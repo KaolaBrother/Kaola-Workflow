@@ -1456,6 +1456,66 @@ function assertNoPlanAnywhere(repo, label) {
     assert(bytes !== null && again.status === 0 && readRecord() === bytes,
       'T8m(W5): re-recording across trees is byte-identical — the merge policy does not change with the '
       + 'destination; got status=' + again.status + ' record_path=' + JSON.stringify(recordedAt));
+
+    // --- W6: PAST `--check`. The E2E leg above stops at the read-only door, and a read-only door is a
+    // different program from the transaction: `--check` reads the recorder and reports, while the
+    // transaction MIRRORS the run folder, ARCHIVES it, regenerates the roadmap and closes. The
+    // self-host worktree lane is already driven whole elsewhere; the CONSUMER worktree lane — where the
+    // validation classification comes from `.cache/final-validation.md` rather than a chain receipt —
+    // was driven only to `--check`.
+    //
+    // The gap is not hypothetical in shape, and two measured mutants say so. Reading the validation
+    // AFTER the archive turns `chains_green` into `final_validation_unverified` on a run whose
+    // recorder was measured green three assertions ago. Resolving the archive destination against the
+    // INVOKING root rather than main's — the pre-#832 shape — writes the run's whole evidence trail
+    // into the tree the sink is about to delete, and leaves main's live folder standing as a phantom
+    // claim. `--check` sees neither, because it never moves anything; and the in-place legs above see
+    // neither of the second one's halves, because in-place IS the invoking root.
+    //
+    // Must run LAST in this scenario: finalize is terminal, and it archives the folder every assertion
+    // above reads.
+    const fin = runClaim(['finalize', '--project', project, '--keep-worktree', '--json'], wt, ghMock);
+    const finJson = lastJson(fin);
+    assert(fin.status === 0, 'T8m(W6): the consumer worktree lane must finalize whole, not only --check; got '
+      + fin.status + '\nstdout: ' + String(fin.stdout || '').slice(-700)
+      + '\nstderr: ' + String(fin.stderr || '').slice(-400));
+    assert(finJson && finJson.status === 'closed',
+      'T8m(W6): and reach terminal closure; got ' + JSON.stringify(finJson && finJson.status));
+
+    // THE DELTA. `--check` said chains_green from the recorder; the transaction must still say it,
+    // after moving the file that carries it.
+    assert(finJson && finJson.validation && finJson.validation.classification === 'chains_green',
+      'T8m(W6): the CONSUMER arm\'s measurement must survive the transaction — the same recorder the '
+      + '--check leg read green, read again by a run that moves the folder holding it. Anything else '
+      + 'here is a run reporting unverified over evidence it had just been handed; got '
+      + JSON.stringify(finJson && finJson.validation));
+
+    // The archive lands in MAIN's band, never the worktree's, and the run's evidence goes with it.
+    // Asserted on DISK at the dest the envelope names, so the envelope cannot be the only witness.
+    const finDest = finJson && finJson.dest;
+    assert(typeof finDest === 'string' && finDest.indexOf(path.join(mainRoot, 'kaola-workflow', 'archive')) === 0,
+      'T8m(W6): the archive destination is under MAIN\'s band — the worktree is the tree being torn '
+      + 'down, so an archive written there is evidence with a demolition date; got ' + JSON.stringify(finDest));
+    assert(finDest && fs.existsSync(path.join(finDest, 'workflow-state.md')),
+      'T8m(W6): the archived run record is ON DISK at the dest the envelope names; got ' + JSON.stringify(finDest));
+    assert(finDest && fs.existsSync(path.join(finDest, '.cache', 'final-validation.md')),
+      'T8m(W6): and the recorder\'s own file travelled with it — it is the only account of how this '
+      + 'consumer run was verified, and losing it in the move is losing the verification; dest='
+      + JSON.stringify(finDest));
+    assert(!fs.existsSync(mainProject),
+      'T8m(W6): the live folder in MAIN is gone — an archive that leaves the live copy standing leaves '
+      + 'a phantom active claim a successor reads as unfinished work; ' + mainProject + ' still exists');
+
+    // The durable half, on the same footing the converted findings get: the archived summary carries
+    // the measurement, so a successor reading the run record sees what the terminal saw.
+    const finSummary = readFinalizationSummary(mainRoot, project, finDest);
+    assert(finSummary !== null, 'T8m(W6): finalization-summary.md exists after the transaction');
+    if (finSummary) {
+      const body = sectionBody(finSummary.text, '## Validation');
+      assert(body !== null && body.indexOf('chains_green') >= 0,
+        'T8m(W6): and the durable `## Validation` section records the consumer arm\'s measurement; got '
+        + JSON.stringify(body === null ? finSummary.text.slice(0, 400) : body.slice(0, 400)));
+    }
   } finally {
     try {
       G.git(path.join(base, 'main'), ['worktree', 'remove', '--force', path.join(base, 'wt')],
@@ -1523,6 +1583,623 @@ function assertNoPlanAnywhere(repo, label) {
         { stdio: ['ignore', 'ignore', 'ignore'] });
     } catch (_) { /* the rm below takes it either way */ }
     rm(base);
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// T9 (#907) — THE FALSE GREEN. A hazard-named file beside the deliverable must not silently cost
+// the finalize commit.
+//
+// MEASURED, end to end, one axis: two fixtures differing only by the presence of a file named
+// `notes.md ` (one trailing space). The control committed `chore: finalize <project>` and carried
+// `src/pending-good.js` into it. The hazard leg exited 0, reported `status: "closed"`,
+// `closure_invariants.ok: true` and `finalize_transaction.finalize_commit: "nothing_to_commit"`,
+// authored NO commit, and left `src/pending-good.js` — an ordinary healthy file — uncommitted. A
+// second run was byte-identical: it does not converge, and the archived run record carries no trace
+// that anything was dropped.
+//
+// The chain: `git status --porcelain` quotes the name, the shared parser strips the quotes without
+// unescaping and then `.trim()`s the value, the mangled path goes into `git add -A -- ...residue`,
+// git exits 128 on the whole invocation, `catch (_) {}` swallows it, and `git diff --cached --quiet`
+// then honestly reports that nothing is staged.
+//
+// REACHABILITY IS THE FIXTURE'S WHOLE JOB. The staging block is nested inside `if (args.keepWorktree)`
+// and a linked-worktree-only test (`mainRoot !== linkedRoot`). An in-place finalize returns
+// `finalize_commit: "skipped"` and never executes it — the first attempt at this reproduction failed
+// exactly that way and proved nothing. So every leg below is a LINKED WORKTREE finalized with
+// `--keep-worktree`, which is this project's own documented finishing sequence.
+//
+// POSTURE: REPORT, NOT REFUSE. Exit stays 0 and closure still completes; what must change is that the
+// deliverable is committed and that a staging failure is said out loud instead of read as
+// `nothing_to_commit`.
+//
+// WHICH NAMES ARE ACTUALLY RED, measured on the baseline rather than assumed — the table below is
+// mixed on purpose and the difference is not cosmetic:
+//   * trailing space, non-ASCII, embedded newline -> RED. The escaped form git printed
+//     (`trail.md` after the trim, `n\303\266te.md`, `new\nline.md`) matches no pathspec.
+//   * embedded `"` and `\`                        -> ALREADY GREEN, by accident: the escaped form
+//     git printed happens to match the real file, so the add succeeds. They stay in the table as
+//     REGRESSION pins — whatever the parse becomes must not break the two cases that work today.
+// ---------------------------------------------------------------------------
+
+// The claim script of every edition. The GitLab and Gitea ports are HAND-ported and policed by
+// nothing — absent from COMMON_SCRIPTS and from the rename-normalized families — so a fix applied to
+// three copies and missed on the fourth is caught here or not at all. (Same table as
+// scripts/test-forge-bundle-lane.js; kept local so requiring that suite's module, which builds
+// fixtures at load time, is not a side effect of running this one.)
+const CLAIM_EDITIONS = Object.freeze([
+  { name: 'root', claim: path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js') },
+  { name: 'codex', claim: path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-claim.js') },
+  { name: 'gitlab', claim: path.join(repoRoot, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-claim.js') },
+  { name: 'gitea', claim: path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-claim.js') },
+]);
+
+// A linked-worktree run, ready to finalize. `hazard` is a file name created UNTRACKED in the
+// worktree root, or null for the control. `src/pending-good.js` is the deliverable every leg asserts
+// on: an ordinary, perfectly stageable file whose only distinction is that it sits beside the hazard.
+function buildWorktreeRun(tag, project, hazard) {
+  const base = makeBase(tag);
+  const mainRoot = fs.realpathSync(initConsumerRepo(path.join(base, 'main'), null));
+  const wtRoot = path.join(base, 'wt');
+  G.git(mainRoot, ['worktree', 'add', '-q', '-b', 'workflow/' + project, wtRoot],
+    { stdio: ['ignore', 'ignore', 'ignore'] });
+  const wt = fs.realpathSync(wtRoot);
+  const dir = path.join(wt, 'kaola-workflow', project, '.cache');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'evidence.md'), 'run evidence\n');
+  fs.writeFileSync(path.join(wt, 'kaola-workflow', project, 'workflow-state.md'), [
+    '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
+    '## Current Position', 'phase: adaptive', 'phase_name: Adaptive', 'workflow_path: adaptive',
+    'runtime: claude', 'step: complete', '',
+    '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+    '## Last Updated', new Date().toISOString(), '',
+    '## Sink', 'branch: workflow/' + project, 'base_branch: main', 'issue_number: 9070',
+    'sink: merge', 'run_posture: worktree', 'worktree_path: ' + wt, 'main_root: ' + mainRoot, ''
+  ].join('\n'));
+  fs.writeFileSync(path.join(wt, 'src', 'feature.js'), 'module.exports = 2;\n');
+  G.commitAll(wt, 'feat: implementation');
+  // The deliverable, and the hazard beside it. Both untracked — this is the Finalization residue the
+  // transaction's Step 8 exists to carry into one commit.
+  fs.writeFileSync(path.join(wt, 'src', 'pending-good.js'), 'module.exports = "carry me";\n');
+  if (hazard) fs.writeFileSync(path.join(wt, hazard), 'hazard\n');
+  return { base, mainRoot, wt, project, gh: writeGhMock(path.join(base, 'bin'), [9070]) };
+}
+
+function removeWorktreeFixture(fx) {
+  try {
+    G.git(fx.mainRoot, ['worktree', 'remove', '--force', path.join(fx.base, 'wt')],
+      { stdio: ['ignore', 'ignore', 'ignore'] });
+  } catch (_) { /* the rm below takes it either way */ }
+  rm(fx.base);
+}
+
+// Raw committed paths on the worktree's branch — read with `-z` so the ASSERTION is never subject to
+// the quoting the code under test gets wrong.
+function committedPaths(repo) {
+  const r = G.git(repo, ['ls-tree', '-r', '-z', '--name-only', 'HEAD'], { encoding: 'utf8' });
+  return String(r.stdout || '').split('\0').filter(Boolean);
+}
+
+// Does the envelope SAY a path could not be staged? The token vocabulary and the field are the
+// implementer's; what is pinned is that something machine-readable names it. `changed_paths` is
+// excluded from the band on purpose: it is derived from what WAS committed, so a hit there would be
+// evidence of success, not of a report.
+function envelopeNames(out, needle) {
+  if (!out || typeof out !== 'object') return false;
+  const band = [out.finalize_transaction, out.errors, out.warnings, out.findings, out.validation,
+    out.staging, out.reason, out.result, out.operator_hint];
+  for (const key of Object.keys(out)) {
+    if (/stag|error|warn|finding|residue|uncommitted|dropped|skip/i.test(key)) band.push(out[key]);
+  }
+  for (const item of band) {
+    if (item === undefined) continue;
+    try { if (JSON.stringify(item).indexOf(needle) >= 0) return true; } catch (_) { /* next */ }
+  }
+  return false;
+}
+
+function runFinalizeKeepWorktree(fx, claimScriptPath) {
+  // spawn-class: cli-contract
+  const r = spawnSync(process.execPath,
+    [claimScriptPath, 'finalize', '--project', fx.project, '--keep-worktree', '--json'], {
+      cwd: fx.wt, encoding: 'utf8', timeout: 120000,
+      // Set EXPLICITLY. OFFLINE is pinned to the same value on EVERY leg including the control, so it
+      // cannot be what suppressed a commit — the control leg commits under exactly this environment,
+      // which is what makes the hazard leg's silence attributable to the hazard alone.
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_WORKTREE_NATIVE: '0',
+        KAOLA_GH_MOCK_SCRIPT: fx.gh,
+      }),
+    });
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, json: lastJson(r) };
+}
+
+(function T9_hazardNamedResidueDoesNotEatTheFinalizeCommit() {
+  console.log('T9: a hazard-named file must not silently cost the finalize commit');
+
+  // --- T9a: THE CONTROL. No hazard file. This is what "the transaction works" looks like, under the
+  // identical environment every hazard leg below runs in.
+  {
+    const fx = buildWorktreeRun('t9-control', 'issue-9070', null);
+    try {
+      const r = runFinalizeKeepWorktree(fx, claimScript);
+      const out = r.json;
+      assert(r.status === 0, 'T9a(control): finalize exits 0; got ' + r.status
+        + ' stderr=' + String(r.stderr || '').slice(0, 300));
+      assert(out && out.finalize_transaction && out.finalize_transaction.finalize_commit === 'committed',
+        'T9a(control): the transaction authors `chore: finalize` — if this leg does not commit, every '
+        + 'hazard assertion below is vacuous because nothing ever committed in this fixture; got '
+        + JSON.stringify(out && out.finalize_transaction));
+      assert(committedPaths(fx.wt).indexOf('src/pending-good.js') >= 0,
+        'T9a(control): and the deliverable is IN the tree; got ' + JSON.stringify(committedPaths(fx.wt)));
+    } finally { removeWorktreeFixture(fx); }
+  }
+
+  // --- T9b: the hazard table. Each leg differs from T9a by exactly one file.
+  const HAZARDS = [
+    ['a trailing space', 'notes.md ', true],
+    ['non-ASCII', 'nöte.md', true],
+    ['an embedded newline', 'new\nline.md', true],
+    ['an embedded double-quote', 'qu"ote.md', false],
+    ['a backslash', 'back\\slash.md', false],
+  ];
+  for (const [label, hazard, redOnBaseline] of HAZARDS) {
+    const fx = buildWorktreeRun('t9-' + Buffer.from(hazard).toString('hex').slice(0, 12), 'issue-9070', hazard);
+    const tag = 'T9b(' + label + (redOnBaseline ? '' : ', regression pin') + ')';
+    try {
+      // FIXTURE PREMISE: the filesystem kept the literal name. Without it a normalising filesystem
+      // would make every assertion below a statement about a file that is not there.
+      assert(fs.readdirSync(fx.wt).indexOf(hazard) >= 0,
+        tag + ' premise: the fixture stores the literal name ' + JSON.stringify(hazard));
+
+      const r = runFinalizeKeepWorktree(fx, claimScript);
+      const out = r.json;
+      const tx = (out && out.finalize_transaction) || {};
+      const tree = committedPaths(fx.wt);
+
+      assert(r.status === 0, tag + ': finalize still EXITS 0 — the posture is report, not refuse; got '
+        + r.status + ' stderr=' + String(r.stderr || '').slice(0, 300));
+      assert(out && out.status === 'closed', tag + ': and closure still completes; got '
+        + JSON.stringify(out && out.status));
+
+      // THE ACCEPTANCE ASSERTION. One badly-named sibling must not cost the deliverable.
+      assert(tree.indexOf('src/pending-good.js') >= 0,
+        tag + ': the healthy deliverable beside the hazard MUST be committed. It is not the hazard '
+        + 'file that is lost — a single bad pathspec aborts the whole `git add`, so an ordinary file '
+        + 'is dropped, the run reports `closed` with `closure_invariants.ok: true`, and a re-run '
+        + 'reproduces it byte for byte; got HEAD tree=' + JSON.stringify(tree)
+        + ' finalize_transaction=' + JSON.stringify(tx)
+        + ' stderr=' + JSON.stringify(String(r.stderr || '').slice(0, 300)));
+      assert(tx.finalize_commit !== 'nothing_to_commit',
+        tag + ': and `nothing_to_commit` is the FALSE GREEN itself — it is the transaction reporting '
+        + 'honestly about an index that a swallowed failure left empty; got '
+        + JSON.stringify(tx.finalize_commit));
+
+      // The hazard file is residue too. Committing it is the natural outcome of parsing the name
+      // correctly; dropping it silently is the same evidence loss in a smaller costume. Either
+      // outcome is acceptable — being SILENT about dropping it is not.
+      assert(tree.indexOf(hazard) >= 0 || envelopeNames(out, path.basename(hazard).trim()),
+        tag + ': the hazard file is either committed with the rest of the residue, or NAMED on the '
+        + 'envelope as something the transaction did not carry. What it must not be is absent from '
+        + 'both; got HEAD tree=' + JSON.stringify(tree)
+        + ' finalize_transaction=' + JSON.stringify(tx));
+    } finally { removeWorktreeFixture(fx); }
+  }
+
+  // --- T9c: THE OTHER HALF — a staging failure with NO parsing involved. Fixing the parse alone
+  // leaves every other cause of a failed `git add` exactly as silent as it is today, and silence is
+  // what turned #900's brick into something worse: a run that completes and reports closed.
+  //
+  // The forced failure is an unreadable file: `git status` reports it, `git add` exits 128 on it, and
+  // no amount of correct parsing changes that. It is deliberately a cause the parse fix cannot cure.
+  //
+  // ONE assertion set, applied to every edition, so no hand-port can end up guarded more weakly than
+  // the canonical copy. The parse half lives in the ×4 byte-identical kernel and therefore reaches
+  // all four editions for free; THIS half is an edit to claim.js, which is hand-ported per forge with
+  // nothing comparing the copies. That asymmetry is exactly why it is driven per edition.
+  function assertStagingFailureIsReported(claimScriptPath, tag) {
+    const fx = buildWorktreeRun('t9c-' + path.basename(claimScriptPath, '.js').slice(-12), 'issue-9070', null);
+    try {
+      const locked = path.join(fx.wt, 'locked.md');
+      fs.writeFileSync(locked, 'unreadable\n');
+      fs.chmodSync(locked, 0o000);
+      // FIXTURE PREMISE, proven rather than assumed: running as root, or on a filesystem that ignores
+      // the mode, this file stages fine and the whole leg would pass while measuring nothing.
+      const probe = G.git(fx.wt, ['add', '-A', '--', 'locked.md'], { encoding: 'utf8' });
+      G.git(fx.wt, ['reset', '-q'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      assert(probe.status !== 0,
+        tag + ' premise: the fixture must genuinely produce a staging failure — `git add` on the '
+        + 'unreadable file exits non-zero. It does not when the suite runs as root, and this leg '
+        + 'would then be vacuous; got status=' + probe.status
+        + ' stderr=' + JSON.stringify(String(probe.stderr || '').slice(0, 200)));
+
+      const r = runFinalizeKeepWorktree(fx, claimScriptPath);
+      const out = r.json;
+      assert(r.status === 0, tag + ': a staging failure still exits 0 — report, not refuse; got ' + r.status);
+      assert(envelopeNames(out, 'locked.md'),
+        tag + ': a `git add` that failed must be REPORTED on the envelope, naming what could not be '
+        + 'staged. Caught and discarded, the only surviving trace is git\'s own line on inherited '
+        + 'stderr — which the archived run record does not keep; got '
+        + 'finalize_transaction=' + JSON.stringify(out && out.finalize_transaction)
+        + ' errors=' + JSON.stringify(out && out.errors));
+      const summary = readFinalizationSummary(fx.mainRoot, fx.project, out && out.dest);
+      assert(summary !== null, tag + ': finalization-summary.md exists after finalize');
+      assert(summary !== null && summary.text.indexOf('locked.md') >= 0,
+        tag + ': and it is recorded DURABLY — an envelope is read once by whoever is at the terminal, '
+        + 'while the archived run record is what a successor has. Reporting to one and not the other '
+        + 'is the deletion ADR 0016 names; summary at ' + (summary && summary.path) + ' was '
+        + JSON.stringify(summary && summary.text.slice(0, 600)));
+    } finally { removeWorktreeFixture(fx); }
+  }
+  assertStagingFailureIsReported(claimScript, 'T9c');
+
+  // --- T9d: EVERY EDITION. The two forge ports are hand-maintained with no parity check, so a fix
+  // that lands on three copies is invisible until a GitLab or Gitea user hits it. One hazard name is
+  // enough per edition for the parse half: the defect is uniform, and what is unwitnessed is the
+  // PORT, not the case.
+  for (const edition of CLAIM_EDITIONS) {
+    if (edition.name === 'root') continue;   // T9a/T9b/T9c already drove it, at full width
+    const tag = 'T9d(' + edition.name + ')';
+    if (!fs.existsSync(edition.claim)) {
+      assert(false, tag + ': the edition claim script exists at ' + edition.claim);
+      continue;
+    }
+    // Control first, so a red below cannot be explained by "this edition's finalize does not work
+    // in this fixture at all".
+    const ctl = buildWorktreeRun('t9d-ctl-' + edition.name, 'issue-9070', null);
+    try {
+      const r = runFinalizeKeepWorktree(ctl, edition.claim);
+      assert(r.status === 0 && r.json && r.json.finalize_transaction
+        && r.json.finalize_transaction.finalize_commit === 'committed',
+        tag + ' control: this edition commits the residue in the clean case; got status=' + r.status
+        + ' tx=' + JSON.stringify(r.json && r.json.finalize_transaction)
+        + ' stderr=' + String(r.stderr || '').slice(0, 300));
+      assert(committedPaths(ctl.wt).indexOf('src/pending-good.js') >= 0,
+        tag + ' control: and the deliverable is in the tree');
+    } finally { removeWorktreeFixture(ctl); }
+
+    const fx = buildWorktreeRun('t9d-haz-' + edition.name, 'issue-9070', 'notes.md ');
+    try {
+      const r = runFinalizeKeepWorktree(fx, edition.claim);
+      const tx = (r.json && r.json.finalize_transaction) || {};
+      assert(r.status === 0, tag + ': exits 0; got ' + r.status);
+      assert(committedPaths(fx.wt).indexOf('src/pending-good.js') >= 0,
+        tag + ': the deliverable survives the hazard on this hand-ported edition too — nothing '
+        + 'compares these copies, so this is the only place a missed port shows up; got HEAD tree='
+        + JSON.stringify(committedPaths(fx.wt)) + ' tx=' + JSON.stringify(tx));
+      assert(tx.finalize_commit !== 'nothing_to_commit',
+        tag + ': and it does not report the false green; got ' + JSON.stringify(tx.finalize_commit));
+    } finally { removeWorktreeFixture(fx); }
+
+    // The reporting half, on the same footing as the canonical copy. This is the arm that catches a
+    // fix applied to `scripts/kaola-workflow-claim.js` and not carried into the forge port.
+    assertStagingFailureIsReported(edition.claim, tag + ' unstageable');
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// T10 / T11 — the MAIN-RESIDENT worktree posture. Both findings below live in it, and neither is
+// reachable from T9's fixture, which claims the run folder in the WORKTREE. This is the posture this
+// project's own runs use: the run folder is resident in MAIN, the linked worktree carries the branch,
+// and Step 8a mirrors main -> worktree at the top of every finalize.
+// ---------------------------------------------------------------------------
+
+// A self-host repo whose run folder lives in MAIN, plus a linked worktree on the branch.
+// `opts.implCommit` adds a committed implementation (so the transaction reaches Step 8);
+// `opts.residue` writes the untracked deliverable Step 8 exists to carry.
+function buildMainResidentRun(tag, project, issue, opts) {
+  const o = opts || {};
+  const base = makeBase(tag);
+  initSelfHostRepo(path.join(base, 'main'));
+  const mainRoot = fs.realpathSync(path.join(base, 'main'));
+  const mainProj = path.join(mainRoot, 'kaola-workflow', project);
+  fs.mkdirSync(path.join(mainProj, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(mainProj, '.cache', 'evidence.md'), 'run evidence\n');
+  fs.writeFileSync(path.join(mainProj, 'mission-list.md'), '# goal\n\n- item: x\n  status: done\n  result: y\n');
+  fs.writeFileSync(path.join(mainProj, 'workflow-state.md'), [
+    '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
+    '## Current Position', 'phase: adaptive', 'phase_name: Adaptive', 'workflow_path: adaptive',
+    'runtime: claude', 'step: complete', '',
+    '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+    '## Last Updated', new Date().toISOString(), '',
+    '## Sink', 'branch: workflow/' + project, 'base_branch: main', 'issue_number: ' + issue,
+    'sink: merge', 'run_posture: worktree', 'worktree_path: ' + path.join(base, 'wt'),
+    'main_root: ' + mainRoot, ''
+  ].join('\n'));
+  G.git(mainRoot, ['worktree', 'add', '-q', '-b', 'workflow/' + project, path.join(base, 'wt')],
+    { stdio: ['ignore', 'ignore', 'ignore'] });
+  const wt = fs.realpathSync(path.join(base, 'wt'));
+  if (o.implCommit) {
+    fs.writeFileSync(path.join(wt, 'src', 'feature.js'), 'module.exports = 2;\n');
+    G.commitAll(wt, 'feat: implementation');
+  }
+  if (o.residue) fs.writeFileSync(path.join(wt, 'src', 'pending-good.js'), 'module.exports = "carry me";\n');
+  const binDir = path.join(base, 'bin');
+  return {
+    base, mainRoot, wt, project, mainProj,
+    gh: writeGhMock(binDir, [issue]),
+    greenMock: writeGreenChainMock(binDir),
+  };
+}
+
+function removeMainResidentRun(fx) {
+  try {
+    G.git(fx.mainRoot, ['worktree', 'remove', '--force', path.join(fx.base, 'wt')],
+      { stdio: ['ignore', 'ignore', 'ignore'] });
+  } catch (_) { /* the rm below takes it either way */ }
+  rm(fx.base);
+}
+
+function readJsonFile(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (_) { return null; } }
+function fileRows(p) { try { return fs.readFileSync(p, 'utf8').trim().split('\n').filter(Boolean).length; } catch (_) { return 0; } }
+function fileText(p) { try { return fs.readFileSync(p, 'utf8'); } catch (_) { return ''; } }
+
+// ---------------------------------------------------------------------------
+// T10 (#910 review R1) — THE MIRROR MUST NOT DESTROY A NEWER TREE-BOUND ARTIFACT.
+//
+// `run-chains --project` writes the receipt into MAIN's run folder. Step 8a then copies main's
+// `.cache/` FORWARD over the worktree's, and `mergeCopyDir` drops its keep-set in its own recursion,
+// so every file under `.cache/` was overwritten unconditionally. The sequence that turns that into a
+// false verdict is ordinary, not exotic:
+//
+//   A  run the chains from the worktree      -> the receipt lands in MAIN (the worktree has no folder)
+//   B  finalize, implementation not yet committed -> REFUSES, but Step 8a already created the
+//      worktree's run folder, which flips run-chains' local-first resolution
+//   C  the operator commits and re-runs the chains -> the FRESH receipt now lands in the WORKTREE
+//   D  finalize -> the mirror copies main's OLD receipt over the fresh one
+//
+// Step D then reports `chains_stale` — "code changed since the chains ran" — over a tree the chains
+// had just run green on, and the ARCHIVE ends up carrying a receipt bound to a tree that no longer
+// exists. Step B is a designed refusal: the machinery deliberately never authors the implementation
+// commit, so a finalize run before the orchestrator commits is the ordinary retry lane.
+//
+// Assertion 4 is the one a naive test misses. A pin that stops at the classification passes on a
+// build that reports green and still archives the stale receipt — and the archive is what a successor
+// reads.
+// ---------------------------------------------------------------------------
+(function T10_mirrorPreservesTreeBoundArtifacts() {
+  console.log('T10: the Step 8a mirror must not overwrite a receipt or an outcome log the worktree authored');
+  const project = 'issue-9100';
+  const fx = buildMainResidentRun('t10', project, 9100, {});
+  const mainReceipt = path.join(fx.mainProj, '.cache', 'chain-receipt.json');
+  const wtProj = path.join(fx.wt, 'kaola-workflow', project);
+  const wtReceipt = path.join(wtProj, '.cache', 'chain-receipt.json');
+  const chains = () => runChains(fx.wt, ['--project', project, '--chains', 'claude',
+    '--mock-chain', 'claude:' + fx.greenMock, '--json']);
+  const finalize = () => {
+    const r = runClaim(['finalize', '--project', project, '--keep-worktree', '--json'], fx.wt, fx.gh);
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, json: lastJson(r) };
+  };
+  try {
+    // --- A: the chains run from the worktree, which carries no run folder yet.
+    chains();
+    const hashA = (readJsonFile(mainReceipt) || {}).codeTreeHash;
+    assert(typeof hashA === 'string' && hashA.length > 0,
+      'T10(A) premise: the first chain run lands its receipt in MAIN — that is the #910 resolution '
+      + 'this finding is downstream of, and without it the whole sequence has no subject; got '
+      + JSON.stringify(hashA));
+
+    // --- B: a finalize that MIRRORS and then refuses.
+    fs.writeFileSync(path.join(fx.wt, 'src', 'pending-good.js'), 'module.exports = "carry me";\n');
+    const b = finalize();
+    assert(b.status === 1 && b.json && b.json.reason === 'implementation_commit_missing',
+      'T10(B) premise: the finalize refuses because the implementation is not committed — a DESIGNED '
+      + 'refusal, and the trigger is any refusal downstream of Step 8a; got status=' + b.status
+      + ' reason=' + JSON.stringify(b.json && b.json.reason));
+    assert(fs.existsSync(wtProj),
+      'T10(B) premise: and Step 8a nonetheless created the worktree run folder — that is what flips '
+      + 'run-chains\' local-first resolution for step C');
+
+    // --- C: the operator commits and re-runs the chains. The fresh receipt lands in the WORKTREE.
+    fs.writeFileSync(path.join(fx.wt, 'src', 'app.js'), 'module.exports = 2;\n');
+    G.commitAll(fx.wt, 'feat: implementation');
+    chains();
+    const hashC_wt = (readJsonFile(wtReceipt) || {}).codeTreeHash;
+    const hashC_main = (readJsonFile(mainReceipt) || {}).codeTreeHash;
+    assert(hashC_main === hashA && typeof hashC_wt === 'string' && hashC_wt !== hashA,
+      'T10(C) premise: the two trees now hold DIFFERENT receipts — main\'s is the stale one from step '
+      + 'A and the worktree\'s covers the committed tree. If they were equal, every assertion below '
+      + 'would pass on a mirror that clobbers; got main=' + JSON.stringify(hashC_main)
+      + ' worktree=' + JSON.stringify(hashC_wt) + ' stepA=' + JSON.stringify(hashA));
+
+    // The outcome log is APPEND-ONLY and belongs to the tree that wrote it. It is EMPTY in this
+    // fixture, and an assertion over two empty files passes against a mirror that overwrites — that
+    // vacuity was measured, not guessed. So both trees are seeded with DISTINGUISHABLE content and
+    // the assertion below reads for the worktree's tag and against main's.
+    const wtLog = path.join(wtProj, '.cache', 'outcome-log.jsonl');
+    const mainLog = path.join(fx.mainProj, '.cache', 'outcome-log.jsonl');
+    fs.writeFileSync(wtLog, ['{"tag":"WT","n":1}', '{"tag":"WT","n":2}', '{"tag":"WT","n":3}'].join('\n') + '\n');
+    fs.writeFileSync(mainLog, '{"tag":"MAIN","n":1}\n');
+    const wtRowsBefore = fileRows(wtLog);
+    assert(wtRowsBefore === 3 && fileRows(mainLog) === 1,
+      'T10(C) premise: the two outcome logs are seeded with DIFFERENT content, so the assertion below '
+      + 'can tell "kept" from "overwritten". Two empty logs make it vacuous — measured; got wt='
+      + wtRowsBefore + ' main=' + fileRows(mainLog));
+
+    // --- D: the finalize that used to copy main's stale receipt forward.
+    const d = finalize();
+    assert(d.status === 0 && d.json && d.json.status === 'closed',
+      'T10(D): the finalize completes; got status=' + d.status
+      + ' stderr=' + String(d.stderr || '').slice(0, 300));
+    assert(d.json && d.json.validation && d.json.validation.classification === 'chains_green',
+      'T10(D): the gate must report chains_green over the tree the chains JUST ran on. `chains_stale` '
+      + 'here is a false verdict manufactured by the mirror, and its remedy — "re-run the chains" — '
+      + 'is what the operator had already done; got '
+      + JSON.stringify(d.json && d.json.validation));
+
+    // THE ASSERTION A NAIVE PIN MISSES. The classification is read once, by whoever is at the
+    // terminal; the ARCHIVE is what every later reader has.
+    const dest = (d.json && d.json.dest) || path.join(fx.mainRoot, 'kaola-workflow', 'archive', project);
+    const archived = readJsonFile(path.join(dest, '.cache', 'chain-receipt.json'));
+    assert(archived && archived.codeTreeHash === hashC_wt,
+      'T10(D): the ARCHIVE must carry the receipt bound to the FINALIZED tree. Archiving main\'s '
+      + 'older one leaves a durable record attesting to a tree that no longer exists, and the receipt '
+      + 'that did cover the finalized tree is then gone from every copy; got '
+      + JSON.stringify(archived && archived.codeTreeHash) + ' want ' + JSON.stringify(hashC_wt));
+
+    // The same rule, second artifact: an append-only log is a record of what happened IN a tree, so
+    // one checkout cannot hold it on another's behalf. Read from the ARCHIVED copy — a successful
+    // finalize removes the live worktree folder, so reading that would measure the archive step
+    // instead of the mirror.
+    const archLog = path.join(dest, '.cache', 'outcome-log.jsonl');
+    const archText = fileText(archLog);
+    assert(fileRows(archLog) === wtRowsBefore && archText.indexOf('"WT"') >= 0 && archText.indexOf('"MAIN"') < 0,
+      'T10(D): the worktree\'s outcome log survives the mirror with ITS OWN rows — not main\'s. An '
+      + 'append-only log overwritten by another tree\'s copy is not stale, it is wrong; got rows='
+      + fileRows(archLog) + ' want ' + wtRowsBefore + ' text=' + JSON.stringify(archText.slice(0, 200)));
+  } finally { removeMainResidentRun(fx); }
+})();
+
+// T10b — THE GREEN CONTROL. The identical fixture and the identical final tree, with step B (the
+// mirrored-then-refused finalize) OMITTED. It reports chains_green on the broken build too, and that
+// is exactly its job: it shows the single axis in T10 is the refused finalize, not the fixture, the
+// mock chain, or the main-resident posture.
+(function T10b_greenControlWithoutTheRefusedFinalize() {
+  console.log('T10b: the same sequence WITHOUT the refused finalize is green — the axis is step B');
+  const project = 'issue-9101';
+  const fx = buildMainResidentRun('t10b', project, 9101, { implCommit: true, residue: true });
+  try {
+    const chains = runChains(fx.wt, ['--project', project, '--chains', 'claude',
+      '--mock-chain', 'claude:' + fx.greenMock, '--json']);
+    assert(chains.status === 0, 'T10b: the chain run exits 0; got ' + chains.status
+      + ' stderr=' + String(chains.stderr || '').slice(0, 300));
+    const r = runClaim(['finalize', '--project', project, '--keep-worktree', '--json'], fx.wt, fx.gh);
+    const out = lastJson(r);
+    assert(r.status === 0 && out && out.status === 'closed',
+      'T10b: the finalize completes; got status=' + r.status
+      + ' stderr=' + String(r.stderr || '').slice(0, 300));
+    assert(out && out.validation && out.validation.classification === 'chains_green',
+      'T10b: and reports chains_green — with no refused finalize in front of it there is nothing in '
+      + 'main for the mirror to push forward, which is why this leg passed even on the broken build; '
+      + 'got ' + JSON.stringify(out && out.validation && out.validation.classification));
+  } finally { removeMainResidentRun(fx); }
+})();
+
+// ---------------------------------------------------------------------------
+// T11 (#907 review R2) — THE FALSE GREEN SURVIVES THROUGH THE PROBE THAT FEEDS THE FIXED CALL.
+//
+// T9 converted the residue `git add`. The `git status --porcelain` probe that PRODUCES that call's
+// pathspec list still swallowed, as did the archive-staging calls beside it — so a fault in any of
+// them reproduced the original signature exactly: exit 0, `closure_invariants.ok: true`,
+// `residue_stage: "skipped"` (documented as "no residue to stage", which is a false statement about a
+// probe that failed), `finalize_commit: "nothing_to_commit"`, no commits authored, the healthy
+// deliverable uncommitted, and an archived record that reads exactly as clean as a finalize that
+// committed everything.
+//
+// The fault is driven by corrupting the linked worktree's index, which is a real if uncommon fault;
+// the structural point does not depend on that choice, because the same catch discards a held index
+// lock, a permission fault and a full disk. The premise is asserted, so a fixture where git still
+// answers reds here rather than passing silently.
+//
+// `nothing_to_stage` is the third leg and it is not decoration: `git diff --cached --quiet` exits 1
+// for "there ARE staged changes" and 128 for "git failed", and reading the second as the first is the
+// original bug's mechanism. That leg pins the exit-1 arm as an ANSWER while `statusfail` pins a
+// non-1 exit as a FAULT — neither leg alone distinguishes them.
+//
+// ALL FOUR EDITIONS. The forge ports never received #832's scoped archive staging: they stage with a
+// single unscoped `git add`, so their archive-staging shape genuinely differs and a canonical-only
+// pin cannot witness them.
+// ---------------------------------------------------------------------------
+(function T11_unprobeableStatusIsReportedNotSwallowed() {
+  console.log('T11: a failed `git status` probe must not read as "no residue to stage"');
+  const LEGS_R2 = ['control', 'statusfail', 'nothing_to_stage'];
+  for (const edition of CLAIM_EDITIONS) {
+    if (!fs.existsSync(edition.claim)) {
+      assert(false, 'T11(' + edition.name + '): the edition claim script exists at ' + edition.claim);
+      continue;
+    }
+    for (const leg of LEGS_R2) {
+      const tag = 'T11(' + edition.name + ' ' + leg + ')';
+      const project = 'issue-9070';
+      const fx = buildMainResidentRun('t11-' + edition.name + '-' + leg, project, 9070,
+        { implCommit: true, residue: leg !== 'nothing_to_stage' });
+      try {
+        if (leg === 'statusfail') {
+          // Corrupt the LINKED WORKTREE's index. `git status --porcelain` then exits 128, and that is
+          // the probe whose catch produced the false `residue_stage: "skipped"`.
+          const rel = String(G.git(fx.wt, ['rev-parse', '--git-path', 'index'], { encoding: 'utf8' }).stdout || '').trim();
+          const idx = path.isAbsolute(rel) ? rel : path.join(fx.wt, rel);
+          fs.writeFileSync(idx, 'GARBAGEGARBAGE');
+          const probe = G.git(fx.wt, ['status', '--porcelain'], { encoding: 'utf8' });
+          assert(probe.status !== 0,
+            tag + ' premise: the fixture must genuinely make `git status --porcelain` fail, or this '
+            + 'leg measures nothing; got status=' + probe.status
+            + ' stderr=' + JSON.stringify(String(probe.stderr || '').slice(0, 200)));
+        }
+
+        // THE EDITION'S OWN SCRIPT. `runClaim` always shells the canonical one, so using it inside a
+        // per-edition loop runs the same file four times and reads as four independent witnesses —
+        // measured, by a canonical-only mutant reddening all four legs.
+        const r = runFinalizeKeepWorktree(fx, edition.claim);
+        const out = r.json;
+        const tx = (out && out.finalize_transaction) || {};
+        const dest = (out && out.dest) || path.join(fx.mainRoot, 'kaola-workflow', 'archive', project);
+        const summary = fileText(path.join(dest, 'finalization-summary.md'));
+        const findings = Array.isArray(tx.findings) ? tx.findings : [];
+
+        assert(r.status === 0 && out && out.status === 'closed',
+          tag + ': exit stays 0 and closure completes — the posture is report, not refuse; got status='
+          + r.status + ' stderr=' + String(r.stderr || '').slice(0, 300));
+
+        if (leg === 'statusfail') {
+          assert(tx.residue_stage !== 'skipped',
+            tag + ': `skipped` is documented as "no residue to stage" — a claim about the WORKING TREE '
+            + 'that a failed probe cannot support. This is the false statement the whole finding is '
+            + 'about; got ' + JSON.stringify(tx.residue_stage));
+          assert(tx.finalize_commit !== 'nothing_to_commit',
+            tag + ': and `nothing_to_commit` is equally a claim about the working tree — the run could '
+            + 'not enumerate what to stage, so it does not know; got ' + JSON.stringify(tx.finalize_commit));
+          assert(tx.roadmap_staged === false,
+            tag + ': `roadmap_staged` must follow the OUTCOME of the staging, not the presence of the '
+            + 'paths on disk — derived from a candidate list it reads true while git staged nothing; '
+            + 'got ' + JSON.stringify(tx.roadmap_staged));
+          assert(findings.length > 0,
+            tag + ': the envelope must carry at least one typed finding; got ' + JSON.stringify(tx));
+          assert(summary.indexOf('## Finalize Findings') >= 0,
+            tag + ': and the ARCHIVED record must say so. An envelope is read once by whoever is at '
+            + 'the terminal; the archived record is what a successor has, and it read exactly as clean '
+            + 'as a finalize that committed everything; got summary='
+            + JSON.stringify(summary.slice(0, 400)));
+          assert(committedPaths(fx.wt).indexOf('src/pending-good.js') < 0
+            || tx.finalize_commit === 'committed',
+            tag + ': non-vacuity — either the deliverable is genuinely uncommitted (and the run says '
+            + 'so above) or it was committed and the transaction reports that; what must not happen '
+            + 'is a silent loss; got finalize_commit=' + JSON.stringify(tx.finalize_commit));
+        } else if (leg === 'control') {
+          // THE LOAD-BEARING CONTROL: the new reporting must not fire on a healthy run.
+          assert(tx.finalize_commit === 'committed',
+            tag + ': a healthy run commits the residue; got ' + JSON.stringify(tx.finalize_commit));
+          assert(tx.residue_stage === 'staged',
+            tag + ': and says the residue was staged; got ' + JSON.stringify(tx.residue_stage));
+          assert(findings.length === 0,
+            tag + ': and carries NO findings — a report that fires on a good run is noise, and would '
+            + 'make every assertion in the statusfail leg satisfiable by a build that always reports; '
+            + 'got ' + JSON.stringify(findings));
+          assert(summary.indexOf('## Finalize Findings') < 0,
+            tag + ': and the archived record carries no findings section either; got summary='
+            + JSON.stringify(summary.slice(0, 300)));
+          assert(committedPaths(fx.wt).indexOf('src/pending-good.js') >= 0,
+            tag + ': and the deliverable IS in the tree; got ' + JSON.stringify(committedPaths(fx.wt)));
+        } else {
+          // THE EXIT-1 ARM. `git diff --cached --quiet` exits 1 when there ARE staged changes and 0
+          // when there are none; a non-1 non-0 exit is a FAULT. With no residue to carry, "nothing to
+          // commit" is the true answer and must still be reported as one — a build that treated every
+          // non-1 exit as a fault would report a finding here and be just as wrong in the other
+          // direction.
+          assert(tx.finalize_commit === 'nothing_to_commit',
+            tag + ': with no residue, `nothing_to_commit` is the TRUE answer and must survive as one — '
+            + 'the exit-1 arm of the probe is an answer, not a fault; got '
+            + JSON.stringify(tx.finalize_commit));
+          assert(findings.length === 0,
+            tag + ': and no finding is manufactured for an ordinary empty index; got '
+            + JSON.stringify(findings));
+          assert(tx.finalize_commit_probe !== 'failed' && tx.archive_commit_probe !== 'failed',
+            tag + ': neither staged-ness probe may report a fault on a healthy tree; got '
+            + JSON.stringify({ finalize: tx.finalize_commit_probe, archive: tx.archive_commit_probe }));
+        }
+      } finally { removeMainResidentRun(fx); }
+    }
   }
 })();
 

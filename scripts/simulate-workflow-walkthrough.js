@@ -9150,6 +9150,51 @@ function testClosureAuditScopedArchiveAmbiguousMatch903() {
     } finally {
       fs.rmSync(soloTmp, { recursive: true, force: true });
     }
+
+    // WHAT THE COUNT IS COUNTING. The rule reads the band `withFileTypes` and keeps only directories,
+    // and until this leg NOTHING armed that filter: deleting it left every scenario above green,
+    // because every entry those fixtures plant is already a directory. So the rule's own premise —
+    // that an archive is a FOLDER — was untested, and a band entry of any other kind counted.
+    //
+    // The fixture is the solo control above plus ONE regular file, so the axis is the entry's TYPE and
+    // nothing else. The file's name deliberately matches the `<project>.archived-<ts>` shape, which is
+    // exactly what a half-finished `mv`, a tar member, or an editor swap file leaves lying in the band.
+    // Both halves of the annotation discriminate: with the filter gone the scope grows an
+    // `archive_name_ambiguous: true` it has no basis for, AND the real archive's finding is downgraded
+    // from `name_match` to `ambiguous_name_match` — a report that tells the operator its own
+    // attribution cannot be trusted, on the strength of a file.
+    //
+    // No export was needed. `archiveNameIsAmbiguous` stays module-private: the CLI's scope envelope
+    // already carries the answer, so the previously-declined widening of the module surface is not
+    // what stood between this branch and a pin.
+    const fileTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-903-attr-ambig-file-'));
+    try {
+      initGitRepo(fileTmp);
+      plantActiveFolder(fileTmp, 'proj-file', 943, null);
+      plantArchive903(fileTmp, 'proj-file', null);
+      const bandFile = path.join(fileTmp, 'kaola-workflow', 'archive', 'proj-file.archived-' + ts);
+      fs.writeFileSync(bandFile, 'a regular file, not an archive\n');
+      assert(fs.statSync(bandFile).isFile(),
+        '#903 fixture premise: the planted band entry must be a regular FILE — the whole leg is about '
+          + 'the entry TYPE, so a fixture that wrote a directory here would repeat the solo control');
+
+      const filed = runClosureAuditOffline(['--project', 'proj-file'], fileTmp);
+      assert(!('archive_name_ambiguous' in filed.scope),
+        '#903: a regular FILE in the archive band whose name matches the project must not count as a '
+          + 'second archive — an archive is a folder, and counting anything else reports an ambiguity '
+          + 'that does not exist; got: ' + JSON.stringify(filed.scope));
+      const filedFindings = filed.current_project_drift.archive_content_incomplete;
+      assert(filedFindings.length === 1 && filedFindings[0].project === 'proj-file',
+        '#903: the one real archive is still the only finding — the file is not an archive and must '
+          + 'not become one; got: ' + JSON.stringify(filedFindings));
+      assert(filedFindings[0].attribution === 'name_match',
+        '#903: and its attribution stays unqualified. This is the second half of the same defect: a '
+          + 'miscounted band entry does not merely add a flag, it downgrades a correct attribution to '
+          + '`ambiguous_name_match`, so the report disowns a reading that was never in doubt; got: '
+          + JSON.stringify(filedFindings[0]));
+    } finally {
+      fs.rmSync(fileTmp, { recursive: true, force: true });
+    }
     console.log('testClosureAuditScopedArchiveAmbiguousMatch903: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

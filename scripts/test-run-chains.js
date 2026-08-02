@@ -1344,6 +1344,70 @@ function chainNames(rc) { return (rc && rc.chains ? rc.chains.map(c => c.name) :
 }
 
 // ---------------------------------------------------------------------------
+// T-907a (#907): the scope decision must survive a path git C-QUOTES.
+//
+// `computeChangedFiles` reads `git diff --name-only` and `git ls-files --others` and splits them on
+// newlines. Neither command emits raw bytes: a path containing a control character, a `"`, a `\`, or
+// (with the default `core.quotePath`) a non-ASCII byte comes back wrapped in double quotes with the
+// offending bytes backslash-escaped. `isEditionCouplingPath` then tests `p.indexOf('plugins/') === 0`,
+// which is false for `"plugins/…"` — so the ONE edition-touching path in the diff reads as
+// claude-exclusive and the run scopes to ONE chain where the design demands four.
+//
+// That is a fail-OPEN in the gate whose own comment says it is "fail-closed by construction", and it
+// is the direction that matters: the missing three chains are the ones that would have gone red.
+//
+// WHAT IS PINNED IS THE DECISION, not the parser. Whether the fix reads `-z`, unquotes, or classifies
+// on bytes is the implementer's; every case below asserts only that the run selected all four chains
+// and recorded the touched path as evidence.
+//
+// The trailing-space case is deliberately in the table even though it is NOT a defect today: git does
+// not quote a trailing space here, so `.trim()` mutates the value while leaving the prefix test true.
+// It is the same hazard class reaching a different outcome, and a fix that starts unquoting must not
+// break it on the way past.
+// ---------------------------------------------------------------------------
+{
+  const HAZARD_EDITION_NAMES = [
+    ['non-ASCII', 'nöte.js'],
+    ['an embedded double-quote', 'qu"ote.js'],
+    ['a backslash', 'back\\slash.js'],
+    ['a trailing space', 'trail.js '],
+  ];
+  for (const [label, name] of HAZARD_EDITION_NAMES) {
+    const { dir } = makeScopeRepo();
+    try {
+      // The hazard-named file is the ONLY edition-coupling path in the diff. If anything else in the
+      // fixture coupled, all-four would be selected for the wrong reason and this would pass on the
+      // broken classifier.
+      const editionDir = path.join(dir, 'plugins', 'kaola-workflow-gitlab', 'scripts');
+      fs.mkdirSync(editionDir, { recursive: true });
+      fs.writeFileSync(path.join(editionDir, name), '// touched\n');
+      // FIXTURE PREMISE: the filesystem actually kept the name. On a filesystem that normalised or
+      // rejected it there would be no hazard in the diff and the assertions below would be vacuous.
+      assert(fs.readdirSync(editionDir).indexOf(name) >= 0,
+        'T-907a(' + label + ') premise: the fixture filesystem stores the literal name '
+        + JSON.stringify(name) + '; got ' + JSON.stringify(fs.readdirSync(editionDir)));
+      const proj = 'issue-scope-hazard';
+      const rp = projReceipt(dir, proj);
+      const r = run(dir, ['--project', proj], rp, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'main' });
+      assert(r.exitCode === 0, 'T-907a(' + label + '): the scoped run exits 0; stderr=' + (r.stderr || '').slice(0, 300));
+      const rc = r.receipt;
+      assert(chainNames(rc) === 'claude,codex,gitlab,gitea',
+        'T-907a(' + label + '): an edition-coupling path under plugins/ selects ALL FOUR chains even when '
+        + 'git quotes it — a quoted path read as claude-exclusive runs one chain where four are owed, and '
+        + 'the three that were skipped are exactly the ones that would have gone red; got '
+        + JSON.stringify(chainNames(rc)));
+      assert(rc && rc.scope && rc.scope.decision === 'all-four',
+        'T-907a(' + label + '): receipt.scope.decision === all-four; got ' + JSON.stringify(rc && rc.scope));
+      assert(rc && rc.scope && Array.isArray(rc.scope.touchedEditionPaths)
+        && rc.scope.touchedEditionPaths.some(p => String(p).indexOf('plugins/') === 0),
+        'T-907a(' + label + '): and the touched edition path is recorded as diff evidence in a form a '
+        + 'reader can match — a `"plugins/…"` entry is the mis-classification itself, written down; got '
+        + JSON.stringify(rc && rc.scope && rc.scope.touchedEditionPaths));
+    } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // T-788: a change to ONLY the canonical Oracle Kernel scopes to the CLAUDE chain alone, even though
 // its gitignored forge mirror is materialized on disk (existsSync would otherwise force all-four).
 // NON-VACUOUS: without the kernel special-case in isEditionCouplingPath this scopes all-four and fails.
@@ -1532,6 +1596,169 @@ function chainNames(rc) { return (rc && rc.chains ? rc.chains.map(c => c.name) :
       assert(greenSteps < 4, 'T39: the chain was killed BEFORE completing all 4 steps (per-chain budget, not per-step); green steps=' + greenSteps);
     }
   } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
+// T-907b (#907): a RENAME OUT of an edition tree must still select all four chains.
+//
+// The second mechanism behind the same wrong answer T-907a pins, and independent of it: the path
+// here is plain ASCII and nothing is quoted. `git diff --name-only` emits ONE field per record, and
+// when rename detection fires that field is the DESTINATION only — the pre-image is never named. So
+//
+//     git mv plugins/kaola-workflow/scripts/moved.js src/moved.js
+//
+// DELETES a file from the Codex plugin tree while the changed-file set the classifier is handed
+// reads `["src/moved.js"]`, with no `plugins/` path in it at all. `isEditionCouplingPath` can only
+// answer about paths it is given, so the decision came back `claude-only` / `non_edition_diff` and
+// three chains were skipped over a diff that removed a file from an edition tree. Same failure
+// class, same direction: the skipped chains are exactly the ones that would have gone red, and the
+// mechanism that skipped them is the one that decides whether anything else gets verified at all.
+//
+// WHAT IS PINNED IS THE DECISION, not the flag. `--no-renames`, `--name-status`, a second diff pass,
+// or classifying on `-M0` output all satisfy every assertion below; each case asserts only which
+// chains ran and which path the receipt recorded as the evidence for it.
+//
+// FIVE CASES, AND THE LAST TWO ARE WHY THE FIRST THREE MEAN ANYTHING. r1 is the defect. r2 (a pure
+// delete) and r6 (a rename INTO plugins) were always classified correctly and are here so a future
+// change cannot narrow the set back down while r1 stays green. r7 composes this fix with T-907a's —
+// a rename out of plugins whose source name is non-ASCII needs BOTH the pre-image and the literal
+// bytes, and it is the one case where either fix alone still gives the wrong answer. r8 is the
+// over-capture control: a rename with no edition path on EITHER side must stay claude-only, because
+// "select all four, always" passes r1/r2/r6/r7 and destroys the whole scoping mechanism.
+// ---------------------------------------------------------------------------
+{
+  // Body long enough that git's similarity index has something to work with — a rename it does not
+  // detect is not the shape under test, and the premise assertion below proves per case that it did.
+  const MOVED_BODY = 'module.exports = 1;\n'
+    + '// a body with enough lines that rename detection has real content to match on\n'
+    + '// so that `git diff` reports one rename record rather than a delete plus an add\n'
+    + '// which would be the shape this case exists to distinguish itself from\n';
+  const EDITION_DIR = ['plugins', 'kaola-workflow', 'scripts'];
+
+  // label, the name committed into plugins/ (null = nothing pre-committed there), the mutation, what
+  // the decision must be, and the path the receipt must record as its evidence. `editionPreImage` is
+  // the premise axis: true when the plugins/ path is the SOURCE of a rename (git's default output
+  // must omit it — that omission is the defect), false when git's default must name it anyway.
+  const RENAME_CASES = [
+    {
+      label: 'r1 rename OUT of plugins/',
+      seed: 'moved.js',
+      mutate: (g) => g(['mv', 'plugins/kaola-workflow/scripts/moved.js', 'src/moved.js']),
+      editionPreImage: true,
+      decision: 'all-four',
+      evidence: 'plugins/kaola-workflow/scripts/moved.js',
+    },
+    {
+      label: 'r2 pure DELETE from plugins/ (control — always classified correctly)',
+      seed: 'moved.js',
+      mutate: (g) => g(['rm', '-q', 'plugins/kaola-workflow/scripts/moved.js']),
+      editionPreImage: false,
+      decision: 'all-four',
+      evidence: 'plugins/kaola-workflow/scripts/moved.js',
+    },
+    {
+      label: 'r6 rename INTO plugins/ (control — always classified correctly)',
+      seed: null,
+      mutate: (g) => g(['mv', 'src/movable.js', 'plugins/kaola-workflow/scripts/movable.js']),
+      editionPreImage: false,
+      decision: 'all-four',
+      evidence: 'plugins/kaola-workflow/scripts/movable.js',
+    },
+    {
+      label: 'r7 rename OUT of plugins/ with a NON-ASCII source name (needs both halves of #907)',
+      seed: 'nöte.js',
+      mutate: (g) => g(['mv', 'plugins/kaola-workflow/scripts/nöte.js', 'src/nöte.js']),
+      editionPreImage: true,
+      decision: 'all-four',
+      evidence: 'plugins/kaola-workflow/scripts/nöte.js',
+    },
+    {
+      label: 'r8 rename with NO edition path on either side (over-capture control)',
+      seed: null,
+      mutate: (g) => g(['mv', 'src/movable.js', 'src/renamed.js']),
+      editionPreImage: false,
+      decision: 'claude-only',
+      evidence: null,
+    },
+  ];
+
+  for (const tc of RENAME_CASES) {
+    const { dir } = makeScopeRepo();
+    try {
+      // Git ARRANGEMENT, routed through the shared fixture library like this file's other git
+      // fixture calls (T5, T29). `G.exec` builds the identical argv — `execFileSync('git', ['-C',
+      // repo, ...args], opts)` — so this is behaviour-preserving by inspection, and it keeps the
+      // repo's one git-spawn decision in one place instead of adding two more here. Safe against
+      // this file's own `spawnSync` interception (:129): that patch does not touch execFileSync,
+      // which is the side `G.exec` uses.
+      const g = (args) => G.exec(dir, args, { encoding: 'utf8' }).trim();
+      // A second base commit carrying the movable content, so main's tip (= the resolved diff base,
+      // since HEAD is main) already holds every path the mutation below moves.
+      const editionDir = path.join(dir, ...EDITION_DIR);
+      fs.mkdirSync(editionDir, { recursive: true });   // `git mv` needs an existing destination dir
+      if (tc.seed) fs.writeFileSync(path.join(editionDir, tc.seed), MOVED_BODY);
+      fs.writeFileSync(path.join(dir, 'src', 'movable.js'), MOVED_BODY);
+      g(['add', '-A']);
+      g(['commit', '-q', '-m', 'seed the movable content']);
+
+      tc.mutate(g);
+
+      // FIXTURE PREMISE, measured on THIS repo rather than assumed: git's own default diff (rename
+      // detection ON) must produce the record shape the case is about. Without this a case could pass
+      // because git never detected the rename here at all, which measures nothing about the
+      // classifier. r2/r8 assert the shape they need too, so no case is exempt from stating one.
+      const defaultDiff = G.exec(dir, ['diff', '--name-only', '-z', 'main'], { encoding: 'utf8' })
+        .split('\0').filter(Boolean);
+      const defaultHasEdition = defaultDiff.some(p => p.indexOf('plugins/') === 0);
+      if (tc.editionPreImage) {
+        assert(!defaultHasEdition,
+          'T-907b(' + tc.label + ') premise: `git diff --name-only` at git\'s default (rename detection ON) '
+          + 'must OMIT the plugins/ pre-image — that omission is the whole defect, and on a repo where git '
+          + 'reported the pre-image anyway (no rename detected) the assertions below would pass on the '
+          + 'broken classifier; got ' + JSON.stringify(defaultDiff));
+      } else if (tc.decision === 'all-four') {
+        assert(defaultHasEdition,
+          'T-907b(' + tc.label + ') premise: this case is a CONTROL for a shape that always worked, so git\'s '
+          + 'default output must already name the plugins/ path; got ' + JSON.stringify(defaultDiff));
+      } else {
+        assert(!defaultHasEdition,
+          'T-907b(' + tc.label + ') premise: the over-capture control must carry NO plugins/ path in the diff '
+          + 'at all, on either side of the rename; got ' + JSON.stringify(defaultDiff));
+      }
+
+      const proj = 'issue-scope-rename';
+      const rp = projReceipt(dir, proj);
+      const r = run(dir, ['--project', proj], rp,
+        { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_FINALIZE_BASE: 'main' });
+      assert(r.exitCode === 0,
+        'T-907b(' + tc.label + '): the scoped run exits 0; stderr=' + (r.stderr || '').slice(0, 300));
+      const rc = r.receipt;
+      const wantChains = tc.decision === 'all-four' ? 'claude,codex,gitlab,gitea' : 'claude';
+      assert(chainNames(rc) === wantChains,
+        'T-907b(' + tc.label + '): the diff must select ' + wantChains + '. A rename is the one edit that '
+        + 'removes a file from an edition tree without ever naming that tree in the changed-file set, so '
+        + 'the chains that would catch the removal are precisely the ones skipped; got '
+        + JSON.stringify(chainNames(rc)));
+      assert(rc && rc.scope && rc.scope.decision === tc.decision,
+        'T-907b(' + tc.label + '): receipt.scope.decision === ' + tc.decision + '; got '
+        + JSON.stringify(rc && rc.scope));
+      if (tc.evidence) {
+        const touched = (rc && rc.scope && Array.isArray(rc.scope.touchedEditionPaths))
+          ? rc.scope.touchedEditionPaths : [];
+        assert(touched.indexOf(tc.evidence) !== -1,
+          'T-907b(' + tc.label + '): and the receipt must record ' + JSON.stringify(tc.evidence)
+          + ' as the diff evidence for that decision, LITERALLY — a decision whose recorded reason names '
+          + 'no edition path is indistinguishable from one taken for an unrelated reason, and a reader '
+          + 'cannot check it; got ' + JSON.stringify(touched));
+      } else {
+        assert(!(rc && rc.scope && Array.isArray(rc.scope.touchedEditionPaths) && rc.scope.touchedEditionPaths.length),
+          'T-907b(' + tc.label + '): a rename with no edition path on either side must record NO touched '
+          + 'edition path — widening every rename to all four would satisfy every case above while '
+          + 'destroying the scoping mechanism itself; got '
+          + JSON.stringify(rc && rc.scope && rc.scope.touchedEditionPaths));
+      }
+    } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+  }
 }
 
 // ---------------------------------------------------------------------------

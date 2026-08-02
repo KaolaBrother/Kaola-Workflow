@@ -4795,6 +4795,355 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   }
 }
 
+// --- #906: the two destruction routes, driven on every edition ----------------------------------
+//
+// D1 above closed the case where main's live folder holds an ordinary FILE the archive lacks. #906 is
+// the two halves D1 did not reach, and neither had any test on arrival:
+//
+//   ROUTE 2 — "cannot be compared" is not "bytes differ". `verifyArchiveComplete` reduced every entry
+//     to bytes or to nothing; a symlink, a dangling symlink and a FIFO all reduced to NOTHING, so they
+//     appeared in no half of the comparison and the delete ran at exit 0. The entry the operator lost
+//     was, in the reported incident, a symlink under an EXEMPT SIDECAR name — the one shape both the
+//     byte comparison and the presence re-check are blind to.
+//   ROUTE 1 — the #395.4 crash backstop DELETED main's surviving live folder to clear the phantom
+//     claim. Clearing the claim and destroying the folder are two different acts; only the first was
+//     ever the goal (the backstop's own comment says so).
+//
+// `release` is the vehicle for route 2 and `finalize` for route 1, for the same reason D1 chose
+// `release`: they are the routes that run NO Step-8a mirror, so nothing upstream establishes
+// "worktree ⊇ main" and the pair `mainLive ↔ dest` is the one that can genuinely differ.
+//
+// PER EDITION, BEHAVIOURALLY. `claim.js`'s GitLab and Gitea copies are hand-ported and policed by
+// nothing — absent from COMMON_SCRIPTS and from the rename-normalized families. The source-text pins
+// in P7/P8 above can only say a literal is present; they cannot say the port WORKS. These run it.
+{
+  const { execFileSync: execFS906, spawnSync: spawnS906 } = require('child_process');
+  const REPO906 = path.resolve(__dirname, '..');
+  const EDITIONS_906 = [
+    ['canonical', path.join(REPO906, 'scripts', 'kaola-workflow-claim.js')],
+    ['codex', path.join(REPO906, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-claim.js')],
+    ['gitlab', path.join(REPO906, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-claim.js')],
+    ['gitea', path.join(REPO906, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-claim.js')],
+  ];
+  const GIT_ENV906 = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const g906 = (cwd, args) => {
+    try { execFS906('git', ['-C', cwd, ...args], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV906 }); return true; }
+    catch (_) { return false; }
+  };
+  const lexists906 = p => { try { fs.lstatSync(p); return true; } catch (_) { return false; } };
+  const cleanup906 = fx => { try { fs.rmSync(fx.base, { recursive: true, force: true }); } catch (_) {} };
+  const state906 = (project, wtRoot, mainRoot, status) => [
+    '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: ' + status, '',
+    '## Current Position', 'phase: adaptive', 'phase_name: Adaptive', 'workflow_path: adaptive',
+    'runtime: claude', 'step: start', '',
+    '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+    '## Last Updated', new Date().toISOString(), '',
+    '## Sink', 'branch: workflow/' + project, 'base_branch: main', 'issue_number: 906',
+    'sink: merge', 'run_posture: worktree', 'worktree_path: ' + wtRoot,
+    'main_root: ' + mainRoot, 'session_marker: fixture-906', 'claim_ts: 2026-01-01T00:00:00Z', ''
+  ].join('\n');
+
+  // One CLI drive. OFFLINE is set EXPLICITLY on every leg including the controls, so it is provably
+  // not what arms or silences the comparison under test: C1 below refuses under this exact value.
+  function runClaim906(claimScript, cwd, argv) {
+    // spawn-class: durable-handoff
+    const r = spawnS906(process.execPath, [claimScript, ...argv], {
+      cwd, encoding: 'utf8', timeout: 120000,
+      env: Object.assign({}, GIT_ENV906, {
+        KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+      }),
+    });
+    let json = null;
+    try {
+      const lines = String(r.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+      if (lines.length) json = JSON.parse(lines[lines.length - 1]);
+    } catch (_) {}
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, json };
+  }
+
+  // ============================================================================================
+  // ROUTE 2 — a linked-worktree `release` where main's live folder holds ONE extra entry, and the
+  // axis is that entry's KIND. mk910 above plants regular files only; this plants the kinds that
+  // reduce to no bytes, which is the whole subject.
+  // ============================================================================================
+  function mk906r2(project, rel, kind) {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-906r2-')));
+    const mainRoot = path.join(base, 'main');
+    const wtRoot = path.join(base, 'wt');
+    fs.mkdirSync(mainRoot, { recursive: true });
+    g906(mainRoot, ['init', '-b', 'main']);
+    g906(mainRoot, ['config', 'user.email', 't@t.com']);
+    g906(mainRoot, ['config', 'user.name', 'Test']);
+    g906(mainRoot, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(mainRoot, 'README.md'), 'fixture\n');
+    g906(mainRoot, ['add', '-A']);
+    g906(mainRoot, ['commit', '-m', 'chore: init']);
+    g906(mainRoot, ['worktree', 'add', '-b', 'workflow/' + project, wtRoot]);
+    const text = state906(project, wtRoot, mainRoot, 'active');
+    // BOTH live copies hold the same two files; the plant below is the only difference.
+    for (const root of [wtRoot, mainRoot]) {
+      const d = path.join(root, 'kaola-workflow', project);
+      fs.mkdirSync(path.join(d, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(d, 'workflow-state.md'), text);
+      fs.writeFileSync(path.join(d, '.cache', 'shared.md'), '# held by both copies\n');
+    }
+    const mainProjDir = path.join(mainRoot, 'kaola-workflow', project);
+    let entryAbs = null;
+    if (kind) {
+      entryAbs = path.join(mainProjDir, ...rel.split('/'));
+      fs.mkdirSync(path.dirname(entryAbs), { recursive: true });
+      if (kind === 'file') fs.writeFileSync(entryAbs, '# main only\n');
+      else if (kind === 'symlink') fs.symlinkSync(path.join(mainProjDir, '.cache', 'shared.md'), entryAbs);
+      else if (kind === 'dangling') fs.symlinkSync(path.join(mainProjDir, 'NO-SUCH-TARGET'), entryAbs);
+      else if (kind === 'fifo') execFS906('mkfifo', [entryAbs]);
+      else if (kind === 'emptydir') fs.mkdirSync(entryAbs, { recursive: true });
+      else throw new Error('unknown plant kind ' + kind);
+    }
+    return { base, mainRoot, wtRoot, project, mainProjDir,
+      wtProjDir: path.join(wtRoot, 'kaola-workflow', project), entryAbs, rel, kind };
+  }
+
+  // THE TABLE. Three `archive` legs and five `refuse` legs, and the archive legs are as load-bearing
+  // as the refuse ones: a blanket refusal would satisfy every `refuse` row and is a broken `release`.
+  const LEGS_906R2 = [
+    { name: 'C0_clean', rel: null, kind: null, expect: 'archive',
+      why: 'nothing is main-only — a clean linked release must still archive at exit 0' },
+    { name: 'C1_main_only_file', rel: '.cache/EXTRA.md', kind: 'file', expect: 'refuse',
+      why: 'an ORDINARY main-only file. This is the POSITIVE CONTROL for the environment: it refuses '
+        + 'under the identical KAOLA_WORKFLOW_OFFLINE=1 every other leg runs under, so the offline '
+        + 'flag is demonstrably not what arms or silences the comparison' },
+    { name: 'R2_top_symlink', rel: 'extra-link.txt', kind: 'symlink', expect: 'refuse',
+      why: 'a main-only SYMLINK at top level — reduces to no bytes, so it appeared in no half of the '
+        + 'comparison and was deleted at exit 0' },
+    { name: 'R4_sidecar_symlink', rel: '.cache/final-validation.md', kind: 'symlink', expect: 'refuse',
+      why: 'a main-only symlink under an EXEMPT SIDECAR name — the incident shape. Both the byte '
+        + 'comparison and the sidecar presence re-check are blind to it, so it is the leg that needs '
+        + 'the entry-kind fault to be named as such' },
+    { name: 'R5_dangling', rel: 'mission-list.md', kind: 'dangling', expect: 'refuse',
+      why: 'a DANGLING symlink — no target, therefore no bytes, therefore invisible to a comparison '
+        + 'that only weighs bytes. The name is the ADR 0017 run record itself' },
+    { name: 'R6_fifo', rel: 'pipe.md', kind: 'fifo', expect: 'refuse',
+      why: 'a FIFO — the same class reached by a different entry kind, so the guard cannot be a '
+        + 'symlink special case' },
+    // ---- the empty-directory question, SETTLED. See the long note at the assertion below.
+    { name: 'P1_empty_dir', rel: 'empty-evidence', kind: 'emptydir', expect: 'archive',
+      why: 'a main-only EMPTY directory carries zero bytes and git cannot represent it at all, so '
+        + 'there is nothing a refusal would be protecting' },
+    { name: 'P2_dir_with_content', rel: 'deep-dir/inner.md', kind: 'file', expect: 'refuse',
+      why: 'THE BOUND on the row above: a main-only directory that holds anything DOES refuse, naming '
+        + 'the file inside it. The acceptance is scoped to "zero bytes", never to "directories"' },
+  ];
+
+  for (const [edName, claimScript] of EDITIONS_906) {
+    if (!fs.existsSync(claimScript)) {
+      assert(false, '#906(R2 ' + edName + '): the edition claim script exists at ' + claimScript);
+      continue;
+    }
+    for (const leg of LEGS_906R2) {
+      const label = '#906(R2 ' + edName + ' ' + leg.name + ')';
+      const project = 'issue-9062' + Buffer.from(edName + leg.name).toString('hex').slice(0, 6);
+      const fx = mk906r2(project, leg.rel, leg.kind);
+      try {
+        if (leg.kind) {
+          assert(lexists906(fx.entryAbs),
+            label + ' premise: the planted ' + leg.kind + ' must exist in MAIN\'s live folder before '
+            + 'the run, or the leg measures nothing');
+        }
+        const r = runClaim906(claimScript, fx.wtRoot, ['release', '--project', fx.project, '--json']);
+        const j = r.json || {};
+
+        if (leg.expect === 'archive') {
+          assert(r.status === 0 && j.released === true && j.archived === true,
+            label + ': must still archive — ' + leg.why + '; got status=' + r.status
+            + ' json=' + JSON.stringify(j) + ' stderr=' + String(r.stderr || '').slice(0, 300));
+          assert(!fs.existsSync(fx.mainProjDir) && !fs.existsSync(fx.wtProjDir),
+            label + ': and BOTH live copies are disposed of, as an ordinary release does');
+          if (leg.name === 'P1_empty_dir') {
+            // SETTLED, and recorded as ACCEPTED rather than left as a suspicion. A main-only empty
+            // directory enters neither the walk's file map nor the invalid[] set, so no half of the
+            // comparison can name it and the disposal deletes it silently — measured, exit 0, on the
+            // no-mirror `release` route where no Step-8a mirror makes it moot.
+            //
+            // It is accepted because git cannot store an empty directory AT ALL. The archive band is
+            // committed, so a preserved empty directory would vanish at the next commit and be absent
+            // from every clone: preserving it would preserve something the durable record cannot
+            // hold. Nothing is lost that could ever have been kept.
+            //
+            // What makes the acceptance safe is the P2 row directly below, not this reasoning: the
+            // moment that directory holds ONE byte, the refusal fires and names it. If a future
+            // change makes an empty directory meaningful, this pin is the place that has to change,
+            // and it says so.
+            assert(!lexists906(fx.entryAbs),
+              label + ': the empty directory is deleted with the folder — pinned as KNOWN AND '
+              + 'ACCEPTED, not as an oversight. If this ever starts surviving, read the note here '
+              + 'before "fixing" the test');
+            assert(!(Array.isArray(j.missing) && j.missing.length)
+              && !(Array.isArray(j.mismatched) && j.mismatched.length),
+              label + ': and it is named in nothing, which is the honest report for an entry with no '
+              + 'bytes; got missing=' + JSON.stringify(j.missing) + ' mismatched=' + JSON.stringify(j.mismatched));
+          }
+        } else {
+          assert(r.status === 1 && j.result === 'refuse' && j.reason === 'archive_incomplete',
+            label + ': ' + leg.why + ' — the disposal must REFUSE; got status=' + r.status
+            + ' json=' + JSON.stringify(j) + ' stderr=' + String(r.stderr || '').slice(0, 300));
+
+          // THE REFUSAL MUST NAME WHAT IT REFUSED OVER. Before this bundle the release / watch-pr /
+          // sweep routes reported `missing` only, so an entry-kind fault refused with an EMPTY list:
+          // an operator told "archive_incomplete" and given nothing to look at. Either half may carry
+          // it — which half is the implementer's — but SOME half must.
+          const named = (Array.isArray(j.missing) ? j.missing : [])
+            .concat(Array.isArray(j.mismatched) ? j.mismatched : []);
+          assert(named.indexOf(leg.rel) >= 0,
+            label + ': and NAME the entry it refused over. A refusal that lists nothing is one an '
+            + 'operator cannot act on, and that is what shipped for these three no-mirror routes; got '
+            + 'missing=' + JSON.stringify(j.missing) + ' mismatched=' + JSON.stringify(j.mismatched));
+
+          // Nothing destroyed: the at-risk entry and BOTH live copies survive.
+          assert(lexists906(fx.entryAbs),
+            label + ': the at-risk entry survives the refusal — this is the entry that was being lost '
+            + 'from everywhere at exit 0');
+          assert(fs.existsSync(fx.mainProjDir) && fs.existsSync(fx.wtProjDir),
+            label + ': and both live copies survive — the delete is all-or-nothing');
+          assert(j.archived !== true,
+            label + ': and the envelope must not claim it archived; got ' + JSON.stringify(j.archived));
+        }
+      } finally { cleanup906(fx); }
+    }
+  }
+
+  // ============================================================================================
+  // ROUTE 1 — the #395.4 crash backstop. The worktree's live folder is GONE (so archiveProjectDir is
+  // source-missing), the archive under MAIN is already stamped closed, and MAIN's live folder
+  // survived. The backstop must clear the phantom claim WITHOUT destroying what main still holds.
+  //
+  // Pinned as a RESULT: a file present only in main's live folder still exists somewhere afterwards,
+  // and `status` from main reports no active folder. NOT pinned: the destination's name or its
+  // timestamp format — those are the implementer's, and a pin on them rots.
+  // ============================================================================================
+  function mk906r1(project, mainOnlyRel, mainLiveAsSymlink) {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-906r1-')));
+    const mainRoot = path.join(base, 'main');
+    const wtRoot = path.join(base, 'wt');
+    fs.mkdirSync(mainRoot, { recursive: true });
+    g906(mainRoot, ['init', '-b', 'main']);
+    g906(mainRoot, ['config', 'user.email', 't@t.com']);
+    g906(mainRoot, ['config', 'user.name', 'Test']);
+    g906(mainRoot, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(mainRoot, 'README.md'), 'fixture\n');
+    g906(mainRoot, ['add', '-A']);
+    g906(mainRoot, ['commit', '-m', 'chore: init']);
+    g906(mainRoot, ['worktree', 'add', '-b', 'workflow/' + project, wtRoot]);
+
+    // The archive under MAIN, already terminal-closed: the crash happened AFTER the rename.
+    const archive = path.join(mainRoot, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(path.join(archive, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(archive, 'workflow-state.md'), state906(project, wtRoot, mainRoot, 'closed'));
+    fs.writeFileSync(path.join(archive, '.cache', 'shared.md'), '# in both\n');
+
+    // MAIN's live folder SURVIVED — this is what the backstop acts on. The worktree's is ABSENT,
+    // which is what makes archiveProjectDir source-missing and reaches the backstop at all.
+    const mainLive = path.join(mainRoot, 'kaola-workflow', project);
+    const realLive = mainLiveAsSymlink ? path.join(base, 'elsewhere-live') : mainLive;
+    fs.mkdirSync(path.join(realLive, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(realLive, 'workflow-state.md'), state906(project, wtRoot, mainRoot, 'active'));
+    fs.writeFileSync(path.join(realLive, '.cache', 'shared.md'), '# in both\n');
+    fs.writeFileSync(path.join(realLive, ...mainOnlyRel.split('/')), '# ONLY IN MAIN\n');
+    if (mainLiveAsSymlink) {
+      fs.mkdirSync(path.dirname(mainLive), { recursive: true });
+      fs.symlinkSync(realLive, mainLive);
+    }
+    return { base, mainRoot, wtRoot, project, archive, mainLive, realLive, mainOnlyRel };
+  }
+
+  // Every file reachable under `dir`, as dir-relative paths. Directory-ness is decided by `statSync`,
+  // which FOLLOWS symlinks, and that is deliberate: when main's live folder was itself a symlink the
+  // backstop moves the LINK, so the rescued bytes are reachable THROUGH the orphan rather than copied
+  // beneath it. A `withFileTypes` walk stops at the link and reports the rescue as a loss. Depth-capped
+  // because following links means a cycle is representable.
+  function walk906(dir, rel, out, depth) {
+    if ((depth || 0) > 6) return out;
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch (_) { return out; }
+    for (const name of names) {
+      const abs = path.join(dir, name);
+      const r = rel ? rel + '/' + name : name;
+      let isDir = false;
+      try { isDir = fs.statSync(abs).isDirectory(); } catch (_) { isDir = false; }
+      if (isDir) walk906(abs, r, out, (depth || 0) + 1); else out.push(r);
+    }
+    return out;
+  }
+
+  const MAIN_ONLY_906 = '.cache/ONLY-IN-MAIN.md';
+  const LEGS_906R1 = [
+    { name: 'L1_plain', extra: [], symlink: false, editions: null },
+    { name: 'L2_keepworktree', extra: ['--keep-worktree'], symlink: false, editions: ['canonical'] },
+    { name: 'L3_symlinked_main_live', extra: [], symlink: true, editions: ['canonical'] },
+  ];
+
+  for (const [edName, claimScript] of EDITIONS_906) {
+    if (!fs.existsSync(claimScript)) continue;   // the R2 loop above already asserted existence
+    for (const leg of LEGS_906R1) {
+      if (leg.editions && leg.editions.indexOf(edName) < 0) continue;
+      const label = '#906(R1 ' + edName + ' ' + leg.name + ')';
+      const project = 'issue-9061' + Buffer.from(edName + leg.name).toString('hex').slice(0, 6);
+      const fx = mk906r1(project, MAIN_ONLY_906, leg.symlink);
+      try {
+        assert(fs.existsSync(path.join(fx.realLive, ...MAIN_ONLY_906.split('/'))),
+          label + ' premise: the main-only evidence file exists before the run');
+        const r = runClaim906(claimScript, fx.wtRoot,
+          ['finalize', '--project', fx.project, ...leg.extra, '--json']);
+        const j = r.json || {};
+
+        assert(r.status === 0 && j.status === 'closed',
+          label + ': the crash-resume finalize still closes at exit 0 — nothing here refuses; got '
+          + 'status=' + r.status + ' json=' + JSON.stringify(j && { status: j.status, reason: j.reason })
+          + ' stderr=' + String(r.stderr || '').slice(0, 300));
+
+        // (a) THE CLAIM IS CLEARED — measured from MAIN, not inferred from the folder being gone.
+        assert(!lexists906(fx.mainLive),
+          label + ': main no longer holds a live folder at kaola-workflow/<project>');
+        const st = runClaim906(claimScript, fx.mainRoot, ['status', '--json']);
+        assert(st.json && st.json.count === 0,
+          label + ': and `status` FROM MAIN reports no active folder — the phantom claim a successor '
+          + 'would resume is what the backstop exists to clear; got ' + JSON.stringify(st.json && st.json.count));
+
+        // (b) NOTHING WAS DESTROYED. The result, not the destination's name: the bytes are still
+        // readable somewhere under the archive authority.
+        const archiveFiles = walk906(fx.archive, '', []);
+        const survivors = archiveFiles.filter(p => p.endsWith(MAIN_ONLY_906.split('/').pop()));
+        const survivedWithBytes = survivors.some(p => {
+          try { return fs.readFileSync(path.join(fx.archive, ...p.split('/')), 'utf8').indexOf('ONLY IN MAIN') >= 0; }
+          catch (_) { return false; }
+        });
+        assert(survivedWithBytes,
+          label + ': the file only MAIN held must still be readable under the archive authority. '
+          + 'Clearing the claim and destroying the folder are two different acts, and only the first '
+          + 'was ever the goal; the archive now holds ' + JSON.stringify(archiveFiles.sort()));
+
+        // (c) and the rescue must not create a SECOND archive authority the next resume trips over.
+        const chk = runClaim906(claimScript, fx.wtRoot,
+          ['finalize', '--project', fx.project, '--check', '--json']);
+        assert(chk.json && chk.json.ok === true,
+          label + ': `finalize --check` still answers ok afterwards — a rescue that made the next '
+          + 'resume ambiguous would have traded one dead end for another; got '
+          + JSON.stringify(chk.json && { ok: chk.json.ok, reasons: chk.json.reasons }));
+
+        if (leg.symlink) {
+          assert(fs.existsSync(path.join(fx.realLive, ...MAIN_ONLY_906.split('/'))),
+            label + ': a SYMLINKED main live folder is moved as the link — the target directory and '
+            + 'its bytes are left exactly where they were, never followed and deleted');
+        }
+      } finally { cleanup906(fx); }
+    }
+  }
+}
+
 spawnCensus.report();
 
 if (failed > 0) {

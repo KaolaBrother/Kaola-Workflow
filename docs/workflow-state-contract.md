@@ -161,8 +161,45 @@ implies its `.cache/<id>.md`), which was the same declared-set idea the finalize
 rested on, one layer down. Nothing is weakened: the recursive source walk requires strictly more
 than any ledger row ever implied.
 
+**Three answers, not two.** The return is `{ ok, missing[], mismatched[], uncomparable[] }`.
+`missing` names what the destination lacks; `mismatched` names every entry that did not verify
+byte-for-byte; and `uncomparable` — a strict **subset** of `mismatched`, never a replacement — names
+the entries that could not be byte-compared *at all*: a symlink, a directory or a device where a
+regular file was required, and a source subtree the walk could not read. The two facts used to share
+one list, so a reader could not tell "restore the correct bytes" from "this is not a file", and the
+caller that compares main's surviving live folder reads presence only, which made the second class
+invisible to it — a main-only symlink, including a dangling one, was destroyed at exit 0. Every
+existing reader keeps the answer it had; a reader needing the distinction subtracts. There is still
+one source walk, one call and one answer. `'<root>'` and `'<dest>'` are sentinels for the source or
+destination directory itself being unreadable or absent.
+
+The evidence floor that survives an unreadable source subtree is named by four fixed filenames —
+`mission-list.md`, `workflow-plan.md`, `workflow-state.md`, `finalization-summary.md`, each required
+in the destination when the source holds it. The first two are read from the kernel's own constants
+in every edition rather than hand-typed per port: the GitLab and Gitea ports listed only three, so
+`mission-list.md`, the run record itself, was absent from that floor and a main-only entry by that
+name was destroyed at exit 0 on those two editions.
+
 `closure-audit` reports an `archive_content_incomplete` drift class (report-only in both modes, and
 identical offline).
+
+### The crash-resume backstop moves, it does not delete
+
+When the archive has already landed and a crash left `<mainRoot>/kaola-workflow/{project}/`
+standing, finalize renames that folder to `<archive-authority>/.orphan-main-live-<ISO-ts>/` rather
+than removing it. The backstop's goal is only to stop the active-folder scan from reading a finished
+run as a live claim, and a move achieves that with nothing lost; the earlier removal destroyed
+main-only evidence that existed in no archive, at exit 0. The destination is nested **inside** the
+resolved archive authority rather than placed beside it, which is measured, not stylistic: a sibling
+`archive/<project>.orphan-<ts>` makes the next sink refuse `sink_blocked` with the rescued evidence
+named as foreign dirt, while the nested form is covered by the own-archive exemption, so the sink
+completes and its `archive_commit` step lands the orphan in git history. Nesting also places it one
+level below where archive authorities are resolved, so no suffix rule can collide with it — a
+`.archived-` suffix was measured to break the next resume with `archive_authority_ambiguous`. The
+envelope reports `main_live_orphan`, `main_live_orphaned_to` and `main_live_orphan_error`; see
+`api.md` § Finalize envelope. A failed rename leaves the folder exactly where it was, and the move is
+skipped when the archive authority is not under the main checkout, because moving into a tree the
+sink is about to force-remove would be a new destruction route wearing a rescue's name.
 
 ## Workflow State Fields
 

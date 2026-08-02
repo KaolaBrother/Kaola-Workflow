@@ -142,6 +142,15 @@ const { isTransientFetchStderr } = require('./kaola-gitlab-workflow-classifier.j
 // unreproducible chains_stale. The kernel is BASE-NAMED in all four trees and is absent from the
 // forge rename map, so this require renders unchanged in every edition port.
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
+// #910: WHERE a project record lands — the resolver the consumer arm's final-validation producer
+// already writes through, reached rather than re-derived so the two halves of one rule cannot drift.
+// The edge is safe and it renders in every edition: this module requires ONLY Node builtins, its CLI
+// is `require.main === module`-guarded so loading it has no side effects, and it is BASE-NAMED and
+// byte-identical in all four trees — absent from the forge rename set, so the require below is
+// emitted unchanged into the gitlab/gitea ports (the trap the isEditionCouplingPath note names).
+// Nothing is added to validation-runner itself: it keeps its single sibling require, and the schema
+// it needs arrives as an injected argument from here.
+const validationRunner = require('./kaola-workflow-validation-runner');
 
 // #666: cap unbounded-in-repo-size git spawnSync/execFileSync calls at 64 MB — Node's default
 // maxBuffer is 1 MB, and a repo-size-scaling diff/listing can exceed it and crash with ENOBUFS.
@@ -623,12 +632,45 @@ function resolveDiffBase(cwd, env) {
 // #725 (B1): the changed-file set vs `baseSha` — tracked committed+staged+unstaged (git diff) PLUS
 // untracked new files (fail-closed: a new plugins/ file must count). Returns null on a git failure
 // (the caller fails closed to all four).
+//
+// #907: `-z` on BOTH streams, split on NUL and NOTHING else. Neither command emits raw bytes without
+// it: a path carrying a `"`, a `\`, a control character, or (under the default core.quotePath) a
+// non-ASCII byte comes back C-QUOTED as `"plugins/…"` with the offending bytes escaped. Every test in
+// isEditionCouplingPath below is a prefix/exact match on this value, and all of them read the leading
+// quote and answer false — so the one edition-touching path in a diff classified as claude-exclusive
+// and the run scoped to ONE chain where four were owed. That is a fail-OPEN in the direction that
+// matters: the three chains it skipped are exactly the ones that would have gone red.
+// The `.trim()` goes with the split, and not only for tidiness — `git diff --name-only` does NOT
+// quote a trailing space (measured; `git status --porcelain` does, so the two commands need different
+// handling and one mental model of "git quotes odd names" is wrong), so the trim silently renamed the
+// path it was about to classify. splitNulPaths is the kernel's one NUL splitter, shared rather than
+// re-typed here.
+//
+// #907 (second half): `--no-renames`, and it is a CORRECTNESS flag here, not a performance one.
+// `--name-only` emits ONE field per record and, when rename detection fires, that field is the
+// DESTINATION only — the pre-image is never named. So a `git mv` that carries a file OUT of an
+// edition tree and into `src/` DELETES it from that edition, while the changed-file set names only
+// the `src/` destination; the classifier below, which can only answer about paths it is handed, then
+// scoped the run to ONE chain. Three chains skipped over a diff that removed a file from an edition
+// tree — a wrong answer in the chain-SELECTION mechanism, which silently skips the verification that
+// would catch everything else.
+// (Stated without an example path on purpose: this file is generated into the forge trees verbatim,
+// and each forge's contract validator forbids a literal reference to another edition's script
+// directory ANYWHERE in the text, comments included. A path here is indistinguishable to that rule
+// from a real cross-tree fallback, and the rule is right to read what ships rather than what was
+// meant.) Turning rename detection OFF decomposes every rename back into a delete of the source plus an
+// add of the destination, both ordinary one-field records: the source is named again, and a pure
+// delete was always classified correctly. It can only ever WIDEN the set, so it cannot introduce a
+// fail-open, and it costs nothing to read — measured, a diff with no rename in it is byte-identical
+// with and without the flag. It also keeps the reader on `splitNulPaths`: `--name-status -z` carries
+// both halves but needs a second decoder for its status column, and the parse contract is explicit
+// that a third decoder is the thing to avoid.
 function computeChangedFiles(cwd, baseSha) {
-  const diff = spawnSync('git', ['-C', cwd, 'diff', '--name-only', baseSha], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+  const diff = spawnSync('git', ['-C', cwd, 'diff', '--name-only', '-z', '--no-renames', baseSha], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   if (diff.status !== 0 || diff.error) return null;
-  const tracked = diff.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
-  const others = spawnSync('git', ['-C', cwd, 'ls-files', '--others', '--exclude-standard'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
-  const untracked = (others.status === 0 && !others.error) ? others.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : [];
+  const tracked = adaptiveSchema.splitNulPaths(diff.stdout);
+  const others = spawnSync('git', ['-C', cwd, 'ls-files', '--others', '--exclude-standard', '-z'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+  const untracked = (others.status === 0 && !others.error) ? adaptiveSchema.splitNulPaths(others.stdout) : [];
   return [...new Set([...tracked, ...untracked])];
 }
 
@@ -674,7 +716,16 @@ const ROOT_EDITION_READ_FILES = new Set(['CLAUDE.md', 'README.md', 'install.sh',
 // COMMON_SCRIPTS / byte-group / rename-family member — detected by filesystem existence so this stays
 // self-contained with NO cross-script import, which a forge port could not resolve), or a ROOT
 // cross-edition READ surface a non-claude contract validator asserts on (#725 R1 — the constants
-// above). Everything else is claude-exclusive. Fail-closed by construction: unsure -> all four.
+// above). Everything else is claude-exclusive.
+//
+// #907, and read this before trusting the line it replaces: this note used to end "Fail-closed by
+// construction: unsure -> all four", flat. That was measurably FALSE. Every test below is a
+// prefix/exact/regex match on `rel`, so the property holds only while `rel` is the file's LITERAL
+// name — and until #907 the caller handed over git's C-QUOTED rendering of it, against which every
+// one of those tests answers "claude-exclusive" for a path sitting squarely under plugins/.
+// The guarantee is CONDITIONAL and its condition lives in the caller: computeChangedFiles reads both
+// streams with `-z` and splits on NUL, for exactly this reason. Feed this function a newline-split
+// stream again and the fail-open comes back with it.
 function isEditionCouplingPath(rel, cwd, forgeRefs) {
   const p = String(rel).replace(/\\/g, '/');
   // The Oracle Kernel's per-forge copies are GENERATED from the one canonical source
@@ -746,18 +797,50 @@ function getGitTopLevel(cwd) {
   return r.stdout.trim() || cwd;
 }
 
+// #910: WHERE a --project RECORD lands, which is not the tree the receipt BINDS. `getGitTopLevel(cwd)`
+// answers with the INVOKING tree, and in a linked worktree that is not where the finalize gate reads:
+// the gate takes the record out of the finalize AUTHORITY's `.cache/` — under the standard worktree
+// posture, main's run folder, the source Step 8a's mirror copies FROM — while hashing the tree its own
+// shell is in. So a receipt produced from the worktree landed in the worktree, the gate looked in main,
+// found nothing, and four green chains classified `chains_unverified`. Running from main instead is not
+// the fix: the hash would then bind main's tree and the same gate answers `chains_stale`. Main and a
+// linked worktree agree only while the branch carries nothing main lacks — i.e. they differ across
+// exactly the pre-merge window a finalize happens in.
+//
+// THE RULE, in one line: THE HASH FOLLOWS THE INVOKING TREE; THE RECORD FOLLOWS THE RUN FOLDER.
+// The hash half is already right and is deliberately untouched (see computeCodeTreeHash's caller
+// below, which keeps its own getGitTopLevel). This is the record half, and it is `resolveRecordFolder`
+// — the SAME resolver the consumer arm's final-validation producer writes through, reached rather than
+// re-derived, because two implementations of one rule are two things to drift. It searches this tree
+// first, then MAIN; it never reaches the other way, since binding main's hash to a worktree-only run
+// folder is the wrong tree.
+//
+// THE FALLBACK IS LOAD-BEARING, not defensive filler: the resolver returns `dir: null` when the run
+// folder is live in NEITHER tree, and in a plain repository that is the ordinary first run — nothing
+// creates the folder before this write does. Falling back to the pre-#910 `<invoking tree>/
+// kaola-workflow/<P>` is precisely what leaves a non-worktree checkout behaving exactly as it did.
+function resolveProjectRecordDir(gitTop, project) {
+  try {
+    const found = validationRunner.resolveRecordFolder(gitTop, project, adaptiveSchema);
+    if (found && found.dir) return found.dir;
+  } catch (_) { /* unresolvable topology — fall back to the invoking tree, i.e. the pre-#910 answer */ }
+  return path.join(gitTop, 'kaola-workflow', project);
+}
+
 // #546: resolve the receipt output path from the parsed flags, honoring precedence
-// --output > --plan > --project > cwd default. --project <issue-N> -> the plan-dir
-// kaola-workflow/<issue-N>/.cache (resolved against the git top-level); --plan <path> -> the EXACT
+// --output > --plan > --project > cwd default. --project <issue-N> -> the run folder's
+// kaola-workflow/<issue-N>/.cache (resolved per #910 above); --plan <path> -> the EXACT
 // plan-dir the validator derives (path.dirname(<plan-path>))/.cache. The validator reads
 // <plan-dir>/.cache/chain-receipt.json, so both flags land the receipt where the gate looks.
+// --plan is an EXPLICIT path the caller supplied and is left resolving against cwd unchanged; only
+// the derived --project arm moved.
 function resolveOutputPath(opts, cwd) {
   if (opts.output != null) return path.resolve(cwd, opts.output);
   if (opts.plan != null) {
     return path.join(path.dirname(path.resolve(cwd, opts.plan)), '.cache', 'chain-receipt.json');
   }
   if (opts.project != null) {
-    return path.join(getGitTopLevel(cwd), 'kaola-workflow', opts.project, '.cache', 'chain-receipt.json');
+    return path.join(resolveProjectRecordDir(getGitTopLevel(cwd), opts.project), '.cache', 'chain-receipt.json');
   }
   return path.join(cwd, '.cache', 'chain-receipt.json');
 }
@@ -969,11 +1052,19 @@ async function main(argv) {
   // helper creates no directory and never creates the log on a refusal, and the return value is
   // discarded. Telemetry can never alter, delay or refuse the outcome it observes.
   // -------------------------------------------------------------------------
+  //
+  // #910: the --project arm resolves through resolveProjectRecordDir, the same resolver the receipt
+  // itself uses. Not tidiness — the sidecar is the SAME run's record in the SAME `.cache/`, and
+  // deriving the folder twice by two rules is how the receipt and its own telemetry end up in
+  // different checkouts. It also settles a latent hazard: this derivation ran even when the folder did
+  // not exist locally, so under a worktree run run-chains CREATED `<worktree>/kaola-workflow/<P>/` as a
+  // side effect of telemetry, and the finalize transaction's Step-8a mirror branches on that
+  // directory's existence. With both arms on one resolver, a worktree run writes nothing there at all.
   const outcomeStartedAt = Date.now();
   const outcomeProjectDir = pathOpts.plan != null
     ? path.dirname(path.resolve(cwd, pathOpts.plan))
     : (pathOpts.project != null
-      ? path.join(getGitTopLevel(cwd), 'kaola-workflow', pathOpts.project)
+      ? resolveProjectRecordDir(getGitTopLevel(cwd), pathOpts.project)
       : null);
   const recordOutcome = (envelope) => {
     try {

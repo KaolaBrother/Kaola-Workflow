@@ -530,6 +530,750 @@ async function main() {
     fs.rmSync(outsideGit, { recursive: true, force: true });
   }
 
+  // ── #904: the sandbox root is a PATH BUDGET, and a child must be able to bind in it ────────────
+  //
+  // The runner points the child's TMPDIR at its own sandbox directory. A unix domain socket path is
+  // carried in `sun_path`, a fixed-width field (104 bytes on darwin, 108 on Linux), so a sandbox root
+  // that is merely long makes every socket-binding child die with `listen EINVAL` — not a flake, a
+  // deterministic length overflow. tsx is one such child: its IPC pipe is `$TMPDIR/tsx-<uid>/<pid>.pipe`.
+  //
+  // WHAT IS PINNED IS THE RESULT — a child spawned by `run` can bind a socket under the sandbox TMPDIR —
+  // and NOT the shape that achieves it. The directory literal, the seed width, and whether the seed is a
+  // digest at all are the implementer's; a pin on `kwv` or on 16 hex would rot the moment either moved
+  // for a reason having nothing to do with this defect. The one shape property that IS pinned is the one
+  // the budget must not buy: two runs of the same policy still produce the same `command_id`, because the
+  // sandbox path is hashed into the identity chain and a random root would break it.
+  //
+  // THIS IS THE FIRST COVERAGE THE `run` SUBCOMMAND HAS EVER HAD. `defaultSandboxPaths` is not exported
+  // and no suite in the repo invoked `run`, which is exactly how a 143-character root shipped. So the
+  // controls below are not decoration — without them a green here proves only that something exited 0.
+  //
+  // TMPDIR IS FIXED BY THE FIXTURE, never inherited. `os.tmpdir()` is the first term of the budget, and
+  // it is 4 characters on a box with TMPDIR unset and 48 on a stock macOS user session. Inheriting it
+  // would make this test pass or fail by accident of who ran it; the fixture pins it at the same 48 the
+  // defect was measured against, so the budget under test is the real one.
+  if (process.platform !== 'win32') {
+    const SOCK_TMPDIR_LEN = 48;               // a stock macOS `os.tmpdir()`: /var/folders/xx/…/T
+    const sockBase = fs.mkdtempSync('/tmp/kw904-');
+    const sockTmp = sockBase + '-' + 'p'.repeat(Math.max(1, SOCK_TMPDIR_LEN - sockBase.length - 1));
+    const sockRepo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw904-repo-')));
+    const sockOut = path.join(sockBase, 'receipt.json');
+    try {
+      fs.mkdirSync(sockTmp, { recursive: true });
+      assert.strictEqual(sockTmp.length, SOCK_TMPDIR_LEN,
+        '#904 fixture: the sandbox TMPDIR under test must be exactly ' + SOCK_TMPDIR_LEN + ' characters — '
+        + 'the budget is arithmetic over path lengths, so a fixture of some other length measures some '
+        + 'other budget; got ' + JSON.stringify(sockTmp));
+
+      // The probe reproduces tsx's real pipe shape. The trailing component is fixed rather than
+      // `process.pid` so the suffix width is the same on every run: a 3-digit pid would quietly buy
+      // two characters of budget the real consumer does not have.
+      const probe = [
+        "'use strict';",
+        "const fs = require('fs'); const net = require('net'); const path = require('path');",
+        "const dir = path.join(process.env.TMPDIR || '/tmp', 'tsx-' + (process.getuid ? process.getuid() : 0));",
+        'fs.mkdirSync(dir, { recursive: true });',
+        "const sock = path.join(dir, '12345.pipe');",
+        'const server = net.createServer();',
+        "server.on('error', e => { process.stderr.write('BIND FAILED len=' + sock.length + ' ' + e.message + '\\n'); process.exit(1); });",
+        "server.listen(sock, () => { server.close(() => { process.stdout.write('BIND OK len=' + sock.length + '\\n'); process.exit(0); }); });",
+      ].join('\n');
+      const probePath = path.join(sockBase, 'probe-tsx-pipe.js');
+      fs.writeFileSync(probePath, probe);
+      const noopPath = path.join(sockBase, 'noop.js');
+      fs.writeFileSync(noopPath, "'use strict';\nprocess.exit(0);\n");
+
+      git(sockRepo, ['init', '-q', '-b', 'main']);
+      git(sockRepo, ['config', 'user.email', 't@t.com']);
+      git(sockRepo, ['config', 'user.name', 'Test']);
+      git(sockRepo, ['config', 'commit.gpgsign', 'false']);
+      write(sockRepo, 'src/app.js', 'module.exports = 1;\n');
+      git(sockRepo, ['add', '-A']);
+      git(sockRepo, ['commit', '-q', '-m', 'init']);
+
+      function runRun904(command, outputPath) {
+        // spawn-class: cli-contract
+        const r = spawnSync(process.execPath, [runnerScript, 'run',
+          '--command', command, '--timeout-minutes', '1', '--repo-root', sockRepo,
+          '--output', outputPath], {
+          cwd: sockRepo, encoding: 'utf8', timeout: 180000,
+          // TMPDIR set EXPLICITLY — see the note above. Everything else is inherited so `node` stays
+          // resolvable on PATH, which is what makes the child a real child.
+          env: Object.assign({}, process.env, { TMPDIR: sockTmp }),
+        });
+        let receipt = null;
+        try { receipt = JSON.parse(fs.readFileSync(outputPath, 'utf8')); } catch (_) {}
+        return { status: r.status, stdout: r.stdout, stderr: r.stderr, receipt };
+      }
+
+      // CONTROL A — the probe itself binds under this TMPDIR. Same script, same directory, no runner.
+      // Without this leg a red below is equally explained by "the fixture TMPDIR is unusable", and the
+      // one axis the test claims to vary would not be the only one that varied.
+      // spawn-class: cli-contract
+      const directProbe = spawnSync(process.execPath, [probePath], {
+        encoding: 'utf8', timeout: 60000,
+        env: Object.assign({}, process.env, { TMPDIR: sockTmp }),
+      });
+      assert.strictEqual(directProbe.status, 0,
+        '#904 control: the probe binds fine under the fixture TMPDIR directly — so anything that fails '
+        + 'below fails because of the sandbox root the RUNNER built, not because of the fixture; got status='
+        + directProbe.status + ' stderr=' + JSON.stringify(String(directProbe.stderr || '').slice(0, 300)));
+
+      // CONTROL B — the runner drives a child successfully in this fixture at all. A `run` that could
+      // not execute anything here would red the acceptance leg for a reason that has nothing to do
+      // with path length.
+      const noopRun = runRun904('node ' + noopPath, path.join(sockBase, 'noop-receipt.json'));
+      assert.strictEqual(noopRun.status, 0,
+        '#904 control: `run` over a child that binds nothing PASSES in this fixture; got status='
+        + noopRun.status + ' stderr=' + JSON.stringify(String(noopRun.stderr || '').slice(0, 400)));
+      assert.strictEqual(noopRun.receipt && noopRun.receipt.outcome, 'pass',
+        '#904 control: and the receipt says so; got ' + JSON.stringify(noopRun.receipt && noopRun.receipt.outcome));
+
+      // THE ACCEPTANCE LEG. One axis against control B: the child binds a socket under its TMPDIR.
+      const sockRun = runRun904('node ' + probePath, sockOut);
+      assert.strictEqual(sockRun.status, 0,
+        '#904: a child spawned by `run` MUST be able to bind a unix socket under the sandbox TMPDIR. '
+        + 'It cannot when the sandbox root spends the whole `sun_path` budget before the child gets a '
+        + 'byte — the failure is `listen EINVAL`, deterministic, and it kills every socket-binding tool '
+        + 'a consumer might validate with. got status=' + sockRun.status
+        + ' outcome=' + JSON.stringify(sockRun.receipt && sockRun.receipt.outcome)
+        + ' stderr=' + JSON.stringify(String(sockRun.stderr || '').slice(0, 400)));
+      assert.strictEqual(sockRun.receipt && sockRun.receipt.outcome, 'pass',
+        '#904: and the receipt records the pass; got ' + JSON.stringify(sockRun.receipt && sockRun.receipt.outcome));
+      const sockRuns = (sockRun.receipt && sockRun.receipt.runs) || [];
+      assert.strictEqual(sockRuns.length && sockRuns[0].exit_code, 0,
+        '#904: the CHILD exited 0 — a runner that never ran it would also not report a bind failure; got '
+        + JSON.stringify(sockRuns[0]));
+
+      // DETERMINISM — the one property the seed genuinely buys, and the one a shorter root must keep.
+      // The sandbox HOME/TMPDIR are hashed into `command_identity.effective_environment`, so a
+      // `mkdtemp`-style random root would move `command_id` on every run and every inherited
+      // `{command_id, required_pass_vector_id}` obligation with it.
+      const det1 = runRun904('node ' + noopPath, path.join(sockBase, 'det1.json'));
+      const det2 = runRun904('node ' + noopPath, path.join(sockBase, 'det2.json'));
+      assert.ok(det1.receipt && HEX.test(String(det1.receipt.command_id)),
+        '#904: the run produces a command_id; got ' + JSON.stringify(det1.receipt && det1.receipt.command_id));
+      assert.strictEqual(det1.receipt && det1.receipt.command_id, det2.receipt && det2.receipt.command_id,
+        '#904: two runs of the SAME policy against the SAME repo must produce an identical command_id — '
+        + 'the sandbox path is inside the identity chain, so shortening it must not make it random; got '
+        + JSON.stringify(det1.receipt && det1.receipt.command_id) + ' vs '
+        + JSON.stringify(det2.receipt && det2.receipt.command_id));
+      // NON-VACUITY for the line above: a different policy must move it, or "identical" would also hold
+      // for a command_id that is a constant.
+      const det3 = runRun904('node ' + probePath, path.join(sockBase, 'det3.json'));
+      assert.notStrictEqual(det3.receipt && det3.receipt.command_id, det1.receipt && det1.receipt.command_id,
+        '#904: a DIFFERENT policy moves the command_id — otherwise the equality above is satisfied by a '
+        + 'constant; got ' + JSON.stringify(det3.receipt && det3.receipt.command_id));
+    } finally {
+      fs.rmSync(sockBase, { recursive: true, force: true });
+      fs.rmSync(sockTmp, { recursive: true, force: true });
+      fs.rmSync(sockRepo, { recursive: true, force: true });
+    }
+  }
+
+  // ── #905: retained child output — `--keep-output <dir>` ────────────────────────────────────────
+  //
+  // A red receipt carries the child's output as DIGESTS ONLY, so it names no cause: the complete
+  // human-readable text is a live local at hash time and is dropped on the floor. `--keep-output`
+  // retains it, opt-in per invocation, and shipped with no coverage at all.
+  //
+  // WHAT IS PINNED IS THE RESULT. Nothing below names the directory literal, the file-naming spelling,
+  // or an internal function: a retained artifact is located by its BYTES, and the index keying is
+  // asserted as "a reader holding run i's digest can find run i's bytes by name" rather than as any
+  // particular name. Four properties, each of them the difference between this flag being safe and
+  // being a defect:
+  //
+  //   A. THE RECEIPT IS BYTE-UNCHANGED BY THE FLAG. This is why an opt-in flag was preferable to the
+  //      two alternatives — a `raw_output_path` field re-keys `vector_id` with the destination, and
+  //      inlining the text re-keys it once for everyone. If the receipt ever moves with the flag, the
+  //      reason this shape was chosen is void, so it is pinned on the value AND on the field set.
+  //   B. THE BYTES ARE WRITTEN AFTER THE LAST CANDIDATE DIGEST. The repetition loop digests the tree
+  //      before and after every repetition and `reduceRuns` compares both, so a log written mid-loop
+  //      makes the runner report its OWN output as `candidate_mutation` — turning a merely red run
+  //      into a self-inflicted `inconclusive`, which is the outcome that cannot be acted on.
+  //   C. AN EXISTING TARGET REFUSES, BEFORE THE CHILD RUNS. A stale file read as this run's output is
+  //      a FALSE diagnosis, strictly worse than the no-diagnosis state the flag exists to fix. And a
+  //      refusal arriving after a long suite has thrown away the very run it was meant to explain, so
+  //      "it refuses" and "it refuses first" are two separate claims and both are asserted.
+  //   D. EVERY REPETITION'S BYTES ARE RETAINED AND KEYED BY THE RECEIPT'S OWN `runs[].index`. That
+  //      mapping is the whole value of the feature: it is what takes a reader from a red digest to
+  //      the bytes that produced it.
+  //
+  // ON ARMING: the runner reads no `KAOLA_*` variable, so no inherited environment can switch this
+  // mechanism off — but a fixture can still be vacuous in two ways that ARE checked below. Every leg
+  // that expects retention proves the child actually ran and actually produced those bytes (the
+  // digests are compared against the receipt's, and C's control leg observes a side effect the child
+  // itself made), and B's location is proven to be one the candidate digest can SEE before it is used.
+  if (process.platform !== 'win32') {
+    const keepBase = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw905-')));
+    const keepRepo = path.join(keepBase, 'repo');
+    try {
+      fs.mkdirSync(keepRepo);
+      git(keepRepo, ['init', '-q', '-b', 'main']);
+      git(keepRepo, ['config', 'user.email', 't@t.com']);
+      git(keepRepo, ['config', 'user.name', 'Test']);
+      git(keepRepo, ['config', 'commit.gpgsign', 'false']);
+      write(keepRepo, 'src/app.js', 'module.exports = 1;\n');
+      git(keepRepo, ['add', '-A']);
+      git(keepRepo, ['commit', '-q', '-m', 'init']);
+
+      // A DETERMINISTIC red child — no pid, no clock. Two runs of this policy are therefore comparable
+      // byte-for-byte, so any difference between them can only have come from the flag under test.
+      // Its two streams differ from each other, which is what makes "stdout and stderr are separately
+      // recoverable" a falsifiable claim rather than one satisfied by a single merged file.
+      const redChild = path.join(keepBase, 'red-child.js');
+      fs.writeFileSync(redChild, [
+        "'use strict';",
+        "process.stdout.write('KW905_STDOUT: assertion 7 of 9 failed\\n  expected: alpha\\n  actual:   beta\\n');",
+        "process.stderr.write('KW905_STDERR: Error: boom at line 42\\n');",
+        'process.exit(1);',
+      ].join('\n'));
+
+      function runRun905(extra) {
+        // spawn-class: cli-contract
+        const r = spawnSync(process.execPath, [runnerScript, 'run',
+          '--timeout-minutes', '1', '--repo-root', keepRepo, ...extra], {
+          cwd: keepRepo, encoding: 'utf8', timeout: 180000,
+        });
+        return { status: r.status, stdout: String(r.stdout || ''), stderr: String(r.stderr || '') };
+      }
+      function receipt905(file) {
+        try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
+      }
+      // A retained artifact is identified by its CONTENT. Reading the directory and digesting what is
+      // in it is deliberate: it lets every assertion below be about what a reader can recover, and
+      // leaves the naming scheme entirely to the implementer.
+      // A destination that does not exist reads as "nothing was retained" rather than throwing: the
+      // assertion that follows then names the property that failed, where a raw ENOENT would name only
+      // a path — and "the flag did nothing at all" is precisely the state this block exists to catch.
+      function retained905(dir) {
+        let names = [];
+        try { names = fs.readdirSync(dir).sort(); } catch (_) { names = []; }
+        return names.map(name => {
+          const bytes = fs.readFileSync(path.join(dir, name));
+          return { name, bytes, digest: runner.sha256(bytes) };
+        });
+      }
+      function carrying905(artifacts, digest) {
+        return artifacts.filter(entry => entry.digest === digest);
+      }
+
+      // ── A. the receipt is byte-unchanged by the flag ─────────────────────────────────────────────
+      const receiptOff = path.join(keepBase, 'receipt-off.json');
+      const receiptOn = path.join(keepBase, 'receipt-on.json');
+      const retainDir = path.join(keepBase, 'retained');   // OUTSIDE the repo: one axis only, the flag
+      const off905 = runRun905(['--command', 'node ' + redChild, '--output', receiptOff]);
+      const on905 = runRun905(['--command', 'node ' + redChild, '--output', receiptOn, '--keep-output', retainDir]);
+      const OFF = receipt905(receiptOff);
+      const ON = receipt905(receiptOn);
+      assert.ok(OFF && ON, '#905: both legs must write a receipt; got off=' + off905.status + ' on=' + on905.status
+        + ' stderr=' + JSON.stringify(on905.stderr.slice(0, 400)));
+      assert.strictEqual(OFF.outcome, 'fail', '#905: the leg under test is a RED run — the case the flag exists for; got '
+        + JSON.stringify(OFF.outcome));
+      assert.strictEqual(ON.outcome, 'fail', '#905: and the retained leg is the same red run; got ' + JSON.stringify(ON.outcome));
+
+      // NON-VACUITY, asserted BEFORE the equalities: the flag must actually have retained the child's
+      // bytes. Without this leg every equality below is also satisfied by a `--keep-output` that is
+      // silently ignored — which is precisely the state this suite is being written against.
+      const onArtifacts = retained905(retainDir);
+      assert.notStrictEqual(ON.runs[0].stdout_sha256, runner.sha256(''),
+        '#905: the child under test must actually emit stdout, or "the bytes were retained" is a claim about nothing');
+      assert.ok(carrying905(onArtifacts, ON.runs[0].stdout_sha256).length >= 1,
+        '#905: with the flag, the child\'s stdout is RECOVERABLE — some retained artifact digests to the '
+        + 'receipt\'s stdout_sha256. This is the whole feature; got ' + JSON.stringify(onArtifacts.map(a => a.name)));
+      assert.ok(carrying905(onArtifacts, ON.runs[0].stderr_sha256).length >= 1,
+        '#905: and so is stderr — both halves of a failure are usually needed; got '
+        + JSON.stringify(onArtifacts.map(a => a.name)));
+      assert.notStrictEqual(carrying905(onArtifacts, ON.runs[0].stdout_sha256)[0].name,
+        carrying905(onArtifacts, ON.runs[0].stderr_sha256)[0].name,
+        '#905: the two streams stay SEPARATELY recoverable — merging them loses which was which');
+      // DISCOVERED, never spelled. Leg E below needs a validated command to collide with retention on
+      // purpose, which means knowing the names retention will write — so they are measured here, from
+      // a real run, rather than written into this suite as literals.
+      const stdoutCarrier = carrying905(onArtifacts, ON.runs[0].stdout_sha256)[0].name;
+      const stderrCarrier = carrying905(onArtifacts, ON.runs[0].stderr_sha256)[0].name;
+
+      // The equalities. `vector_id` is the inherited-obligation key, so it moving with a retention
+      // destination is the exact failure the rejected `raw_output_path` direction would have caused.
+      assert.strictEqual(ON.vector_id, OFF.vector_id,
+        '#905: two runs of the SAME failing command differing ONLY in --keep-output must produce the SAME '
+        + 'vector_id. An opt-in flag was chosen over a receipt field precisely because it does not re-key '
+        + 'the receipt; if this moves, the reason for the design is gone; got ' + JSON.stringify(ON.vector_id)
+        + ' vs ' + JSON.stringify(OFF.vector_id));
+      assert.strictEqual(ON.command_id, OFF.command_id,
+        '#905: and the same command_id — retention is not part of the command\'s identity');
+      assert.strictEqual(ON.candidate_digest, OFF.candidate_digest,
+        '#905: and the same candidate — a retention destination outside the tree is not a tree change');
+      assert.deepStrictEqual(Object.keys(ON).sort(), Object.keys(OFF).sort(),
+        '#905: the receipt GAINS NO FIELD when the flag is used; got ' + JSON.stringify(Object.keys(ON).sort()));
+      assert.deepStrictEqual(Object.keys(ON.runs[0]).sort(), Object.keys(OFF.runs[0]).sort(),
+        '#905: nor does any runs[] entry; got ' + JSON.stringify(Object.keys(ON.runs[0]).sort()));
+      // The audit block is checked on its SHAPE rather than its bytes, because its timestamps
+      // legitimately differ between any two runs (:154-155). Without this, a field added to `audit`
+      // would be invisible: it moves neither `vector_id` nor the top-level key set.
+      assert.deepStrictEqual(Object.keys(ON.audit).sort(), Object.keys(OFF.audit).sort(),
+        '#905: nor does the audit block — "no new receipt field" includes the one place an addition would '
+        + 'not move vector_id; got ' + JSON.stringify(Object.keys(ON.audit).sort()));
+      assert.deepStrictEqual(Object.keys(ON.audit.runs[0]).sort(), Object.keys(OFF.audit.runs[0]).sort(),
+        '#905: nor any audit run entry; got ' + JSON.stringify(Object.keys(ON.audit.runs[0]).sort()));
+      // Everything except the audit block and the self-hash that binds it is byte-identical.
+      const durable905 = value => {
+        const copy = Object.assign({}, value);
+        delete copy.audit;
+        delete copy.receipt_sha256;
+        return runner.canonicalJson(copy);
+      };
+      assert.strictEqual(durable905(ON), durable905(OFF),
+        '#905: every durable byte of the receipt outside the audit block is identical with and without the '
+        + 'flag — the property is byte equality, not merely an equal vector_id');
+      assert.strictEqual(runner.computeReceiptSha256(ON), ON.receipt_sha256,
+        '#905: and the retained-leg receipt still self-verifies (the exclusion above gives up nothing)');
+      assert.strictEqual(runner.computeReceiptSha256(OFF), OFF.receipt_sha256,
+        '#905: as does the leg without the flag');
+
+      // ── D. every repetition is retained, keyed by the receipt's own index ────────────────────────
+      //
+      // The child emits a DIFFERENT line on each repetition — a counter in its own TMPDIR, which the
+      // sandbox provides and which is not the repo. Without that the per-index digests would all be
+      // equal and "run i's file holds run i's bytes" would be satisfied by any mapping at all,
+      // including a reversed one.
+      const repChild = path.join(keepBase, 'rep-child.js');
+      fs.writeFileSync(repChild, [
+        "'use strict';",
+        "const fs = require('fs'); const path = require('path');",
+        "const counter = path.join(process.env.TMPDIR || '/tmp', 'kw905-repetition-counter');",
+        "let n = 0; try { n = parseInt(fs.readFileSync(counter, 'utf8'), 10) || 0; } catch (_) { n = 0; }",
+        'n += 1; fs.writeFileSync(counter, String(n));',
+        "process.stdout.write('KW905_OUT repetition ' + n + '\\n');",
+        "process.stderr.write('KW905_ERR repetition ' + n + '\\n');",
+        'process.exit(1);',
+      ].join('\n'));
+      const REPETITIONS_905 = 3;
+      const receiptReps = path.join(keepBase, 'receipt-reps.json');
+      const retainReps = path.join(keepBase, 'retained-reps');
+      const reps905 = runRun905(['--command', 'node ' + repChild, '--repetitions', String(REPETITIONS_905),
+        '--output', receiptReps, '--keep-output', retainReps]);
+      const REPS = receipt905(receiptReps);
+      assert.ok(REPS && Array.isArray(REPS.runs) && REPS.runs.length === REPETITIONS_905,
+        '#905: the run executed all ' + REPETITIONS_905 + ' repetitions; got status=' + reps905.status
+        + ' runs=' + JSON.stringify(REPS && REPS.runs && REPS.runs.length) + ' stderr=' + JSON.stringify(reps905.stderr.slice(0, 400)));
+      const repDigests = REPS.runs.map(entry => entry.stdout_sha256);
+      assert.strictEqual(new Set(repDigests).size, REPETITIONS_905,
+        '#905 arming: each repetition must have produced DIFFERENT bytes, or the index mapping below is '
+        + 'unfalsifiable — every wrong mapping would also pass; got ' + JSON.stringify(repDigests));
+      const repArtifacts = retained905(retainReps);
+      const namesByIndex = new Map();
+      for (const record of REPS.runs) {
+        const out = carrying905(repArtifacts, record.stdout_sha256);
+        const err = carrying905(repArtifacts, record.stderr_sha256);
+        assert.ok(out.length >= 1 && err.length >= 1,
+          '#905: EVERY repetition\'s bytes are retained, not just the last — repetition ' + record.index
+          + ' must be recoverable from the retained artifacts; got ' + JSON.stringify(repArtifacts.map(a => a.name)));
+        // The keying. A reader who has a red `runs[i]` must be able to go to repetition i's bytes FROM
+        // THE INDEX — that mapping is the entire value of retention. Asserted as "the artifact carrying
+        // those bytes is named for that index", which leaves the naming scheme free while still failing
+        // on a mapping that is off by one, reversed, or collapsed onto a single file.
+        assert.ok(out[0].name.includes(String(record.index)),
+          '#905: the retained artifact holding repetition ' + record.index + '\'s stdout must be locatable FROM '
+          + 'THE RECEIPT INDEX — that keying is what maps a red digest back to the bytes that produced it; '
+          + 'those bytes are in ' + JSON.stringify(out[0].name));
+        assert.ok(err[0].name.includes(String(record.index)),
+          '#905: and so must its stderr; those bytes are in ' + JSON.stringify(err[0].name));
+        assert.ok(!namesByIndex.has(out[0].name),
+          '#905: each repetition gets its OWN artifact — a later repetition must not land on an earlier '
+          + 'one\'s name; ' + JSON.stringify(out[0].name) + ' is claimed by two indices');
+        namesByIndex.set(out[0].name, record.index);
+      }
+
+      // Still D — "for every index" includes the ordinary case of a child whose stderr stays quiet. An
+      // EMPTY stream must still leave an artifact: "there is no file for run i's stderr" and "run i
+      // wrote nothing to stderr" are different diagnoses, and a reader who cannot tell them apart is
+      // back where the missing-output defect left them.
+      const quietChild = path.join(keepBase, 'quiet-child.js');
+      fs.writeFileSync(quietChild, [
+        "'use strict';",
+        "process.stdout.write('KW905_QUIET: stdout only, stderr stays empty\\n');",
+        'process.exit(1);',
+      ].join('\n'));
+      const receiptQuiet = path.join(keepBase, 'receipt-quiet.json');
+      const retainQuiet = path.join(keepBase, 'retained-quiet');
+      const quiet905 = runRun905(['--command', 'node ' + quietChild, '--output', receiptQuiet, '--keep-output', retainQuiet]);
+      const QUIET = receipt905(receiptQuiet);
+      assert.ok(QUIET && Array.isArray(QUIET.runs) && QUIET.runs.length === 1,
+        '#905: the quiet-child leg produced a receipt; got status=' + quiet905.status
+        + ' stderr=' + JSON.stringify(quiet905.stderr.slice(0, 300)));
+      assert.strictEqual(QUIET.runs[0].stderr_sha256, runner.sha256(''),
+        '#905 arming: this child must genuinely write NOTHING to stderr, or the empty-stream case is not '
+        + 'the one being exercised; got ' + JSON.stringify(QUIET.runs[0].stderr_sha256));
+      const quietArtifacts = retained905(retainQuiet);
+      assert.ok(carrying905(quietArtifacts, QUIET.runs[0].stderr_sha256).length >= 1,
+        '#905: an empty stream STILL leaves a retained artifact — a silently absent file turns "the child '
+        + 'said nothing" into "retention lost it"; got ' + JSON.stringify(quietArtifacts.map(a => a.name)));
+      assert.ok(carrying905(quietArtifacts, QUIET.runs[0].stdout_sha256).length >= 1,
+        '#905: and the non-empty stream of the same run is recoverable beside it; got '
+        + JSON.stringify(quietArtifacts.map(a => a.name)));
+
+      // ── C. an existing target refuses, and refuses BEFORE the child runs ─────────────────────────
+      //
+      // The clash is created by RUNNING ONCE, not by this suite guessing a file name: that is both
+      // naming-agnostic and the operator's actual mistake.
+      const sentinel905 = path.join(keepBase, 'the-child-ran');
+      const sentinelChild = path.join(keepBase, 'sentinel-child.js');
+      fs.writeFileSync(sentinelChild, [
+        "'use strict';",
+        "require('fs').writeFileSync(" + JSON.stringify(sentinel905) + ", 'ran\\n');",
+        "process.stdout.write('KW905_SENTINEL_STDOUT\\n');",
+        "process.stderr.write('KW905_SENTINEL_STDERR\\n');",
+        'process.exit(1);',
+      ].join('\n'));
+      const clashDir = path.join(keepBase, 'retained-clash');
+      const receiptFirst = path.join(keepBase, 'receipt-first.json');
+      const receiptClash = path.join(keepBase, 'receipt-clash.json');
+
+      // CONTROL — the same invocation into a FRESH directory does everything the refusal leg must not:
+      // the child runs (it leaves a mark of its own), a receipt is written, and bytes are retained.
+      // Without this leg, "the child did not run" below is equally explained by a fixture in which the
+      // child never runs, and a runner that refused unconditionally would pass.
+      const first905 = runRun905(['--command', 'node ' + sentinelChild, '--output', receiptFirst, '--keep-output', clashDir]);
+      assert.ok(fs.existsSync(sentinel905),
+        '#905 control: into a fresh directory the child RUNS and leaves its own mark; got status=' + first905.status
+        + ' stderr=' + JSON.stringify(first905.stderr.slice(0, 400)));
+      assert.ok(fs.existsSync(receiptFirst), '#905 control: and the receipt is written');
+      const clashArtifacts = retained905(clashDir);
+      assert.ok(clashArtifacts.length >= 1, '#905 control: and the bytes are retained');
+      const clashBefore = clashArtifacts.map(entry => entry.digest).join(',');
+
+      fs.rmSync(sentinel905, { force: true });
+      assert.ok(!fs.existsSync(sentinel905), '#905 fixture: the mark is cleared before the refusal leg');
+      const clash905 = runRun905(['--command', 'node ' + sentinelChild, '--output', receiptClash, '--keep-output', clashDir]);
+      assert.strictEqual(clash905.status, 2,
+        '#905: pointing --keep-output at a directory that already holds retained output is a USAGE error — '
+        + 'overwriting destroys the earlier run\'s evidence, and appending merges two runs into one blob; '
+        + 'got status=' + clash905.status + ' stderr=' + JSON.stringify(clash905.stderr.slice(0, 400)));
+      assert.ok(!fs.existsSync(sentinel905),
+        '#905: and it refuses BEFORE THE CHILD RUNS — the child left no mark this time. A refusal that '
+        + 'arrived after a 27-minute suite would have thrown away the run it was meant to explain');
+      assert.ok(!fs.existsSync(receiptClash),
+        '#905: nothing at all was produced by the refused run — no receipt either');
+      assert.strictEqual(clash905.stdout, '',
+        '#905: and it printed no receipt to stdout; got ' + JSON.stringify(clash905.stdout.slice(0, 200)));
+      assert.strictEqual(retained905(clashDir).map(entry => entry.digest).join(','), clashBefore,
+        '#905: THE EARLIER RUN\'S BYTES SURVIVE UNTOUCHED. A stale file read as this run\'s output is a '
+        + 'FALSE diagnosis, which is strictly worse than the no-diagnosis state the flag exists to fix');
+      assert.ok(clash905.stderr.includes('--keep-output'),
+        '#905: the refusal names the flag that caused it; got ' + JSON.stringify(clash905.stderr.slice(0, 300)));
+      assert.ok(clashArtifacts.some(entry => clash905.stderr.includes(path.join(clashDir, entry.name))),
+        '#905: and names the file it will not overwrite, so the operator can act on it rather than guess; got '
+        + JSON.stringify(clash905.stderr.slice(0, 300)));
+
+      // The same refusal when the destination exists but is not a directory at all — `--keep-output`
+      // names the directory the streams land in, and silently treating a file as one would either
+      // clobber it or fail deep inside the run.
+      const notDirectory = path.join(keepBase, 'not-a-directory');
+      fs.writeFileSync(notDirectory, 'an operator\'s own file\n');
+      const notDir905 = runRun905(['--command', 'node ' + redChild, '--output', path.join(keepBase, 'receipt-notdir.json'),
+        '--keep-output', notDirectory]);
+      assert.strictEqual(notDir905.status, 2,
+        '#905: an existing non-directory destination is a usage error too; got status=' + notDir905.status
+        + ' stderr=' + JSON.stringify(notDir905.stderr.slice(0, 300)));
+      assert.strictEqual(fs.readFileSync(notDirectory, 'utf8'), 'an operator\'s own file\n',
+        '#905: and the operator\'s file is not touched');
+
+      // ── B. the bytes are written AFTER the last candidate digest ─────────────────────────────────
+      //
+      // Runs LAST, because it is the only leg that writes into the fixture repo.
+      //
+      // ARMING FIRST. This leg is worthless at a validation-INVISIBLE location: there, no placement in
+      // the loop could ever move the candidate, so the test would pass against the very implementation
+      // it exists to forbid. So the location is proven visible to the digest — by moving it — before it
+      // is used, and proven to move it back, so the observation is about this path and not about drift.
+      const visibleDir = path.join(keepRepo, 'retained-visible');
+      assert.strictEqual(runner.isValidationInvisible('retained-visible/probe', [], { self_host: false }), false,
+        '#905 arming: the retention location for this leg must be one the candidate digest CAN see');
+      const treeClean = runner.computeLandableTreeDigest(keepRepo);
+      write(keepRepo, 'retained-visible/probe', 'arming probe\n');
+      assert.notStrictEqual(runner.computeLandableTreeDigest(keepRepo), treeClean,
+        '#905 arming: a file appearing at that location MOVES the candidate digest — otherwise a mid-loop '
+        + 'write would be invisible and the assertion below would prove nothing');
+      fs.rmSync(visibleDir, { recursive: true, force: true });
+      assert.strictEqual(runner.computeLandableTreeDigest(keepRepo), treeClean,
+        '#905 arming: and removing it restores the digest, so what is measured below is this write and '
+        + 'nothing else that happened to the tree');
+
+      const receiptVisible = path.join(keepBase, 'receipt-visible.json');   // the RECEIPT stays outside
+      const visible905 = runRun905(['--command', 'node ' + redChild, '--repetitions', '2',
+        '--output', receiptVisible, '--keep-output', visibleDir]);
+      const VISIBLE = receipt905(receiptVisible);
+      assert.ok(VISIBLE, '#905: the visible-location leg writes a receipt; got status=' + visible905.status
+        + ' stderr=' + JSON.stringify(visible905.stderr.slice(0, 400)));
+      const visibleArtifacts = retained905(visibleDir);
+      for (const record of VISIBLE.runs) {
+        assert.ok(carrying905(visibleArtifacts, record.stdout_sha256).length >= 1,
+          '#905: retention really happened at the visible location — otherwise the clean outcome below is '
+          + 'clean because nothing was written; got ' + JSON.stringify(visibleArtifacts.map(a => a.name)));
+      }
+      assert.ok(!(VISIBLE.reduction_reasons || []).includes('candidate_mutation'),
+        '#905: retaining output INSIDE the validated tree must not make the runner report its own log as a '
+        + 'candidate mutation. The loop digests the tree before and after every repetition, so the bytes '
+        + 'have to land after the last of those digests; got reduction_reasons='
+        + JSON.stringify(VISIBLE.reduction_reasons));
+      assert.strictEqual(VISIBLE.outcome, 'fail',
+        '#905: the run stays a plain, actionable RED — not the self-inflicted `inconclusive` a mid-loop '
+        + 'write produces, which is the one outcome a reader cannot act on; got ' + JSON.stringify(VISIBLE.outcome));
+      assert.deepStrictEqual(VISIBLE.reduction_reasons, [],
+        '#905: with no reduction reason at all; got ' + JSON.stringify(VISIBLE.reduction_reasons));
+      assert.ok(VISIBLE.runs.every(record => record.pre_candidate_digest === VISIBLE.candidate_digest
+        && record.post_candidate_digest === VISIBLE.candidate_digest),
+        '#905: every pre/post candidate digest still equals the vector\'s — the tree the runner validated '
+        + 'was not disturbed by the runner; got ' + JSON.stringify(VISIBLE.runs.map(r => [r.pre_candidate_digest, r.post_candidate_digest])));
+
+      // ── E. the WRITE-TIME refusal — the window a pre-flight check cannot reach ───────────────────
+      //
+      // C pins the check that runs BEFORE the command, and that check is structurally blind to the
+      // window between itself and the write: the VALIDATED COMMAND can create a retention file while it
+      // runs, and a write that merely trusts the earlier check clobbers it — with exit codes identical
+      // to a clean retention, so nothing tells the operator that what they are reading is their own
+      // command's artefact rather than this run's output. A guarantee stated at the wrong point in time
+      // is not a guarantee, so this pins the WINDOW rather than the check.
+      const COLLIDE_ARTEFACT = 'IRREPLACEABLE ARTEFACT THE VALIDATED COMMAND ITSELF WROTE\n';
+      function collideChild905(file, targetName, targetDir) {
+        fs.writeFileSync(file, [
+          "'use strict';",
+          'require(\'fs\').writeFileSync(' + JSON.stringify(path.join(targetDir, targetName)) + ', '
+            + JSON.stringify(COLLIDE_ARTEFACT) + ');',
+          "process.stdout.write('KW905_COLLIDE_STDOUT\\n');",
+          "process.stderr.write('KW905_COLLIDE_STDERR\\n');",
+          'process.exit(1);',
+        ].join('\n'));
+        return file;
+      }
+      // BOTH ORDERINGS. Retention writes the two streams in a fixed order, so which carrier the command
+      // collides with must not change the outcome. It once did: a clash on the later carrier left the
+      // earlier one ALREADY WRITTEN, so the directory was left holding one genuine retained file beside
+      // the command's artefact — a retention that reads as COMPLETE while half of it is not this run's,
+      // and a refusal whose own sentence ("no retained output was written for this run") was false.
+      // Exercising both carriers is what makes that invariant independent of the write order.
+      for (const carrier of [stdoutCarrier, stderrCarrier]) {
+        const collideDir = path.join(keepBase, 'retained-collide-' + carrier);
+        const collideChild = collideChild905(path.join(keepBase, 'collide-' + carrier + '.js'), carrier, collideDir);
+        const receiptCollide = path.join(keepBase, 'receipt-collide-' + carrier + '.json');
+        const collide905 = runRun905(['--command', 'node ' + collideChild, '--output', receiptCollide,
+          '--keep-output', collideDir]);
+        assert.strictEqual(collide905.status, 2,
+          '#905: a retention file created BY THE VALIDATED COMMAND, during the run, is refused at the moment '
+          + 'of writing. The pre-flight check cannot see this — the file did not exist when it looked. '
+          + 'Collision on ' + JSON.stringify(carrier) + '; got status=' + collide905.status
+          + ' stderr=' + JSON.stringify(collide905.stderr.slice(0, 400)));
+        assert.strictEqual(fs.readFileSync(path.join(collideDir, carrier), 'utf8'), COLLIDE_ARTEFACT,
+          '#905: and the command\'s own artefact is BYTE-INTACT. Overwriting it is the false diagnosis this '
+          + 'flag exists to prevent, arriving by a route the up-front check does not cover. Collision on '
+          + JSON.stringify(carrier));
+        assert.ok(!fs.existsSync(receiptCollide),
+          '#905: the refused run produces no receipt — it did not half-succeed. Collision on ' + JSON.stringify(carrier));
+        assert.ok(collide905.stderr.includes(path.join(collideDir, carrier)),
+          '#905: and the refusal names the file it would have written over, so the operator can act on it; got '
+          + JSON.stringify(collide905.stderr.slice(0, 300)));
+        assert.deepStrictEqual(fs.readdirSync(collideDir), [carrier],
+          '#905: NOTHING of this run reached the directory — not one stream, and no temporary residue. A '
+          + 'refusal that had already written the other carrier would leave a directory that reads as a '
+          + 'complete retention while half of it belongs to the command, and would make its own message '
+          + 'untrue. Collision on ' + JSON.stringify(carrier) + '; directory holds '
+          + JSON.stringify(fs.readdirSync(collideDir)));
+      }
+
+      // CONTROL — one axis. The refusal is caused by the COLLISION, not by the command having touched
+      // the retention directory at all: a command that writes a name retention does not use is retained
+      // normally. Without this leg, a runner that refused whenever the directory was non-empty at write
+      // time would pass the assertions above while making retention unusable for any command that writes
+      // beside its own logs.
+      const besideDir = path.join(keepBase, 'retained-beside');
+      const besideChild = collideChild905(path.join(keepBase, 'beside-child.js'),
+        'a-name-retention-does-not-use.txt', besideDir);
+      const receiptBeside = path.join(keepBase, 'receipt-beside.json');
+      const beside905 = runRun905(['--command', 'node ' + besideChild, '--output', receiptBeside,
+        '--keep-output', besideDir]);
+      const BESIDE = receipt905(receiptBeside);
+      assert.ok(BESIDE, '#905 control: a command writing a NON-colliding name into the retention directory is '
+        + 'retained normally; got status=' + beside905.status + ' stderr=' + JSON.stringify(beside905.stderr.slice(0, 300)));
+      assert.notStrictEqual(beside905.status, 2,
+        '#905 control: and is not refused; got status=' + beside905.status);
+      const besideArtifacts = retained905(besideDir);
+      assert.ok(carrying905(besideArtifacts, BESIDE.runs[0].stdout_sha256).length >= 1,
+        '#905 control: this run\'s own output was retained beside the command\'s file; got '
+        + JSON.stringify(besideArtifacts.map(a => a.name)));
+      assert.strictEqual(fs.readFileSync(path.join(besideDir, 'a-name-retention-does-not-use.txt'), 'utf8'),
+        COLLIDE_ARTEFACT, '#905 control: and the command\'s own file survived that');
+
+      // ── F. two runners, one destination: exactly one proceeds ────────────────────────────────────
+      //
+      // The destructive shape the pre-flight alone allowed: two runs both pass a stat-then-write check
+      // against a fresh destination, and the later one silently destroys the earlier's output with both
+      // exiting as though nothing happened. Pinned as the RESULT — one proceeds, one refuses, and the
+      // surviving bytes belong to the one that proceeded — because which of the two wins is a race and
+      // is not the property under test.
+      const { spawn } = require('child_process');
+      const raceDir = path.join(keepBase, 'retained-race');
+      function raceLeg905(label) {
+        const sentinel = path.join(keepBase, 'race-ran-' + label);
+        const script = path.join(keepBase, 'race-child-' + label + '.js');
+        fs.writeFileSync(script, [
+          "'use strict';",
+          'require(\'fs\').writeFileSync(' + JSON.stringify(sentinel) + ', \'ran\\n\');',
+          // Long enough that the two runs genuinely overlap, so the loser refuses while the winner is
+          // still executing — the situation the destructive route needed.
+          'const until = Date.now() + 300; while (Date.now() < until) {}',
+          "process.stdout.write('KW905_RACE_" + label + " STDOUT\\n');",
+          "process.stderr.write('KW905_RACE_" + label + " STDERR\\n');",
+          'process.exit(0);',
+        ].join('\n'));
+        return { label, sentinel, script, receipt: path.join(keepBase, 'receipt-race-' + label + '.json'),
+          marker: 'KW905_RACE_' + label };
+      }
+      const legA = raceLeg905('A');
+      const legB = raceLeg905('B');
+      function startRun905(leg) {
+        return new Promise(resolve => {
+          // spawn-class: cli-contract
+          const child = spawn(process.execPath, [runnerScript, 'run', '--timeout-minutes', '1',
+            '--repo-root', keepRepo, '--command', 'node ' + leg.script, '--output', leg.receipt,
+            '--keep-output', raceDir], { cwd: keepRepo });
+          let stderr = '';
+          child.stderr.on('data', chunk => { stderr += chunk; });
+          child.on('close', code => resolve(Object.assign({ code, stderr }, leg)));
+        });
+      }
+      const raceResults = await Promise.all([startRun905(legA), startRun905(legB)]);
+      const proceeded = raceResults.filter(leg => leg.code === 0);
+      const refused = raceResults.filter(leg => leg.code === 2);
+      assert.strictEqual(proceeded.length, 1,
+        '#905: of two runs aimed at ONE destination, exactly one proceeds; got exits '
+        + JSON.stringify(raceResults.map(leg => [leg.label, leg.code])));
+      assert.strictEqual(refused.length, 1,
+        '#905: and exactly one is refused — two runs mixing their output into one directory is the state '
+        + 'retention has no way to disentangle afterwards; got exits '
+        + JSON.stringify(raceResults.map(leg => [leg.label, leg.code])));
+      const winner = proceeded[0];
+      const loser = refused[0];
+      assert.ok(fs.existsSync(winner.receipt),
+        '#905: the run that proceeded wrote its receipt (' + winner.label + ')');
+      assert.ok(!fs.existsSync(loser.receipt),
+        '#905: the refused run wrote nothing at all, receipt included (' + loser.label + ')');
+      assert.ok(fs.existsSync(winner.sentinel),
+        '#905: the winner ran its command (' + winner.label + ')');
+      assert.ok(!fs.existsSync(loser.sentinel),
+        '#905: and the loser never STARTED its command — losing the race after a long suite would throw '
+        + 'away exactly the run the retention was meant to explain (' + loser.label + ')');
+      const raceArtifacts = retained905(raceDir);
+      const WINNER = receipt905(winner.receipt);
+      assert.ok(carrying905(raceArtifacts, WINNER.runs[0].stdout_sha256).length >= 1,
+        '#905: the surviving bytes are THE WINNER\'S, matched against its own receipt; got '
+        + JSON.stringify(raceArtifacts.map(a => a.name)));
+      assert.ok(!raceArtifacts.some(entry => entry.bytes.includes(loser.marker)),
+        '#905: and not one byte of the loser\'s output is in the directory — nothing was destroyed and '
+        + 'nothing was mixed; got ' + JSON.stringify(raceArtifacts.map(a => a.name)));
+
+      // ── G. --keep-output names a directory that does not exist YET ───────────────────────────────
+      //
+      // A deliberate tightening: an existing directory is now a usage error even when it is EMPTY, where
+      // an empty one used to be adopted. Adoption is what made the two routes above reachable — it is the
+      // difference between "this directory is mine" and "this directory was empty a moment ago" — so the
+      // contract is frozen here against being loosened back by accident.
+      const existingEmpty = path.join(keepBase, 'retained-existing-empty');
+      fs.mkdirSync(existingEmpty);
+      const emptySentinel = path.join(keepBase, 'empty-dir-child-ran');
+      const contractChild = path.join(keepBase, 'contract-child.js');
+      fs.writeFileSync(contractChild, [
+        "'use strict';",
+        'require(\'fs\').writeFileSync(' + JSON.stringify(emptySentinel) + ', \'ran\\n\');',
+        "process.stdout.write('KW905_CONTRACT_STDOUT\\n');",
+        "process.stderr.write('KW905_CONTRACT_STDERR\\n');",
+        'process.exit(1);',
+      ].join('\n'));
+      const receiptEmpty = path.join(keepBase, 'receipt-existing-empty.json');
+      const empty905 = runRun905(['--command', 'node ' + contractChild, '--output', receiptEmpty,
+        '--keep-output', existingEmpty]);
+      assert.strictEqual(empty905.status, 2,
+        '#905: an EXISTING directory is a usage error even when empty. Adopting one cannot distinguish '
+        + '"mine" from "empty a moment ago", which is what let a second runner in; got status='
+        + empty905.status + ' stderr=' + JSON.stringify(empty905.stderr.slice(0, 400)));
+      assert.ok(!fs.existsSync(emptySentinel),
+        '#905: and that refusal, like the others, arrives before the command runs');
+      assert.ok(!fs.existsSync(receiptEmpty), '#905: with no receipt written');
+      assert.deepStrictEqual(fs.readdirSync(existingEmpty), [],
+        '#905: and nothing at all written into the directory it declined');
+
+      // CONTROL — the refusal is about the LEAF already existing, not about a path being deep. A
+      // destination whose parents do not exist yet is created and retained normally; without this leg
+      // the assertion above is also satisfied by a runner that refuses every path it did not find.
+      const nestedLeaf = path.join(keepBase, 'retained-nested', 'deeper', 'leaf');
+      const receiptNested = path.join(keepBase, 'receipt-nested.json');
+      const nested905 = runRun905(['--command', 'node ' + contractChild, '--output', receiptNested,
+        '--keep-output', nestedLeaf]);
+      const NESTED = receipt905(receiptNested);
+      assert.ok(NESTED,
+        '#905 control: a destination whose PARENTS do not exist is created, not refused — the rule is '
+        + 'about the leaf; got status=' + nested905.status + ' stderr=' + JSON.stringify(nested905.stderr.slice(0, 300)));
+      assert.ok(fs.existsSync(emptySentinel), '#905 control: and the command ran');
+      const nestedArtifacts = retained905(nestedLeaf);
+      assert.ok(carrying905(nestedArtifacts, NESTED.runs[0].stdout_sha256).length >= 1,
+        '#905 control: with its output retained; got ' + JSON.stringify(nestedArtifacts.map(a => a.name)));
+
+      // ── H. the durable archive band is never a retention destination ─────────────────────────────
+      //
+      // `kaola-workflow/archive/**` holds closed evidence, and the band is TRACKED — a directory that
+      // appears there is permanent history, and the closure audit reads a stray one as a phantom project
+      // missing its state file, which is drift with nothing to repair. Retention is opt-in precisely so
+      // that unredacted child output does not land in permanent history by default; refusing this
+      // destination is that same decision expressed at the destination rather than at the flag.
+      const bandRun = path.join(keepRepo, 'kaola-workflow', 'archive', 'old-run');
+      fs.mkdirSync(bandRun, { recursive: true });
+      const bandDir = path.join(bandRun, 'logs');
+      const bandSentinel = path.join(keepBase, 'band-child-ran');
+      const bandChild = path.join(keepBase, 'band-child.js');
+      fs.writeFileSync(bandChild, [
+        "'use strict';",
+        'require(\'fs\').writeFileSync(' + JSON.stringify(bandSentinel) + ', \'ran\\n\');',
+        "process.stdout.write('KW905_BAND_STDOUT\\n');",
+        "process.stderr.write('KW905_BAND_STDERR\\n');",
+        'process.exit(1);',
+      ].join('\n'));
+      const receiptBand = path.join(keepBase, 'receipt-band.json');
+      const band905 = runRun905(['--command', 'node ' + bandChild, '--output', receiptBand,
+        '--keep-output', bandDir]);
+      assert.strictEqual(band905.status, 2,
+        '#905: a retention destination inside the durable archive band is a usage error; got status='
+        + band905.status + ' stderr=' + JSON.stringify(band905.stderr.slice(0, 400)));
+      assert.ok(!fs.existsSync(bandSentinel),
+        '#905: refused before the command runs, like every other --keep-output refusal');
+      assert.ok(!fs.existsSync(receiptBand), '#905: with no receipt written');
+      assert.deepStrictEqual(fs.readdirSync(bandRun), [],
+        '#905: and NOTHING was created inside the band — an archived run\'s evidence is closed, and a '
+        + 'stray directory there is permanent drift the closure audit reads as a phantom project; got '
+        + JSON.stringify(fs.readdirSync(bandRun)));
+
+      // CONTROL, one path segment. The refusal is about the ARCHIVE BAND, not about the repository and
+      // not about `kaola-workflow/` at large: the same invocation one segment away is retained normally.
+      // Without this leg the assertion above is equally satisfied by a runner that refuses any
+      // destination under `kaola-workflow/`, or any destination inside a git working tree at all.
+      fs.rmSync(bandSentinel, { force: true });
+      const besideBandDir = path.join(keepRepo, 'kaola-workflow', 'notarchive', 'old-run', 'logs');
+      const receiptBesideBand = path.join(keepBase, 'receipt-beside-band.json');
+      const besideBand905 = runRun905(['--command', 'node ' + bandChild, '--output', receiptBesideBand,
+        '--keep-output', besideBandDir]);
+      const BESIDE_BAND = receipt905(receiptBesideBand);
+      assert.ok(BESIDE_BAND,
+        '#905 control: a destination under kaola-workflow/ but OUTSIDE the archive band is retained '
+        + 'normally — the rule is the band, not the tree; got status=' + besideBand905.status
+        + ' stderr=' + JSON.stringify(besideBand905.stderr.slice(0, 300)));
+      assert.ok(fs.existsSync(bandSentinel), '#905 control: and the command ran');
+      const besideBandArtifacts = retained905(besideBandDir);
+      assert.ok(carrying905(besideBandArtifacts, BESIDE_BAND.runs[0].stdout_sha256).length >= 1,
+        '#905 control: with its output retained; got ' + JSON.stringify(besideBandArtifacts.map(a => a.name)));
+    } finally {
+      fs.rmSync(keepBase, { recursive: true, force: true });
+    }
+  }
+
   console.log('test-validation-runner: PASSED');
 }
 

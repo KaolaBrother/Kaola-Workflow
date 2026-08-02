@@ -10,6 +10,22 @@ const { spawnSync } = require('child_process');
 const RECEIPT_SCHEMA_VERSION = 1;
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const VERSION_PROBE_TIMEOUT_MS = 5000;
+// The sandbox root is a PATH BUDGET before it is a name. The child's TMPDIR points inside it, and a
+// child that binds a unix socket there — tsx's IPC pipe is `$TMPDIR/tsx-<uid>/<pid>.pipe`, 19 chars —
+// must land inside the platform's `sun_path` field or it dies with `listen EINVAL`. Measured on darwin:
+// the last path length that binds is 104 and 105 is the first failure, while `os.tmpdir()` is already
+// 48 characters there. That leaves 104 − 48 − 4 (`/tmp`) − 19 = 33 for `/<dir>/<seed>`, i.e.
+// len(dir) + len(seed) <= 31 — so a descriptive directory literal overflows at EVERY seed width, and
+// shortening the seed alone does not clear it. `kwv` + 16 hex spends 19 of the 33 and keeps 12 spare
+// for a consumer whose suffix is longer than tsx's.
+//
+// Truncating the digest costs nothing that was ever load-bearing. The seed's WIDTH buys nothing: the
+// path reaches the receipt only as `sha256(HOME)`/`sha256(TMPDIR)`, so it is never compared, and
+// `prepareSandbox` already wipes the root, so two concurrent runs of one policy already shared it. Its
+// DETERMINISM is what matters — it is what keeps `command_id` equal across two runs of the same policy
+// — and a prefix of a deterministic digest is exactly as deterministic.
+const SANDBOX_DIR_NAME = 'kwv';
+const SANDBOX_SEED_HEX = 16;
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const HASH_RE = /^[0-9a-f]{64}$/;
 const INVARIANT_CLASS_RE = /^[a-z][a-z0-9_]{0,63}$/;
@@ -174,8 +190,8 @@ function buildScrubbedEnvironment(options) {
   const source = opts.source_env && typeof opts.source_env === 'object' ? opts.source_env : {};
   const platform = opts.platform || process.platform;
   const allowlist = Array.isArray(opts.allowlist) ? opts.allowlist : [];
-  const isolatedHome = String(opts.isolated_home || path.join(os.tmpdir(), 'kaola-workflow-validation', 'home'));
-  const isolatedTmp = String(opts.isolated_tmp || path.join(os.tmpdir(), 'kaola-workflow-validation', 'tmp'));
+  const isolatedHome = String(opts.isolated_home || path.join(os.tmpdir(), SANDBOX_DIR_NAME, 'home'));
+  const isolatedTmp = String(opts.isolated_tmp || path.join(os.tmpdir(), SANDBOX_DIR_NAME, 'tmp'));
   const env = Object.create(null);
 
   env.LANG = 'C';
@@ -724,8 +740,8 @@ function defaultExecute(options) {
 }
 
 function defaultSandboxPaths(repoRoot, policy) {
-  const seed = sha256(canonicalJson({ repo_root_sha256: sha256(path.resolve(repoRoot)), policy }));
-  const root = path.join(os.tmpdir(), 'kaola-workflow-validation', seed);
+  const seed = sha256(canonicalJson({ repo_root_sha256: sha256(path.resolve(repoRoot)), policy })).slice(0, SANDBOX_SEED_HEX);
+  const root = path.join(os.tmpdir(), SANDBOX_DIR_NAME, seed);
   return { root, home: path.join(root, 'home'), tmp: path.join(root, 'tmp') };
 }
 
@@ -733,6 +749,92 @@ function prepareSandbox(paths, explicit) {
   if (!explicit) fs.rmSync(paths.root, { recursive: true, force: true });
   fs.mkdirSync(paths.home, { recursive: true });
   fs.mkdirSync(paths.tmp, { recursive: true });
+}
+
+// ── retained child output, opt-in ──────────────────────────────────────────────────────────────────
+// The receipt carries the child's output as digests only, and a red receipt is therefore not
+// diagnosable from the receipt: the complete human-readable text is a live local at hash time and is
+// dropped. Retaining it by DEFAULT is the wrong trade, and not because of ceremony — `normalizeOutputText`
+// redacts absolute paths and nothing else, and `buildScrubbedEnvironment` exists precisely so an
+// allowlisted secret can reach the child while appearing in the receipt only as a digest. A child that
+// echoes that secret puts it in the retained bytes, and a retained file under a run folder is a tracked
+// file, i.e. permanent history. So the operator asks for it, per invocation, and the default posture is
+// untouched.
+//
+// `--keep-output <dir>` names a DIRECTORY at every repetition count, so one run and five runs land the
+// same shape, and the files are `run-<index>.stdout` / `run-<index>.stderr` keyed by the SAME `index`
+// the receipt's `runs[]` carries — that keying is the whole point, since it is what maps a red run's
+// digest to the bytes it digested. The two streams stay in two files: both halves of a failure are
+// usually needed and interleaving them loses which was which.
+//
+// Two things this must not do, both of them decided by a measurement rather than a preference:
+//   • It must not OVERWRITE. A stale file read as this run's evidence is a false diagnosis — strictly
+//     worse than the no-diagnosis state it replaces. That rule needs enforcing at TWO moments, because
+//     a check before the child runs cannot see what appears while it runs (measured: a validated command
+//     that writes into the retention directory, and two concurrent runs aimed at one directory, both
+//     destroyed the earlier bytes at exit 0 when only the pre-flight existed):
+//       – BEFORE, by CREATING the directory rather than adopting one. `mkdirSync` without `recursive`
+//         fails with EEXIST if anything is already there, and that failure is atomic, which is what makes
+//         two concurrent runs safe: exactly one can win the create, so the loser never starts. It also
+//         refuses early, which matters — a refusal arriving after a long suite throws away the run it
+//         was meant to explain. A freshly created directory is empty, so no per-file pre-check is
+//         reachable or needed here.
+//       – AT WRITE TIME, by refusing a target that exists. Sound rather than racy precisely because of
+//         the step above: the directory is this run's alone and the child has already exited, so the
+//         only thing that can have created the file is the validated command itself.
+//   • It must not MOVE THE RECEIPT. The repetition loop takes a candidate digest before and after every
+//     repetition and `reduceRuns` compares both against the vector's, so a write landing in the repo
+//     mid-loop would report the runner's own log as `candidate_mutation`. The bytes are therefore
+//     buffered and written AFTER the last digest is taken — the only placement that holds for a path
+//     anywhere in the tree rather than only for the validation-invisible bands. The cost of that
+//     placement, stated rather than buried: a kill mid-loop retains NOTHING, where a streaming writer
+//     would have kept a prefix. Bounded loss of the thing the flag exists to produce, traded for a
+//     receipt that is never wrong about the candidate.
+// There is no truncation cap, and adding one would be new code with nothing to recommend it:
+// `MAX_OUTPUT_BYTES` already bounds a COMPLETED run's output (exceeding it SIGTERMs the child into
+// `inconclusive`, so it never reaches retention), and a cap applied here would delete the tail of a
+// failure, which is usually the part naming the cause.
+function keepOutputFile(dir, index, stream) {
+  return path.join(dir, 'run-' + index + '.' + stream);
+}
+
+function prepareKeepOutput(keepOutput) {
+  const dir = path.resolve(String(keepOutput));
+  // Same band rule the `record` verb applies to its `--output`, for the same reason: `kaola-workflow/
+  // archive/**` holds closed evidence, and the closure audit reads a stray directory there as a phantom
+  // project. The question is asked of the LOCATION — of the tree that owns the path, which under a
+  // worktree run is not the tree the caller is standing in.
+  const owner = owningWorkingTree(dir);
+  if (owner && isArchiveBandPath(owner, dir)) {
+    throw new Error('--keep-output must not resolve inside the durable archive band (kaola-workflow/archive/**) — an'
+      + ' archived run\'s evidence is closed, never a write target; ' + realResolve(dir) + ' is inside it.'
+      + ' Retain the output somewhere outside the band.');
+  }
+  // The retention directory is CREATED, never adopted — the parents recursively, then the leaf on its
+  // own so the create is exclusive. EEXIST is the refusal, and it covers every prior occupant in one
+  // rule: an earlier run's files, an unrelated directory, a plain file of the same name, and — because
+  // mkdir's failure is atomic — a second runner racing for the same destination.
+  try {
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    fs.mkdirSync(dir);
+  } catch (error) {
+    if (!error || error.code !== 'EEXIST') throw error;
+    // Name what is actually in the way, so the operator can act on it instead of guessing. Read as
+    // directory ENTRIES rather than matched against the run-<n>.<stream> shape: whatever is in there is
+    // what would be at risk, and a rule that only recognised this runner's own names would say nothing
+    // about the operator's. Capped, because the destination could be a large directory.
+    let occupants = [];
+    try { occupants = fs.readdirSync(dir).sort(); } catch (_) { occupants = []; }
+    const named = occupants.slice(0, 5).map(name => path.join(dir, name)).join(', ')
+      + (occupants.length > 5 ? ', and ' + (occupants.length - 5) + ' more' : '');
+    throw new Error('--keep-output names a NEW directory for this run\'s retained output, and ' + dir
+      + ' already exists'
+      + (occupants.length ? ', holding ' + named : '')
+      + '. Retained bytes are only diagnosable if it is unambiguous which run wrote them, so this refuses rather'
+      + ' than mix two runs in one directory or overwrite what is already there. Name a directory that does not'
+      + ' exist yet, or remove that one deliberately.');
+  }
+  return dir;
 }
 
 async function runValidation(options, adapters) {
@@ -743,6 +845,10 @@ async function runValidation(options, adapters) {
   const cwdAbs = path.resolve(repoRoot, policy.cwd);
   const relative = path.relative(repoRoot, cwdAbs);
   if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error('cwd resolves outside repo_root');
+  // Before anything executes: a --keep-output that cannot be honoured is a usage error, and reporting it
+  // after the run would discard the run it exists to explain.
+  const keepOutputDir = opts.keep_output ? prepareKeepOutput(opts.keep_output) : null;
+  const retained = [];
   const defaults = defaultSandboxPaths(repoRoot, policy);
   const explicitSandbox = !!(opts.isolated_home || opts.isolated_tmp);
   const sandbox = {
@@ -807,6 +913,7 @@ async function runValidation(options, adapters) {
     const failure = normalizeFailureSignature(stdout, stderr, {
       absolute_paths: [repoRoot, cwdAbs, sandbox.home, sandbox.tmp],
     });
+    if (keepOutputDir) retained.push({ index, stdout, stderr });
     runs.push({
       index,
       exit_code: result && Number.isInteger(result.exit_code) ? result.exit_code : null,
@@ -826,6 +933,55 @@ async function runValidation(options, adapters) {
       ended_at: toIso(endedMs),
       duration_ms: Math.max(0, Math.round(endedMs - startedMs)),
     });
+  }
+  // After the last candidate digest, never inside the loop — see prepareKeepOutput. RAW bytes: the
+  // normalized form is the failure signature's preimage, which has already had every path-shaped token
+  // replaced out of it, and a diagnosis usually needs the paths.
+  //
+  // Through the ATOMIC REPLACE, for the same reason the destination refuses to be overwritten: a torn
+  // log is the overwrite failure wearing a different hat — a file that reads as this run's complete
+  // output while holding only a prefix of it, which is a false diagnosis rather than a missing one. A
+  // stream runs to MAX_OUTPUT_BYTES, so a partial write on a crash or a kill is a real outcome, not a
+  // theoretical one. Measured: the helper is byte-exact for a Buffer (against invalid UTF-8, a lone
+  // surrogate half and an embedded NUL), so routing through it costs none of the raw-bytes guarantee.
+  // Required on this branch alone, matching writeCliResult, so a caller that never asks for retention
+  // still loads a module whose requires are all Node builtins.
+  //
+  // An EMPTY stream still produces an empty file — "no file" and "empty file" are different diagnoses
+  // and only one of them is true. That is not automatic: the helper skips the write when the target's
+  // existing content EQUALS the new content, and a missing file reads back as ''. What keeps it
+  // correct is that these are Buffers, and a Buffer never compares equal to that '' under `===`.
+  if (retained.length) {
+    const { writeFileAtomicReplace } = require('./kaola-workflow-adaptive-schema');
+    // The second half of the no-overwrite rule, at the moment of writing. The directory was empty when
+    // this run created it, so anything sitting here now arrived while the command ran — the command
+    // wrote into its own retention directory.
+    //
+    // EVERY target is checked before ANY is written, and the two passes are the point. Checking and
+    // writing in one pass makes the outcome depend on which carrier the collision lands on: a clash on
+    // a later stream leaves the earlier one already written, so the directory is left holding one
+    // genuine retained file beside the command's own artefact — which reads as a COMPLETE retention
+    // while half of it is not this run's, the very confusion the whole rule exists to prevent. It also
+    // makes the refusal's own sentence false. Refusing before the first write is what keeps that
+    // sentence true in every ordering.
+    const targets = [];
+    for (const record of retained) {
+      for (const stream of ['stdout', 'stderr']) {
+        const file = keepOutputFile(keepOutputDir, record.index, stream);
+        // lstat, not stat, so a symlink planted at the name counts as an occupant instead of being
+        // followed and replaced.
+        let occupied = true;
+        try { fs.lstatSync(file); } catch (_) { occupied = false; }
+        if (occupied) {
+          throw new Error('--keep-output will not overwrite ' + file + ', which did not exist when this run'
+            + ' started and does now — the validated command writes into its own retention directory. Nothing'
+            + ' was overwritten and no retained output was written for this run. Point --keep-output at a'
+            + ' directory the command does not write to.');
+        }
+        targets.push({ file, value: record[stream] });
+      }
+    }
+    for (const target of targets) writeFileAtomicReplace(target.file, target.value);
   }
   const vector = buildValidationVector({
     command_id: commandId,
@@ -1406,9 +1562,18 @@ function writeCliResult(result, outputPath) {
 function usage() {
   return [
     'usage:',
-    '  kaola-workflow-validation-runner.js run --command <command> --timeout-minutes <1..120> [--repo-root <path>] [--cwd <repo-relative>] [--repetitions <1..5>] [--env-allowlist <A,B>] [--output <path>]',
+    '  kaola-workflow-validation-runner.js run --command <command> --timeout-minutes <1..120> [--repo-root <path>] [--cwd <repo-relative>] [--repetitions <1..5>] [--env-allowlist <A,B>] [--output <path>] [--keep-output <dir>]',
     '  kaola-workflow-validation-runner.js qualify-local --contract-hash <sha256> --context-hash <sha256> --claude-profile-hash <sha256> --codex-profile-hash <sha256> --invariant-classes <a,b> [--timeout-minutes <1..120>] [--output <path>]',
     '  kaola-workflow-validation-runner.js record --project <run-folder> --verdict pass|fail --command "<exact validation command>" [--output <path>]',
+    '',
+    '  --output      where the RECEIPT is written (default stdout). Never the child\'s output.',
+    '  --keep-output a NEW directory (it must not exist yet) to retain the command\'s stdout/stderr in, as',
+    '                run-<index>.stdout and run-<index>.stderr keyed by the receipt\'s runs[] index. OFF by',
+    '                default, and the receipt is byte-identical either way. The retained bytes are the',
+    '                command\'s output VERBATIM: NOTHING is redacted — absolute paths, HOME, TMPDIR and any',
+    '                secret the command echoes are all written out as-is, so choose the destination with that',
+    '                in mind. Never overwrites: it refuses if the directory already exists, and refuses again',
+    '                at write time if the command created a run-<index>.<stream> of its own while it ran.',
   ].join('\n');
 }
 
@@ -1431,6 +1596,7 @@ async function main(argv) {
         env_allowlist: values.env_allowlist || '',
       },
       source_env: process.env,
+      keep_output: values.keep_output,
     });
     writeCliResult(result, values.output);
     if (result.outcome !== 'pass') process.exitCode = 1;
@@ -1512,5 +1678,6 @@ module.exports = {
   FINAL_VALIDATION_FILE,
   RECORD_FIELDS,
   renderFinalValidationRecord,
+  resolveRecordFolder,
   recordFinalValidation,
 };

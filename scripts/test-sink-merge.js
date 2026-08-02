@@ -3308,6 +3308,628 @@ function assertArchiveFailureStopsTheSink(fx, label, opts) {
   }
 })();
 
+// (z1) #907 — AN EMBEDDED GIT REPOSITORY INSIDE THE ARCHIVE MUST NOT BE A PERMANENT, UNCLEARABLE BLOCK.
+//
+// A CORRECTION TO #907 FIRST, so nobody re-derives the wrong mechanism: a `.git`-named FILE is NOT a
+// defect. `requiredArchiveFiles` skips an entry named `.git`, it has done so since the function was
+// written, and the file is simply never committed. The real block is next door.
+//
+// A `.git` DIRECTORY (a nested repository, or a valid gitfile pointing at a live gitdir) makes git
+// collapse the whole subtree into ONE `160000` gitlink. Measured consequences, all three:
+//   * `ls-tree -r -z` returns only the gitlink, so `blobPathsUnder` sees no blobs beneath it;
+//   * `requiredArchiveFiles` walks the DISK and still demands the siblings under that directory;
+//   * the operator's own lever fails too — `git add -f -- <archive>/<dir>/<file>` exits 128 with
+//     `fatal: … is in submodule`.
+// So `missingBlobs` is non-empty on every run, `forcePaths` is empty so the force-add never fires,
+// and the refusal's own advice ("the step is left NOT done so a re-run retries it") describes a
+// deterministic computation. Every re-run is byte-identical. That is a bricked repository, and it is
+// the one shape the "nothing refuses" posture says must not exist: a refusal nobody can clear.
+//
+// The current `.git` skip does not cover it — it skips the ENTRY, while the gitlink boundary is what
+// makes the entry's SIBLINGS unreachable.
+//
+// WHAT IS PINNED, and what deliberately is not. Not a token, not a wording, and not which of the two
+// outcomes is chosen: the sink may carry the archive (dropping, excluding or flattening the embedded
+// repository is a decision about someone's data and belongs to whoever owns the fix), or it may
+// decline — but every path a decline itemizes has to be one the operator's own lever can take. See
+// the oracle note inside; it is an operation, not a reading of prose, because the first version of
+// this leg asked a prose question and the broken sink answered it by accident.
+//
+// DRIVEN ON EVERY EDITION. The GitLab and Gitea sink ports are hand-maintained and compared by
+// nothing, so a fix landing on three copies is invisible until a user on the fourth hits it.
+function assertEmbeddedRepositoryIsClearable907(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#907 z1 ' + label + '): an archive carrying an embedded git repository must either sink, or decline over paths `git add -f` can take — a refusal whose only named remedy exits 128 is a permanent block');
+  // An irrelevant ignore rule: the archive band itself is fully committable, so the blob gate is LIVE.
+  // Under the (q) fixture's default rule the whole band is ignored and archive_commit honestly skips —
+  // which would make this leg green while measuring nothing.
+  const fx = buildGitignoredArchiveSinkFixture(project, issue, { gitignoreBody: 'node_modules/\n' });
+  const archiveRel = 'kaola-workflow/archive/' + project;
+  const embeddedRel = archiveRel + '/vendored';
+  const innerRel = embeddedRel + '/inner.md';
+  try {
+    // The embedded repository: a real one, with its own commit, so git genuinely collapses it.
+    const embeddedAbs = path.join(fx.archiveDir, 'vendored');
+    fs.mkdirSync(embeddedAbs, { recursive: true });
+    fs.writeFileSync(path.join(embeddedAbs, 'inner.md'), 'evidence inside an embedded repository\n');
+    git(embeddedAbs, ['init', '-q', '-b', 'main']);
+    git(embeddedAbs, ['config', 'user.email', 'test@example.com']);
+    git(embeddedAbs, ['config', 'user.name', 'Test User']);
+    git(embeddedAbs, ['add', '-A']);
+    git(embeddedAbs, ['commit', '-q', '-m', 'inner']);
+
+    // --- PREMISE, measured in a SCRATCH INDEX so the fixture the sink is about to read is untouched.
+    // Without these three the leg below could pass on a fixture where nothing was ever collapsed.
+    const scratchIndex = path.join(fx.binDir, 'premise.index');
+    // Routed through the shared git fixture library, like every other git call in this suite — the
+    // only thing this needs beyond `git()` is GIT_INDEX_FILE, which the library forwards verbatim.
+    const withScratchIndex = args => G.git(fx.tmpRoot, args, {
+      encoding: 'utf8', env: Object.assign({}, process.env, { GIT_INDEX_FILE: scratchIndex }),
+    });
+    withScratchIndex(['read-tree', 'HEAD']);
+    withScratchIndex(['add', '--', archiveRel]);
+    const staged = (withScratchIndex(['ls-files', '--stage', '-z', '--', archiveRel]).stdout || '')
+      .split('\0').filter(Boolean);
+    assert(staged.some(rec => rec.indexOf('160000 ') === 0 && rec.indexOf(embeddedRel) > 0),
+      '#907 z1 (' + label + ') premise: git must collapse the embedded repository into a 160000 gitlink — that '
+      + 'collapse is the whole mechanism; got ' + JSON.stringify(staged));
+    assert(!staged.some(rec => rec.indexOf(innerRel) > 0),
+      '#907 z1 (' + label + ') premise: and the file beneath it must NOT be in the index; got ' + JSON.stringify(staged));
+    const forceAdd = withScratchIndex(['add', '-f', '--', innerRel]);
+    assert(forceAdd.status !== 0,
+      '#907 z1 (' + label + ') premise: the operator\'s own lever must fail too — `git add -f` on the file the refusal '
+      + 'names exits non-zero (`is in submodule`). That failure is what the oracle below asks about, '
+      + 'so a fixture where it succeeds measures nothing; got status=' + forceAdd.status
+      + ' stderr=' + JSON.stringify(String(forceAdd.stderr || '').slice(0, 200)));
+    try { fs.rmSync(scratchIndex, { force: true }); } catch (_) {}
+
+    // A forge port shells its OWN CLI, so its shim is pointed at the same offline mock the canonical
+    // leg gets. Without it the port would reach for a real `glab`/`tea` and the leg would be
+    // measuring the absence of a binary instead of the archive gate.
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    // `--keep-issue-open` takes the forge CLOSURE step out of the picture on every edition. The
+    // offline mock speaks gh's argv, not glab's or tea's, so a forge port would otherwise refuse at
+    // `step: 'closure'` — a fixture artefact that reads exactly like an archive-gate red and would
+    // make this leg measure the mock instead of the gate. Applied to ALL editions, so the axis
+    // between them stays the sink script.
+    const result = runSinkAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    const sank = result.status === 0 && out && out.status === 'sinked';
+
+    // FIXTURE PREMISE: the run reached the gate under test. A refusal at some other step is neither a
+    // pass nor evidence about the archive gate, and it must say which step it stopped at rather than
+    // arriving as an unexplained red below.
+    const step = out && out.step;
+    assert(sank || step === 'archive_commit',
+      '#907 z1 (' + label + ') premise: the run must reach the ARCHIVE gate — it either sinks or '
+      + 'refuses at step archive_commit. A stop anywhere else is a fixture fault, not a measurement; '
+      + 'got exit=' + result.status + ' step=' + JSON.stringify(step)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + '\nstderr: ' + String(result.stderr || '').slice(-500));
+
+    // THE ORACLE IS MECHANICAL, not textual. An earlier version of this leg asked whether the report
+    // "names the embedded directory" — and passed on the broken sink, because the journal's
+    // `archived_paths` happens to list the gitlink at exactly that path. Bookkeeping satisfied a
+    // prose question. So the question is asked as an operation instead:
+    //
+    //   EVERY PATH THE REFUSAL NAMES MUST BE ONE `git add -f` CAN TAKE.
+    //
+    // That is precisely "a refusal the operator can clear", it cannot be satisfied by accident, and it
+    // fixes NOTHING about the method: dropping the subtree from the required set (the sink then
+    // completes and names nothing), or naming the containing directory instead of the file beneath it
+    // (`git add -f` on a gitlink exits 0), both satisfy it. What does not satisfy it is today's
+    // behaviour — itemizing a path whose force-add exits 128.
+    const missing = (out && Array.isArray(out.archive_missing_paths)) ? out.archive_missing_paths : [];
+    const unclearable = [];
+    for (const rel of missing) {
+      const probeIndex = path.join(fx.binDir, 'clearable.index');
+      try { fs.rmSync(probeIndex, { force: true }); } catch (_) {}
+      const probe = args => G.git(fx.tmpRoot, args, {
+        encoding: 'utf8', env: Object.assign({}, process.env, { GIT_INDEX_FILE: probeIndex }),
+      });
+      probe(['read-tree', 'HEAD']);
+      const add = probe(['add', '-f', '--', rel]);
+      if (add.status !== 0) unclearable.push(rel + ' -> ' + String(add.stderr || '').trim().slice(0, 160));
+      try { fs.rmSync(probeIndex, { force: true }); } catch (_) {}
+    }
+
+    assert(sank || (missing.length > 0 && unclearable.length === 0),
+      '#907 z1 (' + label + '): an archive carrying an embedded git repository must either SINK, or be declined over '
+      + 'paths the operator can actually act on. Every path the refusal itemizes has to be one '
+      + '`git add -f` can take — today it names ' + JSON.stringify(missing) + ', and force-adding it '
+      + 'fails: ' + JSON.stringify(unclearable) + '. The force-add set the sink builds is empty (the '
+      + 'file is not ignored, it is unreachable), so no re-run can change the outcome and the '
+      + 'repository is bricked rather than gated. got exit=' + result.status
+      + ' status=' + JSON.stringify(out && out.status)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + '\nstderr: ' + String(result.stderr || '').slice(-600));
+
+    // Whichever way it goes, nothing is destroyed: the archive's own evidence, and the embedded
+    // repository's file, are still on disk. A "fix" that cleared the block by deleting the subtree
+    // would satisfy the assertion above and lose someone's data.
+    assert(fs.existsSync(path.join(fx.archiveDir, 'workflow-state.md')),
+      '#907 z1 (' + label + '): the archived run record must survive whichever way the sink decides');
+    assert(fs.existsSync(path.join(embeddedAbs, 'inner.md')),
+      '#907 z1 (' + label + '): and so must the embedded repository\'s own content — clearing the block by deleting '
+      + 'the subtree is not a fix, it is the data loss the archive gate exists to prevent');
+  } finally {
+    cleanup(fx);
+  }
+}
+
+// The four sink copies. `mockEnv` points each forge port's own CLI shim at the SAME offline mock the
+// canonical leg uses, so the axis between editions stays the sink script and nothing else.
+[
+  ['root', path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js'), null],
+  ['codex', path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-sink-merge.js'), null],
+  ['gitlab', path.join(repoRoot, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-sink-merge.js'), 'KAOLA_GLAB_MOCK_SCRIPT'],
+  ['gitea', path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-sink-merge.js'), 'KAOLA_TEA_MOCK_SCRIPT'],
+].forEach(([label, script, mockEnv], index) => {
+  if (!fs.existsSync(script)) {
+    assert(false, '#907 z1 (' + label + '): the edition sink script exists at ' + script);
+    return;
+  }
+  const issue = 90701 + index;
+  assertEmbeddedRepositoryIsClearable907(label, script, 'issue-' + issue, issue, mockEnv);
+});
+
+// (z2) #907 — THE BOUNDARY DISCRIMINATOR MUST AGREE WITH GIT, IN BOTH DIRECTIONS.
+//
+// (z1) above plants exactly ONE shape: a plain nested repository. That is the shape every probe gets
+// right, so (z1) is green against a discriminator that asks the WRONG REPOSITORY — which is what the
+// first fix did. It ran `rev-parse --show-toplevel` from INSIDE the candidate directory, i.e. it asked
+// the INNER repo where its work tree is. Two inner configurations answer in a way that reads as "not a
+// boundary" while the OUTER git stages a `160000` gitlink anyway:
+//
+//   core.bare=true          inner answers `fatal: this operation must be run in a work tree`
+//   core.worktree=<other>   inner answers <other>, which is not the directory being asked about
+//
+// For those two the siblings stayed in `required[]`, could never become blobs, and `git add -f` on
+// them exits 128 `is in submodule` — the permanent unclearable `sink_incomplete` (z1) exists to
+// remove, surviving inside the fix for it. A pin that cannot see the defect it names is worse than no
+// pin, so this leg plants the shapes (z1) cannot.
+//
+// THE ORACLE IS GIT ITSELF, not a table in this file. Ground truth is measured per run, in a
+// HEAD-seeded SCRATCH index (the fixture the sink is about to read is never touched): whichever
+// directories the outer repository collapses into a `160000` entry ARE the boundaries, and the set the
+// sink reports on `receipt.archive_embedded_repos` must equal that set exactly. Equality, not
+// containment, because BOTH directions are load-bearing and each has its own failure:
+//   * a MISSED boundary is the bricked repository — required files git can never commit;
+//   * a FALSE boundary silently drops a whole subtree out of the blob gate, so real evidence that git
+//     would have committed stops being checked at all — the gate disarms itself and says nothing.
+// A shape git's behaviour changes under would break the PREMISE assertions loudly rather than quietly
+// turn this leg vacuous.
+//
+// DRIVEN ON EVERY EDITION, for (z1)'s reason: the GitLab and Gitea sink ports are hand-maintained.
+function assertBoundaryDiscriminationMatchesGit907(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#907 z2 ' + label + '): the archive-boundary inventory must equal the set the OUTER git actually collapses into a gitlink — a `.git` directory carrying core.bare or core.worktree collapses just as a plain nested repo does, and a benign `.git` must not be mistaken for one');
+  const fx = buildGitignoredArchiveSinkFixture(project, issue, { gitignoreBody: 'node_modules/\n' });
+  const archiveRel = 'kaola-workflow/archive/' + project;
+  // The gitdirs c6's symlink points at live OUTSIDE the repository, so they are not themselves walked.
+  const outsideDir = path.join(fx.binDir, 'outside-gitdirs');
+  try {
+    const mkRepo = (abs) => {
+      fs.mkdirSync(abs, { recursive: true });
+      fs.writeFileSync(path.join(abs, 'inner.md'), 'evidence inside a repository boundary\n');
+      G.git(abs, ['init', '-q', '-b', 'main']);
+      G.git(abs, ['config', 'user.email', 'test@example.com']);
+      G.git(abs, ['config', 'user.name', 'Test User']);
+      G.git(abs, ['add', '-A']);
+      G.git(abs, ['commit', '-q', '-m', 'inner']);
+      return abs;
+    };
+    const shapeDir = (name) => {
+      const abs = path.join(fx.archiveDir, name);
+      fs.mkdirSync(abs, { recursive: true });
+      fs.writeFileSync(path.join(abs, 'sibling.md'), 'run evidence beside a ' + name + ' .git entry\n');
+      return abs;
+    };
+    // c1 — a plain nested repository. The one shape (z1) already covers; kept so this leg's ground
+    // truth carries a case both probes agree on.
+    mkRepo(shapeDir('c1'));
+    // c2 — a real repository whose own config says it is BARE. The inner repo then refuses to answer
+    // "where is your work tree", which the first fix read as "not a boundary".
+    const c2 = mkRepo(shapeDir('c2'));
+    G.git(fx.tmpRoot, ['config', '--file', path.join(c2, '.git', 'config'), 'core.bare', 'true']);
+    // c3 — a real repository whose config points core.worktree somewhere else entirely. The inner repo
+    // answers with that other path, which is not itself, which the first fix also read as "not one".
+    const c3 = mkRepo(shapeDir('c3'));
+    const elsewhere = path.join(fx.binDir, 'elsewhere-worktree');
+    fs.mkdirSync(elsewhere, { recursive: true });
+    G.git(fx.tmpRoot, ['config', '--file', path.join(c3, '.git', 'config'), 'core.worktree', elsewhere]);
+    // c4/c5/c7 — the BENIGN shapes. git commits their siblings as ordinary blobs, so calling any of
+    // them a boundary would drop real evidence out of the blob gate. This is the direction a blunt
+    // "any `.git` entry ends the walk" rule gets wrong.
+    fs.writeFileSync(path.join(shapeDir('c4'), '.git'), 'this is not a gitfile at all\n');
+    fs.writeFileSync(path.join(shapeDir('c5'), '.git'), 'gitdir: /nonexistent/kw-c5-gitdir\n');
+    shapeDir('c7');
+    // c6 — a `.git` SYMLINK to a live gitdir outside the archive. git follows it and collapses.
+    fs.mkdirSync(outsideDir, { recursive: true });
+    const c6Repo = mkRepo(path.join(outsideDir, 'c6repo'));
+    fs.symlinkSync(path.join(c6Repo, '.git'), path.join(shapeDir('c6'), '.git'));
+
+    // --- GROUND TRUTH, measured in a SCRATCH INDEX. What does the OUTER repository actually do?
+    const scratchIndex = path.join(fx.binDir, 'z2-premise.index');
+    const withScratchIndex = args => G.git(fx.tmpRoot, args, {
+      encoding: 'utf8', env: Object.assign({}, process.env, { GIT_INDEX_FILE: scratchIndex }),
+    });
+    withScratchIndex(['read-tree', 'HEAD']);
+    withScratchIndex(['add', '--', archiveRel]);
+    const staged = (withScratchIndex(['ls-files', '--stage', '-z', '--', archiveRel]).stdout || '')
+      .split('\0').filter(Boolean).map((rec) => {
+        const tab = rec.indexOf('\t');
+        return { mode: rec.slice(0, rec.indexOf(' ')), path: tab < 0 ? '' : rec.slice(tab + 1) };
+      });
+    try { fs.rmSync(scratchIndex, { force: true }); } catch (_) {}
+    const collapsed = staged.filter(e => e.mode === '160000').map(e => e.path).sort();
+    const shapeRel = n => archiveRel + '/' + n;
+
+    // PREMISE 1 — the two shapes this leg exists for genuinely collapse HERE. If a future git stopped
+    // collapsing them the defect would be gone, and this assertion says so instead of going quiet.
+    assert(collapsed.indexOf(shapeRel('c2')) !== -1 && collapsed.indexOf(shapeRel('c3')) !== -1,
+      '#907 z2 (' + label + ') premise: the OUTER git must collapse BOTH the core.bare repository (c2) and the '
+      + 'core.worktree-elsewhere repository (c3) into 160000 gitlinks — those two are the shapes (z1) does not '
+      + 'plant and the whole reason this leg exists; got collapsed=' + JSON.stringify(collapsed));
+    // PREMISE 2 — and the benign shapes genuinely do NOT collapse, so the equality below is a real
+    // two-sided test rather than "everything is a boundary".
+    assert(['c4', 'c5', 'c7'].every(n => collapsed.indexOf(shapeRel(n)) === -1
+      && staged.some(e => e.path === shapeRel(n) + '/sibling.md')),
+      '#907 z2 (' + label + ') premise: git must commit the siblings of the BENIGN `.git` shapes (a junk `.git` '
+      + 'file, a broken gitfile, no `.git` at all) as ordinary blobs — if git collapsed those too there would '
+      + 'be no false-positive direction to test; got staged=' + JSON.stringify(staged));
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    // `--keep-issue-open` for (z1)'s reason: the offline mock speaks gh's argv, so a forge port would
+    // otherwise refuse at step 'closure' and this leg would measure the mock.
+    const result = runSinkAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    const sank = result.status === 0 && out && out.status === 'sinked';
+    const step = out && out.step;
+    assert(sank || step === 'archive_commit',
+      '#907 z2 (' + label + ') premise: the run must reach the ARCHIVE gate — a stop anywhere else is a fixture '
+      + 'fault, not a measurement; got exit=' + result.status + ' step=' + JSON.stringify(step)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + '\nstderr: ' + String(result.stderr || '').slice(-500));
+
+    // THE ORACLE. The inventory the sink publishes must be exactly what git did.
+    //
+    // Read from the envelope on success and from the SURVIVING JOURNAL on a refusal: a refusal
+    // envelope carries no `receipt` key at all, so an envelope-only read would report `[]` for every
+    // failure mode and say "the sink named nothing" where the truth is "the sink named the wrong set
+    // and then refused". The inventory is written before the add either way, so both are the same
+    // field; taking whichever exists keeps the failure message about the discriminator.
+    let receipt = (out && out.receipt) || null;
+    if (!receipt) {
+      const journal = findSinkJournal(fx.tmpRoot, project);
+      try { receipt = JSON.parse(fs.readFileSync(journal, 'utf8')); } catch (_) { receipt = {}; }
+    }
+    const reported = Array.isArray(receipt.archive_embedded_repos) ? receipt.archive_embedded_repos.slice().sort() : [];
+    assert(JSON.stringify(reported) === JSON.stringify(collapsed),
+      '#907 z2 (' + label + '): receipt.archive_embedded_repos must equal the set the outer git collapses into '
+      + 'gitlinks, EXACTLY. A boundary the sink misses is a required file it can never commit and no operator '
+      + 'can force in — the permanent block; a boundary it invents drops a whole subtree out of the blob gate, '
+      + 'so evidence git WOULD have committed stops being checked and the gate goes silent about its own '
+      + 'blind spot. got ' + JSON.stringify(reported) + '\ngit collapses ' + JSON.stringify(collapsed)
+      + '\nstderr: ' + String(result.stderr || '').slice(-600));
+
+    // (z1)'s oracle, re-asked on the shapes (z1) cannot plant: every path a refusal names has to be one
+    // `git add -f` can take. With the boundaries recognised there is nothing to name and the sink runs.
+    const missing = (out && Array.isArray(out.archive_missing_paths)) ? out.archive_missing_paths : [];
+    const unclearable = [];
+    for (const rel of missing) {
+      const probeIndex = path.join(fx.binDir, 'z2-clearable.index');
+      try { fs.rmSync(probeIndex, { force: true }); } catch (_) {}
+      const probe = args => G.git(fx.tmpRoot, args, {
+        encoding: 'utf8', env: Object.assign({}, process.env, { GIT_INDEX_FILE: probeIndex }),
+      });
+      probe(['read-tree', 'HEAD']);
+      if (probe(['add', '-f', '--', rel]).status !== 0) unclearable.push(rel);
+      try { fs.rmSync(probeIndex, { force: true }); } catch (_) {}
+    }
+    assert(sank || (missing.length > 0 && unclearable.length === 0),
+      '#907 z2 (' + label + '): an archive holding a core.bare / core.worktree repository must SINK, or be '
+      + 'declined over paths the operator can act on — `git add -f` on a path inside a gitlink exits 128, so a '
+      + 'refusal naming one is a repository nobody can unbrick; got exit=' + result.status
+      + ' missing=' + JSON.stringify(missing) + ' unclearable=' + JSON.stringify(unclearable)
+      + '\nstderr: ' + String(result.stderr || '').slice(-600));
+
+    // The benign siblings must have TRAVELLED. This is the false-boundary direction read at the commit
+    // rather than on the receipt: a subtree wrongly skipped is a subtree nothing is watching.
+    const blobs = new Set(blobsUnder(fx.tmpRoot, 'HEAD', archiveRel));
+    for (const n of ['c4', 'c5', 'c7']) {
+      assert(blobs.has(shapeRel(n) + '/sibling.md'),
+        '#907 z2 (' + label + '): the evidence beside a BENIGN `.git` entry (' + n + ') must be a blob at HEAD — '
+        + 'it is ordinary run evidence and git has no trouble with it; got ' + JSON.stringify([...blobs]));
+    }
+    // ...and nothing was cleared by deletion. A "fix" that removed the embedded repositories would
+    // satisfy every assertion above and lose someone's data.
+    for (const n of ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']) {
+      assert(fs.existsSync(path.join(fx.archiveDir, n, 'sibling.md')) || fs.existsSync(path.join(fx.archiveDir, n, 'inner.md')),
+        '#907 z2 (' + label + '): ' + n + '\'s content must survive on disk whichever way the sink decides');
+    }
+  } finally {
+    cleanup(fx);
+  }
+}
+
+// (z2b) #907 — AND THE OTHER HALF OF THE SAME ANSWER, AT THE LEVEL WHERE IT COSTS SOMETHING.
+//
+// (z2)'s equality catches a false boundary on the RECEIPT. This leg catches what a false boundary
+// COSTS: `scanArchiveTree` skips a boundary's whole subtree, so every file under it leaves
+// `required[]` and the #901 blob gate stops asking about it. On a happy path that is invisible — the
+// broad `git add` commits those files anyway and the two answers look identical. Break the add on one
+// file next to a BENIGN `.git` entry and they separate: the shipped sink refuses and names it, while a
+// discriminator that called that directory a boundary reports a complete archive over a file no commit
+// carries. Same shape as (y4), one axis moved: the unreadable file has a `.git`-bearing neighbour.
+function assertBenignGitEntryKeepsTheBlobGateArmed907(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#907 z2b ' + label + '): a benign `.git` FILE must not disarm the blob gate for its siblings — with one of them unreadable the sink must still refuse sink_incomplete and name it, never report a complete archive over a file the commit does not carry');
+  const fx = buildGitignoredArchiveSinkFixture(project, issue, { gitignoreBody: 'node_modules/\n' });
+  const archiveRel = 'kaola-workflow/archive/' + project;
+  const benignDir = path.join(fx.archiveDir, 'has-a-git-file');
+  const blocked = path.join(benignDir, 'unreadable-evidence.md');
+  try {
+    fs.mkdirSync(benignDir, { recursive: true });
+    // A `.git`-named regular FILE: git treats the directory as ordinary and commits what is in it.
+    fs.writeFileSync(path.join(benignDir, '.git'), 'this is not a gitfile at all\n');
+    fs.writeFileSync(path.join(benignDir, 'readable-evidence.md'), 'evidence beside a junk .git file\n');
+    fs.writeFileSync(blocked, 'evidence git will not be able to read\n');
+    fs.chmodSync(blocked, 0o000);
+    let stillReadable = true;
+    try { fs.readFileSync(blocked); } catch (_) { stillReadable = false; }
+    assert(!stillReadable,
+      '#907 z2b (' + label + '): arming axis — the sibling must be genuinely unreadable, else this leg is a '
+      + 'second happy path and proves nothing');
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+
+    assert(out && out.result === 'refuse' && out.reason === 'sink_incomplete' && out.step === 'archive_commit',
+      '#907 z2b (' + label + '): the sink must refuse sink_incomplete at archive_commit. A `.git`-named FILE is '
+      + 'not a repository boundary — git commits its neighbours normally — so treating that directory as one '
+      + 'would take this file out of the required set and publish a complete-looking record of an archive '
+      + 'missing it; got ' + JSON.stringify(out) + '\nstderr: ' + String(result.stderr || '').slice(-600));
+    assert(!(out && out.status === 'sinked'),
+      '#907 z2b (' + label + '): status must NOT be sinked; got ' + JSON.stringify(out && out.status));
+    const missing = (out && out.archive_missing_paths) || [];
+    assert(missing.indexOf(archiveRel + '/has-a-git-file/unreadable-evidence.md') !== -1,
+      '#907 z2b (' + label + '): the refusal must NAME the sibling the commit does not carry — a count is not a '
+      + 'diagnosis, and an unnamed loss under a `.git`-bearing directory is exactly the silence this pin '
+      + 'exists to break; got ' + JSON.stringify(missing));
+    // The `.git` file itself is never demanded of the commit: the ENTRY skip is correct and unchanged.
+    assert(!missing.some(p => p.endsWith('/.git')),
+      '#907 z2b (' + label + '): the `.git` entry itself must never be a required path; got ' + JSON.stringify(missing));
+    assert(fs.existsSync(path.join(benignDir, 'readable-evidence.md')),
+      '#907 z2b (' + label + '): the refusal must destroy nothing — the on-disk archive survives for the re-run');
+  } finally {
+    try { fs.chmodSync(blocked, 0o644); } catch (_) {}
+    cleanup(fx);
+  }
+}
+
+// (z3) #907 — A COMMITTED SYMLINK POINTING OUT OF THE ARCHIVE MUST BE REPORTED, NEVER SILENTLY GREEN.
+//
+// The blob gate structurally cannot ask this. `blobPathsUnder` reads `ls-tree --name-only`, which
+// lists a `120000` entry by name exactly like a `100644` one, and `scanArchiveTree` deliberately
+// admits symlinks into `required[]` (#901 — a link IS staged, as a blob whose content is the target
+// string). Both halves are right alone; together they answer "carried" for a POINTER to content the
+// archive does not hold. `missingBlobs` comes back empty, `archive_commit` reads done, the sink exits
+// 0 reporting `status: sinked`, and a fresh clone gets a dangling link that `git status` calls clean.
+// That is a green completeness verdict over content that did not travel.
+//
+// POSTURE IS REPORT, NEVER REFUSE, and that is pinned as hard as the report itself: the only path that
+// puts a link in the archive band is the crash-resume rescue, and refusing over rescued evidence would
+// destroy more than it protects. Exit 0 stays 0, `missingBlobs` stays untouched, `archive_commit`
+// stays done — what changes is that `receipt.archive_unbacked_symlinks` names the links.
+//
+// BOTH HALVES, AS AN EXACT SET. Over-reporting is as wrong as under-reporting: a link to a sibling
+// INSIDE the archive travels with the archive and resolves in any clone, so naming it would be a false
+// alarm on a healthy run, and an alarm that fires on healthy runs is how a real one gets ignored. The
+// five links below are one archive, so both directions are decided by the same code on the same run.
+function assertUnbackedSymlinksAreReported907(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#907 z3 ' + label + '): an archived symlink whose target the archive does not carry must be NAMED on the receipt while the sink still completes — and a link pointing INSIDE the archive must not be named at all');
+  const fx = buildGitignoredArchiveSinkFixture(project, issue, { gitignoreBody: 'node_modules/\n' });
+  const archiveRel = 'kaola-workflow/archive/' + project;
+  try {
+    // The out-of-archive target lives OUTSIDE the repository entirely — inside it, it would be
+    // untracked foreign dirt and the sink would refuse at preflight over the fixture rather than
+    // reach the gate.
+    const outsideAbs = path.join(fx.binDir, 'outside-the-run-folder', 'big-evidence.md');
+    fs.mkdirSync(path.dirname(outsideAbs), { recursive: true });
+    fs.writeFileSync(outsideAbs, 'the real bytes, outside the archive\n');
+    const subDir = path.join(fx.archiveDir, 'sub');
+    fs.mkdirSync(subDir, { recursive: true });
+    fs.writeFileSync(path.join(fx.archiveDir, '.cache', 'inside-target.md'), 'a target the archive itself carries\n');
+
+    const L1 = path.join(fx.archiveDir, 'L1-absolute-outside.md');
+    const L2 = path.join(subDir, 'L2-relative-inside.md');
+    const L3 = path.join(fx.archiveDir, 'L3-dangling.md');
+    const L4 = path.join(subDir, 'L4-relative-escape.md');
+    const L5 = path.join(fx.archiveDir, 'L5-relative-inside-shallow.md');
+    fs.symlinkSync(outsideAbs, L1);                                              // absolute, outside
+    fs.symlinkSync('../.cache/inside-target.md', L2);                            // relative, inside
+    fs.symlinkSync('/nonexistent/kw-z3/gone.md', L3);                            // dangling
+    fs.symlinkSync(path.relative(subDir, outsideAbs), L4);                       // relative, escapes
+    fs.symlinkSync('.cache/inside-target.md', L5);                               // relative, inside
+    // The escape must genuinely leave the archive, else the "reported" half would be asserting about a
+    // link that is in fact inside it.
+    assert(path.resolve(subDir, fs.readlinkSync(L4)) === outsideAbs,
+      '#907 z3 (' + label + ') premise: the relative-escape link must resolve OUTSIDE the archive; '
+      + JSON.stringify(fs.readlinkSync(L4)) + ' -> ' + path.resolve(subDir, fs.readlinkSync(L4)));
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+
+    // REPORT, NEVER REFUSE — all four clauses, because the incident is that the run looks healthy and
+    // a fix that made it refuse would be a different defect on a rescue path.
+    assert(result.status === 0, '#907 z3 (' + label + '): the sink must still exit 0 — the bytes are not lost, they '
+      + 'are unreachable from the archive, and refusing over rescued evidence destroys more than it protects; got '
+      + result.status + '\nstderr: ' + String(result.stderr || '').slice(-600));
+    assert(out && out.status === 'sinked',
+      '#907 z3 (' + label + '): status must stay sinked; got ' + JSON.stringify(out && out.status));
+    const receipt = (out && out.receipt) || {};
+    assert(!(Array.isArray(receipt.archive_missing_paths) && receipt.archive_missing_paths.length),
+      '#907 z3 (' + label + '): missingBlobs must be untouched — a committed link IS a blob, and re-routing it '
+      + 'through the refusal path would brick the one posture that produces one; got '
+      + JSON.stringify(receipt.archive_missing_paths));
+    assert(receipt.steps && receipt.steps.archive_commit === 'done',
+      '#907 z3 (' + label + '): archive_commit must still read done; got ' + JSON.stringify(receipt.steps));
+
+    // PREMISE — git committed all five as 120000. Without this the discrimination below could pass
+    // because nothing was ever a symlink in the commit.
+    const modes = new Map(treeEntriesUnder(fx.tmpRoot, 'HEAD', archiveRel).map(e => [e.path, e.mode]));
+    const rel = {
+      L1: archiveRel + '/L1-absolute-outside.md',
+      L2: archiveRel + '/sub/L2-relative-inside.md',
+      L3: archiveRel + '/L3-dangling.md',
+      L4: archiveRel + '/sub/L4-relative-escape.md',
+      L5: archiveRel + '/L5-relative-inside-shallow.md',
+    };
+    for (const k of Object.keys(rel)) {
+      assert(modes.get(rel[k]) === '120000',
+        '#907 z3 (' + label + ') premise: ' + k + ' must be committed as a 120000 symlink blob — that mode is '
+        + 'exactly what the blob gate cannot distinguish from content; got ' + JSON.stringify(modes.get(rel[k]))
+        + ' of ' + JSON.stringify([...modes]));
+    }
+
+    // THE DISCRIMINATION, as an exact set. Entries are `<path> -> <target>`; matched on the path.
+    const named = (Array.isArray(receipt.archive_unbacked_symlinks) ? receipt.archive_unbacked_symlinks : [])
+      .map(s => String(s).split(' -> ')[0]).sort();
+    const want = [rel.L1, rel.L3, rel.L4].sort();
+    assert(JSON.stringify(named) === JSON.stringify(want),
+      '#907 z3 (' + label + '): receipt.archive_unbacked_symlinks must name EXACTLY the three links whose target '
+      + 'the archive does not carry — an absolute path outside it, a dangling one, and one that escapes by '
+      + 'relative traversal — and must NOT name the two that point back inside it, which travel with the archive '
+      + 'and resolve in any clone. Under-reporting is the green verdict over content that did not travel; '
+      + 'over-reporting cries wolf on every healthy run until nobody reads the field. got '
+      + JSON.stringify(named) + '\nwant ' + JSON.stringify(want)
+      + '\nstderr: ' + String(result.stderr || '').slice(-600));
+  } finally {
+    cleanup(fx);
+  }
+}
+
+// (z4) #906/#520 — A SINK TRANSACTION JOURNAL MUST NOT REACH GIT HISTORY, AT ANY DEPTH.
+//
+// The journals are the one class of file the workflow declares must never be committed anywhere
+// (`claim.js`'s SINK_JOURNAL_RE, "never part of the deliverable, never committed"). The sink expressed
+// that rule as four EXACT `:(exclude)` pathspecs, each naming `<prefix>/.cache/<journal>` — exactly one
+// directory deep. #906's crash-resume backstop then began moving main's surviving live folder to
+// `<archive>/<project>/.orphan-main-live-<ts>/`, whose journals sit one level DEEPER than any of them,
+// and the broad `git add -- <archive>/` took them into the commit.
+//
+// READ WHY NOTHING CAUGHT IT, because it decides what this pin is allowed to look at: `SINK_STAGE_SKIP`
+// drops both journal basenames from `required[]`, so the blob gate has nothing to report here and
+// `archive_missing_paths` is silent BY DESIGN. Asking the sink's own bookkeeping would measure the
+// bookkeeping. So this leg reads what git ACTUALLY COMMITTED, and nothing else.
+//
+// AND THE CONTROL IS HALF THE PIN. `:(exclude,glob)…/**/<name>` is only correct if it excludes nothing
+// else: every planted evidence file — including the ones sitting in the same directories as the
+// journals, at depth 0 and at depth 2 — must still be a blob at HEAD. An exclusion that swallowed the
+// rescued run record would be a worse defect than the leak it fixes.
+function assertJournalsNeverReachHistory906(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#906 z4 ' + label + '): sink transaction journals must be absent from the published tree at EVERY depth — including the crash-resume orphan the fixed-depth pathspecs missed — while every evidence file beside them still lands');
+  const fx = buildGitignoredArchiveSinkFixture(project, issue, { gitignoreBody: 'node_modules/\n' });
+  const archiveRel = 'kaola-workflow/archive/' + project;
+  const orphan = '.orphan-main-live-2026-08-01T22-52-06-988Z';
+  const JOURNAL_BODY = '{"schema":1,"steps":{},"note":"a transaction journal, never a deliverable"}\n';
+  try {
+    // The three depths, relative to the archive root. Depth 1 is what the pre-#906 pathspecs covered;
+    // depth 0 and depth 2+ are what they missed, and the orphan folder is the shape that produced them.
+    const journalRels = [
+      'sink-receipt.json',                        // depth 0 — sitting in the archive root
+      'sink-fallback.json',                       // depth 0
+      '.cache/sink-fallback.json',                // depth 1 — the shape that was always covered
+      orphan + '/.cache/sink-receipt.json',       // depth 2 — the leak
+      orphan + '/.cache/sink-fallback.json',      // depth 2
+      orphan + '/.cache/nested/sink-receipt.json',// depth 3 — `**/` spans any number, not exactly one
+    ];
+    // Real run evidence sharing every one of those directories. If the exclusion is written as a
+    // subtree rule rather than a basename rule, these disappear with the journals.
+    const evidenceRels = [
+      'orphan-neighbour.md',
+      orphan + '/workflow-state.md',
+      orphan + '/.cache/main-only-evidence.md',
+      orphan + '/.cache/nested/deep-evidence.md',
+    ];
+    for (const r of journalRels) {
+      const abs = path.join(fx.archiveDir, r);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, JOURNAL_BODY);
+      assert(fs.existsSync(abs),
+        '#906 z4 (' + label + ') premise: the journal ' + r + ' is on disk before the sink runs — the exclusion '
+        + 'clauses below are about a file that was there to be excluded');
+    }
+    for (const r of evidenceRels) {
+      const abs = path.join(fx.archiveDir, r);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, 'rescued run evidence at ' + r + '\n');
+    }
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    assert(result.status === 0 && out && out.status === 'sinked',
+      '#906 z4 (' + label + ') premise: the run must complete, else nothing was committed and the clauses below '
+      + 'are vacuous; got exit=' + result.status + ' status=' + JSON.stringify(out && out.status)
+      + ' step=' + JSON.stringify(out && out.step) + '\nstderr: ' + String(result.stderr || '').slice(-600));
+
+    // What git actually published — the ONLY thing this leg trusts.
+    const published = blobsUnder(fx.tmpRoot, 'HEAD', '.');
+    const leaked = published.filter(p => /(?:^|\/)sink-(?:receipt|fallback)\.json$/.test(p));
+    assert(leaked.length === 0,
+      '#906 z4 (' + label + '): no sink transaction journal may exist anywhere in the published tree. These are '
+      + 'disposable crash-resume scratch files the workflow declares must never be committed, and the archive '
+      + 'commit is the one place a rescued folder can smuggle them in at a depth the exclude pathspecs did not '
+      + 'reach; got ' + JSON.stringify(leaked));
+    // ...and it stayed out by NOT BEING STAGED, not by being deleted — a "fix" that removed the files
+    // would satisfy the clause above while destroying the crash-resume state they exist for. Scoped to
+    // the journals the sink does not own: #653 deliberately disposes of its OWN
+    // `<archive>/.cache/sink-{receipt,fallback}.json` on terminal success (sink-merge.js:1090-1092),
+    // so the depth-1 entry is expected to be gone and its absence says nothing about the exclusion.
+    for (const r of journalRels.filter(j => j.indexOf('.cache/') !== 0)) {
+      assert(fs.existsSync(path.join(fx.archiveDir, r)),
+        '#906 z4 (' + label + '): the planted journal ' + r + ' must still be on disk — an exclusion works by not '
+        + 'staging the file, never by deleting it, and this one is not the sink\'s own journal to dispose of');
+    }
+    // THE OVER-EXCLUSION CONTROL: the evidence beside them all travelled.
+    const publishedSet = new Set(published);
+    for (const r of evidenceRels) {
+      assert(publishedSet.has(archiveRel + '/' + r),
+        '#906 z4 (' + label + '): the rescued evidence at ' + r + ' must be a BLOB at HEAD — it shares a directory '
+        + 'with an excluded journal, so an exclusion written as a subtree rule instead of a basename rule would '
+        + 'silently take the run record with it; got ' + JSON.stringify(published));
+    }
+    // ...and so did the ordinary archive evidence, unchanged by any of this.
+    for (const r of ['workflow-state.md', 'finalization-summary.md', '.cache/n1-impl.md']) {
+      assert(publishedSet.has(archiveRel + '/' + r),
+        '#906 z4 (' + label + '): the ordinary archive evidence at ' + r + ' must still be committed; got '
+        + JSON.stringify(published));
+    }
+  } finally {
+    cleanup(fx);
+  }
+}
+
+// The four sink copies again, for (z2)/(z2b)/(z3)/(z4). Same table as (z1)'s and for the same reason:
+// the GitLab and Gitea sink ports are hand-maintained and compared by nothing, so a fix landing on
+// three copies is invisible until a user on the fourth hits it.
+[
+  ['root', path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js'), null],
+  ['codex', path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-sink-merge.js'), null],
+  ['gitlab', path.join(repoRoot, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-sink-merge.js'), 'KAOLA_GLAB_MOCK_SCRIPT'],
+  ['gitea', path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-sink-merge.js'), 'KAOLA_TEA_MOCK_SCRIPT'],
+].forEach(([label, script, mockEnv], index) => {
+  if (!fs.existsSync(script)) {
+    assert(false, '#907 z2/z3 + #906 z4 (' + label + '): the edition sink script exists at ' + script);
+    return;
+  }
+  assertBoundaryDiscriminationMatchesGit907(label, script, 'issue-' + (90711 + index), 90711 + index, mockEnv);
+  assertBenignGitEntryKeepsTheBlobGateArmed907(label, script, 'issue-' + (90721 + index), 90721 + index, mockEnv);
+  assertUnbackedSymlinksAreReported907(label, script, 'issue-' + (90731 + index), 90731 + index, mockEnv);
+  assertJournalsNeverReachHistory906(label, script, 'issue-' + (90641 + index), 90641 + index, mockEnv);
+});
+
 // --------------------------------------------------------------------------- summary
 
 if (failed === 0) {

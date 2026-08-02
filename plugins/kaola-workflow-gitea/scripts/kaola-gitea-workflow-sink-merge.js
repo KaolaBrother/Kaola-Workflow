@@ -405,9 +405,14 @@ function assertBranchHasNonWorkflowChanges(mainRoot, branch, defBranch) {
   } catch (_) { return null; } // origin/main missing → skip (same posture as merge-base skip-check)
   let files;
   try {
-    const out = execFileSync('git', ['-C', mainRoot, 'diff', '--name-only', base + '...' + branch],
+    // #907: `-z`, split on NUL and nothing else. Without it a C-quoted path (`"`, `\`, a control
+    // char, a non-ASCII byte) defeats the startsWith('kaola-workflow/') test below and the finding
+    // under-fires; and `diff --name-only` does NOT quote a trailing space, so the old `.trim()`
+    // silently renamed the path. That second half is durable here: `files` is written verbatim into
+    // `workflow_only_files` on a RECORDED sink finding, so a mangled name lands on the receipt.
+    const out = execFileSync('git', ['-C', mainRoot, 'diff', '--name-only', '-z', base + '...' + branch],
       { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
-    files = out.split('\n').map(s => s.trim()).filter(Boolean);
+    files = adaptiveSchema.splitNulPaths(out);
   } catch (_) { return null; } // diff failed → do not fabricate a finding
   if (files.length === 0) return null; // no changes at all — leave to the existing up-to-date / FF logic
   const allWorkflow = files.every(f => f.startsWith('kaola-workflow/'));
@@ -1372,22 +1377,61 @@ function sinkLandStagedUnion(src, dest) {
 // stage a path under a `.git` component (`add -f -- e/.git` exits 0 and indexes nothing), so
 // requiring one could only produce a refusal no re-run can clear. Never throws: an unreadable
 // subtree contributes nothing rather than aborting the sink.
-function requiredArchiveFiles(mainRoot, archiveRel) {
-  const out = [];
+
+// #907: does git treat this directory as a REPOSITORY BOUNDARY — a nested `.git` DIRECTORY, or a
+// `.git` gitfile that RESOLVES (a linked worktree planted inside the archive)? At a boundary git
+// collapses the directory into ONE `160000` gitlink and nothing beneath it can become a blob.
+// THE QUESTION IS ABOUT THE OUTER REPOSITORY, NOT THE INNER ONE. `rev-parse --show-toplevel` run
+// INSIDE the candidate asks the INNER repository where its work tree is, and the inner config can
+// answer anything: `core.bare=true` errors with `must be run in a work tree`, `core.worktree` answers
+// with some other path. Both read as "not a boundary" while the OUTER git staged a `160000` gitlink
+// for each — leaving their siblings in `required[]`, unreachable, `git add -f` exiting 128, i.e. the
+// exact unclearable `sink_incomplete` this function exists to remove.
+// So ask git's OWN resolver, from the OUTER repo, about the `.git` entry itself: `--resolve-git-dir`
+// is "a valid repository, or a gitfile pointing at one" — the same question `git add` answers when it
+// decides to collapse. It cannot be misdirected by the inner config; it never enters the inner tree.
+// Measured against what the outer repo actually stages across twelve `.git` shapes; agrees on all of
+// them in BOTH directions. Any probe fault answers "not a boundary" (pre-existing breadth).
+function isArchiveRepoBoundary(mainRoot, absDir) {
+  try {
+    execFileSync('git', ['-C', mainRoot, 'rev-parse', '--resolve-git-dir', path.join(absDir, '.git')],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return true;
+  } catch (_) { return false; }
+}
+
+// #907: ONE walk, TWO answers — the files the archive commit OWES, and the repository boundaries that
+// put files permanently out of its reach. A boundary's SUBTREE is skipped whole, not just its `.git`
+// entry: skipping the entry alone kept demanding siblings the gitlink had already made unreachable
+// (`ls-tree -r` shows no blobs beneath it, `ls-files -o -i` reports nothing so no force-add runs, and
+// a hand `git add -f` exits 128 `fatal: … is in submodule`), which was a refusal no re-run could
+// clear. The caller REPORTS what was skipped.
+function scanArchiveTree(mainRoot, archiveRel) {
+  const required = [];
+  const embeddedRepos = [];
   const walk = (absDir, relDir) => {
     let entries;
     try { entries = fs.readdirSync(absDir, { withFileTypes: true }); } catch (_) { return; }
+    // Probe only when a `.git` entry is present, so the ordinary archive costs no spawns.
+    if (entries.some(e => e.name === '.git') && isArchiveRepoBoundary(mainRoot, absDir)) {
+      embeddedRepos.push(relDir);
+      return;
+    }
     for (const entry of entries) {
       if (entry.name === '.git') continue;
       const rel = relDir + '/' + entry.name;
       if (entry.isDirectory()) { walk(path.join(absDir, entry.name), rel); continue; }
       if (!entry.isFile() && !entry.isSymbolicLink()) continue;
       if (SINK_STAGE_SKIP.has(entry.name)) continue;
-      out.push(rel);
+      required.push(rel);
     }
   };
   walk(path.join(mainRoot, archiveRel), archiveRel);
-  return out.sort();
+  return { required: required.sort(), embeddedRepos: embeddedRepos.sort() };
+}
+
+function requiredArchiveFiles(mainRoot, archiveRel) {
+  return scanArchiveTree(mainRoot, archiveRel).required;
 }
 
 // #901: the paths under `pathspec` that git would REFUSE to stage — untracked AND covered by an
@@ -1424,6 +1468,48 @@ function blobPathsUnder(mainRoot, commitish, pathspec) {
       { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
     return out.split('\0').filter(Boolean);
   } catch (_) { return []; }
+}
+
+// #907: the archive entries git committed as SYMLINKS (`120000`) whose target the archive does NOT
+// carry — the commit holds a pointer, and a fresh clone gets a broken one. blobPathsUnder asks
+// `--name-only`, which lists a `120000` entry exactly like a `100644` one, and scanArchiveTree admits
+// symlinks into `required[]` on purpose (#901). Both are right alone; together they answer "carried"
+// for a link the archive cannot reach, so missingBlobs is empty, archive_commit reads done, the sink
+// reports status:sinked at exit 0, and the clone is a dangling pointer `git status` calls clean —
+// a GREEN VERDICT OVER CONTENT THAT DID NOT TRAVEL.
+// A link INSIDE the archive travels with it and is left alone. Resolution is LEXICAL with a realpath
+// second chance: realpath alone cannot answer for a link that already dangles, which is one of the
+// cases that must be named. REPORTS, NEVER REFUSES — the only path that puts a link here is the
+// crash-resume rescue, and the bytes still exist at the target. Never throws.
+function symlinkTargetsOutsideArchive(mainRoot, archiveRel, commitish) {
+  let records;
+  try {
+    records = execFileSync('git', ['-C', mainRoot, 'ls-tree', '-r', '-z', commitish, '--', archiveRel],
+      { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] })
+      .split('\0').filter(Boolean);
+  } catch (_) { return []; }
+  const archiveAbs = path.join(mainRoot, archiveRel);
+  let archiveReal = archiveAbs;
+  try { archiveReal = fs.realpathSync(archiveAbs); } catch (_) {}
+  const within = (p, root) => p === root || p.startsWith(root + path.sep);
+  const out = [];
+  for (const rec of records) {
+    // `<mode> SP <type> SP <sha> TAB <path>`; `-z` never quotes the path.
+    if (rec.indexOf('120000 ') !== 0) continue;
+    const tab = rec.indexOf('\t');
+    if (tab < 0) continue;
+    const rel = rec.slice(tab + 1);
+    if (!rel) continue;
+    const linkAbs = path.join(mainRoot, rel);
+    let target;
+    try { target = fs.readlinkSync(linkAbs); } catch (_) { continue; }
+    const resolved = path.resolve(path.dirname(linkAbs), target);
+    let resolvedReal = resolved;
+    try { resolvedReal = fs.realpathSync(resolved); } catch (_) {}
+    if (within(resolved, archiveAbs) || within(resolvedReal, archiveReal)) continue;
+    out.push(rel + ' -> ' + target);
+  }
+  return out.sort();
 }
 
 // #901: the members of `rels` this repository's ignore rules cover BY NAME ALONE — a file with the
@@ -1481,9 +1567,16 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
   const issueSet = new Set((issueNumbers || []).map(n => String(n)));
   const roadmapSources = [], projDuplicates = [], foreignDirt = [];
   for (const line of lines) {
+    // #907: the STATUS COLUMN is read here; the PATH comes from the kernel's decoder. This used to be
+    // a SECOND, divergent porcelain parser that did not even unwrap git's C-quoting, so a quoted path
+    // missed every classification below — including the #893 own-archive-mirror exemption — and fell
+    // through to foreignDirt: a `sink_blocked` over the run's OWN archive evidence, identical on every
+    // re-run. parsePorcelainPaths is fed ONE record at a time so `xy` stays readable; it decodes the
+    // quoting and takes the rename DESTINATION, which is what this loop always wanted.
     const xy = line.slice(0, 2);
-    let filePath = line.slice(3).trim();
-    if (filePath.includes(' -> ')) filePath = filePath.split(' -> ')[1].trim();
+    const decoded = adaptiveSchema.parsePorcelainPaths(line);
+    if (decoded.length === 0) continue;
+    const filePath = decoded[0];
     const roadmapMatch = filePath.match(/^kaola-workflow\/\.roadmap\/issue-(\d+)\.md$/);
     if (roadmapMatch && issueSet.has(roadmapMatch[1])) { roadmapSources.push(filePath); continue; }
     const projStateFiles = [
@@ -1946,10 +2039,21 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       const ps = archiveRel + '/';
       // #520/#700: exclude crash-resume journals from staging (must persist on disk, never committed).
       // Scope to the ACTUAL dest .cache AND the live folder .cache (the resolved receipt can sit there).
-      const exRcpt = ':(exclude)' + ps + '.cache/sink-receipt.json';
-      const exFb = ':(exclude)' + ps + '.cache/sink-fallback.json';
-      const exLiveRcpt = ':(exclude)kaola-workflow/' + args.project + '/.cache/sink-receipt.json';
-      const exLiveFb = ':(exclude)kaola-workflow/' + args.project + '/.cache/sink-fallback.json';
+      //
+      // MATCHED BY BASENAME AT ANY DEPTH. These were four EXACT paths naming `<prefix>/.cache/<journal>`
+      // — exactly one directory deep. #906's crash-resume backstop moves main's surviving live folder
+      // to `<archive>/<project>/.orphan-main-live-<ts>/`, so its journals land ONE LEVEL DEEPER and
+      // every mechanism stayed silent: the exact pathspecs miss, SINK_STAGE_SKIP drops them from
+      // `required[]` so the blob gate has nothing to report, and the broad `git add` below takes them.
+      // claim.js's SINK_JOURNAL_RE has always stated the rule by basename at any depth; these four
+      // pathspecs were the only fixed-depth wording of it. `**/` spans zero or more directories, so the
+      // pre-#906 depth-1 paths stay covered and depths 0 and 2+ join them.
+      const exJournals = prefix => [
+        ':(exclude,glob)' + prefix + '**/sink-receipt.json',
+        ':(exclude,glob)' + prefix + '**/sink-fallback.json',
+      ];
+      const [exRcpt, exFb] = exJournals(ps);
+      const [exLiveRcpt, exLiveFb] = exJournals('kaola-workflow/' + args.project + '/');
       // #700: also commit the roadmap-source removal + regenerated ROADMAP.md + the live-folder removal
       // (the sole-archiver rename moved a tracked live folder into the suffixed archive), so main's HEAD
       // is not left dirty. Scope to THIS sink's own files; a path that matches nothing is filtered out.
@@ -2004,10 +2108,28 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       // from the REQUIRED set rather than only from the force list, because a path that stays required
       // and is not force-added becomes a missing blob and refuses — which would brick the sink over a
       // `.DS_Store`. A probe fault subtracts nothing, i.e. leaves the pre-#901 breadth in place.
-      let requiredPaths = fs.existsSync(archiveDir) ? requiredArchiveFiles(mainRoot, archiveRel) : [];
+      const archiveScan = fs.existsSync(archiveDir)
+        ? scanArchiveTree(mainRoot, archiveRel)
+        : { required: [], embeddedRepos: [] };
+      let requiredPaths = archiveScan.required;
       if (requiredPaths.length > 0) {
         const ignoredByName = repoWideIgnoredNames(mainRoot, requiredPaths);
         requiredPaths = requiredPaths.filter(p => !ignoredByName.has(p.split('/').pop()));
+      }
+      // #907: an embedded repository inside the archive. Its contents are permanently out of this
+      // commit's reach (see scanArchiveTree), so requiring them was a `sink_incomplete` no re-run
+      // could clear. They are no longer required; what replaces the refusal is the INVENTORY, the
+      // same answer #832/#901 reached for the gitignored archive — itemized on the receipt and on
+      // stderr with the one remedy that works, which lives outside git's index.
+      if (archiveScan.embeddedRepos.length > 0) {
+        receipt.archive_embedded_repos = archiveScan.embeddedRepos.slice();
+        process.stderr.write('sink-merge --sink: WARNING: ' + archiveScan.embeddedRepos.length
+          + ' path(s) under ' + archiveRel + ' are embedded git repositories (a nested .git directory, or a '
+          + 'linked worktree): ' + archiveScan.embeddedRepos.join(', ') + '. git records each as a gitlink, '
+          + 'so the run evidence beneath them is NOT committed with the archive and will not survive a fresh '
+          + 'clone. To archive their contents, remove the repository boundary — delete the nested .git, or '
+          + '`git worktree remove` the planted worktree — so they become ordinary files, then re-run the '
+          + 'sink.\n');
       }
       let forcePaths = [];
       if (!archiveIgnored && requiredPaths.length > 0) {
@@ -2082,6 +2204,23 @@ function runSinkTransaction(args, mainRoot, defBranch) {
         missingBlobs = requiredPaths.filter(p => !blobs.has(p));
       }
       if (missingBlobs.length > 0) receipt.archive_missing_paths = missingBlobs;
+      // #907: the question missingBlobs structurally CANNOT ask — is anything it counted as carried a
+      // POINTER to content the archive does not hold? A committed `120000` entry is a blob, so it
+      // satisfies the gate above while a fresh clone gets a dangling link and `git status` there reads
+      // clean. Measured unconditionally. REPORT, NOT REFUSE — this is a rescue path and the bytes are
+      // not lost, only unreachable from the archive; what changes is that the sink stops saying
+      // "complete" without qualification when part of what it committed points outward.
+      const unbackedLinks = symlinkTargetsOutsideArchive(mainRoot, archiveRel, 'HEAD');
+      if (unbackedLinks.length > 0) {
+        receipt.archive_unbacked_symlinks = unbackedLinks;
+        process.stderr.write('sink-merge --sink: WARNING: ' + unbackedLinks.length + ' archived path(s) under '
+          + archiveRel + ' are SYMLINKS committed as pointers to targets the archive does NOT carry: '
+          + unbackedLinks.join(', ') + '. The commit holds the link, not the content, so a fresh clone '
+          + 'resolves it only where those exact paths exist — elsewhere it dangles, and `git status` in '
+          + 'that clone still reports clean. The bytes are intact at the target on this machine. To make '
+          + 'them survive a clone, replace the link with a copy of its target inside ' + archiveRel
+          + ' and re-run the sink.\n');
+      }
       // #832: an archive the consumer's .gitignore covers can NEVER reach HEAD, so the #700
       // never-committed refusal below would brick every such repo. That is not the remedy the
       // incident asks for — the sink still completes; it just stops claiming a commit git refused.

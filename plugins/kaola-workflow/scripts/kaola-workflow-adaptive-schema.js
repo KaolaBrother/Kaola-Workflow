@@ -431,22 +431,100 @@ function parseValidatedCandidateHash(text) {
 // prefixes is a "parked lane path" when its project segment is NOT owned by this run.
 const PARKED_LANE_PREFIXES = Object.freeze(['kaola-workflow/', '.kw/worktrees/', '.kw/legs/']);
 
+// Split a NUL-terminated git path stream (`-z` on diff / ls-files / ls-tree / status / worktree
+// list) into paths. `-z` output is NEVER quoted and NEVER needs trimming: each record is the
+// literal on-disk name, so the whole parser is one split. This is the ONE NUL splitter — a second
+// copy in a caller is a second answer to "what is this path", which is the defect class itself.
+// Empty records (the terminator's tail, and any blank) drop: a path is never empty.
+function splitNulPaths(text) {
+  return String(text || '').split('\0').filter(Boolean);
+}
+
+// Decode ONE git C-quoted field back to the literal name it stands for: `"n\303\266te.md"` → `nöte.md`.
+// git quotes a path that carries `"`, `\`, a control character, a LEADING OR TRAILING SPACE, or —
+// unless core.quotePath=false — a non-ASCII byte, escaping \a \b \f \n \r \t \v \" \\ by name and
+// every other byte in OCTAL. The octal escapes are bytes of the UTF-8 encoding, never characters,
+// so they are collected as bytes and decoded together; literal runs (raw UTF-8 survives inside a
+// quoted field when core.quotePath=false) are encoded whole, which keeps surrogate pairs intact.
+// Input that is not a closed quoted field is returned VERBATIM, so this is safe to apply
+// unconditionally to a stream that quotes only some of its records.
+function unquoteCStyle(field) {
+  const s = String(field == null ? '' : field);
+  if (s.length < 2 || s[0] !== '"' || s[s.length - 1] !== '"') return s;
+  const body = s.slice(1, -1);
+  const NAMED = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11, '"': 34, '\\': 92 };
+  const chunks = [];
+  let literal = '';
+  const flush = () => { if (literal) { chunks.push(Buffer.from(literal, 'utf8')); literal = ''; } };
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch !== '\\') { literal += ch; continue; }
+    const next = body[i + 1];
+    if (next === undefined) { literal += ch; continue; } // dangling backslash — keep it
+    if (Object.prototype.hasOwnProperty.call(NAMED, next)) {
+      flush(); chunks.push(Buffer.from([NAMED[next]])); i += 1; continue;
+    }
+    const octal = /^[0-7]{1,3}/.exec(body.slice(i + 1, i + 4));
+    if (octal) {
+      flush(); chunks.push(Buffer.from([parseInt(octal[0], 8) & 0xff])); i += octal[0].length; continue;
+    }
+    literal += next; i += 1; // an escape git does not emit — keep the character itself
+  }
+  flush();
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+// Index of the ` -> ` separating a rename/copy's SOURCE from its DESTINATION in LF porcelain, or -1.
+// When the source is quoted the separator is the first arrow AFTER its closing quote, so a quoted
+// source containing ` -> ` cannot be mistaken for it. An UNQUOTED source containing ` -> ` stays
+// genuinely ambiguous in this format — that is why git recommends -z, and why the caller should.
+function renameArrowIndex(field) {
+  if (field[0] !== '"') return field.indexOf(' -> ');
+  let i = 1;
+  while (i < field.length) {
+    if (field[i] === '\\') { i += 2; continue; }
+    if (field[i] === '"') break;
+    i += 1;
+  }
+  return field.indexOf(' -> ', i);
+}
+
+const isRenameStatus = (xy) => xy[0] === 'R' || xy[0] === 'C' || xy[1] === 'R' || xy[1] === 'C';
+
 // Parse git porcelain v1 output into an array of repo-relative fwd-slash paths.
 // Strips the 2-char XY status column + leading space; takes the DESTINATION for rename lines.
 // Both untracked (??) and tracked (M/D/A/…) files are included — the caller applies any
 // --untracked-files filtering at the git invocation level.
+//
+// The returned path is the file's LITERAL name: C-quoting is DECODED (not merely unwrapped) and
+// NOTHING is trimmed, so `git add -- <returned path>` matches the file on disk. Unwrapping the
+// quotes while leaving `\303\266` inside, and trimming a name whose trailing space git had quoted
+// FOR that reason, produced a pathspec matching no file — one such name aborted the finalize
+// transaction's whole `git add`, which then committed nothing and reported success.
+//
+// BOTH record formats are accepted, detected by content, because the callers' git invocations are
+// not all convertible at once and a half-converted caller must not silently mis-parse:
+//   * a NUL anywhere  → `--porcelain -z`: paths verbatim, and a rename/copy is TWO records,
+//     `XY <dest>\0<source>\0` — destination FIRST and no arrow (the reverse of the LF form).
+//   * otherwise       → `--porcelain`: C-quoted where needed, rename `XY <source> -> <dest>`.
 function parsePorcelainPaths(statusText) {
+  const text = String(statusText || '');
+  const nulSeparated = text.indexOf('\0') >= 0;
+  const records = text.split(nulSeparated ? '\0' : '\n');
   const result = [];
-  const lines = String(statusText || '').split('\n');
-  for (const line of lines) {
-    if (line.length < 3) continue;
-    let p = line.slice(3); // drop "XY "
-    // Rename: "old -> new" → take destination
-    const arrowIdx = p.indexOf(' -> ');
-    if (arrowIdx >= 0) p = p.slice(arrowIdx + 4);
-    // Strip surrounding quotes (git uses them for special chars)
-    if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
-    p = p.trim();
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    if (record.length < 3) continue;
+    let p = record.slice(3); // drop "XY "
+    if (isRenameStatus(record)) {
+      if (nulSeparated) {
+        i += 1; // the source path is the NEXT record — consume it, never emit it
+      } else {
+        const arrowIdx = renameArrowIndex(p);
+        if (arrowIdx >= 0) p = p.slice(arrowIdx + 4);
+      }
+    }
+    if (!nulSeparated) p = unquoteCStyle(p);
     if (p) result.push(p);
   }
   return result;
@@ -1595,6 +1673,11 @@ module.exports = {
   SHARED_STATE_FIELDS,
   PARKED_LANE_PREFIXES,
   parsePorcelainPaths,
+  // The two halves of that parser, exported for the path streams that are NOT porcelain (no `XY `
+  // column): `splitNulPaths` is the whole parser for any `-z` stream, `unquoteCStyle` the decoder
+  // for a non-`-z` one. Both exist so a caller converting a reader reuses this answer, not its own.
+  splitNulPaths,
+  unquoteCStyle,
   isParkedLanePath,
   getCoordRoot,
   mainRootFromCoord,

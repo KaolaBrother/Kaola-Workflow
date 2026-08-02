@@ -295,6 +295,75 @@ can see what moved and notice what does not belong.
   sink-merge), else `close-pending` — the default merge lane, where the sink closes the issue after
   finalize, so finalize never asserts a false `closed`.
 
+**The crash-resume backstop moves main's surviving live folder aside; it does not delete it.** When
+the archive has already landed and a crash left `<mainRoot>/kaola-workflow/<project>/` standing, that
+folder is renamed to `<archive-authority>/.orphan-main-live-<ISO-ts>/`. The goal is only to stop the
+active-folder scan from reading a finished run as a live claim, and a move achieves that with nothing
+lost — the earlier `rmSync` destroyed main-only evidence that was in no archive, at exit 0. It is
+nested **inside** the resolved archive authority rather than placed beside it, which is measured and
+load-bearing: a sibling `archive/<project>.orphan-<ts>` makes the next sink refuse `sink_blocked`
+naming the rescued evidence as foreign dirt, while the nested form is covered by the own-archive
+exemption, so the sink completes and its `archive_commit` step lands the orphan in git history. Three
+fields report it:
+
+| Field | Meaning |
+|---|---|
+| `main_live_orphan` | `moved` \| `failed` \| `skipped_authority_outside_main`. The last means the archive authority is not under the main checkout, so the folder was deliberately left alone — moving it into a tree the sink is about to force-remove would be a new destruction route |
+| `main_live_orphaned_to` | the absolute destination, on `moved` |
+| `main_live_orphan_error` | the failure detail, on `failed`. A failed rename leaves the folder exactly where it was: the worst case is a phantom claim the operator can see, never a loss |
+
+`main_live_cleaned_on_resume: true` is retained and is now set only when the move actually succeeded.
+
+**A git fault in the commit gate is reported, not swallowed.** Five `git` calls in that block ran
+under `catch (_) {}`, or read any non-zero exit as an answer. The consequence was that a corrupt
+index, a full disk, a permission, a held index lock, or one hazard-named path aborting a whole
+pathspec all arrived as `finalize_commit: "nothing_to_commit"` at exit 0 — with the healthy files
+beside them left uncommitted, the `chore: archive` and `chore: finalize` commits never authored, and
+nothing durable recording that anything had been dropped. **The rule now separated is "nothing was
+staged" from "we could not tell".** The first is a claim about the working tree; a failed probe does
+not support it.
+
+| Field | Meaning |
+|---|---|
+| `archive_stage` | `skipped` (default) \| `staged` \| `failed`. Covers the archive bookkeeping — the `git rm -r --cached` of the live run folder and the `git add` of the archive paths. A failure here means the branch may still carry the live folder that `chore: archive` exists to remove |
+| `archive_stage_detail` | git's own message on `failed` |
+| `archive_unstaged` | the archive paths that did not stage, capped at 50 |
+| `roadmap_staged` | now derived from the **outcome** of the archive `git add`, not from the paths merely existing on disk. It was `true` whenever the files were present, which is a statement about the filesystem where a statement about the index was owed |
+| `archive_commit_probe` | `failed` when the archive's `git diff --cached --quiet` exited neither 0 nor 1. Exit 1 means "something is staged" and 0 means "nothing is"; anything else is git failing, and reading it as "nothing" is how a fault became a success |
+| `archive_commit_probe_detail` | git's own message |
+| `residue_stage` | `skipped` (default — no residue to stage) \| `staged` \| `failed` \| **`unprobeable`**. The last is new and is not `skipped`: the `git status --porcelain` that enumerates the residue itself failed, so the run cannot say there was nothing to stage |
+| `residue_stage_detail` | git's own message on `failed`. Also re-emitted on stderr with a `WARNING` prefix, so a terminal reader loses nothing the previously-inherited stderr showed |
+| `residue_probe_detail` | git's own message on `unprobeable` |
+| `residue_unstaged` | the paths that did not stage, capped at 50 |
+| `finalize_commit_probe` | `failed` when the finalize commit's `git diff --cached --quiet` exited neither 0 nor 1 |
+| `finalize_commit_probe_detail` | git's own message |
+| `findings` | the **de-duplicated list of typed fault names** raised anywhere in the block: `archive_unstage_failed`, `archive_stage_failed`, `archive_commit_probe_failed`, `residue_probe_failed`, `residue_stage_failed`, `finalize_commit_probe_failed`. Absent or empty on a healthy run |
+
+`finalize_commit` gains the value **`'unknown'`**, and it means *we could not tell*, not *nothing
+happened*. It is set when the residue probe or the staged probe failed — one could not enumerate what
+to stage, the other could not read what was staged, and neither supports the claim
+`nothing_to_commit` makes about the working tree. **An operator seeing `unknown` should re-read the
+worktree by hand before trusting the closure.** One honest limit: when it is the *enumerating* probe
+that failed, the record cannot name the uncommitted paths, and it says so rather than implying a list
+exists.
+
+Every fault is also written durably to `finalization-summary.md` under `## Finalize Findings`, one
+section per fault naming its step and quoting git. That write happens **once**, at every exit from
+the block including the refusing ones — `appendSummarySection` is idempotent by heading, so a
+per-fault write would have landed the first fault and silently dropped the rest, which is the same
+silence being converted here.
+
+**The exit stays 0 on all of it** — this is report, not refuse — and none of these fields fires on a
+healthy run: a good finalize reports `staged`/`staged`/`committed` with no `findings`.
+
+**One edition difference, pre-existing and larger than these fields.** The GitLab and Gitea ports
+stage the archive with a single unscoped `git add -A 'kaola-workflow/'` — no `git rm -r --cached`,
+no candidate-path list — so they raise **five** finding types where canonical and Codex raise
+**six**. The delta is exactly one, `archive_unstage_failed`, which can only exist where there is a
+`git rm -r --cached` to fail; `archive_stage` on those two editions therefore covers that one call
+rather than the two the row above describes. The conversion was applied to the shape those ports
+actually have; the underlying staging divergence is older than this change and is not closed by it.
+
 **Opt-in exit gate.** The JSON is always emitted and the exit is 0 by default. Pass `--strict` to
 make the exit code reflect the invariant verdict: **exit 4** when `closure_invariants.ok === false`.
 
@@ -344,7 +413,7 @@ Usage: kaola-workflow-run-chains.js [--chains name,...] [--accept-known-red name
 |---|---|
 | `--chains <name,...>` | comma-separated chain names to run (default: the resolved set) |
 | `--accept-known-red <name>:<issue>` | waive a known-failing chain; repeatable. Both halves must be non-empty |
-| `--project <issue-N>` | write the receipt to `kaola-workflow/<issue-N>/.cache/chain-receipt.json`, resolved against the git top-level so it lands identically from the worktree root or the repo root |
+| `--project <issue-N>` | write the receipt to `kaola-workflow/<issue-N>/.cache/chain-receipt.json` in the working tree that **holds the run folder** — the invoking tree when it carries it, otherwise the main checkout. From a linked worktree whose run folder is main-resident, the receipt therefore lands in main, where the finalize gate reads it. Falls back to `<invoking tree>/kaola-workflow/<issue-N>/` when no run folder resolves, which is the ordinary first run in a plain repository |
 | `--plan <path>` | write the receipt to `<dir-of-path>/.cache/chain-receipt.json`. A legacy path-derivation alias; `--project` is the flag to use |
 | `--output <path>` | explicit override; default is `<cwd>/.cache/chain-receipt.json` |
 | `--mock-chain <name>:<script>` | test hook: replace a chain's command with a shell script |
@@ -354,6 +423,13 @@ Usage: kaola-workflow-run-chains.js [--chains name,...] [--accept-known-red name
 Receipt-path precedence: `--output > --plan > --project > cwd default`. **Pass `--project`**: the
 bare cwd default lands the receipt at the worktree root, not under `kaola-workflow/<project>/`,
 where the finalize measurement reads it.
+
+**The record follows the run folder; the hash follows the invoking tree.** Only the `--project`
+receipt path resolves across working trees. `codeTreeHash` is still computed over the tree the
+command was invoked from, so a receipt produced in a linked worktree describes that worktree's
+candidate and lands in the checkout the gate will read — both at once, which is the point. `--plan`
+and `--output` are explicit caller-supplied paths and resolve against cwd unchanged; a **relative**
+`--plan` from a linked worktree therefore still lands under the invoking tree.
 
 **Diff-scoped chain selection.** When the caller pins neither `--chains` nor `--mock-chain` and the
 invocation is finalize-context (`--project` or `--plan`), `classifyScope` resolves the diff base and
@@ -475,6 +551,33 @@ reader can check the claim rather than take it on trust. The producer of all thr
 `kaola-workflow-validation-runner.js record` below — the field the gate requires is the one an
 agent writing the file by hand is likeliest to omit, and both remediation hints name that verb.
 
+### Kernel path-stream decoders — `kaola-workflow-adaptive-schema.js`
+
+Every reader that turns a git path stream back into filenames goes through the same anchor, so a
+name git can print is a name the caller can hand back to git. The rule they exist to enforce: **a
+path is returned as the file's literal name**, and `git add -- <returned path>` matches the file on
+disk. Anything less produced a `fatal: pathspec … did not match any files` that aborted a whole
+collective `git add`, taking healthy files with it.
+
+| Export | Contract |
+|---|---|
+| `parsePorcelainPaths(statusText)` | `git status --porcelain` output → repo-relative POSIX paths. **Auto-detects the record format**: a NUL anywhere selects `-z` porcelain, where a rename is two records, destination **first**, no arrow; otherwise LF porcelain with the `XY <source> -> <dest>` arrow. Rename and copy return the destination only. C-quoting is **decoded**, not merely unwrapped, and nothing is trimmed. The arrow is split only on an `R`/`C` status, so an untracked file literally named `a -> b` survives. Never throws; `''`/`null`/`undefined` → `[]`. Order is git's; no sort, no de-dup |
+| `splitNulPaths(text)` | the whole parser for a **plain** path stream — `diff --name-only -z`, `diff --cached --name-only -z`, `log --name-only -z`, `ls-files --others -z`, `ls-tree -r -z`. One field per record, no status column and no rename source, so handing such a stream to `parsePorcelainPaths` would eat three characters off every path. Empty records dropped, everything else verbatim |
+| `unquoteCStyle(field)` | decodes one C-quoted field (`"n\303\266te.md"` → `nöte.md`) for a stream that genuinely cannot take `-z`. Unquoted input is returned unchanged, so it is safe to apply unconditionally. Caveat: `git diff --name-only`, unlike `git status --porcelain`, does **not** quote a leading or trailing space, so unquoting alone is lossless only if you also do not trim |
+
+**Prefer `-z` where you can add it** — it is unambiguous, and the one case LF cannot resolve is an
+unquoted source path that literally contains ` -> `. Not adding it is safe for `git status
+--porcelain`: measured on git 2.50.1, status quotes every path containing `"`, `\`, a control
+character or a leading/trailing space, and (unless `core.quotePath=false`) every non-ASCII byte, all
+of which the decoder reverses.
+
+**Deliberately not converted**, so nobody waits on it: `computeCodeTreeHash`, `filterVisiblePaths`,
+`visibleChangedPathsSince` and `headAdvanceIsValidationInvisible` still split on newlines. Those feed
+a hash and a visibility classifier that the producer and the gate compute through the same one
+function, so a quoted path is consistent on both sides and the worst case is a spurious
+`chains_stale`. Converting them would change `codeTreeHash` inputs and could stale live receipts —
+an unforced risk with no observed failure behind it.
+
 ### `kaola-workflow-validation-runner.js`
 
 The owned local gate for a consumer repo. Runs in a scrubbed environment, binds
@@ -485,7 +588,7 @@ against, so the consumer arm above has an invocable producer rather than a forma
 ```
 kaola-workflow-validation-runner.js run --command <command> --timeout-minutes <1..120>
     [--repo-root <path>] [--cwd <repo-relative>] [--repetitions <1..5>]
-    [--env-allowlist <A,B>] [--output <path>]
+    [--env-allowlist <A,B>] [--output <path>] [--keep-output <dir>]
 kaola-workflow-validation-runner.js qualify-local --contract-hash <sha256> --context-hash <sha256>
     --claude-profile-hash <sha256> --codex-profile-hash <sha256> --invariant-classes <a,b>
     [--timeout-minutes <1..120>] [--output <path>]
@@ -494,6 +597,46 @@ kaola-workflow-validation-runner.js record --project <name> --verdict pass|fail
 ```
 
 Receipts land under `.cache/validation-vectors/`. Exit 1 when the outcome is not `pass`.
+
+#### `--keep-output <dir>` — retain the child's raw streams so a red receipt is diagnosable
+
+The receipt binds `stdout_sha256`, `stderr_sha256` and a normalized failure-signature digest per
+repetition and keeps none of the preimages, so a `fail` with an empty `reduction_reasons` says a
+command failed identically N times and nothing says what it printed. `--keep-output` is the opt-in
+that closes that, and **only that**:
+
+- `<dir>` is always a **directory**, at every repetition count. Files are `run-<index>.stdout` and
+  `run-<index>.stderr`, where `<index>` is the receipt's own `runs[].index` — that keying is the whole
+  value of the flag, because it is what maps a red repetition's digest back to the bytes behind it.
+  The two streams stay in separate files; merging them loses which was which. An empty stream is an
+  empty file, not an absent one.
+- **The receipt is byte-identical with and without the flag.** No receipt field is added, no
+  `vector_id` or `command_id` moves, and the `runs[]` field set is unchanged. Retention is a side
+  channel, never part of validation identity.
+- The write happens **after** the last candidate digest is taken, so a destination anywhere in the
+  repository — including a validation-visible path — cannot make the runner report its own log as
+  `candidate_mutation`. **The consequence is that an interrupted run retains nothing** — not even a
+  prefix, and not the repetitions that had already completed: the bytes are buffered until the last
+  repetition finishes, so a run killed part-way leaves the directory empty (measured, under both
+  SIGTERM and SIGKILL). That is deliberate and is not going to change. Writing inside the loop would
+  move the candidate digest between the pre- and post-repetition measurements on any destination
+  inside the candidate band, which the flag permits, and the runner would report `candidate_mutation`
+  against its own log — a false red on the verdict itself, which is strictly worse than losing a
+  diagnostic aid. An empty directory after a kill is the flag working as designed, not a fault.
+- **It refuses rather than overwrite, and it refuses before the child runs.** An existing
+  `run-<index>.<stream>`, a `<dir>` that exists and is not a directory, or a destination resolving
+  inside the durable archive band `kaola-workflow/archive/**` all exit `2` with nothing executed and
+  nothing written. An earlier run's bytes read as this run's are a false diagnosis, which is worse
+  than the no-diagnosis state the flag exists to fix; and a refusal arriving after a long suite would
+  throw away the run it was meant to explain.
+- **Retained bytes are raw.** Absolute paths are redacted and nothing else, so a secret the child
+  echoes is retained verbatim — choose the destination accordingly. There is no truncation cap:
+  `MAX_OUTPUT_BYTES` already bounds a completed run (exceeding it kills the child into
+  `inconclusive`, so oversized output never reaches retention), and a cap here would delete the tail
+  of a failure, which is usually the part naming the cause.
+
+`docs/decisions/D-697-01.md` records why this is opt-in with a caller-named destination rather than
+always-on: the default posture — raw child output is not persisted — is unchanged.
 
 #### `record` — bind a consumer validation to the tree it validated
 
@@ -626,11 +769,26 @@ attempted — a sink with nothing to close is never false-flagged.
 | `step` | Meaning | Recovery |
 |---|---|---|
 | `push_upstream` | `git push -u origin <branch>` did not verifiably reach parity with its upstream; the branch may not be backed up | the step is left NOT done, so a re-run retries it |
-| `finalize`, `archive_refusal: "archive_incomplete"` | the archive would not be a faithful copy: `missing` names files the source held that the destination lacks, `mismatched` names files that arrived with different bytes. Fires **before** any archive mutation, so the live folder is not deleted | restore the evidence and re-run |
+| `finalize`, `archive_refusal: "archive_incomplete"` | the archive would not be a faithful copy: `missing` names files the source held that the destination lacks, `mismatched` names every entry that did not verify byte-for-byte — which is two different facts, so see `uncomparable` below. Fires **before** any archive mutation, so the live folder is not deleted | restore the evidence and re-run |
 | `finalize`, `archive_refusal: "archive_exception"` \| `"archive_forced_refusal"` \| `"archive_not_performed"` | the archive did not happen at all — a throw other than the `TypeError`/`ReferenceError` export-drift class (`archive_exception`), the `KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL=1` test seam (`archive_forced_refusal`), or a return reporting neither `archived: true` nor `skipped: "source-missing"` (`archive_not_performed`). Nothing was pushed to the mainline and no issue was closed | resolve the fault (for example a non-writable `kaola-workflow/archive/`) and re-run; the step is left NOT done |
 | `archive_commit` | the archive was staged and committed, but a file the archive holds on disk did not become a blob at `HEAD`. `archive_missing_paths` names every one and `archive_add_errors` carries the `git add` output. Returned before teardown, so the branch, the worktree and the on-disk archive are all retained — nothing recoverable is lost | fix whatever git could not index (a mode, a permission) and re-run; the step is left NOT done |
 | `push_main` | the fast-forward landed locally but pushing the mainline threw | branch preserved; resolve the push fault and re-run |
 | `closure` | at least one issue could not be closed, or an exit-0 close could not be verified | the step is left NOT done, so a re-run retries it |
+
+**`verifyArchiveComplete` returns three keys, not two.** `mismatched[]` conflated two different
+facts — *this file arrived with different bytes* and *this entry could not be byte-compared at all*
+(a symlink, a directory or a device where a regular file was required, or a source subtree the walk
+could not read). A reader could not tell "restore the correct bytes" from "this is not a file", and
+the caller that compares main's surviving live folder reads presence only, so the second class was
+invisible to it. `uncomparable[]` names exactly that second half. It is a strict **subset** of
+`mismatched[]` and never a replacement: every existing reader and every existing pin keeps the answer
+it had, and a reader needing the distinction subtracts. There is still one source walk, one call and
+one answer. The sentinels `'<root>'` and `'<dest>'` mean the source or destination directory itself
+could not be read or does not exist.
+
+`missing` and `mismatched` are both reported by `finalize`, `release`, `watch-pr`/`watch-mr` and the
+abandon sweep. The last three previously reported `missing` alone, so an entry that failed only on
+the uncomparable half refused while naming nothing.
 
 ```json
 {
@@ -690,6 +848,20 @@ divergences recorded for the closure audit below — because they describe git-l
 route noun. On the finalize side, `finalize_transaction.archive_ignored_evidence` names the archived
 evidence a consumer's ignore rules cover, so a folder handed to the sink says which of its files git
 would refuse to stage unaided.
+
+**An embedded repository boundary inside the archive is inventoried, not refused.** A nested `.git`
+**directory**, or a gitfile that resolves, makes git collapse that subtree into a single `160000`
+gitlink: `ls-tree -r` returns no blobs beneath it, `ls-files -o -i` reports nothing there so nothing
+is force-addable, and an operator's own `git add -f` exits `128` with `is in submodule`. Demanding
+those files anyway produced a non-convergent `sink_incomplete` with no remedy reachable from inside
+the sink, because the remedy lives outside git's index. The required-file walk now skips the whole
+subtree at a **measured** boundary — `rev-parse --show-toplevel` inside the directory equals the
+directory itself — and `receipt.archive_embedded_repos` names each boundary, with the working remedy
+on stderr: remove the boundary (delete the nested `.git`, or `git worktree remove`) and re-run. This
+is the same answer the gitignored-archive case already reaches: proceed, itemize the loss, name the
+remedy. A junk `.git`-named **file** does not collapse anything — git commits its siblings normally —
+so it stays byte-for-byte inside the blob gate; skipping on the mere presence of a `.git` entry would
+have silently dropped healthy files from the gate that exists to catch exactly that loss.
 
 The close loop runs whenever a primary issue (`--issue`) **or** at least one bundle member
 (`--issue-numbers`) is present, so a bundle sink invoked with only `--issue-numbers` closes every

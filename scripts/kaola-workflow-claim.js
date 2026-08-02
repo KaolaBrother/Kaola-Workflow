@@ -19,7 +19,8 @@ const closureContract = require('./kaola-workflow-closure-contract');
 // issue #227 (adaptive path): forge-neutral constants + toggle resolution.
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 // #579: shared resolver — single source replacing local re-impls in claim.js / adaptive-node.js / sink-merge.js.
-const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, isParkedLanePath } = adaptiveSchema;
+const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, isParkedLanePath,
+  splitNulPaths } = adaptiveSchema;
 // #579: lane classifier (resolveSessionMarker + classifyLane) — imported in-process (no subprocess).
 const { resolveSessionMarker, classifyLane } = require('./kaola-workflow-classifier');
 // parseGoal reads the run's goal (the mission list's H1); the two expansion readers feed the
@@ -39,6 +40,13 @@ const CLAIM_LABEL = 'workflow:in-progress';
 // #666: cap unbounded-in-repo-size git execFileSync calls at 64 MB — Node's execFileSync default
 // maxBuffer is 1 MB, and a repo-size-scaling diff/listing can exceed it and crash with ENOBUFS.
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+// The #520 transaction JOURNALS. sink-receipt.json / sink-fallback.json are cycle-local scratch the
+// sink script owns — never part of the deliverable, never committed, and never counted as evidence a
+// live copy would lose. Three sites asked that question through three hand-copied regexps, so a
+// change to what counts as a journal could reach two of them and silently miss the third; one
+// definition removes the third-copy failure mode. Anchored on a path SEGMENT boundary (`^` or `/`),
+// so a file merely ENDING in the name (`stale-sink-receipt.json`) is not a journal.
+const SINK_JOURNAL_RE = /(^|\/)sink-(receipt|fallback)\.json$/;
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -2510,7 +2518,19 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     // PRESENCE only, deliberately. Byte-identity is the wrong question for main, whose copy
     // legitimately differs — the terminal stamp, the #324 sentinel rewrite and the final-validation
     // normalization above all rewrite the INVOKING root's copy, never main's — so this reads the
-    // comparison's missing[] half and not its mismatched[] half.
+    // comparison's missing[] half and not its byte-difference half.
+    //
+    // #906: it reads uncomparable[] TOO, and that is not a weakening of "presence only". Dropping
+    // the whole non-missing half also dropped every entry the walk could not reduce to bytes, and
+    // those are not files whose bytes legitimately differ — they are entries about which NOTHING was
+    // established. Measured before this line changed: a main-only symlink at top level or under any
+    // exempt-sidecar name was archived-and-deleted at exit 0, in no copy anywhere afterwards, because
+    // a symlink never enters the byte map and reaches missing[] only if listSourceEvidenceFiles
+    // happens to name it. `fs.rmSync` does not follow the link, so what is lost is the link, never
+    // the target's bytes — a smaller loss than a dropped file and still a loss nobody agreed to.
+    // Uncomparable is fail-closed by construction: it can only ever ADD a refusal, and it cannot
+    // false-refuse an ordinary run, because `copyDir` follows links and archives therefore hold no
+    // symlinks of their own.
     //
     // Two subtractions keep it from refusing over a loss that is not one: the #520 transaction
     // journals (cycle-local scratch that must never be committed anywhere — the same two names
@@ -2527,22 +2547,34 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
       try { mainLiveDisposable = fs.realpathSync(mainLive) !== dest; } catch (_) { mainLiveDisposable = false; }
     }
     let missingFromMain = [];
+    let uncomparableFromMain = [];
     if (mainLiveDisposable) {
-      missingFromMain = (verifyArchiveComplete(mainLive, dest).missing || [])
+      const mainCompare = verifyArchiveComplete(mainLive, dest);
+      missingFromMain = (mainCompare.missing || [])
         .concat(missingArchiveSidecars(mainLive, dest))
-        .filter(rel => !/(^|\/)sink-(receipt|fallback)\.json$/.test(rel));
+        .filter(rel => !SINK_JOURNAL_RE.test(rel));
       const ignoredByName = repoWideIgnoredNames(mainRoot, missingFromMain);
       missingFromMain = missingFromMain.filter(rel => !ignoredByName.has(rel.split('/').pop()));
+      // Same two subtractions, for the same two reasons: a journal is never evidence, and a name this
+      // repository ignores is not run evidence either. A probe fault leaves the by-name set EMPTY, so
+      // an unprobeable repo refuses rather than destroys — as above.
+      uncomparableFromMain = (mainCompare.uncomparable || []).filter(rel => !SINK_JOURNAL_RE.test(rel));
+      const ignoredUncomparable = repoWideIgnoredNames(mainRoot, uncomparableFromMain);
+      uncomparableFromMain = uncomparableFromMain.filter(rel => !ignoredUncomparable.has(rel.split('/').pop()));
     }
     // Carry BOTH incompleteness signals. verifyArchiveComplete can fail with an EMPTY missing[]
     // and a non-empty mismatched[] — a file that reached the destination with different bytes — and
     // dropping that half left the sink unable to tell a corrupt archive from a clean one.
-    if (!v.ok || missingFromMain.length > 0) {
+    if (!v.ok || missingFromMain.length > 0 || uncomparableFromMain.length > 0) {
       // De-duplicated: the two live copies overlap by design, and a file BOTH hold that the
       // destination lacks is one loss, not two.
       const missing = Array.from(new Set((v.missing || []).concat(missingFromMain)));
+      // Main's uncomparable entries are reported in the half that already carries entry-kind faults,
+      // so both consumers of this result (cmdFinalize's refusal and the sink's) name them with no
+      // change of their own. De-duplicated against the source side for the same reason as missing[].
+      const mismatched = Array.from(new Set((v.mismatched || []).concat(uncomparableFromMain)));
       return { skipped: undefined, archived: false, archive_incomplete: true,
-        missing, mismatched: v.mismatched || [], dest };
+        missing, mismatched, dest };
     }
     // (d) delete BOTH live copies — only after copy+verify confirmed, for EACH of them.
     fs.rmSync(src, { recursive: true, force: true });          // worktree live folder
@@ -2574,6 +2606,12 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     const prefix = 'refs/kaola-workflow/barrier/' + barrierTag + '/';
     const listed = execFileSync('git', ['for-each-ref', '--format=%(refname)', prefix],
       { cwd: reapRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    // NEWLINE-SPLIT ON PURPOSE — this stream carries REF NAMES, never pathnames, and the two facts
+    // that make the split lossless were measured, not assumed: `--format=%(refname)` emits the name
+    // verbatim (no C-quoting even for `"` or non-ASCII), and git REFUSES to create a ref whose name
+    // contains LF, TAB, space or backslash (`check-ref-format` rejects them). So no record can span
+    // a line and the `.trim()` is a provable no-op. A `-z` conversion here would buy nothing and
+    // would cost a hand-port on three more editions.
     for (const refName of listed.split('\n').map(s => s.trim()).filter(Boolean)) {
       try {
         execFileSync('git', ['update-ref', '-d', refName], { cwd: reapRoot, stdio: ['ignore', 'ignore', 'ignore'] });
@@ -2712,7 +2750,7 @@ function ignoredArchiveEvidence(mainRoot, dest) {
     // the stream is purely NUL-TERMINATED with no trailing newline, so dropping empty records is the
     // only normalization it needs. Kept byte-identical to the sink's two -z readers.
     const covered = out.split('\0').filter(Boolean)
-      .filter(p => !/(^|\/)sink-(receipt|fallback)\.json$/.test(p));
+      .filter(p => !SINK_JOURNAL_RE.test(p));
     const ignoredByName = repoWideIgnoredNames(mainRoot, covered);
     return covered.filter(p => !ignoredByName.has(p.split('/').pop()));
   } catch (_) { return []; }
@@ -3149,14 +3187,28 @@ function findArchiveAuthorities(root, project) {
 // does not carry survive, so a worktree-only artifact (a chain receipt, per-leg evidence) is never
 // dropped by the mirror. `keepExisting` names top-level entries the dest OWNS: when the dest already
 // has one, the source copy is skipped rather than written over.
-function mergeCopyDir(src, dest, keepExisting) {
+//
+// `keepExistingRel` is the same rule keyed on a POSIX path RELATIVE TO THE MIRROR ROOT, and unlike
+// `keepExisting` it is carried through the recursion. That distinction is the whole of #906-R1: the
+// sentence above promised a worktree-authored chain receipt would survive, and it only did while
+// MAIN happened not to carry one too. The moment both copies exist the source wins unconditionally,
+// because the top-level `keepExisting` set cannot name a path inside `.cache/` and was dropped one
+// frame down anyway. A mirror that overwrites a NEWER artifact with an older one is a destruction,
+// not a merge — measured: an operator who runs the chains, hits a designed refusal, commits, and
+// re-runs the chains ends up with the fresh receipt in the worktree and a stale one in main, and
+// the next finalize copied the stale one forward and reported `chains_stale` over a tree the chains
+// had just run green on. The fresh receipt was then in no copy anywhere.
+function mergeCopyDir(src, dest, keepExisting, keepExistingRel, relBase) {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const s = path.join(src, entry.name);
     const d = path.join(dest, entry.name);
+    const rel = relBase ? relBase + '/' + entry.name : entry.name;
     if (entry.isSymbolicLink()) continue;      // never follow a link out of the tree
     if (keepExisting && keepExisting.has(entry.name) && fs.existsSync(d)) continue;
-    if (entry.isDirectory()) mergeCopyDir(s, d);
+    if (keepExistingRel && keepExistingRel.has(rel) && fs.existsSync(d)) continue;
+    // `keepExisting` is deliberately NOT recursed (top-level names, as before); `keepExistingRel` is.
+    if (entry.isDirectory()) mergeCopyDir(s, d, null, keepExistingRel, rel);
     else if (entry.isFile()) fs.copyFileSync(s, d);
   }
 }
@@ -3167,6 +3219,23 @@ function mergeCopyDir(src, dest, keepExisting) {
 // the ledger-regression guard adjudicates that file explicitly (refuse, or copy a source that is at
 // least as complete), which is a stronger check than skip-if-present.
 const FINALIZE_MIRROR_DEST_OWNED = new Set(['workflow-state.md', 'workflow-tasks.json']);
+
+// TREE-BOUND artifacts: produced BY a tree and only meaningful ABOUT that tree. The chain receipt
+// carries a `codeTreeHash` binding it to the exact tree its chains ran over, and the outcome log is
+// append-only telemetry whose rows were appended in the tree that holds it. Neither is a record one
+// checkout can hold on another's behalf, so a mirror in EITHER direction may supply one to a copy
+// that has none and may never write over one that exists. Both directions, because the rule is about
+// the artifact, not about which way the copy happens to be going — and because a mirror that can
+// destroy is a mirror that will, eventually, in whichever direction it was pointed.
+//
+// Keeping the destination's copy is fail-safe by construction. If the copy we keep is the stale one,
+// the finalize gate says `chains_stale` and the operator re-runs the chains — a report, and every
+// byte still on disk in both trees. If we overwrite, the newer copy is gone from everywhere and the
+// archive carries a receipt bound to a tree that no longer exists.
+const FINALIZE_MIRROR_TREE_BOUND = new Set([
+  '.cache/chain-receipt.json',
+  '.cache/' + adaptiveSchema.OUTCOME_LOG_NAME,
+]);
 
 // Finalization residue the orchestrator authored OUTSIDE kaola-workflow/ in the main checkout
 // (CHANGELOG, docs, .env.example …) belongs on the branch too, so the commit gate can hand it to the
@@ -3263,7 +3332,7 @@ function mirrorFinalizationArtifacts(root, project) {
         // worktree ledger untouched (nothing has been copied INTO the worktree at this point).
         let syncFailure = null;
         try {
-          mergeCopyDir(destDir, srcDir);
+          mergeCopyDir(destDir, srcDir, null, FINALIZE_MIRROR_TREE_BOUND);
         } catch (e) {
           if (e instanceof TypeError || e instanceof ReferenceError) throw e;
           syncFailure = String((e && e.message) || e).slice(0, 400);
@@ -3301,7 +3370,7 @@ function mirrorFinalizationArtifacts(root, project) {
   // `mirror_sync_failed` twenty lines above. Same reason, same fail-closed shape: nothing downstream
   // has run yet, so the worktree is left exactly as it was found.
   try {
-    mergeCopyDir(srcDir, destDir, FINALIZE_MIRROR_DEST_OWNED);
+    mergeCopyDir(srcDir, destDir, FINALIZE_MIRROR_DEST_OWNED, FINALIZE_MIRROR_TREE_BOUND);
   } catch (e) {
     if (e instanceof TypeError || e instanceof ReferenceError) throw e;
     return {
@@ -3344,9 +3413,14 @@ function probeImplementationCommit(root, baseBranch, machineryAuthoredPaths) {
   if (!isSafeBranchArg(base)) return { state: 'indeterminate', paths: dirty };
   let committed = [];
   try {
-    const diff = execFileSync('git', ['-C', root, 'diff', '--name-only', base + '...HEAD'],
+    // `-z` because the very next statement is a `startsWith('kaola-workflow/')` classification, and
+    // the non-`-z` stream cannot carry a pathname faithfully: measured, `diff --name-only` C-QUOTES a
+    // path holding `"`, `\`, a control character or (by default) any non-ASCII byte — so a quoted
+    // `kaola-workflow/…` path reads as NON-workflow and this probe silently concludes `committed` —
+    // and it does NOT quote a trailing space, which the old `.trim()` then ate.
+    const diff = execFileSync('git', ['-C', root, 'diff', '--name-only', '-z', base + '...HEAD'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
-    committed = diff.split('\n').map(s => s.trim()).filter(Boolean);
+    committed = splitNulPaths(diff);
   } catch (_) { return { state: 'indeterminate', paths: dirty }; }
   let implCommitted = committed.some(p => !p.startsWith('kaola-workflow/'));
   if (!implCommitted) {
@@ -3356,10 +3430,13 @@ function probeImplementationCommit(root, baseBranch, machineryAuthoredPaths) {
     // the branch's HISTORY, so ask the history before asserting it. Widening-only — a branch the
     // net diff already proves implemented never re-reads as missing.
     try {
-      const touched = execFileSync('git', ['-C', root, 'log', '--name-only', '--pretty=format:', base + '..HEAD'],
+      // `-z` for the same reason as the net diff above. Measured on this stream specifically:
+      // `log --name-only --pretty=format: -z` emits each pathname verbatim and NUL-terminated, with
+      // an empty record between commits — which splitNulPaths drops, since a pathname is never empty.
+      const touched = execFileSync('git', ['-C', root, 'log', '--name-only', '--pretty=format:', '-z', base + '..HEAD'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
-      implCommitted = touched.split('\n').map(s => s.trim())
-        .some(p => p && !p.startsWith('kaola-workflow/'));
+      implCommitted = splitNulPaths(touched)
+        .some(p => !p.startsWith('kaola-workflow/'));
     } catch (_) { return { state: 'indeterminate', paths: dirty }; }
   }
   return { state: implCommitted ? 'committed' : 'missing', paths: dirty.slice(0, 20) };
@@ -3372,9 +3449,12 @@ function probeImplementationCommit(root, baseBranch, machineryAuthoredPaths) {
 function checkFinalizeStagingGuard(root, project) {
   let staged = [];
   try {
-    const out = execFileSync('git', ['-C', root, 'diff', '--cached', '--name-only'],
+    // `-z`: every classification below is a prefix/segment test on the pathname, so a C-quoted path
+    // is invisible to ALL of them — a quoted `kaola-workflow/archive/<other>/…` would slip past the
+    // foreign-archive arm and ride along in the commit this guard exists to split.
+    const out = execFileSync('git', ['-C', root, 'diff', '--cached', '--name-only', '-z'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
-    staged = out.split('\n').map(s => s.trim()).filter(Boolean);
+    staged = splitNulPaths(out);
   } catch (_) { return { ok: true }; }   // unprobeable index — the guard has nothing to assert
   const foreignArchive = new Set();
   const projects = new Set();
@@ -3872,8 +3952,46 @@ function cmdFinalize() {
     impl_commit: 'not_checked',
     roadmap_staged: false,
     archive_commit: 'skipped',
+    // #907: the residue STAGING step, reported separately from the commit it feeds. It used to have
+    // no ledger entry at all, which is how a `git add` that exited 128 and staged nothing could be
+    // followed by `finalize_commit: 'nothing_to_commit'` — a true statement about the index and a
+    // false one about the run. 'skipped' = no residue to stage (or the lane never ran).
+    residue_stage: 'skipped',
+    // #907: the archive-bookkeeping STAGING step (the `git rm --cached` + `git add` pair that feeds
+    // `chore: archive`), reported for the same reason as residue_stage. 'skipped' = nothing to stage.
+    archive_stage: 'skipped',
     finalize_commit: 'skipped'
   };
+  // #907: EVERY mechanical fault this transaction observes, collected in one place. The owner's
+  // ruling is report-do-not-refuse, and a report has two halves — a typed token on the envelope and a
+  // durable line in the archived run record. The accumulator exists because the durable half is
+  // written by appendSummarySection, which is idempotent BY HEADING: a per-fault write would land the
+  // first fault and silently drop every one after it, which is the same silence this converts. So the
+  // faults are collected and flushed ONCE, and flushed at every exit from the block below — including
+  // the refusing ones, or a run that refuses downstream would lose the findings it had already made.
+  const finalizeFindings = [];
+  const recordFinalizeFinding = (type, summary, lines) => {
+    finalizeFindings.push({ type: type, summary: summary, lines: lines || [] });
+  };
+  let finalizeFindingsFlushed = false;
+  const flushFinalizeFindings = () => {
+    if (finalizeFindingsFlushed || finalizeFindings.length === 0) return;
+    finalizeFindingsFlushed = true;
+    // De-duplicated on the envelope (one broken index makes several steps fail with the same fault),
+    // never in the durable body — each entry there names which step it was.
+    finalizeTx.findings = Array.from(new Set(finalizeFindings.map(f => f.type)));
+    if (!result || !result.dest) return;   // no archive to write into; the envelope half still stands
+    const lines = [];
+    for (const f of finalizeFindings) {
+      lines.push('### ' + f.type, '', f.summary, '');
+      for (const l of f.lines) lines.push(l);
+      lines.push('');
+    }
+    appendSummarySection(result.dest, '## Finalize Findings', lines);
+  };
+  // One wording for a git failure's diagnosis, so the envelope and the archived record say the same
+  // thing about the same fault. `stderr` is present only where the call pipes it.
+  const gitFaultDetail = e => String((e && (e.stderr || e.message)) || e).trim().slice(0, 1000);
   // Worktree dirt this transaction manufactured (Step 8a residue mirror) — subtracted from the
   // implementation probe so the machinery never reads its own mirror as operator dirt.
   let mirroredResiduePaths = [];
@@ -4077,13 +4195,24 @@ function cmdFinalize() {
   let archiveStateStamped = 'not_needed';
   if (result.skipped === 'source-missing') {
     try {
-      // #426: backstop destDir is worktree-aware — non-keep-worktree linked run archives to main;
-      // keep-worktree linked run archives to the linked worktree (will merge into main later).
+      // #426: the archive this backstop repairs, wherever the run left it. This used to say the
+      // destination was worktree-aware (main for a plain linked run, the linked worktree for a
+      // `--keep-worktree` one); #832 replaced that with ONE resolution rule — a linked run archives
+      // under MAIN regardless of cwd and regardless of keepWorktree — so the only way a resolved
+      // authority sits outside main now is an archive written before that rule. The comment is
+      // corrected rather than left, because the #906 move-aside below branches on exactly this.
       const destDir = result.dest || finalizeAuthorityDir;
       const destState = path.join(destDir, 'workflow-state.md');
       if (fs.existsSync(destState)) {
         const raw = fs.readFileSync(destState, 'utf8');
         const st = field(raw, 'status');
+        // NOT REACHED FROM cmdFinalize TODAY, and kept deliberately. On this path `destDir` resolves
+        // to `finalizeAuthorityDir` (assigned a few lines above), and resolveFinalizeAuthority already
+        // refused `archive_state_not_closed` against this exact file before the transaction started —
+        // so `st` is terminal here and every run reports `archive_state_stamped: "not_needed"`. It
+        // stays because it is a CRASH-REPAIR backstop: its whole job is a state the ordinary path does
+        // not produce, and "the ordinary path cannot produce it" is the weakest possible argument for
+        // removing one. No observed failure demands the subtraction, so it is recorded, not made.
         if (st !== 'closed' && st !== 'abandoned') {
           // Atomic (same crash-safe writer as archiveProjectDir): this backstop exists precisely to
           // repair a state file a crash left non-terminal — writing it non-atomically could tear the
@@ -4098,14 +4227,62 @@ function cmdFinalize() {
         // worktree) and its MAIN-root live-folder cleanup leaves a surviving MAIN copy that keeps
         // readActiveFolders claiming the project (user_target_blocked on re-claim). On finalize
         // re-run, archiveProjectDir source-missing never reaches that cleanup — re-run it here.
+        //
+        // #906: it MOVES the folder ASIDE; it no longer deletes it. The obligation this backstop was
+        // built for is stated one paragraph up and is about the CLAIM, not the bytes: stop
+        // readActiveFolders claiming the project. It used to discharge that by `fs.rmSync`ing main's
+        // live folder with no comparison against the archive at all — the sibling delete in
+        // archiveProjectDir compares that exact pair first, this one never did — so every file main
+        // held that the archive did not was lost from everywhere at exit 0, with `closure_invariants:
+        // ok` beside it and an envelope whose only trace said a folder was removed and never what was
+        // in it. Measured over one identical state: refusing leaves a permanent phantom claim on main
+        // (active count 1, and a re-claim answers `owned` into the dead folder); deleting clears the
+        // claim and destroys the evidence; MOVING clears the claim (readActiveFolders skips the
+        // `archive` band outright) and keeps every byte. The last one is strictly better than both,
+        // so there is nothing here to trade off and nothing to refuse.
+        //
+        // WHERE it moves matters, and both constraints were measured:
+        //   * INSIDE the resolved archive authority, never beside it. `findArchiveAuthorities` matches
+        //     archive-band entries by NAME (`<project>` or `<project>.archived-*`) and
+        //     `resolveFinalizeAuthority` refuses when more than one matches, so a sibling folder named
+        //     `<project>.archived-<ts>` would make the NEXT resume ambiguous. A nested directory is at
+        //     depth 2 and no name scan can see it.
+        //   * ONLY when that authority sits under MAIN. Then the orphan inherits the archive
+        //     directory's own downstream classification exactly — the sink's untracked-own-archive
+        //     exemption is keyed on the `kaola-workflow/archive/<project>/` prefix, so anything the
+        //     archive dir itself clears, the orphan clears too, and the sink's archive_commit lands
+        //     both. An authority in the LINKED worktree (only reachable for an archive predating the
+        //     one-resolution-rule above) is a tree `removeWorktree` may force-remove minutes later, so
+        //     moving into it would be a new destruction route wearing a rescue's name: leave main's
+        //     folder exactly where it is and say so.
+        // A failed move leaves the folder in place and reports the fault. Nothing here refuses and
+        // nothing here exits non-zero; the worst outcome is the phantom claim the operator can see.
         try {
           const mainRoot4 = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
           const linkedRoot4 = fs.realpathSync(root);
           if (mainRoot4 && mainRoot4 !== linkedRoot4) {
             const mainLive = path.join(mainRoot4, 'kaola-workflow', args.project);
             if (fs.existsSync(mainLive)) {
-              fs.rmSync(mainLive, { recursive: true, force: true });
-              result.main_live_cleaned_on_resume = true;
+              let authorityInMain = false;
+              try {
+                const realDest = fs.realpathSync(destDir);
+                authorityInMain = realDest === mainRoot4 || realDest.startsWith(mainRoot4 + path.sep);
+              } catch (_) { authorityInMain = false; }
+              if (!authorityInMain) {
+                result.main_live_orphan = 'skipped_authority_outside_main';
+              } else {
+                const orphanDir = path.join(destDir,
+                  '.orphan-main-live-' + new Date().toISOString().replace(/[:.]/g, '-'));
+                try {
+                  fs.renameSync(mainLive, orphanDir);
+                  result.main_live_cleaned_on_resume = true;
+                  result.main_live_orphan = 'moved';
+                  result.main_live_orphaned_to = orphanDir;
+                } catch (e) {
+                  result.main_live_orphan = 'failed';
+                  result.main_live_orphan_error = String((e && e.message) || e).slice(0, 300);
+                }
+              }
             }
           }
         } catch (_) {}
@@ -4412,10 +4589,29 @@ function cmdFinalize() {
       // exit-code check. The prior try/commit-as-catch fired the commit even when the `git
       // rm`/`git add` THEMSELVES failed — committing whatever happened to be staged and discarding
       // the real staging error. Staging failures are now isolated and never cascade into a commit.
+      // #907: isolated as before — a staging failure still never cascades into a commit — but no
+      // longer SILENT. Discarding it left `archive_commit` reporting a disposition while nothing had
+      // been staged for it, and the archived record read exactly as clean as a run that staged
+      // everything. stderr is piped so git's own line becomes the finding's detail, then re-emitted.
+      let archiveStageOk = true;
       try {
         execFileSync('git', ['-C', root, 'rm', '-r', '--cached', '--ignore-unmatch', '--', 'kaola-workflow/' + args.project],
-          { encoding: 'utf8', stdio: 'inherit' });
-      } catch (_) { /* staging (rm) failure — do NOT cascade into a commit */ }
+          { encoding: 'utf8', stdio: ['ignore', 'inherit', 'pipe'] });
+      } catch (e) {
+        const detail = gitFaultDetail(e);
+        archiveStageOk = false;
+        finalizeTx.archive_stage = 'failed';
+        finalizeTx.archive_stage_detail = detail;
+        process.stderr.write('kaola-workflow-claim finalize: WARNING: un-staging the live folder for '
+          + args.project + ' FAILED — the `chore: archive` commit below carries whatever the index '
+          + 'already held, which may still list kaola-workflow/' + args.project + '.\n'
+          + (detail ? detail + '\n' : ''));
+        recordFinalizeFinding('archive_unstage_failed',
+          'The archive bookkeeping could not be staged: `git rm -r --cached` failed on '
+            + '`kaola-workflow/' + args.project + '`, so the branch may still carry the live run '
+            + 'folder that `chore: archive` exists to remove.',
+          detail ? ['git said:', '', '```', detail, '```'] : []);
+      }
       const candidatePaths = ['kaola-workflow/.roadmap', 'kaola-workflow/ROADMAP.md'];
       // #832: the archive resolves against MAIN's project root, so on a linked run result.dest is
       // OUTSIDE this worktree's index and can never be staged here — `path.relative(root, dest)`
@@ -4429,13 +4625,37 @@ function cmdFinalize() {
         candidatePaths.unshift(path.join('kaola-workflow', 'archive', args.project));
       }
       const existingPaths = candidatePaths.filter(p => fs.existsSync(path.join(root, p)));
+      let archiveAddOk = true;
       if (existingPaths.length > 0) {
         try {
           execFileSync('git', ['-C', root, 'add', '-A', '--', ...existingPaths],
-            { encoding: 'utf8', stdio: 'inherit' });
-        } catch (_) { /* staging (add) failure — do NOT cascade into a commit */ }
+            { encoding: 'utf8', stdio: ['ignore', 'inherit', 'pipe'] });
+          if (archiveStageOk) finalizeTx.archive_stage = 'staged';
+        } catch (e) {
+          const detail = gitFaultDetail(e);
+          archiveAddOk = false;
+          archiveStageOk = false;
+          finalizeTx.archive_stage = 'failed';
+          finalizeTx.archive_stage_detail = detail;
+          finalizeTx.archive_unstaged = existingPaths.slice(0, 50);
+          process.stderr.write('kaola-workflow-claim finalize: WARNING: staging the archive bookkeeping '
+            + 'FAILED for ' + args.project + ' — `git add` is all-or-nothing over its pathspec list, so '
+            + 'NONE of these ' + existingPaths.length + ' path(s) was staged: ' + existingPaths.join(', ') + '\n'
+            + (detail ? detail + '\n' : ''));
+          recordFinalizeFinding('archive_stage_failed',
+            'The archive bookkeeping could not be staged. `git add` is all-or-nothing over its '
+              + 'pathspec list, so none of the paths below reached the index and the `chore: archive` '
+              + 'commit did not carry them.',
+            ['Paths not staged:', ''].concat(existingPaths.map(p => '- ' + p))
+              .concat(detail ? ['', 'git said:', '', '```', detail, '```'] : []));
+        }
       }
-      finalizeTx.roadmap_staged = existingPaths.some(p => p === 'kaola-workflow/.roadmap' || p === 'kaola-workflow/ROADMAP.md');
+      // #907: derived from the OUTCOME, not from the candidate list. It used to read `true` whenever
+      // the two roadmap paths existed on disk — including when the `git add` above exited non-zero and
+      // staged nothing at all, which is a false statement about the index in exactly the run where it
+      // matters most.
+      finalizeTx.roadmap_staged = archiveAddOk
+        && existingPaths.some(p => p === 'kaola-workflow/.roadmap' || p === 'kaola-workflow/ROADMAP.md');
       // #832: the ARCHIVE's fate is decided here, independently of whatever else the commit below
       // carries. The old code read `git diff --cached --quiet` with NO pathspec, so the roadmap
       // staging alone made hasStaged true and the transaction recorded archive_commit:'committed'
@@ -4462,13 +4682,32 @@ function cmdFinalize() {
         }
       }
       // Explicit exit-code check: `git diff --cached --quiet` exits 1 IFF there are staged changes.
+      // #907: exit 0 and exit 1 are both ANSWERS; anything else is the probe failing, and reading a
+      // failed probe as "nothing staged" is how a broken index became `nothing_to_commit` at exit 0.
+      // It still does not commit — an unreadable index is no basis for one — but it says so now.
       let hasStaged = false;
-      try { execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'ignore' }); }
-      catch (e) { if (e && e.status === 1) hasStaged = true; /* other status = diff error → do not commit */ }
+      try { execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' }); }
+      catch (e) {
+        if (e && e.status === 1) hasStaged = true;
+        else {
+          const detail = gitFaultDetail(e);
+          finalizeTx.archive_commit_probe = 'failed';
+          finalizeTx.archive_commit_probe_detail = detail;
+          process.stderr.write('kaola-workflow-claim finalize: WARNING: could not read the index for '
+            + args.project + ' — `git diff --cached --quiet` did not answer, so no `chore: archive` '
+            + 'commit was attempted.\n' + (detail ? detail + '\n' : ''));
+          recordFinalizeFinding('archive_commit_probe_failed',
+            'The staged-changes probe for `chore: archive` failed, so the transaction could not tell '
+              + 'whether anything was staged and did not commit. This is NOT the same fact as '
+              + '"nothing to commit".',
+            detail ? ['git said:', '', '```', detail, '```'] : []);
+        }
+      }
       if (hasStaged) {
         const committed = commitFinalizeStep(root, 'chore: archive ' + args.project);
         if (!committed.ok) {
           finalizeTx.archive_commit = 'failed';
+          flushFinalizeFindings();
           emitFinalizeCommitFailure(args.project, 'archive', committed, finalizeTx);
           return;
         }
@@ -4481,13 +4720,14 @@ function cmdFinalize() {
       // by the transaction, and the single-project guard re-runs against the whole index so an
       // operator's pre-staged foreign content still refuses instead of riding along.
       const residue = [];
+      let residueProbe = 'ok';
       try {
         const status = execFileSync('git', ['-C', root, 'status', '--porcelain'],
-          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER });
         for (const rel of parsePorcelainPaths(status)) {
           // sink-receipt.json / sink-fallback.json are transaction JOURNALS owned by the sink
           // script — never part of the deliverable, never committed.
-          if (/(^|\/)sink-(receipt|fallback)\.json$/.test(rel)) continue;
+          if (SINK_JOURNAL_RE.test(rel)) continue;
           if (!rel.startsWith('kaola-workflow/')) { residue.push(rel); continue; }
           const seg = rel.split('/');
           if (seg[1] === '.roadmap' || seg[1] === 'ROADMAP.md') { residue.push(rel); continue; }
@@ -4498,15 +4738,77 @@ function cmdFinalize() {
           }
           if (seg[1] === args.project) residue.push(rel);
         }
-      } catch (_) { /* unprobeable status — nothing to stage beyond the archive commit */ }
+        residueProbe = 'ok';
+      } catch (e) {
+        // #907: THE PROBE THAT FEEDS THE CONVERTED CALL. Converting the `git add` below while leaving
+        // this swallow in place fixed nothing when the fault was here: an unreadable index makes this
+        // throw, the residue list comes back EMPTY, the `git add` never runs, and the transaction
+        // reports `residue_stage: "skipped"` — documented as "no residue to stage", which is a false
+        // statement about a probe that failed — followed by `finalize_commit: "nothing_to_commit"` at
+        // exit 0 with `closure_invariants.ok: true`. Measured with a corrupted worktree index: the
+        // deliverable stayed uncommitted and the archived record read completely clean.
+        const detail = gitFaultDetail(e);
+        residueProbe = 'failed';
+        finalizeTx.residue_stage = 'unprobeable';
+        finalizeTx.residue_probe_detail = detail;
+        process.stderr.write('kaola-workflow-claim finalize: WARNING: could not read the working tree '
+          + 'status for ' + args.project + ' — the finalization residue could not be enumerated, so '
+          + 'NOTHING was staged for the `chore: finalize` commit and uncommitted work may remain in '
+          + 'the worktree.\n' + (detail ? detail + '\n' : ''));
+        recordFinalizeFinding('residue_probe_failed',
+          'The finalization residue could not be enumerated: `git status --porcelain` failed, so the '
+            + 'transaction staged nothing for `chore: finalize`. What the run left uncommitted is '
+            + 'therefore UNKNOWN and this record cannot name it — the probe that would have named it '
+            + 'is the one that failed. Re-read the worktree by hand before trusting this closure.',
+          detail ? ['git said:', '', '```', detail, '```'] : []);
+      }
+      // #907: the staging failure is REPORTED, not swallowed and not refused. `git add -A -- …` is
+      // all-or-nothing over its pathspec list: one unmatched path exits 128 and stages NOTHING, not
+      // even the healthy files beside it. Measured end-to-end on the documented `--keep-worktree`
+      // linked finishing sequence, with one untracked `notes.md ` (a single trailing space) beside a
+      // good file: git exited 128, the bare `catch (_) {}` that used to sit here dropped it, the
+      // staged-changes probe below then answered "nothing staged", and finalize emitted
+      // `finalize_commit: "nothing_to_commit"` at exit 0 with `status: "closed"` and
+      // `closure_invariants.ok: true` — the deliverable uncommitted, and a re-run byte-identical, so
+      // it never converged and nothing anywhere said why. A mangled pathspec was one cause of that
+      // and is fixed upstream in the parser; disk-full, a permission fault and a held index lock all
+      // reach this same catch, which is why the fix here is the report and not the parse.
+      // Exit stays 0 (the transaction ledger is what a caller reads), the finding is typed on the
+      // envelope, and it is written durably below so it outlives the process.
       if (residue.length > 0) {
         try {
+          // stderr PIPED, not inherited: git's own `fatal: …` line is the whole diagnosis and it has
+          // to ride along in the typed finding. Re-emitted on this process's stderr immediately
+          // afterwards so a terminal reader loses nothing the inherited form used to show.
           execFileSync('git', ['-C', root, 'add', '-A', '--', ...residue],
-            { encoding: 'utf8', stdio: 'inherit' });
-        } catch (_) { /* staging failure — do NOT cascade into a commit */ }
+            { encoding: 'utf8', stdio: ['ignore', 'inherit', 'pipe'] });
+          finalizeTx.residue_stage = 'staged';
+        } catch (e) {
+          const detail = String((e && (e.stderr || e.message)) || e).trim().slice(0, 1000);
+          finalizeTx.residue_stage = 'failed';
+          finalizeTx.residue_stage_detail = detail;
+          finalizeTx.residue_unstaged = residue.slice(0, 50);
+          process.stderr.write('kaola-workflow-claim finalize: WARNING: staging the finalization residue '
+            + 'FAILED for ' + args.project + ' — `git add` is all-or-nothing over its pathspec list, so '
+            + 'NONE of these ' + residue.length + ' path(s) was staged and the `chore: finalize` commit '
+            + 'below will report nothing to commit: ' + residue.join(', ') + '\n'
+            + (detail ? detail + '\n' : ''));
+          // The durable half goes through the shared accumulator, flushed once below. Writing the
+          // section here directly was correct only while this was the ONLY fault that could reach it —
+          // appendSummarySection is idempotent by heading, so a second fault in the same run would
+          // have been silently dropped.
+          recordFinalizeFinding('residue_stage_failed',
+            'The `chore: finalize` commit could not stage the finalization residue. `git add` is '
+              + 'all-or-nothing over its pathspec list, so none of the paths below was staged and '
+              + 'the transaction recorded `finalize_commit: nothing_to_commit` — the run reports '
+              + 'closed while this work is still uncommitted in the worktree.',
+            ['Paths not staged:', ''].concat(residue.map(p => '- ' + p))
+              .concat(detail ? ['', 'git said:', '', '```', detail, '```'] : []));
+        }
       }
       const finalGuard = checkFinalizeStagingGuard(root, args.project);
       if (!finalGuard.ok) {
+        flushFinalizeFindings();
         output({
           result: 'refuse',
           reason: finalGuard.reason,
@@ -4520,21 +4822,46 @@ function cmdFinalize() {
         }, 1);
         return;
       }
+      // #907: same three-way read as the archive probe above — 0 and 1 are answers, anything else is
+      // the probe failing and must not be read as "nothing to commit".
       let hasFinalStaged = false;
-      try { execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'ignore' }); }
-      catch (e) { if (e && e.status === 1) hasFinalStaged = true; }
+      try { execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' }); }
+      catch (e) {
+        if (e && e.status === 1) hasFinalStaged = true;
+        else {
+          const detail = gitFaultDetail(e);
+          finalizeTx.finalize_commit_probe = 'failed';
+          finalizeTx.finalize_commit_probe_detail = detail;
+          process.stderr.write('kaola-workflow-claim finalize: WARNING: could not read the index for '
+            + args.project + ' — `git diff --cached --quiet` did not answer, so no `chore: finalize` '
+            + 'commit was attempted and the run may be leaving work uncommitted.\n'
+            + (detail ? detail + '\n' : ''));
+          recordFinalizeFinding('finalize_commit_probe_failed',
+            'The staged-changes probe for `chore: finalize` failed, so the transaction could not tell '
+              + 'whether anything was staged and did not commit. This is NOT the same fact as '
+              + '"nothing to commit".',
+            detail ? ['git said:', '', '```', detail, '```'] : []);
+        }
+      }
       if (hasFinalStaged) {
         const committed = commitFinalizeStep(root, 'chore: finalize ' + args.project);
         if (!committed.ok) {
           finalizeTx.finalize_commit = 'failed';
+          flushFinalizeFindings();
           emitFinalizeCommitFailure(args.project, 'finalize', committed, finalizeTx);
           return;
         }
         finalizeTx.finalize_commit = 'committed';
+      } else if (residueProbe === 'failed' || finalizeTx.finalize_commit_probe === 'failed') {
+        // #907: `nothing_to_commit` is a claim about the WORKING TREE, and neither of those faults
+        // supports it — one could not enumerate what to stage, the other could not read what was
+        // staged. `unknown` is the honest token; the finding beside it says which fault produced it.
+        finalizeTx.finalize_commit = 'unknown';
       } else {
         // Nothing left to commit — the branch already carries the final candidate commit.
         finalizeTx.finalize_commit = 'nothing_to_commit';
       }
+      flushFinalizeFindings();
     }
   }
   // #395.5 (D1): OPT-IN exit gate. The JSON is always emitted; --strict additionally makes the exit
@@ -4579,9 +4906,15 @@ function cmdRelease() {
 
   const result = archiveProjectDirSafely(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
   if (!closureContract.archiveSucceeded(result)) {
+    // #906: BOTH halves. This route reported `missing` alone, which was survivable while every
+    // refusal it could produce was a dropped FILE — and stopped being survivable the moment an entry
+    // the walk cannot compare (a symlink) could also refuse here: the operator got exit 1,
+    // `archive_incomplete`, and an empty list. cmdFinalize has reported both halves since #676; this
+    // route, watch-pr and the abandon sweep are the three that run NO Step-8a mirror, so they are
+    // exactly where a main-only entry shows up. An unnamed loss is unrepairable.
     output({ released: false, result: 'refuse', project: folder.project,
       reason: result.reason || (result.archive_incomplete ? 'archive_incomplete' : 'archive_refused'),
-      detail: result.detail, missing: result.missing,
+      detail: result.detail, missing: result.missing, mismatched: result.mismatched,
       reasoning: 'archival did not return an explicit success result; worktree, branch, and claim-label cleanup was not attempted.'
         + (result.archive_incomplete === true ? ' ' + archiveIncompleteRemedy(root, folder.project) : '') }, 1);
     return;
@@ -5130,6 +5463,9 @@ function sweepBarrierRefs(root) {
         { cwd: mainRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     } catch (_) { listed = ''; }
     const byTag = new Map();
+    // NEWLINE-SPLIT ON PURPOSE — ref names, not pathnames; see the archive-time reap above for the
+    // two measurements (verbatim `%(refname)` output, and git's own refusal of LF/TAB/space/`\` in a
+    // ref name) that make this split lossless and the `.trim()` a no-op.
     for (const refName of listed.split('\n').map(s => s.trim()).filter(Boolean)) {
       const rest = refName.slice(prefix.length);
       const slash = rest.indexOf('/');
@@ -5265,16 +5601,26 @@ function listSourceEvidenceFiles(srcDir) {
 //
 // The refusal STAYS. Losing a durable record while moving it is exactly the irreversible harm a
 // refusal is for, and this one fires before either live copy is deleted.
+//
+// THIRD KEY, `uncomparable[]` (#906). `mismatched[]` conflated two different facts — "this arrived
+// with different bytes" and "this could not be compared at all" (a symlink, a socket, a dest entry
+// that is not a plain file). The conflation is why a main-only symlink was destroyed at exit 0: the
+// `mainLive` leg reads `missing[]` only, DELIBERATELY, because main's bytes legitimately differ from
+// the archive's — and a symlink never enters the byte map, so it landed in the half that leg drops.
+// `uncomparable[]` is a strict SUBSET of `mismatched[]`, never a replacement: every existing reader
+// keeps the answer it had, and a reader that needs the distinction subtracts one from the other
+// rather than running a second comparison. Adding a third comparison READER is exactly how this hole
+// formed, so there is still exactly one walk, one call, one answer.
 function verifyArchiveComplete(srcDir, destDir) {
-  if (!fs.existsSync(destDir)) return { ok: false, missing: ['<dest>'], mismatched: [] };
+  if (!fs.existsSync(destDir)) return { ok: false, missing: ['<dest>'], mismatched: [], uncomparable: [] };
   try {
     const srcRoot = fs.lstatSync(srcDir);
     const destRoot = fs.lstatSync(destDir);
     if (!srcRoot.isDirectory() || srcRoot.isSymbolicLink()
         || !destRoot.isDirectory() || destRoot.isSymbolicLink()) {
-      return { ok: false, missing: [], mismatched: ['<root>'] };
+      return { ok: false, missing: [], mismatched: ['<root>'], uncomparable: ['<root>'] };
     }
-  } catch (_) { return { ok: false, missing: ['<root>'], mismatched: [] }; }
+  } catch (_) { return { ok: false, missing: ['<root>'], mismatched: [], uncomparable: [] }; }
   const sourceFiles = new Map();
   const invalid = [];
   const walk = function(absDir, relDir) {
@@ -5309,7 +5655,11 @@ function verifyArchiveComplete(srcDir, destDir) {
   required.add('workflow-state.md');
   for (const rel of sourceFiles.keys()) required.add(rel);
   const missing = [];
+  // `invalid[]` is the source-side kind fault: an entry the walk could not reduce to bytes. It seeds
+  // BOTH halves — mismatched keeps it (every reader that had it still has it) and uncomparable names
+  // it as the thing it actually is.
   const mismatched = invalid.slice();
+  const uncomparable = invalid.slice();
   for (const rel of Array.from(required).sort()) {
     const dest = path.join(destDir, ...String(rel).split('/'));
     if (!fs.existsSync(dest)) { missing.push(rel); continue; }
@@ -5317,13 +5667,15 @@ function verifyArchiveComplete(srcDir, destDir) {
     if (!expected) continue;
     let stat;
     try { stat = fs.lstatSync(dest); } catch (_) { missing.push(rel); continue; }
-    if (!stat.isFile() || stat.isSymbolicLink()) { mismatched.push(rel); continue; }
+    // The DEST-side kind fault. Also a "could not be compared", not a "bytes differ": there are no
+    // bytes to weigh against the source's.
+    if (!stat.isFile() || stat.isSymbolicLink()) { mismatched.push(rel); uncomparable.push(rel); continue; }
     const digest = require('crypto').createHash('sha256').update(fs.readFileSync(dest)).digest('hex');
     if (stat.size !== expected.size || (stat.mode & 0o777) !== expected.mode || digest !== expected.digest) {
       mismatched.push(rel);
     }
   }
-  return { ok: missing.length === 0 && mismatched.length === 0, missing, mismatched };
+  return { ok: missing.length === 0 && mismatched.length === 0, missing, mismatched, uncomparable };
 }
 
 function cmdWorktreeFinalize() {
@@ -5514,9 +5866,12 @@ function cmdWatchPr() {
     if (state === 'MERGED') {
       const archiveResult = archiveProjectDirSafely(root, folder.project, 'closed');
       if (!closureContract.archiveSucceeded(archiveResult)) {
+        // #906: both halves — see cmdRelease. An entry that could not be compared refuses with an
+        // EMPTY missing[], so reporting only that half names nothing at all.
         archiveRefusals.push({ folder: folder.project,
           reason: archiveResult.reason || (archiveResult.archive_incomplete ? 'archive_incomplete' : 'archive_refused'),
-          detail: archiveResult.detail, missing: archiveResult.missing });
+          detail: archiveResult.detail, missing: archiveResult.missing,
+          mismatched: archiveResult.mismatched });
         continue;
       }
       if (archiveResult && (archiveResult.roadmap_source_removed === 'failed' || archiveResult.roadmap_regenerated === 'failed')) {
@@ -5606,9 +5961,12 @@ function cmdWatchPr() {
       sweepBaseBranch = sweepBaseBranch || sweepDefaultBase;
       const archiveResult = archiveProjectDirSafely(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
       if (!closureContract.archiveSucceeded(archiveResult)) {
+        // #906: both halves — see cmdRelease. An entry that could not be compared refuses with an
+        // EMPTY missing[], so reporting only that half names nothing at all.
         archiveRefusals.push({ folder: folder.project,
           reason: archiveResult.reason || (archiveResult.archive_incomplete ? 'archive_incomplete' : 'archive_refused'),
-          detail: archiveResult.detail, missing: archiveResult.missing });
+          detail: archiveResult.detail, missing: archiveResult.missing,
+          mismatched: archiveResult.mismatched });
         continue;
       }
       // #715: commit the discard archive so the next sink's preflight does not refuse it as
