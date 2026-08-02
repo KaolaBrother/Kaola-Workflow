@@ -1274,6 +1274,292 @@ async function main() {
     }
   }
 
+  // ── #913: an allowlisted DETERMINISTIC key is REPORTED, never silently discarded ────────────────
+  //
+  // `buildScrubbedEnvironment` writes HOME, TMPDIR, PATH, LANG, LC_ALL and TZ itself, and then walks
+  // the caller's `--env-allowlist` SKIPPING every key it already wrote. The skip is silent: the
+  // request and the behaviour disagree, and nothing on any surface says so. It lands on the one flag
+  // that is the only in-runner remedy for a tool needing a real HOME — measured live, a `cargo` child
+  // dies in ~10ms under the sandboxed HOME because the rustup shim finds no `.rustup`, and
+  // `--env-allowlist CARGO_HOME,RUSTUP_HOME` fixes it — so the two keys an operator reaches for FIRST
+  // are exactly the two that vanish without a word.
+  //
+  // The disposition being pinned: the key is REPORTED and does NOT take effect. It cannot take
+  // effect. The sandbox HOME/TMPDIR are what hold `command_id` off this particular machine, so a real
+  // HOME in the effective environment re-keys the identity per developer and every inherited
+  // `{command_id, required_pass_vector_id}` obligation with it. The fix therefore owes the caller a
+  // report, not an escape hatch.
+  //
+  // WHAT IS PINNED IS THE RESULT, and the result is what A CALLER CAN READ. Nothing below names a
+  // field, a message, an exit code for the reporting leg, or an internal function: a report is located
+  // by searching the whole caller-visible surface of one run — the receipt at any depth, addressed by
+  // where it sits, plus stderr — for the exact key. Two places on that surface are EXCLUDED, and the
+  // exclusion is the load-bearing part of this block:
+  //
+  //   • `command_identity.policy.env_allowlist` is the caller's own REQUEST echoed back. It says what
+  //     was asked for, never what became of it, and it is byte-identical between a runner that reports
+  //     and the one that discards in silence.
+  //   • `command_identity.effective_environment[].key` is the environment digest's key column. `HOME`
+  //     and `TMPDIR` sit there in EVERY run, allowlist or none.
+  //
+  // Counting either would make every assertion here green against the defect itself. Measured on the
+  // unfixed runner: with both excluded, `--env-allowlist HOME` produces ZERO surface strings naming
+  // HOME — that zero is the defect, stated as a number.
+  //
+  // Five properties, and the last three are controls that must hold BEFORE and AFTER:
+  //   1. `--env-allowlist HOME` reports HOME. 2. `--env-allowlist TMPDIR` reports TMPDIR, and the two
+  //      together report both. The report VARIES with the request (a constant "HOME and TMPDIR are
+  //      deterministic" banner names no particular key and does not identify which one was dropped).
+  //   3. CONTROL — a NON-deterministic allowlisted key still crosses, unchanged. `RUSTUP_HOME` is
+  //      chosen deliberately: it CONTAINS `HOME`, so a fix that matches by substring rather than by
+  //      key would swallow it, and every key assertion here is bound to the whole key for the same
+  //      reason.
+  //   4. CONTROL — `command_id` and `vector_id` are the same on a machine with a different HOME. This
+  //      is the property a "just let it through" fix breaks, and it is why the key cannot take effect.
+  //   5. CONTROL — a run passing no `--env-allowlist` at all is untouched: no report, empty stderr, and
+  //      the child's environment is exactly what it was.
+  //
+  // The four byte-identical copies of the runner are already enforced by validate-script-sync.js (row
+  // `validation-runner module copies`, first step of both chains); nothing here duplicates that.
+  if (process.platform !== 'win32') {
+    const base913 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw913-')));
+    const repo913 = path.join(base913, 'repo');
+    try {
+      fs.mkdirSync(repo913);
+      git(repo913, ['init', '-q', '-b', 'main']);
+      git(repo913, ['config', 'user.email', 't@t.com']);
+      git(repo913, ['config', 'user.name', 'Test']);
+      git(repo913, ['config', 'commit.gpgsign', 'false']);
+      write(repo913, 'src/app.js', 'module.exports = 1;\n');
+      git(repo913, ['add', '-A']);
+      git(repo913, ['commit', '-q', '-m', 'init']);
+
+      // The child dumps the environment it was ACTUALLY handed, to a file OUTSIDE the repo — inside it
+      // the write would move the candidate digest mid-loop and report the probe as `candidate_mutation`.
+      // Its stdout is a fixed string and its exit is 0, so two runs of one policy are byte-comparable
+      // and `vector_id` is stable across them, which is what makes the determinism leg falsifiable.
+      const probe913 = path.join(base913, 'env-probe.js');
+      fs.writeFileSync(probe913, [
+        "'use strict';",
+        "require('fs').writeFileSync(process.argv[2], JSON.stringify(process.env));",
+        "process.stdout.write('KW913_PROBE\\n');",
+        'process.exit(0);',
+      ].join('\n'));
+
+      // Two real, EMPTY home directories. The determinism leg varies the machine's HOME across them and
+      // nothing else, and both being empty keeps git's global-config lookup identical in both — so the
+      // one axis the leg claims to vary is the only one that varies.
+      const homeA913 = path.join(base913, 'home-a');
+      const homeB913 = path.join(base913, 'home-b');
+      fs.mkdirSync(homeA913);
+      fs.mkdirSync(homeB913);
+      const CARGO_913 = '/kw913/sentinel/cargo';
+      const RUSTUP_913 = '/kw913/sentinel/rustup';
+      const LEAK_913 = 'kw913-must-not-cross-the-boundary';
+      // Present in the RUNNER's environment on every leg. The two sentinels are what a pass-through
+      // proves itself with; the leak is what proves the scrub is still a scrub.
+      const sourceEnv913 = { CARGO_HOME: CARGO_913, RUSTUP_HOME: RUSTUP_913, KW913_LEAK: LEAK_913 };
+
+      function runRun913(extra, home) {
+        const envOut = path.join(base913, 'child-env.json');
+        try { fs.rmSync(envOut, { force: true }); } catch (_) {}
+        const receiptOut = path.join(base913, 'receipt-' + runRun913.seq++ + '.json');
+        // spawn-class: cli-contract
+        const r = spawnSync(process.execPath, [runnerScript, 'run',
+          '--timeout-minutes', '1', '--repo-root', repo913,
+          '--command', 'node ' + probe913 + ' ' + envOut,
+          '--output', receiptOut, ...extra], {
+          cwd: repo913, encoding: 'utf8', timeout: 180000,
+          env: Object.assign({}, process.env, sourceEnv913, { HOME: home || homeA913 }),
+        });
+        let receipt = null;
+        try { receipt = JSON.parse(fs.readFileSync(receiptOut, 'utf8')); } catch (_) {}
+        let childEnv = null;
+        try { childEnv = JSON.parse(fs.readFileSync(envOut, 'utf8')); } catch (_) {}
+        return { status: r.status, stdout: String(r.stdout || ''), stderr: String(r.stderr || ''), receipt, childEnv };
+      }
+      runRun913.seq = 1;
+
+      // The caller's whole readable surface for one run, each string addressed by where it sits. The
+      // PATH is searched alongside the value because a report shaped `{ HOME: "ignored" }` carries the
+      // key it names as an object key rather than as a string.
+      const ECHO_PATHS_913 = [
+        /^command_identity\.policy\.env_allowlist(\.|$)/,
+        /^command_identity\.effective_environment\.\d+\.key$/,
+      ];
+      function reports913(leg) {
+        const units = [];
+        if (leg.receipt !== null && leg.receipt !== undefined) {
+          (function walk(node, at) {
+            if (node && typeof node === 'object') {
+              if (Array.isArray(node)) node.forEach((item, index) => walk(item, at ? at + '.' + index : String(index)));
+              else for (const key of Object.keys(node).sort()) walk(node[key], at ? at + '.' + key : key);
+              return;
+            }
+            units.push({ at, text: at + ' = ' + JSON.stringify(node) });
+          })(leg.receipt, '');
+        }
+        const kept = units.filter(unit => !ECHO_PATHS_913.some(skip => skip.test(unit.at)));
+        if (String(leg.stderr || '') !== '') kept.push({ at: '<stderr>', text: String(leg.stderr) });
+        return kept;
+      }
+      // Bound to the WHOLE key, never a substring: `HOME` must not match inside `CARGO_HOME` or
+      // `RUSTUP_HOME`, or a pass-through would read as a report about HOME and the controls below would
+      // certify the fix they exist to falsify.
+      function naming913(units, key) {
+        const token = new RegExp('(^|[^A-Za-z0-9_])' + key + '([^A-Za-z0-9_]|$)');
+        return units.filter(unit => token.test(unit.text));
+      }
+      function shown913(units) {
+        return JSON.stringify(units.map(unit => unit.text).slice(0, 6));
+      }
+
+      // ── 1. --env-allowlist HOME ──────────────────────────────────────────────────────────────────
+      const homeLeg = runRun913(['--env-allowlist', 'HOME']);
+      assert.ok(homeLeg.receipt,
+        '#913: `run --env-allowlist HOME` still COMPLETES and writes a receipt. Reporting is not '
+        + 'refusing: the flag is how a consumer gets a HOME-needing tool to run at all, so an operator '
+        + 'passing HOME alongside the keys that do work must not lose the run; got status='
+        + homeLeg.status + ' stderr=' + JSON.stringify(homeLeg.stderr.slice(0, 400)));
+      assert.strictEqual(homeLeg.receipt.outcome, 'pass',
+        '#913: and the run itself is unaffected; got ' + JSON.stringify(homeLeg.receipt.outcome));
+      assert.ok(homeLeg.childEnv, '#913: the probe ran and recorded the environment it was handed');
+      const homeReports = naming913(reports913(homeLeg), 'HOME');
+      assert.ok(homeReports.length >= 1,
+        '#913: `--env-allowlist HOME` must produce a report NAMING HOME on the surface the caller reads '
+        + '— the receipt or stderr. The runner writes HOME itself and skips it here, and today it does so '
+        + 'in silence: the request and the behaviour disagree and the caller is told nothing, on the only '
+        + 'flag that can get a HOME-needing tool through the sandbox. The two places the key already '
+        + 'appears (the echo of the request, and the environment digest\'s key column) are excluded '
+        + 'because both are byte-identical in a run that reports nothing. Found 0 of them; the surface '
+        + 'outside those two holds ' + shown913(reports913(homeLeg)));
+      assert.notStrictEqual(homeLeg.childEnv.HOME, homeA913,
+        '#913: and the key does NOT take effect — the child keeps the sandbox HOME. Letting the real one '
+        + 'through would re-key `command_id` per machine, which is the property the scrub exists to hold; '
+        + 'got ' + JSON.stringify(homeLeg.childEnv.HOME));
+
+      // ── 2. --env-allowlist TMPDIR, and the two together ──────────────────────────────────────────
+      const tmpdirLeg = runRun913(['--env-allowlist', 'TMPDIR']);
+      assert.ok(tmpdirLeg.receipt && tmpdirLeg.childEnv,
+        '#913: `run --env-allowlist TMPDIR` completes too; got status=' + tmpdirLeg.status
+        + ' stderr=' + JSON.stringify(tmpdirLeg.stderr.slice(0, 400)));
+      const tmpdirReports = naming913(reports913(tmpdirLeg), 'TMPDIR');
+      assert.ok(tmpdirReports.length >= 1,
+        '#913: `--env-allowlist TMPDIR` must produce a report NAMING TMPDIR — the same silent skip, on '
+        + 'the second key the runner writes for itself. Found 0; the surface outside the request echo and '
+        + 'the digest key column holds ' + shown913(reports913(tmpdirLeg)));
+      assert.notStrictEqual(tmpdirLeg.childEnv.TMPDIR, os.tmpdir(),
+        '#913: and TMPDIR does not take effect either — the child keeps the sandbox TMPDIR; got '
+        + JSON.stringify(tmpdirLeg.childEnv.TMPDIR));
+
+      const bothLeg = runRun913(['--env-allowlist', 'HOME,TMPDIR']);
+      assert.ok(bothLeg.receipt, '#913: both keys at once completes; got status=' + bothLeg.status
+        + ' stderr=' + JSON.stringify(bothLeg.stderr.slice(0, 400)));
+      const bothReports = reports913(bothLeg);
+      assert.ok(naming913(bothReports, 'HOME').length >= 1 && naming913(bothReports, 'TMPDIR').length >= 1,
+        '#913: passing both keys must report BOTH by name — a caller who asked for two things and got '
+        + 'neither is owed two answers, not one. HOME named ' + naming913(bothReports, 'HOME').length
+        + 'x, TMPDIR named ' + naming913(bothReports, 'TMPDIR').length + 'x; surface holds '
+        + shown913(bothReports));
+
+      // The report IDENTIFIES the key. Without this, a fixed banner listing every key the sandbox owns
+      // satisfies all three assertions above while telling the caller nothing about their own request —
+      // it names which keys are deterministic, not which of THEIRS was dropped.
+      function determinismReportText913(leg) {
+        const units = reports913(leg).filter(unit =>
+          naming913([unit], 'HOME').length > 0 || naming913([unit], 'TMPDIR').length > 0);
+        return JSON.stringify(units.map(unit => unit.text).sort());
+      }
+      assert.notStrictEqual(determinismReportText913(homeLeg), determinismReportText913(tmpdirLeg),
+        '#913: the report must VARY with the request — asking about HOME and asking about TMPDIR cannot '
+        + 'produce the same words, or the caller is being told which keys the sandbox owns rather than '
+        + 'which of theirs was ignored. HOME leg: ' + determinismReportText913(homeLeg)
+        + ' TMPDIR leg: ' + determinismReportText913(tmpdirLeg));
+
+      // ── 3. CONTROL — a non-deterministic allowlisted key still crosses, unchanged ─────────────────
+      const noneLeg = runRun913([]);
+      assert.ok(noneLeg.receipt && noneLeg.childEnv,
+        '#913 control: a run with no --env-allowlist completes; got status=' + noneLeg.status
+        + ' stderr=' + JSON.stringify(noneLeg.stderr.slice(0, 400)));
+      const passLeg = runRun913(['--env-allowlist', 'CARGO_HOME,RUSTUP_HOME']);
+      assert.ok(passLeg.receipt && passLeg.childEnv,
+        '#913 control: the pass-through leg completes; got status=' + passLeg.status
+        + ' stderr=' + JSON.stringify(passLeg.stderr.slice(0, 400)));
+      assert.strictEqual(passLeg.childEnv.CARGO_HOME, CARGO_913,
+        '#913 control: an allowlisted NON-deterministic key still reaches the child with its value '
+        + 'intact — this is the remedy the flag exists for, and the reporting fix must not narrow it; got '
+        + JSON.stringify(passLeg.childEnv.CARGO_HOME));
+      assert.strictEqual(passLeg.childEnv.RUSTUP_HOME, RUSTUP_913,
+        '#913 control: RUSTUP_HOME too, and it is the adversarial one — it CONTAINS `HOME`, so a fix '
+        + 'matching by substring instead of by key would swallow it; got '
+        + JSON.stringify(passLeg.childEnv.RUSTUP_HOME));
+      const passReports = reports913(passLeg);
+      assert.strictEqual(naming913(passReports, 'CARGO_HOME').length + naming913(passReports, 'RUSTUP_HOME').length, 0,
+        '#913 control: and neither is reported as ignored — they were not ignored; got '
+        + shown913(naming913(passReports, 'CARGO_HOME').concat(naming913(passReports, 'RUSTUP_HOME'))));
+      assert.deepStrictEqual(
+        Object.keys(passLeg.childEnv).filter(key => key !== 'CARGO_HOME' && key !== 'RUSTUP_HOME').sort(),
+        Object.keys(noneLeg.childEnv).sort(),
+        '#913 control: allowlisting adds EXACTLY the requested non-deterministic keys and nothing else. '
+        + 'The absolute key set is not asserted — the shell and the platform contribute to it — so this '
+        + 'compares one allowlisted run against one bare run, which is the difference the flag owns');
+
+      // ── 4. CONTROL — command_id survives a different machine HOME ────────────────────────────────
+      //
+      // Same policy, same repo, twice, with only the machine's HOME moved. This is what "the key cannot
+      // take effect" means as a measurement, and it is what a fix that simply stops skipping breaks.
+      const detA = runRun913(['--env-allowlist', 'HOME'], homeA913);
+      const detB = runRun913(['--env-allowlist', 'HOME'], homeB913);
+      assert.ok(detA.receipt && detB.receipt,
+        '#913 control: both determinism legs produced a receipt; got ' + detA.status + '/' + detB.status);
+      assert.match(String(detA.receipt.command_id), HEX, '#913 control: the leg produces a command_id');
+      assert.strictEqual(detA.receipt.command_id, detB.receipt.command_id,
+        '#913: allowlisting HOME must not make `command_id` depend on WHOSE machine ran it. The identity '
+        + 'is the whole reason the environment is scrubbed, and an inherited `{command_id, '
+        + 'required_pass_vector_id}` obligation is void the moment it moves per developer; got '
+        + JSON.stringify(detA.receipt.command_id) + ' vs ' + JSON.stringify(detB.receipt.command_id));
+      assert.strictEqual(detA.receipt.vector_id, detB.receipt.vector_id,
+        '#913: nor `vector_id` — a report carrying a machine-specific value into the semantic record '
+        + 'would move it; got ' + JSON.stringify(detA.receipt.vector_id) + ' vs '
+        + JSON.stringify(detB.receipt.vector_id));
+      assert.strictEqual(detA.childEnv && detA.childEnv.HOME, detB.childEnv && detB.childEnv.HOME,
+        '#913: and the child saw the SAME HOME under both, which is the fact those equalities rest on; got '
+        + JSON.stringify(detA.childEnv && detA.childEnv.HOME) + ' vs '
+        + JSON.stringify(detB.childEnv && detB.childEnv.HOME));
+      // NON-VACUITY: without this, the three equalities above are equally satisfied by a constant.
+      const otherLeg = runRun913(['--env-allowlist', 'HOME', '--repetitions', '2']);
+      assert.notStrictEqual(otherLeg.receipt && otherLeg.receipt.command_id, detA.receipt.command_id,
+        '#913 control: a DIFFERENT policy moves `command_id`; got '
+        + JSON.stringify(otherLeg.receipt && otherLeg.receipt.command_id));
+
+      // ── 5. CONTROL — a run that asked for nothing is untouched ───────────────────────────────────
+      const noneReports = reports913(noneLeg);
+      assert.strictEqual(noneLeg.stderr, '',
+        '#913 control: a run passing no --env-allowlist writes NOTHING to stderr — the report is owed to a '
+        + 'caller who made a request, and a warning on every run is a new default, not a fix; got '
+        + JSON.stringify(noneLeg.stderr.slice(0, 400)));
+      assert.strictEqual(noneLeg.status, 0, '#913 control: and exits 0; got ' + noneLeg.status);
+      assert.strictEqual(noneLeg.receipt.outcome, 'pass',
+        '#913 control: with a passing receipt; got ' + JSON.stringify(noneLeg.receipt.outcome));
+      assert.strictEqual(naming913(noneReports, 'HOME').length + naming913(noneReports, 'TMPDIR').length, 0,
+        '#913 control: and no report naming HOME or TMPDIR anywhere on its surface. This is the leg that '
+        + 'makes the two above mean something: a runner that mentioned the deterministic keys in every '
+        + 'receipt would satisfy them while reporting nothing about anyone\'s request; got '
+        + shown913(naming913(noneReports, 'HOME').concat(naming913(noneReports, 'TMPDIR'))));
+      assert.notStrictEqual(noneLeg.childEnv.HOME, homeA913,
+        '#913 control: the child still gets the sandbox HOME; got ' + JSON.stringify(noneLeg.childEnv.HOME));
+      assert.notStrictEqual(noneLeg.childEnv.TMPDIR, os.tmpdir(),
+        '#913 control: and the sandbox TMPDIR; got ' + JSON.stringify(noneLeg.childEnv.TMPDIR));
+      for (const leg of [['none', noneLeg], ['home', homeLeg], ['tmpdir', tmpdirLeg], ['pass-through', passLeg]]) {
+        assert.strictEqual(leg[1].childEnv.KW913_LEAK, undefined,
+          '#913 control: an unlisted variable never crosses the boundary on the `' + leg[0] + '` leg — the '
+          + 'scrub is still a scrub; got ' + JSON.stringify(leg[1].childEnv.KW913_LEAK));
+      }
+    } finally {
+      fs.rmSync(base913, { recursive: true, force: true });
+    }
+  }
+
   console.log('test-validation-runner: PASSED');
 }
 

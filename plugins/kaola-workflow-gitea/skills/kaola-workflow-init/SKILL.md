@@ -334,7 +334,7 @@ This file mirrors active unfinished work. Gitea issues are the source of truth w
 ## Rules
 
 - A separate roadmap/research session owns discovering and adding future work to Gitea issues.
-- `kaola-workflow-next` fetches Gitea issues, mirrors active implementation work here, and advances one item per cycle.
+- `kaola-workflow-next` fetches Gitea issues and mirrors active implementation work here.
 - After each `kaola-workflow-next` cycle, refresh this file from issue state.
 - Move completed workflow project folders to `kaola-workflow/archive/`.
 - Close linked Gitea issues only after acceptance criteria pass.

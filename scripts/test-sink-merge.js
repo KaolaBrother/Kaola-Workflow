@@ -139,7 +139,12 @@ function initGitRepoWithBareRemote(tmp) {
   git(tmp, ['add', 'README.md']);
   git(tmp, ['commit', '-m', 'init']);
   const remotePath = tmp + '-remote';
-  G.raw(['init', '--bare', remotePath], { encoding: 'utf8' });
+  // `-b main` is not decoration: without it the bare remote's HEAD comes from the OPERATOR's
+  // init.defaultBranch, which is `master` where that is unset. The fixture repo is `main`, so
+  // the remote ends up with a HEAD pointing at a branch nobody ever pushes — and every
+  // assertion that reads evidence back through a fresh `git clone` of this remote sees an
+  // empty checkout instead of the tree. Pin it here; never let the host decide.
+  G.raw(['init', '--bare', '-b', 'main', remotePath], { encoding: 'utf8' });
   git(tmp, ['remote', 'add', 'origin', remotePath]);
   git(tmp, ['push', '-u', 'origin', 'main']);
   return remotePath;
@@ -3928,6 +3933,180 @@ function assertJournalsNeverReachHistory906(label, sinkScript, project, issue, m
   assertBenignGitEntryKeepsTheBlobGateArmed907(label, script, 'issue-' + (90721 + index), 90721 + index, mockEnv);
   assertUnbackedSymlinksAreReported907(label, script, 'issue-' + (90731 + index), 90731 + index, mockEnv);
   assertJournalsNeverReachHistory906(label, script, 'issue-' + (90641 + index), 90641 + index, mockEnv);
+});
+
+// --------------------------------------------------------------------------- #912 preflight guard
+
+// #912: WHEN sinkPreflight asserts a clean worktree, stated once for every edition.
+//
+//   A BRANCHLESS / in-place run (--branch TBD, #711) committed straight to the default branch. No
+//   feature branch and no linked worktree exist, so there is nothing for the worktree-clean guard to
+//   protect and the guard does not run. A run WITH a feature branch keeps the guard exactly as it
+//   is: a dirty linked worktree refuses, and an unprobeable one refuses too (fail closed).
+//
+// This is the expectation the GitLab and Gitea suites pin for their own copies (they cannot require
+// across trees, so each edition states it in its own suite rather than importing one). The arms here
+// cover the two copies those suites cannot reach.
+//
+// Why the branchless half is not academic: assertWorktreeClean fails closed on a `git worktree list`
+// probe fault BEFORE it matches any branch, so calling it unconditionally on a branchless run is not
+// harmless — the absence of a worktree on branch 'TBD' never gets a chance to save it, and a
+// transient enumeration fault refuses a sink that has nothing to lose.
+//
+// The fault comes from the script's own KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL hook (#506), so what is
+// exercised is the probe the shipped guard already runs. KAOLA_WORKFLOW_SINK_ABORT_AFTER=preflight
+// halts the transaction the instant the preflight step records `done`, so each arm measures the
+// preflight DECISION and nothing downstream of it: exit 99 is "preflight passed", and a refusal
+// exits 1 carrying its typed reason on the envelope.
+function assertPreflightGuardScope912(label, script) {
+  const PREFLIGHT_PASSED = 99;
+
+  const state912 = (project, branch, issue) => [
+    '# Kaola-Workflow State', '',
+    '## Project', 'name: ' + project, 'status: active', '',
+    '## Sink', 'branch: ' + branch, 'issue_number: ' + issue, 'sink: merge', ''
+  ].join('\n') + '\n';
+
+  const mkBranchless = (project, issue) => {
+    const tmpRoot = makeTmpRoot();
+    const remotePath = initGitRepoWithBareRemote(tmpRoot);
+    const dir = path.join(tmpRoot, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), state912(project, 'TBD', issue));
+    fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n');
+    fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'in-place deliverable\n');
+    git(tmpRoot, ['add', '-A']);
+    git(tmpRoot, ['commit', '-m', 'feat: in-place deliverable (branchless)']);
+    return { tmpRoot, remotePath, project, issue, branch: 'TBD', wt: null };
+  };
+
+  const mkBranched = (project, issue, dirty) => {
+    const tmpRoot = makeTmpRoot();
+    const remotePath = initGitRepoWithBareRemote(tmpRoot);
+    const branch = 'workflow/' + project;
+    git(tmpRoot, ['checkout', '-b', branch]);
+    const dir = path.join(tmpRoot, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), state912(project, branch, issue));
+    fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n');
+    fs.writeFileSync(path.join(tmpRoot, 'FEATURE.txt'), 'feature\n');
+    git(tmpRoot, ['add', '-A']);
+    git(tmpRoot, ['commit', '-m', 'feat: deliverable']);
+    git(tmpRoot, ['push', '-u', 'origin', branch]);
+    git(tmpRoot, ['checkout', 'main']);
+    const wt = tmpRoot + '-linked-wt';
+    git(tmpRoot, ['worktree', 'add', wt, branch]);
+    if (dirty) fs.writeFileSync(path.join(wt, 'FEATURE.txt'), 'uncommitted edit\n');
+    return { tmpRoot, remotePath, project, issue, branch, wt };
+  };
+
+  const drop = (fx) => {
+    if (fx.wt) { git(fx.tmpRoot, ['worktree', 'remove', '--force', fx.wt]); }
+    for (const p of [fx.tmpRoot, fx.remotePath, fx.wt]) {
+      if (!p) continue;
+      try { fs.rmSync(p, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (_) {}
+    }
+  };
+
+  const preflight = (fx, extraEnv) => {
+    // The measured property is this process's own exit code and the reason on its OWN envelope —
+    // 'worktree_dirty' seen anywhere in aggregated output is a different fact from this preflight
+    // returning it.
+    // spawn-class: cli-contract
+    const r = spawnSync(process.execPath,
+      [script, '--branch', fx.branch, '--project', fx.project, '--issue', String(fx.issue), '--sink', '--json'],
+      { cwd: fx.tmpRoot, encoding: 'utf8', timeout: 90000,
+        env: Object.assign({}, process.env, {
+          KAOLA_WORKFLOW_OFFLINE: '1',
+          KAOLA_WORKFLOW_SINK_ABORT_AFTER: 'preflight',
+        }, extraEnv || {}) });
+    const out = lastJson(r);
+    return { exit: r.status, envelope: out, reason: (out && out.reason) || null,
+      seen: 'exit=' + r.status + ' envelope=' + JSON.stringify(out) + '\nstderr: ' + String(r.stderr || '').slice(0, 600) };
+  };
+
+  // Same arm lettering as the GitLab and Gitea suites carry, so one expectation reads the same in
+  // all three: controls first, the branchless-under-fault arm last.
+
+  // (a) the branchless fixture with no probe fault — (e)'s attribution control.
+  {
+    const fx = mkBranchless('issue-91201', 91201);
+    try {
+      const r = preflight(fx);
+      assert(r.reason === null && r.exit === PREFLIGHT_PASSED,
+        '#912 (a/' + label + '): a branchless run with no probe fault must pass preflight and refuse nothing — this '
+        + 'is (e)\'s attribution control. Got ' + r.seen);
+    } finally { drop(fx); }
+  }
+
+  // (b) the data-loss guard the branchless exemption must not weaken (#346/#496/#562).
+  {
+    const fx = mkBranched('issue-91203', 91203, true);
+    try {
+      const r = preflight(fx);
+      assert(r.reason === 'worktree_dirty',
+        '#912 (b/' + label + '): a branch-postured run whose linked worktree has uncommitted changes must STILL '
+        + 'refuse worktree_dirty — the sink force-removes that worktree, so proceeding destroys the work. Got ' + r.seen);
+      assert(r.exit !== 0, '#912 (b/' + label + '): the dirty-worktree refusal must exit non-zero. Got ' + r.seen);
+      assert(fs.existsSync(fx.wt) && fs.readFileSync(path.join(fx.wt, 'FEATURE.txt'), 'utf8') === 'uncommitted edit\n',
+        '#912 (b/' + label + '): the refusal must leave the linked worktree and its uncommitted file byte-intact');
+    } finally { drop(fx); }
+  }
+
+  // (c) the other half of (b): a clean linked worktree proceeds.
+  {
+    const fx = mkBranched('issue-91202', 91202, false);
+    try {
+      const r = preflight(fx);
+      assert(r.reason === null && r.exit === PREFLIGHT_PASSED,
+        '#912 (c/' + label + '): a branch-postured run with a clean linked worktree must pass preflight and refuse '
+        + 'nothing. Got ' + r.seen);
+    } finally { drop(fx); }
+  }
+
+  // (d) the counter-pin bounding the exemption (#506): a BRANCH-postured run whose probe faults must
+  // still fail CLOSED even though the worktree is clean — unprobeable is "could not verify", never
+  // "nothing there". Deleting the guard, or swallowing the probe fault, satisfies (e) and breaks this.
+  {
+    const fx = mkBranched('issue-91204', 91204, false);
+    try {
+      const r = preflight(fx, { KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL: '1' });
+      assert(r.reason === 'worktree_dirty',
+        '#912 (d/' + label + '): a branch-postured run whose worktree-list probe faults must STILL refuse '
+        + 'worktree_dirty (fail closed) — the branchless exemption is scoped to --branch TBD and must not disarm '
+        + 'the guard for runs that do have a worktree. Got ' + r.seen);
+      assert(fs.existsSync(fx.wt),
+        '#912 (d/' + label + '): the fail-closed refusal must leave the linked worktree in place');
+    } finally { drop(fx); }
+  }
+
+  // (e) branchless + worktree-list probe fault → the guard does not apply, so nothing refuses.
+  {
+    const fx = mkBranchless('issue-91201', 91201);
+    try {
+      const r = preflight(fx, { KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL: '1' });
+      assert(r.reason !== 'worktree_dirty',
+        '#912 (e/' + label + '): a branchless run (--branch TBD) has no feature branch and no linked worktree, so a '
+        + 'transient `git worktree list` probe fault must NOT produce the worktree_dirty refusal — there is no '
+        + 'uncommitted work behind a worktree that does not exist. Got ' + r.seen);
+      assert(r.exit === PREFLIGHT_PASSED,
+        '#912 (e/' + label + '): the branchless preflight must pass through to the next step (exit ' + PREFLIGHT_PASSED
+        + ' is KAOLA_WORKFLOW_SINK_ABORT_AFTER=preflight firing after preflight recorded done). Got ' + r.seen);
+    } finally { drop(fx); }
+  }
+}
+
+// Root and codex only. The GitLab and Gitea copies are pinned by the same five arms inside their own
+// suites, which is where a forge-only diff's own chain will run them.
+[
+  ['root', path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js')],
+  ['codex', path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-sink-merge.js')],
+].forEach(([label, script]) => {
+  if (!fs.existsSync(script)) {
+    assert(false, '#912 (' + label + '): the edition sink script exists at ' + script);
+    return;
+  }
+  assertPreflightGuardScope912(label, script);
 });
 
 // --------------------------------------------------------------------------- summary

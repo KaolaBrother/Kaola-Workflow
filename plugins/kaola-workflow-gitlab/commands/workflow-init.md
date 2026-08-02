@@ -304,7 +304,7 @@ This file mirrors active unfinished work. GitLab issues are the source of truth 
 ## Rules
 
 - A separate roadmap/research session owns discovering and adding future work to GitLab issues.
-- `/workflow-next` fetches GitLab issues, mirrors active implementation work here, and advances one item per cycle.
+- `/workflow-next` fetches GitLab issues and mirrors active implementation work here.
 - After each `/workflow-next` cycle, refresh this file from issue state.
 - Move completed workflow project folders to `kaola-workflow/archive/`.
 - Close linked GitLab issues only after acceptance criteria pass.

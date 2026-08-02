@@ -79,7 +79,12 @@ function setupRealRepo(name, project) {
 function setupRealRepoWithBareRemote(name, project) {
   const { root, branch } = setupRealRepo(name, project);
   const remotePath = root + '-remote';
-  G.execRaw(['init', '--bare', remotePath], { encoding: 'utf8' });
+  // `-b main` is not decoration: without it the bare remote's HEAD comes from the OPERATOR's
+  // init.defaultBranch, which is `master` where that is unset. The fixture repo is `main`, so
+  // the remote ends up with a HEAD pointing at a branch nobody ever pushes — and every
+  // assertion that reads evidence back through a fresh `git clone` of this remote sees an
+  // empty checkout instead of the tree. Pin it here; never let the host decide.
+  G.execRaw(['init', '--bare', '-b', 'main', remotePath], { encoding: 'utf8' });
   G.exec(root, ['remote', 'add', 'origin', remotePath], { encoding: 'utf8' });
   G.exec(root, ['push', '-u', 'origin', 'main'], { encoding: 'utf8' });
   G.exec(root, ['push', '-u', 'origin', branch], { encoding: 'utf8' });
@@ -1152,7 +1157,7 @@ process.exit(0);
     git('commit', '-m', 'feat: fix\n\nCloses #9517');
     git('checkout', 'main');
     const remotePath = root + '-remote';
-    G.execRaw(['init', '--bare', remotePath], { encoding: 'utf8' });
+    G.execRaw(['init', '--bare', '-b', 'main', remotePath], { encoding: 'utf8' });
     G.exec(root, ['remote', 'add', 'origin', remotePath], { encoding: 'utf8' });
     G.exec(root, ['push', '-u', 'origin', 'main'], { encoding: 'utf8' });
     G.exec(root, ['push', '-u', 'origin', branch], { encoding: 'utf8' });
@@ -1237,7 +1242,7 @@ console.log('GitLab #517 reopen-after-autoclose tests passed');
       const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
       git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
       fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
-      G.execRaw(['init', '--bare', remote], { encoding: 'utf8' });
+      G.execRaw(['init', '--bare', '-b', 'main', remote], { encoding: 'utf8' });
       git('remote', 'add', 'origin', remote); git('push', '-u', 'origin', 'main');
       git('branch', branch); git('checkout', branch);
       fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable'); git('add', '-A'); git('commit', '-m', 'feat: deliverable');
@@ -1279,7 +1284,7 @@ console.log('GitLab #517 reopen-after-autoclose tests passed');
       const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
       git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
       fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
-      G.execRaw(['init', '--bare', remote], { encoding: 'utf8' });
+      G.execRaw(['init', '--bare', '-b', 'main', remote], { encoding: 'utf8' });
       git('remote', 'add', 'origin', remote); git('push', '-u', 'origin', 'main');
       git('branch', branch); git('checkout', branch);
       fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable'); git('add', '-A'); git('commit', '-m', 'feat: deliverable');
@@ -1374,7 +1379,7 @@ console.log('GitLab #520 journal-exclusion from archive_commit: PASSED');
     fs.writeFileSync(path.join(root, 'package.json'),
       JSON.stringify({ name: 'consumer-product', version: '1.0.0', scripts: { test: 'echo unrelated-consumer-suite' } }, null, 2) + '\n');
     fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base + consumer package.json');
-    G.execRaw(['init', '--bare', remotePath], { encoding: 'utf8' });
+    G.execRaw(['init', '--bare', '-b', 'main', remotePath], { encoding: 'utf8' });
     git('remote', 'add', 'origin', remotePath); git('push', '-u', 'origin', 'main');
     git('checkout', '-b', branch);
     fs.writeFileSync(path.join(root, 'feat.md'), 'feat'); git('add', '-A'); git('commit', '-m', 'feat: impl 9548');
@@ -1452,7 +1457,7 @@ console.log('GitLab #548 consumer-aware test-gate: PASSED');
     const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
     git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
     fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
-    G.execRaw(['init', '--bare', remote], { encoding: 'utf8' });
+    G.execRaw(['init', '--bare', '-b', 'main', remote], { encoding: 'utf8' });
     git('remote', 'add', 'origin', remote); git('push', '-u', 'origin', 'main');
     git('branch', branch); git('checkout', branch);
     fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable'); git('add', '-A'); git('commit', '-m', 'feat: deliverable');
@@ -1853,7 +1858,7 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
     const git = (...a) => G.exec(root, a, { encoding: 'utf8' });
     git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
     fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n'); git('add', '-A'); git('commit', '-m', 'init');
-    G.execRaw(['init', '--bare', remote], { encoding: 'utf8' });
+    G.execRaw(['init', '--bare', '-b', 'main', remote], { encoding: 'utf8' });
     git('remote', 'add', 'origin', remote); git('push', '-u', 'origin', 'main');
     writeGlabMock901(mockScript, logFile, issue);
 
@@ -1895,7 +1900,7 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
     const git = (...a) => G.exec(root, a, { encoding: 'utf8' });
     git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
     fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n'); git('add', '-A'); git('commit', '-m', 'init');
-    G.execRaw(['init', '--bare', remote], { encoding: 'utf8' });
+    G.execRaw(['init', '--bare', '-b', 'main', remote], { encoding: 'utf8' });
     git('remote', 'add', 'origin', remote); git('push', '-u', 'origin', 'main');
     writeGlabMock901(mockScript, logFile, issue);
 
@@ -2350,6 +2355,201 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
   }
 
   console.log('GitLab #901 basename .cache/ rule must not clip archive evidence: PASSED');
+}
+
+// #912: sinkPreflight must assert a clean worktree on the SAME runs in every edition. The stated
+// expectation, which all three editions are pinned against here and in their own suites:
+//
+//   a BRANCHLESS / in-place run (--branch TBD) committed straight to main. No feature branch and no
+//   linked worktree exist, so there is nothing for the worktree-clean guard to protect and the
+//   guard does not run. A run WITH a feature branch keeps the guard exactly as it is: dirty
+//   refuses, and an unprobeable worktree refuses too (fail closed).
+//
+// assertWorktreeClean fails closed on a `git worktree list` probe fault BEFORE it matches any
+// branch, so calling it unconditionally is not harmless on a branchless run: the absence of a
+// worktree on branch 'TBD' never gets a chance to save it. A transient enumeration fault refuses a
+// branchless sink that canonical completes.
+//
+// The fault is driven through the port's OWN KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL hook, so what is
+// exercised is the probe the shipped guard already runs, not an injected throw.
+// KAOLA_WORKFLOW_SINK_ABORT_AFTER=preflight halts the transaction the instant the preflight step
+// records `done`, so every arm below measures the preflight DECISION and nothing downstream of it.
+{
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  // The abort hook's exit code. It fires only AFTER a step records done, so reaching it is the
+  // observation "preflight passed"; a preflight refusal exits 1 with a typed envelope instead.
+  const PREFLIGHT_PASSED = 99;
+
+  const state912 = (project, branch, issue) => [
+    '# Kaola-Workflow State', '',
+    '## Project', 'name: ' + project, 'status: active', '',
+    '## GitLab',
+    'issue_iid: ' + issue,
+    'project_id: 77',
+    'path_with_namespace: group/project',
+    'project_web_url: https://gitlab.example/group/project', '',
+    '## Sink',
+    'branch: ' + branch,
+    'issue_number: ' + issue,
+    'sink: merge', ''
+  ].join('\n');
+
+  const seedRepo912 = (label) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-912-' + label + '-'));
+    const remote = root + '-remote';
+    G.initBare(remote);
+    G.init(root, { branch: 'main' });
+    fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+    G.gitOk(root, ['add', '-A']);
+    G.gitOk(root, ['commit', '-m', 'init']);
+    G.gitOk(root, ['remote', 'add', 'origin', remote]);
+    G.gitOk(root, ['push', '-u', 'origin', 'main']);
+    return { root, remote };
+  };
+
+  // BRANCHLESS: live folder + deliverable committed straight to main, workflow-state records
+  // branch: TBD, and no feature branch or linked worktree is ever created.
+  const mkBranchless912 = (label, project, issue) => {
+    const { root, remote } = seedRepo912(label);
+    const dir = path.join(root, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), state912(project, 'TBD', issue));
+    fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization\n\n## Final Validation\n\n- `npm test`: pass\n');
+    fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'in-place deliverable\n');
+    G.gitOk(root, ['add', '-A']);
+    G.gitOk(root, ['commit', '-m', 'feat: in-place deliverable (branchless)']);
+    return { root, remote, project, issue, branch: 'TBD', wt: null };
+  };
+
+  // BRANCHED: a real feature branch with a linked worktree checked out on it.
+  const mkBranched912 = (label, project, issue, dirty) => {
+    const { root, remote } = seedRepo912(label);
+    const branch = 'workflow/' + project;
+    G.gitOk(root, ['checkout', '-b', branch]);
+    const dir = path.join(root, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), state912(project, branch, issue));
+    fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization\n\n## Final Validation\n\n- `npm test`: pass\n');
+    fs.writeFileSync(path.join(root, 'FEATURE.txt'), 'feature\n');
+    G.gitOk(root, ['add', '-A']);
+    G.gitOk(root, ['commit', '-m', 'feat: deliverable']);
+    G.gitOk(root, ['push', '-u', 'origin', branch]);
+    G.gitOk(root, ['checkout', 'main']);
+    const wt = root + '-linked-wt';
+    G.gitOk(root, ['worktree', 'add', wt, branch]);
+    if (dirty) fs.writeFileSync(path.join(wt, 'FEATURE.txt'), 'uncommitted edit\n');
+    return { root, remote, wt, branch, project, issue };
+  };
+
+  const cleanup912 = (fx) => {
+    if (fx.wt) { try { G.git(fx.root, ['worktree', 'remove', '--force', fx.wt]); } catch (_) {} }
+    for (const p of [fx.root, fx.remote, fx.wt]) {
+      if (!p) continue;
+      try { fs.rmSync(p, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (_) {}
+    }
+  };
+
+  const preflight912 = (fx, extraEnv) => {
+    const r = spawnSync(process.execPath,
+      [sinkScript, '--branch', fx.branch, '--project', fx.project, '--issue', String(fx.issue), '--sink', '--json'],
+      { cwd: fx.root, encoding: 'utf8', timeout: 90000,
+        env: Object.assign({}, process.env, {
+          KAOLA_WORKFLOW_OFFLINE: '1',
+          KAOLA_WORKFLOW_SINK_ABORT_AFTER: 'preflight',
+        }, extraEnv || {}) });
+    let envelope = null;
+    for (const line of String(r.stdout || '').split('\n')) {
+      if (!line.trim().startsWith('{')) continue;
+      try { envelope = JSON.parse(line); } catch (_) { /* not the envelope line */ }
+    }
+    // The reason is read off THIS run's own envelope, never off aggregated output: 'worktree_dirty'
+    // appearing anywhere in a combined log is not the same fact as this preflight returning it.
+    return { exit: r.status, envelope, reason: (envelope && envelope.reason) || null, stderr: r.stderr, stdout: r.stdout };
+  };
+  const seen912 = (r) => 'exit=' + r.exit + ' envelope=' + JSON.stringify(r.envelope)
+    + '\nstderr: ' + String(r.stderr || '').slice(0, 600);
+
+  // The arms run controls first and the divergence LAST, deliberately: node's assert throws, so a
+  // baseline run against the unfixed port has to get through every control before it reds on (e).
+
+  // (a) The branchless fixture with no probe fault. It must already pass preflight — this is (e)'s
+  // attribution control, and without it (e)'s failure could be anything about the fixture.
+  {
+    const fx = mkBranchless912('bl-clean', 'gl-912-branchless', 91201);
+    try {
+      const r = preflight912(fx);
+      assert.strictEqual(r.reason, null,
+        '#912-gitlab (a): a branchless run with no probe fault must not refuse at all — this is (e)\'s '
+        + 'attribution control. Got ' + seen912(r));
+      assert.strictEqual(r.exit, PREFLIGHT_PASSED,
+        '#912-gitlab (a): the branchless preflight must pass with no probe fault. Got ' + seen912(r));
+    } finally { cleanup912(fx); }
+  }
+
+  // (b) The data-loss guard the fix must NOT weaken (#346/#496/#562): a real feature branch whose
+  // linked worktree carries uncommitted work still refuses, and refuses with ZERO mutation.
+  {
+    const fx = mkBranched912('br-dirty', 'gl-912-dirty', 91203, true);
+    try {
+      const r = preflight912(fx);
+      assert.strictEqual(r.reason, 'worktree_dirty',
+        '#912-gitlab (b): a branch-postured run whose linked worktree has uncommitted changes must STILL refuse '
+        + 'worktree_dirty — the sink force-removes that worktree, so proceeding destroys the work. Got ' + seen912(r));
+      assert.notStrictEqual(r.exit, 0,
+        '#912-gitlab (b): the dirty-worktree refusal must exit non-zero. Got ' + seen912(r));
+      assert.ok(fs.existsSync(fx.wt),
+        '#912-gitlab (b): the refusal must leave the linked worktree in place (zero mutation)');
+      assert.strictEqual(fs.readFileSync(path.join(fx.wt, 'FEATURE.txt'), 'utf8'), 'uncommitted edit\n',
+        '#912-gitlab (b): the refusal must leave the uncommitted file byte-intact');
+    } finally { cleanup912(fx); }
+  }
+
+  // (c) The other half of (b): a branch-postured run with a CLEAN linked worktree proceeds.
+  {
+    const fx = mkBranched912('br-clean', 'gl-912-clean', 91202, false);
+    try {
+      const r = preflight912(fx);
+      assert.strictEqual(r.reason, null,
+        '#912-gitlab (c): a branch-postured run with a clean linked worktree must not refuse. Got ' + seen912(r));
+      assert.strictEqual(r.exit, PREFLIGHT_PASSED,
+        '#912-gitlab (c): a clean linked worktree must pass preflight. Got ' + seen912(r));
+    } finally { cleanup912(fx); }
+  }
+
+  // (d) The counter-pin bounding the fix (#506): on a BRANCH-postured run the guard must still fail
+  // CLOSED when the worktree-list probe faults, even though the worktree is clean — an unprobeable
+  // worktree is "we could not verify", never "there is nothing there". Deleting the guard, or making
+  // the probe fault swallowable, would satisfy (e) and break this.
+  {
+    const fx = mkBranched912('br-clean-fault', 'gl-912-failclosed', 91204, false);
+    try {
+      const r = preflight912(fx, { KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL: '1' });
+      assert.strictEqual(r.reason, 'worktree_dirty',
+        '#912-gitlab (d): a branch-postured run whose worktree-list probe faults must STILL refuse worktree_dirty '
+        + '(fail closed) — the branchless exemption is scoped to --branch TBD and must not disarm the guard for '
+        + 'runs that do have a worktree. Got ' + seen912(r));
+      assert.ok(fs.existsSync(fx.wt),
+        '#912-gitlab (d): the fail-closed refusal must leave the linked worktree in place');
+    } finally { cleanup912(fx); }
+  }
+
+  // (e) THE DIVERGENCE. A branchless run whose worktree-list probe faults must not refuse.
+  {
+    const fx = mkBranchless912('bl-fault', 'gl-912-branchless', 91201);
+    try {
+      const r = preflight912(fx, { KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL: '1' });
+      assert.notStrictEqual(r.reason, 'worktree_dirty',
+        '#912-gitlab (e): a branchless run (--branch TBD) has no feature branch and no linked worktree, so a '
+        + 'transient `git worktree list` probe fault must NOT produce the worktree_dirty refusal — there is no '
+        + 'uncommitted work behind a worktree that does not exist. Canonical skips the guard entirely on this '
+        + 'run; this port called it unconditionally. Got ' + seen912(r));
+      assert.strictEqual(r.exit, PREFLIGHT_PASSED,
+        '#912-gitlab (e): the branchless preflight must PASS through to the next step (exit ' + PREFLIGHT_PASSED
+        + ' is KAOLA_WORKFLOW_SINK_ABORT_AFTER=preflight firing after preflight recorded done). Got ' + seen912(r));
+    } finally { cleanup912(fx); }
+  }
+
+  console.log('GitLab #912 sinkPreflight worktree-clean guard applies on the same runs as canonical: PASSED');
 }
 
 console.log('GitLab sink tests passed');

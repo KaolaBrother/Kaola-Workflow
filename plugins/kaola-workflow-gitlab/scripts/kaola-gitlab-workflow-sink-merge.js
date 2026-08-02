@@ -1546,14 +1546,23 @@ function repoWideIgnoredNames(root, rels) {
 }
 
 function sinkPreflight(mainRoot, project, branch, issueNumbers) {
+  // #711: branchless / in-place run (branch === 'TBD'). The run committed straight to main, so no
+  // feature branch and no linked worktree exist.
+  const branchless = branch === 'TBD';
   // #562: worktree-clean data-loss guard — the --sink merge step force-removes the linked worktree with
   // NO clean precondition, so a dirty worktree's uncommitted work would be destroyed. Mirror the legacy
   // path's assertWorktreeClean. It throws on a dirty OR unprobeable worktree (fail-closed); convert to
   // the typed refusal sinkPreflight returns. Resume-safe: an already-removed worktree returns cleanly.
-  try {
-    assertWorktreeClean(mainRoot, branch);
-  } catch (err) {
-    return { ok: false, reason: 'worktree_dirty', detail: err.message };
+  // #912: skipped for a branchless run, as canonical does — there is no worktree to protect. Calling
+  // it anyway was not harmless: assertWorktreeClean fails closed on a `git worktree list` probe fault
+  // BEFORE it matches any branch, so "no worktree is registered on branch TBD" never got a chance to
+  // save it and a transient enumeration fault refused a sink canonical completes.
+  if (!branchless) {
+    try {
+      assertWorktreeClean(mainRoot, branch);
+    } catch (err) {
+      return { ok: false, reason: 'worktree_dirty', detail: err.message };
+    }
   }
 
   const porcelain = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '-uall'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });

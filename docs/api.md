@@ -276,6 +276,7 @@ can see what moved and notice what does not belong.
   "status": "closed",
   "roadmap_source_removed": "removed|absent|kept|failed",
   "roadmap_regenerated": "regenerated|skipped|failed",
+  "roadmap_regenerated_by_root": { "worktree": "regenerated|skipped|failed", "main": "regenerated|skipped|failed" },
   "claim_label_removed": "removed|already_absent|skipped_offline|failed",
   "archive_state_stamped": "not_needed|repaired|failed",
   "issue_disposition": "kept-open|close-pending|closed|unknown",
@@ -286,6 +287,15 @@ can see what moved and notice what does not belong.
   "finalize_transaction": {}
 }
 ```
+
+- `roadmap_regenerated_by_root` reports the mirror rebuild **once per root**, in the same enum as the
+  scalar. A run from a linked worktree rebuilds two mirrors — the worktree's and the main checkout's —
+  and `roadmap_regenerated` can only carry one of them, so it keeps its existing meaning (the invoking
+  tree's outcome) and this map says which mirror is stale. `main` reads `skipped` when the run did not
+  rebuild main's mirror at all, which is the ordinary case for a plain checkout and for
+  `--keep-worktree`. When main's rebuild throws, `roadmap_regenerated_main_error` carries the error's
+  own message and the finding `main_roadmap_mirror_not_regenerated` is raised. **The exit stays 0**:
+  a stale mirror is reported, never gated — a reader of the receipt is told which mirror to rebuild.
 
 - `archive_state_stamped` reports the manual-archive backstop: `repaired` when finalize healed a
   state archived by hand (live folder absent, `status: active` in the archive) by stamping it
@@ -337,7 +347,7 @@ not support it.
 | `residue_unstaged` | the paths that did not stage, capped at 50 |
 | `finalize_commit_probe` | `failed` when the finalize commit's `git diff --cached --quiet` exited neither 0 nor 1 |
 | `finalize_commit_probe_detail` | git's own message |
-| `findings` | the **de-duplicated list of typed fault names** raised anywhere in the block: `archive_unstage_failed`, `archive_stage_failed`, `archive_commit_probe_failed`, `residue_probe_failed`, `residue_stage_failed`, `finalize_commit_probe_failed`. Absent or empty on a healthy run |
+| `findings` | the **de-duplicated list of typed fault names** raised anywhere in the block: `archive_unstage_failed`, `archive_stage_failed`, `archive_commit_probe_failed`, `residue_probe_failed`, `residue_stage_failed`, `finalize_commit_probe_failed`, `main_roadmap_mirror_not_regenerated`. Absent or empty on a healthy run |
 
 `finalize_commit` gains the value **`'unknown'`**, and it means *we could not tell*, not *nothing
 happened*. It is set when the residue probe or the staged probe failed — one could not enumerate what
@@ -358,11 +368,21 @@ healthy run: a good finalize reports `staged`/`staged`/`committed` with no `find
 
 **One edition difference, pre-existing and larger than these fields.** The GitLab and Gitea ports
 stage the archive with a single unscoped `git add -A 'kaola-workflow/'` — no `git rm -r --cached`,
-no candidate-path list — so they raise **five** finding types where canonical and Codex raise
-**six**. The delta is exactly one, `archive_unstage_failed`, which can only exist where there is a
+no candidate-path list — so they raise **six** finding types where canonical and Codex raise
+**seven**. The delta is exactly one, `archive_unstage_failed`, which can only exist where there is a
 `git rm -r --cached` to fail; `archive_stage` on those two editions therefore covers that one call
 rather than the two the row above describes. The conversion was applied to the shape those ports
 actually have; the underlying staging divergence is older than this change and is not closed by it.
+
+**`archive_unstage_failed` is not owed to the forges — and the one call is not otherwise
+equivalent.** The forge `archive_stage_failed` message already names the live-folder consequence
+`archive_unstage_failed` announces, so a genuine failure loses nothing. What the single call does
+differently, measured, is *succeed* where canonical does not: a `.gitignore`d child under
+`kaola-workflow/` is silently skipped where canonical's explicit pathspec exits 1; a live run folder
+that survives on disk is re-added rather than forced out of the index, so it stays on the branch; and
+a foreign project's live folder or archive band is swept into the `chore: archive` commit — an open
+divergence tracked separately in issue #922. All three exit 0 and record `archive_stage: 'staged'`,
+so no additional *failure* type would name them either.
 
 **Opt-in exit gate.** The JSON is always emitted and the exit is 0 by default. Pass `--strict` to
 make the exit code reflect the invariant verdict: **exit 4** when `closure_invariants.ok === false`.
@@ -414,7 +434,7 @@ Usage: kaola-workflow-run-chains.js [--chains name,...] [--accept-known-red name
 | `--chains <name,...>` | comma-separated chain names to run (default: the resolved set) |
 | `--accept-known-red <name>:<issue>` | waive a known-failing chain; repeatable. Both halves must be non-empty |
 | `--project <issue-N>` | write the receipt to `kaola-workflow/<issue-N>/.cache/chain-receipt.json` in the working tree that **holds the run folder** — the invoking tree when it carries it, otherwise the main checkout. From a linked worktree whose run folder is main-resident, the receipt therefore lands in main, where the finalize gate reads it. Falls back to `<invoking tree>/kaola-workflow/<issue-N>/` when no run folder resolves, which is the ordinary first run in a plain repository |
-| `--plan <path>` | write the receipt to `<dir-of-path>/.cache/chain-receipt.json`. A legacy path-derivation alias; `--project` is the flag to use |
+| `--plan <path>` | write the receipt to `<dir-of-path>/.cache/chain-receipt.json`. A legacy path-derivation alias; `--project` is the flag to use. It has **no producer**: no prompt, command, skill or routing surface in any of the four editions passes `--plan` — the run-chains invocation they render passes `--project` — and nothing outside a test fixture authors a `workflow-plan.md` for its argument to name |
 | `--output <path>` | explicit override; default is `<cwd>/.cache/chain-receipt.json` |
 | `--mock-chain <name>:<script>` | test hook: replace a chain's command with a shell script |
 | `--json` | emit `{ result, failed, receipt }` after completion |
@@ -597,6 +617,22 @@ kaola-workflow-validation-runner.js record --project <name> --verdict pass|fail
 ```
 
 Receipts land under `.cache/validation-vectors/`. Exit 1 when the outcome is not `pass`.
+
+#### `--env-allowlist <A,B>` — and the keys it cannot grant
+
+The runner sandboxes the environment so `command_id` is a function of the inputs and not of the
+machine, and a few keys are written by the sandbox itself for that reason — `HOME` and `TMPDIR` among
+them. Allowlisting one of those **does not take effect**: the sandbox's own value stands, because the
+alternative is a `command_id` that changes with whoever ran it.
+
+What changed is that it is no longer silent. The receipt carries `env_allowlist_ignored`, a sorted
+array naming exactly the requested keys the sandbox wrote for itself — `["HOME"]` for
+`--env-allowlist HOME,CARGO_HOME`, and `[]` when nothing was ignored. A key the sandbox does not own,
+such as `CARGO_HOME` or `RUSTUP_HOME`, passes through and takes effect as before and is not listed.
+
+The field is outside both digests, so `command_id` and `vector_id` are byte-unmoved by it. It is the
+remedy for a tool that needs a real `HOME`: allowlist the specific variables that tool reads rather
+than `HOME` itself.
 
 #### `--keep-output <dir>` — retain the child's raw streams so a red receipt is diagnosable
 

@@ -2062,6 +2062,9 @@ function probeSelectionEvidence(cacheDirCandidates) {
 // #395.2: shared roadmap-removal + MAIN-orphan reconcile + regenerate, reused by archiveProjectDir's
 // close loop AND cmdFinalize's source-missing backstop so a crash-resume converges (the #395 fix).
 // #403.7: records the actual staged-orphan unstage (roadmap_staged_reconciled).
+// #916: also returns roadmap_regenerated_by_root { worktree, main } — the SAME enum, once per root,
+// because a linked run rebuilds two mirrors and the scalar can only carry one of them; and
+// roadmap_regenerated_main_error, present only when main's rebuild threw.
 function reconcileRoadmapForClosure(root, memberNumbers, primaryNumber, opts, mainRoot, linkedRoot) {
   let roadmapSourceRemoved = 'absent';
   let roadmapRegenerated = 'skipped';
@@ -2167,10 +2170,32 @@ function reconcileRoadmapForClosure(root, memberNumbers, primaryNumber, opts, ma
   }
   // #428: also regenerate the MAIN roadmap when this is a linked worktree run.
   // Skip when keepWorktree is true: the feature-branch merge will carry the deletion + regeneration.
-  if (mainRoot && mainRoot !== linkedRoot && !(opts && opts.keepRoadmapSource) && !(opts && opts.keepWorktree)) {
-    try { roadmapModule.regenerateRoadmap(mainRoot); } catch (_) {}
+  // #916: the mirror is rebuilt in TWO roots and only the linked one had a field. A main-root
+  // failure left `roadmap_regenerated: 'regenerated'` — the LINKED root's honest answer — beside a
+  // MAIN mirror still advertising the issue that just closed, and the bare catch ate the only
+  // account of why. The scalar keeps its meaning exactly (it is what the merged-folder warning on
+  // 'failed' reads); the second root is reported BESIDE it, per-root, in the vocabulary
+  // roadmap_removed_by_root already uses, so a reader can tell WHICH mirror is stale.
+  const roadmapLinkedRun = !!(mainRoot && mainRoot !== linkedRoot);
+  // Not a linked run: `root` IS main, so both keys describe the one rebuild that happened.
+  let roadmapRegeneratedMain = roadmapLinkedRun ? 'skipped' : roadmapRegenerated;
+  let roadmapRegenerateMainError = null;
+  if (roadmapLinkedRun && !(opts && opts.keepRoadmapSource) && !(opts && opts.keepWorktree)) {
+    try {
+      roadmapModule.regenerateRoadmap(mainRoot);
+      roadmapRegeneratedMain = 'regenerated';
+    } catch (e) {
+      // The message is the evidence: it names which read or write refused, and it is the only thing
+      // that tells an operator what to clear before main's mirror can be rebuilt.
+      roadmapRegeneratedMain = 'failed';
+      roadmapRegenerateMainError = String((e && e.message) || e).trim().slice(0, 300);
+    }
   }
-  return { roadmap_source_removed: roadmapSourceRemoved, roadmap_regenerated: roadmapRegenerated, roadmap_sources_removed: removedSources, roadmap_staged_reconciled: stagedReconciled, roadmap_removed_by_root: roadmapByRoot, roadmap_residue: residue };
+  const reconciled = { roadmap_source_removed: roadmapSourceRemoved, roadmap_regenerated: roadmapRegenerated, roadmap_sources_removed: removedSources, roadmap_staged_reconciled: stagedReconciled, roadmap_removed_by_root: roadmapByRoot, roadmap_residue: residue, roadmap_regenerated_by_root: { worktree: roadmapRegenerated, main: roadmapRegeneratedMain } };
+  // Attached only when there IS a failure: a key carrying `null` would still read as an error
+  // report to anyone (or anything) scanning the receipt for one.
+  if (roadmapRegenerateMainError !== null) reconciled.roadmap_regenerated_main_error = roadmapRegenerateMainError;
+  return reconciled;
 }
 
 // #686: shared barrier-ref tag sanitizer — MUST mirror the projectTag computation adaptive-node.js /
@@ -2418,7 +2443,7 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     for (const s of reconciled.roadmap_sources_removed) removedSources.push(s);
     stagedReconciled = reconciled.roadmap_staged_reconciled || [];
     // #428: surface dual-root removal map + residue so cmdFinalize can attach them to the receipt.
-    return {
+    const closedResult = {
       archived: true,
       dest,
       roadmap_source_removed: roadmapSourceRemoved,
@@ -2427,7 +2452,13 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
       roadmap_staged_reconciled: stagedReconciled,
       roadmap_removed_by_root: reconciled.roadmap_removed_by_root || {},
       roadmap_residue: reconciled.roadmap_residue || [],
+      // #916: the per-root REBUILD outcome, beside the per-root removal map above.
+      roadmap_regenerated_by_root: reconciled.roadmap_regenerated_by_root || {},
     };
+    if (reconciled.roadmap_regenerated_main_error) {
+      closedResult.roadmap_regenerated_main_error = reconciled.roadmap_regenerated_main_error;
+    }
+    return closedResult;
   }
   return {
     archived: true,
@@ -4099,6 +4130,10 @@ function cmdFinalize() {
             // #428: surface dual-root removal map + residue from the resume reconcile path.
             if (rec.roadmap_removed_by_root) result.roadmap_removed_by_root = rec.roadmap_removed_by_root;
             if (rec.roadmap_residue) result.roadmap_residue = rec.roadmap_residue;
+            // #916: this backstop calls the SAME helper, so main's mirror can fail here too — and a
+            // convergence path that repairs the roadmap silently is the defect it exists to fix.
+            if (rec.roadmap_regenerated_by_root) result.roadmap_regenerated_by_root = rec.roadmap_regenerated_by_root;
+            if (rec.roadmap_regenerated_main_error) result.roadmap_regenerated_main_error = rec.roadmap_regenerated_main_error;
           }
         }
       }
@@ -4278,6 +4313,28 @@ function cmdFinalize() {
   // #428: dual-root roadmap receipt
   if (result.roadmap_removed_by_root) closureReceipt.roadmap_removed = result.roadmap_removed_by_root;
   if (result.roadmap_residue && result.roadmap_residue.length > 0) closureReceipt.roadmap_residue = result.roadmap_residue;
+  // #916: the per-root mirror REBUILD outcome. roadmap_regenerated stays the linked root's scalar —
+  // repurposing it would change what the 'failed' warning means — so this is where a reader of the
+  // receipt learns which of the two mirrors is stale.
+  if (result.roadmap_regenerated_by_root) closureReceipt.roadmap_regenerated_by_root = result.roadmap_regenerated_by_root;
+  if (result.roadmap_regenerated_main_error) closureReceipt.roadmap_regenerated_main_error = result.roadmap_regenerated_main_error;
+  // The durable half. Recorded, never gated: finalize still exits 0 and still archives — the
+  // orchestrator decides whether to rebuild main's mirror by hand. Without this the finding lives
+  // only on this process's stdout, and the successor who opens the archived run folder instead
+  // reads a closure that mentions the roadmap nowhere at all.
+  if (result.roadmap_regenerated_by_root && result.roadmap_regenerated_by_root.main === 'failed') {
+    recordFinalizeFinding('main_roadmap_mirror_not_regenerated',
+      'The MAIN repo root\'s kaola-workflow/ROADMAP.md was NOT regenerated, so main\'s roadmap '
+        + 'mirror is stale and can still list an issue this run closed. The linked worktree\'s own '
+        + 'mirror rebuilt fine, which is the outcome `roadmap_regenerated: regenerated` reports — '
+        + 'the two roots are reported separately in `roadmap_regenerated_by_root`.',
+      ['main root: ' + (cmdFinalizeIsLinkedRun ? cmdFinalizeMainRoot : root)]
+        .concat(result.roadmap_regenerated_main_error
+          ? ['', 'regenerateRoadmap said:', '', '```', result.roadmap_regenerated_main_error, '```']
+          : [])
+        .concat(['', 'Clear the cause above, then rebuild it by hand: '
+          + '`node scripts/kaola-gitlab-workflow-roadmap.js generate` from the main root.']));
+  }
   // #427: structured closure roll-up (post-build — not a flat schema field; Decision-5 trap).
   {
     const issueSet = issueIids.length > 0 ? issueIids : (issueIid ? [issueIid] : []);
@@ -4596,6 +4653,10 @@ function cmdFinalize() {
   }
   // #395.5 (D1): OPT-IN exit gate — --strict makes the exit code reflect ok:false (exit 4); default 0.
   const strictFailCode = (args.strict && invariantResult && invariantResult.ok === false) ? 4 : undefined;
+  // #916: every other flush site sits inside the `--keep-worktree` commit block, so a finding made
+  // on any other lane reached the emit and never the archive. Idempotent — a lane that already
+  // flushed no-ops here — and it must run BEFORE the emit below, which carries finalizeTx.findings.
+  flushFinalizeFindings();
   // `validation` and `changed_paths` are MEASUREMENTS on the envelope, never verdicts: what this
   // repo's own chains said about this tree, and what this branch touched outside the run-state and
   // documentation bands. Nothing compares either to anything, and neither can fail the finalize.

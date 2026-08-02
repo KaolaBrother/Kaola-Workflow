@@ -5438,6 +5438,305 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
 }
 
 // ---------------------------------------------------------------------------
+// #916 — a linked-worktree finalize rebuilds the roadmap mirror in TWO roots.
+//
+// The scenario above passes --keep-worktree, which makes the main-root arm's gate
+// FALSE, so it never runs there. These four run WITHOUT it, which is the path the
+// main-root rebuild is actually on, and measure the MAIN root's outcome from the
+// outside: what a reader of the closure receipt can determine, and what survives
+// into the archived run folder a successor opens.
+//
+// The fault is real filesystem state, never an injected throw. MAIN's copy of a
+// BYSTANDER roadmap source is made unreadable (permission fault), or MAIN's whole
+// .roadmap/ is removed while its generated mirror still carries rows (source-loss
+// fault). The linked worktree keeps its own readable copies either way, so the
+// linked root rebuilds fine and the existing scalar truthfully reads 'regenerated'
+// while MAIN's mirror still advertises the issue that just closed. That asymmetry
+// is the whole defect, and it is what the receipt has to be able to express.
+// ---------------------------------------------------------------------------
+
+// Anything a reader would take as "this did not succeed". Deliberately loose: what
+// is pinned is that a failure is legible, never the token a producer picks for it.
+const ROADMAP_FAILURE_TOKEN_916 = /fail|stale|error|refus|eacces|enoent|unwritten|not[_ -]?regenerated/;
+
+function collectLeaves916(node, trail, out) {
+  if (node !== null && typeof node === 'object') {
+    const entries = Array.isArray(node)
+      ? node.map((v, i) => [String(i), v])
+      : Object.entries(node);
+    for (const [k, v] of entries) collectLeaves916(v, trail.concat(k), out);
+    return out;
+  }
+  out.push({ path: trail.join('.'), value: node });
+  return out;
+}
+
+// Every leaf of a finalize envelope that says "the MAIN root's roadmap mirror did
+// not get rebuilt". Key-name agnostic on purpose — the receipt already reports
+// per-root outcomes (roadmap_removed_by_root), and which shape the main-root
+// outcome borrows is the producer's call. What must hold is that SOMETHING in the
+// receipt names the main root, is about the roadmap mirror, and reads as a failure.
+function mainRoadmapFailureSignals916(envelope) {
+  return collectLeaves916(envelope, [], []).filter(leaf => {
+    const both = (leaf.path + '=' + String(leaf.value)).toLowerCase();
+    if (!/roadmap|mirror/.test(both)) return false;
+    if (!/(^|[^a-z])main([^a-z]|$)/.test(both)) return false;
+    if (leaf.value === false) return true;
+    return ROADMAP_FAILURE_TOKEN_916.test(both);
+  });
+}
+
+// The same question asked of the DURABLE record. A successor reads files, not an
+// envelope, so the three signals only have to co-occur near each other rather than
+// on one leaf: a heading with lines under it satisfies this as readily as a
+// single `key: value` line.
+function durableMainRoadmapFailureRecord916(text) {
+  const hay = String(text || '').toLowerCase();
+  const re = /roadmap|mirror/g;
+  let m;
+  while ((m = re.exec(hay)) !== null) {
+    const win = hay.slice(Math.max(0, m.index - 240), m.index + 240);
+    if (/(^|[^a-z])main([^a-z]|$)/.test(win) && ROADMAP_FAILURE_TOKEN_916.test(win)) return win;
+  }
+  return null;
+}
+
+// Everything the archived run folder carries, from whichever root it landed in.
+function readArchivedRunFolder916(roots, project) {
+  const files = [];
+  let text = '';
+  for (const root of roots) {
+    const stack = [path.join(root, 'kaola-workflow', 'archive', project)];
+    while (stack.length > 0) {
+      const cur = stack.pop();
+      let entries = [];
+      try { entries = fs.readdirSync(cur, { withFileTypes: true }); } catch (_) { continue; }
+      for (const e of entries) {
+        const p = path.join(cur, e.name);
+        if (e.isDirectory()) { stack.push(p); continue; }
+        files.push(p);
+        // Contents only — a fixture's own temp path must never be able to supply
+        // one of the three signals this text is searched for.
+        try { text += fs.readFileSync(p, 'utf8') + '\n'; } catch (_) {}
+      }
+    }
+  }
+  return { files, text };
+}
+
+// chmod 000 is not a denial for uid 0, and not every filesystem enforces mode at
+// all. Plant the fault and then PROVE the denial by reading; a fault that silently
+// became a no-op would take the scenario green for the wrong reason.
+function plantUnreadableFault916(file) {
+  try { fs.chmodSync(file, 0o000); } catch (_) { return false; }
+  try {
+    fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e.code === 'EACCES' || e.code === 'EPERM') return true;
+    return false;
+  }
+  try { fs.chmodSync(file, 0o644); } catch (_) {}
+  return false;
+}
+
+function parseFinalizeEnvelope916(result) {
+  const lastLine = String(result.stdout || '').trim().split('\n')
+    .filter(l => l.trim().startsWith('{')).pop() || '';
+  try { return JSON.parse(lastLine); } catch (_) { return {}; }
+}
+
+// MAIN root carries both roadmap sources AND a real generated mirror listing both,
+// committed on HEAD; the linked worktree carries the run folder. This is the shape
+// the reproduction ran on.
+function buildLinkedRoadmapFixture916(slug, project, closingIssue, bystanderIssue) {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-916-' + slug + '-')));
+  const kwRoot = tmp + '.kw';
+  const env = { ...process.env, ...GIT_ISOLATION_ENV };
+  initGitRepo(tmp);
+  plantRoadmapIssue(tmp, closingIssue, '');
+  plantRoadmapIssue(tmp, bystanderIssue, '');
+  const gen = runNode(roadmapScript, ['generate'], tmp);
+  assert(gen.status === 0,
+    '#916 fixture: roadmap generate must exit 0, got ' + gen.status + '\n' + gen.stdout + gen.stderr);
+  G.git(tmp, ['add', 'kaola-workflow'], { encoding: 'utf8', env });
+  G.git(tmp, ['commit', '-m', 'plant roadmap sources and mirror'], { encoding: 'utf8', env });
+  const wtPath = path.join(kwRoot, project);
+  fs.mkdirSync(kwRoot, { recursive: true });
+  G.git(tmp, ['worktree', 'add', '-b', 'workflow/' + project, '--', wtPath, 'HEAD'], { encoding: 'utf8', env });
+  plantActiveFolder(wtPath, project, closingIssue, null);
+  seedAdaptiveFinalizeFixture(wtPath, project);
+  const mainMirror = path.join(tmp, 'kaola-workflow', 'ROADMAP.md');
+  assert(read(mainMirror).includes('#' + closingIssue),
+    '#916 fixture: MAIN mirror must list #' + closingIssue + ' before finalize');
+  assert(read(mainMirror).includes('#' + bystanderIssue),
+    '#916 fixture: MAIN mirror must list bystander #' + bystanderIssue + ' before finalize');
+  return { tmp, kwRoot, wtPath, mainMirror, env };
+}
+
+function runLinkedFinalize916(fx, project, extraArgs) {
+  return spawnSync(process.execPath,
+    [claimScript, 'finalize', '--project', project].concat(extraArgs || []), {
+      cwd: fx.wtPath,
+      env: { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8'
+    });
+}
+
+function cleanupLinkedRoadmapFixture916(fx, project) {
+  try {
+    fs.chmodSync(path.join(fx.tmp, 'kaola-workflow', '.roadmap', 'issue-999.md'), 0o644);
+  } catch (_) {}
+  try { G.git(fx.tmp, ['worktree', 'remove', '--force', path.join(fx.kwRoot, project)], { encoding: 'utf8', env: fx.env }); } catch (_) {}
+  fs.rmSync(fx.tmp, { recursive: true, force: true });
+  fs.rmSync(fx.kwRoot, { recursive: true, force: true });
+}
+
+// The body both fault legs share: plant a fault that only MAIN's rebuild trips,
+// finalize, and read the four results off the run.
+function assertMainRoadmapFailureIsRecorded916(fx, project, closingIssue, faultLabel) {
+  const result = runLinkedFinalize916(fx, project);
+
+  // RECORDED, NEVER GATED. A main-root rebuild failure is a measurement; converting
+  // it into a refusal would be a different change from the one being asked for.
+  assert(result.status === 0,
+    '#916 (' + faultLabel + '): finalize must still exit 0 — the main-root roadmap outcome is'
+      + ' recorded, never gated\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+  const envelope = parseFinalizeEnvelope916(result);
+  assert(envelope.status === 'closed',
+    '#916 (' + faultLabel + '): finalize must still report status:closed, got ' + envelope.status);
+  assert(envelope.archived === true,
+    '#916 (' + faultLabel + '): finalize must still archive the run folder, got archived=' + envelope.archived);
+
+  // The linked root genuinely succeeded, so the existing scalar must keep saying so.
+  // It is the input to the finalize warning on `roadmap_regenerated === 'failed'`;
+  // repurposing it to mean "some root failed" would change what that warning means.
+  assert(envelope.roadmap_regenerated === 'regenerated',
+    '#916 (' + faultLabel + '): the linked root rebuilt fine, so roadmap_regenerated must keep'
+      + ' reading "regenerated", got ' + envelope.roadmap_regenerated);
+
+  // Ground truth: MAIN's mirror is the artifact every reader opens, and it still
+  // advertises the issue that just closed.
+  const mainMirrorText = read(fx.mainMirror);
+  assert(mainMirrorText.includes('#' + closingIssue),
+    '#916 (' + faultLabel + ') fixture invalid: MAIN mirror was expected to be STALE (still listing #'
+      + closingIssue + ') — the fault did not reach the main-root rebuild:\n' + mainMirrorText);
+
+  // (1) A reader of the closure receipt can tell that MAIN specifically is stale.
+  const signals = mainRoadmapFailureSignals916(envelope);
+  assert(signals.length > 0,
+    '#916 (' + faultLabel + '): MAIN\'s roadmap mirror is stale and the closure receipt says nothing'
+      + ' a reader could use to tell — no receipt value names the main root, the roadmap mirror and a'
+      + ' failure together. roadmap_regenerated reads "' + envelope.roadmap_regenerated + '" (the'
+      + ' LINKED root\'s outcome). Receipt:\n' + JSON.stringify(envelope, null, 2));
+
+  // (2) And it survives the process: the archived run folder carries it too.
+  const archived = readArchivedRunFolder916([fx.tmp, fx.wtPath], project);
+  assert(archived.files.length > 0,
+    '#916 (' + faultLabel + '): no archived run folder found for ' + project);
+  assert(durableMainRoadmapFailureRecord916(archived.text) !== null,
+    '#916 (' + faultLabel + '): the stale MAIN mirror is not recorded durably — nothing in the'
+      + ' archived run folder names the main root, the roadmap mirror and a failure together, so a'
+      + ' successor reading it cannot learn the mirror is stale. Files read:\n  '
+      + archived.files.join('\n  ') + '\nContents:\n' + archived.text);
+}
+
+function testFinalizeLinkedWorktreeMainRoadmapUnreadableSourceIsRecorded916() {
+  const project = 'issue-920';
+  const fx = buildLinkedRoadmapFixture916('unreadable', project, 920, 999);
+  try {
+    // MAIN's copy of the BYSTANDER source becomes unreadable; the linked worktree's
+    // copy stays readable. So the linked rebuild succeeds and only MAIN's throws.
+    const mainBystander = path.join(fx.tmp, 'kaola-workflow', '.roadmap', 'issue-999.md');
+    if (!plantUnreadableFault916(mainBystander)) {
+      console.log('testFinalizeLinkedWorktreeMainRoadmapUnreadableSourceIsRecorded916: SKIPPED — '
+        + 'chmod 000 did not deny this process a read (uid ' + (process.getuid ? process.getuid() : '?')
+        + '), so the permission fault would be a no-op and the scenario would pass for the wrong '
+        + 'reason. The source-loss leg covers the same defect without needing mode enforcement.');
+      return;
+    }
+    assert(read(path.join(fx.wtPath, 'kaola-workflow', '.roadmap', 'issue-999.md')).length > 0,
+      '#916: the LINKED worktree copy of the bystander source must stay readable — the asymmetry'
+        + ' between the two roots is what the scenario measures');
+    assertMainRoadmapFailureIsRecorded916(fx, project, 920, 'unreadable main source');
+    console.log('testFinalizeLinkedWorktreeMainRoadmapUnreadableSourceIsRecorded916: PASSED');
+  } finally {
+    cleanupLinkedRoadmapFixture916(fx, project);
+  }
+}
+
+function testFinalizeLinkedWorktreeMainRoadmapSourceLossIsRecorded916() {
+  const project = 'issue-920';
+  const fx = buildLinkedRoadmapFixture916('sourceloss', project, 920, 999);
+  try {
+    // MAIN's .roadmap/ is gone while its generated mirror still carries rows — the
+    // state the roadmap generator refuses to overwrite. No file mode involved, so
+    // this leg measures the same defect on a host where chmod does not deny.
+    fs.rmSync(path.join(fx.tmp, 'kaola-workflow', '.roadmap'), { recursive: true, force: true });
+    assert(read(fx.mainMirror).includes('#999'),
+      '#916 fixture: MAIN mirror must still carry rows after its sources are removed');
+    assertMainRoadmapFailureIsRecorded916(fx, project, 920, 'main .roadmap source loss');
+    console.log('testFinalizeLinkedWorktreeMainRoadmapSourceLossIsRecorded916: PASSED');
+  } finally {
+    cleanupLinkedRoadmapFixture916(fx, project);
+  }
+}
+
+// Positive control. On a healthy tree the main-root rebuild really does run and
+// really does drop the closed issue from MAIN's mirror, and nothing reports a
+// main-root failure. This is what the two legs above are measured against, and it
+// is what a fix must not start reporting failures on.
+function testFinalizeLinkedWorktreeMainRoadmapHealthyControl916() {
+  const project = 'issue-920';
+  const fx = buildLinkedRoadmapFixture916('healthy', project, 920, 999);
+  try {
+    const result = runLinkedFinalize916(fx, project);
+    assert(result.status === 0,
+      '#916 healthy control: finalize must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const envelope = parseFinalizeEnvelope916(result);
+    assert(envelope.roadmap_regenerated === 'regenerated',
+      '#916 healthy control: roadmap_regenerated must be "regenerated", got ' + envelope.roadmap_regenerated);
+    const mainMirrorText = read(fx.mainMirror);
+    assert(!mainMirrorText.includes('#920'),
+      '#916 healthy control: MAIN mirror must drop the closed #920 — the main-root rebuild is the'
+        + ' only writer of it on this path:\n' + mainMirrorText);
+    assert(mainMirrorText.includes('#999'),
+      '#916 healthy control: MAIN mirror must keep the still-open #999:\n' + mainMirrorText);
+    const signals = mainRoadmapFailureSignals916(envelope);
+    assert(signals.length === 0,
+      '#916 healthy control: MAIN rebuilt successfully, so no receipt value may report a main-root'
+        + ' roadmap failure, got ' + JSON.stringify(signals));
+    console.log('testFinalizeLinkedWorktreeMainRoadmapHealthyControl916: PASSED');
+  } finally {
+    cleanupLinkedRoadmapFixture916(fx, project);
+  }
+}
+
+// Positive control on the OTHER side of the gate. --keep-worktree deliberately does
+// not rebuild MAIN (the feature-branch merge carries the deletion), so MAIN's mirror
+// staying stale here is correct, not a defect — and must not be reported as a failure.
+function testFinalizeLinkedWorktreeKeepWorktreeSkipsMainRoadmapRebuild916() {
+  const project = 'issue-920';
+  const fx = buildLinkedRoadmapFixture916('keepwt', project, 920, 999);
+  try {
+    const result = runLinkedFinalize916(fx, project, ['--keep-worktree']);
+    assert(result.status === 0,
+      '#916 --keep-worktree control: finalize must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const envelope = parseFinalizeEnvelope916(result);
+    const mainMirrorText = read(fx.mainMirror);
+    assert(mainMirrorText.includes('#920'),
+      '#916 --keep-worktree control: MAIN\'s mirror must be left ALONE — the deletion arrives with'
+        + ' the merge, so a rebuild here would be the wrong write:\n' + mainMirrorText);
+    const signals = mainRoadmapFailureSignals916(envelope);
+    assert(signals.length === 0,
+      '#916 --keep-worktree control: MAIN was deliberately not rebuilt, which is not a failure and'
+        + ' must not be reported as one, got ' + JSON.stringify(signals));
+    console.log('testFinalizeLinkedWorktreeKeepWorktreeSkipsMainRoadmapRebuild916: PASSED');
+  } finally {
+    cleanupLinkedRoadmapFixture916(fx, project);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Issue #297 — worktree finalize cleans MAIN-repo staged roadmap source
 // Scenario: handoff creates .roadmap/issue-N.md in MAIN and `git add`s it
 // WITHOUT committing (worktree was forked before the file existed on HEAD).
@@ -11027,6 +11326,10 @@ function buildRegistry() {
   add('testFinalizeFromMainRootNoSpuriousRemoval',        testFinalizeFromMainRootNoSpuriousRemoval);
   add('testFinalizeCleansRoadmapEntry',                   testFinalizeCleansRoadmapEntry);
   add('testFinalizeFromLinkedWorktreeCleansRoadmapEntry', testFinalizeFromLinkedWorktreeCleansRoadmapEntry);
+  add('testFinalizeLinkedWorktreeMainRoadmapUnreadableSourceIsRecorded916', testFinalizeLinkedWorktreeMainRoadmapUnreadableSourceIsRecorded916);
+  add('testFinalizeLinkedWorktreeMainRoadmapSourceLossIsRecorded916', testFinalizeLinkedWorktreeMainRoadmapSourceLossIsRecorded916);
+  add('testFinalizeLinkedWorktreeMainRoadmapHealthyControl916', testFinalizeLinkedWorktreeMainRoadmapHealthyControl916);
+  add('testFinalizeLinkedWorktreeKeepWorktreeSkipsMainRoadmapRebuild916', testFinalizeLinkedWorktreeKeepWorktreeSkipsMainRoadmapRebuild916);
   add('testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource', testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource);
   add('testFinalizeRoadmapCleanupFailureReceipt',         testFinalizeRoadmapCleanupFailureReceipt);
   add('testWatchPrRoadmapCleanupWarning',                 testWatchPrRoadmapCleanupWarning);

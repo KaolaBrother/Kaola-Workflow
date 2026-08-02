@@ -1,5 +1,80 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **A failed main-root roadmap rebuild is now recorded instead of swallowed (#916).** Closing from a
+  linked worktree rebuilds two mirrors — the worktree's and the main checkout's — but only the
+  worktree's outcome was typed; main's rebuild ran inside a bare `catch (_) {}`. When it threw,
+  finalize still exited 0, the receipt still read `roadmap_regenerated: "regenerated"`, stderr was
+  empty, and main's `ROADMAP.md` — the mirror every reader opens — still listed the issue just
+  closed. Nothing in the archived run folder recorded that anything had failed. The failure is
+  reachable on real filesystem state, not only in theory: a missing or unreadable `.roadmap/`, an
+  unreadable issue source, an unwritable `kaola-workflow/`, and a concurrent unlink racing the
+  rebuild all produce it. The receipt now carries `roadmap_regenerated_by_root` — the same enum, once
+  per root — so a reader can tell *which* mirror is stale, plus `roadmap_regenerated_main_error`
+  carrying the error's own message, and raises the finding `main_roadmap_mirror_not_regenerated`.
+  `roadmap_regenerated` keeps its existing meaning. **The exit stays 0** — this is reported, never
+  gated; the orchestrator decides what to do about a stale mirror.
+- **`--env-allowlist` now reports the keys it cannot grant (#913).** The validation runner sandboxes
+  `HOME` and `TMPDIR` so `command_id` is a function of the inputs rather than of the machine. A
+  caller who allowlisted either got a sandbox they had explicitly opted out of, and was told nothing
+  — and those two keys are the first a caller reaches for when a tool needs a real `HOME`. The
+  request is still not granted, because honouring it is exactly what would make `command_id`
+  machine-dependent; but the receipt now carries `env_allowlist_ignored`, a sorted array naming the
+  requested keys the sandbox wrote for itself. Keys the sandbox does not own pass through and take
+  effect as before. The field sits outside both digests, so `command_id` and `vector_id` are
+  byte-unmoved.
+
+### Fixed
+
+- **The GitLab and Gitea sinks no longer refuse a branchless run over a worktree that does not exist
+  (#912).** `sinkPreflight` on both ports called `assertWorktreeClean` unconditionally, where
+  canonical skips it for a branchless in-place run (`--branch TBD`) that has no feature branch and no
+  linked worktree. That guard fails closed on a `git worktree list` probe fault *before* it matches
+  any branch, so a transient fault made a forge sink refuse `worktree_dirty` on a run canonical
+  completes. The three editions now assert a clean worktree on the same runs. The data-loss guard
+  that motivated it is untouched: a dirty or unprobeable worktree on a branched run still refuses.
+- **Three test suites no longer depend on the operator's global git configuration.** `test-sink-merge`
+  and both forge sink suites created their bare remote with `git init --bare` and no explicit initial
+  branch, so on a machine with no global `init.defaultBranch` the remote's HEAD was an unborn
+  `master` while the fixtures pushed `main`. Every "must survive a fresh clone" witness then read an
+  empty clone, reddening 19 assertions at a commit that was green elsewhere. Out of this bundle's
+  scope, fixed here because a baseline that reds for unrelated reasons cannot verify anything.
+
+### Changed
+
+- **The roadmap rules block no longer tells the agent how many items a cycle advances (#917).** The
+  generated `kaola-workflow/ROADMAP.md`, and the six `workflow-init` surfaces carrying the same
+  bullet, stated that `workflow-next` *"advances one item per cycle"*. That is a constraint on the
+  agent stated as a rule, for a limit the design dropped: under ADR 0017 an item is a mission and the
+  orchestrator decides width at the moment it reaches the item, and the last four archived runs on
+  this repository advanced 7, 3, 4 and 7 items — not one advanced a single item. The bullet now
+  states only what it knows, that `workflow-next` fetches issues and mirrors active implementation
+  work into the file, and names no replacement cadence. The sentence shipped to consumers on every
+  `kaola-workflow-roadmap.js generate`, so the correction reaches every repository that regenerates
+  its roadmap; the new wording is one wording across all three forges and both runtime renderings.
+- **`--plan`'s cwd-relative resolution is documented, not changed (#911).** A relative `--plan`
+  invoked from a linked worktree lands the chain receipt under the invoking tree, where the finalize
+  gate — which reads the tree holding the run folder — does not look; the mis-landing reproduces, and
+  it is the shape #910 fixed for `--project`. It is deliberately left as it is: `--plan` and
+  `--output` are explicit caller-supplied paths and resolve against cwd unchanged, which `docs/api.md`
+  already stated and `kaola-workflow-run-chains.js` already records at the resolver. The one fact that
+  was nowhere on record is now in the flag's own row — `--plan` has **no producer**: no prompt,
+  command, skill or routing surface in any of the four editions passes it, and nothing outside a test
+  fixture authors a `workflow-plan.md` for its argument to name. No behaviour, script or test changed.
+- **The GitLab/Gitea archive-staging divergence is recorded rather than answered with a sixth finding
+  type (#914).** Those two ports raise six finalize finding types where canonical and Codex raise
+  seven, and the delta is `archive_unstage_failed`. It is **not** being ported: the forges' own
+  `archive_stage_failed` message already names the live-folder consequence the sixth type announces,
+  so a genuine staging failure tells a forge operator everything a canonical operator is told. What
+  `docs/api.md` was missing is the other half — the single unscoped `git add -A 'kaola-workflow/'` is
+  not otherwise equivalent to canonical's two scoped calls, and the three measured differences are
+  **silent successes** (exit 0, `archive_stage: 'staged'`), which is why no additional *failure* type
+  would reach them either. That result is now stated where the five-vs-six count is. No finding type
+  was added and no script changed.
+
 ## [9.2.0] - 2026-08-02
 
 ### Added

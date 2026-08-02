@@ -220,6 +220,23 @@ function buildScrubbedEnvironment(options) {
   return env;
 }
 
+// Which of the caller's allowlisted keys the scrub above writes for itself and therefore skips. The
+// skip stays: a real HOME or TMPDIR in the effective environment re-keys `command_id` per machine, and
+// holding the identity off this particular machine is the whole reason the scrub exists. What was
+// missing is the other half — the request and the behaviour disagreed and no surface said so, on the
+// one flag that can get a HOME-needing tool through the sandbox at all. So the keys are named back to
+// the caller instead of vanishing.
+//
+// Derived by RUNNING the scrub with an empty allowlist rather than from a second copy of the key list,
+// so it cannot drift from the skip it describes — the set is not a constant, the win32 branch taking
+// PATH, SystemRoot, ComSpec, PATHEXT and WINDIR from whichever of them the source environment holds.
+function ignoredDeterministicAllowlist(options) {
+  const opts = options && typeof options === 'object' ? options : {};
+  const allowlist = Array.isArray(opts.allowlist) ? opts.allowlist : [];
+  const written = new Set(Object.keys(buildScrubbedEnvironment(Object.assign({}, opts, { allowlist: [] }))));
+  return [...new Set(allowlist.map(String))].filter(key => written.has(key)).sort();
+}
+
 function digestEnvironment(environment) {
   return Object.keys(environment || {}).sort().map(key => ({ key, value_sha256: sha256(String(environment[key])) }));
 }
@@ -858,13 +875,15 @@ async function runValidation(options, adapters) {
   };
   if (typeof injected.prepare_sandbox === 'function') injected.prepare_sandbox(sandbox);
   else if (!injected.execute && !injected.collect_execution_identity) prepareSandbox(sandbox, explicitSandbox);
-  const environment = buildScrubbedEnvironment({
+  const scrubOptions = {
     source_env: opts.source_env || process.env,
     allowlist: policy.env_allowlist,
     platform: opts.platform,
     isolated_home: sandbox.home,
     isolated_tmp: sandbox.tmp,
-  });
+  };
+  const environment = buildScrubbedEnvironment(scrubOptions);
+  const envAllowlistIgnored = ignoredDeterministicAllowlist(scrubOptions);
   const collectIdentity = injected.collect_execution_identity || (() => collectExecutionIdentity({
     repo_root: repoRoot,
     policy,
@@ -994,8 +1013,14 @@ async function runValidation(options, adapters) {
     },
     runs,
   }, auditRuns);
+  // `env_allowlist_ignored` names the allowlisted keys the sandbox wrote for itself — the caller asked
+  // for them and did not get them, and the receipt is where that answer is owed. It rides BESIDE the
+  // vector, not inside it: `command_id` and `vector_id` hash explicit field lists that this is not in,
+  // so a report about the request never moves the identity the request produced. Empty on the runs that
+  // asked for nothing, which is every run that has no such answer coming.
   const receipt = Object.assign({}, vector, {
     command_identity: commandIdentity,
+    env_allowlist_ignored: envAllowlistIgnored,
     execution_identity_incomparability_classes: Array.isArray(initialIdentity.incomparability_classes)
       ? initialIdentity.incomparability_classes : [],
   });
