@@ -13,9 +13,10 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 - A separate roadmap/research session owns discovering and adding future work to GitHub issues.
 - `workflow-next` fetches GitHub issues and mirrors active implementation work here.
-- After each workflow cycle, refresh this file from issue state.
+- After each `workflow-next` cycle, refresh this file from issue state.
 - Move completed workflow project folders to `kaola-workflow/archive/`.
 - Close linked GitHub issues only after acceptance criteria pass.
+- Keep commit and push as the final Finalization step after docs, issues, roadmap, archive, and metadata are complete.
 
 ### Project rules
 ## The design — read `docs/decisions/0017-the-mission-list.md` first

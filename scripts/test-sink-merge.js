@@ -834,123 +834,6 @@ function buildWorktreeEvidenceFixture(project, issue, opts) {
 // measurement — every file present under the run folder before the move must be present after
 // it — and it still refuses; it is the derived required-set, and only that, which is gone.
 
-// --------------------------------------------------------------------------- #711 branchless
-
-// A branchless / in-place fixture: the commit is on main (no feature branch, no worktree). The
-// project folder has branch: TBD + claimed_at: N/A in its workflow-state ## Sink block, mirroring a
-// prior research session that pre-created the folder without a claim. The sink must complete the
-// branchless path: push main, close the issue, archive the project, record branch_mode:'branchless'.
-function buildBranchlessFixture(project, issue) {
-  const tmpRoot = makeTmpRoot();
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
-  const logFile = path.join(binDir, 'gh-calls.log');
-  const remotePath = initGitRepoWithBareRemote(tmpRoot);
-  writeGhMock(binDir, logFile);
-
-  // main: roadmap source + mirror.
-  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
-  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
-  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
-  git(tmpRoot, ['add', 'kaola-workflow']);
-  git(tmpRoot, ['commit', '-m', 'chore: roadmap']);
-  git(tmpRoot, ['push', 'origin', 'main']);
-
-  // in-place run: project folder + deliverable committed STRAIGHT TO MAIN (no feature branch).
-  const liveDir = path.join(tmpRoot, 'kaola-workflow', project);
-  fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
-  // workflow-state ## Sink carries branch: TBD + claimed_at: N/A (the branchless signature).
-  const stateLines = [
-    '# Kaola-Workflow State', '',
-    '## Project', 'name: ' + project, 'status: active', '',
-    '## Current Position', 'phase: adaptive', 'runtime: opencode', 'step: start', '',
-    '## Last Updated', new Date().toISOString(), '',
-    '## Sink',
-    'branch: TBD',
-    'issue_number: ' + issue,
-    'sink: merge',
-    'run_posture: in-place',
-    'main_root: (test)',
-    'session_marker: test-session',
-    'claim_ts: ' + new Date().toISOString(),
-    'claimed_at: N/A',
-  ];
-  fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), stateLines.join('\n') + '\n');
-  fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'), '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n');
-  // ledger with one complete node + its evidence (the #707 requireNodeEvidence gate).
-  fs.writeFileSync(path.join(liveDir, 'workflow-plan.md'), runPlanDoc('branchless run'));
-  fs.writeFileSync(path.join(liveDir, '.cache', 'n1.md'), '# n1 evidence\n\nverdict: pass\n');
-  fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'branchless deliverable\n');
-  git(tmpRoot, ['add', '-A']);
-  git(tmpRoot, ['commit', '-m', 'feat: in-place deliverable (branchless)']);
-  // NOTE: deliberately NOT pushed yet — the sink's push_main step must publish main.
-  return { tmpRoot, remotePath, binDir, logFile, branch: 'TBD', projectName: project };
-}
-
-(function testBranchlessInPlaceSink() {
-  console.log('Test (#711): branchless / in-place sink — --branch TBD with --sink completes without a feature branch (push main + close + archive)');
-  const project = 'issue-71101';
-  const issue = 71101;
-  const fx = buildBranchlessFixture(project, issue);
-  try {
-    // (1) --branch TBD WITHOUT --sink must refuse (branch_tbd_requires_sink).
-    const noSink = spawnSync(process.execPath,
-      [sinkMergeScript, '--branch', 'TBD', '--project', project, '--issue', String(issue), '--json'],
-      { cwd: fx.tmpRoot, encoding: 'utf8', timeout: 90000,
-        env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKFLOW_SKIP_TESTGATE: '1', KAOLA_GH_MOCK_SCRIPT: path.join(fx.binDir, 'gh.js') }) });
-    const noSinkOut = lastJson(noSink);
-    assert(noSink.status !== 0 && noSinkOut && noSinkOut.reason === 'branch_tbd_requires_sink',
-      '#711: --branch TBD without --sink must refuse branch_tbd_requires_sink; got status=' + noSink.status + ' reason=' + JSON.stringify(noSinkOut && noSinkOut.reason));
-
-    // Capture pre-sink main HEAD (the in-place commit, not yet on remote).
-    const preMainHead = git(fx.tmpRoot, ['rev-parse', 'main']).stdout.trim();
-    const remoteMainBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
-    assert(preMainHead !== remoteMainBefore,
-      '#711: pre-sink main must be AHEAD of origin/main (the in-place commit is local-only)');
-
-    // (2) --branch TBD WITH --sink completes the branchless sink.
-    const result = runSink(fx, ['--issue', String(issue)]);
-    const out = lastJson(result);
-
-    assert(result.status === 0, '#711: branchless sink exits 0; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-    assert(out && out.status === 'sinked', '#711: status must be sinked; got ' + JSON.stringify(out && out.status));
-
-    // branch_mode recorded in the receipt.
-    const receipt = out && out.receipt;
-    assert(receipt && receipt.branch_mode === 'branchless',
-      '#711: receipt.branch_mode must be "branchless"; got ' + JSON.stringify(receipt && receipt.branch_mode));
-
-    // main was PUSHED (the in-place commit reached the remote). The archive_commit step adds a
-    // further commit, so check the pre-sink commit is an ANCESTOR of origin/main (not equality).
-    const remoteMainAfter = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
-    const ancestry = git(fx.tmpRoot, ['merge-base', '--is-ancestor', preMainHead, 'origin/main']);
-    assert(ancestry.status === 0 && remoteMainAfter !== remoteMainBefore,
-      '#711: push_main must publish the in-place commit to origin/main (pre-sink HEAD must be an ancestor of the new origin/main)');
-
-    // the issue was CLOSED.
-    const log = readLog(fx.logFile);
-    assert(log.some(l => l === 'close:' + issue),
-      '#711: the issue must be closed by the branchless sink; log=' + JSON.stringify(log));
-
-    // the project folder was archived (no longer live).
-    assert(!fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow', project)),
-      '#711: the live project folder must be archived (moved to archive/)');
-    const archRel = (receipt && receipt.archive_dest) || ('kaola-workflow/archive/' + project);
-    assert(catFileType(fx.tmpRoot, 'HEAD:' + archRel) === 'tree',
-      '#711: the archive must be committed at HEAD');
-
-    // main checkout is CLEAN post-sink (no residual untracked/staged state).
-    const status = git(fx.tmpRoot, ['status', '--porcelain']).stdout.trim();
-    assert(status === '',
-      '#711: main checkout must be clean post-sink; got ' + JSON.stringify(status));
-
-    // roadmap source removed + mirror regenerated (issue closed).
-    assert(catFileType(fx.tmpRoot, 'HEAD:kaola-workflow/.roadmap/issue-' + issue + '.md') === null,
-      '#711: the closed issue roadmap source must be removed at HEAD');
-  } finally {
-    cleanup(fx);
-  }
-})();
-
 // --------------------------------------------------------------------------- (k)/(l)/(m) #715
 
 (function testSiblingArchiveReceiptExemptAndUntouched() {
@@ -3937,21 +3820,14 @@ function assertJournalsNeverReachHistory906(label, sinkScript, project, issue, m
 
 // --------------------------------------------------------------------------- #912 preflight guard
 
-// #912: WHEN sinkPreflight asserts a clean worktree, stated once for every edition.
+// #912: HOW sinkPreflight asserts a clean worktree, stated once for every edition.
 //
-//   A BRANCHLESS / in-place run (--branch TBD, #711) committed straight to the default branch. No
-//   feature branch and no linked worktree exist, so there is nothing for the worktree-clean guard to
-//   protect and the guard does not run. A run WITH a feature branch keeps the guard exactly as it
-//   is: a dirty linked worktree refuses, and an unprobeable one refuses too (fail closed).
+//   Every run goes through the guard. A dirty linked worktree refuses, and an unprobeable one
+//   refuses too (fail closed) — "we could not verify" is never "there is nothing there".
 //
 // This is the expectation the GitLab and Gitea suites pin for their own copies (they cannot require
 // across trees, so each edition states it in its own suite rather than importing one). The arms here
 // cover the two copies those suites cannot reach.
-//
-// Why the branchless half is not academic: assertWorktreeClean fails closed on a `git worktree list`
-// probe fault BEFORE it matches any branch, so calling it unconditionally on a branchless run is not
-// harmless — the absence of a worktree on branch 'TBD' never gets a chance to save it, and a
-// transient enumeration fault refuses a sink that has nothing to lose.
 //
 // The fault comes from the script's own KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL hook (#506), so what is
 // exercised is the probe the shipped guard already runs. KAOLA_WORKFLOW_SINK_ABORT_AFTER=preflight
@@ -3966,19 +3842,6 @@ function assertPreflightGuardScope912(label, script) {
     '## Project', 'name: ' + project, 'status: active', '',
     '## Sink', 'branch: ' + branch, 'issue_number: ' + issue, 'sink: merge', ''
   ].join('\n') + '\n';
-
-  const mkBranchless = (project, issue) => {
-    const tmpRoot = makeTmpRoot();
-    const remotePath = initGitRepoWithBareRemote(tmpRoot);
-    const dir = path.join(tmpRoot, 'kaola-workflow', project);
-    fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(dir, 'workflow-state.md'), state912(project, 'TBD', issue));
-    fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n');
-    fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'in-place deliverable\n');
-    git(tmpRoot, ['add', '-A']);
-    git(tmpRoot, ['commit', '-m', 'feat: in-place deliverable (branchless)']);
-    return { tmpRoot, remotePath, project, issue, branch: 'TBD', wt: null };
-  };
 
   const mkBranched = (project, issue, dirty) => {
     const tmpRoot = makeTmpRoot();
@@ -4026,20 +3889,9 @@ function assertPreflightGuardScope912(label, script) {
   };
 
   // Same arm lettering as the GitLab and Gitea suites carry, so one expectation reads the same in
-  // all three: controls first, the branchless-under-fault arm last.
+  // all three.
 
-  // (a) the branchless fixture with no probe fault — (e)'s attribution control.
-  {
-    const fx = mkBranchless('issue-91201', 91201);
-    try {
-      const r = preflight(fx);
-      assert(r.reason === null && r.exit === PREFLIGHT_PASSED,
-        '#912 (a/' + label + '): a branchless run with no probe fault must pass preflight and refuse nothing — this '
-        + 'is (e)\'s attribution control. Got ' + r.seen);
-    } finally { drop(fx); }
-  }
-
-  // (b) the data-loss guard the branchless exemption must not weaken (#346/#496/#562).
+  // (b) the data-loss guard (#346/#496/#562).
   {
     const fx = mkBranched('issue-91203', 91203, true);
     try {
@@ -4064,39 +3916,24 @@ function assertPreflightGuardScope912(label, script) {
     } finally { drop(fx); }
   }
 
-  // (d) the counter-pin bounding the exemption (#506): a BRANCH-postured run whose probe faults must
-  // still fail CLOSED even though the worktree is clean — unprobeable is "could not verify", never
-  // "nothing there". Deleting the guard, or swallowing the probe fault, satisfies (e) and breaks this.
+  // (d) the fail-closed half of the guard (#506): a run whose probe faults must still refuse even
+  // though the worktree is clean — unprobeable is "could not verify", never "nothing there".
+  // Swallowing the probe fault leaves (b) and (c) green and breaks this one.
   {
     const fx = mkBranched('issue-91204', 91204, false);
     try {
       const r = preflight(fx, { KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL: '1' });
       assert(r.reason === 'worktree_dirty',
-        '#912 (d/' + label + '): a branch-postured run whose worktree-list probe faults must STILL refuse '
-        + 'worktree_dirty (fail closed) — the branchless exemption is scoped to --branch TBD and must not disarm '
-        + 'the guard for runs that do have a worktree. Got ' + r.seen);
+        '#912 (d/' + label + '): a run whose worktree-list probe faults must STILL refuse worktree_dirty '
+        + '(fail closed) — a transient enumeration fault is not evidence that there is no worktree to '
+        + 'protect. Got ' + r.seen);
       assert(fs.existsSync(fx.wt),
         '#912 (d/' + label + '): the fail-closed refusal must leave the linked worktree in place');
     } finally { drop(fx); }
   }
-
-  // (e) branchless + worktree-list probe fault → the guard does not apply, so nothing refuses.
-  {
-    const fx = mkBranchless('issue-91201', 91201);
-    try {
-      const r = preflight(fx, { KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL: '1' });
-      assert(r.reason !== 'worktree_dirty',
-        '#912 (e/' + label + '): a branchless run (--branch TBD) has no feature branch and no linked worktree, so a '
-        + 'transient `git worktree list` probe fault must NOT produce the worktree_dirty refusal — there is no '
-        + 'uncommitted work behind a worktree that does not exist. Got ' + r.seen);
-      assert(r.exit === PREFLIGHT_PASSED,
-        '#912 (e/' + label + '): the branchless preflight must pass through to the next step (exit ' + PREFLIGHT_PASSED
-        + ' is KAOLA_WORKFLOW_SINK_ABORT_AFTER=preflight firing after preflight recorded done). Got ' + r.seen);
-    } finally { drop(fx); }
-  }
 }
 
-// Root and codex only. The GitLab and Gitea copies are pinned by the same five arms inside their own
+// Root and codex only. The GitLab and Gitea copies are pinned by the same three arms inside their own
 // suites, which is where a forge-only diff's own chain will run them.
 [
   ['root', path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js')],
@@ -4109,12 +3946,122 @@ function assertPreflightGuardScope912(label, script) {
   assertPreflightGuardScope912(label, script);
 });
 
+// --------------------------------------------------------------------------- #923 a branch that is not there
+
+// A `--branch` naming a ref that DOES NOT EXIST must never be silently accepted.
+//
+// The sink verifies no branch into existence — there is no `show-ref`, no `rev-parse --verify`, no
+// `branch_missing` anywhere in it — so "the named branch is not there" is only ever discovered
+// downstream, by an operation that needs the ref and cannot get it. That is enough, but only as
+// long as it stays loud: a run that reported status:sinked over a branch that never existed would
+// have closed the issue and published the run record on the strength of a merge that never
+// happened. Nothing else in this corpus feeds the sink a name with no ref behind it.
+//
+// TWO ARMS, ONE ASSERTION SET, and the pairing is the point. The control arm names an obviously
+// absent branch and holds the general property. The 'TBD' arm holds that TBD is NOT a special
+// value: it is a name like any other, and it buys no exemption from the control's outcome. Held to
+// one assertion set so neither can end up guarded more weakly than the other.
+//
+// The fixture is deliberately self-contained (it shares only the module-level helpers): the run it
+// stands up — a live folder and a deliverable committed straight to the default branch, with a
+// workflow-state whose recorded branch has no ref — is the shape that produces this input in the
+// field, and this pin must not depend on a fixture built for anything else.
+function buildInPlaceFixture923(project, issue, recordedBranch) {
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  writeGhMock(binDir, logFile);
+
+  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
+  git(tmpRoot, ['add', 'kaola-workflow']);
+  git(tmpRoot, ['commit', '-m', 'chore: roadmap']);
+  git(tmpRoot, ['push', 'origin', 'main']);
+
+  const liveDir = path.join(tmpRoot, 'kaola-workflow', project);
+  fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), [
+    '# Kaola-Workflow State', '',
+    '## Project', 'name: ' + project, 'status: active', '',
+    '## Current Position', 'phase: adaptive', 'runtime: claude', 'step: start', '',
+    '## Last Updated', new Date().toISOString(), '',
+    '## Sink',
+    'branch: ' + recordedBranch,
+    'issue_number: ' + issue,
+    'sink: merge',
+    'run_posture: in-place',
+    'main_root: (test)',
+    'session_marker: test-session',
+    'claim_ts: ' + new Date().toISOString(),
+  ].join('\n') + '\n');
+  fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'), '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n');
+  fs.writeFileSync(path.join(liveDir, 'workflow-plan.md'), runPlanDoc('in-place run'));
+  fs.writeFileSync(path.join(liveDir, '.cache', 'n1.md'), '# n1 evidence\n\nverdict: pass\n');
+  fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'in-place deliverable\n');
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'feat: in-place deliverable']);
+  // Deliberately NOT pushed: origin/main sitting BEHIND local main is what makes "the sink
+  // published anyway" observable at all.
+  return { tmpRoot, remotePath, binDir, logFile, branch: recordedBranch, projectName: project };
+}
+
+function assertMissingBranchIsNotSilentlyAccepted923(arm, project, issue) {
+  const fx = buildInPlaceFixture923(project, issue, arm.branch);
+  try {
+    const remoteMainBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+    const localMainBefore = git(fx.tmpRoot, ['rev-parse', 'main']).stdout.trim();
+    assert(localMainBefore !== remoteMainBefore,
+      '#923 (' + arm.label + ') precondition: local main must start AHEAD of origin/main, or "the sink published '
+      + 'anyway" is unobservable and every assertion below passes for the wrong reason');
+    assert(git(fx.tmpRoot, ['rev-parse', '--verify', '--quiet', arm.branch + '^{commit}']).status !== 0,
+      '#923 (' + arm.label + ') precondition: no ref named ' + arm.branch + ' may exist in the fixture — this pin '
+      + 'measures a branch that is NOT there');
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+    const seen = 'exit=' + result.status + ' envelope=' + JSON.stringify(out)
+      + '\nstderr: ' + String(result.stderr || '').slice(-800);
+
+    assert(result.status !== 0,
+      '#923 (' + arm.label + '): a --branch naming a ref that does not exist must exit NON-ZERO. ' + seen);
+    assert(!(out && (out.status === 'sinked' || out.result === 'ok')),
+      '#923 (' + arm.label + '): a --branch naming a ref that does not exist must NEVER reach status:sinked — that '
+      + 'reports a merge that could not have happened. ' + seen);
+    assert(!readLog(fx.logFile).some(l => l === 'close:' + issue),
+      '#923 (' + arm.label + '): no issue may be closed over a branch that does not exist. gh log='
+      + JSON.stringify(readLog(fx.logFile)));
+    assert(git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim() === remoteMainBefore,
+      '#923 (' + arm.label + '): origin/main must not advance — nothing was verifiably merged. ' + seen);
+    assert(fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow', project)),
+      '#923 (' + arm.label + '): the live project folder must survive — a run that did not complete must stay '
+      + 'resumable, not be archived out from under itself. ' + seen);
+    assert(((result.stdout || '') + (result.stderr || '')).includes(arm.branch),
+      '#923 (' + arm.label + '): the stop must NAME the branch it could not find, or the operator cannot tell a '
+      + 'missing ref from any other sink fault. ' + seen);
+  } finally {
+    cleanup(fx);
+  }
+}
+
+(function testMissingBranchIsNeverSilentlyAccepted() {
+  console.log('Test (#923): a --branch naming a ref that does not exist is never silently accepted — it exits non-zero, never reports sinked, closes no issue, advances no remote, and names the branch; TBD is not exempt');
+  // CONTROL first: an obviously absent name. It establishes that the assertion set is satisfiable
+  // and that the fixture is sound, so the arm below is attributable to the VALUE of the branch.
+  assertMissingBranchIsNotSilentlyAccepted923(
+    { label: 'control/absent-name', branch: 'workflow/never-created' }, 'issue-92301', 92301);
+  // THE ARM: the same input with the name 'TBD'.
+  assertMissingBranchIsNotSilentlyAccepted923(
+    { label: 'TBD', branch: 'TBD' }, 'issue-92302', 92302);
+})();
+
 // --------------------------------------------------------------------------- summary
 
 if (failed === 0) {
-  console.log('\nSink-merge (#694/#700/#705/#707/#711/#715/#746/#832/#893) test suite passed: ' + passed + ' assertions.');
+  console.log('\nSink-merge (#694/#700/#705/#707/#715/#746/#832/#893/#923) test suite passed: ' + passed + ' assertions.');
   process.exit(0);
 } else {
-  console.error('\nSink-merge (#694/#700/#705/#707/#711/#715/#746/#832/#893) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
+  console.error('\nSink-merge (#694/#700/#705/#707/#715/#746/#832/#893/#923) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
   process.exit(1);
 }

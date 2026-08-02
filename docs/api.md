@@ -337,14 +337,14 @@ not support it.
 |---|---|
 | `archive_stage` | `skipped` (default) \| `staged` \| `failed`. Covers the archive bookkeeping — the `git rm -r --cached` of the live run folder and the `git add` of the archive paths. A failure here means the branch may still carry the live folder that `chore: archive` exists to remove |
 | `archive_stage_detail` | git's own message on `failed` |
-| `archive_unstaged` | the archive paths that did not stage, capped at 50 |
+| `archive_unstaged` | **canonical and Codex only** — the GitLab and Gitea ports raise `archive_stage_failed` without this field. The archive paths that did not reach the index, capped at 50. Read back **from the index** after the failed `git add`, never inferred from its exit code: a gitignored path beside an addable one exits non-zero having staged the addable one, so the attempted list is not the unstaged list. Absent entirely when that read itself failed, because the honest answer is then to say nothing |
 | `roadmap_staged` | now derived from the **outcome** of the archive `git add`, not from the paths merely existing on disk. It was `true` whenever the files were present, which is a statement about the filesystem where a statement about the index was owed |
 | `archive_commit_probe` | `failed` when the archive's `git diff --cached --quiet` exited neither 0 nor 1. Exit 1 means "something is staged" and 0 means "nothing is"; anything else is git failing, and reading it as "nothing" is how a fault became a success |
 | `archive_commit_probe_detail` | git's own message |
 | `residue_stage` | `skipped` (default — no residue to stage) \| `staged` \| `failed` \| **`unprobeable`**. The last is new and is not `skipped`: the `git status --porcelain` that enumerates the residue itself failed, so the run cannot say there was nothing to stage |
 | `residue_stage_detail` | git's own message on `failed`. Also re-emitted on stderr with a `WARNING` prefix, so a terminal reader loses nothing the previously-inherited stderr showed |
 | `residue_probe_detail` | git's own message on `unprobeable` |
-| `residue_unstaged` | the paths that did not stage, capped at 50 |
+| `residue_unstaged` | the paths that did not reach the index, capped at 50 — present on **all four editions**. Read back from the index on the same basis as `archive_unstaged`, and absent when that read failed |
 | `finalize_commit_probe` | `failed` when the finalize commit's `git diff --cached --quiet` exited neither 0 nor 1 |
 | `finalize_commit_probe_detail` | git's own message |
 | `findings` | the **de-duplicated list of typed fault names** raised anywhere in the block: `archive_unstage_failed`, `archive_stage_failed`, `archive_commit_probe_failed`, `residue_probe_failed`, `residue_stage_failed`, `finalize_commit_probe_failed`, `main_roadmap_mirror_not_regenerated`. Absent or empty on a healthy run |
@@ -366,23 +366,27 @@ silence being converted here.
 **The exit stays 0 on all of it** — this is report, not refuse — and none of these fields fires on a
 healthy run: a good finalize reports `staged`/`staged`/`committed` with no `findings`.
 
-**One edition difference, pre-existing and larger than these fields.** The GitLab and Gitea ports
-stage the archive with a single unscoped `git add -A 'kaola-workflow/'` — no `git rm -r --cached`,
-no candidate-path list — so they raise **six** finding types where canonical and Codex raise
-**seven**. The delta is exactly one, `archive_unstage_failed`, which can only exist where there is a
-`git rm -r --cached` to fail; `archive_stage` on those two editions therefore covers that one call
-rather than the two the row above describes. The conversion was applied to the shape those ports
-actually have; the underlying staging divergence is older than this change and is not closed by it.
+**One edition difference in the finding-type count.** The GitLab and Gitea ports raise **six** finding
+types where canonical and Codex raise **seven**. The delta is exactly one, `archive_unstage_failed`.
+All four editions now stage the archive the same way — a `git rm -r --cached` of the live run folder
+followed by a scoped `git add` of a computed candidate-path list — but the forge ports run both calls
+inside **one** try/catch, so a fault in either raises the single `archive_stage_failed`, while
+canonical isolates them and can name which of the two failed.
 
-**`archive_unstage_failed` is not owed to the forges — and the one call is not otherwise
-equivalent.** The forge `archive_stage_failed` message already names the live-folder consequence
-`archive_unstage_failed` announces, so a genuine failure loses nothing. What the single call does
-differently, measured, is *succeed* where canonical does not: a `.gitignore`d child under
-`kaola-workflow/` is silently skipped where canonical's explicit pathspec exits 1; a live run folder
-that survives on disk is re-added rather than forced out of the index, so it stays on the branch; and
-a foreign project's live folder or archive band is swept into the `chore: archive` commit — an open
-divergence tracked separately in issue #922. All three exit 0 and record `archive_stage: 'staged'`,
-so no additional *failure* type would name them either.
+**`archive_unstage_failed` is still not owed to the forges.** Their `archive_stage_failed` message
+already names the live-folder consequence `archive_unstage_failed` announces, so a genuine failure
+loses nothing — the operator learns the branch may still carry the live folder either way, and only
+the attribution between the two calls is coarser.
+
+**The staging divergence itself is closed (#922).** The forge ports previously used a single unscoped
+`git add -A 'kaola-workflow/'` with no `git rm -r --cached` and no candidate list. That shape's
+failure modes were all *successes* — exit 0 with `archive_stage: 'staged'` — which is why no
+additional *failure* type would have reached them: a `.gitignore`d child under `kaola-workflow/` was
+silently skipped where canonical's explicit pathspec exits non-zero; a live run folder surviving on
+disk was re-added rather than forced out of the index, so it stayed on the branch; and a **foreign
+project's live folder or archive band was swept into the `chore: archive` commit**, making neither
+run's diff attributable on a checkout with concurrent runs. Scoping the pathspec is what closed all
+three; adding a finding type never could have.
 
 **Opt-in exit gate.** The JSON is always emitted and the exit is 0 by default. Pass `--strict` to
 make the exit code reflect the invariant verdict: **exit 4** when `closure_invariants.ok === false`.

@@ -1546,12 +1546,6 @@ function repoWideIgnoredNames(root, rels) {
 // { ok: false, reason: 'worktree_dirty', detail } on the #562 dirty/unprobeable worktree guard.
 // INVARIANT: if foreign_dirt is non-empty, NO mutation occurs.
 function sinkPreflight(mainRoot, project, branch, issueNumbers) {
-  // #711: branchless / in-place run (branch === 'TBD'). The run committed straight to main (no
-  // feature branch, no worktree), so the worktree-clean guard and the branch-keyed duplicate check
-  // do not apply. The foreign-dirt scan + roadmap-source stash still apply (we never sink a dirty
-  // main). For projDuplicates, key on defBranch (the commit IS on main/defBranch) instead of the
-  // nonexistent feature branch.
-  const branchless = branch === 'TBD';
   // #562: worktree-clean data-loss guard — mirror the legacy path's assertWorktreeClean (:1461). The
   // --sink merge step force-removes the linked worktree (removeWorktree → `git worktree remove --force`)
   // with NO clean precondition, so a dirty worktree's uncommitted work would be silently destroyed — the
@@ -1559,13 +1553,10 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
   // dirty OR unprobeable worktree (fail-closed); convert that to the typed refusal sinkPreflight returns
   // so runSinkTransaction's preflight handler surfaces result:'refuse' + exit 1 with ZERO mutation.
   // Resume-safe: an already-removed worktree matches no `worktree list` block and returns cleanly.
-  // #711: skipped for a branchless run (no worktree exists — the run was in-place on main).
-  if (!branchless) {
-    try {
-      assertWorktreeClean(mainRoot, branch, [project]);
-    } catch (err) {
-      return { ok: false, reason: 'worktree_dirty', detail: err.message };
-    }
+  try {
+    assertWorktreeClean(mainRoot, branch, [project]);
+  } catch (err) {
+    return { ok: false, reason: 'worktree_dirty', detail: err.message };
   }
 
   const porcelain = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '-uall'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
@@ -1636,13 +1627,10 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
       'kaola-workflow/' + project + '/.cache/dispatch-log.jsonl'
     ];
     if (xy === '??' && projStateFiles.includes(filePath)) {
-      // Verify byte-superset: the branch must carry this file. #711: for a branchless run the
-      // commit is on defBranch (main), so key on HEAD (which is defBranch at sink time) instead of
-      // the nonexistent feature branch.
-      const catKey = branchless ? 'HEAD' : branch;
+      // Verify byte-superset: the branch must carry this file.
       let branchHas = false;
       try {
-        execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', catKey + ':' + filePath],
+        execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', branch + ':' + filePath],
           { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
         branchHas = true;
       } catch (_) {}
@@ -1704,11 +1692,9 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
     // under the archive path is a local edit to committed content, not finalize's mirror.
     const ownArchivePrefix = 'kaola-workflow/archive/' + project + '/';
     if (xy === '??' && filePath.startsWith(ownArchivePrefix)) {
-      // #711: for a branchless run the commit is on defBranch (HEAD at sink time), as bucket 2 does.
-      const archiveKey = branchless ? 'HEAD' : branch;
       let branchHasPath = false;
       try {
-        execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', archiveKey + ':' + filePath],
+        execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', branch + ':' + filePath],
           { stdio: ['ignore', 'ignore', 'ignore'] });
         branchHasPath = true;
       } catch (_) {}
@@ -1830,13 +1816,6 @@ function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) 
 // #429: the main --sink transaction.
 function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   const args = rawArgs;
-  // #711: branchless / in-place adaptive run. The commit is already on main (no feature branch,
-  // no worktree). The merge + push_upstream steps are no-ops; the closure ancestry check + the
-  // post-loop freshness guard + the worktree/branch teardown are skipped (there is nothing to
-  // merge, push-upstream, verify as a published branch, or tear down). push_main + closure +
-  // finalize + archive_commit run as normal so the in-place commit reaches the remote, the issue
-  // closes, and the project folder archives.
-  const branchless = args.branch === 'TBD';
 
   // Resolve the receipt path and load/init the receipt.
   // newCycle=true means loadOrInitReceipt detected a stale prior-cycle receipt and reinit'd — the
@@ -1845,7 +1824,6 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   const loaded = loadOrInitReceipt(mainRoot, args.project, args.branch,
     args.issue, args.issueNumbers, defBranch, args.keepIssueOpen);
   const { receipt, newCycle } = loaded;
-  if (branchless) receipt.branch_mode = 'branchless';
   // Reassignable: the finalize step's archiveProjectDir renames the live folder (receipt included)
   // into the archive dest — every later write must follow it there, or writeSinkReceipt's mkdirSync
   // resurrects a phantom empty live .cache/ and the authoritative receipt forks from the archive.
@@ -1940,9 +1918,6 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
     }
 
     if (step === 'push_upstream') {
-      // #711: branchless run has no feature branch to push — the commit is already on main. The
-      // push_main step below publishes main. Mark this step done as a no-op.
-      if (branchless) { stepDone('push_upstream'); continue; }
       // Push the feature branch to upstream (idempotent)
       if (!OFFLINE) {
         try {
@@ -1987,10 +1962,6 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
     }
 
     if (step === 'merge') {
-      // #711: branchless run — the commit is already on main (no feature branch, no worktree). The
-      // merge is a no-op: no worktree to remove, no feature branch to checkout, no rebase, no
-      // ff-merge. main already carries the deliverable; push_main below publishes it.
-      if (branchless) { stepDone('merge'); continue; }
       // #619(4): capture (stage) the linked worktree's project folder BEFORE removing the
       // worktree, then land the staged copy into mainRoot only AFTER checkout — and only when the
       // branch itself does NOT already track kaola-workflow/<project>/ there. The old code ran a
@@ -2662,52 +2633,41 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       // commits, orphaning the pre-rebase SHA even though the (rebased) content did land on
       // defBranch. The branch ref itself still exists at this point (teardown runs only after
       // the whole step loop completes), so re-resolving it here is safe and always current.
-      // #711: a branchless run (branch === 'TBD') commits straight to main, so the publish
-      // verification is trivially satisfied — the implementation commit IS defBranch's HEAD. Mark
-      // verified + stamp published_head from defBranch so the closure step + downstream callers
-      // proceed without the (nonexistent) feature-branch ancestry probe.
-      if (branchless) {
-        let headRef = null;
-        try { headRef = execFileSync('git', ['-C', mainRoot, 'rev-parse', defBranch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) {}
-        receipt.remote_closed_after_publish = 'verified';
-        if (headRef) receipt.published_head = headRef;
-      } else {
-        let implRef = null;
+      let implRef = null;
+      try {
+        implRef = execFileSync('git', ['-C', mainRoot, 'rev-parse', args.branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      } catch (_) {}
+      let published = false;
+      if (implRef) {
         try {
-          implRef = execFileSync('git', ['-C', mainRoot, 'rev-parse', args.branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-        } catch (_) {}
-        let published = false;
-        if (implRef) {
-          try {
-            execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', implRef, defBranch], { encoding: 'utf8', stdio: 'ignore' });
-            published = true;
-          } catch (_) { published = false; }
-        }
-        receipt.remote_closed_after_publish = published ? 'verified' : 'failed';
-        if (published) {
-          // #631: stamp a NEW, ADDITIVE published_head once the live tip resolves as published —
-          // this NEVER mutates branch_head (stamped once at receipt init; load-bearing for the
-          // #518 cycle-identity guard). branch_head can go stale after doRebase rewrites the
-          // branch's commits (a mid-flight rebase orphans the pre-rebase SHA even though the
-          // rebased content did land on defBranch); published_head is the FRESH tip resolved
-          // here, letting a caller (cmdVerifySink) distinguish a rebased-but-genuinely-published
-          // branch from a truly unpublished one without disturbing branch_head.
-          receipt.published_head = implRef;
-        }
-        if (!published) {
-          receipt.updated_at = new Date().toISOString();
-          writeSinkReceipt(receiptPath, receipt);
-          sinkEmit({
-            result: 'refuse',
-            reason: 'remote_closed_after_publish_unverified',
-            branch: args.branch,
-            default_branch: defBranch,
-            detail: 'refusing to close any issue: the recorded implementation commit (' + (implRef || '(unknown)') +
-              ') is not an ancestor of ' + defBranch + ' — the merge was never verified as actually published. ' +
-              'No issue was closed. The closure step is left NOT done so a re-run retries it once the merge state is resolved.',
-          }, 1);
-          return;
-        }
+          execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', implRef, defBranch], { encoding: 'utf8', stdio: 'ignore' });
+          published = true;
+        } catch (_) { published = false; }
+      }
+      receipt.remote_closed_after_publish = published ? 'verified' : 'failed';
+      if (published) {
+        // #631: stamp a NEW, ADDITIVE published_head once the live tip resolves as published —
+        // this NEVER mutates branch_head (stamped once at receipt init; load-bearing for the
+        // #518 cycle-identity guard). branch_head can go stale after doRebase rewrites the
+        // branch's commits (a mid-flight rebase orphans the pre-rebase SHA even though the
+        // rebased content did land on defBranch); published_head is the FRESH tip resolved
+        // here, letting a caller (cmdVerifySink) distinguish a rebased-but-genuinely-published
+        // branch from a truly unpublished one without disturbing branch_head.
+        receipt.published_head = implRef;
+      }
+      if (!published) {
+        receipt.updated_at = new Date().toISOString();
+        writeSinkReceipt(receiptPath, receipt);
+        sinkEmit({
+          result: 'refuse',
+          reason: 'remote_closed_after_publish_unverified',
+          branch: args.branch,
+          default_branch: defBranch,
+          detail: 'refusing to close any issue: the recorded implementation commit (' + (implRef || '(unknown)') +
+            ') is not an ancestor of ' + defBranch + ' — the merge was never verified as actually published. ' +
+            'No issue was closed. The closure step is left NOT done so a re-run retries it once the merge state is resolved.',
+        }, 1);
+        return;
       }
       // Close issue(s) — reuse postMergeCleanup's probe-before-close (#427) + bundle close (#369).
       // OFFLINE: skip.
@@ -2794,24 +2754,20 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   // OFFLINE-safe: the merge step merges into the LOCAL defBranch, so ancestry holds regardless of
   // push_main. A non-ancestor (or a branch that no longer exists) is a stale / never-applied receipt →
   // typed refusal stale_sink_receipt; never a false status:sinked.
-  // #711: skipped for a branchless run — there is no feature branch whose ancestry could be probed;
-  // the commit IS defBranch's HEAD by construction (the in-place run committed straight to main).
-  if (!branchless) {
-    let merged = false;
-    try {
-      execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', args.branch, defBranch], { encoding: 'utf8', stdio: 'ignore' });
-      merged = true;
-    } catch (_) { merged = false; }
-    if (!merged) {
-      sinkEmit({
-        result: 'refuse',
-        reason: 'stale_sink_receipt',
-        branch: args.branch,
-        default_branch: defBranch,
-        detail: 'all sink steps report "done" but branch "' + args.branch + '" is NOT an ancestor of "' + defBranch + '" — the merge was never applied (a stale receipt resumed from kaola-workflow/archive/' + args.project + '/.cache/sink-receipt.json). Refusing to report status:sinked (main would silently not advance and the deliverable would be lost). Reset the receipt steps or remove the stale archived sink-receipt.json, then re-run --sink so the branch actually merges.',
-      }, 1);
-      return;
-    }
+  let merged = false;
+  try {
+    execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', args.branch, defBranch], { encoding: 'utf8', stdio: 'ignore' });
+    merged = true;
+  } catch (_) { merged = false; }
+  if (!merged) {
+    sinkEmit({
+      result: 'refuse',
+      reason: 'stale_sink_receipt',
+      branch: args.branch,
+      default_branch: defBranch,
+      detail: 'all sink steps report "done" but branch "' + args.branch + '" is NOT an ancestor of "' + defBranch + '" — the merge was never applied (a stale receipt resumed from kaola-workflow/archive/' + args.project + '/.cache/sink-receipt.json). Refusing to report status:sinked (main would silently not advance and the deliverable would be lost). Reset the receipt steps or remove the stale archived sink-receipt.json, then re-run --sink so the branch actually merges.',
+    }, 1);
+    return;
   }
 
   // #694: keep-open END-STATE guard — the keep-open mirror of the remote_closed_after_publish
@@ -2868,29 +2824,21 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
     }
   }
 
-  // All steps done — remove the worktree. #711: skipped for a branchless run (no worktree exists —
-  // the run was in-place on main, so there is nothing to remove).
-  if (!branchless) {
-    try {
-      const { removeWorktree: removeWt, readActiveFolders: readAF } = require('./kaola-workflow-claim.js');
-      const folder = readAF(mainRoot, { excludeClosedIssues: false }).find(f => f.project === args.project);
-      removeWt(mainRoot, args.project, folder);
-    } catch (_) {}
-  }
+  try {
+    const { removeWorktree: removeWt, readActiveFolders: readAF } = require('./kaola-workflow-claim.js');
+    const folder = readAF(mainRoot, { excludeClosedIssues: false }).find(f => f.project === args.project);
+    removeWt(mainRoot, args.project, folder);
+  } catch (_) {}
 
-  // Clean up the feature branch. #711: skipped for a branchless run — there is no feature branch
-  // (branch === 'TBD' is a placeholder, not a real ref); the in-place commit lives on main/defBranch.
-  if (!branchless) {
-    if (!OFFLINE) {
-      try { execFileSync('git', ['-C', mainRoot, 'push', 'origin', '--delete', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
-    }
-    try {
-      execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', args.branch, defBranch],
-        { encoding: 'utf8', stdio: 'ignore' });
-      try { execFileSync('git', ['-C', mainRoot, 'branch', '-D', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
-    } catch (_) {
-      try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
-    }
+  if (!OFFLINE) {
+    try { execFileSync('git', ['-C', mainRoot, 'push', 'origin', '--delete', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
+  }
+  try {
+    execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', args.branch, defBranch],
+      { encoding: 'utf8', stdio: 'ignore' });
+    try { execFileSync('git', ['-C', mainRoot, 'branch', '-D', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
+  } catch (_) {
+    try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
   }
 
   // Emit success
@@ -2909,7 +2857,6 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
 
 const SINK_USAGE = 'usage: kaola-workflow-sink-merge.js --branch B --project P [--issue N] [--issue-numbers A,B] [--keep-issue-open] [--sink]\n'
   + '  --sink         run the full sink TRANSACTION (merge → close → delete branch → remove worktree).\n'
-  + '                 --branch TBD (with --sink only) completes a branchless/in-place run (push main + close).\n'
   + '  --help, -h     print this usage and exit (no side effects).';
 
 function main() {
@@ -2930,28 +2877,11 @@ function main() {
   }
   // #429: detect --sink flag before routing to the transaction.
   const isSinkMode = rawArgv.includes('--sink');
-  // #711: branchless / in-place adaptive run. A prior research session may pre-create the project
-  // folder (claimed_at: N/A, branch: TBD) and the adaptive planner's `owned` verdict preserves TBD,
-  // so the run commits straight to main (no feature branch, no worktree). The legacy assertion
-  // hard-refused `--branch TBD`, forcing a manual `git push origin main` + `gh issue close`. The
-  // branchless path (only valid with --sink) treats the merge as a no-op (commit already on main)
-  // and completes the sink: push main + close issue + archive, recording branch_mode:'branchless'.
-  const isBranchless = args.branch === 'TBD';
-  if (!isBranchless) {
-    assert(
-      args.branch && !args.branch.startsWith('-') && !args.branch.includes('\0') &&
-      args.branch !== '.' && args.branch !== '..',
-      '--branch is invalid'
-    );
-  }
-  if (isBranchless && !isSinkMode) {
-    sinkEmit({
-      result: 'refuse',
-      reason: 'branch_tbd_requires_sink',
-      operator_hint: '--branch TBD (a branchless/in-place run) is only valid with --sink — the legacy non-sink path requires a real feature branch. Re-run with --sink to complete the branchless sink (push main + close issue).',
-      detail: '--branch TBD (a branchless/in-place run) is only valid with --sink',
-    }, 1); return;
-  }
+  assert(
+    args.branch && !args.branch.startsWith('-') && !args.branch.includes('\0') &&
+    args.branch !== '.' && args.branch !== '..',
+    '--branch is invalid'
+  );
   assert(args.project && isSafeName(args.project), '--project must be a safe folder name');
   if (args.issue != null) {
     assert(Number.isFinite(args.issue) && args.issue > 0, '--issue must be a positive integer');

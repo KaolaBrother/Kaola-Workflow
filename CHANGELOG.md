@@ -2,6 +2,72 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **Branchless / in-place runs (`--branch TBD`) are gone from every edition (#923).** The feature let
+  a run that had committed straight to the default branch complete a sink with no feature branch and
+  no worktree. Both producers named in its own comment no longer exist: nothing writes `branch: TBD`
+  — the claim has recorded a real branch name since feature-branch-at-claim-time landed, and
+  `patch-branch` remains only as the migration *away* from the legacy value — and the adaptive
+  planner whose `owned` verdict preserved `TBD` was retired with the DAG. It was never exercised:
+  `branch_mode` appears in no archived receipt across ~373 archived runs, `branch: TBD` in no
+  archived `workflow-state.md`, and `branch_mode` had no reader anywhere — not even `docs/api.md`.
+  The only callers left in the tree were the suites testing it. Removed: eleven guards in canonical
+  and its Codex mirror, the one site each forge port carried, `receipt.branch_mode`, the
+  `branch_tbd_requires_sink` refusal, and the `--help` line — with every test that pinned them
+  deleted alongside, never rewritten to keep passing. **`--branch TBD` is now an ordinary branch
+  name and fails loudly**, measured rather than assumed: online it stops at `push_upstream` with the
+  typed `sink_incomplete` refusal, offline at the merge checkout, both strictly before anything is
+  archived, published or closed — local and remote heads unchanged, no issue closed. Two of three
+  forges already behaved this way, since their sink transaction never carried the feature at all.
+
+### Fixed
+
+- **The GitLab and Gitea archive staging no longer sweeps a foreign project into the commit (#922).**
+  Both ports staged with one unscoped `git add -A 'kaola-workflow/'`, which took whatever else was
+  dirty under that directory — another project's live run folder, another project's archive band —
+  into `chore: archive <project>` **at exit 0**, past both staging guards. It was never a failure, it
+  *succeeded*, which is why no finding type reached it and why no additional type could have: the
+  remedy is the pathspec. Both ports now stage a computed candidate list scoped to the project's own
+  paths, preceded by the `git rm -r --cached` that forces its live folder off the branch — not
+  optional alongside the scoping, because the unscoped `-A` had been re-adding that folder from disk.
+  Both calls share one try/catch, so the single `archive_stage_failed` finding shape is unchanged.
+- **Finalize no longer tells the operator that `git add` is all-or-nothing (#920).** The
+  `archive_stage_failed` and `residue_stage_failed` findings, and their stderr warnings, asserted
+  that `git add` is all-or-nothing over its pathspec list and therefore that *none* of the listed
+  paths was staged. Measured false: a gitignored path beside an addable one exits non-zero having
+  **staged the addable one**, while an unmatched pathspec exits 128 having staged nothing — one case
+  generalized into a property of the command. The findings now state what was measured and read the
+  index instead of inferring it, on all four editions and in both findings. `archive_unstaged` and
+  `residue_unstaged` were assigned the *attempted* list, so on a partial stage they named files that
+  were in the index and in the resulting commit; they now carry the measured set, and are omitted
+  entirely — with the message saying nothing about the staged set — when that read itself fails.
+- **The GitLab and Gitea roadmap generators emit the same rules as canonical (#918).** They carried a
+  four-bullet `Rules` block overlapping canonical's five in only two, with no `workflow-next` bullet
+  and no refresh bullet, and stated source-of-truth in a rule where canonical states it in the
+  header. Their rendered `workflow-init` surfaces already showed canonical's structure, so a consumer
+  followed the surface to create `ROADMAP.md` and that forge's own `generate` then overwrote it with
+  something else. The shared bullets are now one wording across all four editions; the genuinely
+  forge-specific issue-id mapping stays forge-specific. **The same disagreement was present on
+  canonical** — the surfaces promise a sixth bullet no generator wrote — so it is fixed for every
+  edition rather than only the two the issue named.
+- **The GitLab and Gitea claim ports no longer carry a function that cannot run (#919).**
+  `persistExpansionRollupToSummary` and `parseExpansionRecords` survived in both ports after canonical
+  deleted them. Worse than dead: the shared adaptive-schema module stopped exporting
+  `parseExpansionRecords`, so the first statement past the file read threw `TypeError` — swallowed by
+  the function's own `catch (_) { return false; }`, which is why nothing ever saw it. Every path
+  returned `false` and the write it existed to perform was unreachable, so removing it changes
+  nothing observable.
+
+### Changed
+
+- **`docs/api.md` scopes `archive_unstaged` to the editions that emit it (#921).** The field was
+  documented unconditionally but is set only by canonical and Codex; the sibling `residue_unstaged`
+  is genuinely on all four and is now marked as such. The surrounding edition caveat kept its correct
+  six-versus-seven finding-type counts but had explained them by a staging shape #922 replaced in the
+  same release; it now explains them by what is true — the forge ports share one try/catch — and
+  records the three silent successes of the old shape as closed rather than open.
+
 ### Added
 
 - **A failed main-root roadmap rebuild is now recorded instead of swallowed (#916).** Closing from a

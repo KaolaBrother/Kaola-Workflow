@@ -27,7 +27,7 @@ const closureContract = require('./kaola-workflow-closure-contract');
 // parseGoal reads the run's goal (the mission list's H1); the two expansion readers feed the
 // archive rollup line below. All three come from the kernel, so nothing in the finalize/archive
 // path loads a plan reader.
-const { parseGoal, parseExpansionRecords, expansionRecordEfficiency } = adaptiveSchema;
+const { parseGoal } = adaptiveSchema;
 
 const CLAIM_LABEL = forge.CLAIM_LABEL || 'workflow:in-progress';
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
@@ -1997,51 +1997,6 @@ function appendClosureBlock(destDir, fields) {
   } catch (_) { return false; }
 }
 
-// #763: EFFICIENCY EVIDENCE — one ROLLUP line per run, appended to the archived
-// finalization-summary.md, aggregating every expansion point THIS run discharged. Reads the
-// ARCHIVED workflow-plan.md's `## Expansion Records` (already-parsed data — no new parser) and
-// reduces it with the SAME expansionRecordEfficiency the per-expansion evidence line uses (adaptive-
-// node's expand-close), so a run's per-point lines and its one rollup line can never disagree in
-// shape or derivation. A plan with no discharged expansion point (a plain DAG plan, or a spine plan
-// that composed none) writes nothing — presence-guarded like the writers above, never a hollow
-// zero-width line. Idempotent across crash-resume (checks for the heading first) / swallow-on-error.
-function persistExpansionRollupToSummary(destDir) {
-  try {
-    let planContent = '';
-    try { planContent = fs.readFileSync(path.join(destDir, 'workflow-plan.md'), 'utf8'); } catch (_) { return false; }
-    const parsed = parseExpansionRecords(planContent);
-    if (!parsed.discharges || !parsed.discharges.size) return false;
-    const byPoint = new Map();
-    for (const r of parsed.records) {
-      if (!parsed.discharges.has(r.point)) continue;
-      if (!byPoint.has(r.point)) byPoint.set(r.point, []);
-      byPoint.get(r.point).push(r);
-    }
-    if (!byPoint.size) return false;
-    let points = 0;
-    let width = 0;
-    let rework = 0;
-    for (const [, recs] of byPoint) {
-      const eff = expansionRecordEfficiency(recs);
-      points += 1;
-      width += eff.width;
-      rework += eff.rework;
-    }
-    const p = path.join(destDir, 'finalization-summary.md');
-    let s = '';
-    try { s = fs.readFileSync(p, 'utf8'); } catch (_) { /* create-if-absent */ }
-    if (/^## Expansion Rollup$/m.test(s)) return false;
-    // Deliberately a DIFFERENT shape from renderExpansionEfficiencyLine (points/width/rework, no
-    // mode/serializer — those are per-point attributes that do not reduce meaningfully across many
-    // points in one summary line); the per-point lines already live in each point's own evidence
-    // file (.cache/<point>.md) for anyone who needs the mode/serializer breakdown.
-    const block = '## Expansion Rollup\n'
-      + 'expansion rollup: points=' + points + ' width=' + width + ' rework=' + rework + '\n';
-    writeFile(p, s ? (s.trimEnd() + '\n\n' + block) : block);
-    return true;
-  } catch (_) { return false; }
-}
-
 // n5 (#653 finding D3): advisory selection-evidence probe. A file matching selection-evidence.*
 // in either cache dir means the planner's no-target survey docked its selection record (see
 // workflow-next.md § Selection Evidence Docking) before authoring the plan. Advisory
@@ -3825,6 +3780,23 @@ function cmdFinalize() {
   // One wording for a git failure's diagnosis, so the envelope and the archived record say the same
   // thing about the same fault. `stderr` is present only where the call pipes it.
   const gitFaultDetail = e => String((e && (e.stderr || e.message)) || e).trim().slice(0, 1000);
+  // #920: which of `paths` did NOT reach the index, READ from the index rather than assumed. A failed
+  // `git add` says nothing about what it staged: measured on git 2.54.0, a gitignored path beside an
+  // addable one exits 1 having staged the addable one, while an unmatched pathspec exits 128 having
+  // staged nothing. The messages here used to assert `git add` is all-or-nothing over its pathspec
+  // list and name every candidate as unstaged, which is false in the first case and told the operator
+  // to repair an index that already held the file. Returns null when the probe itself fails — the
+  // caller then says nothing about the staged set rather than guessing, which is the honest answer.
+  const pathsNotStaged = (root, paths) => {
+    if (!paths.length) return [];
+    let staged;
+    try {
+      staged = execFileSync('git', ['-C', root, 'diff', '--cached', '--name-only', '--', ...paths],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split('\n').filter(Boolean);
+    } catch (_) { return null; }
+    // A candidate may be a directory, so it counts as staged when anything beneath it staged.
+    return paths.filter(p => !staged.includes(p) && !staged.some(s => s.startsWith(p.replace(/\/$/, '') + '/')));
+  };
   // Worktree dirt this transaction manufactured (Step 8a residue mirror) — subtracted from the
   // implementation probe so the machinery never reads its own mirror as operator dirt.
   let mirroredResiduePaths = [];
@@ -4368,9 +4340,6 @@ function cmdFinalize() {
   // gone by now; every .cache probe below checks the archive candidate first, then live as fallback.
   const liveCacheDir = path.join(root, 'kaola-workflow', args.project, '.cache');
   const archiveCacheDir = result.dest ? path.join(result.dest, '.cache') : null;
-  // #763: the per-run expansion-efficiency rollup line (absent on a plan with no discharged
-  // expansion point — presence-guarded inside the writer).
-  if (result.dest) persistExpansionRollupToSummary(result.dest);
   // n5 (#653 finding D3): advisory selection-evidence probe, using the archive-then-live candidate
   // order (archiveProjectDir already ran).
   closureReceipt.selection_evidence = probeSelectionEvidence([archiveCacheDir, liveCacheDir]);
@@ -4414,10 +4383,32 @@ function cmdFinalize() {
       // longer SILENT. Discarding it left `archive_commit` reporting a disposition while nothing had
       // been staged for it, and the archived record read exactly as clean as a run that staged
       // everything. stderr is piped so git's own line becomes the finding's detail, then re-emitted.
+      // #922: SCOPED to this project's own paths. This was one unscoped `git add -A kaola-workflow/`,
+      // which swept whatever else happened to be dirty under that directory — another project's live
+      // run folder, another project's archive band — into `chore: archive <project>` at exit 0. A
+      // commit spanning two run folders makes neither one's diff attributable, and concurrent runs on
+      // one checkout are a supported posture. Not a failure mode: it SUCCEEDED, which is why no finding
+      // type reached it and why the remedy is the pathspec rather than a new type.
+      // The `git rm -r --cached` is what forces the live run folder OUT of the branch. It is not
+      // optional alongside the scoping: the unscoped `-A` used to re-add that folder from disk, so
+      // narrowing the add on its own would have left it on the branch that `chore: archive` exists to
+      // remove it from. Both calls share one try/catch, so the one-finding shape is unchanged.
+      const archivePaths = ['kaola-workflow/.roadmap', 'kaola-workflow/ROADMAP.md'];
+      if (result.dest) {
+        const destRel = path.relative(root, result.dest);
+        if (destRel && !destRel.startsWith('..') && !path.isAbsolute(destRel)) archivePaths.unshift(destRel);
+      } else if (result.skipped === 'source-missing') {
+        archivePaths.unshift(path.join('kaola-workflow', 'archive', args.project));
+      }
+      const existingArchivePaths = archivePaths.filter(p => fs.existsSync(path.join(root, p)));
       let archiveAddOk = true;
       try {
-        execFileSync('git', ['-C', root, 'add', '-A', 'kaola-workflow/'],
-          { encoding: 'utf8', stdio: ['ignore', 'inherit', 'pipe'] });
+        execFileSync('git', ['-C', root, 'rm', '-r', '--cached', '--ignore-unmatch', '--',
+          'kaola-workflow/' + args.project], { encoding: 'utf8', stdio: ['ignore', 'inherit', 'pipe'] });
+        if (existingArchivePaths.length > 0) {
+          execFileSync('git', ['-C', root, 'add', '-A', '--', ...existingArchivePaths],
+            { encoding: 'utf8', stdio: ['ignore', 'inherit', 'pipe'] });
+        }
         finalizeTx.archive_stage = 'staged';
       } catch (e) {
         const detail = gitFaultDetail(e);
@@ -4425,12 +4416,12 @@ function cmdFinalize() {
         finalizeTx.archive_stage = 'failed';
         finalizeTx.archive_stage_detail = detail;
         process.stderr.write('kaola-workflow-claim finalize: WARNING: staging the archive bookkeeping '
-          + 'FAILED for ' + args.project + ' — nothing under kaola-workflow/ reached the index, so the '
-          + '`chore: archive` commit below did not carry it.\n' + (detail ? detail + '\n' : ''));
+          + 'FAILED for ' + args.project + ' — the `chore: archive` commit below did not carry it.\n'
+          + (detail ? detail + '\n' : ''));
         recordFinalizeFinding('archive_stage_failed',
-          'The archive bookkeeping could not be staged: `git add -A kaola-workflow/` failed, so the '
-            + '`chore: archive` commit did not carry the archive, the roadmap, or the removal of the '
-            + 'live run folder from the branch.',
+          'The archive bookkeeping could not be staged: staging this project\'s own archive paths '
+            + 'failed, so the `chore: archive` commit did not carry the archive, the roadmap, or the '
+            + 'removal of the live run folder from the branch.',
           detail ? ['git said:', '', '```', detail, '```'] : []);
       }
       // #907: derived from the OUTCOME, not from what happens to exist on disk. It used to read
@@ -4545,9 +4536,11 @@ function cmdFinalize() {
             + 'is the one that failed. Re-read the worktree by hand before trusting this closure.',
           detail ? ['git said:', '', '```', detail, '```'] : []);
       }
-      // #907: the staging failure is REPORTED, not swallowed and not refused. `git add -A -- …` is
-      // all-or-nothing over its pathspec list: one unmatched path exits 128 and stages NOTHING, not
-      // even the healthy files beside it. Measured end-to-end on the documented `--keep-worktree`
+      // #907: the staging failure is REPORTED, not swallowed and not refused. One UNMATCHED pathspec
+      // exits 128 and stages NOTHING, not even the healthy files beside it. #920: that is this one
+      // case, not a property of `git add` — a GITIGNORED path beside an addable one exits 1 having
+      // staged the addable one, so what reached the index is read from the index (pathsNotStaged),
+      // never inferred from the exit. Measured end-to-end on the documented `--keep-worktree`
       // linked finishing sequence, with one untracked `notes.md ` (a single trailing space) beside a
       // good file: git exited 128, the bare `catch (_) {}` that used to sit here dropped it, the
       // staged-changes probe below then answered "nothing staged", and finalize emitted
@@ -4569,22 +4562,30 @@ function cmdFinalize() {
           const detail = String((e && (e.stderr || e.message)) || e).trim().slice(0, 1000);
           finalizeTx.residue_stage = 'failed';
           finalizeTx.residue_stage_detail = detail;
-          finalizeTx.residue_unstaged = residue.slice(0, 50);
+          const residueNotStaged = pathsNotStaged(root, residue);
+          if (residueNotStaged) finalizeTx.residue_unstaged = residueNotStaged.slice(0, 50);
           process.stderr.write('kaola-workflow-claim finalize: WARNING: staging the finalization residue '
-            + 'FAILED for ' + args.project + ' — `git add` is all-or-nothing over its pathspec list, so '
-            + 'NONE of these ' + residue.length + ' path(s) was staged and the `chore: finalize` commit '
-            + 'below will report nothing to commit: ' + residue.join(', ') + '\n'
+            + 'FAILED for ' + args.project + ' — `git add` exited non-zero over ' + residue.length
+            + ' path(s)' + (residueNotStaged
+              ? (residueNotStaged.length
+                ? '; these did not reach the index: ' + residueNotStaged.join(', ')
+                : '; every one of them reached the index anyway')
+              : '; which of them reached the index could not be read') + '\n'
             + (detail ? detail + '\n' : ''));
           // The durable half goes through the shared accumulator, flushed once below. Writing the
           // section here directly was correct only while this was the ONLY fault that could reach it —
           // appendSummarySection is idempotent by heading, so a second fault in the same run would
           // have been silently dropped.
           recordFinalizeFinding('residue_stage_failed',
-            'The `chore: finalize` commit could not stage the finalization residue. `git add` is '
-              + 'all-or-nothing over its pathspec list, so none of the paths below was staged and '
-              + 'the transaction recorded `finalize_commit: nothing_to_commit` — the run reports '
-              + 'closed while this work is still uncommitted in the worktree.',
-            ['Paths not staged:', ''].concat(residue.map(p => '- ' + p))
+            'The `chore: finalize` commit could not stage the finalization residue: `git add` exited '
+              + 'non-zero, and the transaction recorded `finalize_commit: nothing_to_commit` — the run '
+              + 'reports closed while work may still be uncommitted in the worktree.',
+            (residueNotStaged
+              ? (residueNotStaged.length
+                ? ['Paths not staged:', ''].concat(residueNotStaged.map(p => '- ' + p))
+                : ['Every path this call was given did reach the index despite the non-zero exit.'])
+              : ['Which paths reached the index could not be read, so this record does not say. '
+                + 'Read the index before repairing anything.'])
               .concat(detail ? ['', 'git said:', '', '```', detail, '```'] : []));
         }
       }
@@ -6085,9 +6086,6 @@ module.exports = {
   probeImplementationCommit,
   checkFinalizeStagingGuard,
   appendClosureBlock,
-  // #763: the per-run expansion-efficiency archive rollup writer — exported for direct unit
-  // coverage AND reuse by sink-merge's SOLE-archiver finalize path (same reason the one above is).
-  persistExpansionRollupToSummary,
   // #715 F1: exported for direct unit coverage (restore-gate dest exemption + base-branch guard).
   treeDirty,
   commitDiscardArchive

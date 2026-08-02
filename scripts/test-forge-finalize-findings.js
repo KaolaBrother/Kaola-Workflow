@@ -25,7 +25,16 @@
 //     registries and the two places `docs/api.md` states them. It answers a different question
 //     from A — "did a type appear or vanish that the docs do not know about?" — which no single
 //     run can witness, because a run only ever exercises the types its own fault reaches. The
-//     enumeration is the honest mechanism for it.
+//     enumeration is the honest mechanism for it. Its tail checks the two `*_unstaged` rows for
+//     SCOPE rather than content, against emission measured by A: one of them is edition-specific
+//     and one is universal, and a row that does not say which is read as universal by default.
+//
+// C — BEHAVIOURAL, and specifically the run that FALSIFIES what these findings say about git. A
+//     staging message asserted `git add` is all-or-nothing over its pathspec list and that
+//     therefore nothing was staged. A holds the index lock, where nothing is staged and the
+//     sentence is only unmeasured; C gitignores one of the archive step's own two candidate paths
+//     and reads the resulting index back out of git, where the other candidate IS staged and
+//     committed while the run reports it as unstaged.
 //
 // Non-vacuity is mechanical, never a claim in a comment:
 //   * every set-equality in B is preceded by a shape guard, so an extractor that silently
@@ -61,6 +70,36 @@ function assert(cond, msg) { if (cond) passed++; else { failed++; console.error(
 // ---------------------------------------------------------------------------------------------
 const FORGE_LIVE_FOLDER_CLAUSE = 'the removal of the live run folder from the branch';
 const CANONICAL_LIVE_FOLDER_CLAUSE = 'may still carry the live run folder';
+
+// ---------------------------------------------------------------------------------------------
+// The claim a staging finding is not allowed to make.
+//
+// MEASURED on git 2.54.0, not read off a man page. `git add -A -- <gitignored> <addable>` exits 1
+// and STAGES the addable one; only an UNMATCHED pathspec exits 128 and stages nothing. So the
+// all-or-nothing property is one `git add` does not have, and the finalize archive step reaches
+// the ignored case for real — `kaola-workflow/` paths can be covered by a .gitignore rule.
+//
+// Bound to the CLAIM rather than to the sentence carrying it: what the message says about the
+// step is the implementer's to word, but this assertion about git is not theirs to make. Bound to
+// RENDERED output rather than to source text, which is the only reading that can tell the false
+// message apart from the accurate code comment beside it — that comment describes the unmatched-
+// path case, where the property does hold, and it is not the defect.
+// ---------------------------------------------------------------------------------------------
+const ALL_OR_NOTHING_CLAIM = 'all-or-nothing over its pathspec list';
+
+// The second claim — "and therefore nothing was staged". Asserted ONLY in part C, on a run that
+// demonstrates it false. Under part A's index lock nothing does reach the index, so there the
+// sentence is unmeasured rather than wrong, and pinning it there would be pinning wording.
+const NONE_STAGED_CLAIMS = Object.freeze([
+  /NONE of these \d+ path\(s\) was staged/,
+  /none of the paths below reached the index/,
+  /none of the paths below was staged/,
+]);
+
+// Part C's two archive candidate paths: the first is covered by the fixture's .gitignore, the
+// second is not. Both are real entries of the archive step's own pathspec list.
+const IGNORED_ARCHIVE_PATH = 'kaola-workflow/.roadmap';
+const ADDABLE_ARCHIVE_PATH = 'kaola-workflow/ROADMAP.md';
 
 const EDITIONS = Object.freeze([
   {
@@ -109,7 +148,8 @@ const PROJECT = 'issue-914';
  * feature branch holding its own copy. This is the shape `finalize --keep-worktree` is invoked in,
  * and it is the shape both staging designs were written against.
  */
-function buildFixture(ed) {
+function buildFixture(ed, opts) {
+  const o = opts || {};
   const mainRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw914-' + ed.key + '-')));
   const kwRoot = mainRoot + '.kw';
   const wtPath = path.join(kwRoot, PROJECT);
@@ -137,6 +177,11 @@ function buildFixture(ed) {
 
   G.init(mainRoot, { branch: 'main' });
   fs.writeFileSync(path.join(mainRoot, 'README.md'), 'init\n');
+  // Part C: one of the two archive candidate paths is gitignored and the other is not. The rule
+  // is COMMITTED, so it is in force on the feature branch the archive step actually stages on.
+  if (o.ignoredArchivePath) {
+    fs.writeFileSync(path.join(mainRoot, '.gitignore'), IGNORED_ARCHIVE_PATH + '/\n');
+  }
   G.commitAll(mainRoot, 'init');
   fs.mkdirSync(kwRoot, { recursive: true });
   G.exec(mainRoot, ['worktree', 'add', '-b', 'workflow/' + PROJECT, '--', wtPath, 'main'],
@@ -151,6 +196,15 @@ function buildFixture(ed) {
   writeState(mainRoot);
   seed(mainRoot);
   G.commitPaths(mainRoot, ['kaola-workflow/'], 'mirror: live folder on main');
+
+  // Part C: both candidates must EXIST for the archive step to put them in one pathspec list, and
+  // ROADMAP.md is left UNTRACKED so the failing `git add` has real work to do on it — a path git
+  // stages nothing for could not witness a partial stage.
+  if (o.ignoredArchivePath) {
+    fs.mkdirSync(path.join(wtPath, IGNORED_ARCHIVE_PATH), { recursive: true });
+    fs.writeFileSync(path.join(wtPath, IGNORED_ARCHIVE_PATH, 'issue-1.md'), '# 1\n');
+    fs.writeFileSync(path.join(wtPath, ADDABLE_ARCHIVE_PATH), '# Roadmap\n');
+  }
 
   return { mainRoot, kwRoot, wtPath };
 }
@@ -209,6 +263,11 @@ function runFinalize(ed, fx, lockIndex) {
     summary: path.join(fx.mainRoot, 'kaola-workflow', 'archive', PROJECT, 'finalization-summary.md'),
   };
 }
+
+// Which `*_unstaged` fields each edition ACTUALLY sets, measured in the fault leg below and read
+// by the docs-scope checks at the end of part B. A field is only ever set on a run whose staging
+// FAILED, so nothing but a real fault run can measure this.
+const unstagedEmitters = new Map();
 
 for (const ed of EDITIONS) {
   // ---- healthy control: the finding is CAUSED by the fault, not carried by the fixture -------
@@ -277,9 +336,145 @@ for (const ed of EDITIONS) {
           + 'archive_unstage_failed must not appear in finalize_transaction.findings; findings: '
           + JSON.stringify(bad.findings));
     }
+
+    // ---- the held lock fails the RESIDUE staging too, which is the other message under test ---
+    // Asserted rather than assumed: `residue_stage_failed` carries the same claim on all four
+    // editions, and it is also the only condition under which `residue_unstaged` is ever set.
+    assert(bad.findings.includes('residue_stage_failed'),
+      'behavioural[' + ed.label + '] a held index lock must also fail the residue staging; '
+        + 'findings: ' + JSON.stringify(bad.findings));
+    assert(bad.tx && bad.tx.residue_stage === 'failed',
+      'behavioural[' + ed.label + '] a failed residue staging must record residue_stage=failed, '
+        + 'got: ' + JSON.stringify(bad.tx && bad.tx.residue_stage));
+    const residueSection = findingSection(bad.summary, 'residue_stage_failed');
+    assert(residueSection !== null,
+      'behavioural[' + ed.label + '] residue_stage_failed must be written durably under '
+        + '"### residue_stage_failed" in ' + bad.summary);
+
+    // ---- no message this fault renders may assert the all-or-nothing property ------------------
+    // Three negatives, each with its own witness that the text it searches EXISTS: the two
+    // sections are asserted found above, and the stderr anchor below proves warnings were written
+    // at all — a run that printed nothing cannot green a "does not contain" over its stderr.
+    assert(bad.stderr.includes('WARNING') && bad.stderr.includes(PROJECT),
+      'behavioural[' + ed.label + '] the fault run must have written its warnings to stderr, or '
+        + 'the stderr assertion below is vacuous; stderr:\n' + bad.stderr);
+    assert(bad.stderr.indexOf(ALL_OR_NOTHING_CLAIM) < 0,
+      'behavioural[' + ed.label + '] a finalize warning tells the operator `git add` is "'
+        + ALL_OR_NOTHING_CLAIM + '". Measured false on git 2.54.0: a gitignored path beside an '
+        + 'addable one exits 1 having STAGED the addable one. Report what was measured — the exit '
+        + 'code, and the staged set only where it is cheap to read.\nstderr:\n' + bad.stderr);
+    assert(stageSection !== null && !stageSection.includes(ALL_OR_NOTHING_CLAIM),
+      'behavioural[' + ed.label + '] the archive_stage_failed finding asserts a git property that '
+        + 'does not hold ("' + ALL_OR_NOTHING_CLAIM + '"), got:\n' + stageSection);
+    assert(residueSection !== null && !residueSection.includes(ALL_OR_NOTHING_CLAIM),
+      'behavioural[' + ed.label + '] the residue_stage_failed finding asserts a git property that '
+        + 'does not hold ("' + ALL_OR_NOTHING_CLAIM + '"), got:\n' + residueSection);
+
+    // ---- and, for the docs-scope checks at the end of part B, WHICH fields this edition set ----
+    unstagedEmitters.set(ed.key, {
+      archive: Array.isArray(bad.tx && bad.tx.archive_unstaged),
+      residue: Array.isArray(bad.tx && bad.tx.residue_unstaged),
+    });
   } finally { destroyFixture(fx); }
 
   console.log('behavioural[' + ed.label + '] archive-staging fault names the live run folder: done');
+}
+
+// =============================================================================================
+// C — BEHAVIOURAL: the case that FALSIFIES the message, driven end to end
+//
+// Part A holds the index lock, so nothing reaches the index and "and therefore none of these
+// paths was staged" is merely unmeasured there. This is the case the sentence is actually WRONG
+// about, and it is not hypothetical: the archive step's own pathspec list is
+// `kaola-workflow/.roadmap` and `kaola-workflow/ROADMAP.md`, and a repository may gitignore one
+// of them. git exits 1, stages ROADMAP.md, and the `chore: archive` commit carries it — while the
+// run reports that same path under "paths not staged".
+//
+// The contradiction is read back OUT OF GIT rather than argued from the text, so what is pinned
+// is a demonstrated falsehood and not a choice of words. Canonical and Codex only: the forge
+// ports make one unscoped `git add -A 'kaola-workflow/'`, which SKIPS a gitignored child instead
+// of failing on it, so they have no pathspec list to be wrong about.
+// =============================================================================================
+
+for (const ed of EDITIONS.filter(e => e.unstageType)) {
+  const fx = buildFixture(ed, { ignoredArchivePath: true });
+  try {
+    const bad = runFinalize(ed, fx, false);
+    assert(bad.status === 0,
+      'behavioural-C[' + ed.label + '] a staging fault must REPORT, not refuse — exit 0 expected, '
+        + 'got ' + bad.status + '\nstdout: ' + bad.stdout + '\nstderr: ' + bad.stderr);
+    assert(bad.tx && bad.tx.archive_stage === 'failed',
+      'behavioural-C[' + ed.label + '] the gitignored candidate must fail the archive staging, '
+        + 'got archive_stage=' + JSON.stringify(bad.tx && bad.tx.archive_stage));
+    assert(bad.findings.includes('archive_stage_failed'),
+      'behavioural-C[' + ed.label + '] the fault must raise archive_stage_failed; findings: '
+        + JSON.stringify(bad.findings));
+    // GROUND TRUTH, read out of the index git actually wrote — and read as STATE, never as prose.
+    // git localizes its own messages, so a precondition that matched "ignored by one of your
+    // .gitignore files" reported "the fixture is broken" on a box whose git speaks Chinese, while
+    // the fixture had reproduced the case perfectly. Exit non-zero (archive_stage=failed, above)
+    // with ONE candidate in the index and the OTHER out of it fully characterises the partial-
+    // stage case in any locale, and no other fault produces that shape: an index lock or an
+    // unmatched pathspec leaves both candidates out.
+    const trackedIgnored = G.out(fx.wtPath, ['ls-files', '--', IGNORED_ARCHIVE_PATH]);
+    assert(trackedIgnored === '',
+      'behavioural-C[' + ed.label + '] the gitignored candidate ' + IGNORED_ARCHIVE_PATH + ' reached '
+        + 'the index, so this run is not the partial-stage case the assertions below read it as. '
+        + 'ls-files: ' + JSON.stringify(trackedIgnored));
+    // The witness the whole leg rests on: if the addable path is NOT tracked then the pathspec
+    // list really was all-or-nothing on this run, the case was never reproduced, and every
+    // assertion below would be vacuous.
+    const tracked = G.out(fx.wtPath, ['ls-files', '--', ADDABLE_ARCHIVE_PATH]);
+    assert(tracked.includes(ADDABLE_ARCHIVE_PATH),
+      'behavioural-C[' + ed.label + '] WITNESS MISSING: the failing `git add` was expected to stage '
+        + ADDABLE_ARCHIVE_PATH + ' beside the gitignored ' + IGNORED_ARCHIVE_PATH + ', but git does '
+        + 'not track it. Without a path that DID stage there is nothing here to contradict the '
+        + 'message. ls-files: ' + JSON.stringify(tracked));
+    // git's own diagnosis must ride along in the transaction. Checked for PRESENCE only — its
+    // wording is git's and its language is the operator's.
+    assert(String((bad.tx && bad.tx.archive_stage_detail) || '').trim() !== '',
+      'behavioural-C[' + ed.label + '] archive_stage_detail is empty — git\'s own message is the '
+        + 'whole diagnosis of a staging fault and must reach the transaction');
+
+    // The run must not name a path it staged as a path it did not stage.
+    const claimedUnstaged = (bad.tx && bad.tx.archive_unstaged) || [];
+    assert(!claimedUnstaged.includes(ADDABLE_ARCHIVE_PATH),
+      'behavioural-C[' + ed.label + '] archive_unstaged lists ' + ADDABLE_ARCHIVE_PATH + ' as a path '
+        + 'that did not stage, and git tracks it: the same `git add` that "failed" staged it, and '
+        + 'the `chore: archive` commit carries it. archive_unstaged: '
+        + JSON.stringify(claimedUnstaged));
+
+    const section = findingSection(bad.summary, 'archive_stage_failed');
+    assert(section !== null,
+      'behavioural-C[' + ed.label + '] the fault must be written durably under '
+        + '"### archive_stage_failed" in ' + bad.summary);
+    assert(section !== null && !section.includes(ALL_OR_NOTHING_CLAIM),
+      'behavioural-C[' + ed.label + '] the finding asserts `git add` is "' + ALL_OR_NOTHING_CLAIM
+        + '" on the very run that disproves it, got:\n' + section);
+    for (const claim of NONE_STAGED_CLAIMS) {
+      assert(section !== null && !claim.test(section),
+        'behavioural-C[' + ed.label + '] the archive_stage_failed finding states ' + claim + ' while '
+          + ADDABLE_ARCHIVE_PATH + ' IS in the index. Say what was measured, or say nothing about '
+          + 'the staged set. Section:\n' + section);
+      assert(!claim.test(bad.stderr),
+        'behavioural-C[' + ed.label + '] the finalize warning states ' + claim + ' while '
+          + ADDABLE_ARCHIVE_PATH + ' IS in the index.\nstderr:\n' + bad.stderr);
+    }
+
+    // The bullet list under the finding's not-staged heading is assembled separately from the
+    // `archive_unstaged` field, so it is pinned separately — correcting one and leaving the other
+    // still tells the operator a path is missing from the very commit that carries it. A finding
+    // that no longer makes the claim at all (no such heading) satisfies this by having nothing to
+    // be wrong about.
+    const NOT_STAGED_HEADING = 'Paths not staged:';
+    const listAt = section === null ? -1 : section.indexOf(NOT_STAGED_HEADING);
+    assert(listAt < 0 || !section.slice(listAt).includes('- ' + ADDABLE_ARCHIVE_PATH),
+      'behavioural-C[' + ed.label + '] the finding lists ' + ADDABLE_ARCHIVE_PATH + ' under "'
+        + NOT_STAGED_HEADING + '" while git tracks it and `chore: archive` carries it. Section:\n'
+        + section);
+  } finally { destroyFixture(fx); }
+
+  console.log('behavioural-C[' + ed.label + '] a partially-staged `git add` is reported honestly: done');
 }
 
 // =============================================================================================
@@ -382,6 +577,86 @@ if (countSentence !== null) {
   assert(WORD_TO_INT[countSentence[2]] === canonical.size,
     'static: docs/api.md says canonical and Codex raise ' + countSentence[2] + ' finding types; '
       + 'measured ' + canonical.size + ' (' + JSON.stringify(sorted(canonical)) + ')');
+}
+
+// ---- the two `*_unstaged` rows: documented SCOPE against measured emission --------------------
+// The `findings` row above is checked for CONTENT; these two are checked for SCOPE, which is a
+// different failure and one nothing else can see. A field only some editions set, documented with
+// no qualifier, reads as universal to someone who has no way to find out otherwise. The
+// measurement comes from part A, where every edition ran a fault that failed BOTH its archive
+// staging and its residue staging — the only condition under which either field is ever set.
+//
+// The two demands are OPPOSITE by construction, so a blanket edit over this table cannot satisfy
+// both: whichever row is genuinely universal must stay unqualified.
+const EDITION_WORD = Object.freeze({
+  canonical: /canonical|GitHub/i,
+  codex: /codex/i,
+  gitlab: /gitlab/i,
+  gitea: /gitea/i,
+});
+const EDITION_KEYS = EDITIONS.map(e => e.key);
+const docsRow = name => apiText.split('\n').find(l => new RegExp('^\\|\\s*`' + name + '`\\s*\\|').test(l));
+const editionsNamedIn = row => EDITION_KEYS.filter(k => EDITION_WORD[k].test(row));
+
+// Positive control for the matcher, on a REAL row of this document: `migrate` is edition-scoped
+// and must be seen to be. Without it, a regex set that matched nothing would pass the
+// "no qualifier" assertion below as a success and fail the "must be scoped" one for the wrong
+// reason. Re-point this pin if that row is renamed.
+const migrateRow = docsRow('migrate');
+assert(migrateRow !== undefined
+    && editionsNamedIn(migrateRow).includes('gitlab') && editionsNamedIn(migrateRow).includes('gitea'),
+  'static: the edition-name matcher failed its positive control — docs/api.md\'s `migrate` row '
+    + 'names GitLab and Gitea and the matcher must see both. Row: ' + migrateRow);
+
+assert(unstagedEmitters.size === EDITIONS.length,
+  'static: the *_unstaged emission measurement covers ' + unstagedEmitters.size + ' of '
+    + EDITIONS.length + ' editions — part A did not reach the fault everywhere, so the scope '
+    + 'checks below have nothing to compare the docs against');
+const emittersOf = field => EDITION_KEYS.filter(k => {
+  const m = unstagedEmitters.get(k);
+  return !!(m && m[field]);
+});
+
+const archiveEmitters = emittersOf('archive');
+const archiveRow = docsRow('archive_unstaged');
+assert(archiveRow !== undefined,
+  'static: docs/api.md must carry an `archive_unstaged` table row — its scope is unchecked if the '
+    + 'row cannot be found. Re-point this pin at the renamed row.');
+assert(archiveEmitters.length > 0,
+  'static: docs/api.md documents `archive_unstaged` and no edition sets it on a run whose archive '
+    + 'staging failed — the row documents a field that does not exist');
+if (archiveRow !== undefined) {
+  const silent = EDITION_KEYS.filter(k => !archiveEmitters.includes(k));
+  const named = editionsNamedIn(archiveRow);
+  // Either acceptable fix passes: scope the row to the divergence (naming that whole group, from
+  // either side), or emit the field everywhere it is documented.
+  const scoped = archiveEmitters.every(k => named.includes(k))
+    || (silent.length > 0 && silent.every(k => named.includes(k)));
+  assert(silent.length === 0 || scoped,
+    'static: docs/api.md documents `archive_unstaged` with no edition qualifier, but only '
+      + JSON.stringify(archiveEmitters) + ' set it — ' + JSON.stringify(silent) + ' never did on a '
+      + 'run whose archive staging FAILED, which is the only run that could. Either scope the row '
+      + 'to the divergence (naming the whole group, emitters or silent ones) or emit the field on '
+      + 'every edition the row speaks for.\n  row: ' + archiveRow
+      + '\n  editions named in the row: ' + JSON.stringify(named));
+}
+
+const residueEmitters = emittersOf('residue');
+const residueRow = docsRow('residue_unstaged');
+assert(residueRow !== undefined,
+  'static: docs/api.md must carry a `residue_unstaged` table row. Re-point this pin at the '
+    + 'renamed row.');
+assert(JSON.stringify(residueEmitters) === JSON.stringify(EDITION_KEYS),
+  'static: `residue_unstaged` is documented unconditionally, so every edition must set it on a '
+    + 'failed residue staging; measured emitters: ' + JSON.stringify(residueEmitters)
+    + ' of ' + JSON.stringify(EDITION_KEYS));
+if (residueRow !== undefined) {
+  const named = editionsNamedIn(residueRow);
+  assert(named.length === 0,
+    'static: `residue_unstaged` IS emitted by every edition (' + JSON.stringify(residueEmitters)
+      + '), so its row must carry no edition qualifier — a blanket edit that scoped this row '
+      + 'alongside `archive_unstaged` would make an accurate row wrong. Named: '
+      + JSON.stringify(named) + '\n  row: ' + residueRow);
 }
 
 console.log('static: finding-type registries and their docs/api.md statements: done');

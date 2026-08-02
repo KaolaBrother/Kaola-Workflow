@@ -2305,18 +2305,12 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
   console.log('Gitea #901 basename .cache/ rule must not clip archive evidence: PASSED');
 }
 
-// #912: sinkPreflight must assert a clean worktree on the SAME runs in every edition. The stated
+// #912: sinkPreflight must assert a clean worktree the SAME way in every edition. The stated
 // expectation, which all three editions are pinned against here and in their own suites:
 //
-//   a BRANCHLESS / in-place run (--branch TBD) committed straight to main. No feature branch and no
-//   linked worktree exist, so there is nothing for the worktree-clean guard to protect and the
-//   guard does not run. A run WITH a feature branch keeps the guard exactly as it is: dirty
-//   refuses, and an unprobeable worktree refuses too (fail closed).
-//
-// assertWorktreeClean fails closed on a `git worktree list` probe fault BEFORE it matches any
-// branch, so calling it unconditionally is not harmless on a branchless run: the absence of a
-// worktree on branch 'TBD' never gets a chance to save it. A transient enumeration fault refuses a
-// branchless sink that canonical completes.
+//   every run goes through the guard. A dirty linked worktree refuses, and an unprobeable one
+//   refuses too (fail closed) — assertWorktreeClean fails closed on a `git worktree list` probe
+//   fault BEFORE it matches any branch, and "we could not verify" is never "there is nothing there".
 //
 // The fault is driven through the port's OWN KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL hook, so what is
 // exercised is the probe the shipped guard already runs, not an injected throw.
@@ -2350,20 +2344,6 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
     G.gitOk(root, ['remote', 'add', 'origin', remote]);
     G.gitOk(root, ['push', '-u', 'origin', 'main']);
     return { root, remote };
-  };
-
-  // BRANCHLESS: live folder + deliverable committed straight to main, workflow-state records
-  // branch: TBD, and no feature branch or linked worktree is ever created.
-  const mkBranchless912 = (label, project, issue) => {
-    const { root, remote } = seedRepo912(label);
-    const dir = path.join(root, 'kaola-workflow', project);
-    fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(dir, 'workflow-state.md'), state912(project, 'TBD', issue));
-    fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization\n\n## Final Validation\n\n- `npm test`: pass\n');
-    fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'in-place deliverable\n');
-    G.gitOk(root, ['add', '-A']);
-    G.gitOk(root, ['commit', '-m', 'feat: in-place deliverable (branchless)']);
-    return { root, remote, project, issue, branch: 'TBD', wt: null };
   };
 
   // BRANCHED: a real feature branch with a linked worktree checked out on it.
@@ -2414,23 +2394,6 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
   const seen912 = (r) => 'exit=' + r.exit + ' envelope=' + JSON.stringify(r.envelope)
     + '\nstderr: ' + String(r.stderr || '').slice(0, 600);
 
-  // The arms run controls first and the divergence LAST, deliberately: node's assert throws, so a
-  // baseline run against the unfixed port has to get through every control before it reds on (e).
-
-  // (a) The branchless fixture with no probe fault. It must already pass preflight — this is (e)'s
-  // attribution control, and without it (e)'s failure could be anything about the fixture.
-  {
-    const fx = mkBranchless912('bl-clean', 'gt-912-branchless', 91201);
-    try {
-      const r = preflight912(fx);
-      assert.strictEqual(r.reason, null,
-        '#912-gitea (a): a branchless run with no probe fault must not refuse at all — this is (e)\'s '
-        + 'attribution control. Got ' + seen912(r));
-      assert.strictEqual(r.exit, PREFLIGHT_PASSED,
-        '#912-gitea (a): the branchless preflight must pass with no probe fault. Got ' + seen912(r));
-    } finally { cleanup912(fx); }
-  }
-
   // (b) The data-loss guard the fix must NOT weaken (#346/#496/#562): a real feature branch whose
   // linked worktree carries uncommitted work still refuses, and refuses with ZERO mutation.
   {
@@ -2470,27 +2433,11 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
     try {
       const r = preflight912(fx, { KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL: '1' });
       assert.strictEqual(r.reason, 'worktree_dirty',
-        '#912-gitea (d): a branch-postured run whose worktree-list probe faults must STILL refuse worktree_dirty '
-        + '(fail closed) — the branchless exemption is scoped to --branch TBD and must not disarm the guard for '
-        + 'runs that do have a worktree. Got ' + seen912(r));
+        '#912-gitea (d): a run whose worktree-list probe faults must STILL refuse worktree_dirty '
+        + '(fail closed) — a transient enumeration fault is not evidence that there is no worktree to '
+        + 'protect. Got ' + seen912(r));
       assert.ok(fs.existsSync(fx.wt),
         '#912-gitea (d): the fail-closed refusal must leave the linked worktree in place');
-    } finally { cleanup912(fx); }
-  }
-
-  // (e) THE DIVERGENCE. A branchless run whose worktree-list probe faults must not refuse.
-  {
-    const fx = mkBranchless912('bl-fault', 'gt-912-branchless', 91201);
-    try {
-      const r = preflight912(fx, { KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL: '1' });
-      assert.notStrictEqual(r.reason, 'worktree_dirty',
-        '#912-gitea (e): a branchless run (--branch TBD) has no feature branch and no linked worktree, so a '
-        + 'transient `git worktree list` probe fault must NOT produce the worktree_dirty refusal — there is no '
-        + 'uncommitted work behind a worktree that does not exist. Canonical skips the guard entirely on this '
-        + 'run; this port called it unconditionally. Got ' + seen912(r));
-      assert.strictEqual(r.exit, PREFLIGHT_PASSED,
-        '#912-gitea (e): the branchless preflight must PASS through to the next step (exit ' + PREFLIGHT_PASSED
-        + ' is KAOLA_WORKFLOW_SINK_ABORT_AFTER=preflight firing after preflight recorded done). Got ' + seen912(r));
     } finally { cleanup912(fx); }
   }
 

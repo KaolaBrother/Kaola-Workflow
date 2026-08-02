@@ -4023,6 +4023,23 @@ function cmdFinalize() {
   // One wording for a git failure's diagnosis, so the envelope and the archived record say the same
   // thing about the same fault. `stderr` is present only where the call pipes it.
   const gitFaultDetail = e => String((e && (e.stderr || e.message)) || e).trim().slice(0, 1000);
+  // #920: which of `paths` did NOT reach the index, READ from the index rather than assumed. A failed
+  // `git add` says nothing about what it staged: measured on git 2.54.0, a gitignored path beside an
+  // addable one exits 1 having staged the addable one, while an unmatched pathspec exits 128 having
+  // staged nothing. The messages here used to assert `git add` is all-or-nothing over its pathspec
+  // list and name every candidate as unstaged, which is false in the first case and told the operator
+  // to repair an index that already held the file. Returns null when the probe itself fails — the
+  // caller then says nothing about the staged set rather than guessing, which is the honest answer.
+  const pathsNotStaged = (root, paths) => {
+    if (!paths.length) return [];
+    let staged;
+    try {
+      staged = execFileSync('git', ['-C', root, 'diff', '--cached', '--name-only', '--', ...paths],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split('\n').filter(Boolean);
+    } catch (_) { return null; }
+    // A candidate may be a directory, so it counts as staged when anything beneath it staged.
+    return paths.filter(p => !staged.includes(p) && !staged.some(s => s.startsWith(p.replace(/\/$/, '') + '/')));
+  };
   // Worktree dirt this transaction manufactured (Step 8a residue mirror) — subtracted from the
   // implementation probe so the machinery never reads its own mirror as operator dirt.
   let mirroredResiduePaths = [];
@@ -4694,16 +4711,25 @@ function cmdFinalize() {
           archiveStageOk = false;
           finalizeTx.archive_stage = 'failed';
           finalizeTx.archive_stage_detail = detail;
-          finalizeTx.archive_unstaged = existingPaths.slice(0, 50);
+          const archiveNotStaged = pathsNotStaged(root, existingPaths);
+          if (archiveNotStaged) finalizeTx.archive_unstaged = archiveNotStaged.slice(0, 50);
           process.stderr.write('kaola-workflow-claim finalize: WARNING: staging the archive bookkeeping '
-            + 'FAILED for ' + args.project + ' — `git add` is all-or-nothing over its pathspec list, so '
-            + 'NONE of these ' + existingPaths.length + ' path(s) was staged: ' + existingPaths.join(', ') + '\n'
+            + 'FAILED for ' + args.project + ' — `git add` exited non-zero over ' + existingPaths.length
+            + ' path(s)' + (archiveNotStaged
+              ? (archiveNotStaged.length
+                ? '; these did not reach the index: ' + archiveNotStaged.join(', ')
+                : '; every one of them reached the index anyway')
+              : '; which of them reached the index could not be read') + '\n'
             + (detail ? detail + '\n' : ''));
           recordFinalizeFinding('archive_stage_failed',
-            'The archive bookkeeping could not be staged. `git add` is all-or-nothing over its '
-              + 'pathspec list, so none of the paths below reached the index and the `chore: archive` '
-              + 'commit did not carry them.',
-            ['Paths not staged:', ''].concat(existingPaths.map(p => '- ' + p))
+            'The archive bookkeeping could not be staged: `git add` exited non-zero over this '
+              + 'project\'s archive paths, so the `chore: archive` commit may not carry them.',
+            (archiveNotStaged
+              ? (archiveNotStaged.length
+                ? ['Paths not staged:', ''].concat(archiveNotStaged.map(p => '- ' + p))
+                : ['Every path this call was given did reach the index despite the non-zero exit.'])
+              : ['Which paths reached the index could not be read, so this record does not say. '
+                + 'Read the index before repairing anything.'])
               .concat(detail ? ['', 'git said:', '', '```', detail, '```'] : []));
         }
       }
@@ -4819,9 +4845,11 @@ function cmdFinalize() {
             + 'is the one that failed. Re-read the worktree by hand before trusting this closure.',
           detail ? ['git said:', '', '```', detail, '```'] : []);
       }
-      // #907: the staging failure is REPORTED, not swallowed and not refused. `git add -A -- …` is
-      // all-or-nothing over its pathspec list: one unmatched path exits 128 and stages NOTHING, not
-      // even the healthy files beside it. Measured end-to-end on the documented `--keep-worktree`
+      // #907: the staging failure is REPORTED, not swallowed and not refused. One UNMATCHED pathspec
+      // exits 128 and stages NOTHING, not even the healthy files beside it. #920: that is this one
+      // case, not a property of `git add` — a GITIGNORED path beside an addable one exits 1 having
+      // staged the addable one, so what reached the index is read from the index (pathsNotStaged),
+      // never inferred from the exit. Measured end-to-end on the documented `--keep-worktree`
       // linked finishing sequence, with one untracked `notes.md ` (a single trailing space) beside a
       // good file: git exited 128, the bare `catch (_) {}` that used to sit here dropped it, the
       // staged-changes probe below then answered "nothing staged", and finalize emitted
@@ -4844,22 +4872,30 @@ function cmdFinalize() {
           const detail = String((e && (e.stderr || e.message)) || e).trim().slice(0, 1000);
           finalizeTx.residue_stage = 'failed';
           finalizeTx.residue_stage_detail = detail;
-          finalizeTx.residue_unstaged = residue.slice(0, 50);
+          const residueNotStaged = pathsNotStaged(root, residue);
+          if (residueNotStaged) finalizeTx.residue_unstaged = residueNotStaged.slice(0, 50);
           process.stderr.write('kaola-workflow-claim finalize: WARNING: staging the finalization residue '
-            + 'FAILED for ' + args.project + ' — `git add` is all-or-nothing over its pathspec list, so '
-            + 'NONE of these ' + residue.length + ' path(s) was staged and the `chore: finalize` commit '
-            + 'below will report nothing to commit: ' + residue.join(', ') + '\n'
+            + 'FAILED for ' + args.project + ' — `git add` exited non-zero over ' + residue.length
+            + ' path(s)' + (residueNotStaged
+              ? (residueNotStaged.length
+                ? '; these did not reach the index: ' + residueNotStaged.join(', ')
+                : '; every one of them reached the index anyway')
+              : '; which of them reached the index could not be read') + '\n'
             + (detail ? detail + '\n' : ''));
           // The durable half goes through the shared accumulator, flushed once below. Writing the
           // section here directly was correct only while this was the ONLY fault that could reach it —
           // appendSummarySection is idempotent by heading, so a second fault in the same run would
           // have been silently dropped.
           recordFinalizeFinding('residue_stage_failed',
-            'The `chore: finalize` commit could not stage the finalization residue. `git add` is '
-              + 'all-or-nothing over its pathspec list, so none of the paths below was staged and '
-              + 'the transaction recorded `finalize_commit: nothing_to_commit` — the run reports '
-              + 'closed while this work is still uncommitted in the worktree.',
-            ['Paths not staged:', ''].concat(residue.map(p => '- ' + p))
+            'The `chore: finalize` commit could not stage the finalization residue: `git add` exited '
+              + 'non-zero, and the transaction recorded `finalize_commit: nothing_to_commit` — the run '
+              + 'reports closed while work may still be uncommitted in the worktree.',
+            (residueNotStaged
+              ? (residueNotStaged.length
+                ? ['Paths not staged:', ''].concat(residueNotStaged.map(p => '- ' + p))
+                : ['Every path this call was given did reach the index despite the non-zero exit.'])
+              : ['Which paths reached the index could not be read, so this record does not say. '
+                + 'Read the index before repairing anything.'])
               .concat(detail ? ['', 'git said:', '', '```', detail, '```'] : []));
         }
       }
