@@ -31,7 +31,7 @@ self-issuing a pass; and a genuinely absent dispatch tool still records
 
 ## Codex Subagent Dispatch (issue #266)
 
-The #924 model-routing policy lives only in the live Codex `kaola-workflow-next` and
+The #925 model-routing policy lives only in the live Codex `kaola-workflow-next` and
 `kaola-workflow-finalize` dispatch instructions. `kaola-workflow-init` does not render it into
 initialized shared repository guidance, which remains runtime-neutral.
 
@@ -42,21 +42,12 @@ names the installed agent role and passes a dispatch packet:
 - `role` — the installed agent role name (e.g. `code-reviewer`, `implementer`)
 - `prompt` — the task prompt
 - `cwd` — the working directory
-- `model` — selected from the role's existing tier for this spawn: standard uses `gpt-5.6-luna` and
-  reasoning uses `gpt-5.6-sol`
-- `reasoning_effort` — paired with that model for this spawn: standard uses `max` and reasoning uses
+- `model` — selected from the role's existing tier for this spawn: both tiers use `gpt-5.6-sol`
+- `reasoning_effort` — paired with that model for this spawn: standard uses `medium` and reasoning uses
   `xhigh`
 
-A standard-tier spawn may temporarily use `gpt-5.6-sol` / `medium` only after recording one of four
-independent reasons: broad repository understanding; serial latency or cost erosion; repeated
-concrete Luna failures; or architecture, migration, or subtle persistent-state risk. Routine
-implementation is excluded, and the exception changes neither classification nor later defaults.
-
-If the current spawn capability does not expose Luna/max, record the mismatch and perform the task
-inline. Never silently substitute another pair. Missing Luna capability is not itself a Sol/medium
-reason; one of the four closed reasons must independently apply and be recorded before that dispatch.
-This outcome applies after a successful profile preflight; it is not a fallback for profile or config
-drift.
+The mapping is fixed for every spawn. A standard-tier role always uses Sol/medium; task breadth,
+latency, prior outcomes, and risk do not create an escalation or any other model/reasoning exception.
 
 Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 

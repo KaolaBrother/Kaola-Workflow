@@ -1464,20 +1464,12 @@ Codex subagent dispatch uses the existing role tier as a separate per-spawn cont
 
 | Role tier | Codex model | Reasoning effort |
 |---|---|---|
-| `standard` | `gpt-5.6-luna` | `max` |
+| `standard` | `gpt-5.6-sol` | `medium` |
 | `reasoning` | `gpt-5.6-sol` | `xhigh` |
 
-A `standard` spawn may temporarily use `gpt-5.6-sol` / `medium` only when the dispatch record names
-one of these four reasons before the spawn: broad repository understanding; serial latency or cost
-erosion; repeated concrete Luna failures; or architecture, migration, or subtle persistent-state
-risk. Routine implementation does not qualify. The override applies to that spawn only and does not
-reclassify the role or alter later defaults. This contract is Codex-only; the resolver and model
-routing for Claude Code, opencode, and Kimi are unchanged.
-
-If the runtime does not expose Luna/max as an accepted spawn pair, record the capability mismatch and
-execute the task inline. Do not silently substitute another pair. Luna unavailability alone does not
-permit Sol/medium; that pair remains available only when one of the four reasons independently
-applies and is recorded before spawn.
+The mappings are fixed for every Codex spawn. A `standard` role always receives Sol/medium and has no
+task-specific model or reasoning-effort escalation, downgrade, or other exception. This contract is
+Codex-only; the resolver and model routing for Claude Code, opencode, and Kimi are unchanged.
 
 ## Environment Variables
 

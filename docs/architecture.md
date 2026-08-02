@@ -338,16 +338,9 @@ installer fills from the agent's own installed profile; that is what renders the
 opencode applies its resolved tier dynamically.
 
 Codex keeps the same role classification but maps it at spawn time: `standard` to
-`gpt-5.6-luna` / `max`, and `reasoning` to `gpt-5.6-sol` / `xhigh`. A standard-tier spawn can instead
-use `gpt-5.6-sol` / `medium` only when the orchestrator records, before spawning, one of four closed
-reasons: broad repository understanding; serial latency or cost erosion; repeated concrete Luna
-failures; or architecture, migration, or subtle persistent-state risk. Routine implementation is
-excluded. The override is local to that spawn and changes neither classification nor either default.
-No other runtime's model resolution changes.
-If Luna/max is not exposed by the current Codex spawn capability, the orchestrator records the
-mismatch and completes the task inline; it never silently substitutes a nearby pair. Sol/medium is
-not the availability fallback and remains permitted only when one of the four reasons independently
-applies and is recorded before spawn.
+`gpt-5.6-sol` / `medium`, and `reasoning` to `gpt-5.6-sol` / `xhigh`. Both mappings are fixed, so a
+standard-tier task never changes model or reasoning effort for task-specific reasons. No other
+runtime's model resolution changes.
 
 ## Testing
 

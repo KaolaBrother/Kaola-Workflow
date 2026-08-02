@@ -67,14 +67,16 @@ function codexModelRoutingBlock(content) {
   return start >= 0 && end > start ? content.slice(start, end) : '';
 }
 
-function hasOpenEndedSolMediumException(content) {
-  return /(?:other|additional|generic|routine|complex)\b.{0,120}\b(?:may|can|allowed|eligible)\b.{0,100}\b(?:escalat\w*|(?:use|select)\s+Sol\/?medium)/i
-    .test(norm(content));
-}
-
-function hasAvailabilityFallbackConflict(content) {
-  return /Luna\/?max\b.{0,100}\bunavailable\b.{0,100}\b(?:use|select|substitute|fall back to)\b.{0,60}\bSol\/?medium\b/i
-    .test(norm(content));
+function hasStandardTierDispatchException(content) {
+  const normalized = norm(content);
+  return /standard-tier\b.{0,180}\b(?:may|can)\b.{0,180}\b(?:use|dispatch|switch|select|escalat|downgrad)/i
+    .test(normalized)
+    || /standard-tier\b.{0,120}\b(?:exception|override|trigger)s?\b/i.test(normalized)
+    || /per-task\b.{0,100}\b(?:model|reasoning(?:-| )effort)\b.{0,100}\bexceptions?\b.{0,50}\b(?:may|can|permit)\b/i
+      .test(normalized)
+    || /\b(?:temporary|recorded)\b.{0,100}\b(?:exception|override|trigger)\b/i.test(normalized)
+    || /Sol\/?medium\b.{0,120}\bunavailable\b.{0,120}\b(?:use|select|substitute|fall back to)\b/i
+      .test(normalized);
 }
 
 function hasProfileOwnedDispatchConflict(content) {
@@ -105,39 +107,24 @@ function codexDispatchCallSiteValid(content, skillName) {
     && callSite.includes('`reasoning_effort`')
     && /per-spawn model routing/i.test(callSite)
     && !hasProfileOwnedDispatchConflict(content)
-    && !hasOpenEndedSolMediumException(content)
-    && !hasAvailabilityFallbackConflict(content);
+    && !hasStandardTierDispatchException(content);
 }
 
 // This is deliberately a prose-contract validator, not a profile/config assertion: the routing
 // decision is made for each spawn, after the role's existing standard/reasoning classification is
-// known. Keeping the four exceptions as an exact list prevents a plausible near-miss where an
-// open-ended "complex task" escape hatch silently turns Sol/medium into a third default tier.
+// known. The negative check prevents a plausible near-miss where a fixed standard pair quietly
+// regains a per-task exception elsewhere on the same live dispatch surface.
 function codexModelRoutingContractValid(content) {
   const block = codexModelRoutingBlock(content);
   if (!block) return false;
   const normalized = norm(block);
-  const triggerRegion = block.match(/only for one of these four recorded triggers:\s*([\s\S]*?)\n\s*Record /i);
-  const triggerItems = triggerRegion
-    ? triggerRegion[1].split('\n').filter(line => /^\s*(?:[-*]|\d+[.)])\s+/.test(line))
-    : [];
-  const triggerNeedles = [
-    'broad repository understanding',
-    'serial latency or cost erosion',
-    'repeated concrete Luna failures',
-    'architecture, migration, or subtle persistent-state risk',
-  ];
-  return normalized.includes('Standard-tier roles dispatch with `model: "gpt-5.6-luna"` and `reasoning_effort: "max"`.')
+  return normalized.includes('Standard-tier roles dispatch with `model: "gpt-5.6-sol"` and `reasoning_effort: "medium"`.')
     && normalized.includes('Reasoning-tier roles dispatch with `model: "gpt-5.6-sol"` and `reasoning_effort: "xhigh"`.')
-    && normalized.includes('A standard-tier task may temporarily use `model: "gpt-5.6-sol"` and `reasoning_effort: "medium"` as a per-spawn override only for one of these four recorded triggers:')
-    && triggerItems.length === triggerNeedles.length
-    && triggerNeedles.every(needle => normalized.includes(needle))
-    && normalized.includes('Record the selected trigger and a task-specific rationale before dispatch.')
-    && normalized.includes('The override does not change the role classification or either tier default.')
-    && normalized.includes('If the runtime cannot accept Luna/max, fail closed to inline work, record the capability mismatch, and never silently substitute another model or reasoning effort.')
-    && normalized.includes('Sol/medium is not an availability fallback; use it only when one of the four triggers independently applies and is recorded before dispatch.')
-    && !hasOpenEndedSolMediumException(content)
-    && !hasAvailabilityFallbackConflict(content);
+    && normalized.includes('These mappings are fixed for every spawn.')
+    && normalized.includes('Do not escalate, downgrade, or otherwise override a standard-tier role\'s model or reasoning effort based on task breadth, latency, prior results, risk, or any other condition.')
+    && normalized.includes('The role classification remains unchanged.')
+    && !normalized.includes('gpt-5.6-luna')
+    && !hasStandardTierDispatchException(content);
 }
 
 // ---------------------------------------------------------------------------
@@ -381,37 +368,43 @@ for (const ed of codexEditions) {
       if (modelRoutingBlock) {
         allModelRoutingBlocks.push(modelRoutingBlock);
         const mutations = [
-          ['standard model', modelRoutingBlock.replace('gpt-5.6-luna', 'gpt-5.6-sol')],
-          ['standard effort', modelRoutingBlock.replace('reasoning_effort: "max"', 'reasoning_effort: "low"')],
+          ['standard model', modelRoutingBlock.replace('gpt-5.6-sol', 'gpt-5.6-terra')],
+          ['standard effort', modelRoutingBlock.replace('reasoning_effort: "medium"', 'reasoning_effort: "high"')],
+          ['reasoning model', modelRoutingBlock.replace(
+            'Reasoning-tier roles dispatch with\n`model: "gpt-5.6-sol"`',
+            'Reasoning-tier roles dispatch with\n`model: "gpt-5.6-terra"`')],
           ['reasoning effort', modelRoutingBlock.replace('reasoning_effort: "xhigh"', 'reasoning_effort: "high"')],
-          ['override effort', modelRoutingBlock.replace('reasoning_effort: "medium"', 'reasoning_effort: "high"')],
-          ['per-spawn scope', modelRoutingBlock.replace('per-spawn override', 'profile-wide override')],
-          ['record-before ordering', modelRoutingBlock.replace('before dispatch', 'after dispatch')],
-          ['classification stability', modelRoutingBlock.replace('does not change', 'changes')],
-          ['broad-repository trigger', modelRoutingBlock.replace('broad repository understanding', '')],
-          ['latency-cost trigger', modelRoutingBlock.replace('serial latency or cost erosion', '')],
-          ['Luna-failure trigger', modelRoutingBlock.replace('repeated concrete Luna failures', '')],
-          ['persistent-state trigger', modelRoutingBlock.replace(
-            'architecture, migration, or subtle persistent-state risk', '')],
-          ['unbounded fifth trigger', modelRoutingBlock.replace(
-            'Record the selected trigger', '- any other complex task\n\nRecord the selected trigger')],
-          ['unsupported-runtime outcome', modelRoutingBlock.replace(
-            'fail closed to inline work', 'silently use a nearby model')],
-          ['availability fallback', modelRoutingBlock.replace(
-            'Sol/medium is not an availability fallback', 'Sol/medium is an availability fallback')],
+          ['fixed mapping', modelRoutingBlock.replace('fixed for every spawn', 'selected for each spawn')],
+          ['classification stability', modelRoutingBlock.replace('remains unchanged', 'may change')],
         ];
         for (const [label, mutatedBlock] of mutations) {
           assert(!codexModelRoutingContractValid(content.replace(modelRoutingBlock, mutatedBlock)),
             `T19 model-routing mutation: ${label} reds ${file}`);
         }
-        const genericException = content.replace(modelRoutingBlock,
-          `${modelRoutingBlock}\nOther complex tasks may also use Sol/medium.`);
-        assert(!codexModelRoutingContractValid(genericException),
-          `T19 model-routing mutation: a non-bullet generic fifth escalation reds ${file}`);
-        const unavailableFallback = `${content}\nIf Luna/max is unavailable, use Sol/medium instead.`;
-        assert(!codexModelRoutingContractValid(unavailableFallback)
-          && !codexDispatchCallSiteValid(unavailableFallback, name),
-          `T19 complete-surface mutation: a later Luna-unavailable Sol/medium fallback reds ${file}`);
+        const temporaryException = content.replace(modelRoutingBlock,
+          `${modelRoutingBlock}\nA standard-tier task may use Sol/xhigh for complex work.`);
+        assert(!codexModelRoutingContractValid(temporaryException)
+          && !codexDispatchCallSiteValid(temporaryException, name),
+          `T19 model-routing mutation: a standard-tier escalation reds ${file}`);
+        const downgradeException = content.replace(modelRoutingBlock,
+          `${modelRoutingBlock}\nA standard-tier task may use Sol/low for routine work.`);
+        assert(!codexModelRoutingContractValid(downgradeException)
+          && !codexDispatchCallSiteValid(downgradeException, name),
+          `T19 model-routing mutation: a standard-tier downgrade reds ${file}`);
+        const triggerList = content.replace(modelRoutingBlock,
+          `${modelRoutingBlock}\nStandard-tier triggers:\n- low-risk tasks use Sol/low.`);
+        assert(!codexModelRoutingContractValid(triggerList)
+          && !codexDispatchCallSiteValid(triggerList, name),
+          `T19 model-routing mutation: a standard-tier trigger list reds ${file}`);
+        const perTaskException = content.replace(modelRoutingBlock,
+          `${modelRoutingBlock}\nPer-task model exceptions may use Sol/high for quick work.`);
+        assert(!codexModelRoutingContractValid(perTaskException)
+          && !codexDispatchCallSiteValid(perTaskException, name),
+          `T19 model-routing mutation: a generic per-task exception reds ${file}`);
+        const availabilityException = `${content}\nIf Sol/medium is unavailable, use Terra/high instead.`;
+        assert(!codexModelRoutingContractValid(availabilityException)
+          && !codexDispatchCallSiteValid(availabilityException, name),
+          `T19 complete-surface mutation: a standard-tier availability exception reds ${file}`);
       }
 
       const callSite = codexDispatchCallSite(content, name);

@@ -177,15 +177,9 @@ governs exactly one case — an ad-hoc dispatch pointed at this repository's
 directory it was dispatched from.
 
 Codex keeps those role classifications unchanged but resolves them explicitly at each subagent
-spawn: `standard` dispatches as `gpt-5.6-luna` / `max`, while `reasoning` dispatches as
-`gpt-5.6-sol` / `xhigh`. A standard-tier spawn may temporarily use `gpt-5.6-sol` / `medium` only
-after recording one of four reasons: broad repository understanding; serial latency or cost erosion;
-repeated concrete Luna failures; or architecture, migration, or subtle persistent-state risk.
-Routine implementation is not a reason. The exception is per-spawn only: it changes neither the
-role's classification nor the default for later dispatches. Other runtimes retain their existing
-model routing. If the runtime does not expose Luna/max for spawning, record that capability mismatch
-and perform the work inline; never silently substitute another pair. Luna unavailability does not
-make Sol/medium eligible — that override still requires one of the four reasons independently.
+spawn: `standard` dispatches as `gpt-5.6-sol` / `medium`, while `reasoning` dispatches as
+`gpt-5.6-sol` / `xhigh`. Both mappings are fixed: standard-tier model and reasoning effort never
+change for an individual task. Other runtimes retain their existing model routing.
 
 Three roles are locally authored rather than derived from ECC:
 
@@ -660,10 +654,8 @@ The audit must keep these facts separate:
   preflight migrates or refuses any profile that pins them. The unpinned profile
   does not select the dispatch pair: each Codex spawn explicitly carries the
   model and reasoning effort selected from its role classification. Standard is
-  Luna/max and reasoning is Sol/xhigh, subject only to the four-reason
-  Sol/medium exception. If Luna/max is unavailable, record the capability
-  mismatch and work inline; never silently substitute Sol/medium or another
-  pair.
+  Sol/medium and reasoning is Sol/xhigh. These mappings have no per-task escalation, downgrade, or
+  other model/reasoning exception.
 
 Recommended posture when the user asks the agent to configure Codex for
 Kaola-Workflow:
@@ -829,13 +821,11 @@ managed `config.toml` block and deliberately omit both runtime keys. Exact histo
 Sol/xhigh profile pins are treated as stale managed profiles and migrated back to omission; partial
 or illegal pins are malformed. This profile rule is separate from dispatch: Codex passes both
 `model` and `reasoning_effort` on each spawn from the role's existing tier classification, using the
-pairs and bounded standard-tier exception documented above. The user-owned root
+fixed pair documented above. The user-owned root
 `model_reasoning_effort` controls the parent session and is never rewritten by profile migration.
 
-When the runtime cannot accept the standard Luna/max pair, the workflow records the capability
-mismatch and performs that work inline. It never silently substitutes another pair. Sol/medium is
-not an availability fallback and remains valid only when one of the four closed reasons independently
-applies and is recorded before dispatch.
+Every standard-tier Codex spawn explicitly carries Sol/medium. The workflow does not select a
+different model or reasoning effort for a standard role based on task or runtime conditions.
 
 **Say where the deliverable goes.** A role that can write (`Write`/`Edit` in its manifest) writes its
 full deliverable to a path the dispatch names and returns a compact summary; a read-only role returns

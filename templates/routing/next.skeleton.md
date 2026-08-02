@@ -83,28 +83,12 @@ record it as what it is. Re-run the gate if the installed profile set changes.
 
 Keep every installed role's existing standard-tier or reasoning-tier classification, and set the
 model and reasoning effort explicitly on each spawn. Standard-tier roles dispatch with
-`model: "gpt-5.6-luna"` and `reasoning_effort: "max"`. Reasoning-tier roles dispatch with
+`model: "gpt-5.6-sol"` and `reasoning_effort: "medium"`. Reasoning-tier roles dispatch with
 `model: "gpt-5.6-sol"` and `reasoning_effort: "xhigh"`.
 
-A standard-tier task may temporarily use `model: "gpt-5.6-sol"` and
-`reasoning_effort: "medium"` as a per-spawn override only for one of these four recorded triggers:
-
-- **broad repository understanding** — the bounded task crosses a large or unfamiliar surface where
-  stronger repository-wide synthesis is needed;
-- **serial latency or cost erosion** — Luna Max is expanding or retrying enough that its nominal
-  cost advantage is being lost on the serial path;
-- **repeated concrete Luna failures** — Luna has already failed the same bounded task with specific,
-  observed errors or inadequate results;
-- **architecture, migration, or subtle persistent-state risk** — a mistake could cross architectural
-  boundaries, corrupt a migration, or leave difficult-to-detect persistent-state defects.
-
-Record the selected trigger and a task-specific rationale before dispatch. Routine implementation is
-not a trigger. The override does not change the role classification or either tier default. If the
-runtime cannot accept Luna/max, fail closed to inline work, record the capability mismatch, and never
-silently substitute another model or reasoning effort. Sol/medium is not an availability fallback;
-use it only when one of the four triggers independently applies and is recorded before dispatch.
-Later standard-tier spawns return to Luna Max unless they independently meet and record one of the
-four triggers.
+These mappings are fixed for every spawn. Do not escalate, downgrade, or otherwise override a
+standard-tier role's model or reasoning effort based on task breadth, latency, prior results, risk,
+or any other condition. The role classification remains unchanged.
 <!-- /PIN -->
 <!-- /REGION -->
 
@@ -332,7 +316,7 @@ its issues alone.
 Subagent delegation is the default posture and is established without asking the user. Invoke the
 installed role agents for delegated work. For every spawn, follow the Codex Per-Spawn Model Routing
 contract above and pass both `model` and `reasoning_effort` explicitly on the spawn call as the pair
-selected by the role's existing tier or its independently justified, recorded temporary override.
+selected by the role's existing tier. Per-task model or reasoning-effort exceptions are not allowed.
 If the runtime genuinely cannot spawn a role agent, do the work inline and say so — that is a fact
 about tool availability, not a choice to present as a question. The Codex Profile Freshness Gate
 above is authoritative for profile availability; profile drift is not tool unavailability and must
