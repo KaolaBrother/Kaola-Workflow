@@ -4,7 +4,7 @@
 
 ### Changed
 
-- **Codex standard-tier subagents now use a fixed Sol/medium pair (#925).** This supersedes #924's
+- **Codex standard-tier subagents now use a fixed Sol/medium pair (#925).** This supersedes the 9.4.0
   Luna/max default and four-reason temporary override. Existing role classifications remain
   unchanged: standard roles always dispatch with Sol/medium and reasoning roles remain Sol/xhigh.
   There is no task-specific standard-tier model or reasoning-effort exception, and no other runtime's
