@@ -1,0 +1,45 @@
+{
+  "project": "bundle-911-912-913-914-916-917",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:forge-roadmap-rules-divergence",
+      "sample": "the gitlab/gitea roadmap.js generators emit a different RULES_BLOCK than canonical (4 bullets vs 5, only 2 overlapping); original divergence, zero commits, invisible to validate-script-sync, and the rendered workflow-init surfaces disagree with the forge generators' own output",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:forge-claim-dead-code",
+      "sample": "the gitlab/gitea claim.js ports carry persistExpansionRollupToSummary/parseExpansionRecords reading workflow-plan.md that canonical deleted (grep count 0 in canonical)",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:false-mechanism-in-finding-message",
+      "sample": "canonical's archive_stage_failed asserts `git add` is all-or-nothing over its pathspec list; measured false, exit 1 AND ROADMAP.md staged",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:api-doc-field-absent-on-forges",
+      "sample": "docs/api.md:330 documents archive_unstaged unconditionally; measured 1x canonical, 0x on both forge ports, while sibling residue_unstaged is 1/1/1",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:forge-archive-staging-unscoped",
+      "sample": "the forge unscoped `git add -A kaola-workflow/` sweeps a FOREIGN project's live folder and archive band into `chore: archive <project>` past both staging guards at exit 0; a scoping gap no failure type can reach because it succeeds",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:forge-branchless-unported",
+      "sample": "#711 branchless runs are implemented in canonical and absent from both forge ports (12 references vs 1); a forge `--branch TBD --sink` passes preflight and would then push/merge against a branch literally named TBD",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:suite-reads-operator-git-config",
+      "sample": "test-sink-merge and both forge sink suites created bare remotes with no explicit initial branch, so they were RED at the v9.2.0 release commit on any box without a global init.defaultBranch; fixed in this run",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:finding-type-count-drift",
+      "sample": "#916 added a seventh finalize finding type in the same bundle whose prose stated six; docs/api.md and the CHANGELOG were briefly false with every chain green, and nothing recounts types against prose",
+      "count": 1
+    }
+  ]
+}
