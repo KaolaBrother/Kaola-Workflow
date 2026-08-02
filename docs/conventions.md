@@ -146,6 +146,21 @@ Behavior that intentionally exercises a real network or installed forge client b
   Per-edition fields (gitlab `mr_*`/`project_id`; gitea `full_name`/`pr_*`) are deliberately
   NOT in `SHARED_STATE_FIELDS` and are not pinned by this gate.
 
+- **Finalize finding-type parity, and the prose that counts it (#914).**
+  `scripts/test-forge-finalize-findings.js` (wired into all five chain definitions) pins two
+  separate things and keeps them separate. **Behaviourally, per edition**: it drives a real
+  archive-staging fault and asserts the raised finding names the live run folder — that claim is
+  the whole reason the forge ports are not owed `archive_unstage_failed`, and it lives in a
+  *message string* in a hand-ported file, where a reword would silently falsify the recorded
+  decision. **Statically**: the per-edition `recordFinalizeFinding` registries agree forge-to-forge
+  and match the counts `docs/api.md` states. The static half is a registry-drift guard and is not
+  offered as behavioural coverage — #914 rules that a diff or byte-identity check cannot witness
+  this surface, which is true of the behaviour and not of the registry. The second half exists
+  because the drift happened: #916 added a seventh type in the same bundle that documented six,
+  and the prose was briefly false with every chain green. `sink-merge.js` and `claim.js` forge
+  ports are hand-ported (`edition-sync.js:30-34`) and absent from `COMMON_SCRIPTS` and
+  `RENAME_NORMALIZED_FAMILIES`, so nothing else looks at this seam at all.
+
 ## Correctness gates are owned and local
 
 Hosted CI/CD is never a Kaola completion gate. It is not a required step, not a finalization
