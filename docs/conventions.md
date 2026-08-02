@@ -31,12 +31,32 @@ self-issuing a pass; and a genuinely absent dispatch tool still records
 
 ## Codex Subagent Dispatch (issue #266)
 
-Codex subagent dispatch uses a **native role-dispatch packet**, not a Claude `Agent(subagent_type=..., model=...)` call. When the main Codex session invokes a Kaola subagent, it names the installed agent role and passes a dispatch packet:
+The #924 model-routing policy lives only in the live Codex `kaola-workflow-next` and
+`kaola-workflow-finalize` dispatch instructions. `kaola-workflow-init` does not render it into
+initialized shared repository guidance, which remains runtime-neutral.
+
+Codex subagent dispatch uses a **native role-dispatch packet**, not a Claude
+`Agent(subagent_type=..., model=...)` call. When the main Codex session invokes a Kaola subagent, it
+names the installed agent role and passes a dispatch packet:
 
 - `role` — the installed agent role name (e.g. `code-reviewer`, `implementer`)
 - `prompt` — the task prompt
 - `cwd` — the working directory
-- `model` — the resolved model, read from the installed `.codex/agents/kaola-workflow/<role>.toml` profile (via `resolve-agent-model`)
+- `model` — selected from the role's existing tier for this spawn: standard uses `gpt-5.6-luna` and
+  reasoning uses `gpt-5.6-sol`
+- `reasoning_effort` — paired with that model for this spawn: standard uses `max` and reasoning uses
+  `xhigh`
+
+A standard-tier spawn may temporarily use `gpt-5.6-sol` / `medium` only after recording one of four
+independent reasons: broad repository understanding; serial latency or cost erosion; repeated
+concrete Luna failures; or architecture, migration, or subtle persistent-state risk. Routine
+implementation is excluded, and the exception changes neither classification nor later defaults.
+
+If the current spawn capability does not expose Luna/max, record the mismatch and perform the task
+inline. Never silently substitute another pair. Missing Luna capability is not itself a Sol/medium
+reason; one of the four closed reasons must independently apply and be recorded before that dispatch.
+This outcome applies after a successful profile preflight; it is not a fallback for profile or config
+drift.
 
 Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 
@@ -247,7 +267,7 @@ the ordinary hand-mirrored agent workflow:
 that stochastic models must emit identical findings, explanations, or outcomes. Installer/preflight
 checks may claim exact selected-source, installed-file, manifest, and plugin-cache bytes only; they
 must not claim proprietary prompt-load attestation without a public runtime introspection contract.
-Codex reviewer profiles preserve inherit-by-omission and may not emit top-level `model` or
+Codex reviewer profiles remain runtime-unpinned by omission and may not emit top-level `model` or
 `model_reasoning_effort`. Their top-level schema is closed to `name`, `description`,
 `nickname_candidates`, and `developer_instructions`; behavior and resolved-profile identity lines
 live inside `developer_instructions` so they remain runtime-verifiable without becoming unsupported

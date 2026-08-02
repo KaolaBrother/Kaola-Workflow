@@ -60,6 +60,86 @@ function conflictingControlPlaneMutations(content) {
   ];
 }
 
+const CODEX_MODEL_ROUTING_MARKER = '<!-- PIN: codex-dispatch-model-routing -->';
+function codexModelRoutingBlock(content) {
+  const start = content.indexOf(CODEX_MODEL_ROUTING_MARKER);
+  const end = start >= 0 ? content.indexOf('<!-- /PIN -->', start) : -1;
+  return start >= 0 && end > start ? content.slice(start, end) : '';
+}
+
+function hasOpenEndedSolMediumException(content) {
+  return /(?:other|additional|generic|routine|complex)\b.{0,120}\b(?:may|can|allowed|eligible)\b.{0,100}\b(?:escalat\w*|(?:use|select)\s+Sol\/?medium)/i
+    .test(norm(content));
+}
+
+function hasAvailabilityFallbackConflict(content) {
+  return /Luna\/?max\b.{0,100}\bunavailable\b.{0,100}\b(?:use|select|substitute|fall back to)\b.{0,60}\bSol\/?medium\b/i
+    .test(norm(content));
+}
+
+function hasProfileOwnedDispatchConflict(content) {
+  const normalized = norm(content);
+  return /pass\b.{0,100}\bconfigured model\b/i.test(normalized)
+    || /ships its model in its installed profile/i.test(normalized)
+    || /profile\b.{0,50}\bowns?\b.{0,50}\bmodel/i.test(normalized)
+    || /inherit\w*\b.{0,50}\bmodel\b.{0,50}\bprofile/i.test(normalized)
+    || /(?:model|reasoning effort)\b.{0,100}\b(?:inherited from|owned by|read from)\b.{0,50}\bprofile/i
+      .test(normalized);
+}
+
+function codexDispatchCallSite(content, skillName) {
+  if (skillName === 'kaola-workflow-next') {
+    const match = content.match(/## Delegation\s*([\s\S]*?)(?:\n## |$)/);
+    return match ? match[1] : '';
+  }
+  if (skillName === 'kaola-workflow-finalize') {
+    const match = content.match(/Delegate to the `doc-updater` role([\s\S]*?)\nWrite the result/);
+    return match ? match[1] : '';
+  }
+  return '';
+}
+
+function codexDispatchCallSiteValid(content, skillName) {
+  const callSite = norm(codexDispatchCallSite(content, skillName));
+  return callSite.includes('`model`')
+    && callSite.includes('`reasoning_effort`')
+    && /per-spawn model routing/i.test(callSite)
+    && !hasProfileOwnedDispatchConflict(content)
+    && !hasOpenEndedSolMediumException(content)
+    && !hasAvailabilityFallbackConflict(content);
+}
+
+// This is deliberately a prose-contract validator, not a profile/config assertion: the routing
+// decision is made for each spawn, after the role's existing standard/reasoning classification is
+// known. Keeping the four exceptions as an exact list prevents a plausible near-miss where an
+// open-ended "complex task" escape hatch silently turns Sol/medium into a third default tier.
+function codexModelRoutingContractValid(content) {
+  const block = codexModelRoutingBlock(content);
+  if (!block) return false;
+  const normalized = norm(block);
+  const triggerRegion = block.match(/only for one of these four recorded triggers:\s*([\s\S]*?)\n\s*Record /i);
+  const triggerItems = triggerRegion
+    ? triggerRegion[1].split('\n').filter(line => /^\s*(?:[-*]|\d+[.)])\s+/.test(line))
+    : [];
+  const triggerNeedles = [
+    'broad repository understanding',
+    'serial latency or cost erosion',
+    'repeated concrete Luna failures',
+    'architecture, migration, or subtle persistent-state risk',
+  ];
+  return normalized.includes('Standard-tier roles dispatch with `model: "gpt-5.6-luna"` and `reasoning_effort: "max"`.')
+    && normalized.includes('Reasoning-tier roles dispatch with `model: "gpt-5.6-sol"` and `reasoning_effort: "xhigh"`.')
+    && normalized.includes('A standard-tier task may temporarily use `model: "gpt-5.6-sol"` and `reasoning_effort: "medium"` as a per-spawn override only for one of these four recorded triggers:')
+    && triggerItems.length === triggerNeedles.length
+    && triggerNeedles.every(needle => normalized.includes(needle))
+    && normalized.includes('Record the selected trigger and a task-specific rationale before dispatch.')
+    && normalized.includes('The override does not change the role classification or either tier default.')
+    && normalized.includes('If the runtime cannot accept Luna/max, fail closed to inline work, record the capability mismatch, and never silently substitute another model or reasoning effort.')
+    && normalized.includes('Sol/medium is not an availability fallback; use it only when one of the four triggers independently applies and is recorded before dispatch.')
+    && !hasOpenEndedSolMediumException(content)
+    && !hasAvailabilityFallbackConflict(content);
+}
+
 // ---------------------------------------------------------------------------
 // Routing-target model. The command surface is three topics — init, next, finalize — and the
 // generated-surface registry is their single source: the same TOPICS table that RENDERS the
@@ -258,6 +338,7 @@ for (const ed of codexEditions) {
     'Re-run the gate if the installed profile set changes',
   ];
   const allPreflightBlocks = [];
+  const allModelRoutingBlocks = [];
 
   for (const edition of codexEditions) {
     const skillNames = fs.readdirSync(path.join(REPO, edition.skillsDir), { withFileTypes: true })
@@ -293,10 +374,71 @@ for (const ed of codexEditions) {
         `T19: ${file} never executes a repository-local first-match preflight`);
       assert(!block.includes('find "$candidate_root"'),
         `T19: ${file} never uses nondeterministic find/head cache selection`);
+
+      const modelRoutingBlock = codexModelRoutingBlock(content);
+      assert(codexModelRoutingContractValid(content),
+        `T19 model routing: ${file} carries the bounded Codex per-spawn standard/reasoning contract`);
+      if (modelRoutingBlock) {
+        allModelRoutingBlocks.push(modelRoutingBlock);
+        const mutations = [
+          ['standard model', modelRoutingBlock.replace('gpt-5.6-luna', 'gpt-5.6-sol')],
+          ['standard effort', modelRoutingBlock.replace('reasoning_effort: "max"', 'reasoning_effort: "low"')],
+          ['reasoning effort', modelRoutingBlock.replace('reasoning_effort: "xhigh"', 'reasoning_effort: "high"')],
+          ['override effort', modelRoutingBlock.replace('reasoning_effort: "medium"', 'reasoning_effort: "high"')],
+          ['per-spawn scope', modelRoutingBlock.replace('per-spawn override', 'profile-wide override')],
+          ['record-before ordering', modelRoutingBlock.replace('before dispatch', 'after dispatch')],
+          ['classification stability', modelRoutingBlock.replace('does not change', 'changes')],
+          ['broad-repository trigger', modelRoutingBlock.replace('broad repository understanding', '')],
+          ['latency-cost trigger', modelRoutingBlock.replace('serial latency or cost erosion', '')],
+          ['Luna-failure trigger', modelRoutingBlock.replace('repeated concrete Luna failures', '')],
+          ['persistent-state trigger', modelRoutingBlock.replace(
+            'architecture, migration, or subtle persistent-state risk', '')],
+          ['unbounded fifth trigger', modelRoutingBlock.replace(
+            'Record the selected trigger', '- any other complex task\n\nRecord the selected trigger')],
+          ['unsupported-runtime outcome', modelRoutingBlock.replace(
+            'fail closed to inline work', 'silently use a nearby model')],
+          ['availability fallback', modelRoutingBlock.replace(
+            'Sol/medium is not an availability fallback', 'Sol/medium is an availability fallback')],
+        ];
+        for (const [label, mutatedBlock] of mutations) {
+          assert(!codexModelRoutingContractValid(content.replace(modelRoutingBlock, mutatedBlock)),
+            `T19 model-routing mutation: ${label} reds ${file}`);
+        }
+        const genericException = content.replace(modelRoutingBlock,
+          `${modelRoutingBlock}\nOther complex tasks may also use Sol/medium.`);
+        assert(!codexModelRoutingContractValid(genericException),
+          `T19 model-routing mutation: a non-bullet generic fifth escalation reds ${file}`);
+        const unavailableFallback = `${content}\nIf Luna/max is unavailable, use Sol/medium instead.`;
+        assert(!codexModelRoutingContractValid(unavailableFallback)
+          && !codexDispatchCallSiteValid(unavailableFallback, name),
+          `T19 complete-surface mutation: a later Luna-unavailable Sol/medium fallback reds ${file}`);
+      }
+
+      const callSite = codexDispatchCallSite(content, name);
+      assert(codexDispatchCallSiteValid(content, name),
+        `T19 call site: ${file} requires both per-spawn model and reasoning effort without profile inheritance`);
+      if (codexDispatchCallSiteValid(content, name)) {
+        const withoutModel = content.replace(callSite, callSite.replace('`model`', '`selected value`'));
+        const withoutEffort = content.replace(callSite,
+          callSite.replace('`reasoning_effort`', '`selected effort`'));
+        const laterConflict = `${content}\nPass the role's configured model on the spawn call.`;
+        const inheritanceConflict = `${content}\nInherit the model from the role's installed profile.`;
+        assert(!codexDispatchCallSiteValid(withoutModel, name),
+          `T19 call-site mutation: omitting model reds ${file}`);
+        assert(!codexDispatchCallSiteValid(withoutEffort, name),
+          `T19 call-site mutation: omitting reasoning_effort reds ${file}`);
+        assert(!codexDispatchCallSiteValid(laterConflict, name),
+          `T19 call-site mutation: a later configured-model conflict reds ${file}`);
+        assert(!codexDispatchCallSiteValid(inheritanceConflict, name),
+          `T19 call-site mutation: a later profile-inheritance conflict reds ${file}`);
+      }
     }
   }
   assert(allPreflightBlocks.every(block => block === allPreflightBlocks[0]),
     'T19: all dispatch-capable Codex skills carry one byte-identical profile preflight block');
+  assert(allModelRoutingBlocks.length === codexEditions.length * expectedDispatchSkills.length
+    && allModelRoutingBlocks.every(block => block === allModelRoutingBlocks[0]),
+    'T19 model routing: all six Codex next/finalize skills carry one byte-identical routing contract');
 
   // Execute the exact fenced Bash block against a fake Codex registry. A malicious
   // lexically-first repository script and an older cache version must never run;
@@ -589,6 +731,7 @@ const FOREIGN_MARKERS = new Set([
   // Managed across every dispatch-capable Codex skill by T19, not by one
   // routing topic in this manifest.
   '<!-- PIN: codex-profile-preflight -->',
+  '<!-- PIN: codex-dispatch-model-routing -->',
   // The consent rule is carried by EVERY topic, so one marker legitimately appears on all three.
   // The reverse sentinel keys marker -> single block, which cannot express that; the FORWARD
   // presence obligation is what enforces it here, via one manifest block per topic. Deleting a

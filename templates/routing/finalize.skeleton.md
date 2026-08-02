@@ -77,6 +77,36 @@ is a profile/config fact about the install, never a judgement about the work, so
 record it as what it is. Re-run the gate if the installed profile set changes.
 <!-- /PIN -->
 <!-- /REGION -->
+<!-- REGION:skill — Codex selects the model and reasoning effort on each spawn from the role's existing tier classification; command runtimes retain their installed-profile model routing -->
+<!-- PIN: codex-dispatch-model-routing -->
+## Codex Per-Spawn Model Routing
+
+Keep every installed role's existing standard-tier or reasoning-tier classification, and set the
+model and reasoning effort explicitly on each spawn. Standard-tier roles dispatch with
+`model: "gpt-5.6-luna"` and `reasoning_effort: "max"`. Reasoning-tier roles dispatch with
+`model: "gpt-5.6-sol"` and `reasoning_effort: "xhigh"`.
+
+A standard-tier task may temporarily use `model: "gpt-5.6-sol"` and
+`reasoning_effort: "medium"` as a per-spawn override only for one of these four recorded triggers:
+
+- **broad repository understanding** — the bounded task crosses a large or unfamiliar surface where
+  stronger repository-wide synthesis is needed;
+- **serial latency or cost erosion** — Luna Max is expanding or retrying enough that its nominal
+  cost advantage is being lost on the serial path;
+- **repeated concrete Luna failures** — Luna has already failed the same bounded task with specific,
+  observed errors or inadequate results;
+- **architecture, migration, or subtle persistent-state risk** — a mistake could cross architectural
+  boundaries, corrupt a migration, or leave difficult-to-detect persistent-state defects.
+
+Record the selected trigger and a task-specific rationale before dispatch. Routine implementation is
+not a trigger. The override does not change the role classification or either tier default. If the
+runtime cannot accept Luna/max, fail closed to inline work, record the capability mismatch, and never
+silently substitute another model or reasoning effort. Sol/medium is not an availability fallback;
+use it only when one of the four triggers independently applies and is recorded before dispatch.
+Later standard-tier spawns return to Luna Max unless they independently meet and record one of the
+four triggers.
+<!-- /PIN -->
+<!-- /REGION -->
 
 <!-- SLOT:fz-h1 -->
 
@@ -236,11 +266,13 @@ Agent(
 )
 ```
 <!-- /REGION -->
-<!-- REGION:skill — the spawn counterpart of the `Agent(...)` block above: this runtime names the role and resolves its model from the installed profile, so there is no call block and no placeholder -->
+<!-- REGION:skill — the spawn counterpart of the `Agent(...)` block above: this runtime names the role and passes the model plus reasoning effort selected by the Codex per-spawn routing contract, so there is no command-runtime call block or placeholder -->
 Delegate to the `doc-updater` role with the changed files, the checklist, and
-`Working directory: ${ACTIVE_WORKTREE_PATH}`. Pass the role's configured model on the spawn call.
-Update docs only when behavior, API, setup, architecture, environment, roadmap, or user-facing
-workflow changed; otherwise write the no-impact reason.
+`Working directory: ${ACTIVE_WORKTREE_PATH}`. Follow the Codex Per-Spawn Model Routing contract above:
+pass both `model` and `reasoning_effort` explicitly on the spawn call as the pair selected for
+`doc-updater`'s existing tier or an independently justified, recorded temporary override. Update docs
+only when behavior, API, setup, architecture, environment, roadmap, or user-facing workflow changed;
+otherwise write the no-impact reason.
 <!-- /REGION -->
 
 Write the result to `.cache/doc-updater.md`. **Anti-fabrication, required:** instruct `doc-updater`

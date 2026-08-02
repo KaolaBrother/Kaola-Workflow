@@ -162,12 +162,12 @@ for one by name at the moment it needs it, and running an item inline instead is
 call. There is no planning agent and no bookkeeping agent — the orchestrator writes the mission list
 and runs the finalize transaction itself.
 
-The **Tier** column is each role's *static default* — the `DEFAULT_AGENT_MODELS`
-fallback the runtime resolver uses when a dispatch names no tier. There is **no
-install-time model axis**: every install ships the same assignment, and the orchestrator may pass a
-different model on any single dispatch.
+The **Tier** column is each role's *static classification*. For Claude Code and opencode it also
+selects the `DEFAULT_AGENT_MODELS` fallback when a dispatch names no tier. There is **no install-time
+model axis**: every install ships the same assignment, and the orchestrator may pass a different
+model on any single dispatch.
 
-For an **installed** agent the tier above is the only thing that decides: install
+For an **installed Claude Code** agent the tier above is the only thing that decides: install
 rewrites each installed agent's frontmatter to `model: inherit`, so the resolver's
 frontmatter step never fires and the chain is `dispatch → DEFAULT_AGENT_MODELS
 → inherit`. Each role's *source* frontmatter carries the identical value and
@@ -176,12 +176,16 @@ governs exactly one case — an ad-hoc dispatch pointed at this repository's
 `test-agent-model-resolver.js`, so a role runs at the same tier whichever
 directory it was dispatched from.
 
-On the current Codex runtime, every named Kaola role profile omits top-level `model` and
-`model_reasoning_effort`, so the child inherits both effective values from the parent session. The
-portable `reasoning`/`standard` tiers (and legacy `opus`/`sonnet` aliases) remain declarative
-metadata for role defaults; they do not select a Codex child pair.
-Reasoning-floor roles still fail closed: a fresh current-session JSONL proof must establish a
-classified `gpt-5.6-sol`/`xhigh`-or-higher parent posture before dispatch.
+Codex keeps those role classifications unchanged but resolves them explicitly at each subagent
+spawn: `standard` dispatches as `gpt-5.6-luna` / `max`, while `reasoning` dispatches as
+`gpt-5.6-sol` / `xhigh`. A standard-tier spawn may temporarily use `gpt-5.6-sol` / `medium` only
+after recording one of four reasons: broad repository understanding; serial latency or cost erosion;
+repeated concrete Luna failures; or architecture, migration, or subtle persistent-state risk.
+Routine implementation is not a reason. The exception is per-spawn only: it changes neither the
+role's classification nor the default for later dispatches. Other runtimes retain their existing
+model routing. If the runtime does not expose Luna/max for spawning, record that capability mismatch
+and perform the work inline; never silently substitute another pair. Luna unavailability does not
+make Sol/medium eligible — that override still requires one of the four reasons independently.
 
 Three roles are locally authored rather than derived from ECC:
 
@@ -653,13 +657,13 @@ The audit must keep these facts separate:
   fresh relative to the plugin source Codex is actually loading.
 - Runtime profile integrity comes from omission plus preflight: every generated
   role profile omits both runtime-strength keys, and the profile-freshness
-  preflight migrates or refuses any profile that pins them. Codex >=0.145.0
-  resolves the sub-agent's own model/reasoning effort itself (via
-  `[agents].default_subagent_model` / `default_subagent_reasoning_effort`, or
-  its own built-in default) — this is Codex's decision, not a guaranteed
-  parent-session equality, and Kaola never writes or overrides it. A
-  reasoning-floor role additionally requires the resolved model to classify at
-  `gpt-5.6-sol`/`xhigh` or higher.
+  preflight migrates or refuses any profile that pins them. The unpinned profile
+  does not select the dispatch pair: each Codex spawn explicitly carries the
+  model and reasoning effort selected from its role classification. Standard is
+  Luna/max and reasoning is Sol/xhigh, subject only to the four-reason
+  Sol/medium exception. If Luna/max is unavailable, record the capability
+  mismatch and work inline; never silently substitute Sol/medium or another
+  pair.
 
 Recommended posture when the user asks the agent to configure Codex for
 Kaola-Workflow:
@@ -820,18 +824,18 @@ When the role profiles are absent the workflow auto-detects this, keeps the
 `delegate` policy, and records `local-fallback-tool-unavailable`. The current Codex session performs
 the work locally under `local-authorized` only when you explicitly disable delegation.
 
-Codex 0.144 reloads a named role profile after transient spawn overrides, so Kaola
-does not rely on per-spawn `model` or `reasoning_effort`. Standalone role TOMLs
-include the same `description` and `nickname_candidates` metadata as the managed
-`config.toml` block and deliberately omit both runtime keys. Exact historical
-Sol/medium or Sol/xhigh pairs are treated as stale managed profiles and migrated
-back to omission; partial or illegal pins are malformed. This per-profile rule is
-separate from the user-owned root `model_reasoning_effort` setting, which controls
-the parent session's dispatch posture and is never rewritten by profile migration.
+Standalone role TOMLs include the same `description` and `nickname_candidates` metadata as the
+managed `config.toml` block and deliberately omit both runtime keys. Exact historical Sol/medium or
+Sol/xhigh profile pins are treated as stale managed profiles and migrated back to omission; partial
+or illegal pins are malformed. This profile rule is separate from dispatch: Codex passes both
+`model` and `reasoning_effort` on each spawn from the role's existing tier classification, using the
+pairs and bounded standard-tier exception documented above. The user-owned root
+`model_reasoning_effort` controls the parent session and is never rewritten by profile migration.
 
-Codex dispatch retains the role's default `reasoning`/`standard` tier as declarative metadata
-only — Codex >=0.145.0 resolves the sub-agent's own model/reasoning effort itself, not a guaranteed
-parent-session equality, and Kaola never writes or overrides it.
+When the runtime cannot accept the standard Luna/max pair, the workflow records the capability
+mismatch and performs that work inline. It never silently substitutes another pair. Sol/medium is
+not an availability fallback and remains valid only when one of the four closed reasons independently
+applies and is recorded before dispatch.
 
 **Say where the deliverable goes.** A role that can write (`Write`/`Edit` in its manifest) writes its
 full deliverable to a path the dispatch names and returns a compact summary; a read-only role returns
@@ -842,8 +846,9 @@ the mission list's `dispatched` field is what lets a successor go looking for th
 Codex preflight and doctor output report the dispatch identity mode. `v2-task-name`
 is the only mode — there is no v1/thread-id fallback. Once `features.multi_agent_v2.enabled = true`
 is set, dispatches pass a sanitized `task_name` with `fork_turns: "none"` and no
-transient model/effort overrides; the named standalone profile (or Codex's own
-runtime resolution) owns the model/reasoning pair.
+conversation-history inheritance. They also pass explicit per-spawn `model` and
+`reasoning_effort` values selected by the Codex routing contract; the standalone
+profile remains runtime-unpinned.
 
 ## Usage
 

@@ -1449,16 +1449,35 @@ retired `parallel_mode`) is ignored, never rewritten.
 
 ### Agent model resolution
 
-There is **no install-written agent model manifest**. `install.sh` deletes a pre-existing
+For Claude Code, there is **no install-written agent model manifest**. `install.sh` deletes a pre-existing
 `~/.claude/agents/.kaola-agent-models.json` on upgrade and never reads one. `KAOLA_AGENT_DIR` is
 respected when set.
 
-`resolve-agent-model` resolves in three steps: **explicit model from the caller → frontmatter (when
+The Claude Code `resolve-agent-model` path resolves in three steps: **explicit model from the caller → frontmatter (when
 not `inherit`) → `DEFAULT_AGENT_MODELS`**, falling back to `''` only when no step answers. For an
 installed agent the frontmatter step is inert, because install rewrites every installed agent's
 frontmatter to `model: inherit`. It governs exactly one case: an ad-hoc dispatch against this
 repository's source `agents/` tree. Each role's source frontmatter is therefore held byte-equal to
 its `DEFAULT_AGENT_MODELS` entry (asserted by `test-agent-model-resolver.js`).
+
+Codex subagent dispatch uses the existing role tier as a separate per-spawn contract:
+
+| Role tier | Codex model | Reasoning effort |
+|---|---|---|
+| `standard` | `gpt-5.6-luna` | `max` |
+| `reasoning` | `gpt-5.6-sol` | `xhigh` |
+
+A `standard` spawn may temporarily use `gpt-5.6-sol` / `medium` only when the dispatch record names
+one of these four reasons before the spawn: broad repository understanding; serial latency or cost
+erosion; repeated concrete Luna failures; or architecture, migration, or subtle persistent-state
+risk. Routine implementation does not qualify. The override applies to that spawn only and does not
+reclassify the role or alter later defaults. This contract is Codex-only; the resolver and model
+routing for Claude Code, opencode, and Kimi are unchanged.
+
+If the runtime does not expose Luna/max as an accepted spawn pair, record the capability mismatch and
+execute the task inline. Do not silently substitute another pair. Luna unavailability alone does not
+permit Sol/medium; that pair remains available only when one of the four reasons independently
+applies and is recorded before spawn.
 
 ## Environment Variables
 

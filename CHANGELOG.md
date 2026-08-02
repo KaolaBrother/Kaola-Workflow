@@ -29,6 +29,14 @@
 
 ### Changed
 
+- **Codex subagents now use a bounded per-spawn model pair (#924).** Existing role classifications
+  remain unchanged: standard roles dispatch with Luna Max and reasoning roles with Sol xhigh. A
+  standard spawn may temporarily use Sol medium only after recording one of four closed reasons —
+  broad repository understanding, serial latency or cost erosion, repeated concrete Luna failures,
+  or architecture/migration/subtle persistent-state risk. Routine implementation is excluded, the
+  override does not become a later default, and no other runtime's model routing changes. If the
+  runtime does not expose Luna Max for spawning, the workflow records the mismatch and performs the
+  work inline; it never silently substitutes Sol medium or another pair.
 - **`docs/api.md` scopes `archive_unstaged` to the editions that emit it (#921).** The field was
   documented unconditionally but is set only by canonical and Codex; the sibling `residue_unstaged`
   is genuinely on all four and is now marked as such. The surrounding edition caveat kept its correct

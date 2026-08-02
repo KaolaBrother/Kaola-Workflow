@@ -301,8 +301,9 @@ carry their own suites (`test-opencode-edition.js`, `test-kimi-edition.js`). See
 
 Each role has a canonical `agents/<name>.md` (installed by `install.sh` for Claude) and a `.toml`
 triple across the three plugin editions. Every Codex profile omits top-level `model` and
-`model_reasoning_effort`, which is the named-role inheritance form. All three `.toml` twins for a
-profile are byte-identical and forge-neutral — no CLI binaries, no forge brands.
+`model_reasoning_effort`; the dispatching workflow, rather than the profile, supplies the runtime
+pair for each spawn. All three `.toml` twins for a profile are byte-identical and forge-neutral — no
+CLI binaries, no forge brands.
 
 `code-reviewer`, `adversarial-verifier` and `security-reviewer` are **generated**, not hand-authored:
 their behavior lives in `templates/reviewers/behavior-contracts.json`, their closed tool/model
@@ -317,7 +318,7 @@ token into all three `.toml` twins before it can be pinned in `test-agent-profil
 
 ### Model resolution
 
-There is no install-time model axis and no install-written manifest. `install.sh` deletes a
+For Claude Code, there is no install-time model axis and no install-written manifest. `install.sh` deletes a
 pre-existing `~/.claude/agents/.kaola-agent-models.json` on upgrade. The resolver
 (`kaola-workflow-resolve-agent-model.js`) is:
 
@@ -332,11 +333,21 @@ real path, each role's source frontmatter is held byte-equal to its `DEFAULT_AGE
 (asserted by `test-agent-model-resolver.js`), so a role resolves to the same tier from either
 directory.
 
-The commands carry an explicit `model="{...}"` placeholder on every dispatch, which the installer
-fills from the agent's own installed profile; that is what renders the model badge. Claude and
-opencode apply the resolved tier dynamically. Codex ≥0.145.0 resolves the named child's own runtime
-pair independently — there is no guaranteed parent-child equality, and Kaola neither writes nor
-verifies one.
+For Claude Code, commands carry an explicit `model="{...}"` placeholder on every dispatch, which the
+installer fills from the agent's own installed profile; that is what renders the model badge.
+opencode applies its resolved tier dynamically.
+
+Codex keeps the same role classification but maps it at spawn time: `standard` to
+`gpt-5.6-luna` / `max`, and `reasoning` to `gpt-5.6-sol` / `xhigh`. A standard-tier spawn can instead
+use `gpt-5.6-sol` / `medium` only when the orchestrator records, before spawning, one of four closed
+reasons: broad repository understanding; serial latency or cost erosion; repeated concrete Luna
+failures; or architecture, migration, or subtle persistent-state risk. Routine implementation is
+excluded. The override is local to that spawn and changes neither classification nor either default.
+No other runtime's model resolution changes.
+If Luna/max is not exposed by the current Codex spawn capability, the orchestrator records the
+mismatch and completes the task inline; it never silently substitutes a nearby pair. Sol/medium is
+not the availability fallback and remains permitted only when one of the four reasons independently
+applies and is recorded before spawn.
 
 ## Testing
 
