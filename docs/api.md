@@ -382,8 +382,9 @@ the attribution between the two calls is coarser.
 `git add -A 'kaola-workflow/'` with no `git rm -r --cached` and no candidate list. That shape's
 failure modes were all *successes* — exit 0 with `archive_stage: 'staged'` — which is why no
 additional *failure* type would have reached them: a `.gitignore`d child under `kaola-workflow/` was
-silently skipped where canonical's explicit pathspec exits non-zero; a live run folder surviving on
-disk was re-added rather than forced out of the index, so it stayed on the branch; and a **foreign
+silently skipped where canonical's explicit pathspec exits non-zero; the live run folder's removal
+reached the index only incidentally, swept up by the unscoped pathspec rather than staged on purpose;
+and a **foreign
 project's live folder or archive band was swept into the `chore: archive` commit**, making neither
 run's diff attributable on a checkout with concurrent runs. Scoping the pathspec is what closed all
 three; adding a finding type never could have.

@@ -30,7 +30,9 @@
   *succeeded*, which is why no finding type reached it and why no additional type could have: the
   remedy is the pathspec. Both ports now stage a computed candidate list scoped to the project's own
   paths, preceded by the `git rm -r --cached` that forces its live folder off the branch — not
-  optional alongside the scoping, because the unscoped `-A` had been re-adding that folder from disk.
+  optional alongside the scoping. The archive step has already deleted that folder from disk, so the
+  unscoped `-A` had been staging its deletion incidentally; narrowing the add removes the only thing
+  that noticed, so the removal now has to be staged explicitly.
   Both calls share one try/catch, so the single `archive_stage_failed` finding shape is unchanged.
 - **Finalize no longer tells the operator that `git add` is all-or-nothing (#920).** The
   `archive_stage_failed` and `residue_stage_failed` findings, and their stderr warnings, asserted

@@ -4389,10 +4389,13 @@ function cmdFinalize() {
       // commit spanning two run folders makes neither one's diff attributable, and concurrent runs on
       // one checkout are a supported posture. Not a failure mode: it SUCCEEDED, which is why no finding
       // type reached it and why the remedy is the pathspec rather than a new type.
-      // The `git rm -r --cached` is what forces the live run folder OUT of the branch. It is not
-      // optional alongside the scoping: the unscoped `-A` used to re-add that folder from disk, so
-      // narrowing the add on its own would have left it on the branch that `chore: archive` exists to
-      // remove it from. Both calls share one try/catch, so the one-finding shape is unchanged.
+      // The `git rm -r --cached` is what forces the live run folder OUT of the branch, and it is not
+      // optional alongside the scoping. archiveProjectDir has already DELETED that folder from disk by
+      // this point, so the unscoped `-A` was staging its deletion incidentally, as a side effect of
+      // sweeping the whole band. Narrowing the add removes the only thing that was noticing the
+      // deletion, which would leave the folder on the branch that `chore: archive` exists to remove it
+      // from — so the removal has to be staged explicitly. Both calls share one try/catch, so the
+      // one-finding shape is unchanged.
       const archivePaths = ['kaola-workflow/.roadmap', 'kaola-workflow/ROADMAP.md'];
       if (result.dest) {
         const destRel = path.relative(root, result.dest);
