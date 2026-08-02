@@ -413,7 +413,7 @@
   was found. That is not a new stop; it is the stop that already existed, made readable.
 
 - **Two pieces of repository drift the closure audit had been reporting on every run are cleared
-  (#909).** Issue #796 was closed while still carrying `workflow:in-progress`; the label is removed,
+  (#909).** Issue 796 was closed while still carrying `workflow:in-progress`; the label is removed,
   and a widened sweep confirmed it was the only instance — no second closed issue carries one, and no
   open issue carries one without a backing claim. And `kaola-workflow/archive/bundle-429-434/` held a
   single tracked file and no `workflow-state.md`, so the audit read it as an archive missing its
