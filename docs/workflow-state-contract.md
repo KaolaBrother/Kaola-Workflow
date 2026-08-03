@@ -140,6 +140,19 @@ name beginning with `.`, are skipped by `readActiveFolders` before path safety i
 such a run is claimed but invisible to status and to the active-folder sweep. Write `—` when no
 project is assigned yet, and a real, intended name otherwise.
 
+**Such a run can be claimed, but it can no longer be archived (issue #930).** The claim side is
+unchanged — a reserved name is still adopted and the folder is still invisible to enumeration — but
+`archiveProjectDir` now refuses every dot-prefixed name, and `archive` **in any casing**, outright with
+`reason: "archive_reserved_directory"` at exit 1, before the archive step moves, copies, stamps or
+deletes anything. The casing matters because the comparison has to agree with the filesystem rather
+than with the string: on a case-insensitive volume `kaola-workflow/Archive` *is* `kaola-workflow/archive`,
+so an exact-match test would let `Archive` through to destroy the very band it was meant to protect.
+Previously finalization derived the archive destination from the project name alone and relocated
+whatever directory that named: a run claimed as `.roadmap` moved the entire backlog — every
+`issue-*.md` source and `_rules.md` — under `kaola-workflow/archive/`, and under `--keep-worktree` it
+also committed the deletion of those tracked files onto the feature branch the sink merges. The
+recovery for such a run is to release or discard it and re-claim under a real project name.
+
 This field is not how a bundle is formed: a bundle's folder name and branch stem are derived from its
 issue set (see Bundle project and branch naming below), never read from here.
 

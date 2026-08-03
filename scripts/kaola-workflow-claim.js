@@ -2429,8 +2429,66 @@ function sanitizeBarrierTag(name) {
   return String(name).replace(/[^A-Za-z0-9_-]/g, '_');
 }
 
+// #930: which names under `kaola-workflow/` are NOT project folders. The wording is the
+// ENUMERATION wording — the same `archive`-or-dot-prefixed test readActiveFolders applies at its
+// main loop, and that this file already applies twice in the barrier-reap keep passes below. A
+// directory the enumerator will never surface as a project is not a project folder, whatever a
+// claim wrote into it. Chosen deliberately over the other three wordings in the tree: the two
+// literal `.roadmap`/`ROADMAP.md` tests are narrower than the class (they do not see `.origin`),
+// compact-context's `!== 'archive'` is narrower still, and adaptive-schema's NON_PROJECT_FOLDERS
+// (`archive`, `exports`) is module-private to the byte-identical cross-edition anchor — reusing it
+// would mean widening that file's export surface, and `exports` is a name no observed failure has
+// ever demanded here. `isSafeName` deliberately does NOT answer this question: it is PATH safety,
+// shared with claimProject, both sinks and closure-audit, and widening it would change what "safe"
+// means for every one of them (and would make the assert below throw instead of report).
+//
+// The `archive` arm is CASE-FOLDED because the filesystem it protects is: this repository's volume
+// and os.tmpdir() are both case-insensitive (measured — `touch AbC && test -e abc` succeeds on
+// both), so `kaola-workflow/Archive` IS `kaola-workflow/archive` on disk while `'Archive' ===
+// 'archive'` is false. Exact-match let `--project Archive` walk straight past this guard and rm -rf
+// the whole archive band in BOTH checkouts at exit 0 with archived:true — the same destruction, with
+// a larger blast radius than the filed case. The dot arm needs no fold: `.Roadmap` still starts with
+// a dot. `toLowerCase`, never `toLocaleLowerCase` — the fold must not vary with the runtime locale.
+//
+// This deliberately OVER-refuses on a case-SENSITIVE filesystem, where `kaola-workflow/Archive`
+// would be a genuinely distinct directory that could legitimately be a project. The trade is taken,
+// not overlooked: over-refusing costs a rename of a name no run has ever used (no `workflow_project`
+// value and no archive directory name in this repository's history is `archive` or any case variant
+// of it), while under-refusing costs the destruction this guard exists to prevent — correct first.
+// Detecting the filesystem's case sensitivity would be a mechanism for a failure nobody has
+// observed, and would trade a certain small over-refusal for an uncertain probe.
+function isReservedWorkflowDirName(name) {
+  const n = String(name);
+  return n.toLowerCase() === 'archive' || n.startsWith('.');
+}
+
 function archiveProjectDir(root, project, statusValue, suffix, opts) {
   assert(isSafeName(project), 'unsafe project name');
+  // #930: REFUSE a reserved directory here, before reading or stamping anything. `workflow_project:`
+  // is adopted verbatim and filtered only by isSafeName, so `.roadmap` can be claimed — and the
+  // archive then carried the roadmap sources, `_rules.md` and every unrelated issue-*.md into
+  // archive/.roadmap/ at exit 0 with closure_invariants {ok:true}; from a linked worktree it also
+  // committed that deletion onto the branch the sink merges to main. This is the destruction class
+  // where a refusal is still legal, the same class verifyArchiveComplete already protects: work
+  // nobody agreed to lose. Placed at the TOP so it covers BOTH lanes at once — the in-place
+  // renameSync and the linked copyDir+rmSync are equally downstream of this line — and so nothing
+  // under the reserved directory is touched at all, not even the terminal stamp, leaving every
+  // checkout byte-identical. It precedes the source-missing early return on purpose: `skipped:
+  // 'source-missing'` reads as SUCCESS to archiveSucceeded and would let closure proceed against a
+  // name that can never be a project folder.
+  //
+  // The detail speaks for the ARCHIVE STEP and nothing wider, deliberately. This string surfaces on
+  // a finalize/discard envelope, and cmdFinalize has already written inside the reserved directory
+  // twice by the time it reaches this line — the Step-8a artifact mirror copies main's copy down
+  // over the worktree's, and persistValidationToSummary creates finalization-summary.md there. An
+  // unscoped "nothing was written" would therefore be false on the one surface that emits it. This
+  // function also cannot speak for its callers at all: the sink and the abandon sweeps reach it
+  // without either of those writes.
+  if (isReservedWorkflowDirName(project)) {
+    return { archived: false, reason: 'archive_reserved_directory', project,
+      detail: 'kaola-workflow/' + project + ' is a reserved directory, not a project folder; '
+        + 'the archive step moved, copied, stamped and deleted nothing' };
+  }
   const src = projectDir(root, project);
   if (!fs.existsSync(src)) return { skipped: 'source-missing' };
   // Deterministic refusal seam for caller-level fail-closed tests.  It fires

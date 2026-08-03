@@ -65,12 +65,96 @@ function resolveRunRecordDir(mainRoot, project, archiveDestRel) {
   return null;
 }
 
+// #931: archiveProjectDir writes to kaola-workflow/archive/<project>.archived-<ts>/ when
+// kaola-workflow/archive/<project>/ already exists, leaves the pre-existing directory where it was,
+// and returns no field saying so — only a `dest` whose STRING carries the suffix. So the fact was
+// encoded and never stated, and the directory still holding the rest of the evidence was named
+// nowhere at all; on the incident that motivated this it was UNTRACKED, the run's only copy, and the
+// sink reported status:sinked at exit 0 beside it. Inferred here rather than returned from
+// archiveProjectDir (four copies of one file, not eight), and sound because the sink always calls it
+// with suffix=undefined — both suffix sites then yield the plain path or the plain path plus
+// `.archived-<ts>`, so a differing dest IS the destination-exists branch. Repo-relative deliberately:
+// closure-audit reads this summary back and treats a bare-relative `.cache/...` token as a citation
+// of THIS archive. Null when there was no collision — a sentence printed either way discloses nothing.
+//
+// THIS FUNCTION NEVER PROBES THE DISK; it is handed the answer, and that split is the correctness
+// argument. Its first version asked `fs.statSync(plain).isDirectory()` here — an EXISTENCE-ONLY
+// AUDIT, the defect class #832 already names below at pruneSinkArchiveSkeleton: resolveSinkReceiptPath
+// falls back to the ARCHIVE receipt path when main holds no live folder and writeSinkReceipt mkdir -p's
+// it, so THE SINK ITSELF manufactures `kaola-workflow/archive/<project>/.cache/` before finalize runs.
+// archiveProjectDir suffixed around the sink's own skeleton, the probe saw a directory, and the
+// sentence was committed and pushed over a run where nothing had collided — every clause false, in the
+// one record this disclosure exists to make true.
+function describeArchiveCollision(project, archiveDestRel, priorArchiveExisted) {
+  if (!archiveDestRel || !priorArchiveExisted) return null;
+  const plainRel = 'kaola-workflow/archive/' + project;
+  if (archiveDestRel.replace(/\/+$/, '') === plainRel) return null;
+  return plainRel + '/ already existed, so this run was archived to ' + archiveDestRel + '/ instead. '
+    + 'The pre-existing directory was left exactly where it was — a SECOND archive standing for this '
+    + 'project, no part of this one. What it holds, and whether the repository tracks it at all, is '
+    + 'not recorded here: read it before treating this archive as the run\'s whole record.';
+}
+
+// Does a REAL archive stand at kaola-workflow/archive/<project>/? Existence does not answer that, and
+// the gap between the two questions is the whole of this repair. THE SINK'S OWN SKELETON:
+// resolveSinkReceiptPath falls back to the ARCHIVE receipt path when main holds no live folder and
+// writeSinkReceipt mkdir -p's it, so by the finalize step THIS SINK has manufactured
+// `kaola-workflow/archive/<project>/.cache/` at the very path in question and disposeSinkJournals
+// deletes it again minutes later — and a resumed transaction reads its stale receipt out of that same
+// directory, so a PRIOR attempt's skeleton is there before this run writes anything. AN EMPTY
+// DIRECTORY: archives nothing and collides with nothing. The suffix cannot discriminate either —
+// archiveProjectDir suffixes around the skeleton exactly as around a real archive, which is what made
+// the first version of this disclosure fire over runs where nothing had collided.
+// pruneSinkArchiveSkeleton encodes the same discrimination and its predicate is deliberately NOT
+// reused verbatim — it demands an EMPTY `.cache/` because it runs after the journals are disposed,
+// and the journal is present for the whole of the transaction this reports on. SINK_STAGE_SKIP is the
+// same two basenames the staging excludes and disposeSinkJournals removes — one list, read here
+// rather than restated. WHAT THAT SET HAS TO KEEP MEANING, because this reader depends on it: every
+// file the sink itself writes into a project `.cache/`. Adding a third journal without adding it there
+// makes this predicate call the sink's own residue a pre-existing archive — silently, and toward
+// OVER-reporting, which is the phantom disclosure coming back. Asked at the finalize step, beside the
+// archiveProjectDir call whose destination it explains, and deliberately NOT captured at transaction
+// start: the suffix decision is made here, so an archive the merge brought to main after the
+// transaction opened is a real collision that an earlier answer would have reported as none.
+function realArchiveAtPlainPath(mainRoot, project) {
+  const dir = path.join(mainRoot, 'kaola-workflow', 'archive', project);
+  let entries;
+  try { entries = fs.readdirSync(dir); } catch (_) { return false; }
+  if (entries.length === 0) return false;
+  if (entries.length > 1 || entries[0] !== '.cache') return true;
+  try {
+    return fs.readdirSync(path.join(dir, '.cache'))
+      .some(name => !SINK_STAGE_SKIP.has(name) && !isAtomicWriteResidue(name));
+  } catch (_) { return false; }
+}
+
+// The temp adaptiveSchema.writeFileAtomicReplace strands when the process dies between its openSync
+// and its renameSync — it unlinks only on a CAUGHT error, and in the #832 posture the directory it is
+// stranded in is exactly the `kaola-workflow/archive/<project>/.cache/` read above. The residue is
+// PERMANENT (disposeSinkJournals unlinks two known basenames, pruneSinkArchiveSkeleton refuses a
+// non-empty `.cache/`), so without this arm one torn write makes EVERY later sink for that project
+// repeat the same false collision line into its committed record. Keyed on the writer's invariant, not
+// a reconstruction of its name: it builds `'.' + basename + '.' + pid + '.' + Date.now() + '.' + rand
+// + '.tmp'`, and what is durable there is a DOT-PREFIXED `.tmp` SIBLING — the pid/timestamp/random
+// layout is free to change, so matching it would be a third form that rots. Nothing the workflow
+// archives as run evidence is a dot-prefixed `.tmp`.
+function isAtomicWriteResidue(name) {
+  return name.startsWith('.') && name.endsWith('.tmp');
+}
+
 // The durable half — same file, same presence-guarded / swallow-on-error discipline as the
 // `## Validation`, `## Changed Paths` and `## Attestation` sections the finalize report writes
 // there. Returns the absolute path written, or null when there was nothing to write.
-function persistSinkFindingsToSummary(destDir, postRebaseTests) {
+//
+// #931's archive_collision rides HERE and not on persistArchivedPathsToSummary, which early-returns
+// on an empty staged-path list: a disclosure behind that gate goes silent on a run whose whole
+// archive band is gitignored. It is a recorded measurement and deliberately NOT a finding — a
+// collision is a fact about where the archive landed, not a verdict on the run, and recordSinkFinding
+// would put a FINDING line on stderr and a `findings` key on the envelope of a sink that completed
+// normally. This disclosure must add neither.
+function persistSinkFindingsToSummary(destDir, postRebaseTests, archiveCollision) {
   if (!destDir) return null;
-  if (!sinkFindings.length && !postRebaseTests) return null;
+  if (!sinkFindings.length && !postRebaseTests && !archiveCollision) return null;
   try {
     const p = path.join(destDir, 'finalization-summary.md');
     let s = '';
@@ -78,6 +162,7 @@ function persistSinkFindingsToSummary(destDir, postRebaseTests) {
     if (/^## Sink Findings$/m.test(s)) return null; // idempotent across a crash-resumed re-entry
     const lines = ['## Sink Findings', ''];
     if (postRebaseTests) lines.push('post_rebase_tests: ' + postRebaseTests, '');
+    if (archiveCollision) lines.push('archive_collision: ' + archiveCollision, '');
     for (const f of sinkFindings) {
       lines.push('classification: ' + f.classification);
       for (const d of f.detail || []) lines.push('', d);
@@ -2015,8 +2100,15 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       // stages the archive, so `## Sink Findings` rides the sink's own commit and survives a fresh
       // clone. Every converted finding is taken at or before the merge step, so the record is
       // complete by now. Covers both archiver postures (sole-archiver dest, keep-worktree archive).
+      //
+      // #931: and the collision, when this step's archiveProjectDir was pushed off the plain path by a
+      // directory already there. THIS moment because the dest is set and nothing has to be staged for
+      // the sentence to land. WHETHER there was a collision is realArchiveAtPlainPath's question, not an
+      // existence check — by now this sink has very likely created that directory itself.
       persistSinkFindingsToSummary(resolveRunRecordDir(mainRoot, args.project, receipt.archive_dest),
-        receipt.post_rebase_tests || null);
+        receipt.post_rebase_tests || null,
+        describeArchiveCollision(args.project, receipt.archive_dest,
+          realArchiveAtPlainPath(mainRoot, args.project)));
       stepDone('finalize'); continue;
     }
     if (step === 'stash_restore') {

@@ -812,6 +812,7 @@ attempted — a sink with nothing to close is never false-flagged.
 | `push_upstream` | `git push -u origin <branch>` did not verifiably reach parity with its upstream; the branch may not be backed up | the step is left NOT done, so a re-run retries it |
 | `finalize`, `archive_refusal: "archive_incomplete"` | the archive would not be a faithful copy: `missing` names files the source held that the destination lacks, `mismatched` names every entry that did not verify byte-for-byte — which is two different facts, so see `uncomparable` below. Fires **before** any archive mutation, so the live folder is not deleted | restore the evidence and re-run |
 | `finalize`, `archive_refusal: "archive_exception"` \| `"archive_forced_refusal"` \| `"archive_not_performed"` | the archive did not happen at all — a throw other than the `TypeError`/`ReferenceError` export-drift class (`archive_exception`), the `KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL=1` test seam (`archive_forced_refusal`), or a return reporting neither `archived: true` nor `skipped: "source-missing"` (`archive_not_performed`). Nothing was pushed to the mainline and no issue was closed | resolve the fault (for example a non-writable `kaola-workflow/archive/`) and re-run; the step is left NOT done |
+| `finalize`, `archive_refusal: "archive_reserved_directory"` (issue #930) | the project name is a reserved directory under `kaola-workflow/` — any name beginning with `.`, or `archive` **in any casing**, since the comparison is case-folded to match a case-insensitive filesystem, where `Archive` and `archive` are one directory — so the source is not a project folder at all. Fires at the very top of `archiveProjectDir`, before the linked/in-place split and before the `source-missing` return, so **the archive step** moved, copied, stamped and deleted nothing. That is a statement about the archive step alone: earlier stages of the same `finalize` transaction have already written inside the directory (step 8a's mirror, and the summary writers, which create `finalization-summary.md` there) | the run was claimed against a name that can never be archived; release or discard it and re-claim under a real project name |
 | `archive_commit` | the archive was staged and committed, but a file the archive holds on disk did not become a blob at `HEAD`. `archive_missing_paths` names every one and `archive_add_errors` carries the `git add` output. Returned before teardown, so the branch, the worktree and the on-disk archive are all retained — nothing recoverable is lost | fix whatever git could not index (a mode, a permission) and re-run; the step is left NOT done |
 | `push_main` | the fast-forward landed locally but pushing the mainline threw | branch preserved; resolve the push fault and re-run |
 | `closure` | at least one issue could not be closed, or an exit-0 close could not be verified | the step is left NOT done, so a re-run retries it |
@@ -855,6 +856,29 @@ another project's archive residue is correctly absent. The same paths are append
 `finalization-summary.md` under `## Sink Findings` as an `archived_paths:` list, so the record
 survives after the envelope scrolls away and the journals are disposed; the writer never creates that
 file and is idempotent across a crash-resumed re-entry.
+
+**`archive_collision` names the directory that was already there (issue #931).** When the archive
+destination `kaola-workflow/archive/<project>/` already exists, `archiveProjectDir` writes to
+`kaola-workflow/archive/<project>.archived-<ts>/` instead and leaves the pre-existing directory
+untouched. The suffixed path then rides `archive_dest` and every `archived_paths` entry, so the fact
+was *encoded* in the committed record but never *stated* — a reader had to already know what produces
+`.archived-` to tell a collision from an ordinary archive, and the directory holding the rest of the
+evidence was named nowhere. A single `archive_collision:` line is now written into the same committed
+`## Sink Findings` block, in repo-relative form, naming the pre-existing directory and saying that it
+was left in place and is a second archive standing for the project. It reports only what it measured,
+and the question it asks is deliberately narrow: **not whether something exists at the plain path, but
+whether a real archive stands there.** The distinction is load-bearing, because the sink manufactures
+that very directory itself — when main holds no live project folder, the receipt path falls back to the
+archive band and writing the first journal creates `kaola-workflow/archive/<project>/.cache/`, which is
+then enough to push the destination onto a suffixed path. An existence-only test therefore reports a
+collision against the sink's own skeleton, names a directory that journal disposal is about to delete,
+and commits that. So a lone `.cache/` holding nothing but sink journals is not an archive, and the line
+is absent entirely when there was no collision — its absence carries information. It is a recorded
+measurement, **not** a
+finding — no `findings` key reaches the envelope and no `FINDING` line reaches stderr, because a
+collision is a fact about where the archive landed rather than a fault in the merge. The disclosure
+covers the posture in which the sink itself archived; under `--keep-worktree` the archive was
+performed by `finalize` and the sink has no destination to compare.
 
 This is a **report, not a guard**. The preflight exemption above is a directory prefix, so a stray
 file under the run's own archive directory is committed along with finalize's mirror, and the sink

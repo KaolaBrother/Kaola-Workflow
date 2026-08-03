@@ -102,6 +102,20 @@
 //       archive leaves the dest unset exactly as a swallowed throw does and must still complete, and
 //       the export-drift class must keep failing on its own terms (driven through a scratch mirror
 //       of scripts/, with an undoctored control run proving the mirror itself is sound).
+//   (n1)–(n3) #931 — the collision the record did not name. When archive/<project>/ already exists
+//       the archive is written to archive/<project>.archived-<ts>/ and THAT is what gets committed:
+//       every path in the durable record sits under the suffixed dir, so nothing there names the
+//       directory that caused the suffix or says a second archive is sitting beside this one. The
+//       collision must be discoverable from the committed bytes alone. Held over BOTH shapes of
+//       prior archive — tracked residue (n2) and the untracked incident shape (n1), where the
+//       abandoned copy is the run's ONLY one — through one assertion set, with (n3) the no-collision
+//       control that keeps the statement informative rather than unconditional. (n4) carries the same
+//       disclosure to all FOUR sink copies: the suffix logic is in every port, and a gitlab-only or
+//       gitea-only omission is invisible to validate-script-sync.js and edition-sync.js --check alike.
+//       (n5) holds the BICONDITIONAL behaviourally on every edition — the statement appears when a prior
+//       archive was there and NOT when it was not — over the posture (n3)'s fixture could not reach: main
+//       holding no live folder, where the sink manufactures its own archive skeleton and an existence
+//       probe reads it as a pre-existing archive.
 //
 // OFFLINE-safe strategy: the KAOLA_GH_MOCK_SCRIPT pattern (same as test-bundle-finalize.js). All
 // fixtures live in $TMPDIR — nothing is written inside the repo tree. The --sink transaction is
@@ -234,6 +248,9 @@ function roadmapMirror(issues) {
 //     branch and force-added, so the run's evidence is branch-tracked the way a real sole-archiver
 //     run leaves it. Forcing is what keeps preflight clean in BOTH #901 legs, so the .gitignore body
 //     stays the single axis between them.
+//   opts.noPriorArchive — do NOT plant the pre-existing archive/<project>/ dir, so the archive lands
+//     at the PLAIN path and there is no collision. Two #931 callers: the no-collision control, and
+//     the untracked arm, which plants its own copy after every commit. Omit for the plain shape.
 function buildSoleArchiverFixture(project, issue, opts) {
   opts = opts || {};
   const tmpRoot = makeTmpRoot();
@@ -247,8 +264,10 @@ function buildSoleArchiverFixture(project, issue, opts) {
   fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
   fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
   fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
-  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', 'archive', project), { recursive: true });
-  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'archive', project, 'placeholder.txt'), 'prior cycle residue\n');
+  if (!opts.noPriorArchive) {
+    fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', 'archive', project), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'archive', project, 'placeholder.txt'), 'prior cycle residue\n');
+  }
   if (opts.gitignoreBody) {
     fs.writeFileSync(path.join(tmpRoot, '.gitignore'), opts.gitignoreBody);
     git(tmpRoot, ['add', '.gitignore']);
@@ -4056,12 +4075,558 @@ function assertMissingBranchIsNotSilentlyAccepted923(arm, project, issue) {
     { label: 'TBD', branch: 'TBD' }, 'issue-92302', 92302);
 })();
 
+// --------------------------------------------------------------------------- (n1)–(n3) #931 the collision the record did not name
+//
+// archiveProjectDir writes to kaola-workflow/archive/<project>.archived-<ts>/ when
+// kaola-workflow/archive/<project>/ already exists, and the sink commits THAT directory. The archive
+// that was already there is not moved, not merged and not mentioned: archive_dest, every
+// archived_paths entry and the archive's own directory name all sit under the suffixed path, so a
+// reader of the committed record has to already know what produces the `.archived-` token before
+// they can tell a collision happened — and nothing anywhere in those bytes names the directory that
+// caused it, or says a second archive is sitting beside this one holding the rest of the evidence.
+//
+// The demanded result is a RECORD, not a refusal: the sink still completes, still commits its own
+// destination, and the pre-existing path is named in the bytes it commits. Two consequences are
+// pinned below rather than left to taste.
+//
+//   BOTH SHAPES, ONE ASSERTION SET. The prior archive may be TRACKED (committed residue from an
+//   earlier cycle — nothing at risk) or UNTRACKED (the 2026-08-03 incident: a complete archive that
+//   git holds no record of, abandoned on disk while the sink reports status:sinked at exit 0). The
+//   two are the same collision and the acceptance is unconditional, so they are held to
+//   assertCollisionIsNamedInTheCommittedRecord and neither can end up guarded more weakly than the
+//   other. A report that also says WHICH shape it found is welcome — one that goes silent on an arm
+//   is not. Whether tracked-ness itself is recorded is deliberately left open.
+//
+//   NO FABRICATION (n3). A statement that appears whether or not a collision happened carries no
+//   information, and "discoverable from the record alone" is then false. (n3) is the single-axis
+//   control: the same fixture with no pre-existing archive, where the same statement must be absent.
+//
+// WHAT IS PINNED IS THE RESULT, NOT THE METHOD — a line in the COMMITTED finalization-summary.md
+// that names the pre-existing unsuffixed directory and is not merely an entry of the path list that
+// commit already carries. Field name, wording, section, and which of the two summary writers
+// produces it are the implementer's to choose.
+//
+// NOT ROUTED THROUGH A FINDING, and that is a live pin rather than a preference: (#700 c) at the top
+// of this file drives the TRACKED collision and asserts the envelope carries no `findings` key and
+// stderr carries no FINDING line. The tracked arm below runs that same fixture, so the disclosure it
+// demands has to be a durable record.
+
+// The suffixed archive directory AS COMMITTED. Derived from the tree at HEAD rather than from the
+// disk or from the sink's own receipt: what #931 asks for is that the collision be discoverable from
+// the committed record alone, so these scenarios read git and nothing else.
+function committedSuffixedArchiveRel(cwd, project) {
+  const prefix = 'kaola-workflow/archive/' + project + '.archived-';
+  for (const p of blobsUnder(cwd, 'HEAD', 'kaola-workflow/archive/')) {
+    if (!p.startsWith(prefix)) continue;
+    const slash = p.indexOf('/', prefix.length);
+    if (slash > 0) return p.slice(0, slash);
+  }
+  return null;
+}
+
+// Lines of a committed summary that name the UNSUFFIXED archive directory as something other than an
+// entry of the path list that same commit carries.
+//
+// The discount is what lets the pin and its control be one rule instead of two. On a collision run
+// every path the sink commits sits under <project>.archived-<ts>/, so a line naming <project>/ can
+// only be a statement ABOUT the directory that was already there. On a no-collision run the archive
+// IS <project>/ and its own path entries name it on every line, so a bare substring test would read
+// the ordinary record as a collision report and (n3) could never fail. Discounting a path the commit
+// demonstrably carries also closes the cheap way out: smuggling the pre-existing directory's files
+// into archived_paths is a claim to have committed them, not a disclosure that they were left behind.
+//
+// `- ` is stripped WITHOUT trimming: the writer emits '- ' + rel verbatim, and a pathname's own
+// trailing space is real (see treeEntriesUnder — trimming a path is what made a run unsinkable).
+function collisionStatementLines(summary, project, committedPaths) {
+  const dir = 'kaola-workflow/archive/' + project + '/';
+  const listed = new Set(committedPaths || []);
+  return (summary || '').split('\n')
+    .filter(l => l.includes(dir))
+    .filter(l => !listed.has(l.replace(/^- /, '')));
+}
+
+// The disclosure as one measured run actually produced it — the project, the suffixed destination it
+// landed at, and the statement line(s) the committed summary carried. Set by the shared assertion set
+// below, consumed by the cross-edition sweep (n4). Null means no arm ever observed one, which is the
+// baseline and which (n4) reports as its own failure rather than skipping.
+let observedDisclosure = null;
+
+// ARMING CONTROL for the citation clause in the shared set below. That clause passes when
+// archiveCitedMissing returns nothing, and "nothing cited is missing" must not be indistinguishable
+// from "this reader no longer flags anything" — a scanner that quietly stopped matching would make
+// the clause pass forever against exactly the regression it exists to catch. Driven once, in
+// process, on a scratch archive whose summary cites a file it does not hold.
+(function testArchiveCitationScannerIsArmed() {
+  console.log('Test (#931 n0): arming control — closure-audit\'s summary-citation scanner really does flag a bare-relative .cache/ citation the archive does not hold, so an empty result in (n1)/(n2) is a measurement rather than a dead reader');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-cite-'));
+  try {
+    const { archiveCitedMissing } = require('./kaola-workflow-closure-audit.js');
+    fs.writeFileSync(path.join(dir, 'finalization-summary.md'),
+      '## Sink Findings\n\nalso cited: .cache/does-not-exist.md\n');
+    assert(archiveCitedMissing(dir).includes('.cache/does-not-exist.md'),
+      '#931 n0: archiveCitedMissing must flag a cited-but-absent .cache/ file, or the (n1)/(n2) citation clause is vacuous; got '
+      + JSON.stringify(archiveCitedMissing(dir)));
+    // The other half of arming: a repo-relative path is NOT a citation of this archive, which is the
+    // form the disclosure has to take. If this ever flags, the clause below becomes unsatisfiable
+    // for the correct fix rather than a fence against the careless one.
+    fs.writeFileSync(path.join(dir, 'finalization-summary.md'),
+      '## Sink Findings\n\nprior archive: kaola-workflow/archive/issue-93100/ (and its .cache)\n');
+    assert(archiveCitedMissing(dir).length === 0,
+      '#931 n0: a repo-relative kaola-workflow/archive/<project>/ mention must NOT read as a citation of THIS archive; got '
+      + JSON.stringify(archiveCitedMissing(dir)));
+  } finally {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {}
+  }
+})();
+
+// "The collision is named in the committed record", as ONE assertion set over both shapes of prior
+// archive. Callers pass the label so a failure names which shape it came through, and the prior
+// archive's paths plus its tracked-ness so each arm also proves it is the shape it claims to be.
+//
+// Every clause is checked because they fail independently: a sink can disclose the collision on
+// stdout and nowhere durable, disclose it durably in the working tree and never commit it, or
+// disclose it in a form that makes a downstream reader report a loss that did not happen.
+function assertCollisionIsNamedInTheCommittedRecord(fx, label, opts) {
+  const o = opts || {};
+  const project = fx.projectName;
+  const result = o.result;
+  const out = o.out;
+
+  // Clause 1 — the sink still COMPLETES. #931 asks the record to say more, not the transaction to
+  // stop; a fix that refuses the collision would fail here first, which is the point.
+  assert(result.status === 0, label + ': the sink must still complete over a collision — the demanded result is a record, not a refusal; got '
+    + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + (result.stderr || '').slice(-1200));
+  assert(out && out.status === 'sinked', label + ': status must be sinked; got ' + JSON.stringify(out && (out.status || out.reason)));
+
+  // Clause 2 — the collision really happened AND reached the commit. Read from the tree, so a
+  // scenario whose fixture stopped colliding fails loudly instead of passing vacuously.
+  const suffixedRel = committedSuffixedArchiveRel(fx.tmpRoot, project);
+  assert(suffixedRel !== null,
+    label + ' precondition: the collision must have forced a suffixed archive INTO the commit, or there is no collision for the record to disclose; archive blobs at HEAD='
+    + JSON.stringify(blobsUnder(fx.tmpRoot, 'HEAD', 'kaola-workflow/archive/')));
+  if (suffixedRel === null) return;
+
+  // Clause 3 — the shape this arm claims to be. The pre-existing archive is still sitting at the
+  // unsuffixed path either way; whether the commit carries it is the single axis between the arms,
+  // and in the untracked case its absence from the commit IS the loss the record has to disclose.
+  for (const rel of (o.priorFiles || [])) {
+    assert(fs.existsSync(path.join(fx.tmpRoot, rel)),
+      label + ' precondition: ' + rel + ' must still sit at the unsuffixed path after the sink — the archive is left behind, not merged');
+    const atHead = showAtHead(fx.tmpRoot, rel) !== null;
+    assert(atHead === !!o.priorTracked,
+      label + ' precondition: ' + rel + ' must be ' + (o.priorTracked ? 'PRESENT in' : 'ABSENT from')
+      + ' the commit — that is the axis between the two arms; got at-HEAD=' + atHead);
+  }
+
+  // Clause 4 — THE DEMANDED RESULT. Read out of git, never off the disk: the envelope is stdout and
+  // the crash-resume journal is disposed on success, so the committed summary is the whole of what a
+  // reader has afterwards. It must name the directory that was already there.
+  const summary = showAtHead(fx.tmpRoot, suffixedRel + '/finalization-summary.md');
+  assert(summary !== null,
+    label + ': the committed archive must carry a finalization-summary.md — it is the only durable carrier the sink has, and without it there is nowhere for the disclosure to live');
+  const committedPaths = blobsUnder(fx.tmpRoot, 'HEAD', 'kaola-workflow/archive/');
+  const statements = collisionStatementLines(summary, project, committedPaths);
+  // Hand the OBSERVED disclosure to the cross-edition sweep (n4). It is derived from a measured run
+  // rather than declared anywhere, which is what keeps that sweep a pin on the result instead of on
+  // one implementation's field name. First arm to see one wins; the rest are identical by (n2).
+  if (statements.length > 0 && observedDisclosure === null) {
+    observedDisclosure = { project, suffixedRel, statements: statements.slice() };
+  }
+  assert(statements.length > 0,
+    label + ': the committed record must NAME kaola-workflow/archive/' + project + '/ — the destination that already existed and forced the suffix. Everything this commit carries sits under '
+    + suffixedRel + '/, so as it stands the collision is legible only to a reader who already knows what produces the `.archived-` token, and the archive still holding the rest of the run\'s evidence is named nowhere at all.'
+    + '\ncommitted ' + suffixedRel + '/finalization-summary.md:\n' + JSON.stringify(summary));
+
+  // Clause 5 — the disclosure must not manufacture a downstream loss report. closure-audit reads
+  // this same archived summary back and reports every bare-relative `.cache/...` token the archive
+  // does not hold as archive_summary_citation_missing. The abandoned archive's own evidence lives at
+  // .cache/ paths, so naming its CONTENTS in that form claims files are missing from THIS archive
+  // that were never in it — a second false statement in the same record the fix exists to make true.
+  // Repo-relative paths (kaola-workflow/archive/<project>/...) are not citations and are unaffected.
+  // Asserted through the shipped function rather than a copy of its regex; armed by (n0) above.
+  const { archiveCitedMissing } = require('./kaola-workflow-closure-audit.js');
+  const cited = archiveCitedMissing(path.join(fx.tmpRoot, suffixedRel));
+  assert(cited.length === 0,
+    label + ': the disclosure must not read as a bare-relative citation of files THIS archive does not hold — closure-audit reports those as archive_summary_citation_missing, inventing a loss from the sentence that was supposed to disclose the real one. Name the directory repo-relative. got '
+    + JSON.stringify(cited));
+}
+
+// (n1) THE INCIDENT SHAPE. The pre-existing archive is UNTRACKED, so it is the run's only copy of
+// what it holds: committed nowhere, absent from a fresh clone, and left behind at exit 0 while the
+// sink reports status:sinked over a two-file archive it wrote beside it.
+(function testCollisionWithUntrackedPriorArchiveIsNamedInTheCommittedRecord() {
+  console.log('Test (#931 n1): a collision with an UNTRACKED pre-existing archive — the run\'s only copy of that evidence — must be named in the committed record: the suffixed archive is committed as always, and the bytes it commits say which directory was already there');
+  const project = 'issue-93101';
+  const issue = 93101;
+  const fx = buildSoleArchiverFixture(project, issue, { noPriorArchive: true });
+  fx.projectName = project;
+  try {
+    // Planted AFTER every commit and after the checkout back to main, so git holds no record of it —
+    // which is precisely why the incident lost it. Preflight exempts it (#893's own-archive-mirror
+    // arm: untracked, under this project's archive prefix, not carried by the branch), so the
+    // transaction runs exactly as it did on 2026-08-03 rather than refusing at sink_blocked.
+    const priorDir = path.join(fx.tmpRoot, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(path.join(priorDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(priorDir, 'workflow-state.md'), '# prior cycle state\n');
+    fs.writeFileSync(path.join(priorDir, '.cache', 'prior-note.md'), '# prior run evidence\n');
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    assertCollisionIsNamedInTheCommittedRecord(fx, '#931 n1', {
+      result,
+      out: lastJson(result),
+      priorTracked: false,
+      priorFiles: [
+        'kaola-workflow/archive/' + project + '/workflow-state.md',
+        'kaola-workflow/archive/' + project + '/.cache/prior-note.md',
+      ],
+    });
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (n2) THE OTHER SHAPE, same assertion set. The pre-existing archive is TRACKED — nothing is at risk
+// of being lost — and the collision is still a collision: two archives now stand for one project and
+// the record has to say so. This is (#700 c)'s fixture unchanged, which is what makes the disclosure
+// a RECORD: that scenario pins the same run emitting no findings key and no FINDING line.
+(function testCollisionWithTrackedPriorArchiveIsNamedInTheCommittedRecord() {
+  console.log('Test (#931 n2): the same disclosure is owed when the pre-existing archive is TRACKED — a report that only speaks up for the untracked shape leaves the other collision exactly as silent as before');
+  const project = 'issue-93102';
+  const issue = 93102;
+  const fx = buildSoleArchiverFixture(project, issue, {});
+  fx.projectName = project;
+  try {
+    const result = runSink(fx, ['--issue', String(issue)]);
+    assertCollisionIsNamedInTheCommittedRecord(fx, '#931 n2', {
+      result,
+      out: lastJson(result),
+      priorTracked: true,
+      priorFiles: ['kaola-workflow/archive/' + project + '/placeholder.txt'],
+    });
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (n3) THE CONTROL, single-axis: the identical fixture with no pre-existing archive. The archive
+// lands at the plain path, no collision happened, and the record must not say one did. Without this
+// the whole pin is satisfiable by a line that is always printed — which discloses nothing, because a
+// reader could no longer tell the two runs apart from their records.
+(function testNoCollisionRecordMakesNoCollisionClaim() {
+  console.log('Test (#931 n3): control — with NO pre-existing archive the sink must claim no collision, so the disclosure carries information instead of being unconditional boilerplate');
+  const project = 'issue-93103';
+  const issue = 93103;
+  const fx = buildSoleArchiverFixture(project, issue, { noPriorArchive: true });
+  fx.projectName = project;
+  try {
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+    assert(result.status === 0, '#931 n3: the sink must complete; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + (result.stderr || '').slice(-1200));
+    assert(out && out.status === 'sinked', '#931 n3: status must be sinked; got ' + JSON.stringify(out && (out.status || out.reason)));
+    // Precondition — the axis really moved: nothing suffixed exists, so the archive is at the plain path.
+    assert(committedSuffixedArchiveRel(fx.tmpRoot, project) === null,
+      '#931 n3 precondition: with no pre-existing archive nothing may be suffixed, or this is not the control it claims to be; archive blobs at HEAD='
+      + JSON.stringify(blobsUnder(fx.tmpRoot, 'HEAD', 'kaola-workflow/archive/')));
+
+    const archiveRel = 'kaola-workflow/archive/' + project;
+    const summary = showAtHead(fx.tmpRoot, archiveRel + '/finalization-summary.md');
+    assert(summary !== null, '#931 n3: the plain archive must carry a committed finalization-summary.md');
+    const statements = collisionStatementLines(summary, project, blobsUnder(fx.tmpRoot, 'HEAD', 'kaola-workflow/archive/'));
+    assert(statements.length === 0,
+      '#931 n3: the committed record of a run that collided with NOTHING must say nothing about a pre-existing '
+      + archiveRel + '/ beyond listing the paths it actually committed there — an unconditional statement is not a disclosure, since the collision then cannot be told from its absence. Offending line(s): '
+      + JSON.stringify(statements) + '\ncommitted summary:\n' + JSON.stringify(summary));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// --------------------------------------------------------------------------- (n4) #931 on every edition
+//
+// (n1)–(n3) drive ONE sink script. The collision-suffix logic exists in all four, and a fix landing on
+// three of them is invisible: the root↔codex pair is the only one machine-enforced (mutating root
+// alone exits 1 out of validate-script-sync.js; root+codex together exits 0), and a gitlab-only or
+// gitea-only omission is seen by NEITHER validate-script-sync.js NOR `edition-sync.js --check`. So the
+// hand-maintained ports are exactly where an incomplete fix ships silently — the same reason (z1)–(z4)
+// and (#912) are driven on every edition.
+//
+// This sweep is STATIC where those are behavioural, and the reason is a capability, not a preference:
+// `glab` and `tea` are absent here, and the forge ports shell their own CLI. A static sweep is the
+// weaker instrument and is worth having anyway, since the alternative is nothing at all.
+//
+// WHAT KEEPS IT A PIN ON THE RESULT. Nothing here names a field, a function or a wording. The marker
+// is DERIVED, at run time, from the disclosure (n1)/(n2) actually observed in the committed record:
+// cut out every runtime-substituted token, and what remains had to be literal text inside the
+// producer. That text is then required in every edition's shipped sink modules. The implementer
+// chooses the words; the sweep only insists that whatever words they chose reach all four copies —
+// which is what "one rule, one wording" already asks of a rule with no capability difference behind it.
+//
+// ITS HONEST LIMIT, stated because a sweep that oversells itself is worse than one that does not
+// exist: it reads TEXT, not behaviour. A port that carries the sentence but never reaches the code
+// that writes it passes. It catches the omission — the actual measured risk — not a miswiring, and
+// only a run of the port's own suite can close that.
+
+// Longest substring of `text` appearing verbatim in `source`. Greedy extension per start, with the
+// early break that keeps it cheap against a 150 KB module: nothing beginning at i can beat `best`
+// once fewer than best.length characters remain.
+function longestFragmentIn(text, source) {
+  let best = '';
+  for (let i = 0; i < text.length; i++) {
+    if (text.length - i <= best.length) break;
+    let len = best.length + 1;
+    while (i + len <= text.length && source.indexOf(text.slice(i, i + len)) !== -1) {
+      best = text.slice(i, i + len);
+      len++;
+    }
+  }
+  return best;
+}
+
+// The literal text the observed disclosure is MADE OF.
+//
+// Every runtime-substituted token is cut out first — the suffixed destination, the unsuffixed one,
+// and the bare project name — leaving pieces that had to be literals in the producer. Each piece is
+// then reduced to its longest run appearing verbatim in `source`, because this codebase splits long
+// sentences across `+` and a whole piece is routinely NOT contiguous in the file; requiring one would
+// red a correct fix. Runs under 8 characters are dropped: too unspecific to be evidence of anything.
+function disclosureFragments(observed, source) {
+  const runtimeTokens = [
+    observed.suffixedRel + '/', observed.suffixedRel,
+    'kaola-workflow/archive/' + observed.project + '/', 'kaola-workflow/archive/' + observed.project,
+    observed.project,
+  ];
+  let pieces = observed.statements.slice();
+  for (const tok of runtimeTokens) pieces = pieces.reduce((acc, s) => acc.concat(s.split(tok)), []);
+  const frags = [];
+  for (const piece of pieces) {
+    if (!piece.trim()) continue;
+    const frag = longestFragmentIn(piece, source);
+    if (frag.length >= 8 && !frags.includes(frag)) frags.push(frag);
+  }
+  return frags;
+}
+
+// The SHIPPED modules the sink transaction composes, per edition. Named rather than globbed, and
+// tests are deliberately not among them: a guard reads what ships, not what was authored, and a port
+// whose own test suite quotes the wording while its script does not is exactly the pass this must not
+// give. adaptive-schema and closure-contract are included because they are byte-identical across all
+// four editions, so a disclosure written into one of them genuinely does reach every port — leaving
+// them out would red a correct fix.
+const EDITION_SINK_MODULES = [
+  ['root', path.join(repoRoot, 'scripts'),
+    ['kaola-workflow-sink-merge.js', 'kaola-workflow-claim.js']],
+  ['codex', path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts'),
+    ['kaola-workflow-sink-merge.js', 'kaola-workflow-claim.js']],
+  ['gitlab', path.join(repoRoot, 'plugins', 'kaola-workflow-gitlab', 'scripts'),
+    ['kaola-gitlab-workflow-sink-merge.js', 'kaola-gitlab-workflow-claim.js']],
+  ['gitea', path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts'),
+    ['kaola-gitea-workflow-sink-merge.js', 'kaola-gitea-workflow-claim.js']],
+].map(([label, dir, names]) => [label, dir,
+  names.concat(['kaola-workflow-adaptive-schema.js', 'kaola-workflow-closure-contract.js'])]);
+
+(function testCollisionDisclosureReachesEveryEdition() {
+  console.log('Test (#931 n4): the disclosure must reach all FOUR sink copies — a gitlab-only or gitea-only omission is invisible to validate-script-sync.js and to edition-sync.js --check alike, so nothing but this would catch a three-copy fix');
+
+  // Nothing observed means (n1)/(n2) found no disclosure to propagate. That is the baseline, and it
+  // is reported here as this scenario's OWN failure rather than skipped: a sweep that goes quiet
+  // exactly when the thing it sweeps for is missing is not a sweep.
+  if (observedDisclosure === null) {
+    assert(false, '#931 n4: no disclosure was observed by (n1)/(n2), so there is no marker to sweep the editions for. '
+      + 'This scenario cannot measure anything until the committed record names the pre-existing archive — fix (n1)/(n2) first.');
+    return;
+  }
+
+  // Every named module must exist, per edition, before anything is read from it — a missing or
+  // renamed port file must read as a fault here and not as an empty source that trivially matches.
+  const sources = new Map();
+  let allPresent = true;
+  for (const [label, dir, names] of EDITION_SINK_MODULES) {
+    const texts = [];
+    for (const name of names) {
+      const file = path.join(dir, name);
+      let text = null;
+      try { text = fs.readFileSync(file, 'utf8'); } catch (_) {}
+      assert(text !== null, '#931 n4 (' + label + '): the edition sink module exists at ' + file);
+      if (text === null) { allPresent = false; continue; }
+      texts.push(text);
+    }
+    sources.set(label, texts.join('\n'));
+  }
+  if (!allPresent) return;
+
+  // CALIBRATION, on the canonical copy the behavioural arms actually drove. It is what turns the
+  // legs below into measurements: the marker is the disclosure's own words as this repository's own
+  // fix wrote them, and if the fix carries no recognisable literal text at all then the sweep has
+  // nothing specific enough to look for and must say so instead of passing three empty legs.
+  const marker = disclosureFragments(observedDisclosure, sources.get('root'));
+  const markerLen = marker.join('').length;
+  assert(marker.length > 0 && markerLen >= 16,
+    '#931 n4 calibration: the disclosure must be made of literal text in the canonical sink modules, or there is no marker to propagate. '
+    + 'A sweep that cannot execute the forge ports has only their bytes to read, so give the statement wording a reader (and this sweep) can recognise. '
+    + 'observed statement(s)=' + JSON.stringify(observedDisclosure.statements) + ' derived fragment(s)=' + JSON.stringify(marker));
+  if (!(marker.length > 0 && markerLen >= 16)) return;
+
+  // THE LEGS. Root is the calibration source and is green by construction, so it is not asserted
+  // again as if it were evidence; what is measured is the three copies a canonical-only fix leaves
+  // behind.
+  for (const [label] of EDITION_SINK_MODULES) {
+    if (label === 'root') continue;
+    const src = sources.get(label);
+    const absent = marker.filter(frag => src.indexOf(frag) === -1);
+    assert(absent.length === 0,
+      '#931 n4 (' + label + '): this edition\'s sink modules do not carry the collision disclosure the canonical copy emits. '
+      + 'The collision-suffix logic exists in every port, and an omission here reaches a user with nothing in between: '
+      + 'validate-script-sync.js and edition-sync.js --check are both blind to a ' + label + '-only difference. '
+      + 'Missing fragment(s): ' + JSON.stringify(absent)
+      + '\nfull marker: ' + JSON.stringify(marker)
+      + '\nobserved statement(s): ' + JSON.stringify(observedDisclosure.statements));
+  }
+})();
+
+// --------------------------------------------------------------------------- (n5) #931 the disclosure must TRACK the collision
+//
+// (n3) is the right control aimed at the right thing, and its FIXTURE defeats it. buildSoleArchiverFixture
+// creates `<liveDir>/.cache` and, with no `liveCacheFiles`, leaves it empty and UNTRACKED; `git checkout
+// main` removes the tracked live files but cannot remove a directory holding an untracked child, so
+// `kaola-workflow/<project>/` survives on main. resolveSinkReceiptPath then returns the LIVE receipt path,
+// no archive skeleton is manufactured, the destination stays plain — and (n3) passes for a reason that has
+// nothing to do with whether the producer is honest. Measured single-axis: a tracked live `.cache/` leaves
+// the live directory ABSENT after the checkout, an empty untracked one leaves it PRESENT, and nothing else
+// differs.
+//
+// The shape it therefore could not see: with main holding no live folder at sink start,
+// resolveSinkReceiptPath's #832 fallback returns the ARCHIVE receipt path and the first
+// stepDone → writeSinkReceipt `mkdir -p`s `kaola-workflow/archive/<project>/.cache/`. The sink has now
+// created the plain archive directory itself. archiveProjectDir sees it, suffixes the destination, and an
+// existence-only probe calls the sink's own transaction skeleton a pre-existing archive — after which
+// disposeSinkJournals prunes it, so the committed record names a directory that is not there. Every
+// load-bearing clause of that sentence is false, and it is committed to the default branch and pushed.
+//
+// So the property is not "a collision is disclosed" but the BICONDITIONAL: the statement appears when a
+// prior archive was there and does not when it was not. Both directions are held to one assertion set,
+// with the SAME fixture and one axis between them — whether a prior archive is planted. A control that
+// shares no code with the arm it controls is a control of something else.
+//
+// DRIVEN ON EVERY EDITION, and behaviourally rather than textually. (n4) reads bytes and says so; this
+// executes each port's own sink through its own forge mock hook (KAOLA_GLAB_MOCK_SCRIPT /
+// KAOLA_TEA_MOCK_SCRIPT — the ports never reach for `glab`/`tea` when those are set), which is the same
+// reason (z1)–(z4) and (#912) are driven per edition: the ports are hand-maintained, this defect
+// reproduces in all of them, and text cannot tell a port that carries a sentence from one that reaches
+// the code writing it.
+
+// The archive directory this run actually committed, suffixed or plain, read out of the tree at HEAD.
+// The no-collision arm must NOT presume the plain path: the sink's own skeleton pushes the destination
+// off it, and pinning the suffix here would pin behaviour that predates #931 and is not what is claimed.
+function committedArchiveRelAtHead(cwd, project) {
+  const suffixed = committedSuffixedArchiveRel(cwd, project);
+  if (suffixed) return suffixed;
+  const plain = 'kaola-workflow/archive/' + project;
+  return blobsUnder(cwd, 'HEAD', plain + '/').length > 0 ? plain : null;
+}
+
+// One assertion set, two modes. `mode` is the only axis: 'collision' plants a real pre-existing archive,
+// 'none' plants nothing. Everything else — the fixture, the flags, the reads — is identical, so a
+// disagreement between the two legs is attributable to the plant and to nothing else.
+function assertDisclosureTracksTheCollision931(label, sinkScript, mockEnvName, mode, project, issue) {
+  console.log('Test (' + label + '/' + mode + '): the collision statement in the committed record must track whether a prior archive was REALLY there — driven through this edition\'s own sink');
+  // A TRACKED live .cache/ is the whole point: it is what lets `git checkout main` remove the live
+  // directory outright, putting the run in the posture where the sink manufactures its own archive
+  // skeleton. An untracked empty one leaves the directory standing and silently suppresses the trigger.
+  const fx = buildSoleArchiverFixture(project, issue, {
+    noPriorArchive: true,
+    liveCacheFiles: { 'chain-receipt.json': '{"green":true}\n' },
+  });
+  fx.projectName = project;
+  try {
+    const liveDir = path.join(fx.tmpRoot, 'kaola-workflow', project);
+    const plainArchiveRel = 'kaola-workflow/archive/' + project;
+    const plainArchiveDir = path.join(fx.tmpRoot, plainArchiveRel);
+    if (mode === 'collision') {
+      // A real prior archive, untracked — the 2026-08-03 shape, and the only thing that differs.
+      fs.mkdirSync(path.join(plainArchiveDir, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(plainArchiveDir, 'workflow-state.md'), '# prior cycle state\n');
+      fs.writeFileSync(path.join(plainArchiveDir, '.cache', 'prior-note.md'), '# prior run evidence\n');
+    }
+
+    // THE AXIS, MEASURED AT SINK START. (n3) passed because its fixture was quietly the other shape, so
+    // neither of these is assumed here. The first is what makes the sink take the #832 receipt-path
+    // fallback at all; the second is the mode.
+    assert(!fs.existsSync(liveDir),
+      label + '/' + mode + ' precondition: main must hold NO live kaola-workflow/' + project + '/ at sink start — that is what routes the receipt to the archive path and makes the sink manufacture its own skeleton. A surviving directory (an untracked child git could not remove) silently suppresses the whole shape; got entries='
+      + JSON.stringify(fs.existsSync(liveDir) ? fs.readdirSync(liveDir) : null));
+    assert(fs.existsSync(plainArchiveDir) === (mode === 'collision'),
+      label + '/' + mode + ' precondition: ' + plainArchiveRel + ' must be ' + (mode === 'collision' ? 'PRESENT' : 'ABSENT')
+      + ' at sink start — it is the single axis between the two legs');
+
+    // `--keep-issue-open` for (z1)'s reason: the offline mock speaks gh's argv, not glab's or tea's, so a
+    // forge port would otherwise refuse at the closure step and this leg would measure the mock instead
+    // of the disclosure. Applied to ALL editions so the axis between them stays the sink script.
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+
+    // FIXTURE PREMISE: the run reached the archive. A stop anywhere else is neither a pass nor evidence
+    // about the disclosure, and it must say so rather than arrive as an unexplained red below.
+    assert(result.status === 0 && out && out.status === 'sinked',
+      label + '/' + mode + ' premise: the run must reach and complete the archive, or nothing below measures the disclosure; got exit='
+      + result.status + ' status=' + JSON.stringify(out && (out.status || out.reason)) + ' step=' + JSON.stringify(out && out.step)
+      + '\nstderr: ' + String(result.stderr || '').slice(-600));
+    if (!(result.status === 0 && out && out.status === 'sinked')) return;
+
+    const archRel = committedArchiveRelAtHead(fx.tmpRoot, project);
+    assert(archRel !== null, label + '/' + mode + ' premise: this run must have committed an archive somewhere under kaola-workflow/archive/; blobs at HEAD='
+      + JSON.stringify(blobsUnder(fx.tmpRoot, 'HEAD', 'kaola-workflow/archive/')));
+    if (archRel === null) return;
+    const summary = showAtHead(fx.tmpRoot, archRel + '/finalization-summary.md');
+    assert(summary !== null, label + '/' + mode + ': the committed archive must carry a finalization-summary.md at ' + archRel);
+    const statements = collisionStatementLines(summary, project, blobsUnder(fx.tmpRoot, 'HEAD', 'kaola-workflow/archive/'));
+
+    if (mode === 'collision') {
+      assert(statements.length > 0,
+        label + '/collision: a prior archive really was there and the committed record must name it; committed ' + archRel + '/finalization-summary.md:\n' + JSON.stringify(summary));
+      assert(fs.existsSync(plainArchiveDir),
+        label + '/collision: the pre-existing archive must still be on disk afterwards — the record says it was left where it was, and that has to be true');
+    } else {
+      // THE R1 CLAUSE. Nothing pre-existed, so no statement may name the plain path. What the sink found
+      // there was its OWN transaction journal skeleton, created by this same process minutes earlier and
+      // deleted again before the run ended — so a sentence about it is false in every clause and points a
+      // reader at a directory that is not there.
+      assert(statements.length === 0,
+        label + '/none: NOTHING pre-existed at ' + plainArchiveRel + ', so the committed record must not say anything did. '
+        + 'The only thing at that path during this run was the sink\'s OWN receipt skeleton, which it created and then pruned — a statement about it is false in every clause, is committed to the default branch and pushed, and sends a reader to a directory that does not exist. '
+        + 'An existence probe cannot tell a prior archive from the sink\'s own skeleton. Offending line(s): ' + JSON.stringify(statements)
+        + '\ncommitted ' + archRel + '/finalization-summary.md:\n' + JSON.stringify(summary)
+        + '\nplain path on disk afterwards: ' + (fs.existsSync(plainArchiveDir) ? JSON.stringify(fs.readdirSync(plainArchiveDir)) : 'ABSENT'));
+    }
+  } finally {
+    cleanup(fx);
+  }
+}
+
+// The four sink copies, both modes. `mockEnv` points each forge port's own CLI shim at the same offline
+// mock the canonical leg gets, so the axis between editions stays the sink script and nothing else.
+[
+  ['root', path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js'), null],
+  ['codex', path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-sink-merge.js'), null],
+  ['gitlab', path.join(repoRoot, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-sink-merge.js'), 'KAOLA_GLAB_MOCK_SCRIPT'],
+  ['gitea', path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-sink-merge.js'), 'KAOLA_TEA_MOCK_SCRIPT'],
+].forEach(([label, script, mockEnv], index) => {
+  if (!fs.existsSync(script)) {
+    assert(false, '#931 n5 (' + label + '): the edition sink script exists at ' + script);
+    return;
+  }
+  // The collision leg FIRST, so a port that never discloses at all fails there rather than quietly
+  // satisfying the no-collision leg by doing nothing.
+  assertDisclosureTracksTheCollision931('#931 n5 ' + label, script, mockEnv, 'collision', 'issue-' + (93150 + index), 93150 + index);
+  assertDisclosureTracksTheCollision931('#931 n5 ' + label, script, mockEnv, 'none', 'issue-' + (93160 + index), 93160 + index);
+});
+
 // --------------------------------------------------------------------------- summary
 
 if (failed === 0) {
-  console.log('\nSink-merge (#694/#700/#705/#707/#715/#746/#832/#893/#923) test suite passed: ' + passed + ' assertions.');
+  console.log('\nSink-merge (#694/#700/#705/#707/#715/#746/#832/#893/#923/#931) test suite passed: ' + passed + ' assertions.');
   process.exit(0);
 } else {
-  console.error('\nSink-merge (#694/#700/#705/#707/#715/#746/#832/#893/#923) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
+  console.error('\nSink-merge (#694/#700/#705/#707/#715/#746/#832/#893/#923/#931) test suite FAILED: ' + failed + ' failed, ' + passed + ' passed.');
   process.exit(1);
 }

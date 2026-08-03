@@ -1,5 +1,79 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Archiving refuses a reserved directory instead of relocating it (#930).** `archiveProjectDir`
+  derived its destination from the project name alone and moved whatever directory that named, with
+  no notion that the source might not be a project folder. A run claimed as `.roadmap` — a name the
+  claim adopts verbatim, and which `readActiveFolders` skips before path safety is even consulted —
+  therefore had the **entire backlog** relocated into `kaola-workflow/archive/` at finalization:
+  every `issue-*.md` source and `_rules.md`, at exit 0, with `closure_invariants` reporting
+  `{ok: true}` and nothing warned. Under `--keep-worktree` it was worse than a working-tree move: both
+  checkouts lost the directory and finalize **committed** the deletion of the tracked sources onto the
+  feature branch the sink merges to the mainline. `.origin` was the same class, relocating six tracked
+  files with no signal of any kind. A guard at the top of `archiveProjectDir` now returns
+  `{archived: false, reason: "archive_reserved_directory"}` for every dot-prefixed name and for
+  `archive` **in any casing**, surfacing as `{"result":"refuse","reason":"archive_reserved_directory"}`
+  at exit 1 from `finalize` and `discard`, and as `archive_refusal` in the sink receipt. The
+  case-folding is not incidental: the comparison has to agree with the filesystem rather than with the
+  string, because on a case-insensitive volume `kaola-workflow/Archive` *is* `kaola-workflow/archive`,
+  and an exact-match test lets `Archive` through to destroy both bands at exit 0. It sits above the
+  linked/in-place split, so neither archive lane can be fixed without the other, and above the
+  `source-missing` early return, which `closureContract.archiveSucceeded` reads as success — a guard
+  placed after it would have stopped the move while still letting closure remove the roadmap source
+  and close the issue. **The claim side is deliberately unchanged** — a reserved name can still be
+  claimed and the folder is still invisible to enumeration; only the destruction is closed.
+
+  Two things this does **not** claim. The refusal speaks for the archive step alone: earlier stages of
+  the same `finalize` transaction have already written inside the reserved directory — step 8a's
+  mirror overwrites `.cache/final-validation.md`, and the summary writers create
+  `finalization-summary.md` there — all pre-existing machinery, none of it destructive, none of it
+  changed here. And `archive` was never the safe control it was taken for: at the previous release a
+  linked-lane `--project archive` exits 0 and destroys the whole band in both checkouts, so the
+  exit-1 readings that suggested otherwise were fixture-dependent — a band large enough for the
+  completeness verifier to refuse, where a smaller one copies cleanly and proceeds to the delete.
+
+- **A collision-suffixed sink archive now names the directory it was pushed off (#931).** When the
+  archive destination already existed, the sink wrote to `kaola-workflow/archive/<project>.archived-<ts>/`,
+  committed **that**, and reported `status: sinked` at exit 0 — while the complete archive stayed on
+  disk under the unsuffixed name, in the observed case **untracked**, one `git clean` from loss with
+  nothing in the record pointing at it. The fact was encoded and never stated: the `.archived-` token
+  rode `archive_dest` and every `archived_paths` entry, so a reader had to already know what produces
+  that suffix, and the abandoned directory was named nowhere. A single repo-relative
+  `archive_collision:` line now joins the committed `## Sink Findings` block, naming the pre-existing
+  directory and recording that it was left in place as a second archive standing for the project. It
+  reports only what it measured — absent entirely when there was no collision, so its absence carries
+  information, and claiming nothing about whether the repository tracks it. It is a recorded
+  measurement, **not** a finding: no `findings` key reaches the envelope and no `FINDING` line reaches
+  stderr, because a collision is a fact about where the archive landed, not a fault in the merge. It
+  rides the summary writer that has no empty-staged-list gate, so a run whose whole archive band is
+  gitignored still discloses.
+
+  The test it applies is **whether a real archive stands at the plain path, not whether anything
+  exists there** — a distinction that is load-bearing rather than pedantic. When main holds no live
+  project folder, the sink's own receipt path falls back to the archive band, and writing the first
+  journal creates `kaola-workflow/archive/<project>/.cache/`; that alone is enough to push the
+  destination onto a suffixed path. An existence-only test therefore reports a collision against the
+  sink's own skeleton and names a directory that journal disposal is about to delete — a false
+  statement committed and pushed, which is the very harm this entry exists to remove. A lone `.cache/`
+  holding nothing but sink journals is accordingly not an archive.
+
+Both fixes land in all four editions, and both are pinned per edition **behaviourally** rather than by
+inspection. The archive scoping suite drives all four `claim.js` copies offline; the sink suite drives
+all four sink copies through each forge's mock hook. In both cases an incomplete propagation is visible
+rather than silent — measured for `#930`, restoring the guard in only the root and GitHub copies leaves
+every remaining failure attributable to the two hand-ported editions.
+
+### Documentation
+
+- `docs/api.md` — the `archive_reserved_directory` refusal row, and the `archive_collision` field of
+  the committed record.
+- `docs/workflow-state-contract.md` — the `workflow_project` hazard paragraph, which named the
+  invisibility but not the destruction, now records that such a run can still be claimed and can no
+  longer be archived.
+
 ## [9.5.2] - 2026-08-03
 
 ### Documentation

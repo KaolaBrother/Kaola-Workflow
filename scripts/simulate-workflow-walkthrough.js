@@ -2507,6 +2507,294 @@ function testArchiveCommitHonestUnderGitignore832() {
   console.log('testArchiveCommitHonestUnderGitignore832: PASSED');
 }
 
+// ---------------------------------------------------------------------------
+// #930 — archiving must never relocate a directory that is not a project folder.
+//
+// `workflow_project:` is adopted verbatim and filtered only by isSafeName, which rejects nothing
+// but the empty string, `.`, `..`, a separator and NUL. `.roadmap` therefore passes: the claim
+// writes workflow-state.md straight into kaola-workflow/.roadmap/ beside the roadmap SOURCES, and
+// finalize then archives "the project" — carrying _rules.md, .gitkeep and every unrelated
+// issue-*.md into kaola-workflow/archive/.roadmap/ at exit 0, with closure_invariants
+// {ok:true, violations:[]} and no finding of any kind. From a linked worktree it is worse: BOTH
+// checkouts lose the folder AND the deletion is committed to the feature branch — the branch the
+// sink merges to main.
+//
+// The claim side is deliberately unchanged: a reserved directory may still be claimed. What is
+// pinned here is the ARCHIVE side, and only as a RESULT — refusing, resolving the name, or
+// anything else all satisfy it. The reserved directory's own content must still be on disk in
+// every checkout and still on the feature branch, and no run may report a successful archive it
+// did not perform.
+//
+// Four names run through ONE predicate, and NONE of them is a control: every one of them could be
+// destroyed. `archive` in particular is not the safe sibling it looks like — whether it survived
+// used to depend on the FIXTURE, not on the name. A large archive band made the completeness
+// verifier refuse; a small one copies cleanly and the run deletes both live copies at exit 0. Any
+// claim that one of these names is inherently safe is a claim about a fixture.
+//
+// `Archive` is the same directory as `archive` wherever the filesystem is case-insensitive (APFS
+// and NTFS by default), so a name-equality test on the caller-supplied string is not a test about
+// the directory it protects. That arm runs only where the aliasing is real, probed rather than
+// assumed, and it pins the RESULT there — not a casing rule, which is the implementer's to choose.
+//
+// FOREIGN vs the run's own: only content that predates the claim is pinned. workflow-state.md,
+// .cache/ and the run's OWN roadmap source are the run's to move — closure removing the closed
+// issue's source file is the documented contract, not the damage.
+// ---------------------------------------------------------------------------
+function testArchiveNeverRelocatesReservedDir930() {
+  // Is this filesystem case-insensitive? Probed, because it decides whether `Archive` and
+  // `archive` name the same directory and therefore whether the aliasing arm has a subject at all.
+  const caseProbeDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-case-probe-930-')));
+  let caseInsensitiveFs = false;
+  try {
+    fs.writeFileSync(path.join(caseProbeDir, 'CaseProbe'), '');
+    caseInsensitiveFs = fs.existsSync(path.join(caseProbeDir, 'caseprobe'));
+  } finally { fs.rmSync(caseProbeDir, { recursive: true, force: true }); }
+
+  const CASES = [
+    {
+      reserved: '.roadmap',
+      issue: 9301,
+      // The roadmap sources. issue-9301.md is the RUN's own source (closure may remove it) and is
+      // planted separately; everything below is the rest of the backlog and the project rules.
+      foreign: {
+        '.gitkeep': '',
+        '_rules.md': '# Project rules\n\nEvery run reads this file.\n',
+        'issue-9302.md': 'issue: #9302\ntitle: unrelated backlog item\nstatus: open\nworkflow_project: —\nnext_step: ready\n',
+        'issue-9303.md': 'issue: #9303\ntitle: second unrelated backlog item\nstatus: open\nworkflow_project: —\nnext_step: ready\n',
+      },
+      forbiddenDest: true,
+    },
+    {
+      reserved: '.origin',
+      issue: 9304,
+      foreign: {
+        'dead-exports-audit.md': 'a durable origin note\n',
+        '877/loadbearing.md': 'a nested origin artifact\n',
+      },
+      forbiddenDest: true,
+    },
+    {
+      reserved: 'archive',
+      issue: 9305,
+      foreign: {
+        'issue-9300/workflow-state.md': '# Kaola-Workflow State\n\n## Project\nname: issue-9300\nstatus: closed\n',
+      },
+      // `archive/archive` is not forbidden here: an attempt that ends in refusal can leave a
+      // partial self-copy of the band behind, and that residue destroys nothing. Preservation, the
+      // directory's SET and honesty carry this case; the copy is the mechanism's business.
+      forbiddenDest: false,
+    },
+    {
+      // The SAME directory, addressed in a casing the caller chose. Only runs where the filesystem
+      // actually aliases the two; elsewhere `Archive` is a genuinely separate name and there is
+      // nothing here to protect.
+      reserved: 'archive',
+      given: 'Archive',
+      issue: 9306,
+      skip: !caseInsensitiveFs,
+      foreign: {
+        'issue-9300/workflow-state.md': '# Kaola-Workflow State\n\n## Project\nname: issue-9300\nstatus: closed\n',
+        'issue-9300/mission-list.md': '# a prior run record\n',
+      },
+      forbiddenDest: false,
+    },
+  ];
+
+  const seedForeign = (root, c) => {
+    for (const [rel, body] of Object.entries(c.foreign)) {
+      const f = path.join(root, 'kaola-workflow', c.reserved, rel);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, body);
+    }
+  };
+
+  // Everything under a directory, as a sorted list of relative paths.
+  const listTree = dir => {
+    const out = [];
+    (function walk(d, rel) {
+      let entries;
+      try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
+      for (const e of entries) {
+        const r = rel ? rel + '/' + e.name : e.name;
+        if (e.isDirectory()) walk(path.join(d, e.name), r); else out.push(r);
+      }
+    })(dir, '');
+    return out.sort();
+  };
+
+  // The only files finalize is KNOWN to create inside the project folder before it ever reaches the
+  // archive step — the finalization-summary writers, which run ahead of the archive call. Named
+  // rather than tolerated silently: a refusal that reports it touched nothing still leaves this
+  // behind, and (1b) below exists so the next addition cannot arrive unseen.
+  const KNOWN_ADDITIONS = new Set(['finalization-summary.md']);
+
+  // ONE predicate, applied to every name in every lane.
+  const assertSurvived = (c, label, result, roots, mainRoot, branchRoot, before) => {
+    const emitted = String(result.stdout).trim().split('\n').filter(l => l.trim().startsWith('{'));
+    let out = {};
+    try { out = emitted.length ? JSON.parse(emitted[emitted.length - 1]) : {}; } catch (_) { out = {}; }
+
+    // (1) THE DEMANDED RESULT: the reserved directory and its own content are still in place —
+    // in EVERY checkout, byte for byte.
+    for (const [rootLabel, root] of roots) {
+      const dir = path.join(root, 'kaola-workflow', c.reserved);
+      assert(
+        fs.existsSync(dir),
+        '#930 ' + label + ': kaola-workflow/' + c.reserved + ' must still exist in the ' + rootLabel
+          + ' checkout after finalize\nexit: ' + result.status + '\nstdout: ' + result.stdout
+      );
+      for (const [rel, body] of Object.entries(c.foreign)) {
+        const f = path.join(dir, rel);
+        assert(
+          fs.existsSync(f),
+          '#930 ' + label + ': ' + rootLabel + ' checkout lost kaola-workflow/' + c.reserved + '/' + rel
+            + ' — archiving relocated a directory that is not a project folder'
+            + '\nexit: ' + result.status + '\nstdout: ' + result.stdout
+        );
+        assert(
+          read(f) === body,
+          '#930 ' + label + ': ' + rootLabel + ' checkout altered kaola-workflow/' + c.reserved + '/' + rel
+        );
+      }
+    }
+
+    // (1b) THE DIRECTORY AS A SET. Presence-and-bytes above cannot see a file ADDED inside the
+    // reserved directory, so a future step could quietly write into a directory the run reports it
+    // did not touch. Everything present that was not there before must be a declared addition.
+    for (const [rootLabel, root] of roots) {
+      const after = listTree(path.join(root, 'kaola-workflow', c.reserved));
+      const seen = (before && before.get(rootLabel)) || [];
+      const added = after.filter(p => !seen.includes(p) && !KNOWN_ADDITIONS.has(p));
+      assert(
+        added.length === 0,
+        '#930 ' + label + ': the ' + rootLabel + ' checkout gained undeclared entries inside '
+          + 'kaola-workflow/' + c.reserved + '/: ' + JSON.stringify(added)
+          + ' — archiving must not write into a directory that is not a project folder. If the '
+          + 'addition is intended, declare it in KNOWN_ADDITIONS with the writer that makes it.'
+          + '\nexit: ' + result.status
+      );
+    }
+
+    // (2) and it was not relocated into the archive under its own name.
+    if (c.forbiddenDest) {
+      const dest = path.join(mainRoot, 'kaola-workflow', 'archive', c.reserved);
+      assert(
+        !fs.existsSync(dest),
+        '#930 ' + label + ': nothing may be archived under ' + path.join('kaola-workflow', 'archive', c.reserved)
+          + ' — ' + c.reserved + ' is not a project folder; found: '
+          + JSON.stringify(fs.existsSync(dest) ? fs.readdirSync(dest) : [])
+      );
+    }
+
+    // (3) NOT A SILENT SUCCESS. A run that did not archive the reserved directory must not report
+    // that it did. Exiting non-zero satisfies this outright; an exit-0 report-and-continue
+    // satisfies it by not claiming the archive.
+    const receiptArchive = (out.closure_receipt || {}).archive;
+    assert(
+      result.status !== 0 || (out.archived !== true && receiptArchive !== 'closed'),
+      '#930 ' + label + ': finalize must not exit 0 reporting a successful archive of ' + c.reserved
+        + ' that it did not perform — got archived=' + JSON.stringify(out.archived)
+        + ', closure_receipt.archive=' + JSON.stringify(receiptArchive)
+        + ', closure_invariants=' + JSON.stringify(out.closure_invariants)
+        + '\nstdout: ' + result.stdout
+    );
+
+    // (4) THE WORST LANE: the deletion must never reach the branch the sink merges to main.
+    if (branchRoot) {
+      for (const [rel, body] of Object.entries(c.foreign)) {
+        const show = G.git(branchRoot, ['show', 'HEAD:kaola-workflow/' + c.reserved + '/' + rel], { encoding: 'utf8' });
+        assert(
+          show.status === 0,
+          '#930 ' + label + ': the feature-branch HEAD no longer carries kaola-workflow/' + c.reserved + '/' + rel
+            + ' — finalize committed the deletion onto the branch the sink merges to main'
+            + '\ngit show: ' + String(show.stderr || '').trim()
+            + '\nbranch log:\n' + String(G.git(branchRoot, ['log', '--oneline', '-3'], { encoding: 'utf8' }).stdout || '')
+        );
+        assert(
+          String(show.stdout) === body,
+          '#930 ' + label + ': the feature-branch HEAD altered kaola-workflow/' + c.reserved + '/' + rel
+        );
+      }
+    }
+  };
+
+  let ranCases = 0;
+  for (const c of CASES) {
+    if (c.skip) {
+      console.log('  #930 skipped ' + JSON.stringify(c.given || c.reserved)
+        + ': this filesystem is case-sensitive, so it does not alias the reserved directory');
+      continue;
+    }
+    ranCases++;
+    // The name the CALLER supplies. It is the directory's own name except in the aliasing arm,
+    // where the point is that the two differ as strings and not on disk.
+    const given = c.given || c.reserved;
+
+    // ---- lane 1: in place, finalize invoked from the main checkout ----
+    {
+      const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-reserved-main-930-')));
+      try {
+        initGitRepo(tmp);
+        seedForeign(tmp, c);
+        plantRoadmapIssue(tmp, c.issue, '');            // the RUN's own source; closure may remove it
+        G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+        G.git(tmp, ['commit', '-m', 'seed reserved directory'], { encoding: 'utf8' });
+        plantActiveFolder(tmp, given, c.issue, null);
+        seedAdaptiveFinalizeFixture(tmp, given);
+        const before = new Map([['main', listTree(path.join(tmp, 'kaola-workflow', c.reserved))]]);
+
+        const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', given], {
+          cwd: tmp, env: { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8'
+        });
+        assertSurvived(c, given + ' / main lane', result, [['main', tmp]], tmp, null, before);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
+
+    // ---- lane 2: linked worktree, finalize invoked from the worktree (what a real run does) ----
+    {
+      const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-reserved-wt-930-')));
+      const kwRoot = tmp + '.kw';
+      const wtPath = path.join(kwRoot, 'issue-' + c.issue);
+      try {
+        initGitRepo(tmp);
+        seedForeign(tmp, c);
+        plantRoadmapIssue(tmp, c.issue, '');
+        G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+        G.git(tmp, ['commit', '-m', 'seed reserved directory'], { encoding: 'utf8' });
+        fs.mkdirSync(kwRoot, { recursive: true });
+        G.git(tmp, ['worktree', 'add', '-b', 'workflow/issue-' + c.issue, '--', wtPath, 'HEAD'], { encoding: 'utf8' });
+        plantActiveFolder(tmp, given, c.issue, null);
+        plantActiveFolder(wtPath, given, c.issue, null);
+        seedAdaptiveFinalizeFixture(tmp, given);
+        seedAdaptiveFinalizeFixture(wtPath, given);
+        alignFinalizeFixtureAcrossRoots(tmp, wtPath, given);
+        const before = new Map([
+          ['main', listTree(path.join(tmp, 'kaola-workflow', c.reserved))],
+          ['worktree', listTree(path.join(wtPath, 'kaola-workflow', c.reserved))],
+        ]);
+
+        const result = spawnSync(
+          process.execPath, [claimScript, 'finalize', '--project', given, '--keep-worktree'],
+          { cwd: wtPath, env: { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' }
+        );
+        assertSurvived(c, given + ' / linked-worktree lane', result,
+          [['main', tmp], ['worktree', wtPath]], tmp, wtPath, before);
+      } finally {
+        try { G.git(tmp, ['worktree', 'remove', '--force', '--', wtPath], { encoding: 'utf8' }); } catch (_) {}
+        try { G.git(tmp, ['worktree', 'prune'], { encoding: 'utf8' }); } catch (_) {}
+        fs.rmSync(tmp, { recursive: true, force: true });
+        fs.rmSync(kwRoot, { recursive: true, force: true });
+      }
+    }
+  }
+  // The count is printed, not asserted: on a case-sensitive filesystem the aliasing arm has no
+  // subject and is skipped above with a reason. A silent skip is what this line prevents.
+  console.log('testArchiveNeverRelocatesReservedDir930: PASSED (' + ranCases + '/' + CASES.length
+    + ' names x 2 lanes)');
+}
+
 function testFinalizeNarrowStagingExcludesForeignArchive() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-narrow-stage-')));
   const kwRoot = tmp + '.kw';
@@ -11495,6 +11783,7 @@ function buildRegistry() {
   add('testPlanlessAndPlannedInitialAuthority699',        testPlanlessAndPlannedInitialAuthority699);
   add('testArchiveCallersFailClosed699',                  testArchiveCallersFailClosed699);
   add('testOfflineNoHistoryClaimRoot699',                 testOfflineNoHistoryClaimRoot699);
+  add('testArchiveNeverRelocatesReservedDir930',          testArchiveNeverRelocatesReservedDir930);
   return reg;
 }
 
