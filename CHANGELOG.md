@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased]
+
+### Documentation
+
+- **`workflow_project` is specified, and no guard was added (#929).** The field in
+  `kaola-workflow/.roadmap/issue-{N}.md` is read back by `projectNameForIssue` and becomes a name on
+  disk — the active folder, the worktree directory, the archive destination and the sink receipt's
+  `project` — while only the em-dash `—` is treated as "unassigned". A run whose source carried
+  `workflow_project: unclaimed` therefore produced a project, worktree and archive literally named
+  `unclaimed`, which reads as *unclaimed* to every later reader of what is in fact a claimed run.
+  Now stated in three places: a new `### Roadmap issue-source fields` section in
+  `docs/workflow-state-contract.md`, which did not mention the field at all; the `project-name` row
+  in `docs/api.md`, which previously specified only that subcommand's exit rule and not the field;
+  and one bullet inside the `CLAUDE.md` compact template in `templates/routing/init.skeleton.md`,
+  which renders to the three `commands/workflow-init.md` and three `skills/kaola-workflow-init/SKILL.md`
+  surfaces (GitHub, GitLab, Gitea) and so ships into each consumer repository's own `CLAUDE.md`.
+  No script changed, in any edition.
+
+  **The issue's root cause was refuted before anything was built, and its proposed fix was not
+  taken.** The report attributed the value to this project's roadmap generator; measured, no tool
+  here emits it — `readRoadmapIssues`, `buildTableRow` and `cmdInitIssue` all default to `—`, and
+  across every value of the field ever committed to this repository the literal `unclaimed` appears
+  zero times. It was hand-authored in the consuming repository, so the filed one-line guard
+  (`name !== 'unclaimed'`) would have written another project's private vocabulary into four
+  hand-maintained copies of the claim path, two of which have no automated body check.
+  **No lexical predicate can do this job**: `unclaimed` and the real project name `pr-sink` are the
+  same lexical object, so any rule admitting one admits the other, a "must contain a hyphen" rule
+  rejects the equally plausible name `sink` while still admitting `not-yet`, and a blocklist has no
+  closed membership. What was missing was a statement of what the field may contain, not a check —
+  so the remedy is the sentence, and the value is still adopted verbatim at runtime.
+
 ## [9.5.1] - 2026-08-03
 
 ### Removed

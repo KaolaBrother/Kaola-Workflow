@@ -150,6 +150,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 - Take irreversible and value-laden calls to the user and ask, in conversation, before acting: risky Git synchronization, destructive rewrites, deployment or credential actions, and issue or roadmap reorganization. Nothing collects that approval for you.
 - GitHub issues are the roadmap source of truth when available; `kaola-workflow/ROADMAP.md` is the local active-work mirror.
 - `kaola-workflow/ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md`; do not hand-edit the mirror.
+- In `.roadmap/issue-N.md`, `workflow_project` becomes a directory name verbatim: write `—` when no project is assigned yet, and a claim derives `issue-N`. Any other value is taken as a real, intended name, so a placeholder like `unclaimed` or `TBD` produces a folder literally called that.
 - Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file.
 - Active work lives in `kaola-workflow/{project}/` until archived or safely discarded.
 - Roadmap/research sessions create or refine issues; workflow runs implement one selected item and refresh the mirror.

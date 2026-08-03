@@ -118,6 +118,31 @@ file but is only as complete as its own source walk.
   recognize such a marker. It is never newly authored, so these parses do not fire for a freshly
   claimed project.
 
+### Roadmap issue-source fields
+
+Each `kaola-workflow/.roadmap/issue-{N}.md` carries `issue`, `title`, `status`, `workflow_project`
+and `next_step`; the GitLab and Gitea editions add `labels` and `url`. Only `workflow_project` is read
+back as an identifier, and it is the one field whose value becomes a name on disk.
+
+**`workflow_project` names the project directory a claim will create, verbatim.** `—` is the sole
+token meaning *not yet assigned*; an absent, empty or whitespace-only field means the same. On any of
+those, a claim derives the name `issue-{N}` instead. **Any other path-safe value is adopted as
+written** — it becomes the active folder `kaola-workflow/{value}/`, the worktree directory, the
+archive destination and the `project` field of the sink receipt. The branch is unaffected: it stays
+`workflow/issue-{N}`, and `workflow/gitlab-issue-{N}` or `workflow/gitea-issue-{N}` on those forges.
+
+The only filter is path safety (`isSafeName`: not empty, not `.` or `..`, no `/`, `\` or NUL). A value
+failing it is not reported — it is silently replaced by `issue-{N}`. Nothing else is checked, so a
+placeholder is not rejected but adopted: writing `unclaimed`, `TBD` or `none` produces a project,
+worktree and archive literally named that, which reads as *unclaimed* to every later reader of the
+folder while in fact naming a claimed run. Two cases are worse than misleading — `archive`, and any
+name beginning with `.`, are skipped by `readActiveFolders` before path safety is even consulted, so
+such a run is claimed but invisible to status and to the active-folder sweep. Write `—` when no
+project is assigned yet, and a real, intended name otherwise.
+
+This field is not how a bundle is formed: a bundle's folder name and branch stem are derived from its
+issue set (see Bundle project and branch naming below), never read from here.
+
 ## Archive Destination
 
 `archiveProjectDir` resolves the archive destination by ONE rule: for a linked run it is always

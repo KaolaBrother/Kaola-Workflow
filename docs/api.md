@@ -1347,7 +1347,7 @@ Manages the local roadmap mirror (`kaola-workflow/ROADMAP.md`) and per-issue met
 | `validate-remote` | the only subcommand that touches the forge. Iterates `.roadmap/issue-*.md` marked `status: open` and checks whether each is closed remotely. Exit 0 when clean; exit 1 with remediation on drift. Skips all network calls under `KAOLA_WORKFLOW_OFFLINE=1` |
 | `migrate` | one-time: parse the current `ROADMAP.md` table and create per-issue sources. Skips existing files. GitLab and Gitea swap this for `refresh` |
 | `init-issue --issue N [--title] [--status] [--workflow-project] [--next-step]` | create one `.roadmap/issue-{N}.md`. Exclusive creation — fails if the file exists |
-| `project-name --issue N` | print the `workflow_project` field from `.roadmap/issue-{N}.md`. Exit 1 if the field is missing or `—` |
+| `project-name --issue N` | print the `workflow_project` field from `.roadmap/issue-{N}.md`. Exit 1 if the field is missing or `—`. That field names the project directory a claim creates **verbatim**: `—`, absent or empty means unassigned and yields `issue-{N}`, and any other path-safe value is adopted as written. Nothing else validates it, so a placeholder becomes a real folder name — see `workflow-state-contract.md` § Roadmap issue-source fields |
 
 **Closure cleanup is automatic.** When an active folder is finalized (`cmdFinalize`) or archived
 after a PR merge (`watch-pr` on MERGED), closure removes the corresponding `.roadmap/issue-{N}.md`
