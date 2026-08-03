@@ -97,6 +97,11 @@ reconciliation: 31 tracked `.opencode/` files = 15 agents + 12 commands + 3 hook
   `--adapt` is sufficient; without `--adapt` both tiers intentionally inherit (the documented
   user-owned contract).
 
+> **Superseded (#927, 2026-08-03).** `--adapt`, `topTierRoles()` and `higherProfileRoles()` are all
+> deleted, and no path materializes per-agent effort any more — a subagent runs the model and effort
+> of the session that dispatched it. The committed neutral template in the first bullet is now the
+> *only* thing the generator emits. Full note at §9 below.
+
 **Established by:** `n1-runtime` §#2 (code-explorer). Caveat (not a defect): a fresh-clone
 consumer who never runs the installer sees no tier differentiation — that is the documented
 "user-owned" contract, not a gap.
@@ -287,6 +292,32 @@ output. Full per-key table in `.cache/n1-schema.md`:
   rejects → opencode will NOT hard-fail on the adapted config.**
 - **No schema drift** since authoring. Deprecated keys (`mode`, `reference`, `autoshare`,
   `layout`) exist but the config uses none.
+
+> **Superseded as to which keys are emitted (#927, 2026-08-03).** There is no adapted config any
+> more. **None** of the keys measured above is emitted: no `provider` block, no
+> `provider.<id>.models.<m>.variants`, no `agent.<role>.variant`, and no per-role effort payload of
+> any kind. Per-role reasoning effort was removed outright, because a subagent runs the model and
+> effort of the session that dispatched it — measured directly, by changing only the parent
+> session's effort and watching both subagents follow. The generator now emits the neutral template
+> alone: a commented-out **model**-pin scaffold and nothing else.
+>
+> The keys were schema-valid exactly as this audit found, and every one of them was inert.
+> **Being accepted by the schema was never the same as being applied**, and no key-presence check
+> could have caught that — not this audit's, and not the one #927 briefly added in its place. The
+> `variant` form was unreachable because opencode honours it only when the agent also pins a model,
+> which this edition never did; the `options` form that replaced it reached the model and was
+> removed anyway, because it overrode inheritance that was already correct. The **PASS verdict
+> stands** on its own terms — nothing emitted hard-fails the schema — but it was re-established
+> against the current output, not carried over.
+>
+> Follow-up **S1** below is closed, and its hypothesis was closer to right than the answer it got.
+> It asked whether zhipu honours `reasoningEffort`. #544 answered "wrong knob — z.ai is served on
+> the Anthropic contract, so use the `thinking` budget", and that answer keyed off the provider's
+> **brand id**, not its transport: `zhipuai-coding-plan` routes through `@ai-sdk/openai-compatible`.
+> So the 32000/16000 `thinking` split was keyed to a contract the one provider ever measured does
+> not actually speak, and no measurement ever showed it doing anything. S1's instinct — *the option
+> key may simply not be honoured* — was the right question, asked of the right provider, and it was
+> never answered before the mechanism it applied to was removed.
 
 The committed canonical form is correctly the **provider-agnostic neutral template**; the
 `--adapt` personalization is correctly **NOT committed**.

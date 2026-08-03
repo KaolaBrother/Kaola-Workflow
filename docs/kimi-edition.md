@@ -80,11 +80,12 @@ dispatch-prompt change only, still with zero canonical impact.
 ## One model tier — every subagent inherits the session model
 
 There is **no Reasoning/Standard two-tier mapping** on Kimi. This edition follows the Codex
-**inherit** precedent, not the opencode `mapTier` effort-variant one: Kimi Code has no
-per-dispatch model override at all, so every subagent inherits the session model.
-Consequences, all enforced by the test:
+**inherit** precedent — and, since #927, the opencode edition's too: on all three, a subagent
+runs the model and reasoning effort of the session that dispatched it. Kimi Code has no
+per-dispatch model override and no per-role effort control at all. Consequences, all enforced by
+the test:
 
-- Generated skills carry **no `model:` field**, and no effort-variant config is seeded
+- Generated skills carry **no `model:` field**, and no effort config is seeded
   anywhere. Model choices live only in the user's own Kimi `config.toml`.
 - The canonical `model:` tier markers are skipped entirely — meaningless under inherit.
 - All "You MUST pass `model=` …" dispatch instructions are rewritten to *"Never pass a
@@ -96,7 +97,7 @@ Consequences, all enforced by the test:
 - The adaptive planner's per-node tier (`reasoning`/`standard`) survives as **metadata
   only**: it is recorded in the dispatch packet and ledger, and `modelDisplay()` renders it
   as `parent session (<tier> tier metadata)` — the same semantics as the Codex edition. It
-  maps to no variant, effort, or model at runtime.
+  maps to no effort or model at runtime.
 
 **Declared runtime divergence.** Kimi is the one runtime whose subagents cannot carry a
 per-dispatch tier: every subagent inherits the session model. That is a genuine capability
@@ -317,9 +318,9 @@ opencode precedent).
 | --- | --- | --- |
 | Delivery | `opencode.json` + `.opencode/agent` + `.opencode/command` | `.kimi/skills/<name>/SKILL.md` tree + managed `[[hooks]]` block in `config.toml` |
 | Roles | named agent definitions (Markdown frontmatter) | **role-contract Skills** (`kaola-role-*`); dispatch uses built-in `coder`/`explore` subagents |
-| Models | two tiers as reasoning-effort variants of your inherited model (`mapTier`, provider-adaptive) | **one tier — every subagent inherits the session model** (Codex inherit precedent); planner tier is metadata only |
+| Models | **inherited** — a subagent runs the session's model and reasoning effort; a per-tier model pin is opt-in | **inherited** — same, and there is no model-pin opt-in at all; planner tier is metadata only |
 | Hooks | TS/JS adapter plugin feeding the shell scripts | TOML `[[hooks]]` in the **global** `config.toml` running the same shell scripts directly |
-| Config seeded | project (or merged global) `opencode.json` with variant definitions | none — model choices stay in the user's own Kimi config |
+| Config seeded | project (or global) `opencode.json` — a template with no model pinned | none — model choices stay in the user's own Kimi config |
 
 ## Verification
 

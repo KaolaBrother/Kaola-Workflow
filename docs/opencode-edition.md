@@ -41,13 +41,14 @@ Everything under `.opencode/` is **generated from canonical** by
 | Canonical source        | opencode edition output       | Notes |
 | ----------------------- | ----------------------------- | ----- |
 | `agents/<name>.md`      | `.opencode/agent/<name>.md`   | opencode frontmatter (`description`, `mode: subagent`, read-only `permission`). **No `model:` field** — model-agnostic. Generated reviewers preserve their canonical normalized behavior core and identity. |
-| `commands/<file>.md`    | `.opencode/command/<file>.md` | Claude install-time `model="{...}"` placeholders + all "pass `model=`" instructions rewritten to opencode's central effort resolution (`task` tool, no per-call `model=`). The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
+| `commands/<file>.md`    | `.opencode/command/<file>.md` | Claude install-time `model="{...}"` placeholders + all "pass `model=`" instructions rewritten to opencode's inheritance (the `task` tool has no model or effort parameter). The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
 | `hooks/<script>.sh`     | `.opencode/hooks/<script>.sh` | The 1 runtime-neutral hook script, byte-copied. |
 | `templates/opencode/plugins/*.js` | `.opencode/plugins/kaola-workflow-hooks.js` | Hook adapter plugin; byte-copied from the tracked canonical source by `sync-opencode-edition.js --write` (verified by `--check`; see [Hooks](#hooks)). |
 
 One file is **authored** (not generated) and verified present by the test:
 
-- `opencode.json` — the user-owned two-tier effort config (seeded once, preserved).
+- `opencode.json` — the user-owned config (seeded once, then preserved; an install names any
+  stale per-role effort entries it still carries and rewrites it only under `--adopt-config`).
 
 Generated agents are deliberately model-agnostic, so regenerating the tree never
 overwrites a user's model choices — those live only in the user-owned
@@ -84,204 +85,49 @@ once read these fields back to bind a review-gate receipt retired with the node/
 nothing currently reads them at run time. `scripts/test-opencode-edition.js` still verifies the
 stamped bytes against canonical.
 
-## Model effort — two tiers as reasoning-effort variants
+## Model and effort — inherited from the session
 
-Claude Code uses a closed model vocabulary (`opus` / `sonnet`). opencode is
-**provider-open** (Anthropic, OpenAI, Google, Z.ai/GLM, …), each with its own
-reasoning-effort levels. The edition migrates Claude's two tiers to opencode with a
-**general, explicit, contract-keyed mapping** — `mapTier(tier, provider)` — that keys
-on the provider's API **contract**, not its brand name:
+**A subagent runs the model and the reasoning effort of the session that dispatched it.** Nothing
+is configured per role, and there is nothing to pass: opencode's `task` tool takes a
+`subagent_type`, a `prompt` and a `description`, and has no model or effort parameter at all. To
+make a dispatched role think harder, raise the session's own effort — every role you dispatch
+follows it.
 
-- **Level 1 (fixed):** `reasoning` → the "top" rank · `standard` → the "second" rank.
-  (`reasoning`/`standard` are the plan's portable per-node vocabulary, `NODE_MODEL_TIERS`; the
-  legacy `opus`/`sonnet` aliases remain accepted and resolve to the same rank — see D-610-01.)
-- **Level 2 (per contract):** each rank → that contract's effort variant **and knob**
-  (Anthropic → `thinking` budget; OpenAI/Google → `reasoningEffort`).
+This is opencode's own behaviour, not something this edition arranges: `TaskTool` hands a subagent
+the parent's variant whenever the role pins no model, and this edition pins none. It was measured
+rather than assumed — with no `agent` block and the plugin hook inert, changing only the parent
+session's effort moved both subagents with it (parent at `nothink` → 0 / 0 / 0 reasoning tokens;
+parent at `think` → 26 / 560 / 641).
 
-| Contract | Providers | Knob | `reasoning` → top | `standard` → second |
-| --- | --- | --- | --- | --- |
-| `anthropic` | `anthropic`, `claude`, **`zhipu` / `z.ai` / GLM-5.2** (served via the Anthropic API contract) | `thinking` budget | `max` (budget 32000) | `high` (budget 16000) |
-| `openai` | `openai`, `gpt`, `codex` | `reasoningEffort` | `xhigh` | `high` |
-| `google` | `google`, `gemini` | `reasoningEffort` | `high` | `low` |
-| `default` (unknown) | any other | `reasoningEffort` | `high` | `medium` |
+The edition previously seeded a per-role effort tier — a `provider.*.variants` block and an
+`agent.<role>.variant` or `.options` entry for each role. That is **removed**, not merely
+deprecated: it was an override of the inheritance above rather than a repair of it, and no observed
+failure forced it to exist. `docs/investigations/2026-08-03-opencode-inherited-effort-tiers-design.md`
+records the design, what it measured, and why it was removed. A config written by an older install
+still carries those entries; the installer names them (see [Config
+drift](#config-drift-and---adopt-config)) and `--adopt-config` regenerates the file.
 
-> **Contract callout.** GLM-5.2 via z.ai is served under the **Anthropic API contract**, so its
-> knob is the `thinking` budget (32000 / 16000) — **not** `reasoningEffort`. Variant names stay
-> `max`/`high` (contract-keying flips only the *options* payload, never the variant *names*, so
-> already-seeded `agent.<role>.variant` references keep resolving). Unrecognized providers get the
-> `default` contract (a real `high`/`medium` top/second split — **no de-tier**).
+The **model**-pin path below is a different, opt-in feature and is unaffected.
 
-`mapTier` + `CONTRACT_EFFORT_TABLE` + `contractForProvider` live in `kaola-workflow-adaptive-schema.js`
-(the ×4 byte-identical drift anchor), so all editions share one table. It is the
-provider-open generalization of the existing Codex `dispatchEffort(reasoning→xhigh)`
-translator.
+### Opt-in: pin the two tiers to different models
 
-### Tier membership
-
-- **Reasoning / top tier** — exactly the canonical reasoning-tier roles
-  (**`planner`, `synthesizer`, `code-architect`, `code-reviewer`,
-  `security-reviewer`, `adversarial-verifier`**) → the model's
-  TOP effort variant. The membership is derived from the canonical agent
-  frontmatter alone; there is no install-time model axis to mirror.
-- **Standard / second tier** — every other role → the model's SECOND effort variant.
-
-### Default install: adaptive (`--adapt`)
-
-`install-opencode.sh` seeds `opencode.json` for your **inherited** model (detected
-from `KAOLA_OPENCODE_INHERIT_MODEL`, else the global `~/.config/opencode/opencode.json`
-`model` field): it defines the two effort variants under `provider.*` and selects
-each role's variant via `agent.<role>.variant`. **No model is pinned** — both tiers
-inherit the model you already use; only the effort differs. Example (GLM-5.2):
-
-```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
-  "default_agent": "build",
-  "provider": {
-    "zhipuai-coding-plan": { "models": { "glm-5.2": { "variants": {
-      "max":  { "thinking": { "type": "enabled", "budgetTokens": 32000 } },
-      "high": { "thinking": { "type": "enabled", "budgetTokens": 16000 } }
-    } } } }
-  },
-  "agent": {
-    "planner":           { "variant": "max"  },   // reasoning tier → top effort
-    "code-reviewer":     { "variant": "max"  },   // reasoning tier → top effort
-    "synthesizer":       { "variant": "max"  },
-    "code-architect":    { "variant": "max"  },
-    "security-reviewer": { "variant": "max"  },
-    "implementer":       { "variant": "high" }    // standard tier → second effort
-    // … 9 standard roles on "high"
-  }
-}
-```
-
-If the inherited model's provider is **unrecognized**, the seed falls back to the safe
-**default contract** (`reasoningEffort` `high`/`medium`) — a real top/second split,
-**no de-tier**. (A falsy/absent model still renders the neutral template: both tiers
-inherit, no variant pin.) Regenerate for another model:
-
-```bash
-node scripts/sync-opencode-edition.js --write-config --adapt         # re-detect + re-render
-KAOLA_OPENCODE_INHERIT_MODEL=openai/gpt-5 \
-  node scripts/sync-opencode-edition.js --write-config --adapt       # xhigh/high
-```
-
-### Switching models (resilience)
-
-opencode's variant schema is **model-scoped**: variants live at
-`provider.<id>.models.<model>.variants.*`, and opencode applies `agent.<role>.variant` by reading
-them from `opencode.json` — there is **no per-call variant override** on the `task` tool (the
-`opencode_variant` the dispatch envelope carries is a recording of intent for the ledger, not a
-runtime override opencode honors). So when you switch your opencode model, the variant
-*definitions* under the old `provider/<model>` do not resolve under the new one. Two safety nets
-keep this from silently de-tiering:
-
-1. **Runtime dispatch never de-tiers.** The dispatch path (`dispatchEffortOpencode` →
-   `resolveOpencodeProvider`) re-resolves the provider from `KAOLA_OPENCODE_INHERIT_MODEL` on
-   **every** dispatch, so the dispatch envelope always carries the correct variant for the
-   *currently* inherited model (sourced from `planner_model`, not `role_default`). Tier
-   *selection* is resilient regardless of what the seeded config says.
-2. **Config re-sync is documented.** For the config *side* to match after a model switch,
-   regenerate the variant definitions:
-
-   ```bash
-   KAOLA_OPENCODE_INHERIT_MODEL=<new-provider>/<new-model> \
-     node scripts/sync-opencode-edition.js --write-config --adapt
-   ```
-
-   The seeded `opencode.json` carries a prominent header comment stating the seeded model, its
-   contract, the knob, and this exact command; `install-opencode.sh` echoes the same guidance at
-   seed time.
-
-The **default contract** is the third safety net: even a provider the resolver has never seen gets
-the `high`/`medium` top/second split rather than collapsing to identical effort, so an unrecognized
-provider never silently de-tiers.
-
-### Computer-wide activation (merge into the global config)
-
-A **project** `opencode.json` (repo-root) applies to that repo only — opencode resolves config
-**global → project** (project wins). The seed above writes a *project* file, so by default each
-Kaola-enabled repo gets its own. To make the two effort tiers effective on **every** repo on a
-machine, the `provider.*` variants + `agent.<role>.variant` map must live in the **global**
-`~/.config/opencode/opencode.json`.
-
-**Why this isn't automatic (the gap).** The installer/script seeds `opencode.json` only **if
-absent** (it preserves your existing file), and the adapted renderer writes a *full* file with
-**no `model` line** (it assumes model inheritance). Consequences:
-
-- a global config that already exists (the typical case — it carries your `model`, and often
-  `mcp` servers with secrets) is **not** upgraded by re-running the installer;
-- a blind overwrite (`--write-config-to ~/.config/opencode/opencode.json --adapt`) would **wipe**
-  your `model` / `mcp` / other keys. Do **not** do that.
-
-**Safe, agent-runnable procedure.** Generate the correct blocks to a **temp** file (the renderer
-is good at this), then **merge** only `provider` + `agent` into the global, preserving everything
-else. Any agent (or human) on opencode can run this — no repo code change required:
-
-```bash
-# 1. Detect the inherited model and render the adapted blocks to a TEMP file (global NOT touched).
-node scripts/sync-opencode-edition.js --write-config-to /tmp/oc-adapted.json --adapt
-#    Override the detected model with KAOLA_OPENCODE_INHERIT_MODEL=<provider>/<model> if needed.
-
-# 2. Merge ONLY `provider` + `agent` from the temp into the global; back up first.
-#    Preserves model / mcp / $schema / any other keys. Validates JSON. Prints no secrets.
-node - <<'NODE'
-const fs=require('fs'),path=require('path');
-const home=process.env.HOME||require('os').homedir();
-const G=path.join(home,'.config','opencode','opencode.json'), T='/tmp/oc-adapted.json';
-const strip=t=>t.replace(/^\s*\/\/.*$/gm,'').replace(/\/\*[\s\S]*?\*\//g,'').trim();
-const g=JSON.parse(strip(fs.readFileSync(G,'utf8'))), a=JSON.parse(strip(fs.readFileSync(T,'utf8')));
-if(!a.provider||!a.agent) throw new Error('adapted temp missing provider/agent');
-fs.writeFileSync(G+'.bak', JSON.stringify(g,null,2)+'\n');            // local backup (has secrets — keep local)
-g.provider=Object.assign({}, g.provider||{}, a.provider);
-g.agent   =Object.assign({}, g.agent||{},    a.agent);
-const out=JSON.stringify(g,null,2)+'\n'; JSON.parse(out);             // validate before write
-fs.writeFileSync(G,out);
-console.log('merged global:',G,'\n keys:',Object.keys(g).join(', '),
-  '\n provider:',Object.keys(g.provider).join(', '),
-  '\n agent roles:',Object.keys(g.agent).length,
-  '\n model kept:',!!g.model,' mcp kept:',!!g.mcp);
-NODE
-
-# 3. Confirm in opencode (next subagent dispatch uses the tiers). Restore on any problem:
-#    mv ~/.config/opencode/opencode.json.bak ~/.config/opencode/opencode.json
-```
-
-**Scope notes.**
-- The `agent.<role>.variant` entries are Kaola role names; they take effect only where those roles
-  are installed — a project `.opencode/agent/` (per-repo) or a global deploy
-  (`./install-opencode.sh --global`). In non-Kaala repos they are inert, so placing them globally
-  is safe.
-- **Idempotent:** re-running overwrites the same `provider`/`agent` blocks with fresh values; your
-  `model`/`mcp` are always preserved.
-- **Opt out** computer-wide by removing the `provider`/`agent` blocks (or restoring the `.bak`);
-  neutral behavior (both tiers inherit, no variant pin) returns.
-
-> Future improvement (not required for the merge above): a `--merge-config --adapt` mode on
-> `sync-opencode-edition.js` would collapse steps 1–2 into one safe command. Today the temp-render
-> + agent merge is the supported path because the renderer's full-file output cannot be written
-> blindly over an existing global.
-
-### Adaptive effort selection in the workflow
-
-The adaptive planner authors `reasoning`/`standard` (or a legacy `opus`/`sonnet` alias) per node by
-reasoning weight (#382, renamed #610); opencode resolves that to an effort variant via `mapTier`.
-Because opencode applies
-the variant **per role** (the `task` tool has no per-call variant override), the
-planner realizes its tier choice through **role choice** — a reasoning-heavy node
-uses a top-tier role (→ top effort), an execution node a standard role (→ second).
-The `buildDispatch` packet carries the per-step `model` (the tier intent).
-
-### Opt-out: pin tiers to different models
-
-If you want the two tiers on **different models** (not just different efforts),
-skip `--adapt` and pin via env (or hand-edit `opencode.json`):
+Effort is inherited and not configurable per role, but the **model** still is. If you want the
+reasoning-tier roles on a different model from the rest, pin via env (or hand-edit
+`opencode.json`):
 
 - `KAOLA_OPENCODE_STANDARD_MODEL` — pin the standard tier to a `provider/model`
 - `KAOLA_OPENCODE_REASONING_MODEL` — pin the reasoning tier to a `provider/model`
 
+The seeded `opencode.json` carries this as a commented-out scaffold: a top-level `model` for the
+standard tier and `agent.<role>.model` overrides for the five reasoning-tier roles
+(`code-architect`, `code-reviewer`, `planner`, `security-reviewer`, `synthesizer`). With nothing
+set, every role inherits the model you already use.
+
+> A role that pins a model no longer inherits the session's effort either — that is opencode's
+> coupling, not this edition's, and it is the trade this opt-in makes.
+
 > `opencode.json` is **user-owned**: `--write` regenerates agents/commands but
-> **preserves** this file. Use `--write-config [--adapt]` to reset it from the template.
+> **preserves** this file. Use `--write-config` to reset it from the template.
 
 ## Path selection
 
@@ -339,6 +185,15 @@ silently drift when a future second plugin is added. Enforced by `A11-allowlist`
 Fail-open everywhere (a missing script, malformed payload, or non-git cwd never
 breaks the session); only an explicit exit-2 deny throws.
 
+**One export, and it must be the default.** opencode's loader iterates `Object.values(mod)` and
+calls **every** exported value as a plugin factory, so a named export beside the default is not a
+harmless test handle — it is invoked with the plugin input, throws, and aborts registration of the
+whole module. This plugin once shipped `export { hookPath, findRoot }` and logged
+`failed to load plugin` on every startup as a result; the hooks survived only because ESM namespace
+keys are sorted and `default` happened to be collected first. Test handles now hang off the default
+export as properties, and `A29` walks the module the way the loader does rather than reaching for
+`.default`, so the shape cannot regress quietly.
+
 ## Script resolution coupling
 
 Workflow commands invoke `scripts/kaola-workflow-*.js` through a `kaola_script()`
@@ -376,12 +231,43 @@ Claude resolver to this opencode form at generation time; canonical `commands/*.
 ./install-opencode.sh --target /path/to/repo  # deploy into a specific project
 ./install-opencode.sh --global                # agents+commands → ~/.config/opencode (un-nested)
 ./install-opencode.sh --regenerate            # refresh in-repo .opencode/ from canonical
+./install-opencode.sh --no-scripts            # skip the support-script copy (see Script resolution)
+./install-opencode.sh --adopt-config          # replace an existing opencode.json (see Config drift)
 ./install-opencode.sh --uninstall             # remove the kaola-deployed edition (see Uninstall)
 ```
 
 The install deploys the workflow command set — finalize, workflow-init, workflow-next.
 It writes no configuration: the shared `~/.config/kaola-workflow/config.json` is user-owned
 and no installer creates or edits it.
+
+### Config drift and `--adopt-config`
+
+`opencode.json` is user-owned, so an install preserves an existing one — which is also how it goes
+stale, and nothing looked. A file written by an older install pins per-role reasoning effort
+(`agent.<role>.options`, or `agent.<role>.variant` from before that); those settings no longer do
+anything, because a subagent runs the model and effort of the session that dispatched it. Every
+install **names the entries still carrying them** and changes nothing:
+
+```
+⚠ Config drift: it pins per-role reasoning effort, which no longer does anything.
+    3 role entry(ies) carrying an inert effort setting: contractor, issue-scout, planner
+    A subagent runs the model and reasoning effort of the session that dispatched it, so
+    these are left over from an older install. An entry that only pins a model is yours
+    and is not counted here.
+```
+
+That last line is the deliberate exclusion: an `agent.<role>` entry carrying **only** a `model` is
+the opt-in model pin, which is yours and still works, so it is never named.
+
+`--adopt-config` is the explicit opt-in that takes the regenerated config. It **regenerates the
+whole file rather than merging into it** — the output is exactly what a fresh seed would write, so
+hand edits and model pins are gone from the live config. The file it replaces is copied to
+`<config>.<timestamp>.bak` first and the install prints that path; if the backup cannot be written
+the install fails and the config is left alone. So the previous file is recoverable, but recovering
+a pin means putting it back by hand.
+
+An unreadable or non-JSON config is not this installer's to diagnose: it says nothing and never
+fails the install.
 
 ### Deploy layout — project vs global (scope-dependent)
 
@@ -412,8 +298,8 @@ install asserts the un-nested layout and that no nested `.opencode/` is created)
 
 `--uninstall` removes **only** kaola-deployed artifacts from the resolved scope, by
 source-tree filename (never a blind `rm` of a dir you may share): the deployed
-agents/commands/plugin/hooks and the opencode-native support scripts under
-`${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/`. The shared
+agents/commands/plugin/hooks and the opencode-native support scripts
+under `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/`. The shared
 `~/.config/kaola-workflow/config.json` is user-owned and untouched, so a co-installed
 Claude/Codex edition is unaffected. Your own `opencode.json` (model/permission
 config) is **preserved**. A subsequent bare install then deploys the workflow edition — the
@@ -423,11 +309,10 @@ uninstall→reinstall round-trip is verified by `test-opencode-edition.js` **U1*
 > not touch opencode — opencode is an additive runtime, not a forge (D-530-02), so its
 > removal lives in `install-opencode.sh --uninstall`, which owns the deploy layout.
 
-It seeds `opencode.json` only if absent. With `--adapt` (the default) it adapts the
-two effort tiers to your **inherited** model (detected from
-`KAOLA_OPENCODE_INHERIT_MODEL`, else the global opencode `model`); no model is
-pinned — both tiers inherit the model you're already using, only the effort
-differs. Override the inherited model, or pin tiers to different models via the
+It seeds `opencode.json` only if absent — otherwise it preserves the file and names any stale
+per-role effort entries it still carries (see [Config
+drift](#config-drift-and---adopt-config)). The seeded file pins no model, so every role runs the
+model and effort of the session that dispatched it; pin a tier to a different model with the
 `KAOLA_OPENCODE_*_MODEL` env vars. Then in opencode:
 
 ```
@@ -439,7 +324,7 @@ differs. Override the inherited model, or pin tiers to different models via the
 
 ```bash
 node scripts/sync-opencode-edition.js --write              # regenerate .opencode/ + seed config
-node scripts/sync-opencode-edition.js --write-config --adapt  # re-render opencode.json for the inherited model
+node scripts/sync-opencode-edition.js --write-config       # re-render opencode.json from the template
 node scripts/sync-opencode-edition.js --check              # parity assert: agents + commands + hooks + opencode.json
 node scripts/test-opencode-edition.js                      # full structural + parity + route-reachability suite
 ```
@@ -454,16 +339,22 @@ The validator is self-contained (run directly with `node`; it is intentionally
 | Delivery | plugin (`.codex-plugin/` + `skills/` + `agents/*.toml`) | `opencode.json` + `.opencode/agent` + `.opencode/command` |
 | Agent format | TOML profiles | Markdown (frontmatter + prompt body) |
 | Forge coupling | shares the forge edition machinery (github/gitlab/gitea) | `--forge` flag; variants generated from the routing registry, outside the edition machinery |
-| Models | baked per-agent | **two tiers as reasoning-effort variants** of your inherited model (`mapTier`, provider-adaptive); default = your model |
+| Models | baked per-agent | **inherited** — a subagent runs the model and reasoning effort of the session that dispatched it; a per-tier model pin is opt-in |
 
 ## Verification
 
 The edition is covered by `scripts/test-opencode-edition.js`: agent/command presence and
 frontmatter, model-agnostic invariant (no `model:` in
 generated agents), byte-for-byte canonical parity including generated reviewer behavior identity,
-`opencode.json` JSONC validity
-+ exact tier coverage, **adaptive effort tiers** (`mapTier` per provider + the
-**model-prose consistency** (no contradictory "pass `model=`" instructions),
+`opencode.json` JSONC validity,
+**plugin load shape** (A29: the module exports exactly `["default"]`, and a harness walks it the
+way opencode's loader does — `Object.values(mod)`, calling every exported value as a plugin
+factory — so a named export beside the default, which once threw on every load, fails here instead
+of silently killing every hook in the file), **config drift** (A27: an install names the entries
+still pinning per-role effort and names the opt-in flag, which actually regenerates the file;
+A27-neg / A27-quiet: a config the generator just wrote, and the inputs on which the check must say
+nothing, report nothing), **model-prose consistency** (no contradictory "pass `model=`"
+instructions),
 **path-flip** (A22: no Path Intent section / auto-fallback prose on the opencode
 surface), route-reachability (every receipt-emitted command target resolves
 under `.opencode/command/`), **command-set lock-in** (P1: the deployed set is exactly

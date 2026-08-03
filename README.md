@@ -363,9 +363,10 @@ opencode is an additive runtime — installed by its own script, not `--forge`. 
 ./install-opencode.sh                 # deploy into the current project (.opencode/ + opencode.json)
 ./install-opencode.sh --global        # deploy agents + commands into ~/.config/opencode (all projects)
 ./install-opencode.sh --regenerate    # refresh the in-repo .opencode/ tree from canonical
+./install-opencode.sh --adopt-config  # replace an existing opencode.json with a freshly generated one
 ```
 
-The install seeds `opencode.json` with **two model tiers as reasoning-effort variants of your inherited model** — no model is pinned, so both tiers inherit whatever model you already use in opencode. The reasoning tier (the canonical reasoning-tier roles, per the **Tier** column under [Workflow roles](#workflow-roles)) gets the model's **top** effort variant; the standard tier gets the **second** (e.g. `max` / `high` on GLM-5.2 and Anthropic, `xhigh` / `high` on OpenAI, `high` / `low` on Google). The mapping (`mapTier` + `CONTRACT_EFFORT_TABLE` + `contractForProvider`) is contract-keyed — the effort knob follows the model's API contract, not its brand name — and lives in `kaola-workflow-adaptive-schema.js`. Full detail: [docs/opencode-edition.md](docs/opencode-edition.md).
+**A subagent runs the model and the reasoning effort of the session that dispatched it.** Nothing is configured per role and there is nothing to pass — opencode's `task` tool has no model or effort parameter. To make a dispatched role think harder, raise the session's own effort; every role you dispatch follows it. (Pinning a *model* per tier is a separate opt-in, via `KAOLA_OPENCODE_STANDARD_MODEL` / `KAOLA_OPENCODE_REASONING_MODEL`.) `opencode.json` is yours: an install preserves an existing one and names any `agent.<role>` entries still pinning per-role effort, which no longer does anything; only `--adopt-config` rewrites it — whole-file, not a merge, after copying the old one to a timestamped `.bak` it names. Full detail: [docs/opencode-edition.md](docs/opencode-edition.md).
 
 ### kimi
 

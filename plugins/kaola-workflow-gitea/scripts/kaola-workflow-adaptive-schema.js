@@ -44,7 +44,8 @@ const PLAN_FILE = 'workflow-plan.md';
 // runtime-NEUTRAL reasoning-weight tier tokens (no haiku) — no edition consumes them as literal model
 // names at dispatch: Claude maps `reasoning`→Opus / `standard`→Sonnet on the Agent(model=…) param;
 // Codex uses them only as declarative role/wait metadata while inheriting the parent pair;
-// opencode maps them to a provider effort variant. `—`/absent ⇒
+// opencode configures no per-role effort at all — a subagent inherits the session's model and
+// effort natively. `—`/absent ⇒
 // today's role-default metadata resolution. New plans author these neutral tokens. Defined here (the ×4
 // byte-identical drift anchor) so the validator, the executor, and every edition share one list.
 const NODE_MODEL_TIERS = Object.freeze(['reasoning', 'standard']);
@@ -52,9 +53,10 @@ const NODE_MODEL_TIERS = Object.freeze(['reasoning', 'standard']);
 // #610: the legacy→neutral tier alias map. Frozen/archived plans keep their BYTES — a legacy `opus`/
 // `sonnet` cell validates at parse (no rewrite, plan_hash unchanged, resume unaffected) by normalizing
 // to the neutral token here. New plans author `reasoning`/`standard` directly. normalizeTier() is the
-// single alias-resolution seam every tier consumer (TIER_RANK lookup, dispatchEffort, mapTier,
-// dispatchEffortOpencode, dispatchModelClaude, dispatchModelCodex, the reasoning-floor check) routes through, so a token is
-// interpreted identically everywhere. A neutral token passes through; a legacy alias resolves; an
+// single alias-resolution seam: a tier token is resolved HERE and nowhere else, so one token means one
+// thing to every reader. What this comment used to carry instead was a roster of the consumers, and
+// the roster outlived three of them — the seam is the rule, a caller list is a copy of the truth that
+// stops being true without saying so. A neutral token passes through; a legacy alias resolves; an
 // out-of-vocab token (e.g. `haiku`) or an absent/blank cell → null (the model_invalid / role-default
 // signal — callers guard on `if (node.model)` before treating null as "invalid").
 const TIER_ALIASES = Object.freeze({ opus: 'reasoning', sonnet: 'standard' });
@@ -114,83 +116,6 @@ function dispatchEffort(model, sessionProof) {
     codex_reasoning_effort: null,
     codex_reasoning_effort_source: 'role_default',
   };
-}
-
-// #382-opencode (#544 contract-keyed): the GENERAL tier→effort mapping for provider-open
-// runtimes (opencode). The {reasoning, standard} tokens are reasoning-weight RANKS, not models;
-// opencode is provider-open, so the migration is a two-level compose that never assumes a provider:
-//   Level 1 (fixed):        reasoning → 'top' rank · standard → 'second' rank.
-//   Level 2 (per contract): rank → that contract's effort variant (top = highest,
-//                           second = 2nd-highest), per the provider's API CONTRACT.
-//   mapTier(tier, provider) = CONTRACT_EFFORT_TABLE[ contractForProvider(provider) ][ TIER_RANK[normalizeTier(tier)] ].
-// #544: the effort KNOB is determined by the provider's API CONTRACT, not its brand name.
-// contractForProvider() maps a provider id to one of four contracts (anthropic|openai|google|
-// default); the table is keyed by CONTRACT, so GLM-5.2 via z.ai (served under the Anthropic API
-// contract) resolves to the `thinking` budget — NOT reasoningEffort. An unknown provider
-// resolves to the safe `default` contract (high/medium) instead of null (NO silent de-tier).
-//   contract          providers                              opus (top)        sonnet (second)
-//   anthropic         anthropic, claude, z.ai/zhipu GLM      max (think 32k)   high (think 16k)
-//   openai            openai, gpt, codex                     xhigh             high
-//   google            google, gemini                         high              low
-//   default           any other (unknown)                    high              medium
-// Variant NAMES are provider-relative and preserved across the contract-keying flip (GLM stays
-// max/high) — only the OPTIONS payload changes. Pure data + pure helpers (no I/O) — qualifies
-// for this ×4 byte-identical drift anchor.
-const TIER_RANK = Object.freeze({ reasoning: 'top', standard: 'second' });
-
-// Each entry: { top: {variant, options}, second: {variant, options} }. `variant` is the
-// opencode variant NAME (referenced by agent.<role>.variant); `options` is the provider
-// model-options payload (passed through to the provider, e.g. thinking / reasoningEffort).
-const CONTRACT_EFFORT_TABLE = Object.freeze({
-  anthropic: Object.freeze({
-    top:    { variant: 'max',  options: { thinking: { type: 'enabled', budgetTokens: 32000 } } },
-    second: { variant: 'high', options: { thinking: { type: 'enabled', budgetTokens: 16000 } } },
-  }),
-  openai: Object.freeze({
-    top:    { variant: 'xhigh', options: { reasoningEffort: 'xhigh' } },
-    second: { variant: 'high',  options: { reasoningEffort: 'high' } },
-  }),
-  google: Object.freeze({
-    top:    { variant: 'high', options: { reasoningEffort: 'high' } },
-    second: { variant: 'low',  options: { reasoningEffort: 'low' } },
-  }),
-  default: Object.freeze({
-    top:    { variant: 'high',   options: { reasoningEffort: 'high' } },
-    second: { variant: 'medium', options: { reasoningEffort: 'medium' } },
-  }),
-});
-
-// Resolve a provider id to its API CONTRACT (the effort KNOB depends on the contract, not the
-// brand). GLM-via-z.ai is served under the Anthropic API contract → 'anthropic' (thinking budget).
-// The zhipu/zai/glm test runs FIRST so GLM provider ids never fall through to a generic branch.
-// Unknown id → 'default' (the safe high/medium contract). Pure (no fs).
-function contractForProvider(providerId) {
-  const lo = String(providerId || '').toLowerCase();
-  if (/zhipu|^zai|z-?ai|glm/.test(lo)) return 'anthropic';   // GLM-via-z.ai → Anthropic contract
-  if (/anthropic|claude/.test(lo)) return 'anthropic';
-  if (/openai|gpt|codex/.test(lo)) return 'openai';
-  if (/google|gemini/.test(lo)) return 'google';
-  return 'default';
-}
-
-// Resolve a provider id to its effort profile. Falsy id → null (load-bearing backward-compat: the
-// no-provider dispatch path for claude/codex must stay behavior-inert). A real but unrecognized
-// provider id → CONTRACT_EFFORT_TABLE.default (the safe high/medium contract — NO silent de-tier).
-function effortForProvider(providerId) {
-  const id = String(providerId || '');
-  if (!id) return null;                                       // no provider → null (backward-compat)
-  return CONTRACT_EFFORT_TABLE[contractForProvider(id)];      // unknown → 'default' (never null)
-}
-
-// The general mapper: tier → {variant, options} for a provider, or null.
-// `tier` is a NODE_MODEL_TIERS token (reasoning|standard) or a legacy alias (opus|sonnet); #610:
-// normalizeTier() first so a frozen-plan legacy cell resolves to the SAME rank. Unknown tier / provider → null.
-function mapTier(tier, providerId) {
-  const rank = TIER_RANK[normalizeTier(tier)];
-  if (!rank) return null;
-  const profile = effortForProvider(providerId);
-  if (!profile) return null;
-  return profile[rank];
 }
 
 // Claim identity. Forge-neutral and side-effect-free so every edition hashes the same
@@ -1688,10 +1613,7 @@ module.exports = {
   PLAN_FILE,
   CODEX_PINNED_STANDARD_ROLES,
   CODEX_PINNED_REASONING_ROLES,
-  contractForProvider,
   dispatchEffort,
-  effortForProvider,
-  mapTier,
   isPlainObject,
   canonicalJson,
   sha256Hex,

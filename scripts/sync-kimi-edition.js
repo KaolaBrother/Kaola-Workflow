@@ -401,9 +401,9 @@ function transformCommandBody(body, forge, label) {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    // Strip the "## Agent Model Badge" section (where opencode substitutes its
-    // Effort Variant Resolution block, the kimi edition has no badge analogue at
-    // all — there is no per-dispatch model to document) and replace its body with
+    // Strip the "## Agent Model Badge" section (where opencode substitutes a block
+    // of its own; the kimi edition has no badge analogue at all — there is no
+    // per-dispatch model to document) and replace its body with
     // the one-line kimi-true guidance, since canonical dispatch prose ("MUST pass
     // model=…") now lives entirely inside this section for every command that has
     // it (a standalone occurrence outside the block, if any, is separately

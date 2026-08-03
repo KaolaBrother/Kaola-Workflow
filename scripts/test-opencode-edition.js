@@ -23,7 +23,9 @@
 const fs = require('fs');
 const path = require('path');
 const sync = require('./sync-opencode-edition.js');
-const schema = require('./kaola-workflow-adaptive-schema.js');
+// The adaptive-schema require went with S1-contract and A26: its only consumers here were
+// `effortForProvider` / `contractForProvider` / `CONTRACT_EFFORT_TABLE`, all removed with per-role
+// effort tiering. An import kept "in case" is the same dead-configuration class as the mechanism.
 const reviewerGenerator = require('./generate-reviewer-profiles.js');
 
 const REPO = sync.REPO;
@@ -655,111 +657,31 @@ for (const role of reasoning) {
     'A8[' + role + ']: pinned reasoning tier carries the given provider/model');
 }
 
-// ---------------------------------------------------------------------------
-// A12: adaptive effort tiers (the locked-in install default). With an explicit
-// inherited model whose provider resolves under a CONTRACT_EFFORT_TABLE contract,
-// renderOpencodeJson emits the two-tier EFFORT-VARIANT config: top-tier roles
-// (exactly the canonical reasoning-tier roles — there is no second, install-time
-// model axis) get the provider's TOP variant; standard roles get its SECOND
-// variant. The per-tier variant names are provider-relative (mapTier). Unknown
-// provider → safe DEFAULT contract (NO de-tier). NODE_MODEL_TIERS {opus,sonnet}
-// stays the portable plan vocabulary; this only resolves a tier.
-// ---------------------------------------------------------------------------
-const topRoles = sync.topTierRoles();
-const stdRoles = sync.standardTierRoles();
-assert(JSON.stringify(topRoles) === JSON.stringify(reasoning),
-  'A12: topTierRoles() is EXACTLY the canonical reasoning-tier role set (one source, no install-time axis); got ['
-    + topRoles.join(', ') + '] vs [' + reasoning.join(', ') + ']');
-for (const role of ['code-architect', 'code-reviewer', 'security-reviewer']) {
-  assert(topRoles.includes(role), 'A12: reasoning-tier role ' + role + ' is on the top tier');
-}
-// Retiring the install-time model axis must not re-tier a role. These stay OFF the top tier:
-// `adversarial-verifier` never had a `higher` variant, so its shipped tier is standard, and
-// `build-error-resolver` is hot repair work. Both are raisable per node by the frozen plan.
-assert(!topRoles.includes('implementer')
-  && !topRoles.includes('adversarial-verifier') && !topRoles.includes('build-error-resolver'),
-  'A12: standard-tier roles stay off the top tier');
-
-// GLM-5.2 (zhipu): top=max, second=high.
-const glm = parseRendered({ inheritModel: 'zhipuai-coding-plan/glm-5.2' });
-assert(glm.provider['zhipuai-coding-plan'].models['glm-5.2'].variants.max
-  && glm.provider['zhipuai-coding-plan'].models['glm-5.2'].variants.high,
-  'A12: glm-5.2 defines top=max + second=high variants');
-// S1 (FLIPPED #544): GLM-5.2 via z.ai is served under the ANTHROPIC API contract, so its
-// effort options MUST be the `thinking` budget shape — NOT reasoningEffort. Variant NAMES
-// stay max/high (contract-keying flips only the OPTIONS payload, per the #544 invariant).
-const glmMax = glm.provider['zhipuai-coding-plan'].models['glm-5.2'].variants.max;
-assert(glmMax.thinking && glmMax.thinking.type === 'enabled' && glmMax.thinking.budgetTokens === 32000,
-  'S1: glm-5.2 max variant carries thinking {type:"enabled",budgetTokens:32000} (Anthropic contract), got ' + JSON.stringify(glmMax));
-assert(glmMax.reasoningEffort === undefined,
-  'S1: glm-5.2 max variant does NOT carry reasoningEffort (Anthropic contract → thinking budget)');
-const glmHigh = glm.provider['zhipuai-coding-plan'].models['glm-5.2'].variants.high;
-assert(glmHigh.thinking && glmHigh.thinking.budgetTokens === 16000,
-  'S1: glm-5.2 high variant carries thinking budgetTokens:16000');
-
-// ---------------------------------------------------------------------------
-// S1-contract (#544): the contract-keyed resolver. effortForProvider now keys on
-// the provider's API CONTRACT, not its brand name; contractForProvider maps a
-// provider id to {anthropic|openai|google|default}. GLM-via-z.ai → anthropic
-// (thinking budget). Unknown provider → safe default (NO de-tier). Falsy stays
-// null (backward-compat for the no-provider claude/codex dispatch path).
-// ---------------------------------------------------------------------------
-const glmProfile = schema.effortForProvider('zhipuai-coding-plan');
-assert(glmProfile && glmProfile.top.options.thinking && !glmProfile.top.options.reasoningEffort,
-  'S1-contract[glm]: effortForProvider(zhipuai-coding-plan) → anthropic-contract thinking (not reasoningEffort)');
-assert(glmProfile.top.variant === 'max' && glmProfile.second.variant === 'high',
-  'S1-contract[glm]: variant NAMES stay max/high (contract-keying flips OPTIONS, not names)');
-assert(schema.contractForProvider('zhipuai-coding-plan') === 'anthropic'
-  && schema.contractForProvider('zai') === 'anthropic'
-  && schema.contractForProvider('zhipu-glm') === 'anthropic',
-  'S1-contract[glm]: contractForProvider resolves zhipu/zai/zhipu-glm → anthropic');
-
-const oaiProfile = schema.effortForProvider('openai');
-assert(oaiProfile && oaiProfile.top.options.reasoningEffort === 'xhigh' && !oaiProfile.top.options.thinking,
-  'S1-contract[openai]: top → reasoningEffort xhigh (no thinking)');
-assert(schema.contractForProvider('openai') === 'openai' && schema.contractForProvider('gpt-5') === 'openai',
-  'S1-contract[openai]: contractForProvider(openai|gpt-5) → openai');
-
-const googProfile = schema.effortForProvider('google');
-assert(googProfile && googProfile.top.options.reasoningEffort === 'high'
-  && googProfile.second.options.reasoningEffort === 'low',
-  'S1-contract[google]: top reasoningEffort high, second low');
-assert(schema.contractForProvider('google') === 'google' && schema.contractForProvider('gemini-2.5-pro') === 'google',
-  'S1-contract[google]: contractForProvider(google|gemini-2.5-pro) → google');
-
-const unkProfile = schema.effortForProvider('acme-corp');
-assert(unkProfile !== null && unkProfile.top.variant !== unkProfile.second.variant,
-  'S1-contract[unknown]: effortForProvider(acme-corp) non-null + top≠second (safe default, NO de-tier)');
-assert(schema.contractForProvider('acme-corp') === 'default',
-  'S1-contract[unknown]: contractForProvider(acme-corp) === default');
-
-assert(schema.effortForProvider(null) === null && schema.effortForProvider('') === null,
-  'S1-contract[falsy]: effortForProvider(null|<empty>) === null (backward-compat, NOT default)');
-
-for (const role of topRoles) {
-  assert(glm.agent[role].variant === 'max', 'A12[' + role + ']: top-tier role → max variant');
-}
-for (const role of stdRoles) {
-  assert(glm.agent[role].variant === 'high', 'A12[' + role + ']: standard-tier role → high variant');
-}
-
-// OpenAI: top=xhigh, second=high (provider-relative — same tier ranks, different names).
-const oai = parseRendered({ inheritModel: 'openai/gpt-5' });
-assert(Object.keys(oai.provider.openai.models['gpt-5'].variants).sort().join('/') === 'high/xhigh',
-  'A12: openai maps top=xhigh, second=high');
-assert(oai.agent.planner.variant === 'xhigh' && oai.agent.implementer.variant === 'high',
-  'A12: openai top-tier → xhigh, standard-tier → high');
-
-// A12 (FLIPPED #544): unknown provider NO LONGER degrades — it gets the safe-DEFAULT
-// contract (high/medium), so a top/second split is preserved instead of collapsing.
-const unk = parseRendered({ inheritModel: 'acme/unknown-model' });
-assert(unk.provider !== undefined && unk.agent !== undefined,
-  'A12: unknown provider emits a safe-default provider+agent block (NO de-tier)');
-assert(unk.provider.acme.models['unknown-model'].variants.high
-  && unk.provider.acme.models['unknown-model'].variants.medium,
-  'A12: unknown provider gets default-contract high/medium variants');
-assert(unk.agent.planner.variant === 'high' && unk.agent.implementer.variant === 'medium',
-  'A12: unknown provider → default contract (planner=high, implementer=medium)');
+// A12 / S1-contract / A12-options — DELETED WITH THEIR MECHANISM. Per-role effort tiering is
+// removed, so every subject these three bands read is gone:
+//
+//   A12            pinned `topTierRoles()` / `standardTierRoles()` — the role→tier split itself.
+//   S1-contract    pinned `effortForProvider` / `contractForProvider` — the provider→API-contract
+//                  resolver and its per-contract effort payloads.
+//   A12-options    pinned `renderOpencodeJson({inheritModel})`'s `agent.<role>.options` payload per
+//                  contract, that the two tiers stayed distinct, that no `variant`/`variants` key
+//                  survived beside it, and the subagent-criterion half.
+//
+// With them go their two private helpers, `stableJson` and `deepHasKey`, which had no other caller
+// once A26 went, and the two prior deletion notes about the `variant`-era assertions those bands
+// replaced — a note about a deletion inside a band that is itself deleted documents nothing.
+//
+// WHY, IN ONE LINE, SO A LATER READER DOES NOT RE-ADD THEM: opencode already hands a dispatched
+// subagent the parent session's effort whenever the role pins no model, measured end to end. The
+// tiers were an override of correct native behaviour, not a repair, and configuration that does
+// nothing but reads as live is what hid the original defect for as long as it existed.
+//
+// NOT LOST WITH THEM — asserted elsewhere, on machinery that survives:
+//   · the reasoning-role SET is still pinned, by A8, against `reasoningRoles()` through the opt-in
+//     model-pin path (`renderNeutralConfig`), which is a different feature and stays;
+//   · the default render still pins NO top-level `model` and NO `agent` block — A8 again, and that
+//     assertion is now the whole of what a default install emits;
+//   · the plugin's surviving hooks and its single-export loader contract — A29.
 
 // ---------------------------------------------------------------------------
 // A9: route-reachability — every receipt-emitted command target resolves to an
@@ -849,13 +771,32 @@ for (const target of emittedCommandTargets) {
 // (untouched, and never capitalized).
 // ---------------------------------------------------------------------------
 {
-  // Extract the `## Effort Variant Resolution` badge block (heading line through
-  // the line before the next heading) — the Surface-1 locus. null when absent.
+  // The heading the block ships under, as ONE literal — because this whole guard is scoped BY it.
+  // Renaming it is not cosmetic on this side: the locator below matches this exact string, so a
+  // rename with no matching change here leaves every content check ranging over `null` —
+  // assertions that evaluate vacuously and can never go red. Change the two together.
+  //
+  // It has moved twice, and both moves were caught HERE rather than shipped. "Effort Variant
+  // Resolution" named a mechanism (opencode `variant`s) that never reached a subagent at all.
+  // "Effort is configured, not passed" was true of the per-role tiers and became false the moment
+  // they were removed — a subagent runs the session's model and effort, configured nowhere. The
+  // current heading states what an agent actually gets.
+  const BADGE_HEADING = 'Model and effort are inherited';
+  const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const BADGE_HEADING_RE = new RegExp('^##\\s+' + escapeRe(BADGE_HEADING) + '\\s*$');
+
+  // The mechanism word this surface must not carry, in either number. The leading `\b` is what
+  // keeps "invariant"/"invariants" out: the char before "variant" there is a word char, so there
+  // is no boundary to match.
+  const MECHANISM_WORD = /\bvariants?\b/i;
+
+  // Extract the effort block (heading line through the line before the next heading) — the
+  // Surface-1 locus. null when absent, and absence is ASSERTED ON below, never skipped past.
   const badgeSection = body => {
     const lines = body.split('\n');
     let start = -1;
     for (let i = 0; i < lines.length; i++) {
-      if (/^##\s+Effort Variant Resolution\s*$/.test(lines[i])) { start = i; break; }
+      if (BADGE_HEADING_RE.test(lines[i])) { start = i; break; }
     }
     if (start < 0) return null;
     const sec = [];
@@ -865,16 +806,59 @@ for (const target of emittedCommandTargets) {
     }
     return sec.join('\n');
   };
+
+  // WHICH generated commands must carry the block is DERIVED, never hand-listed: the generator
+  // substitutes it at the canonical `## Agent Model Badge` heading, so the canonical sources ARE
+  // the expectation. A hand-typed carrier list is a second place for that truth to live, and the
+  // copy that stops being true without saying so.
+  const canonCarriesBadge = file =>
+    /^##\s+Agent Model Badge\s*$/m.test(fs.readFileSync(sync.canonCommandPath(file), 'utf8'));
+  const badgeCarriers = canonCommands.filter(canonCarriesBadge);
+  assert(badgeCarriers.length > 0,
+    'S2: at least ONE canonical command carries `## Agent Model Badge` (found ' + badgeCarriers.length
+    + ' of ' + canonCommands.length + ') — with none, every per-file check below ranges over an empty '
+    + 'expectation and this guard reports green by having had nothing to read');
+
   for (const file of canonCommands) {
     const body = read('.opencode/command/' + file);
-    // (a) The Effort Variant Resolution section names tiers by ROLE, never by the
-    //     Claude nouns opus/sonnet (the mapTier-line leak lived here).
     const sec = badgeSection(body);
+    // (0) A BLOCK THAT CANNOT BE LOCATED IS A RED, NOT A SKIP. This used to be an
+    //     `if (sec !== null)` guard: when the heading moved, the locator matched nothing, the
+    //     content checks below never ran, and the suite stayed green over a surface nobody was
+    //     reading any more. Presence is now pinned in BOTH directions against the canonical
+    //     source, so neither a heading rename nor a dropped substitution can pass in silence.
+    if (canonCarriesBadge(file)) {
+      assert(sec !== null,
+        'S2[' + file + ']: the effort block is LOCATABLE under the exact heading "## ' + BADGE_HEADING
+        + '" — its canonical source carries `## Agent Model Badge`, so the generator substituted a '
+        + 'block into this file and every check below must be reading it. Found no such heading: the '
+        + 'checks would assert over nothing, which is a disarmed guard with no red. If the heading was '
+        + 'renamed deliberately, BADGE_HEADING here moves in the same change.');
+    } else {
+      assert(sec === null,
+        'S2[' + file + ']: NO effort block — its canonical source carries no `## Agent Model Badge`, '
+        + 'so the generator had nothing to substitute here; a block present anyway is stale output');
+    }
     if (sec !== null) {
+      // (a) The effort block names tiers by ROLE, never by the Claude nouns opus/sonnet (the
+      //     mapTier-line leak lived here).
       assert(!/\bopus\b/i.test(sec) && !/\bsonnet\b/i.test(sec),
-        'S2[' + file + ']: Effort Variant Resolution section has no Claude-tier-name (opus/sonnet) leak');
-      assert(/reasoning-tier/.test(sec) && /standard-tier/.test(sec),
-        'S2[' + file + ']: Effort Variant Resolution section uses neutral tier labels (reasoning-tier/standard-tier)');
+        'S2[' + file + ']: effort block has no Claude-tier-name (opus/sonnet) leak');
+      // The companion assertion — that the block names the two tiers as `reasoning-tier` /
+      // `standard-tier` — is DELETED WITH ITS MECHANISM. It required the neutral VOCABULARY of a
+      // per-role tier split, and there is no split left to name: a dispatched subagent runs the
+      // session's effort. Requiring the words to survive the thing they described is exactly the
+      // pin-rewritten-ahead-of-its-mechanism failure. (a) above is not tier-specific — it forbids
+      // the Claude model nouns in this edition's prose whatever the block goes on to say.
+      // (a2) The block names no MECHANISM, heading included. The block's job is to state the
+      //      result — a role's effort is configured centrally, so there is no per-call `model=`
+      //      to pass — and `variant` was the machinery word that made it a claim about HOW,
+      //      one that was never true of a dispatched subagent. The heading line is inside `sec`
+      //      on purpose: the heading is where this word survived a rewrite of the body.
+      assert(!MECHANISM_WORD.test(sec),
+        'S2[' + file + ']: the effort block names NO `variant` anywhere, heading included — the block '
+        + 'states the result (effort is configured per role; never pass a per-call `model=`), and '
+        + 'naming the machinery is how it came to assert a mechanism that never applied');
     }
     // (b) The three transformCommandBody rewrites emit tier labels in dispatch prose
     //     OUTSIDE the section; "opus-tier"/"sonnet-tier" are unambiguous generator
@@ -903,6 +887,31 @@ for (const target of emittedCommandTargets) {
         assert(false,
           'S2 (#609): ' + rel + ':' + (i + 1) + ': Claude model noun "' + m[0] +
           '" leaked into generated opencode prose (B2 — use reasoning-tier/standard-tier vocabulary; B1 lowercase `opus`/`sonnet` tier tokens are exempt)');
+      }
+    }
+  }
+
+  // (e) Body-wide mechanism-word sweep. The (a2) check above is scoped to the effort block, and a
+  // scoped check is exactly what an anchor miss disarms — the failure this issue exists for was a
+  // heading that a block-scoped guard could not see because the guard found no block. This sweep
+  // has no anchor to lose: `variant` is not a word canonical prose produces (zero occurrences in
+  // commands/ and agents/), so ANY occurrence in the generated opencode tree is the generator
+  // presenting effort tiers as a `variant` mechanism — the claim this edition never delivered.
+  // Reported with file:line, so the site is named rather than merely counted.
+  const sweptFiles = [...ocAgentRels, ...ocCommandRels];
+  assert(sweptFiles.length > 0,
+    'S2 (#927): the mechanism-word sweep read at least one generated file (read ' + sweptFiles.length
+    + ') — a sweep over an empty file list reports clean without having opened anything');
+  for (const rel of sweptFiles) {
+    const lines = read(rel).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(MECHANISM_WORD);
+      if (m) {
+        assert(false,
+          'S2 (#927): ' + rel + ':' + (i + 1) + ': mechanism word "' + m[0] + '" in generated opencode '
+          + 'prose — effort tiers were never applied to a dispatched subagent through opencode '
+          + '`variant`s, so naming them states a mechanism that does not happen. State the RESULT '
+          + "(the role's effort is configured centrally; never pass a per-call `model=`): " + lines[i].trim());
       }
     }
   }
@@ -1411,12 +1420,19 @@ if (exists(pluginRel)) {
   }
 
   // -------------------------------------------------------------------------
-  // H1 (#F3) — direct unit assertion of hookPath's GLOBAL resolution. The
-  // plugin (an ESM module) exports hookPath for test only; an ESM harness imports
-  // it and proves that, for a project with NO .opencode/hooks and an EMPTY
-  // OPENCODE_CONFIG_DIR, hookPath still resolves a hook via the plugin-sibling
-  // `../hooks` candidate (SELF_DIR from import.meta.url) — the global-layout case
-  // findRoot never reaches — and returns null (fail-open) for a non-existent hook.
+  // H1 (#F3) — direct unit assertion of hookPath's GLOBAL resolution. An ESM
+  // harness reaches hookPath and proves that, for a project with NO
+  // .opencode/hooks and an EMPTY OPENCODE_CONFIG_DIR, hookPath still resolves a
+  // hook via the plugin-sibling `../hooks` candidate (SELF_DIR from
+  // import.meta.url) — the global-layout case findRoot never reaches — and
+  // returns null (fail-open) for a non-existent hook.
+  //
+  // ACCESS PATH, not mechanism: hookPath is reached as a PROPERTY OF THE DEFAULT
+  // EXPORT, never as a named export beside it. A named export here is not free —
+  // opencode's loader calls every exported value as a plugin factory, so
+  // `export { hookPath }` made the module throw on load and took every hook in it
+  // down. The candidate walk this block asserts is unchanged; only how a test
+  // reaches it is. A29 below is what holds that export shape to one value.
   // -------------------------------------------------------------------------
   {
     const pluginPath = path.join(REPO, '.opencode', 'plugins', 'kaola-workflow-hooks.js');
@@ -1424,7 +1440,8 @@ if (exists(pluginRel)) {
     const emptyCfg = mkdtempSync(path.join(os.tmpdir(), 'opencode-h1-cfg-'));    // empty: no <cfg>/hooks
     const harness = [
       "import { pathToFileURL } from 'node:url';",
-      "const { hookPath } = await import(pathToFileURL(process.env.KW_PLUGIN).href);",
+      "const { default: plugin } = await import(pathToFileURL(process.env.KW_PLUGIN).href);",
+      "const hookPath = plugin.hookPath;",
       "const resolved = hookPath(process.env.KW_FAKEROOT, process.env.KW_SCRIPT);",
       "const missing = hookPath(process.env.KW_FAKEROOT, 'definitely-not-a-real-hook.sh');",
       "process.stdout.write(JSON.stringify({ resolved, missing }));",
@@ -1831,6 +1848,686 @@ if (exists(pluginRel)) {
     } finally {
       try { rmSync(home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
       try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
+  }
+}
+
+// A26 (Layer 2 — per-call effort resolution) — DELETED WITH ITS MECHANISM. The whole band drove
+// the plugin's `chat.params` hook against a generated `effort-tiers.json` sidecar: the harness, the
+// contract case table, A26-sidecar (the sidecar's role→tier map), A26-hook (per-contract payloads,
+// the stale cross-contract knob, the untouched-when-unresolved cases) and A26-degraded (absent and
+// malformed sidecar). Per-role effort tiering is removed: opencode already hands a dispatched
+// subagent the parent session's effort whenever the role pins no model, so there is no hook, no
+// sidecar and no per-role payload left for any of it to assert. Nothing here is re-anchored — a
+// pin rewritten to keep passing against machinery that is gone is worse than no pin.
+//
+// What this band was ALSO the only live proof of — that the shipped plugin LOADS, that opencode's
+// `Object.values(mod)` walk finds exactly one factory, and that the surviving hooks are really
+// registered rather than merely mentioned in the source — is NOT lost with it: A29 below asserts
+// exactly that, against the two hooks that remain.
+
+// ---------------------------------------------------------------------------
+// A29 — the plugin LOADS, and opencode's loader walk finds exactly ONE factory.
+//
+// opencode's plugin loader does `for (const value of Object.values(mod))` and treats EVERY exported
+// value as a plugin factory. A non-function export throws `Plugin export is not a function`
+// outright; an exported HELPER is CALLED as `fn(PluginInput, options)`, which for anything taking a
+// path first argument means `path.resolve(<object>)` and a thrown TypeError. Either aborts
+// registration of the whole module — so one extra named export kills every hook in the file.
+//
+// That is measured, not hypothetical: this plugin shipped `export { hookPath, findRoot }` "for the
+// test suite only, inert for the runtime". They were not inert — they threw on every load, and the
+// hooks survived only because ESM namespace keys are sorted and `default` happened to be collected
+// before `findRoot` threw. One export name sorting ahead of `default` would have silently taken the
+// dispatch-log and compaction hooks down with it.
+//
+// A11 greps the plugin SOURCE for the two hook names. A grep cannot tell a registered hook from a
+// mentioned one and is blind to the export shape entirely, and A26 — which was the only block that
+// actually LOADED the plugin — is deleted with the tier mechanism. So this block loads the SHIPPED
+// file the way opencode does, and asserts three results:
+//   (a) the module's export list is exactly ["default"];
+//   (b) the loader walk yields exactly one hook table, with nothing thrown and no non-function
+//       export met on the way;
+//   (c) both surviving hooks are functions on that table, and neither throws when driven.
+//
+// WHAT IS DELIBERATELY NOT DRIVEN: `tool.execute.before` with `tool === "task"`. That branch runs
+// the DEPLOYED dispatch-log hook, which enumerates the repository's git worktrees and appends to
+// its run records — a test that writes into the tree it is testing. The branch is entered here with
+// a non-task tool, which proves registration and that the hook returns without touching the call.
+// ---------------------------------------------------------------------------
+{
+  const { spawnSync } = require('child_process');
+  const { mkdtempSync, copyFileSync, existsSync, rmSync } = require('fs');
+  const os = require('os');
+
+  // The SHIPPED artifact, in place. Copied to .mjs only so `import()` treats it as ESM (the
+  // deployed .js has no package.json beside it; production runs under Bun, which auto-detects).
+  // The copy sits in the SAME directory, so SELF_DIR-relative resolution is unchanged.
+  const shipped = path.join(REPO, '.opencode', 'plugins', 'kaola-workflow-hooks.js');
+  const asMjs = path.join(REPO, '.opencode', 'plugins', 'kaola-workflow-hooks.a29.mjs');
+  const projRoot = mkdtempSync(path.join(os.tmpdir(), 'oc-a29-proj-'));
+  const homeDir = mkdtempSync(path.join(os.tmpdir(), 'oc-a29-home-'));
+  const cfgDir = mkdtempSync(path.join(os.tmpdir(), 'oc-a29-cfg-'));
+
+  // The harness IS opencode's walk. It reports; it asserts nothing — a throw has to arrive here as
+  // DATA, because "the loader threw" is the finding, not a crashed probe.
+  const WALK_HARNESS = [
+    "import { pathToFileURL } from 'node:url';",
+    "const emit = (o) => process.stdout.write(JSON.stringify(o));",
+    "try {",
+    "  const mod = await import(pathToFileURL(process.env.KW_PLUGIN).href);",
+    "  const exportNames = Object.keys(mod).sort();",
+    "  const tables = []; const walkErrors = []; const nonFunctions = [];",
+    // Verbatim in shape: every exported value, called as a plugin factory.
+    "  for (const value of Object.values(mod)) {",
+    "    if (typeof value !== 'function') { nonFunctions.push(typeof value); continue; }",
+    "    try {",
+    "      const t = await value({ directory: process.env.KW_ROOT, worktree: process.env.KW_ROOT });",
+    "      tables.push(t && typeof t === 'object' ? t : null);",
+    "    } catch (e) { walkErrors.push(String((e && e.message) || e)); }",
+    "  }",
+    "  const table = tables.find((t) => t && typeof t === 'object') || {};",
+    "  const hookTypes = {};",
+    "  for (const k of Object.keys(table)) hookTypes[k] = typeof table[k];",
+    // Drive both surviving hooks. Neither may throw; `Plugin.trigger` wraps hook invocation in a
+    // bare promise with no catch, unlike the load path around it, so a throw is fatal there.
+    "  const drove = {};",
+    "  const before = table['tool.execute.before'];",
+    "  if (typeof before === 'function') {",
+    "    const output = { args: { path: 'README.md' } };",
+    "    try { await before({ tool: 'read', sessionID: 'kw-a29' }, output); drove.before = { threw: null, args: output.args }; }",
+    "    catch (e) { drove.before = { threw: String((e && e.message) || e) }; }",
+    "  }",
+    "  const compacting = table['experimental.session.compacting'];",
+    "  if (typeof compacting === 'function') {",
+    "    const output = { context: [] };",
+    "    try { await compacting({}, output); drove.compacting = { threw: null, contextLen: output.context.length }; }",
+    "    catch (e) { drove.compacting = { threw: String((e && e.message) || e) }; }",
+    "  }",
+    "  emit({ ok: true, exportNames, tableCount: tables.filter(Boolean).length, walkErrors, nonFunctions, hookTypes, drove });",
+    "} catch (e) { emit({ ok: false, error: String((e && e.stack) || e) }); }",
+  ].join('\n');
+
+  try {
+    assert(existsSync(shipped), 'A29: the generated tree carries the plugin at .opencode/plugins/ (nothing to load otherwise)');
+    if (existsSync(shipped)) {
+      copyFileSync(shipped, asMjs);
+      // spawn-class: environment
+      const r = spawnSync('node', ['--input-type=module', '-e', WALK_HARNESS], {
+        env: Object.assign({}, process.env, {
+          HOME: homeDir, OPENCODE_CONFIG_DIR: cfgDir, KW_PLUGIN: asMjs, KW_ROOT: projRoot,
+        }),
+        encoding: 'utf8',
+      });
+      let out = null;
+      try { out = JSON.parse(r.stdout); } catch (_) { out = null; }
+      assert(r.status === 0 && out && out.ok,
+        'A29: the loader-walk harness runs (status ' + r.status + ')'
+        + (out && out.error ? ' — ' + String(out.error).split('\n')[0] : '')
+        + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : ''));
+
+      if (out && out.ok) {
+        // (a) ONE export, and it is the default. Stated as the whole list rather than "no named
+        // export called X": the rule is about the SHAPE opencode walks, so a new name nobody
+        // thought to exclude has to fail here too.
+        assert(JSON.stringify(out.exportNames) === JSON.stringify(['default']),
+          'A29: the plugin module exports EXACTLY ["default"] — every other exported value is called '
+          + 'by opencode as a plugin factory, and one that is not a factory aborts registration of '
+          + 'the whole file. Test-only handles hang off the default export as properties. Got '
+          + JSON.stringify(out.exportNames));
+
+        // (b) The walk itself: nothing thrown, nothing non-callable, exactly one hook table.
+        assert(JSON.stringify(out.nonFunctions) === '[]',
+          'A29: opencode\'s `Object.values(mod)` walk meets NO non-function export — one throws '
+          + '"Plugin export is not a function" and takes the module with it. Found: '
+          + JSON.stringify(out.nonFunctions));
+        assert(JSON.stringify(out.walkErrors) === '[]',
+          'A29: NOTHING throws while the walk calls each exported value as a factory — a helper '
+          + 'exported beside the default is invoked as fn(PluginInput, options) and throws on the '
+          + 'first path argument, which is how this file once killed every hook in it. Threw: '
+          + JSON.stringify(out.walkErrors));
+        assert(out.tableCount === 1,
+          'A29: the walk yields EXACTLY ONE hook table (got ' + out.tableCount + ') — more than one '
+          + 'means a second exported function is being registered as a plugin in its own right');
+
+        // (c) Both surviving hooks are registered as FUNCTIONS, and neither throws when driven.
+        for (const hook of ['tool.execute.before', 'experimental.session.compacting']) {
+          assert(out.hookTypes[hook] === 'function',
+            'A29: the loaded plugin registers `' + hook + '` as a function — A11 greps the source, '
+            + 'which cannot tell a registered hook from a mentioned one. Table: '
+            + JSON.stringify(out.hookTypes));
+        }
+        assert(out.drove && out.drove.before && out.drove.before.threw === null,
+          'A29[tool.execute.before]: the hook returns without throwing — opencode does not catch a '
+          + 'throwing hook the way it catches a failing plugin load. Threw: '
+          + (out.drove && out.drove.before ? out.drove.before.threw : '<hook did not run>'));
+        assert(out.drove && out.drove.before
+          && JSON.stringify(out.drove.before.args) === JSON.stringify({ path: 'README.md' }),
+          'A29[tool.execute.before]: a non-task tool call passes through UNTOUCHED — this hook '
+          + 'observes dispatches, it does not rewrite the call. Got '
+          + JSON.stringify(out.drove && out.drove.before ? out.drove.before.args : undefined));
+        assert(out.drove && out.drove.compacting && out.drove.compacting.threw === null,
+          'A29[experimental.session.compacting]: the hook returns without throwing on a project with '
+          + 'no workflow state. Threw: '
+          + (out.drove && out.drove.compacting ? out.drove.compacting.threw : '<hook did not run>'));
+        assert(out.drove && out.drove.compacting && out.drove.compacting.contextLen === 0,
+          'A29[experimental.session.compacting]: with no kaola-workflow state under the root there is '
+          + 'nothing to preserve, so NOTHING is pushed into the compaction context — a hook that '
+          + 'always appends would put a fabricated resume summary in front of the model. Pushed '
+          + (out.drove && out.drove.compacting ? out.drove.compacting.contextLen : '?') + ' entr(ies)');
+      }
+    }
+  } finally {
+    try { rmSync(asMjs, { force: true }); } catch (_) { /* non-fatal */ }
+    try { rmSync(projRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    try { rmSync(homeDir, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    try { rmSync(cfgDir, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// A27 — installer drift: `seed_config` preserves an existing opencode.json and
+// says nothing about what is in it, so a long-lived config keeps carrying
+// settings that stopped meaning anything, with nothing anywhere that reports it.
+//
+// THE SUBJECT MOVED, AND THAT IS THE POINT. It used to be the config's ROLE SET,
+// compared against the set the generator emits. Per-role effort tiering is
+// removed and the generator emits no `agent` block at all, so that comparison has
+// no baseline and no possible subject — it is deleted here rather than propped up
+// with a substitute. What is stale NOW is an entry that pins per-role reasoning
+// effort: inert, because a subagent runs the model and effort of the session that
+// dispatched it, and still reading as live configuration to anyone who opens the
+// file. That check needs no baseline, which is why it survives the removal.
+//
+// The owner ruling is three-part and each part is asserted separately: DETECT the
+// staleness, REPORT exactly what is stale, and act only behind an EXPLICIT opt-in
+// — never overwrite a user-owned file silently. The opt-in's SPELLING is not
+// pinned here: the test requires that the report itself names a flag, and then
+// proves that flag does the adoption. A test that froze the name would be a
+// mechanism claim that rots; requiring the report to be actionable is the result.
+// ---------------------------------------------------------------------------
+{
+  const { spawnSync } = require('child_process');
+  const { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } = require('fs');
+  const os = require('os');
+  const INSTALLER = path.join(REPO, 'install-opencode.sh');
+  const PASSED_FLAGS = new Set(['--target', '--yes', '--no-scripts', '--help']);
+
+  // A stale, user-owned config: four role entries carrying a per-role effort setting, in BOTH of
+  // the shapes this edition ever wrote (`options` and the older `variant`), plus one entry that
+  // pins ONLY a model. That last one is the negative control INSIDE the fixture — it is the user's
+  // own supported choice and must not be named, so a check that simply lists every role under
+  // `agent` fails here.
+  const STALE_ROLES = ['contractor', 'issue-scout', 'planner', 'workflow-planner'];
+  const MODEL_ONLY_ROLE = 'code-reviewer';
+  const DRIFTED = JSON.stringify({
+    $schema: 'https://opencode.ai/config.json',
+    default_agent: 'build',
+    agent: {
+      planner: { options: { reasoningEffort: 'xhigh' } },
+      contractor: { options: { reasoningEffort: 'high' } },
+      'issue-scout': { variant: 'high' },
+      'workflow-planner': { variant: 'max' },
+      'code-reviewer': { model: 'openai/gpt-5' },
+    },
+  }, null, 2) + '\n';
+
+  function runInstall(dest, home, extra) {
+    // spawn-class: environment
+    const r = spawnSync('bash', [INSTALLER, '--target', dest, '--yes', '--no-scripts'].concat(extra || []), {
+      env: Object.assign({}, process.env, { HOME: home }),
+      encoding: 'utf8',
+    });
+    return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
+  }
+  function freshDrifted() {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'oc-a27-home-'));
+    const dest = mkdtempSync(path.join(os.tmpdir(), 'oc-a27-dest-'));
+    writeFileSync(path.join(dest, 'opencode.json'), DRIFTED);
+    return { home, dest, cfg: path.join(dest, 'opencode.json') };
+  }
+  const wipe = f => {
+    try { rmSync(f.home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    try { rmSync(f.dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  };
+
+  let optInFlags = [];
+  {
+    const f = freshDrifted();
+    try {
+      const r = runInstall(f.dest, f.home, []);
+      // Nothing refuses: a drifted config is a finding to report, not a failed install.
+      assert(r.status === 0,
+        'A27: an install over a DRIFTED opencode.json still exits 0 — reporting drift is a finding, '
+        + 'not a refusal (got ' + r.status + ')');
+      // REPORT EXACTLY WHAT IS STALE, BY NAME.
+      //
+      // RE-ANCHORED SUBJECT. This used to compare the config's role SET against the set the
+      // generator emits, in both directions — roles it carries that are no longer shipped, and
+      // roles shipped now that it lacks. That comparison is DELETED WITH ITS MECHANISM: with
+      // per-role effort tiering removed the generator emits no `agent` block at all, so there is no
+      // baseline left to compare against and the "missing role" direction has no possible subject.
+      // The check that survives is the mirror image, and it needs no baseline: an entry pinning
+      // per-role effort is inert now, and a block that does nothing while reading as live
+      // configuration is exactly what the user has to be told about.
+      for (const role of STALE_ROLES) {
+        assert(r.out.includes(role),
+          'A27: the report NAMES the role "' + role + '", whose entry pins a per-role effort setting '
+          + 'that no longer does anything — a subagent runs the model and effort of the session that '
+          + 'dispatched it. Both shapes this edition ever wrote count (`options` and the older '
+          + '`variant`); naming the count without the names leaves the user nothing to edit.');
+      }
+      // NEGATIVE CONTROL, INSIDE THE FIXTURE — a model-only entry is the user's own choice.
+      assert(!r.out.includes(MODEL_ONLY_ROLE),
+        'A27: the report does NOT name "' + MODEL_ONLY_ROLE + '", whose entry pins only a model — '
+        + 'that is a supported user choice, not a leftover. A check that lists every role under '
+        + '`agent` would name it, and would be telling the user to delete their own configuration.');
+      // NEVER OVERWRITE SILENTLY.
+      assert(readFileSync(f.cfg, 'utf8') === DRIFTED,
+        'A27: the drifted opencode.json is left BYTE-IDENTICAL — it is user-owned, and detection is '
+        + 'not permission to rewrite it');
+      // The report has to be actionable: it must name the flag that adopts the regenerated config.
+      optInFlags = [...new Set(r.out.match(/--[a-z][a-z0-9-]+/g) || [])]
+        .filter(x => !PASSED_FLAGS.has(x)).slice(0, 6);
+      assert(optInFlags.length > 0,
+        'A27: the drift report names an explicit opt-in flag that regenerates the config — a report '
+        + 'that states the drift but not how to act on it leaves the user with nothing to do. '
+        + 'Flags found in output: ' + JSON.stringify(optInFlags));
+    } finally { wipe(f); }
+  }
+
+  // The opt-in actually adopts. Every flag the report named is tried; at least one must replace the
+  // drifted config with what the generator emits.
+  if (optInFlags.length > 0) {
+    let adopted = null;
+    const tried = [];
+    for (const flag of optInFlags) {
+      const f = freshDrifted();
+      try {
+        const r = runInstall(f.dest, f.home, [flag]);
+        const after = existsSync(f.cfg) ? readFileSync(f.cfg, 'utf8') : '';
+        tried.push(flag + '(exit ' + r.status + (after === DRIFTED ? ', unchanged' : ', rewritten') + ')');
+        if (r.status === 0 && after !== DRIFTED && after !== '') { adopted = { flag, after }; break; }
+      } finally { wipe(f); }
+    }
+    assert(adopted !== null,
+      'A27: the flag the drift report names actually regenerates the config on explicit opt-in — '
+      + 'tried ' + tried.join(', '));
+    if (adopted) {
+      // The `{ inheritModel }` argument this comparison used to pass is GONE WITH ITS MECHANISM:
+      // the generator has one render now, and an argument it silently ignores is the dead-knob
+      // class this whole change exists to remove. The claim is unchanged — after the opt-in the
+      // file is exactly what the generator emits.
+      const expected = sync.renderOpencodeJson();
+      assert(adopted.after === expected,
+        'A27: after the explicit opt-in, opencode.json is exactly what the generator emits '
+        + '(flag ' + adopted.flag + ')');
+    }
+  }
+
+  // NEGATIVE CONTROL — a guard that fires on everything is not a guard. An install over a config
+  // the generator itself just wrote carries no per-role effort at all, so the check must say
+  // NOTHING. Read off the report's own vocabulary rather than a role list: post-re-anchor the
+  // generated config names no roles anywhere, so "no role name appeared" would be true of a check
+  // that had been deleted outright.
+  {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'oc-a27n-home-'));
+    const dest = mkdtempSync(path.join(os.tmpdir(), 'oc-a27n-dest-'));
+    try {
+      writeFileSync(path.join(dest, 'opencode.json'), sync.renderOpencodeJson());
+      const r = runInstall(dest, home, []);
+      assert(r.status === 0, 'A27-neg: an install over a freshly generated opencode.json exits 0 (got ' + r.status + ')');
+      assert(!/drift/i.test(r.out),
+        'A27-neg: a config the generator itself just wrote produces NO drift report — a check that '
+        + 'fires on everything tells the user nothing. Output:\n' + r.out.trim().slice(0, 600));
+      assert(!r.out.includes(STALE_ROLES[0]) && !r.out.includes(MODEL_ONLY_ROLE),
+        'A27-neg: …and no role is named in it either');
+    } finally {
+      try { rmSync(home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // A27-quiet — the three inputs on which this check must say NOTHING and must
+  // never fail the install. Each is a distinct way to over-fire, and over-firing
+  // here is not a cosmetic defect: the report tells a user their configuration is
+  // dead and invites them to replace the file.
+  //
+  // The FIRST is the one the negative control above cannot reach. A27-neg feeds a
+  // config with no `agent` block at all, so a check that had lost its
+  // `variant`/`options` filter entirely — and simply named every role under
+  // `agent` — would still pass it. The filter is the whole boundary between "this
+  // setting is inert" and "this is your own model pin", and this is what holds it.
+  // -------------------------------------------------------------------------
+  {
+    const QUIET_CASES = [
+      {
+        label: 'model-pins-only',
+        // An `agent` block, fully populated, carrying nothing but model pins. The user's own
+        // supported choice: it must be neither named nor counted, and must not raise a report.
+        body: JSON.stringify({
+          $schema: 'https://opencode.ai/config.json',
+          default_agent: 'build',
+          agent: {
+            planner: { model: 'openai/gpt-5' },
+            implementer: { model: 'anthropic/claude-sonnet-4-5' },
+            'code-reviewer': { model: 'openai/gpt-5' },
+          },
+        }, null, 2) + '\n',
+        why: 'an `agent` block whose entries pin ONLY a model is the user\'s own configuration — '
+          + 'naming it tells them to delete their own pins, and a check that lost its effort-key '
+          + 'filter would name every one of these',
+      },
+      {
+        label: 'not-json',
+        body: 'this is not json at all { " \n',
+        why: 'an unreadable or non-JSON config is not this installer\'s to diagnose, and is never a '
+          + 'reason to fail the install or to guess at its contents',
+      },
+      {
+        label: 'agent-wrong-shape',
+        // `agent` present but an array — a shape the reader must survive rather than index into.
+        body: JSON.stringify({ $schema: 'https://opencode.ai/config.json', agent: ['planner'] }, null, 2) + '\n',
+        why: 'an `agent` value of the wrong shape must be read as "nothing stale here", not crashed on',
+      },
+    ];
+    for (const c of QUIET_CASES) {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'oc-a27q-home-'));
+      const dest = mkdtempSync(path.join(os.tmpdir(), 'oc-a27q-dest-'));
+      const cfg = path.join(dest, 'opencode.json');
+      try {
+        writeFileSync(cfg, c.body);
+        const r = runInstall(dest, home, []);
+        assert(r.status === 0,
+          'A27-quiet[' + c.label + ']: the install still exits 0 (got ' + r.status + ') — ' + c.why);
+        assert(!/drift/i.test(r.out),
+          'A27-quiet[' + c.label + ']: NO drift report — ' + c.why + '. Output:\n'
+          + r.out.trim().slice(0, 600));
+        assert(readFileSync(cfg, 'utf8') === c.body,
+          'A27-quiet[' + c.label + ']: the config is left BYTE-IDENTICAL — reading a user-owned file '
+          + 'is not permission to rewrite it, least of all one that was not understood');
+      } finally {
+        try { rmSync(home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+        try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
+  }
+
+}
+
+// ---------------------------------------------------------------------------
+// A28 — adoption must not destroy the config it replaces.
+//
+// A27 proves the opt-in ADOPTS. It says nothing about what happens to the file adoption
+// overwrites, and that file is the user's: hand edits, model pins, permission choices. Everything
+// below is the recovery half of that same ruling, asserted as four separate results:
+//
+//   1. the replaced config is recoverable byte-for-byte after adoption;
+//   2. a SECOND adoption inside the SAME clock second does not clobber the first backup — the
+//      measured defect, where two adoptions in one second shared a backup name and the second
+//      overwrote the user's original with the generated config, leaving a reassuring file with
+//      nothing in it worth recovering;
+//   3. a backup that CANNOT be written aborts instead of replacing the file anyway — the one
+//      outcome here that destroys something;
+//   4. the report the user reads BEFORE opting in discloses that adopting replaces rather than
+//      merges, and the path it promises is the path adoption actually writes.
+//
+// NEITHER the flag's spelling NOR the backup's naming scheme is pinned, for A27's reason: a test
+// that freezes a mechanism is a claim that rots. The flag is discovered from the report; the
+// backup is identified by its CONTENT (the bytes that were replaced), and the promised path is
+// matched as a SHAPE taken from the report itself. An implementation that names backups by PID,
+// counter or hash satisfies every assertion here — what it may not do is lose the file.
+// ---------------------------------------------------------------------------
+{
+  const { spawnSync } = require('child_process');
+  const {
+    mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, rmSync,
+  } = require('fs');
+  const os = require('os');
+  const INSTALLER = path.join(REPO, 'install-opencode.sh');
+  const PASSED_FLAGS = new Set(['--target', '--yes', '--no-scripts', '--help']);
+
+  // A user-owned config: stale (so the pre-flag report fires) and carrying a hand-set model pin
+  // — the concrete thing adoption throws away and the backup exists to give back.
+  const USER_CONFIG = JSON.stringify({
+    $schema: 'https://opencode.ai/config.json',
+    default_agent: 'build',
+    model: 'openai/gpt-4.1',
+    agent: {
+      planner: { options: { reasoningEffort: 'xhigh' } },
+      contractor: { options: { reasoningEffort: 'high' } },
+    },
+  }, null, 2) + '\n';
+
+  function runInstall(dest, home, extra, envExtra) {
+    // spawn-class: environment
+    const r = spawnSync('bash', [INSTALLER, '--target', dest, '--yes', '--no-scripts'].concat(extra || []), {
+      // No inherited-model env: the installer no longer reads one, and a knob set here that
+      // nothing consumes is the same dead configuration the removal is about.
+      env: Object.assign({}, process.env, { HOME: home }, envExtra || {}),
+      encoding: 'utf8',
+    });
+    return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
+  }
+  function fresh() {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'oc-a28-home-'));
+    const dest = mkdtempSync(path.join(os.tmpdir(), 'oc-a28-dest-'));
+    writeFileSync(path.join(dest, 'opencode.json'), USER_CONFIG);
+    return { home, dest, cfg: path.join(dest, 'opencode.json') };
+  }
+  const wipe = f => {
+    try { chmodSync(f.dest, 0o755); } catch (_) { /* non-fatal */ }
+    try { rmSync(f.home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    try { rmSync(f.dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  };
+  // Everything the install left BESIDE the config. The backup is found in here by content, never
+  // by name — that is what keeps the naming scheme unpinned.
+  const sideFiles = dest => readdirSync(dest, { withFileTypes: true })
+    .filter(e => e.isFile() && e.name !== 'opencode.json').map(e => e.name).sort();
+  const sideRead = (dest, name) => { try { return readFileSync(path.join(dest, name), 'utf8'); } catch (_) { return null; } };
+  const holdersOf = (dest, text) => sideFiles(dest).filter(n => sideRead(dest, n) === text);
+  const brief = t => (t.length > 900 ? t.slice(0, 900) + ' …' : t);
+
+  // A promised path, as a MATCHER. Any `<…>`/`{…}`/`[…]` placeholder becomes "anything", so the
+  // report may spell its variable part however it likes; the rest must be literal.
+  const shapeToRegExp = shape => {
+    const SENT = '\u0000';
+    const withSent = shape.replace(/<[^>]*>|\{[^}]*\}|\[[^\]]*\]/g, SENT);
+    const escaped = withSent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('^' + escaped.split(SENT).join('.+') + '$');
+  };
+
+  // ---- the report the user reads before deciding -------------------------------------------
+  let report = '';
+  {
+    const f = fresh();
+    try {
+      const r = runInstall(f.dest, f.home, []);
+      assert(r.status === 0,
+        'A28: an install over a drifted user-owned config exits 0 (got ' + r.status + ')');
+      report = r.out;
+      assert(readFileSync(f.cfg, 'utf8') === USER_CONFIG,
+        'A28: the reporting install left the user config byte-identical (precondition for everything below)');
+    } finally { wipe(f); }
+  }
+
+  // (4a) DISCLOSE THE COST BEFORE THE OPT-IN. A user who is told only "re-run with <flag> to adopt
+  // it" reasonably expects their pins to survive a merge. The wording is free; what the report may
+  // not do is stay silent about the file being rewritten rather than merged into.
+  assert(/\breplac(e|es|ed|ing)\b/i.test(report),
+    'A28: the pre-flag drift report discloses that adopting REPLACES the existing config rather '
+    + 'than merging into it — the disclosure has to arrive before the user runs the flag, because '
+    + 'after it the pins are already gone. Any wording carries; this one says nothing. Report:\n'
+    + brief(report));
+
+  // (4b) …and it must say WHERE the replaced file goes. Collected as shapes, checked against the
+  // real thing below: a promise nothing fulfils is worse than no promise, because it reads as a
+  // recovery path the user will look for and not find.
+  const promised = [...new Set(report.match(/\S*opencode\.json\S+/g) || [])]
+    .map(s => s.replace(/[.,;:)\]]+$/, ''))
+    .filter(s => path.basename(s) !== 'opencode.json');
+  assert(promised.length > 0,
+    'A28: the pre-flag drift report names WHERE the config it replaces is kept — "it is backed up" '
+    + 'with no path is not a recovery path. Report:\n' + brief(report));
+
+  // ---- discover the opt-in flag, and prove the backup on the run that finds it ---------------
+  let adoptFlag = null;
+  const candidates = [...new Set(report.match(/--[a-z][a-z0-9-]+/g) || [])]
+    .filter(x => !PASSED_FLAGS.has(x)).slice(0, 6);
+  const tried = [];
+  for (const flag of candidates) {
+    const f = fresh();
+    try {
+      const r = runInstall(f.dest, f.home, [flag]);
+      const after = existsSync(f.cfg) ? readFileSync(f.cfg, 'utf8') : '';
+      tried.push(flag + '(exit ' + r.status + (after === USER_CONFIG ? ', unchanged' : ', rewritten') + ')');
+      if (!(r.status === 0 && after !== USER_CONFIG && after !== '')) continue;
+      adoptFlag = flag;
+
+      // (1) THE REPLACED CONFIG IS RECOVERABLE, BYTE FOR BYTE. Identified by content: whatever the
+      // installer named it, one of the files it left behind has to BE the user's config.
+      const keepers = holdersOf(f.dest, USER_CONFIG);
+      assert(keepers.length > 0,
+        'A28: adoption keeps the config it replaced, byte-for-byte, in a file beside it — the user '
+        + 'opted into a new config, not into losing the old one. Files left beside it: '
+        + JSON.stringify(sideFiles(f.dest)));
+
+      // (4c) THE PROMISE IS THE PRACTICE. The path the pre-flag report named must be the path the
+      // writer produces — one spelling, or the recovery instruction points somewhere empty.
+      const kept = sideFiles(f.dest);
+      const fulfilled = promised.filter(p => {
+        const re = shapeToRegExp(p);
+        return kept.some(n => re.test(n) || re.test(path.join(f.dest, n)));
+      });
+      assert(fulfilled.length > 0,
+        'A28: the backup path the drift report PROMISES is the path adoption actually writes — '
+        + 'promised ' + JSON.stringify(promised) + ', wrote ' + JSON.stringify(kept));
+    } finally { wipe(f); }
+    if (adoptFlag) break;
+  }
+  assert(adoptFlag !== null,
+    'A28: the drift report names a flag that adopts the regenerated config (A27 proves this too; '
+    + 'it is repeated here because every assertion below is scoped to it, and a guard that quietly '
+    + 'skips when its subject is not found is not a guard) — tried ' + (tried.join(', ') || '(none)'));
+
+  if (adoptFlag) {
+    // ---- (2) TWO ADOPTIONS INSIDE ONE CLOCK SECOND ------------------------------------------
+    // The clock is FROZEN on PATH for both runs. Racing the real clock is what makes this test
+    // useless: two installs are seconds apart, so a name derived from the clock alone is unique
+    // and the collision under test never occurs — the suite would pass against the very code that
+    // loses the file. Frozen, ANY clock-derived name collides, and the assertion is about the
+    // outcome (both replaced configs still recoverable), not about how uniqueness is obtained.
+    const shimDir = mkdtempSync(path.join(os.tmpdir(), 'oc-a28-clock-'));
+    const realDate = ['/bin/date', '/usr/bin/date'].find(p => existsSync(p));
+    assert(!!realDate,
+      'A28: a real `date` exists to fall through to — without one the shim below is not a frozen '
+      + 'clock, it is a broken PATH, and every result under it means nothing');
+    if (realDate) {
+      const f = fresh();
+      try {
+        writeFileSync(path.join(shimDir, 'date'),
+          '#!/bin/sh\n'
+          // Any format request answers with one fixed stamp; everything else is the real date.
+          // Format-agnostic on purpose: pinning the exact format string would re-introduce the
+          // mechanism coupling this block is written to avoid, and would silently un-freeze the
+          // clock the day the format changed.
+          + 'case "$1" in\n'
+          + "  +*) printf '%s\\n' '19700101000000'; exit 0 ;;\n"
+          + 'esac\n'
+          + 'exec ' + realDate + ' "$@"\n');
+        chmodSync(path.join(shimDir, 'date'), 0o755);
+        const frozenEnv = { PATH: shimDir + path.delimiter + process.env.PATH };
+
+        // Fixture control: the clock really is frozen. Two reads, one value.
+        // spawn-class: environment
+        const t1 = spawnSync('date', ['+%Y%m%d%H%M%S'], { env: Object.assign({}, process.env, frozenEnv), encoding: 'utf8' });
+        // spawn-class: environment
+        const t2 = spawnSync('date', ['+%Y%m%d%H%M%S'], { env: Object.assign({}, process.env, frozenEnv), encoding: 'utf8' });
+        assert(t1.status === 0 && t1.stdout.trim() !== '' && t1.stdout === t2.stdout,
+          'A28: the frozen-clock shim answers two reads with ONE value — otherwise the two '
+          + 'adoptions below are not in the same clock second and prove nothing (got '
+          + JSON.stringify(t1.stdout) + ' then ' + JSON.stringify(t2.stdout) + ')');
+
+        const r1 = runInstall(f.dest, f.home, [adoptFlag], frozenEnv);
+        assert(r1.status === 0, 'A28: first adoption under the frozen clock exits 0 (got ' + r1.status + ')');
+        const generatedFirst = readFileSync(f.cfg, 'utf8');
+        const after1 = sideFiles(f.dest);
+
+        const r2 = runInstall(f.dest, f.home, [adoptFlag], frozenEnv);
+        assert(r2.status === 0, 'A28: second adoption under the frozen clock exits 0 (got ' + r2.status + ')');
+        const after2 = sideFiles(f.dest);
+
+        // Non-vacuity: the second run must have written a backup of its OWN. If it kept nothing,
+        // the survival check below passes for free and measures nothing.
+        assert(after2.length > after1.length,
+          'A28: the second adoption inside the same clock second wrote its own backup — with no '
+          + 'second write there is no collision for the check below to survive (files beside the '
+          + 'config went ' + JSON.stringify(after1) + ' → ' + JSON.stringify(after2) + ')');
+
+        // THE DEFECT, PINNED. The user's ORIGINAL must still be readable somewhere.
+        assert(holdersOf(f.dest, USER_CONFIG).length > 0,
+          'A28: after a SECOND adoption inside the SAME clock second, the user\'s ORIGINAL config '
+          + 'is STILL recoverable — a backup name derived from the clock alone collides here, and '
+          + 'the second adoption then overwrites the first backup with the generated config: a '
+          + 'reassuring file holding nothing worth recovering. Files beside the config: '
+          + JSON.stringify(after2));
+
+        // And the second adoption kept what IT replaced, so neither run is the one that loses.
+        assert(holdersOf(f.dest, generatedFirst).length > 0,
+          'A28: the second adoption also kept the config IT replaced — the rule is per adoption, '
+          + 'not "the first one is special". Files beside the config: ' + JSON.stringify(after2));
+      } finally {
+        wipe(f);
+        try { rmSync(shimDir, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
+
+    // ---- (3) A BACKUP THAT CANNOT BE WRITTEN ABORTS, IT DOES NOT REPLACE ANYWAY --------------
+    // The destination directory is made read-only AFTER a normal install has populated it: no new
+    // entry (the backup) can be created there, while the existing config file stays writable — so
+    // the only thing standing between the user and a silent loss is the installer refusing.
+    {
+      const f = fresh();
+      try {
+        const seed = runInstall(f.dest, f.home, []);
+        assert(seed.status === 0, 'A28: seed install exits 0 (precondition, got ' + seed.status + ')');
+        assert(readFileSync(f.cfg, 'utf8') === USER_CONFIG,
+          'A28: the seed install preserved the user config (precondition)');
+        chmodSync(f.dest, 0o555);
+
+        // FIXTURE CONTROL — the directory really is unwritable. Under root, or on a filesystem
+        // that ignores the mode, nothing below is the scenario it claims to be; say that plainly
+        // instead of failing on the guard as if the installer had misbehaved.
+        let blocked = false;
+        try { writeFileSync(path.join(f.dest, '.kw-writability-probe'), 'x'); }
+        catch (_) { blocked = true; }
+        assert(blocked,
+          'A28: the fixture can actually make a new file in the destination unwritable — it cannot '
+          + 'here (running as root, or a filesystem that ignores the mode), so the backup below is '
+          + 'writable after all and the abort under test is never reached');
+
+        // CONTROL — the read-only directory alone must not break an install. Without this, the
+        // non-zero exit below proves nothing: it could be the tree deploy failing long before
+        // adoption is reached, and the assertion would hold with no backup guard at all.
+        const control = runInstall(f.dest, f.home, []);
+        assert(control.status === 0,
+          'A28: with the destination read-only, a NON-adopting install still exits 0 — the failure '
+          + 'asserted next has to be attributable to the adoption, not to the directory (got '
+          + control.status + ')');
+
+        const r = runInstall(f.dest, f.home, [adoptFlag]);
+        assert(r.status !== 0,
+          'A28: an adoption whose backup CANNOT be written fails loudly instead of proceeding — '
+          + 'exit ' + r.status + '. Nothing else refuses here; this one does, because carrying on '
+          + 'is the case that destroys something.');
+        assert(readFileSync(f.cfg, 'utf8') === USER_CONFIG,
+          'A28: …and the config it could not back up is left BYTE-IDENTICAL. Replacing a file '
+          + 'after failing to keep a copy of it is the exact outcome the backup exists to prevent.');
+        assert(holdersOf(f.dest, USER_CONFIG).length === 0,
+          'A28: the aborted adoption left no partial backup behind (precondition sanity — the copy '
+          + 'genuinely could not be written, so the abort was the real path, not a stale file)');
+      } finally { wipe(f); }
     }
   }
 }

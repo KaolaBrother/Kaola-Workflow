@@ -1,6 +1,15 @@
 # opencode edition — two effort tiers that both inherit the main session's model
 
-**Status: design only. Nothing in this document is applied.** Recorded for later.
+**Status: BUILT, MEASURED, THEN REMOVED (#927, 2026-08-03).** This design was implemented and shipped
+into the working tree, proven on a live oracle, and then deleted — because a later probe showed its
+premise was false. **Nothing described below is in the product.** A subagent runs the model *and the
+reasoning effort* of the session that dispatched it, which is opencode's own behaviour and needs no
+configuration.
+
+Read [Why this was removed](#why-this-was-removed--probe-c) before anything else here. The design is
+kept unedited above that section, because a design record that quietly becomes a description of the
+final state loses the only thing that made it worth keeping — and because two of its own errors are
+worth more than its conclusion.
 
 Scope is the **opencode edition alone**. The claude, codex and kimi editions are unaffected and
 were not examined.
@@ -136,6 +145,10 @@ output)` shape as the `tool.execute.before` hook it already carries:
 },
 ```
 
+> **The spread-merge on the last line is wrong** and is not what shipped — it leaves the exposure
+> Layer 2 exists to remove. See the [correction](#correction--the-hook-replaces-the-knob-it-does-not-spread-over-it)
+> at the end of this document.
+
 Properties:
 
 - Both tiers inherit the main session's model. Nothing is pinned anywhere.
@@ -156,7 +169,8 @@ design does not fight one. `chat.params` runs after all merging and wins outrigh
 
 - `options` is a raw provider payload merged blind. A wrong-contract payload is **sent**, where a
   mismatched `variant` merely de-tiered silently. Layer 2 is the answer; without it, Layer 1 carries
-  this exposure.
+  this exposure. **The Layer 2 sketch above does not actually remove it** — see the
+  [correction](#correction--the-hook-replaces-the-knob-it-does-not-spread-over-it).
 - No guard proves an agent is actually running at its intended tier. `tokens_reasoning` in
   `opencode.db` is the cheapest available oracle and is what the probes below used.
 
@@ -190,3 +204,116 @@ Rows 1–5 were primary sessions; on their own they would only be a hypothesis a
 never regenerates it. It carries three retired roles (`contractor`, `issue-scout`,
 `workflow-planner`) and is missing `investigator` and `metric-optimizer`. The current generator emits
 exactly the right 14 roles, so a regenerate fixes it independently of anything above.
+
+**Closed alongside #927**, by owner ruling, and it **outlived the design** — it was the one thing
+here that was a real defect independent of tiering. The install *reports* rather than rewrites, and
+acts only under the explicit `--adopt-config` opt-in; the file is user-owned and is never
+overwritten silently. Passing the flag is a decision to take the new config, not consent to lose the
+old one, so adoption copies the file it replaces to a timestamped backup it names and fails rather
+than replacing it if that copy cannot be written.
+
+Its **subject changed with the removal**. The check originally compared the role set in the existing
+file against the set the generator emits. Post-removal the generator emits no `agent` block at all,
+so that comparison has no baseline and the detector went completely silent — measured, with a
+positive control. The useful check is the mirror image, and it is the one this box's own config
+needed: an existing config carrying per-role effort entries (`variant` or `options`) is stale,
+because those entries no longer do anything, and it is named as such. An entry pinning only a
+`model` is the user's own opt-in and is deliberately not counted.
+
+## Correction — the hook replaces the knob, it does not spread over it
+
+Found while authoring the tests, before anything was built. The hook that was built is this, not the
+sketch in Layer 2 — and both are now deleted. **This correction is the most useful thing in the
+document**: it is a design of record that could not have done the job it was derived for, caught by
+someone re-deriving the requirement rather than reading the code.
+
+The sketch ends `output.options = { ...(output.options || {}), ...payload }`. **That does not close
+the wrong-contract exposure Layer 2 exists for.** Layer 1's sync-time payload is `agent.options`,
+and opencode has already merged `agent.options` into `output.options` by the time `chat.params`
+runs. So on a session that has moved to a model on another contract, a spread leaves the stale
+`thinking` budget sitting *alongside* the freshly-resolved `reasoningEffort`, and both go out — the
+same wrong-contract payload the layer was added to prevent, now with an extra key.
+
+The result to reach is therefore stronger than "set the right knob": after the hook runs,
+`output.options` carries the knob for the resolved contract and **carries no knob belonging to any
+other contract**. The shipped hook deletes every other contract's knob before writing the resolved
+payload, and the set of knobs to delete is **derived from the effort table itself** — the union of
+every top-level option key across every contract and rank in the generated sidecar — rather than a
+hand-typed key list. A hand-typed list would go stale the first time a contract with a new knob was
+added, which is the same class of failure as the stale payload this hook removes. Options the table
+does not own are untouched.
+
+---
+
+## Why this was removed — probe C
+
+Owner ruling, 2026-08-03, on a measurement rather than an argument.
+
+Everything above assumed that ~80 subagent sessions all running at reasoning effort `default` was a
+**defect**. Probe C tested that assumption directly, and it is false.
+
+Setup: **no `agent` block** in the config, **no sidecar** (so the plugin hook no-ops by design), two
+variants defined on the model, and the same two-subagent dispatch run twice — changing only the
+**parent** session's `--variant`.
+
+| parent `--variant` | parent | planner (sub) | implementer (sub) |
+|---|---|---|---|
+| `nothink` — thinking disabled | 0 | **0** | **0** |
+| `think` — thinking enabled 32000 | 26 | **560** | **641** |
+
+Flipping only the parent's effort flips both subagents, with nothing configured per role and nothing
+pinning a model. This is the native `TaskTool` behaviour the premise reports had already read out of
+the 1.18.11 binary — `variant: b.model ? void 0 : q` hands the subagent the *parent's* variant `q`
+whenever the role pins no model — and it is exactly what the owner wanted. The ~80 sessions were
+**inheriting correctly** from parents that were themselves at `default`. Had the main session been
+set higher, they would have followed.
+
+So the machinery this document designs — `agent.<role>.options`, the `effort-tiers.json` sidecar,
+the `chat.params` hook — exists to make subagents run at an effort **different from** the session
+that dispatched them. That is an override of correct native behaviour, not a repair of it. Under
+this project's additive-derivation rule the observed failure that would force it to exist was never
+produced: *"the agent might not think hard enough"* argues against the design's premise rather than
+for a mechanism. It was removed entirely, variant-era remains included, rather than reverted to the
+`variant` form — which was measured inert.
+
+### Two things the design got wrong that the probes above could not see
+
+1. **The tier separation was never demonstrated.** Probe C's two subagents came back at 560 and 641
+   — no tier distinction, which is the *correct* result when no per-role payload exists. But the
+   probes that were supposed to prove separation never did either: probe B's 305-vs-182 was reported
+   as consistent-with rather than proof, and probe A1's 350-vs-0 confounds the role's system prompt
+   with the payload, since `planner` and `implementer` differ in far more than their `options`. The
+   honest within-role comparison is n=1 per arm. **The 32000/16000 split was shipped without a
+   measurement showing it did anything.**
+2. **The contract was resolved from the provider brand, and the brand was wrong.** The whole
+   contract-keying story — GLM-5.2 via z.ai is served under the Anthropic API contract, so its knob
+   is the `thinking` budget — was **not verified against the transport**. `zhipuai-coding-plan`
+   routes through `@ai-sdk/openai-compatible`, not the Anthropic contract. So the one provider this
+   design was ever measured on was being sent a `thinking` payload keyed off its *brand name*, and
+   the 32000/16000 split had no demonstrated effect on it. A rule that keys on a brand id and calls
+   itself contract-keyed is the same class of error as a config key that reads as live and is not.
+
+### What survived, and why
+
+Each of these was a real defect, found alongside the design and independent of it:
+
+- **The installer's config-drift blindness** — an existing `opencode.json` was preserved forever and
+  nothing ever looked at it. Now reported, with its subject changed to per-role effort entries.
+- **`--adopt-config` destroying a working config while printing success** — now backed up to a
+  collision-proof timestamped file first, and failing rather than replacing if that backup cannot be
+  written.
+- **The plugin's named exports breaking opencode's loader** — `export { hookPath, findRoot }` was
+  called as a plugin factory, threw, and logged `failed to load plugin` on every startup. The hooks
+  survived only because ESM namespace keys sort and `default` came first; one export name sorting
+  ahead of it would have killed every hook in the file. Now `export default` only.
+- **The false mechanism claims in prose** — the docs told readers effort resolved through `variant`s
+  and through a `provider.*` block. Neither was ever true.
+
+### The lesson worth keeping
+
+The failure this document opens with was real and was correctly measured: `variant` never applied,
+across ~80 sessions. What was never checked is whether the thing it failed to do was worth doing.
+Four probes, a two-layer design, a generated sidecar, a plugin hook and a full test suite were built
+on top of an unexamined premise, and one probe against the premise itself retired all of it.
+**Measure the premise before building the mechanism** — the cheapest probe in this entire
+investigation was the last one run.

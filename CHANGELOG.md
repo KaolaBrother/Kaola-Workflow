@@ -1,5 +1,65 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`install-opencode.sh --adopt-config` replaces a preserved-but-stale `opencode.json` (#927).**
+  That file is user-owned, so every install preserves an existing one — which is also how it goes
+  stale, and nothing looked. Every install now names the `agent.<role>` entries that still pin
+  per-role reasoning effort (`variant` or `options`), which no longer does anything, and changes
+  nothing. An entry that pins only a `model` is yours and is deliberately not counted. Taking the
+  regenerated config is the explicit `--adopt-config` opt-in, and that **regenerates the whole file
+  rather than merging into it**, so hand edits and model pins are gone from the live config.
+  Adoption copies the file it replaces to `<config>.<timestamp>.bak` first and prints that path, and
+  **fails without touching the config if that backup cannot be written** — passing the flag is a
+  decision to take the new config, not consent to lose the old one. The backup name is
+  collision-proof rather than timestamp-only: two adoptions inside one clock second otherwise had
+  the second overwrite the first's backup with a copy of the generated file, destroying the pins the
+  backup exists to preserve.
+
+### Removed
+
+- **Per-role reasoning-effort configuration is gone from the opencode edition (#927).** A subagent
+  runs the **model and the reasoning effort of the session that dispatched it**. To make a
+  dispatched role think harder, raise the session's own effort — every role you dispatch follows it.
+  There is nothing to configure per role and nothing to pass: opencode's `task` tool takes a
+  `subagent_type`, a `prompt` and a `description`, and has no model or effort parameter at all. The
+  seeded `provider.*.variants` block and every per-role `agent.<role>.variant` entry are no longer
+  generated, and the machinery behind them is deleted rather than left in place — a dead key that
+  reads as live configuration is exactly what hid the defect below for as long as it existed.
+  **This was settled by measurement, not argument.** With no `agent` block, no sidecar and the
+  plugin hook inert, changing only the parent session's effort moved both subagents with it (parent
+  at `nothink` → 0 / 0 / 0 reasoning tokens; parent at `think` → 26 / 560 / 641). opencode already
+  hands a subagent the parent's effort whenever the role pins no model, so the ~80 recorded subagent
+  sessions that all ran at the default effort were **inheriting correctly** from parents that were
+  themselves at the default — not failing. Per-role tiers were an override of correct native
+  behaviour, and no observed failure forces one to exist. Two further measurements point the same
+  way: those two subagents came back at 560 and 641, no tier separation, which is the right result
+  when no per-role payload exists; and the 32000/16000 thinking-budget split had no demonstrated
+  effect on the only provider ever measured, which routes through `@ai-sdk/openai-compatible` rather
+  than the Anthropic contract the split assumed. Separately, the `variant` form that shipped in
+  earlier releases never applied at all: opencode honours an agent's `variant` only when that agent
+  *also pins a model*, and this edition pins none. An `opencode.json` written by an older install
+  still carries those entries; the installer now names them as stale (above), and `--adopt-config`
+  regenerates the file. The opt-in **model**-pin path (`KAOLA_OPENCODE_STANDARD_MODEL` /
+  `KAOLA_OPENCODE_REASONING_MODEL`) is a different feature and is unchanged.
+
+### Fixed
+
+- **The opencode hooks plugin no longer errors on every load (#927).** It exported two helpers by
+  name alongside its default export. opencode's loader calls **every** exported value as a plugin
+  factory, so those helpers were invoked as factories, threw, and opencode logged
+  `failed to load plugin` on every single startup — a line that has been printed for every session
+  since and long normalised as noise. The subagent-dispatch-log and compaction-resume hooks did keep
+  working, but only by an accident of ordering: ESM namespace keys are sorted, `default` sorts ahead
+  of both helper names, so the hook table was already registered by the time the throw happened. Any
+  future export whose name sorted before `default` would have taken **every** hook in the file down
+  with it, with nothing to show for it but that same already-ignored error line. The plugin now
+  exports only its default and hangs its test handles off it as properties, and a new guard walks
+  the module exactly as the loader does rather than reaching for `.default` directly, so the shape
+  cannot silently regress. Reinstall the opencode edition to pick this up.
+
 ## [9.4.2] - 2026-08-03
 
 ### Changed

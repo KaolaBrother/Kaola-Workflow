@@ -43,27 +43,37 @@ function findRoot(start) {
   return path.resolve(start || process.cwd());
 }
 
-// Resolve a hook script across the PROJECT and GLOBAL layouts. Project candidates come FIRST so a
-// project-local install always wins; the trailing candidates handle the GLOBAL install, where the
-// plugin lives at <config>/plugins/ and hooks at <config>/hooks/ (NOT under a nested .opencode/), a
-// location findRoot — which walks the user's project tree — never reaches. SELF_DIR/../hooks works
-// regardless of the config dir name; the explicit config-dir forms (flat + legacy nested) are belt
-// and suspenders. Returns null if none exist (fail-open, matching runHook).
-function hookPath(root, script) {
+// Resolve a DEPLOYED artifact across the PROJECT and GLOBAL layouts. Project candidates come FIRST
+// so a project-local install always wins; the trailing candidates handle the GLOBAL install, where
+// the plugin lives at <config>/plugins/ and its siblings at <config>/<dir>/ (NOT under a nested
+// .opencode/), a location findRoot — which walks the user's project tree — never reaches.
+// SELF_DIR/.. works regardless of the config dir name; the explicit config-dir forms (flat + legacy
+// nested) are belt and suspenders. Returns null if none exist (fail-open, matching runHook).
+//
+// Parameterised by directory and name rather than hard-coding `hooks/`: the five candidates ARE the
+// deployed-layout answer, and a second copy of them for a second artifact kind would drift the first
+// time a layout moved. `hookPath` below is the only caller today.
+function deployedPath(root, dir, name) {
   const candidates = [
-    path.join(root, ".opencode", "hooks", script),          // project: <project>/.opencode/hooks/
-    path.join(root, "hooks", script),                       // project: canonical ./hooks/
-    path.join(SELF_DIR, "..", "hooks", script),             // global: sibling of this plugin's dir
-    path.join(OPENCODE_CONFIG_DIR, "hooks", script),        // global: <config>/hooks/ (post path-fix)
-    path.join(OPENCODE_CONFIG_DIR, ".opencode", "hooks", script), // global: legacy nested layout
+    path.join(root, ".opencode", dir, name),          // project: <project>/.opencode/<dir>/
+    path.join(root, dir, name),                       // project: canonical ./<dir>/
+    path.join(SELF_DIR, "..", dir, name),             // global: sibling of this plugin's dir
+    path.join(OPENCODE_CONFIG_DIR, dir, name),        // global: <config>/<dir>/ (post path-fix)
+    path.join(OPENCODE_CONFIG_DIR, ".opencode", dir, name), // global: legacy nested layout
   ];
-  for (const p of candidates) if (existsSync(p)) return p;
+  for (const p of candidates) {
+    try {
+      if (existsSync(p)) return p;
+    } catch {
+      // unreadable candidate — keep looking
+    }
+  }
   return null;
 }
 
-// Named exports for the test suite only — opencode loads the default export below; these are inert
-// for the runtime but let test-opencode-edition.js assert hookPath's global-layout resolution (F3).
-export { hookPath, findRoot };
+function hookPath(root, script) {
+  return deployedPath(root, "hooks", script);
+}
 
 function runHook(root, script, payload) {
   const p = hookPath(root, script);
@@ -117,6 +127,21 @@ function buildResumeContext(root) {
   return ["## Kaola-Workflow resume state (preserve across compaction)", ...lines].join("\n");
 }
 
+// THE DEFAULT EXPORT IS THE ONLY EXPORT, and that is a load-bearing constraint, not a style choice.
+// opencode's plugin loader does `for (const value of Object.values(mod))` and treats EVERY exported
+// value as a plugin factory: a non-function export throws `TypeError("Plugin export is not a
+// function")` outright, and an exported helper is CALLED as `fn(PluginInput, options)` — which for
+// anything taking a path first argument means `path.resolve(<object>)` and a thrown
+// `The "paths[0]" argument must be of type string`. That aborts registration of this module.
+//
+// This file used to also export `hookPath` and `findRoot` "for the test suite only, inert for the
+// runtime". They were not inert: they threw on every load. The hooks survived only because the
+// loader pushes into the caller's array as it goes and ESM namespace keys are sorted, so `default`
+// happened to be collected before `findRoot` threw — one export name sorting ahead of `default`
+// would have silently killed every hook in this file.
+//
+// So helpers a test needs are reached through the default export instead of beside it: a property on
+// a function is invisible to `Object.values(mod)`, and there is no ordering left to depend on.
 export default async function KaolaWorkflowHooks({ directory, worktree }) {
   const root = findRoot(worktree || directory);
   return {
@@ -148,5 +173,14 @@ export default async function KaolaWorkflowHooks({ directory, worktree }) {
         // advisory; ignore
       }
     },
+
   };
 }
+
+// Test-only handles, hung off the default export rather than exported beside it — see the note above
+// KaolaWorkflowHooks for why a named export here is not free. `Object.values(mod)` still yields
+// exactly one value, the factory, so the loader has nothing else to call.
+//   const { default: plugin } = await import(<plugin>);
+//   plugin.hookPath(root, script) · plugin.findRoot(start)
+KaolaWorkflowHooks.hookPath = hookPath;
+KaolaWorkflowHooks.findRoot = findRoot;

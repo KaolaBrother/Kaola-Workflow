@@ -23,43 +23,21 @@
 // `npm test`, `edition-sync.js`, `install.sh`, and the SIX routing surfaces, and
 // keeps its own suite (test-opencode-edition.js).
 //
-// Two model tiers (resolvable from ONE file: opencode.json). The DEFAULT install
-// expresses them as reasoning-EFFORT VARIANTS of the user's inherited model (no
-// model is pinned — both tiers inherit the model opencode is already using):
-//   掐理 (reasoning tier) → the inherited model's TOP effort variant (e.g. max).
-//   普通 (standard tier)  → the inherited model's SECOND effort variant (e.g. high).
-// The reasoning tier = the canonical `model: opus` roles;
-// all other roles run standard. Effort levels are provider-relative, so an effort
-// map (PROVIDER_EFFORT) names the top/second variant per provider:
-//   anthropic max/high · openai xhigh/high · google high/low · z.ai·zhipu max/high
-// (GLM-5.2 ships exactly High + Max). An opt-in MODEL-PIN path still exists for
-// users who want the tiers on DIFFERENT models (top-level "model" + agent.<role>.model
-// overrides for the canonical opus roles). A fresh install never hard-codes a
-// provider; generated agents are MODEL-AGNOSTIC.
-//
 //   --forge=<f>          github (default) | gitlab | gitea — which forge's command
 //                         surfaces to render from, and which tree to write.
 //   --write              regenerate .opencode/agent + .opencode/command from canonical;
 //                         seed opencode.json only if absent (use --write-config to force).
 //   --write-config       (re)write this repo's opencode.json from the template.
 //   --write-config-to P  write the template opencode.json to path P (installer use).
-//   --adapt              (modifier for --write-config / --write-config-to) render the
-//                         two-tier EFFORT-VARIANT config for the inherited model,
-//                         detected from KAOLA_OPENCODE_INHERIT_MODEL env else the
-//                         global ~/.config/opencode/opencode.json "model" field.
-//                         Unknown provider → neutral template (no variants).
 //   --check              assert generated agent/command files are in parity with canonical.
 //
-// Override the inherited model the --adapt path targets:
-//   KAOLA_OPENCODE_INHERIT_MODEL    provider/model to adapt the effort tiers to.
-// Pin each tier to a DIFFERENT model instead (opt-in; otherwise both inherit):
+// Pin a tier to a specific model (opt-in; otherwise every role inherits the session model):
 //   KAOLA_OPENCODE_STANDARD_MODEL   pin the standard tier to a provider/model
 //   KAOLA_OPENCODE_REASONING_MODEL  pin the reasoning tier to a provider/model
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
 const path = require('path');
-const schema = require('./kaola-workflow-adaptive-schema');
 // #708: the reviewer-profile generator owns the deterministic resolved_profile_hash stamping
 // (sha256 of the file with the hash field zeroed). The opencode transform rewrites the
 // frontmatter, so the Claude hash no longer binds these bytes; we re-stamp a fresh hash over
@@ -193,10 +171,10 @@ function canonCommandPath(basename, forge) {
 // --- renderers (pure; exported for parity test) ---
 
 // opencode-edition-only body suffixes: empty for every role — every agent body ships as the
-// verbatim canonical body. The only non-empty branch belonged to the retired workflow-planner
-// (its mapTier effort-tier addendum), and the roster is readdirSync-derived, so no surviving
-// agent reaches a suffix. Kept and exported because renderAgent and the parity test consume
-// the empty contract.
+// verbatim canonical body. The only non-empty branch belonged to the retired workflow-planner (an
+// effort-tier addendum, itself since removed), and the roster is readdirSync-derived, so no
+// surviving agent reaches a suffix. Kept and exported because renderAgent and the parity test
+// consume the empty contract.
 function opencodeAgentSuffix() {
   return '';
 }
@@ -251,32 +229,43 @@ function renderAgent(canonContent, agentName, forge) {
   return content;
 }
 
-// Rewrite Claude-specific model prose for opencode. Effort is centralized in opencode.json
-// (the two Kaola tiers as reasoning-EFFORT VARIANTS of the inherited model), so: (a) replace
-// the recurring canonical "Agent Model Badge" block (a Claude Code feature instructing "MUST
-// pass model=") with an opencode-native "Effort Variant Resolution" note; (b) rewrite the
-// plan-run "Pass model=dispatch.model" and the review-fix "include the explicit model="
-// instructions that reference that badge; (c) drop leftover install-time model placeholders
-// from dispatch lines.
+// Rewrite Claude-specific model prose for opencode. Claude Code dispatches carry an explicit
+// per-call `model=`; opencode has no such parameter, so: (a) replace the recurring canonical
+// "## Agent Model Badge" section with the opencode-native block below — canonical's heading is the
+// TRIGGER this transform matches at, never the heading it emits; (b) rewrite the plan-run "Pass
+// model=dispatch.model" and the review-fix "include the explicit model=" instructions that reference
+// that badge; (c) drop leftover install-time model placeholders from dispatch lines.
+//
+// Both wordings state what an agent ACTUALLY GETS, never a mechanism that delivers it. Two earlier
+// wordings named one: first the effort `variant`, then per-role effort configuration. Neither
+// described what happens — opencode's task tool hands a subagent the dispatching session's own model
+// and variant whenever the role pins no model, so effort is inherited, not configured and not passed.
+// A prompt surface that names a mechanism dates the moment the mechanism changes, and this one has
+// now dated twice. The heading is matched verbatim by the edition suite's block locator, so it moves
+// in the same change as that anchor, never on its own.
+//
+// The task tool's parameters are `description`, `prompt`, `subagent_type`, `task_id` and `command`
+// — read from the shipped 1.18.11 binary's schema literal. There is no model or effort parameter to
+// pass or to withhold, which is why the block states the inheritance rather than warning against an
+// argument that does not exist.
 const OPENCODE_BADGE_BLOCK = [
-  '## Effort Variant Resolution',
+  '## Model and effort are inherited',
   '',
-  'opencode resolves each subagent effort centrally from `opencode.json` (the two Kaola',
-  'tiers as reasoning-EFFORT VARIANTS of the inherited model): reasoning-tier roles run the',
-  "model's TOP effort variant, standard-tier roles its SECOND (e.g. max / high on GLM-5.2).",
-  'Dispatch a role with the `task` tool using `subagent_type: "<role>"`; do NOT pass a',
-  "per-call `model=` argument — the role's configured variant already selects the effort.",
-  '`mapTier(tier, provider)` resolves the variant: the reasoning tier → the TOP effort variant, the standard tier → its SECOND.',
+  'A subagent runs the model and reasoning effort of the session that dispatched it. Nothing is',
+  'configured per role, and there is nothing to pass: the `task` tool takes a `subagent_type`, a',
+  '`prompt` and a `description`, and has no model or effort parameter at all. To make a dispatched',
+  "role think harder, raise the session's own effort — every role you dispatch follows it.",
+  '',
+  'Dispatch a role with the `task` tool using `subagent_type: "<role>"`.',
   '',
 ].join('\n');
 
 // The edition's ONE answer to the canonical model-badge instruction. Canonical states that
-// instruction as PROSE ("… carries an explicit `model=` line … never omit it"); opencode has no
-// per-call `model=` at all, so every such sentence is restated as this single wording.
+// instruction as PROSE ("… carries an explicit `model=` line … never omit it"); opencode's task tool
+// has no model parameter, so every such sentence is restated as this single wording.
 const OPENCODE_BADGE_GUIDANCE =
-  'Dispatch the role via `subagent_type`; its effort variant resolves centrally from '
-  + "`opencode.json` (reasoning-tier roles use the model's TOP effort, standard-tier its SECOND). "
-  + 'Never pass a per-call `model=`.';
+  'Dispatch the role via `subagent_type`. It runs the session\'s own model and reasoning effort — '
+  + 'the task tool has no model or effort parameter.';
 
 // The instruction's stable signature: a `model=` mention in PROSE. Card placeholders sit alone on
 // their own line inside a fenced dispatch card and are removed by stripCardModelPlaceholders, so
@@ -550,130 +539,13 @@ function reasoningRoles() {
     .sort();
 }
 
-// Top-tier roles for the opencode EFFORT design are exactly the canonical reasoning-tier
-// roles — ONE source, shared with the opt-in MODEL-PIN path. There is no second,
-// install-time model axis: the agent tree carries one assignment per role, and the frozen
-// plan's per-node tier column governs every workflow dispatch.
-//
-// SET MEMBERSHIP IS UNCHANGED by collapsing the two sources into one. The effort tier used to be
-// `higherProfileRoles() ∪ canonical-reasoning`; the retired install-time default selected the
-// `higher` variant, so those roles' assignments now live in the canonical agent tree and the union
-// is redundant. Both spellings yield the same five roles: code-architect, code-reviewer, planner,
-// security-reviewer, synthesizer. A sixth member here means a role's canonical frontmatter tier
-// moved — fix the frontmatter, not this function (test-opencode-edition.js A12).
-//
-// The opt-in MODEL-PIN scaffold in opencode.json does gain three entries, and that is a
-// correction: it was previously derived from canonical frontmatter ALONE, so it omitted the three
-// reviewers that the default install nevertheless ran at the reasoning tier. Pinning the reasoning
-// tier to another model now lists every role that actually runs there.
-function topTierRoles() {
-  return reasoningRoles();
-}
-
-function standardTierRoles() {
-  const top = new Set(topTierRoles());
-  return listCanonAgents().filter(n => !top.has(n)).sort();
-}
-
-// Split "provider/model" → { providerId, modelId }. null when there is no slash.
-function parseModelProvider(modelStr) {
-  const s = String(modelStr || '').trim();
-  const i = s.indexOf('/');
-  if (i <= 0) return null;
-  return { providerId: s.slice(0, i), modelId: s.slice(i + 1) };
-}
-
-// The inherited model the --adapt path targets: KAOLA_OPENCODE_INHERIT_MODEL env wins,
-// else the "model" field of the global ~/.config/opencode/opencode.json. '' if neither.
-function detectInheritModel() {
-  const env = String(process.env.KAOLA_OPENCODE_INHERIT_MODEL || '').trim();
-  if (env) return env;
-  const home = process.env.HOME || require('os').homedir();
-  const candidates = [
-    path.join(home, '.config', 'opencode', 'opencode.json'),
-    path.join(home, '.opencode', 'opencode.json'),
-  ];
-  for (const p of candidates) {
-    try {
-      const txt = fs.readFileSync(p, 'utf8');
-      const m = txt.match(/"model"\s*:\s*"([^"]+)"/);
-      if (m) return m[1];
-    } catch (_) { /* not present — keep looking */ }
-  }
-  return '';
-}
-
+// The opencode config this edition seeds. Every role runs the model and reasoning effort of the
+// session that dispatched it — opencode's task tool hands a subagent the parent's model and variant
+// whenever the role pins no model, so there is nothing per-role to configure and nothing to keep in
+// sync when the session's model changes. The only thing this file can still express is the opt-in
+// model PIN, which is a different feature: see renderNeutralConfig.
 function renderOpencodeJson(opts) {
-  opts = opts || {};
-  // Adaptive path: an explicit inherited model (provider/model) whose provider resolves under a
-  // CONTRACT_EFFORT_TABLE contract renders the two-tier EFFORT-VARIANT config (the locked-in
-  // install default). Everything else falls through to the neutral template.
-  const inheritModel = String(opts.inheritModel || '').trim();
-  const parsed = parseModelProvider(inheritModel);
-  const profile = parsed ? schema.effortForProvider(parsed.providerId) : null;
-  if (parsed && profile) return renderAdaptiveConfig(parsed, profile);
-  return renderNeutralConfig(opts);
-}
-
-function renderAdaptiveConfig(parsed, profile) {
-  const top = topTierRoles();
-  const std = standardTierRoles();
-  // #544: derive the contract label + knob from the provider's API contract (not its brand).
-  // GLM-5.2 via z.ai → anthropic contract → thinking budget; openai/google/default → reasoningEffort.
-  const contract = schema.contractForProvider(parsed.providerId);
-  const contractLabel = ({
-    anthropic: 'Anthropic contract → thinking budget',
-    openai: 'OpenAI contract → reasoningEffort',
-    google: 'Google contract → reasoningEffort',
-    default: 'safe DEFAULT contract → reasoningEffort (no de-tier)',
-  })[contract] || (contract + ' contract');
-  const knobDescription = contract === 'anthropic' ? 'thinking.budgetTokens' : 'reasoningEffort';
-  const entries = []
-    .concat(top.map(r => [r, profile.top.variant]),
-            std.map(r => [r, profile.second.variant]))
-    .sort((a, b) => a[0].localeCompare(b[0]));
-  const lines = [];
-  lines.push('{');
-  lines.push('  "$schema": "https://opencode.ai/config.json",');
-  lines.push('  "default_agent": "build",');
-  lines.push('');
-  lines.push('  // Kaola-Workflow · opencode edition — TWO tiers as reasoning-EFFORT variants of your');
-  lines.push('  // inherited model ' + parsed.providerId + '/' + parsed.modelId + ' (NO model is pinned — both tiers');
-  lines.push('  // inherit the model you are already using in opencode). The effort KNOB is set by your');
-  lines.push('  // provider\'s API CONTRACT (' + contractLabel + '; knob: ' + knobDescription + '), keyed by');
-  lines.push('  // mapTier(tier, provider). tier → variant:');
-  lines.push('  //   推理 (reasoning tier) → TOP effort variant "' + profile.top.variant + '".');
-  lines.push('  //   普通 (standard tier)  → SECOND effort variant "' + profile.second.variant + '".');
-  lines.push('  // Reasoning tier = the canonical reasoning-tier roles');
-  lines.push('  // (' + topTierRoles().join(', ') + '); all other roles run standard. Variants are');
-  lines.push('  // defined under provider.* and selected per-role via agent.<role>.variant.');
-  lines.push('  // ⚠ SWITCHING YOUR OPENCODE MODEL? Variant definitions are model-scoped');
-  lines.push('  // (provider.<id>.models.<model>.variants.*) — opencode applies them from this file, with');
-  lines.push('  // NO per-call override. To put these tiers on a DIFFERENT inherited model, regenerate:');
-  lines.push('  //   KAOLA_OPENCODE_INHERIT_MODEL=<provider>/<model> node scripts/sync-opencode-edition.js --write-config --adapt');
-  lines.push('  // (the runtime dispatch path re-resolves the provider on every dispatch regardless, so tier');
-  lines.push('  // selection never silently de-tiers — but the variant DEFINITIONS above must be re-synced');
-  lines.push('  // for the config side to match.)');
-  lines.push('  "provider": {');
-  lines.push('    "' + parsed.providerId + '": {');
-  lines.push('      "models": {');
-  lines.push('        "' + parsed.modelId + '": {');
-  lines.push('          "variants": {');
-  lines.push('            "' + profile.top.variant + '": ' + JSON.stringify(profile.top.options) + ',');
-  lines.push('            "' + profile.second.variant + '": ' + JSON.stringify(profile.second.options));
-  lines.push('          }');
-  lines.push('        }');
-  lines.push('      }');
-  lines.push('    }');
-  lines.push('  },');
-  lines.push('  "agent": {');
-  for (let i = 0; i < entries.length; i++) {
-    const comma = i < entries.length - 1 ? ',' : '';
-    lines.push('    "' + entries[i][0] + '": { "variant": "' + entries[i][1] + '" }' + comma);
-  }
-  lines.push('  }');
-  lines.push('}');
-  return lines.join('\n') + '\n';
+  return renderNeutralConfig(opts || {});
 }
 
 function renderNeutralConfig(opts) {
@@ -785,27 +657,13 @@ function writeCommands(forge) {
   return wrote;
 }
 
-// Build the render opts for the --adapt path: detect the inherited model and, if found,
-// hand it to renderOpencodeJson so it emits the two-tier EFFORT-VARIANT config. A missing
-// detection degrades to {} (the neutral template) with a warning.
-function buildAdaptOpts(adapt) {
-  if (!adapt) return {};
-  const inheritModel = detectInheritModel();
-  if (!inheritModel) {
-    console.warn('sync-opencode-edition: --adapt could not detect an inherited model; writing the neutral template.');
-  }
-  return inheritModel ? { inheritModel } : {};
-}
-
-function writeConfig(force, adapt) {
+function writeConfig(force) {
   if (!force && fs.existsSync(OPENCODE_JSON)) {
     console.log('preserve   opencode.json (user-owned; use --write-config to overwrite)');
     return 0;
   }
-  const opts = buildAdaptOpts(adapt);
-  fs.writeFileSync(OPENCODE_JSON, renderOpencodeJson(opts));
-  const tag = (adapt && opts.inheritModel) ? ' (adapted → ' + opts.inheritModel + ')' : '';
-  console.log((force ? 'rewrote    ' : 'seeded     ') + 'opencode.json' + tag);
+  fs.writeFileSync(OPENCODE_JSON, renderOpencodeJson());
+  console.log((force ? 'rewrote    ' : 'seeded     ') + 'opencode.json');
   return 1;
 }
 
@@ -905,13 +763,13 @@ function pruneRetired(forge) {
   return removed;
 }
 
-function runWrite(configForce, adapt, forge) {
+function runWrite(configForce, forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
   const a = writeAgents(forge);
   const c = writeCommands(forge);
   const h = writeHooks(forge);
   const p = writePlugin(forge);
-  const j = writeConfig(configForce, adapt);
+  const j = writeConfig(configForce);
   const pr = pruneRetired(forge);
   const total = a + c + h + p + j + pr;
   console.log('sync-opencode-edition[' + forge + ']: write complete (' + total + ' file(s) updated'
@@ -920,13 +778,10 @@ function runWrite(configForce, adapt, forge) {
 
 // Installer entrypoint: write the template opencode.json to an arbitrary path
 // (honors the KAOLA_OPENCODE_*_MODEL pin env vars). The installer guards the
-// "preserve existing" semantics; this unconditionally writes the target. With --adapt
-// it emits the two-tier EFFORT-VARIANT config for the detected inherited model.
-function runWriteConfigTo(target, adapt) {
-  const opts = buildAdaptOpts(adapt);
-  fs.writeFileSync(target, renderOpencodeJson(opts));
-  const tag = (adapt && opts.inheritModel) ? ' (adapted → ' + opts.inheritModel + ')' : '';
-  console.log('seeded     ' + target + tag);
+// "preserve existing" semantics; this unconditionally writes the target.
+function runWriteConfigTo(target) {
+  fs.writeFileSync(target, renderOpencodeJson());
+  console.log('seeded     ' + target);
 }
 
 function runCheck(forge) {
@@ -1005,8 +860,7 @@ function runCheck(forge) {
   }
   // #F8: opencode.json parity — the installer freshness gate (install-opencode.sh) and the docs
   // bill --check as the "parity assert", yet runCheck never validated the committed config, so a
-  // corrupted opencode.json passed. Compare it to the NEUTRAL renderer output (bare renderOpencodeJson(),
-  // matching test A7) — not an --adapt-derived render, which would false-fail on an inherited-model pin.
+  // corrupted opencode.json passed. Compare it to the renderer output (test A7 does the same).
   if (fs.existsSync(OPENCODE_JSON) && read('opencode.json') !== renderOpencodeJson()) {
     mismatches.push({ rel: 'opencode.json', reason: 'stale — regenerate via --write-config' });
   }
@@ -1025,22 +879,19 @@ function runCheck(forge) {
 
 function usage() {
   process.stdout.write(
-    'usage: node scripts/sync-opencode-edition.js (--write | --write-config | --write-config-to PATH | --check)'
-    + ' [--forge=github|gitlab|gitea] [--adapt]\n'
+    'usage: node scripts/sync-opencode-edition.js (--write | --write-config | --write-config-to PATH'
+    + ' | --check) [--forge=github|gitlab|gitea]\n'
     + '  --forge=<f>          which forge to render (default github). github writes .opencode/;\n'
     + '                       gitlab/gitea write .opencode-<forge>/\n'
     + '  --write              regenerate the forge tree agent + command; seed opencode.json if absent\n'
     + '  --write-config       (re)write this repo opencode.json from the template (clobbers edits)\n'
     + '  --write-config-to P  write the template opencode.json to path P (installer use)\n'
-    + '  --adapt              modifier: render the two-tier EFFORT-VARIANT config for the inherited\n'
-    + '                       model (KAOLA_OPENCODE_INHERIT_MODEL env, else global opencode.json "model")\n'
     + '  --check              assert generated files are in parity with canonical\n'
   );
 }
 
 function main() {
   const argv = process.argv.slice(2);
-  const adapt = argv.includes('--adapt');
   const forgeArg = argv.find(a => a.startsWith('--forge='));
   const forge = forgeArg ? forgeArg.slice('--forge='.length) : DEFAULT_FORGE;
   try {
@@ -1050,14 +901,14 @@ function main() {
     process.exitCode = 2;
     return;
   }
-  const positional = argv.filter(a => a !== '--adapt' && !a.startsWith('--forge='));
+  const positional = argv.filter(a => !a.startsWith('--forge='));
   const arg = positional[0];
-  if (arg === '--write') return runWrite(false, adapt, forge);
-  if (arg === '--write-config') return runWrite(true, adapt, forge);
+  if (arg === '--write') return runWrite(false, forge);
+  if (arg === '--write-config') return runWrite(true, forge);
   if (arg === '--write-config-to') {
     const target = positional[1];
     if (!target) { console.error('--write-config-to requires a path'); process.exitCode = 2; return; }
-    return runWriteConfigTo(target, adapt);
+    return runWriteConfigTo(target);
   }
   if (arg === '--check') return runCheck(forge);
   usage();
@@ -1066,7 +917,7 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-  renderAgent, renderCommand, renderOpencodeJson, renderAdaptiveConfig, renderNeutralConfig,
+  renderAgent, renderCommand, renderOpencodeJson, renderNeutralConfig,
   transformCommandBody, opencodeAgentSuffix, rewriteClaudeScriptPaths, OPENCODE_KAOLA_SCRIPT,
   rewriteBadgeInstructions, rewriteBadgeParagraph, sentenceStart, stripCardModelPlaceholders,
   assertNoBadgeResidue, OPENCODE_BADGE_GUIDANCE, OPENCODE_BADGE_BLOCK,
@@ -1074,8 +925,6 @@ module.exports = {
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   parseFrontmatter, parseTools, roleTier, reasoningRoles,
   PERMISSION_AXES, deniedPermissionAxes,
-  topTierRoles, standardTierRoles,
-  parseModelProvider, detectInheritModel, buildAdaptOpts,
   listCanonAgents, listCanonCommands,
   ENV_STANDARD_MODEL, ENV_REASONING_MODEL,
   // Legacy aliases (env-derived; empty by default now that pins are opt-in).

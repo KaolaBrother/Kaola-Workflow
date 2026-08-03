@@ -20,13 +20,13 @@
 #   ./install-opencode.sh --global                # deploy agents+commands to ~/.config/opencode
 #   ./install-opencode.sh --regenerate            # refresh the generated tree from canonical here
 #
-# Models: the default install seeds opencode.json with the two Kaola tiers as
-# reasoning-EFFORT VARIANTS of your inherited model (no model is pinned — both tiers
-# inherit the model you are already using in opencode): the reasoning tier gets the
-# model's TOP effort variant, the standard tier its SECOND (e.g. max/high on GLM-5.2).
-# This installer seeds it only if absent, so re-running never clobbers your choices.
-# Override the inherited model via KAOLA_OPENCODE_INHERIT_MODEL, or pin a tier to a
-# different model via KAOLA_OPENCODE_STANDARD_MODEL / _REASONING_MODEL.
+# Models: the seeded opencode.json pins NOTHING per role — a subagent runs the model and reasoning
+# effort of the session that dispatched it, which is what opencode already does for a role that pins
+# no model. Pin a tier to a different model via KAOLA_OPENCODE_STANDARD_MODEL / _REASONING_MODEL.
+# This installer seeds the file only if absent, so re-running never clobbers your choices — but a
+# preserved config is also how a config goes STALE, so the install REPORTS any per-role effort
+# setting left in it (those no longer do anything) and regenerates only if you pass --adopt-config,
+# which REPLACES the file rather than merging into it and keeps a timestamped .bak.
 #
 # COMMAND SET: the install deploys the workflow command set (finalize, workflow-init,
 # workflow-next) into .opencode/command/. The generated .opencode/command/*
@@ -67,12 +67,18 @@ REGENERATE=0
 UNINSTALL=0
 YES=0
 NO_SCRIPTS=0
+ADOPT_CONFIG=0
 FORGE="github"
+
+# The explicit opt-in that lets an install replace an existing, USER-OWNED opencode.json. Spelled
+# once: the argument parser matches this and the drift report tells the user this, so the flag the
+# report names can never be a flag the parser does not accept.
+ADOPT_CONFIG_FLAG="--adopt-config"
 
 usage() {
   cat <<'EOF'
 Usage: ./install-opencode.sh [--target DIR] [--forge=github|gitlab|gitea] [--global]
-                            [--regenerate] [--uninstall] [--no-scripts] [--yes]
+                            [--regenerate] [--uninstall] [--no-scripts] [--adopt-config] [--yes]
   --target DIR     deploy into DIR (default: current directory)
   --forge F        github (default), gitlab, or gitea — which forge's workflow prose
                    and support scripts to deploy
@@ -81,7 +87,17 @@ Usage: ./install-opencode.sh [--target DIR] [--forge=github|gitlab|gitea] [--glo
   --uninstall      remove the kaola-deployed opencode edition from the resolved scope
                    (honors --target/--global), then exit (see UNINSTALL below)
   --no-scripts     skip installing support scripts (see SUPPORT SCRIPTS below)
+  --adopt-config   replace an existing opencode.json with a freshly generated one
+                   (see CONFIG DRIFT below); without it an existing config is never written
   --yes            non-interactive (accept the default deploy path)
+
+CONFIG DRIFT: opencode.json is user-owned, so an install preserves it — which is also how it
+goes stale. A config written by an older install pins per-role reasoning effort
+(agent.<role>.options or .variant); those settings no longer do anything, because a subagent runs
+the model and effort of the session that dispatched it. Every install NAMES the entries still
+carrying them and changes nothing. An entry that only pins a model is yours and is not counted.
+Regenerating is the --adopt-config opt-in, and that REPLACES the file rather than merging into it
+— hand edits and model pins go — after copying the old one to <config>.<timestamp>.bak.
 
 SUPPORT SCRIPTS: workflow commands locate scripts via kaola_script(), which searches
 ./scripts/ and ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/
@@ -109,6 +125,7 @@ while [[ "$#" -gt 0 ]]; do
     --regenerate) REGENERATE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --no-scripts) NO_SCRIPTS=1; shift ;;
+    "$ADOPT_CONFIG_FLAG") ADOPT_CONFIG=1; shift ;;
     -y|--yes) YES=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -410,30 +427,144 @@ install_support_scripts() {
   echo "Installed support scripts → $dest (kaola_script() search path; forge $FORGE)"
 }
 
+# Report how an existing opencode.json differs from what the generator emits NOW, and say nothing
+# when it does not differ. Compared by the ROLE SET of the agent block: role names are what actually
+# goes stale (a role retired since the file was written stays in it; a role added since never
+# appears), and they stay comparable across changes to what each role carries.
+#
+# Where adoption puts the file it replaces: `<config>.<timestamp>.bak`. Spelled ONCE — the drift
+# report promises this shape and seed_config writes exactly it, so the recovery path the user is
+# told about is the one that exists.
+#
+# Never returns a path that already exists. A timestamp alone is NOT enough and this was measured,
+# not assumed: two adoptions landed in the same clock second, and the second one overwrote the
+# backup of the user's original with a copy of the generated config — destroying the very pins the
+# backup exists to preserve.
+config_backup_path() {
+  local candidate="$1.$2.bak" n=1
+  while [[ -e "$candidate" ]]; do candidate="$1.$2-$n.bak"; n=$((n + 1)); done
+  printf '%s\n' "$candidate"
+}
+
+# Report what is STALE in an existing opencode.json, and say nothing when nothing is.
+#
+# The subject is a per-role entry carrying an effort setting — `agent.<role>.variant` or
+# `agent.<role>.options`. Those are the two shapes this edition ever wrote per role, and neither does
+# anything now: a subagent runs the model and reasoning effort of the session that dispatched it. A
+# block left behind still READS as live configuration, which is the whole reason to say so.
+#
+# An entry that only pins a `model` is the user's own supported choice — it is not counted and not
+# named. The check needs no baseline from the generator, which is what makes it survive: it asks what
+# the file carries, not how it compares to a role set the workflow no longer ships.
+#
+# This only ever PRINTS. The file is user-owned; rewriting it is the $ADOPT_CONFIG_FLAG opt-in.
+report_config_drift() {
+  local cfg="$1"
+  KW_CFG="$cfg" \
+  KW_DRIFT_FLAG="$ADOPT_CONFIG_FLAG" \
+  KW_DRIFT_BACKUP="$(config_backup_path "$(basename "$cfg")" "<timestamp>")" \
+  node - <<'NODE' || true
+const fs = require("fs");
+const BACKUP_SHAPE = process.env.KW_DRIFT_BACKUP;
+
+// opencode.json is JSONC and the generated one uses comments, so a plain JSON.parse is tried
+// first and a comment strip only as a fallback. The strip is STRING-AWARE: a line-anchored or
+// naive `//` strip eats the "https://opencode.ai/config.json" inside $schema.
+function stripComments(t) {
+  let out = "", i = 0, inStr = false, esc = false;
+  while (i < t.length) {
+    const c = t[i];
+    if (inStr) {
+      out += c;
+      if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false;
+      i++; continue;
+    }
+    if (c === '"') { inStr = true; out += c; i++; continue; }
+    if (c === "/" && t[i + 1] === "/") { while (i < t.length && t[i] !== "\n") i++; continue; }
+    if (c === "/" && t[i + 1] === "*") { i += 2; while (i < t.length && !(t[i] === "*" && t[i + 1] === "/")) i++; i += 2; continue; }
+    out += c; i++;
+  }
+  return out;
+}
+function parse(text) {
+  for (const t of [text, stripComments(text)]) {
+    try { return JSON.parse(t); } catch (_) { /* try the next form */ }
+  }
+  return null;
+}
+// The per-role keys this edition used to write. `variant` was the pre-#927 shape, `options` the
+// #927 one; both are inert now. `model` is deliberately absent — that pin is the user's own.
+const STALE_KEYS = ["variant", "options"];
+
+// Every `agent.<role>` entry carrying one of those keys, by name.
+function staleEntries(cfg) {
+  const a = cfg && cfg.agent;
+  if (!a || typeof a !== "object" || Array.isArray(a)) return [];
+  return Object.keys(a).filter(role => {
+    const e = a[role];
+    return e && typeof e === "object" && !Array.isArray(e)
+      && STALE_KEYS.some(k => Object.prototype.hasOwnProperty.call(e, k));
+  }).sort();
+}
+
+let existing = null;
+try { existing = parse(fs.readFileSync(process.env.KW_CFG, "utf8")); } catch (_) { existing = null; }
+// Unreadable or not JSON at all: not this installer's to diagnose, and never a reason to fail.
+if (!existing || typeof existing !== "object") process.exit(0);
+
+const stale = staleEntries(existing);
+if (stale.length === 0) process.exit(0);
+
+const say = ["  ⚠ Config drift: it pins per-role reasoning effort, which no longer does anything."];
+say.push("      " + stale.length + " role entry(ies) carrying an inert effort setting: " + stale.join(", "));
+say.push("      A subagent runs the model and reasoning effort of the session that dispatched it, so");
+say.push("      these are left over from an older install. An entry that only pins a model is yours");
+say.push("      and is not counted here.");
+// Disclose the COST before the flag is run, not after: adoption regenerates rather than merges, so
+// a model pin the user set by hand is replaced. Naming the backup is what makes that recoverable —
+// so this text and the copy in seed_config below stand or fall together.
+say.push("      Nothing was changed. Re-run with " + process.env.KW_DRIFT_FLAG + " to adopt it: that REPLACES this");
+say.push("      file rather than merging (hand edits and model pins go), after copying it to " + BACKUP_SHAPE + ".");
+console.log(say.join("\n"));
+NODE
+}
+
 seed_config() {
   local dest_root="$1"
   local cfg="$dest_root/opencode.json"
-  if [[ -f "$cfg" ]]; then
+  if [[ -f "$cfg" && "$ADOPT_CONFIG" -ne 1 ]]; then
     echo "Preserved existing $cfg (your model choices are kept)."
+    # Preserving is also how a config goes stale, and nothing else looks at it. Report what is
+    # stale; acting on a user-owned file needs the explicit opt-in.
+    report_config_drift "$cfg"
     return
   fi
-  # Generate via the sync renderer. With --adapt it emits the two-tier EFFORT-VARIANT
-  # config for your inherited model (KAOLA_OPENCODE_INHERIT_MODEL env, else the global
-  # opencode.json "model"): reasoning tier → the contract's TOP variant, standard tier
-  # → its SECOND variant. The effort KNOB is CONTRACT-KEYED (mapTier + CONTRACT_EFFORT_TABLE
-  # + contractForProvider in kaola-workflow-adaptive-schema.js): GLM-5.2/z.ai → Anthropic
-  # contract (thinking budget), OpenAI → reasoningEffort, Google → reasoningEffort. An
-  # UNRECOGNIZED provider gets the safe default contract (reasoningEffort high/medium — a
-  # real top/second split, no de-tier). A falsy/absent model still renders the neutral
-  # template (both tiers inherit your opencode default).
-  node "$SCRIPT_DIR/scripts/sync-opencode-edition.js" --write-config-to "$cfg" --adapt
-  echo "Seeded $cfg — effort tiers adapted to your inherited model (contract-keyed)."
-  echo "  GLM-5.2/z.ai → Anthropic contract (thinking budget); OpenAI → reasoningEffort;"
-  echo "  Google → reasoningEffort; unknown → safe default (no de-tier)."
-  echo "  ⚠ Switched your opencode model? Re-run with KAOLA_OPENCODE_INHERIT_MODEL=<provider>/<model>"
-  echo "  to regenerate the variant definitions (the dispatch path re-resolves regardless)."
-  echo "  Override the inherited model via KAOLA_OPENCODE_INHERIT_MODEL, or pin a tier via"
-  echo "  KAOLA_OPENCODE_STANDARD_MODEL / _REASONING_MODEL env."
+  # Rendered to a TEMP file and moved into place, never written straight onto the user's file: a
+  # render that fails partway must not leave a truncated config behind. This is the only write
+  # protection left besides the backup, and it is deliberately not a refusal.
+  local rendered
+  rendered="$(mktemp)"
+  node "$SCRIPT_DIR/scripts/sync-opencode-edition.js" --write-config-to "$rendered" >/dev/null
+  if [[ -f "$cfg" ]]; then
+    # The flag is the user's decision to take the new config, not their consent to lose the old
+    # one — so copy it FIRST. A backup that cannot be written is the one case here that destroys
+    # something, so it fails loudly instead of replacing the file anyway.
+    local backup
+    backup="$(config_backup_path "$cfg" "$(date +%Y%m%d%H%M%S)")"
+    if ! cp "$cfg" "$backup"; then
+      rm -f "$rendered"
+      echo "Install error: could not back up $cfg — refusing to replace it." >&2
+      exit 1
+    fi
+    echo "Replacing $cfg with a freshly generated config (you passed $ADOPT_CONFIG_FLAG)."
+    echo "  Your previous config, hand edits and model pins included → $backup"
+  fi
+  mv "$rendered" "$cfg"
+  chmod 644 "$cfg"   # mktemp is 0600; this is the user's own config, not a secret
+  echo "Seeded $cfg — nothing is pinned per role: a subagent runs the model and reasoning effort"
+  echo "  of the session that dispatched it."
+  echo "  To put a tier on a DIFFERENT model, pin it via KAOLA_OPENCODE_STANDARD_MODEL /"
+  echo "  KAOLA_OPENCODE_REASONING_MODEL and re-run."
 }
 
 # --uninstall short-circuits the install entirely (functions are defined above).
