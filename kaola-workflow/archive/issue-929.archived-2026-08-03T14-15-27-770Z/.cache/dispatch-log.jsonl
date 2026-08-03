@@ -1,0 +1,6 @@
+{"ts":"2026-08-03T12:29:37Z","agent_type":"investigator","agent_id":"a3ead8bf4c7fe9f50","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"","model_planned":"sonnet"}
+{"ts":"2026-08-03T12:29:49Z","agent_type":"Explore","agent_id":"a5c9c87789c46baa1","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"","model_planned":""}
+{"ts":"2026-08-03T12:46:39Z","agent_type":"investigator","agent_id":"a673296dbac40b944","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"","model_planned":"sonnet"}
+{"ts":"2026-08-03T13:10:37Z","agent_type":"adversarial-verifier","agent_id":"a73d1071bfa07cc67","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-929","model":"","model_planned":"sonnet"}
+{"ts":"2026-08-03T13:33:43Z","agent_type":"adversarial-verifier","agent_id":"a73d1071bfa07cc67","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-929","model":"","model_planned":"sonnet"}
+{"ts":"2026-08-03T13:48:06Z","agent_type":"adversarial-verifier","agent_id":"a73d1071bfa07cc67","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-929","model":"","model_planned":"sonnet"}
