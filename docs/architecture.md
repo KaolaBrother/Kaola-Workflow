@@ -316,6 +316,11 @@ For non-generated roles, adding a feature paragraph to an `agents/<name>.md` req
 token into all three `.toml` twins before it can be pinned in `test-agent-profile-parity.js`;
 `validate-script-sync.js` `BYTE_IDENTICAL_GROUPS` enforces byte identity across each triple.
 
+Codex profile readiness is an install-time boundary. `install-codex-agent-profiles.js` is the
+authoritative install/upgrade transaction and verifies its completed writes before success;
+`kaola-workflow-codex-preflight.js --doctor` remains an explicit diagnostic. The live Codex
+`next`/`finalize` routing surfaces do not re-certify persisted configuration on entry or resume.
+
 ### Model resolution
 
 For Claude Code, there is no install-time model axis and no install-written manifest. `install.sh` deletes a

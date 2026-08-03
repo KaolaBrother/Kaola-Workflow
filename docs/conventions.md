@@ -51,36 +51,27 @@ latency, prior outcomes, and risk do not create an escalation or any other model
 
 Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 
-**No-silent-inline-fallback rule:** before dispatching, `kaola-workflow-codex-preflight.js` must
-return `status:"ok"` (exit 0). A non-ok preflight is a stop — there is no silent fallback when role
-profiles are absent or stale. `local-fallback-tool-unavailable` is valid only when subagent tooling
-is genuinely unavailable (runtime detection, not a config-drift shortcut);
-`local-fallback-explicit` only when the user set `delegation_policy: local-authorized`.
+**Codex readiness boundary:** `install-codex-agent-profiles.js` owns installation and upgrade proof.
+It exits successfully only after source/profile validation, safe writes and pruning, manifest and
+hook installation, and post-install verification succeed. The `next` and `finalize` Codex skills do
+not invoke `kaola-workflow-codex-preflight.js`, parse or autofix its output, or make profile/config
+freshness a workflow entry, resume, or dispatch verdict. `local-fallback-tool-unavailable` retains
+only its literal meaning: the runtime dispatch tool is genuinely unavailable.
 
-The two dispatch-capable Codex skills (`next` and `finalize` — the sibling `init` skill does not
-dispatch subagents) carry one byte-identical
-`<!-- PIN: codex-profile-preflight -->` entry/resume gate. The gate runs normal preflight with
-`--no-autofix --json` before any probe, retry, or spawn and accepts only exit 0 plus parsed
-`status:"ok"`. The gate parses
-`codex plugin list --json`, requires exactly one enabled installed Kaola edition, validates the
-registry marketplace/name/version components, and executes only that tuple's exact cached
-preflight. Never resolve it with `find`, `head`, lexical cache ordering, or a checkout-local
-`$PWD/plugins` candidate. A missing/ambiguous registry row, unsafe cache component, failed
-preflight, or malformed JSON result is the typed `profile_preflight_refused` stop and may never be
-relabeled as tool unavailability.
-
-Preflight merges the persisted transport/posture fields it owns from HOME through every trusted
-repository-root-to-cwd `.codex/config.toml`, with explicitly present higher fields winning and the
-winning unsafe path retained for diagnosis. Profile provenance is separate: a global profile set is
-eligible only when no project layer has a Kaola footprint; otherwise the project authority and exact
-managed role block must pass. A project Kaola footprint is loadable only when the most-specific
-matching absolute `[projects."..."]` entry in global config says `trust_level = "trusted"`;
+`kaola-workflow-codex-preflight.js --doctor` is an explicit, user-invoked diagnostic, never an
+ordinary session gate. It merges the persisted transport/posture fields it owns from HOME through
+every trusted repository-root-to-cwd `.codex/config.toml`, with explicitly present higher fields
+winning and the winning unsafe path retained for diagnosis. Profile provenance is separate: a
+global profile set is eligible only when no project layer has a Kaola footprint; otherwise the
+project authority and exact managed role block must pass. A project Kaola footprint is loadable
+only when the most-specific matching absolute `[projects."..."]` entry in global config says
+`trust_level = "trusted"`;
 unknown/untrusted footprints stop as `project_trust_required` because Codex ignores those project
-layers. Any outside-marker `agents` declaration in any loaded project layer is unsafe. This gate
-cannot see ephemeral Codex `--profile` or `-c` launch overrides, so its persisted filesystem result
-must not be described as proof of those per-process settings.
+layers. Any outside-marker `agents` declaration in any loaded project layer is unsafe. This
+diagnostic cannot see ephemeral Codex `--profile` or `-c` launch overrides, so its persisted
+filesystem result must not be described as proof of those per-process settings.
 
-See `docs/api.md` § Codex Harness Scripts for the preflight CLI and typed-refusal shapes.
+See `docs/api.md` § Installation and edition sync for the explicit doctor boundary.
 
 ## Joining a dispatch
 
@@ -223,7 +214,9 @@ list by hand:
 | `plugins/*/scripts/install-codex-agent-profiles.js` (×3) | a **third** copy of both tier lists |
 | `README.md` | the ```text codex role catalog, set-equality-checked against `plugins/kaola-workflow/config/agents.toml` by `validate-kaola-workflow-contracts.js`; and the Agent/Tier table, which is **not** machine-checked — keep it in step by hand |
 
-Note the tier lists exist in **three** independent copies. Adding a role to only the schema leaves the codex chain red at preflight; that duplication is the standing cost of the preflight's require-free authoring. An agent-set delta is itself a cross-edition diff.
+Note the tier lists exist in **three** independent copies. Adding a role to only the schema leaves the
+Codex install/doctor chain red; that duplication is the standing cost of the diagnostic's
+`require`-free authoring. An agent-set delta is itself a cross-edition diff.
 
 ## Forge-Neutral Plugin Agent Profiles (issue #341)
 

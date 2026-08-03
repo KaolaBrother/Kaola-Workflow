@@ -11,9 +11,7 @@
 // from the generated-surface registry rather than hand-typed, and every edition is checked.
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
 
 const REPO = path.resolve(__dirname, '..');
 let passed = 0, failed = 0;
@@ -286,10 +284,10 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
-// T19: every Codex skill that can directly dispatch a named role must execute
-// the normal, fail-closed profile gate on entry. A doctor-only probe reports
-// state but cannot authorize dispatch, and downstream skills are valid direct
-// resume entry points, so a router-only check is insufficient.
+// T19: install/upgrade is the Codex profile-readiness boundary. Ordinary next/finalize
+// entry and resume surfaces must not re-certify profile/config bytes or refuse dispatch
+// because persisted runtime-owned state drifted. The fixed per-spawn model contract is
+// independent and remains mandatory on every dispatch-capable Codex skill.
 // ---------------------------------------------------------------------------
 {
   const expectedDispatchSkills = [
@@ -307,25 +305,34 @@ for (const ed of codexEditions) {
   // strength of a document it is merely authoring, and then reds for lacking a gate it never needs.
   const TEMPLATE_REGION = /<!-- KW-CLAUDE-TEMPLATE-START -->[\s\S]*?<!-- KW-CLAUDE-TEMPLATE-END -->/g;
   const dispatchBody = c => c.replace(TEMPLATE_REGION, '');
-  const marker = '<!-- PIN: codex-profile-preflight -->';
-  const requiredTokens = [
-    'normal preflight gate, not `--doctor`',
-    '`kaola-workflow-codex-preflight.js`',
-    '`codex plugin list --json`',
-    'Resolve exactly one enabled installed Kaola edition from',
-    'Never search `$PWD/plugins`',
-    '`$HOME/.codex/plugins/cache/$KAOLA_CODEX_MARKETPLACE/$KAOLA_CODEX_PLUGIN_NAME/$KAOLA_CODEX_PLUGIN_VERSION`',
-    '`--project-root "$PWD" --no-autofix --json`',
-    'merges persisted config from HOME through the repository root to `"$PWD"`',
-    '`profile_preflight_refused`',
-    '`profile_bytes_mismatch`',
-    'item==="."||item===".."',
-    'plugin cache root escapes HOME',
-    'const parts=[".codex","plugins","cache"',
-    'Re-run the gate if the installed profile set changes',
+  const recurringGateTokens = [
+    '<!-- PIN: codex-profile-preflight -->',
+    'profile_preflight_refused',
+    '--no-autofix',
+    'kaola-workflow-codex-preflight.js',
+    'KAOLA_CODEX_PREFLIGHT',
+    'normal preflight gate',
+    'profile freshness gate',
+    'config_stale',
+    'managed_block_drift',
   ];
-  const allPreflightBlocks = [];
+  const recurringGateAbsent = content => recurringGateTokens.every(token => !content.includes(token));
+  const assertRecurringGateAbsent = (content, file) => {
+    assert(recurringGateAbsent(content),
+      `T19 install boundary: ${file} contains no recurring Codex profile/config gate`);
+    for (const token of recurringGateTokens) {
+      assert(!recurringGateAbsent(`${content}\n${token}\n`),
+        `T19 install-boundary mutation: adding ${JSON.stringify(token)} reds ${file}`);
+    }
+  };
   const allModelRoutingBlocks = [];
+
+  for (const file of [
+    'templates/routing/next.skeleton.md',
+    'templates/routing/finalize.skeleton.md',
+  ]) {
+    assertRecurringGateAbsent(fs.readFileSync(path.join(REPO, file), 'utf8'), file);
+  }
 
   for (const edition of codexEditions) {
     const skillNames = fs.readdirSync(path.join(REPO, edition.skillsDir), { withFileTypes: true })
@@ -342,25 +349,7 @@ for (const ed of codexEditions) {
     for (const name of skillNames) {
       const file = `${edition.skillsDir}/${name}/SKILL.md`;
       const content = fs.readFileSync(path.join(REPO, file), 'utf8');
-      const start = content.indexOf(marker);
-      const end = start >= 0 ? content.indexOf('<!-- /PIN -->', start) : -1;
-      const block = start >= 0 && end > start ? content.slice(start, end) : '';
-      assert(block.length > 0, `T19: ${file} carries the bounded Codex profile preflight gate`);
-      allPreflightBlocks.push(block);
-      for (const token of requiredTokens) {
-        const normalizedBlock = norm(block);
-        const needle = norm(token);
-        assert(normalizedBlock.includes(needle), `T19: ${file} preflight block carries ${JSON.stringify(token)}`);
-        const mutated = normalizedBlock.replace(needle, '');
-        assert(!mutated.includes(needle),
-          `T19 mutation: deleting ${JSON.stringify(token)} reds ${file}`);
-      }
-      assert(content.indexOf(marker) < content.search(dispatchSignal),
-        `T19: ${file} profile gate appears before its first named-role dispatch contract`);
-      assert(!block.includes('for candidate_root in "$PWD/plugins"'),
-        `T19: ${file} never executes a repository-local first-match preflight`);
-      assert(!block.includes('find "$candidate_root"'),
-        `T19: ${file} never uses nondeterministic find/head cache selection`);
+      assertRecurringGateAbsent(content, file);
 
       const modelRoutingBlock = codexModelRoutingBlock(content);
       assert(codexModelRoutingContractValid(content),
@@ -427,135 +416,9 @@ for (const ed of codexEditions) {
       }
     }
   }
-  assert(allPreflightBlocks.every(block => block === allPreflightBlocks[0]),
-    'T19: all dispatch-capable Codex skills carry one byte-identical profile preflight block');
   assert(allModelRoutingBlocks.length === codexEditions.length * expectedDispatchSkills.length
     && allModelRoutingBlocks.every(block => block === allModelRoutingBlocks[0]),
     'T19 model routing: all six Codex next/finalize skills carry one byte-identical routing contract');
-
-  // Execute the exact fenced Bash block against a fake Codex registry. A malicious
-  // lexically-first repository script and an older cache version must never run;
-  // all metadata/preflight failures retain the typed refusal prefix.
-  const bashMatch = allPreflightBlocks[0].match(/```bash\n([\s\S]*?)\n```/);
-  assert(!!bashMatch, 'T19: canonical preflight block exposes one executable Bash fence');
-  if (bashMatch) {
-    const gateScript = bashMatch[1];
-    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-active-plugin-gate-'));
-    const fakeHome = path.join(fixtureRoot, 'home');
-    const fakeBin = path.join(fixtureRoot, 'bin');
-    const project = path.join(fixtureRoot, 'project');
-    const markerPath = path.join(fixtureRoot, 'selected.txt');
-    fs.mkdirSync(fakeHome, { recursive: true });
-    fs.mkdirSync(fakeBin, { recursive: true });
-    fs.mkdirSync(project, { recursive: true });
-    const fakeCodex = path.join(fakeBin, 'codex');
-    fs.writeFileSync(fakeCodex,
-      '#!/bin/sh\n'
-      + 'if [ "${KAOLA_PLUGIN_LIST_EXIT:-0}" -ne 0 ]; then printf "metadata-error\\n" >&2; exit "$KAOLA_PLUGIN_LIST_EXIT"; fi\n'
-      + 'if [ "$1" = plugin ] && [ "$2" = list ] && [ "$3" = --json ]; then printf "%s\\n" "$KAOLA_PLUGIN_LIST_JSON"; exit 0; fi\n'
-      + 'exit 9\n');
-    fs.chmodSync(fakeCodex, 0o755);
-
-    function writeProbe(file, label) {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file,
-        '#!/usr/bin/env node\n'
-        + 'const fs=require("fs");\n'
-        + `fs.writeFileSync(process.env.KAOLA_GATE_MARKER, ${JSON.stringify(label)});\n`
-        + 'process.stdout.write(process.env.KAOLA_PREFLIGHT_OUTPUT || "{\\"status\\":\\"ok\\"}\\n");\n'
-        + 'process.exit(Number(process.env.KAOLA_PREFLIGHT_EXIT || 0));\n');
-      fs.chmodSync(file, 0o755);
-    }
-
-    function registryJson(name, version = '4.23.1', marketplace = 'kaola-marketplace') {
-      return JSON.stringify({ installed: [{
-        pluginId: `${name}@${marketplace}`,
-        name,
-        marketplaceName: marketplace,
-        version,
-        installed: true,
-        enabled: true,
-      }] });
-    }
-
-    function runGate(extraEnv = {}) {
-      return spawnSync('bash', ['-c', gateScript], {
-        cwd: project,
-        env: {
-          ...process.env,
-          HOME: fakeHome,
-          PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
-          KAOLA_GATE_MARKER: markerPath,
-          ...extraEnv,
-        },
-        encoding: 'utf8',
-      });
-    }
-
-    try {
-      const malicious = path.join(project, 'plugins', 'aaa', 'scripts',
-        'kaola-workflow-codex-preflight.js');
-      writeProbe(malicious, 'malicious-project');
-      for (const name of ['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea']) {
-        const cacheBase = path.join(fakeHome, '.codex', 'plugins', 'cache',
-          'kaola-marketplace', name);
-        writeProbe(path.join(cacheBase, '4.22.0', 'scripts',
-          'kaola-workflow-codex-preflight.js'), `old-${name}`);
-        writeProbe(path.join(cacheBase, '4.23.1', 'scripts',
-          'kaola-workflow-codex-preflight.js'), `current-${name}`);
-        fs.rmSync(markerPath, { force: true });
-        const run = runGate({ KAOLA_PLUGIN_LIST_JSON: registryJson(name) });
-        assert(run.status === 0,
-          `T19 executable: exact active ${name} metadata passes: ${run.stderr}`);
-        assert(fs.existsSync(markerPath)
-          && fs.readFileSync(markerPath, 'utf8') === `current-${name}`,
-          `T19 executable: ${name} selects current metadata version, never project/old cache`);
-      }
-
-      const cacheRoot = path.join(fakeHome, '.codex', 'plugins', 'cache');
-      const relocatedCache = path.join(fixtureRoot, 'relocated-cache');
-      fs.renameSync(cacheRoot, relocatedCache);
-      fs.symlinkSync(relocatedCache, cacheRoot, 'dir');
-      let refused = runGate({ KAOLA_PLUGIN_LIST_JSON: registryJson('kaola-workflow') });
-      assert(refused.status !== 0 && /profile_preflight_refused:/.test(refused.stderr),
-        'T19 executable: symlinked plugin cache ancestor is refused with typed prefix');
-      fs.rmSync(cacheRoot, { force: true });
-      fs.renameSync(relocatedCache, cacheRoot);
-
-      for (const [label, metadata] of [
-        ['dot marketplace', registryJson('kaola-workflow', '4.23.1', '.')],
-        ['dot-dot marketplace', registryJson('kaola-workflow', '4.23.1', '..')],
-        ['dot version', registryJson('kaola-workflow', '.')],
-        ['dot-dot version', registryJson('kaola-workflow', '..')],
-      ]) {
-        refused = runGate({ KAOLA_PLUGIN_LIST_JSON: metadata });
-        assert(refused.status !== 0 && /profile_preflight_refused:/.test(refused.stderr),
-          `T19 executable: ${label} metadata is refused with typed prefix`);
-      }
-
-      refused = runGate({
-        KAOLA_PLUGIN_LIST_JSON: registryJson('kaola-workflow'),
-        KAOLA_PREFLIGHT_EXIT: '7',
-        KAOLA_PREFLIGHT_OUTPUT: '{"status":"broken"}',
-      });
-      assert(refused.status !== 0 && /profile_preflight_refused:/.test(refused.stderr),
-        'T19 executable: nonzero preflight keeps typed refusal prefix');
-      refused = runGate({
-        KAOLA_PLUGIN_LIST_JSON: registryJson('kaola-workflow'),
-        KAOLA_PREFLIGHT_OUTPUT: 'not-json',
-      });
-      assert(refused.status !== 0 && /profile_preflight_refused: malformed preflight result:/.test(refused.stderr),
-        'T19 executable: malformed preflight JSON keeps typed refusal prefix');
-      refused = runGate({
-        KAOLA_PLUGIN_LIST_JSON: registryJson('kaola-workflow'),
-        KAOLA_PLUGIN_LIST_EXIT: '8',
-      });
-      assert(refused.status !== 0 && /profile_preflight_refused: plugin metadata unavailable:/.test(refused.stderr),
-        'T19 executable: registry command failure keeps typed refusal prefix');
-    } finally {
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
-    }
-  }
 }
 
 // ===========================================================================

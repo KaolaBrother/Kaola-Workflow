@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Codex profile readiness is now proved at install/upgrade time, not on every workflow entry or
+  resume (#926).** `install-codex-agent-profiles.js` remains the authoritative transaction: a
+  successful install still requires valid source profiles, safe managed destinations, completed
+  writes and pruning, manifest and hook installation, and post-install verification. The six Codex
+  `kaola-workflow-next` / `kaola-workflow-finalize` skills no longer invoke or parse the recurring
+  preflight, autofix configuration, or refuse work because Codex-owned persisted bytes report
+  `config_stale` / `managed_block_drift`. `kaola-workflow-codex-preflight.js --doctor` remains an
+  explicit read-only diagnostic with its standalone coverage, and the fixed Sol/medium and
+  Sol/xhigh per-spawn mappings are unchanged. No workflow-init or non-Codex behavior changed.
+
 ## [9.4.1] - 2026-08-02
 
 ### Changed

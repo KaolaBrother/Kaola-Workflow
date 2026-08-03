@@ -1416,7 +1416,8 @@ The `--release-check` step is the gate documented above. `--prepare` bumps the v
 | `edition-sync.js (--check \| --write \| --materialize-kernel)` | materializes the rename-normalized edition copies from the canonical tree and the byte-identical kernel into each edition. `--check` is the read-only verdict |
 | `validate-script-sync.js` | enforces cross-edition parity, including `BYTE_IDENTICAL_GROUPS`, which auto-expands when a new `.toml` is added to the codex tree |
 | `sync-opencode-edition.js` / `sync-kimi-edition.js` | the additive runtime editions; not wired into `npm test` or the forge chains |
-| `kaola-workflow-codex-preflight.js` | verifies the installed Codex plugin, agent profiles and managed hook entries against their sources |
+| `install-codex-agent-profiles.js` | authoritative Codex install/upgrade transaction; validates source profiles and targets, writes and prunes the managed set, records the manifest, installs hooks, and verifies the result before success |
+| `kaola-workflow-codex-preflight.js --doctor` | explicit user-invoked diagnostic for installed plugin, agent-profile, managed-config, manifest, and hook state. Ordinary workflow entry/resume never invokes it or treats its result as a readiness gate |
 
 ## Configuration
 

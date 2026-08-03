@@ -575,14 +575,16 @@ are embedded in `developer_instructions`, where the runtime can verify them with
 unsupported role-schema fields — Codex logs a role file carrying one as a malformed agent role
 definition and ignores it.
 
-Every dispatch-capable Codex workflow skill runs the same fail-closed profile preflight on entry and
-resume. The skill resolves exactly one enabled installed Kaola edition from
-`codex plugin list --json` and runs the preflight bundled at that registry entry's exact
-marketplace/name/version cache path. It never searches a checkout's `plugins/` directory or chooses
-the lexically first cached version. Missing, ambiguous, malformed, symlinked, or non-regular cache
-components stop as `profile_preflight_refused` before any spawn.
+Installation and upgrade are the Codex profile-readiness boundary. The authoritative
+`install-codex-agent-profiles.js` transaction validates source profiles and destinations, writes and
+prunes the managed profile set, records its manifest, installs hooks, and verifies the installed
+result before it exits successfully. Ordinary `kaola-workflow-next` and
+`kaola-workflow-finalize` entry and resume do not re-run that proof, inspect profile/config
+freshness, autofix configuration, or refuse work because persisted bytes drifted.
 
-The preflight validates persisted Codex configuration in effective precedence order: `~/.codex`,
+`kaola-workflow-codex-preflight.js --doctor` remains an explicit, user-invoked diagnostic. It is
+never called automatically by an ordinary workflow session. The doctor validates persisted Codex
+configuration in effective precedence order: `~/.codex`,
 then every trusted `.codex/config.toml` from the Git repository root through the current working
 directory. Higher layers override only the transport/posture fields they actually declare. Profile authority
 remains explicit: a fresh global role install is accepted only when no project layer has a Kaola
@@ -592,7 +594,7 @@ unknown or untrusted projects stop as `project_trust_required` because Codex wou
 `.codex` layer. A trusted project authority must itself be current. The managed block
 must exactly match the bundled role registry, including each role's `config_file`, description, and
 nickname metadata, and any `agents` declaration outside the owned markers is an unsafe conflict.
-The gate reports the persisted config path that supplied an unsafe winning field. It cannot observe
+The doctor reports the persisted config path that supplied an unsafe winning field. It cannot observe
 ephemeral command-line configuration supplied when Codex was launched, including `--profile` or
 `-c`; do not treat a filesystem-only pass as attestation of those per-process overrides.
 
@@ -738,11 +740,11 @@ work in that session (always available and always documented), or — if your Co
 exposes an `ultra` reasoning effort for your model/plan (undocumented as of Codex
 >=0.145.0; check the `/model` picker) — set `model_reasoning_effort = "ultra"` in
 `~/.codex/config.toml`, or pass it per-session (`codex -c model_reasoning_effort=ultra`).
-`kaola-workflow-codex-preflight.js` (both the normal gate and `--doctor`) reports the
-same posture non-fatally once enabled — a `warn:` line, never a red preflight — but
-refuses outright (`codex_multi_agent_v2_required`, exit 7) while `features.multi_agent_v2.enabled`
-itself is absent-or-false. See `docs/api.md` § Codex Harness Scripts for the JSON
-field names.
+The installer and an explicitly invoked `kaola-workflow-codex-preflight.js --doctor` report the
+same posture non-fatally once enabled — a `warn:` line, never a failed install — while the doctor
+returns `codex_multi_agent_v2_required` (exit 7) when `features.multi_agent_v2.enabled` itself is
+absent or false. Ordinary workflow sessions do not invoke the doctor. See `docs/api.md` §
+Installation and edition sync for the diagnostic boundary.
 
 Updating the Codex CLI itself never repairs Kaola-generated `.codex/` state — the
 runtime and the generated role profiles / managed config block are separate
