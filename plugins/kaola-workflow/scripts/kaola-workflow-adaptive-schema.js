@@ -40,33 +40,6 @@ const MISSION_LIST_FILE = 'mission-list.md';
 // The retired frozen-plan artifact. Kept only as a name: the finalize mirror still has to recognise
 // a legacy project folder that carries one, and nothing authors it any more.
 const PLAN_FILE = 'workflow-plan.md';
-// #382/#610: the closed vocabulary for the optional per-node `model` column in `## Nodes`. Two
-// runtime-NEUTRAL reasoning-weight tier tokens (no haiku) — no edition consumes them as literal model
-// names at dispatch: Claude maps `reasoning`→Opus / `standard`→Sonnet on the Agent(model=…) param;
-// Codex uses them only as declarative role/wait metadata while inheriting the parent pair;
-// opencode configures no per-role effort at all — a subagent inherits the session's model and
-// effort natively. `—`/absent ⇒
-// today's role-default metadata resolution. New plans author these neutral tokens. Defined here (the ×4
-// byte-identical drift anchor) so the validator, the executor, and every edition share one list.
-const NODE_MODEL_TIERS = Object.freeze(['reasoning', 'standard']);
-
-// #610: the legacy→neutral tier alias map. Frozen/archived plans keep their BYTES — a legacy `opus`/
-// `sonnet` cell validates at parse (no rewrite, plan_hash unchanged, resume unaffected) by normalizing
-// to the neutral token here. New plans author `reasoning`/`standard` directly. normalizeTier() is the
-// single alias-resolution seam: a tier token is resolved HERE and nowhere else, so one token means one
-// thing to every reader. What this comment used to carry instead was a roster of the consumers, and
-// the roster outlived three of them — the seam is the rule, a caller list is a copy of the truth that
-// stops being true without saying so. A neutral token passes through; a legacy alias resolves; an
-// out-of-vocab token (e.g. `haiku`) or an absent/blank cell → null (the model_invalid / role-default
-// signal — callers guard on `if (node.model)` before treating null as "invalid").
-const TIER_ALIASES = Object.freeze({ opus: 'reasoning', sonnet: 'standard' });
-function normalizeTier(token) {
-  const t = String(token == null ? '' : token).trim().toLowerCase();
-  if (t === '') return null;
-  if (NODE_MODEL_TIERS.indexOf(t) !== -1) return t;   // neutral token passes through
-  if (Object.prototype.hasOwnProperty.call(TIER_ALIASES, t)) return TIER_ALIASES[t]; // legacy alias
-  return null;                                          // out-of-vocab → null
-}
 
 // Codex role profile policy. Every known profile omits runtime-strength keys and inherits the parent
 // pair. The historical standard/reasoning classes remain declarative metadata and wait defaults.
@@ -88,35 +61,6 @@ const CODEX_PINNED_REASONING_ROLES = Object.freeze([
   'adversarial-verifier',
   'synthesizer',
 ]);
-// #405 (#382 deferred half): the node-dispatchable roles for which a `model: opus` tier earns a
-// dedicated Codex `<role>-max` xhigh effort-variant profile. Derived from the #382 planner rubric
-// (agents/workflow-planner.md: assign opus when output quality is bounded by *reasoning depth* —
-// architecture/design, adversarial gates, security review, root-cause of non-obvious bugs) ∩ the
-// Codex per-node reasoning metadata: every base role profile inherits its model and effort. The
-// planner tier controls display and wait budget only; a fresh parent-session proof supplies the pair.
-// Plan-run deliberately omits transient model/effort spawn overrides and relies on inheritance.
-// An absent/blank helper input returns null role-default sentinels for upstream resolution; reaching
-// spawn still null is a typed `codex_tier_unresolved` refusal, never a third subagent tier. #610:
-// normalizeTier() first, so a frozen-plan legacy `opus`/`sonnet` cell resolves to the SAME pair as its
-// neutral tier. No `<role>-max` variant profiles exist; `agent_type` is always the base role.
-function dispatchEffort(model, sessionProof) {
-  const tier = normalizeTier(model);
-  if (tier) {
-    const proof = sessionProof && sessionProof.status === 'fresh' ? sessionProof : null;
-    return {
-      codex_model: proof ? proof.model : null,
-      codex_model_source: 'parent_session',
-      codex_reasoning_effort: proof ? proof.reasoning_effort : null,
-      codex_reasoning_effort_source: 'parent_session',
-    };
-  }
-  return {
-    codex_model: null,
-    codex_model_source: 'role_default',
-    codex_reasoning_effort: null,
-    codex_reasoning_effort_source: 'role_default',
-  };
-}
 
 // Claim identity. Forge-neutral and side-effect-free so every edition hashes the same
 // bytes; filesystem/Git observation lives in the claim script, and this module owns only
@@ -1613,7 +1557,6 @@ module.exports = {
   PLAN_FILE,
   CODEX_PINNED_STANDARD_ROLES,
   CODEX_PINNED_REASONING_ROLES,
-  dispatchEffort,
   isPlainObject,
   canonicalJson,
   sha256Hex,

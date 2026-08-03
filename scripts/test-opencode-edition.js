@@ -766,8 +766,8 @@ for (const target of emittedCommandTargets) {
 // The check stays CASE-SENSITIVE and whole-word, so the B1 exemption — the closed
 // plan `model`-column tier tokens (the lowercase `` `opus` ``/`` `sonnet` ``
 // mentions in the workflow-planner's "Model assignment" guidance and the
-// frozen-plan example row) — is preserved automatically: the canonical
-// NODE_MODEL_TIERS {opus,sonnet} stays the cross-edition internal token
+// frozen-plan example row) — is preserved automatically: the lowercase
+// {opus,sonnet} pair stays the cross-edition internal tier vocabulary
 // (untouched, and never capitalized).
 // ---------------------------------------------------------------------------
 {

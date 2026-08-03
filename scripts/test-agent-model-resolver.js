@@ -35,8 +35,7 @@ assert.deepStrictEqual(
 // The two tables answer different questions, and for most roles they answer it identically:
 //   - DEFAULT_AGENT_MODELS is the Claude DISPATCH TIER — a real `model=` parameter on the spawn.
 //   - CODEX_PINNED_*_ROLES is a Codex DECLARATIVE CLASS — a label and wait-budget default. On Codex
-//     the child inherits the parent session's pair, so the class never selects a model
-//     (dispatchEffort returns codex_model: null for both classes; asserted below).
+//     the child inherits the parent session's pair, so the class never selects a model at all.
 //
 // A role appears here ONLY where those two genuinely disagree, with the reason it disagrees. The
 // entry names the class each runtime assigns, so a silent re-tiering on either side fails.
@@ -76,11 +75,6 @@ for (const [role, model] of Object.entries(resolver.DEFAULT_AGENT_MODELS)) {
     assert.strictEqual(model, pinned ? 'sonnet' : 'opus',
       `${role} declarative tier must match its Codex profile class, or declare the divergence in CLASS_DIVERGENCE`);
   }
-  const dispatch = schema.dispatchEffort(model);
-  assert.strictEqual(dispatch.codex_model, null, `${role} must not select a Codex child model from tier metadata`);
-  assert.strictEqual(dispatch.codex_reasoning_effort, null, `${role} must not select Codex effort from tier metadata`);
-  assert.strictEqual(dispatch.codex_model_source, 'parent_session', `${role} model source is the parent session`);
-  assert.strictEqual(dispatch.codex_reasoning_effort_source, 'parent_session', `${role} effort source is the parent session`);
 }
 
 // INSTALL-INVARIANT TIER. The installer rewrites every installed agent's frontmatter to

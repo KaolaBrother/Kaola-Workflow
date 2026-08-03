@@ -959,7 +959,9 @@ assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-
 // what was decided and when, and rewriting them would falsify the record.
 //
 // Lowercase `opus`/`sonnet` are DELIBERATELY not matched: they are the portable plan `model`-column
-// tier aliases (schema TIER_ALIASES), a closed machine vocabulary, not prose about a vendor.
+// tier tokens, a closed machine vocabulary, not prose about a vendor. Their live carriers are the
+// resolver's DEFAULT_AGENT_MODELS and the agent frontmatter it is pinned against
+// (kaola-workflow-resolve-agent-model.js).
 {
   const VENDOR_MODEL_NOUN_BAN =
     /\b(Opus|Sonnet|Haiku|Gemini|Llama|Mistral|Grok|Qwen|DeepSeek|GPT-[0-9][\w.-]*|GLM-[0-9][\w.-]*)\b/;

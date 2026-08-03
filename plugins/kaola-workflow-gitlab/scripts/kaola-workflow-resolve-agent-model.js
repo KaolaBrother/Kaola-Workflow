@@ -46,10 +46,11 @@ const DEFAULT_AGENT_MODELS = {
 const REASONING_FLOOR_ROLES = new Set(['synthesizer']);
 // #610: the reasoning-class tier is `reasoning` (neutral), whose only legacy alias is `opus`. Accept
 // BOTH so a Claude-default `opus` AND an explicit `reasoning` tier satisfy the floor; `standard`/
-// `sonnet` (or inherit) is non-reasoning → refuse. This mirrors the schema's normalizeTier() alias map
-// (kaola-workflow-adaptive-schema.js is the canonical source), but is inlined DELIBERATELY: the
-// subagent-dispatch-log hook copies THIS resolver standalone (no schema sibling on disk), so a require
-// of the schema would break its isolated invocation — the resolver must stay dependency-free.
+// `sonnet` (or inherit) is non-reasoning → refuse. This is THE alias-resolution seam: a tier token is
+// resolved here and nowhere else. It stays inlined DELIBERATELY — the subagent-dispatch-log hook
+// copies THIS resolver standalone (no schema sibling on disk), so requiring the schema would break its
+// isolated invocation; the resolver must stay dependency-free. DEFAULT_AGENT_MODELS above is the live
+// carrier of the `opus`/`sonnet` tokens this accepts.
 function isReasoningClass(model) {
   const m = String(model || '').trim().toLowerCase();
   return m === 'reasoning' || m === 'opus';
