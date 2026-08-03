@@ -7,8 +7,8 @@
 - **The tier-normalization cluster leaves the ×4 anchor: `dispatchEffort`, `normalizeTier`,
   `NODE_MODEL_TIERS` and `TIER_ALIASES` (#928).** `dispatchEffort` was exported from
   `kaola-workflow-adaptive-schema.js` — the byte-identical cross-edition drift anchor — and its
-  documented consumer had not existed for some time: #451 recorded `kaola-workflow-adaptive-node.js`'s
-  `buildDispatch` spreading it, and both are gone. Its only measured caller repo-wide was its own
+  documented consumer had not existed for some time: issue 451 recorded
+  `kaola-workflow-adaptive-node.js`'s `buildDispatch` spreading it, and both are gone. Its only measured caller repo-wide was its own
   test. Behind it, `normalizeTier` had exactly one call site — inside `dispatchEffort` — and
   `NODE_MODEL_TIERS`/`TIER_ALIASES` were read only inside `normalizeTier`, so the four formed a
   closed loop whose sole entry point was an assertion. The function was also inert in substance: it
@@ -17,8 +17,8 @@
   session proof. **The whole loop is cut, not just the exported head** — stopping at the two named
   symbols would have left the two constants with zero readers, which is the same defect one level
   down. What settled it was that **no prose surface consumes any of it**: `codex_reasoning_effort`
-  appears in no command, agent, SKILL or routing template in any edition, so the #880 precedent that
-  kept `mapTier` alive — shipped documentation naming it as the live mechanism — has no counterpart
+  appears in no command, agent, SKILL or routing template in any edition, so the issue-880 precedent
+  that kept `mapTier` alive — shipped documentation naming it as the live mechanism — has no counterpart
   here and there was no entanglement to record instead. The tier vocabulary itself is unaffected:
   the lowercase `opus`/`sonnet` tokens are still carried by the resolver's `DEFAULT_AGENT_MODELS`
   and the agent frontmatter it is pinned against, and `kaola-workflow-resolve-agent-model.js` —
