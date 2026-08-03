@@ -1,0 +1,237 @@
+D0: .opencode is present and in parity with canonical.
+D0: .opencode-gitlab is present and in parity with canonical.
+D0: .opencode-gitea is present and in parity with canonical.
+FAIL: A12-options[glm(zhipuai-coding-plan)][code-architect]: top-tier role carries the anthropic contract TOP options payload {"thinking":{"type":"enabled","budgetTokens":32000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][code-reviewer]: top-tier role carries the anthropic contract TOP options payload {"thinking":{"type":"enabled","budgetTokens":32000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][planner]: top-tier role carries the anthropic contract TOP options payload {"thinking":{"type":"enabled","budgetTokens":32000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][security-reviewer]: top-tier role carries the anthropic contract TOP options payload {"thinking":{"type":"enabled","budgetTokens":32000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][synthesizer]: top-tier role carries the anthropic contract TOP options payload {"thinking":{"type":"enabled","budgetTokens":32000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][adversarial-verifier]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][build-error-resolver]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][code-explorer]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][doc-updater]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][implementer]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][investigator]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][knowledge-lookup]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][metric-optimizer]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][tdd-guide]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)]: the emitted top-tier and standard-tier payloads are DISTINCT (no silent de-tier) — code-architect=undefined, adversarial-verifier=undefined
+FAIL: A12-options[glm(zhipuai-coding-plan)][adversarial-verifier]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)][build-error-resolver]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)][code-architect]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)][code-explorer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)][code-reviewer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)][doc-updater]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)][implementer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)][investigator]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)][knowledge-lookup]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)][metric-optimizer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)][planner]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)][security-reviewer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)][synthesizer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)][tdd-guide]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[glm(zhipuai-coding-plan)]: NO `provider.*.variants` block survives anywhere in the adaptive config
+FAIL: A12-options[glm(zhipuai-coding-plan)]: NO `variant` key survives anywhere in the adaptive config
+FAIL: A12-options[glm(zhipuai-coding-plan)]: the "opencode applies them from this file" mechanism claim is gone — it was false when written
+FAIL: A12-options[glm(zhipuai-coding-plan)]: the "SWITCHING YOUR OPENCODE MODEL?" regenerate warning is retired — with the contract resolved per call there is nothing left to regenerate
+FAIL: A12-options[anthropic][code-architect]: top-tier role carries the anthropic contract TOP options payload {"thinking":{"type":"enabled","budgetTokens":32000}} — got undefined
+FAIL: A12-options[anthropic][code-reviewer]: top-tier role carries the anthropic contract TOP options payload {"thinking":{"type":"enabled","budgetTokens":32000}} — got undefined
+FAIL: A12-options[anthropic][planner]: top-tier role carries the anthropic contract TOP options payload {"thinking":{"type":"enabled","budgetTokens":32000}} — got undefined
+FAIL: A12-options[anthropic][security-reviewer]: top-tier role carries the anthropic contract TOP options payload {"thinking":{"type":"enabled","budgetTokens":32000}} — got undefined
+FAIL: A12-options[anthropic][synthesizer]: top-tier role carries the anthropic contract TOP options payload {"thinking":{"type":"enabled","budgetTokens":32000}} — got undefined
+FAIL: A12-options[anthropic][adversarial-verifier]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[anthropic][build-error-resolver]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[anthropic][code-explorer]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[anthropic][doc-updater]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[anthropic][implementer]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[anthropic][investigator]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[anthropic][knowledge-lookup]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[anthropic][metric-optimizer]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[anthropic][tdd-guide]: standard-tier role carries the anthropic contract SECOND options payload {"thinking":{"type":"enabled","budgetTokens":16000}} — got undefined
+FAIL: A12-options[anthropic]: the emitted top-tier and standard-tier payloads are DISTINCT (no silent de-tier) — code-architect=undefined, adversarial-verifier=undefined
+FAIL: A12-options[anthropic][adversarial-verifier]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic][build-error-resolver]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic][code-architect]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic][code-explorer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic][code-reviewer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic][doc-updater]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic][implementer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic][investigator]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic][knowledge-lookup]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic][metric-optimizer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic][planner]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic][security-reviewer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic][synthesizer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic][tdd-guide]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[anthropic]: NO `provider.*.variants` block survives anywhere in the adaptive config
+FAIL: A12-options[anthropic]: NO `variant` key survives anywhere in the adaptive config
+FAIL: A12-options[anthropic]: the "opencode applies them from this file" mechanism claim is gone — it was false when written
+FAIL: A12-options[anthropic]: the "SWITCHING YOUR OPENCODE MODEL?" regenerate warning is retired — with the contract resolved per call there is nothing left to regenerate
+FAIL: A12-options[openai][code-architect]: top-tier role carries the openai contract TOP options payload {"reasoningEffort":"xhigh"} — got undefined
+FAIL: A12-options[openai][code-reviewer]: top-tier role carries the openai contract TOP options payload {"reasoningEffort":"xhigh"} — got undefined
+FAIL: A12-options[openai][planner]: top-tier role carries the openai contract TOP options payload {"reasoningEffort":"xhigh"} — got undefined
+FAIL: A12-options[openai][security-reviewer]: top-tier role carries the openai contract TOP options payload {"reasoningEffort":"xhigh"} — got undefined
+FAIL: A12-options[openai][synthesizer]: top-tier role carries the openai contract TOP options payload {"reasoningEffort":"xhigh"} — got undefined
+FAIL: A12-options[openai][adversarial-verifier]: standard-tier role carries the openai contract SECOND options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[openai][build-error-resolver]: standard-tier role carries the openai contract SECOND options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[openai][code-explorer]: standard-tier role carries the openai contract SECOND options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[openai][doc-updater]: standard-tier role carries the openai contract SECOND options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[openai][implementer]: standard-tier role carries the openai contract SECOND options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[openai][investigator]: standard-tier role carries the openai contract SECOND options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[openai][knowledge-lookup]: standard-tier role carries the openai contract SECOND options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[openai][metric-optimizer]: standard-tier role carries the openai contract SECOND options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[openai][tdd-guide]: standard-tier role carries the openai contract SECOND options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[openai]: the emitted top-tier and standard-tier payloads are DISTINCT (no silent de-tier) — code-architect=undefined, adversarial-verifier=undefined
+FAIL: A12-options[openai][adversarial-verifier]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai][build-error-resolver]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai][code-architect]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai][code-explorer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai][code-reviewer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai][doc-updater]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai][implementer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai][investigator]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai][knowledge-lookup]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai][metric-optimizer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai][planner]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai][security-reviewer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai][synthesizer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai][tdd-guide]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[openai]: NO `provider.*.variants` block survives anywhere in the adaptive config
+FAIL: A12-options[openai]: NO `variant` key survives anywhere in the adaptive config
+FAIL: A12-options[openai]: the "opencode applies them from this file" mechanism claim is gone — it was false when written
+FAIL: A12-options[openai]: the "SWITCHING YOUR OPENCODE MODEL?" regenerate warning is retired — with the contract resolved per call there is nothing left to regenerate
+FAIL: A12-options[google][code-architect]: top-tier role carries the google contract TOP options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[google][code-reviewer]: top-tier role carries the google contract TOP options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[google][planner]: top-tier role carries the google contract TOP options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[google][security-reviewer]: top-tier role carries the google contract TOP options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[google][synthesizer]: top-tier role carries the google contract TOP options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[google][adversarial-verifier]: standard-tier role carries the google contract SECOND options payload {"reasoningEffort":"low"} — got undefined
+FAIL: A12-options[google][build-error-resolver]: standard-tier role carries the google contract SECOND options payload {"reasoningEffort":"low"} — got undefined
+FAIL: A12-options[google][code-explorer]: standard-tier role carries the google contract SECOND options payload {"reasoningEffort":"low"} — got undefined
+FAIL: A12-options[google][doc-updater]: standard-tier role carries the google contract SECOND options payload {"reasoningEffort":"low"} — got undefined
+FAIL: A12-options[google][implementer]: standard-tier role carries the google contract SECOND options payload {"reasoningEffort":"low"} — got undefined
+FAIL: A12-options[google][investigator]: standard-tier role carries the google contract SECOND options payload {"reasoningEffort":"low"} — got undefined
+FAIL: A12-options[google][knowledge-lookup]: standard-tier role carries the google contract SECOND options payload {"reasoningEffort":"low"} — got undefined
+FAIL: A12-options[google][metric-optimizer]: standard-tier role carries the google contract SECOND options payload {"reasoningEffort":"low"} — got undefined
+FAIL: A12-options[google][tdd-guide]: standard-tier role carries the google contract SECOND options payload {"reasoningEffort":"low"} — got undefined
+FAIL: A12-options[google]: the emitted top-tier and standard-tier payloads are DISTINCT (no silent de-tier) — code-architect=undefined, adversarial-verifier=undefined
+FAIL: A12-options[google][adversarial-verifier]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google][build-error-resolver]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google][code-architect]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google][code-explorer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google][code-reviewer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google][doc-updater]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google][implementer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google][investigator]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google][knowledge-lookup]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google][metric-optimizer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google][planner]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google][security-reviewer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google][synthesizer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google][tdd-guide]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[google]: NO `provider.*.variants` block survives anywhere in the adaptive config
+FAIL: A12-options[google]: NO `variant` key survives anywhere in the adaptive config
+FAIL: A12-options[google]: the "opencode applies them from this file" mechanism claim is gone — it was false when written
+FAIL: A12-options[google]: the "SWITCHING YOUR OPENCODE MODEL?" regenerate warning is retired — with the contract resolved per call there is nothing left to regenerate
+FAIL: A12-options[unknown(acme)][code-architect]: top-tier role carries the default contract TOP options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[unknown(acme)][code-reviewer]: top-tier role carries the default contract TOP options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[unknown(acme)][planner]: top-tier role carries the default contract TOP options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[unknown(acme)][security-reviewer]: top-tier role carries the default contract TOP options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[unknown(acme)][synthesizer]: top-tier role carries the default contract TOP options payload {"reasoningEffort":"high"} — got undefined
+FAIL: A12-options[unknown(acme)][adversarial-verifier]: standard-tier role carries the default contract SECOND options payload {"reasoningEffort":"medium"} — got undefined
+FAIL: A12-options[unknown(acme)][build-error-resolver]: standard-tier role carries the default contract SECOND options payload {"reasoningEffort":"medium"} — got undefined
+FAIL: A12-options[unknown(acme)][code-explorer]: standard-tier role carries the default contract SECOND options payload {"reasoningEffort":"medium"} — got undefined
+FAIL: A12-options[unknown(acme)][doc-updater]: standard-tier role carries the default contract SECOND options payload {"reasoningEffort":"medium"} — got undefined
+FAIL: A12-options[unknown(acme)][implementer]: standard-tier role carries the default contract SECOND options payload {"reasoningEffort":"medium"} — got undefined
+FAIL: A12-options[unknown(acme)][investigator]: standard-tier role carries the default contract SECOND options payload {"reasoningEffort":"medium"} — got undefined
+FAIL: A12-options[unknown(acme)][knowledge-lookup]: standard-tier role carries the default contract SECOND options payload {"reasoningEffort":"medium"} — got undefined
+FAIL: A12-options[unknown(acme)][metric-optimizer]: standard-tier role carries the default contract SECOND options payload {"reasoningEffort":"medium"} — got undefined
+FAIL: A12-options[unknown(acme)][tdd-guide]: standard-tier role carries the default contract SECOND options payload {"reasoningEffort":"medium"} — got undefined
+FAIL: A12-options[unknown(acme)]: the emitted top-tier and standard-tier payloads are DISTINCT (no silent de-tier) — code-architect=undefined, adversarial-verifier=undefined
+FAIL: A12-options[unknown(acme)][adversarial-verifier]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)][build-error-resolver]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)][code-architect]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)][code-explorer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)][code-reviewer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)][doc-updater]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)][implementer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)][investigator]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)][knowledge-lookup]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)][metric-optimizer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)][planner]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)][security-reviewer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)][synthesizer]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)][tdd-guide]: NO `variant` key survives on the role — opencode never reads it for a role that pins no model, and a dead key that reads as configuration is what hid this failure
+FAIL: A12-options[unknown(acme)]: NO `provider.*.variants` block survives anywhere in the adaptive config
+FAIL: A12-options[unknown(acme)]: NO `variant` key survives anywhere in the adaptive config
+FAIL: A12-options[unknown(acme)]: the "opencode applies them from this file" mechanism claim is gone — it was false when written
+FAIL: A12-options[unknown(acme)]: the "SWITCHING YOUR OPENCODE MODEL?" regenerate warning is retired — with the contract resolved per call there is nothing left to regenerate
+FAIL: A12-options(subagent): two dispatch-only roles (code-reviewer top, tdd-guide standard) carry DIFFERENT payloads on the same inherited model — the property the live tokens_reasoning measurement has to confirm end to end
+FAIL: A26-sidecar: a global install writes the generated tier sidecar at <config>/kaola-workflow/effort-tiers.json — the plugin has no other way to know which role is on which tier
+FAIL: A26-sidecar: the tier map covers EXACTLY the 14 canonical roles — got []
+FAIL: A26-sidecar: the sidecar's `top` set === topTierRoles() (single-sourced) — got [] vs [code-architect, code-reviewer, planner, security-reviewer, synthesizer]
+FAIL: A26-sidecar: the sidecar's `second` set === standardTierRoles() (single-sourced) — got [] vs [adversarial-verifier, build-error-resolver, code-explorer, doc-updater, implementer, investigator, knowledge-lookup, metric-optimizer, tdd-guide]
+FAIL: A26-hook: the plugin registers a `chat.params` hook — without it the tier is only ever the sync-time payload, and a session that moved to another contract is sent the wrong one
+FAIL: A26-hook: the SAME tier resolves to a DIFFERENT payload for two different providers — this is the entire reason Layer 2 exists over Layer 1 (anthropic=undefined, openai=undefined)
+FAIL: A26-hook[top-anthropic]: top tier on the anthropic contract → thinking budget 32000 — expected {"thinking":{"type":"enabled","budgetTokens":32000}}, got undefined
+FAIL: A26-hook[top-openai]: top tier on the openai contract → reasoningEffort xhigh — expected {"reasoningEffort":"xhigh"}, got undefined
+FAIL: A26-hook[top-google]: top tier on the google contract → reasoningEffort high — expected {"reasoningEffort":"high"}, got undefined
+FAIL: A26-hook[top-unknown]: top tier on an unrecognized provider → safe default contract, NO de-tier — expected {"reasoningEffort":"high"}, got undefined
+FAIL: A26-hook[top-glm]: GLM via z.ai is served under the ANTHROPIC contract → thinking budget, never reasoningEffort — expected {"thinking":{"type":"enabled","budgetTokens":32000}}, got undefined
+FAIL: A26-hook[second-anthropic]: standard tier on the anthropic contract → thinking budget 16000 — expected {"thinking":{"type":"enabled","budgetTokens":16000}}, got undefined
+FAIL: A26-hook[second-openai]: standard tier on the openai contract → reasoningEffort high — expected {"reasoningEffort":"high"}, got undefined
+FAIL: A26-hook[second-google]: standard tier on the google contract → reasoningEffort low — expected {"reasoningEffort":"low"}, got undefined
+FAIL: A26-hook[second-unknown]: standard tier on an unrecognized provider → default contract medium — expected {"reasoningEffort":"medium"}, got undefined
+FAIL: A26-hook[second-glm]: GLM standard tier → thinking budget 16000 — expected {"thinking":{"type":"enabled","budgetTokens":16000}}, got undefined
+FAIL: A26-hook: two DISPATCH-ONLY roles on the same inherited model resolve to DIFFERENT payloads (code-reviewer=undefined, tdd-guide=undefined)
+FAIL: A26-hook[sub-top]: code-reviewer is a top-tier dispatch-only role — expected {"thinking":{"type":"enabled","budgetTokens":32000}}, got undefined
+FAIL: A26-hook[sub-second]: tdd-guide is a standard-tier dispatch-only role — expected {"thinking":{"type":"enabled","budgetTokens":16000}}, got undefined
+FAIL: A26-hook[preserve-unrelated]: an unrelated option already in the payload survives alongside the tier — expected {"__kwUnrelated":"keep","reasoningEffort":"xhigh"}, got undefined
+FAIL: A26-hook[stale-anthropic-on-openai]: a thinking budget left over from the previously inherited model must NOT still be sent to an OpenAI-contract call — Layer 2 exists to remove the wrong-contract payload, not to add the right one beside it. Got undefined
+FAIL: A26-hook[stale-openai-on-anthropic]: a leftover reasoningEffort must NOT still be sent to an Anthropic-contract call. Got undefined
+FAIL: A26-hook[stale-*]: clearing the other contract's knob must not clear unrelated options — by the time this hook runs, output.options already holds opencode's own provider and model options
+FAIL: A26-hook[unknown-agent]: no tier resolves for this agent, so output.options is left UNTOUCHED — expected {"__kwUnrelated":"keep"}, got undefined
+FAIL: A26-hook[primary-build-agent]: no tier resolves for this agent, so output.options is left UNTOUCHED — expected {"__kwUnrelated":"keep"}, got undefined
+FAIL: A26-hook[no-agent]: no tier resolves for this agent, so output.options is left UNTOUCHED — expected {"__kwUnrelated":"keep"}, got undefined
+FAIL: A26-hook[no-provider]: no provider resolves, so no contract does either — guessing a payload here would send a possibly wrong-contract knob to the real model — expected {"__kwUnrelated":"keep"}, got undefined
+FAIL: A26-hook[provider-without-id]: no provider resolves, so no contract does either — guessing a payload here would send a possibly wrong-contract knob to the real model — expected {"__kwUnrelated":"keep"}, got undefined
+FAIL: A26-hook[top-anthropic]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[top-openai]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[top-google]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[top-unknown]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[top-glm]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[second-anthropic]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[second-openai]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[second-google]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[second-unknown]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[second-glm]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[sub-top]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[sub-second]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[preserve-unrelated]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[stale-anthropic-on-openai]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[stale-openai-on-anthropic]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[unknown-agent]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[primary-build-agent]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[no-agent]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[no-provider]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[provider-without-id]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[agent-as-object]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[empty-input]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-hook[options-absent]: the chat.params hook must NOT throw — opencode does not catch a throwing hook the way it catches a failing plugin load. Threw: <case did not run>
+FAIL: A26-degraded[absent][degraded-resolvable]: the hook must NOT throw with a absent sidecar — threw: <case did not run>
+FAIL: A26-degraded[absent][degraded-resolvable]: with a absent sidecar no tier resolves, so output.options is left UNTOUCHED — got undefined
+FAIL: A26-degraded[absent][degraded-unknown-agent]: the hook must NOT throw with a absent sidecar — threw: <case did not run>
+FAIL: A26-degraded[absent][degraded-unknown-agent]: with a absent sidecar no tier resolves, so output.options is left UNTOUCHED — got undefined
+FAIL: A26-degraded[malformed][degraded-resolvable]: the hook must NOT throw with a malformed sidecar — threw: <case did not run>
+FAIL: A26-degraded[malformed][degraded-resolvable]: with a malformed sidecar no tier resolves, so output.options is left UNTOUCHED — got undefined
+FAIL: A26-degraded[malformed][degraded-unknown-agent]: the hook must NOT throw with a malformed sidecar — threw: <case did not run>
+FAIL: A26-degraded[malformed][degraded-unknown-agent]: with a malformed sidecar no tier resolves, so output.options is left UNTOUCHED — got undefined
+FAIL: A27: the drift report names the EXTRA role "contractor" present in the existing opencode.json but not emitted by the generator
+FAIL: A27: the drift report names the EXTRA role "issue-scout" present in the existing opencode.json but not emitted by the generator
+FAIL: A27: the drift report names the EXTRA role "workflow-planner" present in the existing opencode.json but not emitted by the generator
+FAIL: A27: the drift report names the MISSING role "implementer" the generator emits but the existing opencode.json lacks
+FAIL: A27: the drift report names the MISSING role "investigator" the generator emits but the existing opencode.json lacks
+FAIL: A27: the drift report names the MISSING role "metric-optimizer" the generator emits but the existing opencode.json lacks
+FAIL: A27: the drift report names an explicit opt-in flag that regenerates the config — a report that states the drift but not how to act on it leaves the user with nothing to do. Flags found in output: []
+
+opencode-edition test FAILED: 232 failure(s), 563 passed. [drift-check: 3 tree(s) in parity (.opencode, .opencode-gitlab, .opencode-gitea)]
