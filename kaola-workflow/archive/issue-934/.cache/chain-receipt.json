@@ -1,0 +1,263 @@
+{
+  "headSha": "ecd8eb9a790cb9e1d93d287b0b0b1a274e797535",
+  "workTreeHash": "clean",
+  "codeTreeHash": "14a282bd442e01e1a52c28e476ba85253f9cf1610192a9101a612c84ccfb56ae",
+  "validationTestConsumes": [],
+  "startedAt": "2026-08-04T06:07:13.333Z",
+  "completedAt": "2026-08-04T06:14:19.705Z",
+  "source": "npm-default",
+  "scope": {
+    "decision": "claude-only",
+    "reason": "non_edition_diff",
+    "base": "ecd8eb9a790cb9e1d93d287b0b0b1a274e797535",
+    "touchedEditionPaths": [],
+    "changedFileCount": 0,
+    "chains": [
+      "claude"
+    ]
+  },
+  "preamble": {
+    "steps": []
+  },
+  "chains": [
+    {
+      "name": "claude",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:claude",
+      "duration_ms": 424407,
+      "accepted_red": false,
+      "accepted_red_issue": null,
+      "attempts": 1,
+      "retried_transient": false,
+      "timed_out": false,
+      "signal": null,
+      "steps": [
+        {
+          "command": "node scripts/edition-sync.js --materialize-kernel",
+          "duration_ms": 68,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/validate-script-sync.js",
+          "duration_ms": 136,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-validate-script-sync.js",
+          "duration_ms": 298,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/validate-vendored-agents.js",
+          "duration_ms": 77,
+          "exitCode": 0
+        },
+        {
+          "command": "bash -n install.sh uninstall.sh install-all.sh",
+          "duration_ms": 15,
+          "exitCode": 0
+        },
+        {
+          "command": "node -e \"JSON.parse(require('fs').readFileSync('package.json', 'utf8'))\"",
+          "duration_ms": 61,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-agent-model-resolver.js",
+          "duration_ms": 379,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-install-model-rendering.js",
+          "duration_ms": 42657,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-install-upgrade-rewrite.js",
+          "duration_ms": 8708,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-install-manifest-single-source.js",
+          "duration_ms": 605,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-validation-runner.js",
+          "duration_ms": 9286,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-install-adaptive-config.js",
+          "duration_ms": 13764,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-uninstall-forge-branches.js",
+          "duration_ms": 4208,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-probe-memo.js",
+          "duration_ms": 180,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-oracle-kernel.js",
+          "duration_ms": 570,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-kernel-conformance.js",
+          "duration_ms": 209384,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-outcome-recorder.js",
+          "duration_ms": 1046,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-finalize-door.js",
+          "duration_ms": 31856,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-suite-registration.js",
+          "duration_ms": 56,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-bundle-state.js",
+          "duration_ms": 291,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-bundle-claim.js",
+          "duration_ms": 21902,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-forge-bundle-lane.js",
+          "duration_ms": 1954,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-bundle-finalize.js",
+          "duration_ms": 12478,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-parallel.js --self-test",
+          "duration_ms": 200,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-edition-sync.js",
+          "duration_ms": 70,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-release-surface-drift.js",
+          "duration_ms": 63,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-release.js",
+          "duration_ms": 28879,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-gap-sweep.js",
+          "duration_ms": 2513,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-ledger-compare.js",
+          "duration_ms": 587,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-validation-allowband.js",
+          "duration_ms": 60,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-route-reachability.js",
+          "duration_ms": 138,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-agent-profile-parity.js",
+          "duration_ms": 371,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/validate-workflow-contracts.js",
+          "duration_ms": 320,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-bash-block-guards.js",
+          "duration_ms": 267,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-spawn-classification.js",
+          "duration_ms": 110,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/simulate-workflow-walkthrough.js --shard auto/12",
+          "duration_ms": 6824,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-forge-finalize-findings.js",
+          "duration_ms": 4150,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-forge-archive-scoping.js",
+          "duration_ms": 4383,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-forge-claim-rollback-scoping.js",
+          "duration_ms": 3930,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-forge-claim-reserved-project.js",
+          "duration_ms": 3494,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-forge-roadmap-rules.js",
+          "duration_ms": 93,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-active-folders-field-parity.js",
+          "duration_ms": 65,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/generate-routing-surfaces.js --check",
+          "duration_ms": 60,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-generate-routing-surfaces.js",
+          "duration_ms": 945,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-install-all.js",
+          "duration_ms": 6906,
+          "exitCode": 0
+        }
+      ]
+    }
+  ]
+}
