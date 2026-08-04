@@ -1,0 +1,14 @@
+# Run gaps — hand-recorded
+
+Defects and scope boundaries this run discovered that the scanner cannot observe, because they were
+found by adversarial reading rather than left as an artifact in `.cache/`.
+
+gap: claim-side-rollback-destroys-reserved-dir — adv-930 R3, CONFIRMED and pre-existing: `claimProject` treats an existing `kaola-workflow/.roadmap` with no `workflow-state.md` as an orphaned stateless dir and falls through to reclaim, and its transaction rollback at `claim.js:1263` is `fs.rmSync(dir, {recursive: true, force: true})` over `projectDir(root, project)`. A throw from `persistSelectionRecord` or `writeState` therefore deletes the entire `kaola-workflow/.roadmap/` tree. This is the same destruction #930 exists to prevent, reached through the claim side rather than the archive side, and #930's owner ruling scoped the claim side out deliberately.
+
+gap: sink-collision-undisclosed-under-keep-worktree — #931's disclosure fires only where `receipt.archive_dest` is set, i.e. where the sink itself archived. Under `--keep-worktree` `cmdFinalize` performs the archive and the sink has no destination, so a collision produced there is not disclosed. The observed 2026-08-03 incident is the sole-archiver shape and IS covered; this shape has never been observed. Closing it means writing `claim.js`.
+
+gap: sink-stage-skip-coupling-fails-silently-toward-over-report — `realArchiveAtPlainPath` decides "is this a real archive" by excluding `SINK_STAGE_SKIP` plus the atomic writer's temp form. Verified exhaustively to be exactly the set of files the sink writes into a project `.cache/` today, and read rather than restated so the two uses cannot drift. The day a third journal is added, the failure is silent and toward over-reporting — the new journal is not skipped, the skeleton reads as a real archive, and the phantom disclosure returns. Mitigated by a comment at the predicate, not by a mechanism.
+
+gap: archive-guard-does-not-cover-exports — #930's predicate covers dot-prefixed names and `archive` in any casing, not `exports` from `NON_PROJECT_FOLDERS`. Driven both ways by adv-930 R4: with or without a pre-existing `archive/exports/`, nothing is destroyed on baseline or candidate — a collision simply suffixes and the salvage patch survives byte-for-byte. Covering it would mean settling a live disagreement between two production sites with no failure forcing it.
+
+gap: crash-window-drops-a-true-collision-disclosure — adv-931 R3, reasoned not driven: `receipt.archive_dest` is set in memory and only reaches disk at `stepDone('finalize')`. A process death in that window leaves a persisted receipt with no `archive_dest`, so a run that really did collide loses its disclosure on resume. Independent of which discrimination route was taken; closing it means persisting the destination across that window.
