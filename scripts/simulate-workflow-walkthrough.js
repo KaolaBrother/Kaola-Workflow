@@ -2519,11 +2519,14 @@ function testArchiveCommitHonestUnderGitignore832() {
 // checkouts lose the folder AND the deletion is committed to the feature branch — the branch the
 // sink merges to main.
 //
-// The claim side is deliberately unchanged: a reserved directory may still be claimed. What is
-// pinned here is the ARCHIVE side, and only as a RESULT — refusing, resolving the name, or
-// anything else all satisfy it. The reserved directory's own content must still be on disk in
-// every checkout and still on the feature branch, and no run may report a successful archive it
-// did not perform.
+// The claim side has moved since, in one half of it. #932 scoped the claim's ROLLBACK to what the
+// transaction created, so a FAILED claim no longer destroys the directory it adopted. The other
+// half stands: the claim still ADOPTS a reserved name and SUCCEEDS at exit 0, writing
+// workflow-state.md and .cache/ into kaola-workflow/.roadmap/ beside the sources — that is #933,
+// and this scenario does not pin it. What IS pinned here is the ARCHIVE side, and only as a
+// RESULT — refusing, resolving the name, or anything else all satisfy it. The reserved directory's
+// own content must still be on disk in every checkout and still on the feature branch, and no run
+// may report a successful archive it did not perform.
 //
 // Four names run through ONE predicate, and NONE of them is a control: every one of them could be
 // destroyed. `archive` in particular is not the safe sibling it looks like — whether it survived
@@ -2793,6 +2796,249 @@ function testArchiveNeverRelocatesReservedDir930() {
   // subject and is skipped above with a reason. A silent skip is what this line prevents.
   console.log('testArchiveNeverRelocatesReservedDir930: PASSED (' + ranCases + '/' + CASES.length
     + ' names x 2 lanes)');
+}
+
+// ---------------------------------------------------------------------------
+// #932 — a FAILED claim must not delete anything the claim did not create.
+//
+// The claim's mkdir is non-recursive, and its EEXIST arm ADOPTS any directory that carries no
+// workflow-state.md — "orphaned stateless dir (crash between mkdir and writeState) — fall through
+// and reclaim". Nothing in that arm distinguishes a folder this claim just created from one that
+// was already on disk with content in it, and the transaction's rollback is a single unscoped
+// `fs.rmSync(dir, { recursive: true, force: true })`. So a claim that throws anywhere between
+// adoption and the completed write deletes the WHOLE adopted tree.
+//
+// `workflow_project:` is adopted verbatim and filtered only by isSafeName, so `.roadmap` names the
+// roadmap SOURCES: _rules.md, .gitkeep and every unrelated issue-*.md go with the folder, leaving
+// the repository with no backlog at all. #930 closed this on the ARCHIVE side and said so
+// explicitly — "the claim side is deliberately unchanged" — which is the side pinned here.
+//
+// Pinned as a RESULT and nothing narrower: scoping the rollback to what was created, refusing the
+// name, resolving it elsewhere, or writing the transaction so it cannot fail after adoption all
+// satisfy this equally. Nothing below reads an exit code, a status token, a guard name or an error
+// string — a test that matched one of those would go green on a fix that matched its shape without
+// preserving a byte.
+//
+// THE THROW IS FORCED FROM OUTSIDE, with no production seam: `<project>/.cache` is planted as a
+// regular FILE, so the transaction's first step — the selection record's recursive
+// `mkdir <project>/.cache/origin` — gets ENOTDIR. That is the transaction's own documented failure
+// mode ("A throw here lands in the rollback below"), and it leaves every directory PERMISSION
+// untouched, so the rollback that runs next is fully able to delete and the survival being asserted
+// is the code's choice rather than the filesystem's. A chmod would have blocked the rollback too
+// and made this a test that passes for the wrong reason.
+//
+// TWO names, and the second is not a variant of the first. `.roadmap` is the issue's own falsifier.
+// `issue-<N>` is the SAME line reached under an ordinary project name, where the adopted directory
+// is a crash-orphan someone has since put work into — the shape the bundle lane can only ever have,
+// since its project name is a computed `bundle-<targets>` literal. A guard that only knows reserved
+// names answers one of these and not the other.
+//
+// FOREIGN vs the run's own: only content that PREDATES the claim is pinned. The run's own roadmap
+// source is planted separately and left unpinned.
+//
+// NO LIVENESS CONTROL HERE, and that is a limit worth naming rather than papering over. Survival
+// proves nothing if the fixture stopped reaching the claim at all — but on this lane every
+// observable that would prove the run reached the adoption is one an ALLOWED fix removes: refusing
+// the name and resolving it elsewhere both mean there is no adoption to observe, and the scalar
+// lane rethrows rather than emitting an envelope, so there is not even a project name to read back.
+// The falsifiable liveness evidence lives where the project name is a literal no fix can change:
+// `Test (8d)/#932` in scripts/test-bundle-claim.js. `testClaimReclaimsStatelessOrphanDir` is the
+// standing pin that this claim path reaches a stateless directory at all.
+// ---------------------------------------------------------------------------
+function testClaimNeverDeletesWhatItDidNotCreate932() {
+  const CASES = [
+    {
+      // The reserved directory, reached exactly as #930 describes: through `workflow_project:`.
+      project: '.roadmap',
+      issue: 9320,
+      foreign: {
+        '.gitkeep': '',
+        '_rules.md': '# Project rules\n\nEvery run reads this file.\n',
+        'issue-9321.md': 'issue: #9321\ntitle: unrelated backlog item\nstatus: open\nworkflow_project: —\nnext_step: ready\n',
+      },
+    },
+    {
+      // An ORDINARY project name. Same adoption, same rollback, no reserved name anywhere.
+      project: 'issue-9322',
+      issue: 9322,
+      foreign: {
+        'NOTES.md': 'hand-written notes the crashed run left behind\n',
+        'notes/evidence.txt': 'nested evidence a successor still needs\n',
+      },
+    },
+  ];
+
+  // Everything under a directory, as a sorted list of relative paths.
+  const listTree = dir => {
+    const out = [];
+    (function walk(d, rel) {
+      let entries;
+      try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
+      for (const e of entries) {
+        const r = rel ? rel + '/' + e.name : e.name;
+        if (e.isDirectory()) walk(path.join(d, e.name), r); else out.push(r);
+      }
+    })(dir, '');
+    return out.sort();
+  };
+
+  for (const c of CASES) {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-claim-adopts-932-')));
+    try {
+      initGitRepo(tmp);
+
+      // The run's OWN roadmap source, carrying the project name this claim will resolve to.
+      // Written by hand rather than through plantRoadmapIssue: that helper hard-codes
+      // `workflow_project: —`, and `field()` reads the FIRST match, so an appended line loses.
+      const roadmapDir = path.join(tmp, 'kaola-workflow', '.roadmap');
+      fs.mkdirSync(roadmapDir, { recursive: true });
+      fs.writeFileSync(path.join(roadmapDir, 'issue-' + c.issue + '.md'), [
+        'issue: #' + c.issue,
+        'title: the claimed issue',
+        'status: open',
+        'workflow_project: ' + c.project,
+        'next_step: ready',
+        ''
+      ].join('\n'));
+
+      // The foreign content, inside the directory the claim is about to ADOPT.
+      const dir = path.join(tmp, 'kaola-workflow', c.project);
+      for (const [rel, body] of Object.entries(c.foreign)) {
+        const f = path.join(dir, rel);
+        fs.mkdirSync(path.dirname(f), { recursive: true });
+        fs.writeFileSync(f, body);
+      }
+      G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+      G.git(tmp, ['commit', '-m', 'seed content the claim did not create'], { encoding: 'utf8' });
+
+      // The forced throw (see the header): a FILE where the transaction needs a directory.
+      fs.writeFileSync(path.join(dir, '.cache'), 'not a directory\n');
+
+      const before = listTree(dir);
+      const result = runNode(claimScript, ['startup', '--target-issue', String(c.issue)], tmp);
+      const where = '\nexit: ' + result.status
+        + '\nstdout: ' + String(result.stdout).trim()
+        + '\nstderr: ' + String(result.stderr).trim();
+
+      // (1) THE DEMANDED RESULT: the directory and every file that predates the claim are still
+      // there, byte for byte.
+      assert(fs.existsSync(dir),
+        '#932 ' + c.project + ': kaola-workflow/' + c.project + ' must still exist after a claim '
+        + 'that failed — the claim did not create it' + where);
+      for (const [rel, body] of Object.entries(c.foreign)) {
+        const f = path.join(dir, rel);
+        assert(fs.existsSync(f),
+          '#932 ' + c.project + ': the failed claim deleted kaola-workflow/' + c.project + '/' + rel
+          + ' — a file it did not create' + where);
+        assert(read(f) === body,
+          '#932 ' + c.project + ': the failed claim altered kaola-workflow/' + c.project + '/' + rel + where);
+      }
+
+      // (2) THE DIRECTORY AS A SET. Presence-and-bytes cannot see a file ADDED, so a claim could
+      // still leave durable state inside a folder it went on to disown. In this fixture the
+      // transaction CANNOT complete — `.cache` is a file, so every path needing `.cache/origin`
+      // fails — which is what makes an empty added-set the right expectation here, rather than a
+      // bound on what a claim that DOES complete may write.
+      const added = listTree(dir).filter(p => !before.includes(p));
+      assert(added.length === 0,
+        '#932 ' + c.project + ': the claim left new entries inside kaola-workflow/' + c.project
+        + '/ without completing: ' + JSON.stringify(added) + where);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+  console.log('testClaimNeverDeletesWhatItDidNotCreate932: PASSED (' + CASES.length + ' names)');
+}
+
+// ---------------------------------------------------------------------------
+// #932 — the SAME rollback, over a directory the claim CREATED and one it ADOPTED.
+//
+// The PAIR is the point. The test above says foreign content survives; on its own that is
+// satisfiable by a rollback that stops cleaning up at all, which only trades lost data for orphaned
+// folders. So this one holds the fault, the entry point and the code path fixed and varies exactly
+// ONE thing — whether the project directory was already on disk — and requires the two outcomes to
+// differ: what the claim MADE is removed, what it FOUND is not.
+//
+// ONE fault for both legs, with nothing planted on the filesystem. `--codex-dispatch-mode` is a
+// registered value flag that `cmdClaim` hands straight to `claimProject` (only `cmdStartup` strips
+// it), and a newline in it makes writeState's #398.2 anti-injection fence refuse INSIDE the
+// transaction. A shipped guard, on a shipped CLI door, landing in the rollback exactly as an ENOSPC
+// or an EIO would — the rollback does not inspect the error, it rm -rf's on any throw. It is also a
+// second, unrelated fault reaching the same destruction as the `.cache`-ENOTDIR one above, which is
+// what makes the finding about the rollback rather than about either injection.
+//
+// THE CREATED LEG IS ALSO THIS TEST'S LIVENESS CONTROL, which is why it earns its cost twice. If
+// the fault ever stops firing — the flag retired, the fence moved, the shim widened to `claim` —
+// the claim SUCCEEDS, its folder is still on disk afterwards, and the created leg reds. The adopted
+// leg cannot go quietly vacuous behind it.
+//
+// GREEN ON BASELINE IS EXPECTED FOR THE CREATED LEG: it is a control, not a falsifier. Baseline
+// already removes what it created. What it forbids is a fix that answers #932 by not deleting.
+//
+// NO additions-set assertion on the adopted leg. On THIS door nothing has been written when the
+// fence throws — `cmdClaim` never sets `selectionRecordBytes` (that assignment lives in
+// `cmdStartup`), so `persistSelectionRecord` does not run at all and the adopted folder is still
+// byte-for-byte what it was. So the assertion would be sound here; it is simply already carried,
+// per edition and on this same door, by leg A of scripts/test-forge-claim-rollback-scoping.js.
+// That suite's leg B covers what no scenario here can reach: the `startup` door DOES set the bytes,
+// so the record is written into the adopted folder and then taken back out with its directories.
+// ---------------------------------------------------------------------------
+function testClaimRollbackRemovesOnlyWhatItCreated932() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-claim-created-vs-adopted-932-')));
+  // A newline in a durable field. Passed as one argv element, so no shell quoting is involved.
+  const FAULT = ['--codex-dispatch-mode', 'v2-task-name\ninjected'];
+  try {
+    initGitRepo(tmp);
+
+    // The ADOPTED leg's folder: already on disk, stateless, holding work the claim did not create.
+    const adoptedDir = path.join(tmp, 'kaola-workflow', 'issue-9324');
+    const foreign = {
+      'evidence.md': 'measurements a successor still needs\n',
+      'notes/handoff.md': 'what the crashed run had figured out\n',
+    };
+    for (const [rel, body] of Object.entries(foreign)) {
+      const f = path.join(adoptedDir, rel);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, body);
+    }
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'seed content the claim did not create'], { encoding: 'utf8' });
+
+    // The CREATED leg's folder does not exist yet. That absence is the whole variable.
+    const createdDir = path.join(tmp, 'kaola-workflow', 'issue-9323');
+    assert(!fs.existsSync(createdDir), 'fixture: the created leg starts with no folder of its own');
+    assert(!fs.existsSync(path.join(adoptedDir, 'workflow-state.md')),
+      'fixture: the adopted folder carries no state file, which is what makes the claim adopt it');
+
+    const created = runNode(claimScript, ['claim', '--project', 'issue-9323', '--issue', '9323', ...FAULT], tmp);
+    const adopted = runNode(claimScript, ['claim', '--project', 'issue-9324', '--issue', '9324', ...FAULT], tmp);
+    const ctx = r => '\nexit: ' + r.status + '\nstdout: ' + String(r.stdout).trim()
+      + '\nstderr: ' + String(r.stderr).trim();
+
+    // (1) THE CONTROL: what the claim MADE is still cleaned up. Green on baseline by design, and
+    // the liveness witness for (2) — a fault that stopped firing leaves this folder behind.
+    assert(!fs.existsSync(createdDir),
+      '#932 control: a rollback must still remove the folder the claim itself created, or the '
+      + 'answer to #932 is orphans instead of data loss — kaola-workflow/issue-9323 is still there'
+      + ctx(created));
+
+    // (2) THE DEMANDED RESULT: what the claim FOUND is untouched. Same fault, same door, same
+    // rollback line; the only difference from (1) is that this folder was already on disk.
+    assert(fs.existsSync(adoptedDir),
+      '#932: kaola-workflow/issue-9324 must still exist after a claim that failed — the claim did '
+      + 'not create it' + ctx(adopted));
+    for (const [rel, body] of Object.entries(foreign)) {
+      const f = path.join(adoptedDir, rel);
+      assert(fs.existsSync(f),
+        '#932: the failed claim deleted kaola-workflow/issue-9324/' + rel
+        + ' — a file it did not create' + ctx(adopted));
+      assert(read(f) === body,
+        '#932: the failed claim altered kaola-workflow/issue-9324/' + rel + ctx(adopted));
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClaimRollbackRemovesOnlyWhatItCreated932: PASSED (created removed, adopted intact)');
 }
 
 function testFinalizeNarrowStagingExcludesForeignArchive() {
@@ -11784,6 +12030,8 @@ function buildRegistry() {
   add('testArchiveCallersFailClosed699',                  testArchiveCallersFailClosed699);
   add('testOfflineNoHistoryClaimRoot699',                 testOfflineNoHistoryClaimRoot699);
   add('testArchiveNeverRelocatesReservedDir930',          testArchiveNeverRelocatesReservedDir930);
+  add('testClaimNeverDeletesWhatItDidNotCreate932',       testClaimNeverDeletesWhatItDidNotCreate932);
+  add('testClaimRollbackRemovesOnlyWhatItCreated932',     testClaimRollbackRemovesOnlyWhatItCreated932);
   return reg;
 }
 

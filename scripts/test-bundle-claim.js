@@ -874,6 +874,126 @@ const rollbackOutcomes = {};
 })();
 
 // ---------------------------------------------------------------------------
+// Test (8d) / #932: the rollback deletes what the claim CREATED — never what it ADOPTED.
+//
+// (8) pins that a rollback leaves no bundle folder behind, and that is right for the folder the
+// claim made. But the mkdir is non-recursive and its EEXIST arm falls through whenever there is no
+// workflow-state.md, so a directory that was ALREADY on disk with content in it is adopted on
+// exactly the same line — `applied.dir = true` is then set unconditionally, and the teardown's
+// `fs.rmSync(dir, { recursive: true, force: true })` runs under a comment reading "Remove project
+// dir if created". The comment claims a scoping the code does not perform, and (8)'s fixture cannot
+// see it: its folder really was created by the claim.
+//
+// So this is (8)'s complement, not a contradiction of it. Same rollback, a folder the claim did not
+// create, and the demanded result is that the folder's own content is still there afterwards.
+//
+// (8) IS THIS TEST'S NEGATIVE CONTROL on this lane, and it is why "never delete anything" is not an
+// acceptable reading of #932 here: (8) drives the same teardown over a folder the claim DID create
+// and requires it gone, so a fix that answers this test by not deleting reds (8) instead. The
+// scalar lane states the same contrast inside one scenario —
+// `testClaimRollbackRemovesOnlyWhatItCreated932` in scripts/simulate-workflow-walkthrough.js, where
+// one fault and one entry point are held fixed and only the folder's prior existence varies.
+//
+// The bundle lane's project name is a computed `bundle-<targets>` literal, so it can never be a
+// reserved directory — which means a guard that answers this by refusing reserved names answers the
+// scalar lane and leaves this one exactly as it was.
+//
+// Pinned as a RESULT: scoping the teardown to created-vs-adopted, refusing to adopt a non-empty
+// stateless directory, or writing the transaction so it cannot fail after adoption all satisfy it
+// equally. Nothing below asserts a status token, an exit code or an error string.
+//
+// The throw is forced from OUTSIDE, with no production seam: `<project>/.cache` is planted as a
+// regular FILE, so Step 3b's selection-record write gets ENOTDIR on its recursive
+// `mkdir <project>/.cache/origin`. That is the step's own documented failure mode ("A throw lands
+// in this function's rollback"), and it leaves directory PERMISSIONS untouched, so the teardown
+// that runs next is fully able to delete — a chmod would have blocked the teardown too and made
+// survival a fact about the filesystem instead of about the code.
+// ---------------------------------------------------------------------------
+
+(function testRollbackNeverDeletesAdoptedContent932() {
+  console.log('Test (8d)/#932: rollback must not delete content of a project folder it did not create');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  try {
+    initGitRepo(tmpRoot);
+    writeRoadmapFile(tmpRoot, 9330);
+    writeRoadmapFile(tmpRoot, 9331);
+    writeGhMockScript(binDir, { openIssues: [9330, 9331] });
+
+    // A STATELESS folder already on disk under the name this bundle will resolve to, carrying work
+    // nobody agreed to lose. No workflow-state.md, so the claim adopts it rather than conflicting.
+    const bundleDir = path.join(tmpRoot, 'kaola-workflow', 'bundle-9330-9331');
+    const foreign = {
+      'NOTES.md': 'hand-written notes the crashed run left behind\n',
+      'notes/evidence.txt': 'nested evidence a successor still needs\n',
+    };
+    for (const [rel, body] of Object.entries(foreign)) {
+      const f = path.join(bundleDir, rel);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, body);
+    }
+    assert(!fs.existsSync(path.join(bundleDir, 'workflow-state.md')),
+      'fixture: the adopted folder carries no state file, which is what makes the claim adopt it');
+
+    // The forced throw (see the header): a FILE where Step 3b needs a directory.
+    fs.writeFileSync(path.join(bundleDir, '.cache'), 'not a directory\n');
+
+    // Everything under the folder, as a sorted list of relative paths.
+    const listTree = dir => {
+      const out = [];
+      (function walk(d, rel) {
+        let entries;
+        try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
+        for (const e of entries) {
+          const r = rel ? rel + '/' + e.name : e.name;
+          if (e.isDirectory()) walk(path.join(d, e.name), r); else out.push(r);
+        }
+      })(dir, '');
+      return out.sort();
+    };
+    const before = listTree(bundleDir);
+
+    const result = runClaim(['startup', '--target-issues', '9330,9331'], tmpRoot, binDir);
+    const out = parseClaim(result);
+    const where = '\nexit: ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr;
+
+    // NON-VACUITY: the folder surviving means nothing unless the run actually got as far as the
+    // name that folder is under. Deriving the bundle project is the last step before the mkdir, and
+    // it is downstream of every pre-mutation refusal in the validation loop — so a fixture that
+    // silently stopped earlier (a classifier change, a mock drift) shows up here rather than
+    // reading as a pass. Fix-agnostic: refusing, scoping the teardown and resolving the name all
+    // still name this project and all still decline to acquire.
+    assert(out !== null && out.project === 'bundle-9330-9331' && out.claim !== 'acquired',
+      'NON-VACUITY: the run must reach this bundle project and not acquire it, got '
+        + JSON.stringify(out && { project: out.project, claim: out.claim }) + where);
+
+    // THE DEMANDED RESULT: the folder and every file that predates the claim are still there.
+    assert(fs.existsSync(bundleDir),
+      '#932: kaola-workflow/bundle-9330-9331 must still exist after a claim that failed — the '
+        + 'claim did not create it' + where);
+    for (const [rel, body] of Object.entries(foreign)) {
+      const f = path.join(bundleDir, rel);
+      assert(fs.existsSync(f),
+        '#932: the rollback deleted kaola-workflow/bundle-9330-9331/' + rel
+          + ' — a file the claim did not create' + where);
+      assert(fs.existsSync(f) && fs.readFileSync(f, 'utf8') === body,
+        '#932: the rollback altered kaola-workflow/bundle-9330-9331/' + rel + where);
+    }
+
+    // ...and nothing was ADDED either. In this fixture the transaction CANNOT complete — `.cache`
+    // is a file, so every path needing `.cache/origin` fails — which is what makes an empty
+    // added-set the right expectation here, rather than a bound on what a claim that DOES
+    // complete may write.
+    const added = listTree(bundleDir).filter(p => !before.includes(p));
+    assert(added.length === 0,
+      '#932: the claim left new entries inside kaola-workflow/bundle-9330-9331/ without '
+        + 'completing: ' + JSON.stringify(added) + where);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // Test (9): Bundle ID is canonical — sorted ascending and deduped
 // --target-issues 53,42,47 must produce bundle-42-47-53 (same as 42,47,53)
 // ---------------------------------------------------------------------------

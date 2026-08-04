@@ -1,5 +1,49 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **A failed claim no longer deletes a project directory it adopted rather than created (#932).**
+  The claim's `fs.mkdirSync(dir)` is non-recursive, and its `EEXIST` arm **adopts** any directory
+  carrying no `workflow-state.md` — the orphaned-stateless-dir reclaim. The transaction's rollback
+  was `fs.rmSync(dir, { recursive: true, force: true })` over that whole adopted tree, so a throw
+  anywhere between adoption and the completed write destroyed a directory the claim had merely
+  found. With `workflow_project: .roadmap` in a roadmap source that is the **backlog itself** —
+  every `issue-*.md` and `_rules.md` — and with `archive`, every archived run. Both are reachable
+  from the shipped CLI: `claim --project .roadmap` takes the name from an operator flag, while
+  `startup --target-issue N` needs nobody to type a reserved name at all, because the name travels
+  in roadmap data that `roadmap init-issue --workflow-project` sanitizes for CR/LF only. The
+  teardown is now scoped by the `EEXIST` signal the mkdir already produces: a directory this claim
+  **created** is still removed whole, and an adopted one gives back only the transaction's own two
+  artifacts — the selection record and `workflow-state.md` — and only whichever of them was not
+  already on disk, with parent directories pruned only where the transaction created them and left
+  them empty. Both lanes are fixed: `claimProject`, and `claimBundle`, whose step (c) has always
+  been written *"Remove project dir if created"* while `applied.dir = true` recorded arrival rather
+  than creation.
+
+  Three things this is **not**. It is not a reserved-name guard, and could not have been one: an
+  **ordinary** project name loses data the same way, because a plain `kaola-workflow/issue-777/`
+  left stateless by the very crash the reclaim exists to recover — or by a human staging notes — is
+  adopted and deleted whole, and the bundle lane can only ever have that shape, its project name
+  being a computed `bundle-<targets>` literal no reserved-name test can match. It is not a decision
+  to stop deleting: a rollback that left its own half-written `workflow-state.md` behind would make
+  the next claim read the folder as occupied, trading lost data for a folder nobody can claim again,
+  and the paired negative control pins that a created folder is still removed. And it does not close
+  the claim side's other door — adopting a reserved directory still **succeeds**, at exit 0, writing
+  run state into the backlog or archive band with nothing deleted and nothing reported; that is a
+  separate defect, tracked as #933, and choosing whether the claim should refuse such a name is a
+  value call rather than a checkable one.
+
+  Two properties worth naming because they were measured rather than assumed. On the bundle lane the
+  destruction was **silent** — exit 0, `result: "answer"`, under the reasoning string *"bundle
+  provision failed and was rolled back"*, which was false in the direction that mattered; scoping
+  the teardown is what makes that sentence true, so it needed no separate repair. And a
+  selection record that was already in an adopted directory survives but is still **overwritten**
+  with the new run's bytes — that is `persistSelectionRecord`'s unconditional "the record is the
+  authority" write, identical on a claim that succeeds, independent of this fix and left alone:
+  #932 demands not-deleted, not not-overwritten.
+
 ## [9.5.3] - 2026-08-04
 
 ### Fixed

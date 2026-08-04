@@ -954,6 +954,9 @@ function claimProject(root, args) {
 
   const dir = projectDir(root, project);
   fs.mkdirSync(path.dirname(dir), { recursive: true });
+  // #932: the mkdir is non-recursive, so EEXIST is the created-vs-adopted signal — it fires exactly
+  // when this directory was already on disk. The rollback below is scoped by it.
+  let dirCreated = true;
   try {
     fs.mkdirSync(dir);
   } catch (e) {
@@ -962,8 +965,11 @@ function claimProject(root, args) {
         return { status: 'target_occupied', result: 'refuse', issue: issueIid, project, reasoning: 'local project folder exists' };
       }
       // orphaned stateless dir (crash between mkdir and writeState) — fall through and reclaim
+      dirCreated = false;
     } else { throw e; }
   }
+  // What an adopted directory already held, read before anything is written into it.
+  const adopted = dirCreated ? null : probeAdoptedDir(root, project);
 
   let worktreePath = '';
   let worktreeError = '';
@@ -1032,7 +1038,10 @@ function claimProject(root, args) {
     const rollbackWorktree = worktreePath || worktreePathFor(root, project);
     if (fs.existsSync(rollbackWorktree)) removeWorktree(root, project, { worktree_path: rollbackWorktree });
     if (!worktreeBranchExisted && branchExists(root, branch)) removeBranch(root, branch);
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {}
+    // #932: remove the whole directory only when this claim CREATED it. An adopted one keeps
+    // everything it arrived with and gives back only this transaction's own two artifacts.
+    if (dirCreated) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+    else rollbackAdoptedDir(root, project, adopted);
     throw error;
   }
   const remoteClaim = postAdvisoryClaim(issueIid, project, projectInfo); // #356: surface footprint status
@@ -1108,10 +1117,17 @@ function claimBundle(root, opts) {
   }
 
   let claimErr = null;
+  // #932: what an ADOPTED project dir already held, probed before the transaction writes into it.
+  // Kept out of `applied` on purpose — that record is emitted to a human as `partial`, and this is
+  // internal teardown bookkeeping rather than a mutation anyone has to finish by hand.
+  let adopted = null;
   try {
     // Step 2: mkdir projectDir (EEXIST + stateFile present -> conflict)
     const dir = projectDir(root, project);
     fs.mkdirSync(path.dirname(dir), { recursive: true });
+    // #932: EEXIST without a state file ADOPTS a directory that was already on disk. `applied.dir`
+    // records CREATION, not arrival, so step (c)'s teardown removes only a folder this claim made.
+    let dirCreated = true;
     try {
       fs.mkdirSync(dir);
     } catch (e) {
@@ -1125,8 +1141,10 @@ function claimBundle(root, opts) {
         return claimAnswer('target_set_conflicts_active_work', { issue: targets[0], project,
           reasoning: 'bundle project folder already exists: ' + project });
       } else if (e.code !== 'EEXIST') { throw e; }
+      dirCreated = false;
     }
-    applied.dir = true;
+    applied.dir = dirCreated;
+    if (!dirCreated) adopted = probeAdoptedDir(root, project);
 
     // Step 3 (#370): provision a worktree exactly like claimProject — the prior "matches adaptive
     // single-issue" suppression was false (claimProject provisions for ALL paths incl. adaptive, #264).
@@ -1256,7 +1274,9 @@ function claimBundle(root, opts) {
         rollbackOk = false;
       }
     }
-    // c. Remove project dir if created
+    // c. Remove project dir if created — which is now what `applied.dir` records. This step has
+    //    always been written "if created"; a directory that was ADOPTED keeps everything it
+    //    arrived with and gives back only this transaction's own two artifacts.
     if (applied.dir) {
       try {
         const dir = projectDir(root, project);
@@ -1264,6 +1284,8 @@ function claimBundle(root, opts) {
       } catch (_) {
         rollbackOk = false;
       }
+    } else if (adopted) {
+      rollbackAdoptedDir(root, project, adopted);
     }
     if (!rollbackOk) {
       // The one token on this surface with no scalar twin, because there is no scalar analogue of
@@ -1498,6 +1520,60 @@ function persistSelectionRecord(root, project, bytes) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   writeFile(dest, bytes);
   return dest;
+}
+
+// #932: a failed claim must not delete anything the claim did not create.
+//
+// The claim's mkdir is non-recursive, so it throws EEXIST exactly when the project directory was
+// already on disk — and the EEXIST arm ADOPTS it when it carries no workflow-state.md. On that
+// path the whole-tree `rmSync(dir, { recursive: true })` in the rollback deletes a directory the
+// claim merely found: the roadmap SOURCES when `workflow_project:` names them, or a crash-orphan's
+// evidence under an ordinary project name. So the teardown is scoped by that signal — a directory
+// this claim CREATED is still removed whole, and an adopted one gets back only what the
+// transaction itself wrote.
+//
+// The transaction writes exactly two artifacts, the selection record and workflow-state.md, so an
+// adopted directory has exactly two to take back — and only the ones that were not already there.
+// Removing a record or a state file the claim FOUND is the same defect one level down, which is
+// why both are probed BEFORE the transaction runs rather than inferred afterwards.
+//
+// Leaving them behind is not the alternative: a half-written workflow-state.md makes the next
+// claim read the folder as occupied, so a rollback that left one would trade lost data for a
+// folder nobody can ever claim again.
+function probeAdoptedDir(root, project) {
+  const dir = projectDir(root, project);
+  const record = selectionRecordPath(root, project);
+  // The record's parent directories that are ALREADY on disk. Anything not listed here is a
+  // directory the transaction would create, and only those may be pruned when it is rolled back.
+  const dirsFound = [];
+  for (let d = path.dirname(record); d.length > dir.length && d !== path.dirname(d); d = path.dirname(d)) {
+    if (fs.existsSync(d)) dirsFound.push(d);
+  }
+  return {
+    record,
+    recordFound: fs.existsSync(record),
+    stateFound: fs.existsSync(stateFile(root, project)),
+    dirsFound
+  };
+}
+
+// The teardown for an ADOPTED project directory: undo this transaction's own writes, nothing else.
+// `probe` is what probeAdoptedDir saw before the transaction began.
+function rollbackAdoptedDir(root, project, probe) {
+  const drop = f => { try { fs.rmSync(f, { force: true }); } catch (_) {} };
+  if (!probe.stateFound) drop(stateFile(root, project));
+  if (!probe.recordFound) drop(probe.record);
+  // Prune the record's parent directories this transaction created and has now emptied again. A
+  // directory that was already there is not ours to remove — empty or not — and neither is one
+  // still holding anything.
+  const dir = projectDir(root, project);
+  for (let d = path.dirname(probe.record); d.length > dir.length && d !== path.dirname(d); d = path.dirname(d)) {
+    if (probe.dirsFound.indexOf(d) >= 0) break;
+    try {
+      if (fs.readdirSync(d).length > 0) break;
+      fs.rmdirSync(d);
+    } catch (_) { break; }
+  }
 }
 
 // B1: pre-claim reconnaissance has no durable home — the project folder does not exist until the
