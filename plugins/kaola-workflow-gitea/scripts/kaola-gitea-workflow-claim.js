@@ -193,6 +193,20 @@ function projectNameForIssue(root, issueIid) {
   return 'issue-' + issueIid;
 }
 
+// #933: a claim must not write run state into a directory that is not a project folder. The name
+// arrives by two doors — the `--project` flag and `workflow_project:` in a roadmap source, which
+// projectNameForIssue reads back verbatim — and isSafeName filters neither, being PATH safety only.
+// The owner ruled this RESOLVES rather than refuses: nothing is destroyed, so it is not the
+// destruction class, and the substitution is REPORTED (`reserved_project_note` /
+// `reserved_project`) rather than performed silently. ONE arm, and `issue-<N>` is the only shape a
+// substitute can take: a claim may carry no iid field, and writeState infers the number back out of
+// the project NAME via `/^issue-([1-9][0-9]*)$/` alone, so anything else cannot complete. A second
+// `project-<name>` arm was written and removed on measurement — its own output could not satisfy
+// that inference, so it threw `claim_issue_numbers_invalid` exactly where doing nothing would have.
+function unreservedProjectName(requested, issueIid) {
+  return isReservedWorkflowDirName(requested) ? 'issue-' + issueIid : requested;
+}
+
 function buildBranchName(issueIid, project, fallback) {
   if (fallback) return fallback;
   return Number.isFinite(issueIid) && issueIid > 0 ? 'workflow/gitea-issue-' + issueIid : 'workflow/gitea-' + project;
@@ -893,7 +907,13 @@ function listOpenIssues(root) {
 
 function claimProject(root, args) {
   const issueIid = args.issue || args.targetIssue || null;
-  const project = args.project || projectNameForIssue(root, issueIid);
+  // #933: both doors converge here — startup resolves its own name and passes it in as
+  // `args.project`. Above the isSafeName assert: the substitute is what must be safe.
+  const requestedProject = args.project || projectNameForIssue(root, issueIid);
+  const project = unreservedProjectName(requestedProject, issueIid);
+  const reservedProjectNote = project === requestedProject ? null
+    : 'kaola-workflow/' + requestedProject + ' is a reserved directory, not a project folder; '
+      + 'claimed kaola-workflow/' + project + ' instead';
   assert(isSafeName(project), 'unsafe project name');
   const existing = issueIid != null ? activeByIssue(root, issueIid) : activeByProject(root, project);
   if (existing) return { status: 'owned', issue: existing.issue_iid, project: existing.project, folder: existing };
@@ -1049,6 +1069,12 @@ function claimProject(root, args) {
     { status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueIid, project, branch, worktree_path: worktreePath, remote_claim: remoteClaim },
     // #403.8: classified worktree-error token alongside the raw message.
     worktreeError ? { worktree_error: worktreeError, worktree_error_class: classifyWorktreeError(worktreeError) } : {},
+    // #933: the substitution is reported, never silent. Both halves name the DECLINED directory —
+    // the substitute is already on `project` and in workflow-state.md. Prose plus a discrete field,
+    // following #403.8's pairing, so a caller need not parse the sentence.
+    reservedProjectNote
+      ? { reserved_project_note: reservedProjectNote, reserved_project: requestedProject }
+      : {},
     baseBranch ? { base_branch: baseBranch } : {},
     inPlaceNote ? { inPlaceNote } : {}
   );

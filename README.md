@@ -886,6 +886,12 @@ Anything else reports a fact about the target rather than a verdict about you �
 retry, work offline, or re-state your reason and claim something else. The one thing it puts back to
 you is your own uncommitted work: that is a question, not a refusal.
 
+A name that could not be a project folder is resolved the same way. `kaola-workflow/.roadmap/` is
+the backlog and `kaola-workflow/archive/` the archive band, so a claim naming either — by
+`--project`, or by `workflow_project:` in a roadmap source, which needs nobody to type it — claims
+the run's ordinary `issue-<N>` folder instead, and the envelope carries `reserved_project` naming
+what it declined. The run proceeds; nothing in the reserved directory is touched.
+
 A run normally carries one issue. Several may share a run when they are all open, unclaimed, and
 share a coherent scope — see [Multi-issue bundle lane](#multi-issue-bundle-lane).
 

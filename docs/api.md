@@ -80,6 +80,24 @@ and claims another issue, fixes the argument, or works offline.
 | `dirty_tree_refused` | `consent` | 1 | in-place claim (`KAOLA_WORKTREE_NATIVE=0`) onto a dirty tree. The subject is the user's own uncommitted work, so it asks: carries an `ask` plus `options: ['commit','stash','worktree']`. An unprobeable tree reads as dirty |
 | `acquired` / `owned` | — | 0 | the folder is yours |
 
+A project name that would not be a project folder is **resolved, not refused** (#933). The reserved
+set is `archive` (case-folded) and any dot-prefixed name — `kaola-workflow/.roadmap/` is the backlog
+and `kaola-workflow/archive/` the archive band, and a claim must not write run state into either.
+The name reaches the claim by two doors, `--project` and `workflow_project:` in a roadmap source,
+and neither is filtered by `isSafeName`, which answers path safety only. Both converge on
+`claimProject`, which substitutes the run's ordinary `issue-<N>` folder and reports the swap on the
+acquiring envelope:
+
+| Field | Content |
+|---|---|
+| `reserved_project` | the declined directory, verbatim as supplied (`.roadmap`, `Archive`) |
+| `reserved_project_note` | prose naming what was declined and what was claimed instead |
+
+Both are absent when no substitution happened. The claim still reports `acquired` at exit 0: nothing
+is destroyed, so this is not the destruction class where a refusal is legal, and the substitution is
+reported rather than silent. `project`, `selected_project` and `workflow-state.md`'s `name:` all
+carry the substitute, so a later resume reads one answer.
+
 `probeIssueState(issueNum, opts)` in `kaola-workflow-active-folders.js` (all three forge editions)
 returns `{state, reason}` with `state` one of `open`, `closed`, `unavailable`.
 

@@ -3041,6 +3041,253 @@ function testClaimRollbackRemovesOnlyWhatItCreated932() {
   console.log('testClaimRollbackRemovesOnlyWhatItCreated932: PASSED (created removed, adopted intact)');
 }
 
+// ---------------------------------------------------------------------------
+// #933 — a claim must not write RUN STATE into a directory that is not a project folder.
+//
+// #930 closed the ARCHIVE side and said in as many words that the claim side was deliberately
+// unchanged; #932 scoped the FAILED claim's rollback. Neither reaches the claim that SUCCEEDS.
+// `isReservedWorkflowDirName` has exactly one call site, inside `archiveProjectDir`, and no
+// claim-path caller at all — so a claim resolving `.roadmap` or `archive` still acquires it at
+// exit 0 and writes workflow-state.md, and through the startup door `.cache/origin/`, in among
+// the roadmap SOURCES or the archive band. The state it writes carries the reserved name forward:
+// `name:` and `next_command:` both name it, so every later resume addresses it too.
+//
+// THE OWNER RULED THE BEHAVIOUR: resolve around the reserved name and REPORT the swap. The claim
+// SUCCEEDS. So this is not a refusal scenario — exit 0 and an acquiring envelope are REQUIRED here,
+// and an answer to #933 that refuses at the claim site reds this on purpose.
+//
+// TWO DOORS, NOT TWO VARIANTS OF ONE. In the flag cases an operator types the name. In the
+// roadmap-data case NOBODY types anything: `workflow_project: .roadmap` sits in
+// kaola-workflow/.roadmap/issue-<N>.md and `projectNameForIssue` reads it back out verbatim, gated
+// only by `isSafeName` — which is path safety (no separator, no NUL, not `.` or `..`), not policy,
+// and passes both names. A guard on the roadmap-AUTHORING side answers the second and not the first.
+//
+// `Archive` is the same directory as `archive` wherever the filesystem is case-insensitive (APFS
+// and NTFS by default), which is the whole reason it is here: on such a volume the claim's mkdir
+// puts its state INSIDE the archive band under a name that merely looks new. That arm runs only
+// where the aliasing is real, probed rather than assumed — on a case-sensitive volume `Archive` is
+// a genuinely distinct name that could legitimately be a project, and folding it anyway is the
+// implementer's call, not this scenario's.
+//
+// TWO ENVELOPE KEYS, PINNED BY NAME — a deliberate exception to pinning results only. The
+// substitution has to be VISIBLE to whatever reads a claim envelope, and "some field somewhere
+// mentions the string" is not falsifiable in this fixture: the run's own roadmap source is at a
+// path containing `.roadmap`, so a scan across every field would go green on an unrelated echo.
+// So the pair is a contract and is asserted as one:
+//
+//   * `reserved_project` — the declined name, DISCRETE, exactly as the caller supplied it;
+//   * `reserved_project_note` — the prose, which a human reads.
+//
+// The pairing is this tree's own, not an invention: #403.8 put `worktree_error_class` beside
+// `worktree_error` so a caller "has a machine-readable signal instead of having to parse a raw git
+// error string", and a substitution reported only in prose would re-make the mistake that corrected.
+// `reserved_project` is what a consumer keys on; the note's WORDING is pinned no further than
+// naming the declined directory case-insensitively, and whether it also names the substitute is the
+// implementer's — the substitute is already on `project` and in workflow-state.md.
+//
+// VERBATIM, on the aliasing arm, means `Archive` and not `archive`. Which directory it collided
+// with is what `project` and the filesystem assertions already establish; what only the caller
+// knows is what the caller ASKED for, so that is what the discrete field has to carry back.
+//
+// FOREIGN vs the run's own: only content that predates the claim AND does not belong to this run is
+// pinned byte-for-byte. The run's own roadmap source lives inside `.roadmap` and is pinned as
+// still-PRESENT only, so a fix that records the resolved project name back into it stays legal.
+// ---------------------------------------------------------------------------
+function testClaimNeverAdoptsReservedDir933() {
+  // The envelope keys carrying the substitution report — the discrete one a consumer keys on, and
+  // the prose beside it. See the header: these two names are a contract rather than a mechanism,
+  // because an any-field scan is vacuous against this fixture.
+  const NAME_KEY = 'reserved_project';
+  const NOTE_KEY = 'reserved_project_note';
+
+  // Is this filesystem case-insensitive? Probed, because it decides whether `Archive` and `archive`
+  // name the same directory and therefore whether the aliasing arm has a subject at all.
+  const caseProbeDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-case-probe-933-')));
+  let caseInsensitiveFs = false;
+  try {
+    fs.writeFileSync(path.join(caseProbeDir, 'CaseProbe'), '');
+    caseInsensitiveFs = fs.existsSync(path.join(caseProbeDir, 'caseprobe'));
+  } finally { fs.rmSync(caseProbeDir, { recursive: true, force: true }); }
+
+  // The roadmap SOURCES: the project rules and the rest of the backlog. Losing or burying these
+  // leaves the repository with no backlog at all.
+  const ROADMAP_FOREIGN = {
+    '.gitkeep': '',
+    '_rules.md': '# Project rules\n\nEvery run reads this file.\n',
+    'issue-9339.md': 'issue: #9339\ntitle: unrelated backlog item\nstatus: open\nworkflow_project: —\nnext_step: ready\n',
+  };
+  // The archive band: a completed run's record, which the claim would be writing alongside.
+  const ARCHIVE_FOREIGN = {
+    'issue-9300/workflow-state.md': '# Kaola-Workflow State\n\n## Project\nname: issue-9300\nstatus: closed\n',
+    'issue-9300/mission-list.md': '# a prior run record\n',
+  };
+
+  const CASES = [
+    { label: 'operator flag / .roadmap', reserved: '.roadmap', given: '.roadmap',
+      issue: 9330, door: 'claim', foreign: ROADMAP_FOREIGN },
+    { label: 'roadmap data / .roadmap (no flag anywhere)', reserved: '.roadmap', given: '.roadmap',
+      issue: 9331, door: 'startup', viaRoadmapData: true, foreign: ROADMAP_FOREIGN },
+    { label: 'operator flag / archive', reserved: 'archive', given: 'archive',
+      issue: 9332, door: 'claim', foreign: ARCHIVE_FOREIGN },
+    { label: 'operator flag / Archive (aliases the archive band)', reserved: 'archive',
+      given: 'Archive', issue: 9333, door: 'claim', foreign: ARCHIVE_FOREIGN,
+      skip: !caseInsensitiveFs },
+  ];
+
+  // Everything under a directory, as a sorted list of relative paths.
+  const listTree = dir => {
+    const out = [];
+    (function walk(d, rel) {
+      let entries;
+      try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
+      for (const e of entries) {
+        const r = rel ? rel + '/' + e.name : e.name;
+        if (e.isDirectory()) walk(path.join(d, e.name), r); else out.push(r);
+      }
+    })(dir, '');
+    return out.sort();
+  };
+
+  let ranCases = 0;
+  for (const c of CASES) {
+    if (c.skip) {
+      console.log('  #933 skipped ' + JSON.stringify(c.given)
+        + ': this filesystem is case-sensitive, so it does not alias the reserved directory');
+      continue;
+    }
+    ranCases++;
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-claim-reserved-933-')));
+    const resolved = 'issue-' + c.issue;
+    try {
+      initGitRepo(tmp);
+
+      // The foreign content, inside the directory the claim must not adopt.
+      const reservedDir = path.join(tmp, 'kaola-workflow', c.reserved);
+      for (const [rel, body] of Object.entries(c.foreign)) {
+        const f = path.join(reservedDir, rel);
+        fs.mkdirSync(path.dirname(f), { recursive: true });
+        fs.writeFileSync(f, body);
+      }
+
+      // The run's OWN roadmap source. Written by hand rather than through plantRoadmapIssue: that
+      // helper hard-codes `workflow_project: —`, and `field()` reads the FIRST match, so an
+      // appended line loses. In the roadmap-data case this single line IS the entry point.
+      const ownSourceRel = path.join('kaola-workflow', '.roadmap', 'issue-' + c.issue + '.md');
+      const ownSource = path.join(tmp, ownSourceRel);
+      fs.mkdirSync(path.dirname(ownSource), { recursive: true });
+      fs.writeFileSync(ownSource, [
+        'issue: #' + c.issue,
+        'title: the claimed issue',
+        'status: open',
+        'workflow_project: ' + (c.viaRoadmapData ? c.given : '—'),
+        'next_step: ready',
+        ''
+      ].join('\n'));
+
+      G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
+      G.git(tmp, ['commit', '-m', 'seed the reserved directory'], { encoding: 'utf8' });
+
+      const before = listTree(reservedDir);
+      const argv = c.door === 'startup'
+        ? ['startup', '--runtime', 'claude', '--target-issue', String(c.issue)]
+        : ['claim', '--project', c.given, '--issue', String(c.issue)];
+      const result = runNode(claimScript, argv, tmp);
+      const where = '\ncommand: kaola-workflow-claim.js ' + argv.join(' ')
+        + '\nexit: ' + result.status
+        + '\nstdout: ' + String(result.stdout).trim()
+        + '\nstderr: ' + String(result.stderr).trim();
+      const emitted = String(result.stdout).trim().split('\n').filter(l => l.trim().startsWith('{'));
+      let env = {};
+      try { env = emitted.length ? JSON.parse(emitted[emitted.length - 1]) : {}; } catch (_) { env = {}; }
+
+      // (0) THE CLAIM STILL SUCCEEDS. Required by the ruling, and this scenario's LIVENESS witness
+      // besides: a fixture that stopped reaching the claim, or a fix that answers #933 by refusing,
+      // reds here instead of passing vacuously through everything below.
+      assert(result.status === 0,
+        '#933 ' + c.label + ': the claim must still succeed at exit 0 — the ruling is resolve and '
+        + 'report, not refuse' + where);
+      assert(env.status === 'acquired' && env.verdict === 'green' && env.claim === 'acquired',
+        '#933 ' + c.label + ': the claim must still report an acquiring envelope — got status='
+        + JSON.stringify(env.status) + ', verdict=' + JSON.stringify(env.verdict)
+        + ', claim=' + JSON.stringify(env.claim) + where);
+
+      // (1) IT ACQUIRED A LEGITIMATE FOLDER AND SAYS SO. This is also "the run does not report
+      // itself as having acquired the reserved folder", stated positively so a red names the value
+      // that was wrong.
+      assert(env.project === resolved,
+        '#933 ' + c.label + ': the claim must resolve to kaola-workflow/' + resolved
+        + ', not the reserved name — got project=' + JSON.stringify(env.project) + where);
+      if (Object.prototype.hasOwnProperty.call(env, 'selected_project')) {
+        assert(env.selected_project === resolved,
+          '#933 ' + c.label + ': selected_project must agree with project (' + resolved
+          + ') — got ' + JSON.stringify(env.selected_project) + where);
+      }
+      const resolvedState = path.join(tmp, 'kaola-workflow', resolved, 'workflow-state.md');
+      assert(fs.existsSync(resolvedState),
+        '#933 ' + c.label + ': the run state must land in kaola-workflow/' + resolved
+        + '/workflow-state.md' + where);
+      // DURABLE STATE MUST AGREE WITH THE ENVELOPE. `name:` is what every later resume reads, so an
+      // envelope that says issue-<N> over a state file still naming the reserved directory has
+      // moved the report and not the run.
+      const stateName = (read(resolvedState).match(/^name:\s*(\S+)\s*$/m) || [])[1];
+      assert(stateName === resolved,
+        '#933 ' + c.label + ': workflow-state.md must record name: ' + resolved
+        + ' — got ' + JSON.stringify(stateName) + where);
+
+      // (2) THE SWAP IS REPORTED, naming what was declined. Pinned by KEY (see the header).
+      // The discrete field first — it is what a consumer keys on, so it carries the name the caller
+      // supplied EXACTLY, casing and all, rather than something a reader has to extract from prose.
+      assert(env[NAME_KEY] === c.given,
+        '#933 ' + c.label + ': the envelope must carry `' + NAME_KEY + '`: ' + JSON.stringify(c.given)
+        + ' — the declined directory, verbatim as supplied, as a discrete field rather than only '
+        + 'inside prose. Got ' + JSON.stringify(env[NAME_KEY]) + where);
+      // ...and the prose beside it. Wording unpinned; it must merely name the declined directory.
+      const note = env[NOTE_KEY];
+      assert(typeof note === 'string' && note.trim() !== '',
+        '#933 ' + c.label + ': the envelope must carry a non-empty `' + NOTE_KEY + '` reporting '
+        + 'that ' + c.given + ' was declined and ' + resolved + ' used instead — got '
+        + JSON.stringify(note) + where);
+      assert(typeof note === 'string' && note.toLowerCase().includes(c.given.toLowerCase()),
+        '#933 ' + c.label + ': `' + NOTE_KEY + '` must name the declined directory ' + c.given
+        + ' — got ' + JSON.stringify(note) + where);
+
+      // (3) THE RESERVED DIRECTORY IS UNTOUCHED. The two artifacts this defect was MEASURED writing
+      // are named first, so a red says which write landed; (3b) is what catches the next one.
+      assert(fs.existsSync(reservedDir),
+        '#933 ' + c.label + ': kaola-workflow/' + c.reserved + ' must still exist' + where);
+      assert(!fs.existsSync(path.join(reservedDir, 'workflow-state.md')),
+        '#933 ' + c.label + ': the claim wrote run state to kaola-workflow/' + c.reserved
+        + '/workflow-state.md — that directory is not a project folder' + where);
+      assert(!fs.existsSync(path.join(reservedDir, '.cache')),
+        '#933 ' + c.label + ': the claim wrote kaola-workflow/' + c.reserved + '/.cache/ — that '
+        + 'directory is not a project folder' + where);
+      for (const [rel, body] of Object.entries(c.foreign)) {
+        const f = path.join(reservedDir, rel);
+        assert(fs.existsSync(f),
+          '#933 ' + c.label + ': the claim removed kaola-workflow/' + c.reserved + '/' + rel + where);
+        assert(read(f) === body,
+          '#933 ' + c.label + ': the claim altered kaola-workflow/' + c.reserved + '/' + rel + where);
+      }
+      // The run's own roadmap source is pinned as PRESENT only — see the header.
+      assert(fs.existsSync(ownSource),
+        '#933 ' + c.label + ': the claim removed the run\'s own roadmap source ' + ownSourceRel + where);
+
+      // (3b) THE DIRECTORY AS A SET. Presence-and-bytes cannot see a file ADDED, and the two named
+      // artifacts above are only the writes this defect was observed making.
+      const added = listTree(reservedDir).filter(p => !before.includes(p));
+      assert(added.length === 0,
+        '#933 ' + c.label + ': the claim added entries inside kaola-workflow/' + c.reserved + '/: '
+        + JSON.stringify(added) + ' — a claim writes into its project folder, and this is not one'
+        + where);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+  // The count is printed, not asserted: on a case-sensitive filesystem the aliasing arm has no
+  // subject and is skipped above with a reason. A silent skip is what this line prevents.
+  console.log('testClaimNeverAdoptsReservedDir933: PASSED (' + ranCases + '/' + CASES.length + ' doors)');
+}
+
 function testFinalizeNarrowStagingExcludesForeignArchive() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-narrow-stage-')));
   const kwRoot = tmp + '.kw';
@@ -12032,6 +12279,7 @@ function buildRegistry() {
   add('testArchiveNeverRelocatesReservedDir930',          testArchiveNeverRelocatesReservedDir930);
   add('testClaimNeverDeletesWhatItDidNotCreate932',       testClaimNeverDeletesWhatItDidNotCreate932);
   add('testClaimRollbackRemovesOnlyWhatItCreated932',     testClaimRollbackRemovesOnlyWhatItCreated932);
+  add('testClaimNeverAdoptsReservedDir933',               testClaimNeverAdoptsReservedDir933);
   return reg;
 }
 

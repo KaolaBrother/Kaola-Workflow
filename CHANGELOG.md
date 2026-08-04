@@ -4,6 +4,33 @@
 
 ### Fixed
 
+- **A claim no longer writes run state into a reserved directory (#933).** Claiming `.roadmap` or
+  `archive` **succeeded**: `startup` resolved `.roadmap` as its project name, adopted
+  `kaola-workflow/.roadmap/` as a project folder, wrote `workflow-state.md` and
+  `.cache/origin/selection-record.json` into it, and returned `claim: "acquired"` at exit 0 — after
+  which the backlog *was* an active project folder to every reader, and the same for `archive`,
+  where the adopted folder is the entire archive band. Two doors reach it, and the second needs
+  nobody to type a reserved name anywhere: `--project .roadmap` takes it from an operator flag,
+  while `startup --target-issue N` takes it from `workflow_project:` in a roadmap source, which
+  `projectNameForIssue` reads back verbatim. The only filter on either was `isSafeName`, which is
+  **path** safety — no separator, no NUL, not `.` or `..` — and answers a different question;
+  `isReservedWorkflowDirName` answers this one and had exactly one call site, the archive step.
+  The claim now resolves the name instead of adopting it: a reserved name becomes the run's
+  ordinary `issue-<N>` folder, and the acquiring envelope carries `reserved_project` (the declined
+  directory, verbatim) alongside `reserved_project_note` explaining the swap.
+
+  This **resolves rather than refuses**, deliberately. Nothing is destroyed here — the directory
+  keeps everything it arrived with — so this is not the destruction class where a refusal is still
+  legal, and the refusal count outside that class stays zero. A reserved name is a routing problem:
+  the run wanted a project folder, that name cannot be one, so it gets one that can be. What keeps
+  the substitution honest is that it is reported rather than silent.
+
+  Distinct from #932, and not fixed by it: that was the rollback deleting an adopted tree on a
+  **failed** claim. This is the adoption itself on the **success** path, where nothing is deleted
+  and, until now, nothing was reported. All four editions carried the defect — including the
+  gitlab and gitea claim ports, which are divergent hand-ports no byte-identity guard compares —
+  and all four are fixed at the one site where both doors converge.
+
 - **A failed claim no longer deletes a project directory it adopted rather than created (#932).**
   The claim's `fs.mkdirSync(dir)` is non-recursive, and its `EEXIST` arm **adopts** any directory
   carrying no `workflow-state.md` — the orphaned-stateless-dir reclaim. The transaction's rollback

@@ -299,6 +299,38 @@ function projectNameForIssue(root, issueNumber) {
   return 'issue-' + issueNumber;
 }
 
+// #933: a claim must not write run state into a directory that is not a project folder. The name
+// reaches the claim from two doors — the `--project` flag, and `workflow_project:` in a roadmap
+// source, which `projectNameForIssue` above reads back out verbatim — and `isSafeName` filters
+// neither, because it is PATH safety and nothing more. Both doors were measured landing
+// `workflow-state.md` (and, through startup, `.cache/origin/selection-record.json`) inside
+// `kaola-workflow/.roadmap/` and `kaola-workflow/archive/` at exit 0 with claim `acquired`.
+//
+// The owner ruled this RESOLVES rather than refuses. Nothing is destroyed here — the adopted
+// directory keeps everything it arrived with — so this is not the destruction class where a refusal
+// is still legal, and the refusal count outside that class stays zero. A reserved name is a routing
+// problem: the run wanted a project folder, that name cannot be one, so it gets one that can be.
+// The substitution is REPORTED on the envelope (`reserved_project` / `reserved_project_note`)
+// rather than performed silently, which is the whole of what keeps it honest.
+//
+// ONE arm, and `issue-<N>` is not merely a convenient substitute — it is the only shape that can
+// be one. A claim may legitimately carry no issue field: `writeState` below infers the number back
+// out of the project NAME, and only from `/^issue-([1-9][0-9]*)$/`. So the substitute has to match
+// that pattern or the claim cannot complete at all.
+//
+// This carried a second arm briefly, yielding `project-<name>` for the no-issue case. It was removed
+// on measurement rather than pinned. Driven directly, with a control, at this tree:
+//   claimProject(root, {project:'issue-888'})       -> acquired; the no-issue door genuinely works
+//   claimProject(root, {project:'project-roadmap'}) -> THROWS claim_issue_numbers_invalid
+//   claimProject(root, {project:'.roadmap'})        -> THROWS claim_issue_numbers_invalid
+// The second arm's own output could never satisfy the inference, so it threw exactly where doing
+// nothing would have, leaving the reserved directory byte-identical either way — no observable
+// effect on any input. The CLI fails at this same line rather than earlier; `cmdClaim` has no issue
+// check of its own, so that exit-1 is this throw propagating. One dead path, not two.
+function unreservedProjectName(requested, issueNumber) {
+  return isReservedWorkflowDirName(requested) ? 'issue-' + issueNumber : requested;
+}
+
 function buildBranchName(issueNumber, project, fallback) {
   if (fallback) return fallback;
   return Number.isFinite(issueNumber) && issueNumber > 0 ? 'workflow/issue-' + issueNumber : 'workflow/' + project;
@@ -1112,7 +1144,15 @@ function dirtyTreeConsentAsk(what) {
 
 function claimProject(root, args) {
   const issueNumber = args.issue || args.targetIssue || null;
-  const project = args.project || projectNameForIssue(root, issueNumber);
+  // #933: BOTH doors converge here — the startup path resolves its own name and passes it in as
+  // `args.project`, so this single line is where the `--project` flag and `workflow_project:` meet.
+  // Placed above the isSafeName assert on purpose: the substitute is what must be safe, and what
+  // every line below this one must see. `reserved_project_note` rides the acquiring envelope.
+  const requestedProject = args.project || projectNameForIssue(root, issueNumber);
+  const project = unreservedProjectName(requestedProject, issueNumber);
+  const reservedProjectNote = project === requestedProject ? null
+    : 'kaola-workflow/' + requestedProject + ' is a reserved directory, not a project folder; '
+      + 'claimed kaola-workflow/' + project + ' instead';
   assert(isSafeName(project), 'unsafe project name');
   const existing = issueNumber != null ? activeByIssue(root, issueNumber) : activeByProject(root, project);
   if (existing) return { status: 'owned', issue: existing.issue_number, project: existing.project, folder: existing };
@@ -1278,6 +1318,14 @@ function claimProject(root, args) {
     // #403.8: surface the classified worktree-error token alongside the raw message so a caller has a
     // machine-readable signal instead of having to parse a raw git error string.
     worktreeError ? { worktree_error: worktreeError, worktree_error_class: classifyWorktreeError(worktreeError) } : {},
+    // #933: the substitution is reported, never silent. Both halves name the DECLINED directory —
+    // the substitute is already on `project` and in `workflow-state.md`, so what was refused is the
+    // one part a caller cannot recover from the rest of the envelope. Prose plus a discrete field
+    // carrying it verbatim, following #403.8's `worktree_error` / `worktree_error_class`: a caller
+    // gets a machine-readable signal instead of having to parse the sentence.
+    reservedProjectNote
+      ? { reserved_project_note: reservedProjectNote, reserved_project: requestedProject }
+      : {},
     baseBranch ? { base_branch: baseBranch } : {},
     inPlaceNote ? { inPlaceNote } : {}
   );
