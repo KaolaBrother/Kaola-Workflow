@@ -1,0 +1,10 @@
+{
+  "project": "issue-933",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:forge-claim-ports-uncompared",
+      "sample": "the gitlab and gitea claim ports are divergent hand-ports that NO byte-identity guard compares to canonical (validate-script-sync.js covers claude<->codex only, and edition-sync deliberately does not generate them — forge vocabulary is 2.5% of claim's divergence), while the walkthrough that exercises claim behaviour reaches claude+codex only. Measured this run: all FOUR editions reproduced #933 identically (44 failing assertions per edition, symmetric), so a canonical-only fix would have gone green on a full four-chain receipt while shipping the defect to half the surface. Closed for THIS defect by scripts/test-forge-claim-reserved-project.js; the general gap stands — only two claim-path defects (#932's rollback scoping, #933's reserved-name resolution) have per-edition sibling suites, and nothing enumerates which other claim-path behaviours are unguarded across the four ports.",
+      "count": 1
+    }
+  ]
+}
