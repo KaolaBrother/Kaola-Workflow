@@ -7555,6 +7555,175 @@ function testSinkKeepOpenReleasesClaimMarker() {
   }
 }
 
+// The same contract stated as the OUTCOME the user actually cares about: after a sink leaves an
+// issue open, that issue can be claimed again.
+//
+// The leg above asserts the marker string is absent from the mock's store afterwards. That is the
+// assertion that mutation-catches a deleter running in the wrong cwd, but it reads the marker in a
+// spelling this suite chose, so it cannot see the three parties disagreeing about what a marker IS:
+//
+//   PRODUCER  claim.js:937          '<!-- kw:claim project=' + project + ' -->\n…'
+//   DELETER   claim.js:977-980      exact, case-sensitive, `project=`-only substring
+//   DETECTOR  classifier.js:215     /<!--\s*kw:claim\s+(project|sess)=/ — tolerant of inner
+//                                   whitespace, and accepts `sess=` as well
+//
+// The detector is strictly WIDER than the deleter, and a marker in the gap is unclearable but still
+// blocking. A test that both writes and reads the marker in its own spelling is blind to that by
+// construction. So this leg spells the marker NOWHERE. It seeds through the real producer, releases
+// through the real sink, and reads the verdict off the real classifier by way of `startup
+// --target-issue`. If any of the three ever disagrees about the bytes, the re-claim stays blocked
+// and this reds — whatever the new spelling happens to be.
+//
+// It seeds by calling postAdvisoryClaim (claim.js's ONLY marker producer, and an export) rather
+// than by running a full claim, because the composition has to leave the SINK as the only thing
+// that releases: cmdFinalize clears the claim itself at claim.js:4605, so a startup→finalize→sink
+// fixture would go green with the sink doing nothing and prove the opposite of what it claims.
+function testKeepOpenSinkLeavesTheIssueReClaimable() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-reclaim-936-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  // Outside the repo root: a mock file inside it is foreign dirt to the sink preflight.
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-reclaim-936-mock-'));
+  const stateFile = path.join(binDir, 'forge-state.json');
+  const project = 'issue-9361';
+  const issue = 9361;
+  try {
+    // A forge that remembers. Labels and comments are STATE, so the claim the producer posts is the
+    // claim the classifier later reads — nothing in this fixture retypes either one.
+    fs.writeFileSync(stateFile, JSON.stringify({ labels: {}, comments: {}, closed: {}, nextId: 50001 }));
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "'use strict';",
+      "const fs = require('fs');",
+      'const argv = process.argv.slice(2);',
+      "const a = argv.join(' ');",
+      'const stateFile = ' + JSON.stringify(stateFile) + ';',
+      "function load(){ try { return JSON.parse(fs.readFileSync(stateFile,'utf8')); } catch(_){ return {labels:{},comments:{},closed:{},nextId:50001}; } }",
+      "function save(s){ try { fs.writeFileSync(stateFile, JSON.stringify(s,null,2)); } catch(_){} }",
+      "function after(flag){ const i = argv.indexOf(flag); return i >= 0 && i + 1 < argv.length ? argv[i+1] : null; }",
+      "if (a.includes('repo view')) { process.stdout.write(JSON.stringify({owner:{login:'test'},name:'repo'}) + '\\n'); process.exit(0); }",
+      "if (a.includes('label create')) { process.exit(0); }",
+      'const viewM = a.match(/issue view (\\d+)/);',
+      'if (viewM) {',
+      '  const s = load(); const n = viewM[1];',
+      // the sink probes with --jq .state and wants a bare token; the classifier wants the object.
+      "  if (a.includes('--jq')) { process.stdout.write((s.closed[n] ? 'closed' : 'open') + '\\n'); process.exit(0); }",
+      "  process.stdout.write(JSON.stringify({ number: Number(n), title: 'reclaim fixture ' + n, body: 'README.md',",
+      "    labels: (s.labels[n] || []).map(function(name){ return { name: name }; }),",
+      "    state: s.closed[n] ? 'CLOSED' : 'OPEN' }) + '\\n');",
+      '  process.exit(0);',
+      '}',
+      "const closeM = a.match(/issue close (\\d+)/);",
+      "if (closeM) { const s = load(); s.closed[closeM[1]] = true; save(s); process.exit(0); }",
+      "const editM = a.match(/issue edit (\\d+)/);",
+      'if (editM) {',
+      '  const s = load(); const n = editM[1]; const cur = s.labels[n] || [];',
+      "  const add = after('--add-label'); const rm = after('--remove-label');",
+      '  if (add && cur.indexOf(add) === -1) cur.push(add);',
+      '  s.labels[n] = rm ? cur.filter(function(l){ return l !== rm; }) : cur;',
+      '  save(s); process.exit(0);',
+      '}',
+      "const commentM = a.match(/issue comment (\\d+)/);",
+      'if (commentM) {',
+      // The body is taken from argv POSITIONALLY, never from the joined string: this is the one
+      // place the producer's exact bytes enter the fixture, and joining would mangle them.
+      "  const body = after('--body');",
+      '  if (body !== null) {',
+      '    const s = load(); const n = commentM[1];',
+      '    (s.comments[n] = s.comments[n] || []).push({ id: s.nextId++, body: body, updated_at: new Date().toISOString() });',
+      '    save(s);',
+      '  }',
+      '  process.exit(0);',
+      '}',
+      // DELETE before LIST — both argv carry the substring 'comments'.
+      "const delM = a.match(/issues\\/comments\\/(\\d+)/);",
+      "if (a.includes('api') && (a.includes('--method DELETE') || a.includes('-X DELETE')) && delM) {",
+      '  const id = Number(delM[1]); const s = load();',
+      '  for (const k of Object.keys(s.comments)) s.comments[k] = s.comments[k].filter(function(c){ return Number(c.id) !== id; });',
+      "  save(s); process.stdout.write('{}\\n'); process.exit(0);",
+      '}',
+      "const listM = a.match(/issues\\/(\\d+)\\/comments/);",
+      "if (a.includes('api') && listM) { process.stdout.write(JSON.stringify(load().comments[listM[1]] || []) + '\\n'); process.exit(0); }",
+      "process.stdout.write('\\n'); process.exit(0);",
+    ]);
+    const mockEnv = { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js') };
+    const readState = () => { try { return JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch (_) { return null; } };
+
+    // A roadmap source, so the re-claim at the end has an issue to claim.
+    plantRoadmapIssue(tmp, issue, '');
+    const gitEnv = { ...process.env, ...GIT_ISOLATION_ENV,
+      GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['commit', '-m', 'chore: roadmap source ' + issue], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['push', 'origin', 'main'], { encoding: 'utf8', env: gitEnv });
+
+    // (1) SEED through the real producer. Nothing here names the marker; whatever bytes
+    // postAdvisoryClaim writes are the bytes the forge state now holds.
+    // spawn-class: cli-contract
+    const seed = spawnSync(process.execPath, ['-e',
+      'const c = require(' + JSON.stringify(claimScript) + ');' +
+      'process.stdout.write(String(c.postAdvisoryClaim(' + issue + ', ' + JSON.stringify(project) + ')));',
+    ], { cwd: tmp, encoding: 'utf8', env: mockEnv });
+    assert(seed.status === 0 && seed.stdout.trim() === 'posted',
+      '#936 reclaim premise: the real producer (postAdvisoryClaim) must post the claim; got exit=' + seed.status +
+      ' stdout=' + JSON.stringify(seed.stdout) + '\nstderr: ' + seed.stderr);
+    const seeded = readState();
+    assert(seeded && (seeded.labels[String(issue)] || []).length === 1 && (seeded.comments[String(issue)] || []).length === 1,
+      '#936 reclaim premise: the producer must have left BOTH artifacts on the issue; forge state=' + JSON.stringify(seeded));
+
+    // (2) THE PREMISE THAT MAKES THE VERDICT MEAN SOMETHING. With the claim in place the real
+    // classifier must call this issue blocked — otherwise step (4) could pass with the sink doing
+    // nothing at all, and the leg would be measuring an issue that was never claimed.
+    // spawn-class: cli-contract
+    const blockedProbe = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', String(issue)],
+      { cwd: tmp, encoding: 'utf8', env: { ...mockEnv, KAOLA_WORKTREE_NATIVE: '1' } });
+    const blockedOut = (() => { try { return JSON.parse(blockedProbe.stdout); } catch (_) { return {}; } })();
+    assert(blockedOut.status === 'user_target_blocked',
+      '#936 reclaim premise: a freshly claimed issue must be user_target_blocked, or the release below proves nothing; got ' +
+      JSON.stringify(blockedOut) + '\nstderr: ' + String(blockedProbe.stderr || '').slice(-400));
+
+    // (3) The branch the sink will land, then the sink itself — the ONLY thing that releases here.
+    G.git(tmp, ['checkout', '-b', 'workflow/' + project], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/' + project], { encoding: 'utf8', env: gitEnv });
+    fs.writeFileSync(path.join(tmp, 'DELIVERABLE-9361.txt'), 'deliverable\n');
+    G.git(tmp, ['add', 'DELIVERABLE-9361.txt'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['commit', '-m', 'feat: deliverable 9361'], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['push', 'origin', 'workflow/' + project], { encoding: 'utf8', env: gitEnv });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8', env: gitEnv });
+
+    // spawn-class: cli-contract
+    const sink = spawnSync(process.execPath, [
+      sinkMergeScript, '--branch', 'workflow/' + project, '--project', project,
+      '--issue', String(issue), '--keep-issue-open', '--sink', '--json',
+    ], { cwd: tmp, encoding: 'utf8', env: mockEnv });
+    const sinkOut = (() => { try { return JSON.parse(String(sink.stdout || '').trim().split('\n').pop()); } catch (_) { return {}; } })();
+    assert(sink.status === 0 && sinkOut.status === 'sinked',
+      '#936 reclaim premise: the keep-open sink must complete; got exit=' + sink.status +
+      ' status=' + JSON.stringify(sinkOut.status || sinkOut.reason) + '\nstderr: ' + String(sink.stderr || '').slice(-800));
+    const afterSink = readState();
+    assert(afterSink && !afterSink.closed[String(issue)],
+      '#936 reclaim premise: --keep-issue-open must leave the issue OPEN; forge state=' + JSON.stringify(afterSink));
+
+    // (4) THE OUTCOME. Same classifier, same forge state, no strings: the issue the sink left open
+    // must be claimable again.
+    // spawn-class: cli-contract
+    const reclaim = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', String(issue)],
+      { cwd: tmp, encoding: 'utf8', env: { ...mockEnv, KAOLA_WORKTREE_NATIVE: '1' } });
+    const out = (() => { try { return JSON.parse(reclaim.stdout); } catch (_) { return {}; } })();
+    assert(out.status !== 'user_target_blocked',
+      '#936: an issue the sink LEFT OPEN must be claimable again — startup --target-issue ' + issue +
+      ' still reports user_target_blocked, so the keep-open terminal released neither artifact fully. ' +
+      'Forge state after the sink: ' + JSON.stringify(readState()) + '\nenvelope: ' + JSON.stringify(out));
+    assert(out.claim === 'acquired' || out.claim === 'owned',
+      '#936: the re-claim must actually succeed (acquired/owned), got claim=' + JSON.stringify(out.claim) +
+      ' status=' + JSON.stringify(out.status) + '\nenvelope: ' + JSON.stringify(out) +
+      '\nstderr: ' + String(reclaim.stderr || '').slice(-400));
+    console.log('testKeepOpenSinkLeavesTheIssueReClaimable: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(binDir, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 // issue-164 Task 5: tests for closure receipt shape and mockability
 
 function testSinkMergeEmitsClosureReceipt() {
@@ -12285,6 +12454,7 @@ function buildRegistry() {
   add('testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker', testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker);
   add('testClearAdvisoryClaimOfflineSkipsDelete',         testClearAdvisoryClaimOfflineSkipsDelete);
   add('testSinkKeepOpenReleasesClaimMarker',              testSinkKeepOpenReleasesClaimMarker);
+  add('testKeepOpenSinkLeavesTheIssueReClaimable',        testKeepOpenSinkLeavesTheIssueReClaimable);
   add('testSinkMergeEmitsClosureReceipt',                 testSinkMergeEmitsClosureReceipt);
   add('testWatchPrMergedClosureReceipt',                  testWatchPrMergedClosureReceipt);
   add('testFinalizeOfflineClosureReceiptSkipped',         testFinalizeOfflineClosureReceiptSkipped);
