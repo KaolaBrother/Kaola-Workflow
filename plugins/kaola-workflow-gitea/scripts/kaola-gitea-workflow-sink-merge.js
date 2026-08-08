@@ -6,7 +6,7 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const forge = require('./kaola-gitea-forge');
-const { getCoordRoot, readActiveFolders, removeWorktree, worktreePathFor, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock } = require('./kaola-gitea-workflow-claim');
+const { getCoordRoot, readActiveFolders, removeWorktree, worktreePathFor, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock, clearAdvisoryClaim } = require('./kaola-gitea-workflow-claim');
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-gitea-workflow-run-chains');
@@ -361,6 +361,22 @@ function readProjectInfo(root, project) {
   if (full_name) return { full_name, html_url };
   // Fallback: discover from git remote — MUST be wrapped in try/catch
   try { return forge.discoverProject(); } catch (_) { return { full_name: '', html_url: '' }; }
+}
+
+// #936: release BOTH claim artifacts from an issue the sink leaves OPEN — the label and the
+// project-scoped kw:claim marker comment. clearAdvisoryClaim owns the marker format and is the one
+// place that knows it, but it gates its label removal on project identity (its comment routes need
+// full_name, whereas `tea issues edit` does not) — and readProjectInfo can return an empty
+// full_name, because its own fallback is forge.discoverProject(), which resolves from cwd and this
+// process has chdir'd to os.tmpdir(). Every keep-open site here removed the label unconditionally
+// before #936 and must keep doing so, hence the fallback. It is scoped to unresolved identity
+// alone, so a label call that genuinely failed is reported failed rather than retried.
+function releaseClaimArtifacts(projectInfo, issueNum, project, forgeOpts) {
+  let status = clearAdvisoryClaim(issueNum, null, projectInfo, project, forgeOpts);
+  if (status === 'failed' && !(projectInfo && projectInfo.full_name)) {
+    try { forge.updateIssueLabels(projectInfo, issueNum, Object.assign({ remove: [forge.CLAIM_LABEL] }, forgeOpts)); status = 'removed'; } catch (_) { status = 'failed'; }
+  }
+  return status;
 }
 
 function finalValidationPassed(root, project) {
@@ -867,7 +883,19 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebase
       }
     }
     // Claim-label removal runs in BOTH modes (claim release is wanted on keep-open).
-    try { forge.updateIssueLabels(readProjectInfo(root, args.project), args.issue, Object.assign({ remove: [forge.CLAIM_LABEL] }, forgeOpts)); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
+    // #936: on keep-open the issue is left OPEN, so the claim must be released in FULL. A claim is
+    // TWO artifacts — the label and the `<!-- kw:claim project=<slug> -->` marker comment — and the
+    // classifier blocks a re-claim on either, so removing only the label leaves the issue claimed.
+    // releaseClaimArtifacts removes both and returns the same label token this variable already
+    // holds. forgeOpts is load-bearing: this process chdirs to os.tmpdir(), where `tea issues edit`
+    // cannot resolve its repo, and every failure inside clearAdvisoryClaim is swallowed. The close
+    // arms keep the label-only call: a marker on a CLOSED issue is inert (the classifier
+    // short-circuits on closed state before any claim check).
+    if (keepIssueOpen) {
+      claimLabelRemoved = releaseClaimArtifacts(readProjectInfo(root, args.project), args.issue, args.project, forgeOpts);
+    } else {
+      try { forge.updateIssueLabels(readProjectInfo(root, args.project), args.issue, Object.assign({ remove: [forge.CLAIM_LABEL] }, forgeOpts)); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
+    }
 
     // #403.6: keep-open BUNDLE arm — per-member comment + label removal (the close loop is gated
     // !keepIssueOpen, so non-primary keep-open members otherwise got nothing).
@@ -876,7 +904,8 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebase
       for (const n of args.issueNumbers) {
         if (n === args.issue) continue;
         try { forge.createIssueComment(projectInfoKO, n, 'Merged via Gitea direct merge sink (bundle member). Issue intentionally kept open (partial-close terminal); residual scope remains tracked here.', forgeOpts); } catch (_) {}
-        try { forge.updateIssueLabels(projectInfoKO, n, Object.assign({ remove: [forge.CLAIM_LABEL] }, forgeOpts)); } catch (_) {}
+        // #936: a keep-open bundle leaves EVERY member open, so every member gets the full release.
+        releaseClaimArtifacts(projectInfoKO, n, args.project, forgeOpts);
       }
     }
   }
@@ -2461,6 +2490,26 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       // close loop, yet execution still fell through to stepDone('closure') below — the receipt
       // reported closure:done having closed zero issues. Run the loop whenever a primary OR any
       // bundle member is present.
+      //
+      // #936: the keep-open terminal. The close loop below is gated `&& !args.keepIssueOpen` and had
+      // NO keep-open arm at all, so `--sink --keep-issue-open` — the invocation the shipped finalize
+      // surface makes — released nothing: the issue stayed open carrying both the
+      // workflow:in-progress label (which never expires) and its kw:claim marker comment, and the
+      // classifier blocks a re-claim on either. Release both, on the primary and on every bundle
+      // member, since a keep-open bundle leaves all of them open. Identity comes from readProjectInfo
+      // — the run record first, a forge lookup only if the record carries none — and the exec cwd is
+      // pinned to mainRoot: this process chdirs to os.tmpdir(), and every failure inside
+      // clearAdvisoryClaim is swallowed, so a cwd-less call would clear nothing and still look fine.
+      if (!OFFLINE && args.keepIssueOpen && (args.issue != null || (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 0))) {
+        const forgeOpts = { execOptions: { cwd: mainRoot } };
+        const projectInfo = readProjectInfo(mainRoot, args.project);
+        const releaseTargets = [];
+        if (args.issue != null) releaseTargets.push(args.issue);
+        if (Array.isArray(args.issueNumbers)) {
+          for (const n of args.issueNumbers) if (releaseTargets.indexOf(n) === -1) releaseTargets.push(n);
+        }
+        for (const n of releaseTargets) releaseClaimArtifacts(projectInfo, n, args.project, forgeOpts);
+      }
       if (!OFFLINE && (args.issue != null || (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 0)) && !args.keepIssueOpen) {
         const closed = [];
         const failed = [];

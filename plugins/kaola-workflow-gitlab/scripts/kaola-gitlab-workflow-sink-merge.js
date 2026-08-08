@@ -6,7 +6,7 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const forge = require('./kaola-gitlab-forge');
-const { getCoordRoot, readActiveFolders, removeWorktree, worktreePathFor, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock } = require('./kaola-gitlab-workflow-claim');
+const { getCoordRoot, readActiveFolders, removeWorktree, worktreePathFor, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock, clearAdvisoryClaim } = require('./kaola-gitlab-workflow-claim');
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-gitlab-workflow-run-chains');
@@ -873,7 +873,19 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebase
       }
     }
     // Claim-label removal runs in BOTH modes (claim release is wanted on keep-open).
-    try { forge.updateIssue(args.issue, Object.assign({ unlabels: [forge.CLAIM_LABEL] }, forgeOpts)); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
+    // #936: on keep-open the issue is left OPEN, so the claim must be released in FULL. A claim is
+    // TWO artifacts — the label and the `<!-- kw:claim project=<slug> -->` marker note — and the
+    // classifier blocks a re-claim on either, so removing only the label leaves the issue claimed.
+    // clearAdvisoryClaim removes both and returns the same label token this variable already holds.
+    // forgeOpts is load-bearing: this process chdirs to os.tmpdir(), where `glab issue update`
+    // cannot resolve its project, and every failure inside clearAdvisoryClaim is swallowed. The
+    // close arms keep the label-only call: a marker on a CLOSED issue is inert (the classifier
+    // short-circuits on closed state before any claim check).
+    if (keepIssueOpen) {
+      claimLabelRemoved = clearAdvisoryClaim(args.issue, null, readProjectInfo(root, args.project), args.project, forgeOpts);
+    } else {
+      try { forge.updateIssue(args.issue, Object.assign({ unlabels: [forge.CLAIM_LABEL] }, forgeOpts)); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
+    }
 
     // #403.6: keep-open BUNDLE arm — per-member note + label removal (the close loop is gated
     // !keepIssueOpen, so non-primary keep-open members otherwise got nothing).
@@ -881,7 +893,8 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebase
       for (const n of args.issueNumbers) {
         if (n === args.issue) continue;
         try { forge.createIssueNote(readProjectInfo(root, args.project), n, 'Merged via GitLab direct merge sink (bundle member). Issue intentionally kept open (partial-close terminal); residual scope remains tracked here.', forgeOpts); } catch (_) {}
-        try { forge.updateIssue(n, Object.assign({ unlabels: [forge.CLAIM_LABEL] }, forgeOpts)); } catch (_) {}
+        // #936: a keep-open bundle leaves EVERY member open, so every member gets the full release.
+        clearAdvisoryClaim(n, null, readProjectInfo(root, args.project), args.project, forgeOpts);
       }
     }
   }
@@ -2468,6 +2481,25 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       // close loop, yet execution still fell through to stepDone('closure') below — the receipt
       // reported closure:done having closed zero issues. Run the loop whenever a primary OR any
       // bundle member is present.
+      //
+      // #936: the keep-open terminal. The close loop below is gated `&& !args.keepIssueOpen` and had
+      // NO keep-open arm at all, so `--sink --keep-issue-open` — the invocation the shipped finalize
+      // surface makes — released nothing: the issue stayed open carrying both the
+      // workflow:in-progress label (which never expires) and its kw:claim marker note, and the
+      // classifier blocks a re-claim on either. Release both, on the primary and on every bundle
+      // member, since a keep-open bundle leaves all of them open. Project identity comes from the run
+      // record rather than forge.discoverProject(), and the exec cwd is pinned to mainRoot: this
+      // process chdirs to os.tmpdir(), and clearAdvisoryClaim swallows every failure.
+      if (!OFFLINE && args.keepIssueOpen && (args.issue != null || (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 0))) {
+        const forgeOpts = { execOptions: { cwd: mainRoot } };
+        const projectInfo = readProjectInfo(mainRoot, args.project);
+        const releaseTargets = [];
+        if (args.issue != null) releaseTargets.push(args.issue);
+        if (Array.isArray(args.issueNumbers)) {
+          for (const n of args.issueNumbers) if (releaseTargets.indexOf(n) === -1) releaseTargets.push(n);
+        }
+        for (const n of releaseTargets) clearAdvisoryClaim(n, null, projectInfo, args.project, forgeOpts);
+      }
       if (!OFFLINE && (args.issue != null || (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 0)) && !args.keepIssueOpen) {
         const closed = [];
         const failed = [];

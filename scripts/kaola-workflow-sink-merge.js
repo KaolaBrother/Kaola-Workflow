@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { getCoordRoot, mainRootFromCoord, resolveMainRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock } = require('./kaola-workflow-claim.js');
+const { getCoordRoot, mainRootFromCoord, resolveMainRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock, clearAdvisoryClaim } = require('./kaola-workflow-claim.js');
 // The porcelain classifier backs the dirty-worktree data-loss guard, which is a KEEP. It lives in
 // the byte-identical schema, not in claim.js — claim.js only ever re-exported it.
 const { parsePorcelainPaths, isParkedLanePath } = require('./kaola-workflow-adaptive-schema.js');
@@ -958,7 +958,20 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebase
       }
     }
     // Claim-label removal runs in BOTH modes (claim release is wanted on keep-open).
-    try { ghExec(['issue', 'edit', String(args.issue), '--remove-label', 'workflow:in-progress'], forgeOpts); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
+    // #936: on keep-open the issue is left OPEN, so the claim must be released in FULL. A claim is
+    // TWO artifacts — the label and the `<!-- kw:claim project=<slug> -->` marker comment — and the
+    // classifier blocks a re-claim on either, so removing only the label leaves the issue claimed.
+    // clearAdvisoryClaim removes both and returns the same label token this variable already holds.
+    // It is given { cwd: mainRoot } because this process chdirs to os.tmpdir() (a cwd-less `gh`
+    // cannot resolve a base repo, and every failure inside clearAdvisoryClaim is swallowed).
+    // The close arms keep the label-only call: a marker on a CLOSED issue is inert (the classifier
+    // short-circuits on closed state before any claim check), so listing and deleting comments
+    // there would be forge round-trips that buy nothing.
+    if (keepIssueOpen) {
+      claimLabelRemoved = clearAdvisoryClaim(args.issue, null, args.project, forgeOpts);
+    } else {
+      try { ghExec(['issue', 'edit', String(args.issue), '--remove-label', 'workflow:in-progress'], forgeOpts); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
+    }
 
     // #403.6: keep-open BUNDLE arm. The close loop below is gated `!keepIssueOpen`, so on a keep-open
     // bundle the NON-PRIMARY members got no comment and no member-label removal — the old code relied
@@ -968,7 +981,8 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebase
       for (const n of args.issueNumbers) {
         if (n === args.issue) continue; // primary handled above
         try { ghExec(['issue', 'comment', String(n), '--body', 'Merged via sink-merge (bundle member). Issue intentionally kept open (partial-close terminal); residual scope remains tracked here.'], forgeOpts); } catch (_) {}
-        try { ghExec(['issue', 'edit', String(n), '--remove-label', 'workflow:in-progress'], forgeOpts); } catch (_) {}
+        // #936: a keep-open bundle leaves EVERY member open, so every member gets the full release.
+        clearAdvisoryClaim(n, null, args.project, forgeOpts);
       }
     }
   }
@@ -2861,6 +2875,21 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
             }, 1);
             return;
           }
+        } else {
+          // #936: the keep-open terminal. Before this the whole closure step was `if (!keepIssueOpen)`
+          // with NO else arm, so `--sink --keep-issue-open` — the invocation the shipped finalize
+          // surface makes — released nothing at all: the issue stayed open carrying both the
+          // workflow:in-progress label (which never expires) and its kw:claim marker comment, and the
+          // classifier blocks a re-claim on either. Release both, on the primary and on every bundle
+          // member, since a keep-open bundle leaves all of them open. forgeOpts is load-bearing: this
+          // process chdirs to os.tmpdir(), where a cwd-less `gh` cannot resolve a base repo and
+          // clearAdvisoryClaim's swallowed catches would report success having done nothing.
+          const releaseTargets = [];
+          if (args.issue != null) releaseTargets.push(args.issue);
+          if (Array.isArray(args.issueNumbers)) {
+            for (const n of args.issueNumbers) if (releaseTargets.indexOf(n) === -1) releaseTargets.push(n);
+          }
+          for (const n of releaseTargets) clearAdvisoryClaim(n, null, args.project, forgeOpts);
         }
       }
       stepDone('closure');

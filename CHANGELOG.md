@@ -1,5 +1,35 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **A sink that leaves an issue open now releases the whole claim, not half of it (#936).** A claim
+  is two artifacts — the `workflow:in-progress` label and a `<!-- kw:claim project=<slug> -->`
+  marker comment posted at claim time — and the classifier blocks a re-claim on **either** of them.
+  Only `clearAdvisoryClaim` in claim.js removed both; the sink removed the label alone, so every
+  keep-open terminal left the issue carrying a marker that kept blocking it for the next 24 hours.
+
+  `--sink --keep-issue-open` was worse than half: the closure step's entire body sat inside
+  `if (!keepIssueOpen)` with no else arm, so that path — the one the shipped finalize surface
+  actually invokes — released **nothing**. It closed nothing, removed no label and deleted no
+  marker, and the label has no expiry at all. It now releases both artifacts on the primary issue
+  and on every member of a keep-open bundle, since a keep-open bundle leaves all of them open.
+  `postMergeCleanup`'s keep-open arms (primary and bundle member), which already removed the label,
+  now delete the marker too.
+
+  The release is single-sourced through `clearAdvisoryClaim` rather than respelled in the sink, and
+  it is given an explicit cwd. That is load-bearing rather than cosmetic: both sink entry points
+  `process.chdir(os.tmpdir())` before doing any work, and every forge call in the sink already
+  carried `{ cwd: mainRoot }` for that reason — but `clearAdvisoryClaim` passed no options and
+  swallows each of its four failure paths, so calling it as it stood would have run `gh` outside
+  any repository, cleared nothing, and still reported success. It now threads a caller-supplied
+  option object into every forge call it makes, on all four editions.
+
+  The **close** paths are deliberately unchanged. A leftover marker on a closed issue is inert —
+  the classifier short-circuits on closed state before it looks at any claim — so listing and
+  deleting comments there would be forge round-trips that buy nothing.
+
 ## [9.5.4] - 2026-08-04
 
 ### Fixed

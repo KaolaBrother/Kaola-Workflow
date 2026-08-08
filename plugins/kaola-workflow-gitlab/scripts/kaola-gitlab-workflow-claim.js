@@ -809,24 +809,29 @@ function postAdvisoryClaim(issueIid, project, projectInfo) {
   return labelAdded ? 'posted' : 'failed';
 }
 
-function clearAdvisoryClaim(issueIid, reason, projectInfo, project) {
+// #936: `opts` is passed straight through to EVERY forge call below. Callers running with a cwd
+// outside the repository must supply `{ execOptions: { cwd: <repo root> } }` — sink-merge chdirs to
+// os.tmpdir() before doing any work, and `glab issue update` resolves its target project from the
+// invoking cwd. Every failure here is swallowed, so a cwd-less call clears nothing and still
+// reports 'removed'.
+function clearAdvisoryClaim(issueIid, reason, projectInfo, project, opts) {
   if (OFFLINE || issueIid == null) return 'skipped_offline';
   let status = 'failed';
-  try { forge.updateIssue(issueIid, { unlabels: [CLAIM_LABEL] }); status = 'removed'; } catch (_) {}
+  try { forge.updateIssue(issueIid, Object.assign({ unlabels: [CLAIM_LABEL] }, opts)); status = 'removed'; } catch (_) {}
   try {
     if (reason && projectInfo && (projectInfo.project_id || projectInfo.path_with_namespace)) {
-      forge.createIssueNote(projectInfo, issueIid, 'Kaola-Workflow advisory claim cleared: ' + reason);
+      forge.createIssueNote(projectInfo, issueIid, 'Kaola-Workflow advisory claim cleared: ' + reason, opts);
     }
   } catch (_) {}
   // Delete the project-scoped kw:claim marker note so the remote-claim detector
   // no longer blocks re-claiming this issue after discard/release/finalize (#278).
   try {
-    const notes = forge.listIssueNotes(projectInfo, issueIid);
+    const notes = forge.listIssueNotes(projectInfo, issueIid, opts);
     const marker = project ? ('<!-- kw:claim project=' + project + ' -->') : null;
     for (const note of (Array.isArray(notes) ? notes : [])) {
       if (!note || !note.body || !note.id) continue;
       if (marker ? note.body.includes(marker) : /<!--\s*kw:claim\s+project=/.test(note.body)) {
-        try { forge.deleteIssueNote(projectInfo, issueIid, note.id); } catch (_) {}
+        try { forge.deleteIssueNote(projectInfo, issueIid, note.id, opts); } catch (_) {}
       }
     }
   } catch (_) {}

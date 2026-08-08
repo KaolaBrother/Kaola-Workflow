@@ -2444,4 +2444,134 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
   console.log('Gitea #912 sinkPreflight worktree-clean guard applies on the same runs as canonical: PASSED');
 }
 
+// #936 — a claim is TWO artifacts and the sink releases one. The workflow:in-progress LABEL and the
+// `<!-- kw:claim project=<slug> -->` MARKER COMMENT are both posted at claim time, and the classifier
+// blocks a re-claim on (label OR marker). claim.js's clearAdvisoryClaim removes both
+// (kaola-gitea-workflow-claim.js:828-833 is this edition's marker deleter, over
+// forge.listIssueComments / forge.deleteIssueComment — note gitea's DELETE endpoint is REPO-level,
+// /issues/comments/{id}, with no issue index, unlike gitlab's issue-scoped note path); sink-merge
+// removes only the label — and on `--sink --keep-issue-open`, whose whole closure step is gated
+// `&& !args.keepIssueOpen`, neither. Both terminals leave the issue OPEN, so the leftover marker
+// keeps blocking it.
+//
+// Asserted as the issue's END STATE — the comment is not on the issue any more — never as "the
+// deleter was called". A deleter whose failures are swallowed (claim.js's are, four times over) is
+// indistinguishable from one that never ran, unless the test reads the remote back.
+//
+// The mock is cwd-honest for `repo view` ONLY, which is the one route that genuinely resolves from
+// the invoking cwd. The sink chdirs to os.tmpdir(), so a fix that reaches project identity through
+// forge.discoverProject() from there fails with a named cause instead of silently. The `api` routes
+// are cwd-agnostic on purpose: this edition addresses comments by full_name, so requiring a repo cwd
+// for them would be inventing a constraint tea does not have.
+{
+  const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
+  const project = 'issue-9360';
+  const branch = 'workflow/' + project;
+  const issue = 9360;
+  const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+  const marker = (p) => '<!-- kw:claim project=' + p + ' -->';
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-936-mock-'));
+  const logFile = path.join(bin, 'tea-calls.log');
+  const storeFile = path.join(bin, 'issue-comments.json');
+  const mockPath = path.join(bin, 'mock-tea.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-936-'));
+  const remotePath = root + '-remote';
+  try {
+    fs.writeFileSync(storeFile, JSON.stringify({
+      [issue]: [
+        { id: 93691, body: marker(project) + '\nKaola-Workflow started local work for `' + project + '`.', updated_at: new Date().toISOString() },
+        { id: 93692, body: marker('issue-OTHER') + '\nKaola-Workflow started local work for `issue-OTHER`.', updated_at: new Date().toISOString() },
+      ],
+    }, null, 2));
+    fs.writeFileSync(mockPath, [
+      '#!/usr/bin/env node',
+      "'use strict';",
+      "const fs = require('fs');",
+      "const path = require('path');",
+      'const argv = process.argv.slice(2);',
+      "const a = argv.join(' ');",
+      'const logFile = ' + JSON.stringify(logFile) + ';',
+      'const storeFile = ' + JSON.stringify(storeFile) + ';',
+      "function log(m){ try { fs.appendFileSync(logFile, m + '\\n'); } catch(_){} }",
+      "function loadStore(){ try { return JSON.parse(fs.readFileSync(storeFile, 'utf8')); } catch(_){ return {}; } }",
+      // repo view is the only route real tea resolves from cwd.
+      "if (a.includes('repo view')) {",
+      "  let d = process.cwd(); let inRepo = false;",
+      "  for (;;) { if (fs.existsSync(path.join(d, '.git'))) { inRepo = true; break; } const p = path.dirname(d); if (p === d) break; d = p; }",
+      "  if (!inRepo) { log('REJECTED-wrong-cwd:' + process.cwd() + ' args=' + a); process.stderr.write('tea: not a git repository\\n'); process.exit(1); }",
+      '  process.stdout.write(JSON.stringify({full_name:"owner/repo",html_url:"https://gitea.example/owner/repo"}) + "\\n"); process.exit(0);',
+      '}',
+      "if (a.includes('issues view')) { const m = a.match(/issues view (\\d+)/); process.stdout.write(JSON.stringify({number: m ? Number(m[1]) : 0, state:'open'}) + '\\n'); process.exit(0); }",
+      "const closeM = a.match(/issues close (\\d+)/); if (closeM) { log('close:' + closeM[1]); process.exit(0); }",
+      "if (a.includes('issues edit') && a.includes('--remove-labels')) { const m = a.match(/issues edit (\\d+)/); log('label-removed:' + (m ? m[1] : '?')); process.exit(0); }",
+      // DELETE first: gitea's delete path (/issues/comments/{id}) and list path
+      // (/issues/{n}/comments) are distinct shapes, but the -X DELETE flag is the reliable key.
+      "const delM = a.match(/issues\\/comments\\/(\\d+)/);",
+      "if (a.includes('api') && a.includes('-X DELETE') && delM) {",
+      '  const id = Number(delM[1]); const s = loadStore();',
+      '  for (const k of Object.keys(s)) s[k] = (s[k] || []).filter(function(c){ return Number(c && c.id) !== id; });',
+      "  try { fs.writeFileSync(storeFile, JSON.stringify(s, null, 2)); } catch(_){}",
+      "  log('comment-deleted:' + id); process.stdout.write('{}\\n'); process.exit(0);",
+      '}',
+      "const listM = a.match(/issues\\/(\\d+)\\/comments$/);",
+      "if (a.includes('api') && listM) { process.stdout.write(JSON.stringify(loadStore()[listM[1]] || []) + '\\n'); process.exit(0); }",
+      "process.stdout.write('\\n'); process.exit(0);",
+    ].join('\n'));
+
+    const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
+    git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    // Project identity where readProjectInfo finds it without any forge call, so a correct fix is
+    // reachable and a discoverProject()-from-tmpdir fix is the thing that reds.
+    const archDir = path.join(root, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(archDir, { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', 'status: closed', 'step: complete',
+      'issue_number: ' + issue,
+      'full_name: owner/repo', 'project_html_url: https://gitea.example/owner/repo', '',
+      '## Sink', 'branch: ' + branch, 'sink: merge', 'issue_action: comment_keep_open', ''
+    ].join('\n'));
+    fs.writeFileSync(path.join(archDir, 'finalization-summary.md'), '# Finalization\n\n## Final Validation\n\n- `npm test`: pass\n');
+    fs.writeFileSync(path.join(root, 'base.txt'), 'base');
+    git('add', '-A'); git('commit', '-m', 'base + archived keep-open run');
+    git('branch', branch); git('checkout', branch);
+    fs.writeFileSync(path.join(root, 'feat.md'), 'feat'); git('add', '-A'); git('commit', '-m', 'feat: deliverable 9360');
+    git('checkout', 'main');
+    G.execRaw(['init', '--bare', '-b', 'main', remotePath], { encoding: 'utf8' });
+    G.exec(root, ['remote', 'add', 'origin', remotePath], { encoding: 'utf8' });
+    G.exec(root, ['push', '-u', 'origin', 'main'], { encoding: 'utf8' });
+    G.exec(root, ['push', '-u', 'origin', branch], { encoding: 'utf8' });
+    G.exec(root, ['branch', '--set-upstream-to=origin/' + branch, branch], { encoding: 'utf8' });
+
+    const r = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--issue', String(issue), '--project', project, '--keep-issue-open', '--sink'], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_TEA_MOCK_SCRIPT: mockPath }
+    });
+    const p = parseLast(r.stdout);
+    const calls = (() => { try { return fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean); } catch (_) { return []; } })();
+    const bodies = (() => {
+      try { return (JSON.parse(fs.readFileSync(storeFile, 'utf8'))[String(issue)] || []).map(c => String(c.body || '')); }
+      catch (_) { return []; }
+    })();
+
+    // FIXTURE PREMISE — a run that stopped early measures nothing about claim release.
+    assert.strictEqual(p.status, 'sinked',
+      '#936-gitea premise: the keep-open --sink run must complete; got exit=' + r.status + ' ' + JSON.stringify(p) + '\nstderr: ' + String(r.stderr || '').slice(-800));
+    assert.ok(!calls.includes('close:' + issue),
+      '#936-gitea premise: a keep-open run must leave the issue OPEN; calls=' + JSON.stringify(calls));
+
+    assert.ok(calls.includes('label-removed:' + issue),
+      '#936-gitea: --sink --keep-issue-open must remove the workflow:in-progress label from the issue it leaves open; calls=' + JSON.stringify(calls));
+    assert.ok(!bodies.some(b => b.includes(marker(project))),
+      '#936-gitea: --sink --keep-issue-open must delete the kw:claim MARKER COMMENT from the issue it leaves open — the classifier blocks a re-claim on (label OR marker), so releasing only the label leaves the issue claimed. Comments still on #' + issue + ': ' + JSON.stringify(bodies));
+    assert.ok(!calls.some(l => l.startsWith('REJECTED-wrong-cwd:')),
+      '#936-gitea: the sink chdirs to os.tmpdir(), so project identity must come from the run record (readProjectInfo) or from a call carrying a cwd — a bare discoverProject() there fails and its error is swallowed. Rejected: ' + JSON.stringify(calls.filter(l => l.startsWith('REJECTED-wrong-cwd:'))));
+    assert.ok(bodies.some(b => b.includes(marker('issue-OTHER'))),
+      '#936-gitea: a marker belonging to a DIFFERENT project is another run\'s live claim and must NOT be deleted; comments=' + JSON.stringify(bodies));
+    console.log('Gitea #936 keep-open sink releases BOTH claim artifacts: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(bin, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 console.log('Gitea sink tests passed');

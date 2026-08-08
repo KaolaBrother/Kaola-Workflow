@@ -2499,4 +2499,132 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
   console.log('GitLab #912 sinkPreflight worktree-clean guard applies on the same runs as canonical: PASSED');
 }
 
+// #936 — a claim is TWO artifacts and the sink releases one. The workflow:in-progress LABEL and the
+// `<!-- kw:claim project=<slug> -->` MARKER NOTE are both posted at claim time, and the classifier
+// blocks a re-claim on (label OR marker). claim.js's clearAdvisoryClaim removes both
+// (kaola-gitlab-workflow-claim.js:824-829 is this edition's marker deleter, over
+// forge.listIssueNotes / forge.deleteIssueNote); sink-merge removes only the label — and on
+// `--sink --keep-issue-open`, whose whole closure step is gated `&& !args.keepIssueOpen`, neither.
+// Both terminals leave the issue OPEN, so the leftover marker keeps blocking it.
+//
+// Asserted as the issue's END STATE — the note is not on the issue any more — never as "the deleter
+// was called". A deleter whose failures are swallowed (claim.js's are, four times over) is
+// indistinguishable from one that never ran, unless the test reads the remote back.
+//
+// The mock is cwd-honest for `repo view` ONLY, which is the one route that genuinely resolves from
+// the invoking cwd. The sink chdirs to os.tmpdir(), so a fix that reaches project identity through
+// forge.discoverProject() from there fails with a named cause instead of silently. The `api` routes
+// are cwd-agnostic on purpose: this edition addresses notes by a fully-qualified project ref, so
+// requiring a repo cwd for them would be inventing a constraint glab does not have.
+{
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const project = 'issue-9360';
+  const branch = 'workflow/' + project;
+  const issue = 9360;
+  const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+  const marker = (p) => '<!-- kw:claim project=' + p + ' -->';
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-936-mock-'));
+  const logFile = path.join(bin, 'glab-calls.log');
+  const storeFile = path.join(bin, 'issue-notes.json');
+  const mockPath = path.join(bin, 'mock-glab.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-936-'));
+  const remotePath = root + '-remote';
+  try {
+    fs.writeFileSync(storeFile, JSON.stringify({
+      [issue]: [
+        { id: 93691, body: marker(project) + '\nKaola-Workflow started local work for `' + project + '`.', updated_at: new Date().toISOString() },
+        { id: 93692, body: marker('issue-OTHER') + '\nKaola-Workflow started local work for `issue-OTHER`.', updated_at: new Date().toISOString() },
+      ],
+    }, null, 2));
+    fs.writeFileSync(mockPath, [
+      '#!/usr/bin/env node',
+      "'use strict';",
+      "const fs = require('fs');",
+      "const path = require('path');",
+      'const argv = process.argv.slice(2);',
+      "const a = argv.join(' ');",
+      'const logFile = ' + JSON.stringify(logFile) + ';',
+      'const storeFile = ' + JSON.stringify(storeFile) + ';',
+      "function log(m){ try { fs.appendFileSync(logFile, m + '\\n'); } catch(_){} }",
+      "function loadStore(){ try { return JSON.parse(fs.readFileSync(storeFile, 'utf8')); } catch(_){ return {}; } }",
+      // repo view is the only route real glab resolves from cwd.
+      "if (a.includes('repo view')) {",
+      "  let d = process.cwd(); let inRepo = false;",
+      "  for (;;) { if (fs.existsSync(path.join(d, '.git'))) { inRepo = true; break; } const p = path.dirname(d); if (p === d) break; d = p; }",
+      "  if (!inRepo) { log('REJECTED-wrong-cwd:' + process.cwd() + ' args=' + a); process.stderr.write('glab: not a git repository\\n'); process.exit(1); }",
+      '  process.stdout.write(JSON.stringify({id:77,path_with_namespace:"group/project",web_url:"https://gitlab.example/group/project"}) + "\\n"); process.exit(0);',
+      '}',
+      "if (a.includes('issue view')) { const m = a.match(/issue view (\\d+)/); process.stdout.write(JSON.stringify({iid: m ? Number(m[1]) : 0, state:'opened'}) + '\\n'); process.exit(0); }",
+      "const closeM = a.match(/issue close (\\d+)/); if (closeM) { log('close:' + closeM[1]); process.exit(0); }",
+      "if (a.includes('issue update') && a.includes('--unlabel')) { const m = a.match(/issue update (\\d+)/); log('label-removed:' + (m ? m[1] : '?')); process.exit(0); }",
+      // DELETE before LIST — the note-scoped path is a superstring of the list path.
+      "const delM = a.match(/issues\\/(\\d+)\\/notes\\/(\\d+)/);",
+      "if (a.includes('api') && a.includes('--method DELETE') && delM) {",
+      '  const id = Number(delM[2]); const s = loadStore();',
+      '  for (const k of Object.keys(s)) s[k] = (s[k] || []).filter(function(c){ return Number(c && c.id) !== id; });',
+      "  try { fs.writeFileSync(storeFile, JSON.stringify(s, null, 2)); } catch(_){}",
+      "  log('note-deleted:' + id); process.stdout.write('{}\\n'); process.exit(0);",
+      '}',
+      "const listM = a.match(/issues\\/(\\d+)\\/notes$/);",
+      "if (a.includes('api') && listM) { process.stdout.write(JSON.stringify(loadStore()[listM[1]] || []) + '\\n'); process.exit(0); }",
+      "process.stdout.write('\\n'); process.exit(0);",
+    ].join('\n'));
+
+    const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
+    git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    // Project identity where readProjectInfo finds it without any forge call, so a correct fix is
+    // reachable and a discoverProject()-from-tmpdir fix is the thing that reds.
+    const archDir = path.join(root, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(archDir, { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', 'status: closed', 'step: complete',
+      'issue_iid: ' + issue, 'issue_number: ' + issue,
+      'project_id: 77', 'path_with_namespace: group/project',
+      'project_web_url: https://gitlab.example/group/project', '',
+      '## Sink', 'branch: ' + branch, 'sink: merge', 'issue_action: comment_keep_open', ''
+    ].join('\n'));
+    fs.writeFileSync(path.join(archDir, 'finalization-summary.md'), '# Finalization\n\n## Final Validation\n\n- `npm test`: pass\n');
+    fs.writeFileSync(path.join(root, 'base.txt'), 'base');
+    git('add', '-A'); git('commit', '-m', 'base + archived keep-open run');
+    git('branch', branch); git('checkout', branch);
+    fs.writeFileSync(path.join(root, 'feat.md'), 'feat'); git('add', '-A'); git('commit', '-m', 'feat: deliverable 9360');
+    git('checkout', 'main');
+    G.execRaw(['init', '--bare', '-b', 'main', remotePath], { encoding: 'utf8' });
+    G.exec(root, ['remote', 'add', 'origin', remotePath], { encoding: 'utf8' });
+    G.exec(root, ['push', '-u', 'origin', 'main'], { encoding: 'utf8' });
+    G.exec(root, ['push', '-u', 'origin', branch], { encoding: 'utf8' });
+    G.exec(root, ['branch', '--set-upstream-to=origin/' + branch, branch], { encoding: 'utf8' });
+
+    const r = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--issue', String(issue), '--project', project, '--keep-issue-open', '--sink'], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GLAB_MOCK_SCRIPT: mockPath }
+    });
+    const p = parseLast(r.stdout);
+    const calls = (() => { try { return fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean); } catch (_) { return []; } })();
+    const bodies = (() => {
+      try { return (JSON.parse(fs.readFileSync(storeFile, 'utf8'))[String(issue)] || []).map(c => String(c.body || '')); }
+      catch (_) { return []; }
+    })();
+
+    // FIXTURE PREMISE — a run that stopped early measures nothing about claim release.
+    assert.strictEqual(p.status, 'sinked',
+      '#936-gitlab premise: the keep-open --sink run must complete; got exit=' + r.status + ' ' + JSON.stringify(p) + '\nstderr: ' + String(r.stderr || '').slice(-800));
+    assert.ok(!calls.includes('close:' + issue),
+      '#936-gitlab premise: a keep-open run must leave the issue OPEN; calls=' + JSON.stringify(calls));
+
+    assert.ok(calls.includes('label-removed:' + issue),
+      '#936-gitlab: --sink --keep-issue-open must remove the workflow:in-progress label from the issue it leaves open; calls=' + JSON.stringify(calls));
+    assert.ok(!bodies.some(b => b.includes(marker(project))),
+      '#936-gitlab: --sink --keep-issue-open must delete the kw:claim MARKER NOTE from the issue it leaves open — the classifier blocks a re-claim on (label OR marker), so releasing only the label leaves the issue claimed. Notes still on #' + issue + ': ' + JSON.stringify(bodies));
+    assert.ok(!calls.some(l => l.startsWith('REJECTED-wrong-cwd:')),
+      '#936-gitlab: the sink chdirs to os.tmpdir(), so project identity must come from the run record (readProjectInfo) or from a call carrying a cwd — a bare discoverProject() there fails and its error is swallowed. Rejected: ' + JSON.stringify(calls.filter(l => l.startsWith('REJECTED-wrong-cwd:'))));
+    assert.ok(bodies.some(b => b.includes(marker('issue-OTHER'))),
+      '#936-gitlab: a marker belonging to a DIFFERENT project is another run\'s live claim and must NOT be deleted; notes=' + JSON.stringify(bodies));
+    console.log('GitLab #936 keep-open sink releases BOTH claim artifacts: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(bin, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 console.log('GitLab sink tests passed');

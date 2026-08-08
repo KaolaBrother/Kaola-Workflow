@@ -7441,6 +7441,116 @@ function testClearAdvisoryClaimOfflineSkipsDelete() {
   }
 }
 
+// #936 — the SINK side of the same contract, and the only chain-visible leg that covers it.
+//
+// A claim is two artifacts: the workflow:in-progress LABEL and the kw:claim MARKER COMMENT. The
+// classifier blocks a re-claim on (label OR marker), so releasing one and leaving the other leaves
+// the issue claimed. The three legs above prove claim.js's clearAdvisoryClaim releases both. This
+// one covers the sink — specifically `--sink --keep-issue-open`, which is the shipped finalize
+// surface's invocation and the terminal that leaves an issue OPEN with the claim on it.
+//
+// The gh mock here is CWD-HONEST: like real gh, it fails when invoked from a directory that is not
+// inside a git repository. That is load-bearing. `--sink` calls process.chdir(os.tmpdir()) before
+// doing any work, which is why every forge call in sink-merge passes { cwd: mainRoot }; and
+// clearAdvisoryClaim calls ghExec with no opts and swallows every error in its marker-deletion
+// block. So a fix that just calls it from the sink deletes nothing, silently, forever — and would
+// pass a test that asserted only that the deleter was called. The assertion below is instead about
+// the issue's END STATE (the marker is not on the issue any more), which that fix cannot satisfy.
+function testSinkKeepOpenReleasesClaimMarker() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-936-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  // The mock lives OUTSIDE the repo root — a file inside it is classified as foreign dirt by the
+  // sink preflight, which would refuse before the closure step ever runs.
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-936-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const storeFile = path.join(binDir, 'issue-comments.json');
+  const project = 'issue-9360';
+  const issue = 9360;
+  const marker = (p) => '<!-- kw:claim project=' + p + ' -->';
+  try {
+    fs.writeFileSync(storeFile, JSON.stringify({
+      [issue]: [
+        { id: 93691, body: marker(project) + '\nKaola-Workflow started local work for `' + project + '`.', updated_at: new Date().toISOString() },
+        { id: 93692, body: marker('issue-OTHER') + '\nKaola-Workflow started local work for `issue-OTHER`.', updated_at: new Date().toISOString() },
+      ],
+    }, null, 2));
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "'use strict';",
+      "const fs = require('fs');",
+      "const path = require('path');",
+      "const a = process.argv.slice(2).join(' ');",
+      "const logFile = " + JSON.stringify(logFile) + ";",
+      "const storeFile = " + JSON.stringify(storeFile) + ";",
+      "function log(m){ try { fs.appendFileSync(logFile, m + '\\n'); } catch(_){} }",
+      "function loadStore(){ try { return JSON.parse(fs.readFileSync(storeFile, 'utf8')); } catch(_){ return {}; } }",
+      // cwd-honest, exactly as real gh is: without --repo, gh resolves its target repo from the
+      // invoking cwd, so a call site that drops { cwd: mainRoot } must fail here too.
+      "let d = process.cwd(); let inRepo = false;",
+      "for (;;) { if (fs.existsSync(path.join(d, '.git'))) { inRepo = true; break; } const p = path.dirname(d); if (p === d) break; d = p; }",
+      "if (!inRepo) { log('REJECTED-wrong-cwd:' + process.cwd() + ' args=' + a); process.stderr.write('gh: could not determine base repo, use --repo\\n'); process.exit(1); }",
+      "if (a.includes('repo view')) { process.stdout.write(JSON.stringify({owner:{login:'test'},name:'repo'}) + '\\n'); process.exit(0); }",
+      "if (/issue view \\d+/.test(a)) { process.stdout.write('open\\n'); process.exit(0); }",
+      "const closeM = a.match(/issue close (\\d+)/); if (closeM) { log('close:' + closeM[1]); process.exit(0); }",
+      "if (a.includes('issue edit') && a.includes('--remove-label')) { const m = a.match(/issue edit (\\d+)/); log('label-removed:' + (m ? m[1] : '?')); process.exit(0); }",
+      // DELETE before LIST — both argv carry the substring 'comments'.
+      "const delM = a.match(/issues\\/comments\\/(\\d+)/);",
+      "if (a.includes('api') && (a.includes('--method DELETE') || a.includes('-X DELETE')) && delM) {",
+      "  const id = Number(delM[1]); const s = loadStore();",
+      "  for (const k of Object.keys(s)) s[k] = (s[k] || []).filter(function(c){ return Number(c && c.id) !== id; });",
+      "  try { fs.writeFileSync(storeFile, JSON.stringify(s, null, 2)); } catch(_){}",
+      "  log('comment-deleted:' + id); process.stdout.write('{}\\n'); process.exit(0);",
+      "}",
+      "const listM = a.match(/issues\\/(\\d+)\\/comments/);",
+      "if (a.includes('api') && listM) { process.stdout.write(JSON.stringify(loadStore()[listM[1]] || []) + '\\n'); process.exit(0); }",
+      "process.stdout.write('\\n'); process.exit(0);",
+    ]);
+
+    G.git(tmp, ['checkout', '-b', 'workflow/' + project], { encoding: 'utf8' });
+    G.git(tmp, ['push', '-u', 'origin', 'workflow/' + project], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'DELIVERABLE-9360.txt'), 'deliverable\n');
+    G.git(tmp, ['add', 'DELIVERABLE-9360.txt'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: deliverable 9360'], { encoding: 'utf8' });
+    G.git(tmp, ['push', 'origin', 'workflow/' + project], { encoding: 'utf8' });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--branch', 'workflow/' + project, '--project', project,
+      '--issue', String(issue), '--keep-issue-open', '--sink', '--json',
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js') },
+    });
+    const parsed = (() => { try { return JSON.parse(String(result.stdout || '').trim().split('\n').pop()); } catch (_) { return {}; } })();
+    const calls = (() => { try { return fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean); } catch (_) { return []; } })();
+    const bodies = (() => {
+      try { return (JSON.parse(fs.readFileSync(storeFile, 'utf8'))[String(issue)] || []).map(c => String(c.body || '')); }
+      catch (_) { return []; }
+    })();
+
+    // FIXTURE PREMISE — a run that stopped early says nothing about claim release.
+    assert(result.status === 0 && parsed.status === 'sinked',
+      '#936: the keep-open --sink run must complete, or nothing below is about claim release; got exit=' + result.status +
+      ' status=' + JSON.stringify(parsed.status || parsed.reason) + '\nstderr: ' + String(result.stderr || '').slice(-800));
+    assert(!calls.includes('close:' + issue),
+      '#936 premise: a keep-open run must leave the issue OPEN; calls=' + JSON.stringify(calls));
+
+    assert(calls.includes('label-removed:' + issue),
+      '#936: --sink --keep-issue-open must remove the workflow:in-progress LABEL from the issue it leaves open; calls=' + JSON.stringify(calls));
+    assert(!bodies.some(b => b.includes(marker(project))),
+      '#936: --sink --keep-issue-open must delete the kw:claim MARKER COMMENT from the issue it leaves open — the classifier blocks a re-claim on (label OR marker), so releasing only the label leaves the issue claimed. Comments still on #' + issue + ': ' + JSON.stringify(bodies));
+    assert(!calls.some(l => l.startsWith('REJECTED-wrong-cwd:')),
+      '#936: every forge call must carry a cwd that resolves the repository — --sink chdirs to os.tmpdir(), so a call made without { cwd: mainRoot } fails invisibly inside a swallowed catch and deletes nothing. Rejected: ' + JSON.stringify(calls.filter(l => l.startsWith('REJECTED-wrong-cwd:'))));
+    assert(bodies.some(b => b.includes(marker('issue-OTHER'))),
+      '#936: a marker belonging to a DIFFERENT project is another run\'s live claim and must NOT be deleted; comments=' + JSON.stringify(bodies));
+    console.log('testSinkKeepOpenReleasesClaimMarker: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(binDir, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 // issue-164 Task 5: tests for closure receipt shape and mockability
 
 function testSinkMergeEmitsClosureReceipt() {
@@ -12170,6 +12280,7 @@ function buildRegistry() {
   add('testClearAdvisoryClaimDeletesMarkerComment',       testClearAdvisoryClaimDeletesMarkerComment);
   add('testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker', testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker);
   add('testClearAdvisoryClaimOfflineSkipsDelete',         testClearAdvisoryClaimOfflineSkipsDelete);
+  add('testSinkKeepOpenReleasesClaimMarker',              testSinkKeepOpenReleasesClaimMarker);
   add('testSinkMergeEmitsClosureReceipt',                 testSinkMergeEmitsClosureReceipt);
   add('testWatchPrMergedClosureReceipt',                  testWatchPrMergedClosureReceipt);
   add('testFinalizeOfflineClosureReceiptSkipped',         testFinalizeOfflineClosureReceiptSkipped);

@@ -166,6 +166,17 @@ function initGitRepoWithBareRemote(tmp) {
 
 // A stateful gh mock: `issue view N --jq .state` returns a bare state ('open'/'closed'), derived from
 // the log — closed once `close:N` is logged, re-opened by `reopen:N`. Every mutating call is logged.
+//
+// #936: it also holds an ISSUE-COMMENT STORE, so a `kw:claim` marker comment is a thing that exists
+// on a fixture issue and can be observed to be gone afterwards, rather than a call the sink is
+// asserted to have made. The store lives at `<binDir>/issue-comments.json`
+// (`{ "<issue>": [ { id, body, updated_at } ] }`) and is served by two routes the pre-#936 mock
+// answered from its catch-all:
+//   `api repos/{owner}/{repo}/issues/N/comments`                → the array for issue N
+//   `api --method DELETE repos/{owner}/{repo}/issues/comments/I` → drops comment I from the store
+// The DELETE route is tested FIRST because both argv contain the substring `comments`.
+// A scenario that plants no store gets `[]` from the list route, which is what the catch-all's empty
+// stdout already parsed to — so every pre-#936 scenario is behaviourally unchanged.
 function writeGhMock(binDir, logFile) {
   fs.mkdirSync(binDir, { recursive: true });
   fs.writeFileSync(path.join(binDir, 'gh.js'), [
@@ -175,7 +186,10 @@ function writeGhMock(binDir, logFile) {
     'const argv = process.argv.slice(2);',
     'const a = argv.join(" ");',
     'const logFile = ' + JSON.stringify(logFile) + ';',
+    'const storeFile = ' + JSON.stringify(path.join(binDir, 'issue-comments.json')) + ';',
     'function log(m){ try { fs.appendFileSync(logFile, m + "\\n"); } catch(_){} }',
+    'function loadStore(){ try { return JSON.parse(fs.readFileSync(storeFile, "utf8")); } catch(_){ return {}; } }',
+    'function saveStore(s){ try { fs.writeFileSync(storeFile, JSON.stringify(s, null, 2)); } catch(_){} }',
     // cwd-honest, like real gh: without --repo, gh resolves its target repo from the invoking cwd.
     // The sink transaction chdirs to os.tmpdir(), so any call site that drops { cwd: mainRoot }
     // must FAIL here exactly as real gh does — a cwd-blind mock is how the #694 keep-open guard
@@ -199,8 +213,50 @@ function writeGhMock(binDir, logFile) {
     'if (a.includes("issue edit") && a.includes("--remove-label")) { const m=a.match(/issue edit (\\d+)/); log("label-removed:"+(m?m[1]:"?")); process.exit(0); }',
     'const commentM = a.match(/issue comment (\\d+)/);',
     'if (commentM) { log("comment:"+commentM[1]); process.exit(0); }',
+    // #936 comment-store routes. DELETE before LIST — both argv carry "comments".
+    'const delM = a.match(/issues\\/comments\\/(\\d+)/);',
+    'if (a.includes("api") && (a.includes("--method DELETE") || a.includes("-X DELETE")) && delM) {',
+    '  const id = Number(delM[1]); const s = loadStore(); let hit = false;',
+    '  for (const k of Object.keys(s)) {',
+    '    const before = (s[k] || []).length;',
+    '    s[k] = (s[k] || []).filter(function(c){ return Number(c && c.id) !== id; });',
+    '    if (s[k].length !== before) hit = true;',
+    '  }',
+    '  saveStore(s);',
+    '  log("comment-deleted:" + id + (hit ? "" : ":no-such-comment"));',
+    '  process.stdout.write("{}\\n"); process.exit(0);',
+    '}',
+    'const listM = a.match(/issues\\/(\\d+)\\/comments/);',
+    'if (a.includes("api") && listM) {',
+    '  log("comments-listed:" + listM[1]);',
+    '  process.stdout.write(JSON.stringify(loadStore()[listM[1]] || []) + "\\n"); process.exit(0);',
+    '}',
     'process.stdout.write("\\n"); process.exit(0);',
   ].join('\n'));
+}
+
+// #936 store accessors. `plantIssueComments` seeds it; `issueCommentBodies` reads the store BACK
+// after a run, which is what makes the marker assertions statements about the remote's end state
+// rather than about the call the sink happened to make.
+function commentStorePath(binDir) { return path.join(binDir, 'issue-comments.json'); }
+function claimMarker(project) { return '<!-- kw:claim project=' + project + ' -->'; }
+function plantIssueComments(binDir, byIssue) {
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(commentStorePath(binDir), JSON.stringify(byIssue, null, 2) + '\n');
+}
+function issueCommentBodies(binDir, issue) {
+  let store = {};
+  try { store = JSON.parse(fs.readFileSync(commentStorePath(binDir), 'utf8')); } catch (_) { return []; }
+  return (store[String(issue)] || []).map(c => String((c && c.body) || ''));
+}
+// A marker comment as the claim path actually posts it (claim.js posts the HTML comment followed by
+// prose on the next line), so a deleter matching the exact literal is matching what ships.
+function markerComment(id, project) {
+  return {
+    id,
+    body: claimMarker(project) + '\nKaola-Workflow started local work for `' + project + '`.',
+    updated_at: new Date().toISOString(),
+  };
 }
 
 // A live-project workflow-state.md (## Sink block with a claim_ts). Written on the feature branch —
@@ -4620,6 +4676,291 @@ function assertDisclosureTracksTheCollision931(label, sinkScript, mockEnvName, m
   assertDisclosureTracksTheCollision931('#931 n5 ' + label, script, mockEnv, 'collision', 'issue-' + (93150 + index), 93150 + index);
   assertDisclosureTracksTheCollision931('#931 n5 ' + label, script, mockEnv, 'none', 'issue-' + (93160 + index), 93160 + index);
 });
+
+// --------------------------------------------------------------------------- (#936) the half-released claim
+//
+// A claim is TWO artifacts, not one: the `workflow:in-progress` LABEL and a
+// `<!-- kw:claim project=<slug> -->` MARKER COMMENT posted at claim time. The classifier blocks a
+// re-claim on (label present) OR (marker present), so releasing one and leaving the other leaves the
+// issue blocked. `clearAdvisoryClaim` in claim.js removes both. sink-merge removes only the label —
+// and on the `--sink` keep-open path, neither.
+//
+// Every assertion below is about the STORE, not about a call: the marker either is or is not on the
+// issue when the run ends. That is deliberate, and it is what makes this suite able to tell a
+// correct fix from the one that is easy to reach for and silently does nothing:
+//
+//   THE cwd TRAP. Both sink entry points `process.chdir(os.tmpdir())` before doing any work, which
+//   is why every forge call in sink-merge passes `{ cwd: mainRoot }` explicitly. `clearAdvisoryClaim`
+//   calls `ghExec` with NO opts, and its marker-deletion block sits inside four swallowed
+//   `catch (_) {}`. A fix that simply calls it from the sink therefore runs `gh` in tmpdir — outside
+//   any git repository, where real gh cannot resolve a base repo — and deletes nothing, forever
+//   silently, forever green against a test that asserts only that the deleter was invoked.
+//   The mock above is cwd-honest for exactly this reason: it fails like real gh does. So a cwd-less
+//   fix leaves the marker sitting in the store and every assertion here goes red, and the
+//   REJECTED-wrong-cwd clause names the cause instead of leaving a bare "still there".
+
+// The mock is the instrument every assertion below reads, so its two discriminating behaviours are
+// measured FIRST and directly: (1) it rejects a call made from outside a repository, and (2) its
+// DELETE route really removes the comment from the store. Without this, "the marker is gone" and
+// "no call was rejected" could both be true of an instrument that does nothing at all.
+(function testTheMockDiscriminatesWrongCwdAndReallyDeletes() {
+  console.log('Test (#936 control): the gh mock is the instrument — it must reject a call made outside a git repo (as real gh does) and its DELETE route must really remove the comment from the store');
+  const fx = buildSoleArchiverFixture('issue-93600', 93600, { noPriorArchive: true });
+  fx.projectName = 'issue-93600';
+  const ghMock = path.join(fx.binDir, 'gh.js');
+  const listArgs = ['api', 'repos/{owner}/{repo}/issues/93600/comments'];
+  const delArgs = ['api', '--method', 'DELETE', 'repos/{owner}/{repo}/issues/comments/93611'];
+  try {
+    plantIssueComments(fx.binDir, { 93600: [markerComment(93611, 'issue-93600')] });
+
+    // (1a) inside the repo: the list route answers.
+    const inRepo = spawnSync(process.execPath, [ghMock].concat(listArgs), { cwd: fx.tmpRoot, encoding: 'utf8' });
+    assert(inRepo.status === 0, '#936 control: a list call from inside the repo must succeed; got ' + inRepo.status + ' stderr: ' + inRepo.stderr);
+    let listed = null;
+    try { listed = JSON.parse(inRepo.stdout); } catch (_) { listed = null; }
+    assert(Array.isArray(listed) && listed.length === 1 && Number(listed[0].id) === 93611,
+      '#936 control: the list route must serve the planted store; got ' + JSON.stringify(inRepo.stdout));
+
+    // (1b) outside any repo — the shape a cwd-less fix produces. This is the POSITIVE CONTROL for
+    // every "no REJECTED-wrong-cwd" clause below: without it those clauses could be vacuously true.
+    const outOfRepo = spawnSync(process.execPath, [ghMock].concat(listArgs), { cwd: os.tmpdir(), encoding: 'utf8' });
+    assert(outOfRepo.status !== 0,
+      '#936 control: a call made from outside any git repository must FAIL like real gh; got exit ' + outOfRepo.status +
+      ' — if this passes, every cwd clause below is measuring nothing');
+    assert(readLog(fx.logFile).some(l => l.startsWith('REJECTED-wrong-cwd:')),
+      '#936 control: the rejection must be recorded in the call log so a cwd-less fix is diagnosable; log=' + JSON.stringify(readLog(fx.logFile)));
+
+    // (2) the DELETE route mutates the store, so "the marker is gone" can only become true by
+    // something actually deleting it.
+    assert(issueCommentBodies(fx.binDir, 93600).length === 1, '#936 control: precondition — the store holds the planted marker');
+    const del = spawnSync(process.execPath, [ghMock].concat(delArgs), { cwd: fx.tmpRoot, encoding: 'utf8' });
+    assert(del.status === 0, '#936 control: a DELETE from inside the repo must succeed; got ' + del.status + ' stderr: ' + del.stderr);
+    assert(issueCommentBodies(fx.binDir, 93600).length === 0,
+      '#936 control: the DELETE route must remove the comment from the store; still there: ' + JSON.stringify(issueCommentBodies(fx.binDir, 93600)));
+    assert(!readLog(fx.logFile).some(l => l === 'comment-deleted:93611:no-such-comment'),
+      '#936 control: the DELETE must have matched a real stored comment, not silently missed');
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// AC1 — `--sink --keep-issue-open` (runSinkTransaction), single issue. Today the entire closure step
+// is wrapped in `if (!keepIssueOpen)` with no else arm, so this path does NOTHING: no close, no
+// comment, no label, no marker. The issue stays claimed forever by both artifacts.
+(function testSinkKeepOpenReleasesBothClaimArtifacts() {
+  console.log('Test (#936 a): --sink --keep-issue-open must release BOTH claim artifacts on the issue it leaves open — the label AND the kw:claim marker comment');
+  const project = 'issue-93601';
+  const issue = 93601;
+  const fx = buildSoleArchiverFixture(project, issue, { noPriorArchive: true });
+  fx.projectName = project;
+  try {
+    // Three comments on the issue: this project's marker, ANOTHER project's marker (a live claim
+    // that must survive), and ordinary prose (which must survive).
+    plantIssueComments(fx.binDir, {
+      [issue]: [
+        markerComment(93621, project),
+        markerComment(93622, 'issue-OTHER'),
+        { id: 93623, body: 'an ordinary human comment mentioning nothing in particular', updated_at: new Date().toISOString() },
+      ],
+    });
+
+    const result = runSink(fx, ['--issue', String(issue), '--keep-issue-open']);
+    const out = lastJson(result);
+
+    // FIXTURE PREMISE — a run that stopped early measures nothing about claim release.
+    assert(result.status === 0 && out && out.status === 'sinked',
+      '#936 a premise: the keep-open sink must complete, or nothing below is about claim release; got exit=' + result.status +
+      ' status=' + JSON.stringify(out && (out.status || out.reason)) + '\nstderr: ' + String(result.stderr || '').slice(-800));
+    if (!(result.status === 0 && out && out.status === 'sinked')) return;
+
+    const calls = readLog(fx.logFile);
+    const bodies = issueCommentBodies(fx.binDir, issue);
+
+    // The issue really was left open — otherwise this is a close-path run wearing a keep-open flag
+    // and the claim-release requirement below is not the one under test.
+    assert(!calls.includes('close:' + issue),
+      '#936 a premise: a keep-open run must not close the issue; calls=' + JSON.stringify(calls));
+
+    // Artifact 1 — the label.
+    assert(calls.includes('label-removed:' + issue),
+      '#936 a: the claim LABEL must be removed from an issue the sink leaves open; calls=' + JSON.stringify(calls));
+
+    // Artifact 2 — the marker. Stated as the issue's END STATE, so a deleter that ran in the wrong
+    // cwd (and had its failure swallowed) fails here exactly as a deleter that never ran.
+    assert(!bodies.some(b => b.includes(claimMarker(project))),
+      '#936 a: the kw:claim MARKER COMMENT must be gone from an issue the sink leaves open — the classifier blocks a re-claim on (label OR marker), so releasing only the label leaves the issue claimed. Comments still on #' + issue + ': ' + JSON.stringify(bodies));
+
+    // The cause, named. A fix that calls the deleter without `{ cwd: mainRoot }` runs gh from
+    // os.tmpdir() (both sink entry points chdir there) and every one of its errors is swallowed.
+    assert(!calls.some(l => l.startsWith('REJECTED-wrong-cwd:')),
+      '#936 a: every forge call must carry a cwd that resolves the repository — the sink chdirs to os.tmpdir(), so a call made without { cwd: mainRoot } fails invisibly inside a swallowed catch. Rejected: ' +
+      JSON.stringify(calls.filter(l => l.startsWith('REJECTED-wrong-cwd:'))));
+
+    // Project scoping — the deleter is scoped to THIS project's marker and nothing else.
+    assert(bodies.some(b => b.includes(claimMarker('issue-OTHER'))),
+      '#936 a: a marker belonging to a DIFFERENT project is another run\'s live claim and must NOT be deleted; comments=' + JSON.stringify(bodies));
+    assert(bodies.some(b => b.includes('an ordinary human comment')),
+      '#936 a: ordinary comments must be left alone; comments=' + JSON.stringify(bodies));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// AC1 (bundle arm) — every issue the keep-open `--sink` run leaves OPEN, not just the primary.
+(function testSinkKeepOpenBundleReleasesEveryMember() {
+  console.log('Test (#936 b): --sink --keep-issue-open on a BUNDLE must release the label and the kw:claim marker on every member it leaves open, not only the primary');
+  const project = 'issue-93602';
+  const primary = 93602;
+  const member = 93632;
+  const fx = buildSoleArchiverFixture(project, primary, { noPriorArchive: true });
+  fx.projectName = project;
+  try {
+    plantIssueComments(fx.binDir, {
+      [primary]: [markerComment(93641, project)],
+      [member]: [markerComment(93642, project), markerComment(93643, 'issue-OTHER')],
+    });
+
+    const result = runSink(fx, ['--issue', String(primary), '--issue-numbers', primary + ',' + member, '--keep-issue-open']);
+    const out = lastJson(result);
+
+    assert(result.status === 0 && out && out.status === 'sinked',
+      '#936 b premise: the keep-open bundle sink must complete; got exit=' + result.status +
+      ' status=' + JSON.stringify(out && (out.status || out.reason)) + '\nstderr: ' + String(result.stderr || '').slice(-800));
+    if (!(result.status === 0 && out && out.status === 'sinked')) return;
+
+    const calls = readLog(fx.logFile);
+    for (const n of [primary, member]) {
+      assert(!calls.includes('close:' + n), '#936 b premise: keep-open must not close member ' + n + '; calls=' + JSON.stringify(calls));
+      assert(calls.includes('label-removed:' + n),
+        '#936 b: the claim LABEL must be removed from bundle member ' + n + '; calls=' + JSON.stringify(calls));
+      assert(!issueCommentBodies(fx.binDir, n).some(b => b.includes(claimMarker(project))),
+        '#936 b: the kw:claim MARKER must be gone from bundle member ' + n + ' — a bundle leaves EVERY member open, so every member needs both artifacts released. Comments still on #' + n + ': ' +
+        JSON.stringify(issueCommentBodies(fx.binDir, n)));
+    }
+    assert(issueCommentBodies(fx.binDir, member).some(b => b.includes(claimMarker('issue-OTHER'))),
+      '#936 b: another project\'s marker on a bundle member must survive; comments=' + JSON.stringify(issueCommentBodies(fx.binDir, member)));
+    assert(!calls.some(l => l.startsWith('REJECTED-wrong-cwd:')),
+      '#936 b: every forge call must carry a cwd that resolves the repository; rejected: ' +
+      JSON.stringify(calls.filter(l => l.startsWith('REJECTED-wrong-cwd:'))));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// AC2 — the LEGACY (non-`--sink`) terminal, postMergeCleanup. This path already removes the label in
+// both modes, primary and bundle member; what it never does is delete the marker. So the label
+// clauses here are green before and after, and the marker clauses are the whole measurement.
+//
+// The legacy entry point stops on a branch tip carrying a LIVE run folder, so this fixture commits
+// the folder ARCHIVED plus a real implementation file — the shape a finalized keep-open run leaves.
+function buildLegacyKeepOpenFixture(project, issue) {
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const branch = 'workflow/' + project;
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  writeGhMock(binDir, logFile);
+
+  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
+  git(tmpRoot, ['add', 'kaola-workflow']);
+  git(tmpRoot, ['commit', '-m', 'chore: roadmap']);
+  git(tmpRoot, ['push', 'origin', 'main']);
+
+  git(tmpRoot, ['checkout', '-b', branch]);
+  const archDir = path.join(tmpRoot, 'kaola-workflow', 'archive', project);
+  fs.mkdirSync(path.join(archDir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(archDir, 'workflow-state.md'),
+    'status: closed\nstep: complete\nissue_number: ' + issue + '\nlast_result: closed_keep_open\n\n## Sink\nbranch: ' + branch +
+    '\nissue_number: ' + issue + '\nsink: merge\nissue_action: comment_keep_open\n');
+  fs.writeFileSync(path.join(archDir, 'finalization-summary.md'), '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n');
+  fs.writeFileSync(path.join(archDir, '.cache', 'final-validation.md'), 'verdict: pass\nfindings_blocking: 0\n');
+  fs.writeFileSync(path.join(tmpRoot, 'IMPL-' + issue + '.txt'), 'real implementation\n');
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'feat: implementation + archived keep-open run']);
+  git(tmpRoot, ['push', '-u', 'origin', branch]);
+  git(tmpRoot, ['checkout', 'main']);
+
+  return { tmpRoot, remotePath, binDir, logFile, branch, projectName: project };
+}
+
+(function testLegacyKeepOpenCleanupDeletesTheMarkerToo() {
+  console.log('Test (#936 c): the legacy postMergeCleanup keep-open terminal removes the label on the primary and on every bundle member — it must delete their kw:claim markers too');
+  const project = 'issue-93603';
+  const primary = 93603;
+  const member = 93653;
+  const fx = buildLegacyKeepOpenFixture(project, primary);
+  try {
+    plantIssueComments(fx.binDir, {
+      [primary]: [markerComment(93661, project), markerComment(93662, 'issue-OTHER')],
+      [member]: [markerComment(93663, project)],
+    });
+
+    const result = runSinkLegacy(fx, ['--issue', String(primary), '--issue-numbers', primary + ',' + member, '--keep-issue-open']);
+    const out = lastJson(result);
+    const calls = readLog(fx.logFile);
+
+    // FIXTURE PREMISE — postMergeCleanup really ran in keep-open mode. Both clauses are needed: a
+    // stop before the cleanup, or a run that closed the issues, would make everything below vacuous.
+    assert(result.status === 0,
+      '#936 c premise: the legacy keep-open sink must complete; got exit=' + result.status +
+      ' out=' + JSON.stringify(out && (out.status || out.reason)) + '\nstderr: ' + String(result.stderr || '').slice(-800));
+    assert(calls.includes('label-removed:' + primary) && calls.includes('label-removed:' + member),
+      '#936 c premise: postMergeCleanup\'s keep-open arms must have run (they are what removes each member\'s label); calls=' + JSON.stringify(calls));
+    if (!(result.status === 0 && calls.includes('label-removed:' + primary))) return;
+    assert(!calls.includes('close:' + primary) && !calls.includes('close:' + member),
+      '#936 c premise: a keep-open run must leave every member OPEN; calls=' + JSON.stringify(calls));
+
+    for (const n of [primary, member]) {
+      assert(!issueCommentBodies(fx.binDir, n).some(b => b.includes(claimMarker(project))),
+        '#936 c: postMergeCleanup removes the claim label from #' + n + ' but leaves the kw:claim marker, so the classifier still blocks a re-claim on it. Comments still on #' + n + ': ' +
+        JSON.stringify(issueCommentBodies(fx.binDir, n)));
+    }
+    assert(issueCommentBodies(fx.binDir, primary).some(b => b.includes(claimMarker('issue-OTHER'))),
+      '#936 c: another project\'s marker must survive; comments=' + JSON.stringify(issueCommentBodies(fx.binDir, primary)));
+    assert(!calls.some(l => l.startsWith('REJECTED-wrong-cwd:')),
+      '#936 c: every forge call must carry a cwd that resolves the repository — the legacy path also chdirs to os.tmpdir(); rejected: ' +
+      JSON.stringify(calls.filter(l => l.startsWith('REJECTED-wrong-cwd:'))));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// AC3 — the CLOSE path is not in scope and must not change. A leftover marker on a CLOSED issue is
+// harmless (the classifier short-circuits on closed state before any claim check), so nothing is
+// asserted about markers here; what is asserted is that the close terminal still closes, still
+// removes the label, and still reports the same way.
+//
+// DECLARED CONTROL: unlike (a)–(c) this is GREEN on the unfixed code, deliberately. It exists to
+// catch a fix that reaches the marker by restructuring the closure step and breaks the close path
+// on the way — a regression the other three cannot see because none of them closes anything.
+(function testCloseTerminalIsUnchanged() {
+  console.log('Test (#936 d, control): the CLOSE terminal is out of scope and must be unchanged — it still closes the issue, still removes the label, and still reports status:sinked (green before AND after the fix)');
+  const project = 'issue-93604';
+  const issue = 93604;
+  const fx = buildSoleArchiverFixture(project, issue, { noPriorArchive: true });
+  fx.projectName = project;
+  try {
+    plantIssueComments(fx.binDir, { [issue]: [markerComment(93671, project)] });
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+    const calls = readLog(fx.logFile);
+
+    assert(result.status === 0 && out && out.status === 'sinked',
+      '#936 d: the close terminal must still reach status:sinked; got exit=' + result.status +
+      ' status=' + JSON.stringify(out && (out.status || out.reason)) + '\nstderr: ' + String(result.stderr || '').slice(-800));
+    assert(calls.includes('close:' + issue),
+      '#936 d: the close terminal must still close the issue; calls=' + JSON.stringify(calls));
+    assert(calls.includes('label-removed:' + issue),
+      '#936 d: the close terminal must still remove the claim label; calls=' + JSON.stringify(calls));
+    assert(!calls.some(l => l.startsWith('REJECTED-wrong-cwd:')),
+      '#936 d: no forge call on the close path may be made from outside the repository; rejected: ' +
+      JSON.stringify(calls.filter(l => l.startsWith('REJECTED-wrong-cwd:'))));
+  } finally {
+    cleanup(fx);
+  }
+})();
 
 // --------------------------------------------------------------------------- summary
 

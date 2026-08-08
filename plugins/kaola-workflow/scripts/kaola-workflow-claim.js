@@ -954,26 +954,31 @@ function removeLegacyStateBlocks(content) {
     .replace(fieldPattern, '');
 }
 
-function clearAdvisoryClaim(issueNumber, reason, project) {
+// #936: `opts` is passed straight through to EVERY ghExec below. Callers that run with a cwd
+// outside the repository must supply `{ cwd: <repo root> }` — sink-merge chdirs to os.tmpdir()
+// before doing any work, and `gh` without --repo resolves its target repo from the invoking cwd, so
+// a cwd-less call there fails to resolve a base repo. Every failure here is swallowed (four
+// separate catches), so such a call would clear nothing and report 'removed' all the same.
+function clearAdvisoryClaim(issueNumber, reason, project, opts) {
   if (OFFLINE || issueNumber == null) return 'skipped_offline';
   let status = 'failed';
   try {
-    ghExec(['issue', 'edit', String(issueNumber), '--remove-label', CLAIM_LABEL]);
+    ghExec(['issue', 'edit', String(issueNumber), '--remove-label', CLAIM_LABEL], opts);
     status = 'removed';
   } catch (_) {}
   if (reason) {
-    try { ghExec(['issue', 'comment', String(issueNumber), '--body', 'Kaola-Workflow advisory claim cleared: ' + reason]); } catch (_) {}
+    try { ghExec(['issue', 'comment', String(issueNumber), '--body', 'Kaola-Workflow advisory claim cleared: ' + reason], opts); } catch (_) {}
   }
   // Delete the project-scoped kw:claim marker comment so the remote-claim detector
   // no longer blocks re-claiming this issue after discard/release/finalize (#275).
   try {
-    const raw = ghExec(['api', 'repos/{owner}/{repo}/issues/' + String(issueNumber) + '/comments']);
+    const raw = ghExec(['api', 'repos/{owner}/{repo}/issues/' + String(issueNumber) + '/comments'], opts);
     const comments = JSON.parse(raw || '[]');
     const marker = project ? ('<!-- kw:claim project=' + project + ' -->') : null;
     for (const comment of comments) {
       if (!comment || !comment.body || !comment.id) continue;
       if (marker ? comment.body.includes(marker) : /<!--\s*kw:claim\s+project=/.test(comment.body)) {
-        try { ghExec(['api', '--method', 'DELETE', 'repos/{owner}/{repo}/issues/comments/' + String(comment.id)]); } catch (_) {}
+        try { ghExec(['api', '--method', 'DELETE', 'repos/{owner}/{repo}/issues/comments/' + String(comment.id)], opts); } catch (_) {}
       }
     }
   } catch (_) {}
@@ -6569,6 +6574,9 @@ module.exports = {
   removeBranch,
   removeBranchIfMerged,
   postAdvisoryClaim,
+  // #936: sink-merge require()s this — the sink's keep-open terminals leave an issue OPEN and must
+  // release BOTH claim artifacts, and this is the one place that knows the kw:claim marker format.
+  clearAdvisoryClaim,
   cmdAuditLabels,
   cmdLegacyWorktreeCleanup,
   cmdRepairLabels,
