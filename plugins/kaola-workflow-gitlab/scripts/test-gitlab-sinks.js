@@ -2570,7 +2570,10 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
       "process.stdout.write('\\n'); process.exit(0);",
     ].join('\n'));
 
-    const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
+    // Fixture arrangement routes through the shared library, exactly as this file's header says —
+    // a `git init` in a fixture is not a property under test at any process boundary, so it carries
+    // no spawn class and must not borrow one. The rest of this block already used G.
+    const git = (...a) => G.exec(root, a, { encoding: 'utf8' });
     git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
     // Project identity where readProjectInfo finds it without any forge call, so a correct fix is
     // reachable and a discoverProject()-from-tmpdir fix is the thing that reds.
@@ -2595,6 +2598,10 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
     G.exec(root, ['push', '-u', 'origin', branch], { encoding: 'utf8' });
     G.exec(root, ['branch', '--set-upstream-to=origin/' + branch, branch], { encoding: 'utf8' });
 
+    // The measured properties are the sink's own exit code and the last-line JSON envelope it
+    // prints, and the forge calls it makes on the way out. All three exist only at the process
+    // boundary; the keep-open closure step is reachable no other way.
+    // spawn-class: cli-contract
     const r = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--issue', String(issue), '--project', project, '--keep-issue-open', '--sink'], {
       cwd: root, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GLAB_MOCK_SCRIPT: mockPath }
     });

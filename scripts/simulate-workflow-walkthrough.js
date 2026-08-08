@@ -7513,6 +7513,10 @@ function testSinkKeepOpenReleasesClaimMarker() {
     G.git(tmp, ['push', 'origin', 'workflow/' + project], { encoding: 'utf8' });
     G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
+    // The measured properties are the sink's own exit code and the last-line JSON envelope it
+    // prints, and the forge calls it makes on the way out. All three exist only at the process
+    // boundary; the keep-open closure step is reachable no other way.
+    // spawn-class: cli-contract
     const result = spawnSync(process.execPath, [
       sinkMergeScript, '--branch', 'workflow/' + project, '--project', project,
       '--issue', String(issue), '--keep-issue-open', '--sink', '--json',

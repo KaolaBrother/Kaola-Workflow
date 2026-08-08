@@ -4713,7 +4713,12 @@ function assertDisclosureTracksTheCollision931(label, sinkScript, mockEnvName, m
   try {
     plantIssueComments(fx.binDir, { 93600: [markerComment(93611, 'issue-93600')] });
 
+    // All three spawns below drive the mock as the CLI it stands in for: argv (and the cwd it is
+    // launched from) in, exit code and stdout out. The exit code IS the measured property in each
+    // — the mock has no in-process form to call, and an exit code does not exist below a process.
+    //
     // (1a) inside the repo: the list route answers.
+    // spawn-class: cli-contract
     const inRepo = spawnSync(process.execPath, [ghMock].concat(listArgs), { cwd: fx.tmpRoot, encoding: 'utf8' });
     assert(inRepo.status === 0, '#936 control: a list call from inside the repo must succeed; got ' + inRepo.status + ' stderr: ' + inRepo.stderr);
     let listed = null;
@@ -4723,6 +4728,7 @@ function assertDisclosureTracksTheCollision931(label, sinkScript, mockEnvName, m
 
     // (1b) outside any repo — the shape a cwd-less fix produces. This is the POSITIVE CONTROL for
     // every "no REJECTED-wrong-cwd" clause below: without it those clauses could be vacuously true.
+    // spawn-class: cli-contract
     const outOfRepo = spawnSync(process.execPath, [ghMock].concat(listArgs), { cwd: os.tmpdir(), encoding: 'utf8' });
     assert(outOfRepo.status !== 0,
       '#936 control: a call made from outside any git repository must FAIL like real gh; got exit ' + outOfRepo.status +
@@ -4733,6 +4739,7 @@ function assertDisclosureTracksTheCollision931(label, sinkScript, mockEnvName, m
     // (2) the DELETE route mutates the store, so "the marker is gone" can only become true by
     // something actually deleting it.
     assert(issueCommentBodies(fx.binDir, 93600).length === 1, '#936 control: precondition — the store holds the planted marker');
+    // spawn-class: cli-contract
     const del = spawnSync(process.execPath, [ghMock].concat(delArgs), { cwd: fx.tmpRoot, encoding: 'utf8' });
     assert(del.status === 0, '#936 control: a DELETE from inside the repo must succeed; got ' + del.status + ' stderr: ' + del.stderr);
     assert(issueCommentBodies(fx.binDir, 93600).length === 0,
