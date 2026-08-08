@@ -271,7 +271,11 @@ patched in place by the later lifecycle verbs. Its blocks:
   `issue_action: close | comment_keep_open` line (default `close` when absent) marks a keep-open
   partial-close terminal: the orchestrator writes `comment_keep_open` at the closure decision to
   keep the issue OPEN — `finalize` / `sink-merge` then preserve the roadmap source, comment instead
-  of closing, and refuse a PR/MR sink (keep-open is merge-sink-only).
+  of closing, refuse a PR/MR sink (keep-open is merge-sink-only), and **release the claim on every
+  issue left open**. Release means both artifacts: the `workflow:in-progress` label and the
+  `<!-- kw:claim project=<slug> -->` marker comment. The classifier blocks a re-claim on either, so
+  removing only the label leaves the issue claimed — an issue kept open is an issue meant to be
+  claimable again.
 
   Three **claim-time session fields** live in the `## Sink` block immediately after `run_posture`.
   They are written once by `writeState` and never refreshed — the partial-edit paths
