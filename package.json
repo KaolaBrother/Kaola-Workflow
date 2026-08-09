@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow",
-  "version": "9.5.4",
+  "version": "9.5.5",
   "description": "Adaptive Kaola-Workflow for Claude Code and Codex — a GitHub-issue-driven mission list: one file of item / status / dispatched / result that the orchestrator writes as it decomposes, dispatches and closes work. Multi-model orchestration with resumable on-disk coordination state.",
   "repository": {
     "type": "git",
