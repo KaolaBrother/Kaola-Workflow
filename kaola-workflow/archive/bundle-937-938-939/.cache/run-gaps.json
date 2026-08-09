@@ -1,0 +1,30 @@
+{
+  "project": "bundle-937-938-939",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:bundle-loop-discards-nonprimary-claim-status",
+      "sample": "`cmdFinalize`'s bundle loop keeps only the PRIMARY member's `clearAdvisoryClaim` result; every non-primary status is discarded. Online, a member whose label removal returns `failed` is therefore invisible, and `closure_invariants` passes on the primary's `removed`. Observed by reading during the #938 drive (`.cache/drive-938-offline.md` inference 5) and NOT measured — no leg drove a per-member forge failure. Not reachable in the offline legs, where every member returns the same token. This run's `claim_release_skipped_offline` finding collects members separately and does not depend on it.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:refusals-after-the-claim-is-released",
+      "sample": "the inverse of what #939 asked. Three `cmdFinalize` returns fire AFTER the claim-clearing loop (canonical :4982 `chore: archive` commit failed, :5103 the `finalGuard` staging guard, :5132 `chore: finalize` commit failed), so the claim is already GONE while the run is still live — folder, branch and worktree all still present. `:5103` re-runs the identical staging-guard condition that refuses at door 4 with the claim intact. Observed while enumerating the six doors (`.cache/drive-939-refusal-paths.md` §1 and §10.1); flagged, not driven. IMPL-PROSE deliberately did not add the `release` route to those three, because the claim is already released there and the advice would be false.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:archive-residue-accumulates-on-repeated-refusal",
+      "sample": "each refused re-run of the `archive_incomplete` door leaves a further `<project>.archived-<timestamp>` directory in the archive band on main. MEASURED (`.cache/drive-939-refusal-paths.md` §6 leg 2). Inert while the live folder survives, because `resolveFinalizeAuthority` only refuses `archive_authority_ambiguous` when more than one archive-band entry matches AND the live source is gone — so it becomes a second-order problem only if the live folder is later removed by hand.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:offline-finding-silent-when-issue-number-is-null",
+      "sample": "`clearAdvisoryClaim` returns `skipped_offline` for `issueNumber == null` as well as for `OFFLINE`, and this run's new finding fires only when at least one real issue number was skipped. A scalar finalize that cannot recover its issue number therefore still reports nothing about its claim. Recorded by IMPL-LANE while implementing (`.cache/impl-lane.md`); no drive observed that shape.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:release-route-not-on-the-command-surface",
+      "sample": "#939's residual was stated as \"no refusal envelope AND no command surface names `release`\". This run closed the envelope half across all six doors and four editions, and `docs/api.md`. The command/SKILL surface still does not name it; that text is GENERATED from `templates/routing/`, so it is a skeleton edit plus a regeneration rather than an amendment. Left undone deliberately — the owner's ruling scoped this to \"the six refusal operator hints and the docs\".",
+      "count": 1
+    }
+  ]
+}
