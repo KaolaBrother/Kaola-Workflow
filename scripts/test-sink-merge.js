@@ -4969,6 +4969,169 @@ function buildLegacyKeepOpenFixture(project, issue) {
   }
 })();
 
+// --------------------------------------------------------------------------- (#937) the slug that only LOOKED right
+//
+// `clearAdvisoryClaim` composes the marker it deletes by EXACT, case-sensitive substring from the
+// project name the OPERATOR supplied: `'<!-- kw:claim project=' + project + ' -->'`. Both keep-open
+// terminals in this file hand it `args.project` verbatim — postMergeCleanup's primary and
+// bundle-member arms on the legacy path, and runSinkTransaction's keep-open terminal under `--sink`.
+// The PRODUCER posted the marker under the name the run was CLAIMED with, which is the name of the
+// folder on disk.
+//
+// On a case-insensitive filesystem those two can differ and nothing local notices. `--project
+// Issue-N` resolves `kaola-workflow/issue-N` exactly as the lowercase spelling would, so every local
+// step succeeds, the run reports status:sinked at exit 0 and the receipt says the claim label was
+// removed — while the marker string composed from the supplied spelling matches nothing on the
+// forge, every delete is skipped, and the claim survives on every member the run left open. git's
+// index is case-SENSITIVE where the filesystem is not, so the same run also publishes its archive
+// under the supplied spelling and leaves the live folder tracked beside it.
+//
+// The owner ruled RESOLVE AND REPORT: the supplied name is resolved to the actual on-disk folder
+// once, early, and the correction is stated in the run's own output. Refusing was declined — a
+// case-SENSITIVE volume already refuses today for its own reasons and that is not in scope here.
+
+// The operator's spelling. `Issue-` differs from the on-disk `issue-` in exactly one byte, which is
+// the whole point: it is the difference a case-insensitive filesystem cannot see and a substring
+// match cannot miss.
+function misCaseSlug(project) { return project.replace(/^issue-/, 'Issue-'); }
+
+// Did this run TELL the operator that the name it was given is not the folder it used? Every value
+// in the envelope is searched for a string naming BOTH spellings, and the shape is deliberately
+// left open: a note field (what #933's `reserved_project` / `reserved_project_note` pair does for
+// the same class of correction on the claim envelope), a typed finding's detail line, or a receipt
+// field all satisfy it. What cannot satisfy it is silence — nor the two spellings turning up in
+// SEPARATE fields, which is what an archive path and a project name do by coincidence rather than
+// by saying anything.
+function slugCorrectionSentences(out, supplied, resolved) {
+  const hits = [];
+  const walk = v => {
+    if (typeof v === 'string') { if (v.includes(supplied) && v.includes(resolved)) hits.push(v); return; }
+    if (Array.isArray(v)) { v.forEach(walk); return; }
+    if (v && typeof v === 'object') { for (const k of Object.keys(v)) walk(v[k]); }
+  };
+  walk(out);
+  return hits;
+}
+
+// One assertion set over both keep-open terminals and both spellings. `supplied` is what goes on the
+// command line; `project` is what is on disk and what the producer's marker carries. When they are
+// equal this is the POSITIVE CONTROL: the same fixture, the same assertions, a slug that needs no
+// resolving — without it "the marker is gone" could be true of a run that deletes nothing anywhere.
+function assertKeepOpenResolvesTheProjectSlug937(label, entry, project, primary, member, supplied) {
+  const misCased = supplied !== project;
+  const fx = entry === 'sink'
+    ? buildSoleArchiverFixture(project, primary, { noPriorArchive: true })
+    : buildLegacyKeepOpenFixture(project, primary);
+  // The operator's spelling reaches the CLI here and nowhere else — the fixture on disk is built
+  // under the real name, exactly as a claim would have left it.
+  fx.projectName = supplied;
+  try {
+    plantIssueComments(fx.binDir, {
+      [primary]: [
+        markerComment(93721, project),
+        markerComment(93722, 'issue-OTHER'),
+        { id: 93723, body: 'an ordinary human comment mentioning nothing in particular', updated_at: new Date().toISOString() },
+      ],
+      [member]: [markerComment(93724, project)],
+    });
+
+    const args = ['--issue', String(primary), '--issue-numbers', primary + ',' + member, '--keep-issue-open'];
+    const result = entry === 'sink' ? runSink(fx, args) : runSinkLegacy(fx, args);
+    const out = lastJson(result);
+    const calls = readLog(fx.logFile);
+
+    // FIXTURE PREMISE. A run that stopped early, or one that closed the issues, measures nothing
+    // about claim release. Resolving the slug must not turn this run into a refusal either — the
+    // owner declined that — so this clause is also the pin against over-correcting.
+    if (entry === 'sink') {
+      assert(result.status === 0 && out && out.status === 'sinked',
+        label + ' premise: the keep-open sink must complete — a mis-cased --project resolves to the on-disk folder, it does not refuse; got exit=' + result.status +
+        ' status=' + JSON.stringify(out && (out.status || out.reason)) + '\nstderr: ' + String(result.stderr || '').slice(-800));
+      if (!(result.status === 0 && out && out.status === 'sinked')) return;
+    } else {
+      assert(result.status === 0,
+        label + ' premise: the legacy keep-open sink must complete; got exit=' + result.status +
+        ' out=' + JSON.stringify(out && (out.status || out.reason)) + '\nstderr: ' + String(result.stderr || '').slice(-800));
+      assert(calls.includes('label-removed:' + primary) && calls.includes('label-removed:' + member),
+        label + ' premise: postMergeCleanup\'s keep-open arms must have run (they are what removes each member\'s label); calls=' + JSON.stringify(calls));
+      if (!(result.status === 0 && calls.includes('label-removed:' + primary))) return;
+    }
+    for (const n of [primary, member]) {
+      assert(!calls.includes('close:' + n),
+        label + ' premise: a keep-open run must leave member ' + n + ' OPEN; calls=' + JSON.stringify(calls));
+    }
+
+    // THE PIN. Stated as the issue's END STATE on every member, so a deleter that composed a marker
+    // nothing matches fails here exactly as a deleter that never ran — both leave the claim standing.
+    for (const n of [primary, member]) {
+      assert(calls.includes('label-removed:' + n),
+        label + ': the claim LABEL must be removed from member ' + n + '; calls=' + JSON.stringify(calls));
+      assert(!issueCommentBodies(fx.binDir, n).some(b => b.includes(claimMarker(project))),
+        label + ': the kw:claim MARKER posted for the on-disk project "' + project + '" must be gone from member ' + n +
+        ', and the run was driven with --project "' + supplied + '". The deleter composes its marker from the supplied spelling by exact substring, so a name that differs only in CASE matches nothing on the forge and every delete is silently skipped — the run still exits 0 and still reports the label removed. Comments still on #' + n + ': ' +
+        JSON.stringify(issueCommentBodies(fx.binDir, n)));
+    }
+
+    // Scoping is NOT widened by the resolution. A case-insensitive or looser match would sweep up a
+    // marker that belongs to a live run somewhere else.
+    assert(issueCommentBodies(fx.binDir, primary).some(b => b.includes(claimMarker('issue-OTHER'))),
+      label + ': a marker belonging to a DIFFERENT project is another run\'s live claim and must NOT be deleted; comments=' +
+      JSON.stringify(issueCommentBodies(fx.binDir, primary)));
+    assert(issueCommentBodies(fx.binDir, primary).some(b => b.includes('an ordinary human comment')),
+      label + ': ordinary comments must be left alone; comments=' + JSON.stringify(issueCommentBodies(fx.binDir, primary)));
+
+    assert(!calls.some(l => l.startsWith('REJECTED-wrong-cwd:')),
+      label + ': every forge call must carry a cwd that resolves the repository — both entry points chdir to os.tmpdir(); rejected: ' +
+      JSON.stringify(calls.filter(l => l.startsWith('REJECTED-wrong-cwd:'))));
+
+    if (misCased) {
+      // REPORTED, not silently corrected. The operator asked for one name and got another; a run
+      // that fixes itself without saying so leaves them believing the name they typed is the name
+      // on disk, and the next command they type carries the same spelling.
+      const sentences = slugCorrectionSentences(out, supplied, project);
+      assert(sentences.length > 0,
+        label + ': the run was given --project "' + supplied + '" and used "' + project + '", and its output says so nowhere. ' +
+        'Report the substitution the way the claim envelope reports a reserved project name — one value naming what was supplied and what was used. Envelope: ' +
+        JSON.stringify(out));
+    }
+
+    if (entry === 'sink') {
+      // The same one-byte difference reaches GIT, whose index is case-sensitive where the
+      // filesystem is not: the archive is written under the supplied spelling and the removal
+      // pathspec for the live folder matches nothing, so the published tree carries both.
+      const published = blobsUnder(fx.tmpRoot, 'origin/main', 'kaola-workflow/');
+      const strayArchive = published.filter(p => p.startsWith('kaola-workflow/archive/' + supplied + '/'));
+      assert(!misCased || strayArchive.length === 0,
+        label + ': the archive was published under the SUPPLIED spelling "kaola-workflow/archive/' + supplied +
+        '/" instead of the on-disk project name — a second, mis-cased archive directory on the default branch. Paths: ' +
+        JSON.stringify(strayArchive));
+      const liveStillTracked = published.filter(p => p.startsWith('kaola-workflow/' + project + '/'));
+      assert(liveStillTracked.length === 0,
+        label + ': the LIVE run folder is still tracked at origin/main after the sink — the removal pathspec was composed from the supplied spelling and matched nothing in a case-sensitive index. Paths: ' +
+        JSON.stringify(liveStillTracked));
+      const dirty = git(fx.tmpRoot, ['status', '--porcelain']).stdout.trim();
+      assert(dirty === '',
+        label + ': the default-branch checkout must be clean after the sink; git status --porcelain:\n' + dirty);
+    }
+  } finally {
+    cleanup(fx);
+  }
+}
+
+// (#937 a/b) the `--sink` keep-open terminal — runSinkTransaction. The mis-cased leg FIRST, so a
+// terminal that resolves nothing fails there rather than quietly satisfying the control.
+console.log('Test (#937 a): --sink --keep-issue-open with a --project that differs from the on-disk folder ONLY IN CASE must still release the claim on every member, and must say it corrected the name');
+assertKeepOpenResolvesTheProjectSlug937('#937 a (--sink, mis-cased)', 'sink', 'issue-93701', 93701, 93711, misCaseSlug('issue-93701'));
+console.log('Test (#937 b, positive control): the same --sink run driven with the EXACT on-disk slug still deletes both markers — without this, "the marker is gone" could be true of a fixture that deletes nothing');
+assertKeepOpenResolvesTheProjectSlug937('#937 b (--sink, exact)', 'sink', 'issue-93702', 93702, 93712, 'issue-93702');
+
+// (#937 c/d) the LEGACY (non-`--sink`) terminal — postMergeCleanup. It never reaches the `--sink`
+// terminal above and the `--sink` path never reaches it, so both need their own fixture.
+console.log('Test (#937 c): the legacy postMergeCleanup keep-open terminal must resolve a mis-cased --project too — its primary and bundle-member arms compose the same marker from the same supplied name');
+assertKeepOpenResolvesTheProjectSlug937('#937 c (legacy, mis-cased)', 'legacy', 'issue-93703', 93703, 93713, misCaseSlug('issue-93703'));
+console.log('Test (#937 d, positive control): the legacy terminal driven with the EXACT on-disk slug still deletes both markers');
+assertKeepOpenResolvesTheProjectSlug937('#937 d (legacy, exact)', 'legacy', 'issue-93704', 93704, 93714, 'issue-93704');
+
 // --------------------------------------------------------------------------- summary
 
 if (failed === 0) {

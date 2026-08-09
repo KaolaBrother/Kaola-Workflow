@@ -4,6 +4,70 @@
 
 ### Fixed
 
+- **A mis-cased `--project` no longer half-finishes a run (#937).** The project slug reached the
+  transaction as the operator typed it and was never reconciled against the run's actual directory
+  name. On a case-insensitive filesystem every path-based step then succeeded through case folding
+  while everything matched by *string* missed: the claim marker is found by exact substring, so
+  `finalize --project Bundle-X` over a folder named `bundle-x` listed the comments on every bundle
+  member and deleted none of them, reporting `claim_label_removed: "removed"` and
+  `closure_invariants.ok: true` at exit 0. Nothing on the envelope distinguished that run from a
+  correct one.
+
+  The sink was worse, and it is the path the shipped finalize surface invokes. Because git's index
+  is case-sensitive while the filesystem is not, the archive move found the content but the removal
+  pathspec matched nothing — so a fresh clone of the remote carried `kaola-workflow/archive/Bundle-X/`
+  *and* the never-removed live `kaola-workflow/bundle-x/`, with the main checkout left holding two
+  unstaged deletions, all under `result: ok, status: sinked`.
+
+  All three symptoms share one cause, so the fix is one resolution rather than five patched call
+  sites: the name is resolved to the directory that exists **once, before anything is composed from
+  it**, and every downstream read — archive path, roadmap paths, removal pathspec, marker, receipt —
+  sees the resolved spelling. The correction is reported as `resolved_project_note` and is absent
+  when the spelling was already exact. `cmdFinalize` resolves against directory entries; the sink
+  resolves against the branch's git tree, because it runs from the default-branch checkout, which
+  does not carry the run folder until the merge lands. Resolution is uniform across filesystems: it
+  neither refuses nor stays silent. The six call sites that already passed a directory entry name
+  are untouched.
+
+- **An offline finalize now says that it released no claim (#938).** The claim release returns
+  before any forge call when `KAOLA_WORKFLOW_OFFLINE=1`, so an offline finalize reported
+  `status: closed` at exit 0 having made **zero** forge calls, leaving both the
+  `workflow:in-progress` label and the `kw:claim` marker on every member of the run. That is not
+  symmetric with an offline *claim*, which creates nothing: the artifacts may already exist, posted
+  online by the same run minutes earlier, and the run walks away from them. The label has no expiry
+  and is checked first, so it blocks the next claim of that issue permanently.
+
+  The finalize now raises the typed finding `claim_release_skipped_offline` on its envelope and
+  durably in `finalization-summary.md`, naming the issues it applies to. It is worded
+  **conditionally** — nothing local records whether the claim was ever posted online, so it does not
+  assert the artifacts are there. This is a report, not a gate: `closure_invariants.ok` stays `true`
+  and `skipped_offline` remains an allowed value of that invariant.
+
+  The durable write is now restating rather than append-once. Every finding until now fired only
+  when a git step had already failed, so the flush could run last; a finding that fires on a
+  *healthy* run would have modified an already-committed archived summary and left the tree dirty.
+  The flush runs before the residue is enumerated and rewrites the whole section, so no fault
+  recorded after it — `residue_stage_failed` in particular — is dropped.
+
+- **A blocked claim now names the artifact that blocked it (#938).** A re-claim is refused on either
+  the `workflow:in-progress` label or the `kw:claim` marker, and every refusal said the same
+  sentence: `issue #N has a remote workflow claim`. The two are not interchangeable — the marker
+  stops blocking 24 hours after its last update, the label never does and must be removed by hand —
+  so an operator could not tell which artifact to clear, or whether waiting would help. The message
+  now names the artifact and what to do about it, on all six emitters across the four editions.
+
+- **A refusing finalize now names `release` as the way to give the claim back (#939).** Six refusal
+  doors return before the claim-clearing loop. That is correct and is left alone: the run still owns
+  a live folder, branch and worktree, so it should still own the claim — releasing there would
+  advertise the issue as claimable while all of that exists. Verified by driving every door: none
+  performs a mutating forge call, all of them precede the merge, and after an archive refusal both
+  sink forms refuse to merge, so no path leaves a claim stranded over finished work. What was
+  missing was the exit. `release` clears both artifacts even on a condition that permanently blocks
+  finalize, but no refusal named it. Each door now does, including the requirement to run it from
+  the main root — from inside the project folder `release` refuses. Re-running finalize remains the
+  primary advice; the route is worded as the exit, not the retry. The one refusal that fires *after*
+  the claim is released is deliberately excluded, where the advice would be false.
+
 - **A sink that leaves an issue open now releases the whole claim, not half of it (#936).** A claim
   is two artifacts — the `workflow:in-progress` label and a `<!-- kw:claim project=<slug> -->`
   marker comment posted at claim time — and the classifier blocks a re-claim on **either** of them.

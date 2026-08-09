@@ -296,6 +296,7 @@ can see what moved and notice what does not belong.
   "roadmap_regenerated": "regenerated|skipped|failed",
   "roadmap_regenerated_by_root": { "worktree": "regenerated|skipped|failed", "main": "regenerated|skipped|failed" },
   "claim_label_removed": "removed|already_absent|skipped_offline|failed",
+  "resolved_project_note": "prose naming the supplied spelling and the one it resolved to",
   "archive_state_stamped": "not_needed|repaired|failed",
   "issue_disposition": "kept-open|close-pending|closed|unknown",
   "validation": { "classification": "chains_green", "green": true, "mode": "chain-receipt" },
@@ -314,6 +315,20 @@ can see what moved and notice what does not belong.
   `--keep-worktree`. When main's rebuild throws, `roadmap_regenerated_main_error` carries the error's
   own message and the finding `main_roadmap_mirror_not_regenerated` is raised. **The exit stays 0**:
   a stale mirror is reported, never gated — a reader of the receipt is told which mirror to rebuild.
+
+- `resolved_project_note` reports that the supplied `--project` did not match the run's directory
+  name and was resolved to the one that exists. It is **absent** when the spelling was already exact.
+  `--project` is the one input the transaction never reconciled against the durable record, and the
+  marker it builds is matched by exact substring — so on a case-insensitive filesystem a mis-cased
+  slug used to let every path-based step succeed while the claim-marker delete silently matched
+  nothing, and the archive was written under the supplied spelling while git's case-sensitive index
+  left the live run folder tracked beside it. The name is therefore resolved **once, before anything
+  is composed from it**, and every downstream read — archive path, roadmap paths, the removal
+  pathspec, the marker, the receipt — sees the resolved spelling. The resolution is uniform across
+  filesystems: it neither refuses nor stays silent. The same field appears on the `--check`
+  pre-flight envelope, which must name the same folder the run will, and on the sink's envelope,
+  where the candidate names come from the branch's git tree rather than the filesystem — the sink
+  runs from the default-branch checkout, which does not carry the run folder until the merge lands.
 
 - `archive_state_stamped` reports the manual-archive backstop: `repaired` when finalize healed a
   state archived by hand (live folder absent, `status: active` in the archive) by stamping it
@@ -365,7 +380,7 @@ not support it.
 | `residue_unstaged` | the paths that did not reach the index, capped at 50 — present on **all four editions**. Read back from the index on the same basis as `archive_unstaged`, and absent when that read failed |
 | `finalize_commit_probe` | `failed` when the finalize commit's `git diff --cached --quiet` exited neither 0 nor 1 |
 | `finalize_commit_probe_detail` | git's own message |
-| `findings` | the **de-duplicated list of typed fault names** raised anywhere in the block: `archive_unstage_failed`, `archive_stage_failed`, `archive_commit_probe_failed`, `residue_probe_failed`, `residue_stage_failed`, `finalize_commit_probe_failed`, `main_roadmap_mirror_not_regenerated`. Absent or empty on a healthy run |
+| `findings` | the **de-duplicated list of typed fault names** raised anywhere in the block: `archive_unstage_failed`, `archive_stage_failed`, `archive_commit_probe_failed`, `residue_probe_failed`, `residue_stage_failed`, `finalize_commit_probe_failed`, `main_roadmap_mirror_not_regenerated`, `claim_release_skipped_offline`. Absent or empty on a healthy **online** run |
 
 `finalize_commit` gains the value **`'unknown'`**, and it means *we could not tell*, not *nothing
 happened*. It is set when the residue probe or the staged probe failed — one could not enumerate what
@@ -376,16 +391,28 @@ that failed, the record cannot name the uncommitted paths, and it says so rather
 exists.
 
 Every fault is also written durably to `finalization-summary.md` under `## Finalize Findings`, one
-section per fault naming its step and quoting git. That write happens **once**, at every exit from
-the block including the refusing ones — `appendSummarySection` is idempotent by heading, so a
-per-fault write would have landed the first fault and silently dropped the rest, which is the same
-silence being converted here.
+section per fault naming its step and quoting git. The write is **restating, not append-once**: the
+flush may run more than once in a block and each run rewrites the whole `## Finalize Findings`
+section from the accumulated set. A per-fault append would have landed the first fault and silently
+dropped the rest, which is the same silence being converted here; an append-once flush would instead
+have dropped every fault recorded after it, including `residue_stage_failed`, which is raised after
+the residue probe. Ordering matters for a second reason: a finding that fires on a **healthy** run
+makes the transaction modify an already-committed archived summary, so the flush runs before the
+residue is enumerated and the modified summary is carried by the finalize commit rather than left
+dirtying the tree.
 
-**The exit stays 0 on all of it** — this is report, not refuse — and none of these fields fires on a
-healthy run: a good finalize reports `staged`/`staged`/`committed` with no `findings`.
+**The exit stays 0 on all of it** — this is report, not refuse. On a healthy **online** run none of
+these fields fires: a good finalize reports `staged`/`staged`/`committed` with no `findings`. A
+healthy **offline** run is the one exception, and it always raises exactly
+`claim_release_skipped_offline`. The claim release returns before any forge call when
+`KAOLA_WORKFLOW_OFFLINE=1`, so `claim_label_removed` records `skipped_offline` and the run walks away
+from artifacts a prior online claim may already have posted. Nothing local records whether it was
+claimed online, so the finding is worded conditionally and names the issues it applies to; it is a
+report, not a gate, and `closure_invariants.ok` stays `true` — `skipped_offline` remains an allowed
+value of that invariant, unchanged.
 
-**One edition difference in the finding-type count.** The GitLab and Gitea ports raise **six** finding
-types where canonical and Codex raise **seven**. The delta is exactly one, `archive_unstage_failed`.
+**One edition difference in the finding-type count.** The GitLab and Gitea ports raise **seven**
+finding types where canonical and Codex raise **eight**. The delta is exactly one, `archive_unstage_failed`.
 All four editions now stage the archive the same way — a `git rm -r --cached` of the live run folder
 followed by a scoped `git add` of a computed candidate-path list — but the forge ports run both calls
 inside **one** try/catch, so a fault in either raises the single `archive_stage_failed`, while

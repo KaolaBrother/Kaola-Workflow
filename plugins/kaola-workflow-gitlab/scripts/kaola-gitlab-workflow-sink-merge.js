@@ -6,7 +6,7 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const forge = require('./kaola-gitlab-forge');
-const { getCoordRoot, readActiveFolders, removeWorktree, worktreePathFor, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock, clearAdvisoryClaim } = require('./kaola-gitlab-workflow-claim');
+const { getCoordRoot, readActiveFolders, removeWorktree, worktreePathFor, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock, clearAdvisoryClaim, resolveProjectSlug } = require('./kaola-gitlab-workflow-claim');
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-gitlab-workflow-run-chains');
@@ -43,13 +43,50 @@ function recordSinkFinding(classification, detail, operatorHint, payload) {
   return finding;
 }
 
+// #937: the sentence saying `--project` named one folder and the run used another, set by
+// resolveSinkProjectSlug below and null whenever nothing was corrected. Module-scoped for the same
+// reason sinkFindings above is: the two terminals that emit a completed sink are in different
+// functions, and a refusal raised after the resolution is just as entitled to say which folder it
+// was talking about.
+let resolvedProjectNote = null;
+
 // Attach the findings to an emitted envelope. Attached ONLY when non-empty, so a run that found
 // nothing emits byte-identical output; applied at every emission so a KEEP-class refusal downstream
 // of a finding cannot swallow it.
 function sinkEmit(payload, exitCode) {
-  const out = sinkFindings.length ? Object.assign({}, payload, { findings: sinkFindings }) : payload;
+  let out = payload;
+  if (sinkFindings.length) out = Object.assign({}, out, { findings: sinkFindings });
+  if (resolvedProjectNote) out = Object.assign({}, out, { resolved_project_note: resolvedProjectNote });
   process.stdout.write(JSON.stringify(out) + '\n');
   if (exitCode != null) process.exitCode = exitCode;
+}
+
+// #937: `isSafeName` tests the SHAPE of the supplied name and never the filesystem, so a name
+// differing from the run folder only in case passes it and then goes on to compose the kw:claim
+// marker, the archive directory and the live folder's removal pathspec. Resolved before the first
+// of those — after this call `args.project` is the recorded spelling everywhere.
+//
+// Read from the BRANCH's tree rather than this checkout: the sink runs from the default branch,
+// which does not carry the run folder until the merge step puts it there, and git records names
+// case-sensitively where the filesystem underneath may not. The live folder (`--sink`) and the
+// already-archived one (the direct-merge entry point) are both candidates; an unresolvable ref
+// simply yields no candidates and the supplied name stands, exactly as before.
+//
+// Called at BOTH entry points: this edition's argument asserts live in two functions (main's
+// `--sink` branch and runDirectMerge), so unlike canonical there is no single line every path
+// crosses before a path is composed from the name.
+function resolveSinkProjectSlug(args, mainRoot) {
+  const branchTreeDirNames = treeish => {
+    try {
+      return execFileSync('git', ['-C', mainRoot, 'ls-tree', '-d', '--name-only', treeish],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split('\n').filter(Boolean);
+    } catch (_) { return []; }
+  };
+  const slug = resolveProjectSlug(args.project,
+    branchTreeDirNames(args.branch + ':kaola-workflow')
+      .concat(branchTreeDirNames(args.branch + ':kaola-workflow/archive')));
+  args.project = slug.project;
+  resolvedProjectNote = slug.note;
 }
 
 // Where the run's record lives, newest-authority first: the recorded archive dest, the plain
@@ -1038,6 +1075,7 @@ function runDirectMerge(args, opts) {
   assert(!args.keepIssueOpen || args.issue != null,
     'sink-merge: --keep-issue-open requires --issue N (there is no issue to keep open)');
   const root = options.root || getRoot();
+  resolveSinkProjectSlug(args, mainRootFromCoord(getCoordRoot(root)));   // #937 — before the first read of the folder
   assert(finalValidationPassed(root, args.project), 'Final validation evidence is required before direct merge sink runs');
 
   if (options.skipGit) {
@@ -2621,6 +2659,7 @@ function main() {
   if (isSinkMode) {
     const root = getRoot();
     const mainRoot = mainRootFromCoord(getCoordRoot(root));
+    resolveSinkProjectSlug(args, mainRoot);   // #937 — before deriveMemberSet composes a path from it
     const defBranch = defaultBranch(mainRoot);
     try { process.chdir(os.tmpdir()); } catch (_) {}
     const memberSet = deriveMemberSet(mainRoot, args.project, args.issueNumbers);

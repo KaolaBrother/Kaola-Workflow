@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { getCoordRoot, mainRootFromCoord, resolveMainRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock, clearAdvisoryClaim } = require('./kaola-workflow-claim.js');
+const { getCoordRoot, mainRootFromCoord, resolveMainRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock, clearAdvisoryClaim, resolveProjectSlug } = require('./kaola-workflow-claim.js');
 // The porcelain classifier backs the dirty-worktree data-loss guard, which is a KEEP. It lives in
 // the byte-identical schema, not in claim.js — claim.js only ever re-exported it.
 const { parsePorcelainPaths, isParkedLanePath } = require('./kaola-workflow-adaptive-schema.js');
@@ -92,11 +92,19 @@ function recordSinkFinding(classification, detail, operatorHint, payload) {
   return finding;
 }
 
+// #937: the sentence saying `--project` named one folder and the run used another, set once in
+// main() and null whenever nothing was corrected. Module-scoped for the same reason sinkFindings
+// above is: the two terminals that emit a completed sink are in different functions, and a refusal
+// raised after the resolution is just as entitled to say which folder it was talking about.
+let resolvedProjectNote = null;
+
 // Attach the accumulated findings to an emitted envelope and write it. Attached ONLY when
 // non-empty, so a run that found nothing emits byte-identical output to before. Applied at
 // every sink emission — a KEEP-class refusal downstream of a finding must not swallow it.
 function sinkEmit(payload, exitCode) {
-  const out = sinkFindings.length ? Object.assign({}, payload, { findings: sinkFindings }) : payload;
+  let out = payload;
+  if (sinkFindings.length) out = Object.assign({}, out, { findings: sinkFindings });
+  if (resolvedProjectNote) out = Object.assign({}, out, { resolved_project_note: resolvedProjectNote });
   process.stdout.write(JSON.stringify(out) + '\n');
   if (exitCode != null) process.exitCode = exitCode;
 }
@@ -3041,11 +3049,34 @@ function main() {
   assert(!args.keepIssueOpen || args.issue != null,
     'sink-merge: --keep-issue-open requires --issue N (there is no issue to keep open)');
 
+  // Resolved once for BOTH entry points, in the order each of them used to resolve it for itself.
+  const coordRoot = getCoordRoot();
+  const mainRoot = mainRootFromCoord(coordRoot);
+  // #937: `isSafeName` above tests the SHAPE of the supplied name and never the filesystem, so a
+  // name differing from the run folder only in case passes it and then goes on to compose the
+  // kw:claim marker, the archive directory and the live folder's removal pathspec. Resolved here,
+  // before the first of those — after this line `args.project` is the recorded spelling everywhere.
+  //
+  // Read from the BRANCH's tree rather than this checkout: the sink runs from the default branch,
+  // which does not carry the run folder until the merge step puts it there, and git records names
+  // case-sensitively where the filesystem underneath may not. The live folder (`--sink`) and the
+  // already-archived one (the legacy entry point) are both candidates; an unresolvable ref simply
+  // yields no candidates and the supplied name stands, exactly as before.
+  const branchTreeDirNames = treeish => {
+    try {
+      return execFileSync('git', ['-C', mainRoot, 'ls-tree', '-d', '--name-only', treeish],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split('\n').filter(Boolean);
+    } catch (_) { return []; }
+  };
+  const projectSlug = resolveProjectSlug(args.project,
+    branchTreeDirNames(args.branch + ':kaola-workflow')
+      .concat(branchTreeDirNames(args.branch + ':kaola-workflow/archive')));
+  args.project = projectSlug.project;
+  resolvedProjectNote = projectSlug.note;
+
   // #429: --sink mode routes to the resumable transaction, bypassing the legacy pipeline.
   // The transaction owns its own preflight (sink_blocked), step-receipt, and idempotent steps.
   if (isSinkMode) {
-    const coordRoot = getCoordRoot();
-    const mainRoot = mainRootFromCoord(coordRoot);
     const defBranch = defaultBranch(mainRoot);
     try { process.chdir(os.tmpdir()); } catch (_) {}
     // Derive member set for the --sink transaction
@@ -3056,13 +3087,11 @@ function main() {
     return;
   }
 
-  // #346: resolve roots, then run ALL preconditions BEFORE the destructive worktree removal. The
-  // old Step 0 ran `removeWorktree --force` FIRST (for cwd-independence convenience), so a sink
-  // about to refuse (dirty main root / live folder / unpushed / dirty worktree) had already
-  // destroyed the worktree — taking any uncommitted work with it. Now the worktree is removed ONLY
-  // after every precondition proves the sink can proceed.
-  const coordRoot = getCoordRoot();
-  const mainRoot = mainRootFromCoord(coordRoot);
+  // #346: the roots are resolved above; run ALL preconditions BEFORE the destructive worktree
+  // removal. The old Step 0 ran `removeWorktree --force` FIRST (for cwd-independence convenience),
+  // so a sink about to refuse (dirty main root / live folder / unpushed / dirty worktree) had
+  // already destroyed the worktree — taking any uncommitted work with it. Now the worktree is
+  // removed ONLY after every precondition proves the sink can proceed.
   // #393a: derive the member set BEFORE the destructive worktree removal (the live/archive state is
   // still readable). When --issue-numbers is absent, fall back to the state's issue_numbers so a
   // bundle sink without the flag still closes every member. Single-issue (no issue_numbers line)

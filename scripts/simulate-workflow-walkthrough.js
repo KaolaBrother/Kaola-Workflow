@@ -7084,6 +7084,134 @@ function testFinalizeOfflineSkipsLabelInvariant() {
   }
 }
 
+// #938 — the offline finalize that reported a clean closure over a claim it never released.
+//
+// `clearAdvisoryClaim` returns 'skipped_offline' before touching the forge, so an OFFLINE finalize
+// makes zero forge calls and both claim artifacts — the `workflow:in-progress` label and the
+// `kw:claim` marker comment — survive on every member. The equivalence that lets the run report
+// success anyway is DELIBERATE and contracted: `skipped_offline` is treated as `removed` by the
+// in-progress-label-removed invariant, which is why the two legs above are green and must stay so.
+// `closure_invariants.ok` is NOT the thing to change here, and this leg asserts it did not change.
+//
+// What was missing is the REPORT. The run's durable record was byte-identical to an online run's,
+// so nothing anywhere said a claim release had been skipped, and the next reader of those issues
+// had no way to learn it from the workflow. The finding goes through the channel that already
+// exists for exactly this — a typed name on `finalize_transaction.findings` and a `### <type>`
+// section in the archived `finalization-summary.md`.
+//
+// CONDITIONAL by requirement: the run holds no local record of whether the claim was ever posted
+// online, so the finding may say the release was skipped and name the issues it would have touched,
+// but may not assert the artifacts are on them. That is a property of the WORDING and is not pinned
+// here — there is no text yet to bind a claim-must-not-be-made regex to.
+const CLAIM_RELEASE_SKIPPED_FINDING = 'claim_release_skipped_offline';
+
+function testFinalizeOfflineReportsSkippedClaimRelease() {
+  // The `### <type>` body of the durable `## Finalize Findings` write.
+  const findingSection = (summaryPath, type) => {
+    if (!fs.existsSync(summaryPath)) return null;
+    const text = fs.readFileSync(summaryPath, 'utf8');
+    const start = text.indexOf('\n### ' + type + '\n');
+    if (start < 0) return null;
+    const rest = text.slice(start + 1);
+    const next = rest.indexOf('\n### ');
+    return next < 0 ? rest : rest.slice(0, next);
+  };
+  // A bundle, so "names the affected issues" is per MEMBER rather than a single number that could
+  // have come from anywhere. plantActiveFolder writes the scalar issue only.
+  const asBundle = (root, project, members) => {
+    const stateFile = path.join(root, 'kaola-workflow', project, 'workflow-state.md');
+    fs.writeFileSync(stateFile, fs.readFileSync(stateFile, 'utf8').trimEnd()
+      + '\nissue_numbers: ' + members.join(',') + '\nbundle_id: ' + project + '\n');
+  };
+
+  // ---- OFFLINE: the release is skipped, and the run must say so ------------------------------
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-offline-claim-'));
+    const project = 'issue-9380';
+    const members = [9380, 9390];
+    try {
+      initGitRepo(tmp);
+      // No roadmap entry — avoids roadmap-source-absent and roadmap-mirror-clean violations.
+      plantActiveFolder(tmp, project, members[0], null);
+      asBundle(tmp, project, members);
+      seedAdaptiveFinalizeFixture(tmp, project);
+      // Driven directly rather than through runClaimOnline, which forces OFFLINE=0.
+      // spawn-class: cli-contract
+      const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
+        cwd: tmp,
+        encoding: 'utf8',
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+      });
+      assert(result.status === 0, '#938: offline finalize should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+      const parsed = JSON.parse(result.stdout);
+
+      // PREMISE — this really is the offline lane, and the contracted equivalence is untouched. Both
+      // clauses guard against an over-reaching implementation: making the skip VIOLATE the invariant
+      // is not the change, and it would red testFinalizeOfflineSkipsLabelInvariant by name.
+      assert(parsed.claim_label_removed === 'skipped_offline',
+        '#938 premise: offline finalize must still record claim_label_removed:skipped_offline, got: ' + parsed.claim_label_removed);
+      assert(parsed.closure_invariants && parsed.closure_invariants.ok === true,
+        '#938: closure_invariants.ok must STAY true — skipped_offline is an allowed value for the in-progress-label-removed invariant and this finding does not change that; got: '
+        + JSON.stringify(parsed.closure_invariants));
+
+      const findings = (parsed.finalize_transaction && parsed.finalize_transaction.findings) || [];
+      assert(findings.includes(CLAIM_RELEASE_SKIPPED_FINDING),
+        '#938: an offline finalize releases NO claim — it makes zero forge calls, so the workflow:in-progress label and the kw:claim marker are left exactly as the run found them on every member — and it reported that nowhere. Raise the typed finding "'
+        + CLAIM_RELEASE_SKIPPED_FINDING + '" on finalize_transaction.findings; got: ' + JSON.stringify(findings));
+
+      const summaryPath = path.join(tmp, 'kaola-workflow', 'archive', project, 'finalization-summary.md');
+      const section = findingSection(summaryPath, CLAIM_RELEASE_SKIPPED_FINDING);
+      assert(section !== null,
+        '#938: the finding must also be DURABLE — the envelope is gone the moment the process exits, and the archived run record is the only thing a later reader has. Expected a "### '
+        + CLAIM_RELEASE_SKIPPED_FINDING + '" section in ' + summaryPath + ', got:\n'
+        + (fs.existsSync(summaryPath) ? fs.readFileSync(summaryPath, 'utf8') : '(no finalization-summary.md at all)'));
+      for (const n of members) {
+        assert(section !== null && new RegExp('(^|\\D)' + n + '(\\D|$)').test(section),
+          '#938: the finding must name the issues whose claim release was skipped, per bundle member — #' + n
+          + ' is not in the "### ' + CLAIM_RELEASE_SKIPPED_FINDING + '" section. A reader who is not told WHICH issues cannot act on it. Section:\n' + section);
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // ---- ONLINE control: the release happened, so there is nothing to report --------------------
+  // Without this the finding could be unconditional, which says nothing about any particular run.
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-online-claim-'));
+    const binDir = path.join(tmp, 'bin');
+    const logFile = path.join(tmp, 'gh-calls.log');
+    const project = 'issue-9381';
+    const members = [9381, 9391];
+    try {
+      initGitRepo(tmp);
+      plantActiveFolder(tmp, project, members[0], null);
+      asBundle(tmp, project, members);
+      writeBundleGhMockScript(binDir, { logFile, closedIssues: members });
+      seedAdaptiveFinalizeFixture(tmp, project);
+      const parsed = runClaimOnline(['finalize', '--project', project], tmp, binDir);
+
+      // PREMISE — the release really did happen on this run, or "no finding" is true for the wrong
+      // reason and the control is measuring an offline run wearing an online flag.
+      assert(parsed.claim_label_removed === 'removed',
+        '#938 control premise: the online finalize must actually release the claim, got claim_label_removed=' + JSON.stringify(parsed.claim_label_removed));
+
+      const findings = (parsed.finalize_transaction && parsed.finalize_transaction.findings) || [];
+      assert(!findings.includes(CLAIM_RELEASE_SKIPPED_FINDING),
+        '#938: an ONLINE finalize released the claim, so it must NOT raise "' + CLAIM_RELEASE_SKIPPED_FINDING
+        + '" — a finding every run carries tells a reader nothing about the run in front of them; findings: ' + JSON.stringify(findings));
+      const summaryPath = path.join(tmp, 'kaola-workflow', 'archive', project, 'finalization-summary.md');
+      assert(findingSection(summaryPath, CLAIM_RELEASE_SKIPPED_FINDING) === null,
+        '#938: the online run\'s archived record must carry no "### ' + CLAIM_RELEASE_SKIPPED_FINDING + '" section; '
+        + summaryPath + ':\n' + (fs.existsSync(summaryPath) ? fs.readFileSync(summaryPath, 'utf8') : '(absent)'));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  console.log('testFinalizeOfflineReportsSkippedClaimRelease: PASSED');
+}
+
 function testWatchPrEmitsClaimLabelReceipt() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watchpr-label-receipt-'));
   const binDir = path.join(tmp, 'bin');
@@ -12447,6 +12575,7 @@ function buildRegistry() {
   add('testFinalizeRemovesClaimLabel',                    testFinalizeRemovesClaimLabel);
   add('testFinalizeNullFolderFallbackReadsArchive',       testFinalizeNullFolderFallbackReadsArchive);
   add('testFinalizeOfflineSkipsLabelInvariant',           testFinalizeOfflineSkipsLabelInvariant);
+  add('testFinalizeOfflineReportsSkippedClaimRelease',    testFinalizeOfflineReportsSkippedClaimRelease);
   add('testWatchPrEmitsClaimLabelReceipt',                testWatchPrEmitsClaimLabelReceipt);
   add('testAuditAndRepairLabels',                         testAuditAndRepairLabels);
   add('testFinalizeClaimLabelFailedTriggersInvariant',    testFinalizeClaimLabelFailedTriggersInvariant);

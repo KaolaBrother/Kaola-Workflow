@@ -285,7 +285,8 @@ function classifyIssue(issueIid, root) {
   // the indeterminate emitter rather than crashing or silently catching to "no remote claim". The
   // label check runs FIRST and short-circuits (preserving the pre-#519 OR order) so the remote-claim
   // probe is skipped — and cannot transient-fault — when the in-progress label already says blocked.
-  let blocked = issueHasWorkflowInProgressLabel(issue.labels || []);
+  const blockedByLabel = issueHasWorkflowInProgressLabel(issue.labels || []);
+  let blocked = blockedByLabel;
   if (!blocked) {
     try {
       blocked = issueHasRemoteClaimNotes(issueIid);
@@ -301,8 +302,18 @@ function classifyIssue(issueIid, root) {
       throw e;
     }
   }
+  // Name WHICH artifact blocked: the two are not interchangeable and the short-circuit above
+  // already knows which one fired. The label never expires and only a hand-removal clears it; a
+  // timestamped kw:claim comment stops blocking 24h after its last update.
   if (blocked) {
-    return { verdict: 'blocked', reasoning: 'issue #' + issueIid + ' has a remote workflow claim' };
+    return {
+      verdict: 'blocked',
+      reasoning: blockedByLabel
+        ? 'issue #' + issueIid + ' has a remote workflow claim: the ' + forge.CLAIM_LABEL + ' label is on the issue. '
+          + 'That label never expires — remove it from the issue to release the claim.'
+        : 'issue #' + issueIid + ' has a remote workflow claim: a kw:claim marker comment is on the issue. '
+          + 'Delete that comment to release the claim; a timestamped marker also stops blocking 24h after its last update.'
+    };
   }
 
   return classify(issue);
@@ -362,7 +373,8 @@ function cmdClassify() {
   // the indeterminate emitter rather than crashing or silently catching to "no remote claim". The
   // label check runs FIRST and short-circuits (preserving the pre-#519 OR order) so the remote-claim
   // probe is skipped — and cannot transient-fault — when the in-progress label already says blocked.
-  let blocked = issueHasWorkflowInProgressLabel(issue.labels || []);
+  const blockedByLabel = issueHasWorkflowInProgressLabel(issue.labels || []);
+  let blocked = blockedByLabel;
   if (!blocked) {
     try {
       blocked = issueHasRemoteClaimNotes(args.issue);
@@ -379,8 +391,16 @@ function cmdClassify() {
       throw e;
     }
   }
+  // Name WHICH artifact blocked — see the same emitter in classifyIssue above.
   if (blocked) {
-    process.stdout.write(JSON.stringify({ verdict: 'blocked', reasoning: 'issue #' + args.issue + ' has a remote workflow claim' }) + '\n');
+    process.stdout.write(JSON.stringify({
+      verdict: 'blocked',
+      reasoning: blockedByLabel
+        ? 'issue #' + args.issue + ' has a remote workflow claim: the ' + forge.CLAIM_LABEL + ' label is on the issue. '
+          + 'That label never expires — remove it from the issue to release the claim.'
+        : 'issue #' + args.issue + ' has a remote workflow claim: a kw:claim marker comment is on the issue. '
+          + 'Delete that comment to release the claim; a timestamped marker also stops blocking 24h after its last update.'
+    }) + '\n');
     return;
   }
 

@@ -1015,6 +1015,138 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(34), false,
 assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
   'issueHasRemoteClaimNotes should return false when OFFLINE=1');
 
+// --- A remote-claim BLOCK must name WHICH of the two artifacts holds the claim ---
+//
+// The two probes directly above are exactly the two artifacts a re-claim can be blocked by, and
+// they do NOT behave the same: the `workflow:in-progress` LABEL has no expiry anywhere and blocks
+// forever, while the `kw:claim` COMMENT expires 24h after its `updated_at`. Both arms nevertheless
+// emitted one undiscriminating sentence — "issue #N has a remote workflow claim" — so an operator
+// could not tell which artifact to go and clear.
+//
+// TWO EMITTERS PER FORGE PORT, and this is where they diverge from canonical: the port carries a
+// `classifyIssue` helper that RETURNS the envelope (the in-process site
+// `kaola-gitea-workflow-claim.js` reaches via `classifier.classifyIssue`) AND a `cmdClassify` that
+// WRITES it (the CLI site a subprocess reaches). The two hold separate copies of the same block, so
+// a fix applied to one and missed on the other ships silently — `validate-script-sync.js` compares
+// the forge-renamed classifier to nothing, and the export superset guard sees only key names. Both
+// sites are driven here.
+//
+// WHAT IS PINNED — the RESULT, not a wording: each arm's `reasoning` names its OWN artifact by the
+// token an operator would search for, and the two arms do not emit the same sentence. Naming both
+// artifacts on both arms passes the contains-checks and fails the differ-check — that is the
+// near-miss this exists to catch. BOTH ARMS DRIVE THE SAME ISSUE NUMBER deliberately: the
+// undiscriminating sentence interpolates the number, so two arms on two numbers would differ
+// already and the differ-check would be green against the defect.
+{
+  const CLAIM_LABEL_TOKEN = forge.CLAIM_LABEL;   // 'workflow:in-progress'
+  const CLAIM_NOTE_TOKEN = 'kw:claim';           // the marker the comment probe greps for
+  const ARM_NUM = 520;
+  const freshComment = [{ body: '<!-- kw:claim project=issue-520 sess=abc -->', updated_at: new Date().toISOString() }];
+  const project = { owner: 'kw-fixture', name: 'repo', full_name: 'kw-fixture/repo' };
+  const findings = [];
+
+  // ---- site 1: the in-process classifyIssue helper (what the claim port calls) ----
+  const inProcessArm = (labels, comments) => {
+    const root = tempRoot('kw-gt-claim-artifact-');
+    try {
+      return withForge({
+        viewIssue(issueNum) { return { number: issueNum, issue_iid: issueNum, state: 'open', labels, body: '' }; },
+        discoverProject() { return project; },
+        listIssueComments() { return comments; }
+      }, () => classifier.classifyIssue(ARM_NUM, root));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  };
+
+  const helperLabelArm = inProcessArm([CLAIM_LABEL_TOKEN], []);
+  const helperNoteArm = inProcessArm([], freshComment);
+  // Liveness: an arm that stopped reaching the blocked emitter reds HERE rather than passing
+  // vacuously through the message checks behind it.
+  assert.strictEqual(helperLabelArm.verdict, 'blocked', 'classifyIssue label arm must still block');
+  assert.strictEqual(helperNoteArm.verdict, 'blocked', 'classifyIssue comment arm must still block');
+
+  if (!String(helperLabelArm.reasoning || '').includes(CLAIM_LABEL_TOKEN)) {
+    findings.push('classifyIssue (in-process site): a label-held claim must NAME the '
+      + CLAIM_LABEL_TOKEN + ' label — it never expires, so the operator has to remove it by hand; got: '
+      + JSON.stringify(helperLabelArm.reasoning));
+  }
+  if (!String(helperNoteArm.reasoning || '').includes(CLAIM_NOTE_TOKEN)) {
+    findings.push('classifyIssue (in-process site): a comment-held claim must NAME the '
+      + CLAIM_NOTE_TOKEN + ' comment — it expires 24h after updated_at, and that is the whole '
+      + 'difference from the label; got: ' + JSON.stringify(helperNoteArm.reasoning));
+  }
+  if (String(helperLabelArm.reasoning || '') === String(helperNoteArm.reasoning || '')) {
+    findings.push('classifyIssue (in-process site): the label arm and the comment arm must not emit '
+      + 'the SAME sentence; both got: ' + JSON.stringify(helperLabelArm.reasoning));
+  }
+
+  // ---- site 2: the cmdClassify CLI emitter (a separate copy of the same block) ----
+  // ONLINE, so KAOLA_WORKFLOW_OFFLINE stays unset and tea is routed at a per-arm mock written
+  // outside the fixture repo.
+  const cliArm = (labels, comments) => {
+    const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-claim-artifact-cli-'));
+    const root = path.join(outer, 'repo');
+    fs.mkdirSync(root, { recursive: true });
+    try {
+      // spawn-class: environment
+      spawnSync('git', ['init', '-b', 'main'], { cwd: root, encoding: 'utf8' });
+      const mock = path.join(outer, 'tea-mock.js');
+      fs.writeFileSync(mock, [
+        'const a = process.argv.slice(2);',
+        'const labels = ' + JSON.stringify(labels) + ';',
+        'const comments = ' + JSON.stringify(comments) + ';',
+        "if (a[0] === 'repo' && a[1] === 'view') {",
+        "  process.stdout.write(JSON.stringify({ full_name: 'kw-fixture/repo', name: 'repo', owner: { login: 'kw-fixture' } }));",
+        "} else if (a[0] === 'issues' && a[1] === 'view') {",
+        "  process.stdout.write(JSON.stringify({ number: parseInt(a[2], 10), state: 'open', labels: labels, body: '' }));",
+        "} else if (a[0] === 'api') {",
+        '  process.stdout.write(JSON.stringify(comments));',
+        '} else {',
+        "  process.stdout.write('');",
+        '}',
+      ].join('\n'));
+      const env = Object.assign({}, process.env, {
+        KAOLA_TEA_MOCK_SCRIPT: mock,
+        KAOLA_CLASSIFIER_BACKOFF_MS: '0'
+      });
+      delete env.KAOLA_WORKFLOW_OFFLINE;
+      // spawn-class: cli-contract
+      const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', String(ARM_NUM)],
+        { cwd: root, encoding: 'utf8', env });
+      let json = null;
+      try { json = JSON.parse(String(result.stdout).trim()); } catch (_) {}
+      return { result, json };
+    } finally { fs.rmSync(outer, { recursive: true, force: true }); }
+  };
+
+  const cliLabelArm = cliArm([CLAIM_LABEL_TOKEN], []);
+  const cliNoteArm = cliArm([], freshComment);
+  assert(cliLabelArm.json && cliLabelArm.json.verdict === 'blocked',
+    'cmdClassify label arm must still block; got ' + JSON.stringify(cliLabelArm.json)
+    + '\nstderr: ' + cliLabelArm.result.stderr);
+  assert(cliNoteArm.json && cliNoteArm.json.verdict === 'blocked',
+    'cmdClassify comment arm must still block; got ' + JSON.stringify(cliNoteArm.json)
+    + '\nstderr: ' + cliNoteArm.result.stderr);
+
+  if (!String(cliNoteArm.json.reasoning || '').includes(CLAIM_NOTE_TOKEN)) {
+    findings.push('cmdClassify (CLI site): a comment-held claim must NAME the ' + CLAIM_NOTE_TOKEN
+      + ' comment; got: ' + JSON.stringify(cliNoteArm.json.reasoning));
+  }
+  if (!String(cliLabelArm.json.reasoning || '').includes(CLAIM_LABEL_TOKEN)) {
+    findings.push('cmdClassify (CLI site): a label-held claim must NAME the ' + CLAIM_LABEL_TOKEN
+      + ' label; got: ' + JSON.stringify(cliLabelArm.json.reasoning));
+  }
+  if (String(cliLabelArm.json.reasoning || '') === String(cliNoteArm.json.reasoning || '')) {
+    findings.push('cmdClassify (CLI site): the label arm and the comment arm must not emit the SAME '
+      + 'sentence; both got: ' + JSON.stringify(cliLabelArm.json.reasoning));
+  }
+
+  // Reported together: node's assert throws on the first failure, and a per-site fix that lands on
+  // one emitter and misses the other must be visible in ONE run, not discovered a run at a time.
+  assert.deepStrictEqual(findings, [],
+    'the blocked reasoning must name WHICH artifact holds the claim, at BOTH emitters:\n  - '
+    + findings.join('\n  - '));
+}
+
 // --- Task A: Gap 2 — OFFLINE branch with depends-on in roadmap ---
 {
   const tempHome = tempRoot('kw-gt-offline-classify-');

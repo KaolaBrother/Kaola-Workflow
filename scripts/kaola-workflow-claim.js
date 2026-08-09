@@ -331,6 +331,43 @@ function unreservedProjectName(requested, issueNumber) {
   return isReservedWorkflowDirName(requested) ? 'issue-' + issueNumber : requested;
 }
 
+// #937: the same class of correction as the reserved name above, for the same reason and with the
+// same ruling — resolve and report, never refuse.
+//
+// `--project` carries whatever the operator typed, and three separate consumers compose something
+// out of it that must be spelled exactly as the directory is: the `kw:claim` marker (matched on the
+// forge by exact substring), the archive directory's name, and the removal pathspec for the live
+// run folder. A case-insensitive filesystem resolves `kaola-workflow/Issue-N` onto the directory
+// named `issue-N`, so every local path operation succeeds and nothing notices — while the marker
+// matches no comment, the archive lands under a second name, and git's case-SENSITIVE index leaves
+// the live folder tracked beside its own archived copy. One string, three victims: resolved ONCE,
+// as early as the names can be read, rather than patched at each consumer — patching them leaves
+// whichever consumer is added next.
+//
+// `names` is the on-disk spelling as its own store records it, which is why it is a parameter and
+// not read here: cmdFinalize runs in the tree that holds the folder and reads directory entries;
+// the sink runs from a checkout the run folder has not been merged into yet and reads the branch's
+// git tree. Both are case-preserving; neither is reachable from the other.
+//
+// `note` is null when nothing was corrected, so a run given the exact name emits what it always
+// emitted. When something was corrected it is ONE sentence naming both spellings — an operator who
+// is not told keeps typing the name they typed.
+function resolveProjectSlug(requested, names) {
+  const supplied = String(requested || '');
+  const list = Array.isArray(names) ? names : [];
+  if (!supplied || list.includes(supplied)) return { project: supplied, note: null };
+  const resolved = list.find(n => String(n).toLowerCase() === supplied.toLowerCase());
+  if (!resolved || resolved === supplied) return { project: supplied, note: null };
+  return {
+    project: resolved,
+    note: 'kaola-workflow/' + supplied + ' is not the run folder this repository has; the name '
+      + 'differs in case only, so it was resolved to kaola-workflow/' + resolved + ' before any '
+      + 'kw:claim marker, archive path or removal pathspec was composed from it. A spelling that '
+      + 'resolves through a case-insensitive filesystem still matches nothing in a marker comment '
+      + 'or in git\'s case-sensitive index.'
+  };
+}
+
 function buildBranchName(issueNumber, project, fallback) {
   if (fallback) return fallback;
   return Number.isFinite(issueNumber) && issueNumber > 0 ? 'workflow/issue-' + issueNumber : 'workflow/' + project;
@@ -3888,16 +3925,22 @@ function resolveFinalizeAuthority(root, project) {
 // The workflow_state rung's operator hint, kept in ONE place so the ladder emit and the checklist
 // can never drift apart.
 function finalizeAuthorityHint(livePresent, innerReason) {
+  // Every arm ends with the give-the-claim-back route: this door returns before the claim-clearing
+  // loop, so both artifacts are still held and an operator who cannot satisfy it needs a named exit.
+  const route = ' The claim is still held. Fixing this and re-running finalize is how the run '
+    + 'finishes; if it will not be finished at all, `release` from the main root — not from inside '
+    + 'the project folder, which it refuses — gives the claim back, archiving the run as abandoned '
+    + 'and tearing down its worktree and branch.';
   if (livePresent) {
-    return 'Restore workflow-state.md as a readable regular file before Finalization. No archive or closure side effect was made.';
+    return 'Restore workflow-state.md as a readable regular file before Finalization. No archive or closure side effect was made.' + route;
   }
   if (innerReason === 'archive_state_not_closed') {
-    return 'Restore the live project and complete Finalization from its verified gates. Only an archive already stamped status: closed by the finalize transaction may resume source-missing; no closure side effect was made.';
+    return 'Restore the live project and complete Finalization from its verified gates. Only an archive already stamped status: closed by the finalize transaction may resume source-missing; no closure side effect was made.' + route;
   }
   if (innerReason === 'archive_authority_ambiguous') {
-    return 'Multiple exact/suffixed archives match this project, so no current transaction authority can be proven. Restore the live project or retain exactly the archive for the interrupted finalize transaction; no closure side effect was made.';
+    return 'Multiple exact/suffixed archives match this project, so no current transaction authority can be proven. Restore the live project or retain exactly the archive for the interrupted finalize transaction; no closure side effect was made.' + route;
   }
-  return 'Restore a valid archived workflow-state.md authority before resuming Finalization. No closure side effect was made.';
+  return 'Restore a valid archived workflow-state.md authority before resuming Finalization. No closure side effect was made.' + route;
 }
 
 // The authority ONE STATEMENT INTO the transaction, not the authority as it stands right now.
@@ -4008,12 +4051,26 @@ function probeFinalizeValidationGate(root, authorityDir, authorityState, base) {
 // them the conversion from refusal to report would be a deletion. Both are idempotent across a
 // crash-resumed re-entry (the heading is checked first) and swallow-on-error, like the other
 // summary writers: they record measurements, so they must never be able to fail a finalize.
-function appendSummarySection(projectDir, heading, lines) {
+// #938: `replace` RESTATES an existing section instead of declining to write it. Idempotence by
+// heading is right for a section written once out of a value that is already complete (`##
+// Validation`, `## Changed Paths`), and wrong for an accumulator that keeps growing: the findings
+// section has to be writable before the commit that carries it AND again if a later step finds
+// something, or one of the two is silently lost. Only the findings flush passes it; every other
+// caller is byte-identical to before.
+function appendSummarySection(projectDir, heading, lines, replace) {
   try {
     const p = path.join(projectDir, 'finalization-summary.md');
     let s = '';
     try { s = fs.readFileSync(p, 'utf8'); } catch (_) { /* create-if-absent */ }
-    if (new RegExp('^' + heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'm').test(s)) return false;
+    const existing = s.match(new RegExp('^' + heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'm'));
+    if (existing) {
+      if (!replace) return false;
+      // Cut the heading through to the next `## ` heading (never a `### ` sub-heading, which is
+      // three hashes and so cannot match) or to end of file.
+      const after = s.indexOf('\n## ', existing.index + heading.length);
+      s = s.slice(0, existing.index) + (after < 0 ? '' : s.slice(after + 1));
+      if (!s.trim()) s = '';
+    }
     const block = [heading, ''].concat(lines).join('\n') + '\n';
     writeFile(p, s ? (s.trimEnd() + '\n\n' + block) : block);
     return true;
@@ -4143,6 +4200,21 @@ function cmdFinalize() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
   assert(args.project, '--project required');
+  // #937: resolve the supplied name to the directory that is actually there, BEFORE anything is
+  // composed from it — the pre-flight below, the archive, the roadmap paths, the removal pathspec
+  // and the kw:claim marker all read `args.project`, and they must all read one spelling. Live
+  // folders and archived ones both count: a re-entered finalize whose live folder is already
+  // archived resolves against the archive. `args.project` is REWRITTEN rather than shadowed
+  // because everything downstream already reads it; a new variable would only be the old bug
+  // wherever it was forgotten.
+  const projectDirNames = dir => {
+    try { return fs.readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name); }
+    catch (_) { return []; }
+  };
+  const projectSlug = resolveProjectSlug(args.project,
+    projectDirNames(path.join(root, 'kaola-workflow'))
+      .concat(projectDirNames(path.join(root, 'kaola-workflow', 'archive'))));
+  args.project = projectSlug.project;
   // #837: `--check` is the one-pass PRE-FLIGHT — every precondition evaluated together, read-only,
   // zero side effect, emitted in cmdVerifySink's { project, ok, checks, reasons } shape plus the
   // `authority` topology the answers were predicted over. It is an ADDED surface, never a
@@ -4154,10 +4226,14 @@ function cmdFinalize() {
       base: args.base || (process.env.KAOLA_FINALIZE_BASE || '').trim() || null
     });
     const ok = report.reasons.length === 0;
-    output({
+    const checkEmit = {
       project: args.project, ok, checks: report.checks, reasons: report.reasons,
       authority: report.authority
-    }, ok ? 0 : 1);
+    };
+    // #937: the pre-flight predicts the run, so it must name the same folder the run will use —
+    // and say when that is not the folder that was asked for.
+    if (projectSlug.note) checkEmit.resolved_project_note = projectSlug.note;
+    output(checkEmit, ok ? 0 : 1);
     return;
   }
   // #816: the transaction ledger — one object recording every step of the mechanical residue, so
@@ -4185,27 +4261,34 @@ function cmdFinalize() {
   // durable line in the archived run record. The accumulator exists because the durable half is
   // written by appendSummarySection, which is idempotent BY HEADING: a per-fault write would land the
   // first fault and silently drop every one after it, which is the same silence this converts. So the
-  // faults are collected and flushed ONCE, and flushed at every exit from the block below — including
-  // the refusing ones, or a run that refuses downstream would lose the findings it had already made.
+  // faults are collected and flushed together, at every exit from the block below — including the
+  // refusing ones, or a run that refuses downstream would lose the findings it had already made.
+  //
+  // #938: flushed as often as it likes rather than once. The write RESTATES the whole accumulated
+  // set, so an early flush costs nothing and a later one loses nothing — which is what lets the
+  // durable half be written BEFORE the commit that has to carry it. A findings section written after
+  // `chore: archive` / `chore: finalize` leaves the archived summary modified in a tree the
+  // transaction has just declared clean.
   const finalizeFindings = [];
   const recordFinalizeFinding = (type, summary, lines) => {
     finalizeFindings.push({ type: type, summary: summary, lines: lines || [] });
   };
-  let finalizeFindingsFlushed = false;
+  let finalizeFindingsWritten = 0;
   const flushFinalizeFindings = () => {
-    if (finalizeFindingsFlushed || finalizeFindings.length === 0) return;
-    finalizeFindingsFlushed = true;
+    if (finalizeFindings.length === 0) return;
     // De-duplicated on the envelope (one broken index makes several steps fail with the same fault),
     // never in the durable body — each entry there names which step it was.
     finalizeTx.findings = Array.from(new Set(finalizeFindings.map(f => f.type)));
     if (!result || !result.dest) return;   // no archive to write into; the envelope half still stands
+    if (finalizeFindingsWritten === finalizeFindings.length) return; // nothing found since the last write
+    finalizeFindingsWritten = finalizeFindings.length;
     const lines = [];
     for (const f of finalizeFindings) {
       lines.push('### ' + f.type, '', f.summary, '');
       for (const l of f.lines) lines.push(l);
       lines.push('');
     }
-    appendSummarySection(result.dest, '## Finalize Findings', lines);
+    appendSummarySection(result.dest, '## Finalize Findings', lines, true);
   };
   // One wording for a git failure's diagnosis, so the envelope and the archived record say the same
   // thing about the same fault. `stderr` is present only where the call pipes it.
@@ -4247,7 +4330,11 @@ function cmdFinalize() {
           + 'the linked worktree, in BOTH directions, and could not perform it — one of the two '
           + 'trees is unwritable, or the main copy could not be repaired. `detail` names the tree '
           + 'and the error. Make that tree writable, then re-run finalize. Never hand-copy a staler '
-          + 'main ledger over the worktree. No archive or closure side effect was made.',
+          + 'main ledger over the worktree. No archive or closure side effect was made. '
+          + 'The claim is still held. Fixing this and re-running finalize is how the run finishes; '
+          + 'if it will not be finished at all, `release` from the main root — not from inside the '
+          + 'project folder, which it refuses — gives the claim back, archiving the run as abandoned '
+          + 'and tearing down its worktree and branch.',
         errors: [mirror.inner_reason]
       }, 1);
       return;
@@ -4327,7 +4414,10 @@ function cmdFinalize() {
           operator_hint: 'The branch carries no implementation commit while implementation-shaped '
             + 'changes are uncommitted. Author the implementation commit yourself, then re-run '
             + 'finalize. The machinery authors only the finalize bookkeeping commit; no archive or '
-            + 'closure side effect was made.',
+            + 'closure side effect was made. The claim is still held. Fixing this and re-running '
+            + 'finalize is how the run finishes; if it will not be finished at all, `release` from '
+            + 'the main root — not from inside the project folder, which it refuses — gives the '
+            + 'claim back, archiving the run as abandoned and tearing down its worktree and branch.',
           errors: ['implementation_commit_missing']
         }, 1);
         return;
@@ -4342,7 +4432,11 @@ function cmdFinalize() {
           project: args.project,
           staged: guard.detail,
           operator_hint: 'Split the commit: the index carries workflow state that does not belong '
-            + 'to this project. Unstage it, then re-run finalize. No archive or closure side effect was made.',
+            + 'to this project. Unstage it, then re-run finalize. No archive or closure side effect was made. '
+            + 'The claim is still held. Fixing this and re-running finalize is how the run finishes; '
+            + 'if it will not be finished at all, `release` from the main root — not from inside the '
+            + 'project folder, which it refuses — gives the claim back, archiving the run as abandoned '
+            + 'and tearing down its worktree and branch.',
           errors: [guard.reason]
         }, 1);
         return;
@@ -4379,7 +4473,11 @@ function cmdFinalize() {
       reason: result.reason || 'archive_refused',
       project: args.project,
       detail: result.detail,
-      reasoning: 'archival did not return an explicit success result; no roadmap, issue, label, worktree, or branch cleanup was performed.'
+      reasoning: 'archival did not return an explicit success result; no roadmap, issue, label, worktree, or branch cleanup was performed. '
+        + 'The claim is still held. Fixing this and re-running finalize is how the run finishes; '
+        + 'if it will not be finished at all, `release` from the main root — not from inside the '
+        + 'project folder, which it refuses — gives the claim back, archiving the run as abandoned '
+        + 'and tearing down its worktree and branch.'
     }, 1);
     return;
   }
@@ -4414,7 +4512,11 @@ function cmdFinalize() {
           (mismatched.join(', ') || 'unknown') + ')') +
         '; every live project folder was left in place — no roadmap/issue/label side effect was ' +
         'performed. The archive must reproduce every file the source contains, byte for byte and '  +
-        'entry kind for entry kind. ' + archiveIncompleteRemedy(root, args.project)
+        'entry kind for entry kind. ' + archiveIncompleteRemedy(root, args.project) +
+        ' The claim is still held. Fixing this and re-running finalize is how the run finishes; ' +
+        'if it will not be finished at all, `release` from the main root — not from inside the ' +
+        'project folder, which it refuses — gives the claim back, archiving the run as abandoned ' +
+        'and tearing down its worktree and branch.'
     }, 1);
     return;
   }
@@ -4604,16 +4706,43 @@ function cmdFinalize() {
   // for the existing checkClosureInvariants in-progress-label-removed check.
   // Single-issue path: issueNumbers is empty; falls through to scalar call below (unchanged).
   let claimLabelRemoved;
+  // #938: which members' release was actually SKIPPED. The loop below keeps only the primary's
+  // status, and a report that cannot name the issues it is about is unactionable — so the numbers
+  // are collected here rather than inferred from `claim_label_removed`, which is one member's.
+  const claimReleaseSkipped = [];
   if (issueNumbers.length > 0) {
     // Bundle: clear label for each member; primary's status is the canonical one.
     for (const n of issueNumbers) {
       const labelStatus = clearAdvisoryClaim(n, 'finalized', args.project);
+      if (labelStatus === 'skipped_offline') claimReleaseSkipped.push(n);
       if (n === issueNumber) claimLabelRemoved = labelStatus;
     }
     if (claimLabelRemoved == null) claimLabelRemoved = 'failed';
   } else {
     // Single-issue path (unchanged)
     claimLabelRemoved = clearAdvisoryClaim(issueNumber, 'finalized', args.project);
+    if (claimLabelRemoved === 'skipped_offline' && issueNumber != null) claimReleaseSkipped.push(issueNumber);
+  }
+  // #938: an offline finalize makes ZERO forge calls, so it releases nothing — and reported that
+  // nowhere. `skipped_offline` counting as `removed` for the in-progress-label-removed invariant is
+  // DELIBERATE and contracted; this does not change it, and `closure_invariants.ok` stays true. What
+  // it changes is the silence: the run's durable record was byte-identical to a run that did release
+  // the claim, so a later reader had no way to learn that two remote artifacts were left behind.
+  //
+  // CONDITIONAL by necessity, not by hedging. Nothing local records whether this run's claim was
+  // ever POSTED — `postAdvisoryClaim` returns the same `skipped_offline` on an offline claim and
+  // `writeState` persists no token for it — so the finding may say the release was skipped and name
+  // the issues it would have touched, and may not say the artifacts are on them.
+  if (claimReleaseSkipped.length > 0) {
+    recordFinalizeFinding('claim_release_skipped_offline',
+      'This finalize released no claim: KAOLA_WORKFLOW_OFFLINE=1, so the release returned before '
+        + 'making any forge call. Nothing local records whether this run was ever claimed online, so '
+        + 'this does not assert the artifacts are there — but IF the claim was posted, the `'
+        + CLAIM_LABEL + '` label and the `kw:claim` marker comment are still on the issues below. '
+        + 'The marker expires after 24h; the label does not, and either one blocks a later claim of '
+        + 'that issue until it is removed.',
+      ['Issues whose claim release was skipped:', '']
+        .concat(claimReleaseSkipped.map(n => '- #' + n)));
   }
   // #328: per-member remote close probe (warning-first: catch per member, accumulate, never abort)
   // Uses probeIssueState (from active-folders.js, already imported) for consistent JSON parsing.
@@ -4989,6 +5118,13 @@ function cmdFinalize() {
       // Finalization residue outside kaola-workflow/. A foreign project's paths are never staged
       // by the transaction, and the single-project guard re-runs against the whole index so an
       // operator's pre-staged foreign content still refuses instead of riding along.
+      // #938: write the findings known SO FAR before the residue is enumerated, so the archived
+      // summary they land in is picked up as residue and carried by the `chore: finalize` commit
+      // below. Without this the durable write happens after both commits and leaves the archived
+      // record modified in a tree this lane has just made clean — which is what the #296 B1
+      // re-entry and #217 second-finalize assertions read. Anything found after this point is
+      // written again by the flush at the end of the block; the write restates the whole set.
+      flushFinalizeFindings();
       const residue = [];
       let residueProbe = 'ok';
       try {
@@ -5168,6 +5304,9 @@ function cmdFinalize() {
     finalize_transaction: finalizeTx
   });
   if (finalizeChangedProbe !== 'measured') finalizeEmit.changed_paths_probe = finalizeChangedProbe;
+  // #937: present only when a name was actually corrected, so a run given the exact spelling emits
+  // the envelope it emitted before.
+  if (projectSlug.note) finalizeEmit.resolved_project_note = projectSlug.note;
   output(finalizeEmit, strictFailCode);
 }
 
@@ -6577,6 +6716,10 @@ module.exports = {
   // #936: sink-merge require()s this — the sink's keep-open terminals leave an issue OPEN and must
   // release BOTH claim artifacts, and this is the one place that knows the kw:claim marker format.
   clearAdvisoryClaim,
+  // #937: sink-merge require()s this — both scripts take a `--project` from the operator and both
+  // compose the marker, the archive name and a pathspec out of it, so the resolution and the
+  // sentence that reports it are stated once and read twice.
+  resolveProjectSlug,
   cmdAuditLabels,
   cmdLegacyWorktreeCleanup,
   cmdRepairLabels,

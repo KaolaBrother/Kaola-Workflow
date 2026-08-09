@@ -2212,3 +2212,328 @@ if (failed > 0) {
 } else {
   console.log('finalize-door tests passed (' + passed + ' assertions)');
 }
+
+// ---------------------------------------------------------------------------
+// T12 — a refusing finalize must name the route that GIVES THE CLAIM BACK
+// ---------------------------------------------------------------------------
+//
+// APPENDED AFTER THIS FILE'S OWN SUMMARY FOOTER, deliberately, and it re-reports and re-sets the
+// exit code from the same counters at the bottom. A second author was editing this file
+// concurrently in the same worktree; an append is the only edit shape that cannot silently drop
+// their work, and the footer above has already run by the time these assertions execute, so a red
+// here would otherwise be swallowed by an exit code computed before they existed.
+//
+// WHAT WAS MEASURED, and what it is NOT. Every refusal door in cmdFinalize returns BEFORE the
+// claim-clearing loop, so both claim artifacts — the `workflow:in-progress` label and the `kw:claim`
+// marker — stay held across a refusal. That is CORRECT: a run whose finalize refused still owns its
+// work, and a door that released the claim on the way out would hand a live run to the next caller.
+// Nothing here asks for that to change.
+//
+// THE RESIDUAL IS ROUTING. `release` is the recovery that clears BOTH artifacts, and it works even
+// on a condition that permanently blocks finalize — but no refusal envelope names it, so an operator
+// who cannot satisfy the door has been told what is wrong and not what to do instead. "Missing is a
+// routing problem": the way out exists and nothing points at it.
+//
+// AND THE ROUTE HAS A TRAP. `release` refuses with `refusing to discard current working directory`
+// when cwd is inside the project folder (cmdRelease's cwdInside guard) — which is exactly where an
+// operator finalizing a run is standing. Naming the command without naming where to run it hands
+// them a second dead end, so the guidance must also name the main root/checkout.
+//
+// WHICH DOORS ARE PINNED — the four that CARRY `operator_hint`:
+//   finalize_mirror_refused · finalize_gate_unverified · implementation_commit_missing ·
+//   staging_guard_multi_project
+// The two archive doors (`archive_refused` / `archive_incomplete`) carry NO `operator_hint` at all —
+// they put their guidance in `reasoning` — so they are outside this pin: the field to pin is the
+// one that already exists, and inventing a hint field on those two is a design decision this test
+// is not entitled to make.
+//
+// THE MAIN-ROOT CUE IS MIXED, on purpose, and the difference is not cosmetic:
+//   * finalize_mirror_refused    -> ALREADY GREEN. Its hint says "the main checkout" for its own
+//     unrelated reason. It stays in the table as a REGRESSION pin — whatever the hint becomes must
+//     not lose it.
+//   * the other three            -> RED. They name no tree at all.
+//
+// PER EDITION, because these hint strings are HAND-PORTED into three more claim.js copies that
+// `validate-script-sync.js` compares to nothing for the two forge ports. A fix applied to canonical
+// and missed on a port ships silently.
+
+(function T12_refusalNamesTheGiveTheClaimBackRoute() {
+  console.log('T12: a refusing finalize names `release` as the route that gives the claim back');
+
+  const missionList = statuses => {
+    const lines = ['# T12 fixture', ''];
+    statuses.forEach((s, i) => {
+      lines.push('- item: mission ' + (i + 1));
+      lines.push('  status: ' + s);
+      if (s !== 'todo') lines.push('  dispatched: agent-' + (i + 1) + ', output to out/' + (i + 1) + '.md');
+      if (s === 'done') lines.push('  result: out/' + (i + 1) + '.md');
+      lines.push('');
+    });
+    return lines.join('\n');
+  };
+
+  // Each door: a fixture that reaches it, the refusal it must produce, and whether the main-root
+  // cue is a new demand or a regression pin. `run` returns the finalize result; `clean` tears down.
+  const DOORS = [
+    {
+      reason: 'finalize_gate_unverified',
+      mainRootCue: 'red',
+      // An in-place run against a project folder that does not exist: Step 8a mirrors nothing and
+      // the authority resolves to archive_authority_missing. The cheapest door there is.
+      build(tag) {
+        const base = makeBase(tag);
+        G.init(base, { branch: 'main' });
+        fs.mkdirSync(path.join(base, 'kaola-workflow', '.roadmap'), { recursive: true });
+        fs.writeFileSync(path.join(base, 'README.md'), '# fixture\n');
+        G.commitAll(base, 'init');
+        return { base, project: 'issue-9071' };
+      },
+      run(fx, claimPath) {
+        // spawn-class: cli-contract
+        const r = spawnSync(process.execPath,
+          [claimPath, 'finalize', '--project', fx.project, '--json'],
+          { cwd: fx.base, encoding: 'utf8', timeout: 120000,
+            env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+        return { status: r.status, stderr: r.stderr, json: lastJson(r) };
+      },
+      clean(fx) { rm(fx.base); }
+    },
+    {
+      reason: 'finalize_mirror_refused',
+      mainRootCue: 'regression',
+      // A main copy that is BOTH staler than the worktree's ledger and unwritable: the transaction
+      // owns that sync, cannot perform it, and refuses fail-closed before any side effect.
+      build(tag) {
+        const fx = buildWorktreeRun(tag, 'issue-9070', null);
+        fs.writeFileSync(path.join(fx.wt, 'kaola-workflow', fx.project, 'mission-list.md'),
+          missionList(['done', 'done', 'done']));
+        const mainProj = path.join(fx.mainRoot, 'kaola-workflow', fx.project);
+        fs.mkdirSync(path.join(mainProj, '.cache'), { recursive: true });
+        fs.writeFileSync(path.join(mainProj, 'workflow-state.md'), 'stale\n');
+        fs.writeFileSync(path.join(mainProj, 'mission-list.md'), missionList(['done', 'todo', 'todo']));
+        fs.chmodSync(path.join(mainProj, 'mission-list.md'), 0o444);
+        fs.chmodSync(path.join(mainProj, 'workflow-state.md'), 0o444);
+        fs.chmodSync(path.join(mainProj, '.cache'), 0o555);
+        fs.chmodSync(mainProj, 0o555);
+        fx.locked = mainProj;
+        return fx;
+      },
+      run(fx, claimPath) { return runFinalizeKeepWorktree(fx, claimPath); },
+      clean(fx) {
+        // Restore the modes first or the teardown cannot remove the tree it locked.
+        try { fs.chmodSync(fx.locked, 0o755); fs.chmodSync(path.join(fx.locked, '.cache'), 0o755); } catch (_) {}
+        removeWorktreeFixture(fx);
+      }
+    },
+    {
+      reason: 'implementation_commit_missing',
+      mainRootCue: 'red',
+      // The same worktree run with its implementation commit rolled back into the working tree:
+      // implementation-shaped changes uncommitted, no implementation commit on the branch.
+      build(tag) {
+        const fx = buildWorktreeRun(tag, 'issue-9070', null);
+        G.git(fx.wt, ['reset', '--mixed', 'HEAD~1'], { stdio: ['ignore', 'ignore', 'ignore'] });
+        return fx;
+      },
+      run(fx, claimPath) { return runFinalizeKeepWorktree(fx, claimPath); },
+      clean(fx) { removeWorktreeFixture(fx); }
+    },
+    {
+      reason: 'staging_guard_multi_project',
+      mainRootCue: 'red',
+      // Two projects' workflow state in one index. The run's own folder is already committed by the
+      // fixture, so it is TOUCHED and re-staged — one staged project alone is not a split.
+      build(tag) {
+        const fx = buildWorktreeRun(tag, 'issue-9070', null);
+        const foreign = path.join(fx.wt, 'kaola-workflow', 'issue-8888');
+        fs.mkdirSync(foreign, { recursive: true });
+        fs.writeFileSync(path.join(foreign, 'workflow-state.md'), '# foreign run state\nname: issue-8888\n');
+        fs.appendFileSync(path.join(fx.wt, 'kaola-workflow', fx.project, 'workflow-state.md'), '\n# touched\n');
+        G.git(fx.wt, ['add', 'kaola-workflow/issue-8888', 'kaola-workflow/' + fx.project],
+          { stdio: ['ignore', 'ignore', 'ignore'] });
+        return fx;
+      },
+      run(fx, claimPath) { return runFinalizeKeepWorktree(fx, claimPath); },
+      clean(fx) { removeWorktreeFixture(fx); }
+    },
+  ];
+
+  for (const edition of CLAIM_EDITIONS) {
+    if (!fs.existsSync(edition.claim)) {
+      assert(false, 'T12(' + edition.name + '): the edition claim script exists at ' + edition.claim);
+      continue;
+    }
+    for (const door of DOORS) {
+      const tag = 'T12(' + edition.name + ' ' + door.reason + ')';
+      const fx = door.build('t12-' + edition.name + '-' + door.reason.slice(0, 12));
+      try {
+        const r = door.run(fx, edition.claim);
+        // REACHABILITY IS THE FIXTURE'S WHOLE JOB. A fixture that stopped reaching its door reds
+        // HERE rather than passing vacuously through the guidance assertions behind it.
+        assert(r.status !== 0 && r.json && r.json.reason === door.reason,
+          tag + ': the fixture must still reach this door; got status=' + r.status
+          + ' json=' + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 300));
+        if (!r.json || r.json.reason !== door.reason) continue;
+
+        const hint = String(r.json.operator_hint || '');
+        assert(hint.length > 0,
+          tag + ': this door carries operator_hint — an empty one means the field moved and this '
+          + 'pin is reading the wrong place; got ' + JSON.stringify(r.json.operator_hint));
+
+        // The route itself. `release` clears BOTH claim artifacts and works on a condition that
+        // permanently blocks finalize; an operator who cannot satisfy this door has no other way to
+        // hand the issue back, and today nothing tells them it exists.
+        assert(/\brelease\b/.test(hint),
+          tag + ': the refusal must name `release` as the way to give the claim back — the door '
+          + 'correctly keeps holding the label and the kw:claim marker, so an operator who cannot '
+          + 'satisfy it is stuck with no named way out; got operator_hint=' + JSON.stringify(hint));
+
+        // And where to run it. Run from inside the project folder, `release` refuses with
+        // `refusing to discard current working directory` — the operator is standing in exactly
+        // that folder when finalize refuses.
+        const cueLabel = door.mainRootCue === 'regression'
+          ? ': the main-root cue is ALREADY present here and must not be lost'
+          : ': naming `release` without naming the main root/checkout hands the operator a second '
+            + 'dead end — from inside the project folder it refuses `refusing to discard current '
+            + 'working directory`';
+        assert(/\bmain (root|checkout)\b/i.test(hint), tag + cueLabel + '; got operator_hint='
+          + JSON.stringify(hint));
+      } finally {
+        door.clean(fx);
+      }
+    }
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// Final result — RE-REPORTED. See the T12 header: this block is appended after the footer above,
+// which has already run against the counters as they stood before these assertions.
+// ---------------------------------------------------------------------------
+if (failed > 0) {
+  console.error('finalize-door tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
+  process.exitCode = 1;
+} else {
+  console.log('finalize-door tests passed (' + passed + ' assertions)');
+}
+
+// ---------------------------------------------------------------------------
+// T12b — the same route, on the two doors that carry NO `operator_hint`
+// ---------------------------------------------------------------------------
+//
+// A SECOND ATOMIC APPEND, for the same reason as T12: this file is shared and an append is the only
+// edit shape that cannot drop another author's work. The footer below is the authoritative one —
+// the counters are cumulative, so T12's footer prints an intermediate total and this one prints the
+// final. Nothing above line 2215 has been touched by either append.
+//
+// T12 deliberately stopped at the four doors carrying `operator_hint` and left the archive pair
+// alone, because giving them a hint field they do not have is an ADDITION and that was not a call a
+// test author gets to make. It has now been ruled: name the route in the `reasoning` field these two
+// ALREADY emit. Amending existing text adds nothing; a new field would. So the assertions are T12's,
+// read off `reasoning` instead of `operator_hint`.
+//
+// THE TWO DOORS, and the lever each needs — neither is reachable by ordinary fixture arrangement:
+//   * archive_refused (:4384) — `KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL=1`, the deterministic refusal
+//     seam that fires before terminal stamping and leaves the live source untouched. The envelope's
+//     `reason` is the seam's own `archive_forced_refusal`, NOT the literal `archive_refused`: that
+//     door emits `result.reason || 'archive_refused'`, and this result carries one.
+//   * archive_incomplete (:4419) — a SYMLINK inside the live run folder. verifyArchiveComplete walks
+//     the source and pushes any entry it cannot reduce to bytes into `invalid[]`, which seeds
+//     `mismatched[]`; unlike the env seam this is a property of the tree, so it survives a re-run.
+//     Measured: `mismatched: [".cache/evidence-link.md"]`, `missing: []` — which is exactly why the
+//     door reports BOTH halves.
+//
+// THE MAIN-ROOT CUE IS AGAIN MIXED, and again not cosmetic:
+//   * archive_incomplete -> ALREADY GREEN. archiveIncompleteRemedy already says "the one in the main
+//     checkout" while explaining where a named file may be hiding. REGRESSION pin.
+//   * archive_refused    -> RED. Its one sentence names no tree and no next move at all.
+
+(function T12b_archiveDoorsNameTheGiveTheClaimBackRoute() {
+  console.log('T12b: the two archive doors name `release` in the `reasoning` they already emit');
+
+  const DOORS = [
+    {
+      label: 'archive_refused',
+      reason: 'archive_forced_refusal',
+      mainRootCue: 'red',
+      env: { KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL: '1' },
+      arrange() { /* the seam is the whole arrangement */ }
+    },
+    {
+      label: 'archive_incomplete',
+      reason: 'archive_incomplete',
+      mainRootCue: 'regression',
+      env: {},
+      arrange(fx) {
+        const cache = path.join(fx.wt, 'kaola-workflow', fx.project, '.cache');
+        fs.symlinkSync(path.join(cache, 'evidence.md'), path.join(cache, 'evidence-link.md'));
+      }
+    },
+  ];
+
+  for (const edition of CLAIM_EDITIONS) {
+    if (!fs.existsSync(edition.claim)) {
+      assert(false, 'T12b(' + edition.name + '): the edition claim script exists at ' + edition.claim);
+      continue;
+    }
+    for (const door of DOORS) {
+      const tag = 'T12b(' + edition.name + ' ' + door.label + ')';
+      const fx = buildWorktreeRun('t12b-' + edition.name + '-' + door.label.slice(8), 'issue-9070', null);
+      try {
+        door.arrange(fx);
+        // spawn-class: cli-contract
+        const raw = spawnSync(process.execPath,
+          [edition.claim, 'finalize', '--project', fx.project, '--keep-worktree', '--json'], {
+            cwd: fx.wt, encoding: 'utf8', timeout: 120000,
+            env: Object.assign({}, process.env, {
+              KAOLA_WORKFLOW_OFFLINE: '0',
+              KAOLA_WORKTREE_NATIVE: '0',
+              KAOLA_GH_MOCK_SCRIPT: fx.gh,
+            }, door.env),
+          });
+        const r = { status: raw.status, stderr: raw.stderr, json: lastJson(raw) };
+
+        // REACHABILITY FIRST, as in T12: a fixture that stopped reaching its door reds here rather
+        // than passing vacuously through the guidance assertions behind it.
+        assert(r.status !== 0 && r.json && r.json.reason === door.reason,
+          tag + ': the fixture must still reach this door; got status=' + r.status
+          + ' json=' + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 300));
+        if (!r.json || r.json.reason !== door.reason) continue;
+
+        const reasoning = String(r.json.reasoning || '');
+        // The field-has-not-moved pin. These two doors carry NO operator_hint by design — the route
+        // belongs in the text they already emit, and a reader that found operator_hint here would be
+        // reading a field the ruling said not to add.
+        assert(reasoning.length > 0,
+          tag + ': this door carries its guidance in `reasoning` — an empty one means the field moved '
+          + 'and this pin is reading the wrong place; got ' + JSON.stringify(r.json.reasoning));
+
+        assert(/\brelease\b/.test(reasoning),
+          tag + ': the refusal must name `release` as the way to give the claim back — this door also '
+          + 'returns before the claim-clearing loop, so the label and the kw:claim marker are both '
+          + 'still held and the operator has no named way out; got reasoning=' + JSON.stringify(reasoning));
+
+        const cueLabel = door.mainRootCue === 'regression'
+          ? ': the main-root cue is ALREADY present here and must not be lost'
+          : ': naming `release` without naming the main root/checkout hands the operator a second '
+            + 'dead end — from inside the project folder it refuses `refusing to discard current '
+            + 'working directory`';
+        assert(/\bmain (root|checkout)\b/i.test(reasoning), tag + cueLabel + '; got reasoning='
+          + JSON.stringify(reasoning));
+      } finally {
+        removeWorktreeFixture(fx);
+      }
+    }
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// Final result — AUTHORITATIVE. Two appended blocks now sit after this file's original footer, and
+// the counters are cumulative, so the two earlier summary lines are intermediate totals and THIS is
+// the one that decides the exit code.
+// ---------------------------------------------------------------------------
+if (failed > 0) {
+  console.error('finalize-door tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
+  process.exitCode = 1;
+} else {
+  console.log('finalize-door tests passed (' + passed + ' assertions)');
+}

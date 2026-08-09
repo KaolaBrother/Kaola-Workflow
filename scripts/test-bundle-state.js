@@ -11,6 +11,12 @@
 //   (c) classifier/active-folder overlap blocks a member of a live bundle (exit code 2)
 //   (d) a non-member issue is NOT blocked (exit code 0)
 //
+// The classifier's OTHER blocking door — the ONLINE remote-claim block — is pinned beside (c)/(d)
+// because this is where the suite already drives `kaola-workflow-classifier.js classify`:
+//   (e) a claim held by the workflow:in-progress LABEL names the label
+//   (f) a claim held by a kw:claim MARKER comment names the marker
+//   (g) control: a marker older than 24h with no label does not block at all
+//
 // All fixtures are written to $TMPDIR (mkdtempSync) — NOTHING is written inside
 // the repo's kaola-workflow/ tree (the per-node barrier checks write-set containment
 // against the 5 declared files; a stray repo write trips it).
@@ -220,6 +226,168 @@ const SINGLE_ISSUE_STATE = [
 // The orient-driven bundle-coherence scenarios stood here. They drove
 // `kaola-workflow-adaptive-node.js orient` and asserted a `bundle_state_incoherent` refusal —
 // a subcommand and a refusal class that both no longer exist. Deleted with their mechanism.
+
+
+// ---------------------------------------------------------------------------
+// Tests (e)/(f)/(g): a remote-claim BLOCK must name WHICH artifact holds the claim
+// ---------------------------------------------------------------------------
+//
+// Tests (c)/(d) above pin the OTHER blocking door — the local active-folder/bundle overlap, which
+// exits 2 with no stdout. This block pins the ONLINE door beside it: `blocked` is
+// `label OR marker`, and both arms emitted the SAME undiscriminating sentence
+// ("issue #N has a remote workflow claim"), so an operator reading it could not tell which of two
+// artifacts to go and clear. The two are not interchangeable:
+//
+//   * the `workflow:in-progress` LABEL has no expiry anywhere — it blocks forever;
+//   * the `kw:claim` MARKER comment expires 24h after its `updated_at`.
+//
+// The caller already knows which fired: the label is evaluated FIRST and short-circuits, so when
+// it is present the marker probe never runs. Nothing about the probe signatures has to change for
+// the message to say so.
+//
+// WHAT IS PINNED — the RESULT, not a wording. Each arm's `reasoning` names its OWN artifact by the
+// token an operator would search for, and the two arms do not emit the same sentence. A message
+// that names both artifacts on both arms satisfies the two contains-checks and fails the
+// differ-check, which is the near-miss this exists to catch. Asserted against the JSON the
+// classifier subprocess actually emitted — never a string reconstructed here.
+//
+// BOTH ARMS DRIVE THE SAME ISSUE NUMBER, deliberately. The undiscriminating sentence interpolates
+// the issue number, so two arms on two numbers differ ALREADY — the differ-check would have been
+// green at HEAD and pinned nothing. Same number, so at HEAD the two strings are byte-identical.
+//
+// ONLINE, so KAOLA_WORKFLOW_OFFLINE is REMOVED from the child env (the classifier captures it at
+// module load) and `gh` is routed at a per-case mock written OUTSIDE the fixture repo.
+
+const CLAIM_LABEL_TOKEN = 'workflow:in-progress';   // the exact label the classifier matches
+const CLAIM_MARKER_TOKEN = 'kw:claim';              // the exact marker the classifier greps for
+
+// A gh mock answering the three calls the online classify path makes: the issue fetch, the
+// repo-identity probe behind the comment fetch, and the comment fetch itself.
+function writeGhMock(dir, labels, comments) {
+  const mockPath = path.join(dir, 'gh-mock.js');
+  fs.writeFileSync(mockPath, [
+    'const a = process.argv.slice(2);',
+    'const labels = ' + JSON.stringify(labels) + ';',
+    'const comments = ' + JSON.stringify(comments) + ';',
+    "if (a[0] === 'issue' && a[1] === 'view') {",
+    "  process.stdout.write(JSON.stringify({ number: parseInt(a[2], 10), title: 'fixture', body: '', labels: labels, state: 'OPEN' }));",
+    "} else if (a[0] === 'repo' && a[1] === 'view') {",
+    "  process.stdout.write(JSON.stringify({ owner: { login: 'kw-fixture' }, name: 'repo' }));",
+    "} else if (a[0] === 'api') {",
+    '  process.stdout.write(JSON.stringify(comments));',
+    '} else {',
+    "  process.stdout.write('');",
+    '}',
+  ].join('\n'));
+  return mockPath;
+}
+
+// A fixture repo of its own (`git init -b main`) so the classifier's `git rev-parse --show-toplevel`
+// resolves HERE and never at the repository this suite lives in. The mock lives in a sibling dir,
+// outside the repo, so nothing under test ever sees it as tree content.
+function runClassifierOnline(issueNum, labels, comments) {
+  const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-claim-artifact-'));
+  const root = path.join(outer, 'repo');
+  const binDir = path.join(outer, 'bin');
+  fs.mkdirSync(root, { recursive: true });
+  fs.mkdirSync(binDir, { recursive: true });
+  try {
+    // spawn-class: environment
+    spawnSync('git', ['init', '-b', 'main'], { cwd: root, encoding: 'utf8' });
+    const env = Object.assign({}, process.env, {
+      KAOLA_GH_MOCK_SCRIPT: writeGhMock(binDir, labels, comments),
+      KAOLA_CLASSIFIER_BACKOFF_MS: '0',
+    });
+    delete env.KAOLA_WORKFLOW_OFFLINE;
+    // spawn-class: cli-contract
+    const result = spawnSync(
+      process.execPath,
+      [classifierScript, 'classify', '--issue', String(issueNum)],
+      { cwd: root, encoding: 'utf8', env }
+    );
+    if (result.error) throw result.error;
+    let json = null;
+    try { json = JSON.parse(String(result.stdout).trim()); } catch (_) {}
+    return { result, json };
+  } finally {
+    fs.rmSync(outer, { recursive: true, force: true });
+  }
+}
+
+const freshMarker = [{
+  body: '<!-- kw:claim project=issue-501 sess=abc -->',
+  updated_at: new Date().toISOString()
+}];
+
+let labelBlockedReasoning = null;
+let markerBlockedReasoning = null;
+
+// ---------------------------------------------------------------------------
+// Test (e): the LABEL arm names the label
+// ---------------------------------------------------------------------------
+
+(function testLabelBlockNamesTheLabel() {
+  console.log('Test (e): a label-held claim names the ' + CLAIM_LABEL_TOKEN + ' label');
+  // No comments at all: the marker probe cannot be what produced this block even if it ran.
+  const { result, json } = runClassifierOnline(501, [{ name: CLAIM_LABEL_TOKEN }], []);
+  assert(result.status === 0, 'classifier exits 0 on the label arm, got ' + result.status
+    + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+  // Liveness: a fixture that stopped reaching the emitter reds HERE rather than passing vacuously
+  // through the message assertions behind it.
+  assert(json && json.verdict === 'blocked',
+    'label arm must still reach the blocked emitter, got ' + JSON.stringify(json));
+  const reasoning = String((json && json.reasoning) || '');
+  labelBlockedReasoning = reasoning;
+  assert(reasoning.includes(CLAIM_LABEL_TOKEN),
+    'a label-held claim must NAME the label an operator has to remove — the label never expires, '
+    + 'so "has a remote workflow claim" sends them looking for a marker that is not there; got: '
+    + JSON.stringify(reasoning));
+})();
+
+// ---------------------------------------------------------------------------
+// Test (f): the MARKER arm names the marker
+// ---------------------------------------------------------------------------
+
+(function testMarkerBlockNamesTheMarker() {
+  console.log('Test (f): a marker-held claim names the ' + CLAIM_MARKER_TOKEN + ' marker comment');
+  // No label at all: the label arm cannot be what produced this block. Same issue number as test
+  // (e) — see the header: a different number makes the differ-check below pass for free.
+  const { result, json } = runClassifierOnline(501, [], freshMarker);
+  assert(result.status === 0, 'classifier exits 0 on the marker arm, got ' + result.status
+    + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+  assert(json && json.verdict === 'blocked',
+    'marker arm must still reach the blocked emitter, got ' + JSON.stringify(json));
+  const reasoning = String((json && json.reasoning) || '');
+  markerBlockedReasoning = reasoning;
+  assert(reasoning.includes(CLAIM_MARKER_TOKEN),
+    'a marker-held claim must NAME the marker comment — it expires 24h after its updated_at, and '
+    + 'that is the whole difference from the label; got: ' + JSON.stringify(reasoning));
+  // The discrimination itself, bound to the two arms' own emitted strings: one sentence for both
+  // artifacts is exactly the message #936's reporter could not act on.
+  assert(labelBlockedReasoning !== null && markerBlockedReasoning !== labelBlockedReasoning,
+    'the label arm and the marker arm must not emit the SAME sentence; both got: '
+    + JSON.stringify(markerBlockedReasoning));
+})();
+
+// ---------------------------------------------------------------------------
+// Test (g): positive control — an EXPIRED marker with no label does not block
+// ---------------------------------------------------------------------------
+
+(function testAgedMarkerDoesNotBlock() {
+  console.log('Test (g): control — a >24h ' + CLAIM_MARKER_TOKEN + ' marker with no label acquires');
+  const aged = [{
+    body: '<!-- kw:claim project=issue-503 sess=abc -->',
+    updated_at: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString()
+  }];
+  const { result, json } = runClassifierOnline(503, [], aged);
+  assert(result.status === 0, 'classifier exits 0 on the aged-marker control, got ' + result.status
+    + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+  // Without this the two arms above could both be blocking for some reason the fixture supplies
+  // incidentally rather than the artifact each one plants.
+  assert(json && json.verdict !== 'blocked',
+    'a marker older than 24h with no label must NOT block — this control is what proves tests (e) '
+    + 'and (f) block BECAUSE of the artifact each plants; got ' + JSON.stringify(json));
+})();
 
 
 // ---------------------------------------------------------------------------

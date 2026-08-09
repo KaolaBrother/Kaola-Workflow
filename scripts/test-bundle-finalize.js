@@ -240,6 +240,8 @@ function writeGhMockScript(binDir, opts) {
   const throwOnView = opts && opts.throwOnIssueView != null ? String(opts.throwOnIssueView) : 'null';
   // #371: `pr view` route for cmdWatchPr coverage — configurable PR state (MERGED/CLOSED/OPEN).
   const prState = opts && opts.prState ? JSON.stringify(opts.prState) : 'null';
+  // #937: opt-in mutable issue-comment store; see the two comment routes at the tail.
+  const storeFile = opts && opts.commentStore ? JSON.stringify(opts.commentStore) : 'null';
 
   fs.mkdirSync(binDir, { recursive: true });
   const script = [
@@ -321,9 +323,33 @@ function writeGhMockScript(binDir, opts) {
     '// label create ...',
     'if (a.includes("label create")) { process.exit(0); }',
     '',
-    '// api repos/.../issues/N/comments => []',
-    'if (a.includes("api") && a.includes("comments")) {',
-    '  process.stdout.write("[]\\n");',
+    '// #937: the ISSUE-COMMENT STORE. Without opts.commentStore these are the two pre-existing',
+    '// routes unchanged — the list answers [] and a DELETE is a silent no-op — so every scenario',
+    '// that configures no store behaves exactly as before. With one, a kw:claim marker is a thing',
+    '// that EXISTS on a fixture issue and can be observed to be gone (or still sitting there)',
+    '// afterwards. That is the only way to tell a delete that ran from a delete whose composed',
+    '// marker matched nothing: both make the same calls and both report the same way.',
+    '// DELETE is tested FIRST — both argv carry the substring "comments".',
+    'const storeFile = ' + storeFile + ';',
+    'function loadStore(){ try { return JSON.parse(fs.readFileSync(storeFile, "utf8")); } catch(_) { return {}; } }',
+    'const delM = a.match(/issues\\/comments\\/(\\d+)/);',
+    'if (a.includes("api") && a.includes("DELETE") && delM) {',
+    '  if (storeFile) {',
+    '    const id = Number(delM[1]);',
+    '    const s = loadStore();',
+    '    for (const k of Object.keys(s)) s[k] = (s[k] || []).filter(function(c){ return Number(c && c.id) !== id; });',
+    '    try { fs.writeFileSync(storeFile, JSON.stringify(s, null, 2)); } catch(_) {}',
+    '    log("comment-deleted:" + id);',
+    '  }',
+    '  process.stdout.write("{}\\n");',
+    '  process.exit(0);',
+    '}',
+    '',
+    '// api repos/.../issues/N/comments => the store for N, or [] when none is configured',
+    'const listM = a.match(/issues\\/(\\d+)\\/comments/);',
+    'if (a.includes("api") && (listM || a.includes("comments"))) {',
+    '  if (storeFile && listM) log("comments-listed:" + listM[1]);',
+    '  process.stdout.write(JSON.stringify(storeFile && listM ? (loadStore()[listM[1]] || []) : []) + "\\n");',
     '  process.exit(0);',
     '}',
     '',
@@ -1548,6 +1574,176 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
       && !fs.existsSync(projectDir) && fs.existsSync(result.dest),
     '#699 a plan-absent claim record archives successfully, got ' + JSON.stringify(result));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+})();
+
+// ---------------------------------------------------------------------------
+// (#937) cmdFinalize and the slug that only LOOKED right
+//
+// `clearAdvisoryClaim` composes the marker comment it deletes by EXACT, case-sensitive substring
+// from the project name it is handed: `'<!-- kw:claim project=' + project + ' -->'`. cmdFinalize
+// hands it `args.project` — the OPERATOR's spelling — from both arms: once per member in the bundle
+// loop, and once on the single-issue path. The marker on the forge carries the name the run was
+// CLAIMED with, which is the name of the folder on disk.
+//
+// On a case-insensitive filesystem those can differ with nothing local to notice.
+// `finalize --project Issue-N` finds `kaola-workflow/issue-N` exactly as the lowercase spelling
+// would, so the whole finalize succeeds: exit 0, `status: closed`, `claim_label_removed: removed`,
+// `closure_invariants.ok: true` — and the comment LIST goes out, matches nothing, and every member
+// keeps its claim. The label is removed by ISSUE NUMBER and so is unaffected, which is what makes
+// the receipt read healthy.
+//
+// The owner ruled RESOLVE AND REPORT: resolve the supplied name to the on-disk folder once, early,
+// and state the correction in the run's own output. Refusing was declined.
+// ---------------------------------------------------------------------------
+
+// The operator's spelling — one byte from the on-disk name, which is the difference a
+// case-insensitive filesystem cannot see and an exact substring match cannot miss.
+function misCaseSlug(project) { return project.replace(/^issue-/, 'Issue-'); }
+
+function commentStorePath(binDir) { return path.join(binDir, 'issue-comments.json'); }
+function claimMarker(project) { return '<!-- kw:claim project=' + project + ' -->'; }
+function plantIssueComments(binDir, byIssue) {
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(commentStorePath(binDir), JSON.stringify(byIssue, null, 2) + '\n');
+}
+function issueCommentBodies(binDir, issue) {
+  let store = {};
+  try { store = JSON.parse(fs.readFileSync(commentStorePath(binDir), 'utf8')); } catch (_) { return []; }
+  return (store[String(issue)] || []).map(c => String((c && c.body) || ''));
+}
+// A marker comment as the claim path actually posts it — postAdvisoryClaim writes the HTML comment
+// followed by prose on the next line — so a deleter matching the exact literal is matching what
+// ships rather than a shape this file invented.
+function markerComment(id, project) {
+  return {
+    id,
+    body: claimMarker(project) + '\nKaola-Workflow started local work for `' + project + '`.',
+    updated_at: new Date().toISOString(),
+  };
+}
+
+// Did the run TELL the operator that the name it was given is not the folder it used? Every value
+// in the envelope is searched for a string naming BOTH spellings. The shape is deliberately left
+// open — a note field (what `reserved_project` / `reserved_project_note` do for the same class of
+// correction on the claim envelope), a typed finding's detail line, or a receipt field all satisfy
+// it. What cannot is silence, or the two spellings appearing in SEPARATE fields, which an archive
+// path and a project name do by coincidence rather than by saying anything.
+function slugCorrectionSentences(out, supplied, resolved) {
+  const hits = [];
+  const walk = v => {
+    if (typeof v === 'string') { if (v.includes(supplied) && v.includes(resolved)) hits.push(v); return; }
+    if (Array.isArray(v)) { v.forEach(walk); return; }
+    if (v && typeof v === 'object') { for (const k of Object.keys(v)) walk(v[k]); }
+  };
+  walk(out);
+  return hits;
+}
+
+// One assertion set over both cmdFinalize arms and both spellings. `supplied` is what goes on the
+// command line; `project` is what is on disk and what the marker carries. Equal spellings make this
+// the POSITIVE CONTROL — same fixture, same assertions, a slug that needs no resolving. Without it
+// "the marker is gone" could be true of a fixture in which nothing is ever deleted.
+function assertFinalizeResolvesTheProjectSlug937(label, project, members, supplied) {
+  const misCased = supplied !== project;
+  const primary = members[0];
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  const logFile = path.join(tmpRoot, 'gh-calls.log');
+  try {
+    initGitRepo(tmpRoot);
+    if (members.length > 1) writeBundleStateFile(tmpRoot, project, primary, members);
+    else writeSingleStateFile(tmpRoot, project, primary);
+    for (const n of members) writeRoadmapFile(tmpRoot, n);
+    writeRoadmapMirror(tmpRoot, members);
+    writeGhMockScript(binDir, { logFile, closedIssues: members, commentStore: commentStorePath(binDir) });
+    plantIssueComments(binDir, Object.assign(
+      {
+        [primary]: [
+          markerComment(93731, project),
+          markerComment(93732, 'issue-OTHER'),
+          { id: 93733, body: 'an ordinary human comment mentioning nothing in particular', updated_at: new Date().toISOString() },
+        ],
+      },
+      ...members.slice(1).map((n, i) => ({ [n]: [markerComment(93740 + i, project)] }))
+    ));
+    // Seed LAST, after every fixture file is in place, so the recorded candidate hash matches the
+    // tree finalize recomputes over.
+    seedAdaptiveFinalizeFixture(tmpRoot, project);
+
+    const result = runFinalize(['finalize', '--project', supplied], tmpRoot, binDir);
+    const out = parseOutput(result);
+    const calls = readLog(logFile);
+
+    // FIXTURE PREMISE. A finalize that stopped measures nothing about claim release — and resolving
+    // the slug must not turn this run into a refusal, which the owner declined.
+    assert(result.status === 0 && out && out.status === 'closed',
+      label + ' premise: finalize must complete — a mis-cased --project resolves to the on-disk folder, it does not refuse; got exit=' + result.status +
+      ' status=' + JSON.stringify(out && (out.status || out.reason)) + '\nstdout: ' + String(result.stdout || '').slice(-800) +
+      '\nstderr: ' + String(result.stderr || '').slice(-800));
+    if (!(result.status === 0 && out && out.status === 'closed')) return;
+    assert(out.closure_invariants && out.closure_invariants.ok === true,
+      label + ' premise: closure_invariants.ok must stay true; got ' + JSON.stringify(out.closure_invariants));
+
+    // The comment list must have gone out at all — otherwise "the marker is still there" would be
+    // reporting a deleter that was never reached rather than one that matched nothing.
+    assert(calls.some(l => l.startsWith('comments-listed:')),
+      label + ': clearAdvisoryClaim must LIST the issue comments; without that call every marker '
+      + 'assertion below is about a code path the run never entered. calls=' + JSON.stringify(calls));
+
+    // THE PIN, per member. Stated as the issue's END STATE, so a deleter that composed a marker
+    // nothing matches fails exactly as one that never ran.
+    for (const n of members) {
+      assert(calls.includes('label-removed:' + n),
+        label + ': the claim LABEL must be removed from member ' + n + '; calls=' + JSON.stringify(calls));
+      assert(!issueCommentBodies(binDir, n).some(b => b.includes(claimMarker(project))),
+        label + ': the kw:claim MARKER posted for the on-disk project "' + project + '" must be gone from member ' + n +
+        ', and the run was driven with --project "' + supplied + '". The deleter composes its marker from the supplied spelling by exact substring, so a name differing only in CASE matches nothing on the forge and every delete is silently skipped — while the label removal (keyed on the issue NUMBER) still succeeds and the receipt reads healthy. Comments still on #' + n + ': ' +
+        JSON.stringify(issueCommentBodies(binDir, n)));
+    }
+
+    // Scoping is not widened by the resolution.
+    assert(issueCommentBodies(binDir, primary).some(b => b.includes(claimMarker('issue-OTHER'))),
+      label + ': a marker belonging to a DIFFERENT project is another run\'s live claim and must NOT be deleted; comments=' +
+      JSON.stringify(issueCommentBodies(binDir, primary)));
+    assert(issueCommentBodies(binDir, primary).some(b => b.includes('an ordinary human comment')),
+      label + ': ordinary comments must be left alone; comments=' + JSON.stringify(issueCommentBodies(binDir, primary)));
+
+    // The archive is named from the same supplied string. Compared case-SENSITIVELY on the basename,
+    // because fs.existsSync cannot tell the two apart on this filesystem and git's index can.
+    // `startsWith` rather than equality: a collision suffix (`.archived-<ts>`) is legitimate here.
+    const destName = String(out.dest || '').split(path.sep).filter(Boolean).pop() || '';
+    assert(destName.startsWith(project),
+      label + ': the run archive was written under the SUPPLIED spelling "' + destName + '" instead of the on-disk project name "' +
+      project + '" — on a case-sensitive index that is a second, differently-named archive directory. dest=' + JSON.stringify(out.dest));
+
+    if (misCased) {
+      // REPORTED, not silently corrected: an operator who is not told keeps typing the same name.
+      const sentences = slugCorrectionSentences(out, supplied, project);
+      assert(sentences.length > 0,
+        label + ': the run was given --project "' + supplied + '" and used "' + project + '", and its output says so nowhere. ' +
+        'Report the substitution the way the claim envelope reports a reserved project name — one value naming what was supplied and what was used. Envelope: ' +
+        JSON.stringify(out));
+    }
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+// The mis-cased legs FIRST, so an implementation that resolves nothing fails there rather than
+// quietly satisfying the control.
+(function () {
+  console.log('Test (#937 e): bundle finalize with a --project that differs from the on-disk folder ONLY IN CASE must still release the kw:claim marker on every member, and must say it corrected the name');
+  assertFinalizeResolvesTheProjectSlug937('#937 e (bundle, mis-cased)', 'issue-93705', [93705, 93715], misCaseSlug('issue-93705'));
+})();
+
+(function () {
+  console.log('Test (#937 f): the SINGLE-issue finalize arm composes the same marker from the same supplied name — the bundle loop and the scalar call are separate call sites and neither reaches the other');
+  assertFinalizeResolvesTheProjectSlug937('#937 f (single, mis-cased)', 'issue-93706', [93706], misCaseSlug('issue-93706'));
+})();
+
+(function () {
+  console.log('Test (#937 g, positive control): the same bundle finalize driven with the EXACT on-disk slug still deletes the marker on every member — without this, "the marker is gone" could be true of a fixture that deletes nothing');
+  assertFinalizeResolvesTheProjectSlug937('#937 g (bundle, exact)', 'issue-93707', [93707, 93717], 'issue-93707');
 })();
 
 // ---------------------------------------------------------------------------

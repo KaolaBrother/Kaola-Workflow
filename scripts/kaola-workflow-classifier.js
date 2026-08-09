@@ -368,7 +368,8 @@ function cmdClassify(argv) {
   // (main()'s catch → exit 1) or silently catching to "no remote claim" → proceed. The label check
   // runs FIRST and short-circuits (preserving the pre-#519 OR evaluation order) so the remote-claim
   // probe is skipped — and cannot transient-fault — when the in-progress label already says blocked.
-  let blocked = issueHasWorkflowInProgressLabel(issue.labels || []);
+  const blockedByLabel = issueHasWorkflowInProgressLabel(issue.labels || []);
+  let blocked = blockedByLabel;
   if (!blocked) {
     try {
       blocked = issueHasRemoteClaimComment(args.issue);
@@ -388,8 +389,18 @@ function cmdClassify(argv) {
       throw e;
     }
   }
+  // Name WHICH artifact blocked: the two are not interchangeable and the short-circuit above
+  // already knows which one fired. The label never expires and only a hand-removal clears it; a
+  // timestamped kw:claim marker stops blocking 24h after its last update.
   if (blocked) {
-    process.stdout.write(JSON.stringify({ verdict: 'blocked', reasoning: 'issue #' + args.issue + ' has a remote workflow claim' }) + '\n');
+    process.stdout.write(JSON.stringify({
+      verdict: 'blocked',
+      reasoning: blockedByLabel
+        ? 'issue #' + args.issue + ' has a remote workflow claim: the workflow:in-progress label is on the issue. '
+          + 'That label never expires — remove it from the issue to release the claim.'
+        : 'issue #' + args.issue + ' has a remote workflow claim: a kw:claim marker comment is on the issue. '
+          + 'Delete that comment to release the claim; a timestamped marker also stops blocking 24h after its last update.'
+    }) + '\n');
     return;
   }
 
