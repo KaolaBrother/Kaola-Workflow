@@ -149,11 +149,11 @@ Claude Code's agents are vendored directly from this repository; the prompts are
 | `code-architect` | Planning — design | reasoning |
 | `tdd-guide` | Write — per-task TDD executor | standard |
 | `implementer` | Write — implementation without test-first ceremony; refactors, scaffolding, config, UI, migrations | standard |
-| `build-error-resolver` | Write — validation repair when needed | standard |
+| `build-error-resolver` | Write — validation repair when needed | reasoning |
 | `code-reviewer` | Gate — review | reasoning |
 | `security-reviewer` | Gate — review (conditional) | reasoning |
 | `doc-updater` | Finalization — docs | standard |
-| `adversarial-verifier` | Read-only falsifier; graph-derived investigation or change gate | standard |
+| `adversarial-verifier` | Read-only falsifier; graph-derived investigation or change gate | reasoning |
 | `synthesizer` | Parallel-write convergence (reconciles concurrent write legs by intent on a real merge conflict) | reasoning |
 | `metric-optimizer` | Bounded metric-ratchet for optimize-shaped work (propose → apply → gate → measure → accept or revert) | standard |
 
@@ -208,10 +208,11 @@ differs from the agent's frontmatter). **After installing or re-running
 
 > **Badge visibility by session model (Claude Code platform behaviour):**
 > - **Session on Sonnet** — only Opus subagents show a badge. Sonnet-dispatched
->   agents (`code-explorer`, `investigator`, `tdd-guide`, `implementer`, `build-error-resolver`,
->   `knowledge-lookup`, `doc-updater`, `adversarial-verifier`, `metric-optimizer`) run silently.
->   Opus-dispatched agents (`planner`, `synthesizer`,
->   `code-architect`, `code-reviewer`, and `security-reviewer`) badge as expected.
+>   agents (`code-explorer`, `investigator`, `tdd-guide`, `implementer`,
+>   `knowledge-lookup`, `doc-updater`, `metric-optimizer`) run silently.
+>   Opus-dispatched agents (`planner`, `synthesizer`, `code-architect`,
+>   `code-reviewer`, `security-reviewer`, `build-error-resolver`, and
+>   `adversarial-verifier`) badge as expected.
 > - **Session on Opus** — all subagents show a badge, regardless of their model.
 >
 > The badge is a model-switch indicator: it renders when the subagent's model

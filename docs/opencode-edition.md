@@ -119,9 +119,10 @@ reasoning-tier roles on a different model from the rest, pin via env (or hand-ed
 - `KAOLA_OPENCODE_REASONING_MODEL` — pin the reasoning tier to a `provider/model`
 
 The seeded `opencode.json` carries this as a commented-out scaffold: a top-level `model` for the
-standard tier and `agent.<role>.model` overrides for the five reasoning-tier roles
-(`code-architect`, `code-reviewer`, `planner`, `security-reviewer`, `synthesizer`). With nothing
-set, every role inherits the model you already use.
+standard tier and `agent.<role>.model` overrides for the seven reasoning-tier roles
+(`adversarial-verifier`, `build-error-resolver`, `code-architect`, `code-reviewer`, `planner`,
+`security-reviewer`, `synthesizer`). With nothing set, every role inherits the model you already
+use.
 
 > A role that pins a model no longer inherits the session's effort either — that is opencode's
 > coupling, not this edition's, and it is the trade this opt-in makes.

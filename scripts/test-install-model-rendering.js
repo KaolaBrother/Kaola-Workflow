@@ -2933,8 +2933,11 @@ try {
 
   const finalize = readInstalledCommand('kaola-workflow-finalize.md');
 
-  // The finalize command carries the sonnet routed-fix (tdd-guide / build-error-resolver) and
-  // doc-updater tiers. (Runtime role resolution is proven per role against the resolver below.)
+  // The finalize command carries the routed-fix pair (tdd-guide / build-error-resolver) and the
+  // doc-updater tier. The pair is SPLIT: tdd-guide renders standard, build-error-resolver renders
+  // reasoning. Each placeholder resolves from its own source frontmatter, so the split proves the
+  // render reads the per-role declaration rather than one shared routed-fix tier.
+  // (Runtime role resolution is proven per role against the resolver below.)
   assert(finalize.includes('model="sonnet",'), 'doc-updater should render as sonnet');
   assert(
     // Anchor on a heading the surface actually carries; `## Steps` was the anchor until the
@@ -2943,8 +2946,8 @@ try {
     'installer rendering should preserve blank markdown lines'
   );
   assert(
-    finalize.includes('subagent_type="build-error-resolver",\n  model="sonnet",'),
-    'finalize routed-fix build-error-resolver block should render as sonnet'
+    finalize.includes('subagent_type="build-error-resolver",\n  model="opus",'),
+    'finalize routed-fix build-error-resolver block should render as opus'
   );
   assert(
     finalize.includes('subagent_type="tdd-guide",\n  model="sonnet",'),
@@ -3010,15 +3013,21 @@ try {
   // adaptive dispatch path actually reads.
   //
   // THE PINNED TABLE IS THE ACCEPTANCE EVIDENCE, and its required value is FIXED: it is the exact
-  // per-role resolution a default install produced BEFORE the axis was removed. Retiring a selector
-  // must not re-tier a single role, so every entry here is a behavioural pin, not a preference —
-  // the retired default was `--profile=higher`, so the three roles that had a `higher` variant
-  // (code-architect, code-reviewer, security-reviewer) pin to the reasoning tier and every other
-  // role pins to whatever its source frontmatter already declared.
+  // per-role resolution a default install produced BEFORE the axis was removed, carried forward
+  // through every deliberate re-tiering since. Retiring a selector must not re-tier a single role,
+  // so every entry here is a behavioural pin, not a preference — the retired default was
+  // `--profile=higher`, so the three roles that had a `higher` variant (code-architect,
+  // code-reviewer, security-reviewer) pin to the reasoning tier and every other role pins to
+  // whatever its source frontmatter already declared.
+  //
+  // #935 (owner-ruled) moved build-error-resolver and adversarial-verifier from the standard tier
+  // to the reasoning tier, so those two entries carry the ruled value rather than the pre-removal
+  // one. They are the ONLY entries that have moved, and each moved by an explicit ruling — a
+  // decision, never a green-suite convenience.
   //
   // This table is INDEPENDENTLY DERIVED from DEFAULT_AGENT_MODELS — do not "fix" a failure here by
   // editing this table to match the resolver. The two agreeing is the whole assertion; if they
-  // disagree, the resolver moved a role's tier and that is the bug.
+  // disagree with no ruling behind the move, the resolver re-tiered a role and that is the bug.
   const EXPECTED_ROLE_MODELS = {
     'code-explorer': 'sonnet',
     'knowledge-lookup': 'sonnet',
@@ -3026,11 +3035,11 @@ try {
     'code-architect': 'opus',
     'tdd-guide': 'sonnet',
     implementer: 'sonnet',
-    'build-error-resolver': 'sonnet',
+    'build-error-resolver': 'opus',
     'code-reviewer': 'opus',
     'security-reviewer': 'opus',
     'doc-updater': 'sonnet',
-    'adversarial-verifier': 'sonnet',
+    'adversarial-verifier': 'opus',
     synthesizer: 'opus',
     'metric-optimizer': 'sonnet'
   };

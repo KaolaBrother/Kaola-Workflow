@@ -15,20 +15,22 @@ const DEFAULT_AGENT_MODELS = {
   'investigator': 'sonnet',
   'knowledge-lookup': 'sonnet',
   planner: 'opus',
-  // These defaults preserve each role's declarative reasoning/wait-budget class. Codex named
-  // profiles inherit runtime strength from the parent session; this map never selects a child pair.
+  // These defaults are each role's declarative tier, and that tier is what the other runtimes read:
+  // the Codex dispatch contract selects a role's per-spawn reasoning effort from it, and the
+  // opencode sync derives its reasoning-role list from the frontmatter this map is held equal to.
+  // A change here reaches every runtime, not Claude alone.
   'code-architect': 'opus',
   'tdd-guide': 'sonnet',
   'implementer': 'sonnet',
-  'build-error-resolver': 'sonnet',
+  'build-error-resolver': 'opus',
   'code-reviewer': 'opus',
   'security-reviewer': 'opus',
   'doc-updater': 'sonnet',
-  // The adversarial verifier falsifies ONE recorded claim against ONE named surface — a bounded,
-  // well-scoped read task — so its shipped tier is standard. A dispatch may raise it (the
-  // post-G1 intent-verifier on a synthesizer's merge is raised that way); it is NOT a
-  // reasoning-floor role.
-  'adversarial-verifier': 'sonnet',
+  // The adversarial verifier's shipped tier is reasoning: verification here routinely OVERTURNS
+  // conclusions that green suites and the implementer's own mutation proof had already accepted, so
+  // it is reasoning-class judgment, not a bounded read. A dispatch may still raise or lower it; it
+  // is NOT a reasoning-floor role — only `synthesizer` is.
+  'adversarial-verifier': 'opus',
   // #634: metric-optimizer runs a bounded metric-ratchet loop; the per-iteration reasoning is small
   // (the change-gate verifier and reviewer carry the judgment), so its default is the standard tier.
   // A dispatch may raise it; it is NOT a reasoning-floor role.

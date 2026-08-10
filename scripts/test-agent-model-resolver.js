@@ -30,51 +30,23 @@ assert.deepStrictEqual(
   'Codex profile classes must cover exactly the resolver role registry'
 );
 
-// DECLARED RUNTIME DIVERGENCE (Claude dispatch tier vs Codex declarative class).
+// TOTAL AGREEMENT between the Claude dispatch tier and the Codex declarative class.
 //
-// The two tables answer different questions, and for most roles they answer it identically:
+// The two tables answer different questions:
 //   - DEFAULT_AGENT_MODELS is the Claude DISPATCH TIER — a real `model=` parameter on the spawn.
 //   - CODEX_PINNED_*_ROLES is a Codex DECLARATIVE CLASS — a label and wait-budget default. On Codex
 //     the child inherits the parent session's pair, so the class never selects a model at all.
 //
-// A role appears here ONLY where those two genuinely disagree, with the reason it disagrees. The
-// entry names the class each runtime assigns, so a silent re-tiering on either side fails.
-const CLASS_DIVERGENCE = Object.freeze({
-  // Repair is dispatched hot and often; the Claude tier keeps it standard so a routine build/lint
-  // fix is not billed at the reasoning tier, while Codex labels it reasoning for the longer
-  // non-interrupt wait budget a root-cause hunt may need.
-  'build-error-resolver': Object.freeze({ claude: 'sonnet', codex: 'reasoning' }),
-  // Falsifying ONE recorded claim against ONE named surface is bounded read work, so the Claude
-  // tier is standard; a plan RAISES it per node where the claim warrants it (the post-G1
-  // intent-verifier on a synthesizer merge). Codex labels it reasoning for the wait budget.
-  'adversarial-verifier': Object.freeze({ claude: 'sonnet', codex: 'reasoning' }),
-});
-
-for (const role of Object.keys(CLASS_DIVERGENCE)) {
-  assert.ok(Object.prototype.hasOwnProperty.call(resolver.DEFAULT_AGENT_MODELS, role),
-    `declared class divergence names an unregistered role: ${role}`);
-}
-
+// Every registered role answers them the same way, so this is one unconditional rule over all of
+// them: standard class <-> sonnet, reasoning class <-> opus. A re-tiering on either side alone
+// fails here.
 for (const [role, model] of Object.entries(resolver.DEFAULT_AGENT_MODELS)) {
   assert.ok(model === 'opus' || model === 'sonnet', `${role} must default to reasoning or standard`);
   const pinned = schema.CODEX_PINNED_STANDARD_ROLES.includes(role);
   const reasoning = schema.CODEX_PINNED_REASONING_ROLES.includes(role);
   assert.ok(pinned !== reasoning, `${role} must belong to exactly one Codex profile class`);
-  const codexClass = pinned ? 'standard' : 'reasoning';
-  const declared = CLASS_DIVERGENCE[role];
-  if (declared) {
-    // Bidirectional: a declared divergence must STILL diverge, and must diverge exactly as declared.
-    // A stale entry (the tables re-converged) fails just as loudly as an undeclared one.
-    assert.strictEqual(model, declared.claude,
-      `${role} Claude dispatch tier changed; the declared divergence says ${declared.claude}`);
-    assert.strictEqual(codexClass, declared.codex,
-      `${role} Codex declarative class changed; the declared divergence says ${declared.codex}`);
-    assert.notStrictEqual(model, pinned ? 'sonnet' : 'opus',
-      `${role} no longer diverges — delete its CLASS_DIVERGENCE entry instead of leaving it stale`);
-  } else {
-    assert.strictEqual(model, pinned ? 'sonnet' : 'opus',
-      `${role} declarative tier must match its Codex profile class, or declare the divergence in CLASS_DIVERGENCE`);
-  }
+  assert.strictEqual(model, pinned ? 'sonnet' : 'opus',
+    `${role} declarative tier must match its Codex profile class`);
 }
 
 // INSTALL-INVARIANT TIER. The installer rewrites every installed agent's frontmatter to

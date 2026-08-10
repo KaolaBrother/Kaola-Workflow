@@ -1,5 +1,41 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **`build-error-resolver` and `adversarial-verifier` now dispatch at the reasoning tier (#935).**
+  The two roles were classified `reasoning` in the Codex profile lists and `standard` everywhere
+  else, and the two answers had been reconciled by a *declared* divergence rather than resolved. The
+  divergence is now resolved upward, on the ground that both roles do work that needs reasoning:
+  adversarial verification here routinely overturns conclusions that green suites and an
+  implementer's own mutation proof had already accepted.
+
+  This reaches dispatch on three runtimes. Claude Code resolves both roles to the reasoning tier.
+  Codex moves them from `gpt-5.6-sol` / `medium` to `gpt-5.6-sol` / `xhigh` — the per-tier model and
+  effort pairs themselves are unchanged. opencode's generated reasoning-role list grows from five to
+  seven. Kimi is unaffected, having no tier axis at all.
+
+  The classification is now stated once and agreed everywhere: the Codex profile lists, the
+  `DEFAULT_AGENT_MODELS` map and its three edition copies, both agents' source frontmatter, the
+  README role table, the README model-badge visibility lists, and the generated `opencode.json`. The
+  `CLASS_DIVERGENCE` declaration that recorded the disagreement is deleted, so the resolver's
+  contract test now applies one unconditional rule to all fourteen roles with no exceptions.
+
+  **This costs more, on every runtime that has a tier.** `adversarial-verifier` is the
+  highest-fan-out role in the workflow. That is the direct consequence of resolving the divergence
+  upward rather than downward, and it was ruled deliberately: correctness before cost.
+
+### Removed
+
+- **`install.sh`'s `default_agent_model()` fallback (#935).** It was a fourth copy of the role/tier
+  table, reached only when a source agent file carries no `model:` line. It had drifted: it covered
+  twelve of the fourteen roles, and returned the standard tier for `code-architect`, `code-reviewer`
+  and `security-reviewer`, which the canonical map has resolved to the reasoning tier for some time.
+  Nothing had noticed, because the branch is unreachable — every agent file carries a `model:` line,
+  and the resolver's contract test asserts that for all fourteen roles. `extract_agent_model` is now
+  the sole authority, and a missing `model:` fails loudly instead of resolving to a stale guess.
+
 ## [9.5.5] - 2026-08-09
 
 ### Fixed

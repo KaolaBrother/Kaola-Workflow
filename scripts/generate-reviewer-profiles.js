@@ -182,7 +182,7 @@ const OUTPUT_SPECS = Object.freeze([
     role: 'adversarial-verifier',
     runtime: 'claude',
     variant: 'base',
-    adapter: 'claude-standard',
+    adapter: 'claude-reasoning',
     format: 'markdown',
   }),
   Object.freeze({

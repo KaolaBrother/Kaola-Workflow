@@ -503,20 +503,6 @@ install_agent_files() {
 
 install_agent_files
 
-default_agent_model() {
-  case "$1" in
-    code-explorer|knowledge-lookup|code-architect|tdd-guide|implementer|investigator|build-error-resolver|code-reviewer|security-reviewer|adversarial-verifier)
-      printf '%s\n' "sonnet"
-      ;;
-    planner)
-      printf '%s\n' "opus"
-      ;;
-    doc-updater)
-      printf '%s\n' "sonnet"
-      ;;
-  esac
-}
-
 extract_agent_model() {
   local agent_file="$1"
   [[ -f "$agent_file" ]] || return 0
@@ -535,13 +521,12 @@ extract_agent_model() {
   ' "$agent_file"
 }
 
+# The source agent frontmatter is the ONLY model authority for the install. An `inherit`
+# value resolves to empty on purpose: render_command_file drops the whole model= line for it.
 resolve_agent_model_for_install() {
   local agent="$1"
   local model
   model="$(extract_agent_model "$(agent_source_file "$agent")")"
-  if [[ -z "$model" ]]; then
-    model="$(default_agent_model "$agent")"
-  fi
   if [[ "$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')" == "inherit" ]]; then
     return 0
   fi

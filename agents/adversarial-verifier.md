@@ -3,10 +3,10 @@ name: adversarial-verifier
 description: Adversarial verifier for one recorded claim and surface, using strongest falsification with uncertainty counting against the claim.
 nickname_candidates: ["Adversary", "Refuter", "Breaker"]
 tools: ["Read", "Write", "Grep", "Glob", "Bash"]
-model: sonnet
+model: opus
 behavior_contract_version: 3
 behavior_contract_hash: efb8f28ba39b96d87ad7986705629c1c133e71747fa6c30d9270e57003f3883c
-resolved_profile_hash: e3b5d588692ff70b359236bd6167025db100fbc5d09e637c8dc3935236a79f5e
+resolved_profile_hash: f131a3ecb1abfc6bd9c29899e57ab0c1d214071389bcdbc1c2441134e90ffe3c
 ---
 <!--
 kaola-workflow-managed-agent: true
