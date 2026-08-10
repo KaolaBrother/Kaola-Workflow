@@ -231,10 +231,10 @@ function renderAgent(canonContent, agentName, forge) {
 
 // Rewrite Claude-specific model prose for opencode. Claude Code dispatches carry an explicit
 // per-call `model=`; opencode has no such parameter, so: (a) replace the recurring canonical
-// "## Agent Model Badge" section with the opencode-native block below — canonical's heading is the
-// TRIGGER this transform matches at, never the heading it emits; (b) rewrite the plan-run "Pass
+// "## Agent Model Dispatch" section with the opencode-native block below — canonical's heading is
+// the TRIGGER this transform matches at, never the heading it emits; (b) rewrite the plan-run "Pass
 // model=dispatch.model" and the review-fix "include the explicit model=" instructions that reference
-// that badge; (c) drop leftover install-time model placeholders from dispatch lines.
+// that section; (c) drop leftover install-time model placeholders from dispatch lines.
 //
 // Both wordings state what an agent ACTUALLY GETS, never a mechanism that delivers it. Two earlier
 // wordings named one: first the effort `variant`, then per-role effort configuration. Neither
@@ -248,7 +248,7 @@ function renderAgent(canonContent, agentName, forge) {
 // — read from the shipped 1.18.11 binary's schema literal. There is no model or effort parameter to
 // pass or to withhold, which is why the block states the inheritance rather than warning against an
 // argument that does not exist.
-const OPENCODE_BADGE_BLOCK = [
+const OPENCODE_MODEL_DISPATCH_BLOCK = [
   '## Model and effort are inherited',
   '',
   'A subagent runs the model and reasoning effort of the session that dispatched it. Nothing is',
@@ -260,10 +260,10 @@ const OPENCODE_BADGE_BLOCK = [
   '',
 ].join('\n');
 
-// The edition's ONE answer to the canonical model-badge instruction. Canonical states that
+// The edition's ONE answer to the canonical model-dispatch instruction. Canonical states that
 // instruction as PROSE ("… carries an explicit `model=` line … never omit it"); opencode's task tool
 // has no model parameter, so every such sentence is restated as this single wording.
-const OPENCODE_BADGE_GUIDANCE =
+const OPENCODE_MODEL_DISPATCH_GUIDANCE =
   'Dispatch the role via `subagent_type`. It runs the session\'s own model and reasoning effort — '
   + 'the task tool has no model or effort parameter.';
 
@@ -289,13 +289,13 @@ function sentenceStart(text, at) {
 // Running to the end of the paragraph is deliberate: every observed wording puts the instruction
 // last, and its trailing clauses ("Pass it exactly as shown; never omit it.") are anaphoric
 // continuations that must not outlive the sentence they refer to.
-function rewriteBadgeParagraph(para, guidance) {
+function rewriteModelDispatchParagraph(para, guidance) {
   const at = para.search(MODEL_MENTION);
   if (at < 0) return para;
   return para.slice(0, sentenceStart(para, at)) + guidance;
 }
 
-// Restate the canonical model-badge instruction in the edition's wording — ANCHORED to whole
+// Restate the canonical model-dispatch instruction in the edition's wording — ANCHORED to whole
 // sentences, never to the `model="{...}"` token inside one.
 //
 // This replaces a global unanchored strip that excised the placeholder from INSIDE a prose
@@ -305,14 +305,14 @@ function rewriteBadgeParagraph(para, guidance) {
 // opposite 100 lines earlier. A token strip can half-apply; replacing a whole sentence run cannot.
 //
 // Prose only: fenced code blocks pass through untouched. A wording this MISSES is not silently
-// shipped — assertNoBadgeResidue fails the render.
-function rewriteBadgeInstructions(text, guidance) {
+// shipped — assertNoModelDispatchResidue fails the render.
+function rewriteModelDispatchInstructions(text, guidance) {
   const out = [];
   let fenced = false;
   let para = [];
   function flushPara() {
     if (!para.length) return;
-    out.push(rewriteBadgeParagraph(para.join('\n'), guidance));
+    out.push(rewriteModelDispatchParagraph(para.join('\n'), guidance));
     para = [];
   }
   for (const line of text.split(/\r?\n/)) {
@@ -347,13 +347,13 @@ function stripCardModelPlaceholders(text) {
 // a canonical wording the rewrite did not match, a surviving install-time placeholder, or an empty
 // code span left by a token strip. This is what keeps the transform honest across canonical edits
 // that have not happened yet: a reworded instruction fails the render instead of half-applying.
-function assertNoBadgeResidue(text, label) {
+function assertNoModelDispatchResidue(text, label) {
   // Scan the WHOLE surface, fenced blocks included: the card placeholders are already gone by
   // this point, so ANY surviving `model=` is residue wherever it sits. Only the edition's own two
   // wordings are subtracted first.
   const probe = text
-    .split(OPENCODE_BADGE_BLOCK).join('')
-    .split(OPENCODE_BADGE_GUIDANCE).join('');
+    .split(OPENCODE_MODEL_DISPATCH_BLOCK).join('')
+    .split(OPENCODE_MODEL_DISPATCH_GUIDANCE).join('');
   const problems = [];
   // Exactly two backticks, never three — a ``` fence is not an empty span.
   if (/(?<!`)``(?!`)/.test(probe)) problems.push('empty code span `` — a strip cut inside a code span');
@@ -361,8 +361,9 @@ function assertNoBadgeResidue(text, label) {
     if (MODEL_MENTION.test(line)) problems.push('unrewritten model= instruction: ' + line.trim());
   }
   if (problems.length) {
-    throw new Error('sync-opencode-edition: model-badge residue in ' + (label || '(command)')
-      + ' — the anchored rewrite did not match this wording:\n  - ' + problems.join('\n  - '));
+    throw new Error('sync-opencode-edition: a Claude-only `model=` instruction survived into '
+      + (label || '(command)') + ' — this runtime has no model parameter to honour it, and the'
+      + ' anchored rewrite did not match this wording:\n  - ' + problems.join('\n  - '));
   }
 }
 
@@ -408,19 +409,49 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + opencodeKaolaScript(forge));
 }
 
+// The canonical section this transform substitutes at — the TRIGGER, never a heading it emits.
+const MODEL_DISPATCH_HEADING = /^##\s+Agent Model Dispatch\s*$/;
+
+// A heading that READS like that section without being it. The substitution below is a plain `if`,
+// and a canonical rename once moved the heading out from under it: nothing threw, the block was
+// simply never substituted, and the surface shipped without the one paragraph telling an opencode
+// reader how a role is dispatched on a runtime whose task tool takes no model. This regex is the
+// missing `else` — deliberately looser than the anchor, because its whole job is to notice that the
+// anchor no longer matches. A surface carrying no such section is silent, which is correct: today
+// only one of the three canonical commands has one, and the other two must render without complaint.
+const MODEL_DISPATCH_HEADING_NEAR_MISS = /^##\s+.*\bModel\b/;
+
+// Fail-loud anchor check, the twin of assertNoModelDispatchResidue above: the substitution is this
+// edition's ONLY carrier for a statement about its own runtime that canonical cannot make, so a
+// canonical heading it fails to recognize must name itself rather than no-op.
+function assertModelDispatchAnchorMatched(canonBody, substituted, label) {
+  if (substituted) return;
+  const nearMiss = canonBody.split(/\r?\n/)
+    .filter(l => MODEL_DISPATCH_HEADING_NEAR_MISS.test(l) && !MODEL_DISPATCH_HEADING.test(l))
+    .map(l => l.trim());
+  if (!nearMiss.length) return;
+  throw new Error('sync-opencode-edition: model-dispatch anchor missed in ' + (label || '(command)')
+    + ' — canonical carries a section this transform did not substitute at, so the edition would'
+    + ' ship without its dispatch instruction. Re-anchor MODEL_DISPATCH_HEADING to the heading'
+    + ' canonical now uses:\n  - ' + nearMiss.join('\n  - '));
+}
+
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
-  // Anchored badge rewrite FIRST, on canonical text only — before the loop below substitutes
-  // OPENCODE_BADGE_BLOCK, so the edition's own guidance is never fed back through the rewrite.
-  const lines = rewriteBadgeInstructions(body, OPENCODE_BADGE_GUIDANCE).split(/\r?\n/);
+  // Anchored model-dispatch rewrite FIRST, on canonical text only — before the loop below
+  // substitutes OPENCODE_MODEL_DISPATCH_BLOCK, so the edition's own guidance is never fed back
+  // through the rewrite.
+  const lines = rewriteModelDispatchInstructions(body, OPENCODE_MODEL_DISPATCH_GUIDANCE).split(/\r?\n/);
   const out = [];
+  let substitutedModelDispatch = false;
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    if (/^##\s+Agent Model Badge\s*$/.test(line)) {
-      out.push(OPENCODE_BADGE_BLOCK);
+    if (MODEL_DISPATCH_HEADING.test(line)) {
+      out.push(OPENCODE_MODEL_DISPATCH_BLOCK);
+      substitutedModelDispatch = true;
       i++;
-      // Skip the original badge body up to (not including) the next heading line.
+      // Skip the canonical section body up to (not including) the next heading line.
       while (i < lines.length && !/^#{1,6}\s/.test(lines[i])) i++;
       continue;
     }
@@ -429,8 +460,8 @@ function transformCommandBody(body, forge, label) {
     // resolution + Branch A/B path-selection prose) is DROPPED at generation time. This
     // transform runs ONLY inside renderCommand (opencode output), so canonical is never
     // touched — avoiding a guaranteed merge conflict with #538's in-flight canonical edits.
-    // Mirrors the Agent Model Badge strip above: detect the heading, skip its body. UNLIKE
-    // the badge (a flat block), this section nests `### Branch A`/`### Branch B` children,
+    // Mirrors the Agent Model Dispatch strip above: detect the heading, skip its body. UNLIKE
+    // that section (a flat block), this one nests `### Branch A`/`### Branch B` children,
     // so the body-skip stops at the next SIBLING `##` heading (`^##\s` rejects `###` — after
     // two hashes `\s` requires whitespace, and `###` has a third `#` there), not the first
     // `###` child. The ^## anchor isolates the section heading (surviving "(Step 0a-1)"
@@ -471,13 +502,16 @@ function transformCommandBody(body, forge, label) {
     out.push(line);
     i++;
   }
+  // A canonical rename that walked out from under the anchor above reports itself here rather than
+  // silently dropping the block.
+  assertModelDispatchAnchorMatched(body, substitutedModelDispatch, label);
   let text = out.join('\n');
   // Dispatch-card `Agent(` openings → the opencode `task` form. Scoped to the literal opening
   // (a line that is exactly `Agent(` immediately followed by an indented `subagent_type=` line)
   // so it rewrites ONLY the dispatch invocation and never prose mentions of the word "agent"
   // or inline `Agent(...)` code spans.
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'task(\n$1');
-  // Card placeholder lines. The prose forms are already restated by rewriteBadgeInstructions
+  // Card placeholder lines. The prose forms are already restated by rewriteModelDispatchInstructions
   // above, so this only ever sees a card.
   text = stripCardModelPlaceholders(text);
   // Tidy trailing whitespace left behind on affected lines.
@@ -511,7 +545,7 @@ function transformCommandBody(body, forge, label) {
   text = rewriteClaudeScriptPaths(text, forge);
   // Fail loud rather than half-apply: nothing but the edition's own guidance may still say
   // `model=` by the time the surface ships.
-  assertNoBadgeResidue(text, label);
+  assertNoModelDispatchResidue(text, label);
   return text;
 }
 
@@ -963,8 +997,9 @@ if (require.main === module) main();
 module.exports = {
   renderAgent, renderCommand, renderOpencodeJson, renderNeutralConfig,
   transformCommandBody, opencodeAgentSuffix, rewriteClaudeScriptPaths, OPENCODE_KAOLA_SCRIPT,
-  rewriteBadgeInstructions, rewriteBadgeParagraph, sentenceStart, stripCardModelPlaceholders,
-  assertNoBadgeResidue, OPENCODE_BADGE_GUIDANCE, OPENCODE_BADGE_BLOCK,
+  rewriteModelDispatchInstructions, rewriteModelDispatchParagraph, sentenceStart,
+  stripCardModelPlaceholders, assertNoModelDispatchResidue, assertModelDispatchAnchorMatched,
+  OPENCODE_MODEL_DISPATCH_GUIDANCE, OPENCODE_MODEL_DISPATCH_BLOCK, MODEL_DISPATCH_HEADING,
   opencodeKaolaScript, outDirs, treeLabel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   parseFrontmatter, parseTools, roleTier, reasoningRoles,

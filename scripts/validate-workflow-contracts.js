@@ -176,11 +176,15 @@ const retiredExecutor = ['workflow-plan.md', 'Node Ledger', 'plan_hash', 'workfl
 for (const file of phaseCommands) {
   assert(exists(file), file + ' is missing');
   assertIncludes(file, 'workflow-state.md');
-  assertIncludes(file, '## Agent Model Badge');
+  assertIncludes(file, '## Agent Model Dispatch');
   assertIncludes(file, 'You MUST pass `model=');
   assertIncludes(file, 'model="{');
   assertEveryDispatchHasModel(file);
-  assertNotIncludes(file, 'Agent Model Badge Contract');
+  // The retired heading, in the SHORT form that subsumes the longer "… Contract" wording this
+  // used to pin. "Badge" named a cosmetic effect, not the mechanism; the pin follows the
+  // vocabulary it forbids, so a half-applied revert of the rename cannot ship one heading here
+  // and the other in the skeleton.
+  assertNotIncludes(file, 'Agent Model Badge');
   assertNotIncludes(file, 'kaola_agent_model');
   for (const token of retired) assertNotIncludes(file, token);
   for (const token of retiredPathSelector) assertNotIncludes(file, token);

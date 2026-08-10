@@ -244,10 +244,10 @@ function renderAgent(canonContent, agentName, forge) {
   return content;
 }
 
-// The edition's ONE answer to the canonical model-badge instruction. Canonical states that
+// The edition's ONE answer to the canonical model-dispatch instruction. Canonical states that
 // instruction as PROSE ("… carries an explicit `model=` line … never omit it"); Kimi has no
 // per-dispatch model override at all, so every such sentence is restated as this single wording.
-const KIMI_BADGE_GUIDANCE = 'Never pass a per-call model override; sub-agents inherit the session model.';
+const KIMI_MODEL_DISPATCH_GUIDANCE = 'Never pass a per-call model override; sub-agents inherit the session model.';
 
 // The instruction's stable signature: a `model=` mention in PROSE. Card placeholders sit alone on
 // their own line inside a dispatch card and are removed by stripCardModelPlaceholders, so this
@@ -271,13 +271,13 @@ function sentenceStart(text, at) {
 // the end of the paragraph is deliberate: every observed wording puts the instruction last, and
 // its trailing clauses ("Pass it exactly as shown; never omit it.") are anaphoric continuations
 // that must not outlive the sentence they refer to.
-function rewriteBadgeParagraph(para, guidance) {
+function rewriteModelDispatchParagraph(para, guidance) {
   const at = para.search(MODEL_MENTION);
   if (at < 0) return para;
   return para.slice(0, sentenceStart(para, at)) + guidance;
 }
 
-// Restate the canonical model-badge instruction in the edition's wording — ANCHORED to whole
+// Restate the canonical model-dispatch instruction in the edition's wording — ANCHORED to whole
 // sentences, never to the `model="{...}"` token inside one (the kimi twin of the opencode
 // rewrite).
 //
@@ -288,14 +288,14 @@ function rewriteBadgeParagraph(para, guidance) {
 // whole sentence run cannot.
 //
 // Prose only: fenced code blocks pass through untouched. A wording this MISSES is not silently
-// shipped — assertNoBadgeResidue fails the render.
-function rewriteBadgeInstructions(text, guidance) {
+// shipped — assertNoModelDispatchResidue fails the render.
+function rewriteModelDispatchInstructions(text, guidance) {
   const out = [];
   let fenced = false;
   let para = [];
   function flushPara() {
     if (!para.length) return;
-    out.push(rewriteBadgeParagraph(para.join('\n'), guidance));
+    out.push(rewriteModelDispatchParagraph(para.join('\n'), guidance));
     para = [];
   }
   for (const line of text.split(/\r?\n/)) {
@@ -331,8 +331,8 @@ function stripCardModelPlaceholders(text) {
 // a silently shipped contradiction: a canonical wording the rewrite did not match, a surviving
 // install-time placeholder, or an empty code span left by a token strip. This is what keeps the
 // transform honest across canonical edits that have not happened yet.
-function assertNoBadgeResidue(text, label) {
-  const probe = text.split(KIMI_BADGE_GUIDANCE).join('');
+function assertNoModelDispatchResidue(text, label) {
+  const probe = text.split(KIMI_MODEL_DISPATCH_GUIDANCE).join('');
   const problems = [];
   // Exactly two backticks, never three — a ``` fence is not an empty span.
   if (/(?<!`)``(?!`)/.test(probe)) problems.push('empty code span `` — a strip cut inside a code span');
@@ -340,8 +340,9 @@ function assertNoBadgeResidue(text, label) {
     if (MODEL_MENTION.test(line)) problems.push('unrewritten model= instruction: ' + line.trim());
   }
   if (problems.length) {
-    throw new Error('sync-kimi-edition: model-badge residue in ' + (label || '(command)')
-      + ' — the anchored rewrite did not match this wording:\n  - ' + problems.join('\n  - '));
+    throw new Error('sync-kimi-edition: a Claude-only `model=` instruction survived into '
+      + (label || '(command)') + ' — this runtime has no per-dispatch model override to honour it,'
+      + ' and the anchored rewrite did not match this wording:\n  - ' + problems.join('\n  - '));
   }
 }
 
@@ -392,28 +393,58 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + kimiKaolaScript(forge));
 }
 
+// The canonical section this transform strips at — the TRIGGER, never a heading it emits (kimi
+// drops the heading with the section and leaves the one-line guidance in its place).
+const MODEL_DISPATCH_HEADING = /^##\s+Agent Model Dispatch\s*$/;
+
+// A heading that READS like that section without being it. The strip below is a plain `if`, and a
+// canonical rename once moved the heading out from under it: nothing threw, the section was simply
+// never stripped, and the surface shipped a Claude-shaped heading over prose about a per-dispatch
+// model this runtime does not have. This regex is the missing `else` — deliberately looser than the
+// anchor, because its whole job is to notice that the anchor no longer matches. A surface carrying
+// no such section is silent, which is correct: today only one of the three canonical commands has
+// one, and the other two must render without complaint.
+const MODEL_DISPATCH_HEADING_NEAR_MISS = /^##\s+.*\bModel\b/;
+
+// Fail-loud anchor check, the twin of assertNoModelDispatchResidue above: the strip is this
+// edition's ONLY carrier for a statement about its own runtime that canonical cannot make, so a
+// canonical heading it fails to recognize must name itself rather than no-op.
+function assertModelDispatchAnchorMatched(canonBody, stripped, label) {
+  if (stripped) return;
+  const nearMiss = canonBody.split(/\r?\n/)
+    .filter(l => MODEL_DISPATCH_HEADING_NEAR_MISS.test(l) && !MODEL_DISPATCH_HEADING.test(l))
+    .map(l => l.trim());
+  if (!nearMiss.length) return;
+  throw new Error('sync-kimi-edition: model-dispatch anchor missed in ' + (label || '(command)')
+    + ' — canonical carries a section this transform did not strip, so the edition would ship'
+    + ' without its dispatch instruction. Re-anchor MODEL_DISPATCH_HEADING to the heading canonical'
+    + ' now uses:\n  - ' + nearMiss.join('\n  - '));
+}
+
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
-  // Anchored badge rewrite FIRST, on canonical text only — before the loop below substitutes the
-  // edition's own one-liner, so that guidance is never fed back through the rewrite.
-  const lines = rewriteBadgeInstructions(body, KIMI_BADGE_GUIDANCE).split(/\r?\n/);
+  // Anchored model-dispatch rewrite FIRST, on canonical text only — before the loop below
+  // substitutes the edition's own one-liner, so that guidance is never fed back through the rewrite.
+  const lines = rewriteModelDispatchInstructions(body, KIMI_MODEL_DISPATCH_GUIDANCE).split(/\r?\n/);
   const out = [];
+  let strippedModelDispatch = false;
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    // Strip the "## Agent Model Badge" section (where opencode substitutes a block
-    // of its own; the kimi edition has no badge analogue at all — there is no
+    // Strip the "## Agent Model Dispatch" section (where opencode substitutes a block
+    // of its own; the kimi edition has no analogue at all — there is no
     // per-dispatch model to document) and replace its body with
     // the one-line kimi-true guidance, since canonical dispatch prose ("MUST pass
     // model=…") now lives entirely inside this section for every command that has
     // it (a standalone occurrence outside the block, if any, is separately
     // rewritten below). Detect the heading, skip its flat body up to the next
     // heading line, and leave a single-blank seam around the replacement line.
-    if (/^##\s+Agent Model Badge\s*$/.test(line)) {
+    if (MODEL_DISPATCH_HEADING.test(line)) {
       while (out.length && out[out.length - 1].trim() === '') out.pop();
       if (out.length) out.push('');
-      out.push(KIMI_BADGE_GUIDANCE);
+      out.push(KIMI_MODEL_DISPATCH_GUIDANCE);
       out.push('');
+      strippedModelDispatch = true;
       i++;
       while (i < lines.length && !/^#{1,6}\s/.test(lines[i])) i++;
       continue;
@@ -447,6 +478,9 @@ function transformCommandBody(body, forge, label) {
     out.push(line);
     i++;
   }
+  // A canonical rename that walked out from under the anchor above reports itself here rather than
+  // silently leaving the section in place.
+  assertModelDispatchAnchorMatched(body, strippedModelDispatch, label);
   let text = out.join('\n');
   // Dispatch-card rewrite (kimi-specific). Canonical dispatch cards name a kaola ROLE
   // in subagent_type plus an install-time model= placeholder:
@@ -475,7 +509,7 @@ function transformCommandBody(body, forge, label) {
         + 'prompt="First invoke the `kaola-role-' + role + '` Skill and follow its contract for the entire task. ';
     }
   );
-  // Card placeholder lines. The prose forms are already restated by rewriteBadgeInstructions
+  // Card placeholder lines. The prose forms are already restated by rewriteModelDispatchInstructions
   // above, so this only ever sees a card.
   text = stripCardModelPlaceholders(text);
   // Tidy trailing whitespace left behind on affected lines.
@@ -497,7 +531,7 @@ function transformCommandBody(body, forge, label) {
   // above) is rewritten in full; the earlier transforms do not touch it.
   text = rewriteClaudeScriptPaths(text, forge);
   // Fail loud rather than half-apply: no `model=` may still stand by the time the surface ships.
-  assertNoBadgeResidue(text, label);
+  assertNoModelDispatchResidue(text, label);
   return text;
 }
 
@@ -819,8 +853,9 @@ if (require.main === module) main();
 module.exports = {
   renderAgent, renderCommand, transformCommandBody,
   rewriteClaudeScriptPaths, KIMI_KAOLA_SCRIPT, kimiKaolaScript,
-  rewriteBadgeInstructions, rewriteBadgeParagraph, sentenceStart, stripCardModelPlaceholders,
-  assertNoBadgeResidue, KIMI_BADGE_GUIDANCE,
+  rewriteModelDispatchInstructions, rewriteModelDispatchParagraph, sentenceStart,
+  stripCardModelPlaceholders, assertNoModelDispatchResidue, assertModelDispatchAnchorMatched,
+  KIMI_MODEL_DISPATCH_GUIDANCE, MODEL_DISPATCH_HEADING,
   renderKimiHooksToml, treeLabel, skillRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   adaptHookForKimi, HOOK_ADAPTATIONS,

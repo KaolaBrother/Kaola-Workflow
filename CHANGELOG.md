@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **The model badge is retired as a goal; the dispatch mechanism it was used to justify is not (#949).**
+  The finalize command's `## Agent Model Badge` section told the orchestrator that the `model=` line
+  "is what shows the model badge" — stating a visual side effect as the purpose of the mechanism.
+  Measured, that framing is backwards: the literal *is* the effective-model override. Across this
+  project's own subagent transcripts, a dispatch carrying `model=` runs on the requested model in 69
+  of the 71 cases where it differs from the parent's, and a dispatch carrying none runs on the parent
+  model in all 22 cases where the role's declared tier differs from it. Removing the literals would
+  have moved `tdd-guide` and `doc-updater` off their assigned model on every finalize and un-pinned
+  `build-error-resolver` in any session not already running its tier.
+
+  So the wording goes and the mechanism stays. The section is now `## Agent Model Dispatch` and states
+  what the rule actually buys: installed agents carry `inherit`, so a dispatch that omits `model=`
+  does not fall back to the role's assigned model — it runs the role on the session's model. The
+  heading was renamed rather than deleted because its **string** is a live anchor: six code sites match
+  on it, three of them edition transforms with no fallback. Deleting it reds three of the four chains,
+  and — measured — the opencode and kimi transforms do not fail at all; they silently no-op, dropping
+  the sentence that tells those runtimes their task tool has no model parameter. Those transforms are
+  re-anchored and now report a stale anchor instead of missing it in silence.
+
+  Removed as cosmetic: the badge explanation, the badge-visibility-by-session-model blockquote, the
+  "restart Claude Code for the badges to take effect" instruction, and the badge troubleshooting entry.
+  Kept as mechanism: every `model=` placeholder, the dispatch rule, `assertEveryDispatchHasModel`, the
+  region directive that scopes the block to command surfaces, and the edition guidance restating it for
+  runtimes that cannot honour a model parameter. A guard now pins the retired heading out, so the
+  cosmetic framing cannot return.
+
+### Fixed
+
+- **`DEFAULT_AGENT_MODELS` claimed an authority it does not have (#949).** Its header read "THIS MAP IS
+  THE EFFECTIVE TIER OF EVERY INSTALLED AGENT", which is false for Claude Code: a dispatch is governed
+  by the `model=` argument it carries, falling back to the parent conversation, and nothing on that path
+  consults the map. The claim is what made the finalize command's `model=` literals look redundant. The
+  comment now states its real scope — the tier reaches other runtimes transitively through the pins it
+  is held in lockstep with, the dispatch-log hook is the one component reading it directly at runtime,
+  and a Claude Code dispatch follows none of it — along with the timing difference the old wording
+  flattened. Corrected identically across all four copies.
+
 ### Added
 
 - **The Codex per-spawn routing block now ships the role→tier roster (#944).** The block ordered

@@ -294,7 +294,7 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
 // K2: no transform residue — the generated tree carries NO install-time model
 // placeholders ({X_MODEL}, model="{...}"), NO Claude "MUST pass model="
 // dispatch instructions, and NO doubled-comma (,,) card artifacts (locks
-// transformCommandBody's badge strip + placeholder strip + comma collapse).
+// transformCommandBody's model-dispatch strip + placeholder strip + comma collapse).
 // Positive side: the claim invocations stamp --runtime kimi (never
 // --runtime claude), and the inherit-model guidance replaced the stripped
 // "MUST pass model=" prose.
@@ -321,12 +321,76 @@ for (const name of ['workflow-next']) {
 // (issue-scout was its only one, and is fully retired), so there is nothing left to strip and
 // replace there.
 //
-// THE INHERIT-MODEL PROSE REPLACEMENT HAS NO CARRIER LEFT. It was checked on
+// THE INHERIT-MODEL PROSE REPLACEMENT HAS NO CARRIER LEFT ON THIS PATH. It was checked on
 // `kaola-workflow-adapt`, the one surviving surface that dispatched an agent with an explicit
-// model badge; that surface is retired and no generated skill carries a per-call model override to
-// strip. The BAN half still runs — the loop above asserts no `MUST pass model=` survives anywhere
-// in the tree — so what is lost is the positive half: nothing confirms the replacement PROSE is
-// still emitted, because there is nothing left for it to replace.
+// per-call model; that surface is retired and no generated skill carries a standalone per-call
+// model override to strip. The BAN half still runs — the loop above asserts no `MUST pass model=`
+// survives anywhere in the tree — so what is lost HERE is the positive half: nothing in this block
+// confirms the replacement PROSE is still emitted, because there is nothing left for it to replace.
+//
+// K2-anchor below restores that positive half against the carrier that DOES exist: the canonical
+// `## Agent Model Dispatch` section, whose kimi answer is the single guidance line the strip
+// leaves in its place.
+
+// ---------------------------------------------------------------------------
+// K2-anchor: the canonical section this edition answers must still EXIST. (The kimi twin of
+// test-opencode-edition.js's S2 carrier count.)
+//
+// `transformCommandBody` strips the canonical `## Agent Model Dispatch` section and leaves
+// KIMI_MODEL_DISPATCH_GUIDANCE in its place. That one line is the whole kimi-side statement of a
+// fact canonical cannot state — this runtime has no per-dispatch model override — and every other
+// check in this file reads the GENERATED tree, where deleting the canonical section deletes the
+// section, the strip, the guidance and the expectation together. Measured: with the section
+// removed from the skeleton, this suite stayed green at 516 assertions and said nothing, while the
+// opencode twin went red. The count assertion below is the missing red.
+//
+// WHICH commands must carry it is DERIVED from canonical, never hand-listed — a typed carrier list
+// is a second place for that truth to live, and the copy that stops being true without saying so.
+// The heading is a LITERAL here rather than the generator's exported MODEL_DISPATCH_HEADING:
+// sourcing the expectation from the subject's own constant would make this agree with the
+// generator by construction, and it could then no longer witness generator and canonical
+// disagreeing.
+//
+// The per-file half is ONE-DIRECTIONAL on purpose. A carrier's Skill must show the guidance and
+// must not show the canonical heading. The converse — a NON-carrier must not show the guidance —
+// is deliberately not asserted: the same literal is also this edition's answer to a standalone
+// `model=` instruction anywhere in a body, so a canonical edit that legitimately added one
+// elsewhere would fail a biconditional for being correct.
+// ---------------------------------------------------------------------------
+{
+  const CANON_SECTION = /^##\s+Agent Model Dispatch\s*$/m;
+  // The presence check below is `includes(GUIDANCE)`, which an empty or missing constant would
+  // make true of every file — a green that means the constant vanished, not that the strip fired.
+  const GUIDANCE = sync.KIMI_MODEL_DISPATCH_GUIDANCE;
+  assert(typeof GUIDANCE === 'string' && GUIDANCE.trim().length > 20,
+    'K2-anchor: sync.KIMI_MODEL_DISPATCH_GUIDANCE is a non-trivial string — got '
+      + JSON.stringify(GUIDANCE));
+
+  const canonCarriesSection = file =>
+    CANON_SECTION.test(fs.readFileSync(sync.canonCommandPath(file), 'utf8'));
+  const sectionCarriers = canonCommands.filter(canonCarriesSection);
+  assert(sectionCarriers.length > 0,
+    'K2-anchor: at least ONE canonical command carries `## Agent Model Dispatch` (found '
+      + sectionCarriers.length + ' of ' + canonCommands.length + ') — with none, every per-file '
+      + 'check below ranges over an empty expectation and this guard reports green by having had '
+      + 'nothing to read');
+
+  for (const file of sectionCarriers) {
+    const rel = skillDir(file.slice(0, -3));
+    assert(exists(rel), 'K2-anchor[' + file + ']: generated Skill exists at ' + rel);
+    if (!exists(rel)) continue;
+    const content = read(rel);
+    assert(content.includes(GUIDANCE),
+      'K2-anchor[' + file + ']: ' + rel + ' carries the inherit-model guidance the strip leaves '
+        + 'behind — its canonical source carries `## Agent Model Dispatch`, so the strip fired here '
+        + 'and this line is the only thing telling a Kimi reader there is no model= to pass');
+    assert(!CANON_SECTION.test(content),
+      'K2-anchor[' + file + ']: ' + rel + ' does NOT carry the canonical `## Agent Model Dispatch` '
+        + 'heading — kimi drops the heading with the section, so a surviving one means the strip '
+        + 'never fired and the surface ships Claude-shaped prose about a model= this runtime has no '
+        + 'parameter for');
+  }
+}
 
 // K2-declaration: the model-inheritance divergence must exist as a DECLARED EXEMPTION-TABLE ENTRY,
 // not merely as prose. "One rule, one wording" permits a runtime to diverge only where its

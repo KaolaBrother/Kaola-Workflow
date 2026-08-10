@@ -339,8 +339,9 @@ real path, each role's source frontmatter is held byte-equal to its `DEFAULT_AGE
 directory.
 
 For Claude Code, commands carry an explicit `model="{...}"` placeholder on every dispatch, which the
-installer fills from the agent's own installed profile; that is what renders the model badge.
-opencode applies its resolved tier dynamically.
+installer fills from the agent's own installed profile; the filled literal is what selects the model
+the dispatched role runs on — without it the role inherits the session's model. opencode applies its
+resolved tier dynamically.
 
 Codex keeps the same role classification but maps it at spawn time: `standard` to
 `gpt-5.6-sol` / `medium`, and `reasoning` to `gpt-5.6-sol` / `xhigh`. Both mappings are fixed, so a

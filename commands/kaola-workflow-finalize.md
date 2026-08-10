@@ -26,12 +26,13 @@ result, and you are the only party with enough context to be.
 Read `kaola-workflow/{project}/workflow-state.md` for what this run owns, and
 `kaola-workflow/{project}/mission-list.md` for what it set out to do.
 
-## Agent Model Badge
+## Agent Model Dispatch
 
 Every subagent dispatch below carries an explicit `model=` line — the installer fills each
-`model="{...}"` placeholder from the agent's own installed profile, and it is what shows the model
-badge. You MUST pass `model="{...}"` in every Agent call exactly as shown; never omit the `model=`
-line on any dispatch.
+`model="{...}"` placeholder from the agent's own installed profile. You MUST pass `model="{...}"`
+in every Agent call exactly as shown; never omit the `model=` line on any dispatch. An installed
+agent's frontmatter `model:` is rewritten to `inherit`, so a dispatch that omits `model=` does not
+fall back to that role's assigned model — it runs the role on this session's model instead.
 
 ## Step 1 — Final validation
 

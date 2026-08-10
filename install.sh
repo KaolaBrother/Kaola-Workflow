@@ -783,7 +783,7 @@ for event in list(hooks.keys()):
 
 if is_managed_subagent_statusline(settings.get("subagentStatusLine")):
     settings.pop("subagentStatusLine", None)
-    print("Removed the managed Kaola subagentStatusLine; model badges use explicit Agent model dispatch.", file=sys.stderr)
+    print("Removed the managed Kaola subagentStatusLine; each Agent dispatch carries its own model.", file=sys.stderr)
 
 with open(settings_path, "w") as f:
     json.dump(settings, f, indent=2)

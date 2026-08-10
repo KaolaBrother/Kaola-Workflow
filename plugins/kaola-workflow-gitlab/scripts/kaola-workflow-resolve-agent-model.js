@@ -5,20 +5,31 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// THIS MAP IS THE EFFECTIVE TIER OF EVERY INSTALLED AGENT. The installer rewrites each installed
-// agent's frontmatter to `model: inherit`, so the frontmatter step below can never fire for an
-// installed agent and resolution always lands here. Keep an entry byte-equal to its source
-// `agents/<role>.md` frontmatter: the two are one declaration seen from two sides, and a divergence
-// silently re-tiers the role on every install.
+// WHAT THIS MAP ANSWERS FOR: each role's declarative tier, and the effective tier for the consumers
+// that read it — the dispatch-log hook's advisory `model_planned`, and, through the pins holding it
+// equal to the source frontmatter and to the kernel's Codex tier classes, the Codex per-spawn
+// reasoning effort and the opencode reasoning-role list.
+//
+// IT DOES NOT DECIDE A CLAUDE CODE `Agent(...)` DISPATCH. There the explicit `model=` argument wins,
+// and its absence means `inherit` — the spawning conversation's model. Nothing on that path consults
+// this map, so dropping a `model=` does not fall back to the tier declared here.
+//
+// Within this script's own resolution the map IS the last word for an installed agent: the installer
+// rewrites each installed agent's frontmatter to `model: inherit`, so the frontmatter step below can
+// never fire for one. Keep an entry byte-equal to its source `agents/<role>.md` frontmatter: the two
+// are one declaration seen from two sides, and a divergence silently re-tiers the role on every
+// install.
 const DEFAULT_AGENT_MODELS = {
   'code-explorer': 'sonnet',
   'investigator': 'sonnet',
   'knowledge-lookup': 'sonnet',
   planner: 'opus',
-  // These defaults are each role's declarative tier, and that tier is what the other runtimes read:
-  // the Codex dispatch contract selects a role's per-spawn reasoning effort from it, and the
-  // opencode sync derives its reasoning-role list from the frontmatter this map is held equal to.
-  // A change here reaches every runtime, not Claude alone.
+  // These defaults are each role's declarative tier, and that tier does reach the other runtimes —
+  // transitively, through the pins above, never as a dispatch-time lookup. The Codex tier classes are
+  // held in lockstep with this map and the opencode reasoning-role list derives from the frontmatter
+  // this map is held equal to, so re-tiering a role here re-tiers it there at the next sync; the
+  // dispatch-log hook, the one component reading this map directly at runtime, follows immediately.
+  // A Claude Code dispatch follows none of it.
   'code-architect': 'opus',
   'tdd-guide': 'sonnet',
   'implementer': 'sonnet',

@@ -201,22 +201,9 @@ rather than self-issuing a pass.
 When agents are installed, their frontmatter `model:` field is rewritten to
 `inherit`. Command files render each agent's concrete assigned model (e.g.,
 `model="sonnet"`) into the dispatched `Agent(...)` call via install-time
-substitution. This makes Claude Code's built-in model badge render on every
-subagent dispatch (the badge renders only when a concrete `model=` literal
-differs from the agent's frontmatter). **After installing or re-running
-`install.sh`, restart Claude Code for the model badges to take effect.**
-
-> **Badge visibility by session model (Claude Code platform behaviour):**
-> - **Session on Sonnet** — only Opus subagents show a badge. Sonnet-dispatched
->   agents (`code-explorer`, `investigator`, `tdd-guide`, `implementer`,
->   `knowledge-lookup`, `doc-updater`, `metric-optimizer`) run silently.
->   Opus-dispatched agents (`planner`, `synthesizer`, `code-architect`,
->   `code-reviewer`, `security-reviewer`, `build-error-resolver`, and
->   `adversarial-verifier`) badge as expected.
-> - **Session on Opus** — all subagents show a badge, regardless of their model.
->
-> The badge is a model-switch indicator: it renders when the subagent's model
-> differs from the session's default. This is by design in Claude Code.
+substitution. That rendered literal is what puts the role on its assigned
+model: a dispatch that carries no `model=` runs on the session's own model
+instead.
 
 ## Installation
 
@@ -256,8 +243,8 @@ Claude Code installs use `install.sh` only. Do not install Kaola-Workflow throug
 the Claude Code plugin marketplace; `install.sh` copies the slash commands,
 support scripts, optional hook config, and vendored agents into `~/.claude/`.
 During install, slash commands render each installed Kaola agent's frontmatter
-model into concrete `Agent(..., model="...")` examples so spawned subagents can
-show Claude Code's built-in model badge.
+model into concrete `Agent(..., model="...")` examples so each spawned subagent
+runs on its assigned model.
 If an older Claude Code plugin install is present, the installer refuses to run
 until the plugin is removed:
 
@@ -1261,12 +1248,9 @@ those paths.
 - Verify with `jq '.hooks' ~/.claude/settings.json` — expect the two ids
   above, with scripts under `~/.claude/kaola-workflow/hooks/` or
   `~/.claude/kaola-workflow/scripts/`.
-- Model badges are enforced by slash-command dispatch, not by a status-line
-  override: the installer renders each installed agent's resolved model into
-  concrete `model="..."` lines in the slash commands.
-- **Badge not showing for some subagents?** By design: on a Sonnet session,
-  only Opus subagents show a badge. On an Opus session, all subagents badge.
-  See the vendored-agents note above for details.
+- Subagent model selection comes from slash-command dispatch, not from a
+  status-line override: the installer renders each installed agent's resolved
+  model into concrete `model="..."` lines in the slash commands.
 - If hooks are missing, re-run `./install.sh --forge=github` (or
   `--forge=gitlab` or `--forge=gitea`). Do not edit `~/.claude/settings.json` directly —
   re-running the installer is the supported path.

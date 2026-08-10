@@ -384,7 +384,7 @@ for (const file of canonCommands) {
 // model=), so EVERY surviving `model=` mention must be the "do NOT / Never pass" guidance.
 //
 // SCOPE, stated exactly. The universal over `model=` residue is NOT here — it is
-// assertNoBadgeResidue in sync-opencode-edition.js, which hard-errors the render on any surviving
+// assertNoModelDispatchResidue in sync-opencode-edition.js, which hard-errors the render on any surviving
 // mention (MODEL_MENTION is a bare /model=/, scanned over the whole surface, fences included).
 // What remains here are the wordings canonical STILL carries, checked against the tracked tree so
 // a rewrite that half-applies is caught by the suite as well as by the renderer. Two entries were
@@ -512,7 +512,7 @@ assert(sync.opencodeAgentSuffix('implementer') === ''
   && sync.opencodeAgentSuffix('code-reviewer') === '',
   'A13: opencodeAgentSuffix is empty for every surviving role — no agent body is rewritten');
 // Same reading as the agent loop above: render DETERMINISM, not parity with canonical. Command
-// bodies carry several DECLARED transforms (badge strip, Path Intent strip, placeholder strip,
+// bodies carry several DECLARED transforms (model-dispatch strip, Path Intent strip, placeholder strip,
 // runtime rewrite, comma collapse), so a blanket line-survival rule of the A6-body kind would be a
 // pin on the current transform set rather than a property. What holds the command surface honest is
 // the content-reachability band instead — A14/A16/A22/A24/S2/A25 assert the PINs, wiring literals,
@@ -754,7 +754,7 @@ for (const target of emittedCommandTargets) {
 
 // ---------------------------------------------------------------------------
 // S2 (issue #537, narrowed by #609): neutral tier labels. Originally scoped to
-// generator string constants ONLY (OPENCODE_BADGE_BLOCK's `mapTier` line, the
+// generator string constants ONLY (OPENCODE_MODEL_DISPATCH_BLOCK's `mapTier` line, the
 // transformCommandBody "opus-tier"/"sonnet-tier" rewrite markers, and
 // opencodeAgentSuffix) and explicitly TOLERATED Claude "Opus"/"Sonnet" MODEL-name
 // prose surviving from canonical bodies (e.g. the workflow-planner "(Opus)" and
@@ -762,7 +762,7 @@ for (const target of emittedCommandTargets) {
 // rewrite (applied in renderAgent + transformCommandBody) that purges those B2
 // sites at generation time, so this guard is now BODY-WIDE: it forbids the
 // capitalized proper-noun forms "Opus"/"Sonnet" ANYWHERE in a generated agent or
-// command file, not just inside the badge section or the rewrite-marker strings.
+// command file, not just inside the substituted block or the rewrite-marker strings.
 // The check stays CASE-SENSITIVE and whole-word, so the B1 exemption — the closed
 // plan `model`-column tier tokens (the lowercase `` `opus` ``/`` `sonnet` ``
 // mentions in the workflow-planner's "Model assignment" guidance and the
@@ -781,9 +781,9 @@ for (const target of emittedCommandTargets) {
   // "Effort is configured, not passed" was true of the per-role tiers and became false the moment
   // they were removed — a subagent runs the session's model and effort, configured nowhere. The
   // current heading states what an agent actually gets.
-  const BADGE_HEADING = 'Model and effort are inherited';
+  const BLOCK_HEADING = 'Model and effort are inherited';
   const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const BADGE_HEADING_RE = new RegExp('^##\\s+' + escapeRe(BADGE_HEADING) + '\\s*$');
+  const BLOCK_HEADING_RE = new RegExp('^##\\s+' + escapeRe(BLOCK_HEADING) + '\\s*$');
 
   // The mechanism word this surface must not carry, in either number. The leading `\b` is what
   // keeps "invariant"/"invariants" out: the char before "variant" there is a word char, so there
@@ -792,11 +792,11 @@ for (const target of emittedCommandTargets) {
 
   // Extract the effort block (heading line through the line before the next heading) — the
   // Surface-1 locus. null when absent, and absence is ASSERTED ON below, never skipped past.
-  const badgeSection = body => {
+  const blockSection = body => {
     const lines = body.split('\n');
     let start = -1;
     for (let i = 0; i < lines.length; i++) {
-      if (BADGE_HEADING_RE.test(lines[i])) { start = i; break; }
+      if (BLOCK_HEADING_RE.test(lines[i])) { start = i; break; }
     }
     if (start < 0) return null;
     const sec = [];
@@ -808,35 +808,41 @@ for (const target of emittedCommandTargets) {
   };
 
   // WHICH generated commands must carry the block is DERIVED, never hand-listed: the generator
-  // substitutes it at the canonical `## Agent Model Badge` heading, so the canonical sources ARE
+  // substitutes it at the canonical `## Agent Model Dispatch` heading, so the canonical sources ARE
   // the expectation. A hand-typed carrier list is a second place for that truth to live, and the
   // copy that stops being true without saying so.
-  const canonCarriesBadge = file =>
-    /^##\s+Agent Model Badge\s*$/m.test(fs.readFileSync(sync.canonCommandPath(file), 'utf8'));
-  const badgeCarriers = canonCommands.filter(canonCarriesBadge);
-  assert(badgeCarriers.length > 0,
-    'S2: at least ONE canonical command carries `## Agent Model Badge` (found ' + badgeCarriers.length
+  //
+  // The canonical heading is written here as a LITERAL, not read from the generator's exported
+  // MODEL_DISPATCH_HEADING. Sourcing the expectation from the subject's own constant would make
+  // this assertion agree with the generator by construction — it would still catch the section
+  // being deleted, but it could no longer witness the generator and canonical disagreeing, which
+  // is the other half of what it is for.
+  const canonCarriesSection = file =>
+    /^##\s+Agent Model Dispatch\s*$/m.test(fs.readFileSync(sync.canonCommandPath(file), 'utf8'));
+  const sectionCarriers = canonCommands.filter(canonCarriesSection);
+  assert(sectionCarriers.length > 0,
+    'S2: at least ONE canonical command carries `## Agent Model Dispatch` (found ' + sectionCarriers.length
     + ' of ' + canonCommands.length + ') — with none, every per-file check below ranges over an empty '
     + 'expectation and this guard reports green by having had nothing to read');
 
   for (const file of canonCommands) {
     const body = read('.opencode/command/' + file);
-    const sec = badgeSection(body);
+    const sec = blockSection(body);
     // (0) A BLOCK THAT CANNOT BE LOCATED IS A RED, NOT A SKIP. This used to be an
     //     `if (sec !== null)` guard: when the heading moved, the locator matched nothing, the
     //     content checks below never ran, and the suite stayed green over a surface nobody was
     //     reading any more. Presence is now pinned in BOTH directions against the canonical
     //     source, so neither a heading rename nor a dropped substitution can pass in silence.
-    if (canonCarriesBadge(file)) {
+    if (canonCarriesSection(file)) {
       assert(sec !== null,
-        'S2[' + file + ']: the effort block is LOCATABLE under the exact heading "## ' + BADGE_HEADING
-        + '" — its canonical source carries `## Agent Model Badge`, so the generator substituted a '
+        'S2[' + file + ']: the effort block is LOCATABLE under the exact heading "## ' + BLOCK_HEADING
+        + '" — its canonical source carries `## Agent Model Dispatch`, so the generator substituted a '
         + 'block into this file and every check below must be reading it. Found no such heading: the '
         + 'checks would assert over nothing, which is a disarmed guard with no red. If the heading was '
-        + 'renamed deliberately, BADGE_HEADING here moves in the same change.');
+        + 'renamed deliberately, BLOCK_HEADING here moves in the same change.');
     } else {
       assert(sec === null,
-        'S2[' + file + ']: NO effort block — its canonical source carries no `## Agent Model Badge`, '
+        'S2[' + file + ']: NO effort block — its canonical source carries no `## Agent Model Dispatch`, '
         + 'so the generator had nothing to substitute here; a block present anyway is stale output');
     }
     if (sec !== null) {
@@ -872,7 +878,7 @@ for (const target of emittedCommandTargets) {
 
   // (d) #609: body-wide B2 sweep — the narrowed exemption. Every generated agent
   // and command file must carry ZERO capitalized "Opus"/"Sonnet" proper-noun
-  // mentions (case-sensitive, whole-word), not just inside the badge section or
+  // mentions (case-sensitive, whole-word), not just inside the substituted block or
   // the generator's own rewrite-marker strings. This is the check the ORIGINAL S2
   // comment (above) used to explicitly tolerate failing on; rewriteClaudeModelNouns()
   // (sync-opencode-edition.js) is what makes it pass now.
