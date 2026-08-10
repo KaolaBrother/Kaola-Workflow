@@ -1,0 +1,15 @@
+# Run gaps observed by hand — bundle-945-946-947-948
+
+Seeded so the sweep actually observes what this run discovered. Each line is `gap: <class> — <text>`.
+
+gap: doc-badge-overclaim — `docs/architecture.md:341-343` and `README.md:201-207` both state the Claude model badge renders on every subagent dispatch; measured, only three dispatches in the whole tree carry a `model="{...}"` placeholder, all in `commands/kaola-workflow-finalize.md`, so a `workflow-next` dispatch renders no badge. Pre-existing and not caused by #946, but #946's new invariant comment at `install.sh:536-537` now sits in visible tension with it. `README.md` is test-consumed, so the fix stales a chain receipt and did not belong in this bundle.
+
+gap: doc-stale-assertion-count — `docs/conventions.md:325` cites 325 assertions for `test-route-reachability.js` as the count observed under a forge-deletion mutation; the suite reports 331 today and reported 331 on the pre-bundle base `a339e5df` too, so the number is stale by 6 independently of this run. Not test-consumed.
+
+gap: a30-footer-line-unpinned — measured on a scratch mirror: dropping `sync-opencode-edition.js`'s source-edit footer line whenever a flag is already named leaves `test-opencode-edition.js` fully green at 563 assertions, exit 0. Catching it requires pinning footer wording, which A30 states its property as an outcome specifically to avoid, so it is a value call on the report's contract rather than a coverage gap the test author could settle.
+
+gap: derived-copylist-lazy-require — the #945 derived sandbox copy list walks requires that actually executed in the parent, so a future repo-local `require()` placed inside a function that only runs under `--check` would not be copied. Every repo-local require in the graph is top-level today, so the graph is fully realized; the residue is visible rather than silent because the baseline assertion carries the child's stderr and names `Cannot find module` directly. A static source scan would close it but would have to parse around the `require(...)` literals embedded in `slots.js`'s shell snippets.
+
+gap: opencode-tree-stale-in-main — the main checkout's gitignored `.opencode/agent/synthesizer.md` is stale against `agents/synthesizer.md`, which commit `97df0d6f` touched without regenerating, so `node scripts/test-opencode-edition.js` fails at D0 in the main checkout. Generated per-checkout state, not a tracked defect: `git ls-files .opencode` returns 0 files, and the worktree used for this run was unaffected.
+
+gap: codex-install-cache-stale — the installed Codex plugin cache is at version 7.5.5 while the repo is 9.5.5, and its `SKILL.md` PIN block carries an older wording without the per-role tier lists HEAD ships. Observed while reading installed bytes for #946 and #947; orthogonal to both.
