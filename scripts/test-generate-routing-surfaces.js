@@ -619,16 +619,41 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     [path.join(sandbox, 'scripts', 'generate-routing-surfaces.js'), '--check'],
     { encoding: 'utf8' });
   try {
-    // The render inputs the sandbox needs to start at all. `slots.js` requires the kernel to source
-    // the Codex per-spawn tier roster, so the kernel is a render input too — omit it and the
-    // spawned --check dies at MODULE LOAD before rendering a byte. A new require under
-    // templates/routing/ is a new line here.
-    for (const rel of [
-      'scripts/generate-routing-surfaces.js',
-      'templates/routing/rename-table.js',
-      'templates/routing/slots.js',
-      'scripts/kaola-workflow-adaptive-schema.js',
-    ]) copy(rel);
+    // The JS the sandbox needs to start at all, DERIVED from the require graph the parent process
+    // already realized rather than hand-typed. `slots.js` requires the kernel to source the Codex
+    // per-spawn tier roster, so the kernel is a render input two edges deep — omit any transitive
+    // require and the spawned --check dies at MODULE LOAD before rendering a byte. A hand-typed
+    // enumeration went stale twice; `children` is a faithful require-edge list (a module already in
+    // the cache is still recorded on its requirer), so a new require anywhere under the generator
+    // is picked up with no line to add here. Repo-local only: node_modules and anything outside the
+    // tree is dropped, because the sandbox copies by relative path.
+    const jsInputs = (() => {
+      const entry = require.resolve('./generate-routing-surfaces.js');
+      require(entry);
+      const seen = new Set();
+      const walk = id => {
+        if (seen.has(id)) return;
+        seen.add(id);
+        for (const child of (require.cache[id] ? require.cache[id].children : [])) walk(child.filename);
+      };
+      walk(entry);
+      return [...seen]
+        .map(abs => path.relative(repo, abs))
+        .filter(rel => rel && !rel.startsWith('..') && !path.isAbsolute(rel)
+          && !rel.split(path.sep).includes('node_modules'))
+        .sort();
+    })();
+    // The derivation is anchored, not trusted. An empty list starves every spawn, and a starved
+    // spawn exits 1 — the same code --check uses to signal detected drift, which is exactly how a
+    // stale list left the RED assertions below passing against a process that rendered nothing.
+    // The kernel is the pinned member because it is the require that staled the hand-typed list and
+    // it sits two edges out, so reaching it proves the walk is transitive. The count is deliberately
+    // NOT pinned: growing is the correct response to a new require.
+    assert(jsInputs.length > 0,
+      'mutation proof: the derived sandbox copy list is non-empty (an empty list starves every spawn)');
+    assert(jsInputs.includes('scripts/kaola-workflow-adaptive-schema.js'),
+      `mutation proof: the derived copy list reaches the kernel two requires out — got [${jsInputs.join(', ')}]`);
+    for (const rel of jsInputs) copy(rel);
     for (const skeleton of new Set(GENERATED_SURFACES.map(r => r.skeleton))) {
       copy(path.join('templates', 'routing', skeleton));
     }
@@ -666,7 +691,7 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
       fs.writeFileSync(abs, original.replace('\n\n', '\n\nHAND EDIT — not in any skeleton.\n\n'));
       assert(fs.readFileSync(abs, 'utf8') !== original, `mutation proof: ${row.path} was actually mutated`);
       const red = runCheck();
-      eq(red.status, 1, `mutation proof: --check exits 1 on a hand-edited ${v.topic} surface`);
+      eq(red.status, 1, `mutation proof: --check exits 1 on a hand-edited ${v.topic} surface (${row.path})`);
       assert(red.stderr.includes(`DRIFT: ${row.path}`), `mutation proof: --check names ${row.path} as drifted`);
       fs.writeFileSync(abs, original);
       const green = runCheck();

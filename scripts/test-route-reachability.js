@@ -316,7 +316,12 @@ for (const ed of codexEditions) {
     'config_stale',
     'managed_block_drift',
   ];
-  const recurringGateAbsent = content => recurringGateTokens.every(token => !content.includes(token));
+  // Case-insensitive: prose names the retired gate in title case ("the Codex Profile Freshness
+  // Gate"), so a case-sensitive lowercase needle reads straight past the capitalization that
+  // actually ships and the guard reports absent on a surface still carrying it.
+  const recurringGateNeedles = recurringGateTokens.map(token => token.toLowerCase());
+  const recurringGateAbsent = content =>
+    recurringGateNeedles.every(needle => !String(content).toLowerCase().includes(needle));
   const assertRecurringGateAbsent = (content, file) => {
     assert(recurringGateAbsent(content),
       `T19 install boundary: ${file} contains no recurring Codex profile/config gate`);

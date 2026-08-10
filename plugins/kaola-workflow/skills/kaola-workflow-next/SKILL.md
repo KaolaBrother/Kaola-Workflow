@@ -254,9 +254,8 @@ installed role agents for delegated work. For every spawn, follow the Codex Per-
 contract above and pass both `model` and `reasoning_effort` explicitly on the spawn call as the pair
 selected by the role's existing tier. Per-task model or reasoning-effort exceptions are not allowed.
 If the runtime genuinely cannot spawn a role agent, do the work inline and say so — that is a fact
-about tool availability, not a choice to present as a question. The Codex Profile Freshness Gate
-above is authoritative for profile availability; profile drift is not tool unavailability and must
-not be recorded as one.
+about tool availability, not a choice to present as a question. Profile drift is not tool
+unavailability and must not be recorded as one.
 
 ## Required output
 

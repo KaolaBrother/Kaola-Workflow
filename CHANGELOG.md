@@ -14,7 +14,49 @@
   ships the answer. It is generated rather than written: adding a role to the constants without
   regenerating reds `test-route-reachability.js`, in both directions.
 
+- **The opencode remediation-footer band now exercises the mixture that tempts the wrong advice (#948).**
+  #941's defect was advice that is right for most classes and wrong for a mixture, and the band built
+  to pin it covered every combination except one: a stale generated artifact, which `--write` clears,
+  alongside an unregistered plugin, which no flag clears. That is the only combination where a flag is
+  advised while part of the set is flag-irreducible and the user-owned config is not involved — the
+  shape that invites a producer to name the stronger `--write-config` "so at least the rest gets
+  fixed", overwriting the model pins a user set there in order to repair a stale agent. The behaviour
+  was already correct and is now pinned. The all-three-class set is deliberately still absent: its
+  branch profile is identical to a combination already covered, so it would re-run the loop for a
+  branch already measured. The band keeps stating its property as an outcome — drive the advised
+  command, assert what survives — and pins no footer wording.
+
 ### Fixed
+
+- **The Codex `workflow-next` skill pointed at a section that does not exist (#947).** Its Delegation
+  block told the orchestrator that "the Codex Profile Freshness Gate above is authoritative for
+  profile availability" while no section of that name renders anywhere — a reader following it had
+  nothing to follow. The gate was removed deliberately when Codex profile readiness moved to the
+  install/upgrade transaction and to an explicit diagnostic on the init surface, and the
+  cross-reference was left standing by omission. The pointer is retired rather than restored, because
+  restoring the gate would reverse that decision and reintroduce the recurring preflight the install
+  boundary replaced. The rule the sentence also carried — profile drift is not tool unavailability and
+  must not be recorded as one — survives as its own sentence. The `REGION:skill` directive that scopes
+  the block is unchanged in behaviour; only its recorded justification, which named the same dead
+  gate, was rewritten to the live contract it actually depends on. Authored in
+  `templates/routing/next.skeleton.md` and regenerated to the three Codex skill surfaces.
+
+- **The guard that was built to keep that gate out could not see it (#947).** `test-route-reachability.js`'s
+  install-boundary check forbids nine recurring-gate tokens, but matched them case-sensitively against
+  a lowercase needle list, while the surviving prose spelled the phrase in title case. The check was
+  green, and mutation-proven, with the dangling reference on a shipped surface the whole time — armed,
+  and aimed one capitalization away. Matching now folds case for all nine tokens; the existing
+  mutation proof still fires on every file/token pair.
+
+- **Seven of the routing-surface mutation assertions could not fail for the reason they name (#945).**
+  The block builds a disposable sandbox and asserts `--check` exits 1 on a hand-edited surface — but a
+  Node module-load failure also exits 1, so when the sandbox could not start those seven "detected"
+  drift in a process that had rendered nothing. The arming condition was a hand-typed list of the
+  files to copy into the sandbox, which silently staled whenever a new `require` appeared. That list
+  is now derived from the generator's actual require graph, so a new dependency is picked up instead
+  of starving the sandbox, and two anchors keep the derivation from resolving to nothing. The paired
+  assertions that already discriminated are unchanged; the exit-code assertion now names the surface
+  it failed on, so seven identical messages become seven distinct ones.
 
 - **`sync-opencode-edition.js --check` advised a flag that could not fix what it reported (#941).**
   The remediation footer was unconditional — `--write` on any failure — and it is the last line a
@@ -59,6 +101,19 @@
   upward rather than downward, and it was ruled deliberately: correctness before cost.
 
 ### Removed
+
+- **Eight dead model-placeholder registrations in `install.sh` (#946).** The installer registered
+  eleven `{ROLE_MODEL}` placeholders across two coupled lists — the resolver `case` and the
+  substitution array — while only three were ever spelled by a command surface. The other eight
+  resolved nothing: no consumer, and no usable value if one had appeared, since all eight roles ship
+  with an inherited frontmatter model that the resolver returns empty for. Dead registration that
+  reads as coverage, so an audit of which roles have a rendered model placeholder counted them.
+  The eight are removed from both lists in the same edit, since a name in one and not the other is
+  the failure shape that the pairing exists to avoid, and the invariant is now stated where the lists
+  are. Nothing about the roles themselves changes: all eight still install, and their tiers still
+  reach the runtime through the resolver map, the Codex tier rosters and the pinned acceptance table.
+  Verified by installing both trees into isolated sandboxes and comparing every rendered file — the
+  removal changes zero installed bytes.
 
 - **The reasoning-tier floor (#940).** `REASONING_FLOOR_ROLES`, `isReasoningClass`,
   `enforceReasoningFloor`, the `--enforce-floor` flag and the `reasoning_floor_violation` refusal are

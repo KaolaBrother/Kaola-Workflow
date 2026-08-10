@@ -234,7 +234,7 @@ branch and worktree. Keep their commits separate — a commit spanning two folde
 one's diff attributable. Another session's folder is not yours: leave its branch, its worktree and
 its issues alone.
 
-<!-- REGION:skill — it defers to the Codex Profile Freshness Gate above as the authority on profile availability, and that gate renders on this surface only -->
+<!-- REGION:skill — it directs every spawn to the Codex Per-Spawn Model Routing contract above and to pass an explicit `model` and `reasoning_effort` pair on the call; that contract renders on this surface only, and command runtimes route each role's model from its installed profile with no per-spawn pair to pass -->
 ## Delegation
 
 Subagent delegation is the default posture and is established without asking the user. Invoke the
@@ -242,9 +242,8 @@ installed role agents for delegated work. For every spawn, follow the Codex Per-
 contract above and pass both `model` and `reasoning_effort` explicitly on the spawn call as the pair
 selected by the role's existing tier. Per-task model or reasoning-effort exceptions are not allowed.
 If the runtime genuinely cannot spawn a role agent, do the work inline and say so — that is a fact
-about tool availability, not a choice to present as a question. The Codex Profile Freshness Gate
-above is authoritative for profile availability; profile drift is not tool unavailability and must
-not be recorded as one.
+about tool availability, not a choice to present as a question. Profile drift is not tool
+unavailability and must not be recorded as one.
 
 <!-- /REGION -->
 ## Required output

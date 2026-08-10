@@ -2705,12 +2705,22 @@ if (exists(pluginRel)) {
       },
     };
 
+    // One scenario per BRANCH PROFILE of the closing advice, not per subset of the classes. The
+    // producer decides two things and nothing else: which flag it names (--write-config wins over
+    // --write, and neither is named when no flag clears anything), and whether a source-edit line
+    // is printed. The last entry is the only mixture where a flag is advised while part of the set
+    // is flag-irreducible AND the config file is not involved — the profile that tempts a producer
+    // into naming the stronger flag "so at least the rest gets fixed", which would overwrite the
+    // user's model pins to repair a stale agent. The all-three set is deliberately absent: its
+    // profile is identical to the entry above it, so it would re-run this loop for a branch
+    // already measured.
     const SCENARIOS = [
       ['stale generated agent'],
       ['stale user-owned opencode.json'],
       ['unregistered canonical plugin'],
       ['stale user-owned opencode.json', 'stale generated agent'],
       ['stale user-owned opencode.json', 'unregistered canonical plugin'],
+      ['stale generated agent', 'unregistered canonical plugin'],
     ];
 
     let adviceSeen = 0;

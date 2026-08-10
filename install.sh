@@ -533,18 +533,14 @@ resolve_agent_model_for_install() {
   printf '%s\n' "$model"
 }
 
+# Registered placeholders are exactly the ones some command surface actually spells. A name
+# here with no consumer is inert residue; a name a surface spells with no arm here is the #646
+# regression (empty model → line silently dropped, or a hard install error out of model= context).
+# Both lists below must carry the same names — add to and remove from them in the same edit.
 model_for_placeholder() {
   case "$1" in
-    CODE_EXPLORER_MODEL) resolve_agent_model_for_install code-explorer ;;
-    KNOWLEDGE_LOOKUP_MODEL) resolve_agent_model_for_install knowledge-lookup ;;
-    PLANNER_MODEL) resolve_agent_model_for_install planner ;;
-    CODE_ARCHITECT_MODEL) resolve_agent_model_for_install code-architect ;;
     TDD_GUIDE_MODEL) resolve_agent_model_for_install tdd-guide ;;
-    IMPLEMENTER_MODEL) resolve_agent_model_for_install implementer ;;
-    INVESTIGATOR_MODEL) resolve_agent_model_for_install investigator ;;
     BUILD_ERROR_RESOLVER_MODEL) resolve_agent_model_for_install build-error-resolver ;;
-    CODE_REVIEWER_MODEL) resolve_agent_model_for_install code-reviewer ;;
-    SECURITY_REVIEWER_MODEL) resolve_agent_model_for_install security-reviewer ;;
     DOC_UPDATER_MODEL) resolve_agent_model_for_install doc-updater ;;
   esac
 }
@@ -567,16 +563,8 @@ render_command_file() {
   local dest_file="$2"
   local line rendered placeholder model skip_line
   local placeholders=(
-    CODE_EXPLORER_MODEL
-    KNOWLEDGE_LOOKUP_MODEL
-    PLANNER_MODEL
-    CODE_ARCHITECT_MODEL
     TDD_GUIDE_MODEL
-    IMPLEMENTER_MODEL
-    INVESTIGATOR_MODEL
     BUILD_ERROR_RESOLVER_MODEL
-    CODE_REVIEWER_MODEL
-    SECURITY_REVIEWER_MODEL
     DOC_UPDATER_MODEL
   )
 
