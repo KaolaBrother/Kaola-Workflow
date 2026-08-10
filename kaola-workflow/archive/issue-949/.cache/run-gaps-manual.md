@@ -1,0 +1,9 @@
+# Run gaps observed by hand — issue-949
+
+Seeded so the sweep observes what this run actually found. Each line is `gap: <class> — <text>`.
+
+gap: filed-premise-refuted — #949 was originally filed as "two doc surfaces overclaim badge coverage", on the claim that only three of many dispatches carry a `model=` placeholder. Measured, that is false: there are exactly THREE `Agent(` dispatch cards across all Claude Code command surfaces and all three carry one; `workflow-init`, `workflow-next` and every SKILL have zero cards. "Every dispatch" was 3 of 3, and `assertEveryDispatchHasModel` is what keeps it true. The issue was rewritten in place to the badge retirement it became; recorded here so the refuted overclaim is not re-filed from the old wording.
+
+gap: codex-validator-copy-exits-1-standalone — `plugins/kaola-workflow/scripts/validate-workflow-contracts.js` exits 1 when invoked directly, both before and after this run: it computes `root = path.resolve(__dirname, '..')` = `plugins/kaola-workflow/`, which has no `commands/`, so it fails at the loop's first assertion long before reaching any anchor. It is a shipped byte copy never run from that location, as `scripts/kaola-workflow-prose-census.js:175` states. Pre-existing, not a regression, and not caused by the anchor rename — recorded only so its exit code is not mistaken for one by a future run.
+
+gap: badge-word-survives-only-as-negative-pin — after the retirement, the only live case-insensitive occurrences of "badge" outside CHANGELOG, the archive, `.origin` and the sanctioned historical docs are the four `assertNotIncludes(file, 'Agent Model Badge')` pins and their explanatory comments. That is intentional and functional: the pins are the ratchet that keeps the retired cosmetic heading from returning. Recorded so a future census does not read them as missed removal targets and delete the ratchet.
