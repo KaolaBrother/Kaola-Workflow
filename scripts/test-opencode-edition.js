@@ -2532,6 +2532,293 @@ if (exists(pluginRel)) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// A30 — THE REMEDY --check ADVISES IS THE REMEDY THAT CLEARS WHAT IT REPORTED.
+//
+// runCheck prints its per-mismatch reasons and then ONE closing remediation line for the whole
+// set, last of all. The reasons are derived per class and are correct; the closing line is
+// derived from nothing, and two of the classes runCheck can report are NOT cleared by the
+// command it names:
+//
+//   · the tracked, USER-OWNED opencode.json read stale — `--write` deliberately preserves that
+//     file, so the advised command exits 0 saying "tree already in sync" while --check still
+//     exits 1 on the very mismatch it was run to fix. Only --write-config rewrites it.
+//   · an unregistered plugin in templates/opencode/plugins/ — NO flag of this script clears it.
+//     The remedy is a source edit adding the basename to PLUGIN_SCRIPTS, which is exactly what
+//     that mismatch's own reason line already says.
+//
+// So the property is stated as an OUTCOME, never as a wording: take whatever runnable invocation
+// of this script the output offers, RUN it, and re-check. What was advised has to clear
+// everything a flag of this script can clear, and it may not offer a command that clears
+// nothing. That is checkable without pinning one sentence of the message, and it keeps holding
+// as the class table grows — a fourteen-way string pin would rot on the next class.
+//
+// WHY A SCRATCH COPY OF THE REPO. runCheck resolves REPO from its own __dirname and both write
+// modes mutate that tree, so the only way to plant a mismatch is to plant it in a repo — never
+// this one, whose generated trees are gitignored and whose drift D0 above exists to report. The
+// scratch repo carries the source trees the generator reads plus the tracked opencode.json, is
+// regenerated once, and is asserted GREEN before anything is planted: that control is also what
+// catches an under-copied fixture, which would report every file missing and quietly turn every
+// scenario below into a different test than the one it claims to be.
+//
+// The two KAOLA_OPENCODE_*_MODEL pins are scrubbed from the child environment: they change what
+// renderOpencodeJson emits, so a developer with one exported would find the fixture's config
+// stale before this band planted anything. The fixture's subject has to be the fixture.
+//
+// NOT EVERY ASSERTION HERE CAN GO RED TODAY, AND THAT IS SAID OUT LOUD. The write-clearable
+// scenario and the never-blanket-advise-the-stronger-flag check are GREEN ON ARRIVAL: they lock
+// in the classes today's line is right about, and they stop the repair from being made by
+// swapping in --write-config — which clears 13 of the 14 classes and overwrites the model pins
+// the config file itself invites the user to hand-edit.
+// ---------------------------------------------------------------------------
+{
+  const { spawnSync } = require('child_process');
+  const { mkdtempSync, cpSync, rmSync } = require('fs');
+  const os = require('os');
+
+  const scratch = mkdtempSync(path.join(os.tmpdir(), 'oc-a30-repo-'));
+  const SYNC = path.join(scratch, 'scripts', 'sync-opencode-edition.js');
+  // The generator's whole input surface: it renders from agents/ and commands/, byte-copies from
+  // hooks/ and templates/opencode/plugins/, and requires its siblings out of scripts/. The
+  // green-baseline assertion below is what keeps this list honest — an omission reds there.
+  const SOURCE_TREES = ['scripts', 'agents', 'commands', 'hooks', 'templates'];
+  const childEnv = Object.assign({}, process.env);
+  delete childEnv.KAOLA_OPENCODE_STANDARD_MODEL;
+  delete childEnv.KAOLA_OPENCODE_REASONING_MODEL;
+
+  const run = args => {
+    // spawn-class: environment
+    const r = spawnSync(process.execPath, [SYNC].concat(args), { encoding: 'utf8', env: childEnv });
+    return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
+  };
+  const check = () => run(['--forge=github', '--check']);
+
+  // What --check reported, as paths. Parsed from the per-mismatch lines, which is the surface
+  // the issue leaves alone; if that shape ever changes this returns nothing, and the per-scenario
+  // control below ("the planted set is what was reported") reds loudly instead of passing empty.
+  const reported = out => out.split('\n')
+    .map(l => l.match(/^\s*-\s+(\S+)\s+—\s/))
+    .filter(Boolean).map(m => m[1]).sort();
+
+  // Every runnable invocation of THIS script the output offers, as argv tails. Deliberately
+  // generous about wording and position — "Fix: node …", a bulleted line, two of them — because
+  // the claim is about what a reader is handed to run, not about where it is printed. It stops
+  // at a shell operator so a chained pair is read as two commands rather than one nonsense one.
+  const ADVICE_RE = /node\s+\S*sync-opencode-edition\.js[^\n`'"&;]*/g;
+  const advisedCommands = out => (out.match(ADVICE_RE) || [])
+    .map(m => m.trim().split(/\s+/).slice(2)
+      .map(t => t.replace(/[.,;:)\]`]+$/, '')).filter(Boolean));
+
+  // The volatile surface: everything a plant or a write mode can touch. Snapshotting it is what
+  // lets one scratch repo serve every leg — restore is exact, so no scenario inherits another's
+  // damage and no leg inherits the previous leg's repair.
+  const VOLATILE = ['opencode.json', '.opencode', path.join('templates', 'opencode', 'plugins')];
+  const walkFiles = (abs, out) => {
+    if (!fs.existsSync(abs)) return out;
+    if (fs.statSync(abs).isFile()) { out.push(abs); return out; }
+    for (const e of fs.readdirSync(abs)) walkFiles(path.join(abs, e), out);
+    return out;
+  };
+  const volatileFiles = () => VOLATILE.reduce((acc, rel) => acc.concat(walkFiles(path.join(scratch, rel), [])), []);
+  const snapshot = () => new Map(volatileFiles().map(f => [path.relative(scratch, f), fs.readFileSync(f)]));
+  const restore = snap => {
+    for (const f of volatileFiles()) if (!snap.has(path.relative(scratch, f))) rmSync(f, { force: true });
+    for (const [rel, buf] of snap) {
+      const abs = path.join(scratch, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      if (!fs.existsSync(abs) || !fs.readFileSync(abs).equals(buf)) fs.writeFileSync(abs, buf);
+    }
+  };
+
+  try {
+    // The copy is checked before it is made. A SOURCE_TREES entry that no longer exists throws
+    // out of cpSync, and an uncaught throw here is a stack trace where a named cause belongs —
+    // this band runs last, so it would take the suite's own summary line with it. Measured, not
+    // theorised: a fixture built with one tree deleted killed this file mid-run until this line.
+    const missingTrees = SOURCE_TREES.filter(d => !fs.existsSync(path.join(REPO, d)));
+    assert(missingTrees.length === 0,
+      'A30: every source tree this fixture copies is present in the repo — ' + JSON.stringify(missingTrees)
+      + ' is not, so the scratch repo below is missing an input the generator reads and every '
+      + 'scenario would be reporting on a tree of absent files rather than on planted drift');
+    for (const d of SOURCE_TREES) {
+      if (fs.existsSync(path.join(REPO, d))) cpSync(path.join(REPO, d), path.join(scratch, d), { recursive: true });
+    }
+    cpSync(path.join(REPO, 'opencode.json'), path.join(scratch, 'opencode.json'));
+
+    const w = run(['--forge=github', '--write']);
+    assert(w.status === 0, 'A30: the scratch repo regenerates — sync --write exit ' + w.status
+      + ': ' + String(w.out).split('\n').slice(0, 3).join(' | '));
+    const baselineGreen = check();
+    assert(baselineGreen.status === 0,
+      'A30: the scratch repo is GREEN before anything is planted. Every scenario below reads its '
+      + 'mismatch set as the set it planted, so a fixture that is already red — an under-copied '
+      + 'source tree, an exported model pin — is a different test wearing this one\'s name. Got '
+      + 'exit ' + baselineGreen.status + ': ' + baselineGreen.out.split('\n').slice(0, 5).join(' | '));
+
+    const pristine = snapshot();
+    assert(pristine.size > 0,
+      'A30: the snapshot captured the volatile surface — an empty one restores nothing, so every '
+      + 'scenario after the first would run against the previous one\'s leftovers');
+
+    // The three classes, each with the flag that ACTUALLY clears it — one per REMEDY KIND, not one
+    // per class: the property is about which remedy applies, and a pin over all fourteen classes
+    // would rot on the fifteenth. `clearedBy` is a claim, not a fact: the `none` half is re-measured
+    // every run by the maximal-flag leg below, and a wrong `write`/`write-config` half surfaces as a
+    // contradiction between the never-blanket check and the sufficiency check, which cannot both
+    // hold if the flag named here is not the one that clears it.
+    const agentDir = path.join(scratch, '.opencode', 'agent');
+    const agentMd = (fs.existsSync(agentDir)
+      ? fs.readdirSync(agentDir).filter(f => f.endsWith('.md')).sort() : [])[0] || '';
+    assert(agentMd !== '',
+      'A30: the regenerated fixture has a generated agent to plant drift in — with none, the '
+      + 'write-clearable scenario has no subject and its green would mean nothing');
+    const ROGUE_PLUGIN = 'zzz-a30-unregistered.js';
+    const CLASSES = {
+      'stale generated agent': {
+        rel: '.opencode/agent/' + agentMd,
+        clearedBy: 'write',
+        // Guarded, not assumed: with no agent to drift the assertion above has already said so,
+        // and a throw from here would replace that named failure with a stack trace.
+        plant: () => {
+          if (agentMd) fs.appendFileSync(path.join(agentDir, agentMd), '\n<!-- A30 planted drift -->\n');
+        },
+      },
+      'stale user-owned opencode.json': {
+        rel: 'opencode.json',
+        clearedBy: 'write-config',
+        // The hand edit the file itself invites: a pinned standard-tier model. Any edit reads
+        // stale (--check byte-compares against the renderer); this is the documented one.
+        plant: () => {
+          const p = path.join(scratch, 'opencode.json');
+          fs.writeFileSync(p, fs.readFileSync(p, 'utf8')
+            .replace('"default_agent": "build"', '"default_agent": "build",\n  "model": "example/pinned-model"'));
+        },
+      },
+      'unregistered canonical plugin': {
+        rel: 'templates/opencode/plugins/' + ROGUE_PLUGIN,
+        clearedBy: 'none',
+        plant: () => {
+          const dir = path.join(scratch, 'templates', 'opencode', 'plugins');
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, ROGUE_PLUGIN), '// A30 fixture\n');
+        },
+      },
+    };
+
+    const SCENARIOS = [
+      ['stale generated agent'],
+      ['stale user-owned opencode.json'],
+      ['unregistered canonical plugin'],
+      ['stale user-owned opencode.json', 'stale generated agent'],
+      ['stale user-owned opencode.json', 'unregistered canonical plugin'],
+    ];
+
+    let adviceSeen = 0;
+    for (const ids of SCENARIOS) {
+      const tag = 'A30[' + ids.join(' + ') + ']';
+      const planted = ids.map(i => CLASSES[i].rel).sort();
+      const flagProof = ids.filter(i => CLASSES[i].clearedBy === 'none').map(i => CLASSES[i].rel).sort();
+      const needsConfigFlag = ids.some(i => CLASSES[i].clearedBy === 'write-config');
+      const someFlagHelps = ids.some(i => CLASSES[i].clearedBy !== 'none');
+      const plant = () => { restore(pristine); for (const i of ids) CLASSES[i].plant(); };
+
+      // ---- the report itself, and the two controls that make the rest mean something --------
+      plant();
+      const c0 = check();
+      assert(c0.status === 1,
+        tag + ': the planted tree fails --check (exit ' + c0.status + ') — a plant that did not '
+        + 'take makes every assertion below a statement about a clean tree');
+      assert(JSON.stringify(reported(c0.out)) === JSON.stringify(planted),
+        tag + ': --check reports EXACTLY the planted mismatches — expected ' + JSON.stringify(planted)
+        + ', parsed ' + JSON.stringify(reported(c0.out)) + '. A different set means a different '
+        + 'scenario; an empty one means the mismatch lines stopped being parseable and the '
+        + 'outcome checks below would be comparing nothing to nothing');
+
+      const advised = advisedCommands(c0.out);
+      adviceSeen += advised.length;
+
+      // ---- what the maximal flag can do, MEASURED, not assumed ------------------------------
+      // --write-config is --write plus the forced config rewrite, so it is the most any flag of
+      // this script can clear. Whatever survives IT is the flag-irreducible remainder, and that
+      // is the only thing the advice is allowed to leave behind. Measured per scenario because
+      // otherwise a fixture where the flag silently did nothing would let the wrong advice pass.
+      plant();
+      run(['--forge=github', '--write-config']);
+      const irreducible = reported(check().out);
+      assert(JSON.stringify(irreducible) === JSON.stringify(flagProof),
+        tag + ': the strongest flag this script has (--write-config) clears everything except '
+        + JSON.stringify(flagProof) + ' — measured ' + JSON.stringify(irreducible) + '. This is the '
+        + 'reference the advice is held to, so a fixture where the flag did nothing would excuse '
+        + 'advice that also does nothing');
+
+      // ---- THE PROPERTY: run what it advised, and see what is left --------------------------
+      plant();
+      for (const cmd of advised) run(cmd);
+      const surviving = reported(check().out);
+      assert(JSON.stringify(surviving) === JSON.stringify(irreducible),
+        tag + ': after running what --check advised, the only mismatches left are the ones NO '
+        + 'flag of this script can clear. Advised ' + JSON.stringify(advised) + '; left behind '
+        + JSON.stringify(surviving) + ', irreducible ' + JSON.stringify(irreducible)
+        + '. A reader who does exactly what the last line of the report tells them must not be '
+        + 'left holding a mismatch a different flag would have fixed');
+
+      // ---- and nothing it advised may be a no-op --------------------------------------------
+      // Individually, against a fresh plant, so the rule is order-independent: a second command
+      // is not condemned for finding the first one's work already done.
+      for (const cmd of advised) {
+        plant();
+        run(cmd);
+        const left = reported(check().out);
+        assert(left.length < planted.length,
+          tag + ': the advised command ' + JSON.stringify(cmd) + ' clears at least one of the '
+          + 'mismatches reported alongside it — run on its own it left ' + JSON.stringify(left)
+          + ' of ' + JSON.stringify(planted) + ' standing. Naming a command that changes nothing '
+          + 'is worse than naming none: it exits 0 and reports the tree already in sync');
+      }
+
+      // ---- per-set expectations ---------------------------------------------------------------
+      if (someFlagHelps) {
+        assert(advised.length >= 1,
+          tag + ': --check still hands the reader a runnable command — a flag DOES clear part of '
+          + 'this set, and replacing a wrong command with vague prose would regress every class '
+          + 'the current line is right about');
+      } else {
+        assert(advised.length === 0,
+          tag + ': NO flag of this script clears anything in this set, so --check offers no '
+          + 'runnable invocation of it at all — it offered ' + JSON.stringify(advised) + '. The '
+          + 'per-mismatch reason already names the real remedy; a command line printed under it '
+          + 'is read as the fix and exits 0 having done nothing');
+      }
+      if (!needsConfigFlag) {
+        for (const cmd of advised) {
+          assert(!cmd.includes('--write-config'),
+            tag + ': --write-config is NOT advised here — nothing in this set needs it, and it '
+            + 'rewrites the user-owned opencode.json, destroying the model pins that file invites '
+            + 'the user to hand-edit. It clears 13 of the 14 classes, which is exactly what makes '
+            + 'it tempting as a blanket answer. Advised: ' + JSON.stringify(cmd));
+        }
+      }
+      if (ids.includes('unregistered canonical plugin')) {
+        assert(c0.out.includes('PLUGIN_SCRIPTS'),
+          tag + ': the report still names PLUGIN_SCRIPTS — the allowlist edit is the ONLY remedy '
+          + 'for this class, so the reason line that names it is the whole of what the reader gets');
+      }
+    }
+
+    assert(adviceSeen > 0,
+      'A30: at least one scenario yielded a parseable advised command — with none, the '
+      + '"no no-op advice" and "no blanket --write-config" checks above range over an empty list '
+      + 'and pass by having read nothing');
+
+    restore(pristine);
+    assert(check().status === 0,
+      'A30: the scratch repo is green again after the last restore — a restore that does not '
+      + 'undo a plant would have leaked one scenario into the next');
+  } finally {
+    try { rmSync(scratch, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
+}
+
 if (failed) {
   console.error('\nopencode-edition test FAILED: ' + failed + ' failure(s), ' + passed + ' passed.'
     + driftVerdict);

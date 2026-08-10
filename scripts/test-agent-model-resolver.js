@@ -180,11 +180,6 @@ try {
   fs.rmSync(tmpRetiredRole, { recursive: true, force: true });
 }
 
-// #463 Slice 1 (AC14): reasoning-class floor ENFORCEMENT. The synthesizer (a REASONING_FLOOR_ROLE)
-// resolves real write-leg merge conflicts BY INTENT — a reasoning-class task. A manifest/frontmatter
-// override that LOWERS the floor (or an explicit inherit) is a TYPED REFUSAL, never a silent downgrade.
-// A plan may RAISE but never LOWER this floor. The default path (opus) always passes.
-assert.strictEqual(typeof resolver.enforceReasoningFloor, 'function', 'enforceReasoningFloor is exported');
 assert.strictEqual(typeof resolver.loadCodexSessionProof, 'function', 'loadCodexSessionProof is exported');
 const tmpSessionHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-session-proof-'));
 try {
@@ -500,82 +495,6 @@ try {
     'an oversized prefix with session_meta but no valid id cannot establish complete discovery');
 } finally {
   fs.rmSync(tmpSessionMissingIdPrefixHome, { recursive: true, force: true });
-}
-
-// Default path: synthesizer -> opus default -> floor satisfied (with and without enforcement).
-const tmpFloorOk = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-floor-ok-'));
-try {
-  assert.strictEqual(resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorOk }), 'opus');
-  assert.strictEqual(resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorOk, enforceFloor: true }), 'opus',
-    'enforceFloor passes the opus default through unchanged');
-  assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'opus').ok, true, 'opus satisfies the synthesizer floor');
-  // #610: the floor check normalizes — a plan-authored NEUTRAL `reasoning` tier satisfies the floor
-  // exactly as the legacy `opus` alias does; the non-reasoning `standard`/`sonnet` tokens do NOT.
-  assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'reasoning').ok, true, 'neutral reasoning tier satisfies the floor');
-  // #775 (Codex 0.145 re-baseline): the Codex leg that proved the floor by reading the PARENT
-  // session's proof is retired (Codex resolves the child's model/reasoning independently under
-  // multi_agent_v2 — the parent no longer determines the child, so that check was a false signal,
-  // never a real gate). A reasoning-class tier now satisfies the Codex floor exactly like every
-  // other runtime, REGARDLESS of session-proof shape (absent/stale/fresh all pass identically).
-  const missingProof = resolver.enforceReasoningFloor('synthesizer', 'reasoning', {
-    runtime: 'codex', currentThreadId: 'thread-current', sessionProof: { status: 'absent' }
-  });
-  assert.strictEqual(missingProof.ok, true, 'an absent Codex session proof no longer refuses the floor');
-  const freshProof = {
-    status: 'fresh', thread_id: 'thread-current', model: 'gpt-5.6-sol', reasoning_effort: 'xhigh',
-    observed_at: '2026-07-15T00:00:00Z', source: 'session_jsonl'
-  };
-  assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'reasoning', {
-    runtime: 'codex', currentThreadId: 'thread-current', sessionProof: freshProof
-  }).ok, true, 'a reasoning-class tier still satisfies the Codex floor with a fresh proof present (now irrelevant)');
-  assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'standard').ok, false, 'neutral standard tier violates the floor');
-  assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'sonnet').ok, false, 'legacy sonnet violates the floor');
-  // A non-floor role is NEVER constrained by the floor.
-  assert.strictEqual(resolver.enforceReasoningFloor('code-reviewer', 'sonnet').ok, true, 'non-floor role unaffected');
-  assert.strictEqual(resolver.resolveAgentModel('code-reviewer', { agentDir: tmpFloorOk, enforceFloor: true }), 'opus',
-    'enforceFloor leaves non-floor roles alone');
-} finally {
-  fs.rmSync(tmpFloorOk, { recursive: true, force: true });
-}
-
-// A frontmatter override that LOWERS the synthesizer to a non-reasoning tier:
-//  - WITHOUT enforceFloor: the (wrong) lowered model still returns (back-compat unchanged)
-//  - WITH enforceFloor: resolveAgentModel THROWS a typed reasoning_floor_violation
-//  - enforceReasoningFloor reports ok:false with the typed reason
-const tmpFloorLower = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-floor-lower-'));
-try {
-  writeAgent(tmpFloorLower, 'synthesizer', 'sonnet');
-  assert.strictEqual(resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorLower }), 'sonnet',
-    'back-compat: without enforceFloor a lowered synthesizer still returns');
-  const v = resolver.enforceReasoningFloor('synthesizer', 'sonnet');
-  assert.strictEqual(v.ok, false, 'enforceReasoningFloor refuses a lowered synthesizer');
-  assert.strictEqual(v.reason, 'reasoning_floor_violation', 'typed reason');
-  assert.strictEqual(v.floor, 'opus', 'reports the floor');
-  let threw = null;
-  try { resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorLower, enforceFloor: true }); }
-  catch (e) { threw = e; }
-  assert.ok(threw, 'enforceFloor throws on a lowered synthesizer');
-  assert.strictEqual(threw.reason, 'reasoning_floor_violation', 'typed reason on the thrown error');
-} finally {
-  fs.rmSync(tmpFloorLower, { recursive: true, force: true });
-}
-
-// An empty/inherit tier reaching enforceReasoningFloor is ALSO a violation (it may resolve to a
-// non-reasoning session model — the floor must not be silently surrendered). That value now arrives
-// only from a plan tier column: an `inherit` FRONTMATTER can no longer surrender the floor, because
-// the chain falls through to the reasoning-class static default instead of returning empty.
-const tmpFloorInherit = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-floor-inherit-'));
-try {
-  writeAgent(tmpFloorInherit, 'synthesizer', 'inherit');
-  assert.strictEqual(resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorInherit }), 'opus',
-    'inherit frontmatter falls through to the reasoning-class static default, never to empty');
-  assert.doesNotThrow(() => resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorInherit, enforceFloor: true }),
-    'the static default satisfies the floor, so enforceFloor passes');
-  assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', '').ok, false, 'inherit (empty) violates the floor');
-  assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', '').reason, 'reasoning_floor_violation',
-    'typed reason on the empty-tier violation');
-} finally {
-  fs.rmSync(tmpFloorInherit, { recursive: true, force: true });
 }
 
 console.log('Agent model resolver tests passed');

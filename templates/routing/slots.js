@@ -70,6 +70,45 @@ SLOTS['in-claim-resolver'] = resolverFor('CLAIM_JS', {
   gitea: 'kaola-gitea-workflow-claim.js',
 });
 
+// codex-tier-roster — the ONE slot with no topic prefix, because it is the same answer on two
+// topics: the Codex routing PIN ships on both the next and the finalize skill.
+//
+// That PIN orders every spawn at its role's existing standard- or reasoning-tier classification
+// and fixes the model and effort per tier — a question whose answer no prompt surface carried.
+// The membership is RENDERED here from the kernel's own registry rather than restated as prose:
+// a role added to either pinned list reaches all six dispatch surfaces on the next render, and
+// there is no second enumeration for the shipped instruction to drift away from.
+const {
+  CODEX_PINNED_STANDARD_ROLES,
+  CODEX_PINNED_REASONING_ROLES,
+} = require('../../scripts/kaola-workflow-adaptive-schema.js');
+
+// tierRoster — one tier's line(s), wrapped to the skeletons' prose column. The wrap is COMPUTED,
+// so a registry change re-flows instead of overrunning the column or leaving a stale hand-wrap.
+// Every continuation line carries role names only: the tier word stays on the label line, which
+// is what lets a reader (and the shipped-bytes pin) attribute each name to exactly one tier.
+const ROSTER_WIDTH = 100;
+function tierRoster(label, roles) {
+  const lines = [];
+  let line = label;
+  roles.forEach((role, i) => {
+    const token = `\`${role}\`${i === roles.length - 1 ? '.' : ','}`;
+    if (`${line} ${token}`.length > ROSTER_WIDTH) {
+      lines.push(line);
+      line = token;
+    } else {
+      line = `${line} ${token}`;
+    }
+  });
+  return [...lines, line].join('\n');
+}
+
+SLOTS['codex-tier-roster'] = [
+  tierRoster('Standard-tier roles:', CODEX_PINNED_STANDARD_ROLES),
+  '',
+  tierRoster('Reasoning-tier roles:', CODEX_PINNED_REASONING_ROLES),
+].join('\n');
+
 const SPLICES = {
   // ---- next: forge nouns, route nouns, and the per-forge invocations. ----
   "nx-issue-fetch": {"github":"If a GitHub remote and an authenticated `gh` are available, read the open issues:","gitlab":"If a GitLab remote and an authenticated `glab` are available, read the open issues:","gitea":"If a Gitea remote and an authenticated `tea` are available, read the open issues:"},

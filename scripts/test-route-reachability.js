@@ -421,6 +421,238 @@ for (const ed of codexEditions) {
     'T19 model routing: all six Codex next/finalize skills carry one byte-identical routing contract');
 }
 
+// ---------------------------------------------------------------------------
+// T19b: THE ROSTER — a surface that ASKS for a role's tier must SHIP the membership.
+//
+// T19's block orders the orchestrator to dispatch each role at "its existing standard-tier or
+// reasoning-tier classification" and fixes the effort per tier. It never says WHICH roles are in
+// which tier. The membership does ship — CODEX_PINNED_STANDARD_ROLES / CODEX_PINNED_REASONING_ROLES
+// are installed three times over in the Codex tree — but nothing renders it, prints it, or points a
+// prompt at it, so at dispatch the split is unreachable from the one surface that demands it. An
+// instruction that asks a question whose answer it does not ship is the defect. The roster is
+// generated into the block FROM those constants, which is what makes it unable to drift from them.
+//
+// THE UNIVERSE IS DERIVED, NOT LISTED. Every generated surface whose COMMITTED bytes carry the
+// routing PIN owes the roster: a seventh surface that acquires the instruction acquires the
+// obligation with it, and a surface that never asks is never obligated. Read from the shipped
+// bytes, never from the skeleton — an authored-only answer is precisely the failure here.
+//
+// FORMAT IS DELIBERATELY NOT PINNED. The reader gives a role the tier named on its own line, else
+// the nearest preceding unambiguous tier word; a line naming both tiers clears the context rather
+// than guessing, so an unlabelled role reads as "(no tier)" and reds instead of inheriting a stale
+// heading. A table, a heading plus a list, or one line per tier all read the same, and a re-wrap
+// cannot redden it. What is pinned is the MAPPING, in both directions.
+//
+// The scan is bounded to the PIN block, which is both the ruling (the roster is generated into that
+// block) and a correctness requirement: role names occur in ordinary prose elsewhere on these
+// surfaces, and a whole-file scan would tier them by accident.
+// ---------------------------------------------------------------------------
+{
+  const { GENERATED_SURFACES } = require('./generate-routing-surfaces.js');
+  const schema = require('./kaola-workflow-adaptive-schema.js');
+  const codexPreflight = require('./kaola-workflow-codex-preflight.js');
+
+  // The registry, as ONE map. This is the answer the block has to carry.
+  const EXPECTED_TIER = new Map([
+    ...schema.CODEX_PINNED_STANDARD_ROLES.map(role => [role, 'standard']),
+    ...schema.CODEX_PINNED_REASONING_ROLES.map(role => [role, 'reasoning']),
+  ]);
+  assert(EXPECTED_TIER.size
+    === schema.CODEX_PINNED_STANDARD_ROLES.length + schema.CODEX_PINNED_REASONING_ROLES.length,
+    'T19b registry: no role is in both Codex tiers (the two pinned lists are disjoint)');
+
+  // A SECOND, INDEPENDENT enumeration of role names, so the "on the roster but not in the registry"
+  // direction has something to recognise. Deriving the universe from EXPECTED_TIER alone would make
+  // that direction structurally undetectable: a role the registry does not know would simply never
+  // be looked for. Its bound is stated rather than hidden — a roster naming something that is
+  // neither a registered tier member nor an agent in the tree is not seen here (the surface's
+  // byte-equality with its skeleton, asserted by `generate-routing-surfaces.js --check`, is what
+  // covers that), and the mutation proof below injects such a name to show the direction bites.
+  const AGENT_ROLES = fs.readdirSync(path.join(REPO, 'agents'))
+    .filter(f => f.endsWith('.md')).map(f => f.slice(0, -'.md'.length));
+  const ROLE_UNIVERSE = [...new Set([...EXPECTED_TIER.keys(), ...AGENT_ROLES])].sort();
+  assert(ROLE_UNIVERSE.length >= EXPECTED_TIER.size && EXPECTED_TIER.size > 0,
+    'T19b registry: the role universe is non-empty and covers every pinned role');
+
+  // Role names carry hyphens, so the boundary is "not an identifier character" rather than \b:
+  // \bcode-reviewer\b would also fire inside a longer hyphenated token.
+  const roleNeedle = role => new RegExp(`(^|[^A-Za-z0-9_-])${role}([^A-Za-z0-9_-]|$)`);
+  const NEEDLES = new Map(ROLE_UNIVERSE.map(role => [role, roleNeedle(role)]));
+  // `reasoning_effort` does not match \breasoning\b (the underscore is a word character), so the
+  // effort sentences do not masquerade as tier labels; `reasoning effort` in prose does, and a line
+  // carrying both words is treated as ambiguous, which is the safe reading.
+  const TIER_WORD = /\b(standard|reasoning)\b/gi;
+
+  // codexRosterTiers — PURE. (block text, role universe) -> Map(role -> Set of claimed tiers).
+  // A role claimed under two tiers keeps both, so "listed twice, disagreeing" is a defect rather
+  // than a last-one-wins silent pass.
+  const codexRosterTiers = (block, universe) => {
+    const found = new Map();
+    let context = null;
+    for (const line of block.split('\n')) {
+      const words = [...new Set([...line.matchAll(TIER_WORD)].map(m => m[1].toLowerCase()))];
+      const lineTier = words.length === 1 ? words[0] : null;
+      for (const role of universe) {
+        if (!(NEEDLES.get(role) || roleNeedle(role)).test(line)) continue;
+        if (!found.has(role)) found.set(role, new Set());
+        found.get(role).add(lineTier || context || '(no tier)');
+      }
+      if (words.length > 0) context = lineTier;
+    }
+    return found;
+  };
+
+  // rosterDefects — PURE detector, both directions. Empty means the shipped roster IS the registry.
+  const rosterDefects = (block, expected, universe) => {
+    const found = codexRosterTiers(block, universe);
+    const defects = [];
+    for (const [role, tier] of expected) {
+      const claimed = found.get(role);
+      if (!claimed) { defects.push(`${role}: absent from the roster (registry: ${tier})`); continue; }
+      if (claimed.size > 1) {
+        defects.push(`${role}: claimed as ${[...claimed].sort().join(' AND ')} — one role, one tier`);
+        continue;
+      }
+      const got = [...claimed][0];
+      if (got !== tier) defects.push(`${role}: roster says ${got}, registry says ${tier}`);
+    }
+    for (const role of found.keys()) {
+      if (!expected.has(role)) defects.push(`${role}: on the roster but not in the Codex tier registry`);
+    }
+    return defects;
+  };
+
+  // effortDefects — PURE. The tier->effort mapping, bound to the constants the Codex installer and
+  // preflight validate installed profiles against, so the prose and the validator cannot drift
+  // apart. T19 pins the same two sentences as literals; this is the binding to the constant, which
+  // is what makes the roster's tier names joinable to an actual effort at dispatch.
+  const effortDefects = (block, efforts) => {
+    const flat = norm(block);
+    return Object.entries(efforts)
+      .filter(([tier, effort]) => !new RegExp(
+        `${tier}-tier roles dispatch with \`model: "[^"]+"\` and \`reasoning_effort: "${effort}"\``, 'i')
+        .test(flat))
+      .map(([tier, effort]) => `${tier}-tier is not stated as reasoning_effort "${effort}"`);
+  };
+  const EXPECTED_EFFORTS = {
+    standard: codexPreflight.CODEX_STANDARD_EFFORT,
+    reasoning: codexPreflight.CODEX_REASONING_EFFORT,
+  };
+
+  // The obligated universe: every generated surface whose COMMITTED bytes ask the question.
+  const routingSurfaces = GENERATED_SURFACES
+    .map(row => ({ row, content: fs.readFileSync(path.join(REPO, row.path), 'utf8') }))
+    .filter(s => s.content.includes(CODEX_MODEL_ROUTING_MARKER));
+  assert(routingSurfaces.length === codexEditions.length * 2,
+    `T19b universe: the routing instruction ships on ${codexEditions.length * 2} generated surfaces `
+    + `— found ${routingSurfaces.length} (${routingSurfaces.map(s => s.row.path).join(', ')})`);
+  assert(routingSurfaces.length > 0
+    && routingSurfaces.every(s => s.row.surface_type === 'skill')
+    && [...new Set(routingSurfaces.map(s => s.row.topic))].sort().join(',') === 'finalize,next',
+    'T19b universe: the obligated surfaces are exactly the Codex next/finalize SKILLs');
+
+  for (const { row, content } of routingSurfaces) {
+    const block = codexModelRoutingBlock(content);
+    assert(!!block, `T19b: ${row.path} carries a bounded routing block to read the roster out of`);
+    const defects = rosterDefects(block, EXPECTED_TIER, ROLE_UNIVERSE);
+    assert(defects.length === 0,
+      `T19b roster: ${row.path} must ship the role->tier membership its own instruction demands — `
+      + `${defects.length} defect(s): ${defects.join('; ')}`);
+    const efforts = effortDefects(block, EXPECTED_EFFORTS);
+    assert(efforts.length === 0,
+      `T19b effort: ${row.path} must state the tier->effort pair the Codex profile constants define — `
+      + `${efforts.join('; ')}`);
+  }
+
+  // MUTATION PROOF. The detectors are pure, so every direction is proved against synthetic blocks
+  // and against the real block held in memory; nothing on disk is written.
+  {
+    const tiered = tier => [...EXPECTED_TIER].filter(([, t]) => t === tier).map(([r]) => r);
+    const goodBlock = [
+      `Standard-tier roles: ${tiered('standard').join(', ')}.`,
+      `Reasoning-tier roles: ${tiered('reasoning').join(', ')}.`,
+    ].join('\n');
+    assert(rosterDefects(goodBlock, EXPECTED_TIER, ROLE_UNIVERSE).length === 0,
+      'T19b mutation (GREEN): a roster that matches the registry has no defects — the detector is '
+      + 'satisfiable, so a red is a real disagreement and not an unmeetable shape');
+
+    // Heading-plus-list is an equally valid rendering; the reader must not force one shape.
+    const listBlock = ['**Standard tier**', ...tiered('standard').map(r => `- \`${r}\``),
+      '**Reasoning tier**', ...tiered('reasoning').map(r => `- \`${r}\``)].join('\n');
+    assert(rosterDefects(listBlock, EXPECTED_TIER, ROLE_UNIVERSE).length === 0,
+      'T19b mutation (GREEN): a heading-plus-list rendering reads the same as one line per tier');
+
+    // The synthetic role is DERIVED to be absent from the universe rather than spelled, so a role
+    // the project actually adds later can never collide with the harness and red these proofs for
+    // a reason that has nothing to do with what they test.
+    let ghostRole = 'unregistered-probe-role';
+    while (ROLE_UNIVERSE.includes(ghostRole)) ghostRole += '-x';
+
+    // (a) registry gains a role the roster does not carry -> RED on that role.
+    const grown = new Map([...EXPECTED_TIER, [ghostRole, 'reasoning']]);
+    const grownDefects = rosterDefects(goodBlock, grown, [...ROLE_UNIVERSE, ghostRole]);
+    assert(grownDefects.length === 1 && grownDefects[0].startsWith(`${ghostRole}: absent`),
+      'T19b mutation (RED): a role added to the registry but missing from the roster reds, and only '
+      + `that role — got ${JSON.stringify(grownDefects)}`);
+
+    // (b) roster carries a role the registry does not classify -> RED.
+    const ghost = `${goodBlock}\nReasoning-tier roles: ${ghostRole}.`;
+    assert(rosterDefects(ghost, EXPECTED_TIER, [...ROLE_UNIVERSE, ghostRole])
+      .includes(`${ghostRole}: on the roster but not in the Codex tier registry`),
+      'T19b mutation (RED): a role on the roster that the registry does not classify reds');
+
+    // (c) one role on the wrong side -> RED, naming both readings.
+    const swapped = goodBlock
+      .replace(`Standard-tier roles: ${tiered('standard').join(', ')}.`,
+        `Standard-tier roles: ${tiered('standard').slice(1).join(', ')}.`)
+      .replace(`Reasoning-tier roles: ${tiered('reasoning').join(', ')}.`,
+        `Reasoning-tier roles: ${tiered('standard')[0]}, ${tiered('reasoning').join(', ')}.`);
+    const swapDefects = rosterDefects(swapped, EXPECTED_TIER, ROLE_UNIVERSE);
+    assert(swapDefects.length === 1
+      && swapDefects[0] === `${tiered('standard')[0]}: roster says reasoning, registry says standard`,
+      `T19b mutation (RED): one role moved to the wrong tier reds — got ${JSON.stringify(swapDefects)}`);
+
+    // (d) a role listed under both tiers -> RED (never last-one-wins).
+    const doubled = `${goodBlock}\nStandard-tier roles: ${tiered('reasoning')[0]}.`;
+    assert(rosterDefects(doubled, EXPECTED_TIER, ROLE_UNIVERSE)
+      .some(d => d.startsWith(`${tiered('reasoning')[0]}: claimed as`)),
+      'T19b mutation (RED): a role claimed under both tiers reds rather than resolving to one');
+
+    // (e) an unlabelled roster must not inherit a stale tier word from the prose above it. This is
+    // the near-miss the reader is most likely to wave through: the names ship, the split does not.
+    const unlabelled = `${goodBlock.split('\n')[0]}\n\n${ROLE_UNIVERSE.join(', ')}`;
+    const unlabelledDefects = rosterDefects(unlabelled, EXPECTED_TIER, ROLE_UNIVERSE);
+    assert(unlabelledDefects.some(d => / says standard, registry says reasoning$/.test(d)),
+      'T19b mutation (RED): a bare list of role names carries no split and reds');
+
+    // (f) the real shipped block, with the roster the fix adds stripped back out, must red again.
+    // Without this the whole pin could be satisfied by a roster that happens to sit outside the
+    // block, or by a detector reading a different region than the one the ruling names.
+    {
+      const live = codexModelRoutingBlock(routingSurfaces[0].content);
+      const stripped = live.split('\n')
+        .filter(line => ![...EXPECTED_TIER.keys()].some(role => roleNeedle(role).test(line)))
+        .join('\n');
+      const strippedDefects = rosterDefects(stripped, EXPECTED_TIER, ROLE_UNIVERSE);
+      assert(strippedDefects.length === EXPECTED_TIER.size
+        && strippedDefects.every(d => /absent from the roster/.test(d)),
+        'T19b mutation (RED): removing every role-naming line from the shipped block reports all '
+        + `${EXPECTED_TIER.size} roles absent — got ${strippedDefects.length}`);
+    }
+
+    // (g) the effort binding reads the BLOCK, not the constant's name.
+    assert(effortDefects(goodBlock, EXPECTED_EFFORTS).length === 2,
+      'T19b mutation (RED): a block stating no tier->effort pair reds on both tiers');
+    const liveBlock = codexModelRoutingBlock(routingSurfaces[0].content);
+    assert(effortDefects(liveBlock, { standard: 'high', reasoning: EXPECTED_EFFORTS.reasoning })
+      .some(d => /^standard-tier/.test(d)),
+      'T19b mutation (RED): a standard effort other than the pinned constant reds');
+    assert(effortDefects(liveBlock.replace(`"${EXPECTED_EFFORTS.reasoning}"`, '"high"'), EXPECTED_EFFORTS)
+      .some(d => /^reasoning-tier/.test(d)),
+      'T19b mutation (RED): downgrading the reasoning-tier effort in the block reds');
+  }
+}
+
 // ===========================================================================
 // #630 Layer-1 — required-block MANIFEST presence checker (derived-universe),
 // bidirectional orphan-sentinel, the superset proof, and the by-construction

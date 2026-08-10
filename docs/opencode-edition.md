@@ -333,6 +333,37 @@ node scripts/test-opencode-edition.js                      # full structural + p
 The validator is self-contained (run directly with `node`; it is intentionally
 **not** wired into `package.json`'s `test` chain, to keep the change additive).
 
+### What `--check` tells you to do about a failure
+
+A failing `--check` lists each mismatched file with its reason and then closes with the
+**remediation that actually clears the set it just reported**. Each mismatch class carries its own
+remedy, and the closing advice is derived from the remedies present — so the command named is never
+one that would exit 0 having repaired nothing:
+
+- **Everything regenerable** (a missing, drifted or retired-but-present file in the generated
+  tree) → `--write`.
+- **Anything requiring the user-owned `opencode.json`** → `--write-config`, *including* mixtures
+  that also contain regenerable files, because `--write-config` is a strict superset of `--write`.
+  It comes with the warning that it rewrites `opencode.json` and discards model pins set there —
+  `--write` alone preserves that file and would leave it stale while `--check` kept failing.
+- **Anything only a source edit clears** (today: the plugin-allowlist class above — a `*.js` in
+  `templates/opencode/plugins/` missing from `PLUGIN_SCRIPTS`) → the file is named with a line
+  saying no flag of this script clears it. When the set contains *nothing else*, no invocation of
+  this script is offered at all, so a command printed under the reasons is never mistaken for the
+  fix.
+
+```text
+sync-opencode-edition[github]: PARITY FAILED (3 file(s)):
+  - .opencode/agent/doc-updater.md — stale — regenerate
+  - templates/opencode/plugins/probe-unregistered.js — unregistered plugin 'probe-unregistered.js' present in templates/opencode/plugins/ but absent from PLUGIN_SCRIPTS — add it to the allowlist
+  - opencode.json — stale — regenerate via --write-config
+Fix: node scripts/sync-opencode-edition.js --forge=github --write-config
+     (--write preserves the user-owned opencode.json and leaves it stale; --write-config rewrites it, discarding any model pins set there.)
+No flag of this script clears templates/opencode/plugins/probe-unregistered.js — apply the source edit its reason names above.
+```
+
+The named flag always carries the `--forge=` the check ran under. Exit code is 1 on any mismatch.
+
 ## How it differs from the Codex edition
 
 | Aspect | Codex edition | opencode edition |

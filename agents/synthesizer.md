@@ -11,8 +11,8 @@ note: Locally authored for the write-overlap mechanism (owner-approved 2026-06-1
 upstream provenance. The synthesizer converges concurrent write branches. DISJOINT work is merged
 MECHANICALLY (a plain git/octopus merge — NO agent is spawned). This agent is dispatched ONLY when a
 3-way merge hits a REAL textual conflict, to resolve it by intent — which is why it is
-reasoning-class and held to a non-lowerable floor (REASONING_FLOOR_ROLES). A clean agentic merge is
-a WEAK signal; review and the validation chains are what land the work.
+reasoning-class. A clean agentic merge is a WEAK signal; review and the validation chains are what
+land the work.
 -->
 
 ## Prompt Defense Baseline

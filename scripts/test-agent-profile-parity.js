@@ -48,8 +48,6 @@ const ROLE_PINS = [
   { role: 'tdd-guide', token: 'you author the tests, and you never write production code' },
   { role: 'tdd-guide', token: 'the implementing role reads and runs your tests but can never write them' },
   { role: 'tdd-guide', token: 'Custody governs writing, not reading.' },
-  // The synthesizer's non-lowerable reasoning floor.
-  { role: 'synthesizer', token: 'REASONING_FLOOR_ROLES' },
   // The metric-optimizer's scoped-revert safety rule. Polarity is load-bearing on the second pin:
   // the rule is that scope binds the REVERT too, which is where an unscoped reset destroys work
   // belonging to other agents.

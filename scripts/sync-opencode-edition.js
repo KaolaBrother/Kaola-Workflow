@@ -784,6 +784,47 @@ function runWriteConfigTo(target) {
   console.log('seeded     ' + target);
 }
 
+// What actually clears a mismatch. Every mismatch below carries one, decided where the mismatch is
+// constructed — the class is what knows its own remedy, and the closing advice is derived from the
+// set of remedies reported rather than fixed in advance.
+const REMEDY = {
+  WRITE: 'write',                 // --write regenerates or prunes it
+  WRITE_CONFIG: 'write-config',   // only --write-config clears it: --write preserves the user-owned config
+  SOURCE_EDIT: 'source-edit',     // no flag of this script clears it; the reason names the edit
+};
+
+// The closing remediation lines for a non-empty mismatch set.
+//
+// --write is the right answer for most classes and the wrong one for two, and both wrong cases fail
+// quietly: --write exits 0 reporting "tree already in sync" while --check still exits 1, so a reader
+// who follows a blanket line is told the repair succeeded when nothing was repaired.
+//
+// --write-config is runWrite(true) — a strict superset of --write — so when anything in the set needs
+// it, it is the one command that clears the whole flag-clearable part. It is never named otherwise,
+// because it overwrites the model pins opencode.json itself invites the user to hand-edit.
+//
+// When no flag clears anything in the set, no invocation of this script is offered at all: a command
+// printed under the reasons is read as the fix, and this one would exit 0 having done nothing.
+function remediationLines(mismatches, forge) {
+  const remedies = new Set(mismatches.map(m => m.remedy));
+  const lines = [];
+  const flag = remedies.has(REMEDY.WRITE_CONFIG) ? '--write-config'
+    : remedies.has(REMEDY.WRITE) ? '--write' : '';
+  if (flag) {
+    lines.push('Fix: node scripts/sync-opencode-edition.js --forge=' + forge + ' ' + flag);
+    if (flag === '--write-config') {
+      lines.push('     (--write preserves the user-owned opencode.json and leaves it stale;'
+        + ' --write-config rewrites it, discarding any model pins set there.)');
+    }
+  }
+  const sourceEdits = mismatches.filter(m => m.remedy === REMEDY.SOURCE_EDIT).map(m => m.rel);
+  if (sourceEdits.length) {
+    lines.push('No flag of this script clears ' + sourceEdits.join(', ') + ' — apply the source edit '
+      + (sourceEdits.length === 1 ? 'its reason names' : 'their reasons name') + ' above.');
+  }
+  return lines;
+}
+
 function runCheck(forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
   const tree = treeLabel(forge);
@@ -793,38 +834,38 @@ function runCheck(forge) {
     const canon = read('agents/' + name + '.md');
     const rel = tree + '/agent/' + name + '.md';
     if (!fs.existsSync(path.join(REPO, rel))) {
-      mismatches.push({ rel, reason: 'missing generated agent' });
+      mismatches.push({ rel, reason: 'missing generated agent', remedy: REMEDY.WRITE });
       continue;
     }
     const expected = renderAgent(canon, name, forge);
-    if (read(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate' });
+    if (read(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate', remedy: REMEDY.WRITE });
   }
   for (const file of listCanonCommands(forge)) {
     const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
     const rel = tree + '/command/' + file;
     if (!fs.existsSync(path.join(REPO, rel))) {
-      mismatches.push({ rel, reason: 'missing generated command' });
+      mismatches.push({ rel, reason: 'missing generated command', remedy: REMEDY.WRITE });
       continue;
     }
     const expected = renderCommand(canon, forge, rel);
-    if (read(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate' });
+    if (read(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate', remedy: REMEDY.WRITE });
   }
   for (const script of HOOK_SCRIPTS) {
     const rel = tree + '/hooks/' + script;
     if (!fs.existsSync(path.join(REPO, rel))) {
-      mismatches.push({ rel, reason: 'missing hook script copy' });
+      mismatches.push({ rel, reason: 'missing hook script copy', remedy: REMEDY.WRITE });
       continue;
     }
-    if (read(rel) !== read('hooks/' + script)) mismatches.push({ rel, reason: 'drifted from canonical hooks/' });
+    if (read(rel) !== read('hooks/' + script)) mismatches.push({ rel, reason: 'drifted from canonical hooks/', remedy: REMEDY.WRITE });
   }
   for (const script of PLUGIN_SCRIPTS) {
     const rel = tree + '/plugins/' + script;
     if (!fs.existsSync(path.join(REPO, rel))) {
-      mismatches.push({ rel, reason: 'missing generated plugin' });
+      mismatches.push({ rel, reason: 'missing generated plugin', remedy: REMEDY.WRITE });
       continue;
     }
     const canonContent = fs.readFileSync(path.join(CANON_PLUGINS_DIR, script), 'utf8');
-    if (read(rel) !== canonContent) mismatches.push({ rel, reason: 'drifted from canonical templates/opencode/plugins/' });
+    if (read(rel) !== canonContent) mismatches.push({ rel, reason: 'drifted from canonical templates/opencode/plugins/', remedy: REMEDY.WRITE });
   }
   // Allowlist guard: every *.js present in the canonical plugins dir must be registered in
   // PLUGIN_SCRIPTS (the unregistered-on-disk direction). The per-script loop above covers the
@@ -838,6 +879,9 @@ function runCheck(forge) {
         mismatches.push({
           rel: 'templates/opencode/plugins/' + file,
           reason: "unregistered plugin '" + file + "' present in templates/opencode/plugins/ but absent from PLUGIN_SCRIPTS — add it to the allowlist",
+          // The allowlist is source, so neither write mode touches this: the reason above is the
+          // whole remedy, and the closing lines must not offer a command instead of it.
+          remedy: REMEDY.SOURCE_EDIT,
         });
       }
     }
@@ -845,29 +889,29 @@ function runCheck(forge) {
   // Retired-surface guard: a *.md in the deployed command/agent dir whose canonical source
   // was deleted (e.g. the fast/full commands) must be pruned; --write removes it.
   for (const f of retiredMdFiles(dirs.command, listCanonCommands(forge).map(x => x.slice(0, -3)))) {
-    mismatches.push({ rel: tree + '/command/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
+    mismatches.push({ rel: tree + '/command/' + f, reason: 'retired surface not in canonical — prune (--write removes it)', remedy: REMEDY.WRITE });
   }
   for (const f of retiredMdFiles(dirs.agent, listCanonAgents())) {
-    mismatches.push({ rel: tree + '/agent/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
+    mismatches.push({ rel: tree + '/agent/' + f, reason: 'retired surface not in canonical — prune (--write removes it)', remedy: REMEDY.WRITE });
   }
   // Same for the byte-copied artifacts: a hook or plugin this generator no longer emits is retired,
   // and --check called such a tree green until it was reported here.
   for (const f of retiredCopiedFiles(dirs.hooks, HOOK_SCRIPTS, ['.sh'])) {
-    mismatches.push({ rel: tree + '/hooks/' + f, reason: 'retired artifact no longer emitted — prune (--write removes it)' });
+    mismatches.push({ rel: tree + '/hooks/' + f, reason: 'retired artifact no longer emitted — prune (--write removes it)', remedy: REMEDY.WRITE });
   }
   for (const f of retiredCopiedFiles(dirs.plugins, PLUGIN_SCRIPTS, ['.js'])) {
-    mismatches.push({ rel: tree + '/plugins/' + f, reason: 'retired artifact no longer emitted — prune (--write removes it)' });
+    mismatches.push({ rel: tree + '/plugins/' + f, reason: 'retired artifact no longer emitted — prune (--write removes it)', remedy: REMEDY.WRITE });
   }
   // #F8: opencode.json parity — the installer freshness gate (install-opencode.sh) and the docs
   // bill --check as the "parity assert", yet runCheck never validated the committed config, so a
   // corrupted opencode.json passed. Compare it to the renderer output (test A7 does the same).
   if (fs.existsSync(OPENCODE_JSON) && read('opencode.json') !== renderOpencodeJson()) {
-    mismatches.push({ rel: 'opencode.json', reason: 'stale — regenerate via --write-config' });
+    mismatches.push({ rel: 'opencode.json', reason: 'stale — regenerate via --write-config', remedy: REMEDY.WRITE_CONFIG });
   }
   if (mismatches.length) {
     console.error('sync-opencode-edition[' + forge + ']: PARITY FAILED (' + mismatches.length + ' file(s)):');
     for (const m of mismatches) console.error('  - ' + m.rel + ' — ' + m.reason);
-    console.error('Fix: node scripts/sync-opencode-edition.js --forge=' + forge + ' --write');
+    for (const line of remediationLines(mismatches, forge)) console.error(line);
     process.exitCode = 1;
     return;
   }

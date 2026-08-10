@@ -59,7 +59,7 @@ config_file = "./agents/kaola-workflow/adversarial-verifier.toml"
 nickname_candidates = ["Adversary", "Refuter", "Breaker"]
 
 [agents.synthesizer]
-description = "Kaola-Workflow for Codex write-convergence specialist: reconciles concurrent write branches by intent on a real merge conflict; reasoning-class, held to a non-lowerable reasoning-tier floor, never invoked for cleanly-disjoint work."
+description = "Kaola-Workflow for Codex write-convergence specialist: reconciles concurrent write branches by intent on a real merge conflict; reasoning-class, never invoked for cleanly-disjoint work."
 config_file = "./agents/kaola-workflow/synthesizer.toml"
 nickname_candidates = ["Synthesizer", "Merger", "Reconciler"]
 

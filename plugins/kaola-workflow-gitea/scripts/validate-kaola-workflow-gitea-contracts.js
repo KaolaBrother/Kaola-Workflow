@@ -389,9 +389,6 @@ assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'path_n
 // nothing left to select, so its vocabulary is pinned ABSENT from the router surface too.
 assertNotIncludes(pluginRoot + '/commands/workflow-next.md', 'KAOLA_PATH');
 assertNotIncludes(pluginRoot + '/commands/workflow-next.md', 'path_not_installed');
-// Token-pin the synthesizer reasoning floor in the Gitea edition tree. The write-overlap policy
-// field and the PROTECTED file set left with the machinery they governed.
-assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', 'REASONING_FLOOR_ROLES');
 // #816: the finalize seam records no attestation — pinned as an ABSENCE so a revival reds the chain.
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'finalize_contractor_attested');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'attestContractorSpawn');

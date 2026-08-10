@@ -324,9 +324,6 @@ assertIncludes('hooks/hooks.json', 'compact-context');
 assertNotIncludes('hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes('hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assertNotIncludes('hooks/hooks.json', 'session-env');
-// Token-pin the reasoning floor. The other two anchors of this trio were the write-overlap policy
-// field and the PROTECTED file set, both gone with the machinery they governed.
-assertIncludes('scripts/kaola-workflow-resolve-agent-model.js', 'REASONING_FLOOR_ROLES');
 assertManifestScript('kaola-workflow-active-folders.js');     // #407: was install.sh literal
 assertManifestScript('kaola-workflow-resolve-agent-model.js'); // #407: was install.sh literal
 assertIncludes('uninstall.sh', 'subagentStatusLine');

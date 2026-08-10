@@ -21,6 +21,9 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-models-'));
 const codexProfileInstaller = require('../plugins/kaola-workflow/scripts/install-codex-agent-profiles');
 const codexPreflight = require('./kaola-workflow-codex-preflight');
 const reviewerGenerator = require('./generate-reviewer-profiles');
+// Loaded for its ROLE REGISTRY ONLY (see EXPECTED_ROLE_MODELS): the tiers this file asserts are
+// resolved by SPAWNING the resolver against an installed tree, never by calling it in-process.
+const resolver = require('./kaola-workflow-resolve-agent-model.js');
 
 function renderClaudeInstalledReviewer(source) {
   let rendered = source.replace(/^model:\s*\S+\s*$/m, 'model: inherit');
@@ -3028,8 +3031,19 @@ try {
   // This table is INDEPENDENTLY DERIVED from DEFAULT_AGENT_MODELS — do not "fix" a failure here by
   // editing this table to match the resolver. The two agreeing is the whole assertion; if they
   // disagree with no ruling behind the move, the resolver re-tiered a role and that is the bug.
+  //
+  // #943: "EVERY registered role" was, until now, a claim this table could not deliver. The loop
+  // below iterates the PINNED TABLE — the one direction that structurally cannot notice a missing
+  // key — so a role absent from it is never passed to resolveRole and its installed tier is
+  // asserted NOWHERE. `investigator` entered the registry in #798, after the paragraphs above were
+  // written, and went unpinned: a coherent re-tier of it (frontmatter + every carrier moved
+  // together) passed a full, unwaived four-chain run, while the same re-tier of any pinned role
+  // reds here. Its entry is derived the way every other one is — from what a fresh install RENDERS
+  // (`sonnet`, corroborated by the agents/investigator.md frontmatter and the README tier column),
+  // never by copying the resolver map.
   const EXPECTED_ROLE_MODELS = {
     'code-explorer': 'sonnet',
+    investigator: 'sonnet',
     'knowledge-lookup': 'sonnet',
     planner: 'opus',
     'code-architect': 'opus',
@@ -3043,6 +3057,15 @@ try {
     synthesizer: 'opus',
     'metric-optimizer': 'sonnet'
   };
+  // The coverage half of the pin, in BOTH directions: a role registered with no entry here is a
+  // tier nothing asserts, and an entry here for a role the registry dropped is a pin guarding
+  // nothing. KEYS ONLY — comparing values would make the table a restatement of the resolver and
+  // destroy the independence the paragraphs above depend on.
+  assert.deepStrictEqual(
+    Object.keys(EXPECTED_ROLE_MODELS).sort(),
+    Object.keys(resolver.DEFAULT_AGENT_MODELS).sort(),
+    'the pinned install-tier table must cover exactly the resolver role registry'
+  );
   // spawn-class: environment
   const resolveRole = (agentDir, role) => execFileSync('node',
     [path.join(root, 'scripts', 'kaola-workflow-resolve-agent-model.js'), role, '--agent-dir', agentDir, '--raw'],

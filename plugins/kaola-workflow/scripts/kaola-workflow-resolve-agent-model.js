@@ -28,35 +28,19 @@ const DEFAULT_AGENT_MODELS = {
   'doc-updater': 'sonnet',
   // The adversarial verifier's shipped tier is reasoning: verification here routinely OVERTURNS
   // conclusions that green suites and the implementer's own mutation proof had already accepted, so
-  // it is reasoning-class judgment, not a bounded read. A dispatch may still raise or lower it; it
-  // is NOT a reasoning-floor role — only `synthesizer` is.
+  // it is reasoning-class judgment, not a bounded read. A dispatch may still raise or lower it.
   'adversarial-verifier': 'opus',
   // #634: metric-optimizer runs a bounded metric-ratchet loop; the per-iteration reasoning is small
   // (the change-gate verifier and reviewer carry the judgment), so its default is the standard tier.
-  // A dispatch may raise it; it is NOT a reasoning-floor role.
+  // A dispatch may raise it.
   'metric-optimizer': 'sonnet',
   // #463 (write-overlap): the synthesizer resolves real write-leg merge conflicts BY INTENT — a
-  // reasoning-class task. Its default is opus; a plan may RAISE but never LOWER this floor (see
-  // REASONING_FLOOR_ROLES). The post-G1 intent-verifier (adversarial-verifier on a merge) is held to
-  // the same floor when it is dispatched on a synthesizer's output.
+  // reasoning-class task, so its default is opus. A dispatch may still raise or lower it.
   synthesizer: 'opus'
 };
 
-// #463 (write-overlap): roles whose dispatch MUST resolve to a reasoning-class model (a non-reasoning
-// tier is a freeze/dispatch refusal, never a silent downgrade). The synthesizer's conflict-resolution
-// path reasons about intent; a non-reasoning tier would compose bytes without understanding them.
-const REASONING_FLOOR_ROLES = new Set(['synthesizer']);
-// #610: the reasoning-class tier is `reasoning` (neutral), whose only legacy alias is `opus`. Accept
-// BOTH so a Claude-default `opus` AND an explicit `reasoning` tier satisfy the floor; `standard`/
-// `sonnet` (or inherit) is non-reasoning → refuse. This is THE alias-resolution seam: a tier token is
-// resolved here and nowhere else. It stays inlined DELIBERATELY — the subagent-dispatch-log hook
-// copies THIS resolver standalone (no schema sibling on disk), so requiring the schema would break its
-// isolated invocation; the resolver must stay dependency-free. DEFAULT_AGENT_MODELS above is the live
-// carrier of the `opus`/`sonnet` tokens this accepts.
-function isReasoningClass(model) {
-  const m = String(model || '').trim().toLowerCase();
-  return m === 'reasoning' || m === 'opus';
-}
+// The subagent-dispatch-log hook copies THIS resolver standalone (no schema sibling on disk), so
+// requiring the schema would break its isolated invocation; the resolver must stay dependency-free.
 
 const CODEX_SESSION_SCAN_MAX_FILES = 2048;
 const CODEX_SESSION_SCAN_MAX_DEPTH = 8;
@@ -220,44 +204,6 @@ function loadCodexSessionProof({ codexHome, threadId } = {}) {
   }
 }
 
-// #463 Slice 1 (AC14): ENFORCE the reasoning-class floor. For a REASONING_FLOOR_ROLES role, the
-// resolved model MUST be reasoning-class; a manifest/frontmatter override that LOWERS the floor — or an
-// explicit `inherit` (empty), which could resolve to a non-reasoning session model — is a typed refusal,
-// never a silent downgrade. A dispatch may RAISE but never LOWER the floor. Non-floor roles are unaffected.
-// Returns { ok, role, model, floor } on pass; { ok:false, reason, role, model, floor, operator_hint }
-// on a violation. ENFORCEMENT is opt-in via resolveAgentModel({enforceFloor:true}) / the CLI
-// --enforce-floor flag, so the back-compat string-return contract is unchanged for existing callers;
-// the step-4 synthesizer dispatch (and the post-G1 intent-verifier) opt in.
-//
-// #775 TIGHTEN-ONLY DERIVATION (CLAUDE.md First Principles — an axiom/change may only make a check
-// STRICTER, never looser; this removal is a loosening on its face, so the derivation is recorded here
-// verbatim): the Codex leg formerly below this comment proved the reasoning floor by reading the
-// PARENT session's last observed model/effort (loadCodexSessionProof) and asserting the CHILD would
-// inherit it. Under Codex 0.145's multi_agent_v2 re-baseline, Codex itself resolves the sub-agent's
-// model/reasoning effort ([agents].default_subagent_model / default_subagent_reasoning_effort, or
-// Codex's own default) — the parent no longer determines the child. The removed check therefore
-// proved a property that no longer holds: it was not a real gate, it was a FALSE correctness signal
-// that could pass or fail independent of the actual dispatched model. Removing a check that asserts
-// a false thing is a tightening in substance (a broken lock is not a lock), even though it is a
-// loosening in the literal code-diff sense — so this satisfies the tighten-only boundary. The
-// non-codex early-return immediately below is UNCHANGED and stays correct (Claude/opencode still
-// resolve the model directly, so isReasoningClass(model) alone is the right and sufficient check).
-function enforceReasoningFloor(role, model, options) {
-  const name = String(role || '').trim();
-  if (!REASONING_FLOOR_ROLES.has(name)) return { ok: true, role: name, model: model || '', floor: null };
-  if (!isReasoningClass(model)) {
-    return {
-      ok: false,
-      reason: 'reasoning_floor_violation',
-      role: name,
-      model: model || '(inherit)',
-      floor: options && options.runtime === 'codex' ? 'gpt-5.6-sol/xhigh' : 'opus',
-      operator_hint: `Role '${name}' must resolve to a reasoning-class tier; resolved '${model || 'inherit'}'.`
-    };
-  }
-  return { ok: true, role: name, model, floor: options && options.runtime === 'codex' ? 'gpt-5.6-sol/xhigh' : 'opus' };
-}
-
 function homeDir() {
   return process.env.HOME || os.homedir();
 }
@@ -333,21 +279,7 @@ function resolveAgentModel(agentName, options = {}) {
   const dir = options.agentDir || defaultAgentDir();
   const staticDefaults = options.staticDefaults === true
     || (options.staticDefaults !== false && isCodexPluginScriptDir());
-  const model = resolveAgentModelRaw(name, dir, { ...options, staticDefaults });
-  // #463 Slice 1 (AC14): opt-in reasoning-class floor enforcement. A floor-role resolution that LOWERS
-  // the floor is a typed refusal (thrown), surfaced fail-closed to the caller — never silently honored.
-  if (options.enforceFloor) {
-    const check = enforceReasoningFloor(name, model);
-    if (!check.ok) {
-      const err = new Error(check.operator_hint);
-      err.reason = check.reason;
-      err.role = check.role;
-      err.model = check.model;
-      err.floor = check.floor;
-      throw err;
-    }
-  }
-  return model;
+  return resolveAgentModelRaw(name, dir, { ...options, staticDefaults });
 }
 
 function formatAgentArgument(model) {
@@ -359,8 +291,7 @@ function parseArgs(argv) {
   const args = {
     agent: '',
     format: 'raw',
-    agentDir: '',
-    enforceFloor: false
+    agentDir: ''
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -371,8 +302,6 @@ function parseArgs(argv) {
       args.format = 'json';
     } else if (arg === '--agent-arg') {
       args.format = 'agent-arg';
-    } else if (arg === '--enforce-floor') {
-      args.enforceFloor = true;
     } else if (arg === '--agent-dir') {
       args.agentDir = argv[i + 1] || '';
       i += 1;
@@ -398,24 +327,11 @@ function main() {
   }
 
   if (!args.agent) {
-    console.error('usage: kaola-workflow-resolve-agent-model.js <agent-name> [--raw|--json|--agent-arg] [--enforce-floor] [--agent-dir DIR]');
+    console.error('usage: kaola-workflow-resolve-agent-model.js <agent-name> [--raw|--json|--agent-arg] [--agent-dir DIR]');
     process.exit(2);
   }
 
-  // #463 Slice 1 (AC14): --enforce-floor surfaces a reasoning-floor violation as a typed refusal + a
-  // non-zero exit, fail-closed, instead of silently emitting the lowered model.
-  let model;
-  try {
-    model = resolveAgentModel(args.agent, { agentDir: args.agentDir || undefined, enforceFloor: args.enforceFloor });
-  } catch (err) {
-    if (err && err.reason === 'reasoning_floor_violation') {
-      const refusal = { result: 'refuse', reason: err.reason, agent: args.agent, model: err.model, floor: err.floor, operator_hint: err.message };
-      if (args.format === 'json') process.stdout.write(`${JSON.stringify(refusal)}\n`);
-      else console.error(err.message);
-      process.exit(1);
-    }
-    throw err;
-  }
+  const model = resolveAgentModel(args.agent, { agentDir: args.agentDir || undefined });
   if (args.format === 'json') {
     process.stdout.write(`${JSON.stringify({ agent: args.agent, model })}\n`);
   } else if (args.format === 'agent-arg') {
@@ -430,9 +346,6 @@ if (require.main === module) main();
 
 module.exports = {
   DEFAULT_AGENT_MODELS,
-  REASONING_FLOOR_ROLES,
-  isReasoningClass,
-  enforceReasoningFloor,
   loadCodexSessionProof,
   CODEX_SESSION_SCAN_MAX_FILES,
   CODEX_SESSION_SCAN_MAX_DEPTH,

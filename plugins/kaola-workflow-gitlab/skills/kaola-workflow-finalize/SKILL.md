@@ -10,6 +10,12 @@ model and reasoning effort explicitly on each spawn. Standard-tier roles dispatc
 `model: "gpt-5.6-sol"` and `reasoning_effort: "medium"`. Reasoning-tier roles dispatch with
 `model: "gpt-5.6-sol"` and `reasoning_effort: "xhigh"`.
 
+Standard-tier roles: `code-explorer`, `investigator`, `knowledge-lookup`, `tdd-guide`,
+`implementer`, `doc-updater`, `metric-optimizer`.
+
+Reasoning-tier roles: `planner`, `code-architect`, `build-error-resolver`, `code-reviewer`,
+`security-reviewer`, `adversarial-verifier`, `synthesizer`.
+
 These mappings are fixed for every spawn. Do not escalate, downgrade, or otherwise override a
 standard-tier role's model or reasoning effort based on task breadth, latency, prior results, risk,
 or any other condition. The role classification remains unchanged.

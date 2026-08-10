@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Added
+
+- **The Codex per-spawn routing block now ships the role→tier roster (#944).** The block ordered
+  every spawn at its role's "existing standard-tier or reasoning-tier classification" while no
+  installed Codex prompt surface said which roles were in which tier — the membership existed only as
+  JS constants nothing rendered, so the `medium`/`xhigh` effort split was unreachable at dispatch for
+  every role except `synthesizer`, which happened to declare its own tier in prose. The roster is now
+  generated from `CODEX_PINNED_STANDARD_ROLES` / `CODEX_PINNED_REASONING_ROLES` into that PIN on both
+  the next and the finalize skill, across all six edition trees, so the surface that asks the question
+  ships the answer. It is generated rather than written: adding a role to the constants without
+  regenerating reds `test-route-reachability.js`, in both directions.
+
+### Fixed
+
+- **`sync-opencode-edition.js --check` advised a flag that could not fix what it reported (#941).**
+  The remediation footer was unconditional — `--write` on any failure — and it is the last line a
+  reader acts on. Measured across all fourteen mismatch classes, `--write` is correct for twelve. For
+  a stale user-owned `opencode.json` only `--write-config` clears it, and for an unregistered plugin
+  neither flag does: that one needs a source edit to `PLUGIN_SCRIPTS`. Each mismatch now carries its
+  remedy from where it is constructed, and the closing advice is derived from the remedies actually
+  present, mixtures included. `--write-config` is never advised blanketly, because it discards the
+  model pins a user set in that file — the footer now says so when it does advise it.
+
+- **`investigator`'s rendered tier had no acceptance pin (#943).** `EXPECTED_ROLE_MODELS` — the table
+  its own comment calls "THE PINNED TABLE IS THE ACCEPTANCE EVIDENCE" — held thirteen of fourteen
+  roles, and the consuming loop iterates the table rather than the registry, so the omission could not
+  notice itself. A coherent re-tier of `investigator` passed an unwaived four-chain green; the same
+  re-tier of a pinned role reds. The missing pin is added, and a keys-only completeness assertion now
+  holds the table equal to `DEFAULT_AGENT_MODELS` in both directions, so a newly registered role
+  cannot silently go unpinned again. Values stay independently derived — the two agreeing is still the
+  whole assertion.
+
 ### Changed
 
 - **`build-error-resolver` and `adversarial-verifier` now dispatch at the reasoning tier (#935).**
@@ -27,6 +59,19 @@
   upward rather than downward, and it was ruled deliberately: correctness before cost.
 
 ### Removed
+
+- **The reasoning-tier floor (#940).** `REASONING_FLOOR_ROLES`, `isReasoningClass`,
+  `enforceReasoningFloor`, the `--enforce-floor` flag and the `reasoning_floor_violation` refusal are
+  gone from all four resolver copies, together with the tests that existed only to exercise them. The
+  floor was enforced for no role, including `synthesizer`: its one production consumer,
+  `kaola-workflow-next-action.js`, was deleted by `c0b48043` along with nine DAG scripts, and the only
+  remaining caller — the dispatch-log hook — invokes the resolver without the flag and is fail-open by
+  construction. What survived was residue that ran solely inside its own test. Wiring it back would
+  have meant building a new refusal seam, at `SubagentStart`, after the model is already chosen,
+  against a failure class never observed. No role's tier changed: `DEFAULT_AGENT_MODELS['synthesizer']`
+  is still `opus`, and the whole map is byte-equal before and after. `synthesizer` remains
+  reasoning-class; only the enforcement is gone. The retired flag now fails honestly with
+  `unexpected argument` instead of silently doing nothing.
 
 - **`install.sh`'s `default_agent_model()` fallback (#935).** It was a fourth copy of the role/tier
   table, reached only when a source agent file carries no `model:` line. It had drifted: it covered

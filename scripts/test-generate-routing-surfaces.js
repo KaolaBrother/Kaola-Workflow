@@ -619,10 +619,15 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     [path.join(sandbox, 'scripts', 'generate-routing-surfaces.js'), '--check'],
     { encoding: 'utf8' });
   try {
+    // The render inputs the sandbox needs to start at all. `slots.js` requires the kernel to source
+    // the Codex per-spawn tier roster, so the kernel is a render input too — omit it and the
+    // spawned --check dies at MODULE LOAD before rendering a byte. A new require under
+    // templates/routing/ is a new line here.
     for (const rel of [
       'scripts/generate-routing-surfaces.js',
       'templates/routing/rename-table.js',
       'templates/routing/slots.js',
+      'scripts/kaola-workflow-adaptive-schema.js',
     ]) copy(rel);
     for (const skeleton of new Set(GENERATED_SURFACES.map(r => r.skeleton))) {
       copy(path.join('templates', 'routing', skeleton));
@@ -630,7 +635,14 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     for (const row of GENERATED_SURFACES) copy(row.path);
 
     const clean = runCheck();
-    eq(clean.status, 0, 'mutation proof: sandbox baseline --check exits 0');
+    // The spawned stderr is carried into the message. A sandbox that cannot start reports the same
+    // exit code as a detected drift, so on the one occasion this list did go stale the suite's own
+    // output named nothing: sixteen failures, all of them downstream, and the actual
+    // `Cannot find module` line lived only in a child process whose stderr nobody printed. The
+    // cause had to be rebuilt by hand to be seen. When the check passes, stderr is empty and the
+    // message is unchanged.
+    eq(clean.status, 0, 'mutation proof: sandbox baseline --check exits 0'
+      + (clean.stderr ? `\n    sandbox stderr: ${clean.stderr.trim().split('\n').slice(0, 5).join('\n      ')}` : ''));
     assert(/all 18 surfaces byte-match/.test(clean.stdout), 'mutation proof: sandbox baseline reports 18 surfaces');
 
     // Every topic is covered on BOTH render shapes, and the FORGE twins as well as the canonical

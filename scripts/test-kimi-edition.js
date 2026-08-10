@@ -1257,6 +1257,98 @@ for (const script of sync.HOOK_SCRIPTS) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// K12 — THIS EDITION'S REMEDIATION LINE IS CORRECT, AND STAYS CORRECT.
+//
+// runCheck closes a failed report with one command for the whole mismatch set. On the opencode
+// twin that line is wrong for two of its classes, and the repair there is to derive the line from
+// the classes actually present. HERE IT IS RIGHT, and the reason is structural: every class this
+// runCheck can report is a generator-owned artifact, there is no user-owned tracked file among
+// them, and `--write` is the only write mode this script has. So the line is pinned as an
+// OUTCOME — run what it advised, and the report it advised on must be gone — rather than left to
+// be "fixed" in sympathy with a sibling whose problem this file does not have.
+//
+// The subject is a scratch copy of the repo, because runCheck resolves REPO from its own
+// __dirname and `--write` mutates that tree; the planted drift must go somewhere that is not this
+// checkout. One scenario, two classes at once, because a mixture is where a per-class rewrite of
+// the line would go wrong first.
+// ---------------------------------------------------------------------------
+{
+  const { spawnSync } = require('child_process');
+  const { mkdtempSync, cpSync, rmSync } = require('fs');
+  const os = require('os');
+
+  const scratch = mkdtempSync(path.join(os.tmpdir(), 'kimi-k12-repo-'));
+  const SYNC = path.join(scratch, 'scripts', 'sync-kimi-edition.js');
+  const SOURCE_TREES = ['scripts', 'agents', 'commands', 'hooks', 'templates'];
+  const run = args => {
+    // spawn-class: environment
+    const r = spawnSync(process.execPath, [SYNC].concat(args), { encoding: 'utf8' });
+    return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
+  };
+  const check = () => run(['--forge=github', '--check']);
+  const reported = out => out.split('\n')
+    .map(l => l.match(/^\s*-\s+(\S+)\s+—\s/))
+    .filter(Boolean).map(m => m[1]).sort();
+  const advisedCommands = out => (out.match(/node\s+\S*sync-kimi-edition\.js[^\n`'"&;]*/g) || [])
+    .map(m => m.trim().split(/\s+/).slice(2).map(t => t.replace(/[.,;:)\]`]+$/, '')).filter(Boolean));
+
+  try {
+    const missingTrees = SOURCE_TREES.filter(d => !fs.existsSync(path.join(REPO, d)));
+    assert(missingTrees.length === 0,
+      'K12: every source tree this fixture copies is present in the repo — ' + JSON.stringify(missingTrees)
+      + ' is not, so nothing below is reporting on planted drift');
+    for (const d of SOURCE_TREES) {
+      if (fs.existsSync(path.join(REPO, d))) cpSync(path.join(REPO, d), path.join(scratch, d), { recursive: true });
+    }
+
+    const w = run(['--forge=github', '--write']);
+    assert(w.status === 0, 'K12: the scratch repo regenerates — sync --write exit ' + w.status
+      + ': ' + String(w.out).split('\n').slice(0, 3).join(' | '));
+    assert(check().status === 0,
+      'K12: the scratch repo is GREEN before anything is planted — a fixture already red reports a '
+      + 'mismatch set that is not the planted one, and the outcome check below would be about that');
+
+    // Two classes at once: a stale generated skill and a retired directory the mirror must prune.
+    const skillsDir = path.join(scratch, '.kimi', 'skills');
+    const roleSkill = fs.readdirSync(skillsDir).filter(n => n.startsWith('kaola-role-')).sort()[0] || '';
+    assert(roleSkill !== '',
+      'K12: the regenerated fixture has a role skill to drift — with none there is no subject');
+    const RETIRED = 'zzz-k12-retired';
+    if (roleSkill) fs.appendFileSync(path.join(skillsDir, roleSkill, 'SKILL.md'), '\n<!-- K12 planted drift -->\n');
+    fs.mkdirSync(path.join(skillsDir, RETIRED), { recursive: true });
+    fs.writeFileSync(path.join(skillsDir, RETIRED, 'SKILL.md'), '# K12 fixture\n');
+
+    const c0 = check();
+    const planted = [sync.skillRel(roleSkill, 'github'), sync.treeLabel('github') + '/skills/' + RETIRED].sort();
+    assert(c0.status === 1, 'K12: the planted tree fails --check (exit ' + c0.status + ')');
+    assert(JSON.stringify(reported(c0.out)) === JSON.stringify(planted),
+      'K12: --check reports EXACTLY the two planted mismatches — expected ' + JSON.stringify(planted)
+      + ', parsed ' + JSON.stringify(reported(c0.out)) + '; an empty parse means the mismatch lines '
+      + 'stopped being parseable and the outcome check below would compare nothing to nothing');
+
+    const advised = advisedCommands(c0.out);
+    assert(advised.length >= 1,
+      'K12: --check hands the reader a runnable command — every class this edition reports is '
+      + 'cleared by one, so offering none would be a regression, not a repair');
+    for (const cmd of advised) {
+      assert(!cmd.includes('--write-config'),
+        'K12: no --write-config is advised — this script has no such mode and no user-owned tracked '
+        + 'config to justify one. Advised: ' + JSON.stringify(cmd)
+        + '. (The opencode twin needs that flag for its config class; copying its remediation line '
+        + 'across would name a flag that does not exist here.)');
+    }
+    for (const cmd of advised) run(cmd);
+    const after = check();
+    assert(after.status === 0 && reported(after.out).length === 0,
+      'K12: running what --check advised clears the whole report — exit ' + after.status + ', left '
+      + JSON.stringify(reported(after.out)) + '. This is the property the opencode twin lost: the '
+      + 'closing line names a command that does not fix what the lines above it reported');
+  } finally {
+    try { rmSync(scratch, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
+}
+
 if (failed) {
   console.error('\nkimi-edition test FAILED: ' + failed + ' failure(s), ' + passed + ' passed.'
     + driftVerdict);
