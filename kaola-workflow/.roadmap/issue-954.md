@@ -1,0 +1,5 @@
+issue: #954
+title: ADR 0017 watch list: record three never-observed failure classes surfaced by an external design review, sized against the external implementation
+status: open
+workflow_project: issue-954
+next_step: Docs-only close: add three rows to the watch-list table in docs/decisions/0017-the-mission-list.md, in its existing three-column format, sizing carried inline as pointers to the reviewed external implementation (DietrichGebert/ponytail): (1) subagent rule-carrier gap — SubagentStart injection with every failure path failing open; (2) in-context prose rule measurably not followed — three-arm real-session benchmark with LLM judge; (3) load-bearing rule phrase silently absent from a non-byte-comparable rendered surface — INVARIANTS canary phrases with the ceiling declared in place. Row 3 must stand on its arming observation, not on symmetry with the editions that have a scan. No mechanism built, no guard added; diff touches the ADR and CHANGELOG only; the issue closes when the rows land.
