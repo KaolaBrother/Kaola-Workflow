@@ -1,5 +1,0 @@
-issue: #955
-title: Per-runtime capability divergence is re-derived each session — one pointer-only table in docs/, every cell a tier label plus a pointer that resolves
-status: open
-workflow_project: issue-955
-next_step: Premise pass first — the four motivating divergence facts are weeks old (the #944 role→tier carrier gap has since been closed by the tier-roster work); verify the shipped state of each before writing any cell. Then place one small table in docs/ (short new doc or a section of docs/architecture.md, decided by what the premise pass finds): rows = dispatch carrier, command/skill surface, hooks, model & tier handling, install path; columns = the four runtimes; every cell a tier label plus a pointer to the authoritative file — never a restated mechanism fact, with the sole exception of absent capabilities, which name the issue or ADR that established the absence. Acceptance: every pointer resolves at close, no cell restates a fact whose truth lives elsewhere, docs/README.md indexes it, CHANGELOG under [Unreleased]. Docs-only; facts a per-edition doc should hold and does not are findings for that doc, not content for the table.

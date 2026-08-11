@@ -1,5 +1,0 @@
-issue: #952
-title: Subtraction audit over scripts/ and docs/: every finding measured, ranked by net deletable lines, report-only — cuts escalate per finding
-status: open
-workflow_project: issue-952
-next_step: Premise pass first — re-measure the 24% byte-identical duplication figure and the 84-file scripts/ count against the current tree before reading anything for cuts; both date from before recent closes. Then run as a normal workflow run (mission list, dispatched readers over scripts/ and docs/), every candidate measured before listed (a delete: shows its zero-consumer search, a shrink: shows the shorter form running), findings in the fixed grammar delete:|stdlib:|native:|yagni:|shrink: ranked by net deletable lines, report landing dated in docs/audits/. Report-only: no cut applied; each accepted finding becomes its own escalated follow-up. Test custody holds (a finding on a test names the mechanism whose removal takes it); the adaptive-schema byte-identical copies and ADR 0017 "built once, removed, recoverable" rows are not findings.
