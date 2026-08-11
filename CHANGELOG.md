@@ -206,8 +206,9 @@
   have meant building a new refusal seam, at `SubagentStart`, after the model is already chosen,
   against a failure class never observed. No role's tier changed: `DEFAULT_AGENT_MODELS['synthesizer']`
   is still `opus`, and the whole map is byte-equal before and after. `synthesizer` remains
-  reasoning-class; only the enforcement is gone. The retired flag now fails honestly with
-  `unexpected argument` instead of silently doing nothing.
+  reasoning-class; only the enforcement is gone. Passed alongside an agent, the retired flag now
+  fails honestly with `unexpected argument` instead of silently doing nothing; the bare flag with no
+  agent parses as an agent name and exits 0 empty, the resolver's answer for any unknown agent.
 
 - **`install.sh`'s `default_agent_model()` fallback (#935).** It was a fourth copy of the role/tier
   table, reached only when a source agent file carries no `model:` line. It had drifted: it covered
@@ -215,7 +216,9 @@
   and `security-reviewer`, which the canonical map has resolved to the reasoning tier for some time.
   Nothing had noticed, because the branch is unreachable — every agent file carries a `model:` line,
   and the resolver's contract test asserts that for all fourteen roles. `extract_agent_model` is now
-  the sole authority, and a missing `model:` fails loudly instead of resolving to a stale guess.
+  the sole authority, and a missing `model:` no longer resolves to a stale guess — the install drops
+  the `model=` line, which installs the role with inherit semantics, and the contract test above is
+  the guard that reds if a registered role ever goes model-less.
 
 ## [9.5.5] - 2026-08-09
 
