@@ -1,0 +1,5 @@
+issue: #960
+title: yagni: run-chain-pool.js (428 lines) — a within-chain step pool with no chain, no CLI and no installer caller
+status: open
+workflow_project: issue-960
+next_step: Largest single subtraction candidate from the #952 audit (S1). scripts/run-chain-pool.js, 428 canonical lines, multiplier x1; its only consumer is the test that exists to test it, and its shard registry is empty. Re-run the zero-consumer search before cutting, in TWO parts, because neither alone suffices — git grep -P over the tracked tree AND an explicit find|xargs sweep over the six rendered edition trees, which are gitignored (git grep cannot see them) while the local grep is ugrep (skips dot-directories). SEARCH ON THE STEM, NOT THE BASENAME - the audit's first sweep searched run-chain-pool.js and reported zero consumers when the real consumer is require('./run-chain-pool'); a basename-anchored search is not a zero-consumer search. Test custody - the test dies WITH the mechanism, never ahead of it, and a pin must not be repaired so it keeps passing against machinery that is gone.
