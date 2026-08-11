@@ -312,7 +312,7 @@ coverage universe from the author side of the artifact, while the defect lived o
 | reviewer contradiction check, token table, vocabulary ban | `contractText`, built from `sections[].lines` | section headings were in no scanned region, yet render as `## <heading>` to 12 surfaces |
 | opencode `A3` / kimi `K5-kinds` | the write/edit restriction axis | that axis had become unreachable; the live axis (`bash: deny`) was new and unguarded |
 | the retired-vocabulary cleanup | the authored contract | `node-id` lived in the generator's own render, which nothing read for vocabulary |
-| `test-route-reachability` | a universe derived from the edition tables | the forge term is the registry measuring itself — 12→8 surfaces, unchanged assertion count |
+| `test-route-reachability` | a universe derived from the edition tables | the forge term is the registry measuring itself — 12→8 surfaces, and at the time an unchanged assertion count (325→325) |
 
 Two rules follow, and they are the ones stated in `CLAUDE.md`:
 
@@ -322,8 +322,24 @@ source misses generator prose, and a scanned region is a choice whose complement
 sits. Where a universe is derived from the artifact under test, partially anchored is not anchored:
 one **absolute** count belongs in a different file. `test-generate-routing-surfaces`'s `registry
 derives 18 surfaces` is that anchor for the routing registry, and it is mutation-proven — delete a
-forge from both edition tables and it fails at 18→12 while `test-route-reachability` stays green at
-an unchanged 325 assertions.
+forge from both edition tables and it fails at 18→12, while the walkthrough's
+`testAxiomBlockByteIdentity` passes at 12→8 surfaces, its width `FORGES.length × (2 +
+runtimeEditionCount)` shrinking in lockstep with the registry it measures. That floor is left derived
+on purpose, and says so where it is written. `test-route-reachability` held the green side of this
+contrast, and the floor the row above describes still holds it: that universe is still registry-derived
+and still passes at 12→8. What changed is the **suite**, which now reds under the same mutation at
+`T19b universe: … 6 … found 4` — a later band added for an unrelated purpose. That is an incidental
+catch and not the anchor this rule asks for: it measures a different universe, six Codex
+routing-marker SKILL surfaces rather than the registry's eighteen rows, against a hand-kept
+`codexEditions` twin of the very edition tables being deleted from — one guard *inside* this same
+suite rather than one guard over. Enough to stop the suite standing in for "stays green", and not
+enough to re-anchor anything.
+
+Quote no assertion total in the rule's illustration above. The suites print their own, and the numeral
+this one once carried went stale the same day it was written — four hours later — while the claim it
+decorated survived nine days before a sibling assertion inverted that too. The dead numeral then stayed
+arithmetically reachable: under the mutation the run evaluates 324 passed and 1 failed, summing to the
+very 325 it used to assert, on a line that reads `FAILED`.
 
 **A threshold cannot see a rule beneath its bar.** A consensus derivation reports nothing that
 distinguishes *no such rule* from *below threshold*, so a small reciprocal obligation gets an explicit

@@ -756,10 +756,17 @@ const MANIFEST_EDITIONS = {
 // deliver is worse than no comment: only the RUNTIME term is independently
 // anchored. The FORGE term is still read from the same registry this checks, so
 // deleting a forge from the edition tables shrinks the universe from twelve
-// surfaces to eight and this suite stays green at an unchanged assertion count —
-// mutation-proved. That case is caught by test-generate-routing-surfaces.js's
-// "registry derives 18 surfaces" assertion, in the always-selected claude chain,
-// which is why the forge term is left registry-derived rather than re-anchored.
+// surfaces to eight and THIS FLOOR stays green — mutation-proved, and left
+// registry-derived on that basis rather than re-anchored.
+//
+// The floor, not the suite. Do not widen this to "the suite stays green": the
+// same mutation now reds T19b, whose expectation is the hand-typed codexEditions
+// literal above and so does not shrink with the registry. It is caught in
+// test-generate-routing-surfaces.js's "registry derives 18 surfaces" assertion
+// too, in the always-selected claude chain. A comment asserting a mutation proof
+// stays true only for the assertion it is written against. This one said "this
+// suite", was true for nine days, and was falsified not by any change to the
+// floor it describes but by an unrelated band landing beside it in the same file.
 const RUNTIME_EDITION_MODULES = fs.readdirSync(path.join(REPO, 'scripts'))
   .filter(f => /^sync-[a-z0-9-]+-edition\.js$/.test(f))
   .map(f => f.slice('sync-'.length, -'-edition.js'.length))

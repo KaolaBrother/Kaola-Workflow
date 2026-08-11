@@ -41,7 +41,49 @@
   and a Claude Code dispatch follows none of it — along with the timing difference the old wording
   flattened. Corrected identically across all four copies.
 
+- **A worked example in `docs/conventions.md` outlived the defect it described (#950).** The rule that
+  one absolute count belongs in a different file was illustrated by a contrast: delete a forge from both
+  edition tables and `test-generate-routing-surfaces`'s `registry derives 18 surfaces` fails at 18→12,
+  "while `test-route-reachability` stays green at an unchanged 325 assertions." Measured, the second half
+  is false — that suite now reds under the mutation, at `T19b universe: … 6 … found 4`. Not because the
+  guard it named was repaired: the floor in question is still registry-derived and still passes at 12→8.
+  An unrelated band landed beside it nine days later, measuring a different universe against a hand-typed
+  literal that predates that band by two months, and catches the forge deletion incidentally. So the
+  sentence was exactly true when written and was falsified by a neighbour, which is the harder failure to
+  notice — nothing about the floor the claim describes changed at all.
+
+  The filed diagnosis — a count stale by 6 — is refuted. The plain total is indeed 331, but writing 331
+  back would have preserved the false half; and the mutation evaluates 324 passed plus 1 failed, so
+  re-checking the doc's own numeral lands on 325 again and confirms a sentence whose claim has already
+  inverted. The counter-example is re-pointed at the walkthrough's `testAxiomBlockByteIdentity`, which is
+  still registry-derived — its width shrinks with the tables it measures — and does stay green, passing at
+  12→8 surfaces, deliberately and with the reason recorded where it is written. Two of the three sites
+  carrying the stale claim moved: the prose, and a source comment in `scripts/test-route-reachability.js`
+  that asserted a mutation proof the suite it lives in had since broken — that comment now scopes its
+  claim to the single floor it sits above and says not to widen it. The third, a row in the five-defect
+  table, is left standing as the historical observation it records, with its assertion-count clause dated
+  so it no longer reads as current. The rule's illustration now quotes no assertion total.
+
 ### Added
+
+- **A watch-list row for the opencode report's unguarded source-edit footer (#951).** `--check` closes a
+  failed parity report by naming the file no flag of the script clears — the one line telling a reader
+  that the `Fix:` command printed above does not cover everything just reported. Mutation-measured,
+  nothing observes it: dropping that line when a flag is already named, *or* dropping it unconditionally,
+  leaves `test-opencode-edition.js` green at 563 of 563, the suite's own output byte-identical to baseline
+  under both.
+  The band quantifies its properties over runnable invocations of the script, and the footer names no
+  command, so it never enters the set the band drives. A second, independent copy of the gap sits on a
+  prose surface: `docs/opencode-edition.md` carries the line verbatim and states its rule, and no script
+  consumes that doc, so code and documentation can diverge with every suite green.
+
+  No guard is built and no wording is pinned. The class has never been observed escaping — it exists only
+  because someone mutated it into existence — so it is recorded rather than built, and the row carries
+  both sized mechanisms for the day it is seen: an occurrence-count discriminator that needs no wording
+  pin, and the shape the kimi edition already uses, where `K12` pins its remediation as an outcome and
+  reds twice when that line is deleted. The asymmetry is the row's sharpest arming fact, and it runs
+  opposite to the obvious reading — opencode is the edition missing a guard its sibling already has, not
+  kimi awaiting a fix in sympathy.
 
 - **The Codex per-spawn routing block now ships the role→tier roster (#944).** The block ordered
   every spawn at its role's "existing standard-tier or reasoning-tier classification" while no
