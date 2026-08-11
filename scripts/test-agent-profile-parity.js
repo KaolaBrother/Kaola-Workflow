@@ -53,6 +53,18 @@ const ROLE_PINS = [
   // belonging to other agents.
   { role: 'metric-optimizer', token: 'git reset --hard' },
   { role: 'metric-optimizer', token: 'including reverts' },
+  // The solution ladder's reuse rung. Three roles decide how much to build — the one that plans, the
+  // one that designs, and the one that writes it — so the ladder is shared by 3 of 11 hand-maintained
+  // profiles and sits far under the consensus threshold. A rule at that distribution is invisible to
+  // the derivation below: it never becomes a baseline unit, so no .toml twin is ever asked for it and
+  // a hand-written mirror can omit it with every assertion still green. That is not hypothetical —
+  // the code-architect's earlier minimalism wording sat in its canonical .md while reaching none of
+  // the three twins, and no assertion here moved. Byte-identity cannot substitute: the trees agree
+  // when all three are missing the rule. The pin is the rung whose loss is silent and expensive —
+  // dropped, the role builds a second mechanism beside a working one and nothing else disagrees.
+  { role: 'planner', token: 'Reuse or extend an existing mechanism before writing a second one.' },
+  { role: 'code-architect', token: 'Reuse or extend an existing mechanism before writing a second one.' },
+  { role: 'implementer', token: 'Reuse or extend an existing mechanism before writing a second one.' },
 ];
 
 // The prompt-defense baseline, pinned verbatim. Every other obligation in this file is relative —

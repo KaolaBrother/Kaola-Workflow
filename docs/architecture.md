@@ -297,6 +297,47 @@ into `npm test`, `edition-sync.js`, `install.sh`, or the routing-surface propaga
 carry their own suites (`test-opencode-edition.js`, `test-kimi-edition.js`). See
 `opencode-edition.md` and `kimi-edition.md`.
 
+### Runtime capability divergence
+
+Where the four runtimes differ, they differ **here** — one table, one place. Every cell is a **tier
+label plus a pointer**, never a restatement of the mechanism: a restated fact rots away from its
+source, and the re-derivation this table exists to end is exactly what a rotted copy causes. Read the
+label for how much of the capability exists; read the pointer for what it is.
+
+The labels: **full** — the shared mechanism covers this runtime directly · **partial** — covered,
+with a limitation the pointer names · **rendered** — generated from a shared source, which the
+runtime consumes and never authors · **substituted** — the runtime lacks the shared primitive, so the
+workflow routes the capability through a different one · **inherited** — no control exists at any
+level; the session's value carries.
+
+**The forge axis multiplies two of the four columns.** claude and codex each ship against three
+forges (github, gitlab, gitea), so a claude or codex pointer may resolve to three trees rather than
+one — where it does, the pointer's own path says so, and where the artifact is forge-independent it
+does not. opencode and kimi take `--forge` inside their own standalone installers instead. Runtimes
+and forge editions are different axes; this table is indexed by runtime.
+
+| | claude | codex | opencode | kimi |
+|---|---|---|---|---|
+| **dispatch carrier** | full — `agents/`; § Agent profiles below | full — `plugins/kaola-workflow/config/agents.toml` (registry); `plugins/*/agents/*.toml` | full — `docs/opencode-edition.md` § What gets generated | substituted — `docs/kimi-edition.md` § Roles as Skills; enforced by `KIMI_RUNTIME_NATIVE` in `scripts/test-kimi-edition.js` |
+| **command / skill surface** | rendered — `scripts/generate-routing-surfaces.js` (`COMMAND_EDITIONS`); skeletons in `templates/routing/` | rendered — `scripts/generate-routing-surfaces.js` (`SKILL_EDITIONS`); skeletons in `templates/routing/` | rendered — `docs/opencode-edition.md` § Installer command set; consumes `commandSources()` via `scripts/sync-opencode-edition.js` | rendered — `docs/kimi-edition.md` § Installer command set; consumes `commandSources()` via `scripts/sync-kimi-edition.js` |
+| **hooks** | full — `hooks/hooks.json`; merge at `install.sh` (`MERGE_SETTINGS`) | full — `plugins/*/config/hooks.json` (three trees, and unlike the other codex artifacts these differ per forge); merge at `plugins/*/scripts/install-codex-agent-profiles.js` | substituted — `docs/opencode-edition.md` § Hooks; `templates/opencode/plugins/kaola-workflow-hooks.js` | partial — `docs/kimi-edition.md` § Hooks; event mapping `docs/decisions/D-703-01.md` |
+| **model & tier handling** | full — `scripts/kaola-workflow-resolve-agent-model.js` (header comment); shipped rule at `commands/kaola-workflow-finalize.md` § Agent Model Dispatch | full — `CODEX_PINNED_STANDARD_ROLES` / `CODEX_PINNED_REASONING_ROLES` in `scripts/kaola-workflow-adaptive-schema.js`; every carrier copy and the guard binding them, `docs/conventions.md` § Bundle Lane | partial — `docs/opencode-edition.md` § Model and effort — inherited from the session | inherited — `docs/kimi-edition.md` § One model tier — every subagent inherits the session model; enforced by `KIMI_RUNTIME_NATIVE` in `scripts/test-kimi-edition.js` |
+| **install path** | full — `install.sh` | partial — the split stated at `install-all.sh` (§ Codex marketplace-plugin convergence); profiles and hooks at `plugins/kaola-workflow/scripts/install-codex-agent-profiles.js` | substituted — `install-opencode.sh`; `docs/opencode-edition.md` § Deploy layout — project vs global (scope-dependent) | substituted — `install-kimi.sh`; `docs/kimi-edition.md` § Deploy layout — project vs global (scope-dependent) |
+
+The label grades the capability, not the pointer. Two cells carry **two** pointers because one alone
+loses half the fact: codex model & tier separates the source constants from the carrier set that
+renders them, and kimi's dispatch carrier separates the readable description from the
+machine-enforced declaration. The weakest pointer is claude's dispatch carrier: no prose names the
+dispatch mechanism itself, so the first pointer is the directory, and § Agent profiles below carries
+only what the profiles contain. claude and codex have no per-edition doc, which is why their cells
+point at code where opencode's and kimi's point at prose.
+
+**No `hooks.json` in any edition registers a `PreToolUse` or `PostToolUse` hook** — across all six
+they register `SessionStart` and `SubagentStart` only, and
+`docs/decisions/0011-oracle-test-and-kernel-extraction.md` establishes that absence. It is a statement
+about that file family, which is claude and codex; it does not generalize to the additive editions,
+and opencode's plugin does register a pre-tool event (`templates/opencode/plugins/kaola-workflow-hooks.js`).
+
 ### Agent profiles
 
 Each role has a canonical `agents/<name>.md` (installed by `install.sh` for Claude) and a `.toml`
@@ -343,10 +384,23 @@ installer fills from the agent's own installed profile; the filled literal is wh
 the dispatched role runs on — without it the role inherits the session's model. opencode applies its
 resolved tier dynamically.
 
-Codex keeps the same role classification but maps it at spawn time: `standard` to
-`gpt-5.6-sol` / `medium`, and `reasoning` to `gpt-5.6-sol` / `xhigh`. Both mappings are fixed, so a
-standard-tier task never changes model or reasoning effort for task-specific reasons. No other
-runtime's model resolution changes.
+Codex keeps the same role classification but maps it to a model / reasoning-effort pair at spawn
+time. Two different files own the two halves, and they are easy to confuse: **which roles take which
+tier** is declared once by `CODEX_PINNED_STANDARD_ROLES` and `CODEX_PINNED_REASONING_ROLES` in
+`kaola-workflow-adaptive-schema.js`, rendered from there into the Codex SKILL surfaces — see
+`conventions.md` § Bundle Lane for every carrier copy and the guard that binds the roster to those
+constants. **What each tier resolves to** is a separate fact in a separate place, and the schema holds
+no model or effort literal at all: it is authored twice, as named constants (`CODEX_STANDARD_MODEL`,
+`CODEX_STANDARD_EFFORT`, `CODEX_REASONING_MODEL`, `CODEX_REASONING_EFFORT`) in
+`kaola-workflow-codex-preflight.js`, and as typed literals in the dispatch-routing pin of
+`templates/routing/next.skeleton.md` and `finalize.skeleton.md`, which is what ships to the SKILL
+surfaces. The two are bound: `test-route-reachability.js` builds its expected efforts from those
+constants and asserts every shipped surface states the matching one, so the prose and the validator
+cannot drift apart, and `validate-kaola-workflow-contracts.js` cross-binds preflight to the
+installer's own copies. Note the shape of that binding — it pins the **effort** and accepts any model
+string, so a model change is caught by the contract validator rather than by the prose check. Both mappings are fixed, so a standard-tier task never
+changes model or reasoning effort for task-specific reasons. No other runtime's model resolution
+changes.
 
 ## Testing
 

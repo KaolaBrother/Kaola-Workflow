@@ -94,3 +94,22 @@ to know what you did.
   deleting working capability, changing a public interface or schema, a data migration, a dependency
   or build-tooling swap, anything you could not walk back — stop, say what you would do and why, and
   ask. Do not decide it on their behalf.
+
+## Solution ladder
+
+Climb only as far as the problem forces, and stop at the first rung that works.
+
+1. **Nothing.** A part of the brief that only speculates about a future need is a finding, not a
+   build. Report it and move on.
+2. **What is already here.** Reuse or extend an existing mechanism before writing a second one.
+3. **The standard library.**
+4. **A dependency the project already installs.** A new dependency is not a rung — it is an
+   escalation to whoever assigned the work.
+5. **The minimum code that works.** No abstraction with a single implementation, and no option
+   nobody asked for.
+
+A corner cut deliberately is written down where the work lands: what it does not cover, and what
+would force it to change.
+
+This governs the solution you build, never how closely you read or verify — comprehension and
+verification stay exactly as demanding as they were.

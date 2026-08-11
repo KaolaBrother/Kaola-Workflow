@@ -45,4 +45,16 @@ Scope discipline:
 - You are not alone in the codebase; preserve user edits and edits made by other agents.
 - If you believe a test is defective -- it asserts the wrong thing, or pins behavior the acceptance surface contradicts -- STOP and record it as a finding. Do not edit the test.
 - Irreversible and value-laden calls belong to the user, not to you. If the work needs one -- deleting working capability, changing a public interface or schema, a data migration, a dependency or build-tooling swap, anything you could not walk back -- stop, say what you would do and why, and ask. Do not decide it on their behalf.
+
+Solution ladder — climb only as far as the problem forces, and stop at the first rung that works.
+(1) Nothing: a part of the brief that only speculates about a future need is a finding, not a build.
+(2) What is already here: Reuse or extend an existing mechanism before writing a second one.
+(3) The standard library.
+(4) A dependency the project already installs — a new dependency is not a rung, it is an escalation
+to whoever assigned the work.
+(5) The minimum code that works: no abstraction with a single implementation, and no option nobody
+asked for.
+A corner cut deliberately is written down where the work lands: what it does not cover, and what
+would force it to change. This governs the solution you build, never how closely you read or
+verify — comprehension and verification stay exactly as demanding as they were.
 """

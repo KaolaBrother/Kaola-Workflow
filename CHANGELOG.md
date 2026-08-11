@@ -1,5 +1,102 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **The three code-producing roles now carry one solution ladder, and a pin that makes it stay —
+  #953.** `implementer`, `code-architect` and `planner` each gain the same `## Solution ladder`
+  section: climb only as far as the problem forces, stopping at the first rung that works — nothing,
+  what is already here, the standard library, a dependency the project already installs, then the
+  minimum code that works. A new dependency is not a rung but an escalation; a deliberately cut
+  corner is written down where the work lands. The ladder governs the solution and explicitly not the
+  reading, because `implementer` carries "correct for every valid input" and that demand is unchanged.
+
+  The filed issue was wrong about two of its three claims, and the measurement is worth keeping.
+  `planner`'s "one incidental hit" was two, one of them under its own `## Sizing and Phasing`
+  heading. `code-architect`'s "second wording" was the fifth — `CLAUDE.md`,
+  `templates/routing/init.skeleton.md`, `code-architect`, `build-error-resolver` and `planner` each
+  held one. So `code-architect`'s two bullets were **harmonized into the ladder rather than left
+  beside it**: their content is rungs 5 and 1, and a sixth wording would have been the defect this
+  issue set out to fix.
+
+  What the issue did not name is the defect that mattered: **`code-architect`'s minimalism lines had
+  never reached the Codex carrier at all** — zero occurrences across all three `agents/*.toml` trees
+  and both installed Codex locations, because that profile is an independent rewrite that drops the
+  whole `## Process` section. The gap was a mirroring gap, not an authoring gap, so adding a wording
+  without a pin would have reproduced it at four times the scale. `test-agent-profile-parity.js`
+  could not have caught it: its consensus mechanism only makes a rule mandatory once 8 of 11 profiles
+  carry it, and this rule reaches 3. Three `ROLE_PINS` entries close that seam, and they are
+  mutation-proven rather than merely green — with the ladder in place, deleting the pinned sentence
+  from a single Codex carrier fails the guard by name against that exact file.
+
+- **One table now records where the four runtimes differ, and every cell points rather than
+  restates — #955.** `docs/architecture.md` gains `### Runtime capability divergence` inside the
+  existing `## Editions and runtimes`: five rows (dispatch carrier, command/skill surface, hooks,
+  model & tier handling, install path) against the four runtimes, each cell a tier label plus a
+  pointer that resolves. It went into that section rather than a new doc deliberately — a new doc
+  would have made per-runtime divergence live in two places, which is the re-derivation the issue
+  exists to end.
+
+  The rule that a cell may not restate a mechanism fact is the whole point, and it carried an
+  obligation: `§ Model resolution`, one screen below, restated the Codex tier mapping as literal
+  values. Those literals are gone, repointed at their source. Two cells carry two pointers because
+  one loses half the fact, and the weakest pointer — claude's dispatch carrier, where no prose names
+  the mechanism and the pointer is the directory itself — is called out in plain text under the table
+  rather than left looking as solid as its neighbours.
+
+  Adversarial review then found the repoint had itself mis-attributed: the schema constants are role
+  *rosters* and hold no model or effort literal at all, while the tier values are authored in the
+  routing skeletons' dispatch-routing pin. A reader sent to the schema for the pair would have found
+  nothing — the exact wrong-pointer defect this issue exists to prevent, one paragraph from the table
+  forbidding it. Both halves are now named separately. Review also corrected the hooks row (the three
+  Codex `config/hooks.json` differ per forge, so a single-tree pointer was wrong) and the
+  `PreToolUse`/`PostToolUse` absence, which is a statement about that file family and does not
+  generalize — opencode's plugin does register a pre-tool event.
+
+- **A subtraction audit over `scripts/` and `docs/`, report-only — #952.**
+  `docs/audits/2026-08-11-subtraction-audit.md` records 16 measured findings — 6 over `scripts/`
+  totalling 643 canonical lines, and 10 over `docs/` — each carrying the measurement that establishes
+  it, plus five retired-machinery hypotheses checked and cleared. Nothing is cut: each accepted
+  finding escalates as its own follow-up.
+
+  The two highest-value findings are both one-line documentation defects that instruct the reader
+  wrongly, which is why they outrank a 428-line dead script: `docs/conventions.md` documents a
+  constant that was deleted and tells the reader to add to it, and `docs/architecture.md` says the
+  additive editions are not wired into the routing-surface propagation set — true of the render
+  targets, false of the derivation, so a reader who believes it edits a routing skeleton and never
+  regenerates the opencode tree.
+
+  The audit's filed premise was a real number attached to a wrong conclusion. The "24% byte-identical
+  duplication" re-measures at 23.3% — but 23.2 of those points are the four-edition port structure,
+  which is guarded and load-bearing, and genuine non-port duplication is 0.04%. Duplication was
+  therefore struck from the finding classes before any file was read, and a ranking rule was added so
+  that a port multiplier cannot decide the order in place of merit.
+
+  Three measurement traps are recorded with the findings, because each produced a clean, plausible,
+  wrong number and each was caught by a control rather than by inspection: a truncated capture that
+  read as complete (and would have reported 0.2%), a basename-anchored search that is not a
+  zero-consumer search, and an unquoted pathspec that silently reported all 198 docs as unreferenced.
+
+### Changed
+
+- **The ADR 0017 watch list gains two rows, and refuses a third — #954.** The register of record now
+  carries *a subagent that never receives a project rule its work depends on* and *a rule an agent
+  demonstrably held in context and measurably did not follow*. Both are sized inline against evidence
+  in this repo, as every existing row is: the first names the SubagentStart carrier that already runs
+  on every dispatch and its four fail-open exits, so that what is absent is an emitted payload rather
+  than a hook; the second names the #524 entry below as the one recorded instance and concedes
+  the partial measurement at `docs/conventions.md:846-856`, without which the row would be refutable
+  on its face.
+
+  A third row — a load-bearing rule phrase going silently absent from a non-byte-comparable rendered
+  surface — was **not** added. It failed on its arming observation, and not for the symmetry the
+  watch list exists to refuse: the failure has actually been observed. A canonical rename once moved
+  a heading out from under a plain `if`, nothing threw, and the surface shipped without the paragraph
+  telling an opencode reader how a role is dispatched. #949 built the mechanism for it — anchor,
+  near-miss `else`, throw, and suite anchors on both editions. The watch list is defined as failure
+  classes never observed in this methodology, so the row would have recorded a false claim.
+
 ## [9.6.0] - 2026-08-11
 
 ### Changed

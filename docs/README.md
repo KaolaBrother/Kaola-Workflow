@@ -6,7 +6,10 @@ moments.
 
 ## Core
 
-- [Architecture](architecture.md) — system structure and data flow.
+- [Architecture](architecture.md) — system structure and data flow. Includes
+  [Runtime capability divergence](architecture.md#runtime-capability-divergence) — the one place the
+  four runtimes' differences are recorded (dispatch carrier, command/skill surface, hooks, model &
+  tier, install path), as a tier label plus a pointer per cell, never a restated mechanism.
 - [API](api.md) — script CLIs, envelopes, and external contracts.
 - [Conventions](conventions.md) — coding, testing, Git, and review rules.
 - [Workflow State Contract](workflow-state-contract.md) — durable state and the generated roadmap mirror.
