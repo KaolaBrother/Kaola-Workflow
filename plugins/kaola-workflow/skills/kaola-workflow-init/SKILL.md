@@ -136,7 +136,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 
 ## Maintenance
 
-- Keep this file under 200 lines; move detail to docs or skills.
+- Keep this file under 200 lines — a recommendation, not a limit; move detail to docs or skills.
 - Add rules only after repeated mistakes, review feedback, or stable project conventions.
 - Do not use `@path` imports for optional reference material.
 ```
@@ -422,7 +422,7 @@ If `kaola-workflow-claim.js` is unavailable (manual install without the script),
 After edits:
 
 1. Run `git status --short --branch`.
-2. Run `wc -l CLAUDE.md` and report whether it is under the 200-line target.
+2. Run `wc -l CLAUDE.md` and report the count against the recommended 200 lines. If it is over, offer to trim it with the user — the count fails nothing.
 3. Summarize:
    - whether Git is initialized
    - whether a GitHub remote exists

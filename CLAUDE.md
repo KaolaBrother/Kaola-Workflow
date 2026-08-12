@@ -194,5 +194,6 @@ architecture docs if structure changed · inline comments where public interface
 
 ## Maintenance
 
-Keep this file under 200 lines; move detail to `docs/` or skills. Add rules only after repeated
-mistakes, review feedback, or stable conventions, and do not use `@path` imports.
+Keep this file under 200 lines — recommended, never enforced: past it you get a notice and an offer
+to trim, not a failure. Move detail to `docs/` or skills. Add rules only after repeated mistakes,
+review feedback, or stable conventions, and do not use `@path` imports.

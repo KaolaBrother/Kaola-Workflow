@@ -56,7 +56,7 @@ If there is no Gitea remote, or if `tea` is unavailable or unauthenticated, skip
 
 Create `CLAUDE.md` if missing. If it exists, preserve user-authored content and add only missing durable guidance. Do not paste full source files, roadmaps, changelogs, API docs, or long skill text into `CLAUDE.md`.
 
-Target size: under 200 lines. Hard limit: if the result would exceed 240 lines, stop and summarize what should move to docs, `.claude/rules/`, skills, or `CLAUDE.local.md`.
+Recommended size: under 200 lines. This is a recommendation, not a limit — nothing fails on the count, at any size. If the result would exceed it, say so plainly, name what should move to docs, `.claude/rules/`, skills, or `CLAUDE.local.md`, and offer to trim it together rather than stopping.
 
 Use this policy:
 
@@ -181,7 +181,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 
 ## Maintenance
 
-- Keep this file under 200 lines; move detail to docs or skills.
+- Keep this file under 200 lines — a recommendation, not a limit; move detail to docs or skills.
 - Add rules only after repeated mistakes, review feedback, or stable project conventions.
 - Do not use `@path` imports for optional reference material.
 ```
@@ -392,7 +392,7 @@ If `kaola-gitea-workflow-claim.js` is unavailable (manual install without the sc
 After edits:
 
 1. Run `git status --short --branch`.
-2. Run `wc -l CLAUDE.md` and report whether it is under the 200-line target.
+2. Run `wc -l CLAUDE.md` and report the count against the recommended 200 lines. If it is over, offer to trim it with the user — the count fails nothing.
 3. Summarize:
    - whether Git is initialized
    - whether a Gitea remote exists

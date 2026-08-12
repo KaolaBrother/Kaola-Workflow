@@ -1177,7 +1177,7 @@ Use a separate research or roadmap session to discover future work and create or
 
 The local roadmap is a working mirror, not the source of truth. Keep only active unfinished work there; completed workflow folders move to `kaola-workflow/archive/`.
 
-The workflow also enforces context discipline: `CLAUDE.md` targets under 200 lines, the local roadmap should not become history storage, and agent prompts should include only the relevant phase excerpts needed for the delegated task.
+The workflow also encourages context discipline: `CLAUDE.md` has a recommended size of under 200 lines — advisory, never enforced, so a longer file draws a notice and an offer to trim rather than a failure — the local roadmap should not become history storage, and agent prompts should include only the relevant phase excerpts needed for the delegated task.
 
 Each active workflow maintains two files: `workflow-state.md`, which records what the run owns — issue, branch, worktree, sink, next command — and `mission-list.md`, which records what it is doing. After resume or compaction, read both before continuing.
 

@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`CLAUDE.md`'s length is a recommendation that notifies, and can no longer fail a build — #967.**
+  The rule was enforced as a hard `assert` in three live validators — `validate-workflow-contracts.js`,
+  its byte-identical plugin copy, and `validate-kaola-workflow-contracts.js`, which is the **codex**
+  chain's own validator and the copy easiest to miss because the two filenames differ by one word.
+  Because the assertion sat at column 0 of the module body it threw at *require* time, so one
+  over-length doc file took down the entire CLI; downstream that surfaced in the walkthrough only as
+  an opaque `testContractValidatorOfflineSkip` exit, naming neither CLAUDE.md nor its length. It also
+  enforced the wrong number: `split(/\r?\n/)` counts the trailing empty element, so the advertised
+  "200" was really **198 physical lines**, and a 199-line file failed a rule that permitted it — the
+  defect that prompted the issue, hit while editing this repo's own CLAUDE.md.
+
+  All three now count **physical** lines, so the number reported is the number `wc -l` prints, and
+  emit a non-fatal `notice:` above 200 instead of throwing. **Nothing about this file's size can red
+  a chain at any size** — a doc past the recommended length is something to tell the user about and
+  offer to trim, not a reason to refuse the run, which is the same reason nothing else in the run
+  design refuses. Mutation-proven one validator at a time at three sizes: 200 → silent/exit 0,
+  201 → notice/exit 0, 260 → notice/**still** exit 0. Two of the three were proven by direct run; the
+  plugin copy is not standalone-runnable in this layout (its `root` resolves to
+  `plugins/kaola-workflow/`, so it exits 1 on an unrelated missing path **at HEAD as well**) and
+  rides on the byte-identity `validate-script-sync.js` enforces.
+
+  The prose surfaces are brought to one wording, since the project had been shipping consumers a
+  *different* rule than it enforced on itself: the injected `workflow-init` guidance already carried
+  a two-tier "target 200 / **hard limit** 240, stop and summarize". That stop is removed — it now
+  names what should move and offers to trim together, and never stops. Edited at the skeleton
+  (`templates/routing/init.skeleton.md`, 3 sites) and regenerated, so all 18 routing surfaces
+  byte-match; `--check` was confirmed RED before the regeneration and green after, rather than
+  assumed. `README.md` stops claiming the workflow "enforces" context discipline. This repo's own
+  `CLAUDE.md` now stands at 199 lines — the exact length that threw before this change.
+
 ### Fixed
 
 - **The opencode and kimi installers now prune retired support scripts, so a script removed from the

@@ -1511,7 +1511,7 @@ function chainNames(rc) { return (rc && rc.chains ? rc.chains.map(c => c.name) :
     'commands/kaola-workflow-plan-run.md', // codex plan-run SKILL content parity
     '.agents/plugins/marketplace.json',    // Codex marketplace registry (all three non-claude validators)
     'agents/workflow-planner.md',          // Claude agent role — forge validators assert its concepts
-    'CLAUDE.md',                           // codex validator: line-count + durable-state concept
+    'CLAUDE.md',                           // codex validator: length notice + durable-state concept
     'README.md',                           // codex validator content assertion
     'docs/api.md',                         // codex validator: closure-contract concept
     'docs/workflow-state-contract.md',     // codex validator: durable-state concept
