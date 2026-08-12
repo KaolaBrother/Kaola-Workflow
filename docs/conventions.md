@@ -42,12 +42,17 @@ names the installed agent role and passes a dispatch packet:
 - `role` — the installed agent role name (e.g. `code-reviewer`, `implementer`)
 - `prompt` — the task prompt
 - `cwd` — the working directory
-- `model` — selected from the role's existing tier for this spawn: both tiers use `gpt-5.6-sol`
-- `reasoning_effort` — paired with that model for this spawn: standard uses `medium` and reasoning uses
-  `xhigh`
+- `model` / `reasoning_effort` — selected from the role's existing tier for this spawn; the
+  per-tier pair is authored twice, as the `CODEX_STANDARD_*`/`CODEX_REASONING_*` constants in
+  `kaola-workflow-codex-preflight.js` and as typed literals in the dispatch-routing pin of
+  `templates/routing/next.skeleton.md` and `finalize.skeleton.md`, which is what ships to the Codex
+  next/finalize SKILLs. `test-route-reachability.js` binds the two, pinning the effort and accepting
+  any model string; the installer's own copies are cross-bound by
+  `validate-kaola-workflow-contracts.js`
 
-The mapping is fixed for every spawn. A standard-tier role always uses Sol/medium; task breadth,
-latency, prior outcomes, and risk do not create an escalation or any other model/reasoning exception.
+The mapping is fixed for every spawn. A standard-tier role always uses the standard-tier pair;
+task breadth, latency, prior outcomes, and risk do not create an escalation or any other
+model/reasoning exception.
 
 Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 
@@ -278,19 +283,23 @@ Three-part machine-enforced contract:
    Any byte divergence between the three plugin-tree copies of a `.toml` reds the validation
    run. A new profile added to the codex tree is auto-covered.
 
-2. **Feature-token mirroring** — for non-generated roles, `scripts/test-agent-profile-parity.js` enforces that any
-   token in the curated `FEATURE_TOKENS` list that is present in an `agents/<name>.md` MUST
-   also appear in all three `.toml` twins. Add a token to `FEATURE_TOKENS` only after it is
-   GREEN at HEAD (present in both the `.md` and all three `.toml` twins). A drift between the
-   `.md` and the twins reds the claude chain and is caught before the four-chain gate.
+2. **Derived sentence parity** — for non-generated roles, `scripts/test-agent-profile-parity.js`
+   derives its obligations from the corpus rather than from a curated list: a rule sentence carried
+   by at least two thirds of the hand-maintained canonical profiles must appear in every
+   hand-maintained `.md` AND in all three `.toml` twins of each, and `ROLE_PINS` carries the
+   role-specific rules no consensus can reach — each pin asserted present in its source `.md`
+   first, so a pin whose source wording has moved fails loudly instead of enforcing nothing.
+   A drift between the `.md` and the twins reds the claude chain and is caught before the
+   four-chain gate.
 
 3. **Chain pinning** — `test-agent-profile-parity.js` is wired into the claude chain and
    pinned by all four `validate-*-contracts.js`, so a missing or renamed guard file reds
    every chain.
 
-**Workflow:** For a non-generated role, mirror a new feature paragraph/token into all three `.toml`
-twins first, then pin it in `FEATURE_TOKENS`. For the three generated reviewer roles, use the
-canonical JSON + generator workflow above instead.
+**Workflow:** For a non-generated role, mirror a new feature paragraph into all three `.toml`
+twins; a rule shared by two thirds of the hand-maintained roles is enforced automatically, and a
+role-specific rule needs a `ROLE_PINS` entry in `test-agent-profile-parity.js`. For the three
+generated reviewer roles, use the canonical JSON + generator workflow above instead.
 
 **`config/hooks.json` family (#418.1).** The three plugin-tree `config/hooks.json` files
 (`plugins/kaola-workflow/`, `plugins/kaola-workflow-gitlab/`, `plugins/kaola-workflow-gitea/`)
@@ -767,7 +776,7 @@ active-folder lane into one of four buckets. The classifier is a pure function; 
 4. Liveness heuristic — `claim_ts` present and age < `LANE_STALENESS_MS` → **`ambiguous`** (ask
    before overwriting); otherwise → **`stale`** (old leftover or pre-#579 markerless folder).
 
-`LANE_STALENESS_MS = 86400000` (24 hours) is the single staleness constant exported from
+`LANE_STALENESS_MS` (24 hours) is the single staleness constant exported from
 `kaola-workflow-adaptive-schema.js`. The value is conservative: a run completes well within a
 day, so a marker newer than 24 hours could be an active co-tenant.
 

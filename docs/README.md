@@ -17,7 +17,7 @@ moments.
 
 ## Runtime editions
 
-- [opencode Edition](opencode-edition.md) — additive opencode runtime (`opencode.json` + `.opencode/` tree; provider-open two-tier effort mapping; installs via `install-opencode.sh`).
+- [opencode Edition](opencode-edition.md) — additive opencode runtime (`opencode.json` + `.opencode/` tree; model and effort inherited from the session, opt-in per-tier model pin; installs via `install-opencode.sh`).
 - [kimi Edition](kimi-edition.md) — additive Kimi Code runtime (`.kimi/skills/` tree + managed `[[hooks]]` block; roles as Skills, inherit-only model tier; installs via `install-kimi.sh`).
 
 ## Decisions

@@ -44,10 +44,10 @@ function runNode(script, args, cwd, extraEnv, opts) {
   // Git isolation: prevent developer gpgsign/hooksPath from breaking fixture commits.
   baseEnv.GIT_CONFIG_GLOBAL = '/dev/null';
   baseEnv.GIT_CONFIG_NOSYSTEM = '1';
-  // The timeout is a HANG guard, not an assertion. When this suite runs inside a concurrent
-  // chain pool a single fixture subprocess legitimately takes far longer than on an idle
-  // host, so the runner exports KAOLA_TEST_TIMEOUT_SCALE and the guard tracks the load it is
-  // running under. A standalone run (no scale set) keeps the original bound exactly.
+  // The timeout is a HANG guard, not an assertion. It scales with KAOLA_TEST_TIMEOUT_SCALE so a
+  // runner that puts this suite under concurrent load can widen the guard rather than take a false
+  // red. Nothing exports that variable since the within-chain step pool was retired (#960), and the
+  // read is fail-open, so the scale is 1 and the original bound holds exactly.
   const timeoutScale = Math.max(1, Number(process.env.KAOLA_TEST_TIMEOUT_SCALE) || 1);
   const timeout = ((opts && opts.timeout != null) ? opts.timeout : 120000) * timeoutScale;
   // Every adaptive-lifecycle scenario drives this helper as a CHAIN of separate CLI

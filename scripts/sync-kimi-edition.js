@@ -58,8 +58,6 @@ const CANON_HOOKS_DIR = path.join(REPO, 'hooks');
 function treeLabel(forge) {
   return '.kimi' + forgeLayout.outSuffix(forge || DEFAULT_FORGE);
 }
-const OUT_SKILLS_DIR = path.join(REPO, treeLabel(DEFAULT_FORGE), 'skills');
-const OUT_HOOKS_DIR = path.join(REPO, treeLabel(DEFAULT_FORGE), 'hooks');
 
 // Reviewer gate roles (code-reviewer, adversarial-verifier, security-reviewer) carry their
 // schema-2 identity through the kimi render: behavior_contract_version / behavior_contract_hash
@@ -449,32 +447,6 @@ function transformCommandBody(body, forge, label) {
       while (i < lines.length && !/^#{1,6}\s/.test(lines[i])) i++;
       continue;
     }
-    // kimi path-flip (mirror of the opencode #539 Mechanism B strip): kimi is
-    // adaptive-only-default, so the canonical "## Startup Step … — Path Intent"
-    // section (KAOLA_ENABLE_ADAPTIVE switch resolution + Branch A/B prose) is DROPPED
-    // at generation time. Matched by the stable "Path Intent" TITLE, not the volatile
-    // step number; the body-skip stops at the next SIBLING `##` heading (the section
-    // nests `### Branch A`/`### Branch B` children). Rewind trailing blanks so the
-    // excision leaves a single-blank seam. Canonical is never touched.
-    if (/^##\s.*\bPath Intent\b/.test(line)) {
-      while (out.length && out[out.length - 1].trim() === '') out.pop();
-      if (out.length) out.push('');
-      i++;
-      while (i < lines.length && !/^##\s/.test(lines[i])) i++;
-      continue;
-    }
-    // kimi strip (mirror of the opencode workflow-init Codex-note cleanup): the
-    // "> **Codex hooks note:** …" blockquote is Codex-specific install guidance with
-    // no kimi meaning (kimi delivers hooks via install-kimi.sh + kimi-hooks.toml).
-    // Only workflow-init carries it → no over-strip risk.
-    if (/^>\s*\*\*Codex hooks note:/.test(line)) {
-      while (out.length && out[out.length - 1].trim() === '') out.pop();
-      if (out.length) out.push('');
-      i++;
-      while (i < lines.length && /^>/.test(lines[i])) i++;
-      while (i < lines.length && lines[i].trim() === '') i++;
-      continue;
-    }
     out.push(line);
     i++;
   }
@@ -514,12 +486,6 @@ function transformCommandBody(body, forge, label) {
   text = stripCardModelPlaceholders(text);
   // Tidy trailing whitespace left behind on affected lines.
   text = text.replace(/[ \t]+\n/g, '\n');
-  // Inline "Step 0a-1" residue mentions in workflow-next (the Path Intent SECTION
-  // strip above removed the step, leaving these dangling). Two shapes — a
-  // parenthetical " (Step 0a-1)" and a conjunction " or Step 0a-1" — both collapse
-  // cleanly (same scoped strip as the opencode transform; only workflow-next.md
-  // carries it, so no over-strip risk).
-  text = text.replace(/ \(Step 0a-1\)| or Step 0a-1/g, '');
   // The canonical workflow-next dispatch emits a claim invocation carrying the
   // literal `--runtime claude`; on the kimi edition the flag must stamp the kimi
   // runtime into workflow-state.md. Scoped to the exact flag token (word boundary) so
@@ -865,6 +831,6 @@ module.exports = {
   CANONICAL_RESTRICTIONS, restrictionNote, restrictedRoles,
   listCanonAgents, listCanonCommands,
   CANON_AGENTS_DIR, CANON_HOOKS_DIR,
-  OUT_SKILLS_DIR, OUT_HOOKS_DIR, REPO,
+  REPO,
   HOOK_SCRIPTS,
 };

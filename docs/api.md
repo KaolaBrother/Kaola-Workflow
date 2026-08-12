@@ -999,7 +999,7 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
 - **Offline**: `KAOLA_WORKFLOW_OFFLINE=1` writes an `OFFLINE_PLACEHOLDER` commit instead of real
   metadata.
 - The folder stays active until `watch-pr` / `watch-mr` observes MERGED or CLOSED; both archive it.
-- `cmdSinkPr` emits no closure receipt — the authoritative receipt for a `sink: pr` project is
+- The PR sink emits no closure receipt — the authoritative receipt for a `sink: pr` project is
   emitted by the watcher at merge. This is documented behavior, not a gap.
 
 ### Sink journal disposal
@@ -1530,16 +1530,22 @@ frontmatter to `model: inherit`. It governs exactly one case: an ad-hoc dispatch
 repository's source `agents/` tree. Each role's source frontmatter is therefore held byte-equal to
 its `DEFAULT_AGENT_MODELS` entry (asserted by `test-agent-model-resolver.js`).
 
-Codex subagent dispatch uses the existing role tier as a separate per-spawn contract:
+Codex subagent dispatch uses the existing role tier as a separate per-spawn contract. The per-tier
+model/effort pair is authored twice — as named constants (`CODEX_STANDARD_MODEL`,
+`CODEX_STANDARD_EFFORT`, `CODEX_REASONING_MODEL`, `CODEX_REASONING_EFFORT`) in
+`scripts/kaola-workflow-codex-preflight.js`, and as typed literals in the dispatch-routing pin of
+`templates/routing/next.skeleton.md` and `finalize.skeleton.md`, which is what ships to the SKILL
+surfaces. The two are bound: `test-route-reachability.js` builds its expected efforts from those
+constants and asserts every shipped Codex SKILL states the matching one, and
+`validate-kaola-workflow-contracts.js` cross-binds preflight to the installer's own copies. Note the
+shape of that binding — it pins the **effort** and accepts any model string, so a model change is
+caught by the contract validator rather than by the prose check. This document does not restate the
+values.
 
-| Role tier | Codex model | Reasoning effort |
-|---|---|---|
-| `standard` | `gpt-5.6-sol` | `medium` |
-| `reasoning` | `gpt-5.6-sol` | `xhigh` |
-
-The mappings are fixed for every Codex spawn. A `standard` role always receives Sol/medium and has no
-task-specific model or reasoning-effort escalation, downgrade, or other exception. This contract is
-Codex-only; the resolver and model routing for Claude Code, opencode, and Kimi are unchanged.
+The mappings are fixed for every Codex spawn. A `standard` role always receives the standard-tier
+pair and has no task-specific model or reasoning-effort escalation, downgrade, or other exception.
+This contract is Codex-only; the resolver and model routing for Claude Code, opencode, and Kimi
+are unchanged.
 
 ## Environment Variables
 

@@ -71,8 +71,6 @@ function outDirs(forge) {
 }
 const OUT_AGENT_DIR = outDirs(DEFAULT_FORGE).agent;
 const OUT_COMMAND_DIR = outDirs(DEFAULT_FORGE).command;
-const OUT_HOOKS_DIR = outDirs(DEFAULT_FORGE).hooks;
-const OUT_PLUGINS_DIR = outDirs(DEFAULT_FORGE).plugins;
 const OPENCODE_JSON = path.join(REPO, 'opencode.json');
 
 // Runtime-neutral hook scripts (byte-copied from canonical hooks/ into the
@@ -455,50 +453,6 @@ function transformCommandBody(body, forge, label) {
       while (i < lines.length && !/^#{1,6}\s/.test(lines[i])) i++;
       continue;
     }
-    // opencode path-flip (#539, Mechanism B): opencode is adaptive-only-default, so the
-    // canonical "## Startup Step 0a-1 — Path Intent" section (KAOLA_ENABLE_ADAPTIVE switch
-    // resolution + Branch A/B path-selection prose) is DROPPED at generation time. This
-    // transform runs ONLY inside renderCommand (opencode output), so canonical is never
-    // touched — avoiding a guaranteed merge conflict with #538's in-flight canonical edits.
-    // Mirrors the Agent Model Dispatch strip above: detect the heading, skip its body. UNLIKE
-    // that section (a flat block), this one nests `### Branch A`/`### Branch B` children,
-    // so the body-skip stops at the next SIBLING `##` heading (`^##\s` rejects `###` — after
-    // two hashes `\s` requires whitespace, and `###` has a third `#` there), not the first
-    // `###` child. The ^## anchor isolates the section heading (surviving "(Step 0a-1)"
-    // prose mentions elsewhere are not headings). Rewind trailing blank line(s) in `out` so
-    // excising the section leaves a single-blank seam, not a double-blank.
-    // #F7: match by the stable "Path Intent" TITLE, not the volatile step number "0a-1" — a
-    // canonical renumber (e.g. "Step 0b") must not silently un-strip the section and leak the
-    // path-selection switch onto the adaptive-only surface. The A22 negative assertions
-    // (no KAOLA_ENABLE_ADAPTIVE, no Branch A/B) are the fail-loud net if this ever misses.
-    if (/^##\s.*\bPath Intent\b/.test(line)) {
-      // Rewind trailing blank line(s) in `out` then re-insert exactly ONE blank, so
-      // excising the section leaves a clean single-blank seam to the next heading
-      // (the body-skip below also consumes the blank that followed the section).
-      while (out.length && out[out.length - 1].trim() === '') out.pop();
-      if (out.length) out.push('');
-      i++;
-      while (i < lines.length && !/^##\s/.test(lines[i])) i++;
-      continue;
-    }
-    // opencode strip (workflow-init Codex-note cleanup): the canonical
-    // "> **Codex hooks note:** …" blockquote is Codex-specific install guidance — it points at
-    // `install-codex-agent-profiles.js` (a Codex-only script with no opencode meaning) and rode
-    // along when workflow-init was regenerated from the canonical Claude command. opencode
-    // delivers agents/hooks via `install-opencode.sh`, so the note is dead prose on this surface.
-    // Detect the blockquote opener by its stable "**Codex hooks note:**" marker (only
-    // workflow-init carries it → no over-strip risk), skip the contiguous `>` body, and consume
-    // the trailing blank(s) so the seam to the next paragraph collapses to a single blank
-    // (mirrors the Path Intent strip above). opencode-only: this runs inside renderCommand and
-    // never touches canonical commands/*.md (additive, D-530-02).
-    if (/^>\s*\*\*Codex hooks note:/.test(line)) {
-      while (out.length && out[out.length - 1].trim() === '') out.pop();
-      if (out.length) out.push('');
-      i++;
-      while (i < lines.length && /^>/.test(lines[i])) i++;
-      while (i < lines.length && lines[i].trim() === '') i++;
-      continue;
-    }
     out.push(line);
     i++;
   }
@@ -522,17 +476,6 @@ function transformCommandBody(body, forge, label) {
   // opencode adapt surface needs NO path-fallback strip; it is defended instead by the POSITIVE A22
   // assertion that the generated adapt carries the "NEVER downgrade to fast/full" guard plus a
   // negative guard against any un-NEVER'd fallback wording. The dead replace is removed here.
-  // opencode path-flip (#540, Mechanism B continuation): the Path Intent SECTION strip above
-  // removed the "## Startup Step 0a-1 — Path Intent" heading + body, but three INLINE "Step 0a-1"
-  // residue mentions survive elsewhere in workflow-next (post-#538 the step no longer exists, so
-  // they are dangling dead prose). Two shapes — a parenthetical " (Step 0a-1)" (e.g.
-  // "Resolve the path intent first (Step 0a-1)," → "Resolve the path intent first,";
-  // "resolve the path intent (Step 0a-1) *before*" → "resolve the path intent *before*") and a
-  // conjunction " or Step 0a-1" ("from KAOLA_PATH or Step 0a-1 judgment" → "from KAOLA_PATH
-  // judgment") — both collapse cleanly to single-space prose. Canonical commands/*.md are never
-  // touched (opencode-only, additive D-530-02). Scoped to the literal "Step 0a-1" — only
-  // workflow-next.md carries it, so no over-strip risk.
-  text = text.replace(/ \(Step 0a-1\)| or Step 0a-1/g, '');
   // #2 (opencode runtime label): the canonical workflow-next dispatch emits a claim invocation
   // carrying the literal `--runtime claude`. On the opencode edition that flag must stamp the
   // opencode runtime into workflow-state.md, so rewrite the literal to `--runtime opencode`.
@@ -1006,11 +949,8 @@ module.exports = {
   PERMISSION_AXES, deniedPermissionAxes,
   listCanonAgents, listCanonCommands,
   ENV_STANDARD_MODEL, ENV_REASONING_MODEL,
-  // Legacy aliases (env-derived; empty by default now that pins are opt-in).
-  DEFAULT_STANDARD_MODEL: ENV_STANDARD_MODEL,
-  DEFAULT_REASONING_MODEL: ENV_REASONING_MODEL,
   CANON_AGENTS_DIR, CANON_HOOKS_DIR, CANON_PLUGINS_DIR,
-  OUT_AGENT_DIR, OUT_COMMAND_DIR, OUT_HOOKS_DIR, OUT_PLUGINS_DIR, OPENCODE_JSON, REPO,
+  OUT_AGENT_DIR, OUT_COMMAND_DIR, OPENCODE_JSON, REPO,
   HOOK_SCRIPTS, PLUGIN_SCRIPTS,
   writePlugin, retiredMdFiles, retiredCopiedFiles, pruneRetired,
 };

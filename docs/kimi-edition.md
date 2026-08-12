@@ -94,10 +94,6 @@ the test:
   CANONICAL source either — there is no model-noun rewrite transform left to apply (the
   lowercase `opus`/`sonnet` plan-ledger tier tokens are the portable cross-edition
   contract and remain).
-- The adaptive planner's per-node tier (`reasoning`/`standard`) survives as **metadata
-  only**: it is recorded in the dispatch packet and ledger, and `modelDisplay()` renders it
-  as `parent session (<tier> tier metadata)` — the same semantics as the Codex edition. It
-  maps to no effort or model at runtime.
 
 **Declared runtime divergence.** Kimi is the one runtime whose subagents cannot carry a
 per-dispatch tier: every subagent inherits the session model. That is a genuine capability

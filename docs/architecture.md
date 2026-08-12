@@ -111,15 +111,16 @@ worktree reads one authority instead of re-deriving from cwd.
 
 `classifyLane(lane, ctx)` (`kaola-workflow-classifier.js`) is a pure function partitioning an
 active-folder lane into `mine` / `live` / `stale` / `ambiguous`, driven by three claim-time fields
-(`session_marker`, `claim_ts`, and `LANE_STALENESS_MS = 86400000`). All three are written once at
+(`session_marker`, `claim_ts`, and `LANE_STALENESS_MS`). All three are written once at
 claim time; there is no heartbeat. `cmdStatus` annotates each folder with its bucket; `cmdResume`
 excludes `live` lanes and asks on `ambiguous`. See `workflow-state-contract.md` § Lane
 classification for the precedence ladder.
 
 The clean-worktree checks (`assertWorktreeClean` in `sink-merge.js`, `treeDirty` in `claim.js`)
 apply `isParkedLanePath(relPath, ownedProjects)` on top of the existing fail-closed handling, so
-another lane's scratch under `kaola-workflow/`, `.kw/worktrees/` or `.kw/legs/` does not read as
-dirt. Real code and shared durable state stay strict, and an unverifiable tree still reads as dirty.
+another lane's scratch under the `PARKED_LANE_PREFIXES` paths (exported from
+`kaola-workflow-adaptive-schema.js`) does not read as dirt. Real code and shared durable state stay
+strict, and an unverifiable tree still reads as dirty.
 
 ## Validation
 
@@ -284,7 +285,7 @@ under `### Project rules`.
 
 ## Editions and runtimes
 
-**Four forge editions** ship the same workflow against a different forge CLI: the canonical GitHub
+**Four editions** ship the same workflow across three forge CLIs: the canonical GitHub
 tree in `scripts/` plus `plugins/kaola-workflow/` (Codex), `plugins/kaola-workflow-gitlab/`, and
 `plugins/kaola-workflow-gitea/`. Most scripts are rename-normalized copies —
 `kaola-workflow-<name>.js` becomes `kaola-{forge}-workflow-<name>.js` — and `scripts/edition-sync.js`
@@ -293,8 +294,10 @@ file held **byte-identical** across all four trees: it is the cross-edition drif
 constant shared between a producer and a consumer lives there so the two cannot disagree.
 
 **Two additive runtime editions** — opencode and Kimi — are runtimes, not forges. They are not wired
-into `npm test`, `edition-sync.js`, `install.sh`, or the routing-surface propagation set, and they
-carry their own suites (`test-opencode-edition.js`, `test-kimi-edition.js`). See
+into `npm test`, `edition-sync.js`, `install.sh`, or the routing generator's render targets, but
+their sync scripts derive their command surfaces from that same routing registry (via
+`runtime-edition-forge.js`), so a routing-surface change leaves `.opencode`/`.kimi` stale until
+regenerated. They carry their own suites (`test-opencode-edition.js`, `test-kimi-edition.js`). See
 `opencode-edition.md` and `kimi-edition.md`.
 
 ### Runtime capability divergence

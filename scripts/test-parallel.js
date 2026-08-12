@@ -338,7 +338,7 @@ async function selfTest() {
   }
 
   // ------------------------------------------------------------------
-  // (f) Within-chain step pool + scenario sharding.
+  // (f) Scenario sharding.
   //
   // These are the load-bearing properties of the faster chain: the shard
   // partition must cover every scenario exactly once, and the coverage audit
@@ -346,7 +346,6 @@ async function selfTest() {
   // here, in the chain, so a regression cannot ship as "the suite got faster".
   // ------------------------------------------------------------------
   const shardLib = require('./test-shard-lib');
-  const pool = require('./run-chain-pool');
 
   // (f1) EXACT PARTITION: for every width, every ordinal is owned by exactly one shard.
   {
@@ -409,58 +408,6 @@ async function selfTest() {
     const blob = 'noise\n' + shardLib.coverageLine({ suite: 'z', index: 1, total: 2, scenarios: 5, ran: 3 }) + '\nmore noise\n';
     const got = shardLib.parseCoverage(blob);
     assert('(f5) parseCoverage recovers exactly one payload', got.length === 1 && got[0].suite === 'z' && got[0].ran === 3);
-  }
-
-  // (f6) planUnits: a registered suite expands into N tagged shard units; anything else
-  // stays one unit; the queue is ordered longest-hint-first.
-  // The registry is EMPTY in the shipped tree — the two suites that were once registered are
-  // deleted, and the walkthrough is deliberately excluded. So register a synthetic suite here
-  // rather than reading production data: this pins the EXPANSION MECHANISM, which survives, and
-  // stops the assertion going vacuous (or crashing) whenever the registry's contents change.
-  {
-    const suite = 'node scripts/test-synthetic-shardable.js';
-    pool.SHARDED_SUITES[suite] = 4;
-    const units = pool.planUnits([suite, 'node scripts/test-run-chains.js'], {});
-    const shardUnits = units.filter(u => u.suite === suite);
-    const width = pool.SHARDED_SUITES[suite];
-    assert('(f6a) a registered suite expands to its declared width', shardUnits.length === width);
-    assert('(f6b) every expanded unit carries a distinct --shard i/N',
-      new Set(shardUnits.map(u => u.command)).size === width
-      && shardUnits.every(u => u.command.startsWith(suite + ' --shard ')));
-    assert('(f6c) an unregistered step stays a single whole-suite unit',
-      units.filter(u => u.command === 'node scripts/test-run-chains.js').length === 1);
-    assert('(f6d) the queue is ordered longest-hint-first',
-      units.every((u, i) => i === 0 || units[i - 1].cost >= u.cost));
-    delete pool.SHARDED_SUITES[suite];
-  }
-
-  // (f7) KAOLA_TEST_POOL_SHARDS=off disables expansion — the escape hatch runs the whole suite.
-  {
-    const suite = 'node scripts/test-synthetic-shardable.js';
-    pool.SHARDED_SUITES[suite] = 4;
-    const units = pool.planUnits([suite], { KAOLA_TEST_POOL_SHARDS: 'off' });
-    assert('(f7) SHARDS=off runs the suite whole', units.length === 1 && units[0].command === suite);
-    delete pool.SHARDED_SUITES[suite];
-  }
-
-  // (f8) Pool sizing: serial on request, forced on a number, bounded on auto, and a typo
-  // falls back to auto rather than crashing the gate.
-  {
-    assert('(f8a) serial forces a pool of 1', pool.resolveConcurrency({ KAOLA_TEST_POOL_CONCURRENCY: 'serial' }, 16, 40) === 1);
-    assert('(f8b) "1" forces a pool of 1', pool.resolveConcurrency({ KAOLA_TEST_POOL_CONCURRENCY: '1' }, 16, 40) === 1);
-    assert('(f8c) a number forces that pool size', pool.resolveConcurrency({ KAOLA_TEST_POOL_CONCURRENCY: '3' }, 16, 40) === 3);
-    assert('(f8d) a forced size never exceeds the unit count', pool.resolveConcurrency({ KAOLA_TEST_POOL_CONCURRENCY: '99' }, 16, 4) === 4);
-    assert('(f8e) auto stays at the measured non-inflating ceiling', pool.resolveConcurrency({}, 64, 40) === 4
-      && pool.resolveConcurrency({}, 8, 40) === 4);
-    assert('(f8f) a tiny host stays serial', pool.resolveConcurrency({}, 2, 40) === 1);
-    assert('(f8g) a typo falls back to auto', pool.resolveConcurrency({ KAOLA_TEST_POOL_CONCURRENCY: 'yes-please' }, 16, 40) > 1);
-  }
-
-  // (f9) parseArgs splits the serial --first prefix from the pooled remainder.
-  {
-    const { first, pooled } = pool.parseArgs(['--first', 'a', '--first', 'b', 'c', 'd']);
-    assert('(f9) --first steps are separated, in order, from the pooled steps',
-      first.join(',') === 'a,b' && pooled.join(',') === 'c,d');
   }
 
   // Roll-up

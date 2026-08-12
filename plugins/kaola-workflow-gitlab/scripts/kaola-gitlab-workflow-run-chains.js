@@ -40,12 +40,13 @@
 //                                 STRICTER than the finalize gate — see runReleaseCheck below.
 //                                 Optional: --candidate <sha-ish> (default HEAD), --receipt <path>.
 //
-// RECEIPT PATH (#546): plan-validator --finalize-check reads the chain receipt from
-// <plan-dir>/.cache/chain-receipt.json where plan-dir == path.dirname(<plan-path>). Run from the
+// RECEIPT PATH (#546): the finalize chain-receipt check — kaola-gitlab-workflow-claim.js finalize calling
+// adaptiveSchema.evaluateChainReceipt in process — reads the chain receipt from
+// <project-dir>/.cache/chain-receipt.json, i.e. kaola-workflow/<project>/.cache/. Run from the
 // worktree root (the #466 contract), the producer's bare cwd default (.cache/chain-receipt.json)
-// lands at the WORKTREE ROOT, not under kaola-workflow/<project>/ — so the gate reads nothing and
-// refuses chains_unverified. Pass --project <issue-N> (or --plan <path>) to land the receipt where
-// the gate reads it. Precedence when several are given: --output > --plan > --project > cwd default.
+// lands at the WORKTREE ROOT, not under kaola-workflow/<project>/ — so the check reads nothing and
+// reports chains_unverified. Pass --project <issue-N> (or --plan <path>) to land the receipt where
+// the check reads it. Precedence when several are given: --output > --plan > --project > cwd default.
 //
 // Env:
 //   KAOLA_RUN_CHAINS_CONCURRENCY  auto (default) | serial | <N>  — pool size for the chain
@@ -122,9 +123,10 @@
 //
 // SELF-HOST-ONLY (#475): this producer runs the built-in npm edition chains for the
 // Kaola-Workflow self-host. A consumer (non-npm) product repo does NOT run it — its
-// finalize gate is the agent-recorded `.cache/final-validation.md` evidence, enforced
-// by `plan-validator --finalize-check` (consumer mode). The v6.2.0 `kaola-workflow/chains.json`
-// consumer escape hatch is retired (Pure option A — no opt-in middle-ground).
+// finalize evidence is the agent-recorded `.cache/final-validation.md`, reported
+// by the finalize chain-receipt check (`adaptiveSchema.evaluateChainReceipt`, consumer mode).
+// The v6.2.0 `kaola-workflow/chains.json` consumer escape hatch is retired (Pure option A — no
+// opt-in middle-ground).
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
@@ -863,12 +865,12 @@ function getWorkTreeHash(cwd) {
 // #475 (supersedes the #464 consumer escape hatch): run-chains.js is now SELF-HOST-only.
 // The v6.2.0 per-repo `kaola-workflow/chains.json` consumer contract is RETIRED — there is no
 // opt-in middle-ground (Pure option A). A consumer (non-npm) product repo no longer authors
-// chains.json + re-runs a suite to produce a chain receipt; its finalize gate is the agent's
-// recorded `.cache/final-validation.md` evidence ("Agent Owns Reasoning; Scripts Own Atomicity",
-// #44), enforced by `plan-validator --finalize-check` in consumer mode. resolveChains therefore
-// resolves ONLY the built-in npm edition chains for the KNOWN_CHAINS whose `test:kaola-workflow:<name>`
-// script is declared in package.json (the self-host); otherwise a typed `chains_config_missing`
-// refusal (a consumer repo simply never runs this producer).
+// chains.json + re-runs a suite to produce a chain receipt; its finalize evidence is the agent's
+// recorded `.cache/final-validation.md` ("Agent Owns Reasoning; Scripts Own Atomicity", #44),
+// reported by the finalize chain-receipt check (`adaptiveSchema.evaluateChainReceipt`) in consumer
+// mode. resolveChains therefore resolves ONLY the built-in npm edition chains for the KNOWN_CHAINS
+// whose `test:kaola-workflow:<name>` script is declared in package.json (the self-host); otherwise
+// a typed `chains_config_missing` refusal (a consumer repo simply never runs this producer).
 function readJsonOr(p, dflt) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (_) { return dflt; }
 }
@@ -1088,9 +1090,10 @@ async function main(argv) {
   const mockNames = Object.keys(mocks);
   if (resolved.error && mockNames.length === 0) {
     // #475: run-chains.js is self-host-only. A consumer (non-npm) repo does NOT run this producer —
-    // its finalize gate is the agent-recorded .cache/final-validation.md, enforced by
-    // plan-validator --finalize-check in consumer mode. So the only refusal is chains_config_missing
-    // (this repo declares no edition test scripts), and the hint points at the consumer contract.
+    // its finalize evidence is the agent-recorded .cache/final-validation.md, reported by the
+    // finalize chain-receipt check (adaptiveSchema.evaluateChainReceipt) in consumer mode. So the
+    // only refusal is chains_config_missing (this repo declares no edition test scripts), and the
+    // hint points at the consumer contract.
     const hint = 'This repo declares no test:kaola-workflow:* scripts, so it cannot run the npm edition chains. Only the Kaola-Workflow self-host runs these; a consumer (non-npm) repo does NOT run run-chains.js — finalize gates on the agent-recorded .cache/final-validation.md (#475).';
     // Recorded on BOTH arms: the outcome is the same refusal whether it was rendered as JSON or as
     // a stderr line, and a measurement that only saw the --json callers would under-count itself.
@@ -1229,9 +1232,9 @@ async function main(argv) {
   // Strip the internal _output field (kept as _timedOut is PROMOTED below). #550: the receipt
   // additively records `attempts` (the FINAL attempt's exitCode is the chain verdict) and
   // `retried_transient`. #608: `timed_out` promotes the internal _timedOut marker so a receipt
-  // reader (the plan-validator finalize gate, an operator) can distinguish a timeout kill from a
+  // reader (the finalize chain-receipt check, an operator) can distinguish a timeout kill from a
   // genuine test failure without re-running anything. #725 (B0): `steps` records the per-step
-  // decomposition. Readers index by name/exitCode/accepted_red (plan-validator --finalize-check,
+  // decomposition. Readers index by name/exitCode/accepted_red (`adaptiveSchema.evaluateChainReceipt`,
   // #522 schema test), so these are backward-compatible additions.
   const chainResults = dispatchResults.map((ch) => ({
     name: ch.name,

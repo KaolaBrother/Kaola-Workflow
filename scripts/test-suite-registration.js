@@ -202,8 +202,8 @@ if (typeof fast === 'string' && typeof full === 'string') {
 // a script in this repo — across EVERY script, not just the chains, since `sync:editions`,
 // `test:parallel` and the edition runner invoke scripts too and any of them can be left dangling.
 // It is NOT a general "every referenced path exists" sweep over arbitrary strings, and it
-// deliberately validates no other table: the COST_HINT and ceiling tables were considered and left
-// alone, because no failure has been observed there.
+// deliberately validates no other table: the spawn-classification ceiling table was considered and
+// left alone, because no failure has been observed there.
 {
   // `node scripts/x.js`, `node plugins/<edition>/scripts/y.js` — optionally quoted, with any flags
   // following. The path is the first token after `node` that ends in .js.

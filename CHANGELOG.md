@@ -4,6 +4,16 @@
 
 ### Added
 
+- **The root `README.md`'s Codex dispatch prose is now bound to the constants it states — #957.**
+  Every prose surface this repo ships had its per-tier model and effort pair bound to
+  `kaola-workflow-codex-preflight.js` except three, and the README was the one nobody had noticed: a
+  live, normative sentence naming both tiers' model and effort, read by no check. It keeps its
+  values — the front door should answer the question — and `validate-kaola-workflow-contracts.js`
+  now builds each expected fragment **from** the constants and asserts the README states it. Pinned
+  once rather than mirrored into the forge validators: those mirror the neighbouring block because
+  each forge tree owns a preflight and an installer, so what is replicated there is the subject, not
+  the rule, and the README is a single root file.
+
 - **The three code-producing roles now carry one solution ladder, and a pin that makes it stay —
   #953.** `implementer`, `code-architect` and `planner` each gain the same `## Solution ladder`
   section: climb only as far as the problem forces, stopping at the first rung that works — nothing,
@@ -80,6 +90,51 @@
 
 ### Changed
 
+- **`docs/conventions.md` stops instructing readers to pin tokens in a constant that no longer
+  exists — #956.** The agent-profile parity section documented `FEATURE_TOKENS` and told contributors
+  to add tokens to it; the constant was removed at `523f1241`, which took the code and left the
+  instructions. It was not merely deleted but **replaced in the same commit and the same file**, so
+  the block is rewritten against the successor rather than cut: parity obligations are now derived
+  from the corpus — a rule sentence carried by two thirds of the hand-maintained canonical profiles
+  must appear in every one of them and in all three `.toml` twins — with `ROLE_PINS` carrying the
+  role-specific rules no consensus can reach, each asserted present in its source `.md` first so a
+  pin whose wording has moved fails loudly instead of enforcing nothing. The two neighbouring items
+  are left intact because they remain true: the guard really is wired into the claude chain and
+  pinned by all four `validate-*-contracts.js`.
+
+- **The Codex per-tier model and effort pair is stated once and pointed at, not restated — #957.**
+  `docs/api.md` and `docs/conventions.md` carried their own copies of the values, bound to nothing;
+  both now point at the four `CODEX_*` constants in `kaola-workflow-codex-preflight.js` and at the
+  checks that bind them. A third copy, in the root `README.md`, was the one the issue missed — it
+  keeps its values, because a reader of the front door is owed the concrete answer, and gains a guard
+  instead (see Added).
+
+- **`docs/architecture.md` no longer says the additive runtime editions are outside the routing
+  propagation set — #958.** They are outside the routing generator's **render targets** — it writes
+  eighteen surfaces and neither `.opencode` nor `.kimi` is among them — but both sync scripts derive
+  their command surfaces from that same registry, so a routing-surface change leaves those trees
+  stale until regenerated. The sentence now says so, which is the half with a consequence: a reader
+  who believed the old wording would edit a routing skeleton and never regenerate. The three
+  accurate clauses (absent from `npm test`, `edition-sync.js` and `install.sh`) are unchanged.
+
+- **`docs/architecture.md` no longer claims four forge editions ship against four forge CLIs —
+  #959.** Measured by which CLI each tree actually invokes, the four trees call **three**: the Codex
+  tree's six `gh` call sites are the same files at the same lines as canonical's, so its axis is
+  runtime, not forge. The line now reads "**Four editions** ship the same workflow across three forge
+  CLIs", which leaves the load-bearing "four editions" vocabulary — 243 lines across some seventy
+  files — untouched and agrees with the runtime-divergence table directly below it.
+
+- **Four more restatements and a fabricated symbol leave the docs — #962, and two findings from the
+  same audit that had no issue of their own.** `docs/kimi-edition.md` no longer credits rendering to
+  a deleted function (the bullet described a dispatch packet, ledger and planner node that ADR 0017
+  retired, and every surviving clause is already stated in the same section);
+  `docs/opencode-edition.md` points at the derived reasoning-tier roster instead of re-typing it;
+  `LANE_STALENESS_MS` is named without its value at all three live sites; `docs/architecture.md`
+  names `PARKED_LANE_PREFIXES` rather than inlining it. Unfiled alongside them: `docs/README.md` sold
+  the opencode edition on a per-role effort mapping that was removed rather than deprecated, and
+  `docs/api.md` attributed the PR sink's behaviour to `cmdSinkPr`, a function that never existed in
+  any script — the stated result was true, only the method was invented.
+
 - **The ADR 0017 watch list gains two rows, and refuses a third — #954.** The register of record now
   carries *a subagent that never receives a project rule its work depends on* and *a rule an agent
   demonstrably held in context and measurably did not follow*. Both are sized inline against evidence
@@ -96,6 +151,32 @@
   telling an opencode reader how a role is dispatched. #949 built the mechanism for it — anchor,
   near-miss `else`, throw, and suite anchors on both editions. The watch list is defined as failure
   classes never observed in this methodology, so the row would have recorded a false claim.
+
+### Removed
+
+- **`scripts/run-chain-pool.js`, a 428-line within-chain step pool that nothing ever scheduled —
+  #960.** No chain, npm script, CLI entry point or installer invoked it, and its shard registry was
+  an empty object; its only consumer was the `--self-test` section of `scripts/test-parallel.js`,
+  removed with it. The walkthrough's `KAOLA_TEST_TIMEOUT_SCALE` reader is fail-open and stays, now
+  permanently at the pre-pool bound.
+
+- **`scripts/fixtures-orphan-legality.js`, a 102-line shared fixture whose consumers are all gone —
+  #961.** Both importers were deleted with their mechanisms (`test-parallel-batch.js` in `1fc33c9d`,
+  `test-adaptive-node.js` in `c0b48043`), leaving all eight exports unreferenced by live code; the
+  now-stale install-manifest exclusion comment goes with it in both byte-paired copies.
+
+- **Three dead strip transforms, two uncalled CLI modes and six dead constants leave the runtime
+  edition scripts — #962.** `sync-opencode-edition.js` and `sync-kimi-edition.js` lose the Path
+  Intent, Codex-note and `Step 0a-1` strips from `transformCommandBody` (87 lines): all three match
+  nothing in any of the nine canonical command sources, and removing them renders the six edition
+  trees **byte-identically** — measured, with a control that removed a live transform instead and
+  did produce a diff. `runtime-edition-forge.js` loses its `--commands-dir` and `--forges` CLI modes,
+  which no installer, npm script or edition sync ever called; the `commandSources()` function they
+  sat beside is untouched, because both sync scripts derive their command list through it. Six
+  zero-consumer constants go with them (`DEFAULT_STANDARD_MODEL`, `DEFAULT_REASONING_MODEL`,
+  `OUT_SKILLS_DIR`, both `OUT_HOOKS_DIR` definitions and `OUT_PLUGINS_DIR`) — three more than the
+  audit reported, because `OUT_HOOKS_DIR` is defined in both scripts and a name-keyed search reads
+  each file's own export as the other's consumer.
 
 ## [9.6.0] - 2026-08-11
 

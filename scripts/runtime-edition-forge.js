@@ -26,10 +26,8 @@
 // topic is a zero-edit change here.
 //
 // CLI (used by the installers, which cannot require() a node module inline):
-//   --forge=<f> --commands-dir   absolute dir holding that forge's command surfaces
 //   --forge=<f> --scripts-dir    absolute dir holding that forge's support scripts
 //   --forge=<f> --out-suffix     '' for github, '-<forge>' otherwise
-//   --forge=<f> --forges         (any forge) the newline-joined forge axis
 // ---------------------------------------------------------------------------
 
 const path = require('path');
@@ -114,10 +112,8 @@ function main(argv) {
   let mode = null;
   for (const arg of argv) {
     if (arg.startsWith('--forge=')) forge = arg.slice('--forge='.length);
-    else if (arg === '--commands-dir') mode = 'commands-dir';
     else if (arg === '--scripts-dir') mode = 'scripts-dir';
     else if (arg === '--out-suffix') mode = 'out-suffix';
-    else if (arg === '--forges') mode = 'forges';
     else {
       process.stderr.write(`runtime-edition-forge: unknown argument "${arg}"\n`);
       process.exit(2);
@@ -126,7 +122,7 @@ function main(argv) {
   if (!forge || !mode) {
     process.stderr.write(
       'runtime-edition-forge: usage: --forge=<github|gitlab|gitea>'
-      + ' (--commands-dir|--scripts-dir|--out-suffix|--forges)\n');
+      + ' (--scripts-dir|--out-suffix)\n');
     process.exit(2);
   }
   try {
@@ -135,20 +131,8 @@ function main(argv) {
     process.stderr.write(`runtime-edition-forge: ${e.message}\n`);
     process.exit(2);
   }
-  if (mode === 'forges') return process.stdout.write(FORGES.join('\n') + '\n');
   if (mode === 'out-suffix') return process.stdout.write(outSuffix(forge) + '\n');
   if (mode === 'scripts-dir') return process.stdout.write(forgeScriptsDir(forge) + '\n');
-  // commands-dir: every command surface of a forge lives in one directory; assert
-  // that rather than assume it, so a future split layout fails loudly here instead
-  // of silently rendering half a tree.
-  const dirs = new Set(commandSources(forge).map(s => path.dirname(s.absPath)));
-  if (dirs.size !== 1) {
-    process.stderr.write(
-      `runtime-edition-forge: forge ${forge} spreads command surfaces across `
-      + `${dirs.size} directories (${[...dirs].join(', ')}); a single --commands-dir cannot describe it\n`);
-    process.exit(2);
-  }
-  process.stdout.write([...dirs][0] + '\n');
 }
 
 if (require.main === module) main(process.argv.slice(2));

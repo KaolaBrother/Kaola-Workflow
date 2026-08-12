@@ -2296,10 +2296,13 @@ function reconcileRoadmapForClosure(root, memberNumbers, primaryNumber, opts, ma
   return reconciled;
 }
 
-// #686: shared barrier-ref tag sanitizer — MUST mirror the projectTag computation adaptive-node.js /
-// plan-validator.js use to anchor `refs/kaola-workflow/barrier/<tag>/<node>`
+// #686: shared barrier-ref tag sanitizer — MUST reproduce the projectTag computation the retired
+// DAG-era barrier machinery (adaptive-node.js / plan-validator.js, both since deleted) USED to anchor
+// `refs/kaola-workflow/barrier/<tag>/<node>`
 // (`path.basename(<projectDir>).replace(/[^A-Za-z0-9_-]/g, '_')`) so a ref this reaps/sweeps is
-// EXACTLY the ref the barrier machinery anchored. Confirmed (grep across the whole tree) that
+// EXACTLY the ref the barrier machinery anchored. The producers are gone; the refs they wrote are
+// not, so this shape is pinned by those historical refs and not by any live caller — do not
+// "modernize" it. Confirmed (grep across the whole tree) that
 // `refs/kaola-workflow/` carries exactly two ref namespaces: `barrier/<tag>/<node>` (the barrier
 // anchor this file reaps/sweeps) and `leg-base/<project>/<node>` (leg provisioning/teardown — a
 // SEPARATE namespace, never touched here). `barrier-base-*` is only a `.cache/` FILE-name prefix
@@ -5992,8 +5995,9 @@ function listBarrierSweepWorktreeRoots(mainRoot) {
 //
 // #686 R5 (n3-adversary attempt 1): on a case-insensitive filesystem (macOS default), a wrong-case
 // `--record-base` path anchors a barrier ref tag in a different case than the live folder's actual
-// dirent (projTag is recorded EXACTLY as given, plan-validator.js — never case-normalized), so an
-// exact-case keep lookup misses it. The keep membership check below is CASE-FOLDED — a tag is kept
+// dirent (projTag was recorded EXACTLY as given by the retired plan-validator.js — never
+// case-normalized; the historical refs keep that shape), so an exact-case keep lookup misses it.
+// The keep membership check below is CASE-FOLDED — a tag is kept
 // if it matches a keep-set entry under case-folding — which only ever ADDS matches (fail-safe
 // under-reap on every FS, case-sensitive or not). The archive-time reap (archiveProjectDir) is
 // exact-tag-scoped to ONE already-known project name at archive time (no cross-tag keep/delete

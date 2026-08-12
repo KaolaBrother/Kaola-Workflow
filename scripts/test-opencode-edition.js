@@ -512,8 +512,8 @@ assert(sync.opencodeAgentSuffix('implementer') === ''
   && sync.opencodeAgentSuffix('code-reviewer') === '',
   'A13: opencodeAgentSuffix is empty for every surviving role — no agent body is rewritten');
 // Same reading as the agent loop above: render DETERMINISM, not parity with canonical. Command
-// bodies carry several DECLARED transforms (model-dispatch strip, Path Intent strip, placeholder strip,
-// runtime rewrite, comma collapse), so a blanket line-survival rule of the A6-body kind would be a
+// bodies carry several DECLARED transforms (model-dispatch strip, placeholder strip, runtime
+// rewrite, script-path rewrite), so a blanket line-survival rule of the A6-body kind would be a
 // pin on the current transform set rather than a property. What holds the command surface honest is
 // the content-reachability band instead — A14/A16/A22/A24/S2/A25 assert the PINs, wiring literals,
 // template bytes and banned tokens directly against the generated files.
@@ -924,35 +924,39 @@ for (const target of emittedCommandTargets) {
 }
 
 // ---------------------------------------------------------------------------
-// A22 (issue #539): opencode path-flip. opencode is adaptive-only-default, so the
-// canonical "## Startup Step 0a-1 — Path Intent" section (with its
-// KAOLA_ENABLE_ADAPTIVE switch-resolution and Branch A/B path-selection prose) and
+// A22 (issue #539; strips retired by #962): opencode path-flip. opencode is
+// adaptive-only-default, and post-#538 canonical is too: no canonical command
+// carries the "## Startup Step 0a-1 — Path Intent" section, its
+// KAOLA_ENABLE_ADAPTIVE switch-resolution or Branch A/B path-selection prose, or
 // the adapt repair-loop "downgrade to full path" / "fall back to full"
-// auto-fallback wording are STRIPPED at generation time by transformCommandBody
-// (opencode-only — the transform runs solely inside renderCommand; canonical
-// commands/*.md are never touched). This locks the strip-transform. Mechanism B
-// (generator-only) avoids colliding with #538's in-flight canonical edits.
+// auto-fallback wording. The generation-time strips that once removed them
+// matched nothing and are deleted (#962), so a canonical reintroduction of any
+// of these patterns would flow through transformCommandBody UNTOUCHED and reach
+// the generated opencode surface. These assertions are that canary — they no
+// longer lock a strip-transform; they red on canonical drift.
 // ---------------------------------------------------------------------------
 {
   const wfNext = read('.opencode/command/workflow-next.md');
   assert(!wfNext.includes('## Startup Step 0a-1 — Path Intent'),
-    'A22: workflow-next has NO "## Startup Step 0a-1 — Path Intent" section (stripped at generation; opencode is adaptive-only-default)');
+    'A22: workflow-next has NO "## Startup Step 0a-1 — Path Intent" section (absent from canonical, and no generation-time strip remains — a hit means canonical reintroduced it and it flowed through untouched; fix canonical)');
   assert(!wfNext.includes('KAOLA_ENABLE_ADAPTIVE'),
-    'A22: workflow-next has NO KAOLA_ENABLE_ADAPTIVE switch-resolution prose (Path Intent section stripped)');
+    'A22: workflow-next has NO KAOLA_ENABLE_ADAPTIVE switch-resolution prose (absent from canonical; no strip remains, so a hit is a canonical reintroduction reaching the generated surface — fix canonical)');
   assert(!/### Branch [AB]\b/.test(wfNext),
-    'A22: workflow-next has NO Branch A/B path-selection prose (Path Intent section stripped)');
-  // A22 (#540): the inline "(Step 0a-1)" residue survives the Path Intent SECTION strip —
-  // post-#538 the "Step 0a-1" step no longer exists, so every literal must be purged from the
-  // generated opencode command (3 dangling inline mentions at L72/L159/L464 before #540).
+    'A22: workflow-next has NO Branch A/B path-selection prose (absent from canonical; no strip remains, so a hit is a canonical reintroduction reaching the generated surface — fix canonical)');
+  // A22 (#540): inline "(Step 0a-1)" parentheticals once survived the SECTION strip and needed
+  // a dedicated inline strip (3 dangling mentions at L72/L159/L464 before #540). Post-#538 the
+  // step does not exist anywhere in canonical, so that inline strip matched nothing and is
+  // deleted with the rest (#962); any literal here now means canonical grew one back.
   assert(!wfNext.includes('Step 0a-1'),
-    'A22: workflow-next has NO stale "Step 0a-1" inline references (post-#538 the step no longer exists; parentheticals stripped at generation, #540)');
-  // A22 (#F7): content-anchored leak canaries. These phrases live ONLY inside the canonical
-  // "Path Intent" section body, so their presence in the generated tree would mean the section
-  // strip missed (e.g. a canonical renumber that broke a number-keyed match). The strip is now
-  // keyed to the "Path Intent" TITLE (sync-opencode-edition.js), and these catch any regression.
+    'A22: workflow-next has NO "Step 0a-1" inline references (post-#538 the step no longer exists and no inline strip remains — a hit is a canonical reintroduction reaching the generated surface, #540)');
+  // A22 (#F7): content-anchored leak canaries. These phrases were Path-Intent-section BODY
+  // literals — content a heading-keyed check cannot see. Today no canonical command carries
+  // them (the section itself is gone post-#538) and no strip remains to eat a reintroduction,
+  // so a hit means path-selection prose re-entered canonical under ANY heading and reached the
+  // generated surface.
   for (const canary of ['path-name verbal escapes', 'fast path', 'full review']) {
     assert(!wfNext.includes(canary),
-      'A22 (#F7): workflow-next has NO "' + canary + '" — a Path-Intent-section body literal that would leak only if the title-anchored section strip missed');
+      'A22 (#F7): workflow-next has NO "' + canary + '" — a Path-Intent body literal absent from canonical; a hit means path-selection prose re-entered canonical and flowed through generation untouched');
   }
   // A23 (#2): the claim dispatch flag must stamp the opencode runtime into workflow-state.md,
   // so the canonical "--runtime claude" is rewritten to "--runtime opencode" at generation time.

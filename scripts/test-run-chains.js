@@ -723,8 +723,9 @@ try {
   assert(resolveOutputPath(Object.assign({}, none, { output: 'sub/r.json' }), cwd)
     === path.join(cwd, 'sub', 'r.json'), 'T23b: --output relative path resolves against cwd');
 
-  // --plan: path.dirname(path.resolve(cwd, plan)) + /.cache/chain-receipt.json — the EXACT plan-dir
-  // plan-validator --finalize-check derives. Use a cwd-relative plan path so resolve uses cwd.
+  // --plan: path.dirname(path.resolve(cwd, plan)) + /.cache/chain-receipt.json — the EXACT project
+  // dir the finalize chain-receipt check (`adaptiveSchema.evaluateChainReceipt`) reads the receipt
+  // from. Use a cwd-relative plan path so resolve uses cwd.
   const planRel = 'kaola-workflow/issue-546/workflow-plan.md';
   assert(resolveOutputPath(Object.assign({}, none, { plan: planRel }), cwd)
     === path.join(cwd, 'kaola-workflow', 'issue-546', '.cache', 'chain-receipt.json'),

@@ -501,6 +501,21 @@ assert(extraInReadme.length === 0,
 assert(!blockMatch[1].includes('docs-lookup'),
   'README role catalog must not list the retired docs-lookup role');
 
+// #957: README states the per-tier Codex model/effort pair in live normative prose ("`standard`
+// dispatches as ... while `reasoning` dispatches as ..."), and until now no check read it — the
+// values were free to drift away from the constants pinned above. Each expected fragment is BUILT
+// from the preflight constants rather than restated; a hardcoded copy here would be the very defect.
+// Normalized, because the reasoning fragment line-wraps in the source markdown.
+const normalizedReadme = norm(readmeText);
+for (const [tier, model, effort] of [
+  ['standard', codexPreflight.CODEX_STANDARD_MODEL, codexPreflight.CODEX_STANDARD_EFFORT],
+  ['reasoning', codexPreflight.CODEX_REASONING_MODEL, codexPreflight.CODEX_REASONING_EFFORT],
+]) {
+  const fragment = '`' + tier + '` dispatches as `' + model + '` / `' + effort + '`';
+  assert(normalizedReadme.includes(fragment),
+    'README Codex dispatch prose has drifted from the ' + tier + '-tier preflight constants; expected: ' + fragment);
+}
+
 
 // #340 derived parity guard (enumeration-free): the codex-dispatch config/agents.toml must register
 // exactly the agent profiles present in agents/ — both directions. A profile copied without its

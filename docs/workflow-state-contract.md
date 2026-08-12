@@ -292,7 +292,7 @@ patched in place by the later lifecycle verbs. Its blocks:
     (`session_id`, `last_heartbeat`, `expires`, `owner_session_id`, `claim_comment_id`) — those are
     erased by `removeLegacyStateBlocks`.
   - **`claim_ts`** — the ISO-8601 claim timestamp, the liveness anchor. Together with
-    `LANE_STALENESS_MS = 86400000` (24 hours, exported from `kaola-workflow-adaptive-schema.js`) it
+    `LANE_STALENESS_MS` (24 hours, exported from `kaola-workflow-adaptive-schema.js`) it
     drives the lane-freshness test.
 
 - `## Last Evidence` — `last_command` and `last_result`, the terminal disposition tokens the closure
