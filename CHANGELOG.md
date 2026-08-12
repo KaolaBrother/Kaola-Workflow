@@ -67,7 +67,7 @@
 - **`test-opencode-edition.js`'s S2 comments stop crediting a function deleted releases ago — #963.**
   Three sites narrated `rewriteClaudeModelNouns()` in the present tense — "is what makes it pass now" —
   for a function that exists nowhere: a repo-wide grep finds the identifier only inside this file's own
-  comments, and #812 deleted it from both `sync-opencode-edition.js` and `sync-kimi-edition.js` when the
+  comments, and issue-812 deleted it from both `sync-opencode-edition.js` and `sync-kimi-edition.js` when the
   canonical sources were neutralized at source instead. The comments now state what is true: nothing
   rewrites on the way out, and the sweep passes because canonical `commands/` + `agents/` carry zero
   capitalized model nouns. **Comment text only — no assertion moved.** With no rewrite left to normalise
@@ -80,7 +80,7 @@
 - **Two consumer-less test helpers and a dead timing knob removed — #964.** `runScenario`
   (`test-shard-lib.js`, exported) and `makeShimSpawnFn` (`test-parallel.js`, defined and never called —
   `nodeShimSpawn` is the shim actually wired) were both already dead at HEAD, measured as pre-existing
-  rather than caused by #960's excision. The zero was re-established the way this repo requires, and the
+  rather than caused by issue-960's excision. The zero was re-established the way this repo requires, and the
   positive control is the part that makes it mean anything: the identical per-symbol method run over all
   nine `test-shard-lib.js` exports finds 1–76 live consumer lines for eight of them (`owns` 76,
   `selector` 12, `MARKER` 10) and 0 for `runScenario` alone. A first control was discarded as worthless —
