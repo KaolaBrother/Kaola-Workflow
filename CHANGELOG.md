@@ -140,7 +140,7 @@
   demonstrably held in context and measurably did not follow*. Both are sized inline against evidence
   in this repo, as every existing row is: the first names the SubagentStart carrier that already runs
   on every dispatch and its four fail-open exits, so that what is absent is an emitted payload rather
-  than a hook; the second names the #524 entry below as the one recorded instance and concedes
+  than a hook; the second names the issue-524 entry below as the one recorded instance and concedes
   the partial measurement at `docs/conventions.md:846-856`, without which the row would be refutable
   on its face.
 
