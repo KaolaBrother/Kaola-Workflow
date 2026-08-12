@@ -1,5 +1,37 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **The opencode and kimi installers now prune retired support scripts, so a script removed from the
+  tree stops living forever in the runtime home — #965.** `install.sh` has always converged its
+  destination on the install manifest ("Remove stale support scripts not present in source."); the two
+  additive editions only ever copied forward, so their `kaola-workflow/scripts/` directory grew release
+  by release and no installer exit code reflected it. Measured on a real machine immediately after an
+  all-PASS `install-all.sh`: a 17-script manifest against **30** `.js` files in the opencode home and
+  **28** in the kimi home, the extras being scripts whose source the tree had already deleted
+  (`adaptive-node`, `autopilot`, `next-action`, `plan-validator`, `replan`, `task-mirror`, …). For
+  opencode this was more than clutter — `kaola_script()` resolves by search path over that directory,
+  so a retired script stayed resolvable by name.
+
+  The sweep enumerates the destination and intersects it against what the install actually deployed, so
+  a delete path is never constructed from a manifest-supplied name — the discipline
+  `sweep_retired_agents()` already modelled. It is scoped to `*.js`, `install.sh`'s scope rather than a
+  wider one invented here, so a non-`.js` file a user keeps alongside survives byte-intact; and a deploy
+  that copied nothing sweeps nothing rather than emptying the directory.
+
+  `S1b` and `P1b` pin both halves per edition — the retired file goes, the unrelated file stays — and
+  each is mutation-proven at its own install site, one at a time, since a two-site mutant would have
+  proven only that one of them was armed.
+
+  Two things the issue got wrong, both corrected by measuring rather than reading. It claimed the
+  comments "mirrors install.sh" and "same as install-opencode.sh" advertised a parity the code did not
+  have; both are scoped to the Oracle Kernel source fallback and the manifest list respectively, neither
+  ever claimed the prune, and nothing needed repairing there. It also expected the new empty-deploy
+  guard to be the fragile part on macOS's `/bin/bash` 3.2 under `set -euo pipefail` — 3.2.57 expands
+  `${#arr[@]}` on an empty local array without complaint, so that concern was unfounded.
+
 ## [9.7.0] - 2026-08-12
 
 ### Added

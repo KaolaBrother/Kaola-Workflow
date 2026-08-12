@@ -411,6 +411,7 @@ install_support_scripts() {
   local dest="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts"
   mkdir -p "$dest"
   local name src
+  local deployed=()
   while IFS= read -r name || [[ -n "$name" ]]; do
     [[ -n "$name" ]] || continue
     src="$FORGE_SCRIPTS_DIR/$name"
@@ -423,7 +424,33 @@ install_support_scripts() {
     fi
     cp "$src" "$dest/$name"
     chmod +x "$dest/$name"
+    deployed+=("$name")
   done < <(node "$manifest" --forge="$FORGE" --scripts 2>/dev/null)
+  # Copying forward never REMOVES, so a script whose source the tree has since retired lives in
+  # the config home for good and the deployed set drifts up release by release. Converge the dir
+  # on the manifest instead, exactly as install.sh does ("Remove stale support scripts not
+  # present in source.").
+  #
+  # ENUMERATES THE DESTINATION and intersects it against what was just deployed, so a delete path
+  # is never CONSTRUCTED from a manifest-supplied name (same discipline as sweep_retired_agents).
+  # Scoped to `*.js` — install.sh's scope, not a wider one invented here — so anything else a user
+  # keeps alongside survives. A deploy that copied NOTHING (an empty/failed manifest read) sweeps
+  # nothing rather than emptying the directory.
+  if [[ ${#deployed[@]} -gt 0 ]]; then
+    local stale_file stale_name is_current
+    for stale_file in "$dest"/*.js; do
+      [[ -f "$stale_file" ]] || continue
+      stale_name="$(basename "$stale_file")"
+      is_current=0
+      for name in "${deployed[@]}"; do
+        [[ "$name" == "$stale_name" ]] && is_current=1 && break
+      done
+      if [[ "$is_current" -eq 0 ]]; then
+        rm -f "$stale_file"
+        echo "Removed stale script: $stale_file"
+      fi
+    done
+  fi
   echo "Installed support scripts → $dest (kaola_script() search path; forge $FORGE)"
 }
 

@@ -1353,6 +1353,76 @@ if (exists(pluginRel)) {
     try { rmSync(r.cfg, { recursive: true, force: true }); } catch (_) {}
   }
 
+  // -------------------------------------------------------------------------
+  // S1b (#965) — INSTALLING PRUNES. S1 above asks only whether every manifest
+  // script is PRESENT, which a pure copy-forward always satisfies; nothing asks
+  // whether anything ELSE is there. So a config home carrying support scripts
+  // from an older release keeps them for good, and the deployed set drifts up
+  // release by release — measured on a real machine after an all-PASS
+  // install-all: a 17-script manifest against 30 .js files on disk, the extras
+  // being scripts whose source is gone from the tree (adaptive-node, autopilot,
+  // next-action, …). install.sh removes exactly these ("Remove stale support
+  // scripts not present in source."); this edition never learned to.
+  //
+  // The SCOPE of the sweep is pinned WITH it, because a prune that overreaches
+  // is the worse defect and no assertion above would see it. The scope is
+  // install.sh's, not one invented here: it enumerates `*.js` in the dir and
+  // intersects each basename against the manifest, so a non-.js file survives
+  // untouched — and a stray `.js` does not, in this directory the installer
+  // owns and created.
+  //
+  // The manifest is read through the same CLI the installer reads it through,
+  // so the expected set is the installed set's own source rather than a list
+  // retyped here that would keep agreeing with itself after the manifest moved.
+  // -------------------------------------------------------------------------
+  {
+    const cfg = mkdtempSync(path.join(os.tmpdir(), 'opencode-s1b-cfg-'));
+    const scriptsDir = path.join(cfg, 'kaola-workflow', 'scripts');
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    // Planted BEFORE the installer runs — this is an upgrade over an older install,
+    // which is the only way the stale set is ever reached. RETIRED is a real name
+    // this workflow shipped and deleted; the other two are what a user might leave
+    // in the same directory.
+    const RETIRED = 'kaola-workflow-adaptive-node.js';
+    const USER_JS = 'my-local-helper.js';
+    const USER_KEPT = 'notes.md';
+    const KEPT_BODY = 'notes the installer never wrote\n';
+    fs.writeFileSync(path.join(scriptsDir, RETIRED), '// shipped by an older release\n');
+    fs.writeFileSync(path.join(scriptsDir, USER_JS), '// user-authored\n');
+    fs.writeFileSync(path.join(scriptsDir, USER_KEPT), KEPT_BODY);
+
+    const r = runGlobalInstaller([], { cfg, withScripts: true });
+    assert(r.ok, 'S1b: --global install (with scripts) over an already-populated scripts dir exits 0 '
+      + '(got status ' + r.status + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
+    const manifest = path.join(REPO, 'scripts', 'kaola-workflow-install-manifest.js');
+    // spawn-class: environment
+    const names = spawnSync('node', [manifest, '--forge=github', '--scripts'], { encoding: 'utf8' })
+      .stdout.split('\n').map(s => s.trim()).filter(Boolean);
+    assert(names.length > 0, 'S1b: install manifest lists at least one support script');
+    assert(!names.includes(RETIRED) && !names.includes(USER_JS),
+      'S1b: neither planted .js is a manifest name — if one ever returns to the manifest the fixture '
+      + 'plants nothing stale and every pin below passes for the wrong reason (manifest holds '
+      + names.length + ' names)');
+    const deployedJs = readdirSync(scriptsDir).filter(f => f.endsWith('.js')).sort();
+    assert(!deployedJs.includes(RETIRED),
+      'S1b (#965): a support script the manifest no longer names is REMOVED by the install — '
+      + RETIRED + ' is still on disk after it');
+    assert(!deployedJs.includes(USER_JS),
+      'S1b (#965): the sweep is the manifest ALLOWLIST, not a retired-name blocklist — an unlisted '
+      + USER_JS + ' in the installer-owned scripts dir goes too, which is what install.sh does '
+      + '(if the sweep should be narrower than install.sh\'s `*.js`, this is the assertion to change)');
+    assert(JSON.stringify(deployedJs) === JSON.stringify([...names].sort()),
+      'S1b (#965): after the install the scripts dir holds EXACTLY the manifest .js set — unexpected: '
+      + (deployedJs.filter(n => !names.includes(n)).join(', ') || '(none)')
+      + ' | missing: ' + (names.filter(n => !deployedJs.includes(n)).join(', ') || '(none)'));
+    assert(existsSync(path.join(scriptsDir, USER_KEPT))
+      && readFileSync(path.join(scriptsDir, USER_KEPT), 'utf8') === KEPT_BODY,
+      'S1b (#965): the sweep is SCOPED — a non-.js file the installer neither wrote nor would write '
+      + 'survives the install byte-intact (install.sh enumerates `*.js` only)');
+    try { rmSync(r.home, { recursive: true, force: true }); } catch (_) {}
+    try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
+  }
+
   // P6 (former self-healing-prune-of-orphaned-opt-in-files probe) — DELETED IN
   // FULL alongside P2–P5: the fast/full opt-in partition it exercised is retired,
   // so there is no opt-in scenario left to narrow-then-prune.

@@ -961,6 +961,75 @@ for (const script of sync.HOOK_SCRIPTS) {
     clean(r);
   }
 
+  // P1b (#965) — INSTALLING PRUNES. P1 above asks only whether every manifest
+  // script is PRESENT, which a pure copy-forward always satisfies; nothing asks
+  // whether anything ELSE is there. FA9's exact-set assertion would see an
+  // extra, but it installs into a home that was empty a moment earlier, so it
+  // can only ever see what THIS install wrote. A kimi home carrying support
+  // scripts from an older release therefore keeps them for good — measured on a
+  // real machine after an all-PASS install-all: a 17-script manifest against 28
+  // .js files on disk, the extras being scripts whose source is gone from the
+  // tree (adaptive-node, autopilot, next-action, …). install.sh removes exactly
+  // these ("Remove stale support scripts not present in source."); this edition
+  // never learned to.
+  //
+  // The SCOPE of the sweep is pinned WITH it, because a prune that overreaches
+  // is the worse defect and no assertion above would see it. The scope is
+  // install.sh's, not one invented here: it enumerates `*.js` in the dir and
+  // intersects each basename against the manifest, so a non-.js file survives
+  // untouched — and a stray `.js` does not, in this directory the installer
+  // owns and created.
+  //
+  // The manifest is read through the same CLI the installer reads it through,
+  // so the expected set is the installed set's own source rather than a list
+  // retyped here that would keep agreeing with itself after the manifest moved.
+  {
+    const kimiHome = mkdtempSync(path.join(os.tmpdir(), 'kimi-p1b-kh-'));
+    const scriptsHome = path.join(kimiHome, 'kaola-workflow', 'scripts');
+    fs.mkdirSync(scriptsHome, { recursive: true });
+    // Planted BEFORE the installer runs — this is an upgrade over an older install,
+    // which is the only way the stale set is ever reached. RETIRED is a real name
+    // this workflow shipped and deleted; the other two are what a user might leave
+    // in the same directory.
+    const RETIRED = 'kaola-workflow-adaptive-node.js';
+    const USER_JS = 'my-local-helper.js';
+    const USER_KEPT = 'notes.md';
+    const KEPT_BODY = 'notes the installer never wrote\n';
+    fs.writeFileSync(path.join(scriptsHome, RETIRED), '// shipped by an older release\n');
+    fs.writeFileSync(path.join(scriptsHome, USER_JS), '// user-authored\n');
+    fs.writeFileSync(path.join(scriptsHome, USER_KEPT), KEPT_BODY);
+
+    const r = runInstaller([], { kimiHome });
+    assert(r.ok, 'P1b: install over an already-populated <kimi_home>/kaola-workflow/scripts exits 0 '
+      + '(got status ' + r.status + (r.stderr ? ' — ' + firstStderrLine(r) : '') + ')');
+    const manifest = path.join(REPO, 'scripts', 'kaola-workflow-install-manifest.js');
+    // spawn-class: environment
+    const names = spawnSync('node', [manifest, '--forge=github', '--scripts'], { encoding: 'utf8' })
+      .stdout.split('\n').map(s => s.trim()).filter(Boolean);
+    assert(names.length > 0, 'P1b: install manifest lists at least one support script');
+    assert(!names.includes(RETIRED) && !names.includes(USER_JS),
+      'P1b: neither planted .js is a manifest name — if one ever returns to the manifest the fixture '
+      + 'plants nothing stale and every pin below passes for the wrong reason (manifest holds '
+      + names.length + ' names)');
+    const deployedJs = readdirSync(scriptsHome).filter(f => f.endsWith('.js')).sort();
+    assert(!deployedJs.includes(RETIRED),
+      'P1b (#965): a support script the manifest no longer names is REMOVED by the install — '
+      + RETIRED + ' is still on disk after it');
+    assert(!deployedJs.includes(USER_JS),
+      'P1b (#965): the sweep is the manifest ALLOWLIST, not a retired-name blocklist — an unlisted '
+      + USER_JS + ' in the installer-owned scripts dir goes too, which is what install.sh does '
+      + '(if the sweep should be narrower than install.sh\'s `*.js`, this is the assertion to change)');
+    assert(JSON.stringify(deployedJs) === JSON.stringify([...names].sort()),
+      'P1b (#965): after the install the scripts dir holds EXACTLY the manifest .js set — unexpected: '
+      + (deployedJs.filter(n => !names.includes(n)).join(', ') || '(none)')
+      + ' | missing: ' + (names.filter(n => !deployedJs.includes(n)).join(', ') || '(none)'));
+    assert(existsSync(path.join(scriptsHome, USER_KEPT))
+      && readFileSync(path.join(scriptsHome, USER_KEPT), 'utf8') === KEPT_BODY,
+      'P1b (#965): the sweep is SCOPED — a non-.js file the installer neither wrote nor would write '
+      + 'survives the install byte-intact (install.sh enumerates `*.js` only)');
+    clean(r);
+  }
+
   // P2/P3 (former --with-fast / --with-full opt-in-partition probes) — DELETED
   // IN FULL. #725 Phase A retires the fast/full opt-in partition itself; every
   // surface these probed (kaola-workflow-fast, kaola-workflow-phase[1-5]) is
