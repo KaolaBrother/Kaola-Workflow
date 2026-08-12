@@ -214,6 +214,12 @@ Claude resolver to this opencode form at generation time; canonical `commands/*.
   `kaola_script()` already searches), so commands resolve without editing them.
   Skip with `--no-scripts`.
 
+  The install **converges** that directory on the manifest rather than only adding to it: a `.js`
+  the manifest no longer names is removed, so a script retired from the tree stops being resolvable
+  by `kaola_script()` instead of lingering across upgrades. The scope is `install.sh`'s — `*.js` in
+  that installer-owned directory — so anything else you keep alongside survives untouched, and a
+  run that copied nothing sweeps nothing.
+
 ## Install (into a project)
 
 `install-opencode.sh` is a standalone, additive installer (it does not modify
