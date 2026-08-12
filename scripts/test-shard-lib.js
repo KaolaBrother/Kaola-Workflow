@@ -118,20 +118,6 @@ function coverageLine(payload) {
   return MARKER + JSON.stringify(payload);
 }
 
-// Per-scenario wall-clock, printed only when KAOLA_TEST_SCENARIO_TIMING=1. This is how a
-// shard partition gets re-balanced against evidence instead of guesswork: run a suite once
-// with the flag, read the tail of the sorted output, and rebalance if one scenario dominates.
-const TIMING_ON = String(process.env.KAOLA_TEST_SCENARIO_TIMING || '') === '1';
-
-/** Run one scenario body, optionally timing it. Ownership is decided by the caller. */
-function runScenario(ordinal, fn) {
-  if (!TIMING_ON) { fn(); return; }
-  const t0 = Date.now();
-  try { fn(); } finally {
-    process.stdout.write('##KW-SCENARIO ' + ordinal + ' ' + (Date.now() - t0) + '\n');
-  }
-}
-
 /**
  * Print the coverage line for a suite run. Called by every shard-aware suite right
  * before its own pass/fail summary, sharded or not.
@@ -210,7 +196,6 @@ module.exports = {
   selector,
   owns,
   coverageLine,
-  runScenario,
   reportCoverage,
   parseCoverage,
   auditShardCoverage,

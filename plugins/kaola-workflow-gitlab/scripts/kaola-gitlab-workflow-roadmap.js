@@ -307,16 +307,36 @@ function issueIsClosed(issueIid) {
   }
 }
 
-function validateRemote(root) {
+/**
+ * Compare local roadmap sources against the remote, in ONE direction.
+ *
+ * The comparison domain is the local files: `.roadmap/issue-*.md` marked `status: open`. Each is
+ * asked whether it is already closed on the remote. The reverse question — an issue open on the
+ * remote with no local source — is not merely unimplemented but unrepresentable here, because
+ * there is no file to iterate for an issue that has none.
+ *
+ * The consequence a caller must handle: an empty `.roadmap/` produces an empty result for the same
+ * reason a fully reconciled one does. Anything reporting this result has to say how much it
+ * actually compared, or "clean" and "nothing was examined" render identically.
+ *
+ * @param {string} [root] repo root.
+ * @param {{checked?: number}} [stats] optional out-param. Receives the number of sources actually
+ *   compared against the remote — open AND parseable entries, not the count of files present.
+ * @returns {number[]} issue iids marked open locally but closed on the remote.
+ */
+function validateRemote(root, stats) {
   const repoRoot = root || getRoot();
   const issues = readRoadmapIssues(roadmapDir(repoRoot));
   const drift = [];
+  let checked = 0;
   for (const it of issues) {
     if (String(it.status || '').toLowerCase() !== 'open') continue;
     const issueIid = parseInt(String(it.issue).replace('#', ''), 10);
     if (!Number.isInteger(issueIid) || issueIid <= 0) continue;
+    checked += 1;
     if (issueIsClosed(issueIid)) drift.push(issueIid);
   }
+  if (stats && typeof stats === 'object') stats.checked = checked;
   return drift;
 }
 
@@ -325,7 +345,8 @@ function cmdValidateRemote() {
     process.stdout.write('skipped: offline\n');
     return;
   }
-  const drift = validateRemote(getRoot());
+  const stats = {};
+  const drift = validateRemote(getRoot(), stats);
   if (drift.length > 0) {
     process.stderr.write(
       'roadmap drift: ' + drift.map(n => 'issue-' + n + '.md').join(', ') +
@@ -334,7 +355,19 @@ function cmdValidateRemote() {
     process.exitCode = 1;
     return;
   }
-  process.stdout.write('ok\n');
+  // Say what was compared, always. A bare `ok` reads as "the roadmap is reconciled with the
+  // forge", which this command has never been able to establish: it compares local sources
+  // outward, so over ZERO of them it printed the identical word it prints for a genuinely clean
+  // set. That is not a hypothetical — a reader trusted a vacuous `ok`, read `No active work` in
+  // the mirror, and reported an empty backlog while issues were open. Naming the domain makes the
+  // vacuous case legible AS vacuous instead of indistinguishable from verified.
+  process.stdout.write(
+    stats.checked > 0
+      ? 'ok: ' + stats.checked + ' open local source' + (stats.checked === 1 ? '' : 's') +
+        ' compared against the remote, none closed there\n'
+      : 'ok: nothing compared — no open local sources. This checks .roadmap/issue-*.md outward ' +
+        'and cannot see an issue open on the remote with no local source\n'
+  );
 }
 
 function cmdInitIssue(argv) {

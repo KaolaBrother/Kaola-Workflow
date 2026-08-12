@@ -40,7 +40,8 @@ landed, close the item; otherwise re-dispatch, unless you can show the dispatch 
   project-local `.roadmap/_rules.md` appended under `### Project rules`); do not hand-edit the mirror.
 - Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file. A file
   left behind is silent and nothing detects it automatically — check by hand with
-  `node scripts/kaola-workflow-roadmap.js validate-remote` (exit 1 = drift).
+  `node scripts/kaola-workflow-roadmap.js validate-remote` (exit 1 = drift). It compares one direction
+  only — local sources outward, never the reverse — so **the forge's open list is the backlog truth**.
 - `workflow-state.md` is the **claim** record: which issue, which branch, which worktree. It does not
   describe the run.
 - `mission-list.md` is the **run** record. It is not attested, not frozen, and not machine-verified —

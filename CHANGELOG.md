@@ -32,6 +32,52 @@
   guard to be the fragile part on macOS's `/bin/bash` 3.2 under `set -euo pipefail` — 3.2.57 expands
   `${#arr[@]}` on an empty local array without complaint, so that concern was unfounded.
 
+- **`test-opencode-edition.js`'s S2 comments stop crediting a function deleted releases ago — #963.**
+  Three sites narrated `rewriteClaudeModelNouns()` in the present tense — "is what makes it pass now" —
+  for a function that exists nowhere: a repo-wide grep finds the identifier only inside this file's own
+  comments, and #812 deleted it from both `sync-opencode-edition.js` and `sync-kimi-edition.js` when the
+  canonical sources were neutralized at source instead. The comments now state what is true: nothing
+  rewrites on the way out, and the sweep passes because canonical `commands/` + `agents/` carry zero
+  capitalized model nouns. **Comment text only — no assertion moved.** With no rewrite left to normalise
+  a reintroduced noun, the assertions beneath are strictly stronger than when written: a canonical
+  reintroduction now reaches the generated surface and reds them, which is what makes them
+  canonical-drift canaries rather than guards on a dead mechanism. The issue's one open question —
+  whether `test-kimi-edition.js` mirrors any of this — was measured and answered NO: zero hits for all
+  three needles, so the scope is a single file.
+
+- **Two consumer-less test helpers and a dead timing knob removed — #964.** `runScenario`
+  (`test-shard-lib.js`, exported) and `makeShimSpawnFn` (`test-parallel.js`, defined and never called —
+  `nodeShimSpawn` is the shim actually wired) were both already dead at HEAD, measured as pre-existing
+  rather than caused by #960's excision. The zero was re-established the way this repo requires, and the
+  positive control is the part that makes it mean anything: the identical per-symbol method run over all
+  nine `test-shard-lib.js` exports finds 1–76 live consumer lines for eight of them (`owns` 76,
+  `selector` 12, `MARKER` 10) and 0 for `runScenario` alone. A first control was discarded as worthless —
+  the symbol chosen was not an export of that file, so its zero proved nothing. The gitignored rendered
+  edition trees were swept with `find` in the main tree where they exist (`.opencode` 3458 files,
+  `.kimi` 19); the worktree has neither, so sweeping it would have produced exactly the false zero this
+  repo has been burned by before. The cut takes one **mechanism**, not two symbols: `TIMING_ON` and its
+  `KAOLA_TEST_SCENARIO_TIMING` env flag existed solely to serve `runScenario` and reach no doc surface,
+  so they die with it rather than surviving as a knob wired to nothing. Files kept —
+  `test-parallel.js --self-test` is a live step in both claude chains and still covers `test-shard-lib`.
+
+- **`validate-remote` now states what it compared, so a vacuous pass stops reading as a verified one —
+  #966.** The check iterates the LOCAL sources — `.roadmap/issue-*.md` marked `status: open` — and asks
+  one question of each: is this already closed on the remote? Over an empty `.roadmap/` the loop body
+  never executes, `drift` is empty, and it printed the same bare `ok` it prints for a genuinely
+  reconciled set. Observed, not hypothesized: a session ran it at `85209757`, got `ok`, read
+  `No active work` in the mirror, and reported an empty backlog while #963 and #964 were open. Success
+  now names its domain — `ok: N open local sources compared against the remote, none closed there`, or
+  `ok: nothing compared — no open local sources …` — and the count is entries that actually reached the
+  remote check, so an unparseable source is never reported as compared. **The return shape is
+  deliberately untouched**: both forge suites pin `validateRemote(root)` with `deepStrictEqual` and
+  `docs/api.md` documents it, so the count rides an optional `stats` out-param rather than breaking a
+  documented export. Ported to all three forge scripts. `CLAUDE.md` and `docs/api.md` stop presenting it
+  as the general roadmap-drift check and state the one direction it covers — it cannot see an issue open
+  on the remote with no local source, because there is no file to iterate for one, so the forge's open
+  list remains the only backlog truth. **The owner ruled the mirror itself correct**: `ROADMAP.md`'s
+  "active work" means claimed runs, so `No active work` was TRUE and only the drift check misled; the
+  reverse-direction option was declined.
+
 ## [9.7.0] - 2026-08-12
 
 ### Added

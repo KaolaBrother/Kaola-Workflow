@@ -758,11 +758,19 @@ for (const target of emittedCommandTargets) {
 // transformCommandBody "opus-tier"/"sonnet-tier" rewrite markers, and
 // opencodeAgentSuffix) and explicitly TOLERATED Claude "Opus"/"Sonnet" MODEL-name
 // prose surviving from canonical bodies (e.g. the workflow-planner "(Opus)" and
-// the "Opus-floor synthesizer"). #609 added a pure rewriteClaudeModelNouns()
-// rewrite (applied in renderAgent + transformCommandBody) that purges those B2
-// sites at generation time, so this guard is now BODY-WIDE: it forbids the
-// capitalized proper-noun forms "Opus"/"Sonnet" ANYWHERE in a generated agent or
+// the "Opus-floor synthesizer"). #609 widened it to BODY-WIDE: the capitalized
+// proper-noun forms "Opus"/"Sonnet" are forbidden ANYWHERE in a generated agent or
 // command file, not just inside the substituted block or the rewrite-marker strings.
+//
+// NOTHING REWRITES ON THE WAY OUT ANY MORE. #609 bought that width with a
+// generation-time purge — a pure rewriteClaudeModelNouns() applied in renderAgent +
+// transformCommandBody. #812 DELETED that rewrite from both sync scripts and
+// neutralized the CANONICAL sources instead, on the rule that generated text must be
+// neutral at its source rather than laundered on the way out. So what makes this pass
+// today is that canonical prose carries no noun to find. That leaves the assertion
+// STRONGER than when it was written, not redundant: with no rewrite left to normalise
+// a reintroduced noun, a canonical reintroduction now reaches the generated surface
+// and reds this. Read it as the canonical-drift canary, never as a guard on a rewrite.
 // The check stays CASE-SENSITIVE and whole-word, so the B1 exemption — the closed
 // plan `model`-column tier tokens (the lowercase `` `opus` ``/`` `sonnet` ``
 // mentions in the workflow-planner's "Model assignment" guidance and the
@@ -866,9 +874,12 @@ for (const target of emittedCommandTargets) {
         + 'states the result (effort is configured per role; never pass a per-call `model=`), and '
         + 'naming the machinery is how it came to assert a mechanism that never applied');
     }
-    // (b) The three transformCommandBody rewrites emit tier labels in dispatch prose
-    //     OUTSIDE the section; "opus-tier"/"sonnet-tier" are unambiguous generator
-    //     leak markers (canonical prose never produces them).
+    // (b) "opus-tier"/"sonnet-tier" are unambiguous generator leak markers, and both of
+    //     their possible producers are now absent: canonical prose never produced them,
+    //     and no rewrite emits them either — the three transformCommandBody rewrites
+    //     that once did went with the rest of the model-noun rewriting. Having no
+    //     producer left is exactly what makes ANY occurrence here a reintroduced
+    //     rewrite rather than an ambiguity to triage.
     assert(!/\bopus-tier\b/i.test(body) && !/\bsonnet-tier\b/i.test(body),
       'S2[' + file + ']: no opus-tier/sonnet-tier leak in rewrite prose');
   }
@@ -880,8 +891,11 @@ for (const target of emittedCommandTargets) {
   // and command file must carry ZERO capitalized "Opus"/"Sonnet" proper-noun
   // mentions (case-sensitive, whole-word), not just inside the substituted block or
   // the generator's own rewrite-marker strings. This is the check the ORIGINAL S2
-  // comment (above) used to explicitly tolerate failing on; rewriteClaudeModelNouns()
-  // (sync-opencode-edition.js) is what makes it pass now.
+  // comment (above) used to explicitly tolerate failing on. What makes it pass now is
+  // that the CANONICAL sources carry no such noun (#812 took them to zero) — not a
+  // rewrite on the way out, which no longer exists anywhere. So this sweep reads
+  // canonical neutrality THROUGH the generated tree, and reds when a noun is
+  // reintroduced upstream.
   const B2_MODEL_NOUN = /\b(Opus|Sonnet)\b/;
   const ocAgentRels = fs.readdirSync(sync.OUT_AGENT_DIR).filter(f => f.endsWith('.md')).map(f => '.opencode/agent/' + f);
   const ocCommandRels = fs.readdirSync(sync.OUT_COMMAND_DIR).filter(f => f.endsWith('.md')).map(f => '.opencode/command/' + f);

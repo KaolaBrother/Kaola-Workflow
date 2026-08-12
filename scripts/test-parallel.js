@@ -190,21 +190,6 @@ async function selfTest() {
     }
   }
 
-  // Build fake spawn that wraps `node -e <script>` shims.
-  // Each shim runs in milliseconds.
-  function makeShimSpawnFn(shimMap) {
-    // shimMap: { chainName: { script: string, exitCode: number } }
-    return function shimSpawn(cmd, args, opts) {
-      // args is ['run', 'test:kaola-workflow:<name>'] for real chains,
-      // but for fake chains passed directly we use the chain.args format.
-      // The fake chains below pass args directly as ['-e', script].
-      return spawn(process.execPath, args, {
-        shell: false,
-        env: opts.env || process.env,
-      });
-    };
-  }
-
   // ------------------------------------------------------------------
   // Build four fake chains:
   //   c1 — exits 0, prints "c1-output"

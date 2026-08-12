@@ -1413,7 +1413,7 @@ Manages the local roadmap mirror (`kaola-workflow/ROADMAP.md`) and per-issue met
 |---|---|
 | `generate` | regenerate `ROADMAP.md` from `.roadmap/issue-*.md` sources alone. **Makes no remote call.** Atomic write-replace; no change = no-op. Guards against replacing a non-empty generated ROADMAP when `.roadmap/` is missing |
 | `validate` | assert `ROADMAP.md` is current with its sources. Exit 0 on match; exit 1 plus a remediation message when stale |
-| `validate-remote` | the only subcommand that touches the forge. Iterates `.roadmap/issue-*.md` marked `status: open` and checks whether each is closed remotely. Exit 0 when clean; exit 1 with remediation on drift. Skips all network calls under `KAOLA_WORKFLOW_OFFLINE=1` |
+| `validate-remote` | the only subcommand that touches the forge. Iterates `.roadmap/issue-*.md` marked `status: open` and checks whether each is closed remotely — **one direction, local outward.** It cannot see an issue open on the remote with no local source, because there is no file to iterate for one; it is a stale-source check, not a general roadmap-drift check. Exit 0 when clean; exit 1 with remediation on drift. Success states its domain — `ok: N open local sources compared against the remote, none closed there`, or `ok: nothing compared — no open local sources …` — so a vacuous pass over an empty `.roadmap/` cannot be read as a verified-clean one. Skips all network calls under `KAOLA_WORKFLOW_OFFLINE=1` |
 | `migrate` | one-time: parse the current `ROADMAP.md` table and create per-issue sources. Skips existing files. GitLab and Gitea swap this for `refresh` |
 | `init-issue --issue N [--title] [--status] [--workflow-project] [--next-step]` | create one `.roadmap/issue-{N}.md`. Exclusive creation — fails if the file exists |
 | `project-name --issue N` | print the `workflow_project` field from `.roadmap/issue-{N}.md`. Exit 1 if the field is missing or `—`. That field names the project directory a claim creates **verbatim**: `—`, absent or empty means unassigned and yields `issue-{N}`, and any other path-safe value is adopted as written. Nothing else validates it, so a placeholder becomes a real folder name — see `workflow-state-contract.md` § Roadmap issue-source fields |
@@ -1427,7 +1427,9 @@ rename, `kaola-workflow/.roadmap/`, and `kaola-workflow/ROADMAP.md` — rather t
 `git add -A kaola-workflow/`, so a stray foreign archive folder is never swept into the commit.
 
 **Exports:** `regenerateRoadmap(root)` (returns `'generated'` or `'up-to-date'`; prints nothing),
-`validateRemote(root)`, `readRoadmapIssues(dir)`, `roadmapDir(root)`, and
+`validateRemote(root[, stats])` (returns the drift array; pass `stats` to receive `checked`, the
+number of sources actually compared — open **and** parseable entries, not files present),
+`readRoadmapIssues(dir)`, `roadmapDir(root)`, and
 `buildRoadmapContent(issues, dir)`. When `dir` is provided and `<dir>/_rules.md` is non-empty, its
 contents are appended to the Rules section under `### Project rules`; all call sites within a script
 must thread `dir` consistently so `generate` output matches the `validate` recomputation.
@@ -1638,7 +1640,7 @@ opts)`, `fastForwardMain(args, opts)`, `finalValidationPassed(root, project)`,
 checks both the live folder and the archive before updating state, returning
 `{updated: false, reason: 'project archived'}` rather than recreating an archived project.
 
-**`kaola-gitlab-workflow-roadmap.js`** — `regenerateRoadmap(root)`, `validateRemote(root)`.
+**`kaola-gitlab-workflow-roadmap.js`** — `regenerateRoadmap(root)`, `validateRemote(root[, stats])`.
 
 ### Gitea edition
 
@@ -1658,4 +1660,4 @@ returns `{pr, project}`, updating the `## Sink` block with `pr_url`, `pr_number`
 project, issueIid, opts)`, `fastForwardMain(args, opts)`, `finalValidationPassed(root, project)`,
 `runDirectMerge(args, opts)`, `assertBranchHasNonWorkflowChanges(...)`.
 
-**`kaola-gitea-workflow-roadmap.js`** — `regenerateRoadmap(root)`, `validateRemote(root)`.
+**`kaola-gitea-workflow-roadmap.js`** — `regenerateRoadmap(root)`, `validateRemote(root[, stats])`.
