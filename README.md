@@ -35,7 +35,7 @@ A few beliefs follow from that order.
 
 **Concurrency carries no machinery at all.** There is no disjointness proof, no serializer taxonomy, no evidence line, no fan-out cap, and nothing inspects the decision. The frontier is not computed — it is the list minus done minus in-flight, visible by reading. Independent work runs concurrently because that is faster; work that feeds other work runs in order because it has to. The agent can already tell the difference.
 
-**Tools stay tools.** Subagents and per-issue worktrees are offered and declinable — decline either and the run still finishes. A tool you cannot decline and still finish would be a gate wearing a tool's name, and there are none.
+**Tools stay tools.** Subagents and worktrees are offered and declinable — decline either and the run still finishes. A tool you cannot decline and still finish would be a gate wearing a tool's name, and there are none.
 
 **Measure, then report; the agent owns the outcome.** Validation, the paths a run changed, and the sink all *measure* and hand the finding to the orchestrator instead of slamming a door. That is not "proceed anyway": moving the verdict moves the **accountability**, onto the only party with enough context to fix what it finds.
 
@@ -46,8 +46,8 @@ A few beliefs follow from that order.
 ### What you get
 
 - **One resumable file per run** — a successor with no context reads it top to bottom: the H1 is the goal, `done` items and their `result` are what is known, `in-flight` items are the only decision to make, `todo` is what remains.
-- **A claim that is bookkeeping, not a gate** — it records which issue, branch and worktree the run owns, so parallel sessions do not collide.
-- **Subagents and per-issue worktrees** as declinable tools, with 14 vendored roles across all four runtimes.
+- **A claim that is bookkeeping, not a gate** — it records which issues, branch and worktree the run owns, so parallel sessions do not collide.
+- **Subagents and worktrees** as declinable tools, with 14 vendored roles across all four runtimes.
 - **Multi-model** across Claude Code, Codex, opencode, and Kimi Code, right-sizing the model per dispatch.
 - **Independent review** — generated, runtime-neutral reviewer contracts (`code-reviewer`, `adversarial-verifier`, `security-reviewer`) with deterministic profile identity across runtimes.
 - **Self-owned validation** — the four local edition chains produce a candidate-bound receipt; a consumer repo records its own verdict instead. Nothing waits on a hosted pipeline.
@@ -79,7 +79,7 @@ A few beliefs follow from that order.
 ## Autonomy and goal contract
 
 `/goal` is a **platform** stop-condition wrapper, not a Kaola mechanism — it is
-the outer loop around the per-issue workflow. Use it in either Claude Code or
+the outer loop around the workflow. Use it in either Claude Code or
 Codex to keep a session working on one objective across many turns.
 
 ### Using `/goal` with Claude Code or Codex
@@ -128,11 +128,12 @@ materially user-owned choices, such as risky Git synchronization, destructive
 rewrites,
 credential or deployment actions, or issue/roadmap reorganization.
 
-Each `/workflow-next` run targets one issue and ends at Finalization closure.
-The agent does not auto-continue across issues; cross-issue work requires
-explicit user direction — typically stated upfront in `/goal` text (for
-example, "finish all remaining open issues"), which then drives one
-`/workflow-next` run per issue until the scope is met.
+Each `/workflow-next` run targets one explicitly selected set of issues —
+normally three to five, sometimes one — and ends at Finalization closure,
+which closes every issue in the set. The agent does not auto-continue past
+that set; further work requires explicit user direction — typically stated
+upfront in `/goal` text (for example, "finish all remaining open issues"),
+which then drives one `/workflow-next` run per set until the scope is met.
 
 ## Workflow roles
 
@@ -865,7 +866,7 @@ when the pick is genuinely ambiguous. A clean selection claims without asking.
 ### 2. Claim
 
 The claim is bookkeeping, not a gate. It atomically creates `kaola-workflow/{project}/` with its
-`workflow-state.md` — recording which issue, branch and worktree this run owns — and provisions a
+`workflow-state.md` — recording which issues, branch and worktree this run owns — and provisions a
 repo-local worktree at `<repo-root>/.kw/worktrees/<project>/` unless `KAOLA_WORKTREE_NATIVE=0`
 disables it.
 
@@ -880,8 +881,10 @@ the backlog and `kaola-workflow/archive/` the archive band, so a claim naming ei
 the run's ordinary `issue-<N>` folder instead, and the envelope carries `reserved_project` naming
 what it declined. The run proceeds; nothing in the reserved directory is touched.
 
-A run normally carries one issue. Several may share a run when they are all open, unclaimed, and
-share a coherent scope — see [Multi-issue bundle lane](#multi-issue-bundle-lane).
+A run normally carries **three to five issues**; one issue is the exception rather than the norm.
+Members are admissible when they are all open, unclaimed, and each **closeable on its own
+evidence** — finishing one does not depend on how another turns out. See
+[Multi-issue bundle lane](#multi-issue-bundle-lane).
 
 ### 3. Write the mission list
 
@@ -1004,7 +1007,7 @@ when developing locally. Drift between `scripts/` and
 
 | Script | What it does | When it runs |
 |--------|--------------|--------------|
-| `kaola-workflow-claim.js` (GitHub) / `kaola-gitlab-workflow-claim.js` (GitLab) / `kaola-gitea-workflow-claim.js` (Gitea) | Active-folder coordination: claim, release/discard, status, watch-pr (watch-mr on GitLab), bootstrap/startup, finalize, pick-next, resume, worktree-status, worktree-finalize, stale-worktree-check, stale-worktree-cleanup, legacy-worktree-cleanup. Provisions a per-issue Git worktree at `<repo-root>/.kw/worktrees/<project>/` by default on every claim; set `KAOLA_WORKTREE_NATIVE=0` to disable. | All phases |
+| `kaola-workflow-claim.js` (GitHub) / `kaola-gitlab-workflow-claim.js` (GitLab) / `kaola-gitea-workflow-claim.js` (Gitea) | Active-folder coordination: claim, release/discard, status, watch-pr (watch-mr on GitLab), bootstrap/startup, finalize, pick-next, resume, worktree-status, worktree-finalize, stale-worktree-check, stale-worktree-cleanup, legacy-worktree-cleanup. Provisions a per-claim Git worktree at `<repo-root>/.kw/worktrees/<project>/` by default on every claim; set `KAOLA_WORKTREE_NATIVE=0` to disable. | All phases |
 | `kaola-workflow-active-folders.js` | Shared library: reads the active-folder table from `kaola-workflow/{project}/workflow-state.md`. Imported by claim, classifier, and sink scripts. | Library |
 | `kaola-workflow-classifier.js` | Parallel-work classifier: marks each open issue green/yellow/red/blocked based on dependency graph, exact file-path overlaps, shared-infra directories, and active folders. | Startup |
 | `kaola-workflow-roadmap.js` (GitHub) / `kaola-gitlab-workflow-roadmap.js` (GitLab) / `kaola-gitea-workflow-roadmap.js` (Gitea) | Regenerates `kaola-workflow/ROADMAP.md` from `kaola-workflow/.roadmap/issue-{N}.md`, and appends an optional project-local `kaola-workflow/.roadmap/_rules.md` to the generated `## Rules` section under a `### Project rules` sub-heading (no-op, byte-identical output, when the file is absent or empty). Shared subcommands: `generate`, `validate`, `validate-remote`, `init-issue`, `project-name`; GitHub also supports `migrate`, while GitLab/Gitea support `refresh`. | Planning, Finalization |
@@ -1173,7 +1176,7 @@ resume online later.
 
 ## Roadmap cycle
 
-Use a separate research or roadmap session to discover future work and create or refine forge issues. `/workflow-next` is the implementation cycle: it fetches open forge issues, mirrors active unfinished work into `kaola-workflow/ROADMAP.md`, advances one selected item, then comments on or closes linked issues after validation.
+Use a separate research or roadmap session to discover future work and create or refine forge issues. `/workflow-next` is the implementation cycle: it fetches open forge issues, mirrors active unfinished work into `kaola-workflow/ROADMAP.md`, advances one explicitly selected set of issues — normally three to five, sometimes one — then comments on or closes the linked issues after validation.
 
 The local roadmap is a working mirror, not the source of truth. Keep only active unfinished work there; completed workflow folders move to `kaola-workflow/archive/`.
 
@@ -1291,11 +1294,11 @@ do not hand-merge entries into `~/.claude/settings.json`.
 
 ## Keep-open partial-close sinks
 
-When a run is complete as a cycle but the issue must **stay open** (partial implementation, residual follow-ups), the main session writes `issue_action: comment_keep_open` into the `## Sink` block at the Closure Decision Gate (issue #336). Finalization then runs the full mechanical sink with **no manual FF-push cleanup**: `finalize --keep-open`/`--keep-issue-open` preserves the per-issue roadmap source (instead of deleting it) and regenerates `ROADMAP.md` still listing `#N`; `sink-merge --keep-issue-open` merges, pushes, removes the worktree/branch, and releases the claim exactly like a normal close, but posts a keep-open comment instead of closing the issue. Keep-open is **merge-sink-only** — a PR/MR sink would auto-close the issue via its `Closes #N` body, so the PR/MR sink (including the exit-3 merge-impossible auto-pivot) is refused with a typed BLOCKED, and the `sink-pr`/`sink-mr` scripts themselves refuse a project carrying `issue_action: comment_keep_open`.
+When a run is complete as a cycle but its issues must **stay open** (partial implementation, residual follow-ups), the main session writes `issue_action: comment_keep_open` into the `## Sink` block at the Closure Decision Gate (issue #336). That choice is **whole-run** — it takes every member of the claimed set with it, including members whose own work finished cleanly. Finalization then runs the full mechanical sink with **no manual FF-push cleanup**: `finalize --keep-open`/`--keep-issue-open` preserves every member's `.roadmap/issue-N.md` source (instead of deleting it) and regenerates `ROADMAP.md` still listing them; `sink-merge --keep-issue-open` merges, pushes, removes the worktree/branch, and releases the claim on every issue left open — **both** artifacts, the `workflow:in-progress` label and the `kw:claim` marker comment, where a normal close removes the label alone because a marker on a closed issue is inert — but posts a keep-open comment instead of closing them. Keep-open is **merge-sink-only** — a PR/MR sink would auto-close the issue via its `Closes #N` body, so the PR/MR sink (including the exit-3 merge-impossible auto-pivot) is refused with a typed BLOCKED, and the `sink-pr`/`sink-mr` scripts themselves refuse a project carrying `issue_action: comment_keep_open`.
 
 ## Multi-issue bundle lane
 
-The bundle lane lets N same-scope issues share one worktree, one branch, one mission list, and one finalization that closes all N issues together. The single-issue path is unchanged.
+The bundle lane lets N issues share one worktree, one branch, one mission list, and one finalization that closes all N issues together. It is the normal shape of a run — three to five issues; the single-issue path remains, for the issue that must run alone.
 
 ### Two entry modes
 
@@ -1303,13 +1306,15 @@ The bundle lane lets N same-scope issues share one worktree, one branch, one mis
 
 2. **Bundle** — pass `--target-issues A,B,C` (comma-separated, sorted+deduped) or set `KAOLA_TARGET_ISSUES=A,B,C`. The claim script validates all targets before any mutation (all-or-nothing: if any target is invalid the whole bundle is refused). On success, one `kaola-workflow/bundle-A-B-C/` folder is created and one `workflow/bundle-A-B-C` branch is provisioned (forge editions prefix the edition name, e.g. `workflow/gitlab-bundle-A-B-C`).
 
-Which mode applies is the orchestrator's call, made while reading the backlog: several issues share a run when they are all open, unclaimed, and coherent in scope. That is a shape judgement and nothing caps it — say which issues you bundled and why.
+Which mode applies is the orchestrator's call, made while reading the backlog: issues share a run when they are all open, unclaimed, and each closeable on its own evidence — finishing one does not depend on how another turns out. Sharing a scope is one route to that and buys a shared investigation; disjoint write surfaces are the other, and buy real concurrency — prefer disjoint when both are on offer. That is a shape judgement and nothing caps it — say which issues you bundled and why, and if you took fewer than three, say what you passed over.
+
+An issue runs alone when it moves something the other members read — a schema, an envelope shape, a routing skeleton, a shared constant; when closing it needs a value call from the user, since all-or-nothing closure would hold every finished sibling behind that one decision; or when its scope is not knowable until it has been investigated. Size is not the test: a large change inside one module bundles fine, and a one-line change to a shared anchor does not.
 
 Setting both `--target-issue` and `--target-issues` (or both env-var equivalents) answers `target_ambiguity` usage at exit 0; no state is written either way.
 
 ### Bundle claim semantics
 
-`claimExplicitBundle` validates every issue in the set before mutating anything. If any single target fails validation the entire bundle is refused and no active folder is created. Bundle SIZE is not one of those validations — how many issues a claim takes is the orchestrator's call, so a wide set acquires and the envelope carries `bundle_size_note` (the count plus a recommended 8) as advice. Claim outcome codes (`target_ambiguity` exits 0; the rest exit non-zero):
+`claimExplicitBundle` validates every issue in the set before mutating anything. If any single target fails validation the entire bundle is refused and no active folder is created. Bundle SIZE is not one of those validations — how many issues a claim takes is the orchestrator's call, so a wide set acquires and the envelope carries `bundle_size_note` (the count plus the recommended ceiling of 8) as advice. Only a set larger than 8 draws the note; the three-to-five norm is guidance for choosing a set, not a second threshold anything checks. Claim outcome codes (`target_ambiguity` exits 0; the rest exit non-zero):
 
 | Code | Meaning |
 |------|---------|
@@ -1330,13 +1335,13 @@ Setting both `--target-issue` and `--target-issues` (or both env-var equivalents
 
 Multiple Kaola-Workflow runs can coexist when each targets a distinct active folder. The source of truth is `kaola-workflow/{project}/workflow-state.md`, with the configured forge's issue state used to reject closed issues and PR/MR state used by `watch-pr` (or `watch-mr` on GitLab).
 
-- Startup requires an explicit `--target-issue N`; the agent chooses the issue and scripts validate it.
+- Startup requires an explicit `--target-issue N` or `--target-issues A,B,C`; the agent chooses the issues and scripts validate them.
 - Claiming uses atomic folder creation, so two agents cannot create the same `kaola-workflow/{project}/` folder.
 - `status` lists active folders; `release` archives abandoned work; `finalize` archives completed work.
 
 ### Parallel execution examples
 
-Run one session per issue in separate terminals. Each `/workflow-next`
+Run one session per claimed set in separate terminals. Each `/workflow-next`
 claims its own `kaola-workflow/{project}/` folder atomically, and the
 classifier ensures the chosen issues are green or yellow (no red conflicts)
 before claiming.
@@ -1367,9 +1372,9 @@ cd ~/Workspace/Kaola-Workflow
 /goal use the workflow-next skill to finish issue #43.
 ```
 
-By default, every active issue runs in a
+By default, every claimed set runs in a
 repo-local worktree at `<repo-root>/.kw/worktrees/<project>/`, so file edits
-in one issue do not interfere with another (set `KAOLA_WORKTREE_NATIVE=0` to
+in one run do not interfere with another (set `KAOLA_WORKTREE_NATIVE=0` to
 disable).
 
 To drive several issues from a single session instead of several
@@ -1380,18 +1385,19 @@ terminals, scope the goal text accordingly:
       time, in dependency order.
 ```
 
-### Per-issue Git worktrees
+### Per-claim Git worktrees
 
 By default, `kaola-workflow-claim.js` provisions a Git worktree on every
-claim so each active issue has its own
+claim so each claimed set has its own
 checkout — separate from the main repo checkout and from every other active
-issue. Set `KAOLA_WORKTREE_NATIVE=0` to disable (a repo-root run, no
+run. A claim covering several issues is one project and one worktree, not one
+per member. Set `KAOLA_WORKTREE_NATIVE=0` to disable (a repo-root run, no
 worktree).
 
 **Why.** With one shared checkout, two parallel sessions stepping on the
 same files would collide on branch switches and stash state. A
-per-issue worktree gives each session its own working tree, so file
-edits, builds, and node runs in one issue do not affect another.
+per-claim worktree gives each session its own working tree, so file
+edits, builds, and node runs in one run do not affect another.
 
 **Where.** Worktrees live at `<repo-root>/.kw/worktrees/<project>/`.
 If the main repo is `~/Workspace/Kaola-Workflow`, the worktree for
@@ -1402,7 +1408,7 @@ the linked worktree without consulting a lock file.
 
 **How the workflow uses it.** The workflow resolves `ACTIVE_WORKTREE_PATH` at
 startup — when `KAOLA_WORKTREE_NATIVE=0` it is the current directory; when
-`KAOLA_WORKTREE_NATIVE=1` it is the per-issue worktree.
+`KAOLA_WORKTREE_NATIVE=1` it is the claimed set's worktree.
 All `git`, `cp`, and path operations during the run are then anchored at
 that root. Finalization's sink-merge runs against the worktree; `finalize`
 removes the worktree by default after archiving the active folder, or

@@ -85,7 +85,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 ## Kaola-Workflow
 
 - Start and resume all workflow work through the workflow router entrypoint your runtime installs.
-- A run claims one issue — or one explicitly selected same-scope set — and records what it owns in `kaola-workflow/{project}/workflow-state.md`: which issue, which branch, which worktree.
+- A run claims an explicitly selected set of issues — normally three to five, sometimes one — each open, unclaimed, and closeable on its own evidence, and records what it owns in `kaola-workflow/{project}/workflow-state.md`: which issues, which branch, which worktree. An issue runs alone when it moves something the others read, when closing it needs a value call from the user, or when its scope is not knowable until it has been investigated.
 - `kaola-workflow/{project}/mission-list.md` is the run's coordination record and the one file a successor needs. No script owns this file; you write it. An H1 carrying the goal in one line, then one item per mission.
 - An item is a **mission, not a specification**. One line of prose: what to achieve, plus the hints and facts you already know. It carries no role, no file list, no dependency edge, no model, no cardinality and no shape, because you decide all of that when you reach it.
 - The frontier is not computed — it is the list minus done minus in-flight, visible by reading. When you reach an item, decide whether to dispatch subagents or do the work yourself, and at what width.
@@ -99,7 +99,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 - Use the vendored agent role names exactly as installed; prefer short names like `planner`. When spawning a Kaola subagent, pass the role's configured model on the spawn call — each agent ships its model in its installed profile.
 - At workflow-router startup, fetch remote-tracking refs, classify local/upstream sync state, and ask before any risky synchronization.
 - Use a persistent-objective prompt so work continues until its objective and completion audit are satisfied.
-- That objective prompt must not use "next issue in line" or any phrasing that implies automatic cross-issue continuation. Each workflow run targets one issue; finishing it is the terminal event. The single-issue completion contract requires explicit re-direction for the next issue.
+- That objective prompt must not use "next issue in line" or any phrasing that implies automatic cross-issue continuation. Each workflow run targets one selected set of issues; finishing the set is the terminal event. The completion contract requires explicit re-direction for the next set.
 - Treat nonessential workflow bookkeeping as autonomous: generated project names, collision suffixes like `-2`, cache/artifact paths, and harmless ordering choices are selected automatically and recorded.
 - For essential technical decisions, apply your own judgment, apply the selected answer, and say what the evidence was.
 - Take irreversible and value-laden calls to the user and ask, in conversation, before acting: risky Git synchronization, destructive rewrites, deployment or credential actions, and issue or roadmap reorganization. Nothing collects that approval for you.
@@ -108,7 +108,7 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 - In `.roadmap/issue-N.md`, `workflow_project` becomes a directory name verbatim: write `—` when no project is assigned yet, and a claim derives `issue-N`. Any other value is taken as a real, intended name, so a placeholder like `unclaimed` or `TBD` produces a folder literally called that.
 - Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file.
 - Active work lives in `kaola-workflow/{project}/` until archived or safely discarded.
-- Roadmap/research sessions create or refine issues; workflow runs implement one selected item and refresh the mirror.
+- Roadmap/research sessions create or refine issues; workflow runs implement one selected set and refresh the mirror.
 - After resume or compaction, read `workflow-state.md` and `mission-list.md` before continuing: the H1 is the goal, `done` items carry what is already known, `in-flight` items are the decision to make, `todo` items are what remains.
 - Resuming an `in-flight` item means looking for the WORK, not the worker: if the output its `dispatched` line promised has landed, close it; otherwise re-dispatch, unless the dispatch is provably still alive.
 - End each cycle by docking docs against code changes, resolving closure decisions, updating issues, refreshing the roadmap, archiving completed workflow folders, and then the final commit and push.
@@ -229,9 +229,9 @@ already exists, remove it (or run `uninstall.sh`) to avoid double-firing.
 
 ### How a run is coordinated
 
-One file per run. A run claims its issue, then writes
-`kaola-workflow/{project}/mission-list.md`. There is nothing to select or configure, and no
-script owns the file.
+One file per run, not one per issue. A run claims its set of issues — normally three to five,
+sometimes one — then writes `kaola-workflow/{project}/mission-list.md`. There is nothing to select
+or configure, and no script owns the file.
 
 A stale workflow-path request from an old session or script is silently ignored; there is only one
 way to run.

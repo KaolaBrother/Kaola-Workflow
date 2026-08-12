@@ -145,9 +145,9 @@ moved and notice what does not belong.
 
 Walk what the run set out to do and name what satisfies each part — a covering test, a validation
 receipt, or prose evidence, judged in context. The `done` items in `mission-list.md` and their
-`result` lines are where the run recorded its own answers; the issue statement is the outer
-obligation. That judgement is yours: there is no mechanical match and no per-item ledger, and a part
-you cannot satisfy is a blocker, not a footnote.
+`result` lines are where the run recorded its own answers; the issue statements — one per claimed
+member — are the outer obligation. That judgement is yours: there is no mechanical match and no
+per-item ledger, and a part you cannot satisfy is a blocker, not a footnote.
 
 Then confirm the obvious: tests pass per the validation result rather than a re-run universal suite,
 no type or lint errors, no unresolved critical or high review findings, and no debug statements left
@@ -192,8 +192,8 @@ is a docking gap, not a doc.
 
 ## Step 5 — Documentation docking
 
-Compare the changed code, config, test and workflow files against the issue statement, the run's own
-recorded results, and `README`, the API docs, the architecture docs, the changelog,
+Compare the changed code, config, test and workflow files against every claimed issue's statement,
+the run's own recorded results, and `README`, the API docs, the architecture docs, the changelog,
 `.env.example`, the roadmap, and the issue comments. Every public behavior, API, setup,
 architecture, environment or validation change is reflected somewhere, or carries an explicit
 no-impact reason. Write `.cache/doc-docking.md` — changed files reviewed, documents checked, gaps
@@ -238,6 +238,11 @@ record `noise: <justification>`. If you hand-typed a `## Run gaps` row the scann
 append the matching `gap: <class> — <text>` line to `.cache/run-gaps-manual.md` and re-run the
 scanner, so what is written was actually swept.
 
+**File them as independent slices, not one omnibus issue.** Where the findings sit on disjoint
+surfaces, they are separate issues; a single issue bundling unrelated surfaces cannot be worked
+alongside anything, itself included. A later run can only take a set as wide as the backlog's
+independence allows, so how these are filed sets how wide the next one can be.
+
 Advisory: export `KAOLA_GOAL`, or set a `goal:` line in the run folder, so the closure receipt
 records that a goal was DECLARED, with its source. Nothing checks whether it was achieved — do not
 read it as success.
@@ -250,18 +255,27 @@ If there are any, take them to the user with your recommendation and **ask befor
 splitting, merging, or reorganizing** any issue or roadmap entry.
 
 <!-- SPLICE:fz-issue-closure -->
-after acceptance passes and the closure decision clears. Keep it open when follow-ups, partial work,
-or unresolved decisions remain.
+after acceptance passes and the closure decision clears. Keep them open when follow-ups, partial work,
+or unresolved decisions remain — that choice is whole-run and takes every member with it.
 
 ### Keep-open terminal mode
 
-A run can be complete as a cycle while the issue stays OPEN. The durable signal is one optional line
+A run can be complete as a cycle while its issues stay OPEN. The durable signal is one optional line
 in the `## Sink` block of `workflow-state.md`: `issue_action: comment_keep_open` (absent means
-close), written by you at the closure decision with the user's agreement. Under keep-open the issue
-is not closed — the sink posts a mechanical keep-open comment — the roadmap source
-`.roadmap/issue-N.md` is preserved and the mirror still lists the issue, the claim is released, the
-worktree and branch are removed, and the archive is stamped as kept-open. Keep-open is
+close), written by you at the closure decision with the user's agreement.
+
+**That one line is whole-run; there is no per-issue variant of it.** Under keep-open the close is
+skipped for the entire claimed set: **no member is closed, including members whose work finished
+cleanly**, every member gets a mechanical keep-open comment from the sink, every roadmap source
+`.roadmap/issue-N.md` is preserved so the mirror still lists all of them, and **the claim is
+released on every issue left open** — both artifacts, the `workflow:in-progress` label and the
+`kw:claim` marker comment, since an issue meant to stay open is an issue meant to be claimable
+again. The worktree and branch are removed and the archive is stamped as kept-open. Keep-open is
 merge-sink-only.
+
+So on a bundle this is priced per set, not per issue: taking it for one unresolved member leaves
+every finished member open too, back in the backlog to be re-claimed. Weigh that against closing
+the set and carrying the unresolved remainder into a new issue.
 
 ## Step 9 — Capture the sink metadata
 
@@ -377,9 +391,9 @@ content it could not vouch for.
 
 **What it tells you is not everything worth knowing.** In particular the sink does not check that the
 branch carries implementation: on `--sink` nothing reports a branch whose entire diff is workflow
-bookkeeping, and it will merge, push and close the issue. Silence there is not a clearance. You know
-whether your run produced work, so confirm that before you sink — afterwards the mainline is published
-and the issue is closed, which is recoverable only in public.
+bookkeeping, and it will merge, push and close every issue in the set. Silence there is not a
+clearance. You know whether your run produced work, so confirm that before you sink — afterwards the
+mainline is published and the issues are closed, which is recoverable only in public.
 
 It also stops the way any operation stops — a push that did not land, an archive move that would
 lose a file, a tree it does not own, a record it would have to misreport. It stops rather than
@@ -436,7 +450,7 @@ completed step idempotent, so re-running applies only what is left.
 
 ## Completion contract
 
-This phase closes exactly one issue, or every issue in one explicitly selected set — all of them, or
-none. After the issue is closed and the active folder is archived, the completion contract is
-satisfied. Stop and await explicit re-direction from the user. Do not auto-route into the next issue
+This phase closes every issue in one explicitly selected set — all of them, or none; a run carrying
+a single issue is that set with one member. After the issues are closed and the active folder is
+archived, the completion contract is satisfied. Stop and await explicit re-direction from the user. Do not auto-route into the next issue
 in line.

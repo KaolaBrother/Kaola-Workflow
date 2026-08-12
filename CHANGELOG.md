@@ -1,5 +1,52 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **A run's default shape is a bundle of three to five issues, and bundle admission now turns on
+  independent closure rather than shared scope — #968.** The claim-time prior was one sentence
+  repeated across the routing skeletons — *"A run normally carries one issue … share a coherent
+  scope"* — and nothing in the machinery ever backed it: `claimExplicitBundle` retired
+  `KAOLA_BUNDLE_MAX_ISSUES` along with its enforcement, and `BUNDLE_SIZE_ADVISORY = 8` has only ever
+  ridden out as advice on the claim envelope. The prose *was* the whole limiter, and measured over
+  the last 26 archived runs it produced a **median run of one issue** (mean 2.6; 14 of 26 single).
+
+  The admission test, not the count, was the substantive defect. Issues that "share a coherent scope"
+  share files, and sharing files is exactly what forces serialization inside a run — so the rule
+  admitted the bundles that parallelize worst and excluded the ones that parallelize best. Members
+  are now admissible when each is **closeable on its own evidence**: shared scope survives as one
+  route to that (it buys a shared investigation) and **disjoint write surfaces are preferred** (they
+  buy real concurrency). An issue **runs alone** when it moves something the other members read, when
+  closing it needs a value call from the user, or when its scope is not knowable until it has been
+  investigated — **blast radius, not diff size**.
+
+  This aligns the prose with a ruling the bundle lane's own design phase already made: a claim script
+  refusing a user-named set on "scope" would override explicit user intent, so `target_set_not_same_scope`
+  was dropped before v1 and never built. No script computes, stores, or refuses on scope coherence,
+  and the one role intended to carry the judgement was retired with the standalone pre-claim survey.
+
+  Three is a floor on what is taken from what the frontier already offers, never a licence to invent
+  work. **`BUNDLE_SIZE_ADVISORY` is untouched** and eight remains the recommended ceiling, so the two
+  numbers now read as the different knobs they are. **`closure_policy: all_or_nothing` is untouched.**
+
+  Prose-only, across all three routing skeletons: `next.skeleton.md` (the default and the completion
+  contract), `init.skeleton.md` (three statements inside the `KW-CLAUDE-TEMPLATE` region, so the rule
+  changes in every consumer repo's generated `CLAUDE.md`), and `finalize.skeleton.md` (the closure
+  half, which keeps "all of them, or none" verbatim while making the set rather than the single issue
+  the headline case). Renders to **18 tracked surfaces** and, through the two edition transforms, to
+  **18 more** across the six `.opencode*` and `.kimi*` trees — all three topics, not just the two
+  most obviously touched — verified by measurement rather than assumed, since those transforms fail
+  silently on a changed anchor. `README.md` restated the rule in
+  four hand-maintained places and was brought into line. **No script changed.**
+
+- **ADR 0017's watch list records the cost of all-or-nothing closure at wider bundles.** Keep-open is
+  a whole-run boolean with no member axis, so one member that cannot close holds every finished
+  sibling open — a cost that grows with the default width. Recorded, not built, per the watch-list
+  discipline: the row names the observation that would arm it and corrects the sizing, since the
+  per-member roadmap-retention half already exists and is already tested per-member, while the
+  per-member intake and forge-close decision do not.
+
 ## [9.8.0] - 2026-08-12
 
 ### Changed

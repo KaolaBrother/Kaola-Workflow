@@ -18,7 +18,7 @@ from those four or a **preference** the successor is free to re-decide.
 
 The mission list answers the first two questions in one file: its H1 carries the goal, its `item`
 lines carry the decomposition, and `status` / `dispatched` carry the position. `workflow-state.md`
-carries the claim — which issue, branch, worktree and sink mode this run owns.
+carries the claim — which issues, branch, worktree and sink mode this run owns.
 
 That claim is only worth anything once it has been applied to every file a run actually writes, so
 the table below rules all of them. It is generated from — and machine-checked against — the
@@ -303,7 +303,7 @@ patched in place by the later lifecycle verbs. Its blocks:
 
 ### What this file no longer carries
 
-`workflow-state.md` records **claim identity and nothing else** — which issue, which branch, which
+`workflow-state.md` records **claim identity and nothing else** — which issues, which branch, which
 worktree, when, by whom, and how the run will sink. The `## Pending Gates` and `## Planning
 Evidence` blocks are gone with the executor that read them, and so are `plan_hash`, `decision`,
 `risk`, `first_node_id`, `first_node_role` and `active_plan_hash`.

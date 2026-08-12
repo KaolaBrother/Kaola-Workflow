@@ -83,7 +83,7 @@ their Codex SKILL twins; losing that sentence is losing the mechanism.
 
 ## Claim and coordination
 
-`kaola-workflow-claim.js` owns the atomic bookkeeping around a run. The claim records which issue,
+`kaola-workflow-claim.js` owns the atomic bookkeeping around a run. The claim records which issues,
 branch and worktree the run owns, in `kaola-workflow/{project}/workflow-state.md`, so a successor
 knows what is already in flight.
 

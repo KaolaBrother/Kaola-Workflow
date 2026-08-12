@@ -1230,10 +1230,10 @@ const rollbackOutcomes = {};
 // Test (9): the selection record on the BUNDLE lane.
 //
 // The bundle claim is the second entry into claimProject-shaped provisioning, and it is exactly
-// the lane a no-target orchestrator survey produces (a same-scope bundle is the guarded exception
-// the ranking rules allow). If the record is only wired into the scalar path, a bundle run loses
-// its whole account of why it exists. Three properties, mirroring the scalar coverage in
-// test-claim-hardening.js:
+// the lane a no-target orchestrator survey produces (a bundle is the norm — a run normally carries
+// three to five issues, each closeable on its own evidence). If the record is only wired into the
+// scalar path, a bundle run loses its whole account of why it exists. Three properties, mirroring
+// the scalar coverage in test-claim-hardening.js:
 //   (a) an orchestrator-selected bundle claim with no --selection-record still CLAIMS, on the
 //       canonical self-describing record, and reports that on the envelope;
 //   (b) a plain (user-directed) bundle claim writes the canonical record + digest under the

@@ -63,9 +63,23 @@ You select the target. No script picks for you.
 the user when the pick is genuinely ambiguous. A clean selection — frontier honored, no ambiguity —
 claims without asking.
 
-A run normally carries one issue. Several issues may share one run when they are all open,
-unclaimed, and share a coherent scope; that is a shape judgement and nothing caps it. Say which
-issues you bundled and why.
+A run normally carries **three to five issues**. One issue is the exception rather than the norm:
+take it when the frontier genuinely offers nothing else, or when the issue is one that must run
+alone. Three is a floor on what you take from what already exists — never a reason to invent work —
+and eight remains the recommended ceiling.
+
+Members are admissible when they are all open, unclaimed, and each **closeable on its own
+evidence**: finishing one does not depend on how another turns out. Sharing a scope is one route to
+that and buys a shared investigation; **disjoint write surfaces are the other, and buy real
+concurrency**. Prefer disjoint when both are on offer. That is a shape judgement and nothing caps it.
+
+An issue **runs alone** when it moves something the other members read — a schema, an envelope
+shape, a routing skeleton, a shared constant; when closing it needs a value call from the user,
+since all-or-nothing closure would hold every finished sibling behind that one decision; or when its
+scope is not knowable until it has been investigated. Size is not the test: a large change inside one
+module bundles fine, and a one-line change to a shared anchor does not.
+
+Say which issues you bundled and why, and if you took fewer than three, say what you passed over.
 
 **Goal context.** When `KAOLA_GOAL` is exported, treat it as a soft filter inside the chosen
 priority tier: note the alignment, never exclude on mismatch, and never let it outrank an open,
@@ -119,18 +133,17 @@ node "$CLAIM_JS" watch-pr >/dev/null 2>&1 || true
 
 ## Step 3 — Claim
 
-The claim is bookkeeping: it records which issue, branch and worktree this run owns, in
+The claim is bookkeeping: it records which issues, branch and worktree this run owns, in
 `kaola-workflow/{project}/workflow-state.md`, so a successor knows what is already in flight.
 
-Set `KAOLA_TARGET_ISSUE` to the issue you selected, then run the startup transaction. For a run
-carrying several issues, swap `--target-issue "$KAOLA_TARGET_ISSUE"` for
-`--target-issues 42,47,53` — comma-separated, no spaces; the script validates the exact set and
-never reorders it.
+Set `KAOLA_TARGET_ISSUES` to the set you selected — comma-separated, no spaces, as in `42,47,53` —
+then run the startup transaction; the script validates the exact set and never reorders it. For a
+run carrying a single issue, swap `--target-issues "$KAOLA_TARGET_ISSUES"` for `--target-issue 42`.
 
 ```bash
 kaola_script(){ _n="$1"; _p="plugins/kaola-workflow/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
 CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
-node "$CLAIM_JS" startup --runtime codex --target-issue "$KAOLA_TARGET_ISSUE"
+node "$CLAIM_JS" startup --runtime codex --target-issues "$KAOLA_TARGET_ISSUES"
 ```
 
 It atomically creates the project folder and its `workflow-state.md`, and provisions a repo-local
@@ -271,9 +284,9 @@ Next: {the next skill, or the frontier item you are opening}
 
 ## Completion contract
 
-Each run implements exactly one issue, or one explicitly selected same-scope set. After finalization
-closes the issue (or every issue in the set) and archives the active folder, stop and await explicit
-re-direction. Do not auto-route into the next issue in line.
+Each run implements one explicitly selected set of issues — normally three to five, sometimes one.
+After finalization closes every issue in the set and archives the active folder, stop and await
+explicit re-direction. Do not auto-route into the next issue in line.
 
 A multi-issue closure is all-or-nothing: finalization closes every issue in the set, removes every
 matching `.roadmap/issue-N.md` source, regenerates the roadmap mirror once, archives one folder, and
