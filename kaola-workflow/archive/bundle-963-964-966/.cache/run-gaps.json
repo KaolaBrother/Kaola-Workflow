@@ -1,0 +1,10 @@
+{
+  "project": "bundle-963-964-966",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:guard-threshold",
+      "sample": "the CLAUDE.md line check in scripts/validate-workflow-contracts.js:339 enforces a 198-line ceiling while its own message and CLAUDE.md's Maintenance rule both say 200. The assertion splits on newlines and a trailing newline yields one extra empty element, so a file of 199 physical lines fails a check whose message names 200 as the target. OBSERVED, not read: editing CLAUDE.md to 199 physical lines threw at module load and red the entire contracts validator, which surfaced in the full-scope walkthrough only as an opaque testContractValidatorOfflineSkip failure — the assertion sits at column 0 of the module body, so its failure takes the whole CLI down rather than reporting a scoped finding. Cost this run one diagnose-and-fix cycle. The fix is one line either way, and the issue deliberately does not presume which side moves; rewording the message alone is a legitimate closure.",
+      "count": 1
+    }
+  ]
+}
