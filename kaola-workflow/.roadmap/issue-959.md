@@ -1,5 +1,0 @@
-issue: #959
-title: docs/architecture.md:287 says four forge editions ship against a different forge CLI — measured, four trees call three CLIs
-status: open
-workflow_project: issue-959
-next_step: From the #952 audit (D10), filed narrowly on purpose. This is NOT "four editions is wrong" — that phrase is load-bearing repo-wide vocabulary meaning four script trees and CLAUDE.md uses it the same way. The false clause is "against a different forge CLI". Measured by which CLI each tree calls - canonical gh 127, Codex gh 64/glab 0/tea 0, gitlab glab 34, gitea tea 41; four trees, three CLIs, so the Codex tree's axis is runtime not forge. Positive control - the method finds glab only in gitlab and tea only in gitea. Blast radius MEASURED, and it overturns an assumption made in the originating run where this was left alone on the belief that rewording would ripple - git grep -i "four forge edition" outside the archive returns three hits, of which docs/architecture.md:287 is the only live doc. This line now sits directly above the Runtime capability divergence table added by #955, which tells the reader the axes differ.

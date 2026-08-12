@@ -1,5 +1,0 @@
-issue: #956
-title: docs/conventions.md documents FEATURE_TOKENS — a constant deleted at 523f1241 — and instructs the reader to add tokens to it
-status: open
-workflow_project: issue-956
-next_step: Highest-value finding of the #952 subtraction audit; full measurement in docs/audits/2026-08-11-subtraction-audit.md (D1). docs/conventions.md:281-293 documents FEATURE_TOKENS in test-agent-profile-parity.js and tells the reader to add tokens to it; the constant exists nowhere in the tree, removed at 523f1241 (the #881-#885 audit), which took the code and left the instructions. It does not merely go stale — it instructs action on machinery that is gone, which is why it outranks findings fifty times its size. Re-confirm before cutting, with the audit's own positive control: CONFIG_HOOKS_FAMILY, named twelve lines later, still resolves 6x. Decide whether the 23-line block is deleted with its mechanism or rewritten against whatever replaced it; the repo rule that a test is deleted with its mechanism rather than repaired ahead of it applies to its documentation too.
