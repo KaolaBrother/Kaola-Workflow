@@ -221,6 +221,21 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
+    // The third measurement, same rule as the other two: a durable destination,
+    // compared to nothing. The token is the SENTENCE, not the bare heading —
+    // `## Mission List` alone is satisfied by either of its two occurrences on
+    // the surface, so it survives losing one of them. This pins the rule that
+    // makes all three sections script-owned, which is the thing a surface must
+    // not quietly drop.
+    block_id: 'fn-mission-list-report',
+    topic: 'finalize',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '`## Validation`, `## Changed Paths` and `## Mission List` are where the finalize transaction\'s own findings land',
+    ],
+  },
+  {
     // R3's replacement, and the reason the refusal could go: the sink reports,
     // and the orchestrator is accountable for the branch ending up right. All
     // three resolutions are named, because "merge anyway and report" is the

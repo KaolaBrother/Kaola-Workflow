@@ -213,15 +213,16 @@ last thing a reader has after the folder is archived:
 ## Test Coverage
 ## Validation
 ## Changed Paths
+## Mission List
 ## Documentation Docking
 ## Run gaps
 ## Follow-Up Items
 ## Status: READY FOR FINAL GIT GATE
 ```
 
-`## Validation` and `## Changed Paths` are where the finalize transaction's own findings land — do
-not delete them, and do not soften them. `## Run gaps` carries one line per swept gap, each either
-`filed: #N` or `noise: <justification>`.
+`## Validation`, `## Changed Paths` and `## Mission List` are where the finalize transaction's own
+findings land — do not delete them, and do not soften them. `## Run gaps` carries one line per swept
+gap, each either `filed: #N` or `noise: <justification>`.
 
 ## Step 7 — Run-gap sweep
 
@@ -264,7 +265,7 @@ A run can be complete as a cycle while its issues stay OPEN. The durable signal 
 in the `## Sink` block of `workflow-state.md`: `issue_action: comment_keep_open` (absent means
 close), written by you at the closure decision with the user's agreement.
 
-**That one line is whole-run; there is no per-issue variant of it.** Under keep-open the close is
+**That one line is whole-run; there is no per-issue form of it.** Under keep-open the close is
 skipped for the entire claimed set: **no member is closed, including members whose work finished
 cleanly**, every member gets a mechanical keep-open comment from the sink, every roadmap source
 `.roadmap/issue-N.md` is preserved so the mirror still lists all of them, and **the claim is
@@ -284,6 +285,11 @@ Capture this now, while `workflow-state.md` still exists — the merge path arch
 ```bash
 <!-- SLOT:fz-scripts-resolver -->
 SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"
+if [ ! -f "$SINK_STATE_FILE" ]; then   # the record stays where the claim wrote it; you may not be there
+  _SINK_COORD="$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")"
+  if [[ "$_SINK_COORD" != /* ]]; then _SINK_COORD="$(pwd)/$_SINK_COORD"; fi
+  SINK_STATE_FILE="$(dirname "$_SINK_COORD")/$SINK_STATE_FILE"
+fi
 SINK_BRANCH=$(grep '^branch:' "$SINK_STATE_FILE" | awk '{print $2}')
 <!-- SPLICE:fz-sink-issue -->
 SINK_KIND=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^sink:' | awk '{print $2}'); SINK_KIND=${SINK_KIND:-merge}
@@ -295,7 +301,7 @@ SINK_ISSUE_NUMBERS_FLAG=""; [ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_F
 SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_action:' | awk '{print $2}'); SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
 SINK_KEEP_OPEN_FLAG=""; [ "$SINK_ISSUE_ACTION" = "comment_keep_open" ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
 ACTIVE_WORKTREE_PATH="$(pwd)"
-_WT_PRE="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/{project}/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
+_WT_PRE="$(node -e "try{const fs=require('fs');const s=fs.readFileSync(process.argv[1],'utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" "$SINK_STATE_FILE" 2>/dev/null)" || true
 [ -n "$_WT_PRE" ] && [ -d "$_WT_PRE" ] && ACTIVE_WORKTREE_PATH="$_WT_PRE"
 ```
 

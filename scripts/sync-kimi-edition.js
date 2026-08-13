@@ -48,6 +48,37 @@ const reviewerGen = require('./generate-reviewer-profiles');
 const forgeLayout = require('./runtime-edition-forge');
 
 const REPO = path.resolve(__dirname, '..');
+
+// TREE_ROOT — where the generated tree LANDS, which is not where the canonical sources are READ.
+//
+// Sources come from the checkout this script was invoked out of (REPO): a run edits agents/,
+// commands/ and templates/ on its branch, and a render that read them anywhere else would ship
+// prose nobody wrote here — a sync that quietly re-renders another checkout from its own unchanged
+// sources is a no-op wearing a regenerate's name.
+//
+// The tree is different. It is gitignored and derived, so a machine holds exactly one of it and it
+// belongs to the MAIN checkout: a tree written inside a linked worktree dies with that worktree,
+// which is how a run can regenerate all six trees, record them in parity, and still leave the only
+// copy anyone deploys from carrying prose the branch had already replaced. So a sync run from a
+// worktree renders the WORKTREE's sources into MAIN's tree.
+//
+// Two costs, both accepted: main's trees can carry prose that has not merged yet, and two worktrees
+// syncing at once leave the later render standing. Both are bounded by the trees being derived —
+// any --write, and either installer's check-or-write, restores them from whatever canonical says.
+//
+// Where there is no main checkout to resolve, the tree belongs beside this script, and never in the
+// process cwd, which owns no canonical sources at all. Three postures have no main checkout: an
+// unpacked source tree (how the installers run), a bare repository's linked worktree, and a
+// submodule. The last two still have a coordination directory, and it is NOT a checkout's `.git` —
+// it is the bare repo itself, or `<super>/.git/modules/<name>`. Taking it would put the generated
+// tree inside git's own storage, which git may rewrite around and no reader would ever look in. So
+// only a coordination directory that IS a `.git` names a checkout that can own the tree.
+const TREE_ROOT = (() => {
+  const schema = require('./kaola-workflow-adaptive-schema.js');
+  const coord = schema.getCoordRoot(REPO);
+  return path.basename(coord) === '.git' ? schema.mainRootFromCoord(coord) : REPO;
+})();
+
 const DEFAULT_FORGE = 'github';
 const CANON_AGENTS_DIR = path.join(REPO, 'agents');
 const CANON_HOOKS_DIR = path.join(REPO, 'hooks');
@@ -545,8 +576,18 @@ function renderKimiHooksToml(forge) {
 }
 
 // --- IO helpers ---
+// read() resolves a CANONICAL path (agents/, hooks/); treePath()/readTree() resolve a path inside
+// the GENERATED tree. They are separate because the two roots differ under a linked worktree — see
+// TREE_ROOT above — and a check that read the tree from the invoking checkout would report every
+// file missing in exactly the posture a run works in.
 function read(rel) {
   return fs.readFileSync(path.join(REPO, rel), 'utf8');
+}
+function treePath(rel) {
+  return path.join(TREE_ROOT, rel);
+}
+function readTree(rel) {
+  return fs.readFileSync(treePath(rel), 'utf8');
 }
 function ensureDir(d) {
   fs.mkdirSync(d, { recursive: true });
@@ -570,7 +611,7 @@ function expectedSkillDirs(forge) {
 }
 
 function retiredSkillDirs(forge) {
-  const dir = path.join(REPO, treeLabel(forge), 'skills');
+  const dir = treePath(path.join(treeLabel(forge), 'skills'));
   if (!fs.existsSync(dir)) return [];
   const expected = expectedSkillDirs(forge);
   return fs.readdirSync(dir, { withFileTypes: true })
@@ -593,7 +634,7 @@ function expectedHookFiles() {
 // this generator itself writes there — so it cannot reach a subdirectory or an unrelated file type
 // a user placed alongside. The tree ROOT is never swept.
 function retiredHookFiles(forge) {
-  const dir = path.join(REPO, treeLabel(forge), 'hooks');
+  const dir = treePath(path.join(treeLabel(forge), 'hooks'));
   if (!fs.existsSync(dir)) return [];
   const expected = new Set(expectedHookFiles());
   return fs.readdirSync(dir, { withFileTypes: true })
@@ -606,12 +647,12 @@ function retiredHookFiles(forge) {
 function pruneSkills(forge) {
   let removed = 0;
   for (const name of retiredSkillDirs(forge)) {
-    fs.rmSync(path.join(REPO, treeLabel(forge), 'skills', name), { recursive: true, force: true });
+    fs.rmSync(treePath(path.join(treeLabel(forge), 'skills', name)), { recursive: true, force: true });
     console.log('pruned     ' + treeLabel(forge) + '/skills/' + name + ' (retired surface)');
     removed++;
   }
   for (const f of retiredHookFiles(forge)) {
-    fs.rmSync(path.join(REPO, treeLabel(forge), 'hooks', f), { force: true });
+    fs.rmSync(treePath(path.join(treeLabel(forge), 'hooks', f)), { force: true });
     console.log('pruned     ' + treeLabel(forge) + '/hooks/' + f + ' (retired artifact)');
     removed++;
   }
@@ -624,7 +665,7 @@ function writeAgents(forge) {
     const canon = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
     const out = renderAgent(canon, name, forge);
     const rel = skillRel('kaola-role-' + name, forge);
-    const dest = path.join(REPO, rel);
+    const dest = treePath(rel);
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
       ensureDir(path.dirname(dest));
       fs.writeFileSync(dest, out);
@@ -642,7 +683,7 @@ function writeCommands(forge) {
     const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
     const out = renderCommand(canon, name, forge);
     const rel = skillRel(name, forge);
-    const dest = path.join(REPO, rel);
+    const dest = treePath(rel);
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
       ensureDir(path.dirname(dest));
       fs.writeFileSync(dest, out);
@@ -690,7 +731,7 @@ function adaptHookForKimi(script, content) {
 }
 
 function writeHooks(forge) {
-  const out_dir = path.join(REPO, treeLabel(forge), 'hooks');
+  const out_dir = treePath(path.join(treeLabel(forge), 'hooks'));
   ensureDir(out_dir);
   let wrote = 0;
   for (const script of HOOK_SCRIPTS) {
@@ -725,6 +766,28 @@ function runWrite(forge) {
     + (total === 0 ? ' — tree already in sync' : '') + ').');
 }
 
+// Bring back into parity every forge tree that ALREADY EXISTS, and create none.
+//
+// A tree that is absent carries no stale prose, and materializing one hands a developer a forge
+// edition they never installed — so absence is not a failure here and is not reported as one. The
+// caller is the regenerate step the skeleton rule already mandates: a prose edit reaches every
+// tracked surface, and without this it stopped one hop short of the tree a runtime actually reads.
+function runRefreshPresent() {
+  const refreshed = [];
+  for (const forge of forgeLayout.FORGES) {
+    if (!fs.existsSync(treePath(treeLabel(forge)))) continue;
+    writeAgents(forge);
+    writeCommands(forge);
+    writeHooks(forge);
+    pruneSkills(forge);
+    refreshed.push(treeLabel(forge));
+  }
+  if (refreshed.length) {
+    console.log('sync-kimi-edition: refreshed ' + refreshed.length + ' present tree(s): '
+      + refreshed.join(', ') + '.');
+  }
+}
+
 function runCheck(forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
   const tree = treeLabel(forge);
@@ -732,37 +795,37 @@ function runCheck(forge) {
   for (const name of listCanonAgents()) {
     const canon = read('agents/' + name + '.md');
     const rel = skillRel('kaola-role-' + name, forge);
-    if (!fs.existsSync(path.join(REPO, rel))) {
+    if (!fs.existsSync(treePath(rel))) {
       mismatches.push({ rel, reason: 'missing generated role skill' });
       continue;
     }
     const expected = renderAgent(canon, name, forge);
-    if (read(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate' });
+    if (readTree(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate' });
   }
   for (const file of listCanonCommands(forge)) {
     const name = file.slice(0, -3);
     const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
     const rel = skillRel(name, forge);
-    if (!fs.existsSync(path.join(REPO, rel))) {
+    if (!fs.existsSync(treePath(rel))) {
       mismatches.push({ rel, reason: 'missing generated command skill' });
       continue;
     }
     const expected = renderCommand(canon, name, forge);
-    if (read(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate' });
+    if (readTree(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate' });
   }
   for (const script of HOOK_SCRIPTS) {
     const rel = tree + '/hooks/' + script;
-    if (!fs.existsSync(path.join(REPO, rel))) {
+    if (!fs.existsSync(treePath(rel))) {
       mismatches.push({ rel, reason: 'missing hook script copy' });
       continue;
     }
-    if (read(rel) !== adaptHookForKimi(script, read('hooks/' + script))) mismatches.push({ rel, reason: 'drifted from canonical hooks/ (post-adaptation)' });
+    if (readTree(rel) !== adaptHookForKimi(script, read('hooks/' + script))) mismatches.push({ rel, reason: 'drifted from canonical hooks/ (post-adaptation)' });
   }
   {
     const rel = tree + '/hooks/kimi-hooks.toml';
-    if (!fs.existsSync(path.join(REPO, rel))) {
+    if (!fs.existsSync(treePath(rel))) {
       mismatches.push({ rel, reason: 'missing generated hooks fragment' });
-    } else if (read(rel) !== renderKimiHooksToml(forge)) {
+    } else if (readTree(rel) !== renderKimiHooksToml(forge)) {
       mismatches.push({ rel, reason: 'stale — regenerate' });
     }
   }
@@ -789,11 +852,14 @@ function runCheck(forge) {
 
 function usage() {
   process.stdout.write(
-    'usage: node scripts/sync-kimi-edition.js (--write | --check) [--forge=github|gitlab|gitea]\n'
+    'usage: node scripts/sync-kimi-edition.js (--write | --refresh-present | --check)'
+    + ' [--forge=github|gitlab|gitea]\n'
     + '  --forge=<f>  which forge to render (default github). github writes .kimi/;\n'
     + '               gitlab/gitea write .kimi-<forge>/\n'
     + '  --write   regenerate the forge tree skills + hooks from canonical\n'
+    + '  --refresh-present  regenerate every forge tree that already exists; create none (ignores --forge)\n'
     + '  --check   assert the generated tree is in byte-parity with a fresh render\n'
+    + '  --print-tree-root  print the directory the generated trees land in; write nothing\n'
   );
 }
 
@@ -810,7 +876,12 @@ function main() {
   }
   const arg = argv.filter(a => !a.startsWith('--forge='))[0];
   if (arg === '--write') return runWrite(forge);
+  if (arg === '--refresh-present') return runRefreshPresent();
   if (arg === '--check') return runCheck(forge);
+  // Read-only, and the ONE answer to "where does the tree a deploy copies from actually live" —
+  // so a consumer of the generated tree never has to restate the rule and get it wrong somewhere
+  // the rule does not hold. Prints a directory and nothing else; forge-independent.
+  if (arg === '--print-tree-root') { process.stdout.write(TREE_ROOT + '\n'); return; }
   usage();
 }
 

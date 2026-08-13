@@ -342,6 +342,34 @@ function cmdCheck(ir) {
   console.log(`generate-routing-surfaces --check: all ${GENERATED_SURFACES.length} surfaces byte-match the skeleton.`);
 }
 
+// The additive runtime editions render FROM the surfaces above, so until this ran the mandated
+// "edit the skeleton and regenerate" reached every tracked surface and stopped one hop short of the
+// tree those runtimes actually read — leaving a deployed edition instructing its reader to pass a
+// flag canonical had already renamed, with nothing to notice (the trees are gitignored, and every
+// chain-resident guard renders in memory rather than reading one).
+//
+// Only trees that ALREADY EXIST are refreshed and none is created, so a checkout that installed no
+// edition sees and gains nothing. This belongs to --write alone: --check runs in all four chains,
+// and a check that read an edition tree would put the editions inside `npm test`.
+//
+// Child processes, not a require: these modules reach back to this one through
+// runtime-edition-forge, so importing them here closes a cycle in which this file's own exports are
+// not yet assigned. The process boundary is what keeps that from being a live hazard.
+function refreshPresentEditionTrees() {
+  const { spawnSync } = require('child_process');
+  let failed = 0;
+  for (const script of ['sync-opencode-edition.js', 'sync-kimi-edition.js']) {
+    const abs = path.join(__dirname, script);
+    if (!fs.existsSync(abs)) continue; // a checkout that does not carry the edition generators
+    const r = spawnSync(process.execPath, [abs, '--refresh-present'], { cwd: REPO, stdio: 'inherit' });
+    if (r.status !== 0) {
+      console.error(`generate-routing-surfaces --write: ${script} --refresh-present exited ${r.status}`);
+      failed++;
+    }
+  }
+  return failed;
+}
+
 function cmdWrite(ir) {
   for (const row of GENERATED_SURFACES) {
     const abs = path.join(REPO, row.path);
@@ -349,6 +377,7 @@ function cmdWrite(ir) {
     fs.writeFileSync(abs, rendered);
   }
   console.log(`generate-routing-surfaces --write: rendered ${GENERATED_SURFACES.length} surfaces.`);
+  if (refreshPresentEditionTrees() > 0) process.exit(1);
 }
 
 function main() {

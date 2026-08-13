@@ -45,8 +45,42 @@ const schema = require('./kaola-workflow-adaptive-schema.js');
 const reviewerGenerator = require('./generate-reviewer-profiles.js');
 
 const REPO = sync.REPO;
-const read = rel => fs.readFileSync(path.join(REPO, rel), 'utf8');
-const exists = rel => fs.existsSync(path.join(REPO, rel));
+
+// ---------------------------------------------------------------------------
+// TREE_ROOT — the checkout the GENERATED tree lives in, which is NOT where the canonical sources
+// are read from. Under a linked worktree the two differ, and both halves are deliberate: the
+// sources are this checkout's, because a branch's edits are the whole point of running here, and
+// the tree is the main checkout's, because a tree written into a worktree dies with it. Every path
+// below whose first segment is a tree label resolves here; everything else resolves against REPO.
+//
+// COMPUTED HERE RATHER THAN IMPORTED, and that is the point. This is a second, independent
+// statement of where the tree belongs, and it is what keeps D1 able to fail: a probe derived from
+// the writer's own resolution agrees with it by construction — including when both are wrong — and
+// a probe that cannot disagree is the guard D1 exists to be. The fallback is the same result the
+// writer must honour: where no main checkout resolves (an unpacked source tree that is no git
+// checkout, which is how the installers run), the tree belongs beside the script.
+// ---------------------------------------------------------------------------
+const TREE_ROOT = (() => {
+  const { spawnSync } = require('child_process');
+  // spawn-class: environment
+  const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: REPO, encoding: 'utf8' });
+  if (r.status !== 0) return REPO;
+  const common = String(r.stdout || '').trim();
+  if (!common) return REPO;
+  const abs = path.resolve(REPO, common);
+  // A coordination directory identifies a main checkout only when it is that checkout's own `.git`.
+  // Anything else — a bare repository, a submodule's `.git/modules/<name>` — means there is no main
+  // checkout to speak of, and the tree then belongs beside the script rather than inside a directory
+  // git owns. K15 below asserts that outcome on disk; this is the same statement, for the probe.
+  return path.basename(abs) === '.git' ? path.dirname(abs) : REPO;
+})();
+
+// The ONE expression that decides which root a repo-relative path belongs to. The labels come from
+// the module's own forge axis, so a forge added later is routed without a second registration here.
+const TREE_LABELS = new Set(sync.FORGES.map(f => sync.treeLabel(f)));
+const rootOf = rel => (TREE_LABELS.has(String(rel).split(/[\\/]/)[0]) ? TREE_ROOT : REPO);
+const read = rel => fs.readFileSync(path.join(rootOf(rel), rel), 'utf8');
+const exists = rel => fs.existsSync(path.join(rootOf(rel), rel));
 let passed = 0, failed = 0;
 function assert(cond, msg) {
   if (cond) { passed++; return; }
@@ -88,7 +122,10 @@ let driftVerdict = '';
 // The ONE expression that decides present-vs-absent. D0 skips on it and D1 below asserts on it, so
 // there is no second path for the two to disagree about: a probe that resolves somewhere no tree is
 // ever written would make D0 skip every forge in silence, and D1 is what stops that being green.
-const treeRootFor = forge => path.join(REPO, sync.treeLabel(forge));
+const treeRootFor = forge => path.join(TREE_ROOT, sync.treeLabel(forge));
+// Named once, appended to every line D0 prints, so a verdict about a tree in ANOTHER checkout can
+// never read as a verdict about this one. Empty in the ordinary posture, where the two coincide.
+const treeWhere = TREE_ROOT === REPO ? '' : ' [tree root: ' + TREE_ROOT + ', not this checkout]';
 {
   const { spawnSync } = require('child_process');
   const verified = [];
@@ -114,16 +151,16 @@ const treeRootFor = forge => path.join(REPO, sync.treeLabel(forge));
     }
     verified.push(label);
   }
-  for (const label of verified) console.log('D0: ' + label + ' is present and in parity with canonical.');
+  for (const label of verified) console.log('D0: ' + label + ' is present and in parity with canonical.' + treeWhere);
   for (const label of absent) {
     console.log('D0: SKIPPED — ' + label + ' is absent from disk, so nothing was compared '
-      + '(gitignored generated tree; a fresh clone has none).');
+      + '(gitignored generated tree; a fresh clone has none).' + treeWhere);
   }
   driftVerdict = ' [drift-check: '
     + (verified.length ? verified.length + ' tree(s) in parity (' + verified.join(', ') + ')'
                        : 'NO tree verified')
     + (absent.length ? '; ' + absent.length + ' ABSENT, not checked (' + absent.join(', ') + ')' : '')
-    + ']';
+    + ']' + treeWhere;
 }
 
 // ---------------------------------------------------------------------------
@@ -152,9 +189,17 @@ const treeRootFor = forge => path.join(REPO, sync.treeLabel(forge));
 // find it. This calls treeRootFor, the same expression D0 skips on and NOT a restatement of it: an
 // independently-written copy here would pass while the probe it is supposed to defend was broken,
 // which is measured, not theorised — the first version of D1 did exactly that.
+//
+// It is ALSO the check that the two roots agree. TREE_ROOT is derived independently of the writer's
+// own resolution, so this is where "the tree lands in the main checkout" is confronted with where
+// the writer actually put it. When they diverge this reds here, before hundreds of tree reads fail
+// one at a time and the file finally dies on an ENOENT with no verdict attached — which is what
+// happened, measured, before this line resolved the same root the writer does.
 assert(fs.existsSync(treeRootFor(sync.DEFAULT_FORGE)),
   'D1: after sync --write, D0\'s presence probe must resolve a tree that exists — it resolved '
-  + treeRootFor(sync.DEFAULT_FORGE) + ', which does not, so D0 skipped every forge and checked nothing');
+  + treeRootFor(sync.DEFAULT_FORGE) + ', which does not, so D0 skipped every forge and checked '
+  + 'nothing. This checkout is ' + REPO + '; the tree root resolved to ' + TREE_ROOT + '. If those '
+  + 'differ, the writer put the tree somewhere else and the two resolutions have diverged');
 
 // Walk every file under .kimi/ (skills + hooks), returning repo-relative paths.
 function generatedTreeFiles() {
@@ -167,7 +212,7 @@ function generatedTreeFiles() {
       else out.push(r);
     }
   };
-  walk(path.join(REPO, '.kimi'), '.kimi');
+  walk(path.join(TREE_ROOT, '.kimi'), '.kimi');
   return out;
 }
 
@@ -189,7 +234,7 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
 // derived from the TRACKED canonical sources at run time so the expectation moves when they do.
 // ---------------------------------------------------------------------------
 {
-  const provisioned = fs.existsSync(path.join(REPO, '.kimi', 'skills'));
+  const provisioned = fs.existsSync(path.join(TREE_ROOT, '.kimi', 'skills'));
   assert(provisioned,
     'K0: the generated .kimi/skills tree exists after sync --write — an ABSENT tree must fail loudly '
     + 'here rather than let every readdir-driven loop below iterate over nothing');
@@ -197,7 +242,7 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
     // Stop here rather than let the first readdir throw: a stack trace is a worse report than one
     // line naming the cause, and every count after it would be meaningless.
     console.error('FATAL: sync --write reported success but produced no tree at '
-      + path.join(REPO, '.kimi', 'skills') + ' — nothing below can be tested.');
+      + path.join(TREE_ROOT, '.kimi', 'skills') + ' — nothing below can be tested.');
     process.exit(1);
   }
   const trackedAgents = fs.readdirSync(path.join(REPO, 'agents'))
@@ -258,7 +303,7 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
 // command) and a non-empty `description` (required by directory-form Skills).
 // ---------------------------------------------------------------------------
 {
-  const entries = fs.readdirSync(path.join(REPO, '.kimi', 'skills'), { withFileTypes: true });
+  const entries = fs.readdirSync(path.join(TREE_ROOT, '.kimi', 'skills'), { withFileTypes: true });
   const dirNames = entries.filter(e => e.isDirectory()).map(e => e.name).sort();
   const expected = [...canonCommandNames, ...roleDirNames].sort();
   assert(entries.length === expected.length && entries.every(e => e.isDirectory()),
@@ -815,7 +860,7 @@ for (const script of sync.HOOK_SCRIPTS) {
   const emittedCommandTargets = Object.keys(ROUTING_TOPICS).sort()
     .map(t => ROUTING_TOPICS[t].command_basename);
   const installed = new Set(
-    fs.readdirSync(path.join(REPO, '.kimi', 'skills'), { withFileTypes: true })
+    fs.readdirSync(path.join(TREE_ROOT, '.kimi', 'skills'), { withFileTypes: true })
       .filter(e => e.isDirectory()).map(e => e.name)
   );
   for (const target of emittedCommandTargets) {
@@ -1145,7 +1190,7 @@ for (const script of sync.HOOK_SCRIPTS) {
 // ---------------------------------------------------------------------------
 {
   const { spawnSync } = require('child_process');
-  const probeDir = path.join(REPO, '.kimi', 'skills', 'kaola-workflow-__kw_retired_probe');
+  const probeDir = path.join(TREE_ROOT, '.kimi', 'skills', 'kaola-workflow-__kw_retired_probe');
   // spawn-class: environment
   const runSync = (flag) => spawnSync(process.execPath,
     [path.join(REPO, 'scripts', 'sync-kimi-edition.js'), flag], { encoding: 'utf8' });
@@ -1265,7 +1310,7 @@ for (const script of sync.HOOK_SCRIPTS) {
     assert(c.status === 0, 'FA3[' + forge + ']: sync --check is green after --write (got ' + c.status + ': '
       + String(c.stderr || '').slice(0, 300) + ')');
 
-    const files = walk(path.join(REPO, tree));
+    const files = walk(path.join(TREE_ROOT, tree));
     assert(files.length > 0, 'FA3[' + forge + ']: ' + tree + ' is non-empty after --write');
     const bodies = files.map(f => fs.readFileSync(f, 'utf8'));
 
@@ -1295,7 +1340,7 @@ for (const script of sync.HOOK_SCRIPTS) {
     // this forge (generated, not a hand-maintained list).
     const expected = routing.commandSurfacesForForge(forge)
       .map(r => path.basename(r.path).slice(0, -3)).sort();
-    const actual = fs.readdirSync(path.join(REPO, tree, 'skills'), { withFileTypes: true })
+    const actual = fs.readdirSync(path.join(TREE_ROOT, tree, 'skills'), { withFileTypes: true })
       .filter(e => e.isDirectory() && !e.name.startsWith('kaola-role-'))
       .map(e => e.name).sort();
     assert(JSON.stringify(actual) === JSON.stringify(expected),
@@ -1305,7 +1350,7 @@ for (const script of sync.HOOK_SCRIPTS) {
     // F7: the managed hooks fragment names a script this forge's manifest ACTUALLY
     // installs. A forge-blind fragment would wire the hook to a basename that no
     // gitlab/gitea install ever writes — a dead hook that no parity check would see.
-    const frag = fs.readFileSync(path.join(REPO, tree, 'hooks', 'kimi-hooks.toml'), 'utf8');
+    const frag = fs.readFileSync(path.join(TREE_ROOT, tree, 'hooks', 'kimi-hooks.toml'), 'utf8');
     const installed = new Set(manifest.supportScripts(forge));
     const referenced = (frag.match(/kaola-[A-Za-z0-9._-]*\.js/g) || []);
     assert(referenced.length > 0, 'FA7[' + forge + ']: the hooks fragment references at least one script');
@@ -1479,6 +1524,475 @@ for (const script of sync.HOOK_SCRIPTS) {
       + 'closing line names a command that does not fix what the lines above it reported');
   } finally {
     try { rmSync(scratch, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// K13 + K14 — WHERE THE GENERATED TREE LANDS, AND WHO REFRESHES IT.
+// (Mirror of test-opencode-edition.js's A31 + A32; the failure was observed on both editions.)
+//
+// THE OBSERVED FAILURE. A run regenerated all six edition trees, its record says so, and every
+// tree it wrote died with the worktree it wrote them in: the main checkout was never touched, and
+// twelve files there kept prose that tells a reader to pass a flag canonical had already renamed.
+// Nothing reported it — the trees are gitignored, so `git status` is silent, and every
+// chain-resident guard renders the surfaces in memory rather than reading a tree, so all four
+// stayed green over the twelve stale files.
+//
+// Two properties close that, stated as RESULTS because neither is a claim about how a root is
+// computed:
+//
+//   K13  a sync run FROM a linked worktree writes the MAIN checkout's tree, rendered from the
+//        INVOKING checkout's canonical sources, and leaves no throwaway tree behind.
+//   K14  the regenerate step the skeleton rule already mandates leaves every edition tree that
+//        is PRESENT current, and does not conjure one that is absent.
+//
+// WHY A SCRATCH REPO WITH A REAL WORKTREE. Both write modes mutate a real tree, and the subject
+// here is *which* tree — so the fixture has to own both candidate roots. It builds a repo, commits
+// it, and adds a genuine linked worktree, because a linked worktree is the posture the failure was
+// observed in and the only one where the two roots differ. This repo is never a candidate: its own
+// trees are gitignored and D0 above exists to report their drift.
+//
+// THE TWO MARKERS ARE THE WHOLE DISCRIMINATOR. "Writes main's tree" is satisfiable by a change that
+// simply resolves everything — sources included — against the main checkout, and that change closes
+// nothing: a run's regenerate would then read main's unedited sources and write a tree that was
+// already in parity, i.e. a no-op wearing a fix's name. So one marker is planted in main's canonical
+// agent and one in the worktree's, and the assertions below are on BOTH: main's tree must gain the
+// worktree's marker and LOSE main's own.
+// ---------------------------------------------------------------------------
+{
+  const { spawnSync } = require('child_process');
+  const { mkdtempSync, cpSync, rmSync } = require('fs');
+  const os = require('os');
+
+  const fixture = mkdtempSync(path.join(os.tmpdir(), 'kimi-k13-'));
+  const mainRoot = path.join(fixture, 'main');     // K13: the main checkout
+  const wtRoot = path.join(fixture, 'wt');         // K13: a genuine linked worktree of it
+  const plainRoot = path.join(fixture, 'plain');   // K13: a copy that is not a git checkout at all
+  const neutralCwd = path.join(fixture, 'cwd');    // K13: a cwd belonging to no checkout
+  const regenRoot = path.join(fixture, 'regen');   // K14
+
+  // The generator's whole input surface. `plugins` carries the gitlab/gitea command sources, so a
+  // non-default forge is unrenderable without it; the green-baseline assertions keep the list honest.
+  const SOURCE_TREES = ['scripts', 'agents', 'commands', 'hooks', 'templates', 'plugins'];
+  const childEnv = Object.assign({}, process.env);
+  delete childEnv.KAOLA_OPENCODE_STANDARD_MODEL;
+  delete childEnv.KAOLA_OPENCODE_REASONING_MODEL;
+
+  const copyRepo = dest => {
+    fs.mkdirSync(dest, { recursive: true });
+    for (const d of SOURCE_TREES) cpSync(path.join(REPO, d), path.join(dest, d), { recursive: true });
+    // Not a kimi input, but the sibling edition reads it: a regenerate step that refreshes both
+    // editions must not trip over a tracked file this fixture simply failed to bring along.
+    if (fs.existsSync(path.join(REPO, 'opencode.json'))) {
+      cpSync(path.join(REPO, 'opencode.json'), path.join(dest, 'opencode.json'));
+    }
+  };
+  // Identity and signing are pinned per invocation: a fixture that inherits the developer's
+  // git config fails on a machine that signs commits, and a red there says nothing about the
+  // property under test.
+  // `protocol.file.allow` is needed for the submodule leg in K15: modern git refuses a file://
+  // submodule clone by default, and that refusal would be a fixture failure wearing a finding's name.
+  const git = (cwd, args) => {
+    // spawn-class: environment
+    const r = spawnSync('git',
+      ['-c', 'user.email=k13@fixture.invalid', '-c', 'user.name=k13', '-c', 'commit.gpgsign=false',
+        '-c', 'protocol.file.allow=always'].concat(args), { cwd, encoding: 'utf8' });
+    return { status: r.status, out: (r.stdout || '') + (r.stderr || ''), stdout: r.stdout || '' };
+  };
+  // scriptRoot is the checkout the script is INVOKED FROM; cwd is the process's working directory.
+  // They are passed separately on purpose — "not cwd" is half of what K13 pins.
+  const runSync = (scriptRoot, cwd, args) => {
+    // spawn-class: environment
+    const r = spawnSync(process.execPath,
+      [path.join(scriptRoot, 'scripts', 'sync-kimi-edition.js')].concat(args),
+      { cwd, encoding: 'utf8', env: childEnv });
+    return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
+  };
+  const runGenerator = (scriptRoot, args) => {
+    // spawn-class: environment
+    const r = spawnSync(process.execPath,
+      [path.join(scriptRoot, 'scripts', 'generate-routing-surfaces.js')].concat(args),
+      { cwd: scriptRoot, encoding: 'utf8', env: childEnv });
+    return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
+  };
+  const readIf = p => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '');
+  const head = out => String(out).split('\n').filter(Boolean).slice(0, 4).join(' | ');
+
+  // The forge axis, taken from the module rather than typed: one default tree, one non-default
+  // tree, and one that stays absent. K14's "present is refreshed, absent is left alone" needs all
+  // three, and an axis that ever shrinks below three should red here rather than silently drop a leg.
+  const DEF_FORGE = sync.DEFAULT_FORGE;
+  const OTHER_FORGE = sync.FORGES.filter(f => f !== DEF_FORGE)[0];
+  const ABSENT_FORGE = sync.FORGES.filter(f => f !== DEF_FORGE && f !== OTHER_FORGE)[0];
+
+  try {
+    const missingTrees = SOURCE_TREES.filter(d => !fs.existsSync(path.join(REPO, d)));
+    assert(missingTrees.length === 0,
+      'K13: every source tree these fixtures copy is present in the repo — ' + JSON.stringify(missingTrees)
+      + ' is not, so the copies below are missing an input the generator reads and every assertion '
+      + 'would be reporting on a tree of absent files rather than on where a tree landed');
+    assert(!!OTHER_FORGE && !!ABSENT_FORGE,
+      'K13/K14: the forge axis carries at least three forges (' + JSON.stringify(sync.FORGES) + ') — '
+      + 'K14 needs a present default tree, a present non-default tree and an absent one, and with '
+      + 'fewer the absent-tree leg would range over nothing and pass by having checked nothing');
+
+    // -----------------------------------------------------------------------
+    // K13 — the fixture: a committed repo plus a real linked worktree.
+    // -----------------------------------------------------------------------
+    copyRepo(mainRoot);
+    const gitSteps = [
+      ['init', ['init', '-q']],
+      ['add', ['add', '-A']],
+      ['commit', ['commit', '-q', '--no-verify', '-m', 'k13 fixture base']],
+      ['worktree', ['worktree', 'add', '-q', '-b', 'k13-branch', wtRoot]],
+    ];
+    let fixtureBuilt = true;
+    for (const [name, args] of gitSteps) {
+      const r = git(mainRoot, args);
+      if (r.status !== 0) fixtureBuilt = false;
+      assert(r.status === 0,
+        'K13: the fixture builds — git ' + name + ' exited ' + r.status + ': ' + head(r.out)
+        + '. Every assertion below reads a tree out of this repo or its worktree, so a fixture that '
+        + 'did not build is a band that checked nothing');
+    }
+    assert(fixtureBuilt && fs.existsSync(path.join(wtRoot, 'scripts')),
+      'K13: the linked worktree has a checkout to run from — without one the sync spawns below '
+      + 'would fail to find their own script and every result would be an artifact of that');
+
+    if (fixtureBuilt) {
+      const w0 = runSync(mainRoot, mainRoot, ['--forge=' + DEF_FORGE, '--write']);
+      assert(w0.status === 0,
+        'K13: the fixture regenerates — sync --write exit ' + w0.status + ': ' + head(w0.out));
+      const c0 = runSync(mainRoot, mainRoot, ['--forge=' + DEF_FORGE, '--check']);
+      assert(c0.status === 0,
+        'K13: the fixture is GREEN before anything is planted. The markers below are read as the '
+        + 'only difference between the two checkouts, so a fixture already red — an under-copied '
+        + 'source tree — is a different test wearing this one\'s name. Got exit ' + c0.status
+        + ': ' + head(c0.out));
+
+      const agentFile = (fs.existsSync(path.join(mainRoot, 'agents'))
+        ? fs.readdirSync(path.join(mainRoot, 'agents')).filter(f => f.endsWith('.md')).sort() : [])[0] || '';
+      assert(agentFile !== '',
+        'K13: the fixture has a canonical agent to plant a marker in — with none there is no '
+        + 'subject and both markers would be absent from every tree for a reason that is not the '
+        + 'one this band reports');
+
+      const MAIN_MARK = 'K13-MARKER-PLANTED-IN-MAIN';
+      const WT_MARK = 'K13-MARKER-PLANTED-IN-WORKTREE';
+      const renderedRel = sync.skillRel('kaola-role-' + agentFile.replace(/\.md$/, ''), DEF_FORGE);
+
+      if (agentFile) {
+        // Control: a canonical edit reaches the rendered surface AT ALL. Without it, the marker
+        // assertions below could red forever against a correct implementation, and a marker that
+        // never renders would make the "main's marker is gone" half true for the wrong reason.
+        fs.appendFileSync(path.join(mainRoot, 'agents', agentFile), '\n' + MAIN_MARK + '\n');
+        const w1 = runSync(mainRoot, mainRoot, ['--forge=' + DEF_FORGE, '--write']);
+        assert(w1.status === 0,
+          'K13: the fixture regenerates after the main-side plant — exit ' + w1.status + ': ' + head(w1.out));
+        assert(readIf(path.join(mainRoot, renderedRel)).includes(MAIN_MARK),
+          'K13: control — an edit to a canonical agent reaches its rendered role Skill. It did not '
+          + 'reach ' + renderedRel + ', so this fixture cannot tell WHICH checkout\'s sources were '
+          + 'rendered and both marker assertions below would be vacuous');
+
+        fs.appendFileSync(path.join(wtRoot, 'agents', agentFile), '\n' + WT_MARK + '\n');
+        assert(!readIf(path.join(wtRoot, 'agents', agentFile)).includes(MAIN_MARK),
+          'K13: control — the worktree holds its own copy of the canonical sources. If it shared '
+          + 'main\'s file, both markers would be in both checkouts and the discriminator would be gone');
+
+        // ------------------------------------------------------------------
+        // K13 — THE SUBJECT: sync --write, run from the linked worktree.
+        // ------------------------------------------------------------------
+        const w2 = runSync(wtRoot, wtRoot, ['--forge=' + DEF_FORGE, '--write']);
+        assert(w2.status === 0,
+          'K13: sync --write run from a linked worktree succeeds — exit ' + w2.status + ': ' + head(w2.out));
+
+        const landed = readIf(path.join(mainRoot, renderedRel));
+        assert(landed.includes(WT_MARK),
+          'K13: a sync run from a linked worktree writes the MAIN checkout\'s edition tree. '
+          + path.join(mainRoot, renderedRel) + ' does not carry the worktree\'s marker, so the '
+          + 'regenerate a run performs on its branch leaves main\'s tree exactly as stale as it '
+          + 'found it — the observed failure this band exists for');
+        assert(!landed.includes(MAIN_MARK),
+          'K13: ...and renders it from the INVOKING checkout\'s canonical sources. Main\'s tree still '
+          + 'carries the marker planted in MAIN\'s agents/, which means the sources were resolved '
+          + 'against the main checkout too — a sync from a worktree would then re-render main from '
+          + 'its own unchanged sources and the run\'s edits would never reach any tree');
+        assert(!fs.existsSync(path.join(wtRoot, sync.treeLabel(DEF_FORGE))),
+          'K13: ...and leaves no throwaway tree in the worktree. '
+          + path.join(wtRoot, sync.treeLabel(DEF_FORGE)) + ' exists: a tree written there is deleted '
+          + 'with the worktree, which is how a run can report six trees in parity and leave twelve '
+          + 'stale files behind');
+
+        const c2 = runSync(wtRoot, wtRoot, ['--forge=' + DEF_FORGE, '--check']);
+        assert(c2.status === 0,
+          'K13: --check and --write agree about which root holds the tree. Run from the worktree, '
+          + '--check exited ' + c2.status + ' over a tree --write had just made current: ' + head(c2.out)
+          + '. A checker looking at one root while the writer writes another reports a permanent '
+          + 'false red in exactly the posture a run works in');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // K13 — the non-git leg. Resolving main is a new dependency on git, and the sync also runs
+    // from an unpacked source tree that is no checkout at all (the installers call it from wherever
+    // they were unpacked). Neither root exists there, so the tree belongs where the script does —
+    // and never in the process cwd, which is the other thing "resolve against the main checkout"
+    // must not be read to mean.
+    // -----------------------------------------------------------------------
+    copyRepo(plainRoot);
+    fs.mkdirSync(neutralCwd, { recursive: true });
+    assert(!fs.existsSync(path.join(plainRoot, '.git')),
+      'K13: the non-git leg\'s copy really is not a git checkout — with a .git in it this leg would '
+      + 'be a second copy of the leg above rather than the fallback case');
+    const w3 = runSync(plainRoot, neutralCwd, ['--forge=' + DEF_FORGE, '--write']);
+    assert(w3.status === 0,
+      'K13: sync --write succeeds in a directory that is not a git checkout — exit ' + w3.status
+      + ': ' + head(w3.out) + '. An unpacked source tree has no main checkout to resolve, and a '
+      + 'resolution that throws there breaks both installers');
+    assert(fs.existsSync(path.join(plainRoot, sync.treeLabel(DEF_FORGE), 'skills')),
+      'K13: ...and writes the tree into the root the script itself lives in');
+    assert(!fs.existsSync(path.join(neutralCwd, sync.treeLabel(DEF_FORGE))),
+      'K13: ...and never into the process cwd — the tree landed in ' + neutralCwd + ', which owns '
+      + 'no canonical sources and is not what "the main checkout" means');
+    const c3 = runSync(plainRoot, neutralCwd, ['--forge=' + DEF_FORGE, '--check']);
+    assert(c3.status === 0,
+      'K13: --check agrees in the non-git case too — exit ' + c3.status + ': ' + head(c3.out));
+
+    // -----------------------------------------------------------------------
+    // K15 — THE TREE IS NEVER WRITTEN INTO A DIRECTORY GIT OWNS.
+    // (Mirror of test-opencode-edition.js's A33.)
+    //
+    // "Resolve the tree against the main checkout" has two postures where there IS no main
+    // checkout and the coordination directory is not a checkout's `.git` either:
+    //
+    //   bare repository + linked worktree   coordination dir = <name>.git, the bare repo itself
+    //   submodule                            coordination dir = <super>/.git/modules/<name>
+    //
+    // A resolution that simply takes the coordination directory when it cannot take its parent
+    // lands the generated tree INSIDE git's own storage. Nothing is destroyed by that and the
+    // installers still deploy full counts, which is why this is small — but it is somewhere git
+    // owns and may rewrite, it is somewhere no one would look, and it contradicts the rule the
+    // resolution is there to implement: with no main checkout, the tree belongs beside the script.
+    //
+    // Stated as a result and only as a result. WHERE the tree ends up is the whole assertion; how
+    // the answer is computed is not this band's business, and a fix by any route satisfies it.
+    //
+    // The coordination directory is asked for per posture rather than assumed, so this keeps
+    // meaning the same thing if git's layout changes: whatever git says its storage is, the tree
+    // is not in it.
+    // -----------------------------------------------------------------------
+    const coordDirOf = checkout => {
+      const r = git(checkout, ['rev-parse', '--git-common-dir']);
+      const raw = String(r.stdout || '').trim().split('\n')[0];
+      return r.status === 0 && raw ? path.resolve(checkout, raw) : '';
+    };
+    const treeLandingLegs = [];
+
+    // Leg 1 — bare repository with a linked worktree. Cloned from the K13 fixture, which already
+    // carries a commit; a bare repo has no working tree of its own, so the worktree is the only
+    // checkout in play and "beside the script" can only mean that worktree.
+    {
+      const bare = path.join(fixture, 'bare.git');
+      const bareWt = path.join(fixture, 'bare-wt');
+      let built = true;
+      for (const [name, cwd, args] of [
+        ['clone --bare', fixture, ['clone', '--bare', '-q', mainRoot, bare]],
+        ['worktree add', bare, ['worktree', 'add', '-q', '--detach', bareWt, 'HEAD']],
+      ]) {
+        const r = git(cwd, args);
+        if (r.status !== 0) built = false;
+        assert(r.status === 0, 'K15[bare]: the fixture builds — git ' + name + ' exited ' + r.status
+          + ': ' + head(r.out));
+      }
+      if (built && fs.existsSync(path.join(bareWt, 'scripts'))) {
+        treeLandingLegs.push({ tag: 'bare', checkout: bareWt });
+      } else {
+        assert(false, 'K15[bare]: the bare repo\'s worktree has a checkout to run from — without one '
+          + 'this posture is untested and its absence would read as a pass');
+      }
+    }
+
+    // Leg 2 — submodule. Its `.git` is a FILE pointing into the superproject's storage, which is
+    // the posture that produces a `.git/modules/...` coordination dir.
+    {
+      const sup = path.join(fixture, 'super');
+      fs.mkdirSync(sup, { recursive: true });
+      fs.writeFileSync(path.join(sup, 'README.md'), '# K15 superproject fixture\n');
+      let built = true;
+      for (const [name, args] of [
+        ['init', ['init', '-q']],
+        ['add', ['add', '-A']],
+        ['commit', ['commit', '-q', '--no-verify', '-m', 'k15 superproject']],
+        ['submodule add', ['submodule', 'add', '-q', mainRoot, 'sub']],
+      ]) {
+        const r = git(sup, args);
+        if (r.status !== 0) built = false;
+        assert(r.status === 0, 'K15[submodule]: the fixture builds — git ' + name + ' exited '
+          + r.status + ': ' + head(r.out));
+      }
+      const sub = path.join(sup, 'sub');
+      if (built && fs.existsSync(path.join(sub, 'scripts'))) {
+        treeLandingLegs.push({ tag: 'submodule', checkout: sub });
+      } else {
+        assert(false, 'K15[submodule]: the submodule has a checkout to run from — without one this '
+          + 'posture is untested and its absence would read as a pass');
+      }
+    }
+
+    assert(treeLandingLegs.length === 2,
+      'K15: both postures were constructed (' + treeLandingLegs.length + ' of 2) — a leg that failed '
+      + 'to build checks nothing, and this band is the only place either posture is exercised');
+
+    for (const leg of treeLandingLegs) {
+      const tag = 'K15[' + leg.tag + ']';
+      const label = sync.treeLabel(DEF_FORGE);
+      const coord = coordDirOf(leg.checkout);
+      assert(coord !== '',
+        tag + ': git names a coordination directory for this checkout — without one the assertion '
+        + 'below has no forbidden location to compare against and would pass having compared nothing');
+
+      const w = runSync(leg.checkout, leg.checkout, ['--forge=' + DEF_FORGE, '--write']);
+      assert(w.status === 0,
+        tag + ': sync --write succeeds — exit ' + w.status + ': ' + head(w.out));
+
+      const beside = path.join(leg.checkout, label);
+      const inGitStorage = coord ? path.join(coord, label) : '';
+      const landedAt = [beside, inGitStorage].filter(Boolean).find(p => fs.existsSync(p)) || '';
+
+      assert(inGitStorage === '' || !fs.existsSync(inGitStorage),
+        tag + ': the generated tree is NOT written inside the directory git uses for its own '
+        + 'storage. It is at ' + inGitStorage + '. That directory belongs to git, which may rewrite '
+        + 'or repack around it, and nobody looking for a generated tree looks there');
+      assert(fs.existsSync(path.join(beside, 'skills')),
+        tag + ': ...it is beside the script instead, at ' + beside + '. There is no main checkout in '
+        + 'this posture — a bare repository has no working tree and a submodule\'s storage is not a '
+        + 'checkout — so beside the script is the only place left that a reader owns. It landed at '
+        + (landedAt || '(nowhere this band knows about)'));
+      assert(!landedAt.split(path.sep).includes('.git'),
+        tag + ': ...and no segment of the tree\'s path is `.git` — it landed at ' + landedAt
+        + '. This is the general form of the line above: whatever git calls its storage, a generated '
+        + 'tree does not live under a `.git` directory');
+
+      const c = runSync(leg.checkout, leg.checkout, ['--forge=' + DEF_FORGE, '--check']);
+      assert(c.status === 0,
+        tag + ': --check agrees with --write about where the tree is — exit ' + c.status + ': '
+        + head(c.out) + '. A fix that moves only the writer leaves the checker reporting every file '
+        + 'missing in a posture that was working before it');
+    }
+
+    // -----------------------------------------------------------------------
+    // K14 — THE MANDATED REGENERATE STEP LEAVES A PRESENT TREE CURRENT.
+    //
+    // The rule is "edit the skeleton and regenerate, never a rendered surface", and the regenerate
+    // it names renders the tracked command/skill surfaces. The edition trees render FROM those
+    // surfaces and are not part of that step, so the prose reaches every tracked surface and stops
+    // one hop short of the trees a runtime actually reads.
+    //
+    // Stated as a result, never as a topology: after the regenerate step, an edition tree that is
+    // PRESENT is in parity, whatever calls what to get there. An ABSENT tree is not created —
+    // there is no stale prose in a tree that does not exist, and materializing one would hand a
+    // developer a forge tree they never asked to deploy. A skip may be printed or silent; loud is
+    // the house preference and neither is pinned here.
+    // -----------------------------------------------------------------------
+    copyRepo(regenRoot);
+    // A committed repo with no worktree, so this band's subject is the regenerate step and not the
+    // root resolution K13 already owns: main resolves to regenRoot itself either way.
+    for (const args of [['init', '-q'], ['add', '-A'], ['commit', '-q', '--no-verify', '-m', 'k14 fixture base']]) {
+      const r = git(regenRoot, args);
+      assert(r.status === 0, 'K14: the fixture builds — git ' + args[0] + ' exited ' + r.status + ': ' + head(r.out));
+    }
+
+    for (const forge of [DEF_FORGE, OTHER_FORGE]) {
+      const w = runSync(regenRoot, regenRoot, ['--forge=' + forge, '--write']);
+      assert(w.status === 0,
+        'K14: the fixture materializes ' + sync.treeLabel(forge) + ' — exit ' + w.status + ': ' + head(w.out));
+      const c = runSync(regenRoot, regenRoot, ['--forge=' + forge, '--check']);
+      assert(c.status === 0,
+        'K14: ' + sync.treeLabel(forge) + ' is in parity BEFORE the skeleton is edited — exit '
+        + c.status + ': ' + head(c.out) + '. Every assertion below reads a --check exit as the '
+        + 'answer to "did the regenerate step refresh this tree", which it is not if the tree was '
+        + 'already stale');
+    }
+    assert(!fs.existsSync(path.join(regenRoot, sync.treeLabel(ABSENT_FORGE))),
+      'K14: ' + sync.treeLabel(ABSENT_FORGE) + ' is absent from the fixture — it is the absent-tree '
+      + 'leg\'s whole subject, and a tree that is there makes that leg check nothing');
+
+    const skeleton = path.join(regenRoot, 'templates', 'routing', 'next.skeleton.md');
+    assert(fs.existsSync(skeleton),
+      'K14: the skeleton the regenerate step renders from is present at templates/routing — the '
+      + 'edit below is what makes every tracked surface, and then every tree, stale');
+    if (fs.existsSync(skeleton)) {
+      const SKEL_MARK = 'K14-MARKER-FROM-THE-SKELETON';
+      fs.appendFileSync(skeleton, '\n' + SKEL_MARK + '\n');
+
+      // Control: the plant reaches the tracked surfaces. Without this the trees could be in parity
+      // after the regenerate step simply because nothing ever changed, and every assertion below
+      // would be green over an edit that went nowhere.
+      const g0 = runGenerator(regenRoot, ['--check']);
+      assert(g0.status === 1,
+        'K14: control — the skeleton edit makes the tracked surfaces stale (--check exit ' + g0.status
+        + ': ' + head(g0.out) + '). If it does not, the regenerate step below has nothing to '
+        + 'propagate and the parity assertions pass by having observed no change at all');
+
+      // THE SUBJECT: the step the rule mandates, and nothing else.
+      const g1 = runGenerator(regenRoot, ['--write']);
+      assert(g1.status === 0,
+        'K14: the regenerate step succeeds — generate-routing-surfaces --write exit ' + g1.status
+        + ': ' + head(g1.out));
+      const g2 = runGenerator(regenRoot, ['--check']);
+      assert(g2.status === 0,
+        'K14: the regenerate step still does its own job — the tracked surfaces byte-match the '
+        + 'skeleton afterwards (--check exit ' + g2.status + ': ' + head(g2.out) + ')');
+
+      for (const forge of [DEF_FORGE, OTHER_FORGE]) {
+        const c = runSync(regenRoot, regenRoot, ['--forge=' + forge, '--check']);
+        assert(c.status === 0,
+          'K14: after the regenerate step, the PRESENT tree ' + sync.treeLabel(forge) + ' is current '
+          + '— --check exited ' + c.status + ': ' + head(c.out) + '. The prose reached every tracked '
+          + 'surface and stopped one hop short of the tree a runtime reads, which is the whole of '
+          + 'what leaves an edition deploying a renamed flag');
+      }
+      assert(readIf(path.join(regenRoot, sync.skillRel('workflow-next', DEF_FORGE))).includes(SKEL_MARK),
+        'K14: ...and the tree carries the edited prose itself, not merely a passing exit code — '
+        + sync.skillRel('workflow-next', DEF_FORGE) + ' does not contain the marker planted in the '
+        + 'skeleton');
+
+      assert(!fs.existsSync(path.join(regenRoot, sync.treeLabel(ABSENT_FORGE))),
+        'K14: ...and an ABSENT tree is left absent. The regenerate step materialized '
+        + sync.treeLabel(ABSENT_FORGE) + ', handing a developer a forge tree they never installed; '
+        + 'a tree that does not exist carries no stale prose and needs no refresh');
+
+      // ---------------------------------------------------------------------
+      // K14 — AND THE CHAINS GAIN NO EDITION COVERAGE. Green on arrival, and said out loud: this
+      // pins a ruling rather than a repair. generate-routing-surfaces --check runs in all four
+      // chains, so an edition tree read in CHECK mode would put the editions inside `npm test` —
+      // the one thing the rule at CLAUDE.md's validation policy forbids, and the reason the
+      // refresh belongs to --write alone. A stale tree here must not move --check's exit code, and
+      // --check must not repair what it saw either: a checker that writes is how the drift that
+      // started all this stayed invisible.
+      // ---------------------------------------------------------------------
+      const planted = path.join(regenRoot, sync.skillRel('workflow-next', DEF_FORGE));
+      if (fs.existsSync(planted)) {
+        const before = fs.readFileSync(planted, 'utf8');
+        fs.writeFileSync(planted, before + '\n<!-- K14 planted tree drift -->\n');
+        const cPlant = runSync(regenRoot, regenRoot, ['--forge=' + DEF_FORGE, '--check']);
+        assert(cPlant.status === 1,
+          'K14: control — the planted tree drift is real (sync --check exit ' + cPlant.status + ': '
+          + head(cPlant.out) + '). With no drift on disk the two assertions below observe nothing');
+        const g3 = runGenerator(regenRoot, ['--check']);
+        assert(g3.status === 0,
+          'K14: a stale edition tree does not move generate-routing-surfaces --check, which runs in '
+          + 'all four chains — exit ' + g3.status + ': ' + head(g3.out) + '. An edition tree read in '
+          + 'CHECK mode puts the editions inside `npm test`, and reds every fresh clone and every '
+          + 'worktree besides, where no tree exists to compare');
+        assert(fs.readFileSync(planted, 'utf8').includes('K14 planted tree drift'),
+          'K14: ...and --check did not repair it either. A check that writes destroys the evidence '
+          + 'it was run to report, which is the defect the drift block at the top of this file exists '
+          + 'to stop being repeated');
+      }
+    }
+  } finally {
+    try { rmSync(fixture, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   }
 }
 

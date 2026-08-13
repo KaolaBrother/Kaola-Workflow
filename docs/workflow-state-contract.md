@@ -111,8 +111,8 @@ file but is only as complete as its own source walk.
   status, phase, step, next command or skill, issue number, sink mode, branch, worktree path when
   known, and the claim-time session fields. See Workflow State Fields below.
 - `kaola-workflow/{project}/finalization-summary.md` is the terminal artifact, and the only place
-  the finalize transaction's own two measurements survive the process that took them (`## Validation`
-  and `## Changed Paths`).
+  the finalize transaction's own three measurements survive the process that took them
+  (`## Validation`, `## Changed Paths` and `## Mission List`).
 - A `fast-summary.md` on disk is read only tolerantly: the classifier's defensive `## Scope` parse
   (feeding in-flight write-set overlap detection) and the router's active-folder detection both
   recognize such a marker. It is never newly authored, so these parses do not fire for a freshly

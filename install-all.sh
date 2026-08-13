@@ -13,15 +13,22 @@
 # PASS MEANS CONVERGED, NOT "EXITED 0". Codex is the one runtime whose install is
 # genuinely two-part: agent profiles (install-codex-agent-profiles.js) PLUS the
 # marketplace plugin that carries the skill packs. That plugin cache is
-# VERSION-KEYED, so a tree bump keeps serving the previously-added version until
-# the plugin is re-added — an installer exit 0 is not evidence the runtime is at
-# HEAD. converge_codex_plugin() closes that gap: it compares the installed plugin
-# version against the tree's .codex-plugin/plugin.json (NEVER package.json — the
-# Codex plugin version is deliberately a different number from the repo version),
-# refreshes on mismatch, and RE-READS afterwards so a refresh that did not take
-# cannot report green. Absent tooling is not a failed convergence: a missing codex
-# CLI or an unregistered marketplace degrades to PARTIAL-with-reason, never a
-# bare PASS and never a wrapper failure.
+# VERSION-KEYED, so it keeps serving what was last added until the plugin is
+# re-added — after a tree bump, and equally after prose moves at an UNCHANGED
+# version — so an installer exit 0 is not evidence the runtime is at HEAD.
+# converge_codex_plugin() closes that gap. Both of its questions — the installed
+# VERSION and the CONTENT the cache serves — are asked of the directory the plugin is
+# installed from, read out of .codex-plugin/plugin.json there (NEVER package.json —
+# the Codex plugin version is deliberately a different number from the repo version),
+# because that directory is the only thing a refresh can deliver; the invoking tree
+# supplies the forge edition to ask about, and its own manifest only as the fallback
+# version when the source declares none. The content half additionally needs a LOCAL
+# marketplace, since a fetched snapshot has no local directory to arbitrate it. Either
+# difference refreshes, and afterwards the axis that was refreshed is RE-READ so a
+# refresh that did not take cannot report green. Neither absent tooling nor an
+# unanswerable comparison is a failed convergence: a missing codex CLI or an
+# unregistered marketplace, and a comparison attempted but unreadable, degrade to
+# PARTIAL-with-reason, never a bare PASS and never a wrapper failure.
 #
 # NOT using `set -e`: a failed installer must NOT abort the wrapper in the
 # default continue-through mode — every runtime is attempted and reported.
@@ -94,7 +101,7 @@ Options:
   --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi) — logged loudly
   --strict                      Fail-fast: stop at the first failing runtime
   --check                       Dry run: print HEAD + the command each runtime would run,
-                                and report a pending Codex plugin upgrade; no changes
+                                and report a pending Codex plugin upgrade or refresh; no changes
   -h, --help                    Show this help
 
 The Claude installer (install.sh) has no global/project concept — it installs
@@ -105,14 +112,18 @@ you add (kaola-workflow, -gitlab, -gitea). Exit status is non-zero if ANY runtim
 (continue-through by default; --strict aborts at the first failure).
 
 Codex is installed in two parts: the agent profiles (the installer above) and the
-marketplace plugin that carries the skill packs. The plugin cache is version-keyed,
-so after the profiles land this wrapper compares the installed plugin version with
-the tree's plugins/kaola-workflow/.codex-plugin/plugin.json and, on a mismatch,
-refreshes the plugin (remove + add) and re-reads the version to prove it took.
+marketplace plugin that carries the skill packs. The plugin cache is version-keyed, so
+after the profiles land this wrapper checks both the version the plugin reports and —
+for a marketplace that is a local directory — the content it actually serves, since
+prose can move at an unchanged version. Both are measured against the directory the
+plugin is installed from (its .codex-plugin/plugin.json and its files), which is the
+checkout the marketplace points at, not necessarily the one you ran this from. Either
+difference refreshes the plugin (remove + add), and what was refreshed is re-read to
+prove it took; a comparison that cannot be completed is reported, never assumed.
 
 Summary statuses:
-  PASS     installer succeeded and (for codex) the marketplace plugin is at the tree
-           version, OR that check does not apply here (no codex CLI installed) — an
+  PASS     installer succeeded and (for codex) the marketplace plugin serves what its
+           source installs, OR that check does not apply here (no codex CLI installed) — an
            inapplicable check always prints its reason on the row, never a bare PASS
   FAIL     installer failed, or a codex plugin refresh was attempted and did not converge
   PARTIAL  installer succeeded but a check that DOES apply could not be completed
@@ -247,24 +258,29 @@ run_one() {
 #
 # install-codex-agent-profiles.js deploys AGENT PROFILES only. The skill packs
 # ship through the local marketplace plugin, whose cache is keyed by version
-# (~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/), so a tree bump keeps
-# serving the previously-added version forever. The wrapper — not the profile
-# installer — owns the "is this runtime at HEAD" question, so the check lives here
-# and install-codex-agent-profiles.js stays a pure agent-profile installer.
+# (~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/), so it serves what was
+# last added forever: after a tree bump, and equally after prose moved at an
+# unchanged version, which no comparison of the two version strings can see. The
+# wrapper — not the profile installer — owns the "is this runtime at HEAD" question,
+# so the check lives here and install-codex-agent-profiles.js stays a pure
+# agent-profile installer. HEAD there means the checkout the marketplace is configured
+# to install from: run from a linked worktree, this answers about that marketplace and
+# not about the worktree, because that is the only tree a refresh could ever deliver.
 # ---------------------------------------------------------------------------
 
-# Print one string field declared by the TREE plugin manifest (.codex-plugin/plugin.json).
+# Print one string field declared by a plugin manifest (.codex-plugin/plugin.json) — $2,
+# defaulting to the forge-selected manifest in the invoking tree.
 # Exits non-zero (printing nothing) when the manifest is missing or the field is absent.
 codex_plugin_manifest_field() {
-  local field="$1"
-  [[ -f "$CODEX_PLUGIN_MANIFEST" ]] || return 1
+  local field="$1" manifest="${2:-$CODEX_PLUGIN_MANIFEST}"
+  [[ -f "$manifest" ]] || return 1
   node -e '
     const fs = require("fs");
     let v;
     try { v = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))[process.argv[2]]; } catch (e) { process.exit(1); }
     if (typeof v !== "string" || !v) process.exit(1);
     process.stdout.write(v);
-  ' "$CODEX_PLUGIN_MANIFEST" "$field" 2>/dev/null
+  ' "$manifest" "$field" 2>/dev/null
 }
 
 codex_tree_plugin_version() { codex_plugin_manifest_field version; }
@@ -308,8 +324,11 @@ run_bounded() {
   return "$rc"
 }
 
-# Print "<installed-version>\t<pluginId>" for the single installed kaola-workflow
-# plugin row. Non-zero (printing nothing) when the CLI errors, hangs past the
+# Print "<installed-version>\t<pluginId>\t<marketplace sourceType>\t<install-from path>"
+# for the single installed kaola-workflow plugin row. The last two fields are empty when
+# the row declares no marketplace provenance and no source path — live rows exist without
+# them, and unknown is neither local nor a directory anything can be compared against.
+# Non-zero (printing nothing) when the CLI errors, hangs past the
 # ceiling (124), the output is not parseable (3), the plugin is not installed (4),
 # or more than one marketplace serves it (5).
 codex_installed_plugin_row() {
@@ -338,9 +357,59 @@ codex_installed_plugin_row() {
       if (rows.length > 1) process.exit(5);
       const row = rows[0];
       const id = row.pluginId || (row.name + "@" + (row.marketplaceName || ""));
-      process.stdout.write(String(row.version || "") + "\t" + id);
+      const ms = row.marketplaceSource;
+      const src = ms && typeof ms.sourceType === "string" ? ms.sourceType : "";
+      const from = row.source && typeof row.source.path === "string" ? row.source.path : "";
+      process.stdout.write(String(row.version || "") + "\t" + id + "\t" + src + "\t" + from);
     });
   ' "$CODEX_PLUGIN_NAME"
+}
+
+# The version-keyed directory a plugin id serves from at $2. Layout read off a live
+# install: <codex home>/plugins/cache/<marketplace>/<plugin>/<version>/. Both halves
+# come from the installed row's own plugin id, never assumed from this tree.
+codex_plugin_cache_dir() {
+  local plugin_id="$1" version="$2" codex_home
+  codex_home="${CODEX_HOME:-${HOME:-}/.codex}"
+  printf '%s/plugins/cache/%s/%s/%s' "$codex_home" "${plugin_id#*@}" "${plugin_id%@*}" "$version"
+}
+
+# Compare what the cache at $1 SERVES against the plugin directory at $2 it is installed
+# from, byte for byte over every file. Returns 0 when they agree, 1 when they differ, and
+# 2 when the question could not be answered at all (either path absent — an empty $2 among
+# them — or the walk did not complete). UNKNOWN is deliberately distinct from DIFFERS: a
+# difference nobody could measure must never trigger a refresh, or a box this wrapper
+# reads wrongly churns on every run.
+codex_cache_content_state() {
+  local cache_dir="$1" tree_dir="$2" verdict
+  [[ -d "$cache_dir" && -d "$tree_dir" ]] || return 2
+  verdict="$(node -e '
+    const fs = require("fs"), path = require("path");
+    const walk = (root, rel, out) => {
+      for (const e of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
+        const r = rel ? rel + "/" + e.name : e.name;
+        if (e.isDirectory()) walk(root, r, out);
+        else if (e.isFile()) out.set(r, fs.statSync(path.join(root, r)).size);
+      }
+      return out;
+    };
+    const a = walk(process.argv[1], "", new Map());
+    const b = walk(process.argv[2], "", new Map());
+    let same = a.size === b.size;
+    if (same) {
+      for (const [rel, size] of a) {
+        if (b.get(rel) !== size ||
+            !fs.readFileSync(path.join(process.argv[1], rel))
+              .equals(fs.readFileSync(path.join(process.argv[2], rel)))) { same = false; break; }
+      }
+    }
+    process.stdout.write(same ? "same" : "differ");
+  ' "$tree_dir" "$cache_dir" 2>/dev/null)" || return 2
+  case "$verdict" in
+    same)   return 0 ;;
+    differ) return 1 ;;
+    *)      return 2 ;;
+  esac
 }
 
 # Record an UNVERIFIED outcome: a check that genuinely applies here but could not be
@@ -372,7 +441,7 @@ codex_not_applicable() {
 }
 
 converge_codex_plugin() {
-  local idx tree row installed plugin_id after
+  local idx tree row installed plugin_id source_type source_path after
   idx="$(runtime_index codex)" || return 0
   if is_skipped codex; then return 0; fi
   if [[ "${R_STATUS[$idx]:-}" == "FAIL" ]]; then
@@ -421,23 +490,81 @@ converge_codex_plugin() {
   fi
   installed="${row%%$'\t'*}"
   plugin_id="${row#*$'\t'}"
+  source_type="${plugin_id#*$'\t'}"
+  plugin_id="${plugin_id%%$'\t'*}"
+  source_path="${source_type#*$'\t'}"
+  source_type="${source_type%%$'\t'*}"
 
+  # ONE ORACLE, both axes. What the runtime OUGHT to serve — version and content alike — is
+  # whatever its install-from directory carries, because that is the only thing a refresh
+  # can deliver. Asking the version question of the invoking tree while asking the content
+  # question of the source lets the two disagree permanently: a marketplace checkout that
+  # has taken a release this checkout has not would be refreshed to its own version and
+  # then judged against ours, so every run churns and reports a failure nothing can clear.
+  # The invoking tree still selects WHICH plugin is asked about (the forge edition, above),
+  # and its own version stands only while the source declares none.
+  if [[ -n "$source_path" ]]; then
+    local from_source
+    from_source="$(codex_plugin_manifest_field version "$source_path/.codex-plugin/plugin.json")" \
+      && tree="$from_source"
+  fi
+
+  # Equal version strings are not equal artifacts. The cache is keyed by version, so it
+  # keeps serving what was last added even when the prose has moved since — the runtimes
+  # that copy unconditionally take such a change and this one does not.
+  #
+  # What the cache is measured against is the directory the plugin is INSTALLED FROM, as
+  # the row itself declares it — never the tree this wrapper happened to be invoked from.
+  # Those are the same directory only when the wrapper runs from the checkout the
+  # marketplace points at; from a linked worktree they diverge, and measuring against the
+  # invoking tree would demand a refresh that reinstalls the source's content, still
+  # differ, and report a failure no repair could ever clear. Only a LOCAL marketplace has
+  # such a directory at all: one fetched from a remote serves that snapshot.
+  local content_stale=0 cstate=0 cache_dir=""
   if [[ "$installed" == "$tree" ]]; then
-    echo ""
-    echo ">>> [codex] marketplace plugin already at $tree ($plugin_id)"
-    R_NOTE[$idx]="plugin $tree"
-    return 0
+    if [[ "$source_type" == "local" ]]; then
+      cache_dir="$(codex_plugin_cache_dir "$plugin_id" "$installed")"
+      codex_cache_content_state "$cache_dir" "$source_path" || cstate=$?
+    fi
+    # A comparison that was ATTEMPTED and came back unreadable has not shown the runtime
+    # serves what its source installs, so it cannot report the row that says so. It is
+    # equally not a mismatch: nothing was measured, so there is nothing for a refresh to
+    # converge to and none is attempted. Reached only from the local branch above — where
+    # no local directory is claimed to arbitrate the plugin, nothing was attempted and
+    # nothing is left incomplete, so those boxes stay a plain PASS.
+    if [[ "$cstate" -eq 2 ]]; then
+      echo ""
+      echo ">>> [codex] plugin convergence SKIPPED: could not compare $cache_dir with $source_path ($plugin_id)"
+      codex_degrade "$idx" "plugin convergence skipped: served content could not be compared with its source (plugin $tree)"
+      return 0
+    fi
+    if [[ "$cstate" -ne 1 ]]; then
+      echo ""
+      echo ">>> [codex] marketplace plugin already at $tree ($plugin_id)"
+      R_NOTE[$idx]="plugin $tree"
+      return 0
+    fi
+    content_stale=1
   fi
 
   if [[ "$CHECK" == "1" ]]; then
     echo ""
-    echo ">>> [codex] PENDING marketplace plugin upgrade: $installed -> $tree ($plugin_id)"
-    R_NOTE[$idx]="plugin upgrade pending: $installed -> $tree"
+    if [[ "$content_stale" -eq 1 ]]; then
+      echo ">>> [codex] PENDING marketplace plugin refresh: at $tree, but the served content differs from $source_path ($plugin_id)"
+      R_NOTE[$idx]="plugin refresh pending: served content differs from its source at $tree"
+    else
+      echo ">>> [codex] PENDING marketplace plugin upgrade: $installed -> $tree ($plugin_id)"
+      R_NOTE[$idx]="plugin upgrade pending: $installed -> $tree"
+    fi
     return 0
   fi
 
   echo ""
-  echo ">>> [codex] marketplace plugin STALE: $installed -> $tree — refreshing $plugin_id"
+  if [[ "$content_stale" -eq 1 ]]; then
+    echo ">>> [codex] marketplace plugin STALE at $tree: served content differs from $source_path — refreshing $plugin_id"
+  else
+    echo ">>> [codex] marketplace plugin STALE: $installed -> $tree — refreshing $plugin_id"
+  fi
   # `remove` is best-effort: `add` is the step that must succeed, and a remove that
   # fails on an already-absent entry must not mask the real outcome. Both are
   # bounded too — generously, since a real `add` fetches over the network — so no
@@ -449,8 +576,11 @@ converge_codex_plugin() {
     R_NOTE[$idx]="plugin convergence FAILED: still $installed, tree $tree"
     return 1
   fi
-  # RE-READ: a refresh that exits 0 without moving the version is exactly the false
-  # green this whole step exists to prevent, so convergence is proven, not assumed.
+  # RE-READ: a refresh that exits 0 without changing what the runtime serves is exactly
+  # the false green this whole step exists to prevent, so convergence is proven, not
+  # assumed — and proven on the axis that was refreshed. Where the content was what
+  # differed, the versions agreed before the refresh and agree after it, so a version
+  # re-read there certifies nothing at all and the served content is what must be read.
   if ! row="$(codex_installed_plugin_row)"; then
     echo "!!! [codex] plugin absent after re-add — cannot confirm convergence to $tree" >&2
     R_STATUS[$idx]="FAIL"
@@ -463,6 +593,18 @@ converge_codex_plugin() {
     R_STATUS[$idx]="FAIL"
     R_NOTE[$idx]="plugin convergence FAILED: still $after, tree $tree"
     return 1
+  fi
+  if [[ "$content_stale" -eq 1 ]]; then
+    if ! codex_cache_content_state "$(codex_plugin_cache_dir "$plugin_id" "$after")" \
+      "$source_path"; then
+      echo "!!! [codex] plugin does not serve its source's content after refresh (plugin $after) — NOT converged" >&2
+      R_STATUS[$idx]="FAIL"
+      R_NOTE[$idx]="plugin convergence FAILED: served content is not its source's (plugin $after)"
+      return 1
+    fi
+    echo ">>> [codex] marketplace plugin content converged at $after"
+    R_NOTE[$idx]="plugin $after (content refreshed)"
+    return 0
   fi
   echo ">>> [codex] marketplace plugin converged: $installed -> $after"
   R_NOTE[$idx]="plugin $installed -> $after"

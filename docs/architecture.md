@@ -189,7 +189,7 @@ together — mirror, `workflow_state`, `implementation_commit`, `staging_guard`,
 Nothing short-circuits; a failed rung never hides a later one. `validation` is reported as state,
 never as a reason.
 
-Two measurements ride the emitted envelope and are written durably into
+Three measurements ride the emitted envelope and are written durably into
 `finalization-summary.md`, and the durable half is not optional — a conversion that emits a finding
 and drops the state the refusal was freezing is a deletion, not a conversion:
 
@@ -199,6 +199,11 @@ and drops the state the refusal was freezing is a deletion, not a conversion:
   `kaola-workflow/**`). Nothing compares that list against a declaration, because there is no
   declaration to compare it to. It is there so a reader can see what moved and notice what does not
   belong.
+- **`mission_list`** → `## Mission List`: how many missions the run's own record holds, and the
+  `item:` line of every one carrying an outcome while its `status` is not `done`. A run that wrote
+  no record measures nothing and says nothing; a record that agrees with itself still reports. The
+  record is read and never repaired, and the finalize is unaffected either way — what to do about a
+  contradiction is the reader's call.
 
 The transaction never authors the implementation commit, and it owns the worktree→main project
 folder sync itself. The archive still fails loudly if it would lose a file — an operation refusing
@@ -296,8 +301,10 @@ constant shared between a producer and a consumer lives there so the two cannot 
 **Two additive runtime editions** — opencode and Kimi — are runtimes, not forges. They are not wired
 into `npm test`, `edition-sync.js`, `install.sh`, or the routing generator's render targets, but
 their sync scripts derive their command surfaces from that same routing registry (via
-`runtime-edition-forge.js`), so a routing-surface change leaves `.opencode`/`.kimi` stale until
-regenerated. They carry their own suites (`test-opencode-edition.js`, `test-kimi-edition.js`). See
+`runtime-edition-forge.js`), so the `generate-routing-surfaces.js --write` that a routing-surface
+change already mandates also brings every `.opencode`/`.kimi` tree already on the machine back into
+parity — always the main checkout's trees, and never creating one that is absent. They carry their
+own suites (`test-opencode-edition.js`, `test-kimi-edition.js`). See
 `opencode-edition.md` and `kimi-edition.md`.
 
 ### Runtime capability divergence

@@ -50,6 +50,37 @@ const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
 
 const REPO = path.resolve(__dirname, '..');
+
+// TREE_ROOT — where the generated tree LANDS, which is not where the canonical sources are READ.
+//
+// Sources come from the checkout this script was invoked out of (REPO): a run edits agents/,
+// commands/ and templates/ on its branch, and a render that read them anywhere else would ship
+// prose nobody wrote here — a sync that quietly re-renders another checkout from its own unchanged
+// sources is a no-op wearing a regenerate's name.
+//
+// The tree is different. It is gitignored and derived, so a machine holds exactly one of it and it
+// belongs to the MAIN checkout: a tree written inside a linked worktree dies with that worktree,
+// which is how a run can regenerate all six trees, record them in parity, and still leave the only
+// copy anyone deploys from carrying prose the branch had already replaced. So a sync run from a
+// worktree renders the WORKTREE's sources into MAIN's tree.
+//
+// Two costs, both accepted: main's trees can carry prose that has not merged yet, and two worktrees
+// syncing at once leave the later render standing. Both are bounded by the trees being derived —
+// any --write, and either installer's check-or-write, restores them from whatever canonical says.
+//
+// Where there is no main checkout to resolve, the tree belongs beside this script, and never in the
+// process cwd, which owns no canonical sources at all. Three postures have no main checkout: an
+// unpacked source tree (how the installers run), a bare repository's linked worktree, and a
+// submodule. The last two still have a coordination directory, and it is NOT a checkout's `.git` —
+// it is the bare repo itself, or `<super>/.git/modules/<name>`. Taking it would put the generated
+// tree inside git's own storage, which git may rewrite around and no reader would ever look in. So
+// only a coordination directory that IS a `.git` names a checkout that can own the tree.
+const TREE_ROOT = (() => {
+  const schema = require('./kaola-workflow-adaptive-schema.js');
+  const coord = schema.getCoordRoot(REPO);
+  return path.basename(coord) === '.git' ? schema.mainRootFromCoord(coord) : REPO;
+})();
+
 const DEFAULT_FORGE = 'github';
 const CANON_AGENTS_DIR = path.join(REPO, 'agents');
 const CANON_HOOKS_DIR = path.join(REPO, 'hooks');
@@ -60,7 +91,7 @@ const CANON_PLUGINS_DIR = path.join(REPO, 'templates', 'opencode', 'plugins');
 // write sibling trees. Agents and hooks are forge-NEUTRAL content but still live
 // per-tree, because a tree is what the installer copies wholesale.
 function outDirs(forge) {
-  const root = path.join(REPO, '.opencode' + forgeLayout.outSuffix(forge));
+  const root = path.join(TREE_ROOT, '.opencode' + forgeLayout.outSuffix(forge));
   return {
     root,
     agent: path.join(root, 'agent'),
@@ -587,8 +618,18 @@ function renderNeutralConfig(opts) {
 }
 
 // --- IO helpers ---
+// read() resolves a CANONICAL path (agents/, hooks/, the tracked opencode.json); treePath()/
+// readTree() resolve a path inside the GENERATED tree. They are separate because the two roots
+// differ under a linked worktree — see TREE_ROOT above — and a check that read the tree from the
+// invoking checkout would report every file missing in exactly the posture a run works in.
 function read(rel) {
   return fs.readFileSync(path.join(REPO, rel), 'utf8');
+}
+function treePath(rel) {
+  return path.join(TREE_ROOT, rel);
+}
+function readTree(rel) {
+  return fs.readFileSync(treePath(rel), 'utf8');
 }
 function ensureDir(d) {
   fs.mkdirSync(d, { recursive: true });
@@ -753,6 +794,33 @@ function runWrite(configForce, forge) {
     + (total === 0 ? ' — tree already in sync' : '') + ').');
 }
 
+// Bring back into parity every forge tree that ALREADY EXISTS, and create none.
+//
+// A tree that is absent carries no stale prose, and materializing one hands a developer a forge
+// edition they never installed — so absence is not a failure here and is not reported as one. The
+// caller is the regenerate step the skeleton rule already mandates: a prose edit reaches every
+// tracked surface, and without this it stopped one hop short of the tree a runtime actually reads.
+//
+// The user-owned opencode.json is deliberately untouched: it is a tracked file the user is invited
+// to hand-edit, not part of the generated tree, and --write-config remains the only thing that
+// rewrites it.
+function runRefreshPresent() {
+  const refreshed = [];
+  for (const forge of forgeLayout.FORGES) {
+    if (!fs.existsSync(outDirs(forge).root)) continue;
+    writeAgents(forge);
+    writeCommands(forge);
+    writeHooks(forge);
+    writePlugin(forge);
+    pruneRetired(forge);
+    refreshed.push(treeLabel(forge));
+  }
+  if (refreshed.length) {
+    console.log('sync-opencode-edition: refreshed ' + refreshed.length + ' present tree(s): '
+      + refreshed.join(', ') + '.');
+  }
+}
+
 // Installer entrypoint: write the template opencode.json to an arbitrary path
 // (honors the KAOLA_OPENCODE_*_MODEL pin env vars). The installer guards the
 // "preserve existing" semantics; this unconditionally writes the target.
@@ -810,39 +878,39 @@ function runCheck(forge) {
   for (const name of listCanonAgents()) {
     const canon = read('agents/' + name + '.md');
     const rel = tree + '/agent/' + name + '.md';
-    if (!fs.existsSync(path.join(REPO, rel))) {
+    if (!fs.existsSync(treePath(rel))) {
       mismatches.push({ rel, reason: 'missing generated agent', remedy: REMEDY.WRITE });
       continue;
     }
     const expected = renderAgent(canon, name, forge);
-    if (read(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate', remedy: REMEDY.WRITE });
+    if (readTree(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate', remedy: REMEDY.WRITE });
   }
   for (const file of listCanonCommands(forge)) {
     const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
     const rel = tree + '/command/' + file;
-    if (!fs.existsSync(path.join(REPO, rel))) {
+    if (!fs.existsSync(treePath(rel))) {
       mismatches.push({ rel, reason: 'missing generated command', remedy: REMEDY.WRITE });
       continue;
     }
     const expected = renderCommand(canon, forge, rel);
-    if (read(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate', remedy: REMEDY.WRITE });
+    if (readTree(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate', remedy: REMEDY.WRITE });
   }
   for (const script of HOOK_SCRIPTS) {
     const rel = tree + '/hooks/' + script;
-    if (!fs.existsSync(path.join(REPO, rel))) {
+    if (!fs.existsSync(treePath(rel))) {
       mismatches.push({ rel, reason: 'missing hook script copy', remedy: REMEDY.WRITE });
       continue;
     }
-    if (read(rel) !== read('hooks/' + script)) mismatches.push({ rel, reason: 'drifted from canonical hooks/', remedy: REMEDY.WRITE });
+    if (readTree(rel) !== read('hooks/' + script)) mismatches.push({ rel, reason: 'drifted from canonical hooks/', remedy: REMEDY.WRITE });
   }
   for (const script of PLUGIN_SCRIPTS) {
     const rel = tree + '/plugins/' + script;
-    if (!fs.existsSync(path.join(REPO, rel))) {
+    if (!fs.existsSync(treePath(rel))) {
       mismatches.push({ rel, reason: 'missing generated plugin', remedy: REMEDY.WRITE });
       continue;
     }
     const canonContent = fs.readFileSync(path.join(CANON_PLUGINS_DIR, script), 'utf8');
-    if (read(rel) !== canonContent) mismatches.push({ rel, reason: 'drifted from canonical templates/opencode/plugins/', remedy: REMEDY.WRITE });
+    if (readTree(rel) !== canonContent) mismatches.push({ rel, reason: 'drifted from canonical templates/opencode/plugins/', remedy: REMEDY.WRITE });
   }
   // Allowlist guard: every *.js present in the canonical plugins dir must be registered in
   // PLUGIN_SCRIPTS (the unregistered-on-disk direction). The per-script loop above covers the
@@ -901,13 +969,16 @@ function runCheck(forge) {
 function usage() {
   process.stdout.write(
     'usage: node scripts/sync-opencode-edition.js (--write | --write-config | --write-config-to PATH'
-    + ' | --check) [--forge=github|gitlab|gitea]\n'
+    + ' | --refresh-present | --check) [--forge=github|gitlab|gitea]\n'
     + '  --forge=<f>          which forge to render (default github). github writes .opencode/;\n'
     + '                       gitlab/gitea write .opencode-<forge>/\n'
     + '  --write              regenerate the forge tree agent + command; seed opencode.json if absent\n'
+    + '  --refresh-present    regenerate every forge tree that already exists; create none (ignores\n'
+    + '                       --forge, and leaves opencode.json alone)\n'
     + '  --write-config       (re)write this repo opencode.json from the template (clobbers edits)\n'
     + '  --write-config-to P  write the template opencode.json to path P (installer use)\n'
     + '  --check              assert generated files are in parity with canonical\n'
+    + '  --print-tree-root    print the directory the generated trees land in; write nothing\n'
   );
 }
 
@@ -925,6 +996,7 @@ function main() {
   const positional = argv.filter(a => !a.startsWith('--forge='));
   const arg = positional[0];
   if (arg === '--write') return runWrite(false, forge);
+  if (arg === '--refresh-present') return runRefreshPresent();
   if (arg === '--write-config') return runWrite(true, forge);
   if (arg === '--write-config-to') {
     const target = positional[1];
@@ -932,6 +1004,10 @@ function main() {
     return runWriteConfigTo(target);
   }
   if (arg === '--check') return runCheck(forge);
+  // Read-only, and the ONE answer to "where does the tree a deploy copies from actually live" —
+  // so a consumer of the generated tree never has to restate the rule and get it wrong somewhere
+  // the rule does not hold. Prints a directory and nothing else; forge-independent.
+  if (arg === '--print-tree-root') { process.stdout.write(TREE_ROOT + '\n'); return; }
   usage();
 }
 

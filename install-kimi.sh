@@ -119,7 +119,14 @@ if ! FORGE_SCRIPTS_DIR="$(node "$FORGE_HELPER" --forge="$FORGE" --scripts-dir)";
   exit 1
 fi
 # The generated tree this forge deploys FROM: .kimi for github, .kimi-<forge> otherwise.
-SOURCE_TREE="$SCRIPT_DIR/.kimi$FORGE_SUFFIX"
+# WHERE that tree lives is the generator's answer, never this script's guess: it is not always the
+# directory this installer sits in (a linked worktree's tree belongs to the main checkout), and a
+# deploy that copies from a path the generator never writes installs nothing.
+if ! TREE_ROOT="$(node "$SCRIPT_DIR/scripts/sync-kimi-edition.js" --print-tree-root)"; then
+  echo "Install error: cannot resolve where the generated kimi tree lands" >&2
+  exit 1
+fi
+SOURCE_TREE="$TREE_ROOT/.kimi$FORGE_SUFFIX"
 
 # Always ensure the in-repo generated tree is fresh before copying from it (install only — an
 # uninstall removes by source-tree name and must not regenerate the repo tree).
@@ -177,7 +184,7 @@ copy_skills() {
     [[ -d "$stale" ]] || continue
     rm -rf "$stale"
   done
-  local src_dir base
+  local src_dir base skill_count=0
   for src_dir in "$SOURCE_TREE/skills/"*/; do
     [[ -d "$src_dir" ]] || continue
     base="$(basename "$src_dir")"
@@ -188,7 +195,15 @@ copy_skills() {
       esac
     fi
     cp -R "${src_dir%/}" "$skills_dest/$base"
+    skill_count=$((skill_count + 1))
   done
+  # Fail CLOSED on a deploy that landed nothing (the same guard install-opencode.sh's copy_tree
+  # keeps over its agents). An empty skills dir reported as a successful install is the worst
+  # outcome this script has: the user is told the edition is installed and it is not there.
+  if [[ "$skill_count" -eq 0 ]]; then
+    echo "Install error: no skill sources found in $SOURCE_TREE/skills" >&2
+    exit 1
+  fi
   echo "Installed workflow skills → $skills_dest/"
 }
 

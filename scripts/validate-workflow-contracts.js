@@ -518,7 +518,18 @@ assert(exists('commands/kaola-workflow-finalize.md'),
   'commands/kaola-workflow-finalize.md must be present (#283 terminal routine)');
 assertIncludes('commands/kaola-workflow-finalize.md', 'kaola-workflow-sink-merge.js');
 assertIncludes('commands/kaola-workflow-finalize.md', 'kaola-workflow-sink-pr.js');
-assertIncludes('commands/kaola-workflow-finalize.md', 'SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"');
+// #971: the assertIncludes for 'SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"' is
+// DROPPED. It froze the one token that had to change. That path is cwd-relative and Step 9 carries
+// no cd, so on a worktree run — operator standing in the linked worktree, run record resident in
+// MAIN — every read in the capture misses and SINK_BRANCH reaches the sink EMPTY at exit 0. The pin
+// blocked its own repair, and nothing static replaces it, because the property is "the capture binds
+// the sink metadata whichever tree the operator stands in" and that is a runtime property of a shell
+// block. Both shapes of valid fix were measured and they share no text: rooting the path deletes
+// this spelling, prepending a cd to the main checkout leaves it byte-identical. A substring check
+// must therefore reject one of them, which is inspecting the route rather than checking the result.
+// So the capture is asserted by EXECUTION instead — test-bash-block-guards.js Test F runs the
+// shipped block from both trees across all six rendered finalize surfaces and reads back what it
+// bound. That also widens the surface: this line only ever looked at the GitHub command.
 // The consumer (non-npm) arm must stay documented — the agent's own .cache/final-validation.md is
 // what finalize reads there, not a chain receipt.
 assertIncludes('commands/kaola-workflow-finalize.md', '.cache/final-validation.md');

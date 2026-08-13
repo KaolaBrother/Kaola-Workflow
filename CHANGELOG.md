@@ -47,6 +47,122 @@
   per-member roadmap-retention half already exists and is already tested per-member, while the
   per-member intake and forge-close decision do not.
 
+### Fixed
+
+- **A sync run from a linked worktree now writes the main checkout's edition trees, so a skeleton
+  edit can no longer be rendered into a tree that dies with the worktree — #969.** The observed
+  failure is the #968 run itself: it synced all six trees, recorded *"all six trees reported in
+  parity"*, and its worktree was then deleted — leaving main carrying twelve files that told readers
+  to pass `--target-issue` where canonical already said `--target-issues`. Nothing caught it. The
+  trees are gitignored, so neither `git status` nor a diff review sees them; `generate-routing-surfaces
+  --check` was measured green at 18/18 over those same twelve stale files, as were
+  `test-route-reachability`, `test-generate-routing-surfaces` and the walkthrough's byte-identity
+  scenario, because every chain-resident guard verifies canonical→render and none verifies render→disk.
+
+  Canonical sources resolve to the **invoking** checkout — resolving them to main would make a sync
+  from a worktree re-render main from its own unchanged sources, a no-op wearing a regenerate's name.
+  The generated tree resolves to the **main** checkout, because a machine holds exactly one of it.
+  Where no main checkout resolves — an unpacked source tree that is no git checkout, which is how the
+  installers run — the tree belongs beside the script rather than at the process working directory.
+
+  The mandated regenerate step, `generate-routing-surfaces.js --write`, now also brings every edition
+  tree that **already exists** back into parity and creates none; a checkout that installed no edition
+  sees nothing and gains nothing. `--check` is deliberately unchanged: it runs in all four chains, and
+  **opencode and kimi stay absent from `npm test`**. Wiring a tree check into a chain was measured and
+  rejected on evidence rather than taste — a bare check reds every fresh clone and every worktree, and
+  a presence-gated one is inert in the worktree where the receipt is made, i.e. a guard that cannot
+  fail.
+
+  Two costs are accepted and stated rather than hidden: main's trees can carry prose that has not
+  merged yet, and two worktrees syncing at once leave the later render standing. Both are bounded by
+  the trees being derived — any `--write`, or either installer's check-or-write, restores them.
+
+- **Finalize now reports a run record that contradicts itself — #970.** An item carrying an outcome
+  while its status is not `done` lands on the envelope as `mission_list` and durably under a
+  `## Mission List` heading in the archived `finalization-summary.md`, naming the count and the
+  offending `item:` line numbers. The #968 run archived with 7 of 17 items in that state while the run
+  was genuinely complete, and the shipped predicate measured over all 36 archived records finds
+  **34 such items across 11 of them**, out of 445 items read — so this is a class and not an incident.
+
+  Severity comes from the resume rule, not tidiness: `in-flight` items are documented as the only
+  decision a successor makes, so an item reading `in-flight` while carrying its own result sends that
+  successor to re-dispatch finished work, and the `result` line that would correct it is the line the
+  rule does not send it to.
+
+  It **reports and never refuses** — exit code, `status: closed` and `reasons` are untouched, and the
+  record is never repaired. The record stays unattested, unfrozen and unverified by design. The
+  condition is outcome-present-and-status-not-`done`, **not** status-is-`in-flight`: an item that is
+  genuinely in flight with nothing to show is a different and louder problem, and conflating the two
+  makes the report useless exactly where it matters. A coherent record still reports, with a count of
+  zero, because a key that appears only on a contradictory run is indistinguishable from a report that
+  never ran; a run that wrote no record emits nothing at all.
+
+  Where one item carries two `status:` lines the later one wins — measured over all 11 such items in
+  the archive, every one has the correction written *under* the stale line and none over it.
+
+- **The run-gap sweep resolves the run folder against the tree that holds it, so it can no longer be
+  run from the wrong tree and certify nothing — #971.** Filed as a confusing message; measurement
+  found worse. Running the scanner from the provisioned worktree — the natural response to *"run
+  scanner first"* — read that tree's empty cache, swept zero classes, wrote a stray run folder, and
+  the gate then took its vacuous-pass branch and **exited 0 while a real gap sat unswept in main**. A
+  loud red became a silent green that certified nothing. Both modes now resolve identically, because a
+  scanner and a gate disagreeing about the folder was the mechanism of that false green.
+
+  The same defect one step away in the finalize surface is fixed with it: Step 9's sink-metadata
+  capture was also resolved against the working directory, so from a worktree `SINK_BRANCH` bound
+  **empty** and was consumed by the sink. The finalize surface is generated, so the fix is in the
+  skeleton and reaches its rendered surfaces.
+
+  A contract pin that froze the defective path literally was **removed rather than rewritten**: the two
+  valid fix shapes share no text at that site, so any substring check must reject one of them, which
+  inspects the route instead of checking the result. The property is now asserted by executing the
+  shipped block from both trees across every rendered finalize surface — which also widens coverage,
+  since the removed pin only ever looked at one of them.
+
+- **`install-all` no longer reports the Codex runtime current when the content it serves differs from
+  the plugin's own source — #972.** Codex is the one runtime whose surfaces ship through a
+  version-keyed cache, and currency was decided by version-string equality alone. Reproduced live: at
+  an unchanged plugin version, the cached skill still carried retired prose with a two-day-old mtime
+  while the other three runtimes had taken the new wording, and the wrapper reported *"marketplace
+  plugin already at 7.8.0"*, *"codex PASS"*, *"all runtimes OK"*. The refresh path it needed already
+  existed and already worked; only its trigger was unreachable.
+
+  Currency now turns on version **or** content. The content comparison is made against the path the
+  plugin row itself states it comes from — the same directory a refresh installs from — never a
+  directory reconstructed by assuming a marketplace's internal layout. It is gated to marketplaces
+  served from a local directory: where the served content comes from a remote snapshot, the working
+  tree is not the arbiter, and a difference this wrapper cannot arbitrate is **not** reported as
+  staleness. The post-refresh proof observes content, not the version, which is equal by construction
+  on that path and would otherwise be a proof that cannot fail.
+
+  Consequence, accepted and recorded rather than repaired: run from a linked worktree the convergence
+  report describes the marketplace's checkout rather than the worktree's, on the same stance — a
+  difference this wrapper cannot arbitrate is not reported as staleness.
+
+- **Installing the opencode or kimi edition from a linked git worktree works again, and an install
+  that deploys nothing can no longer report success.** Once the generated tree resolved to the main
+  checkout, both installers still deployed from the tree beside themselves — which in a worktree is
+  nothing. The opencode installer failed with *"no agent sources found"*; the kimi installer was
+  worse, **exiting 0 having deployed zero skills**, because its check-or-write line saw a passing
+  check against the main checkout's current tree and therefore never regenerated, and the copy from a
+  missing source directory was swallowed. Running the wrapper from a worktree gave a loud failure on
+  one edition and a silent empty install on the other.
+
+  Each installer now asks the generator where the generated tree lands instead of assuming it sits
+  beside the installer — one wording of that rule, owned by the code that already had it, rather than
+  a second copy written in shell where getting it wrong would be silent. Separately and on its own
+  merits, the kimi install now fails when it deploys no skills: a silent-success path that merely
+  happens to be unreachable is one refactor from being reachable again.
+
+  Measured from both postures after the fix: 14 agents and 3 commands for opencode, 17 skills for
+  kimi, from a main checkout and from a linked worktree alike. **No change for an ordinary checkout
+  or an unpacked release tarball**, where the tree still belongs beside the script — that is the
+  posture a consumer installs from, and it is verified rather than assumed.
+
+  This also repaired a validation step that had gone red in the meantime:
+  `test-install-adaptive-config.js` runs the real opencode installer, so between the tree-root change
+  and this one the fast gate itself failed from any worktree.
+
 ## [9.8.0] - 2026-08-12
 
 ### Changed

@@ -9,7 +9,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawnSync, execFileSync } = require('child_process');
 
 let passed = 0, failed = 0;
 function assert(c, m) {
@@ -1025,6 +1025,225 @@ try {
   }
 } finally {
   try { fs.rmSync(fix24.root, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T25 (#971): the run folder is resolved against the tree it LIVES in, not against cwd.
+//
+// Every scenario above hands the script a KAOLA_GAP_ROOT, so none of them can see where the
+// script would have looked on its own. On a worktree run nobody does: the operator stands in the
+// linked worktree while `kaola-workflow/<project>/` is resident in the MAIN checkout, uncommitted
+// (the claim creates it there and Step 7 runs before any mirror). Resolving against cwd then reads
+// a tree that has no run folder at all.
+//
+// The visible symptom is a missing artifact, and that half is nearly harmless. The half that costs
+// evidence is what happens next: the operator reads "run scanner first", runs the scanner from the
+// worktree, and the scan reads the worktree's EMPTY .cache — sweeping zero classes, writing a
+// stray untracked run folder into the worktree, and leaving the gate to take its vacuous-pass
+// branch and exit 0. A real gap sits unswept in main's cache while the gate certifies nothing.
+// So the assertions below are on the FALSE GREEN, not on the missing-artifact message.
+//
+// The fixture is a real linked worktree, because the defect lives in the tree topology and a
+// synthetic root cannot express it. Both modes must resolve identically — a scanner and a gate
+// that disagree about the folder is exactly how the false green is produced.
+// ---------------------------------------------------------------------------
+
+function git(cwd, args) {
+  // spawn-class: environment
+  return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+// Run gap-sweep from an arbitrary cwd, WITHOUT KAOLA_GAP_ROOT unless the caller supplies one —
+// the only runner in this file that lets the script resolve the root itself.
+function runIn(cwd, extraArgs, env) {
+  const childEnv = Object.assign({}, process.env, env || {});
+  delete childEnv.KAOLA_GAP_ROOT;
+  if (env && env.KAOLA_GAP_ROOT) childEnv.KAOLA_GAP_ROOT = env.KAOLA_GAP_ROOT;
+  // spawn-class: cli-contract
+  const r = spawnSync(process.execPath, [GAP_SWEEP, ...extraArgs], {
+    cwd, encoding: 'utf8', timeout: 20000, env: childEnv,
+  });
+  let jsonOut = null;
+  const lines = (r.stdout || '').trim().split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try { jsonOut = JSON.parse(lines[i]); break; } catch (_) {}
+  }
+  return { exitCode: r.status, stdout: r.stdout || '', stderr: r.stderr || '', jsonOut };
+}
+
+// macOS resolves os.tmpdir() through a symlink, so a cwd-derived path and a constructed one
+// differ by a /private prefix. Compare canonicalized.
+function realish(p) {
+  try { return fs.realpathSync(p); } catch (_) { return path.resolve(p); }
+}
+
+// A main checkout with a linked worktree, and the run folder created in MAIN only, AFTER the
+// worktree exists and left uncommitted — the real run-time topology.
+function makeWorktreeFixture(project, gapLine) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gap-wt-'));
+  const main = path.join(tmp, 'main');
+  fs.mkdirSync(main, { recursive: true });
+  git(main, ['init', '-b', 'main']);
+  git(main, ['config', 'user.email', 't@t.com']);
+  git(main, ['config', 'user.name', 'T']);
+  fs.writeFileSync(path.join(main, 'README.md'), 'repo\n');
+  git(main, ['add', '-A']);
+  git(main, ['commit', '-m', 'init']);
+  git(main, ['branch', 'workflow/' + project]);
+  const wt = path.join(tmp, 'wt');
+  git(main, ['worktree', 'add', wt, 'workflow/' + project]);
+  const cacheDir = path.join(main, 'kaola-workflow', project, '.cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  if (gapLine) fs.writeFileSync(path.join(cacheDir, 'run-gaps-manual.md'), gapLine + '\n', 'utf8');
+  return { tmp, main, wt, cacheDir, project };
+}
+
+const GAP_LINE = 'gap: flaky-suite — the sink suite went red once';
+const GAP_CLASS = 'manual:flaky-suite';
+
+// --- T25a: the reference behaviour, from MAIN. This is what every other scenario must match. ---
+const fx25a = makeWorktreeFixture('proj-t25a', GAP_LINE);
+try {
+  const scan = runIn(fx25a.main, ['--project', 'proj-t25a', '--json']);
+  assert(scan.exitCode === 0, 'T25a: scanner from main exits 0, got ' + scan.exitCode);
+  assert(scan.jsonOut && Array.isArray(scan.jsonOut.sweptClasses) && scan.jsonOut.sweptClasses.length === 1
+    && scan.jsonOut.sweptClasses[0].reasonClass === GAP_CLASS,
+    'T25a: scanner from main sweeps the seeded gap, got ' + JSON.stringify(scan.jsonOut));
+  const check = runIn(fx25a.main, ['--project', 'proj-t25a', '--check', '--json', '--offline']);
+  assert(check.exitCode === 1, 'T25a: gate from main exits 1 on the unmapped gap, got ' + check.exitCode);
+  assert(check.jsonOut && check.jsonOut.reason === 'gaps_unswept',
+    'T25a: gate from main refuses gaps_unswept, got ' + JSON.stringify(check.jsonOut));
+} finally {
+  try { fs.rmSync(fx25a.tmp, { recursive: true, force: true }); } catch (_) {}
+}
+
+// --- T25b: scanner ran from MAIN; the gate runs from the WORKTREE. Same repository, same run
+//     folder, same command — it must reach the same verdict, not report the artifact missing.
+//     Pinned on the REASON, deliberately not on the "artifact not found" text: the emitted path is
+//     absolute and a verbatim pin would freeze a string nobody emits.
+const fx25b = makeWorktreeFixture('proj-t25b', GAP_LINE);
+try {
+  runIn(fx25b.main, ['--project', 'proj-t25b', '--json']);
+  const check = runIn(fx25b.wt, ['--project', 'proj-t25b', '--check', '--json', '--offline']);
+  assert(check.jsonOut && check.jsonOut.reason === 'gaps_unswept',
+    'T25b (#971): the gate run from the linked worktree reads MAIN\'s run folder and refuses '
+    + 'gaps_unswept, the same verdict it reaches from main — got ' + JSON.stringify(check.jsonOut));
+  assert(check.exitCode === 1, 'T25b: gate from the worktree exits 1, got ' + check.exitCode);
+} finally {
+  try { fs.rmSync(fx25b.tmp, { recursive: true, force: true }); } catch (_) {}
+}
+
+// --- T25c: THE FALSE GREEN. The operator's natural recovery — "it says run the scanner, so I run
+//     the scanner" — done entirely from the worktree. Nothing here may pass vacuously, and nothing
+//     may be written into the worktree.
+const fx25c = makeWorktreeFixture('proj-t25c', GAP_LINE);
+try {
+  const scan = runIn(fx25c.wt, ['--project', 'proj-t25c', '--json']);
+  assert(scan.exitCode === 0, 'T25c: scanner from the worktree exits 0, got ' + scan.exitCode);
+  assert(scan.jsonOut && Array.isArray(scan.jsonOut.sweptClasses) && scan.jsonOut.sweptClasses.length === 1,
+    'T25c (#971): the scanner run from the linked worktree sweeps MAIN\'s seeded gap rather than '
+    + 'an empty worktree .cache, got ' + JSON.stringify(scan.jsonOut && scan.jsonOut.sweptClasses));
+  if (scan.jsonOut && scan.jsonOut.sweptClasses && scan.jsonOut.sweptClasses[0]) {
+    assert(scan.jsonOut.sweptClasses[0].reasonClass === GAP_CLASS,
+      'T25c: the swept class is ' + GAP_CLASS + ', got ' + scan.jsonOut.sweptClasses[0].reasonClass);
+  }
+  assert(scan.jsonOut && typeof scan.jsonOut.artifact === 'string'
+    && realish(scan.jsonOut.artifact) === realish(path.join(fx25c.cacheDir, 'run-gaps.json')),
+    'T25c (#971): the artifact lands in MAIN\'s .cache, got ' + (scan.jsonOut && scan.jsonOut.artifact));
+  assert(fs.existsSync(path.join(fx25c.cacheDir, 'run-gaps.json')),
+    'T25c: run-gaps.json exists in MAIN\'s .cache after a worktree scan');
+  assert(!fs.existsSync(path.join(fx25c.wt, 'kaola-workflow', 'proj-t25c')),
+    'T25c (#971): the scanner leaves NO stray run folder in the worktree — mkdirSync on a '
+    + 'cwd-resolved output path is what creates one');
+
+  const check = runIn(fx25c.wt, ['--project', 'proj-t25c', '--check', '--json', '--offline']);
+  assert(check.exitCode === 1,
+    'T25c (#971): scan-then-check entirely from the worktree must NOT exit 0 while a real gap sits '
+    + 'unswept in main — got exit ' + check.exitCode + ' / ' + check.stdout.trim());
+  assert(check.jsonOut && check.jsonOut.result === 'refuse' && check.jsonOut.reason === 'gaps_unswept',
+    'T25c (#971): the gate refuses gaps_unswept instead of taking the vacuous-pass branch, got '
+    + JSON.stringify(check.jsonOut));
+  assert(check.jsonOut && Array.isArray(check.jsonOut.unmapped) && check.jsonOut.unmapped.length === 1
+    && check.jsonOut.unmapped[0].reasonClass === GAP_CLASS,
+    'T25c (#971): the unmapped gap is named, got ' + JSON.stringify(check.jsonOut && check.jsonOut.unmapped));
+} finally {
+  try { fs.rmSync(fx25c.tmp, { recursive: true, force: true }); } catch (_) {}
+}
+
+// --- T25d: KAOLA_GAP_ROOT keeps precedence over any tree lookup. Every other assertion in this
+//     file rides on that override, so it is pinned here rather than merely relied on: a resolution
+//     that lets the tree win would silently redirect all of them. The override points at a THIRD
+//     tree carrying a DIFFERENT gap, so the swept class names which root was actually read.
+const fx25d = makeWorktreeFixture('proj-t25d', GAP_LINE);
+const envRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gap-envroot-'));
+try {
+  const envCache = path.join(envRoot, 'kaola-workflow', 'proj-t25d', '.cache');
+  fs.mkdirSync(envCache, { recursive: true });
+  fs.writeFileSync(path.join(envCache, 'run-gaps-manual.md'),
+    'gap: env-root-gap — seeded only in the KAOLA_GAP_ROOT tree\n', 'utf8');
+
+  const scan = runIn(fx25d.wt, ['--project', 'proj-t25d', '--json'], { KAOLA_GAP_ROOT: envRoot });
+  assert(scan.jsonOut && Array.isArray(scan.jsonOut.sweptClasses) && scan.jsonOut.sweptClasses.length === 1
+    && scan.jsonOut.sweptClasses[0].reasonClass === 'manual:env-root-gap',
+    'T25d: KAOLA_GAP_ROOT wins over the tree lookup — the scan reads the override root, not main '
+    + '(a manual:flaky-suite here means main won), got ' + JSON.stringify(scan.jsonOut && scan.jsonOut.sweptClasses));
+  assert(scan.jsonOut && realish(scan.jsonOut.artifact) === realish(path.join(envCache, 'run-gaps.json')),
+    'T25d: the artifact lands under KAOLA_GAP_ROOT, got ' + (scan.jsonOut && scan.jsonOut.artifact));
+  assert(!fs.existsSync(path.join(fx25d.cacheDir, 'run-gaps.json')),
+    'T25d: nothing is written into main when KAOLA_GAP_ROOT is set');
+
+  const check = runIn(fx25d.wt, ['--project', 'proj-t25d', '--check', '--json', '--offline'],
+    { KAOLA_GAP_ROOT: envRoot });
+  assert(check.jsonOut && check.jsonOut.reason === 'gaps_unswept'
+    && Array.isArray(check.jsonOut.unmapped) && check.jsonOut.unmapped.length === 1
+    && check.jsonOut.unmapped[0].reasonClass === 'manual:env-root-gap',
+    'T25d: the gate reads the override root too — both modes honour KAOLA_GAP_ROOT identically, got '
+    + JSON.stringify(check.jsonOut));
+} finally {
+  try { fs.rmSync(fx25d.tmp, { recursive: true, force: true }); } catch (_) {}
+  try { fs.rmSync(envRoot, { recursive: true, force: true }); } catch (_) {}
+}
+
+// --- T25e: the run folder that lives in the INVOKING tree stays there. Reaching for main
+//     unconditionally would break the post-mirror topology, where the folder is worktree-resident.
+//     The rule is "the tree the run folder lives in", not "always main".
+const fx25e = makeWorktreeFixture('proj-t25e', null);
+try {
+  fs.rmSync(path.join(fx25e.main, 'kaola-workflow'), { recursive: true, force: true });
+  const wtCache = path.join(fx25e.wt, 'kaola-workflow', 'proj-t25e', '.cache');
+  fs.mkdirSync(wtCache, { recursive: true });
+  fs.writeFileSync(path.join(wtCache, 'run-gaps-manual.md'),
+    'gap: wt-only — seeded in the worktree, absent from main\n', 'utf8');
+
+  const scan = runIn(fx25e.wt, ['--project', 'proj-t25e', '--json']);
+  assert(scan.jsonOut && Array.isArray(scan.jsonOut.sweptClasses) && scan.jsonOut.sweptClasses.length === 1
+    && scan.jsonOut.sweptClasses[0].reasonClass === 'manual:wt-only',
+    'T25e: a run folder resident only in the invoking worktree is still the one read, got '
+    + JSON.stringify(scan.jsonOut && scan.jsonOut.sweptClasses));
+  assert(scan.jsonOut && realish(scan.jsonOut.artifact) === realish(path.join(wtCache, 'run-gaps.json')),
+    'T25e: the artifact lands in the worktree\'s own .cache, got ' + (scan.jsonOut && scan.jsonOut.artifact));
+  assert(!fs.existsSync(path.join(fx25e.main, 'kaola-workflow', 'proj-t25e')),
+    'T25e: no stray run folder is created in main');
+} finally {
+  try { fs.rmSync(fx25e.tmp, { recursive: true, force: true }); } catch (_) {}
+}
+
+// --- T25f: no git anywhere and no override. A tree lookup that throws must not take the script
+//     with it; the cwd fallback is what every non-repo consumer checkout relies on.
+const noGitRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gap-nogit-'));
+try {
+  const cache = path.join(noGitRoot, 'kaola-workflow', 'proj-t25f', '.cache');
+  fs.mkdirSync(cache, { recursive: true });
+  fs.writeFileSync(path.join(cache, 'run-gaps-manual.md'), 'gap: nogit — no repository here\n', 'utf8');
+  const scan = runIn(noGitRoot, ['--project', 'proj-t25f', '--json']);
+  assert(scan.exitCode === 0, 'T25f: a cwd outside any git repository still scans, got exit '
+    + scan.exitCode + ' / ' + scan.stderr.trim());
+  assert(scan.jsonOut && Array.isArray(scan.jsonOut.sweptClasses) && scan.jsonOut.sweptClasses.length === 1
+    && scan.jsonOut.sweptClasses[0].reasonClass === 'manual:nogit',
+    'T25f: resolution falls back to cwd when there is no repository to ask, got '
+    + JSON.stringify(scan.jsonOut && scan.jsonOut.sweptClasses));
+} finally {
+  try { fs.rmSync(noGitRoot, { recursive: true, force: true }); } catch (_) {}
 }
 
 // ---------------------------------------------------------------------------

@@ -158,6 +158,104 @@ function git(cwd, args) { return execFileSync('git', ['-C', cwd, ...args], { enc
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// ---------------------------------------------------------------------------
+// Test F (#971): Step 9's sink-metadata capture resolves workflow-state.md against the tree the
+// run folder LIVES in, not against cwd.
+//
+// `SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"` is cwd-relative and Step 9 carries
+// no `cd`. On a worktree run the operator stands in the linked worktree while the run folder is
+// resident in the MAIN checkout, so every grep in the block reads a path that does not exist and
+// SINK_BRANCH comes back EMPTY — and SINK_BRANCH is what Step 11 hands the sink. The block still
+// exits 0, so nothing announces it.
+//
+// This runs the block instead of pattern-matching it, because the property is what the variables
+// hold at the end, and it runs the block from all SIX rendered surfaces rather than the skeleton,
+// because a guard reads what ships. Both cwds are exercised: the worktree (RED) and main (the
+// control the worktree must match).
+// ---------------------------------------------------------------------------
+{
+  const FINALIZE_SURFACES = [
+    'commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md',
+  ];
+  const proj = 'issue-4242';
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-step9-sink-'));
+  const repo = path.join(tmp, 'main');
+  fs.mkdirSync(repo, { recursive: true });
+  git(repo, ['init', '-b', 'main']);
+  git(repo, ['config', 'user.email', 't@t.com']);
+  git(repo, ['config', 'user.name', 'T']);
+  fs.writeFileSync(path.join(repo, 'README.md'), 'repo\n');
+  git(repo, ['add', '-A']);
+  git(repo, ['commit', '-m', 'init']);
+  git(repo, ['branch', 'workflow/' + proj]);
+  const wt = path.join(tmp, 'wt');
+  git(repo, ['worktree', 'add', wt, 'workflow/' + proj]);
+  // The claim record lives in MAIN only, uncommitted — the topology at Step 9 on every worktree
+  // run, since Step 9 precedes the transaction that mirrors anything.
+  fs.mkdirSync(path.join(repo, 'kaola-workflow', proj), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'kaola-workflow', proj, 'workflow-state.md'),
+    'project: ' + proj + '\nbranch: workflow/' + proj + '\nissue_number: 4242\nissue_iid: 4242\n'
+    + 'worktree_path: ' + wt + '\n\n## Sink\n\nsink: merge\nissue_numbers: 4242\n');
+  const real = p => { try { return fs.realpathSync(p); } catch (_) { return path.resolve(p); } };
+
+  // Run the extracted block and read back what it bound. HOME is redirected at the fixture so the
+  // block's script resolver cannot reach this machine's real installs.
+  function runStep9(body, cwd) {
+    const scriptPath = path.join(tmp, 'step9.sh');
+    fs.writeFileSync(scriptPath, body + '\n'
+      + 'printf "BRANCH=%s\\nISSUE=%s\\nNUMS=%s\\nWT=%s\\n"'
+      + ' "$SINK_BRANCH" "$SINK_ISSUE" "$SINK_ISSUE_NUMBERS" "$ACTIVE_WORKTREE_PATH"\n');
+    // spawn-class: cli-contract
+    const r = spawnSync('bash', [scriptPath], {
+      cwd, encoding: 'utf8', timeout: 30000,
+      env: Object.assign({}, process.env, { HOME: tmp, CLAUDE_PLUGIN_ROOT: '' }),
+    });
+    const out = {};
+    for (const line of (r.stdout || '').split('\n')) {
+      const m = /^(BRANCH|ISSUE|NUMS|WT)=(.*)$/.exec(line);
+      if (m) out[m[1]] = m[2];
+    }
+    return { exitCode: r.status, out, stderr: r.stderr || '' };
+  }
+
+  for (const surface of FINALIZE_SURFACES) {
+    const blocks = extractBashBlocks(read(surface), 'SINK_BRANCH=');
+    assert(blocks.length === 1,
+      'F (#971): ' + surface + ' carries exactly one Step 9 capture block to execute, got '
+      + blocks.length + ' — a guard that finds no block passes everything');
+    if (blocks.length !== 1) continue;
+    const body = blocks[0].split('{project}').join(proj);
+
+    const fromWt = runStep9(body, wt);
+    assert(fromWt.out.BRANCH === 'workflow/' + proj,
+      'F (#971): ' + surface + ' — run from the linked worktree, Step 9 must bind SINK_BRANCH from '
+      + 'MAIN\'s workflow-state.md; the sink consumes it. Got SINK_BRANCH=[' + fromWt.out.BRANCH + ']');
+    assert(fromWt.out.ISSUE === '4242',
+      'F (#971): ' + surface + ' — SINK_ISSUE captured from the worktree, got [' + fromWt.out.ISSUE + ']');
+    assert(fromWt.out.NUMS === '4242',
+      'F (#971): ' + surface + ' — SINK_ISSUE_NUMBERS captured from the worktree, got [' + fromWt.out.NUMS + ']');
+    assert(real(fromWt.out.WT || '') === real(wt),
+      'F (#971): ' + surface + ' — ACTIVE_WORKTREE_PATH still resolves to the linked worktree Step 10 '
+      + 'cd\'s into; a fix that cd\'s the operator\'s shell to main must not take it with it. Got ['
+      + fromWt.out.WT + ']');
+
+    // Control: from main the same block already works, and must keep working.
+    const fromMain = runStep9(body, repo);
+    assert(fromMain.out.BRANCH === 'workflow/' + proj,
+      'F control: ' + surface + ' — run from main, SINK_BRANCH is unchanged, got ['
+      + fromMain.out.BRANCH + ']');
+    assert(real(fromMain.out.WT || '') === real(wt),
+      'F control: ' + surface + ' — run from main, ACTIVE_WORKTREE_PATH resolves to the worktree via '
+      + 'worktree_path, got [' + fromMain.out.WT + ']');
+  }
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 if (failed > 0) {
   console.error('test-bash-block-guards: ' + failed + ' failed, ' + passed + ' passed');
   process.exit(1);

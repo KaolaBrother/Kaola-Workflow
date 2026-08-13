@@ -30,8 +30,9 @@ node scripts/sync-kimi-edition.js --forge=gitea --check
 
 **Additive is unchanged by this.** Being additive is about edition *machinery*, not forge
 support: the edition stays out of `npm test`, `edition-sync.js`, `install.sh`, and the
-routing-surface contract, and keeps its own suite. An unknown `--forge` value is refused,
-never silently defaulted to github.
+routing-surface `--check` contract, and keeps its own suite. The mandated
+`generate-routing-surfaces.js --write` still refreshes a tree that already exists, and
+creates none. An unknown `--forge` value is refused, never silently defaulted to github.
 
 ## What gets generated
 
@@ -304,10 +305,16 @@ Then in Kimi Code:
 ## Develop / regenerate
 
 ```bash
-node scripts/sync-kimi-edition.js --write   # regenerate .kimi/ from canonical
-node scripts/sync-kimi-edition.js --check   # parity assert: skills + hooks fragment
-node scripts/test-kimi-edition.js           # full structural + parity + route-reachability suite
+node scripts/sync-kimi-edition.js --write             # regenerate .kimi/ from canonical
+node scripts/sync-kimi-edition.js --refresh-present   # regenerate every tree that already exists; create none (ignores --forge)
+node scripts/sync-kimi-edition.js --check             # parity assert: skills + hooks fragment
+node scripts/test-kimi-edition.js                     # full structural + parity + route-reachability suite
 ```
+
+A routing-prose change needs no separate refresh: the mandated
+`node scripts/generate-routing-surfaces.js --write` already leaves every `.kimi*` tree on the
+machine in parity, and still creates none. Reach for `--refresh-present` directly only when
+refreshing the trees is the whole errand.
 
 The validator is self-contained (run directly with `node`; it is intentionally **not**
 wired into `package.json`'s `test` chain, to keep the change additive — the D-530-02

@@ -265,17 +265,19 @@ will read it, so the check and the transaction cannot silently disagree about wh
 | `source_dir` | The directory that proves the authority today, or `null`. On `pending_mirror` this is the **main-resident** run folder the mirror will copy |
 | `dest_dir` | The directory the transaction will read the authority from. Equals `source_dir` except on `pending_mirror`, where it is `<linked_root>/kaola-workflow/<project>`. `null` when `source` is `none` |
 
-### The two reports
+### The three reports
 
-`probeFinalizeValidationGate` takes two measurements. Neither refuses, and both land in two places —
-the emitted envelope and, durably, `kaola-workflow/{project}/finalization-summary.md`. The durable
-half is not optional: a conversion that emits a finding and drops the state the refusal was freezing
-is a deletion, not a conversion.
+The finalize transaction takes three measurements — two from `probeFinalizeValidationGate`, one from
+`probeMissionListCoherence`. None refuses, and each lands in two places — the emitted envelope and,
+durably, `kaola-workflow/{project}/finalization-summary.md`. The durable half is not optional: a
+conversion that emits a finding and drops the state the refusal was freezing is a deletion, not a
+conversion.
 
 | Envelope field | Durable heading | Content |
 |---|---|---|
 | `validation` | `## Validation` | the typed chain-receipt finding from `adaptiveSchema.evaluateChainReceipt`, computed **in process** — no subprocess, no plan file |
 | `changed_paths` | `## Changed Paths` | `adaptiveSchema.changedPathsSinceBase(root, base, project)` — `git diff <base>...HEAD --name-only` minus the bookkeeping band |
+| `mission_list` | `## Mission List` | `{ items, outcome_while_not_done }` — how many missions the run's own record holds, and the `item:` line of each one carrying an outcome while its `status` is not `done` |
 
 `changed_paths_probe` is added to the envelope only when it is not `measured`; `unavailable` means
 the branch diff could not be enumerated, which is reported as "not measured", never as a verdict
@@ -286,6 +288,12 @@ used to be an attribution sweep against declared write sets that refused the rem
 write sets are gone, and a mission-list `result` is free text, not a path set — parsing one back
 into one would re-invent the declaration. The comparison went; the measurement stayed, so a reader
 can see what moved and notice what does not belong.
+
+`mission_list` is present only when the run wrote a `mission-list.md` — a run without one emits the
+envelope it emitted before, and writes no section. A record that agrees with itself still reports,
+with an empty `outcome_while_not_done`: a key appearing only on a contradictory run would be
+indistinguishable from a report that never ran. The record is read and never repaired, and nothing
+about the exit code, `status` or `reasons` turns on it.
 
 ### Finalize envelope
 
@@ -301,6 +309,7 @@ can see what moved and notice what does not belong.
   "issue_disposition": "kept-open|close-pending|closed|unknown",
   "validation": { "classification": "chains_green", "green": true, "mode": "chain-receipt" },
   "changed_paths": ["scripts/foo.js"],
+  "mission_list": { "items": 6, "outcome_while_not_done": [25, 52] },
   "closure_receipt": {},
   "closure_invariants": { "ok": true, "violations": [] },
   "finalize_transaction": {}
@@ -1486,7 +1495,7 @@ The `--release-check` step is the gate documented above. `--prepare` bumps the v
 | `kaola-workflow-install-manifest.js --forge=<github\|gitlab\|gitea> (--scripts\|--hooks)` | the single source of the support-file list an installer copies. Prints one name per line. Exits 2 on an unknown argument, a missing flag, or an **empty** list — an empty manifest would copy zero support files, so it refuses rather than silently installing nothing. Exports `SUPPORT_SCRIPTS`, `SUPPORT_HOOKS`, `FORGES`, `supportScripts`, `supportHooks`, `renameIfPorted` |
 | `edition-sync.js (--check \| --write \| --materialize-kernel)` | materializes the rename-normalized edition copies from the canonical tree and the byte-identical kernel into each edition. `--check` is the read-only verdict |
 | `validate-script-sync.js` | enforces cross-edition parity, including `BYTE_IDENTICAL_GROUPS`, which auto-expands when a new `.toml` is added to the codex tree |
-| `sync-opencode-edition.js` / `sync-kimi-edition.js` | the additive runtime editions; not wired into `npm test` or the forge chains |
+| `sync-opencode-edition.js` / `sync-kimi-edition.js` | the additive runtime editions; not wired into `npm test` or the forge chains. `--refresh-present` regenerates every edition tree already on the machine and creates none — it is what the routing generator's `--write` calls, so a routing-prose change leaves no installed tree stale. `--print-tree-root` prints the single absolute directory that edition's generated tree lands in and writes nothing. Both modes ignore `--forge`: the answer is the same for all three. Each edition installer takes its source tree from that answer instead of assuming one beside itself, so an install run from a linked worktree finds the tree |
 | `install-codex-agent-profiles.js` | authoritative Codex install/upgrade transaction; validates source profiles and targets, writes and prunes the managed set, records the manifest, installs hooks, and verifies the result before success |
 | `kaola-workflow-codex-preflight.js --doctor` | explicit user-invoked diagnostic for installed plugin, agent-profile, managed-config, manifest, and hook state. Ordinary workflow entry/resume never invokes it or treats its result as a readiness gate |
 

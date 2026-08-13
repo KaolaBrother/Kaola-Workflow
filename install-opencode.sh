@@ -149,7 +149,14 @@ if ! FORGE_SCRIPTS_DIR="$(node "$FORGE_HELPER" --forge="$FORGE" --scripts-dir)";
   exit 1
 fi
 # The generated tree this forge deploys FROM: .opencode for github, .opencode-<forge> otherwise.
-SOURCE_TREE="$SCRIPT_DIR/.opencode$FORGE_SUFFIX"
+# WHERE that tree lives is the generator's answer, never this script's guess: it is not always the
+# directory this installer sits in (a linked worktree's tree belongs to the main checkout), and a
+# deploy that copies from a path the generator never writes installs nothing.
+if ! TREE_ROOT="$(node "$SCRIPT_DIR/scripts/sync-opencode-edition.js" --print-tree-root)"; then
+  echo "Install error: cannot resolve where the generated opencode tree lands" >&2
+  exit 1
+fi
+SOURCE_TREE="$TREE_ROOT/.opencode$FORGE_SUFFIX"
 
 # Always ensure the in-repo generated tree is fresh before copying from it (install only — an
 # uninstall removes by source filename and must not regenerate the repo tree).

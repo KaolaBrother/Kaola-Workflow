@@ -7212,6 +7212,437 @@ function testFinalizeOfflineReportsSkippedClaimRelease() {
   console.log('testFinalizeOfflineReportsSkippedClaimRelease: PASSED');
 }
 
+// #970 — the run record that disagrees with itself.
+//
+// An item whose outcome is filled in while its `status` still reads something other than `done`
+// is a record contradicting itself, and finalize said nothing about it: the archived run came out
+// byte-identical to a coherent one, so the only reader who could catch it was a human reading the
+// file line by line. It is not a one-off — 11 of the 36 mission lists in this repo's archive carry
+// at least one such item, 34 items in all, counting a decorated key (`result (test leg):`) as the
+// outcome it is and an empty one as no outcome at all.
+//
+// WHAT THIS MAY NEVER BECOME. The mission list is deliberately not attested, not frozen and not
+// machine-verified, and the refusal count in the run design is zero. Every leg below therefore
+// asserts the finalize is UNCHANGED apart from the report — exit 0, `status: closed`, and the
+// archived record byte-for-byte the one that was planted. Nor does anything here judge whether a
+// record is SUFFICIENT: an item carrying nothing but its mission is silent, not deficient, and the
+// control below contains one. An EMPTY field is the same absence — an orchestrator that writes the
+// four field names ahead of the work leaves `result:` standing bare, and two archived runs end on
+// exactly that item. Reporting one would say an outcome landed where nothing did, which is the
+// wrongness this report exists to catch, arriving through the report itself.
+//
+// TWO CONDITIONS, NOT ONE. "Carries an outcome while not done" is not "is in-flight". An item
+// genuinely in flight with nothing to show is a different and louder problem, and over the archive
+// the two sets are near-orthogonal. Every fixture below contains one of those, and this measure
+// must stay silent about it: a count that mixes the two says nothing about either.
+//
+// CHANNEL-NEUTRAL BY CONSTRUCTION. finalize has two report channels — a measurement key beside
+// `validation`/`changed_paths` with a `## Heading` in the summary, and a typed name on
+// `finalize_transaction.findings` with a `### <type>` section — and this scenario pins neither. It
+// locates the report by the one thing both channels share: something that NAMES the record it
+// read. The weight is carried by the content assertions, which are exact.
+const MISSION_REPORT_NAME = /mission/i;
+
+// A record authored as a line array, with the item line numbers DERIVED from it. Spelling those
+// numbers out by hand would make them wrong the moment anyone edits a line of prose above them,
+// and the numbers ARE the assertion here.
+function missionRecordFixture(lines) {
+  const itemLines = [];
+  lines.forEach((line, i) => { if (/^(?:- )?item:/.test(line)) itemLines.push(i + 1); });
+  return { text: lines.join('\n') + '\n', itemLines };
+}
+
+function testFinalizeReportsMissionListOutcomeWithoutDone() {
+  // ---- the two locators, one per channel, both keyed on the NAME and never on the shape -------
+
+  // Everything the envelope offers AS this report: a key naming the record, at any depth, or a
+  // typed finding name that does. Deliberately NOT a substring search over the whole envelope —
+  // `closure_receipt` already carries the archived `mission-list.md` PATH, so a search like that
+  // would "find" the report in every run ever finalized.
+  const envelopeReports = (node, prefix, out) => {
+    if (!node || typeof node !== 'object') return out;
+    if (Array.isArray(node)) {
+      // A typed-finding list: there, the names themselves are the report. Every other array on
+      // this envelope is data.
+      if (/findings$/.test(prefix)) {
+        for (const el of node) {
+          if (typeof el === 'string' && MISSION_REPORT_NAME.test(el)) out.push(prefix + ' = ' + el);
+        }
+      }
+      return out;
+    }
+    for (const [k, v] of Object.entries(node)) {
+      const where = prefix ? prefix + '.' + k : k;
+      if (MISSION_REPORT_NAME.test(k)) out.push(where + ' = ' + JSON.stringify(v));
+      else envelopeReports(v, where, out);
+    }
+    return out;
+  };
+
+  // Any `## ` or `### ` section of the archived finalization-summary.md whose heading names the
+  // record, sliced to the next heading of either depth.
+  const summaryReports = (summaryPath) => {
+    if (!fs.existsSync(summaryPath)) return [];
+    const out = [];
+    let cur = null;
+    for (const line of read(summaryPath).split('\n')) {
+      if (/^#{2,3} /.test(line)) {
+        if (cur) out.push(cur.join('\n'));
+        cur = MISSION_REPORT_NAME.test(line) ? [line] : null;
+      } else if (cur) {
+        cur.push(line);
+      }
+    }
+    if (cur) out.push(cur.join('\n'));
+    return out;
+  };
+
+  // A WHOLE number: `110` does not contain `11`, and `issue-9700` does not contain `70`.
+  const mentions = (text, n) => new RegExp('(^|[^0-9])' + n + '([^0-9]|$)').test(text);
+
+  // ---- one leg: plant a record, finalize, hand the two channels to the caller ------------------
+  const legWithRecord = (project, issue, fixture, body) => {
+    // The absence assertions below look for a bare number, and a correct report legitimately
+    // prints two small ones of its own: how many items it flagged, and how many it read. Keeping
+    // every item well clear of those is what makes "this line number is NOT named" mean something.
+    assert(Math.min.apply(null, fixture.itemLines) > 10,
+      '#970 fixture invariant: every item must start below line 10 in ' + project
+      + ' so that no item line number can collide with a count the report itself states; got: '
+      + JSON.stringify(fixture.itemLines));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-mission-record-'));
+    try {
+      initGitRepo(tmp);
+      // No roadmap entry, as in the other finalize-report scenarios: nothing for the
+      // roadmap-source or mirror-clean rungs to say about this run.
+      plantActiveFolder(tmp, project, issue, null);
+      const recordPath = path.join(tmp, 'kaola-workflow', project, 'mission-list.md');
+      fs.writeFileSync(recordPath, fixture.text);
+      // Seeded AFTER the record, so the bound candidate hash is taken over the tree the finalize
+      // actually measures.
+      seedAdaptiveFinalizeFixture(tmp, project);
+      const run = runNode(claimScript, ['finalize', '--project', project], tmp);
+
+      // PREMISE 1 — nothing about this report may reach the outcome of the finalize. The run
+      // record is not attested and not machine-verified; a contradiction inside it is something
+      // the orchestrator is TOLD, never something it is stopped for.
+      assert(run.status === 0,
+        '#970: a self-contradicting run record must not change the exit code — the mission list is '
+        + 'not attested, not frozen and not machine-verified, and nothing in the run design refuses. '
+        + 'Expected exit 0 for ' + project + ', got ' + run.status + '\nstdout: ' + run.stdout
+        + '\nstderr: ' + run.stderr);
+      const parsed = JSON.parse(run.stdout);
+      assert(parsed.status === 'closed',
+        '#970: the closure verdict must be unchanged by the presence of the condition; got status='
+        + JSON.stringify(parsed.status));
+
+      const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', project);
+      const summaryPath = path.join(archiveDir, 'finalization-summary.md');
+
+      // PREMISE 2 — the durable channel is alive on this lane. Without this an absent report below
+      // could mean the summary was never written at all, and the negative control would be green
+      // for a reason that has nothing to do with the record it was given.
+      assert(fs.existsSync(summaryPath) && /^## Validation$/m.test(read(summaryPath)),
+        '#970 premise: the archived finalization-summary.md must exist and already carry its other '
+        + 'durable measurement (## Validation), or nothing can be concluded from a report being '
+        + 'absent from it. ' + summaryPath + ':\n'
+        + (fs.existsSync(summaryPath) ? read(summaryPath) : '(absent)'));
+
+      // PREMISE 3 — reading the record is all this does. A measurement that repairs, normalizes or
+      // re-serializes the run record has stopped being a measurement.
+      const archivedRecord = path.join(archiveDir, 'mission-list.md');
+      assert(fs.existsSync(archivedRecord) && read(archivedRecord) === fixture.text,
+        '#970: the archived mission-list.md must be byte-identical to the one the run wrote — this '
+        + 'report READS the record and may never rewrite it. ' + archivedRecord + ':\n'
+        + (fs.existsSync(archivedRecord) ? read(archivedRecord) : '(absent)'));
+
+      body({
+        envelope: envelopeReports(parsed, '', []).join('\n'),
+        sections: summaryReports(summaryPath).join('\n'),
+        summaryPath: summaryPath,
+        parsed: parsed
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  };
+
+  // The positive legs assert an EXACT set: every offending item named, every other item not. A
+  // report that flags the whole file is as useless as one that flags nothing.
+  const assertReports = (project, fixture, offenderIdx, found) => {
+    const flagged = offenderIdx.map(i => fixture.itemLines[i]);
+    const quiet = fixture.itemLines.filter(n => !flagged.includes(n));
+
+    assert(found.envelope !== '',
+      '#970 [' + project + ']: nothing on the finalize envelope reports that this run record '
+      + 'contradicts itself. ' + flagged.length + ' of its ' + fixture.itemLines.length
+      + ' items carry an outcome while their status is not `done` (item lines '
+      + flagged.join(', ') + '). The report is located by NAME, not by shape: an envelope key that '
+      + 'names the record it read, or a typed finding that does — whichever channel is used, '
+      + 'something on the envelope has to say `mission`.');
+    for (const n of flagged) {
+      assert(mentions(found.envelope, n),
+        '#970 [' + project + ']: the item starting at line ' + n + ' carries an outcome while its '
+        + 'status is not `done`, and the envelope report does not name it. A count with no line '
+        + 'numbers cannot be acted on — the reader has to find the item. Envelope report:\n'
+        + found.envelope);
+    }
+    for (const n of quiet) {
+      assert(!mentions(found.envelope, n),
+        '#970 [' + project + ']: the item starting at line ' + n + ' does NOT carry an outcome '
+        + 'while unfinished, and the envelope report names it anyway. Expected exactly the items '
+        + 'at ' + flagged.join(', ') + '. Envelope report:\n' + found.envelope);
+    }
+
+    assert(found.sections !== '',
+      '#970 [' + project + ']: the report must also be DURABLE. The envelope is gone the moment '
+      + 'the process exits, and the archived run folder is all a later reader has. Expected a '
+      + 'section naming the record in ' + found.summaryPath + ':\n' + read(found.summaryPath));
+    for (const n of flagged) {
+      assert(mentions(found.sections, n),
+        '#970 [' + project + ']: the durable section does not name the item at line ' + n
+        + '. Section(s):\n' + found.sections);
+    }
+    for (const n of quiet) {
+      assert(!mentions(found.sections, n),
+        '#970 [' + project + ']: the durable section names the item at line ' + n + ', which does '
+        + 'not carry an outcome while unfinished. Expected exactly ' + flagged.join(', ')
+        + '. Section(s):\n' + found.sections);
+    }
+    assert(mentions(found.sections, flagged.length),
+      '#970 [' + project + ']: the durable section must state HOW MANY items are in this state ('
+      + flagged.length + '), not only list them. Section(s):\n' + found.sections);
+  };
+
+  // ---- POSITIVE: the bullet form, with every kind of variance the archive actually holds -------
+  //
+  // Fields at two spaces under a `- item:` bullet and wrapped prose at four: 425 bulleted item
+  // lines and 1194 two-space field lines across the archive, and NOT ONE field name at three
+  // spaces or deeper, so indent is a real boundary here. What the archive does hold is prose that
+  // reads like a field — `Note for whoever implements:`, `MY DECISION:` — and, inside a result,
+  // sentences quoting the record's own vocabulary. Two of those are planted where a parser
+  // matching `status:`/`result:` anywhere in a line, rather than at the front of one, flips a
+  // verdict: item 2's result says the repaired archive "reads status: done", and item 3 — which
+  // has NO result — has "the result:" inside its dispatched prose.
+  const bulletRecord = missionRecordFixture([
+    '# #9700 — the run whose record disagreed with itself',
+    '',
+    'Branch `workflow/issue-9700`. The goal is a record a successor can read without having to',
+    'guess which half of it is current: what is known, what went out, and what came back.',
+    '',
+    'Items are in the order they were reached, not the order they were dispatched. Nothing here',
+    'is machine-verified and nothing here refuses — this file is bookkeeping for whoever picks',
+    'the run up next, and the only thing it owes that reader is honesty about position.',
+    '',
+    'Two conventions this run followed, written down because the archive is inconsistent about',
+    'both: fields sit at two spaces under their bullet and wrapped prose at four, and where a',
+    'status was corrected in place the correction was written UNDER the stale line rather than',
+    'over it — which is what every other run in the archive did too.',
+    '',
+    '---',
+    '',
+    '## Items',
+    '',
+    '- item: Read the frontier and decide the width — one pass over the open list, then decide',
+    '    then and there whether to dispatch or do the work inline, and at what width.',
+    '  status: done',
+    '  dispatched: self, inline; the deciding was the work, so nothing went out.',
+    '  result: Six items, dispatched two wide. The reasoning is in this file and nowhere else.',
+    '',
+    '- item: Sweep the four editions for the retired constant and report what still carries it,',
+    '    naming each copy by path rather than by count.',
+    '  status: in-flight',
+    '  dispatched: `investigator` subagent in the worktree; findings to land in',
+    '    `kaola-workflow/issue-9700/sweep.md`.',
+    '  result: `sweep.md`. Three copies still carry it; the fourth was clean already.',
+    '    Note for whoever implements: the copy under `plugins/` is the one that ships, so a sweep',
+    '    reading only `scripts/` reports a repo cleaner than the installed one.',
+    '    MY DECISION: fix all four together — they are byte-identical by contract, and a partial',
+    '    edit is a drift some later guard has to catch.',
+    '    One thing the next reader should know: the repaired archive now reads status: done on',
+    '    every item that landed, which is exactly what made this contradiction visible.',
+    '',
+    '- item: Decide with the user whether the retired constant is deleted or wired up — deleting',
+    '    working capability is escalation-worthy and not a call to take alone.',
+    '  status: in-flight',
+    '  dispatched: self, in conversation, with the sweep as the evidence; the result: is to land',
+    '    in this item once the user rules, and nothing goes out until it does.',
+    '',
+    '- item: Port the fix to the three remaining copies and prove they are byte-identical after.',
+    '  status: in-flight',
+    '  status: done',
+    '  dispatched: `implementer` subagent in the worktree; notes to',
+    '    `kaola-workflow/issue-9700/impl.md`.',
+    '  result: `impl.md`. All four copies hash identically after, produced by `cp`, so the',
+    '    identity is by construction rather than by assertion.',
+    '',
+    '- item: Update the changelog and the two docs the change reaches.',
+    '  status: todo',
+    '  dispatched: self, inline.',
+    '  result: One entry under `[Unreleased]`, plus the API table row and the architecture note.',
+    '',
+    '- item: Run the suite at full scope and quote the count rather than asserting it passed.',
+    '  status: done',
+    '  dispatched: self, inline.',
+    '  result: Full scope, exit 0; the shard line is quoted in the finalization summary.',
+    ''
+  ]);
+  // Item 2 (in-flight, result) and item 5 (todo, result) — and only those. Item 3 is in-flight
+  // with nothing to show, item 4 was corrected in place to `done` under its stale line, and items
+  // 1 and 6 are plainly finished. `todo` is not a hypothetical: two items in the archive sit in
+  // exactly that state, which is why the condition is "not done" and not "in-flight".
+  legWithRecord('issue-9700', 9700, bulletRecord, (found) =>
+    assertReports('issue-9700', bulletRecord, [1, 4], found));
+
+  // ---- POSITIVE: the same condition in the form three archived runs use ------------------------
+  //
+  // No bullet, fields at column zero, and wrapped prose at column zero too — so here the indent
+  // separates nothing and the only thing telling a field from a continuation is the name at the
+  // front of the line. This is where `MY DECISION:` and `Note for whoever implements:` sit at the
+  // SAME offset as a real field, exactly as they do in the archive.
+  const plainRecord = missionRecordFixture([
+    '# #9701 — the same contradiction, in the record form without bullets',
+    '',
+    'Branch `workflow/issue-9701`. This run wrote its fields at column zero, which is what three',
+    'of the archived runs did. Wrapped prose sits at column zero as well, so a continuation line',
+    'is told from a field by its name and by nothing else.',
+    '',
+    'The goal was one thing: get the retired flag out of the surfaces that still advertise it,',
+    'and say plainly which copies were reached and which were only inspected.',
+    '',
+    '---',
+    '',
+    'item: Sweep the installed surfaces for the retired flag and report which of them still',
+    'advertise it, by path — a count would not tell the next reader which copy to open.',
+    'status: in-flight',
+    'dispatched: `investigator` subagent in the worktree; findings to land in',
+    '`kaola-workflow/issue-9701/sweep.md`.',
+    'result: `sweep.md`. Two of the six surfaces still carry it.',
+    'Note for whoever implements: the generated surfaces render from a skeleton, so the fix goes',
+    'in the skeleton and the render follows — never the other way round.',
+    'MY DECISION: hold the port until the user has ruled on the deletion.',
+    '',
+    'item: Ask the user whether the flag is deleted or wired up, with the sweep as the evidence.',
+    'status: done',
+    'dispatched: self, in conversation.',
+    'result: Ruled: delete it. Tests fall out with the mechanism, never repaired ahead of it.',
+    '',
+    'item: Regenerate the surfaces from the skeleton and quote the check output either side.',
+    'status: todo',
+    'dispatched: not yet — this is the frontier.',
+    '',
+    // Copied in shape from the two archived runs that actually hold this — issue-878:65 and
+    // issue-899:45, both a `dock and finish` item scaffolded at the end of the file with all four
+    // field NAMES written ahead of time and two of them still empty. Both are column-0 records,
+    // which is why the case lives here as well as in the control: the empty field is the whole
+    // point, and this leg proves it is skipped in the same file where a real outcome is reported.
+    'item: dock and finish — CHANGELOG `[Unreleased]`, then run the chains, finalize and sink.',
+    '`CHANGELOG.md` is test-consumed, so write ALL prose before the chain run rather than after,',
+    'or the receipt is stale before it is read.',
+    'status: todo',
+    'dispatched:',
+    'result:',
+    ''
+  ]);
+  legWithRecord('issue-9701', 9701, plainRecord, (found) =>
+    assertReports('issue-9701', plainRecord, [0], found));
+
+  // ---- NEGATIVE CONTROL: a coherent record, and every state nearest the condition --------------
+  //
+  // Without this the report could be unconditional, which would say nothing about any run. The
+  // control is not merely "clean": every item in it is one a wrong measure flags anyway, and the
+  // reason each must stay silent is written beside it in `coherentSilence` below — the failure
+  // message reads from that table, so an item added here says why it belongs without anyone having
+  // to keep prose and indexes in step.
+  const coherentRecord = missionRecordFixture([
+    '# #9702 — a record that agrees with itself',
+    '',
+    'Branch `workflow/issue-9702`. Nothing in this run is in a contradictory state: what is',
+    'finished says so and carries its outcome, what is out says so and carries no outcome yet,',
+    'and what has not been reached says nothing at all.',
+    '',
+    'The goal is the same shape as the two runs above, so the only difference a reader can see',
+    'between them is the one thing under measurement.',
+    '',
+    '---',
+    '',
+    '## Items',
+    '',
+    '- item: Read the frontier and decide the width.',
+    '  status: done',
+    '  dispatched: self, inline.',
+    '  result: Five items, two of them dispatched wide.',
+    '',
+    '- item: Sweep the four editions for the retired constant and name every copy that carries it.',
+    '  status: in-flight',
+    '  dispatched: `investigator` subagent in the worktree; findings to land in',
+    '    `kaola-workflow/issue-9702/sweep.md`, which has not come back yet.',
+    '',
+    '- item: Decide with the user whether the constant is deleted or wired up.',
+    '  status: todo',
+    '',
+    '- item: Port the fix to the three remaining copies and prove byte-identity after.',
+    '  status: in-flight',
+    '  status: done',
+    '  dispatched: `implementer` subagent in the worktree; notes to `impl.md`.',
+    '  result: `impl.md`. All four copies hash identically after.',
+    '',
+    '- item: Update the changelog and the docs the change reaches.',
+    '  status: done',
+    '  dispatched: self, inline.',
+    '  result: One entry under `[Unreleased]`, plus the API table row.',
+    '',
+    // The two SCAFFOLDED items. An orchestrator that writes the four field names ahead of the work
+    // leaves `result:` standing empty, and an empty field is the absence of an outcome, not the
+    // presence of one — reporting it states that something landed where nothing did, in a section
+    // a successor reads as evidence. Both forms are here because a key-only match sees no
+    // difference between them: nothing after the colon, and whitespace after the colon.
+    '- item: Dock and finish — CHANGELOG `[Unreleased]`, then chains, finalize, sink.',
+    '  status: todo',
+    '  dispatched:',
+    '  result:',
+    '',
+    '- item: Re-run the sweep once the port has landed and record what changed.',
+    '  status: in-flight',
+    '  dispatched: `investigator` subagent in the worktree.',
+    '  result:   ',
+    ''
+  ]);
+  // Why each item must draw silence, in fixture order. The message quotes the entry for whatever
+  // was actually named, so a wrong reading is told which state it misread rather than that it was
+  // wrong somewhere in a seven-item file.
+  const coherentSilence = [
+    'is plainly finished and carries its outcome',
+    'is in flight with nothing to show — a different and louder problem, and not this one',
+    'carries nothing but its mission and a status, and a thin record is not a defective one',
+    'was corrected in place, `in-flight` then `done` on the next line, which is how all eleven '
+      + 'duplicate-status items in the archive read: the later line is the current one, and reading '
+      + 'the earlier one as authoritative reports ten items across the archive whose author wrote '
+      + '`done` directly beneath',
+    'is plainly finished and carries its outcome',
+    'was SCAFFOLDED — the field names were written ahead of the work and `result:` is still empty. '
+      + 'An empty field is the absence of an outcome; reporting it tells a later reader that '
+      + 'something landed on an item where nothing did. Two archived runs hold exactly this item '
+      + '(issue-878 and issue-899, both a `dock and finish` scaffolded at the end of the file)',
+    'was SCAFFOLDED like the one above, with whitespace after the colon rather than nothing — the '
+      + 'same absence, and a key-only match cannot tell the two apart'
+  ];
+  legWithRecord('issue-9702', 9702, coherentRecord, (found) => {
+    assert(coherentSilence.length === coherentRecord.itemLines.length,
+      '#970 fixture invariant: every item in the control needs its reason for silence — '
+      + coherentRecord.itemLines.length + ' items, ' + coherentSilence.length + ' reasons.');
+    const named = coherentRecord.itemLines.filter(n =>
+      mentions(found.envelope, n) || mentions(found.sections, n));
+    assert(named.length === 0,
+      '#970 [issue-9702]: no item in this record carries an outcome while its status is not '
+      + '`done`, yet the report names ' + named.length + ' of them:\n'
+      + named.map(n => '  - line ' + n + ' — '
+          + coherentSilence[coherentRecord.itemLines.indexOf(n)]).join('\n')
+      + '\nEnvelope report:\n' + found.envelope + '\nSection(s):\n' + found.sections);
+  });
+
+  console.log('testFinalizeReportsMissionListOutcomeWithoutDone: PASSED');
+}
+
 function testWatchPrEmitsClaimLabelReceipt() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watchpr-label-receipt-'));
   const binDir = path.join(tmp, 'bin');
@@ -12576,6 +13007,7 @@ function buildRegistry() {
   add('testFinalizeNullFolderFallbackReadsArchive',       testFinalizeNullFolderFallbackReadsArchive);
   add('testFinalizeOfflineSkipsLabelInvariant',           testFinalizeOfflineSkipsLabelInvariant);
   add('testFinalizeOfflineReportsSkippedClaimRelease',    testFinalizeOfflineReportsSkippedClaimRelease);
+  add('testFinalizeReportsMissionListOutcomeWithoutDone', testFinalizeReportsMissionListOutcomeWithoutDone);
   add('testWatchPrEmitsClaimLabelReceipt',                testWatchPrEmitsClaimLabelReceipt);
   add('testAuditAndRepairLabels',                         testAuditAndRepairLabels);
   add('testFinalizeClaimLabelFailedTriggersInvariant',    testFinalizeClaimLabelFailedTriggersInvariant);

@@ -960,6 +960,11 @@ accountability onto you, because you are the only party with enough context to c
 - **Changed paths** — the paths the run actually touched, on the envelope as `changed_paths` and
   durably under `## Changed Paths`. Nothing compares them against a declaration; the report exists so
   a reader can notice what does not belong.
+- **Mission list** — the run record read against itself: how many missions it holds, and the `item:`
+  line of every one carrying an outcome while its `status` is not `done`. On the envelope as
+  `mission_list` and durably under `## Mission List`; present only when the run wrote a record, and a
+  record that agrees with itself still reports a zero count. Read and never repaired — what to do
+  about a contradiction is the reader's call.
 - **The finalize transaction** — one resumable script call covering the artifact mirror, archive and
   status close, roadmap staging, and the `chore: finalize {project}` commit gate. `--check`
   evaluates every precondition in one read-only pass and reports all of them together. Re-running the
@@ -1062,7 +1067,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `startup` / `bootstrap` | `node scripts/kaola-workflow-claim.js startup --target-issue <N> [--runtime claude|codex] [--sink merge|pr]` | Validates and atomically creates or reuses the active folder for issue N |
 | `status` | `node scripts/kaola-workflow-claim.js status` | Lists active folders and their issue, branch, phase, sink, and worktree metadata |
 | `release` / `discard` | `node scripts/kaola-workflow-claim.js release --project <name>` | Archives an active folder as abandoned and clears advisory forge labels when online |
-| `finalize` | `node scripts/kaola-workflow-claim.js finalize --project <name> [--keep-worktree] [--check] [--json] [--base <ref>]` | The one resumable finalize transaction: artifact mirror, archive + status close, roadmap staging, and the `chore: finalize <project>` commit gate. It also reports `validation` and `changed_paths` on its envelope and durably in the summary. `--check` evaluates every precondition in one read-only pass, reporting all of them together with zero side effects. By default it removes the linked worktree; `--keep-worktree` preserves it for the final commit gate. `--base <ref>` (or `KAOLA_FINALIZE_BASE`) scopes the changed-paths report on a **shared/multi-issue branch** |
+| `finalize` | `node scripts/kaola-workflow-claim.js finalize --project <name> [--keep-worktree] [--check] [--json] [--base <ref>]` | The one resumable finalize transaction: artifact mirror, archive + status close, roadmap staging, and the `chore: finalize <project>` commit gate. It also reports `validation`, `changed_paths` and `mission_list` on its envelope and durably in the summary. `--check` evaluates every precondition in one read-only pass, reporting all of them together with zero side effects. By default it removes the linked worktree; `--keep-worktree` preserves it for the final commit gate. `--base <ref>` (or `KAOLA_FINALIZE_BASE`) scopes the changed-paths report on a **shared/multi-issue branch** |
 | `sink-fallback` | `node scripts/kaola-workflow-claim.js sink-fallback --project <name> [--reason <text>]` | Records merge-impossible fallback; updates Sink block to sink: pr; writes .cache/sink-fallback.json |
 | `watch-pr` | `node scripts/kaola-workflow-claim.js watch-pr` | Archives PR-backed folders when the forge reports MERGED or CLOSED. GitLab edition uses `watch-mr` (`kaola-gitlab-workflow-claim.js watch-mr`) instead. |
 | `stale-worktree-check` | `node scripts/kaola-workflow-claim.js stale-worktree-check` | Detects and reports worktrees and branches for closed or archived issues that are not currently active |

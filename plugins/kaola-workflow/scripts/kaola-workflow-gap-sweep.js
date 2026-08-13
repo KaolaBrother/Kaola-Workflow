@@ -30,7 +30,8 @@
 //   -h / --help               Print usage.
 //
 // Root override (for tests):
-//   KAOLA_GAP_ROOT=<dir>      Use <dir> as the repo root instead of process.cwd().
+//   KAOLA_GAP_ROOT=<dir>      Use <dir> as the repo root, in place of the tree the run folder
+//                             is found in. Takes precedence over everything.
 //
 // Reason classes (closed enum):
 //   deferred_red_chain        chain in chain-receipt.json with accepted_red:true
@@ -463,20 +464,33 @@ function runCheck(opts) {
 // Argument parsing + main
 // ---------------------------------------------------------------------------
 
+// The root whose kaola-workflow/<project>/ this run's record lives in. The record does not move
+// when the operator does: at finalize the folder is resident in the main checkout while the
+// operator stands in the linked worktree, and after the transaction's mirror it is resident in the
+// worktree too. So the answer is the tree that HAS the folder — this one when it does, the main
+// checkout otherwise — and cwd when neither has it (a first scan, or no repository to ask).
+// KAOLA_GAP_ROOT overrides the search outright.
+function resolveRunRoot(project) {
+  if (process.env.KAOLA_GAP_ROOT) return path.resolve(process.env.KAOLA_GAP_ROOT);
+  const cwd = process.cwd();
+  const holds = r => fs.existsSync(path.join(r, 'kaola-workflow', project));
+  if (holds(cwd)) return cwd;
+  let mainRoot = cwd;
+  try {
+    mainRoot = require('./kaola-workflow-adaptive-schema').resolveMainRoot(cwd);
+  } catch (_) { /* nothing to ask: cwd stands */ }
+  return holds(mainRoot) ? mainRoot : cwd;
+}
+
 function main(argv) {
   const args = argv.slice(2);
 
   let project     = null;
-  let outputPath  = null;  // computed after project resolved
-  let summaryPath = null;  // computed after project resolved
+  let outputArg   = null;  // resolved against the run root, once the project names it
+  let summaryArg  = null;  // ditto
   let asJson      = false;
   let checkMode   = false;
   let forceOffline = false;
-
-  // Resolve repo root (injectable for tests via KAOLA_GAP_ROOT).
-  const root = process.env.KAOLA_GAP_ROOT
-    ? path.resolve(process.env.KAOLA_GAP_ROOT)
-    : process.cwd();
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -493,14 +507,14 @@ function main(argv) {
         process.stderr.write('gap-sweep: --output requires a value\n');
         return 1;
       }
-      outputPath = path.resolve(root, val);
+      outputArg = val;
     } else if (a === '--summary') {
       const val = args[++i];
       if (!val) {
         process.stderr.write('gap-sweep: --summary requires a value\n');
         return 1;
       }
-      summaryPath = path.resolve(root, val);
+      summaryArg = val;
     } else if (a === '--json') {
       asJson = true;
     } else if (a === '--check') {
@@ -528,14 +542,18 @@ function main(argv) {
     return 1;
   }
 
-  // Resolve defaults after we know the project name.
+  // Resolve the root, then every path, after we know the project name. Both modes resolve here,
+  // before the mode split: a scanner and a gate that disagreed about the folder would sweep one
+  // .cache and certify the other, which reads as a pass over gaps nobody looked at.
+  const root = resolveRunRoot(project);
+
   const defaultCacheDir = path.join(root, 'kaola-workflow', project, '.cache');
-  if (!outputPath) {
-    outputPath = path.join(defaultCacheDir, 'run-gaps.json');
-  }
-  if (!summaryPath) {
-    summaryPath = path.join(root, 'kaola-workflow', project, 'finalization-summary.md');
-  }
+  const outputPath = outputArg
+    ? path.resolve(root, outputArg)
+    : path.join(defaultCacheDir, 'run-gaps.json');
+  const summaryPath = summaryArg
+    ? path.resolve(root, summaryArg)
+    : path.join(root, 'kaola-workflow', project, 'finalization-summary.md');
 
   if (checkMode) {
     return runCheck({ project, outputPath, summaryPath, asJson, forceOffline });

@@ -3741,7 +3741,8 @@ function predictFinalizeAuthority(root, project, mirror) {
   return { authority, pending, topology };
 }
 
-// THE FINALIZE REPORT. Two measurements, neither of which refuses.
+// THE FINALIZE REPORT. Three measurements, none of which refuses. (A) and (B) are this function;
+// (C) is its sibling below, which reads the run record rather than the tree.
 //
 // (A) VALIDATION — did this repo's own tests pass over THIS tree? Answered from artifacts this
 //     workflow produced (a chain receipt, or the agent's recorded final-validation evidence) with
@@ -3764,7 +3765,8 @@ function predictFinalizeAuthority(root, project, mirror) {
 // state the refusal was freezing is a deletion, not a conversion.
 //
 // A missing run record is not an error either: the mission list is a convention, not a
-// precondition, and neither measurement reads it.
+// precondition. Neither measurement here reads it; the sibling (C) report below does, and is silent
+// in its entirety when the record is absent.
 //
 // Returns { validation, changed_paths, changed_paths_probe } — no ok, because there is nothing here
 // to fail.
@@ -3835,6 +3837,75 @@ function persistChangedPathsToSummary(projectDir, changed, probe) {
     for (const rel of changed) lines.push('- ' + rel);
   }
   return appendSummarySection(projectDir, '## Changed Paths', lines);
+}
+
+// (C) THE RUN RECORD THAT DISAGREES WITH ITSELF. An item whose outcome is filled in while its
+// `status` still reads something other than `done` is a contradiction nothing but a human reading
+// the file line by line could catch, and the archived run came out byte-identical to a coherent
+// one. It is not a one-off: measured by the predicate below over this repo's own archive, 11 of the
+// 36 records carry at least one, 34 items in all out of 445.
+//
+// This READS the record. It never repairs it, never refuses, and never judges whether a record is
+// SUFFICIENT — an item carrying nothing but its mission is silent, not deficient, and an item with
+// no `status` at all contradicts nothing, so neither is reported. Nor is "in flight with nothing to
+// show", which is a different and louder problem: NO ITEM can be in both states — this one needs an
+// outcome, that one needs none — which is why a count mixing them says nothing about either. That
+// disjointness is structural and does NOT extend to runs. Measured over the archive: 34 items in 11
+// runs here against 14 items in 9 runs there, and of the 15 runs carrying either, 5 carry both.
+//
+// Its own parse, ledger-compare.js style, so a finalize-time report never couples to another reader.
+// Two readings the archive settled:
+//   - The LAST `status:` in an item wins. All eleven duplicate-status items in the archive write the
+//     correction UNDER the stale line, never over it; reading the first reports ten of them whose
+//     author wrote `done` directly beneath.
+//   - A field is a NAME AT THE FRONT of a line — at the bullet, at two spaces, or at column zero,
+//     the three forms the archive uses. Never a substring: `result` prose quotes the record's own
+//     vocabulary ("reads status: done") and `dispatched` prose says "the result:", and a scan
+//     anywhere in the line flips both verdicts.
+// An outcome is a field whose name STARTS with `result` — the plain key and the decorations the
+// archive puts on it (`result so far:`, `result (test leg):`) — AND WHICH CARRIES A VALUE. An
+// orchestrator scaffolding an item writes the four field names ahead of the work, leaving `result:`
+// standing empty; two archived runs end on exactly that item. An empty field is the ABSENCE of an
+// outcome, so counting the key alone would tell a successor that something landed where nothing did
+// — the same wrongness this report exists to catch, arriving through the report. Nothing after the
+// colon and whitespace after the colon are one case; only `\S` tells either from a real value.
+const MISSION_ITEM_LINE = /^(?:- )?item:/;
+const MISSION_STATUS_LINE = /^(?:- |  )?status:[ \t]*([A-Za-z][A-Za-z-]*)/;
+const MISSION_RESULT_LINE = /^(?:- |  )?result\b[^:]*:[ \t]*\S/;
+function probeMissionListCoherence(authorityDir) {
+  let text;
+  // A run with no record measures nothing and says nothing: the mission list is a convention, not
+  // a precondition.
+  try { text = fs.readFileSync(path.join(authorityDir, adaptiveSchema.MISSION_LIST_FILE), 'utf8'); }
+  catch (_) { return null; }
+  const items = [];
+  let cur = null;
+  text.split('\n').forEach((line, i) => {
+    if (MISSION_ITEM_LINE.test(line)) { cur = { line: i + 1, status: null, outcome: false }; items.push(cur); return; }
+    if (!cur) return;
+    const status = line.match(MISSION_STATUS_LINE);
+    if (status) { cur.status = status[1].toLowerCase(); return; }
+    if (MISSION_RESULT_LINE.test(line)) cur.outcome = true;
+  });
+  return {
+    items: items.length,
+    outcome_while_not_done: items
+      .filter(it => it.outcome && it.status !== null && it.status !== 'done')
+      .map(it => it.line)
+  };
+}
+function persistMissionListToSummary(projectDir, mission) {
+  if (!mission) return false;
+  const flagged = mission.outcome_while_not_done || [];
+  const lines = ['items: ' + mission.items,
+    'carrying an outcome while their status is not `done`: ' + flagged.length];
+  if (flagged.length) {
+    lines.push('', 'The record contradicts itself at these `item:` lines — the outcome landed and '
+      + 'the status did not follow. Reported, never repaired, and the finalize is unaffected: this '
+      + 'record is the run\'s own bookkeeping, and what to do about it is the reader\'s call.', '');
+    for (const n of flagged) lines.push('- line ' + n);
+  }
+  return appendSummarySection(projectDir, '## Mission List', lines);
 }
 
 // ONE pass over EVERY finalize precondition. Returns { checks, reasons, authority }:
@@ -4182,28 +4253,34 @@ function cmdFinalize() {
       }
     }
   }
-  // THE TWO FINALIZE REPORTS — taken BEFORE the archive moves the folder, so both land in the copy
-  // that is kept:
+  // THE THREE FINALIZE REPORTS — taken BEFORE the archive moves the folder, so all of them land in
+  // the copy that is kept:
   //   validation    — SELF-HOST (npm): the chain receipt over THIS tree. CONSUMER (non-npm): the
   //                   agent-recorded .cache/final-validation.md, bound to the candidate it
   //                   validated. Classified, never enforced.
   //   changed_paths — what this branch touched outside the run-state and documentation bands.
-  // NEITHER refuses, and neither is allowed to: a finalize whose receipt is stale, red or missing
-  // still completes, carrying the finding where the orchestrator will read it. That party owns the
-  // outcome — re-run the chains, fix the red, or proceed knowingly.
+  //   mission_list  — #970: items whose outcome is filled in while their status is not `done`, by
+  //                   `item:` line number. Absent entirely when the run wrote no record.
+  // NONE refuses, and none is allowed to: a finalize whose receipt is stale, red or missing, or
+  // whose run record disagrees with itself, still completes, carrying the finding where the
+  // orchestrator will read it. That party owns the outcome — re-run the chains, fix the red, correct
+  // the record, or proceed knowingly.
   // #837: probed by the SAME pure helper the one-pass `--check` report reads. `--base` is sourced
   // from the flag and/or KAOLA_FINALIZE_BASE env, defaulting to `main`.
   let finalizeValidation = null;
   let finalizeChangedPaths = [];
   let finalizeChangedProbe = 'measured';
+  let finalizeMissionList = null;
   {
     const report = probeFinalizeValidationGate(root, finalizeAuthorityDir, finalizeAuthorityState,
       args.base || (process.env.KAOLA_FINALIZE_BASE || '').trim() || null);
     finalizeValidation = report.validation;
     finalizeChangedPaths = report.changed_paths || [];
     finalizeChangedProbe = report.changed_paths_probe || 'measured';
+    finalizeMissionList = probeMissionListCoherence(finalizeAuthorityDir);
     persistValidationToSummary(finalizeAuthorityDir, finalizeValidation);
     persistChangedPathsToSummary(finalizeAuthorityDir, finalizeChangedPaths, finalizeChangedProbe);
+    persistMissionListToSummary(finalizeAuthorityDir, finalizeMissionList);
   }
   const result = archiveProjectDirSafely(root, args.project, 'closed', undefined, { keepOpen: keepIssueOpen, keepRoadmapSource: keepIssueOpen, keepWorktree: args.keepWorktree });
   if (!closureContract.archiveSucceeded(result) && result.archive_incomplete !== true) {
@@ -4960,11 +5037,12 @@ function cmdFinalize() {
   // on any other lane reached the emit and never the archive. Idempotent — a lane that already
   // flushed no-ops here — and it must run BEFORE the emit below, which carries finalizeTx.findings.
   flushFinalizeFindings();
-  // `validation` and `changed_paths` are MEASUREMENTS on the envelope, never verdicts: what this
-  // repo's own chains said about this tree, and what this branch touched outside the run-state and
-  // documentation bands. Nothing compares either to anything, and neither can fail the finalize.
-  // Both are durable in the archived finalization-summary.md under `## Validation` /
-  // `## Changed Paths` — the envelope copies are for whoever is reading the run right now.
+  // `validation`, `changed_paths` and `mission_list` are MEASUREMENTS on the envelope, never
+  // verdicts: what this repo's own chains said about this tree, what this branch touched outside the
+  // run-state and documentation bands, and where the run's own record disagrees with itself. Nothing
+  // compares any of them to anything, and none can fail the finalize. All are durable in the
+  // archived finalization-summary.md under `## Validation` / `## Changed Paths` / `## Mission List`
+  // — the envelope copies are for whoever is reading the run right now.
   const finalizeEmit = Object.assign({ status: 'closed' }, result, {
     claim_label_removed: claimLabelRemoved,
     archive_state_stamped: archiveStateStamped,
@@ -4976,6 +5054,10 @@ function cmdFinalize() {
     finalize_transaction: finalizeTx
   });
   if (finalizeChangedProbe !== 'measured') finalizeEmit.changed_paths_probe = finalizeChangedProbe;
+  // #970: present only when the run wrote a record, so a run without one emits the envelope it
+  // emitted before. A record that agrees with itself still reports — a zero count is the
+  // measurement, and its absence would be indistinguishable from a report that never ran.
+  if (finalizeMissionList) finalizeEmit.mission_list = finalizeMissionList;
   // #937: present only when a name was actually corrected, so a run given the exact spelling emits
   // the envelope it emitted before.
   if (projectSlug.note) finalizeEmit.resolved_project_note = projectSlug.note;
