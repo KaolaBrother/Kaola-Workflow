@@ -1,0 +1,20 @@
+{
+  "project": "bundle-969-970-971-972",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:installer-destructive-prune",
+      "sample": "install-kimi.sh copy_skills prunes the deployed skill directories BEFORE copying, so an install that goes on to deploy nothing still removes what was there. Confirmed pre-existing by a mutation repro that took a target from 17 skills to 0; the loss is the kaola-namespaced set only and is regenerable by re-running, and with this bundle's tree-root fix the path is near-unreachable because heal-or-abort now precedes the copy. This bundle made an existing SILENT loss loud; it did not create it.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:gap-sweep-pollution-residue",
+      "sample": "a tree already polluted by the pre-fix bug's stray kaola-workflow/<project>/ folder still false-greens: the resolver stops at the stray, sweeps an empty cache, and takes the vacuous-pass branch while a real gap sits in main. Byte-identical pre/post fix. The fix prevents NEW pollution and ships no detection or cleanup of OLD pollution.",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:fixture-escaped-sandbox",
+      "sample": "a self-referential symlink plugins/plugins -> plugins was created inside the provisioned worktree at 01:59 during the install-all content-comparison work, i.e. a fixture wrote outside its sandbox into the live worktree. It survived a full four-chain run, appearing in the receipt's touchedEditionPaths as \"plugins/plugins\", and a symlink loop is exactly the shape a recursive walk trips on. Removed by hand at finalize; nothing detected it automatically.",
+      "count": 1
+    }
+  ]
+}
