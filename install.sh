@@ -172,16 +172,32 @@ if command -v claude >/dev/null 2>&1; then
 fi
 
 
-# Remove stale kaola-workflow command files before installing fresh ones.
+# Commands this workflow deployed on a PREVIOUS release and no longer ships. This is where
+# "retired on purpose" is written down: the sweep below is exactly these names, and each command
+# the install is about to write is removed by the install loop itself, immediately before writing
+# it. A deployed command that is neither is one this install has nothing to put back (#973 — the
+# namespace glob that used to stand here emptied ~/.claude/commands whenever the source rendered
+# less than the destination held, silently on gitlab/gitea). Bounded by what commands/ and the
+# plugin command trees once carried, plus workflow-goal.md, which no commit in this history ever
+# added — a name that was never deployed costs one no-op stat; $COMMANDS_DIR is shared by every
+# forge, so is this list.
+RETIRED_COMMANDS=(
+  "workflow-goal.md" "workflow-next-pr.md"
+  "kaola-workflow-adapt.md" "kaola-workflow-auto.md" "kaola-workflow-fast.md"
+  "kaola-workflow-phase1.md" "kaola-workflow-phase2.md" "kaola-workflow-phase3.md"
+  "kaola-workflow-phase4.md" "kaola-workflow-phase5.md" "kaola-workflow-phase6.md"
+  "kaola-workflow-plan-run.md"
+)
+
+# Remove retired kaola-workflow command files before installing fresh ones.
 # Outdated user-level commands in ~/.claude/commands/ take precedence over
 # everything else and will shadow updated installs if not cleaned up.
 if [[ -d "$COMMANDS_DIR" ]]; then
-  for pattern in "kaola-workflow-*.md" "workflow-init.md" "workflow-next.md" "workflow-goal.md" "workflow-next-pr.md"; do
-    for stale_file in "$COMMANDS_DIR"/$pattern; do
-      [[ -f "$stale_file" ]] || continue
-      rm -f "$stale_file"
-      echo "Removed stale command: $stale_file"
-    done
+  for retired_name in "${RETIRED_COMMANDS[@]}"; do
+    stale_file="$COMMANDS_DIR/$retired_name"
+    [[ -f "$stale_file" ]] || continue
+    rm -f "$stale_file"
+    echo "Removed stale command: $stale_file"
   done
 fi
 
@@ -611,6 +627,9 @@ for command_file in "$SOURCE_COMMANDS_DIR"/*.md; do
   fi
 
   dest="$COMMANDS_DIR/$(basename "$command_file")"
+  # Remove the file this install is about to write, immediately before writing it — the shadowing
+  # stale copy is cleared without a namespace glob having to guess which names are still shipped.
+  rm -f "$dest"
   render_command_file "$command_file" "$dest"
   echo "Installed: $dest"
   installed=$((installed + 1))

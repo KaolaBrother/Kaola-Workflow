@@ -932,8 +932,10 @@ for (const script of sync.HOOK_SCRIPTS) {
     const kimiHome = opts.kimiHome || mkdtempSync(path.join(os.tmpdir(), 'kimi-i-kh-'));
     const dest = opts.dest || mkdtempSync(path.join(os.tmpdir(), 'kimi-i-dest-'));
     const args = ['--target', dest, '--yes'].concat(extraArgs || []);
+    // `opts.installer` runs a COPY of this checkout instead of this checkout (P5 below): the state
+    // some cases need is a state of the SOURCE tree, and mutating this one is not on offer.
     // spawn-class: environment
-    const r = spawnSync('bash', [INSTALLER].concat(args), {
+    const r = spawnSync('bash', [opts.installer || INSTALLER].concat(args), {
       env: Object.assign({}, process.env, { HOME: home, KIMI_CODE_HOME: kimiHome }),
       encoding: 'utf8',
     });
@@ -1073,6 +1075,269 @@ for (const script of sync.HOOK_SCRIPTS) {
       'P1b (#965): the sweep is SCOPED — a non-.js file the installer neither wrote nor would write '
       + 'survives the install byte-intact (install.sh enumerates `*.js` only)');
     clean(r);
+  }
+
+  // -------------------------------------------------------------------------
+  // P5 (#973) — AN INSTALL DOES NOT REMOVE A DEPLOYED SKILL IT IS NOT GOING TO
+  // REPLACE.
+  //
+  // The skill deploy is prune-then-recopy, and the two halves read DIFFERENT
+  // sets. The prune is namespace-wide over the DESTINATION; the recopy is
+  // whatever the generated tree renders AND the installer's own allowlist
+  // accepts. Whenever the second set is smaller than the first, the difference
+  // is destroyed — and destroyed quietly, because the only guard over the recopy
+  // asks whether it deployed NOTHING, and a partial deploy is not nothing.
+  //
+  // P5a/P5b are the two reachable partial cases, both measured against a
+  // destination holding the full deploy set:
+  //   P5a — canonical renders no role skills: 17 → 3, exit 0, "Installed
+  //         workflow skills →" printed, stderr empty.
+  //   P5b — the rendered command skills fall outside the deploy allowlist:
+  //         17 → 14, exit 0, three `warning:` lines on stderr.
+  // NEITHER asserts an exit code. An install that refuses BEFORE pruning removes
+  // nothing either, and what is left on disk is the whole property; pinning a
+  // status would pin one repair and reject the others.
+  //
+  // P5c/P5d pin what the prune is FOR, and are green here by construction —
+  // they are the two ways a narrowing repair breaks something that works today:
+  //   P5c — the namespace prune is the ONLY thing on the install path that
+  //         clears a skill dir retired in an earlier release. Narrow it to the
+  //         deploy set and those names become immortal on every live install.
+  //   P5d — `cp -R src dest` onto an EXISTING dest copies INTO it. Defer a
+  //         name's removal past its own copy and reinstalls stop updating:
+  //         dest/X/SKILL.md stays stale while the new bytes land at
+  //         dest/X/X/SKILL.md.
+  //
+  // Each mutated case installs from its OWN throwaway copy of this checkout,
+  // because the state under test is a state of the SOURCE tree.
+  // -------------------------------------------------------------------------
+  {
+    const routing = require('./generate-routing-surfaces.js');
+    // `.git` is deliberately absent from the copy and that is load-bearing, not tidiness: the
+    // installer regenerates the tree it deploys from, the generator writes that tree at the MAIN
+    // checkout when one resolves, and a copied gitdir pointer resolves to this repository — so a
+    // copy carrying `.git` would rewrite the real tree from mutated canonical sources.
+    // `kaola-workflow/` is run state rather than installer input, and is skipped for its size.
+    const COPY_SKIP = new Set(['.git', 'kaola-workflow', 'node_modules']);
+    function sourceCopy(tag) {
+      const dir = fs.realpathSync(mkdtempSync(path.join(os.tmpdir(), 'kimi-p5-src-' + tag + '-')));
+      for (const entry of readdirSync(REPO)) {
+        if (COPY_SKIP.has(entry)) continue;
+        // spawn-class: environment
+        const r = spawnSync('cp', ['-R', path.join(REPO, entry), path.join(dir, entry)], { encoding: 'utf8' });
+        if (r.status !== 0) throw new Error('P5 fixture: cp -R ' + entry + ' failed — ' + r.stderr);
+      }
+      // A THROW, not an assert: a copy whose generated tree resolves anywhere but itself must never
+      // reach the installer, because the install refreshes that tree first. Failing the run is the
+      // point — a recorded assertion would let the destructive install happen anyway.
+      // spawn-class: environment
+      const probe = spawnSync('node', [path.join(dir, 'scripts', 'sync-kimi-edition.js'), '--print-tree-root'],
+        { encoding: 'utf8' });
+      let treeRoot = String(probe.stdout || '').trim();
+      try { treeRoot = fs.realpathSync(treeRoot); } catch (_) { /* report it raw */ }
+      if (probe.status !== 0 || treeRoot !== dir) {
+        try { rmSync(dir, { recursive: true, force: true }); } catch (_) { /* best-effort */ }
+        throw new Error('P5 fixture: refusing to install from a copy whose generated tree lands outside it'
+          + ' (status ' + probe.status + ', tree root ' + JSON.stringify(treeRoot) + ')');
+      }
+      return dir;
+    }
+    const dropSrc = dir => { try { rmSync(dir, { recursive: true, force: true }); } catch (_) { /* non-fatal */ } };
+
+    const DEPLOY_SET = [...ADAPTIVE_CORE, ...roleDirNames];
+    const plantedBody = name => 'PLANTED ' + name + ' — on disk BEFORE the install\n';
+    // A destination in the state a working install leaves behind: one dir per deployed skill,
+    // each holding a SKILL.md whose bytes say where it came from.
+    function plantSkillDirs(names, extraFiles) {
+      const dest = mkdtempSync(path.join(os.tmpdir(), 'kimi-p5-dest-'));
+      const skills = path.join(dest, '.kimi-code', 'skills');
+      fs.mkdirSync(skills, { recursive: true });
+      for (const name of names) {
+        fs.mkdirSync(path.join(skills, name), { recursive: true });
+        fs.writeFileSync(path.join(skills, name, 'SKILL.md'), plantedBody(name));
+      }
+      for (const name of extraFiles || []) fs.writeFileSync(path.join(skills, name), plantedBody(name));
+      return { dest, skills };
+    }
+    const treeSkillDirs = src => readdirSync(path.join(src, '.kimi', 'skills'), { withFileTypes: true })
+      .filter(e => e.isDirectory()).map(e => e.name).sort();
+
+    // P5a — canonical renders NO role skills. The tree the installer deploys from is legitimately
+    // regenerated to hold the three command skills and nothing else; the destination holds all 17.
+    {
+      const src = sourceCopy('a');
+      const { dest, skills } = plantSkillDirs(DEPLOY_SET);
+      try {
+        for (const f of readdirSync(path.join(src, 'agents'))) {
+          if (f.endsWith('.md')) fs.unlinkSync(path.join(src, 'agents', f));
+        }
+        assert(readdirSync(skills).sort().join(',') === [...DEPLOY_SET].sort().join(','),
+          'P5a (fixture): the destination holds the FULL deploy set before the install — a destination '
+          + 'that was short to begin with cannot observe anything being removed');
+        const r = runInstaller([], { dest, installer: path.join(src, 'install-kimi.sh') });
+        // The mutation has to have reached the tree the installer deploys FROM, and it has to have
+        // reached only HALF of it: this is the PARTIAL case, and a source that renders nothing at
+        // all is a different case with a different (loud) outcome.
+        const rendered = treeSkillDirs(src);
+        assert(rendered.filter(n => n.startsWith('kaola-role-')).length === 0,
+          'P5a (fixture): the mutated source renders NO role skills — got ' + JSON.stringify(rendered));
+        assert(ADAPTIVE_CORE.every(n => rendered.includes(n)),
+          'P5a (fixture): the mutated source still renders every command skill, so the install has '
+          + 'something to deploy and this is the PARTIAL case — got ' + JSON.stringify(rendered));
+        const lost = roleDirNames.filter(n => !existsSync(path.join(skills, n, 'SKILL.md')));
+        assert(lost.length === 0,
+          'P5a (#973): a deployed role skill the install is NOT going to replace is still on disk '
+          + 'afterwards — ' + lost.length + ' of ' + roleDirNames.length + ' destroyed (' + lost.slice(0, 3).join(', ')
+          + (lost.length > 3 ? ', …' : '') + '), install exited ' + r.status);
+        const overwritten = roleDirNames.filter(n => existsSync(path.join(skills, n, 'SKILL.md'))
+          && readFileSync(path.join(skills, n, 'SKILL.md'), 'utf8') !== plantedBody(n));
+        assert(overwritten.length === 0,
+          'P5a (#973): the surviving role skills are the PLANTED ones, byte-intact — nothing in the '
+          + 'source could have replaced them, so a changed body means they were removed and recreated: '
+          + overwritten.slice(0, 3).join(', '));
+        clean(r);
+      } finally {
+        dropSrc(src);
+        try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
+
+    // P5b — the rendered command skills fall OUTSIDE the installer's deploy allowlist. The
+    // allowlist is hand-maintained and no generator feeds it, so a command basename that moves in
+    // the routing registry renders a valid skill the install then skips — after pruning the
+    // deployed one. Here the registry row and the file it names move together, which is what a
+    // rename in the registry does.
+    {
+      const src = sourceCopy('b');
+      const { dest, skills } = plantSkillDirs(DEPLOY_SET);
+      try {
+        const registry = path.join(src, 'scripts', 'generate-routing-surfaces.js');
+        const before = readFileSync(registry, 'utf8');
+        const after = before.replace(/command_basename: '([a-z0-9-]+)'/g, "command_basename: 'zz-$1'");
+        if (after === before) throw new Error('P5b fixture: no command_basename row to move in the routing registry');
+        fs.writeFileSync(registry, after);
+        for (const row of routing.GENERATED_SURFACES.filter(s => s.surface_type === 'command')) {
+          const from = path.join(src, row.path);
+          fs.renameSync(from, path.join(path.dirname(from), 'zz-' + path.basename(from)));
+        }
+        const r = runInstaller([], { dest, installer: path.join(src, 'install-kimi.sh') });
+        const rendered = treeSkillDirs(src);
+        assert(ADAPTIVE_CORE.every(n => !rendered.includes(n)) && rendered.some(n => n.startsWith('zz-')),
+          'P5b (fixture): the mutated source renders the command skills under names the deploy '
+          + 'allowlist does not hold — got ' + JSON.stringify(rendered.filter(n => !n.startsWith('kaola-role-'))));
+        assert(roleDirNames.every(n => rendered.includes(n)),
+          'P5b (fixture): the mutated source still renders every role skill, so this is the PARTIAL '
+          + 'case rather than a source that renders nothing');
+        const lost = ADAPTIVE_CORE.filter(n => !existsSync(path.join(skills, n, 'SKILL.md')));
+        assert(lost.length === 0,
+          'P5b (#973): a deployed command skill the install is NOT going to replace is still on disk '
+          + 'afterwards — destroyed: ' + (lost.join(', ') || '(none)') + ', install exited ' + r.status
+          + ' (' + (String(r.stderr).split('\n').filter(Boolean).length) + ' warning line(s) on stderr)');
+        clean(r);
+      } finally {
+        dropSrc(src);
+        try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
+
+    // P5c — WHAT THE NAMESPACE PRUNE IS FOR, and the half a narrowing repair loses. A skill dir
+    // retired in an earlier release is cleared from a LIVE install by this prune and by nothing
+    // else on the install path (RETIRED_ROLE_SKILLS is read by the uninstall; the generator's own
+    // prune converges the tree, never a destination). The scope is pinned WITH the sweep, because
+    // a prune that reaches further is the worse defect and the sweep half cannot see it: the skills
+    // dir is SHARED with whatever the user put there.
+    //
+    // RETIRED below is the WHOLE set of skill dirs this edition ever shipped and no longer ships,
+    // censused from the edition's own history and NOT from the installer's list — a probe that
+    // reads the list under test agrees with it by construction and can never see a name missing
+    // from it. The census is `git log --no-renames --diff-filter=D --name-only <edition-birth>..HEAD
+    // -- agents/ commands/`, because the generator produces exactly one `kaola-role-<agent>` per
+    // TOP-LEVEL `agents/*.md` and one `<command>` per `commands/*.md` (expectedSkillDirs in
+    // sync-kimi-edition.js), so a path deleted under either is a skill dir left stranded on every
+    // machine that installed before the deletion. `--no-renames` is load-bearing: a retirement git
+    // scores as a rename never reaches the D filter, and `.kimi/` is untracked, so nothing else on
+    // disk records what the edition once deployed.
+    {
+      const RETIRED = [
+        // agents/ — issue-scout, contractor, workflow-planner (all three deleted after the edition shipped)
+        'kaola-role-issue-scout', 'kaola-role-contractor', 'kaola-role-workflow-planner',
+        // commands/ — the two node-executor surfaces and the six fast/full opt-in surfaces
+        'kaola-workflow-adapt', 'kaola-workflow-plan-run',
+        'kaola-workflow-fast', 'kaola-workflow-phase1', 'kaola-workflow-phase2',
+        'kaola-workflow-phase3', 'kaola-workflow-phase4', 'kaola-workflow-phase5',
+      ];
+      const KEPT_DIRS = ['workflow-goal', 'kaola-something-else', 'my-own-skill'];
+      const KEPT_FILE = 'kaola-role-notadir.md';
+      const { dest, skills } = plantSkillDirs([...DEPLOY_SET, ...RETIRED, ...KEPT_DIRS], [KEPT_FILE]);
+      try {
+        // Anti-vacuity, both directions. A retired name that returned to the deploy set would be
+        // REPLACED rather than swept, and a kept name that joined it would survive because it was
+        // deployed — either way the pin below would stop measuring what it says it measures.
+        assert(RETIRED.every(n => !DEPLOY_SET.includes(n)) && KEPT_DIRS.every(n => !DEPLOY_SET.includes(n)),
+          'P5c: no planted name is in the deploy set — a name that is deployed is not evidence about '
+          + 'the prune at all (deploy set holds ' + DEPLOY_SET.length + ' names)');
+        const r = runInstaller([], { dest });
+        assert(r.ok, 'P5c: install over a populated skills dir exits 0 (got status ' + r.status
+          + (r.stderr ? ' — ' + firstStderrLine(r) : '') + ')');
+        const left = RETIRED.filter(n => existsSync(path.join(skills, n)));
+        assert(left.length === 0,
+          'P5c: a skill dir retired in an earlier release is SWEPT from a live install — still on '
+          + 'disk: ' + left.join(', '));
+        for (const n of KEPT_DIRS) {
+          assert(existsSync(path.join(skills, n, 'SKILL.md'))
+            && readFileSync(path.join(skills, n, 'SKILL.md'), 'utf8') === plantedBody(n),
+            'P5c: the sweep is SCOPED — ' + n + ', which this edition neither ships nor ever shipped, '
+            + 'survives byte-intact in the shared skills dir');
+        }
+        assert(existsSync(path.join(skills, KEPT_FILE))
+          && readFileSync(path.join(skills, KEPT_FILE), 'utf8') === plantedBody(KEPT_FILE),
+          'P5c: a non-directory entry survives — the sweep removes skill DIRS, and ' + KEPT_FILE
+          + ' matches the namespace by name only');
+        // The sweep half is only evidence alongside a real deploy: a run that swept everything and
+        // deployed nothing would satisfy the four assertions above.
+        const missing = DEPLOY_SET.filter(n => !existsSync(path.join(skills, n, 'SKILL.md')));
+        assert(missing.length === 0,
+          'P5c: the same install still deploys the whole skill set — missing: ' + missing.join(', '));
+        clean(r);
+      } finally {
+        try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
+
+    // P5d — A REINSTALL STILL UPDATES. The copy is `cp -R <src> <dest>/<name>`, and onto an
+    // existing directory that copies INTO it: dest/X/SKILL.md keeps the old bytes while the new
+    // ones land at dest/X/X/SKILL.md, which no runtime reads. So a repair that defers a name's
+    // removal past that name's own copy makes every skill on every install immortal — with the
+    // deploy set, the exit code and the success message all unchanged.
+    {
+      const { dest, skills } = plantSkillDirs(DEPLOY_SET);
+      try {
+        // An orphan inside a replaced skill dir: it is how a replacement is told from a merge.
+        fs.writeFileSync(path.join(skills, DEPLOY_SET[0], 'left-behind.txt'), 'from an older release\n');
+        const r = runInstaller([], { dest });
+        assert(r.ok, 'P5d: reinstall over a populated skills dir exits 0 (got status ' + r.status
+          + (r.stderr ? ' — ' + firstStderrLine(r) : '') + ')');
+        const stale = [], nested = [];
+        for (const name of DEPLOY_SET) {
+          const live = path.join(skills, name, 'SKILL.md');
+          const source = path.join(TREE_ROOT, '.kimi', 'skills', name, 'SKILL.md');
+          if (!existsSync(live) || !fs.readFileSync(live).equals(fs.readFileSync(source))) stale.push(name);
+          if (existsSync(path.join(skills, name, name))) nested.push(name);
+        }
+        assert(stale.length === 0,
+          'P5d: after the install every deployed SKILL.md carries the SOURCE bytes, not the ones that '
+          + 'were there before — stale: ' + stale.slice(0, 3).join(', ') + (stale.length > 3 ? ', …' : ''));
+        assert(nested.length === 0,
+          'P5d: no deployed skill dir holds a directory of its own name — that shape is `cp -R` onto '
+          + 'an existing dir, i.e. the install stopped updating: ' + nested.slice(0, 3).join(', '));
+        assert(!existsSync(path.join(skills, DEPLOY_SET[0], 'left-behind.txt')),
+          'P5d: a file left inside a skill dir by an older release is gone — the copy REPLACES the '
+          + 'dir rather than merging into it');
+        clean(r);
+      } finally {
+        try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
   }
 
   // P2/P3 (former --with-fast / --with-full opt-in-partition probes) — DELETED

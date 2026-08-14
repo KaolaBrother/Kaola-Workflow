@@ -470,16 +470,34 @@ function runCheck(opts) {
 // worktree too. So the answer is the tree that HAS the folder — this one when it does, the main
 // checkout otherwise — and cwd when neither has it (a first scan, or no repository to ask).
 // KAOLA_GAP_ROOT overrides the search outright.
+//
+// HAVING A FOLDER OF THAT NAME IS NOT THE SAME AS HOLDING THE RUN. The stop condition is a bare
+// existence test, so anything of that name terminates the search: the stray a pre-#971 sweep wrote
+// into the worktree, or an empty directory an operator created by hand. Standing in front of the
+// real record, such a leftover makes the scanner sweep an empty .cache and the gate certify it —
+// the vacuous pass exits 0 while the evidence sits one tree over, and it does so whether or not the
+// sweep itself ever succeeded. workflow-state.md is the file the claim transaction writes into the
+// folder it creates — later writers only update a copy that already exists, or (the finalize mirror)
+// carry that one forward — so its presence is the one signal on disk separating a folder some claim
+// created from a directory that merely shares its name.
+//
+// It is a TIE-BREAK, never a requirement. This tree still wins when it carries the signature — the
+// post-mirror window, where BOTH trees legitimately do and the worktree copy is the one to read —
+// and still wins when neither tree carries it, which is the folder run-chains writes on a first run
+// and the reading that leaves #971's answer intact. Main is reached for in exactly one case: it
+// carries the signature and this tree does not.
 function resolveRunRoot(project) {
   if (process.env.KAOLA_GAP_ROOT) return path.resolve(process.env.KAOLA_GAP_ROOT);
   const cwd = process.cwd();
   const holds = r => fs.existsSync(path.join(r, 'kaola-workflow', project));
-  if (holds(cwd)) return cwd;
+  const claimed = r => fs.existsSync(path.join(r, 'kaola-workflow', project, 'workflow-state.md'));
+  if (holds(cwd) && claimed(cwd)) return cwd;
   let mainRoot = cwd;
   try {
     mainRoot = require('./kaola-workflow-adaptive-schema').resolveMainRoot(cwd);
   } catch (_) { /* nothing to ask: cwd stands */ }
-  return holds(mainRoot) ? mainRoot : cwd;
+  if (holds(mainRoot) && (claimed(mainRoot) || !holds(cwd))) return mainRoot;
+  return cwd;
 }
 
 function main(argv) {

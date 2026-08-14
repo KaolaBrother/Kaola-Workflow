@@ -36,12 +36,24 @@
 //     and reads the resulting index back out of git, where the other candidate IS staged and
 //     committed while the run reports it as unstaged.
 //
+// D — BEHAVIOURAL. Finalize stages its residue with one `git add -A` over every uncommitted
+//     non-`kaola-workflow/` path, so an artifact that was in the tree for reasons unrelated to
+//     the run is committed under `chore: finalize` — measured, mode 120000 for a symlink, and the
+//     tree it leaves behind is clean, which is why nothing noticed. D drives a real finalize with
+//     three shapes of foreign artifact planted beside the run's own dirt and reads the commit git
+//     wrote. It pins BOTH directions: the foreign paths are named in a typed finding and stay out
+//     of the repository, AND the run's own dirt is still swept in.
+//
 // Non-vacuity is mechanical, never a claim in a comment:
 //   * every set-equality in B is preceded by a shape guard, so an extractor that silently
 //     matched nothing cannot pass as `[] === []`;
 //   * the docs row and the docs count sentence must be FOUND, not merely agree once found;
 //   * A's healthy control asserts the very finding the fault leg asserts is ABSENT, so a fixture
-//     that failed for its own reasons cannot green the fault leg.
+//     that failed for its own reasons cannot green the fault leg;
+//   * D reads its fixture out of git BEFORE the run — all five planted paths dirty, and nothing
+//     the branch committed reaching into the directory the foreign ones sit in — so neither a
+//     shape that failed to plant nor a "foreign" path that is really attributable can pass
+//     unnoticed; and it runs the same fixture once with no foreign artifact at all.
 //
 // Usage
 //   node scripts/test-forge-finalize-findings.js
@@ -95,6 +107,57 @@ const NONE_STAGED_CLAIMS = Object.freeze([
   /none of the paths below reached the index/,
   /none of the paths below was staged/,
 ]);
+
+// ---------------------------------------------------------------------------------------------
+// Part D's contract (issue #975): the finding type and the transaction field that carry a
+// finalize-time path the run cannot attribute to itself.
+//
+// These two NAMES are the contract, not an implementation detail: `finalize_transaction.findings`
+// and its sibling fields are what a consumer routes on, and a rename is an envelope change for
+// every one of them. Re-pointing these constants at whatever name shipped would retire the pin
+// rather than read it — if the name is to change, change it here deliberately and say so.
+//
+// The behaviour they name was MEASURED at 69264936, end to end, with the exact 2026-08-12
+// artifact planted. `chore: finalize issue-914` carried, at exit 0 and with
+// `findings: ["claim_release_skipped_offline"]` and nothing else:
+//     A plugins/plugins            120000 f4f388c8   <- the artifact, staged as a symlink
+//     A plugins/stray.txt          100644
+//     M plugins/kaola-workflow/plugin.json
+//     A src/helper.js  /  M src/impl.js               <- the run's own work, correctly carried
+// The current fault is not that the paths go unnoticed — the residue probe sees each one by name
+// and hands it to `git add -A`. It is that they are ADOPTED.
+// ---------------------------------------------------------------------------------------------
+const UNATTRIBUTED_TYPE = 'residue_unattributed';
+const UNATTRIBUTED_FIELD = 'residue_unattributed';
+
+// THREE shapes of foreign artifact, planted in ONE run so a classifier that reads a path's TYPE
+// rather than its provenance cannot pass by catching only the shape that happened to be observed.
+// Each one closes a different near-miss:
+//   * the symlink is the 2026-08-12 artifact itself;
+//   * the plain file forbids "a symlink is the foreign thing";
+//   * the MODIFICATION to an already-tracked file forbids "only an untracked path can be foreign",
+//     which is the cheapest wrong rule available here and the one that would look right against
+//     the single observed instance. Measured adopted exactly like the other two: the tampered
+//     content is what `chore: finalize` committed.
+// `plugins/` holds a tracked file and the branch never touches it, so git lists the untracked
+// paths individually rather than collapsing the directory — the form the residue probe reads.
+const FOREIGN_SYMLINK = 'plugins/plugins';
+const FOREIGN_FILE = 'plugins/stray.txt';
+const FOREIGN_TRACKED = 'plugins/kaola-workflow/plugin.json';
+const FOREIGN_TRACKED_ORIGINAL = '{}\n';
+const FOREIGN_TRACKED_TAMPERED = '{"not":"this run\'s"}\n';
+// The two untracked ones only. The tracked modification is asserted separately: `ls-files` says
+// nothing about it (it has been tracked since `main`), so "did it enter the repository" is read
+// there as "did the tampered CONTENT reach the commit".
+const FOREIGN_UNTRACKED = Object.freeze([FOREIGN_SYMLINK, FOREIGN_FILE]);
+const FOREIGN_ALL = Object.freeze([FOREIGN_SYMLINK, FOREIGN_FILE, FOREIGN_TRACKED]);
+// The run's OWN implementation dirt, in both shapes finalize legitimately sweeps into
+// `chore: finalize`: a modification to a file the branch's implementation commit already carries,
+// and a new file in the directory that commit touched. These are the anti-over-reach pins — a fix
+// that reports foreign dirt by declining to stage anything it did not itself author would pass
+// every assertion about the artifact and silently stop finishing ordinary runs.
+const OWN_TRACKED = 'src/impl.js';
+const OWN_UNTRACKED = 'src/helper.js';
 
 // Part C's two archive candidate paths: the first is covered by the fixture's .gitignore, the
 // second is not. Both are real entries of the archive step's own pathspec list.
@@ -182,10 +245,28 @@ function buildFixture(ed, opts) {
   if (o.ignoredArchivePath) {
     fs.writeFileSync(path.join(mainRoot, '.gitignore'), IGNORED_ARCHIVE_PATH + '/\n');
   }
+  // Part D: an implementation directory the run will change, and a SECOND tracked directory it
+  // never touches. `plugins/` has to hold a tracked file for the foreign paths to be listed
+  // individually — git collapses a wholly-untracked directory to `?? plugins/`, and the residue
+  // probe would then read one entry rather than the two the fault is about.
+  if (o.implementation) {
+    fs.mkdirSync(path.join(mainRoot, path.dirname(OWN_TRACKED)), { recursive: true });
+    fs.writeFileSync(path.join(mainRoot, OWN_TRACKED), 'module.exports = 1;\n');
+    fs.mkdirSync(path.join(mainRoot, path.dirname(FOREIGN_TRACKED)), { recursive: true });
+    fs.writeFileSync(path.join(mainRoot, FOREIGN_TRACKED), FOREIGN_TRACKED_ORIGINAL);
+  }
   G.commitAll(mainRoot, 'init');
   fs.mkdirSync(kwRoot, { recursive: true });
   G.exec(mainRoot, ['worktree', 'add', '-b', 'workflow/' + PROJECT, '--', wtPath, 'main'],
     { encoding: 'utf8', stdio: 'pipe' });
+
+  // Part D: the run's OWN implementation commit. Without it `probeImplementationCommit` reads
+  // implementation-shaped dirt beside a branch carrying none, and finalize refuses at
+  // `implementation_commit_missing` before it ever reaches the residue staging under test.
+  if (o.implementation) {
+    fs.writeFileSync(path.join(wtPath, OWN_TRACKED), 'module.exports = 2;\n');
+    G.commitPaths(wtPath, [path.dirname(OWN_TRACKED) + '/'], 'feat: the implementation');
+  }
 
   // The live folder is COMMITTED on the feature branch: staging it away is exactly the work the
   // archive step does, so a fixture that left it untracked would make the failure unobservable.
@@ -204,6 +285,22 @@ function buildFixture(ed, opts) {
     fs.mkdirSync(path.join(wtPath, IGNORED_ARCHIVE_PATH), { recursive: true });
     fs.writeFileSync(path.join(wtPath, IGNORED_ARCHIVE_PATH, 'issue-1.md'), '# 1\n');
     fs.writeFileSync(path.join(wtPath, ADDABLE_ARCHIVE_PATH), '# Roadmap\n');
+  }
+
+  // Part D: the dirt the run leaves in the worktree at finalize time. Written LAST so the
+  // validation hash `seed()` recorded is the one the transaction re-computes — the run under test
+  // is an ordinary one whose implementation moved on, not a fixture with a doctored record.
+  if (o.ownDirt) {
+    fs.writeFileSync(path.join(wtPath, OWN_TRACKED), 'module.exports = 3;\n');
+    fs.writeFileSync(path.join(wtPath, OWN_UNTRACKED), 'module.exports = 9;\n');
+  }
+  if (o.foreignDirt) {
+    // The 2026-08-12 artifact, in the shape both surviving records agree on the FORM of: a link
+    // created inside a directory that already existed. `fs.symlinkSync` is given the full child
+    // path, which is the one call shape that does not throw EEXIST against the parent.
+    fs.symlinkSync('plugins', path.join(wtPath, FOREIGN_SYMLINK));
+    fs.writeFileSync(path.join(wtPath, FOREIGN_FILE), 'not this run\'s\n');
+    fs.writeFileSync(path.join(wtPath, FOREIGN_TRACKED), FOREIGN_TRACKED_TAMPERED);
   }
 
   return { mainRoot, kwRoot, wtPath };
@@ -475,6 +572,218 @@ for (const ed of EDITIONS.filter(e => e.unstageType)) {
   } finally { destroyFixture(fx); }
 
   console.log('behavioural-C[' + ed.label + '] a partially-staged `git add` is reported honestly: done');
+}
+
+// =============================================================================================
+// D — BEHAVIOURAL: a path finalize cannot attribute to the run is REPORTED, never adopted
+//
+// The residue probe pushes every uncommitted non-`kaola-workflow/` path into one list and hands
+// that list to `git add -A`, so an artifact that was in the tree for reasons unrelated to the run
+// is committed into the repository under `chore: finalize`. Measured at 69264936 on this fixture,
+// end to end, at exit 0 and with `findings: ["claim_release_skipped_offline"]` and nothing else:
+//
+//     chore: finalize issue-914
+//       A plugins/plugins                     ls-files --stage: 120000 f4f388c8
+//       A plugins/stray.txt
+//       M plugins/kaola-workflow/plugin.json
+//       A src/helper.js
+//       M src/impl.js
+//     git status --porcelain afterwards: ""
+//
+// The last two lines are the run's own work and belong there. The first three do not, and the
+// empty status is the reason nothing was ever noticed: the tree finalize left behind is clean.
+//
+// What is pinned is the RESULT, in both directions, because either one alone is satisfiable by a
+// wrong implementation:
+//   * the foreign paths are named and NOT in the repository — a classifier that reports and stages
+//     anyway has fixed nothing;
+//   * the run's own dirt IS swept into the commit exactly as before — a classifier that stages only
+//     what it can positively attribute would leave ordinary runs unfinished, which is worse than
+//     the fault it replaces. `src/helper.js` is what carries this: it is UNTRACKED, so a rule of
+//     "stage only paths the implementation commit already names" reports it as foreign and reds
+//     here, which is the point.
+// Nothing here asserts an exit code other than 0, and nothing asserts the artifact was removed:
+// the finding is a report, and a report that deletes what it found is not one.
+//
+// The oracle is `git status --porcelain` AFTER the transaction, read as state. It answers both
+// directions in one measurement and is blind to the transaction's commit shape — own dirt gone
+// means it was committed, a foreign path still dirty means it was neither adopted nor tidied away
+// — so a fix that excludes the foreign paths before `git add` and a fix that stages everything and
+// un-stages them again are equally acceptable to it. `ls-files` backs it up on the question the
+// incident actually turned on, whether the path entered the repository at all; for the tracked
+// shape that question is asked of the COMMIT's content instead, because `ls-files` has answered
+// "yes" about that path since `main`.
+// =============================================================================================
+
+/**
+ * Paths git reports as dirty, from the porcelain form these transactions are read in.
+ *
+ * Deliberately NOT `G.out`, which trims the whole stream. A porcelain record is `XY <path>`, and
+ * for an unstaged modification X is a SPACE — so trimming eats the leading space of the FIRST
+ * record only, and a `slice(3)` parse then eats the first character of that one pathname.
+ * Measured, and it is silent: with untracked paths sorting first the bug does not appear at all,
+ * and the moment a ` M` record sorts first the list comes back holding
+ * `"lugins/kaola-workflow/plugin.json"`. `-z` for the same reason `probeImplementationCommit`
+ * uses it — the non-`-z` stream C-quotes a pathname holding a quote, a backslash or a non-ASCII
+ * byte, and does not quote a trailing space.
+ */
+function dirtyPathsIn(wt) {
+  // spawn-class: cli-contract
+  const r = spawnSync('git', ['-C', wt, 'status', '--porcelain', '-z'], { encoding: 'utf8' });
+  return String(r.stdout || '').split('\0').filter(Boolean).map(rec => rec.slice(3)).sort();
+}
+
+for (const ed of EDITIONS) {
+  // ---- the fault: three foreign artifacts beside the run's own dirt ----------------------------
+  let fx = buildFixture(ed, { implementation: true, ownDirt: true, foreignDirt: true });
+  try {
+    // ANTI-VACUITY, read BEFORE the run and independent of any implementation. Two ways this
+    // fixture could quietly stop testing anything: it could fail to plant a shape (then an
+    // assertion about that shape passes by describing an absence), or it could plant the foreign
+    // paths somewhere the branch's own commits reach (then "unattributable" is false of them and a
+    // correct implementation is required to fail). Both are checked against git, not assumed.
+    const dirtyBefore = dirtyPathsIn(fx.wtPath);
+    assert(JSON.stringify(dirtyBefore)
+        === JSON.stringify([...FOREIGN_ALL, OWN_TRACKED, OWN_UNTRACKED].sort()),
+      'behavioural-D[' + ed.label + '] FIXTURE BROKEN: the run must start with all five planted '
+        + 'paths dirty — three foreign shapes and the run\'s own two. An assertion about a shape '
+        + 'that was never planted passes by describing nothing. dirty: '
+        + JSON.stringify(dirtyBefore));
+    const branchTouched = G.out(fx.wtPath, ['log', '--name-only', '--pretty=format:', 'main..HEAD'])
+      .split('\n').map(s => s.trim()).filter(Boolean);
+    assert(branchTouched.includes(OWN_TRACKED),
+      'behavioural-D[' + ed.label + '] FIXTURE BROKEN: the branch must have committed ' + OWN_TRACKED
+        + ', or the run has no implementation of its own for the foreign paths to be told apart '
+        + 'from. Touched: ' + JSON.stringify(branchTouched));
+    assert(!branchTouched.some(p => p.startsWith('plugins/')),
+      'behavioural-D[' + ed.label + '] FIXTURE BROKEN: the branch\'s own commits reach into '
+        + '`plugins/`, so the "foreign" paths are attributable to this run after all and the '
+        + 'classification below has nothing to observe. Touched: ' + JSON.stringify(branchTouched));
+
+    const run = runFinalize(ed, fx, false);
+    assert(run.status === 0,
+      'behavioural-D[' + ed.label + '] an unattributable path is REPORTED, not refused — exit 0 '
+        + 'expected, got ' + run.status + '\nstdout: ' + run.stdout + '\nstderr: ' + run.stderr);
+
+    // WITNESS FIRST. Every assertion below is about a transaction that reached the residue step
+    // and staged something; a run that refused earlier, or staged nothing at all, would satisfy
+    // "the foreign paths are not in the repository" by having done no work whatsoever.
+    assert(run.tx && run.tx.impl_commit === 'committed',
+      'behavioural-D[' + ed.label + '] WITNESS MISSING: the fixture must present dirt beside a '
+        + 'branch that DOES carry an implementation commit, or finalize stops at '
+        + 'implementation_commit_missing and never reaches the residue staging under test. '
+        + 'impl_commit: ' + JSON.stringify(run.tx && run.tx.impl_commit));
+    assert(run.tx && run.tx.residue_stage === 'staged',
+      'behavioural-D[' + ed.label + '] WITNESS MISSING: the residue step must have staged this '
+        + 'run\'s own dirt. Anything else and the assertions below read a transaction that never '
+        + 'did the work. residue_stage: ' + JSON.stringify(run.tx && run.tx.residue_stage));
+
+    // ---- the foreign paths never entered the repository -----------------------------------------
+    for (const foreign of FOREIGN_UNTRACKED) {
+      assert(G.out(fx.wtPath, ['ls-files', '--', foreign]) === '',
+        'behavioural-D[' + ed.label + '] ' + foreign + ' is in the index/tree. The residue probe '
+          + 'hands every non-`kaola-workflow/` path to `git add -A`, so an artifact this run did '
+          + 'not author is committed under `chore: finalize` — measured at 69264936 as mode 120000 '
+          + 'for the symlink. A path finalize cannot attribute to the run is reported, not adopted.');
+      // Reported, not tidied away. Nothing in this design deletes what it found. `lstat`, not
+      // `existsSync`: the planted symlink resolves to itself, so a following stat answers ELOOP
+      // and `existsSync` would report the artifact absent while it sits right there.
+      assert(fs.lstatSync(path.join(fx.wtPath, foreign), { throwIfNoEntry: false }) !== undefined,
+        'behavioural-D[' + ed.label + '] ' + foreign + ' is gone from the worktree. The finding is '
+          + 'a report the orchestrator adjudicates; removing the artifact is a value call that '
+          + 'belongs to a human, and it destroys the only evidence of what happened.');
+    }
+    // The tracked one, whose question is different: it has been in the repository since `main`, so
+    // `ls-files` can say nothing about it. What must not have entered is the tampered CONTENT.
+    // Read out of the commit, not off the disk — the disk answers whether the file was reverted,
+    // which is a different (and forbidden) behaviour, and the two are told apart only here.
+    assert(G.out(fx.wtPath, ['show', 'HEAD:' + FOREIGN_TRACKED]).trim()
+        === FOREIGN_TRACKED_ORIGINAL.trim(),
+      'behavioural-D[' + ed.label + '] the commit at HEAD carries a change to ' + FOREIGN_TRACKED
+        + ' that this run did not author. A foreign MODIFICATION to an already-tracked file is the '
+        + 'same fault as a foreign new file — the residue probe lists both and `git add -A` takes '
+        + 'both — and it is the one an "only untracked paths can be foreign" rule would miss. '
+        + 'HEAD content: ' + JSON.stringify(G.out(fx.wtPath, ['show', 'HEAD:' + FOREIGN_TRACKED])));
+    assert(fs.readFileSync(path.join(fx.wtPath, FOREIGN_TRACKED), 'utf8')
+        === FOREIGN_TRACKED_TAMPERED,
+      'behavioural-D[' + ed.label + '] ' + FOREIGN_TRACKED + ' was reverted on disk. The finding '
+        + 'reports; it does not repair. Undoing an edit nobody has adjudicated destroys the only '
+        + 'evidence of what happened, and it is a value call that belongs to a human.');
+
+    // ---- the run's own dirt was swept in, exactly as before --------------------------------------
+    const dirtyAfter = dirtyPathsIn(fx.wtPath);
+    assert(JSON.stringify(dirtyAfter) === JSON.stringify([...FOREIGN_ALL].sort()),
+      'behavioural-D[' + ed.label + '] after finalize the worktree must hold the three foreign '
+        + 'paths and NOTHING else: the run\'s own ' + OWN_TRACKED + ' and ' + OWN_UNTRACKED
+        + ' belong in `chore: finalize` and a fix that stops staging them leaves ordinary runs '
+        + 'unfinished. expected: ' + JSON.stringify([...FOREIGN_ALL].sort())
+        + ', dirty: ' + JSON.stringify(dirtyAfter));
+    for (const own of [OWN_TRACKED, OWN_UNTRACKED]) {
+      assert(G.out(fx.wtPath, ['ls-files', '--', own]).includes(own),
+        'behavioural-D[' + ed.label + '] ' + own + ' is not tracked — this run\'s own '
+          + 'implementation dirt must still reach the repository. ls-files: '
+          + JSON.stringify(G.out(fx.wtPath, ['ls-files', '--', own])));
+    }
+
+    // ---- the typed report, on the envelope and durably --------------------------------------------
+    assert(run.findings.includes(UNATTRIBUTED_TYPE),
+      'behavioural-D[' + ed.label + '] the run must raise the typed finding ' + UNATTRIBUTED_TYPE
+        + '; findings: ' + JSON.stringify(run.findings));
+    const named = (run.tx && run.tx[UNATTRIBUTED_FIELD]) || [];
+    assert(Array.isArray(run.tx && run.tx[UNATTRIBUTED_FIELD]),
+      'behavioural-D[' + ed.label + '] finalize_transaction.' + UNATTRIBUTED_FIELD + ' must be the '
+        + 'array of paths the transaction could not attribute — a finding that names no path tells '
+        + 'a consumer a foreign artifact exists and not which one. tx: ' + JSON.stringify(run.tx));
+    for (const foreign of FOREIGN_ALL) {
+      assert(named.includes(foreign),
+        'behavioural-D[' + ed.label + '] finalize_transaction.' + UNATTRIBUTED_FIELD + ' omits '
+          + foreign + '. All three shapes are planted in ONE run precisely so a classifier reading '
+          + 'a path\'s type rather than its provenance cannot pass by catching the shape that '
+          + 'happened to be observed. Named: ' + JSON.stringify(named));
+    }
+    const section = findingSection(run.summary, UNATTRIBUTED_TYPE);
+    assert(section !== null,
+      'behavioural-D[' + ed.label + '] the finding must be written durably under "### '
+        + UNATTRIBUTED_TYPE + '" in ' + run.summary + ' — the envelope scrolls away and the '
+        + 'archived record is what the orchestrator reads back');
+    for (const foreign of FOREIGN_ALL) {
+      assert(section !== null && section.includes(foreign),
+        'behavioural-D[' + ed.label + '] the durable ' + UNATTRIBUTED_TYPE + ' section does not '
+          + 'name ' + foreign + '. Section:\n' + section);
+    }
+    // Not a path this run authored. A finding that also names the run's own dirt is the
+    // over-reach the staging assertion above catches, stated one surface over.
+    for (const own of [OWN_TRACKED, OWN_UNTRACKED]) {
+      assert(!named.includes(own),
+        'behavioural-D[' + ed.label + '] ' + UNATTRIBUTED_FIELD + ' names ' + own + ', which this '
+          + 'run authored and committed. Named: ' + JSON.stringify(named));
+    }
+  } finally { destroyFixture(fx); }
+
+  // ---- the control: the same run with NO foreign artifact ---------------------------------------
+  // The finding must be CAUSED by the artifact. Without this leg an implementation that raises
+  // `residue_unattributed` on every finalize would green every assertion above.
+  fx = buildFixture(ed, { implementation: true, ownDirt: true });
+  try {
+    const ok = runFinalize(ed, fx, false);
+    assert(ok.status === 0,
+      'behavioural-D[' + ed.label + '] control: an ordinary finalize must exit 0, got ' + ok.status
+        + '\nstdout: ' + ok.stdout + '\nstderr: ' + ok.stderr);
+    assert(!ok.findings.includes(UNATTRIBUTED_TYPE),
+      'behavioural-D[' + ed.label + '] control: a run whose only dirt is its own must raise NO '
+        + UNATTRIBUTED_TYPE + ' — a finding that always fires would green the fault leg for the '
+        + 'wrong reason; findings: ' + JSON.stringify(ok.findings));
+    assert(findingSection(ok.summary, UNATTRIBUTED_TYPE) === null,
+      'behavioural-D[' + ed.label + '] control: nothing must be written durably under "### '
+        + UNATTRIBUTED_TYPE + '" on a run with no foreign artifact');
+    const dirtyAfter = dirtyPathsIn(fx.wtPath);
+    assert(dirtyAfter.length === 0,
+      'behavioural-D[' + ed.label + '] control: the worktree must be clean after finalize — this '
+        + 'run\'s own dirt is exactly what `chore: finalize` exists to carry. dirty: '
+        + JSON.stringify(dirtyAfter));
+  } finally { destroyFixture(fx); }
+
+  console.log('behavioural-D[' + ed.label + '] unattributable finalize residue is reported, not adopted: done');
 }
 
 // =============================================================================================

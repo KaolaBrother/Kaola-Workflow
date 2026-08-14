@@ -144,10 +144,12 @@ touched**.
 
 `install-opencode.sh` is a standalone installer — it has its own `--forge` flag and does not run
 through `install.sh --forge`. It deploys the workflow command set — finalize, workflow-init,
-workflow-next. `copy_tree` is **self-healing**: before re-copying it prunes every
-kaola-owned command file not in that set, so a reinstall converges to exactly the workflow command
-set on disk. Support scripts come from the selected forge's script tree, and the installer fails
-closed if an allowlisted script is missing from source.
+workflow-next. `copy_tree` removes exactly two things: the names the edition **retired on purpose**
+(`RETIRED_WORKFLOW_COMMANDS`), and each name it is **about to write**, immediately before writing
+it. A deployed command it has nothing to put back is left alone, so a source tree that renders
+fewer commands than the destination holds no longer destroys the difference. Retiring a command
+therefore means adding its name to that list. Support scripts come from the selected forge's
+script tree, and the installer fails closed if an allowlisted script is missing from source.
 
 `sync-opencode-edition.js writeCommands` produces one command file per command surface the routing
 registry declares for the selected forge, into the in-repo `.opencode[-<forge>]/command/` (the

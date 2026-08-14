@@ -1247,6 +1247,292 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// T26 (#974): a run folder that is a LEFTOVER ARTIFACT rather than the run's real one must not
+// silently satisfy the resolver.
+//
+// #971 taught the resolver to look past cwd — but only when cwd holds NOTHING. The stop condition is
+// a bare existence test, so a `kaola-workflow/<project>/` sitting in the invoking tree terminates the
+// search there and the run's real folder, one directory over, is never read. Three populations reach
+// that state and all three are measured below: the leftover a PRE-#971 sweep wrote into the linked
+// worktree (T26a, T26b), and a bare empty directory that anything at all created (T26c) — no
+// `.cache`, no artifact, no content of any kind is required for the hijack.
+//
+// WHAT IS PINNED IS THAT THE LEFTOVER STOPS BEING INVISIBLE — not a refusal, and not a mechanism.
+// This failure class is a VACUOUS PASS, not a missing door: the gate already refuses loudly when the
+// artifact is absent, and what is wrong here is that a pass means nothing, so the repair is to stop
+// the pass being vacuous rather than to add a gate. No assertion below demands a new non-zero exit
+// code, and none names a candidate root field, a marker, or a resolution rule. Two observable
+// properties carry the whole claim:
+//
+//   * DIFFERENTIAL. A run over a leftover and a run over a LEGITIMATELY worktree-resident run folder
+//     are byte-identical today — measured at 69264936, both emit
+//     `{"result":"pass","mapped":0,"filed":0,"noise":0}` on stdout, nothing on stderr, exit 0, while
+//     one of them has a real unswept gap in the other tree and the other has no other tree at all.
+//     They are semantically opposite, so an implementation whose own output still cannot tell them
+//     apart has not seen the leftover. Reporting the other candidate root closes this; so does
+//     marking the artifact; so does resolving somewhere else. The assertion prefers none of them.
+//   * ACTIONABILITY. In the leftover case the run either stops being a bare vacuous pass, or its
+//     output NAMES the other working tree that also holds this run folder. A signal that does not
+//     say which other tree is silence with extra bytes in it, and the shipped precedent for this
+//     exact question already names paths. Both spellings of the path count: macOS resolves
+//     os.tmpdir() through a symlink, so the same directory has a /private-prefixed twin.
+//
+// The LEGITIMATE topologies are pinned alongside, because a fix that "closes" #974 by breaking one of
+// them has relocated the false green rather than removed it. T26d is the post-mirror window in which
+// BOTH trees genuinely hold the folder — the finalize transaction copies main's run folder into the
+// worktree, and from that moment the worktree copy is the right one to read. T26e is the
+// KAOLA_GAP_ROOT override, which 127 assertions in this file ride on. Both are GREEN AT HEAD and the
+// point of them is that they stay green; they are controls, not the claim.
+// ---------------------------------------------------------------------------
+
+// The whole observable of a --check run. --check emits no paths, so runs from two different tmpdir
+// fixtures are directly comparable with no normalization — which is exactly why the differential
+// below is a byte comparison and not a shape comparison.
+function checkObservable(r) {
+  return JSON.stringify([r.exitCode, r.stdout, r.stderr]);
+}
+
+// Does this run's output name the OTHER working tree that also holds the run folder?
+function namesRoot(r, root) {
+  const blob = (r.stdout || '') + (r.stderr || '');
+  return blob.includes(root) || blob.includes(realish(root));
+}
+
+// Every refusal class the script ships, read off its five `reason:` sites. Used only to pin that the
+// leftover does not earn a SIXTH one.
+const SHIPPED_REFUSAL_REASONS = [
+  'project_archived', 'foreign_run_gaps_output', 'artifact_missing',
+  'observed_gap_unseeded', 'gaps_unswept',
+];
+
+// The bare vacuous pass: the gate certified a run whose swept set was empty, and said nothing else.
+function isBareVacuousPass(r) {
+  return r.exitCode === 0 && r.jsonOut !== null && r.jsonOut.result === 'pass' && r.jsonOut.mapped === 0;
+}
+
+// The leftover is manufactured by the shipped scanner with its root pinned at the worktree, which is
+// byte-for-byte the pre-#971 `root := cwd` behaviour — not hand-carved, so the fixture cannot drift
+// from what the real population looks like.
+function makePreFixLeftover(fx) {
+  return runIn(fx.wt, ['--project', fx.project, '--json'], { KAOLA_GAP_ROOT: fx.wt });
+}
+
+// Main's run folder in these scenarios is CLAIM-CREATED, and the claim transaction writes
+// workflow-state.md into it. The fixture says so rather than leaving it out: without it the fixture
+// would quietly forbid the one content-level signal that exists on disk for telling a claimed run
+// folder from a folder something else made, and a test that forbids a mechanism is a test that
+// picked one.
+function markClaimCreated(root, project) {
+  fs.writeFileSync(path.join(root, 'kaola-workflow', project, 'workflow-state.md'),
+    '# Workflow State\n\n- issue: 974\n', 'utf8');
+}
+
+// --- T26 baseline: the LEGITIMATE sole copy. The run folder lives in the invoking worktree and
+//     NOWHERE else (T25e's topology: run-chains writes this shape on a first run, and #910's
+//     resolver comment protects it). Its .cache is empty, nothing was swept, nothing was mapped — a
+//     vacuous pass is the CORRECT answer here and must survive. This measurement is the control the
+//     three leftover legs are compared against, so it is pinned before it is used: if this leg stops
+//     being a bare vacuous pass, the differentials below stop meaning anything.
+let LEGIT_SOLE_COPY_CHECK = null;
+const fx26base = makeWorktreeFixture('proj-t26', null);
+try {
+  fs.rmSync(path.join(fx26base.main, 'kaola-workflow'), { recursive: true, force: true });
+  fs.mkdirSync(path.join(fx26base.wt, 'kaola-workflow', 'proj-t26', '.cache'), { recursive: true });
+  runIn(fx26base.wt, ['--project', 'proj-t26', '--json']);
+  const check = runIn(fx26base.wt, ['--project', 'proj-t26', '--check', '--json', '--offline']);
+  LEGIT_SOLE_COPY_CHECK = checkObservable(check);
+  assert(isBareVacuousPass(check),
+    'T26 baseline: a run folder that is the SOLE copy, with an empty .cache and no mapped gaps, still '
+    + 'passes vacuously — that is a correct answer and #974 does not touch it; got exit '
+    + check.exitCode + ' / ' + check.stdout.trim());
+  assert(!namesRoot(check, fx26base.main),
+    'T26 baseline: and it names no other tree, because there is no other tree holding this folder; got '
+    + check.stdout.trim() + ' / ' + check.stderr.trim());
+} finally {
+  try { fs.rmSync(fx26base.tmp, { recursive: true, force: true }); } catch (_) {}
+}
+
+// --- T26a: THE SHAPE THE FINALIZE FLOW ACTUALLY TAKES. The sweep already happened, correctly, from
+//     MAIN — main's artifact names a real gap that nothing has mapped. Step 7 of finalize issues ONE
+//     command, `--check`, and the operator never re-scans. Run from a worktree carrying a pre-#971
+//     leftover, that single command certifies an empty run folder while the evidence sits one
+//     directory over. The false green therefore does NOT require the sweep to have failed, which is
+//     the half of this defect that makes it reachable in a run where everything else went right.
+const fx26a = makeWorktreeFixture('proj-t26a', GAP_LINE);
+try {
+  markClaimCreated(fx26a.main, 'proj-t26a');
+  const scanMain = runIn(fx26a.main, ['--project', 'proj-t26a', '--json']);
+  assert(scanMain.jsonOut && Array.isArray(scanMain.jsonOut.sweptClasses)
+    && scanMain.jsonOut.sweptClasses.length === 1,
+    'T26a fixture: the scan from main sweeps the real gap first — without that this leg would be '
+    + 'measuring an empty run; got ' + JSON.stringify(scanMain.jsonOut));
+  makePreFixLeftover(fx26a);
+  assert(fs.existsSync(path.join(fx26a.wt, 'kaola-workflow', 'proj-t26a', '.cache', 'run-gaps.json')),
+    'T26a fixture: the pre-#971 leftover is resident in the worktree');
+
+  const check = runIn(fx26a.wt, ['--project', 'proj-t26a', '--check', '--json', '--offline']);
+  assert(checkObservable(check) !== LEGIT_SOLE_COPY_CHECK,
+    'T26a (#974): --check run from a tree holding a LEFTOVER run folder, while main holds this run\'s '
+    + 'real one with an unmapped gap in it, is byte-identical to --check over a legitimately '
+    + 'worktree-resident empty run — two opposite situations, one output. The leftover has to be '
+    + 'visible in SOMETHING the run emits; got ' + JSON.stringify(checkObservable(check)));
+  assert(!isBareVacuousPass(check) || namesRoot(check, fx26a.main),
+    'T26a (#974): and the difference has to be actionable — either this stops being a bare vacuous '
+    + 'pass, or the output names the other working tree that holds this run folder ('
+    + fx26a.main + '); got exit ' + check.exitCode + ' / ' + check.stdout.trim()
+    + ' / ' + check.stderr.trim());
+
+  // NO NEW DOOR. #974 is a vacuous pass, not a missing refusal — the gate already refuses loudly
+  // when there is nothing to read. A repair may of course end up refusing for a reason that was
+  // already shipped (a retargeted resolver reaching main's real gap refuses gaps_unswept, which is
+  // the CORRECT verdict), but a fresh refusal class invented for the leftover itself is the thing
+  // this issue says not to build. Pinned once here; the rule is the same on every leg above.
+  assert(!(check.jsonOut && check.jsonOut.result === 'refuse')
+    || SHIPPED_REFUSAL_REASONS.indexOf(check.jsonOut.reason) !== -1,
+    'T26a (#974): a leftover run folder must not earn a NEW refusal class — the shipped reasons are '
+    + SHIPPED_REFUSAL_REASONS.join(', ') + '; got ' + JSON.stringify(check.jsonOut));
+
+  const mainArtifact = JSON.parse(fs.readFileSync(path.join(fx26a.cacheDir, 'run-gaps.json'), 'utf8'));
+  assert(Array.isArray(mainArtifact.sweptClasses) && mainArtifact.sweptClasses.length === 1
+    && mainArtifact.sweptClasses[0].reasonClass === GAP_CLASS,
+    'T26a: main\'s artifact still names the real unmapped gap throughout — this is what the gate '
+    + 'certified past, and without it the two assertions above would be about nothing; got '
+    + JSON.stringify(mainArtifact));
+} finally {
+  try { fs.rmSync(fx26a.tmp, { recursive: true, force: true }); } catch (_) {}
+}
+
+// --- T26b: the issue's own chain — scan AND check from the polluted worktree. The scanner finds the
+//     leftover in cwd, stops, sweeps its empty .cache, rewrites the leftover artifact with zero
+//     classes, and the gate then passes over it. T25c pins this same operator recovery on a CLEAN
+//     worktree, where it now reads main correctly; the leftover is what puts the pre-#971 answer back.
+const fx26b = makeWorktreeFixture('proj-t26b', GAP_LINE);
+try {
+  markClaimCreated(fx26b.main, 'proj-t26b');
+  makePreFixLeftover(fx26b);
+  const scan = runIn(fx26b.wt, ['--project', 'proj-t26b', '--json']);
+  assert((scan.jsonOut && Array.isArray(scan.jsonOut.sweptClasses) && scan.jsonOut.sweptClasses.length > 0)
+    || namesRoot(scan, fx26b.main),
+    'T26b (#974): a scan invoked from a tree holding a LEFTOVER run folder reports `swept` with an '
+    + 'empty class list and names only the leftover it swept — the run\'s real .cache, holding a '
+    + 'seeded gap in main, is neither read nor mentioned. The scan must either reach it or say that '
+    + 'another tree holds this folder; got ' + JSON.stringify(scan.jsonOut));
+
+  const check = runIn(fx26b.wt, ['--project', 'proj-t26b', '--check', '--json', '--offline']);
+  assert(checkObservable(check) !== LEGIT_SOLE_COPY_CHECK,
+    'T26b (#974): scan-then-check entirely inside the polluted worktree ends in the same byte-identical '
+    + 'vacuous pass as a legitimate empty run; got ' + JSON.stringify(checkObservable(check)));
+  assert(!isBareVacuousPass(check) || namesRoot(check, fx26b.main),
+    'T26b (#974): with nothing an operator could act on — neither a changed verdict nor the name of '
+    + 'the other tree (' + fx26b.main + '); got exit ' + check.exitCode + ' / ' + check.stdout.trim()
+    + ' / ' + check.stderr.trim());
+  assert(fs.existsSync(path.join(fx26b.cacheDir, 'run-gaps-manual.md')),
+    'T26b: main\'s seeded gap is still sitting there unswept — the fixture\'s whole point');
+} finally {
+  try { fs.rmSync(fx26b.tmp, { recursive: true, force: true }); } catch (_) {}
+}
+
+// --- T26c: AN EMPTY DIRECTORY IS ENOUGH. The stop condition is a bare existence test: no `.cache`,
+//     no artifact, no `workflow-state.md`, nothing. `mkdir kaola-workflow/<P>` in the worktree — which
+//     is exactly what the shipped final-validation operator hint tells operators not to do, so the
+//     population is not bounded to trees that ran a pre-#971 sweep — hijacks the resolver. The first
+//     --check then reports the artifact missing (honest, and deliberately not pinned here: which
+//     answer that recovery step gives depends on the repair), the operator does the documented thing
+//     and re-runs the scanner, and the rescan manufactures the artifact in the same hijacked tree.
+const fx26c = makeWorktreeFixture('proj-t26c', GAP_LINE);
+try {
+  markClaimCreated(fx26c.main, 'proj-t26c');
+  fs.mkdirSync(path.join(fx26c.wt, 'kaola-workflow', 'proj-t26c'), { recursive: true });
+  assert(fs.readdirSync(path.join(fx26c.wt, 'kaola-workflow', 'proj-t26c')).length === 0,
+    'T26c fixture: the hijacking directory is genuinely EMPTY — if the fixture had to put anything '
+    + 'inside it, this leg would be measuring the leftover-artifact case again');
+
+  const scan = runIn(fx26c.wt, ['--project', 'proj-t26c', '--json']);
+  assert((scan.jsonOut && Array.isArray(scan.jsonOut.sweptClasses) && scan.jsonOut.sweptClasses.length > 0)
+    || namesRoot(scan, fx26c.main),
+    'T26c (#974): an EMPTY DIRECTORY of the right name is enough to redirect the scan away from the '
+    + 'run folder that has the evidence in it; got ' + JSON.stringify(scan.jsonOut));
+
+  const check = runIn(fx26c.wt, ['--project', 'proj-t26c', '--check', '--json', '--offline']);
+  assert(checkObservable(check) !== LEGIT_SOLE_COPY_CHECK,
+    'T26c (#974): and the gate that follows is again byte-identical to a legitimate empty run; got '
+    + JSON.stringify(checkObservable(check)));
+  assert(!isBareVacuousPass(check) || namesRoot(check, fx26c.main),
+    'T26c (#974): with nothing naming the other tree (' + fx26c.main + '); got exit '
+    + check.exitCode + ' / ' + check.stdout.trim() + ' / ' + check.stderr.trim());
+} finally {
+  try { fs.rmSync(fx26c.tmp, { recursive: true, force: true }); } catch (_) {}
+}
+
+// --- T26d: CONTROL — the post-mirror window, where both trees legitimately hold the run folder and
+//     the worktree copy is the right one to read. The finalize transaction copies main's run folder
+//     into the worktree (`workflow-state.md` included), and from that moment "another tree also holds
+//     this folder" is TRUE of a perfectly healthy run. A repair that treats that fact alone as the
+//     signal breaks this leg, and breaking it is worse than the defect: the gate would stop reading
+//     the tree the operator is finalizing from. Green at HEAD; it must stay green.
+const fx26d = makeWorktreeFixture('proj-t26d', GAP_LINE);
+try {
+  fs.writeFileSync(path.join(fx26d.main, 'kaola-workflow', 'proj-t26d', 'workflow-state.md'),
+    '# Workflow State\n', 'utf8');
+  const wtCache26d = path.join(fx26d.wt, 'kaola-workflow', 'proj-t26d', '.cache');
+  fs.mkdirSync(wtCache26d, { recursive: true });
+  fs.writeFileSync(path.join(wtCache26d, 'run-gaps-manual.md'), GAP_LINE + '\n', 'utf8');
+  fs.writeFileSync(path.join(fx26d.wt, 'kaola-workflow', 'proj-t26d', 'workflow-state.md'),
+    '# Workflow State\n', 'utf8');
+
+  const scan = runIn(fx26d.wt, ['--project', 'proj-t26d', '--json']);
+  assert(scan.jsonOut && Array.isArray(scan.jsonOut.sweptClasses) && scan.jsonOut.sweptClasses.length === 1
+    && scan.jsonOut.sweptClasses[0].reasonClass === GAP_CLASS,
+    'T26d (#974 control): after the finalize mirror the worktree\'s own copy is complete and IS the '
+    + 'run folder — the scan reads it and sweeps its gap; got ' + JSON.stringify(scan.jsonOut && scan.jsonOut.sweptClasses));
+  assert(scan.jsonOut && realish(scan.jsonOut.artifact) === realish(path.join(wtCache26d, 'run-gaps.json')),
+    'T26d (#974 control): and the artifact lands in the worktree\'s own .cache, got '
+    + (scan.jsonOut && scan.jsonOut.artifact));
+
+  const check = runIn(fx26d.wt, ['--project', 'proj-t26d', '--check', '--json', '--offline']);
+  assert(check.exitCode === 1 && check.jsonOut && check.jsonOut.reason === 'gaps_unswept',
+    'T26d (#974 control): and the gate still refuses the unmapped gap from that tree — this leg is '
+    + 'what stops #974 being "closed" by making the gate read main unconditionally; got exit '
+    + check.exitCode + ' / ' + check.stdout.trim());
+  assert(check.jsonOut && Array.isArray(check.jsonOut.unmapped) && check.jsonOut.unmapped.length === 1
+    && check.jsonOut.unmapped[0].reasonClass === GAP_CLASS,
+    'T26d (#974 control): naming the gap it found, got ' + JSON.stringify(check.jsonOut && check.jsonOut.unmapped));
+} finally {
+  try { fs.rmSync(fx26d.tmp, { recursive: true, force: true }); } catch (_) {}
+}
+
+// --- T26e: CONTROL — KAOLA_GAP_ROOT keeps tier-1 precedence WITH a leftover present in cwd. T25d
+//     pins the override against a clean tree; this pins it against the one input a #974 repair adds
+//     to the resolver. 127 assertions in this file reach their root through that override, so a
+//     repair that consults the trees before honouring it redirects all of them somewhere else.
+const fx26e = makeWorktreeFixture('proj-t26e', GAP_LINE);
+const envRoot26e = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gap-envroot26-'));
+try {
+  markClaimCreated(fx26e.main, 'proj-t26e');
+  makePreFixLeftover(fx26e);
+  const envCache = path.join(envRoot26e, 'kaola-workflow', 'proj-t26e', '.cache');
+  fs.mkdirSync(envCache, { recursive: true });
+  fs.writeFileSync(path.join(envCache, 'run-gaps-manual.md'),
+    'gap: env-root-gap — seeded only in the KAOLA_GAP_ROOT tree\n', 'utf8');
+
+  const scan = runIn(fx26e.wt, ['--project', 'proj-t26e', '--json'], { KAOLA_GAP_ROOT: envRoot26e });
+  assert(scan.jsonOut && Array.isArray(scan.jsonOut.sweptClasses) && scan.jsonOut.sweptClasses.length === 1
+    && scan.jsonOut.sweptClasses[0].reasonClass === 'manual:env-root-gap',
+    'T26e (#974 control): KAOLA_GAP_ROOT still wins outright when cwd holds a leftover run folder — a '
+    + 'manual:flaky-suite here means main won, an empty list means the leftover won; got '
+    + JSON.stringify(scan.jsonOut && scan.jsonOut.sweptClasses));
+  const check = runIn(fx26e.wt, ['--project', 'proj-t26e', '--check', '--json', '--offline'],
+    { KAOLA_GAP_ROOT: envRoot26e });
+  assert(check.jsonOut && check.jsonOut.reason === 'gaps_unswept'
+    && Array.isArray(check.jsonOut.unmapped) && check.jsonOut.unmapped.length === 1
+    && check.jsonOut.unmapped[0].reasonClass === 'manual:env-root-gap',
+    'T26e (#974 control): and the gate honours it identically, got ' + JSON.stringify(check.jsonOut));
+} finally {
+  try { fs.rmSync(fx26e.tmp, { recursive: true, force: true }); } catch (_) {}
+  try { fs.rmSync(envRoot26e, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
 // Final result
 // ---------------------------------------------------------------------------
 if (failed > 0) {

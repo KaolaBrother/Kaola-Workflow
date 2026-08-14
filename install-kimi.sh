@@ -38,9 +38,10 @@
 #     pre-merge config and aborts non-zero. The hooks config is global regardless of install
 #     scope — it is merged on every install unless --no-scripts.
 #
-# REINSTALL IS SELF-HEALING: copy_skills PRUNES kaola-owned skill dirs before re-copying, so a
-# reinstall converges to exactly the workflow skill set on disk. --uninstall removes the full
-# deployed surface; see uninstall_edition.
+# REINSTALL IS SELF-HEALING, AND NOTHING WIDER: copy_skills removes each skill dir it is about to
+# re-copy (immediately before re-copying it) plus the RETIRED_ROLE_SKILLS this edition no longer
+# ships, so a reinstall converges to the workflow skill set without destroying a deployed skill it
+# has nothing to put back. --uninstall removes the full deployed surface; see uninstall_edition.
 
 set -euo pipefail
 
@@ -141,10 +142,22 @@ if [[ "$REGENERATE" -eq 1 ]]; then
   exit 0
 fi
 
-# Skills this edition deployed on a PREVIOUS release and no longer generates. The install
-# prune is namespace-wide (kaola-role-* and kaola-workflow-*), so install already self-heals;
-# uninstall removes by source-tree name and needs the retired names listed here.
-RETIRED_ROLE_SKILLS=("kaola-role-contractor" "kaola-role-workflow-planner" "kaola-workflow-adapt" "kaola-workflow-plan-run")
+# Skills this edition deployed on a PREVIOUS release and no longer generates. BOTH paths read
+# this list: uninstall removes by source-tree name, and the install sweep is exactly the deploy
+# set PLUS these names (#973 — a namespace-wide install prune destroys a deployed skill whenever
+# the source renders fewer than the destination holds, which is silent and reported as success).
+# So this is where "retired on purpose" is written down, and a name that is not here is treated
+# as a skill this install simply has nothing to put back.
+# Bounded by what this edition actually shipped: the kimi edition landed 2026-07-17, so it carries
+# the fast/phase surfaces retired two days later plus the three roles and two commands retired
+# since, and nothing older (kaola-workflow-auto went before it existed). One skill dir per TOP-LEVEL
+# agents/*.md and per commands/*.md deleted since that date — census it from git, not from memory.
+RETIRED_ROLE_SKILLS=(
+  "kaola-role-issue-scout" "kaola-role-contractor" "kaola-role-workflow-planner"
+  "kaola-workflow-adapt" "kaola-workflow-plan-run" "kaola-workflow-fast"
+  "kaola-workflow-phase1" "kaola-workflow-phase2" "kaola-workflow-phase3"
+  "kaola-workflow-phase4" "kaola-workflow-phase5"
+)
 
 # Workflow command-skill set: deployed alongside all kaola-role-* skills. Any OTHER skill fails
 # CLOSED (skipped + warned) so a future canonical command cannot silently widen the install.
@@ -174,26 +187,36 @@ copy_skills() {
     echo "Self-dev deploy (source $SOURCE_TREE/skills is already the live tree) → copy skipped."
     return
   fi
-  # The COMMAND-skill deploy is SELF-HEALING. First PRUNE every kaola-owned skill dir from the
-  # dest (blanket-then-recopy) so a reinstall converges to exactly the workflow skill set. Then
-  # re-copy via a fail-CLOSED ALLOWLIST: the workflow command skills + all kaola-role-* skills,
-  # anything else skipped.
-  local stale
-  for stale in "$skills_dest/"kaola-workflow-* "$skills_dest/"kaola-role-* \
-               "$skills_dest/workflow-init" "$skills_dest/workflow-next"; do
+  # The COMMAND-skill deploy is SELF-HEALING, and it removes exactly two things: the names this
+  # edition RETIRED on purpose (RETIRED_ROLE_SKILLS), and each skill dir it is about to WRITE,
+  # immediately before writing it. A deployed dir that is neither is one this install has nothing
+  # to put back, so it is left alone — a source tree that renders fewer skills than the
+  # destination holds must not destroy the difference (#973; the loss was silent and reported as
+  # a successful install). The per-name removal is NOT deferrable past that name's own copy:
+  # `cp -R src dest` onto an EXISTING dest copies INTO it, leaving the live SKILL.md stale and the
+  # new bytes at dest/X/X/SKILL.md, so a reinstall would stop updating skills at all.
+  local stale retired
+  for retired in "${RETIRED_ROLE_SKILLS[@]}"; do
+    stale="$skills_dest/$retired"
     [[ -d "$stale" ]] || continue
     rm -rf "$stale"
   done
-  local src_dir base skill_count=0
+  # Re-copy via a fail-CLOSED ALLOWLIST: the workflow command skills + all kaola-role-* skills,
+  # anything else skipped.
+  local src_dir base skill_count=0 skipped=0
   for src_dir in "$SOURCE_TREE/skills/"*/; do
     [[ -d "$src_dir" ]] || continue
     base="$(basename "$src_dir")"
     if ! in_array "$base" "${WORKFLOW_COMMANDS[@]}"; then
       case "$base" in
         kaola-role-*) : ;;   # role skills: always
-        *) echo "warning: skipping unrecognized skill not in the workflow command / role set: $base" >&2; continue ;;
+        *) echo "warning: skipping unrecognized skill not in the workflow command / role set: $base" >&2
+           skipped=$((skipped + 1)); continue ;;
       esac
     fi
+    # Replace, never merge — see the `cp -R` note above. Dirs only, so a non-directory entry a
+    # user keeps under this name is left for `cp` to fail on rather than silently deleted.
+    if [[ -d "$skills_dest/$base" ]]; then rm -rf "$skills_dest/$base"; fi
     cp -R "${src_dir%/}" "$skills_dest/$base"
     skill_count=$((skill_count + 1))
   done
@@ -201,7 +224,12 @@ copy_skills() {
   # keeps over its agents). An empty skills dir reported as a successful install is the worst
   # outcome this script has: the user is told the edition is installed and it is not there.
   if [[ "$skill_count" -eq 0 ]]; then
-    echo "Install error: no skill sources found in $SOURCE_TREE/skills" >&2
+    if [[ "$skipped" -gt 0 ]]; then
+      # Say what actually happened: the sources are present and every one of them was rejected.
+      echo "Install error: all $skipped skill source(s) in $SOURCE_TREE/skills fall outside the workflow command / role set" >&2
+    else
+      echo "Install error: no skill sources found in $SOURCE_TREE/skills" >&2
+    fi
     exit 1
   fi
   echo "Installed workflow skills → $skills_dest/"

@@ -1283,6 +1283,22 @@ function resolveCandidateRoot(schema) {
 // worktree is NOT written from main, because binding main's hash to it is the wrong tree, and the typed
 // report that says so is the honest answer. `dir` is null when no live folder exists at either place, and
 // `searched` carries what was looked at so the report can name it.
+//
+// A LIVE DIRECTORY OF THAT NAME IS NOT YET THIS RUN'S RECORD. `isDirectory()` is satisfied by an empty
+// directory, so a folder left in the invoking tree by something other than this run captures the search
+// in front of the real one — and both records this resolver places follow it there: the chain receipt
+// (`run-chains --project` → resolveProjectRecordDir) and the final-validation binding. A receipt in a
+// folder the finalize gate does not read is #910's failure with a different cause, so this cannot be a
+// report alone; the answer itself has to move. workflow-state.md is the file the claim transaction writes
+// into the folder it creates — later writers only update a copy that already exists, or (the finalize
+// mirror) carry that one forward — which makes its presence the one signal on disk telling a folder some
+// claim created from a directory that shares its name.
+//
+// It is a TIE-BREAK, never a requirement, and the "this tree first" rule above is unchanged wherever the
+// two trees do not disagree about it: this tree wins when it carries the signature (post-mirror, both do)
+// and when neither tree carries it (the ordinary first run, where nothing has created the folder yet).
+// MAIN is preferred in exactly one case — it carries the signature and this tree does not — which is the
+// leftover, and there the record belongs with the claim.
 function resolveRecordFolder(root, project, schema) {
   const searched = [];
   const liveDir = candidate => {
@@ -1292,14 +1308,16 @@ function resolveRecordFolder(root, project, schema) {
     try { stat = fs.statSync(dir); } catch (_) { stat = null; }
     return stat && stat.isDirectory() ? dir : '';
   };
+  const claimed = dir => fs.existsSync(path.join(dir, 'workflow-state.md'));
   const local = liveDir(root);
-  if (local) return { dir: local, root, mainResident: false, searched };
+  if (local && claimed(local)) return { dir: local, root, mainResident: false, searched };
   let main = '';
   try { main = schema.resolveMainRoot(root) || ''; } catch (_) { main = ''; }
   if (main && path.resolve(main) !== path.resolve(root)) {
     const inMain = liveDir(main);
-    if (inMain) return { dir: inMain, root: main, mainResident: true, searched };
+    if (inMain && (claimed(inMain) || !local)) return { dir: inMain, root: main, mainResident: true, searched };
   }
+  if (local) return { dir: local, root, mainResident: false, searched };
   return { dir: null, root: '', mainResident: false, searched };
 }
 

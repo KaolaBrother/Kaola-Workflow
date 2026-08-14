@@ -1684,6 +1684,23 @@ function committedPaths(repo) {
 // implementer's; what is pinned is that something machine-readable names it. `changed_paths` is
 // excluded from the band on purpose: it is derived from what WAS committed, so a hit there would be
 // evidence of success, not of a report.
+//
+// THE BAND IS WALKED AS PARSED STRUCTURE, never as `JSON.stringify(item)`. Serialising the haystack
+// escapes exactly the characters the T9b table is built from — inside JSON text a newline is `\n`, a
+// quote is `\"` and a backslash is `\\` — so a raw needle carrying one of them could not match an
+// envelope that named the path perfectly. MEASURED, on the five T9b names against the envelope the
+// implementation emits: only `notes.md ` and `nöte.md`, whose escaping is the identity, survived the
+// round trip; `new\nline.md`, `qu"ote.md` and `back\slash.md` matched nothing no matter what the
+// report said. That is not a weak observation, it is an unsatisfiable one — for those three the
+// "or NAMED on the envelope" half of T9b's assertion could never be true, leaving it demanding that
+// the hazard be COMMITTED, which is a different assertion from the one written there. It stayed
+// invisible while the implementation committed the hazard and surfaced the moment #975 started
+// reporting it instead.
+//
+// Comparing VALUES rather than a rendering of them removes the whole class: no escaping sits between
+// the needle and the string the envelope carries, whatever the character. It is also strictly
+// tighter than the stringify form, which could match across the `","` seam between two neighbouring
+// entries; a hit here is always inside one scalar or one key.
 function envelopeNames(out, needle) {
   if (!out || typeof out !== 'object') return false;
   const band = [out.finalize_transaction, out.errors, out.warnings, out.findings, out.validation,
@@ -1691,11 +1708,18 @@ function envelopeNames(out, needle) {
   for (const key of Object.keys(out)) {
     if (/stag|error|warn|finding|residue|uncommitted|dropped|skip/i.test(key)) band.push(out[key]);
   }
-  for (const item of band) {
-    if (item === undefined) continue;
-    try { if (JSON.stringify(item).indexOf(needle) >= 0) return true; } catch (_) { /* next */ }
-  }
-  return false;
+  // Substring, not equality: naming the path inside a sentence of prose is still naming it, and the
+  // wording of that sentence is the implementer's to choose. Keys count for the same reason — a
+  // report keyed BY the path names it as machine-readably as one that lists it.
+  const namesIt = (node) => {
+    if (node === null || node === undefined) return false;
+    if (Array.isArray(node)) return node.some(namesIt);
+    if (typeof node === 'object') {
+      return Object.keys(node).some(k => k.indexOf(needle) >= 0 || namesIt(node[k]));
+    }
+    return String(node).indexOf(needle) >= 0;
+  };
+  return band.some(namesIt);
 }
 
 function runFinalizeKeepWorktree(fx, claimScriptPath) {

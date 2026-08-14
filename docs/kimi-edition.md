@@ -147,11 +147,13 @@ never touched**.
 
 `install-kimi.sh` is a standalone installer — it has its own `--forge` flag and does not run
 through `install.sh --forge`. It deploys the workflow command skills — finalize, workflow-init,
-workflow-next — plus all 14 `kaola-role-*` skills. `copy_skills` is
-**self-healing**: before re-copying it prunes every kaola-owned skill dir not in that set, so a
-reinstall converges to exactly the workflow skill set on disk. Support scripts come from the
-selected forge's script tree, and the installer fails closed if an allowlisted script is missing
-from source.
+workflow-next — plus all 14 `kaola-role-*` skills. `copy_skills` removes exactly two things: the
+names the edition **retired on purpose** (`RETIRED_ROLE_SKILLS`), and each name it is **about to
+write**, immediately before writing it. A deployed skill it has nothing to put back is left alone,
+so a source tree that renders fewer skills than the destination holds no longer destroys the
+difference. Retiring a skill therefore means adding its name to that list. Support scripts come
+from the selected forge's script tree, and the installer fails closed if an allowlisted script is
+missing from source.
 
 `sync-kimi-edition.js` produces one command skill per command surface the routing registry
 declares for the selected forge, into the in-repo `.kimi[-<forge>]/skills/` tree (the single

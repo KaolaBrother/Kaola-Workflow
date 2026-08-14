@@ -40,6 +40,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # production always resolves to this script's own directory.
 ROOT="${KAOLA_INSTALL_ALL_ROOT:-$SCRIPT_DIR}"
 
+# The temp base every mktemp below writes under. `${TMPDIR:-/tmp}` guards an EMPTY
+# TMPDIR and NOT a relative one, and a bare `mktemp` / `mktemp -d` reads TMPDIR the
+# same way — so `TMPDIR=.` puts this script's per-runtime logs, watchdog flag dirs
+# and CLI capture files into whatever directory it was invoked from. Measured:
+# `kaola-install-all-claude.XXXXXX` landed in the repository checkout, and a failed
+# mktemp here costs only a log, so it is silent. Absolute or nothing.
+KW_TMPDIR="${TMPDIR:-/tmp}"
+case "$KW_TMPDIR" in
+  /*) ;;
+  *) KW_TMPDIR="/tmp" ;;
+esac
+
 # Ordered runtime list — the single source of truth this script iterates and the
 # contract test (scripts/test-install-all.js) cross-checks against the tree.
 RUNTIMES=(claude opencode codex kimi)
@@ -230,7 +242,7 @@ run_one() {
     return 0
   fi
   local logf rc
-  logf="$(mktemp "${TMPDIR:-/tmp}/kaola-install-all-$name.XXXXXX")"
+  logf="$(mktemp "$KW_TMPDIR/kaola-install-all-$name.XXXXXX")"
   "$@" 2>&1 | tee "$logf"
   rc=${PIPESTATUS[0]}
   R_NOTE+=("")
@@ -300,7 +312,7 @@ codex_tree_plugin_name() { codex_plugin_manifest_field name; }
 run_bounded() {
   local secs="$1"; shift
   local flagdir flag cmd_pid watch_pid rc=0 restore_monitor=0
-  flagdir="$(mktemp -d)"
+  flagdir="$(mktemp -d "$KW_TMPDIR/kaola-install-all-bound.XXXXXX")"
   flag="$flagdir/timed-out"
   case "$-" in *m*) ;; *) set -m; restore_monitor=1 ;; esac
   "$@" &
@@ -336,7 +348,7 @@ codex_installed_plugin_row() {
   # The listing is captured through a temp FILE, not a command substitution: a
   # `$(...)` around a bounded call stays open until every descendant that inherited
   # the pipe exits, so a CLI that forks a stuck child would defeat the ceiling.
-  outfile="$(mktemp)"
+  outfile="$(mktemp "$KW_TMPDIR/kaola-install-all-listing.XXXXXX")"
   run_bounded "$CODEX_LIST_TIMEOUT_SECS" "$CODEX_BIN" plugin list --json >"$outfile" 2>/dev/null || rc=$?
   listing="$(cat "$outfile")"
   rm -f "$outfile"

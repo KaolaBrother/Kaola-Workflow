@@ -813,6 +813,17 @@ folders — returns `false` and still fails the dirty check.
 `git status` call) is always treated as dirty — the parked filter narrows which KNOWN-CLEAN
 states pass, never relaxes the unverifiable-is-dirty posture.
 
+**One boundary is call-site-specific, not universal (#973/#975).** `assertWorktreeClean`'s
+untracked-record half — `worktreeDirtRecords`, added to widen the linked-worktree probe from
+`--untracked-files=no` to `-uall` so it can see untracked work at all before `git worktree remove
+--force` runs — calls `isParkedLanePath` with an **empty** owned-project set, not the caller's
+`ownedProjects`. That is deliberate, not an oversight of rule 3 above: inside a *linked worktree*
+the lane folder is that run's own throwaway copy, not the live record `assertCleanWorktree`'s
+main-root check protects, so for this one probe an **own** `<project>/` folder is parked too —
+only content outside `kaola-workflow/`/`.kw/` still fails the gate. Tracked records are read
+exactly as before. Three shapes this widening still cannot see, all pre-existing and unchanged by
+it, are recorded in `CHANGELOG.md`'s `[Unreleased]` entry for #975.
+
 **Merge protocol unchanged.** `ffMergeLoop` and the true-conflict halt in `sink-merge.js` are
 byte-unchanged. `assertCleanWorktree`/`assertWorktreeClean` run BEFORE `ffMergeLoop`, so the
 looser non-owned exemption cannot affect conflict resolution. Each lane cleans its own branch,

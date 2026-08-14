@@ -64,6 +64,23 @@ const INSTALL_ALL = path.join(REPO, 'install-all.sh');
 let passed = 0, failed = 0;
 function assert(cond, msg) { if (cond) passed++; else { failed++; console.error('FAIL: ' + msg); } }
 
+// #975: the base every fixture root below is made under. A fixture root must not resolve against
+// the CURRENT DIRECTORY, and `os.tmpdir()` alone does not carry that property: it returns `TMPDIR`
+// verbatim, so `TMPDIR=.` makes every root here relative and every fixture lands wherever the suite
+// was started — the checkout, when it is run from one. Measured that way: 81 `kaola-install-all-*`
+// roots in the checkout root, each holding a `plugins/` tree, and `cleanup()` removes every one, so
+// a `git status` on either side of the run sees nothing at all.
+// Absolutising does NOT fix it, and both idioms that look like it were measured: `realpathSync`
+// around the `mkdtempSync` absolutises the returned STRING after the directory has been created in
+// the cwd, and `path.resolve(os.tmpdir())` is absolute at creation and still the cwd, because
+// `path.resolve(".")` IS the cwd. A relative `TMPDIR` is simply unusable as a temp root, so it is
+// treated exactly as an unset one — `/tmp` is what `os.tmpdir()` itself falls back to when no temp
+// variable is set, and an empty `TMPDIR` already reaches it.
+function tmpBase() {
+  const dir = os.tmpdir();
+  return path.isAbsolute(dir) ? dir : '/tmp';
+}
+
 // ---- single source of truth: the four runtime installers ----
 // { runtime, file: tree-relative path that MUST exist, ref: token that MUST
 //   appear in install-all.sh }. Adding a 5th edition means adding a row here AND
@@ -134,7 +151,7 @@ for (const inst of discovered) {
 // the four. The derivation must SCAN THE TREE, surface the phantom, and report it
 // missing — this is what fails red when a new runtime is dropped.
 {
-  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-all-guard-'));
+  const fixtureRoot = fs.mkdtempSync(path.join(tmpBase(), 'kaola-install-all-guard-'));
   try {
     const touch = (rel) => {
       const abs = path.join(fixtureRoot, rel);
@@ -172,7 +189,7 @@ assert(/RUNTIMES=\(claude opencode codex kimi\)/.test(wrapperSrc),
 // ---- 2. BEHAVIOR: drive install-all.sh against stub installers ----
 const tmpRoots = [];
 function freshRoot() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-all-test-'));
+  const dir = fs.mkdtempSync(path.join(tmpBase(), 'kaola-install-all-test-'));
   tmpRoots.push(dir);
   return dir;
 }
@@ -1095,7 +1112,7 @@ function runWrapper(rootOrStub, args, extraEnv) {
     },
     {
       name: 'X2', why: 'the declared install-from path is not there',
-      opts: { rowSourcePath: path.join(os.tmpdir(), 'kaola-no-such-plugin-source-dir') },
+      opts: { rowSourcePath: path.join(tmpBase(), 'kaola-no-such-plugin-source-dir') },
     },
     {
       name: 'X3', why: 'the source directory cannot be read',

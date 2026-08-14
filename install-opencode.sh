@@ -45,18 +45,23 @@
 #     ~/.config/opencode/.opencode/ is never scanned). copy_tree takes a `layout_root` arg for exactly this.
 #   - opencode.json always lands at the config/project root (dest_root), never under the layout subtree.
 #
-# REINSTALL IS SELF-HEALING: copy_tree PRUNES kaola-owned command files before re-copying, so a
-# reinstall converges to exactly the workflow command set on disk. --uninstall removes the full
-# deployed surface; see uninstall_edition.
+# REINSTALL IS SELF-HEALING, AND NOTHING WIDER: copy_tree removes each command file it is about
+# to re-copy (immediately before re-copying it) plus the RETIRED_WORKFLOW_COMMANDS this edition no
+# longer ships, so a reinstall converges to the workflow command set without destroying a deployed
+# command it has nothing to put back. --uninstall removes the full deployed surface; see
+# uninstall_edition.
 #
-# AGENTS ARE MANIFEST-DRIVEN (they cannot be blind-pruned). Commands live in a reserved
-# `kaola-workflow-*` / `workflow-*` namespace, so the prune above is namespace-complete and a
-# retired command self-heals. Agent files are NOT namespaced (bare `code-explorer.md`) and share
-# the deployed agent dir with user-authored agents, so there is no pattern that means "ours".
-# Instead copy_tree records `<filename>\t<sha256>` for every agent it deploys, and the NEXT
-# install removes exactly the previously-recorded files the tree no longer ships that are still
-# byte-identical to what we wrote. A file absent from the manifest is user-authored and is never
-# touched; a recorded file the user then edited is their work and is never touched either.
+# BOTH HALVES OF THE DEPLOY NAME WHAT THEY RETIRE, and differ only in where that set comes from.
+# Commands DECLARE it: RETIRED_WORKFLOW_COMMANDS lists the names this edition once shipped and no
+# longer does, and a deployed command that is neither retired nor about to be written is left
+# alone. The namespace glob that used to stand in for that list could not tell the two apart, so
+# it swept whatever the source failed to render — silently, and reported as a successful install.
+# Agents DERIVE it: agent files are NOT namespaced (bare `code-explorer.md`) and share the
+# deployed agent dir with user-authored agents, so there is no pattern that means "ours" and no
+# list to keep. Instead copy_tree records `<filename>\t<sha256>` for every agent it deploys, and
+# the NEXT install removes exactly the previously-recorded files the tree no longer ships that are
+# still byte-identical to what we wrote. A file absent from the manifest is user-authored and is
+# never touched; a recorded file the user then edited is their work and is never touched either.
 
 set -euo pipefail
 
@@ -176,6 +181,16 @@ fi
 # Single source of truth for the deploy set (used by copy_tree).
 WORKFLOW_COMMANDS=(
   kaola-workflow-finalize.md workflow-init.md workflow-next.md
+)
+# Commands this edition deployed on a PREVIOUS release and no longer generates. This is where
+# "retired on purpose" is written down: the install sweep is exactly the deploy set PLUS these
+# names, and a deployed command that is neither is one this install simply has nothing to put
+# back (#973 — a namespace-wide prune destroyed it silently, and no count guard covers commands).
+# Bounded by what this edition actually shipped, measured from .opencode/command/ history.
+RETIRED_WORKFLOW_COMMANDS=(
+  kaola-workflow-adapt.md kaola-workflow-auto.md kaola-workflow-fast.md
+  kaola-workflow-phase1.md kaola-workflow-phase2.md kaola-workflow-phase3.md
+  kaola-workflow-phase4.md kaola-workflow-phase5.md kaola-workflow-plan-run.md
 )
 in_array() { local needle="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done; return 1; }
 
@@ -310,16 +325,19 @@ copy_tree() {
   mv "$manifest_tmp" "$agent_manifest"
   sweep_retired_agents "$prev_manifest" "$layout_root/agent"
   rm -f "$prev_manifest"
-  # The COMMAND deploy is SELF-HEALING. First PRUNE every kaola-owned command file from the dest,
-  # then re-copy the workflow command set via a fail-CLOSED ALLOWLIST: a command not in
-  # WORKFLOW_COMMANDS is skipped + warned, so a future canonical command cannot silently widen the
-  # install. Agents/plugins/hooks are always fully deployed.
-  local stale_pattern stale_file
-  for stale_pattern in "kaola-workflow-*.md" "workflow-init.md" "workflow-next.md"; do
-    for stale_file in "$layout_root/command/"$stale_pattern; do
-      [[ -f "$stale_file" ]] || continue
-      rm -f "$stale_file"
-    done
+  # The COMMAND deploy is SELF-HEALING, and it removes exactly two things: the names this edition
+  # RETIRED on purpose, and each command file it is about to WRITE, immediately before writing it.
+  # A deployed command that is neither is one this install has nothing to put back, so a source
+  # tree that renders fewer commands than the destination holds leaves the difference alone rather
+  # than destroying it (#973 — silent here, since nothing counts commands the way the agent deploy
+  # counts agents). The re-copy is a fail-CLOSED ALLOWLIST: a command not in WORKFLOW_COMMANDS is
+  # skipped + warned, so a future canonical command cannot silently widen the install.
+  # Agents/plugins/hooks are always fully deployed.
+  local stale_file retired
+  for retired in "${RETIRED_WORKFLOW_COMMANDS[@]}"; do
+    stale_file="$layout_root/command/$retired"
+    [[ -f "$stale_file" ]] || continue
+    rm -f "$stale_file"
   done
   local command_file base
   for command_file in "$SOURCE_TREE/command/"*.md; do
@@ -329,6 +347,8 @@ copy_tree() {
       echo "warning: skipping unrecognized command not in the workflow command set: $base" >&2
       continue
     fi
+    # Replace the file this install is about to write, so `cp` never has to overwrite in place.
+    rm -f "$layout_root/command/$base"
     cp "$command_file" "$layout_root/command/$base"
   done
   cp "$SOURCE_TREE/hooks/"*.sh "$layout_root/hooks/" 2>/dev/null || true

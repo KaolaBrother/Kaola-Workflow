@@ -163,6 +163,110 @@
   `test-install-adaptive-config.js` runs the real opencode installer, so between the tree-root change
   and this one the fast gate itself failed from any worktree.
 
+- **`install.sh`, `install-kimi.sh` and `install-opencode.sh` no longer delete a deployed skill or
+  command they are not going to replace — #973.** All three pruned the whole `kaola-workflow-*` /
+  `kaola-role-*` / `workflow-*` namespace *before* re-copying, so any source tree that rendered
+  fewer surfaces than the destination held destroyed the difference. The filed case was a total
+  wipe, but the reachable and more damaging cases are silent partials at **exit 0** under an
+  "Installed" message: a canonical `agents/` that is empty rather than missing took kimi from 17
+  skills to 3, a command renamed out of the hand-maintained deploy allowlist took it to 14, and
+  `install-opencode.sh` — which has no zero-deploy guard at all — went from 3 commands to 0.
+  `install.sh --forge=gitlab` against a skeleton tree emptied `~/.claude/commands` and reported
+  "skeleton installed".
+
+  A name cannot tell the installer which case it is in: "we retired this" and "the source failed to
+  render this" look identical on disk, and both are kaola-namespaced. So each installer now removes
+  exactly two things — the names it **retired on purpose** (`RETIRED_ROLE_SKILLS`,
+  `RETIRED_WORKFLOW_COMMANDS`, `RETIRED_COMMANDS`, each verified complete against that edition's
+  full shipping history) and each name it is **about to write**, immediately before writing it.
+  Anything else deployed is left alone. The per-name removal is not deferrable: `cp -R src dest`
+  onto an existing directory copies *into* it, leaving the live `SKILL.md` stale and the new bytes
+  at `dest/X/X/SKILL.md`, so a reinstall would silently stop updating.
+
+  **Retiring a skill or command now means adding its name to the relevant list, and nothing detects
+  a forgotten entry.** The failure mode is benign — a dead directory lingers on upgraded installs
+  and nothing is destroyed — so it is recorded here as a maintenance obligation rather than guarded
+  against. `install-kimi.sh` also now distinguishes its two zero-deploy cases: sources absent,
+  versus sources present and all rejected by the deploy allowlist.
+
+- **A leftover run folder no longer silently satisfies the record resolvers — #974.** Both
+  `gap-sweep`'s `resolveRunRoot` and `validation-runner`'s `resolveRecordFolder` stopped at any
+  directory carrying the run's name, which an empty `mkdir` satisfies as readily as the stray a
+  pre-fix sweep left behind. Standing in front of the real record, such a folder made the scanner
+  sweep an empty `.cache` and the gate certify it: `pass`, `mapped: 0`, **exit 0**, while the
+  evidence sat one tree over. It did not require the sweep to have failed — running `--check` alone
+  from a polluted tree after a correct scan reached the same vacuous green, and `--check` alone is
+  what the finalize step actually issues.
+
+  `workflow-state.md` — written by the claim transaction and nothing else — is now a **tie-break
+  between two candidate trees, never a requirement on one**. The invoking tree still wins when it
+  carries that signature, which is the post-mirror window where both trees legitimately do, and
+  still wins when neither carries it. Main is preferred in exactly one case: it carries the
+  signature and the invoking tree does not. `KAOLA_GAP_ROOT` keeps outright precedence.
+
+  The second resolver is the consequential one: it places the **chain receipt**, so a polluted tree
+  could misfile the evidence a run is judged on. #971 fixed one of the two co-derived resolvers;
+  both now carry the same shape so they cannot drift apart again.
+
+- **Finalize reports a path it cannot attribute to the run instead of committing it — #975.** The
+  residue probe collected untracked paths and handed them to `git add -A`, which stages anything,
+  including a symlink at mode `120000`. A foreign artifact present at finalize was therefore
+  committed into the repository as part of `chore: finalize`, at exit 0, leaving a clean
+  `git status` behind — which is why nothing ever noticed. A path whose own directory the branch's
+  commits never touched is now reported as a typed `residue_unattributed` finding, on the envelope
+  and durably in `finalization-summary.md`. **The run's own work still stages exactly as before**,
+  including a file it created but never committed *beside a committed sibling*, and the exit code is
+  unchanged either way — this reports, it does not refuse. Attribution reads the branch's history
+  rather than its net diff, so work committed and later reverted still counts as the run's, and it
+  fails open — staging everything, as before — when git cannot be asked or the branch carries no
+  commits of its own.
+
+  Two limits of directory-level attribution are known and deliberately not closed, because every
+  alternative rule measured so far reintroduces the defect that motivated it — attributing by
+  top-level segment, or by nearest committed ancestor, would both have called the original
+  `plugins/plugins` artifact the run's own work, since the run committed under
+  `plugins/<edition>/scripts/`. First, a file the run creates in a **brand-new directory** the branch
+  never committed to is reported rather than staged, leaving that run visibly unfinished. Second, the
+  repository **root** is attributed whenever the branch commits any root-level file — which a
+  `CHANGELOG.md` edit alone achieves — so a foreign artifact at the root is still adopted.
+
+- **The sink no longer silently destroys untracked work in a linked worktree — #975.** Step 0's
+  clean-worktree guard declares that it must fail closed, and against untracked content it could
+  not: it probed with `git status --porcelain --untracked-files=no`, which structurally cannot
+  report an untracked path, so a worktree whose only uncommitted content was untracked probed clean
+  and `git worktree remove --force` took it. Harmless while nothing untracked survived finalize —
+  and the change above is exactly what stopped that being true, since a reported-not-adopted path is
+  left on disk untracked by design. Both entry points are covered, the `--sink` transaction and the
+  legacy one, because the guard they share is where the fix sits.
+
+  The flag was not an accident, so widening it alone is not the repair: every run leaves untracked
+  lane content in its worktree, and a bare widening refuses every ordinary sink. Untracked records
+  are now filtered by the same lane boundary the main-root check already draws, tracked records are
+  treated exactly as before, and a record that cannot be decoded is kept rather than dropped.
+
+  **One consequence is worth stating plainly**: an untracked file that is neither lane content nor
+  ignored — a stray `.DS_Store` in a repository that does not ignore it is the likely case — now
+  **refuses** the sink where it was previously destroyed without mention. That is the intended
+  direction, and the remedy is to remove or ignore the file and re-run.
+
+  Three shapes are still destroyed silently, all of them equally destroyed before this change, so
+  they are residuals rather than regressions — recorded because the guard is otherwise easy to read
+  as absolute. A file whose *name* contains backslashes (legal on POSIX) can normalise onto a lane
+  prefix and be classified as lane. An embedded git repository under a lane prefix — a nested
+  worktree, say — is reported as a single collapsed record even under `-uall`, so it is exempted by
+  its directory segment and anything uncommitted inside it goes with it. And the legacy route
+  removes the run's own `.cache/` journal, where the `--sink` route stages a best-effort rescue
+  first.
+
+- **Test fixture roots can no longer be created inside the working checkout — #975.** Under a
+  relative `TMPDIR`, `mkdtempSync(path.join(os.tmpdir(), …))` and `mktemp "${TMPDIR:-/tmp}/…"`
+  both resolve against the current directory, so a full `install-all` suite run scattered 81 fixture
+  roots — each containing a `plugins/` tree — across the checkout root and then deleted every one at
+  cleanup, leaving nothing for a before/after check to find. Both the Node and shell halves now
+  resolve their root somewhere that does not depend on the current directory. Absolutising after the
+  fact does not fix this: the directory has already been created in the wrong place, and
+  `path.resolve(".")` *is* the current directory.
+
 ## [9.8.0] - 2026-08-12
 
 ### Changed

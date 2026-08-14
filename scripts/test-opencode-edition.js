@@ -1259,8 +1259,10 @@ if (exists(pluginRel)) {
     const home = opts.home || mkdtempSync(path.join(os.tmpdir(), 'opencode-p-home-'));
     const dest = opts.dest || mkdtempSync(path.join(os.tmpdir(), 'opencode-p-dest-'));
     const args = ['--target', dest, '--yes', '--no-scripts'].concat(extraArgs || []);
+    // `opts.installer` runs a COPY of this checkout instead of this checkout (P7 below): the state
+    // some cases need is a state of the SOURCE tree, and mutating this one is not on offer.
     // spawn-class: environment
-    const r = spawnSync('bash', [INSTALLER].concat(args), {
+    const r = spawnSync('bash', [opts.installer || INSTALLER].concat(args), {
       env: Object.assign({}, process.env, { HOME: home }),
       encoding: 'utf8',
     });
@@ -1310,6 +1312,167 @@ if (exists(pluginRel)) {
     assert(!existsSync(r.configPath),
       'P1: default install must not create ~/.config/kaola-workflow/config.json (user-owned; the\n      workflow has no install-time configuration)');
     clean(r);
+  }
+
+  // -------------------------------------------------------------------------
+  // P7 (#973) — AN INSTALL DOES NOT REMOVE A DEPLOYED COMMAND IT IS NOT GOING TO
+  // REPLACE.
+  //
+  // The command deploy is prune-then-recopy over a dir shared with the user's own
+  // commands. The prune is namespace-wide over the DESTINATION; the recopy is
+  // whatever the generated tree renders AND the deploy allowlist accepts. When
+  // the second set is smaller, the difference is destroyed — and here nothing at
+  // all notices: the agent deploy fails closed on an empty source, but it runs
+  // BEFORE the command prune and says nothing about commands, and no count is
+  // checked over the commands themselves. Measured against a destination holding
+  // the deployed set: 3 → 0, exit 0, "Installed workflow agents+commands+…"
+  // printed, three `warning:` lines on stderr.
+  //
+  // P7a asserts no exit code. An install that refuses BEFORE pruning removes
+  // nothing either; what is left on disk is the whole property.
+  //
+  // P7b/P7c pin what the prune is FOR and pass here by construction — a repair
+  // that narrows the prune to the deploy set loses the first, and one that defers
+  // the removal past the copy loses the second.
+  // -------------------------------------------------------------------------
+  {
+    const routing = require('./generate-routing-surfaces.js');
+    // `.git` is deliberately absent and that is load-bearing: the installer regenerates the tree it
+    // deploys from, the generator writes that tree at the MAIN checkout when one resolves, and a
+    // copied gitdir pointer resolves to this repository — so a copy carrying `.git` would rewrite
+    // the real tree from mutated canonical sources. `kaola-workflow/` is run state, skipped for size.
+    const COPY_SKIP = new Set(['.git', 'kaola-workflow', 'node_modules']);
+    function sourceCopy(tag) {
+      const dir = fs.realpathSync(mkdtempSync(path.join(os.tmpdir(), 'opencode-p7-src-' + tag + '-')));
+      for (const entry of readdirSync(REPO)) {
+        if (COPY_SKIP.has(entry)) continue;
+        // spawn-class: environment
+        const r = spawnSync('cp', ['-R', path.join(REPO, entry), path.join(dir, entry)], { encoding: 'utf8' });
+        if (r.status !== 0) throw new Error('P7 fixture: cp -R ' + entry + ' failed — ' + r.stderr);
+      }
+      // A THROW, not an assert: a copy whose generated tree resolves anywhere but itself must never
+      // reach the installer, because the install refreshes that tree first. Failing the run is the
+      // point — a recorded assertion would let the destructive install happen anyway.
+      // spawn-class: environment
+      const probe = spawnSync('node', [path.join(dir, 'scripts', 'sync-opencode-edition.js'), '--print-tree-root'],
+        { encoding: 'utf8' });
+      let treeRoot = String(probe.stdout || '').trim();
+      try { treeRoot = fs.realpathSync(treeRoot); } catch (_) { /* report it raw */ }
+      if (probe.status !== 0 || treeRoot !== dir) {
+        try { rmSync(dir, { recursive: true, force: true }); } catch (_) { /* best-effort */ }
+        throw new Error('P7 fixture: refusing to install from a copy whose generated tree lands outside it'
+          + ' (status ' + probe.status + ', tree root ' + JSON.stringify(treeRoot) + ')');
+      }
+      return dir;
+    }
+    const plantedBody = name => 'PLANTED ' + name + ' — on disk BEFORE the install\n';
+    function plantCommands(names) {
+      const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-p7-dest-'));
+      fs.mkdirSync(cmdDir(dest), { recursive: true });
+      for (const name of names) fs.writeFileSync(path.join(cmdDir(dest), name), plantedBody(name));
+      return dest;
+    }
+    const deployedCmds = dest => readdirSync(cmdDir(dest)).filter(f => f.endsWith('.md')).sort();
+
+    // P7a — the rendered commands fall OUTSIDE the deploy allowlist. That allowlist is hand-held
+    // and no generator feeds it, so a command basename that moves in the routing registry renders a
+    // valid command the install skips — after pruning the deployed one. Registry row and file move
+    // together, which is what a rename in the registry does.
+    {
+      const src = sourceCopy('a');
+      const USER_OWNED = 'my-own-command.md';
+      const dest = plantCommands([...ADAPTIVE_CORE.map(n => n + '.md'), USER_OWNED]);
+      try {
+        const registry = path.join(src, 'scripts', 'generate-routing-surfaces.js');
+        const before = readFileSync(registry, 'utf8');
+        const after = before.replace(/command_basename: '([a-z0-9-]+)'/g, "command_basename: 'zz-$1'");
+        if (after === before) throw new Error('P7a fixture: no command_basename row to move in the routing registry');
+        fs.writeFileSync(registry, after);
+        for (const row of routing.GENERATED_SURFACES.filter(s => s.surface_type === 'command')) {
+          const from = path.join(src, row.path);
+          fs.renameSync(from, path.join(path.dirname(from), 'zz-' + path.basename(from)));
+        }
+        assert(deployedCmds(dest).length === ADAPTIVE_CORE.length + 1,
+          'P7a (fixture): the destination holds the full deployed set before the install — a '
+          + 'destination that was short to begin with cannot observe anything being removed');
+        const r = runInstaller([], { dest, installer: path.join(src, 'install-opencode.sh') });
+        const rendered = readdirSync(path.join(src, '.opencode', 'command')).sort();
+        assert(ADAPTIVE_CORE.every(n => !rendered.includes(n + '.md')) && rendered.some(n => n.startsWith('zz-')),
+          'P7a (fixture): the mutated source renders the commands under names the deploy allowlist '
+          + 'does not hold — got ' + JSON.stringify(rendered));
+        const lost = ADAPTIVE_CORE.filter(n => !existsSync(path.join(cmdDir(dest), n + '.md')));
+        assert(lost.length === 0,
+          'P7a (#973): a deployed command the install is NOT going to replace is still on disk '
+          + 'afterwards — destroyed: ' + (lost.join(', ') || '(none)') + ', install exited ' + r.status);
+        assert(existsSync(path.join(cmdDir(dest), USER_OWNED)),
+          'P7a: the user-owned command in the same dir is untouched either way');
+        clean(r);
+      } finally {
+        try { rmSync(src, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+        try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
+
+    // P7b — WHAT THE NAMESPACE PRUNE IS FOR, and the half a narrowing repair loses. A command
+    // retired in an earlier release is cleared from a LIVE install by this prune and by nothing
+    // else. The scope is pinned WITH the sweep, because a prune that reaches further is the worse
+    // defect and the sweep half cannot see it: the command dir is SHARED with the user's own.
+    {
+      const RETIRED = ['kaola-workflow-adapt.md', 'kaola-workflow-plan-run.md'];
+      const KEPT = ['my-own-command.md', 'notes.txt'];
+      const dest = plantCommands([...ADAPTIVE_CORE.map(n => n + '.md'), ...RETIRED, ...KEPT]);
+      try {
+        // Anti-vacuity, both directions: a retired name back in the deploy set would be REPLACED
+        // rather than swept, and a kept name that joined it would survive because it was deployed.
+        const deploySet = ADAPTIVE_CORE.map(n => n + '.md');
+        assert(RETIRED.every(n => !deploySet.includes(n)) && KEPT.every(n => !deploySet.includes(n)),
+          'P7b: no planted name is in the deploy set — a name that is deployed is not evidence about '
+          + 'the prune at all');
+        const r = runInstaller([], { dest });
+        assert(r.ok, 'P7b: install over a populated command dir exits 0 (got status ' + r.status
+          + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
+        const left = RETIRED.filter(n => existsSync(path.join(cmdDir(dest), n)));
+        assert(left.length === 0,
+          'P7b: a command retired in an earlier release is SWEPT from a live install — still on '
+          + 'disk: ' + left.join(', '));
+        for (const n of KEPT) {
+          assert(existsSync(path.join(cmdDir(dest), n))
+            && readFileSync(path.join(cmdDir(dest), n), 'utf8') === plantedBody(n),
+            'P7b: the sweep is SCOPED — ' + n + ', which this edition neither ships nor ever shipped, '
+            + 'survives byte-intact in the shared command dir');
+        }
+        // The sweep is only evidence alongside a real deploy: a run that swept everything and
+        // deployed nothing would satisfy the assertions above.
+        const missing = ADAPTIVE_CORE.filter(n => !hasCmd(dest, n));
+        assert(missing.length === 0,
+          'P7b: the same install still deploys the whole command set — missing: ' + missing.join(', '));
+        clean(r);
+      } finally {
+        try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
+
+    // P7c — A REINSTALL STILL UPDATES. The deployed file must carry the SOURCE bytes afterwards, so
+    // a repair that keeps a stale command in place rather than replacing it reds here.
+    {
+      const dest = plantCommands(ADAPTIVE_CORE.map(n => n + '.md'));
+      try {
+        const r = runInstaller([], { dest });
+        assert(r.ok, 'P7c: reinstall over a populated command dir exits 0 (got status ' + r.status
+          + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
+        const stale = ADAPTIVE_CORE.filter(n => {
+          const live = path.join(cmdDir(dest), n + '.md');
+          const source = path.join(TREE_ROOT, '.opencode', 'command', n + '.md');
+          return !existsSync(live) || !fs.readFileSync(live).equals(fs.readFileSync(source));
+        });
+        assert(stale.length === 0,
+          'P7c: after the install every deployed command carries the SOURCE bytes, not the ones that '
+          + 'were there before — stale: ' + stale.join(', '));
+        clean(r);
+      } finally {
+        try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
   }
 
   // P2–P5 (former --with-fast / --with-full / union-preserve opt-in-partition probes)

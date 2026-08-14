@@ -3436,6 +3436,67 @@ function probeImplementationCommit(root, baseBranch, machineryAuthoredPaths) {
   return { state: implCommitted ? 'committed' : 'missing', paths: dirty.slice(0, 20) };
 }
 
+/** The directory part of a git pathname; '' for a path at the repository root. */
+function dirOfRepoPath(rel) {
+  const cut = rel.lastIndexOf('/');
+  return cut < 0 ? '' : rel.slice(0, cut);
+}
+
+// #975: which of the finalization residue this run cannot attribute to ITSELF.
+//
+// The residue probe hands every uncommitted non-`kaola-workflow/` path to one `git add -A`, so an
+// artifact that was in the tree for reasons unrelated to the run is committed under
+// `chore: finalize`. Measured end to end on 2026-08-12's own artifact: a self-referential
+// `plugins/plugins` symlink staged at mode 120000, committed at exit 0, and `git status` afterwards
+// EMPTY — which is why nothing noticed. The fault was never that the path went unseen; the probe
+// names it. It is that it was ADOPTED.
+//
+// ATTRIBUTION IS BY DIRECTORY, from the branch's own history. Not by path, which cannot see a new
+// file (`src/helper.js` beside a committed `src/impl.js` is this run's work and must still be
+// staged), and not by top-level segment, which is too coarse to have caught the observed instance:
+// that run committed under `plugins/kaola-workflow-gitea/scripts/`, so a `plugins`-vs-`plugins`
+// compare would have called the artifact the run's own. The rule is the run's own commits carry a
+// file in this path's OWN directory — work deep inside a tree does not vouch for a new entry at the
+// tree's root, which is exactly the shape that was adopted.
+//
+// The history, not the net diff (`main...HEAD`): a path committed and later reverted is still this
+// run's work, and the net diff is blind to it — the same reason probeImplementationCommit consults
+// both. Widening-only reads are the safe direction here, because the cost of calling this run's own
+// work foreign is an ordinary run left unfinished, which is worse than the fault being fixed.
+//
+// `machineryAuthoredPaths` (the Step 8a residue mirror) is subtracted for the reason
+// probeImplementationCommit subtracts it: state the transaction manufactured itself is never
+// evidence against the operator, and reading it back as such is a bug this codebase has already
+// paid for once.
+//
+// Returns { state: 'ok' | 'unattributable_unknown', paths }. Two reads answer `unattributable_unknown`
+// and BOTH stage everything, exactly as before: git could not be asked, or the branch carries no
+// commits of its own — with no evidence of what this run authored, "all of it is foreign" is not a
+// finding, it is an ordinary run refusing to finish.
+function unattributableResidue(root, baseBranch, residue, machineryAuthoredPaths) {
+  const candidates = (residue || []).filter(rel => !rel.startsWith('kaola-workflow/'));
+  if (candidates.length === 0) return { state: 'ok', paths: [] };
+  const base = (baseBranch || '').trim() || 'main';
+  if (!isSafeBranchArg(base)) return { state: 'unattributable_unknown', paths: [] };
+  let touched = [];
+  try {
+    // `-z` for the reason probeImplementationCommit gives: `log --name-only` C-QUOTES a pathname
+    // holding a quote, a backslash or a non-ASCII byte, and a quoted path compares equal to nothing
+    // — every such path would read as unattributable and be left behind.
+    const out = execFileSync('git', ['-C', root, 'log', '--name-only', '--pretty=format:', '-z', base + '..HEAD'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+    touched = splitNulPaths(out);
+  } catch (_) { return { state: 'unattributable_unknown', paths: [] }; }
+  if (touched.length === 0) return { state: 'unattributable_unknown', paths: [] };
+  const authored = new Set(Array.isArray(machineryAuthoredPaths) ? machineryAuthoredPaths : []);
+  const ownDirs = new Set(touched.map(dirOfRepoPath));
+  return {
+    state: 'ok',
+    paths: candidates.filter(rel => !authored.has(rel) && !ownDirs.has(dirOfRepoPath(rel)))
+  };
+}
+
+
 // The single-project staging rule, moved out of command prose and into the transaction. Compare
 // the project name as a FIXED STRING (never a regex): a foreign project's `archive/` band or more
 // than one live `kaola-workflow/<project>/` in the index means the commit must be split.
@@ -4920,6 +4981,33 @@ function cmdFinalize() {
             + 'is the one that failed. Re-read the worktree by hand before trusting this closure.',
           detail ? ['git said:', '', '```', detail, '```'] : []);
       }
+      // #975: the residue is STAGED, never ADOPTED. `git add -A` takes whatever the probe listed, so
+      // a path that was in the tree for reasons unrelated to this run is committed under
+      // `chore: finalize` — measured on 2026-08-12's own artifact, a `plugins/plugins` symlink at
+      // mode 120000, at exit 0, with `git status` afterwards EMPTY. That empty status is why nothing
+      // noticed. Classified HERE, between the probe and the `git add`, so an unattributable path
+      // never reaches the index at all.
+      // Nothing refuses and nothing is repaired: the exit stays 0, the artifact stays exactly where
+      // it was, and the whole of the response is the typed finding plus the durable section it is
+      // flushed into. Removing what it found would destroy the only evidence of what happened, and
+      // deciding what an unexplained artifact means is a value call that belongs to a human.
+      const attribution = unattributableResidue(root, field(finalizeAuthorityState, 'base_branch'),
+        residue, mirroredResiduePaths);
+      const unattributed = new Set(attribution.paths);
+      if (attribution.state !== 'ok') finalizeTx.residue_attribution = attribution.state;
+      const stageable = unattributed.size === 0 ? residue : residue.filter(rel => !unattributed.has(rel));
+      if (unattributed.size > 0) {
+        finalizeTx.residue_unattributed = attribution.paths.slice(0, 50);
+        process.stderr.write('kaola-workflow-claim finalize: WARNING: ' + attribution.paths.length
+          + ' path(s) in the worktree could not be attributed to ' + args.project + ' — they are NOT in '
+          + 'the `chore: finalize` commit and they are still on disk: ' + attribution.paths.join(', ') + '\n');
+        recordFinalizeFinding('residue_unattributed',
+          'The `chore: finalize` commit did NOT carry the paths below: this branch\'s own commits touch '
+            + 'no file in their directories, so the transaction has no evidence they are this run\'s '
+            + 'work. Nothing was committed, reverted or deleted — they are exactly where they were. '
+            + 'Read them before the sink runs: commit what belongs to the run, remove what does not.',
+          ['Paths not attributed to this run:', ''].concat(attribution.paths.slice(0, 50).map(p => '- ' + p)));
+      }
       // #907: the staging failure is REPORTED, not swallowed and not refused. One UNMATCHED pathspec
       // exits 128 and stages NOTHING, not even the healthy files beside it. #920: that is this one
       // case, not a property of `git add` — a GITIGNORED path beside an addable one exits 1 having
@@ -4934,22 +5022,27 @@ function cmdFinalize() {
       // and is fixed upstream in the parser; disk-full, a permission fault and a held index lock all
       // reach this same catch, which is why the fix here is the report and not the parse.
       // Exit stays 0, the finding is typed on the envelope, and it is written durably below.
-      if (residue.length > 0) {
+      if (residue.length > 0 && stageable.length === 0) {
+        // #907's lesson, one case further on: `skipped` is documented as "no residue to stage", and
+        // there WAS residue — every path of it was unattributable. A ledger that says nothing was
+        // there is the same false statement, one step removed.
+        finalizeTx.residue_stage = 'nothing_attributable';
+      } else if (stageable.length > 0) {
         try {
           // stderr PIPED, not inherited: git's own `fatal: …` line is the whole diagnosis and it has
           // to ride along in the typed finding. Re-emitted on this process's stderr immediately
           // afterwards so a terminal reader loses nothing the inherited form used to show.
-          execFileSync('git', ['-C', root, 'add', '-A', '--', ...residue],
+          execFileSync('git', ['-C', root, 'add', '-A', '--', ...stageable],
             { encoding: 'utf8', stdio: ['ignore', 'inherit', 'pipe'] });
           finalizeTx.residue_stage = 'staged';
         } catch (e) {
           const detail = String((e && (e.stderr || e.message)) || e).trim().slice(0, 1000);
           finalizeTx.residue_stage = 'failed';
           finalizeTx.residue_stage_detail = detail;
-          const residueNotStaged = pathsNotStaged(root, residue);
+          const residueNotStaged = pathsNotStaged(root, stageable);
           if (residueNotStaged) finalizeTx.residue_unstaged = residueNotStaged.slice(0, 50);
           process.stderr.write('kaola-workflow-claim finalize: WARNING: staging the finalization residue '
-            + 'FAILED for ' + args.project + ' — `git add` exited non-zero over ' + residue.length
+            + 'FAILED for ' + args.project + ' — `git add` exited non-zero over ' + stageable.length
             + ' path(s)' + (residueNotStaged
               ? (residueNotStaged.length
                 ? '; these did not reach the index: ' + residueNotStaged.join(', ')

@@ -374,9 +374,15 @@ function runSink(fx, extraArgs, extraEnv) {
 }
 
 // The LEGACY (non---sink) entry point. It is where the two branch-shape preconditions live, so it
-// is the only way to drive them end to end.
+// is the only way to drive them end to end. Split from an EXPLICIT script path for the same reason
+// runSinkAt is (#973): the worktree data-loss guard is hand-ported per forge and must be driven
+// through each edition's own copy on this entry point too.
 function runSinkLegacy(fx, extraArgs, extraEnv) {
-  const args = [sinkMergeScript, '--branch', fx.branch, '--project', fx.projectName, '--json'].concat(extraArgs || []);
+  return runSinkLegacyAt(sinkMergeScript, fx, extraArgs, extraEnv);
+}
+
+function runSinkLegacyAt(script, fx, extraArgs, extraEnv) {
+  const args = [script, '--branch', fx.branch, '--project', fx.projectName, '--json'].concat(extraArgs || []);
   // The measured properties are the process's OWN exit code and its emitted envelope, and the
   // preconditions under test run in main() before any exported seam — there is nothing to call
   // in-process that would carry either.
@@ -813,6 +819,18 @@ function runPlanDoc(note) {
 // .kw/worktrees/<project> path holds the branch with UNTRACKED .cache evidence (the shape a run
 // leaves behind: evidence is never committed). opts.evidence: { 'n1.md': content } written into
 // the WORKTREE's .cache only; omit to build the evidence-lost shape (no worktree at all).
+//
+// #973: three more optional knobs, all off by default so every pre-existing caller is byte-unchanged.
+//   opts.untracked  { '<wt-relative path>': content } — planted UNTRACKED in the linked worktree at
+//                   an arbitrary path, so a scenario can carry genuine work (src/…) as well as the
+//                   workflow's own lane content (kaola-workflow/<project>/…). Also builds the
+//                   worktree on its own, so a scenario needs no .cache evidence to get one.
+//   opts.symlinks   { '<wt-relative path>': '<link target>' } — the same, as a SYMLINK. A regular
+//                   file is not a proxy for this: the artifact that motivated the issue is a link.
+//   opts.gitignore  a .gitignore body COMMITTED on main before the branch, so `opts.untracked` can
+//                   plant content git is required to ignore (the third population at this seam).
+// The worktree path is returned as `wtPath` — the destructive step under test removes exactly that
+// directory, so a scenario has to be able to name it.
 function buildWorktreeEvidenceFixture(project, issue, opts) {
   opts = opts || {};
   const tmpRoot = makeTmpRoot();
@@ -826,7 +844,8 @@ function buildWorktreeEvidenceFixture(project, issue, opts) {
   fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
   fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
   fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
-  git(tmpRoot, ['add', 'kaola-workflow']);
+  if (opts.gitignore) fs.writeFileSync(path.join(tmpRoot, '.gitignore'), opts.gitignore);
+  git(tmpRoot, ['add', '-A']);
   git(tmpRoot, ['commit', '-m', 'chore: roadmap']);
   git(tmpRoot, ['push', 'origin', 'main']);
 
@@ -844,17 +863,37 @@ function buildWorktreeEvidenceFixture(project, issue, opts) {
   git(tmpRoot, ['checkout', 'main']);
 
   // Linked worktree on the branch at the canonical path, holding UNTRACKED node evidence.
-  if (opts.evidence) {
-    const wtPath = path.join(tmpRoot, '.kw', 'worktrees', project);
+  let wtPath = null;
+  if (opts.evidence || opts.untracked || opts.symlinks) {
+    wtPath = path.join(tmpRoot, '.kw', 'worktrees', project);
     git(tmpRoot, ['worktree', 'add', wtPath, branch]);
-    const wtCache = path.join(wtPath, 'kaola-workflow', project, '.cache');
-    fs.mkdirSync(wtCache, { recursive: true });
-    for (const name of Object.keys(opts.evidence)) {
-      fs.writeFileSync(path.join(wtCache, name), opts.evidence[name]);
+    if (opts.evidence) {
+      const wtCache = path.join(wtPath, 'kaola-workflow', project, '.cache');
+      fs.mkdirSync(wtCache, { recursive: true });
+      for (const name of Object.keys(opts.evidence)) {
+        fs.writeFileSync(path.join(wtCache, name), opts.evidence[name]);
+      }
     }
+    plantWorktreeUntracked973(wtPath, opts);
   }
 
-  return { tmpRoot, remotePath, binDir, logFile, branch };
+  return { tmpRoot, remotePath, binDir, logFile, branch, wtPath };
+}
+
+// #973: plant `opts.untracked` (regular files) and `opts.symlinks` (links) into a linked worktree.
+// Shared by the two fixture builders that need it so the symlink shape is expressed in one place —
+// it is easy to add the file case to a builder and quietly leave the link case only in one of them.
+function plantWorktreeUntracked973(wtPath, opts) {
+  for (const rel of Object.keys((opts && opts.untracked) || {})) {
+    const abs = path.join(wtPath, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, opts.untracked[rel]);
+  }
+  for (const rel of Object.keys((opts && opts.symlinks) || {})) {
+    const abs = path.join(wtPath, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.symlinkSync(opts.symlinks[rel], abs);
+  }
 }
 
 (function testWorktreePosturedSinkArchivesWorktreeCacheEvidence() {
@@ -4019,6 +4058,521 @@ function assertPreflightGuardScope912(label, script) {
     return;
   }
   assertPreflightGuardScope912(label, script);
+});
+
+// ------------------------------------------------- #973 the UNTRACKED half of the data-loss guard
+
+// `assertWorktreeClean` is the only thing standing between a linked worktree carrying uncommitted
+// work and `git worktree remove --force`. (#912 b) holds its TRACKED half. This holds the untracked
+// half, which the tracked half does not imply: the probe is
+// `git status --porcelain --untracked-files=no`, and that flag form structurally cannot report an
+// untracked file — so a worktree whose only uncommitted content is untracked probes CLEAN and the
+// forced removal takes it. CLAUDE.md states the invariant this restores: an operation that would
+// destroy something still fails loudly, "a sink over a tree carrying uncommitted work".
+//
+// THE FLAG IS NOT AN ACCIDENT, and that is what makes this more than a one-character fix. It is what
+// lets an ordinary run through: a run's linked worktree carries `kaola-workflow/<project>/.cache/…`
+// UNTRACKED by design — the sink says so itself where it stages that directory before removing the
+// worktree ("genuinely worktree-only (untracked) content, e.g. a .cache/ crash-resume journal, still
+// survives"), and (#707 h) pins the sink archiving exactly that content. So three arms, and the two
+// controls are the ones with teeth:
+//
+//   (e) GENUINE untracked work — a path that is not the workflow's own bookkeeping — must not be
+//       silently destroyed.  RED at baseline.
+//   (f) the workflow's OWN untracked lane content must still sink, exit unchanged.  A repair that
+//       merely widens the flag passes (e) and breaks every run in the field; this is the arm that
+//       says so.
+//   (g) IGNORED content must still sink. Measured, and it is why (g) is a control and not a third
+//       red: `--untracked-files=all` does NOT list an ignored path (a worktree whose only extra
+//       content is `node_modules/…` under a committed `node_modules/` rule reports an entirely empty
+//       `status --porcelain -uall`), so widening the flag cannot break this one. It is the control
+//       against a repair that reaches past the flag and adds `--ignored`, which would refuse over
+//       every generated tree this repo carries (`.claude/`, `.codex/`, `node_modules/`, …).
+//   (h) the same as (e) over a SYMLINK, because a link is the shape actually observed — a guard
+//       proven only against a regular file is unproven against the artifact that produced this.
+//   (i) the same as (e) on the LEGACY (non---sink) entry point, which reaches the same forced
+//       removal by a different route. A probe-side repair covers both; a repair placed inside the
+//       --sink transaction covers only one, and nothing else in the corpus would notice.
+//
+// WHAT IS PINNED IS THE RESULT, NOT THE MECHANISM. (e) does not demand a refusal. Refusing,
+// reporting-and-preserving and moving the artifact aside all satisfy it; the pair it forbids is
+// "the bytes are gone" AND "nothing said so". The measurement is end to end over the real
+// destructive step — no abort hook, so `git worktree remove --force` actually runs — and survival is
+// searched for by NONCE across the fixture rather than tested at a fixed path, so a repair that
+// relocates the file is not mistaken for one that destroyed it.
+//
+// Every arm runs `--keep-issue-open`, as (#906 z4) does and for the same reason: the closure
+// terminal is far downstream of the guard under test, and the shared gh-shaped mock cannot serve
+// every edition's close call from this fixture (the GitLab and Gitea close paths reach it from a cwd
+// the cwd-honest mock rejects). Keep-open reaches the same terminal past the same worktree removal,
+// so nothing these arms measure is changed by it.
+
+// Every file under `root` whose bytes contain `needle`. Bounded (depth and hit count) because it
+// runs over a live fixture, and `.git` is skipped: a committed blob is zlib-deflated and would never
+// match anyway, while a stray match in git's own scratch would be a survival claim about nothing.
+function filesContaining973(root, needle) {
+  const hits = [];
+  const walk = (dir, depth) => {
+    if (depth > 12 || hits.length >= 25) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const entry of entries) {
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === '.git') continue;
+        walk(abs, depth + 1);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      try { if (fs.readFileSync(abs, 'utf8').includes(needle)) hits.push(path.relative(root, abs)); } catch (_) {}
+    }
+  };
+  walk(root, 0);
+  return hits;
+}
+
+// Every SYMLINK under `root` whose target is `target`. The survival oracle for (h), and it cannot be
+// built out of the same parts as filesContaining973 — three measured reasons, each of which would
+// make the search pass silently over the very artifact it exists to find:
+//   * `fs.existsSync` on `plugins/plugins -> plugins` answers FALSE: the link resolves to itself, so
+//     "does it exist" is the wrong question and would report the artifact as already gone.
+//   * a `Dirent` carries lstat semantics, so a symlink answers false to BOTH isFile() and
+//     isDirectory() — filesContaining973's `if (!entry.isFile()) continue` walks straight past it.
+//   * there are no bytes to search: the link's content is its target, read with readlink.
+// Not following the link is also load-bearing — a self-referential one is an infinite descent.
+function symlinksTo973(root, target) {
+  const hits = [];
+  const walk = (dir, depth) => {
+    if (depth > 12 || hits.length >= 25) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const entry of entries) {
+      const abs = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        let link = null;
+        try { link = fs.readlinkSync(abs); } catch (_) { continue; }
+        if (link === target) hits.push(path.relative(root, abs));
+        continue;
+      }
+      if (entry.isDirectory() && entry.name !== '.git') walk(abs, depth + 1);
+    }
+  };
+  walk(root, 0);
+  return hits;
+}
+
+// `git worktree remove --force` is the operation under test. A fixture that escaped the temp dir
+// would run it over a real tree, so the path is proven before anything destructive is spawned.
+function assertUnderTmpdir973(label, p) {
+  let real = p;
+  let tmp = os.tmpdir();
+  try { real = fs.realpathSync(p); } catch (_) {}
+  try { tmp = fs.realpathSync(tmp); } catch (_) {}
+  assert(real.startsWith(tmp + path.sep),
+    '#973 (' + label + ') SAFETY: the fixture must live under the temp dir before any destructive '
+    + 'sink runs over it; got ' + real + ' (tmpdir ' + tmp + ')');
+  return real.startsWith(tmp + path.sep);
+}
+
+function assertUntrackedWorkIsNotSilentlyDestroyed973(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#973 e ' + label + '): a linked worktree carrying GENUINE untracked work must not be force-removed silently — the bytes survive somewhere and the operator is told');
+  const NONCE = 'kw973-untracked-nonce-' + issue;
+  const GENUINE_REL = 'src/util/helper.js';
+  const fx = buildWorktreeEvidenceFixture(project, issue, {
+    untracked: {
+      // The workflow's own lane content, present exactly as an ordinary run leaves it, so this arm
+      // measures the genuine file and not "the worktree had something in it".
+      ['kaola-workflow/' + project + '/.cache/n1-impl.md']: 'binding: n1-impl nonce' + issue + '\n',
+      // The work #975 leaves untracked in the worktree: a path finalize could not attribute, so it
+      // is neither staged nor committed and nothing but this guard stands between it and the force.
+      [GENUINE_REL]: '// ' + NONCE + '\nmodule.exports = function helper() { return ' + issue + '; };\n',
+    },
+  });
+  fx.projectName = project;
+  try {
+    if (!assertUnderTmpdir973(label + '/e', fx.tmpRoot)) return;
+    const genuineAbs = path.join(fx.wtPath, GENUINE_REL);
+    assert(fs.existsSync(genuineAbs),
+      '#973 (e/' + label + ') premise: the untracked file must be on disk in the linked worktree before the '
+      + 'sink runs, else every clause below is vacuous; expected ' + genuineAbs);
+    // The premise that makes this arm about the guard and not about git: in the flag form the guard
+    // probes with, this worktree is indistinguishable from an empty one. A repair therefore cannot
+    // come from that probe as written — it has to see the file some other way, or protect it later.
+    const blindProbe = git(fx.wtPath, ['status', '--porcelain', '--untracked-files=no']).stdout.trim();
+    assert(blindProbe === '',
+      '#973 (e/' + label + ') premise: `status --porcelain --untracked-files=no` must report NOTHING over an '
+      + 'untracked-only worktree — that is why the guard cannot see this file; got ' + JSON.stringify(blindProbe));
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    const combined = String(result.stdout || '') + String(result.stderr || '');
+    const survivors = filesContaining973(fx.tmpRoot, NONCE);
+    // Deliberately generous, because "the operator was told" has more than one honest shape: a
+    // refusal (non-zero exit), a typed finding on the envelope, or the path named in what the run
+    // printed. Any one of them is being told; none of them is a mechanism this arm requires.
+    const told = result.status !== 0
+      || !!(out && out.reason)
+      || combined.includes(GENUINE_REL)
+      || combined.includes('helper.js');
+    const seen = 'exit=' + result.status
+      + ' status=' + JSON.stringify(out && out.status)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + ' worktree_still_present=' + fs.existsSync(fx.wtPath)
+      + ' survivors=' + JSON.stringify(survivors)
+      + '\nstderr: ' + String(result.stderr || '').slice(-500);
+
+    assert(survivors.length > 0,
+      '#973 (e/' + label + '): the untracked work must still exist after the sink. `git worktree remove --force` '
+      + 'is what runs here, and nothing else in the transaction is holding this file: it is not staged, not '
+      + 'committed and not under kaola-workflow/. Leaving the worktree standing, preserving the file elsewhere '
+      + 'and copying it aside all satisfy this; destroying it does not. ' + seen);
+    assert(told,
+      '#973 (e/' + label + '): the sink must not report unqualified success over a worktree carrying uncommitted '
+      + 'work. A non-zero exit, a typed reason on the envelope, or the path named in the output all count — '
+      + 'silence does not. ' + seen);
+  } finally {
+    cleanup(fx);
+  }
+}
+
+function assertOwnLaneContentStillSinks973(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#973 f ' + label + '): a worktree carrying ONLY the workflow\'s own untracked lane content must still sink, exit unchanged — the flag the guard uses is what lets an ordinary run through');
+  const fx = buildWorktreeEvidenceFixture(project, issue, {
+    untracked: {
+      ['kaola-workflow/' + project + '/.cache/n1-impl.md']: 'binding: n1-impl nonce' + issue + '\n',
+      ['kaola-workflow/' + project + '/.cache/n2-review.md']: 'binding: n2-review nonce' + issue + '\n\nverdict: pass\n',
+      ['kaola-workflow/' + project + '/.cache/sink-fallback.json']: '{"schema":1}\n',
+    },
+  });
+  fx.projectName = project;
+  try {
+    if (!assertUnderTmpdir973(label + '/f', fx.tmpRoot)) return;
+    // The premise: this content IS untracked, so a guard that counts untracked files at all counts
+    // these. Without this the arm could pass because the fixture accidentally committed them.
+    const wide = git(fx.wtPath, ['status', '--porcelain', '-uall']).stdout.trim();
+    assert(wide.split('\n').filter(Boolean).length === 3,
+      '#973 (f/' + label + ') premise: the three lane files must be UNTRACKED in the worktree — otherwise this '
+      + 'control cannot catch a guard that refuses on untracked content; got ' + JSON.stringify(wide));
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    assert(result.status === 0 && out && out.status === 'sinked',
+      '#973 (f/' + label + '): the run must still complete. Every run leaves untracked lane content in its '
+      + 'worktree, so a guard that treats untracked-means-dirty refuses EVERY sink — green in isolation on the '
+      + 'destructive arm, and broken in the field. got exit=' + result.status
+      + ' status=' + JSON.stringify(out && out.status)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + '\nstderr: ' + String(result.stderr || '').slice(-600));
+  } finally {
+    cleanup(fx);
+  }
+}
+
+function assertIgnoredContentStillSinks973(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#973 g ' + label + '): a worktree carrying only GITIGNORED content must still sink — the third population at this seam, and the control against a guard that reaches past --untracked-files into --ignored');
+  const fx = buildWorktreeEvidenceFixture(project, issue, {
+    gitignore: 'node_modules/\nbuild/\n',
+    untracked: {
+      'node_modules/left-pad/index.js': 'module.exports = function () { return ' + issue + '; };\n',
+      'build/out.js': '// generated\n',
+    },
+  });
+  fx.projectName = project;
+  try {
+    if (!assertUnderTmpdir973(label + '/g', fx.tmpRoot)) return;
+    // The measured answer to "should ignored files count?": git does not offer them to any
+    // --untracked-files setting, so a repair that widens the flag never sees them, and a repair
+    // that asks for them has gone looking. Recorded here so the boundary is a fact, not a choice.
+    const wide = git(fx.wtPath, ['status', '--porcelain', '-uall']).stdout.trim();
+    assert(wide === '',
+      '#973 (g/' + label + ') premise: `status --porcelain -uall` must report NOTHING over ignored-only content '
+      + '— ignored is a population NO --untracked-files setting reaches; got ' + JSON.stringify(wide));
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    assert(result.status === 0 && out && out.status === 'sinked',
+      '#973 (g/' + label + '): the run must still complete over ignored content. Ignored trees are generated and '
+      + 'disposable — this repo carries several in every checkout — so a guard that counts them refuses every '
+      + 'sink. got exit=' + result.status
+      + ' status=' + JSON.stringify(out && out.status)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + '\nstderr: ' + String(result.stderr || '').slice(-600));
+  } finally {
+    cleanup(fx);
+  }
+}
+
+function assertUntrackedSymlinkIsNotSilentlyDestroyed973(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#973 h ' + label + '): the same, over a SYMLINK — the shape actually observed. A guard proven only against a regular file is unproven against the artifact that produced this');
+  const LINK_REL = 'plugins/plugins';
+  const LINK_TARGET = 'plugins';
+  const fx = buildWorktreeEvidenceFixture(project, issue, {
+    untracked: { ['kaola-workflow/' + project + '/.cache/n1-impl.md']: 'binding: n1-impl nonce' + issue + '\n' },
+    symlinks: { [LINK_REL]: LINK_TARGET },
+  });
+  fx.projectName = project;
+  try {
+    if (!assertUnderTmpdir973(label + '/h', fx.tmpRoot)) return;
+    const linkAbs = path.join(fx.wtPath, LINK_REL);
+    assert(fs.lstatSync(linkAbs).isSymbolicLink() && fs.readlinkSync(linkAbs) === LINK_TARGET,
+      '#973 (h/' + label + ') premise: the untracked path must really be a symlink to ' + LINK_TARGET
+      + ' before the sink runs; expected ' + linkAbs);
+    // The premise that dictates the oracle, and it is worth asserting rather than assuming: this link
+    // resolves to itself, so `existsSync` answers FALSE while the link is sitting right there. A
+    // survivor check written on existsSync would report the artifact destroyed before the sink ran.
+    assert(fs.existsSync(linkAbs) === false,
+      '#973 (h/' + label + ') premise: `existsSync` must answer false on the self-referential link — that is why '
+      + 'the survival oracle is lstat and not existsSync');
+    const wide = git(fx.wtPath, ['status', '--porcelain', '-uall']).stdout;
+    assert(wide.includes('?? ' + LINK_REL),
+      '#973 (h/' + label + ') premise: git must report the link as UNTRACKED, else there is nothing for a widened '
+      + 'probe to have seen; got ' + JSON.stringify(wide.trim()));
+    const blindProbe = git(fx.wtPath, ['status', '--porcelain', '--untracked-files=no']).stdout.trim();
+    assert(blindProbe === '',
+      '#973 (h/' + label + ') premise: the guard\'s own flag form must report NOTHING over it; got '
+      + JSON.stringify(blindProbe));
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    const combined = String(result.stdout || '') + String(result.stderr || '');
+    const survivors = symlinksTo973(fx.tmpRoot, LINK_TARGET);
+    const told = result.status !== 0 || !!(out && out.reason) || combined.includes(LINK_REL);
+    const seen = 'exit=' + result.status
+      + ' status=' + JSON.stringify(out && out.status)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + ' worktree_still_present=' + fs.existsSync(fx.wtPath)
+      + ' surviving_links=' + JSON.stringify(survivors)
+      + '\nstderr: ' + String(result.stderr || '').slice(-500);
+
+    assert(survivors.length > 0,
+      '#973 (h/' + label + '): the untracked SYMLINK must still exist after the sink, by lstat. A link is what the '
+      + 'run that motivated this actually left behind, and `git worktree remove --force` unlinks it like anything '
+      + 'else. ' + seen);
+    assert(told,
+      '#973 (h/' + label + '): the sink must not report unqualified success over a worktree carrying an uncommitted '
+      + 'symlink. ' + seen);
+  } finally {
+    cleanup(fx);
+  }
+}
+
+// (i) The LEGACY (non---sink) entry point reaches the same `git worktree remove --force` by a
+// different route: main() runs its preconditions and then Step 3 removes the worktree, where the
+// transaction runs sinkPreflight and removes it inside the merge step. Both call the SAME
+// assertWorktreeClean, so a probe-side repair satisfies both — but a repair written into the --sink
+// transaction satisfies only one, and nothing else in this corpus drives the legacy path over a
+// worktree that has anything to lose. Pinning the result on both entry points says which repairs are
+// complete without saying where the repair belongs.
+//
+// THE FIXTURE POSTURE IS FORCED, from both ends, and every constraint below was measured by trying
+// the alternative and reading what came back:
+//   * the run folder must NOT be on the BRANCH TIP — the legacy path reports `run_not_finalized`
+//     there and stops;
+//   * it must NOT be archived either — the GitLab and Gitea legacy paths early-exit 3
+//     ("project archived … fallback receipt written") over an already-archived project, before
+//     touching git. Root and codex do not, which is why an archived fixture looks fine on two
+//     editions and dies on the other two;
+//   * it must therefore be LIVE in the main root and UNTRACKED there: untracked keeps it invisible
+//     to `assertCleanWorktree` (`--untracked-files=no`) and out of the branch, so `git checkout
+//     <branch>` has nothing to collide with;
+//   * and `finalization-summary.md` must satisfy /Final Validation/i AND /pass/i AND no
+//     /blocked|failed/ — the GitLab and Gitea `finalValidationPassed` gate, which root and codex do
+//     not carry. The `READY FOR FINAL GIT GATE` body the other legacy fixture here uses fails it;
+//     the pre-existing legacy tests drive the root script only, so nothing had ever run that gate.
+// This is the in-place posture — a live run in the main root, its deliverable on the branch, and a
+// linked worktree still standing. (i-control) is what keeps all of it honest: if any constraint
+// drifts, the fixture stops completing and (i-control) reds rather than (i) passing on silence.
+function buildLegacyWorktreeFixture973(project, issue, opts) {
+  opts = opts || {};
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const branch = 'workflow/' + project;
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  writeGhMock(binDir, logFile);
+
+  // main: roadmap source + mirror.
+  fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
+  fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'chore: roadmap']);
+  git(tmpRoot, ['push', 'origin', 'main']);
+
+  // branch: the deliverable, and nothing under kaola-workflow/ — real implementation, no run state.
+  git(tmpRoot, ['checkout', '-b', branch]);
+  fs.writeFileSync(path.join(tmpRoot, 'IMPL-' + issue + '.txt'), 'real implementation\n');
+  git(tmpRoot, ['add', '-A']);
+  git(tmpRoot, ['commit', '-m', 'feat: implementation']);
+  git(tmpRoot, ['push', '-u', 'origin', branch]);
+  git(tmpRoot, ['checkout', 'main']);
+
+  // The live run folder, written back on main and never committed anywhere. Order matters: writing
+  // it before the branch commit would sweep it into that commit via `git add -A`.
+  const liveDir = path.join(tmpRoot, 'kaola-workflow', project);
+  fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), liveState(project, issue, new Date().toISOString()));
+  fs.writeFileSync(path.join(liveDir, 'workflow-plan.md'), runPlanDoc('legacy in-place run'));
+  fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'),
+    '# Finalization Summary\n\n## Final Validation\n\nverdict: pass\n\nREADY FOR FINAL GIT GATE\n');
+  fs.writeFileSync(path.join(liveDir, '.cache', 'n1.md'), '# n1 evidence\n\nverdict: pass\n');
+
+  const wtPath = path.join(tmpRoot, '.kw', 'worktrees', project);
+  git(tmpRoot, ['worktree', 'add', wtPath, branch]);
+  plantWorktreeUntracked973(wtPath, opts);
+
+  return { tmpRoot, remotePath, binDir, logFile, branch, projectName: project, wtPath };
+}
+
+function assertLegacyEntryPointHoldsTheSameLine973(label, sinkScript, project, issue, mockEnvName, laneControlCompleted) {
+  console.log('Test (#973 i ' + label + '): the LEGACY (non---sink) entry point reaches the same forced removal — genuine untracked work must not be silently destroyed there either');
+  const NONCE = 'kw973-legacy-nonce-' + issue;
+  const GENUINE_REL = 'src/util/helper.js';
+  const fx = buildLegacyWorktreeFixture973(project, issue, {
+    untracked: {
+      ['kaola-workflow/' + project + '/.cache/n1-impl.md']: 'binding: n1-impl nonce' + issue + '\n',
+      [GENUINE_REL]: '// ' + NONCE + '\nmodule.exports = function helper() { return ' + issue + '; };\n',
+    },
+  });
+  try {
+    if (!assertUnderTmpdir973(label + '/i', fx.tmpRoot)) return;
+    const genuineAbs = path.join(fx.wtPath, GENUINE_REL);
+    assert(fs.existsSync(genuineAbs),
+      '#973 (i/' + label + ') premise: the untracked file must be on disk in the linked worktree before the legacy '
+      + 'sink runs; expected ' + genuineAbs);
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkLegacyAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    const combined = String(result.stdout || '') + String(result.stderr || '');
+    const survivors = filesContaining973(fx.tmpRoot, NONCE);
+    const told = result.status !== 0
+      || !!(out && out.reason)
+      || combined.includes(GENUINE_REL)
+      || combined.includes('helper.js');
+    const seen = 'exit=' + result.status
+      + ' status=' + JSON.stringify(out && out.status)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + ' worktree_still_present=' + fs.existsSync(fx.wtPath)
+      + ' survivors=' + JSON.stringify(survivors)
+      + '\nstderr: ' + String(result.stderr || '').slice(-500);
+
+    // ================= NON-VACUITY, and it is the load-bearing part of this arm =================
+    //
+    // Any early stop for a reason this arm is not about leaves the worktree standing AND exits
+    // non-zero — which satisfies the survival clause and the `told` clause at once, while measuring
+    // nothing. This is not hypothetical: it was live here. The GitLab and Gitea legacy paths carry
+    // two preconditions root and codex do not — `finalValidationPassed` (gitlab :1079, gitea :1090)
+    // and an archived early-exit returning exit 3 (gitlab :1103) — and an earlier fixture posture
+    // tripped both, so this arm was GREEN on two editions and measuring nothing on them.
+    //
+    // The check CANNOT be "an envelope was emitted". main()'s terminal is
+    // `catch (err) { stderr; exitCode = 1 }` (:3275), so this entry point emits no JSON for ANY
+    // throw — including a legitimate refusal repair inside assertWorktreeClean. Requiring an
+    // envelope would forbid that repair family, which is pinning the mechanism.
+    //
+    // What is required instead is POSITIVE evidence that this edition drives this fixture to the
+    // destructive step at all, and (i-control) is exactly that measurement: same builder, same entry
+    // point, lane-only content, run to completion. It is passed in rather than re-run, so the two
+    // arms cost one run each and cannot disagree about the fixture.
+    assert(laneControlCompleted === true,
+      '#973 (i/' + label + ') premise: (i-control) must have COMPLETED on this edition. This arm measures nothing '
+      + 'on an edition where the legacy path stops before the guard — the worktree survives and the non-zero exit '
+      + 'reads as "told", so both clauses below pass on silence. If (i-control) is red, read that first: this arm '
+      + 'is not evidence here. ' + seen);
+    // The archived early-exit's own code, called out separately because it is the one stop that
+    // reports SUCCESS-ish (a fallback receipt) rather than an error, and no repair can legitimately
+    // produce it here.
+    assert(result.status !== 3,
+      '#973 (i/' + label + ') premise: exit 3 is the sink\'s "project already archived — nothing done" fallback. '
+      + 'It means the run never reached the worktree removal, so neither clause below is about this guard. ' + seen);
+    const unrelated = ['run_not_finalized', 'no_implementation_changes', 'sink_blocked', 'unknown_flag'];
+    assert(!(out && unrelated.includes(out.reason)),
+      '#973 (i/' + label + ') premise: the legacy run must not stop on a precondition this arm is not about — it '
+      + 'would leave the worktree standing for the wrong reason and pass both clauses vacuously. ' + seen);
+
+    assert(survivors.length > 0,
+      '#973 (i/' + label + '): the untracked work must still exist after the LEGACY sink. Step 3 of main() force-'
+      + 'removes the same worktree the transaction does; a repair that covers only the --sink path leaves this '
+      + 'entry point destroying work. ' + seen);
+    assert(told,
+      '#973 (i/' + label + '): the legacy sink must not report unqualified success over a worktree carrying '
+      + 'uncommitted work. ' + seen);
+  } finally {
+    cleanup(fx);
+  }
+}
+
+// (i-control) the must-not-break half of (i), and — because it RETURNS its outcome — (i)'s
+// non-vacuity premise on this edition. Without it a legacy-path repair may refuse on the untracked
+// lane content every run leaves (the same trap (f) holds for the transaction path), and nothing
+// would notice an (i) that never reached the guard at all.
+//
+// The success terminal is the legacy path's own and is NOT `sinked`: main() reports `status:merged`
+// (`kaola-workflow-sink-merge.js:1131`); `sinked` belongs to the --sink transaction. What is required
+// here is that the run completed and refused nothing; which word it completes with belongs to that
+// entry point, not to this arm. Every pre-existing legacy test asserts exit 0 and never the token.
+//
+// Returns true iff this edition drove the fixture to a clean completion.
+function assertLegacyOwnLaneContentStillSinks973(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#973 i-control ' + label + '): the LEGACY entry point over a worktree carrying ONLY the workflow\'s own untracked lane content must still complete');
+  const fx = buildLegacyWorktreeFixture973(project, issue, {
+    untracked: {
+      ['kaola-workflow/' + project + '/.cache/n1-impl.md']: 'binding: n1-impl nonce' + issue + '\n',
+      ['kaola-workflow/' + project + '/.cache/n2-review.md']: 'binding: n2-review nonce' + issue + '\n\nverdict: pass\n',
+    },
+  });
+  try {
+    if (!assertUnderTmpdir973(label + '/i-control', fx.tmpRoot)) return false;
+    const wide = git(fx.wtPath, ['status', '--porcelain', '-uall']).stdout.trim();
+    assert(wide.split('\n').filter(Boolean).length === 2,
+      '#973 (i-control/' + label + ') premise: the two lane files must be UNTRACKED in the worktree; got '
+      + JSON.stringify(wide));
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkLegacyAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    const completed = result.status === 0 && !!out && !out.reason && out.result !== 'refuse' && out.result !== 'report';
+    assert(completed,
+      '#973 (i-control/' + label + '): the legacy run must still complete over lane-only untracked content — every '
+      + 'run leaves it, so a guard that counts it refuses every legacy sink. This also carries (i)\'s non-vacuity: '
+      + 'if this fixture cannot complete, (i) proves nothing. got exit='
+      + result.status + ' status=' + JSON.stringify(out && out.status)
+      + ' result=' + JSON.stringify(out && out.result)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + '\nstderr: ' + String(result.stderr || '').slice(-600));
+    return completed;
+  } finally {
+    cleanup(fx);
+  }
+}
+
+// All four sink copies. The data-loss guard is hand-ported per forge (the GitLab and Gitea sinks are
+// separate files, compared by nothing), and all four carry the same blind probe — so a repair that
+// lands on three of them is invisible until a user on the fourth loses work.
+[
+  ['root', path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js'), null],
+  ['codex', path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-sink-merge.js'), null],
+  ['gitlab', path.join(repoRoot, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-sink-merge.js'), 'KAOLA_GLAB_MOCK_SCRIPT'],
+  ['gitea', path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-sink-merge.js'), 'KAOLA_TEA_MOCK_SCRIPT'],
+].forEach(([label, script, mockEnv], index) => {
+  if (!fs.existsSync(script)) {
+    assert(false, '#973 (' + label + '): the edition sink script exists at ' + script);
+    return;
+  }
+  assertUntrackedWorkIsNotSilentlyDestroyed973(label, script, 'issue-' + (97301 + index), 97301 + index, mockEnv);
+  assertOwnLaneContentStillSinks973(label, script, 'issue-' + (97311 + index), 97311 + index, mockEnv);
+  assertIgnoredContentStillSinks973(label, script, 'issue-' + (97321 + index), 97321 + index, mockEnv);
+  assertUntrackedSymlinkIsNotSilentlyDestroyed973(label, script, 'issue-' + (97331 + index), 97331 + index, mockEnv);
+  // (i-control) runs FIRST and its outcome is (i)'s non-vacuity premise — see the note inside (i).
+  const laneControlCompleted =
+    assertLegacyOwnLaneContentStillSinks973(label, script, 'issue-' + (97351 + index), 97351 + index, mockEnv);
+  assertLegacyEntryPointHoldsTheSameLine973(label, script, 'issue-' + (97341 + index), 97341 + index, mockEnv,
+    laneControlCompleted);
 });
 
 // --------------------------------------------------------------------------- #923 a branch that is not there

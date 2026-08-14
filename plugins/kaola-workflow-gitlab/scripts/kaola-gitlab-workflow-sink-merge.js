@@ -446,6 +446,33 @@ function assertNoLiveWorkflowFolder(mainRoot, project, branch) {
     { project, branch: branch || null, live_state_path: gitPath });
 }
 
+// #973: which porcelain records from the worktree probe count as work a forced removal would
+// destroy. Every TRACKED record does, exactly as before; this decides the UNTRACKED half.
+//
+// The probe feeding this reads `-uall`, not `--untracked-files=no`: that flag form structurally
+// cannot report an untracked path, so a worktree whose only uncommitted content was untracked
+// probed CLEAN and `git worktree remove --force` took it. `-uall` and not `=normal` because
+// `=normal` collapses a wholly-untracked directory into ONE record, and the test here reads a
+// path's project segment. Widening the flag alone is NOT the repair: every run leaves untracked
+// lane content in its worktree (`kaola-workflow/<project>/.cache/…`), so a bare widening refuses
+// every ordinary sink. Untracked records are filtered by the boundary the main-root check already
+// draws, isParkedLanePath, with `[]` for ownedProjects — there the run's own lane folder is the
+// live record being published and is not exempt; here it is the worktree's throwaway copy of it.
+// Ignored files are a third population NO --untracked-files setting reports, so they fall outside
+// this by construction. Fail-closed: an undecodable record is kept.
+function worktreeDirtRecords(statusText) {
+  const kept = [];
+  for (const record of String(statusText || '').split('\n')) {
+    if (!record.trim()) continue;
+    if (record.startsWith('??')) {
+      const rel = adaptiveSchema.parsePorcelainPaths(record)[0];
+      if (rel && adaptiveSchema.isParkedLanePath(rel, [])) continue;
+    }
+    kept.push(record);
+  }
+  return kept;
+}
+
 // #346: refuse — with ZERO mutation — when the linked worktree that has `branch` checked out
 // carries uncommitted work. Step 0 used to `removeWorktree --force` BEFORE the preconditions, so a
 // sink about to refuse first DESTROYED the worktree and any uncommitted work in it. This guard runs
@@ -480,12 +507,14 @@ function assertWorktreeClean(mainRoot, branch) {
     // #496: the ONLY gate before a destructive worktree removal — fail CLOSED. A probe that cannot
     // PROVE the worktree clean (transient git fault) is treated as DIRTY, never swallowed as clean.
     // One bounded retry absorbs a momentary fault before refusing.
+    // #973: `-uall`, so the probe can see untracked work at all; worktreeDirtRecords decides which
+    // of those records count. See its note for why the flag alone is not the repair.
     let status = '';
     let probeErr = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         if (FORCE_WT_STATUS_FAIL) throw new Error('[TEST ONLY] KAOLA_WORKFLOW_FORCE_WT_STATUS_FAIL — status probe forced to fail');
-        status = execFileSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim();
+        status = execFileSync('git', ['-C', wt, 'status', '--porcelain', '-uall'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim();
         probeErr = null;
         break;
       } catch (e) {
@@ -501,11 +530,12 @@ function assertWorktreeClean(mainRoot, branch) {
         'Probe error: ' + (probeErr.message || String(probeErr))
       );
     }
-    if (status) {
+    const dirt = worktreeDirtRecords(status);
+    if (dirt.length) {
       throw new Error(
         'sink-merge refused: the linked worktree for branch ' + branch + ' (' + wt + ') has uncommitted changes.\n' +
         'Removing it (Step 0) would destroy that work. Commit or discard the worktree changes, then re-run sink-merge.\n' +
-        'Uncommitted:\n  ' + status.split('\n').join('\n  ')
+        'Uncommitted:\n  ' + dirt.join('\n  ')
       );
     }
     return;

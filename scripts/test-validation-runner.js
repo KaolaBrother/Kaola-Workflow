@@ -530,6 +530,88 @@ async function main() {
     fs.rmSync(outsideGit, { recursive: true, force: true });
   }
 
+  // ── #974: a LEFTOVER run folder must not silently satisfy `resolveRecordFolder` ────────────────
+  //
+  // This resolver implements the same this-tree-first rule the gap sweep re-derives, with the same
+  // bare directory test as its stop condition — and it is the one BOTH record producers write
+  // through: `run-chains --project` places the chain receipt at
+  // `resolveProjectRecordDir` -> `resolveRecordFolder`, and the `record` verb above writes the
+  // final-validation binding through it. So a `kaola-workflow/<P>/` left in the invoking tree by
+  // something other than this run captures both records, and each lands in a folder nobody reads.
+  //
+  // ONE TREE, ONE MUTATION, so the fixture cannot be accused of comparing two different things.
+  // Leg A is the LEGITIMATE worktree-resident run folder this resolver's own comment protects — "a
+  // run folder that lives only in a linked worktree is NOT written from main". Leg B is that same
+  // worktree after MAIN gains the run's real, claim-created folder (`workflow-state.md` plus a live
+  // `.cache`, the shape only the claim transaction writes), which is what makes the worktree copy a
+  // leftover. The two situations are opposite and the resolver answers them BYTE-IDENTICALLY —
+  // measured at 69264936, `{"dir":"<wt>/kaola-workflow/<P>","root":"<wt>","mainResident":false,
+  // "searched":["<wt>/kaola-workflow/<P>"]}` for both — so no consumer downstream can tell them apart.
+  //
+  // WHAT IS PINNED IS THAT THE TWO ANSWERS DIFFER, not how. Reporting the other candidate root closes
+  // it (`otherProjectRoots`, twenty-five lines below this resolver, already computes exactly that
+  // list, and the `record` consumer already emits it as `other_candidate_roots` with the exit code
+  // untouched); resolving elsewhere closes it; a third shape closes it. Nothing here demands a throw,
+  // an exit code, or a named field — this class of failure is a vacuous pass, and a door is not the
+  // repair for it. Leg C is the CONTROL: the main-resident answer that the standard worktree lane
+  // depends on, unchanged.
+  {
+    const schema974 = require('./kaola-workflow-adaptive-schema.js');
+    const tmp974 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw974-')));
+    try {
+      const main974 = path.join(tmp974, 'main');
+      fs.mkdirSync(main974, { recursive: true });
+      git(main974, ['init', '-q', '-b', 'main']);
+      git(main974, ['config', 'user.email', 't@t.com']);
+      git(main974, ['config', 'user.name', 'Test']);
+      git(main974, ['config', 'commit.gpgsign', 'false']);
+      write(main974, 'src/app.js', 'module.exports = 1;\n');
+      git(main974, ['add', '-A']);
+      git(main974, ['commit', '-q', '-m', 'init']);
+      git(main974, ['branch', 'workflow/issue-974']);
+      const wt974 = path.join(tmp974, 'wt');
+      git(main974, ['worktree', 'add', '-q', wt974, 'workflow/issue-974']);
+
+      // Leg A — the worktree is the SOLE holder. This is the answer the resolver must keep giving.
+      fs.mkdirSync(path.join(wt974, 'kaola-workflow', 'issue-974', '.cache'), { recursive: true });
+      const soleA = runner.resolveRecordFolder(wt974, 'issue-974', schema974);
+      assert.strictEqual(soleA && soleA.dir, path.join(wt974, 'kaola-workflow', 'issue-974'),
+        '#974 control: a run folder resident only in the invoking worktree still resolves there — '
+        + 'binding main\'s hash to it would be the wrong tree; got ' + JSON.stringify(soleA));
+
+      // Leg B — MAIN gains the run's REAL folder. Nothing about the worktree changed.
+      fs.mkdirSync(path.join(main974, 'kaola-workflow', 'issue-974', '.cache'), { recursive: true });
+      write(main974, 'kaola-workflow/issue-974/workflow-state.md', '# Workflow State\n');
+      write(main974, 'kaola-workflow/issue-974/.cache/run-gaps-manual.md',
+        'gap: flaky-suite — the sink suite went red once\n');
+      const leftoverB = runner.resolveRecordFolder(wt974, 'issue-974', schema974);
+      assert.notStrictEqual(JSON.stringify(leftoverB), JSON.stringify(soleA),
+        '#974: the resolver gives the SAME answer whether the worktree folder is this run\'s only one '
+        + '(leg A) or a leftover standing in front of the real, claim-created one in main (leg B). '
+        + 'Two opposite topologies, one answer, and the chain receipt and the final-validation binding '
+        + 'both follow it into the leftover. Which way the answer changes is the implementer\'s — '
+        + 'reporting the other candidate root, or resolving elsewhere — but it cannot stay identical; '
+        + 'got ' + JSON.stringify(leftoverB));
+      assert.ok(fs.existsSync(path.join(main974, 'kaola-workflow', 'issue-974', 'workflow-state.md')),
+        '#974 fixture: main really is carrying the claim-created run folder — the assertion above is '
+        + 'about nothing without it');
+
+      // Leg C — CONTROL: main-resident only. The standard worktree lane, where the claim creates the
+      // folder in main and the linked worktree does not carry it. Unchanged by #974.
+      fs.rmSync(path.join(wt974, 'kaola-workflow', 'issue-974'), { recursive: true, force: true });
+      const mainOnlyC = runner.resolveRecordFolder(wt974, 'issue-974', schema974);
+      assert.strictEqual(mainOnlyC && mainOnlyC.dir,
+        path.join(main974, 'kaola-workflow', 'issue-974'),
+        '#974 control: with no folder in the worktree at all the resolver still reaches MAIN — this is '
+        + 'the lane every worktree finalize takes; got ' + JSON.stringify(mainOnlyC));
+      assert.strictEqual(mainOnlyC && mainOnlyC.mainResident, true,
+        '#974 control: and reports that it did, which is what the operator hint keys on; got '
+        + JSON.stringify(mainOnlyC));
+    } finally {
+      fs.rmSync(tmp974, { recursive: true, force: true });
+    }
+  }
+
   // ── #904: the sandbox root is a PATH BUDGET, and a child must be able to bind in it ────────────
   //
   // The runner points the child's TMPDIR at its own sandbox directory. A unix domain socket path is

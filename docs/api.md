@@ -383,13 +383,15 @@ not support it.
 | `roadmap_staged` | now derived from the **outcome** of the archive `git add`, not from the paths merely existing on disk. It was `true` whenever the files were present, which is a statement about the filesystem where a statement about the index was owed |
 | `archive_commit_probe` | `failed` when the archive's `git diff --cached --quiet` exited neither 0 nor 1. Exit 1 means "something is staged" and 0 means "nothing is"; anything else is git failing, and reading it as "nothing" is how a fault became a success |
 | `archive_commit_probe_detail` | git's own message |
-| `residue_stage` | `skipped` (default — no residue to stage) \| `staged` \| `failed` \| **`unprobeable`**. The last is new and is not `skipped`: the `git status --porcelain` that enumerates the residue itself failed, so the run cannot say there was nothing to stage |
+| `residue_stage` | `skipped` (default — no residue to stage) \| `staged` \| `failed` \| **`unprobeable`** \| **`nothing_attributable`**. Neither of the last two is `skipped`, and for the same reason: `unprobeable` means the `git status --porcelain` that enumerates the residue failed, and `nothing_attributable` means there was residue and every path of it was unattributable (see `residue_unattributed`). A run that says there was nothing to stage when there was is the false statement both values exist to avoid |
 | `residue_stage_detail` | git's own message on `failed`. Also re-emitted on stderr with a `WARNING` prefix, so a terminal reader loses nothing the previously-inherited stderr showed |
 | `residue_probe_detail` | git's own message on `unprobeable` |
 | `residue_unstaged` | the paths that did not reach the index, capped at 50 — present on **all four editions**. Read back from the index on the same basis as `archive_unstaged`, and absent when that read failed |
+| `residue_unattributed` | the worktree paths the transaction could not attribute to this run, capped at 50 — present on **all four editions**, absent when there are none. They are **not** in the `chore: finalize` commit and they are **still on disk**: nothing is committed, reverted or deleted. Attribution is by directory, from the branch's own commits (`<base>..HEAD`) — a path whose directory holds no file this branch committed is not this run's work as far as the transaction can tell. The run's own untracked work beside a committed sibling is therefore still staged, as before |
+| `residue_attribution` | `unattributable_unknown`, present only when the attribution above could not be made at all — git could not be asked, or the branch carries no commits of its own. The residue is staged exactly as it was before this classification existed, and this field is why: with no evidence of what the run authored, "all of it is foreign" would be an ordinary run left unfinished rather than a finding |
 | `finalize_commit_probe` | `failed` when the finalize commit's `git diff --cached --quiet` exited neither 0 nor 1 |
 | `finalize_commit_probe_detail` | git's own message |
-| `findings` | the **de-duplicated list of typed fault names** raised anywhere in the block: `archive_unstage_failed`, `archive_stage_failed`, `archive_commit_probe_failed`, `residue_probe_failed`, `residue_stage_failed`, `finalize_commit_probe_failed`, `main_roadmap_mirror_not_regenerated`, `claim_release_skipped_offline`. Absent or empty on a healthy **online** run |
+| `findings` | the **de-duplicated list of typed fault names** raised anywhere in the block: `archive_unstage_failed`, `archive_stage_failed`, `archive_commit_probe_failed`, `residue_probe_failed`, `residue_stage_failed`, `residue_unattributed`, `finalize_commit_probe_failed`, `main_roadmap_mirror_not_regenerated`, `claim_release_skipped_offline`. Absent or empty on a healthy **online** run |
 
 `finalize_commit` gains the value **`'unknown'`**, and it means *we could not tell*, not *nothing
 happened*. It is set when the residue probe or the staged probe failed — one could not enumerate what
@@ -420,8 +422,8 @@ claimed online, so the finding is worded conditionally and names the issues it a
 report, not a gate, and `closure_invariants.ok` stays `true` — `skipped_offline` remains an allowed
 value of that invariant, unchanged.
 
-**One edition difference in the finding-type count.** The GitLab and Gitea ports raise **seven**
-finding types where canonical and Codex raise **eight**. The delta is exactly one, `archive_unstage_failed`.
+**One edition difference in the finding-type count.** The GitLab and Gitea ports raise **eight**
+finding types where canonical and Codex raise **nine**. The delta is exactly one, `archive_unstage_failed`.
 All four editions now stage the archive the same way — a `git rm -r --cached` of the live run folder
 followed by a scoped `git add` of a computed candidate-path list — but the forge ports run both calls
 inside **one** try/catch, so a fault in either raises the single `archive_stage_failed`, while
@@ -841,9 +843,16 @@ and a route forward. A converted guard still stops the sink — nothing is merge
   `kaola-workflow/**` artifacts, turning silent implementation loss into a loud, recoverable
   failure. Skipped when the mainline is unresolvable — it cannot judge, so it does not block.
 - **`worktree_dirty`** — `sinkPreflight` runs `assertWorktreeClean` before the merge step
-  force-removes the linked worktree, so uncommitted work is never silently destroyed. Fail-closed:
+  force-removes the linked worktree, so a worktree carrying uncommitted work is refused rather than
+  removed — with the three residual shapes named at the end of this entry. Fail-closed:
   a dirty **or** unprobeable worktree refuses, with zero mutation and the worktree intact.
-  Resume-safe — an already-removed worktree matches no `worktree list` block and passes.
+  Resume-safe — an already-removed worktree matches no `worktree list` block and passes. The
+  status probe reads every untracked record (`-uall`), not tracked ones alone, and exempts only
+  paths under the worktree's own throwaway lane content (`kaola-workflow/`, `.kw/`) — issue #973
+  / #975; before that widening, `--untracked-files=no` could not report an untracked path at all,
+  so a worktree whose only uncommitted content was untracked probed clean and was destroyed. Three
+  shapes are still destroyed silently, unchanged by the widening and recorded rather than guarded
+  against — see `CHANGELOG.md`'s `[Unreleased]` #975 entry.
 
 **Exit codes**: `0` merged, branch pushed, issues verifiably closed · `1` merge failed
 (non-recoverable, including pre-merge guard failures) or a post-merge close that could not be
