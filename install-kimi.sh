@@ -181,6 +181,49 @@ RETIRED_HOOKS=(
   "kaola-workflow-pre-commit.sh" "kaola-workflow-write-lane.sh"
 )
 
+# Support scripts this edition deployed on a PREVIOUS release and no longer deploys — the same
+# declaration model as the two lists above, and the same asymmetry the hooks list already closes:
+# the INSTALL path converges (it enumerates the destination and drops whatever it did not just
+# deploy), so a reinstall heals a stranded script, while uninstall removes strictly by the CURRENT
+# manifest and a retired name survives it.
+#
+# Censused from the SUPPORT_SCRIPTS history in scripts/kaola-workflow-install-manifest.js
+# (`git log -L` over that array), cross-checked against `git log --diff-filter=D` over scripts/ —
+# never from the installer's own arrays, since a list validated against itself cannot show an
+# omission. Bounded by what this edition shipped: kimi landed 2026-07-17 deploying support scripts
+# from its first release, so it carries the three fast/full/phase4 advancers retired two days later
+# and the eight retired with the DAG executor on 07-31 — and NOT autopilot (retired 2026-06-26) or
+# parallel-batch (07-02), both of which were gone before this edition existed. A namespace sweep of
+# the scripts dir is deliberately NOT used: it would reintroduce the defect #973 removed.
+RETIRED_SUPPORT_SCRIPTS=(
+  "kaola-workflow-fast-advance.js" "kaola-workflow-full-advance.js" "kaola-workflow-phase4-advance.js"
+  "kaola-workflow-repair-state.js" "kaola-workflow-plan-validator.js" "kaola-workflow-next-action.js"
+  "kaola-workflow-commit-node.js" "kaola-workflow-adaptive-handoff.js" "kaola-workflow-adaptive-node.js"
+  "kaola-workflow-replan.js" "kaola-workflow-task-mirror.js"
+)
+
+# Remove the retired support scripts from a deployed scripts dir. Each canonical base is removed
+# alongside its two forge-port spellings: the manifest renames kaola-workflow-<X> to
+# kaola-<forge>-workflow-<X> for gitlab and gitea, so the deployed basename depends on the forge the
+# home was installed under — which need not be the forge this uninstall was invoked with. All three
+# spellings of a RETIRED name are safe to remove and none of them is a current artifact. Every name
+# still goes through is_plain_basename before it becomes a delete path.
+remove_retired_support_scripts() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+  local base name
+  for base in "${RETIRED_SUPPORT_SCRIPTS[@]}"; do
+    for name in "$base" \
+      "${base/#kaola-workflow-/kaola-gitlab-workflow-}" \
+      "${base/#kaola-workflow-/kaola-gitea-workflow-}"; do
+      is_plain_basename "$name" || continue
+      [[ -f "$dir/$name" ]] || continue
+      rm -f "$dir/$name"
+      echo "Removed retired support script: $dir/$name"
+    done
+  done
+}
+
 # Workflow command-skill set: deployed alongside all kaola-role-* skills. Any OTHER skill fails
 # CLOSED (skipped + warned) so a future canonical command cannot silently widen the install.
 # Single source of truth for the deploy set (used by copy_skills).
@@ -479,6 +522,9 @@ uninstall_edition() {
       rm -f "$scripts_dir/$name"
     done < <(node "$manifest" --forge="$FORGE" --scripts 2>/dev/null)
   fi
+  # Outside the manifest guard on purpose: a retired script is absent from the manifest by
+  # definition, so its removal must not be conditional on the manifest being readable.
+  remove_retired_support_scripts "$scripts_dir"
   if [[ -d "$hooks_dir" ]]; then
     local hook
     for hook in "$SOURCE_TREE/hooks/"*.sh; do

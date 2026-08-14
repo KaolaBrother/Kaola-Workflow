@@ -289,13 +289,17 @@ every project): `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/{scripts,hoo
 
 `--uninstall` removes **only** kaola-deployed artifacts from the resolved scope, by
 source-tree filename plus the names the edition retired on purpose (`RETIRED_ROLE_SKILLS`,
-`RETIRED_HOOKS` — a retired name is absent from the source tree, so without those lists it would
-linger forever; never a blind `rm` of a dir you may share): the deployed skills, the
+`RETIRED_HOOKS`, `RETIRED_SUPPORT_SCRIPTS` — a retired name is absent from the source tree and from
+the install manifest, so without those lists it would linger forever; never a blind `rm` of a dir you
+may share): the deployed skills, the
 support/hook scripts under `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/`, and the
 managed hooks block in `config.toml`. The shared `~/.config/kaola-workflow/config.json`
 is user-owned and untouched, so a co-installed Claude/Codex/opencode edition is unaffected. Your own Kimi `config.toml` content outside the managed block is
 **preserved**. A subsequent bare install then deploys the workflow edition — the
-uninstall→reinstall round-trip is verified by `test-kimi-edition.js` **U1**.
+uninstall→reinstall round-trip is verified by `test-kimi-edition.js` **U1**, and the
+retired-support-script residue by **P1c** — which also pins the removal as a **blocklist**: an
+unlisted, user-authored `.js` in the scripts dir survives the uninstall byte-intact, because a
+namespace sweep of that directory would reintroduce #973's defect.
 
 > `uninstall.sh` (the claude/codex/gitlab/gitea uninstaller) is **forge-scoped** and does
 > not touch kimi — Kimi Code is an additive runtime, not a forge (D-530-02 precedent), so

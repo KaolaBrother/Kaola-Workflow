@@ -311,14 +311,17 @@ install asserts the un-nested layout and that no nested `.opencode/` is created)
 
 `--uninstall` removes **only** kaola-deployed artifacts from the resolved scope, by
 source-tree filename plus the names the edition retired on purpose (`RETIRED_WORKFLOW_COMMANDS`,
-`RETIRED_HOOKS` — a retired name is absent from the source tree, so without those lists it would
-linger forever; never a blind `rm` of a dir you may share): the deployed
-agents/commands/plugin/hooks and the opencode-native support scripts
+`RETIRED_HOOKS`, `RETIRED_SUPPORT_SCRIPTS` — a retired name is absent from the source tree and from
+the install manifest, so without those lists it would linger forever; never a blind `rm` of a dir you
+may share): the deployed agents/commands/plugin/hooks and the opencode-native support scripts
 under `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/`. The shared
 `~/.config/kaola-workflow/config.json` is user-owned and untouched, so a co-installed
 Claude/Codex edition is unaffected. Your own `opencode.json` (model/permission
 config) is **preserved**. A subsequent bare install then deploys the workflow edition — the
-uninstall→reinstall round-trip is verified by `test-opencode-edition.js` **U1**.
+uninstall→reinstall round-trip is verified by `test-opencode-edition.js` **U1**, the retired-command
+and retired-hook residue by **U2**, and the retired-support-script residue by **S1c** — which also
+pins the removal as a **blocklist**: an unlisted, user-authored `.js` in the scripts dir survives the
+uninstall byte-intact, because a namespace sweep of that directory would reintroduce #973's defect.
 
 > `uninstall.sh` (the claude/codex/gitlab/gitea uninstaller) is **forge-scoped** and does
 > not touch opencode — opencode is an additive runtime, not a forge (D-530-02), so its

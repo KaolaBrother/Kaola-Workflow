@@ -1679,6 +1679,95 @@ if (exists(pluginRel)) {
     try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
   }
 
+  // -------------------------------------------------------------------------
+  // S1c (#981) — UNINSTALLING MUST PRUNE THE SAME RESIDUE. S1b pins the INSTALL
+  // path converging on the manifest, which is why a reinstall heals a stranded
+  // script. The uninstall path removes strictly by the CURRENT manifest, so a
+  // support script this edition retired is the one artifact that survives an
+  // uninstall which removes every current artifact around it — the same gap #977
+  // closed for commands, role skills, managed agents and hooks, left open for
+  // support scripts alone.
+  //
+  // The plant happens AFTER the seed install for U2's reason: the install path
+  // sweeps stale scripts itself (S1b), so a plant the install could reach proves
+  // nothing about the uninstall. Pins are disk outcomes only — whether the
+  // uninstall consults a blocklist, a manifest history or something else is not
+  // decided here.
+  //
+  // The retired name is censused from the manifest's own SUPPORT_SCRIPTS history,
+  // NOT read from the installer's array: a check that reads the list it validates
+  // can never catch an omission in it, which is the flaw that produced #977.
+  // -------------------------------------------------------------------------
+  {
+    const cfg = mkdtempSync(path.join(os.tmpdir(), 'opencode-s1c-cfg-'));
+    const r = runGlobalInstaller([], { cfg, withScripts: true });
+    assert(r.ok, 'S1c: seed --global install (with scripts) exits 0 (got status ' + r.status
+      + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
+    const scriptsDir = path.join(cfg, 'kaola-workflow', 'scripts');
+    const manifest = path.join(REPO, 'scripts', 'kaola-workflow-install-manifest.js');
+    // spawn-class: environment
+    const names = spawnSync('node', [manifest, '--forge=github', '--scripts'], { encoding: 'utf8' })
+      .stdout.split('\n').map(s => s.trim()).filter(Boolean);
+    assert(names.length > 0, 'S1c: install manifest lists at least one support script');
+
+    // Real names this edition deployed and the tree has since deleted (retired 2026-06-26 and
+    // 2026-07-31 respectively — two different retirement eras, so a fix bounded to one is caught).
+    const RETIRED = ['kaola-workflow-autopilot.js', 'kaola-workflow-task-mirror.js'];
+    const USER_KEPT = 'notes.md';
+    const KEPT_BODY = 'notes the installer never wrote\n';
+    // A user-authored .JS is the load-bearing half of the scope pin. A non-.js file survives even
+    // install.sh's `*.js` sweep, so pinning only that would pass against a namespace prune of the
+    // directory; an unlisted .js is exactly what such a prune takes and what the uninstall — which
+    // removes by explicit name and nothing else — must leave alone.
+    const USER_JS = 'my-local-helper.js';
+    const USER_JS_BODY = '// user-authored\n';
+    // Anti-vacuity: a planted name back in the manifest would be a CURRENT artifact, and its
+    // removal below would be the manifest loop's property rather than this probe's.
+    assert(RETIRED.every(n => !names.includes(n)) && !names.includes(USER_JS),
+      'S1c: no planted name is in the manifest — a name the uninstall already removes by manifest '
+      + 'is not evidence about retired-residue handling at all (manifest holds ' + names.length + ')');
+    for (const n of RETIRED) fs.writeFileSync(path.join(scriptsDir, n), '// shipped by an older release\n');
+    fs.writeFileSync(path.join(scriptsDir, USER_KEPT), KEPT_BODY);
+    fs.writeFileSync(path.join(scriptsDir, USER_JS), USER_JS_BODY);
+
+    // spawn-class: environment
+    const ru = spawnSync('bash', [INSTALLER, '--global', '--uninstall', '--yes'], {
+      env: Object.assign({}, process.env, { HOME: r.home, OPENCODE_CONFIG_DIR: cfg }),
+      encoding: 'utf8',
+    });
+    assert(ru.status === 0, 'S1c: --uninstall exits 0 (got ' + ru.status
+      + (ru.stderr ? ' — ' + String(ru.stderr).split('\n')[0] : '') + ')');
+
+    // Positive control: THIS uninstall ran and removed the current support scripts. Without it a
+    // fixture whose uninstall silently did nothing would satisfy nothing below and still read green
+    // if the retired plants happened to be absent.
+    const currentLeft = names.filter(n => existsSync(path.join(scriptsDir, n)));
+    assert(currentLeft.length === 0,
+      'S1c: the uninstall removes the CURRENT manifest scripts — still on disk: '
+      + currentLeft.slice(0, 5).join(', '));
+
+    const leftRetired = RETIRED.filter(n => existsSync(path.join(scriptsDir, n)));
+    assert(leftRetired.length === 0,
+      'S1c (#981): a support script this edition RETIRED must be gone after an --uninstall that '
+      + 'removes every current artifact around it. Still on disk: ' + leftRetired.join(', ')
+      + '. A reinstall would heal these (S1b), so the exposure is the user who uninstalls and never '
+      + 'reinstalls — inert residue, but residue the user asked to be rid of.');
+
+    // SCOPE, pinned with the removal: this must stay a blocklist. A namespace sweep of the scripts
+    // dir would take the user's own files with it and reintroduce exactly the defect #973 removed.
+    assert(existsSync(path.join(scriptsDir, USER_JS))
+      && readFileSync(path.join(scriptsDir, USER_JS), 'utf8') === USER_JS_BODY,
+      'S1c (#981): the retired-name removal is a BLOCKLIST — an unlisted USER-AUTHORED .js in the '
+      + 'scripts dir survives the uninstall byte-intact. A namespace sweep of the directory passes '
+      + 'the clause above and fails this one, which is the point of testing both, and is exactly the '
+      + 'defect #973 removed.');
+    assert(existsSync(path.join(scriptsDir, USER_KEPT))
+      && readFileSync(path.join(scriptsDir, USER_KEPT), 'utf8') === KEPT_BODY,
+      'S1c (#981): a non-.js file the installer neither wrote nor would write survives too');
+    try { rmSync(r.home, { recursive: true, force: true }); } catch (_) {}
+    try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
+  }
+
   // P6 (former self-healing-prune-of-orphaned-opt-in-files probe) — DELETED IN
   // FULL alongside P2–P5: the fast/full opt-in partition it exercised is retired,
   // so there is no opt-in scenario left to narrow-then-prune.

@@ -1078,6 +1078,89 @@ for (const script of sync.HOOK_SCRIPTS) {
   }
 
   // -------------------------------------------------------------------------
+  // P1c (#981) — UNINSTALLING MUST PRUNE THE SAME RESIDUE. P1b pins the INSTALL
+  // path converging on the manifest, which is why a reinstall heals a stranded
+  // script. The uninstall path removes strictly by the CURRENT manifest, so a
+  // support script this edition retired is the one artifact that survives an
+  // uninstall which removes every current artifact around it — including the
+  // hooks directly beneath it in the same function, which #977 taught to remove
+  // their retired names while the support scripts above them were left as they
+  // were.
+  //
+  // The plant happens AFTER the seed install for U1's reason: the install path
+  // sweeps stale scripts itself (P1b), so a plant the install could reach proves
+  // nothing about the uninstall. Pins are disk outcomes only.
+  //
+  // The retired names are censused from the manifest's own SUPPORT_SCRIPTS
+  // history, NOT read from the installer's array — a check that reads the list it
+  // validates can never catch an omission in it. Both plants postdate this
+  // edition's 2026-07-17 arrival, so both are names it really deployed.
+  // -------------------------------------------------------------------------
+  {
+    const r = runInstaller([]);
+    assert(r.ok, 'P1c: seed install exits 0 (got status ' + r.status
+      + (r.stderr ? ' — ' + firstStderrLine(r) : '') + ')');
+    const scriptsHome = path.join(r.kimiHome, 'kaola-workflow', 'scripts');
+    assert(existsSync(scriptsHome), 'P1c: the seed install deployed the support scripts dir at ' + scriptsHome);
+    const manifest = path.join(REPO, 'scripts', 'kaola-workflow-install-manifest.js');
+    // spawn-class: environment
+    const names = spawnSync('node', [manifest, '--forge=github', '--scripts'], { encoding: 'utf8' })
+      .stdout.split('\n').map(s => s.trim()).filter(Boolean);
+    assert(names.length > 0, 'P1c: install manifest lists at least one support script');
+
+    // Retired 2026-07-19 and 2026-07-31 — two retirement eras, both after this edition landed.
+    const RETIRED = ['kaola-workflow-fast-advance.js', 'kaola-workflow-task-mirror.js'];
+    const USER_KEPT = 'notes.md';
+    const KEPT_BODY = 'notes the installer never wrote\n';
+    // A user-authored .JS is the load-bearing half of the scope pin. A non-.js file survives even
+    // install.sh's `*.js` sweep, so pinning only that would pass against a namespace prune of the
+    // directory; an unlisted .js is exactly what such a prune takes and what the uninstall — which
+    // removes by explicit name and nothing else — must leave alone.
+    const USER_JS = 'my-local-helper.js';
+    const USER_JS_BODY = '// user-authored\n';
+    assert(RETIRED.every(n => !names.includes(n)) && !names.includes(USER_JS),
+      'P1c: no planted name is in the manifest — a name the uninstall already removes by manifest is '
+      + 'not evidence about retired-residue handling at all (manifest holds ' + names.length + ')');
+    for (const n of RETIRED) fs.writeFileSync(path.join(scriptsHome, n), '// shipped by an older release\n');
+    fs.writeFileSync(path.join(scriptsHome, USER_KEPT), KEPT_BODY);
+    fs.writeFileSync(path.join(scriptsHome, USER_JS), USER_JS_BODY);
+
+    // spawn-class: environment
+    const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r.dest, '--yes'], {
+      env: Object.assign({}, process.env, { HOME: r.home, KIMI_CODE_HOME: r.kimiHome }),
+      encoding: 'utf8',
+    });
+    assert(ru.status === 0, 'P1c: --uninstall exits 0 (got ' + ru.status
+      + (ru.stderr ? ' — ' + String(ru.stderr).split('\n')[0] : '') + ')');
+
+    // Positive control: THIS uninstall ran and removed the current support scripts.
+    const currentLeft = names.filter(n => existsSync(path.join(scriptsHome, n)));
+    assert(currentLeft.length === 0,
+      'P1c: the uninstall removes the CURRENT manifest scripts — still on disk: '
+      + currentLeft.slice(0, 5).join(', '));
+
+    const leftRetired = RETIRED.filter(n => existsSync(path.join(scriptsHome, n)));
+    assert(leftRetired.length === 0,
+      'P1c (#981): a support script this edition RETIRED must be gone after an --uninstall that '
+      + 'removes every current artifact around it. Still on disk: ' + leftRetired.join(', ')
+      + '. A reinstall would heal these (P1b), so the exposure is the user who uninstalls and never '
+      + 'reinstalls — inert residue, but residue the user asked to be rid of.');
+
+    // SCOPE, pinned with the removal: this must stay a blocklist. A namespace sweep of the scripts
+    // dir would take the user's own files with it and reintroduce exactly the defect #973 removed.
+    assert(existsSync(path.join(scriptsHome, USER_JS))
+      && readFileSync(path.join(scriptsHome, USER_JS), 'utf8') === USER_JS_BODY,
+      'P1c (#981): the retired-name removal is a BLOCKLIST — an unlisted USER-AUTHORED .js in the '
+      + 'scripts dir survives the uninstall byte-intact. A namespace sweep of the directory passes '
+      + 'the clause above and fails this one, which is the point of testing both, and is exactly the '
+      + 'defect #973 removed.');
+    assert(existsSync(path.join(scriptsHome, USER_KEPT))
+      && readFileSync(path.join(scriptsHome, USER_KEPT), 'utf8') === KEPT_BODY,
+      'P1c (#981): a non-.js file the installer neither wrote nor would write survives too');
+    clean(r);
+  }
+
+  // -------------------------------------------------------------------------
   // P5 (#973) — AN INSTALL DOES NOT REMOVE A DEPLOYED SKILL IT IS NOT GOING TO
   // REPLACE.
   //

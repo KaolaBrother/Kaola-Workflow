@@ -49,6 +49,41 @@
 
 ### Fixed
 
+- **A sink that stops between staging the run journal and landing it now names where the staged copy
+  went — #980.** Both sink routes copy `<worktree>/kaola-workflow/<project>/` into an OS temporary
+  directory (`kw-wtsync-*`) before the forced worktree removal and land it per file (#707 h) only
+  after the merge succeeds. Every stop in between ended the process with that path named nowhere: a
+  red post-rebase gate, a red chain during fast-forward recovery, a failed fast-forward, a rebase
+  conflict, and the uncaught `git checkout` between the two. The worktree was already gone, so the
+  staged copy was the run's only surviving journal — parked under a generated name reported nowhere
+  the operator would look, until OS temp reaping took it. Same class as #619(4), which covers the
+  destroy case rather than the stop case.
+
+  The note is **armed where the stage succeeds and disarmed where the landing completes**, so it
+  covers every exit in that window rather than an enumerated list of stops — including the two
+  uncaught `checkout` throws an enumeration would have missed, and any stop added between the two
+  later. It writes to **stderr**; the envelope on stdout is byte-identical, so no consumer moves.
+  The `#707 h` landing pins and `sinkLandStagedUnion`'s `existsSync` destination probe are untouched.
+  Landed in all four sink copies.
+
+- **A support script an edition retired is now removed by an opencode or kimi `--uninstall` — #981.**
+  #977 brought commands, role skills, managed agents and hooks under an explicit retired-name
+  declaration on both the install and uninstall paths; support scripts were left out. The install
+  path already converges on the manifest (#965), which is why a **reinstall heals** a stranded
+  script — but uninstall removes strictly by the *current* manifest, so a retired name was the one
+  artifact that survived an uninstall removing every current artifact around it. The exposure is
+  confined to a user who uninstalls and never reinstalls, and the residue is inert script files
+  rather than anything shadowing live behaviour.
+
+  Both editions now declare `RETIRED_SUPPORT_SCRIPTS`, censused from the manifest's own
+  `SUPPORT_SCRIPTS` history rather than from any installer array — a list validated against itself
+  cannot show an omission, which is the flaw that produced #977. opencode carries all 13 retired
+  names; kimi carries 11, since `autopilot` and `parallel-batch` were retired before that edition
+  existed. Each name is removed alongside its two forge-port spellings, because the deployed basename
+  depends on the forge the home was installed under. It stays a **blocklist** — a namespace sweep of
+  the scripts directory would reintroduce exactly the defect #973 removed, and both edition suites
+  now pin that scope with a user-authored `.js` that must survive.
+
 - **A sync run from a linked worktree now writes the main checkout's edition trees, so a skeleton
   edit can no longer be rendered into a tree that dies with the worktree — #969.** The observed
   failure is the #968 run itself: it synced all six trees, recorded *"all six trees reported in

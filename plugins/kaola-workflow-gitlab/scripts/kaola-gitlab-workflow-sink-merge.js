@@ -50,6 +50,33 @@ function recordSinkFinding(classification, detail, operatorHint, payload) {
 // was talking about.
 let resolvedProjectNote = null;
 
+// #980: between the forced worktree removal and the landing, the kw-wtsync-* stage is the ONLY
+// surviving copy of the run's journal — the worktree it was copied from is already gone. Every stop
+// in that window ended the process with that path named nowhere: a red post-rebase chain, a red
+// chain during fast-forward recovery, a failed fast-forward, a rebase conflict, and the uncaught
+// `git checkout` throw that sits between the two on both routes. The staged copy then sat under a
+// generated name reported nowhere the operator would look, until OS tmp reaping took it. #619(4)
+// covers the same class for the destroy case; this covers the stop case.
+//
+// Armed where the stage succeeds, disarmed where the landing completes — so it reports on EVERY
+// exit in that window rather than on an enumerated list of stops, and a stop added between the two
+// later is covered without anyone having to remember it. Writes to STDERR: the envelope on stdout
+// is parsed by consumers and stays byte-identical.
+let stagedJournalDir = null;
+function armStagedJournalNote(dir) { stagedJournalDir = dir || null; }
+function disarmStagedJournalNote() { stagedJournalDir = null; }
+process.on('exit', () => {
+  if (!stagedJournalDir) return;
+  try { if (!fs.existsSync(stagedJournalDir)) return; } catch (_) { return; }
+  process.stderr.write(
+    'sink-merge: the run stopped before landing its staged run journal. The staged copy below was '
+    + 'taken from the linked worktree ahead of its removal and was never landed, so where that '
+    + 'removal went through it is the only remaining copy of the worktree\'s run folder:\n'
+    + '  ' + stagedJournalDir + '\n'
+    + 'Nothing deletes it immediately, but it is an OS temporary directory and reaping will. Copy '
+    + 'it somewhere durable before re-running the sink.\n');
+});
+
 // Attach the findings to an emitted envelope. Attached ONLY when non-empty, so a run that found
 // nothing emits byte-identical output; applied at every emission so a KEEP-class refusal downstream
 // of a finding cannot swallow it.
@@ -1237,6 +1264,7 @@ function runDirectMerge(args, opts) {
         try {
           wtStageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wtsync-'));
           sinkCopyDir(wtProjDir, wtStageDir);
+          armStagedJournalNote(wtStageDir); // #980
         } catch (e) { wtStageDir = null; wtStageErr = e; wtStageSrc = wtProjDir; }
       }
     }
@@ -1324,6 +1352,7 @@ function runDirectMerge(args, opts) {
       sinkLandStagedUnion(wtStageDir, mainProjDir);
     } catch (_) {}
     try { fs.rmSync(wtStageDir, { recursive: true, force: true }); } catch (_) {}
+    disarmStagedJournalNote(); // #980: past the landing, there is no un-landed stage to name
   }
 
   const cleanupResult = postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, testGate.result);
@@ -2058,6 +2087,7 @@ function runSinkTransaction(args, mainRoot, defBranch) {
             try {
               wtStageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wtsync-'));
               sinkCopyDir(wtProjDir, wtStageDir);
+              armStagedJournalNote(wtStageDir); // #980
             } catch (e) { wtStageDir = null; wtStageErr = e; wtStageSrc = wtProjDir; }
           }
         }
@@ -2149,6 +2179,7 @@ function runSinkTransaction(args, mainRoot, defBranch) {
           sinkLandStagedUnion(wtStageDir, mainProjDir);
         } catch (_) {}
         try { fs.rmSync(wtStageDir, { recursive: true, force: true }); } catch (_) {}
+        disarmStagedJournalNote(); // #980: past the landing, there is no un-landed stage to name
       }
       stepDone('merge'); continue;
     }

@@ -936,6 +936,19 @@ function plantWorktreeUntracked973(wtPath, opts) {
     assert(status === '', '#707 h: main checkout must be clean after status:sinked; got:\n' + status);
     const calls = readLog(fx.logFile);
     assert(calls.includes('close:' + issue), '#707 h: the issue must be closed; calls=' + JSON.stringify(calls));
+
+    // #980, the FALSE-ALARM control. This is the path the staged-journal note must stay silent on: a
+    // worktree-postured sink that stages, removes, merges and LANDS. (w) proves the note fires when
+    // it should; nothing but this proves it stops.
+    //
+    // Measured, so it is not read as more than it is: this clause is held by the handler's existsSync
+    // probe rather than by the disarm — dropping both disarm calls leaves this arm GREEN, because the
+    // landing deletes the stage and the probe then finds nothing to report. The disarm covers the
+    // case behind that probe (a cleanup rmSync that fails leaves the directory on disk), which this
+    // fixture does not reach; (w2) is what holds the disarm, and it says so in its own words.
+    assert(!/staged run journal|kw-wtsync-/.test(String(result.stderr || '')),
+      '#707 h (#980): a COMPLETED worktree sink must not warn about an un-landed staged journal — it '
+      + 'landed and deleted the stage. stderr:\n' + String(result.stderr || '').slice(-800));
   } finally {
     cleanup(fx);
   }
@@ -2852,6 +2865,21 @@ function buildPostRebaseGateFixture(project, issue, opts) {
   git(tmpRoot, ['push', '-u', 'origin', branch]);
   git(tmpRoot, ['checkout', 'main']);
 
+  // #980: optional WORKTREE posture. The staged-journal window only exists on a run whose linked
+  // worktree gets removed, so the arms that measure it need the branch checked out at the canonical
+  // .kw/worktrees/<project> path with worktree-ONLY (untracked) journal content inside it — content
+  // that exists nowhere else, so "was it preserved" and "can it be found" are both answerable.
+  let wtPath = null;
+  if (opts.worktreeUntracked) {
+    wtPath = path.join(tmpRoot, '.kw', 'worktrees', project);
+    git(tmpRoot, ['worktree', 'add', wtPath, branch]);
+    for (const rel of Object.keys(opts.worktreeUntracked)) {
+      const abs = path.join(wtPath, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, opts.worktreeUntracked[rel]);
+    }
+  }
+
   // ADVANCE origin/<default> under the branch, from a separate clone, so the sink's up-to-date check
   // resolves false and the rebase — and therefore the gate — actually happens. Without this the gate
   // is skipped and both scenarios below would pass vacuously.
@@ -2865,7 +2893,7 @@ function buildPostRebaseGateFixture(project, issue, opts) {
   git(advanceDir, ['push', 'origin', 'main']);
   git(tmpRoot, ['fetch', 'origin']);
 
-  return { tmpRoot, remotePath, binDir, logFile, branch, projectName: project, advanceDir };
+  return { tmpRoot, remotePath, binDir, logFile, branch, projectName: project, advanceDir, wtPath };
 }
 
 function cleanupGateFixture(fx) {
@@ -2976,6 +3004,183 @@ function runSinkWithGate(fx, extraArgs) {
     }
   } finally {
     cleanupGateFixture(fx);
+  }
+})();
+
+// --------------------------------------------------------------------------- (w) #980
+//
+// (v) drives the red stop; this drives the SAME stop on a worktree-postured run, where it opens a
+// window (v)'s fixture has no worktree to expose. Both sink routes copy <wt>/kaola-workflow/<project>/
+// into an OS tmpdir (kw-wtsync-*) and force-remove the worktree BEFORE the merge, then land the copy
+// per-file (#707 h) only after the merge succeeds. Every stop between those two — this red gate, a
+// red chain during FF recovery, a failed fast-forward, a rebase conflict, and the uncaught
+// `git checkout` throw sitting between them — ended the process with the staged copy the ONLY
+// surviving journal, parked under a generated name reported nowhere the operator would look, until
+// OS tmp reaping took it. #619(4) is the same class for the destroy case.
+//
+// THE PIN IS DISCOVERABILITY, not a mechanism. Naming the path in the failure output, landing it into
+// the archive band before stopping, and deferring the removal until the landing commits are all
+// admissible answers; parking it silently is the one forbidden outcome. So the oracle asks only
+// whether the journal is reachable from what the run said, or already sitting where the operator
+// reads — never how it got there.
+(function testStagedJournalIsFindableWhenTheSinkStopsBeforeLanding980() {
+  console.log('Test (#980 w): a run that stages the worktree journal and then stops before landing it must leave the operator able to FIND the staged copy — not park it under a generated tmpdir name reported nowhere');
+  const project = 'issue-87709';
+  const issue = 87709;
+  const NONCE = 'kw980-staged-journal-nonce-' + issue;
+  const JOURNAL_REL = 'kaola-workflow/' + project + '/.cache/n7-worktree-only.md';
+  const fx = buildPostRebaseGateFixture(project, issue, {
+    testExit: 7,
+    worktreeUntracked: {
+      [JOURNAL_REL]: '# per-node evidence\n' + NONCE + '\n',
+    },
+  });
+  try {
+    if (!assertUnderTmpdir973('w', fx.tmpRoot)) return;
+
+    // Premise 1 — the journal is genuinely worktree-ONLY, so finding it afterwards can only mean the
+    // staged copy survived. This is the survival oracle's positive control.
+    const preHits = filesContaining973(fx.tmpRoot, NONCE);
+    assert(preHits.length === 1 && preHits[0].startsWith('.kw' + path.sep),
+      '#980 (w) premise: before the run the NONCE must be found in exactly the ONE worktree copy; got '
+      + JSON.stringify(preHits));
+    assert(fs.existsSync(fx.wtPath),
+      '#980 (w) premise: the linked worktree must exist before the sink runs; expected ' + fx.wtPath);
+
+    const result = runSinkWithGate(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+    const combined = String(result.stdout || '') + String(result.stderr || '');
+    // The staged copy lands in os.tmpdir(), NOT under the fixture root — that displacement is the
+    // whole defect — so "did the bytes survive" has to be asked of both places. Scoped to the
+    // kw-wtsync-* prefix rather than a walk of the whole temp dir, and the NONCE is unique per issue,
+    // so a stage left by a concurrent scenario cannot answer for this one.
+    const stageDirs = (() => {
+      try {
+        return fs.readdirSync(os.tmpdir())
+          .filter(n => n.startsWith('kw-wtsync-'))
+          .map(n => path.join(os.tmpdir(), n));
+      } catch (_) { return []; }
+    })();
+    const inFixture = filesContaining973(fx.tmpRoot, NONCE);
+    const inStage = stageDirs.filter(d => filesContaining973(d, NONCE).length > 0);
+    const survivors = inFixture.concat(inStage);
+    const seen = 'exit=' + result.status
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + ' worktree_still_present=' + fs.existsSync(fx.wtPath)
+      + ' survivors=' + JSON.stringify(survivors)
+      + '\nstderr: ' + String(result.stderr || '').slice(-1200);
+
+    // Premise 2 — the run stopped for the reason this arm is about. A stop on some earlier
+    // precondition never reaches the stage or the removal, and would satisfy the clause below while
+    // measuring nothing (the failure mode (m) and (i) both carry premises against).
+    assert(out && out.reason === 'chains_red',
+      '#980 (w) premise: the run must stop at the RED post-rebase gate — that is the stop that opens '
+      + 'the window between the removal and the landing. ' + seen);
+
+    // Premise 3 — the removal actually HAPPENED. Without it the worktree still holds the journal, it
+    // is trivially findable, and the pin below is vacuous. This is the clause that makes the arm
+    // about the staged copy rather than about the original.
+    assert(!fs.existsSync(fx.wtPath),
+      '#980 (w) premise: the linked worktree must be GONE after the stop — the stage-then-remove-then-'
+      + 'stop ordering is the whole window this arm measures, and a surviving worktree means the run '
+      + 'never reached it. ' + seen);
+
+    // Premise 4 — the bytes were not destroyed. If they were, that is a strictly worse defect than
+    // the one this arm pins, and it must not be reported as this one.
+    assert(survivors.length > 0,
+      '#980 (w) premise: the staged copy must still exist somewhere after the stop. The worktree is '
+      + 'gone and the stage is the only copy left; losing it outright is a destroy defect (#619(4)), '
+      + 'not the naming defect this arm measures. ' + seen);
+
+    // ================================ THE PIN ================================
+    // Findable means one of two things, and the arm accepts either: a path the run NAMED leads to the
+    // journal, or the journal is already in the band the operator reads (the live/archive folder).
+    // Anything else is a generated name nobody was told about.
+    const namedPaths = (combined.match(/\/[^\s'"()\n]+/g) || []);
+    const reachableFromOutput = namedPaths.some(p => {
+      try {
+        if (!fs.existsSync(p)) return false;
+        if (fs.statSync(p).isDirectory()) return filesContaining973(p, NONCE).length > 0;
+        return fs.readFileSync(p, 'utf8').includes(NONCE);
+      } catch (_) { return false; }
+    });
+    const inOperatorBand = inFixture.some(rel => rel.startsWith('kaola-workflow' + path.sep));
+
+    assert(reachableFromOutput || inOperatorBand,
+      '#980 (w): the staged run journal must be FINDABLE after a stop that leaves it un-landed. The '
+      + 'worktree it came from is gone, so this staged copy is the run\'s only surviving journal, and '
+      + 'it currently sits under a generated kw-wtsync-* name that appears nowhere in the output and '
+      + 'nowhere the operator looks — OS tmp reaping eventually takes it. Naming the path in the '
+      + 'failure output, landing it into the archive band before stopping, or deferring the removal '
+      + 'until the landing commits all satisfy this; parking it silently does not. '
+      + 'survivors=' + JSON.stringify(survivors) + ' ' + seen);
+  } finally {
+    cleanupGateFixture(fx);
+    // The un-landed stage is the artifact under test, so nothing in the sink deletes it — this arm
+    // owns that cleanup or it leaks a temp dir on every run. Only the one carrying THIS arm's nonce.
+    try {
+      for (const n of fs.readdirSync(os.tmpdir())) {
+        if (!n.startsWith('kw-wtsync-')) continue;
+        const abs = path.join(os.tmpdir(), n);
+        if (filesContaining973(abs, NONCE).length > 0) fs.rmSync(abs, { recursive: true, force: true });
+      }
+    } catch (_) {}
+  }
+})();
+
+// (w2) — the same three-copy blind spot (#931 n4) exists for this fix. (w) drives the CANONICAL sink
+// only, and the gitlab and gitea sinks are hand-ported: a canonical-only repair leaves both of them
+// staging a journal and stopping without naming it, with every behavioural arm green. The window is
+// opened by the stage and closed by the landing, so what each copy must carry is the pair — an arm at
+// every stage site and a disarm at every landing site. Counting them is what makes a copy that armed
+// ONE of its two routes fail here rather than pass on a partial port.
+(function testStagedJournalNoteReachesEveryEdition980() {
+  console.log('Test (#980 w2): the staged-journal note must reach all FOUR sink copies, armed at BOTH stage sites — a canonical-only or single-route fix leaves the same silent tmpdir behind on the copies (w) never drives');
+  const copies = [
+    ['root', path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js')],
+    ['codex', path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-sink-merge.js')],
+    ['gitlab', path.join(repoRoot, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-sink-merge.js')],
+    ['gitea', path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-sink-merge.js')],
+  ];
+  const texts = new Map();
+  let allPresent = true;
+  for (const [label, file] of copies) {
+    let text = null;
+    try { text = fs.readFileSync(file, 'utf8'); } catch (_) {}
+    assert(text !== null, '#980 (w2/' + label + '): the edition sink module must exist at ' + file);
+    if (text === null) { allPresent = false; continue; }
+    texts.set(label, text);
+  }
+  if (!allPresent) return;
+
+  // CALIBRATION on the canonical copy (w) actually drove: the counts below are only a measurement if
+  // the canonical really carries the pair, and the stage/landing sites are counted from the source
+  // rather than assumed, so a future route added to the sink raises the bar for every copy at once.
+  const root = texts.get('root');
+  const stageSites = (root.match(/^[ \t]*sinkCopyDir\(wtProjDir, wtStageDir\);$/gm) || []).length;
+  const landSites = (root.match(/^[ \t]*try \{ fs\.rmSync\(wtStageDir, \{ recursive: true, force: true \}\); \} catch \(_\) \{\}$/gm) || []).length;
+  assert(stageSites >= 2 && landSites >= 2,
+    '#980 (w2) calibration: the canonical sink must carry both staging routes and both landing sites, '
+    + 'or there is nothing for the legs below to count against; got stage=' + stageSites + ' land=' + landSites);
+  if (!(stageSites >= 2 && landSites >= 2)) return;
+
+  for (const [label] of copies) {
+    const text = texts.get(label);
+    const armed = (text.match(/armStagedJournalNote\(wtStageDir\)/g) || []).length;
+    const disarmed = (text.match(/^[ \t]*disarmStagedJournalNote\(\);/gm) || []).length;
+    assert(armed === stageSites,
+      '#980 (w2/' + label + '): every staging site must arm the note. A route that stages without arming '
+      + 'reaches its stops with the copy parked under an unreported kw-wtsync-* name — the exact defect, '
+      + 'surviving on one route; expected ' + stageSites + ' armed, got ' + armed);
+    assert(disarmed === landSites,
+      '#980 (w2/' + label + '): every landing site must disarm the note. The handler\'s existsSync probe '
+      + 'already covers the ordinary completed path — the stage is deleted immediately after landing, so '
+      + 'there is nothing left to report — which is why (#707 h) stays green without the disarm. What the '
+      + 'disarm covers is the case that probe cannot see: a cleanup rmSync that FAILS leaves the directory '
+      + 'on disk after a successful landing, and an un-disarmed note then warns about a copy the run '
+      + 'already landed. Expected ' + landSites + ' disarmed, got ' + disarmed);
+    assert(/kw-wtsync|staged run journal/.test(text) && text.includes('stagedJournalDir'),
+      '#980 (w2/' + label + '): the copy must carry the note itself, not only the call sites');
   }
 })();
 
