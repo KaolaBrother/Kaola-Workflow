@@ -144,12 +144,14 @@ touched**.
 
 `install-opencode.sh` is a standalone installer — it has its own `--forge` flag and does not run
 through `install.sh --forge`. It deploys the workflow command set — finalize, workflow-init,
-workflow-next. `copy_tree` removes exactly two things: the names the edition **retired on purpose**
-(`RETIRED_WORKFLOW_COMMANDS`), and each name it is **about to write**, immediately before writing
-it. A deployed command it has nothing to put back is left alone, so a source tree that renders
+workflow-next. `copy_tree` removes exactly three things: the command names the edition **retired
+on purpose** (`RETIRED_WORKFLOW_COMMANDS`), the hook-script names it retired on purpose
+(`RETIRED_HOOKS`), and each command name it is **about to write**, immediately before writing it.
+A deployed command it has nothing to put back is left alone, so a source tree that renders
 fewer commands than the destination holds no longer destroys the difference. Retiring a command
-therefore means adding its name to that list. Support scripts come from the selected forge's
-script tree, and the installer fails closed if an allowlisted script is missing from source.
+or hook script therefore means adding its name to the matching list. Support scripts come from the
+selected forge's script tree, and the installer fails closed if an allowlisted script is missing
+from source.
 
 `sync-opencode-edition.js writeCommands` produces one command file per command surface the routing
 registry declares for the selected forge, into the in-repo `.opencode[-<forge>]/command/` (the
@@ -308,7 +310,9 @@ install asserts the un-nested layout and that no nested `.opencode/` is created)
 ```
 
 `--uninstall` removes **only** kaola-deployed artifacts from the resolved scope, by
-source-tree filename (never a blind `rm` of a dir you may share): the deployed
+source-tree filename plus the names the edition retired on purpose (`RETIRED_WORKFLOW_COMMANDS`,
+`RETIRED_HOOKS` — a retired name is absent from the source tree, so without those lists it would
+linger forever; never a blind `rm` of a dir you may share): the deployed
 agents/commands/plugin/hooks and the opencode-native support scripts
 under `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/`. The shared
 `~/.config/kaola-workflow/config.json` is user-owned and untouched, so a co-installed

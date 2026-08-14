@@ -4575,6 +4575,413 @@ function assertLegacyOwnLaneContentStillSinks973(label, sinkScript, project, iss
     laneControlCompleted);
 });
 
+// ------------------------------------------------- #978 three shapes the lane exemption still hands to the force
+
+// (#973 e–i) armed the untracked half of the data-loss guard, and its exemption — isParkedLanePath
+// over the DECODED porcelain record, empty owned set — is what lets an ordinary run's own lane
+// content through ((f) holds why that exemption must exist). #978 is the residue of that boundary:
+// three shapes where uncommitted work still reaches `git worktree remove --force` with nothing
+// said. All three were destroyed by the pre-#973 blind probe too — residuals, not regressions.
+// Three arms, all four editions, same lettering space as (e)–(i):
+//
+//   (j) a file literally NAMED `kaola-workflow\<seg>\<name>` — ONE root-level path component with
+//       backslashes in it. git C-quotes the record (`?? "kaola-workflow\\<seg>\\<name>"`, under
+//       either core.quotePath setting), the porcelain parser decodes the quoting back to the
+//       literal on-disk name — correctly; that contract is what keeps `git add -- <path>` matching
+//       the file — and the classifier then normalises `\` to `/` and reads a parked lane where the
+//       disk holds a single file that is not under kaola-workflow/ at all. The probe REPORTS the
+//       file (premised below); the guard passes over it anyway, and the --sink stage cannot save
+//       it (it copies the own-project lane directory only, and this name is not under it).
+//   (k) an embedded git repository under a FOREIGN lane segment. `-uall` emits ONE collapsed
+//       record for an embedded repo (`?? kaola-workflow/<seg>/` — a plain foreign-lane directory
+//       reports per-file; the collapse is the embedded-repo behaviour, premised below). The
+//       collapse does not flip the classifier — plain files under a foreign lane are individually
+//       exempt by design — it changes the POPULATION: an entire repository, uncommitted files AND
+//       its own .git holding committed-but-unpushed history, hides behind one exempted segment. A
+//       parked lane is throwaway bookkeeping; a repository is not.
+//   (l) the LEGACY (non---sink) entry point and the run's OWN journal. The --sink merge step
+//       stages `<wt>/kaola-workflow/<project>/` before removing the worktree and lands the
+//       worktree-only files after checkout — (#707 h) pins that content reaching the archive — so
+//       preserving the crash journal is the transaction's ORDINARY outcome. Step 3 of main()
+//       reaches the same forced removal with no stage anywhere on its route, and (i-control)
+//       forbids the other repair — refusing over lane content refuses every legacy sink — so on
+//       this entry point survival is the only outcome that holds both.
+//
+// WHAT IS PINNED IS THE RESULT, NOT THE MECHANISM, exactly as (e) pins it: the bytes still exist
+// somewhere — searched by NONCE across the fixture, with a pre-run positive control proving the
+// search sees them while they exist, so a repair that relocates them is not mistaken for one that
+// destroyed them — and, for (j)/(k), no unqualified success is reported over them. A stricter lane
+// predicate, a refusal on the undecodable shapes, a descent into collapsed records, a legacy-route
+// stage: any of them satisfies these arms; which one ships is the fixer's call. (l) accepts no
+// "told" in place of survival: its content is the workflow's own journal, and a completed run that
+// named the file while destroying it would still have destroyed the only copy.
+
+function assertBackslashLaneNameIsNotSilentlyDestroyed978(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#978 j ' + label + '): a file literally NAMED kaola-workflow\\<seg>\\<name> — one root-level component — must not be force-removed silently; the classifier reads a parked lane where the disk holds genuine work');
+  const NONCE = 'kw978-backslash-nonce-' + issue;
+  const SEG = 'proj' + issue;
+  const BS_REL = 'kaola-workflow\\' + SEG + '\\notes.md'; // ONE component: backslash is a name char here, not a separator
+  const fx = buildWorktreeEvidenceFixture(project, issue, {
+    untracked: {
+      // The workflow's own lane content, present exactly as an ordinary run leaves it, so the
+      // guard's decision is about the backslash name and not about an otherwise-empty worktree.
+      ['kaola-workflow/' + project + '/.cache/n1-impl.md']: 'binding: n1-impl nonce' + issue + '\n',
+      [BS_REL]: '// ' + NONCE + '\nsurvey notes — genuine work, not lane bookkeeping\n',
+    },
+  });
+  fx.projectName = project;
+  try {
+    if (!assertUnderTmpdir973(label + '/j', fx.tmpRoot)) return;
+    assert(fs.readdirSync(fx.wtPath).includes(BS_REL),
+      '#978 (j/' + label + ') premise: the worktree ROOT must hold a single entry named ' + BS_REL
+      + ' — if the fixture split it into directories this arm is measuring a lane tree, not the name');
+    // The premise that separates this arm from (e): the guard\'s own probe form REPORTS this file.
+    // Blindness is not the failure here; classification is.
+    const wide = git(fx.wtPath, ['status', '--porcelain', '-uall']).stdout;
+    assert(wide.includes('?? "kaola-workflow\\\\' + SEG + '\\\\notes.md"'),
+      '#978 (j/' + label + ') premise: `status --porcelain -uall` must report the C-quoted record for the '
+      + 'backslash name — the guard SEES this file; got ' + JSON.stringify(wide.trim()));
+    // Positive control for the survival oracle: it finds the file while it exists, and finds it
+    // ONLY in the worktree — so "found afterwards" can only mean preserved past the removal.
+    const preHits = filesContaining973(fx.tmpRoot, NONCE);
+    assert(preHits.length === 1 && preHits[0].startsWith('.kw/'),
+      '#978 (j/' + label + ') premise: before the sink the NONCE must be found exactly once, inside the '
+      + 'worktree; got ' + JSON.stringify(preHits));
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    const combined = String(result.stdout || '') + String(result.stderr || '');
+    const survivors = filesContaining973(fx.tmpRoot, NONCE);
+    // Same generous shape as (e): any honest signal counts and no mechanism is required. The named
+    // token is the SEGMENT, which survives C-quoting unchanged — the full literal name would fail
+    // to match its own quoted form in a refusal message.
+    const told = result.status !== 0 || !!(out && out.reason) || combined.includes(SEG);
+    const seen = 'exit=' + result.status
+      + ' status=' + JSON.stringify(out && out.status)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + ' worktree_still_present=' + fs.existsSync(fx.wtPath)
+      + ' survivors=' + JSON.stringify(survivors)
+      + '\nstderr: ' + String(result.stderr || '').slice(-500);
+
+    assert(survivors.length > 0,
+      '#978 (j/' + label + '): the backslash-named file must still exist after the sink. It is one untracked '
+      + 'file at the worktree root — not under kaola-workflow/, not reached by the --sink stage — and the '
+      + 'decoded-then-normalised NAME is the only reading under which it looks like lane bookkeeping. '
+      + 'Refusing, preserving it elsewhere and copying it aside all satisfy this; destroying it does not. ' + seen);
+    assert(told,
+      '#978 (j/' + label + '): the sink must not report unqualified success over it. A non-zero exit, a typed '
+      + 'reason on the envelope, or the name in the output all count — silence does not. ' + seen);
+  } finally {
+    cleanup(fx);
+  }
+}
+
+function assertEmbeddedRepoUnderLanePrefixIsNotSilentlyDestroyed978(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#978 k ' + label + '): an embedded git repository under a FOREIGN lane segment must not be force-removed silently — one collapsed record hides a whole repo, unpushed history included, behind the exemption');
+  const NONCE = 'kw978-nested-repo-nonce-' + issue;
+  const SEG = 'crashed-' + issue;
+  const fx = buildWorktreeEvidenceFixture(project, issue, {
+    untracked: {
+      ['kaola-workflow/' + project + '/.cache/n1-impl.md']: 'binding: n1-impl nonce' + issue + '\n',
+    },
+  });
+  fx.projectName = project;
+  try {
+    if (!assertUnderTmpdir973(label + '/k', fx.tmpRoot)) return;
+    // A real repository under the foreign lane segment: one commit that exists nowhere else (no
+    // remote), plus two uncommitted files — the 2026-08 crash shape, a run's scratch clone parked
+    // where a successor's worktree inherits it.
+    const nested = path.join(fx.wtPath, 'kaola-workflow', SEG);
+    fs.mkdirSync(path.join(nested, 'sub'), { recursive: true });
+    G.git(nested, ['init', '-b', 'main'], { encoding: 'utf8' });
+    git(nested, ['config', 'user.email', 'test@example.com']);
+    git(nested, ['config', 'user.name', 'Test User']);
+    fs.writeFileSync(path.join(nested, 'history.md'), '# committed, never pushed\n' + NONCE + '\n');
+    git(nested, ['add', 'history.md']);
+    git(nested, ['commit', '-m', 'work: history']);
+    fs.writeFileSync(path.join(nested, 'precious.md'), NONCE + ' — uncommitted\n');
+    fs.writeFileSync(path.join(nested, 'sub', 'deeper.txt'), NONCE + ' — uncommitted, nested\n');
+
+    assert(fs.existsSync(path.join(nested, '.git'))
+      && git(nested, ['rev-parse', '--verify', 'HEAD']).status === 0
+      && git(nested, ['remote']).stdout.trim() === '',
+      '#978 (k/' + label + ') premise: the lane segment must hold a REAL embedded repository carrying a '
+      + 'commit and no remote — committed-but-unpushed history is part of what the removal destroys');
+    const inner = git(nested, ['status', '--porcelain', '-uall']).stdout;
+    assert(inner.includes('?? precious.md') && inner.includes('?? sub/deeper.txt'),
+      '#978 (k/' + label + ') premise: the two files must be uncommitted INSIDE the embedded repo; got '
+      + JSON.stringify(inner.trim()));
+    // The collapse premise: the outer probe emits ONE record and never descends. Without this the
+    // arm would be re-measuring the per-file exemption (f) already holds.
+    const wide = git(fx.wtPath, ['status', '--porcelain', '-uall']).stdout;
+    assert(wide.includes('?? kaola-workflow/' + SEG + '/') && !wide.includes('precious.md'),
+      '#978 (k/' + label + ') premise: `-uall` must report ONE collapsed record for the embedded repo and no '
+      + 'per-file records — the collapse is the embedded-repo behaviour, and it is what hides the population; '
+      + 'got ' + JSON.stringify(wide.trim()));
+    const preHits = filesContaining973(fx.tmpRoot, NONCE);
+    assert(preHits.length === 3 && preHits.every(p => p.startsWith('.kw/')),
+      '#978 (k/' + label + ') premise: before the sink the NONCE must be found in exactly the three files '
+      + 'inside the worktree — the survival oracle\'s positive control; got ' + JSON.stringify(preHits));
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    const combined = String(result.stdout || '') + String(result.stderr || '');
+    const survivors = filesContaining973(fx.tmpRoot, NONCE);
+    const told = result.status !== 0 || !!(out && out.reason) || combined.includes(SEG);
+    const seen = 'exit=' + result.status
+      + ' status=' + JSON.stringify(out && out.status)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + ' worktree_still_present=' + fs.existsSync(fx.wtPath)
+      + ' survivors=' + JSON.stringify(survivors)
+      + '\nstderr: ' + String(result.stderr || '').slice(-500);
+
+    assert(survivors.length > 0,
+      '#978 (k/' + label + '): the embedded repository\'s work must still exist after the sink. Plain files '
+      + 'under a foreign lane are exempt by design — but this segment holds a REPOSITORY: uncommitted files '
+      + 'and a .git whose commits exist nowhere else, all behind one exempted record, and `git worktree '
+      + 'remove --force` takes every byte of it. Refusing, preserving the directory elsewhere and copying it '
+      + 'aside all satisfy this; destroying it does not. ' + seen);
+    assert(told,
+      '#978 (k/' + label + '): the sink must not report unqualified success over an embedded repository it '
+      + 'is about to destroy. A non-zero exit, a typed reason, or the segment named in the output all count '
+      + '— silence does not. ' + seen);
+  } finally {
+    cleanup(fx);
+  }
+}
+
+function assertLegacyRouteKeepsTheWorktreeOnlyJournal978(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#978 l ' + label + '): the LEGACY entry point must not destroy the worktree-only run journal the --sink route preserves — same forced removal, no stage on its route, and (i-control) forbids refusing over it');
+  const NONCE = 'kw978-journal-nonce-' + issue;
+  const fx = buildLegacyWorktreeFixture973(project, issue, {
+    untracked: {
+      ['kaola-workflow/' + project + '/.cache/n7-worktree-only.md']: '# per-node evidence\n' + NONCE + '\n',
+      ['kaola-workflow/' + project + '/.cache/sink-fallback.json']: '{"schema":1,"nonce":"' + NONCE + '"}\n',
+    },
+  });
+  try {
+    if (!assertUnderTmpdir973(label + '/l', fx.tmpRoot)) return;
+    const wide = git(fx.wtPath, ['status', '--porcelain', '-uall']).stdout.trim();
+    assert(wide.split('\n').filter(Boolean).length === 2,
+      '#978 (l/' + label + ') premise: the two journal files must be UNTRACKED in the worktree; got '
+      + JSON.stringify(wide));
+    // Positive control for the survival oracle, and the worktree-only premise in one: the NONCE
+    // exists in exactly the two worktree copies, so finding it afterwards can only mean the legacy
+    // route preserved what only the worktree held.
+    const preHits = filesContaining973(fx.tmpRoot, NONCE);
+    assert(preHits.length === 2 && preHits.every(p => p.startsWith('.kw/')),
+      '#978 (l/' + label + ') premise: before the run the NONCE must be found in exactly the two WORKTREE '
+      + 'copies; got ' + JSON.stringify(preHits));
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkLegacyAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    const survivors = filesContaining973(fx.tmpRoot, NONCE);
+    const seen = 'exit=' + result.status
+      + ' status=' + JSON.stringify(out && out.status)
+      + ' result=' + JSON.stringify(out && out.result)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + ' survivors=' + JSON.stringify(survivors)
+      + '\nstderr: ' + String(result.stderr || '').slice(-500);
+
+    // Non-vacuity, not a second pin: a legacy run that stops early leaves the worktree standing and
+    // the journal trivially alive. (i-control) holds this same posture to completion on every
+    // edition — if this clause is red alongside (i-control), read (i-control) first.
+    const completed = result.status === 0 && !!out && !out.reason && out.result !== 'refuse' && out.result !== 'report';
+    assert(completed,
+      '#978 (l/' + label + ') premise: the legacy run must COMPLETE over lane-only untracked content — '
+      + 'refusing here refuses every legacy sink ((i-control) is the arm that says so), and a run that '
+      + 'stopped early never reached the removal this arm measures. ' + seen);
+    assert(survivors.length > 0,
+      '#978 (l/' + label + '): the worktree-only journal must still exist somewhere after a completed legacy '
+      + 'sink. The --sink route preserves exactly this content as its ordinary outcome — staged before the '
+      + 'removal, landed after checkout, archived ((#707 h)) — while Step 3 of main() reaches the same '
+      + '`git worktree remove --force` with no stage anywhere on its route. Landed into the live folder, '
+      + 'archived, or copied aside all satisfy this; destroyed does not. ' + seen);
+  } finally {
+    cleanup(fx);
+  }
+}
+
+// (m) R1 — the rescue's own failure mode. The legacy stage that closes (l) is best-effort by
+// design (a stage fault must not hard-stop every sink — that is (i-control)'s line), and its copy
+// loop opens every non-directory entry: a DANGLING symlink (ENOENT) or a SELF-REFERENTIAL one
+// (ELOOP) inside kaola-workflow/<project>/ makes the copy throw, the catch nulls the whole stage,
+// and the run proceeds to the same forced removal reporting `merged` at exit 0 — the journal is
+// destroyed with nothing said. That is the exact silent-destruction shape (l) exists to close,
+// reached through a trigger (l)'s fixture does not model; and a link is not an exotic guest at
+// this seam — (h) is in this file because a run actually left one.
+//
+// THE PIN IS A DISJUNCTION, unlike (l): when the stage CANNOT preserve the journal, refusing and
+// reporting are both honest outcomes, and so is surviving anyway (a copy that handles links).
+// What is forbidden is the pair — the journal is gone AND nothing said so. An unreadable-FILE
+// trigger (EACCES) exists too and is deliberately not fixtured: a permission probe reads
+// differently under root, and a fixture that changes meaning by operator is worse than a named
+// omission.
+function assertLegacyStageFailureIsNotSilent978(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#978 m ' + label + '): a symlink the legacy stage cannot copy must not turn the rescue back into silent destruction — the journal survives, or the run says what it could not preserve');
+  const NONCE = 'kw978-stagefail-nonce-' + issue;
+  const LANE = 'kaola-workflow/' + project + '/.cache/';
+  const fx = buildLegacyWorktreeFixture973(project, issue, {
+    untracked: {
+      [LANE + 'n7-worktree-only.md']: '# per-node evidence\n' + NONCE + '\n',
+      [LANE + 'n8-timings.md']: '# timings\n' + NONCE + '\n',
+    },
+    symlinks: {
+      // Both measured trigger shapes, in one fixture: whichever the copy meets first, the whole
+      // stage is lost at once — so one arm covers both without caring about readdir order.
+      [LANE + 'dangling-link']: 'no-such-target-' + issue,
+      [LANE + 'self-link']: 'self-link',
+    },
+  });
+  try {
+    if (!assertUnderTmpdir973(label + '/m', fx.tmpRoot)) return;
+    const dangling = path.join(fx.wtPath, LANE + 'dangling-link');
+    const selfRef = path.join(fx.wtPath, LANE + 'self-link');
+    assert(fs.lstatSync(dangling).isSymbolicLink() && fs.existsSync(dangling) === false
+      && fs.lstatSync(selfRef).isSymbolicLink() && fs.existsSync(selfRef) === false,
+      '#978 (m/' + label + ') premise: both links must exist by lstat and resolve to NOTHING by existsSync — '
+      + 'dangling and self-referential are the two shapes that make a naive per-entry copy throw');
+    const preHits = filesContaining973(fx.tmpRoot, NONCE);
+    assert(preHits.length === 2 && preHits.every(p => p.startsWith('.kw/')),
+      '#978 (m/' + label + ') premise: before the run the NONCE must be found in exactly the two WORKTREE '
+      + 'journal files — the survival oracle\'s positive control; got ' + JSON.stringify(preHits));
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkLegacyAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    const combined = String(result.stdout || '') + String(result.stderr || '');
+    const survivors = filesContaining973(fx.tmpRoot, NONCE);
+    const told = result.status !== 0
+      || !!(out && out.reason)
+      || combined.includes('n7-worktree-only.md')
+      || combined.includes('dangling-link')
+      || combined.includes('self-link');
+    const seen = 'exit=' + result.status
+      + ' status=' + JSON.stringify(out && out.status)
+      + ' result=' + JSON.stringify(out && out.result)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + ' survivors=' + JSON.stringify(survivors)
+      + '\nstderr: ' + String(result.stderr || '').slice(-500);
+
+    // Non-vacuity: a stop for a reason this arm is not about would satisfy `told` while measuring
+    // nothing — the same premises (i) carries, for the same reason.
+    assert(result.status !== 3,
+      '#978 (m/' + label + ') premise: exit 3 is the "project already archived — nothing done" fallback; the '
+      + 'run never reached the stage or the removal, so the clause below is not about this trigger. ' + seen);
+    const unrelated978m = ['run_not_finalized', 'no_implementation_changes', 'sink_blocked', 'unknown_flag'];
+    assert(!(out && unrelated978m.includes(out.reason)),
+      '#978 (m/' + label + ') premise: the run must not stop on a precondition this arm is not about. ' + seen);
+
+    assert(survivors.length > 0 || told,
+      '#978 (m/' + label + '): a stage that throws must not hand the journal back to silent destruction. '
+      + 'Best-effort is the stage\'s contract and refusing every sink over a fault is (i-control)\'s line to '
+      + 'hold — but "could not preserve" has to surface: keep the bytes anyway (a copy that handles links), '
+      + 'or say so (a non-zero exit, a typed reason on the envelope, the artifacts named in the output). '
+      + 'Destroyed at exit 0 under an unqualified terminal is the one forbidden pair. ' + seen);
+  } finally {
+    cleanup(fx);
+  }
+}
+
+// (n) the --sink twin of (m), and the more reachable half: the transaction's merge step carries
+// the IDENTICAL stage — same sinkCopyDir over the same `<wt>/kaola-workflow/<project>/`, same
+// swallow nulling the stage — and the legacy route is reachable only by a direct invocation that
+// omits the flag, while every shipped finalize surface passes `--sink`. So the same symlink loses
+// the same journal on the route every real run takes, under the transaction's own success
+// terminal (`sinked` at exit 0). The blast radius is the same CONTENT as (m) — both stages copy
+// exactly the own-project lane dir, both land through the same per-file union — on a route with
+// strictly more traffic. Same disjunction, same fixture shapes, same named omission of the
+// EACCES trigger (a permission fixture reads differently under root; a named omission beats a
+// fixture that passes for the wrong reason).
+function assertSinkRouteStageFailureIsNotSilent978(label, sinkScript, project, issue, mockEnvName) {
+  console.log('Test (#978 n ' + label + '): the --sink route\'s stage has the same throw-and-swallow — a symlink it cannot copy must not cost the journal silently on the route every shipped finalize takes');
+  const NONCE = 'kw978-sinkstagefail-nonce-' + issue;
+  const LANE = 'kaola-workflow/' + project + '/.cache/';
+  const fx = buildWorktreeEvidenceFixture(project, issue, {
+    untracked: {
+      [LANE + 'n7-worktree-only.md']: '# per-node evidence\n' + NONCE + '\n',
+      [LANE + 'n8-timings.md']: '# timings\n' + NONCE + '\n',
+    },
+    symlinks: {
+      // Both trigger shapes in one fixture, exactly as (m): whichever the copy meets first loses
+      // the whole stage, so the arm covers both without depending on readdir order.
+      [LANE + 'dangling-link']: 'no-such-target-' + issue,
+      [LANE + 'self-link']: 'self-link',
+    },
+  });
+  fx.projectName = project;
+  try {
+    if (!assertUnderTmpdir973(label + '/n', fx.tmpRoot)) return;
+    const dangling = path.join(fx.wtPath, LANE + 'dangling-link');
+    const selfRef = path.join(fx.wtPath, LANE + 'self-link');
+    assert(fs.lstatSync(dangling).isSymbolicLink() && fs.existsSync(dangling) === false
+      && fs.lstatSync(selfRef).isSymbolicLink() && fs.existsSync(selfRef) === false,
+      '#978 (n/' + label + ') premise: both links must exist by lstat and resolve to NOTHING by existsSync — '
+      + 'dangling and self-referential are the two shapes that make a naive per-entry copy throw');
+    const preHits = filesContaining973(fx.tmpRoot, NONCE);
+    assert(preHits.length === 2 && preHits.every(p => p.startsWith('.kw/')),
+      '#978 (n/' + label + ') premise: before the run the NONCE must be found in exactly the two WORKTREE '
+      + 'journal files — the survival oracle\'s positive control; got ' + JSON.stringify(preHits));
+
+    const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
+    const result = runSinkAt(sinkScript, fx, ['--issue', String(issue), '--keep-issue-open'], extraEnv);
+    const out = lastJson(result);
+    const combined = String(result.stdout || '') + String(result.stderr || '');
+    const survivors = filesContaining973(fx.tmpRoot, NONCE);
+    const told = result.status !== 0
+      || !!(out && out.reason)
+      || combined.includes('n7-worktree-only.md')
+      || combined.includes('dangling-link')
+      || combined.includes('self-link');
+    const seen = 'exit=' + result.status
+      + ' status=' + JSON.stringify(out && out.status)
+      + ' reason=' + JSON.stringify(out && out.reason)
+      + ' survivors=' + JSON.stringify(survivors)
+      + '\nstderr: ' + String(result.stderr || '').slice(-500);
+
+    // Non-vacuity: the disjunction reads ANY non-zero exit as told, so a stop on a precondition
+    // this arm is not about would pass while measuring nothing. `worktree_dirty` is deliberately
+    // NOT on this list — a guard that refuses over an uncopyable lane entry is a legitimate
+    // repair, not an unrelated stop.
+    const unrelated978n = ['run_not_finalized', 'no_implementation_changes', 'chains_red',
+      'non_fast_forward', 'sink_blocked', 'unknown_flag'];
+    assert(!(out && unrelated978n.includes(out.reason)),
+      '#978 (n/' + label + ') premise: the run must not stop on a precondition this arm is not about. ' + seen);
+
+    assert(survivors.length > 0 || told,
+      '#978 (n/' + label + '): the --sink stage that throws must not hand the journal back to silent '
+      + 'destruction on the one route every shipped finalize takes. Keep the bytes anyway (a copy that '
+      + 'handles links), or say so (a non-zero exit, a typed reason on the envelope, the artifacts named in '
+      + 'the output). Destroyed under an unqualified `sinked` at exit 0 is the one forbidden pair. ' + seen);
+  } finally {
+    cleanup(fx);
+  }
+}
+
+// All four sink copies, exactly as (e)–(i) and for the same reason: the guard and its exemption
+// call is hand-ported per forge, while the classifier itself lives in the byte-identical kernel —
+// so a repair may land in one file or in four, and only arms that drive every edition can tell a
+// complete repair from a root-only one.
+[
+  ['root', path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js'), null],
+  ['codex', path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-sink-merge.js'), null],
+  ['gitlab', path.join(repoRoot, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-sink-merge.js'), 'KAOLA_GLAB_MOCK_SCRIPT'],
+  ['gitea', path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-sink-merge.js'), 'KAOLA_TEA_MOCK_SCRIPT'],
+].forEach(([label, script, mockEnv], index) => {
+  if (!fs.existsSync(script)) {
+    assert(false, '#978 (' + label + '): the edition sink script exists at ' + script);
+    return;
+  }
+  assertBackslashLaneNameIsNotSilentlyDestroyed978(label, script, 'issue-' + (97801 + index), 97801 + index, mockEnv);
+  assertEmbeddedRepoUnderLanePrefixIsNotSilentlyDestroyed978(label, script, 'issue-' + (97811 + index), 97811 + index, mockEnv);
+  assertLegacyRouteKeepsTheWorktreeOnlyJournal978(label, script, 'issue-' + (97821 + index), 97821 + index, mockEnv);
+  assertLegacyStageFailureIsNotSilent978(label, script, 'issue-' + (97831 + index), 97831 + index, mockEnv);
+  assertSinkRouteStageFailureIsNotSilent978(label, script, 'issue-' + (97841 + index), 97841 + index, mockEnv);
+});
+
 // --------------------------------------------------------------------------- #923 a branch that is not there
 
 // A `--branch` naming a ref that DOES NOT EXIST must never be silently accepted.

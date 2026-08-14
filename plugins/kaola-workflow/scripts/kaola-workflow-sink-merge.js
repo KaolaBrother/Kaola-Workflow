@@ -496,13 +496,22 @@ function assertNoLiveWorkflowFolder(mainRoot, project, branch) {
 // no run means to keep. Ignored files are a third population that NO --untracked-files setting
 // reports (measured), so they fall outside this by construction rather than by choice.
 // Fail-closed: an undecodable record is kept.
+//
+// #978: two record shapes are kept as dirt without consulting the classifier. A decoded rel
+// containing a BACKSLASH: git emits `/` as the only separator in porcelain records (a backslash
+// arrives C-quoted and decodes to a literal filename character), so `kaola-workflow\proj\x.md` is
+// ONE root-level file — but the classifier normalises `\` to `/` and reads a parked lane there.
+// And a rel ending `/`: `-uall` reports untracked files one record per file EXCEPT inside an
+// embedded repository, which git will not descend into and reports as ONE collapsed directory
+// record — exempting that record by its segment hands an entire foreign repo, its .git and any
+// commits existing nowhere else included, to the forced removal.
 function worktreeDirtRecords(statusText) {
   const kept = [];
   for (const record of String(statusText || '').split('\n')) {
     if (!record.trim()) continue;
     if (record.startsWith('??')) {
       const rel = parsePorcelainPaths(record)[0];
-      if (rel && isParkedLanePath(rel, [])) continue;
+      if (rel && !rel.includes('\\') && !rel.endsWith('/') && isParkedLanePath(rel, [])) continue;
     }
     kept.push(record);
   }
@@ -2154,6 +2163,14 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       // safely — genuinely worktree-only (untracked) content, e.g. a .cache/ crash-resume journal,
       // still survives; branch-tracked content wins exactly as checkout already resolved it.
       let wtStageDir = null;
+      // #978 R1: a stage attempt that THROWS while the journal directory exists is set aside and
+      // checked AFTER the catch below, so the refusal cannot be swallowed by the same catch — and
+      // the removal is skipped, so the refused run leaves the worktree and its journal intact. A
+      // missing worktree or absent journal directory stages nothing and proceeds as before; what
+      // must not proceed is destroying a folder the stage just failed to copy (a dangling or
+      // self-referential symlink makes the per-entry copy throw) while reporting `sinked` over it.
+      let wtStageErr = null;
+      let wtStageSrc = null;
       try {
         const { removeWorktree: removeWt, readActiveFolders: readAF, worktreePathFor: wtPathFor } = require('./kaola-workflow-claim.js');
         const folder = readAF(mainRoot, { excludeClosedIssues: false }).find(f => f.project === args.project);
@@ -2165,11 +2182,26 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
             try {
               wtStageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wtsync-'));
               sinkCopyDir(wtProjDir, wtStageDir);
-            } catch (_) { wtStageDir = null; }
+            } catch (e) { wtStageDir = null; wtStageErr = e; wtStageSrc = wtProjDir; }
           }
         }
-        removeWt(mainRoot, args.project, folder);
+        if (!wtStageErr) removeWt(mainRoot, args.project, folder);
       } catch (_) {}
+      if (wtStageErr) {
+        sinkEmit({
+          result: 'refuse',
+          reason: 'stage_failed',
+          step: 'merge',
+          branch: args.branch,
+          project: args.project,
+          detail: 'could not stage ' + wtStageSrc + ' before worktree removal ('
+            + (wtStageErr.message || String(wtStageErr)) + '). Removing the worktree would destroy '
+            + 'the only copy of that folder. The merge step is left NOT done so a re-run resumes '
+            + 'here; remove or repair the uncopyable entry (e.g. a dangling symlink), or commit the '
+            + 'content, then re-run --sink.',
+        }, 1);
+        return;
+      }
 
       // Resolve merge base for up-to-date check
       const originRef = 'origin/' + defBranch;
@@ -3214,9 +3246,44 @@ function main() {
 
   // Step 3 — Remove the worktree (only now that every precondition passed) so the branch can be
   // checked out in the main root below.
+  // #978: stage <wt>/kaola-workflow/<project>/ BEFORE the forced removal, exactly as the --sink
+  // merge step does. The worktree-only half of that folder — the untracked .cache per-node
+  // evidence, the crash-resume journal — exists nowhere else, and this route used to reach the
+  // same `git worktree remove --force` with no stage anywhere on it. The staged copy lands after
+  // the merge below. A missing worktree or absent journal directory stages nothing and the sink
+  // proceeds; a stage attempt that THROWS with the journal present (a dangling or self-referential
+  // symlink makes the per-entry copy throw) stops the sink below instead — proceeding would
+  // destroy the only copy of that folder while reporting a completed merge.
+  let wtStageDir = null;
   {
     const folder = readActiveFolders(mainRoot, { excludeClosedIssues: false })
       .find(item => item.project === args.project);
+    let wtStageErr = null;
+    let wtStageSrc = null;
+    try {
+      const { worktreePathFor: wtPathFor } = require('./kaola-workflow-claim.js');
+      let wtPath = null;
+      try { wtPath = (folder && folder.worktree_path) || wtPathFor(mainRoot, args.project); } catch (_) {}
+      if (wtPath && fs.existsSync(wtPath)) {
+        const wtProjDir = path.join(wtPath, 'kaola-workflow', args.project);
+        if (fs.existsSync(wtProjDir)) {
+          try {
+            wtStageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wtsync-'));
+            sinkCopyDir(wtProjDir, wtStageDir);
+          } catch (e) { wtStageDir = null; wtStageErr = e; wtStageSrc = wtProjDir; }
+        }
+      }
+    } catch (_) {}
+    // #978 R1: a KEEP, like the Step 2 guards that protect work the next step would destroy — the
+    // throw stops the sink with the worktree and its journal intact.
+    if (wtStageErr) {
+      throw new Error(
+        'sink-merge refused: could not stage ' + wtStageSrc + ' before worktree removal ('
+        + (wtStageErr.message || String(wtStageErr)) + ').\n'
+        + 'Removing the worktree (Step 3) would destroy the only copy of that folder. Remove or '
+        + 'repair the uncopyable entry (e.g. a dangling symlink), or commit the content, then '
+        + 're-run sink-merge.');
+    }
     // Always attempt removeWorktree — even when folder is archived (not found in active folders),
     // the worktree may still be registered. removeWorktree falls back to worktreePathFor when
     // folder is undefined, which computes the canonical sibling .kw path and removes it.
@@ -3304,6 +3371,18 @@ function main() {
     // rebase_conflict stops bare: a true content conflict is never auto-resolved.
     process.exitCode = 2;
     return;
+  }
+
+  // #978: land the staged worktree-only content now that checkout has resolved whether the branch
+  // itself tracks kaola-workflow/<project>/ — the same per-file union as the --sink merge step
+  // (#707): a checkout-resolved file is authoritative and is never overwritten; a file that exists
+  // only in the worktree copy always lands.
+  if (wtStageDir) {
+    try {
+      const mainProjDir = path.join(mainRoot, 'kaola-workflow', args.project);
+      sinkLandStagedUnion(wtStageDir, mainProjDir);
+    } catch (_) {}
+    try { fs.rmSync(wtStageDir, { recursive: true, force: true }); } catch (_) {}
   }
 
   const cleanupResult = postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, testGate.result);

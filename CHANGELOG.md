@@ -178,7 +178,8 @@
   render this" look identical on disk, and both are kaola-namespaced. So each installer now removes
   exactly two things — the names it **retired on purpose** (`RETIRED_ROLE_SKILLS`,
   `RETIRED_WORKFLOW_COMMANDS`, `RETIRED_COMMANDS`, each verified complete against that edition's
-  full shipping history) and each name it is **about to write**, immediately before writing it.
+  full shipping history — a census #977, below, shows fell short for `install.sh`: seven pre-rename
+  names were missing) and each name it is **about to write**, immediately before writing it.
   Anything else deployed is left alone. The per-name removal is not deferrable: `cp -R src dest`
   onto an existing directory copies *into* it, leaving the live `SKILL.md` stale and the new bytes
   at `dest/X/X/SKILL.md`, so a reinstall would silently stop updating.
@@ -256,7 +257,7 @@
   worktree, say — is reported as a single collapsed record even under `-uall`, so it is exempted by
   its directory segment and anything uncommitted inside it goes with it. And the legacy route
   removes the run's own `.cache/` journal, where the `--sink` route stages a best-effort rescue
-  first.
+  first. (All three are closed by #978, below.)
 
 - **Test fixture roots can no longer be created inside the working checkout — #975.** Under a
   relative `TMPDIR`, `mkdtempSync(path.join(os.tmpdir(), …))` and `mktemp "${TMPDIR:-/tmp}/…"`
@@ -266,6 +267,114 @@
   resolve their root somewhere that does not depend on the current directory. Absolutising after the
   fact does not fix this: the directory has already been created in the wrong place, and
   `path.resolve(".")` *is* the current directory.
+
+- **A relative `TMPDIR` can no longer land installer or production-script temporaries inside the
+  working checkout — #976.** The entry above covered the explicit `"${TMPDIR:-/tmp}/…"` templates,
+  which escape everywhere; eight more installer sites called `mktemp` bare (or `-t`), leaving the
+  `TMPDIR` consultation to `mktemp` itself — and on GNU coreutils a relative value resolves against
+  the invoking directory. Measured live on Linux: `bash install.sh --forge=github` under `TMPDIR=.`
+  ran to exit 0 with its manifest temp files sitting in the checkout root mid-run, moved or cleaned
+  by the end, so no before/after check could see it. On macOS none of the eight sites escapes —
+  `mktemp` there consults `TMPDIR` only when the per-user temp directory is unavailable — which is
+  part of how the defect shipped unnoticed. All three installers now carry the same
+  absolute-or-`/tmp` guard `install-all.sh` already had (`KW_TMPDIR`) and pass explicit templates
+  under it.
+
+  The Node surface was the larger half, and the filed enumeration missed it entirely: `os.tmpdir()`
+  returns a relative `TMPDIR` verbatim, and everything built on it inherits that — hundreds of
+  `mkdtempSync(path.join(os.tmpdir(), …))` fixture roots across the test suites, and four
+  production scripts, among them the chain runner's own isolation root, the very mechanism that
+  hands chain children an absolute temp path. Absolutising the returned string does not help,
+  because the directory has already been created in the wrong place. Measured harm: a bare
+  walkthrough run under `TMPDIR=.` created fixture roots inside the checkout, left
+  `kaola-workflow/archive/` carrying a modified tracked file and a stray new artifact, and failed. Rather than patch sites one by one, the kernel now normalises
+  `TMPDIR`/`TMP`/`TEMP` once at require time: a non-empty, non-absolute value is rewritten to
+  `/tmp`; an absolute value — including one that legitimately sits inside a repository — passes
+  byte-for-byte untouched; empty stays empty. Every temp-creating production script loads the
+  kernel at module start (the validation runner now requires it top-level, which is what makes that
+  sentence true rather than aspirational), and children inherit the environment — so one statement
+  covers every current site, every spawned child, and every future `os.tmpdir()` call in those
+  processes.
+
+  One of the eight sites was hiding a worse, unfiled defect, user-visible on Linux:
+  `install-kimi.sh` backed up an existing hooks config with `mktemp -t kaola-kimi-hooks` — a
+  template with no `X`s, which GNU `mktemp` rejects outright (`too few X's in template`), and under
+  `set -euo pipefail` that error **aborted the entire kimi install for every GNU user with an
+  existing `config.toml`** (macOS `mktemp` accepts the X-less form, which is how it shipped). The
+  explicit template repairs it: a GNU install or reinstall over an existing config now succeeds
+  where it previously died, and the backup/restore mechanism itself is unchanged.
+
+- **A surface the tree retired is now removed from a deployed install, on both the install and the
+  uninstall path — #977.** Four strands, each reproduced live on a real install before the fix, and
+  each closed by naming the retired artifacts rather than widening any sweep: removal stays exactly
+  the declared names plus what a deploy is about to write, never a namespace prune (#973's defect
+  class), so a user-authored file at any other name is untouched.
+
+  `install.sh` never removed the seven pre-rename `claude-workflow*` command names: the 2026-05
+  installer was a bare copy with no stale-removal, and no glob the later prune ever carried matched
+  them, so a box from that era kept them across every upgrade. They join `RETIRED_COMMANDS`,
+  census-verified as exactly the stranded set. (`uninstall.sh` already cleared these seven; the gap
+  was the install/upgrade path.)
+
+  `uninstall.sh` named only one of the four agents previous releases deployed and later retired,
+  and that strand was **permanent** rather than stale: this uninstall also deletes the agent
+  manifest, and the install-side sweep needs a pre-install manifest row, so a name missed at
+  uninstall was unremovable by any later install — measured, three dead managed agent files
+  survived an uninstall and the reinstall after it, untouched. `docs-lookup`, `issue-scout` and
+  `workflow-planner` join `contractor` in `RETIRED_AGENTS`; removal is still gated on the managed
+  marker, so a user-authored file at one of those names survives byte-intact.
+
+  opencode `--uninstall` removed commands by current source-tree name only and never consulted the
+  edition's own `RETIRED_WORKFLOW_COMMANDS`, so a retired command survived the uninstall that
+  removed every current artifact around it. It now deletes those nine names too — a deliberate
+  behaviour change, bounded to names every install and reinstall already deletes today.
+
+  Retired hook scripts had no removal route at all on the opencode and kimi editions: absent from
+  the source tree, they were invisible both to the bare-copy deploy and to the by-source-name
+  uninstall — stranded on both paths, with no healing mechanism. Each edition now declares a
+  `RETIRED_HOOKS` list — exactly `kaola-workflow-pre-commit.sh` and `kaola-workflow-write-lane.sh`,
+  censused from each edition's full hook-set history — read by both its install and its uninstall
+  path.
+
+- **The sink no longer silently destroys the three shapes of uncommitted work the #975 entry above
+  records as residuals — #978.** All three were measured end-to-end before the fix: the guard
+  passed, `git worktree remove --force` ran, and the work was gone at exit 0 with nothing said.
+
+  A file whose **name** contains backslashes — legal on POSIX, one root-level path component — was
+  normalised onto a lane prefix by the exemption's classifier and destroyed. Git's porcelain emits
+  `/` as its only separator, so a backslash in a decoded record is always a literal filename
+  character; such a record is now never exempt, and the sink **refuses**, loudly, with the worktree
+  intact and the name in the output. An **embedded git repository** under a lane prefix is reported
+  as one collapsed `dir/` record even under `-uall` — git does not descend into it — so a single
+  exempted segment hid an entire foreign repository, and the removal destroyed not only its
+  uncommitted files but its own `.git`, unpushed commits included. A record ending in `/` — the
+  collapsed form git emits for a repository it will not descend into — is now never exempt either,
+  and the sink refuses. Both rules sit in the guard both entry points share, so the legacy no-flag
+  route refuses too — verified by driving it directly on all four editions.
+
+  The third shape is the legacy route's own: it removed the worktree with no rescue, destroying the
+  worktree-only run journal — the `.cache/` evidence and crash-resume record — that the `--sink`
+  route stages and lands around its removal. The legacy route now stages the run's own
+  `kaola-workflow/<project>/` folder before removal and lands it after the merge succeeds, the same
+  best-effort union the `--sink` route has carried: worktree-only files land, checkout-resolved
+  files are never overwritten.
+
+  The stage on both routes — this new legacy one and the `--sink` merge step's, which every shipped
+  surface reaches — no longer swallows its own failure. A stage attempt that throws while the
+  journal directory exists (the measured trigger: a dangling symlink in the lane makes the
+  per-entry copy throw) previously had its error eaten by the surrounding catch, and the removal
+  went on to destroy the folder under an unqualified success. Both routes now skip the removal and
+  stop loudly with the worktree and journal intact, naming the source path and the underlying
+  error — the `--sink` transaction as a typed `stage_failed` refusal, the legacy route as the same
+  hard stop its other keep-guards use. The landing stays best-effort as before, and a missing
+  worktree or an absent journal directory still stages nothing and sinks as before. This closes
+  the measured trigger, not every way a stage could go wrong.
+
+  One consequence is deliberate and worth stating plainly: an in-lane file whose **basename**
+  contains a backslash now refuses the sink where it previously completed — fail-closed
+  over-breadth, loud and trivially remediable, accepted rather than special-cased. Ordinary runs
+  are unaffected: untracked lane content still sinks (every run leaves some), and ignored trees
+  stay invisible to the guard.
 
 ## [9.8.0] - 2026-08-12
 

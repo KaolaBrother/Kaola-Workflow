@@ -209,7 +209,7 @@ list by hand:
 | `plugins/*/agents/<name>.toml` (×3) | the three sibling edition profiles, byte-identical |
 | `plugins/*/config/agents.toml` (×3) | the `[agents.<name>]` codex-dispatch table — without it the agent is undispatchable in the codex/gitlab/gitea runtimes even though the profile installs |
 | `scripts/validate-vendored-agents.js` | `localAgents` exact listing |
-| `install.sh` **and** `uninstall.sh` | `REQUIRED_AGENTS` — a missing uninstall name orphans the installed agent |
+| `install.sh` **and** `uninstall.sh` | `REQUIRED_AGENTS` — a missing uninstall name orphans the installed agent. On **removal**, also `uninstall.sh`'s `RETIRED_AGENTS`: uninstall deletes the agent manifest, so a retired name missing there is a permanent strand no later install can heal (#977) |
 | `scripts/kaola-workflow-resolve-agent-model.js` (×4, byte-identical) | `DEFAULT_AGENT_MODELS` |
 | gitlab/gitea contract validators | agent counts |
 | the two forge `test-*-workflow-scripts.js` | counts |
@@ -813,16 +813,22 @@ folders — returns `false` and still fails the dirty check.
 `git status` call) is always treated as dirty — the parked filter narrows which KNOWN-CLEAN
 states pass, never relaxes the unverifiable-is-dirty posture.
 
-**One boundary is call-site-specific, not universal (#973/#975).** `assertWorktreeClean`'s
+**One boundary is call-site-specific, not universal (#973/#975/#978).** `assertWorktreeClean`'s
 untracked-record half — `worktreeDirtRecords`, added to widen the linked-worktree probe from
 `--untracked-files=no` to `-uall` so it can see untracked work at all before `git worktree remove
 --force` runs — calls `isParkedLanePath` with an **empty** owned-project set, not the caller's
 `ownedProjects`. That is deliberate, not an oversight of rule 3 above: inside a *linked worktree*
 the lane folder is that run's own throwaway copy, not the live record `assertCleanWorktree`'s
-main-root check protects, so for this one probe an **own** `<project>/` folder is parked too —
-only content outside `kaola-workflow/`/`.kw/` still fails the gate. Tracked records are read
-exactly as before. Three shapes this widening still cannot see, all pre-existing and unchanged by
-it, are recorded in `CHANGELOG.md`'s `[Unreleased]` entry for #975.
+main-root check protects, so for this one probe an **own** `<project>/` folder is parked too, and
+content outside `kaola-workflow/`/`.kw/` still fails the gate. Tracked records are read
+exactly as before. Two untracked record shapes are never exempt even under a lane prefix (#978): a
+decoded path containing a backslash — porcelain's only separator is `/`, so a backslash is a
+literal filename character that the classifier's `\`→`/` normalisation would read as one — and a
+path ending in `/`, the collapsed record git emits for an embedded repository it will not descend
+into, which stands for a population the per-file exemption never saw. Both are kept as dirt and
+refuse. The three shapes #975 recorded as still silently destroyed are closed by #978: those two
+record rules cover the first two, and the legacy route now stages and lands the run's own project
+folder around its worktree removal, as the `--sink` route already did.
 
 **Merge protocol unchanged.** `ffMergeLoop` and the true-conflict halt in `sink-merge.js` are
 byte-unchanged. `assertCleanWorktree`/`assertWorktreeClean` run BEFORE `ffMergeLoop`, so the

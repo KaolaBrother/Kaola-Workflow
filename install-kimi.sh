@@ -45,6 +45,17 @@
 
 set -euo pipefail
 
+# The temp base every mktemp below writes under. `${TMPDIR:-/tmp}` guards an EMPTY
+# TMPDIR and NOT a relative one, and a bare `mktemp` reads TMPDIR the same way — on
+# GNU coreutils a relative TMPDIR resolves against the invoking directory (the
+# checkout, for a local install), so the temp files land beside tracked files.
+# Same guard as install-all.sh: absolute or nothing.
+KW_TMPDIR="${TMPDIR:-/tmp}"
+case "$KW_TMPDIR" in
+  /*) ;;
+  *) KW_TMPDIR="/tmp" ;;
+esac
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TARGET=""
 GLOBAL=0
@@ -157,6 +168,17 @@ RETIRED_ROLE_SKILLS=(
   "kaola-workflow-adapt" "kaola-workflow-plan-run" "kaola-workflow-fast"
   "kaola-workflow-phase1" "kaola-workflow-phase2" "kaola-workflow-phase3"
   "kaola-workflow-phase4" "kaola-workflow-phase5"
+)
+
+# Hook scripts this edition deployed on a PREVIOUS release and no longer generates — the same
+# declaration model as RETIRED_ROLE_SKILLS, read by BOTH paths: the hook deploy is a bare copy
+# forward and uninstall removes by source-tree name, so a retired hook is invisible to both and
+# would live in the kimi home for good. Removal is exactly these names plus what the deploy is
+# about to write, never a sweep of the whole hooks dir. Bounded the same way as the skills list:
+# the edition shipped pre-commit and write-lane from its first release until their retirement
+# three days later, and no other name has ever left its hook set.
+RETIRED_HOOKS=(
+  "kaola-workflow-pre-commit.sh" "kaola-workflow-write-lane.sh"
 )
 
 # Workflow command-skill set: deployed alongside all kaola-role-* skills. Any OTHER skill fails
@@ -292,6 +314,14 @@ install_support_scripts() {
   echo "Installed support scripts → $dest (forge $FORGE)"
   local hooks_dest="$home/kaola-workflow/hooks"
   mkdir -p "$hooks_dest"
+  # The copy below only writes forward, so a hook the tree has since retired would survive every
+  # reinstall. Remove the retired names first (same self-healing copy_skills gives the skills).
+  local retired
+  for retired in "${RETIRED_HOOKS[@]}"; do
+    [[ -f "$hooks_dest/$retired" ]] || continue
+    rm -f "$hooks_dest/$retired"
+    echo "Removed retired hook script: $hooks_dest/$retired"
+  done
   local hook hook_base
   for hook in "$SOURCE_TREE/hooks/"*.sh; do
     [[ -f "$hook" ]] || continue
@@ -320,7 +350,11 @@ merge_hooks_config() {
   fragment="$SOURCE_TREE/hooks/kimi-hooks.toml"
   mkdir -p "$home"
   if [[ -f "$cfg" ]]; then
-    backup="$(mktemp -t kaola-kimi-hooks)"
+    # Explicit template, not `mktemp -t kaola-kimi-hooks`: on GNU coreutils a -t template
+    # without X's is "too few X's in template", exit 1, and set -euo pipefail turned that
+    # into an aborted install for every GNU user with an existing config.toml (macOS mktemp
+    # accepts the X-less form, which is how it shipped unnoticed).
+    backup="$(mktemp "$KW_TMPDIR/kaola-kimi-hooks.XXXXXX")"
     cp "$cfg" "$backup"
   fi
   KIMI_HOOKS_CFG="$cfg" KIMI_HOOKS_FRAGMENT="$fragment" KIMI_HOME_RESOLVED="$home" node -e '
@@ -450,6 +484,13 @@ uninstall_edition() {
     for hook in "$SOURCE_TREE/hooks/"*.sh; do
       [[ -f "$hook" ]] || continue
       rm -f "$hooks_dir/$(basename "$hook")"
+    done
+    # A hook RETIRED since the deployed install is absent from the source tree and would linger
+    # forever (same reason as the retired role skills above). Remove the retired names explicitly.
+    for retired in "${RETIRED_HOOKS[@]}"; do
+      [[ -f "$hooks_dir/$retired" ]] || continue
+      rm -f "$hooks_dir/$retired"
+      echo "Removed retired hook script: $hooks_dir/$retired"
     done
   fi
   rmdir "$scripts_dir" 2>/dev/null || true

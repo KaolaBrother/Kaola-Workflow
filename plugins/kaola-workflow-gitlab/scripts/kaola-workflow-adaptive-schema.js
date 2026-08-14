@@ -12,10 +12,33 @@
 // drift anchor (design doc §"Parity risk").
 //
 // It contains ONLY forge-neutral data + side-effect-free helpers — no forge CLI
-// calls, no remote URLs, no references to sibling script paths or other editions.
-// Keep it that way so the byte copies stay legal everywhere (the renamed editions
-// reject cross-edition leaks and parent-dir requires).
+// calls, no remote URLs, no references to sibling script paths or other editions —
+// plus exactly ONE deliberate require-time side effect, the temp-env normalisation
+// directly below. Keep it that way so the byte copies stay legal everywhere (the
+// renamed editions reject cross-edition leaks and parent-dir requires).
 // ---------------------------------------------------------------------------
+
+// A relative TMPDIR/TMP/TEMP is unusable as a temp base and is normalised HERE, at require
+// time — the one side effect this module carries (#976). `os.tmpdir()` returns a relative
+// TMPDIR verbatim, so every `mkdtempSync(path.join(os.tmpdir(), …))` root resolves against
+// the process cwd — at finalize, the working checkout — and wrapping the call in
+// `realpathSync` only absolutises the returned STRING after the directory already landed
+// there. This module is the choke point because every production script that creates a temp
+// path loads it at module start, before its first temp path exists, and spawned children
+// inherit the normalised value. Absolute values pass byte-for-byte untouched — no realpath,
+// no trailing-slash tidying — because an absolute TMPDIR that happens to sit inside a
+// repository is legitimate; a rewritten value lands on '/tmp', the same floor the repo's
+// existing absolute-or-'/tmp' guards normalise to. An EMPTY value is deliberately left
+// alone (the `||` / `:-` fallbacks downstream already treat empty as unset), so only a
+// non-empty relative value is rewritten — which is also what makes re-running this block
+// a no-op: its own output is absolute.
+{
+  const isAbsolutePath = require('path').isAbsolute;
+  for (const key of ['TMPDIR', 'TMP', 'TEMP']) {
+    const val = process.env[key];
+    if (val && !isAbsolutePath(val)) process.env[key] = '/tmp';
+  }
+}
 
 // issue #770: the path SELECTOR is retired — adaptive is the only workflow path and there
 // is no legality gate left to run anywhere, so the `WORKFLOW_PATHS` closed-universe const

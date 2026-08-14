@@ -151,7 +151,9 @@ workflow-next — plus all 14 `kaola-role-*` skills. `copy_skills` removes exact
 names the edition **retired on purpose** (`RETIRED_ROLE_SKILLS`), and each name it is **about to
 write**, immediately before writing it. A deployed skill it has nothing to put back is left alone,
 so a source tree that renders fewer skills than the destination holds no longer destroys the
-difference. Retiring a skill therefore means adding its name to that list. Support scripts come
+difference. Retiring a skill therefore means adding its name to that list. The hook deploy gets
+the same self-healing: names in `RETIRED_HOOKS` are removed before the copy, so retiring a hook
+script likewise means adding its name there. Support scripts come
 from the selected forge's script tree, and the installer fails closed if an allowlisted script is
 missing from source.
 
@@ -286,7 +288,9 @@ every project): `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/{scripts,hoo
 ```
 
 `--uninstall` removes **only** kaola-deployed artifacts from the resolved scope, by
-source-tree filename (never a blind `rm` of a dir you may share): the deployed skills, the
+source-tree filename plus the names the edition retired on purpose (`RETIRED_ROLE_SKILLS`,
+`RETIRED_HOOKS` — a retired name is absent from the source tree, so without those lists it would
+linger forever; never a blind `rm` of a dir you may share): the deployed skills, the
 support/hook scripts under `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/`, and the
 managed hooks block in `config.toml`. The shared `~/.config/kaola-workflow/config.json`
 is user-owned and untouched, so a co-installed Claude/Codex/opencode edition is unaffected. Your own Kimi `config.toml` content outside the managed block is

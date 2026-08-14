@@ -65,6 +65,17 @@
 
 set -euo pipefail
 
+# The temp base every mktemp below writes under. `${TMPDIR:-/tmp}` guards an EMPTY
+# TMPDIR and NOT a relative one, and a bare `mktemp` reads TMPDIR the same way — on
+# GNU coreutils a relative TMPDIR resolves against the invoking directory (the
+# checkout, for a local install), so the temp files land beside tracked files.
+# Same guard as install-all.sh: absolute or nothing.
+KW_TMPDIR="${TMPDIR:-/tmp}"
+case "$KW_TMPDIR" in
+  /*) ;;
+  *) KW_TMPDIR="/tmp" ;;
+esac
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TARGET=""
 GLOBAL=0
@@ -183,14 +194,24 @@ WORKFLOW_COMMANDS=(
   kaola-workflow-finalize.md workflow-init.md workflow-next.md
 )
 # Commands this edition deployed on a PREVIOUS release and no longer generates. This is where
-# "retired on purpose" is written down: the install sweep is exactly the deploy set PLUS these
-# names, and a deployed command that is neither is one this install simply has nothing to put
-# back (#973 — a namespace-wide prune destroyed it silently, and no count guard covers commands).
+# "retired on purpose" is written down, and BOTH paths read it: the install sweep is exactly the
+# deploy set PLUS these names, and a deployed command that is neither is one this install simply
+# has nothing to put back (#973 — a namespace-wide prune destroyed it silently, and no count
+# guard covers commands); uninstall removes by current source-tree name, which a retired command
+# no longer carries, so it removes these names explicitly as well.
 # Bounded by what this edition actually shipped, measured from .opencode/command/ history.
 RETIRED_WORKFLOW_COMMANDS=(
   kaola-workflow-adapt.md kaola-workflow-auto.md kaola-workflow-fast.md
   kaola-workflow-phase1.md kaola-workflow-phase2.md kaola-workflow-phase3.md
   kaola-workflow-phase4.md kaola-workflow-phase5.md kaola-workflow-plan-run.md
+)
+# Hook scripts this edition deployed on a PREVIOUS release and no longer generates — the same
+# declaration model as the commands above, read by BOTH paths: removal is exactly these names
+# plus what the deploy is about to write, never a sweep of the whole hooks dir. Bounded by what
+# the edition's hook set ever carried: pre-commit and write-lane shipped from the first hook
+# deploy until their retirement, and no other name has ever left the set.
+RETIRED_HOOKS=(
+  kaola-workflow-pre-commit.sh kaola-workflow-write-lane.sh
 )
 in_array() { local needle="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done; return 1; }
 
@@ -302,11 +323,11 @@ copy_tree() {
   # manifest, then sweep whatever the previous manifest owned that the tree has since retired.
   local agent_manifest prev_manifest manifest_tmp agent_file agent_base agent_count
   agent_manifest="$layout_root/agent/$AGENT_MANIFEST_NAME"
-  prev_manifest="$(mktemp)"
+  prev_manifest="$(mktemp "$KW_TMPDIR/kaola-opencode-manifest-prev.XXXXXX")"
   if [[ -f "$agent_manifest" ]]; then
     cp "$agent_manifest" "$prev_manifest"
   fi
-  manifest_tmp="$(mktemp)"
+  manifest_tmp="$(mktemp "$KW_TMPDIR/kaola-opencode-manifest.XXXXXX")"
   agent_count=0
   for agent_file in "$SOURCE_AGENT_DIR/"*.md; do
     [[ -f "$agent_file" ]] || continue
@@ -332,7 +353,9 @@ copy_tree() {
   # than destroying it (#973 — silent here, since nothing counts commands the way the agent deploy
   # counts agents). The re-copy is a fail-CLOSED ALLOWLIST: a command not in WORKFLOW_COMMANDS is
   # skipped + warned, so a future canonical command cannot silently widen the install.
-  # Agents/plugins/hooks are always fully deployed.
+  # Agents/plugins/hooks are always fully deployed; the hook deploy below gets the same
+  # self-healing — the RETIRED_HOOKS names are removed first, since the copy alone would leave a
+  # hook an older release deployed on disk for good.
   local stale_file retired
   for retired in "${RETIRED_WORKFLOW_COMMANDS[@]}"; do
     stale_file="$layout_root/command/$retired"
@@ -351,14 +374,18 @@ copy_tree() {
     rm -f "$layout_root/command/$base"
     cp "$command_file" "$layout_root/command/$base"
   done
+  for retired in "${RETIRED_HOOKS[@]}"; do
+    rm -f "$layout_root/hooks/$retired"
+  done
   cp "$SOURCE_TREE/hooks/"*.sh "$layout_root/hooks/" 2>/dev/null || true
   chmod +x "$layout_root/hooks/"*.sh 2>/dev/null || true
   echo "Installed workflow agents+commands+plugin+hooks → $layout_root/"
 }
 
-# Remove ONLY kaola-deployed artifacts from the resolved scope, by source-tree filename (never a blind
-# rm of a dir the user may share). Preserves the user-owned opencode.json and the SHARED
-# ~/.config/kaola-workflow/config.json (kept for any co-installed Claude/Codex edition).
+# Remove ONLY kaola-deployed artifacts from the resolved scope, by source-tree filename plus the
+# names this edition retired on purpose (never a blind rm of a dir the user may share). Preserves
+# the user-owned opencode.json and the SHARED ~/.config/kaola-workflow/config.json (kept for any
+# co-installed Claude/Codex edition).
 uninstall_edition() {
   local dest_root layout_root
   if [[ "$GLOBAL" -eq 1 ]]; then
@@ -397,6 +424,18 @@ uninstall_edition() {
   for f in "$SOURCE_TREE/command/"*.md;                      do [[ -f "$f" ]] || continue; rm -f "$layout_root/command/$(basename "$f")"; done
   for f in "$SCRIPT_DIR/templates/opencode/plugins/"*.js;    do [[ -f "$f" ]] || continue; rm -f "$layout_root/plugins/$(basename "$f")"; done
   for f in "$SOURCE_TREE/hooks/"*.sh;                        do [[ -f "$f" ]] || continue; rm -f "$layout_root/hooks/$(basename "$f")"; done
+  # A command or hook RETIRED since the deployed install is absent from the source tree, so the
+  # loops above never name it and it would linger forever. Remove the retired names explicitly.
+  for base in "${RETIRED_WORKFLOW_COMMANDS[@]}"; do
+    [[ -f "$layout_root/command/$base" ]] || continue
+    rm -f "$layout_root/command/$base"
+    echo "Removed retired command: $layout_root/command/$base"
+  done
+  for base in "${RETIRED_HOOKS[@]}"; do
+    [[ -f "$layout_root/hooks/$base" ]] || continue
+    rm -f "$layout_root/hooks/$base"
+    echo "Removed retired hook: $layout_root/hooks/$base"
+  done
   for sub in command agent plugins hooks; do rmdir "$layout_root/$sub" 2>/dev/null || true; done
   [[ "$GLOBAL" -eq 1 ]] || rmdir "$layout_root" 2>/dev/null || true
   echo "Removed deployed agents/commands/plugin/hooks."
@@ -597,7 +636,7 @@ seed_config() {
   # render that fails partway must not leave a truncated config behind. This is the only write
   # protection left besides the backup, and it is deliberately not a refusal.
   local rendered
-  rendered="$(mktemp)"
+  rendered="$(mktemp "$KW_TMPDIR/kaola-opencode-config.XXXXXX")"
   node "$SCRIPT_DIR/scripts/sync-opencode-edition.js" --write-config-to "$rendered" >/dev/null
   if [[ -f "$cfg" ]]; then
     # The flag is the user's decision to take the new config, not their consent to lose the old

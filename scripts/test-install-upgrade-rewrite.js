@@ -375,13 +375,23 @@ function runInstallFrom(srcRoot, home, forge) {
   // WHAT THE NAMESPACE PRUNE IS FOR, and the two halves a repair can lose. Both installs run from
   // THIS checkout: the source is healthy here, which is the whole point.
   const RETIRED = ['workflow-goal.md', 'workflow-next-pr.md', 'kaola-workflow-adapt.md'];
+  // #977 — the pre-rename era. These seven were deployed by the 2026-05 installer (a bare copy
+  // with no stale-removal of any kind), renamed away in-tree, and never matched by the namespace
+  // prune at any point since: they sit outside every pruned glob, so a user from that era carries
+  // them forever across upgrades. Censused from git history (`git log --no-renames
+  // --diff-filter=D -- commands/`), NOT read from the installer's own retired list — a probe that
+  // reads the list under test agrees with it by construction and can never see a name missing
+  // from it.
+  const STRANDED = ['claude-workflow.md', 'claude-workflow-phase1.md', 'claude-workflow-phase2.md',
+    'claude-workflow-phase3.md', 'claude-workflow-phase4.md', 'claude-workflow-phase5.md',
+    'claude-workflow-phase6.md'];
   const KEPT = ['my-own-command.md', 'notes.txt'];
   const fresh = plantCommandHome([]);
-  const upgraded = plantCommandHome([...WORKFLOW_COMMANDS, ...RETIRED, ...KEPT]);
+  const upgraded = plantCommandHome([...WORKFLOW_COMMANDS, ...RETIRED, ...STRANDED, ...KEPT]);
   try {
     // Anti-vacuity, both directions: a retired name back in the deploy set would be REPLACED rather
     // than swept, and a kept name that joined it would survive because it was deployed.
-    assert(RETIRED.every(n => !WORKFLOW_COMMANDS.includes(n)) && KEPT.every(n => !WORKFLOW_COMMANDS.includes(n)),
+    assert([...RETIRED, ...STRANDED].every(n => !WORKFLOW_COMMANDS.includes(n)) && KEPT.every(n => !WORKFLOW_COMMANDS.includes(n)),
       '#973: no planted name is in the deploy set — a name that is deployed is not evidence about the prune');
 
     runInstall(fresh.home);       // the reference result: a first install into an empty dir
@@ -403,6 +413,15 @@ function runInstallFrom(srcRoot, home, forge) {
     assert.strictEqual(stale.length, 0,
       `#973: after an upgrade every deployed command is byte-identical to what a FIRST install `
       + `writes, not to what was there before — stale: ${stale.join(', ')}`);
+    // #977 pin, LAST in this block on purpose: this file's assert throws, and the pins above must
+    // hold today, so they run ahead of one that must not. The property is the same one the RETIRED
+    // trio proves the mechanism can deliver: an upgrade over a live install leaves NO name this
+    // workflow ever deployed and no longer ships. Uninstall already clears these seven
+    // (deliberately unasserted here — this pin is the INSTALL path's).
+    const left977 = STRANDED.filter(n => fs.existsSync(path.join(upgraded.dir, n)));
+    assert.strictEqual(left977.length, 0,
+      `#977: a command deployed by the 2026-05-era installer and retired since is SWEPT on `
+      + `upgrade like every later retirement — still on disk: ${left977.join(', ')}`);
   } finally {
     fs.rmSync(fresh.home, { recursive: true, force: true });
     fs.rmSync(upgraded.home, { recursive: true, force: true });

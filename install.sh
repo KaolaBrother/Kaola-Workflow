@@ -13,6 +13,17 @@
 
 set -euo pipefail
 
+# The temp base every mktemp below writes under. `${TMPDIR:-/tmp}` guards an EMPTY
+# TMPDIR and NOT a relative one, and a bare `mktemp` reads TMPDIR the same way — on
+# GNU coreutils a relative TMPDIR resolves against the invoking directory (the
+# checkout, for a local install), so the temp files land beside tracked files.
+# Same guard as install-all.sh: absolute or nothing.
+KW_TMPDIR="${TMPDIR:-/tmp}"
+case "$KW_TMPDIR" in
+  /*) ;;
+  *) KW_TMPDIR="/tmp" ;;
+esac
+
 # Detect curl|bash: BASH_SOURCE[0] is empty or not a real file when piped from curl.
 # When detected, clone the repo to a temp dir and re-exec the local copy.
 _SELF="${BASH_SOURCE[0]:-}"
@@ -21,7 +32,7 @@ if [[ -z "$_SELF" || "$_SELF" == "-" || ! -f "$_SELF" ]]; then
     echo "error: git is required but not found — install git and retry" >&2
     exit 1
   fi
-  _TMPDIR="$(mktemp -d)"
+  _TMPDIR="$(mktemp -d "$KW_TMPDIR/kaola-workflow-bootstrap.XXXXXX")"
   trap 'rm -rf "$_TMPDIR"' EXIT
   echo "Kaola-Workflow — cloning repository..."
   git clone --depth=1 https://github.com/KaolaBrother/Kaola-Workflow.git "$_TMPDIR/kaola-workflow" >/dev/null 2>&1
@@ -180,9 +191,14 @@ fi
 # less than the destination held, silently on gitlab/gitea). Bounded by what commands/ and the
 # plugin command trees once carried, plus workflow-goal.md, which no commit in this history ever
 # added — a name that was never deployed costs one no-op stat; $COMMANDS_DIR is shared by every
-# forge, so is this list.
+# forge, so is this list. The claude-workflow* names are the pre-rename 2026-05 surface: that
+# era's installer was a bare copy with no stale-removal, so a box from then carries them across
+# every upgrade unless they are named here (they sit outside every glob the old prune ever had).
 RETIRED_COMMANDS=(
   "workflow-goal.md" "workflow-next-pr.md"
+  "claude-workflow.md"
+  "claude-workflow-phase1.md" "claude-workflow-phase2.md" "claude-workflow-phase3.md"
+  "claude-workflow-phase4.md" "claude-workflow-phase5.md" "claude-workflow-phase6.md"
   "kaola-workflow-adapt.md" "kaola-workflow-auto.md" "kaola-workflow-fast.md"
   "kaola-workflow-phase1.md" "kaola-workflow-phase2.md" "kaola-workflow-phase3.md"
   "kaola-workflow-phase4.md" "kaola-workflow-phase5.md" "kaola-workflow-phase6.md"
@@ -398,7 +414,7 @@ agent_source_file() {
 install_managed_agent() {
   local source="$1"; local dest="$2"
   cp "$source" "$dest"
-  local tmp; tmp="$(mktemp)"
+  local tmp; tmp="$(mktemp "$KW_TMPDIR/kaola-workflow-agent.XXXXXX")"
   awk '
     BEGIN { in_fm=0; closed=0; replaced=0 }
     NR==1 && $0=="---" { in_fm=1; print; next }
@@ -426,13 +442,13 @@ install_agent_files() {
   mkdir -p "$AGENTS_DIR"
 
   local manifest_tmp
-  manifest_tmp="$(mktemp)"
+  manifest_tmp="$(mktemp "$KW_TMPDIR/kaola-workflow-manifest.XXXXXX")"
   # Snapshot the PREVIOUS manifest before it is overwritten — it is the only record
   # of which agent files this installer owns, and the retired-agent sweep below
   # reads it after the new manifest lands. Always a real file (empty when there is
   # no previous manifest) so cleanup never has to branch.
   local prev_manifest
-  prev_manifest="$(mktemp)"
+  prev_manifest="$(mktemp "$KW_TMPDIR/kaola-workflow-manifest-prev.XXXXXX")"
   if [[ -f "$AGENT_MANIFEST_FILE" ]]; then
     cp "$AGENT_MANIFEST_FILE" "$prev_manifest"
   fi

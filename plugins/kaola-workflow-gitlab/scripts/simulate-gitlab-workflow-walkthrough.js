@@ -1,5 +1,21 @@
 #!/usr/bin/env node
 'use strict';
+
+// A relative TMPDIR/TMP/TEMP resolves against the CURRENT DIRECTORY: `os.tmpdir()` returns the
+// value VERBATIM, so every fixture root this process or its children build — the HOME sandboxes
+// created at MODULE LOAD included — would land in the checkout, and a measured full run under
+// `TMPDIR=.` modified a tracked file (and left a new untracked artifact) under
+// kaola-workflow/archive/ before failing (#976).
+// Normalised HERE, first, because nothing loaded earlier can do it. Absolute-or-/tmp is the
+// established shape (tmpBase() in test-install-all.js, KW_TMPDIR in install-all.sh); the two
+// look-alike idioms are measured dead — realpathSync(mkdtempSync(…)) absolutises the STRING
+// after the directory already landed in the cwd, and path.resolve of a relative TMPDIR IS the
+// cwd. Children inherit the normalised value, so one statement covers the whole process tree;
+// scripts/test-relative-tmpdir-escape.js pins the result for the root walkthrough.
+for (const k of ['TMPDIR', 'TMP', 'TEMP']) {
+  if (process.env[k] && !require('path').isAbsolute(process.env[k])) process.env[k] = '/tmp';
+}
+
 // Advisory spawn census (ADR 0013, the process-boundary razor). Installed BEFORE this
 // file destructures child_process so the counted wrappers are what it binds. Advisory,
 // pass-through and fail-open: the require itself is guarded, so a census that is absent

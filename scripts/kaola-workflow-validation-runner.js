@@ -7,6 +7,11 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+// Loaded at module start, not only at the lazy call sites below: the kernel's require-time
+// TMPDIR/TMP/TEMP normalisation must have run before the first sandbox/temp path in this
+// file is built from os.tmpdir().
+require('./kaola-workflow-adaptive-schema');
+
 const RECEIPT_SCHEMA_VERSION = 1;
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const VERSION_PROBE_TIMEOUT_MS = 5000;

@@ -1366,6 +1366,51 @@ for (const script of sync.HOOK_SCRIPTS) {
     clean(r2);
   }
 
+  // -------------------------------------------------------------------------
+  // P8 (#977) — A REINSTALL CLEARS A RETIRED HOOK, AND ONLY A RETIRED ONE.
+  // The edition's first release shipped hook scripts the tree has since
+  // retired, so a real kimi home can carry one; the hook deploy only writes
+  // forward, so without an install-path sweep the residue survives EVERY
+  // future install. Twin of the opencode P8 pin. Disk outcomes only: the
+  // retired name is censused from the hook set's history, never read from the
+  // installer's own list — a probe that reads the list under test agrees with
+  // it by construction and can never see a name missing from it. The
+  // user-authored control is the pin that matters most: the hooks dir is
+  // swept by NAME, never wholesale.
+  // -------------------------------------------------------------------------
+  {
+    const RETIRED_HOOK = 'kaola-workflow-pre-commit.sh';
+    const USER_HOOK = 'my-own-hook.sh';
+    const USER_BODY = '#!/usr/bin/env bash\n# user-authored, never shipped\n';
+    const r1 = runInstaller([]);
+    assert(r1.ok, 'P8: seed install exits 0 (got status ' + r1.status
+      + (r1.stderr ? ' — ' + firstStderrLine(r1) : '') + ')');
+    const hooksDir = path.join(r1.kimiHome, 'kaola-workflow', 'hooks');
+    // Anti-vacuity: a hook back in the deploy set would be REPLACED rather than swept.
+    assert(!sync.HOOK_SCRIPTS.includes(RETIRED_HOOK) && !sync.HOOK_SCRIPTS.includes(USER_HOOK),
+      'P8: neither planted name is in the deploy set — a name that is deployed is not evidence '
+      + 'about any sweep (deploy set: ' + JSON.stringify(sync.HOOK_SCRIPTS) + ')');
+    // Planted AFTER the seed install: the install path sweeps retired names before it deploys,
+    // so a plant the seed install could reach proves nothing about the REINSTALL's half.
+    fs.writeFileSync(path.join(hooksDir, RETIRED_HOOK),
+      '#!/usr/bin/env bash\n# shipped by an older release\n');
+    fs.writeFileSync(path.join(hooksDir, USER_HOOK), USER_BODY);
+    const r2 = runInstaller([], { home: r1.home, kimiHome: r1.kimiHome, dest: r1.dest });
+    assert(r2.ok, 'P8: reinstall over a live kimi home exits 0 (got status ' + r2.status
+      + (r2.stderr ? ' — ' + firstStderrLine(r2) : '') + ')');
+    // The sweep is only evidence alongside a real deploy.
+    const missingHooks = sync.HOOK_SCRIPTS.filter(h => !existsSync(path.join(hooksDir, h)));
+    assert(missingHooks.length === 0,
+      'P8: the same install still deploys every current hook — missing: ' + missingHooks.join(', '));
+    assert(!existsSync(path.join(hooksDir, RETIRED_HOOK)),
+      'P8 (#977): a hook retired in an earlier release is removed on reinstall — '
+      + RETIRED_HOOK + ' is still on disk after it');
+    assert(existsSync(path.join(hooksDir, USER_HOOK))
+      && readFileSync(path.join(hooksDir, USER_HOOK), 'utf8') === USER_BODY,
+      'P8 (#977): the sweep is by NAME — a user-authored hook in the same dir survives byte-intact');
+    clean(r1);
+  }
+
   // U1 — --uninstall removes the ENTIRE kaola-deployed surface: the deployed
   // skills (commands + roles), the support scripts + hook scripts under the
   // kimi home, and the managed hooks block in config.toml (the file itself is
@@ -1376,6 +1421,26 @@ for (const script of sync.HOOK_SCRIPTS) {
     const r1 = runInstaller([]);
     assert(r1.ok, 'U1: seed install exits 0');
     assert(existsSync(skillsDir(r1)), 'U1: skills present before uninstall');
+    // #977 plants — a box that installed OLDER releases holds names today's source tree no
+    // longer renders, and an uninstall over a fresh install alone can never observe what
+    // happens to them. Planted AFTER the seed install and never before it: the INSTALL path
+    // sweeps retired names itself (P5c), so a plant the install could reach proves nothing
+    // about the uninstall. Names are censused from the edition's history, not read from the
+    // installer's own retired list. The hook plant also reds the no-residue pins below when
+    // it is missed — same defect, one cause.
+    const RETIRED_SKILLS = ['kaola-workflow-fast', 'kaola-role-issue-scout'];
+    const RETIRED_HOOK = 'kaola-workflow-pre-commit.sh';
+    assert(RETIRED_SKILLS.every(n => ![...ADAPTIVE_CORE, ...roleDirNames].includes(n))
+      && !sync.HOOK_SCRIPTS.includes(RETIRED_HOOK),
+      'U1 (#977): no planted name is in the deploy set — a name that is deployed is not '
+      + 'evidence about retired-residue handling at all');
+    for (const n of RETIRED_SKILLS) {
+      fs.mkdirSync(path.join(skillsDir(r1), n), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir(r1), n, 'SKILL.md'), 'shipped by an older release\n');
+    }
+    const kimiHooksDir = path.join(r1.kimiHome, 'kaola-workflow', 'hooks');
+    fs.writeFileSync(path.join(kimiHooksDir, RETIRED_HOOK),
+      '#!/usr/bin/env bash\n# shipped by an older release\n');
     // spawn-class: environment
     const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
       { env: Object.assign({}, process.env, { HOME: r1.home, KIMI_CODE_HOME: r1.kimiHome }), encoding: 'utf8' });
@@ -1385,6 +1450,13 @@ for (const script of sync.HOOK_SCRIPTS) {
       assert(!existsSync(path.join(skillsDir(r1), name)),
         'U1[' + name + ']: skill removed by --uninstall');
     }
+    const leftSkills = RETIRED_SKILLS.filter(n => existsSync(path.join(skillsDir(r1), n)));
+    assert(leftSkills.length === 0,
+      'U1 (#977): a skill retired in an earlier release is removed by --uninstall — still on '
+      + 'disk after it: ' + leftSkills.join(', '));
+    assert(!existsSync(path.join(kimiHooksDir, RETIRED_HOOK)),
+      'U1 (#977): a hook retired in an earlier release is removed by --uninstall — '
+      + RETIRED_HOOK + ' is still on disk after it');
     assert(!existsSync(skillsDir(r1)),
       'U1: the skills dir itself is gone after --uninstall (no empty-shell residue)');
     assert(!existsSync(path.join(r1.dest, '.kimi-code')),

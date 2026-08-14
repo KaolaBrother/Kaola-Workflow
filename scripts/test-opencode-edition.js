@@ -1481,6 +1481,40 @@ if (exists(pluginRel)) {
   // is n2-deleted from canonical, so there is nothing left to opt into or lock in.
 
   // -------------------------------------------------------------------------
+  // P8 (#977) — A REINSTALL CLEARS A RETIRED HOOK. The tracked-era .opencode
+  // shipped hook scripts the root tree has since retired, so a real install can
+  // carry one; commands and support scripts both self-heal on reinstall, and a
+  // hook must too — otherwise the residue survives EVERY future install. The pin
+  // is the disk outcome only: HOW the install identifies a retired hook is the
+  // implementer's (this dir is installer-created, but whether the sweep is an
+  // allowlist like the scripts dir or a retired-name list is not decided here).
+  // -------------------------------------------------------------------------
+  {
+    const RETIRED_HOOK = 'kaola-workflow-pre-commit.sh';
+    const r1 = runInstaller([]);
+    assert(r1.ok, 'P8: seed install exits 0 (got status ' + r1.status
+      + (r1.stderr ? ' — ' + String(r1.stderr).split('\n')[0] : '') + ')');
+    const hooksDir = path.join(r1.dest, '.opencode', 'hooks');
+    // Anti-vacuity: a hook back in the deploy set would be REPLACED rather than swept.
+    assert(!sync.HOOK_SCRIPTS.includes(RETIRED_HOOK),
+      'P8: the planted hook is not in the deploy set — a name that is deployed is not evidence '
+      + 'about any sweep (deploy set: ' + JSON.stringify(sync.HOOK_SCRIPTS) + ')');
+    fs.writeFileSync(path.join(hooksDir, RETIRED_HOOK),
+      '#!/usr/bin/env bash\n# shipped by an older release\n');
+    const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
+    assert(r2.ok, 'P8: reinstall over a live install exits 0 (got status ' + r2.status
+      + (r2.stderr ? ' — ' + String(r2.stderr).split('\n')[0] : '') + ')');
+    // The sweep is only evidence alongside a real deploy.
+    const missingHooks = sync.HOOK_SCRIPTS.filter(h => !existsSync(path.join(hooksDir, h)));
+    assert(missingHooks.length === 0,
+      'P8: the same install still deploys every current hook — missing: ' + missingHooks.join(', '));
+    assert(!existsSync(path.join(hooksDir, RETIRED_HOOK)),
+      'P8 (#977): a hook retired in an earlier release is removed on reinstall — '
+      + RETIRED_HOOK + ' is still on disk after it');
+    clean(r1);
+  }
+
+  // -------------------------------------------------------------------------
   // G1 (#F1) — the --global install deploys DIRECTLY under the config root
   // (${OPENCODE_CONFIG_DIR}/{agent,command,plugins,hooks}), NOT a nested
   // .opencode/. opencode scans the config dir itself as its global ".opencode
@@ -1683,6 +1717,62 @@ if (exists(pluginRel)) {
     const back = readdirSync(cmdDir(r1.dest)).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
     assert(JSON.stringify(back) === JSON.stringify([...ADAPTIVE_CORE].sort()),
       'U1 (#F4): uninstall→reinstall returns EXACTLY the adaptive-core commands — got ' + JSON.stringify(back));
+    clean(r1);
+  }
+
+  // -------------------------------------------------------------------------
+  // U2 (#977) — WHAT --uninstall CLEARS THAT THE CURRENT SOURCE TREE NO LONGER
+  // NAMES. U1 uninstalls a fresh install, so only freshly-deployed names are
+  // ever on disk and a retired-name residue is structurally unobservable there.
+  // A real box holds names from OLDER releases too; an uninstall that walks only
+  // today's source tree leaves every one of them behind, deployed and live,
+  // after the user asked for the edition to be gone. The plants happen AFTER
+  // the seed install and never before it: the install path sweeps retired
+  // commands itself (P7b), so a plant the install could reach proves nothing
+  // about the uninstall. Pins are disk outcomes only — which list or mechanism
+  // the uninstall consults is not decided here.
+  // -------------------------------------------------------------------------
+  {
+    // Both retired in earlier releases (censused from the edition's history, not read from any
+    // installer list): one command from each retirement era, plus a hook the tracked-era
+    // .opencode really shipped. The user-owned command pins the sweep's scope in the SHARED dir.
+    const RETIRED_CMDS = ['kaola-workflow-fast.md', 'kaola-workflow-plan-run.md'];
+    const RETIRED_HOOK = 'kaola-workflow-pre-commit.sh';
+    const USER_OWNED = 'my-own-command.md';
+    const r1 = runInstaller([]);
+    assert(r1.ok, 'U2: seed install exits 0 (got status ' + r1.status
+      + (r1.stderr ? ' — ' + String(r1.stderr).split('\n')[0] : '') + ')');
+    const hooksDir = path.join(r1.dest, '.opencode', 'hooks');
+    const deploySet = ADAPTIVE_CORE.map(n => n + '.md');
+    // Anti-vacuity: a planted name back in the deploy set would be freshly deployed, and its
+    // removal below would be U1's property rather than this probe's.
+    assert(RETIRED_CMDS.every(n => !deploySet.includes(n)) && !sync.HOOK_SCRIPTS.includes(RETIRED_HOOK),
+      'U2: no planted name is in the deploy set — a name that is deployed is not evidence about '
+      + 'retired-residue handling at all');
+    for (const n of RETIRED_CMDS) {
+      fs.writeFileSync(path.join(cmdDir(r1.dest), n), 'shipped by an older release\n');
+    }
+    fs.writeFileSync(path.join(hooksDir, RETIRED_HOOK),
+      '#!/usr/bin/env bash\n# shipped by an older release\n');
+    fs.writeFileSync(path.join(cmdDir(r1.dest), USER_OWNED), 'user-owned\n');
+    // spawn-class: environment
+    const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
+      { env: Object.assign({}, process.env, { HOME: r1.home }), encoding: 'utf8' });
+    assert(ru.status === 0, 'U2: --uninstall exits 0 (got ' + ru.status
+      + (ru.stderr ? ' — ' + String(ru.stderr).split('\n')[0] : '') + ')');
+    // Positive control: THIS uninstall ran and removes the current surface.
+    const currentLeft = ADAPTIVE_CORE.filter(n => hasCmd(r1.dest, n));
+    assert(currentLeft.length === 0,
+      'U2: the uninstall removes the current commands — still on disk: ' + currentLeft.join(', '));
+    const leftCmds = RETIRED_CMDS.filter(n => existsSync(path.join(cmdDir(r1.dest), n)));
+    assert(leftCmds.length === 0,
+      'U2 (#977): a command retired in an earlier release is removed by --uninstall — still on '
+      + 'disk after it: ' + leftCmds.join(', '));
+    assert(!existsSync(path.join(hooksDir, RETIRED_HOOK)),
+      'U2 (#977): a hook retired in an earlier release is removed by --uninstall — '
+      + RETIRED_HOOK + ' is still on disk after it');
+    assert(existsSync(path.join(cmdDir(r1.dest), USER_OWNED)),
+      'U2 (#977): the user-owned command in the SHARED dir survives the uninstall');
     clean(r1);
   }
 

@@ -204,11 +204,36 @@ try {
       '#816: the sweep must name the removal on stdout, got: ' + upgradeOut2);
     // uninstall path: plant it again (no manifest row needed — RETIRED_AGENTS removes by name).
     fs.writeFileSync(stale, staleBody);
+    // #977: contractor is not the only retired role a live box can carry. These three were
+    // retired from agents/ after real installs shipped them — censused from git history
+    // (`git log --no-renames --diff-filter=D -- agents/`), NOT read from uninstall.sh's own
+    // retired list, which is exactly the reading that could never see a name missing from it.
+    // Planted the way an old box actually holds them: managed marker + manifest row, so the
+    // removal can be proven ours whichever way the uninstall verifies it. The strand is
+    // PERMANENT if missed: this uninstall also deletes the manifest, so no later reinstall
+    // can identify the files as installer-written.
+    const RETIRED_ROLES = ['issue-scout', 'workflow-planner', 'docs-lookup'];
+    for (const name of RETIRED_ROLES) {
+      const body = '---\nname: ' + name + '\nmodel: inherit\n---\n<!--\nkaola-workflow-managed-agent: true\n-->\nbody\n';
+      fs.writeFileSync(path.join(agentsDir, name + '.md'), body);
+      fs.appendFileSync(manifest, name + '.md\t'
+        + crypto.createHash('sha256').update(Buffer.from(body)).digest('hex') + '\n');
+    }
+    // A user-authored agent in the same shared dir: no marker, no manifest row — untouchable.
+    const userAgent = path.join(agentsDir, 'my-own-helper.md');
+    const userBody = '---\nname: my-own-helper\nmodel: sonnet\n---\n\nMy own agent.\n';
+    fs.writeFileSync(userAgent, userBody);
     // spawn-class: environment
     execFileSync('bash', ['uninstall.sh', '--forge=github'],
       { cwd: root, env: { ...process.env, HOME: h }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     assert(!fs.existsSync(stale),
       '#816: uninstall.sh must remove a previously-installed contractor.md (RETIRED_AGENTS)');
+    assert(fs.existsSync(userAgent) && fs.readFileSync(userAgent, 'utf8') === userBody,
+      '#977: a user-authored agent in the shared dir survives uninstall byte-intact');
+    const left977 = RETIRED_ROLES.filter(n => fs.existsSync(path.join(agentsDir, n + '.md')));
+    assert(left977.length === 0,
+      '#977: uninstall.sh removes EVERY retired managed role, not only contractor — still in '
+      + 'the agents dir: ' + left977.join(', '));
   }
 
   // opencode install-time parity — install-opencode.sh treats the shared

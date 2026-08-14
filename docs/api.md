@@ -844,15 +844,21 @@ and a route forward. A converted guard still stops the sink — nothing is merge
   failure. Skipped when the mainline is unresolvable — it cannot judge, so it does not block.
 - **`worktree_dirty`** — `sinkPreflight` runs `assertWorktreeClean` before the merge step
   force-removes the linked worktree, so a worktree carrying uncommitted work is refused rather than
-  removed — with the three residual shapes named at the end of this entry. Fail-closed:
+  removed. Fail-closed:
   a dirty **or** unprobeable worktree refuses, with zero mutation and the worktree intact.
   Resume-safe — an already-removed worktree matches no `worktree list` block and passes. The
   status probe reads every untracked record (`-uall`), not tracked ones alone, and exempts only
   paths under the worktree's own throwaway lane content (`kaola-workflow/`, `.kw/`) — issue #973
   / #975; before that widening, `--untracked-files=no` could not report an untracked path at all,
-  so a worktree whose only uncommitted content was untracked probed clean and was destroyed. Three
-  shapes are still destroyed silently, unchanged by the widening and recorded rather than guarded
-  against — see `CHANGELOG.md`'s `[Unreleased]` #975 entry.
+  so a worktree whose only uncommitted content was untracked probed clean and was destroyed. Two
+  untracked record shapes are never exempt even under a lane prefix (#978): a decoded path
+  containing a backslash — porcelain's only separator is `/`, so a backslash is a literal filename
+  character, not a lane boundary — and a path ending in `/`, the collapsed record git emits for an
+  embedded repository it will not descend into. Both refuse, on the `--sink` transaction and the
+  legacy route alike, where they were previously exempted and destroyed. The third residual the
+  #975 entry recorded — the legacy route removing the worktree-only run journal — is closed with
+  them: the legacy route now stages and lands the run's own project folder around its removal, as
+  `--sink` already did.
 
 **Exit codes**: `0` merged, branch pushed, issues verifiably closed · `1` merge failed
 (non-recoverable, including pre-merge guard failures) or a post-merge close that could not be
