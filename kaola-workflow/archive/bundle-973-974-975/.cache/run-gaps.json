@@ -1,0 +1,25 @@
+{
+  "project": "bundle-973-974-975",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:installer-tmpdir-escape",
+      "sample": "the relative-TMPDIR escape survives at seven more installer sites outside #975's enumerated set",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:retired-name-incomplete",
+      "sample": "install.sh strands seven claude-workflow* names, opencode's uninstall ignores its retired list, and probe U1 structurally cannot observe a retired residue",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:sink-lane-exemption-residual",
+      "sample": "three measured shapes the lane exemption still destroys silently — backslash filenames, an embedded git repo collapsing to one record, the legacy route's own .cache journal",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:sink-staging-dir-leak",
+      "sample": "the sink's kw-wtsync-* staging directory is never removed",
+      "count": 1
+    }
+  ]
+}
