@@ -95,7 +95,7 @@ Reported by the finalize transaction on its envelope and appended below it.
 
 ## Mission List
 
-23 items, all `done`. Structure: premise-check every filed claim before building; author tests before
+19 items, all `done`. Structure: premise-check every filed claim before building; author tests before
 implementation with strict custody; implement; adversarially review; dock docs; verify.
 
 **Premise-checking earned its place — every one of the three issues was wrong in some load-bearing
