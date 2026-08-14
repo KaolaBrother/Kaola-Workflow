@@ -136,11 +136,24 @@ investigate a bug that no longer exists.
 
 ## Follow-Up Items
 
-#979–#983, each filed as an independent slice on a disjoint surface so a later run can take them at
-whatever width the backlog allows. Roadmap sources written for all five, so the mirror lists them —
-this run *began* by finding the opposite condition (three open issues with no local sources, leaving
-`validate-remote` structurally blind), and not handing that same blindness to a successor was the
-point.
+**The backlog this run leaves is #980 and #981 — two, not five.** All five were filed as independent
+slices on disjoint surfaces, with roadmap sources, so a later run could take them at whatever width
+the backlog allows; this run *began* by finding the opposite condition (three open issues with no
+local sources, leaving `validate-remote` structurally blind), and not handing that blindness to a
+successor was the point.
+
+**Three of the five were then closed, in the same session, on the project's own principle** — see
+the audit note under Corrections. #979, #982 and #983 described failure classes that have **never
+been observed**; each issue body said so in its own words, and each was filed anyway. ADR 0017's
+watch list is "the register of record, and the only one", and it records that a backlog issue which
+mirrored it was closed *"because a permanently-open issue that is explicitly not work is a standing
+invitation to schedule it."* All three are now rows in that table (`docs/decisions/0017-the-mission-list.md`,
+commit `d4526db9`), each carrying the observation that would arm it and a mechanism already sized,
+and their roadmap sources are removed with the mirror regenerated.
+
+**#980 and #981 remain open because they were measured**: `review-978.md:145` records R3 as
+`demonstrated`, and `premise-977.md:19` records the support-script strand as `CONFIRMED — measured
+live`, naming a real survivor (`kaola-workflow-adaptive-node.js`).
 
 Not a follow-up but a recorded decision: an in-lane basename containing a backslash now refuses every
 sink where it previously sank. Loud, fail-closed, the safe direction — accepted deliberately.
@@ -156,6 +169,20 @@ Recorded because the run's own record was wrong twice and both were caught by so
 - **The R1 refusal shape** — the typed `result:'refuse', reason:'stage_failed'` envelope is the
   `--sink` transaction's shape *only*; the legacy route refuses by **throw**, with no typed reason
   field. Both refuse, both skip removal, both name the path and the error.
+- **Three of the five follow-ups should never have been filed, and an audit after the run caught
+  it.** #979, #982 and #983 describe failure classes never observed — the preflight's backslash
+  exemption (*"whether the preflight's exemption actually destroys anything… was never measured"*),
+  the shim's `-p`/`-t` precedence (*"latent — it cannot mislead any site that exists today"*), and
+  the unfixtured `EACCES` trigger (*"what is NOT claimed: that EACCES is broken"*). Each issue body
+  contained the sentence that disqualified it; the honesty was there and the conclusion was not
+  drawn. Under *"add only what an observed failure demands; silence is an answer"* these are
+  watch-list rows, and ADR 0017 had **already ruled on precisely this** by closing a backlog issue
+  that mirrored the watch list. Corrected in-session: rows added, issues closed, sources removed.
+  **The sharpest part of the finding is that the immediately preceding run set the right precedent
+  and this one did not follow it** — #975 refuted its cycle-guard half by measurement and *"recorded
+  it on the watch list rather than built"*, in a record this run's orchestrator read at Step 1.
+  Deliberately **not** built in response: a mechanism to stop an orchestrator over-filing would be
+  justified by "the agent might get this wrong", which this design refuses outright.
 - **The run record itself was malformed, and the finalize transaction caught it.** Its emit reported
   `mission_list: {items: 19, outcome_while_not_done: [19, 24, 116]}` — three items carrying a
   `result` while still reading `status: in-flight`. Auditing on that hint found the problem was
