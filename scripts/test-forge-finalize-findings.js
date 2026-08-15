@@ -958,15 +958,35 @@ const EDITION_KEYS = EDITIONS.map(e => e.key);
 const docsRow = name => apiText.split('\n').find(l => new RegExp('^\\|\\s*`' + name + '`\\s*\\|').test(l));
 const editionsNamedIn = row => EDITION_KEYS.filter(k => EDITION_WORD[k].test(row));
 
-// Positive control for the matcher, on a REAL row of this document: `migrate` is edition-scoped
-// and must be seen to be. Without it, a regex set that matched nothing would pass the
-// "no qualifier" assertion below as a success and fail the "must be scoped" one for the wrong
-// reason. Re-point this pin if that row is renamed.
-const migrateRow = docsRow('migrate');
-assert(migrateRow !== undefined
-    && editionsNamedIn(migrateRow).includes('gitlab') && editionsNamedIn(migrateRow).includes('gitea'),
-  'static: the edition-name matcher failed its positive control — docs/api.md\'s `migrate` row '
-    + 'names GitLab and Gitea and the matcher must see both. Row: ' + migrateRow);
+// Positive control for the matcher, on a REAL row of this document. Without it, a regex set that
+// matched nothing would pass the "no qualifier" assertion below as a success and fail the "must be
+// scoped" one for the wrong reason.
+//
+// ADR 0018 §8 step 5 deleted `kaola-workflow-roadmap.js` in all four editions, and with it the whole
+// `## Roadmap Operations` section of docs/api.md — `migrate` (the row this control used to read) is
+// gone along with the mechanism it documented, not renamed. `docsRow('migrate') === undefined` is
+// therefore the honest, correct answer now, not a bug to route around: the mechanism this control
+// exists to protect (editionsNamedIn's regex matcher) is not retired, only its witness died — the
+// same shape as `plantRoadmapIssue` and `test-forge-bundle-lane.js`'s classifier seam elsewhere in
+// this run. Re-pointed at a row verified still present, by reading the live file rather than
+// remembering the old one: `docs/api.md`'s install-manifest row is the ONLY OTHER table row in the
+// entire document whose own text names both GitLab and Gitea (confirmed by grepping every `|`-led
+// line in the file for both substrings) — its key literally enumerates
+// `--forge=<github|gitlab|gitea>`. (`archive_unstaged`'s row also names both, but that row is the
+// SUBJECT the assertions below already read — reusing it here would make the control depend on the
+// very thing it exists to protect, not an independent check.)
+//
+// Looked up by a distinctive substring rather than through `docsRow(name)`: the install-manifest
+// row's own KEY contains unescaped `|` characters (markdown's own escape for a literal pipe inside a
+// table cell — `\|`), which `docsRow`'s `new RegExp('...`' + name + '`...')` would read as regex
+// alternation, not literal text, if the raw key were threaded through it as `name`.
+const installManifestRow = apiText.split('\n')
+  .find(l => l.startsWith('|') && l.includes('kaola-workflow-install-manifest.js'));
+assert(installManifestRow !== undefined
+    && editionsNamedIn(installManifestRow).includes('gitlab') && editionsNamedIn(installManifestRow).includes('gitea'),
+  'static: the edition-name matcher failed its positive control — docs/api.md\'s install-manifest '
+    + 'row names GitLab and Gitea (as `--forge=<github|gitlab|gitea>`) and the matcher must see '
+    + 'both. Row: ' + installManifestRow);
 
 assert(unstagedEmitters.size === EDITIONS.length,
   'static: the *_unstaged emission measurement covers ' + unstagedEmitters.size + ' of '
