@@ -116,6 +116,9 @@ function runListOpen(cwd, binDir, extraEnv) {
   const mockEnv = binDir && fs.existsSync(path.join(binDir, 'gh.js'))
     ? { KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js') }
     : {};
+  // The subject IS the CLI surface — `list-open`'s exit code, stdout envelope and ordering —
+  // so it has to be exercised as a process, not called in-process.
+  // spawn-class: cli-contract
   return spawnSync(process.execPath, [claimScript, 'list-open'], {
     cwd,
     encoding: 'utf8',
@@ -291,6 +294,9 @@ function testOfflineIsSaneNotThrown() {
   const tmp = makeTmpRoot();
   initGitRepo(tmp);
   // No gh mock at all: offline must never attempt a forge call in the first place.
+  // Same reason, and the absent mock is the point: only a real process proves the
+  // offline path never reaches for the forge in the first place.
+  // spawn-class: cli-contract
   const r = spawnSync(process.execPath, [claimScript, 'list-open'], {
     cwd: tmp,
     encoding: 'utf8',
