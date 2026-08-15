@@ -314,6 +314,15 @@ ordering that opens it is wrong however tidy it looks.
    the same defect as a test repaired ahead of one. Tests fall out here, deleted with what they pin,
    never repaired ahead of it. The installer manifests lose the roadmap script and gain its
    retired-name prune entry.
+
+   **Inside this step the order is not free, and getting it wrong locks the run out of its own
+   tooling.** `roadmap.js` is required at **module load** by eight production call sites — `claim.js`
+   and `closure-audit.js`, each in canonical plus all three plugin copies. Deleting the script before
+   those requires are removed breaks claim, startup, resume, finalize and the audit **at require
+   time, in every edition**. This repo is the self-host: the run performing the deletion is finalized
+   by `claim.js`. So the requires come out first, in the same commit as or before the file, and the
+   step is verified by *running* a claim and a finalize — not by a green suite, which loads the same
+   module the same way and would pass right up until the file is gone.
 6. **Migrate consumers, one repo at a time, on consent** (ruling 3). Never as a side effect of an
    upgrade. The constraints below are what make this step the risky one:
 
