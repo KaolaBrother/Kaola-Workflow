@@ -127,6 +127,12 @@ worktree reconciliation exist for this file class alone. On the consumer, **371 
    the knob and its docs was the coherent alternative; **ruling 2 took connect over retire**, so the
    `P`-tier stops being prose in a table cell and becomes queryable:
    `gh issue list --label P1`.
+
+   **Connecting the sorter means ordering, never selecting.** `next.skeleton.md:39` says *"You select
+   the target. No script picks for you"*, and that is untouched: the sorter replaces the raw
+   `gh issue list` splice's arrival order with tier order, and the orchestrator still reads the list
+   and decides. Stated here because the ruling is otherwise reachable two wrong ways — leaving the
+   sorter dormant a second time (ruling unfulfilled), or wiring it as a selector (ADR 0017 violated).
 3. **Decision provenance goes where the decision goes** — an issue comment, and the repo's `D-NNN-NN`
    record. Not a table cell citing a record that may not exist.
 4. **`ROADMAP.md` is deleted, not cached.** The earlier draft kept it as an untracked regenerable
@@ -203,6 +209,23 @@ worktree reconciliation exist for this file class alone. On the consumer, **371 
    consumer is itself an edit to a user-owned file, so it cannot be retroactive — for existing repos
    the first migration proposes it (*"this is what I would own; everything else stays yours"*), and
    repos initialized afterwards carry it from the start.
+
+   **The rule spans surfaces, so it takes a PIN — and a PIN is not the region.** This record's rule
+   is stated in three places by nature: `init.skeleton.md` (standing facts, → consumer `CLAUDE.md`),
+   `next.skeleton.md` (read the shortlist before claiming), and `finalize.skeleton.md` (tag what you
+   file, comment what you corrected). §2 is a record of what happens when one rule sits on several
+   surfaces with no declared relationship — so this one is pinned, e.g.
+   `<!-- PIN: forge-is-the-backlog -->`, and `test-route-reachability.js` derives its universe the way
+   it already does for `consent-in-conversation`: **every surface whose committed bytes carry the pin
+   owes the roster, a surface that never asks is never obligated.** That admits per-surface wording
+   (the consent pin already differs between next and finalize) while making silent disappearance from
+   one surface impossible. The three §2 statements drifted precisely because they were unpinned
+   incidental prose.
+
+   Keep the two mechanisms distinct in the build: **the pin** says a rule must appear on the surfaces
+   that invoke it (tool-side, cross-surface, tested); **the region** says which lines the tool owns
+   inside a user-owned file (consumer-side, an ownership boundary). Conflating them would put a
+   fail-closed test on a file the tool does not own.
 8. **The run loop's only new duty is tagging what it files.** Finalize Step 7 mandates a follow-up
    per real defect; an issue filed without a `P` label is tier 99 and invisible to the sorter item 2
    connects. So the tier is written in the same breath as `filed: #N`. **That is the whole of it.**
