@@ -458,8 +458,8 @@ function isParkedLanePath(relPath, ownedProjects) {
 // #353: crash-safe durable-state write — tmp + fsync + atomic rename, so a crash mid-write can
 // never leave a TORN workflow-plan.md (plan_hash mismatch → --resume-check bricks the run with no
 // recovery) or workflow-state.md (a torn file is silently skipped by readActiveFolders → the
-// project goes invisible). Returns false when content is unchanged (no write). Mirrors roadmap.js's
-// primitive; placed here (the ×4 byte-anchor + a COMMON_SCRIPT) to avoid a new-file registration.
+// project goes invisible). Returns false when content is unchanged (no write). Placed here (the
+// ×4 byte-anchor + a COMMON_SCRIPT) to avoid a new-file registration.
 function writeFileAtomicReplace(filePath, content) {
   const fs = require('fs');
   const path = require('path');

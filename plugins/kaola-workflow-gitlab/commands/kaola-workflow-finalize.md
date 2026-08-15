@@ -10,7 +10,7 @@ argument-hint: <project name>
 <!-- PIN: consent-in-conversation -->
 **Consent.** Irreversible and value-laden calls belong to the user — ask, in conversation, before
 taking one. Nothing collects that approval on your behalf, so this rule is the whole mechanism.
-Closing an issue that still has open work in it, reorganizing issues or the roadmap, force-pushing,
+Closing an issue that still has open work in it, reorganizing issues, force-pushing,
 rewriting history, and resolving a real content conflict are all in that class: say what you propose
 and why, then wait for the answer. Everything checkable is yours to decide and get on with.
 <!-- /PIN -->
@@ -169,7 +169,7 @@ is a docking gap, not a doc.
 
 Compare the changed code, config, test and workflow files against every claimed issue's statement,
 the run's own recorded results, and `README`, the API docs, the architecture docs, the changelog,
-`.env.example`, the roadmap, and the issue comments. Every public behavior, API, setup,
+`.env.example`, and the issue comments. Every public behavior, API, setup,
 architecture, environment or validation change is reflected somewhere, or carries an explicit
 no-impact reason. Write `.cache/doc-docking.md` — changed files reviewed, documents checked, gaps
 found and fixed, no-impact reasons, and a verdict of `DOCKED` or `BLOCKED`. Only continue on
@@ -210,10 +210,18 @@ CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirn
 node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-gap-sweep.js" --project {project} --check
 ```
 
+<!-- PIN: forge-is-the-backlog -->
 For each real run-discovered defect, file a follow-up and record `filed: #N`. For each non-defect,
 record `noise: <justification>`. If you hand-typed a `## Run gaps` row the scanner never observed,
 append the matching `gap: <class> — <text>` line to `.cache/run-gaps-manual.md` and re-run the
 scanner, so what is written was actually swept.
+
+When this run's own findings contradict or correct the issue as filed — a wrong premise, a disproved
+figure, a symptom that never existed, a justification the run replaced — post that correction as a
+comment on the issue before it closes. Never close quietly against text now known to be wrong. A
+correction is not a follow-up: a follow-up is new work with its own `filed: #N`; a correction is the
+record of what this issue turned out to be, and it lands on the issue it corrects.
+<!-- /PIN -->
 
 **File them as independent slices, not one omnibus issue.** Where the findings sit on disjoint
 surfaces, they are separate issues; a single issue bundling unrelated surfaces cannot be worked
@@ -229,7 +237,7 @@ read it as success.
 Scan the run's own records for deferred items, unresolved conflicts, partial-implementation notes,
 open review follow-ups, and anything the user should decide. If there are none, say so and continue.
 If there are any, take them to the user with your recommendation and **ask before creating, closing,
-splitting, merging, or reorganizing** any issue or roadmap entry.
+splitting, merging, or reorganizing** any issue.
 
 If the project links issues, close every GitLab issue in the set — but only
 after acceptance passes and the closure decision clears. Keep them open when follow-ups, partial work,
@@ -243,8 +251,7 @@ close), written by you at the closure decision with the user's agreement.
 
 **That one line is whole-run; there is no per-issue form of it.** Under keep-open the close is
 skipped for the entire claimed set: **no member is closed, including members whose work finished
-cleanly**, every member gets a mechanical keep-open comment from the sink, every roadmap source
-`.roadmap/issue-N.md` is preserved so the mirror still lists all of them, and **the claim is
+cleanly**, every member gets a mechanical keep-open comment from the sink, and **the claim is
 released on every issue left open** — both artifacts, the `workflow:in-progress` label and the
 `kw:claim` marker comment, since an issue meant to stay open is an issue meant to be claimable
 again. The worktree and branch are removed and the archive is stamped as kept-open. Keep-open is
@@ -286,7 +293,7 @@ _WT_PRE="$(node -e "try{const fs=require('fs');const s=fs.readFileSync(process.a
 ## Step 10 — The finalize transaction
 
 The mechanical residue is ONE resumable script transaction, not prose and not a delegation: the
-artifact mirror, the archive and status close, the roadmap staging, and the
+artifact mirror, the archive and status close, and the
 `chore: finalize {project}` commit gate. Judgment stays with you; atomicity stays with the script.
 Run it yourself from the linked worktree and reason over the typed emit:
 
@@ -353,9 +360,8 @@ cd "$_MAIN_ROOT" 2>/dev/null || true   # the sink may have removed the worktree 
 ```
 
 `--sink` mode is one resumable transaction: preflight (naming any foreign dirt it found, with zero
-mutation, and auto-stashing the claim-time `.roadmap/issue-N.md`) → push branch → rebase onto the
-mainline → run the validation chains → fast-forward merge → push mainline → close the issue,
-idempotently → archive → clean up. `kaola-workflow/{project}/.cache/sink-receipt.json` tracks each
+mutation) → push branch → rebase onto the mainline → run the validation chains → fast-forward merge
+→ push mainline → close the issue, idempotently → archive → clean up. `kaola-workflow/{project}/.cache/sink-receipt.json` tracks each
 step so a re-run resumes from the last incomplete one without double-applying. That receipt and
 `sink-fallback.json` are transaction journals: a terminally successful sink deletes them itself, and
 a "clean and synced" check that finds one afterwards must DELETE it, never commit it — a journal is
@@ -407,8 +413,8 @@ fix it.
 ### Reconciliation sweep
 
 After a successful sink, run the closure audit as an after-the-fact drift detector. It flags a
-closed issue still carrying the in-progress label, a stale roadmap source, or an un-archived merged
-folder that the sink's own reporting did not catch.
+closed issue still carrying the in-progress label, or an un-archived merged folder that the sink's
+own reporting did not catch.
 
 ```bash
 kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
@@ -417,9 +423,8 @@ node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-closure-audit.js" --project {project}
 # node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-closure-audit.js" --project {project} --execute  # repair safe local drift, scoped
 ```
 
-Dry-run is the default and reports without mutating. `--execute` repairs safe local drift — stale
-roadmap sources, mirror rows, an in-progress label on a closed issue — and never deletes folders or
-worktrees. `--project` partitions the report rather than narrowing the sweep: `current_project_clean`
+Dry-run is the default and reports without mutating. `--execute` repairs safe local drift — an
+in-progress label on a closed issue — and never deletes folders or worktrees. `--project` partitions the report rather than narrowing the sweep: `current_project_clean`
 is the verdict for this run alone, and whatever the sweep found elsewhere stays visible under
 `repository_drift_outside_scope`, so it can neither contaminate that verdict nor hide behind it. That
 verdict is fail-closed — `true` only when every scoped class actually evaluated, so an offline run is

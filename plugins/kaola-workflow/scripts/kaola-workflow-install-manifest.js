@@ -66,7 +66,6 @@ const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-compact-context.js',
   'kaola-workflow-sink-merge.js',
   'kaola-workflow-sink-pr.js',
-  'kaola-workflow-roadmap.js',
   'kaola-workflow-classifier.js',
   'kaola-workflow-adaptive-schema.js',
   'kaola-workflow-resolve-agent-model.js',

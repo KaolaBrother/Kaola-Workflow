@@ -716,7 +716,11 @@ function testGiteaBundleDuplicateIssueBlocking() {
 // the mirror once, archives ONE folder, and the closure receipt carries the bundle fields.
 // THIS IS THE SCENARIO THAT WOULD HAVE CAUGHT THE #328 CR1 FORGE-FINALIZATION DEFECT.
 // AC#11 + AC#12 + AC#13 E2E guard.
-function testGiteaBundleFinalizeRoadmapCleanup() {
+// Online bundle finalize: all three members probe closed via the tea mock, and the archive
+// must land with a clean closure_receipt/closure_invariants. (Formerly also asserted the
+// retired roadmap_regenerated/roadmap_sources_removed receipt fields — ADR 0018 §5 retires
+// both; the forge no longer tracks or removes a local roadmap mirror on finalize.)
+function testGiteaBundleFinalizeOnlineAllClosedArchives() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-bundle-finalize-')));
   const binDir = path.join(tmp, 'bin');
   const project = 'bundle-42-47-53';
@@ -738,14 +742,6 @@ function testGiteaBundleFinalizeRoadmapCleanup() {
         'sink: merge', 'run_posture: in-place', ''
       ].join('\n')
     });
-    gtPlantRoadmapIssue(tmp, 42);
-    gtPlantRoadmapIssue(tmp, 47);
-    gtPlantRoadmapIssue(tmp, 53);
-    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'ROADMAP.md'), [
-      '# Kaola-Workflow Roadmap', '',
-      '| Issue | Title | Status |', '|-------|-------|--------|',
-      '| #42 | Test 42 | active |', '| #47 | Test 47 | active |', '| #53 | Test 53 | active |', ''
-    ].join('\n'));
     writeBundleTeaMockScript(binDir, { closedIssues: [42, 47, 53] });
 
     // Seed the frozen adaptive plan + passing gate LAST (after every code-band write).
@@ -761,26 +757,13 @@ function testGiteaBundleFinalizeRoadmapCleanup() {
       'gitea #342 S5: finalize exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     const out = gtLastJson(result.stdout);
     assert.strictEqual(out.status, 'closed', 'gitea #342 S5: status must be closed, got ' + JSON.stringify(out.status));
-    assert.ok(out.closure_receipt && out.closure_receipt.roadmap_regenerated === 'regenerated',
-      'gitea #342 S5: receipt.roadmap_regenerated must be "regenerated", got ' +
-      JSON.stringify(out.closure_receipt && out.closure_receipt.roadmap_regenerated));
 
-    for (const n of [42, 47, 53]) {
-      assert.ok(!fs.existsSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-' + n + '.md')),
-        'gitea #342 S5: issue-' + n + '.md roadmap source must be removed after finalize');
-    }
     assert.ok(out.dest && fs.existsSync(out.dest), 'gitea #342 S5: archive folder must exist at dest');
     assert.ok(!fs.existsSync(path.join(tmp, 'kaola-workflow', project)),
       'gitea #342 S5: live project folder must be gone after finalize');
 
     const receipt = out.closure_receipt;
     assert.ok(receipt != null, 'gitea #342 S5: closure_receipt must be present');
-    assert.ok(Array.isArray(receipt.roadmap_sources_removed) && receipt.roadmap_sources_removed.length === 3,
-      'gitea #342 S5: roadmap_sources_removed must have 3 entries, got ' + JSON.stringify(receipt.roadmap_sources_removed));
-    for (const n of [42, 47, 53]) {
-      assert.ok(receipt.roadmap_sources_removed.includes('issue-' + n + '.md'),
-        'gitea #342 S5: roadmap_sources_removed must include issue-' + n + '.md');
-    }
     assert.ok(Array.isArray(receipt.closed_issues), 'gitea #342 S5: receipt must have closed_issues array');
     assert.ok(Array.isArray(receipt.failed_issue_closures) && receipt.failed_issue_closures.length === 0,
       'gitea #342 S5: failed_issue_closures must be empty when all probes succeed, got ' + JSON.stringify(receipt.failed_issue_closures));
@@ -791,19 +774,22 @@ function testGiteaBundleFinalizeRoadmapCleanup() {
     assert.ok(inv && inv.ok === true,
       'gitea #342 S5: closure_invariants must pass; violations: ' + JSON.stringify(inv && inv.violations));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  console.log('testGiteaBundleFinalizeRoadmapCleanup: PASSED');
+  console.log('testGiteaBundleFinalizeOnlineAllClosedArchives: PASSED');
 }
 
-// S6: AC#1 contamination guard — a single-issue claim must NOT write the bundle fields. Offline.
+// S6: AC#1 contamination guard — a single-issue claim must NOT write the bundle fields. Online
+// (ADR 0018 §5 retired the offline claim-evidence path — a not-yet-active issue no longer
+// classifies as anything but target_unverified offline, so this drives the real classifier
+// online against the tea mock instead of planting a local roadmap source).
 function testGiteaBundleSingleIssueStateHasNoBundleFields() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-bundle-single-'));
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-bundle-single-')));
+  const binDir = path.join(tmp, 'bin');
   fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
   try {
     _initGitRepo(tmp);
-    gtPlantRoadmapIssue(tmp, 601);
-    const r = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '601'],
-      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
-    const out = JSON.parse(r.stdout);
+    writeBundleTeaMockScript(binDir, { openIssues: [601] });
+    const r = gtSpawnBundle(['startup', '--target-issue', '601'], tmp, binDir);
+    const out = gtLastJson(r.stdout);
     assert.strictEqual(out.claim, 'acquired', 'gitea #342 S6: single-issue startup must acquire, got ' + JSON.stringify(out.claim));
     const state = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-601', 'workflow-state.md'), 'utf8');
     assert.ok(!/^issue_numbers:/m.test(state), 'gitea #342 S6: single-issue state must NOT contain issue_numbers line');
@@ -837,14 +823,14 @@ testGiteaClosurePersistence();
 testGiteaSelectionEvidenceDocking();
 testGiteaBundleRefusalLeavesNoFolder();
 testGiteaBundleDuplicateIssueBlocking();
-testGiteaBundleFinalizeRoadmapCleanup();
+testGiteaBundleFinalizeOnlineAllClosedArchives();
 testGiteaBundleSingleIssueStateHasNoBundleFields();
 
 // bundle-426-427-428-430 regression tests (mirrors root walkthrough §testFinalizeArchiveVerifiesBeforeDelete etc.).
 testGiteaFinalizeArchiveVerifiesBeforeDelete();
 testGiteaFinalizeClosesIssueBundleMembers();
 testGiteaBundleFinalizeAllOpenCloseIsPending();  // #508
-testGiteaFinalizeRoadmapResidueDetection();
+// testGiteaFinalizeRoadmapResidueDetection() DELETED (#428) — see comment at its former definition site.
 
 // bundle-424-432-433 n9-walkthrough (gitea edition):
 // evidence seeding (D-433-01 §2) and doc-updater .md-target barrier (D-424-01 allowband).
@@ -1015,46 +1001,11 @@ function testGiteaBundleFinalizeAllOpenCloseIsPending() {
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
-// ---------------------------------------------------------------------------
-// #428: closure_receipt carries roadmap_removed_by_root; source removed after finalize.
-// ---------------------------------------------------------------------------
-function testGiteaFinalizeRoadmapResidueDetection() {
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-428-residue-')));
-  try {
-    _initGitRepo(tmp);
-    gtWriteProject(tmp, 'issue-428gt', {
-      'workflow-state.md': [
-        '# Kaola-Workflow State', '',
-        '## Project', 'name: issue-428gt', 'status: active', '',
-        '## Sink', 'branch: workflow/issue-428gt', 'issue_number: 428', 'sink: pr', ''
-      ].join('\n')
-    });
-    seedAdaptiveFinalizeFixture(tmp, 'issue-428gt');
-    gtPlantRoadmapIssue(tmp, 428);
-
-    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-428gt'], {
-      cwd: tmp, encoding: 'utf8', timeout: 60000,
-      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-    });
-
-    assert.strictEqual(result.status, 0,
-      'gitea #428 residue: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-    const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
-    assert.ok(lines.length > 0, 'gitea #428 residue: expected JSON output');
-    const out = JSON.parse(lines[lines.length - 1]);
-    assert.strictEqual(out.status, 'closed', 'gitea #428 residue: status must be closed');
-    const receipt = out.closure_receipt;
-    assert.ok(receipt != null, 'gitea #428 residue: closure_receipt must be present');
-    assert.ok(
-      receipt.roadmap_removed !== undefined || receipt.roadmap_removed_by_root !== undefined,
-      'gitea #428 residue: closure_receipt must carry roadmap_removed or roadmap_removed_by_root'
-    );
-    assert.ok(
-      !fs.existsSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-428.md')),
-      'gitea #428 residue: .roadmap/issue-428.md must be removed after finalize'
-    );
-    console.log('testGiteaFinalizeRoadmapResidueDetection: PASSED');
-  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
+// DELETED: testGiteaFinalizeRoadmapResidueDetection (#428). Its entire premise was the
+// dual-root roadmap receipt (roadmap_removed / roadmap_removed_by_root) and .roadmap/issue-N.md
+// source removal on finalize — ADR 0018 §5 retires both with the roadmap.js mirror itself; no
+// producer emits either field or removes a roadmap source anymore. Nothing else in the scenario
+// (a plain single-issue finalize to closed) survives it as a distinct case — that path is already
+// covered by testGiteaClosurePersistence and the bundle finalize tests above.
 
 

@@ -224,11 +224,13 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
 }
 
 // --- #395.1 buildClosureReceipt undefined-skip (receipt-field-survival) ------
+// The roadmap_source_removed/roadmap_regenerated witness pair is retired under ADR 0018 §5 along
+// with reconcileRoadmapForClosure — neither field has a schema entry to seed a default into any
+// more. Deleted with the mechanism; the undefined-skip behavior itself is unchanged and still
+// covered below via close_disposition.
 {
   const { buildClosureReceipt } = require('./kaola-workflow-claim.js');
-  const r = buildClosureReceipt('proj', 7, { roadmap_source_removed: undefined, roadmap_regenerated: 'regenerated' });
-  assert(r.roadmap_source_removed === 'failed', '#395.1: undefined step keeps the seeded failed default (field never vanishes)');
-  assert(r.roadmap_regenerated === 'regenerated', '#395.1: a defined step still overwrites the default');
+  const r = buildClosureReceipt('proj', 7, {});
   assert(!('close_disposition' in r), '#395.1/#396.4: undefined close_disposition is not emitted');
   const r2 = buildClosureReceipt('proj', 7, { close_disposition: 'close_pending', keep_open_requested: true });
   assert(r2.close_disposition === 'close_pending', '#396.4: a set close_disposition survives into the receipt');

@@ -36,12 +36,12 @@ landed, close the item; otherwise re-dispatch, unless you can show the dispatch 
 
 ## Durable State Contract
 
-- `kaola-workflow/ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md` (plus an optional
-  project-local `.roadmap/_rules.md` appended under `### Project rules`); do not hand-edit the mirror.
-- Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file. A file
-  left behind is silent and nothing detects it automatically — check by hand with
-  `node scripts/kaola-workflow-roadmap.js validate-remote` (exit 1 = drift). It compares one direction
-  only — local sources outward, never the reverse — so **the forge's open list is the backlog truth**.
+- The forge is the backlog: an issue's title, labels, and comments are what the work is — comments
+  override the body. There is no local mirror to keep current — **the forge's open list is the
+  backlog truth**.
+- `kaola-workflow/.roadmap/_rules.md` is the one optional local file that survives, for standing
+  project-local rules read directly; nothing else is generated or tracked under
+  `kaola-workflow/.roadmap/`.
 - `workflow-state.md` is the **claim** record: which issues, which branch, which worktree. It does not
   describe the run.
 - `mission-list.md` is the **run** record. It is not attested, not frozen, and not machine-verified —
@@ -122,9 +122,9 @@ gone, and never re-add a field to satisfy a test.
 
 ## Key Scripts
 
-- `kaola-workflow-claim.js` — claim, release/discard, status, startup, pick-next, resume, finalize,
-  worktrees, sink-fallback, verify-sink, labels. · `kaola-workflow-roadmap.js` — roadmap mirror;
-  `generate` makes no remote call, `validate-remote` is the only forge call. Ported per forge.
+- `kaola-workflow-claim.js` — claim, release/discard, status, startup, pick-next, list-open, resume,
+  finalize, worktrees, sink-fallback, verify-sink, labels. `list-open` orders the open issue list by
+  its `P0`–`P3` priority tier without selecting one for you.
 - `kaola-workflow-run-chains.js` — runs the chains, writes the receipt, diff-scopes chain selection at
   finalize; also owns `--release-check`, the pre-tag gate. · `kaola-workflow-sink-merge.js` — the sink;
   reports what it found, and the orchestrator gets the branch right and cleans up after.
@@ -189,8 +189,7 @@ architecture docs if structure changed · inline comments where public interface
 
 - `README.md` — overview and install. · `CHANGELOG.md` — user-visible changes.
 - `docs/README.md` — index. · `docs/architecture.md` · `docs/api.md` · `docs/conventions.md` ·
-  `docs/workflow-state-contract.md` · `docs/decisions/` — ADRs. · `kaola-workflow/ROADMAP.md` —
-  roadmap mirror.
+  `docs/workflow-state-contract.md` · `docs/decisions/` — ADRs.
 
 ## Maintenance
 

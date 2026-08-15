@@ -326,16 +326,10 @@ for (const ed of EDITIONS) {
         + 'project\'s archive band; it carried: ' + JSON.stringify(under(landedList, FOREIGN_BAND)));
 
     // ---- 3. the project's OWN paths still land -----------------------------------------------
-    // The roadmap mirror is the archive commit's whole positive payload on a linked run (the
-    // archive destination itself resolves under MAIN and is outside this worktree's index by
-    // design, so it cannot be staged here and is committed by the sink).
-    assert(archivePaths.includes('kaola-workflow/ROADMAP.md'),
-      'regression[' + ed.label + '] the archive commit must still carry the roadmap mirror '
-        + 'kaola-workflow/ROADMAP.md; it carried: ' + JSON.stringify(archivePaths));
-    assert(archivePaths.includes('kaola-workflow/.roadmap/issue-1.md'),
-      'regression[' + ed.label + '] the archive commit must still carry the removal of this '
-        + 'project\'s roadmap source kaola-workflow/.roadmap/issue-1.md; it carried: '
-        + JSON.stringify(archivePaths));
+    // The roadmap-mirror-carried and roadmap-source-removal assertions stood here. ADR 0018 §5
+    // retired reconcileRoadmapForClosure — finalize no longer unlinks a roadmap source or
+    // regenerates a mirror, so the archive commit on a linked run has no positive payload left to
+    // require; deleted with the mechanism.
     // The project's own archive band is its own record. Asserted over everything the run committed
     // rather than over the archive commit alone: which of the two commits carries it is a design
     // choice the editions already make differently, and pinning that would freeze an incidental.

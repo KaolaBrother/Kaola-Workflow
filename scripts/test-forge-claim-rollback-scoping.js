@@ -36,40 +36,26 @@
 // ...AND ITS OTHER HALF, which is why "delete nothing" is not the answer. Leg A drives the same
 // fault over a directory the claim itself CREATED and requires it gone: a rollback that stops
 // cleaning up has only traded lost data for orphaned folders, and an orphan with a half-written
-// state file makes the NEXT claim read the folder as occupied. Leg B requires the same of the two
-// artifacts the transaction writes INTO an adopted folder.
+// state file makes the NEXT claim read the folder as occupied. Leg A's created half is the liveness
+// witness for its adopted half — if the fault ever stops firing, the claim SUCCEEDS and its own
+// folder is still there afterwards, so the created half reds rather than the adopted half going
+// quietly green.
 //
-// NON-VACUITY IS MECHANICAL, never a claim in a comment:
-//   * leg A's created half is the liveness witness for its adopted half — if a fault ever stops
-//     firing, the claim SUCCEEDS and its own folder is still there afterwards, so the created half
-//     reds rather than the adopted half going quietly green;
-//   * leg B runs the SAME fixture twice, once WITHOUT the fault, and asserts the selection record
-//     really is written into the adopted folder on that door — otherwise "the record was removed"
-//     is unfalsifiable;
-//   * the bundle leg asserts the run reached the bundle project and declined to acquire it, so a
-//     fixture that silently refused earlier (classifier drift, roadmap-source rename) reds instead
-//     of reading as "nothing was destroyed".
+// THE FAULT: `claim --project <p> --codex-dispatch-mode <value with a newline>` — a registered
+// value flag that `cmdClaim` hands straight to `claimProject`, refused by writeState's
+// anti-injection fence INSIDE the transaction. `cmdClaim` never sets `selectionRecordBytes`, so on
+// this door NOTHING has been written when it throws — a shipped guard, not a planted one.
 //
-// THREE FAULTS, all shipped guards or ordinary I/O errors, none planted in production code. Which
-// one a leg uses is decided by WHERE in the transaction it has to fire, and each was A/B'd against
-// a reverted tree before being relied on — a fault that turns out to fire before the adoption makes
-// every survival assertion behind it true for a reason that has nothing to do with the rollback.
-//
-//   * `claim --project <p> --codex-dispatch-mode <value with a newline>` — a registered value flag
-//     that `cmdClaim` hands straight to `claimProject` (only `cmdStartup` strips it), refused by
-//     writeState's anti-injection fence INSIDE the transaction. `cmdClaim` never sets
-//     `selectionRecordBytes`, so on this door NOTHING has been written when it throws.
-//   * a repo whose own PATH contains a newline, claimed through `startup` — writeState resolves
-//     `main_root` from the root it was handed and puts it through the same fence, and `cmdStartup`
-//     DOES set `selectionRecordBytes`, so the selection record has already been written into the
-//     adopted folder when this one fires. It is the only fault reaching the "record written, then
-//     taken back out" branch from a shipped entry point: `--codex-dispatch-mode` is stripped on
-//     this door, and `--branch` with a newline never gets near the transaction — `assertSafeBranchArg`
-//     puts the branch through the fence at the front door, before the mkdir, with zero mutation.
-//   * `<project>/.cache` planted as a regular FILE, so the record write hits ENOTDIR — the bundle
-//     lane's fault, since that lane runs only through `cmdStartup` and its branch is derived rather
-//     than supplied. Permissions are left untouched, so the rollback that follows is fully able to
-//     delete and survival is the code's choice rather than the filesystem's.
+// ADR 0018 §5 RETIRED THREE OF THIS FILE'S FOUR LEGS. Legs B, C and D drove `startup
+// --target-issue(s)` (the only door that reaches the "record written, then taken back out" branch,
+// and the bundle lane), and all three reached classification only through a seeded
+// `kaola-workflow/.roadmap/issue-N.md` as OFFLINE local evidence — the classifier's offline arm,
+// itself retired as a named accepted loss. An OFFLINE claim for an issue with no active folder now
+// always answers `target_unverified` before classification ever reaches the adopt-and-rollback
+// code these legs drove; see the note where they stood, further down this file. Leg D's own
+// built-in non-vacuity check is what caught this at the time of the retirement — it was written
+// for precisely this failure shape: "a fixture that silently refused earlier reds instead of
+// reading as nothing was destroyed."
 //
 // Usage
 //   node scripts/test-forge-claim-rollback-scoping.js
@@ -101,10 +87,10 @@ const EDITIONS = Object.freeze([
 
 // A newline in a durable field value. Passed as ONE argv element, so no shell quoting is involved.
 const FAULT_CLAIM_DOOR = Object.freeze(['--codex-dispatch-mode', 'v2-task-name\ninjected']);
-// The `startup`-door fault is the repo's own path (see the header), not an argument.
+// The `startup`-door fault is the repo's own path (see the header), not an argument. No leg passes
+// `newlineInPath` any more — legs B/C/D (the only `startup`-door legs) are retired, see the note
+// where they stood — so this constant's only reference (in newRepo below) is now unreachable.
 const NEWLINE_DIRNAME = 'repo\nsecond-line';
-
-const RECORD_REL = path.join('.cache', 'origin', 'selection-record.json');
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -124,20 +110,6 @@ function newRepo(ed, tag, opts) {
   fs.writeFileSync(path.join(root, '.gitignore'), '.kw/\n');
   G.commitAll(root, 'init');
   return { root, outer };
-}
-
-/** The roadmap source the claim resolves its project name from. */
-function seedRoadmap(root, issue) {
-  const dir = path.join(root, 'kaola-workflow', '.roadmap');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'issue-' + issue + '.md'), [
-    'issue: #' + issue,
-    'title: the claimed issue',
-    'status: open',
-    'workflow_project: —',
-    'next_step: ready',
-    ''
-  ].join('\n'));
 }
 
 /** Content that PREDATES the claim, inside the directory the claim will adopt. */
@@ -248,129 +220,15 @@ for (const ed of EDITIONS) {
     } finally { fs.rmSync(outer, { recursive: true, force: true }); }
   }
 
-  // =========================================================================================
-  // LEG B — the record is WRITTEN into the adopted folder, and then taken back out.
-  // The `startup` door sets selectionRecordBytes, so persistSelectionRecord has already written
-  // `.cache/origin/selection-record.json` inside the adopted folder by the time the fault fires.
-  // This is the branch no canonical-only test reaches: both walkthrough scenarios fault BEFORE
-  // the write. Two runs on the same fixture shape — one without the fault — because "the record
-  // was removed" is unfalsifiable unless the record is known to have been written.
-  //
-  // The two repos differ in exactly one thing: the faulted one lives one directory deeper, under a
-  // name carrying a newline. That is the fault (see the header).
-  // =========================================================================================
-  {
-    const tag = '#932[' + ed.label + '/B]';
-    const control = newRepo(ed, 'Bc');
-    const faulted = newRepo(ed, 'Bf', { newlineInPath: true });
-    try {
-      for (const fx of [control, faulted]) {
-        seedRoadmap(fx.root, 9410);
-        seedFolder(fx.root, 'issue-9410', FOREIGN);
-        G.commitAll(fx.root, 'seed content the claim did not create');
-      }
-
-      // (B1) THE WITNESS: on this door, and with no fault, the record really is written into the
-      // adopted folder. Without this the removal assertion below could not fail.
-      const ok = runClaim(ed, control.root, ['startup', '--target-issue', '9410']);
-      assert(fs.existsSync(path.join(control.root, 'kaola-workflow', 'issue-9410', RECORD_REL)),
-        tag + ' WITNESS: an unfaulted claim on this door must write ' + RECORD_REL + ' into the '
-          + 'adopted folder, or "the record was removed" below is unfalsifiable' + ctx(ok));
-
-      const r = runClaim(ed, faulted.root, ['startup', '--target-issue', '9410']);
-      const dir = path.join(faulted.root, 'kaola-workflow', 'issue-9410');
-
-      // (B2) THE DEMANDED RESULT.
-      assertForeignSurvived(tag, faulted.root, 'issue-9410', r);
-
-      // (B3) ...and the transaction took its OWN artifacts with it, directories included. A
-      // half-written state file or an orphaned `.cache` in a folder the claim disowned is the
-      // other half of the same contract: the next claim reads a folder with a state file as
-      // occupied. Stated as the folder's whole content, so a partial cleanup cannot pass.
-      const after = listTree(dir);
-      assert(JSON.stringify(after) === JSON.stringify(Object.keys(FOREIGN).sort()),
-        tag + ' the adopted folder must hold exactly what it held before — the claim\'s own '
-          + 'artifacts go with it and the directories it made are pruned; got '
-          + JSON.stringify(after) + ctx(r));
-    } finally {
-      fs.rmSync(control.outer, { recursive: true, force: true });
-      fs.rmSync(faulted.outer, { recursive: true, force: true });
-    }
-  }
-
-  // =========================================================================================
-  // LEG C — a selection record that was ALREADY THERE is not the transaction's to remove.
-  // The sharpest reading of the sentence, at file granularity rather than folder granularity:
-  // the rollback must tell its own artifact apart from one of the same name it found.
-  // =========================================================================================
-  {
-    const tag = '#932[' + ed.label + '/C]';
-    const { root, outer } = newRepo(ed, 'C', { newlineInPath: true });
-    try {
-      seedRoadmap(root, 9420);
-      seedFolder(root, 'issue-9420', Object.assign({}, FOREIGN, {
-        [RECORD_REL]: '{"note":"a record from an earlier run"}\n',
-      }));
-      G.commitAll(root, 'seed content the claim did not create');
-
-      const r = runClaim(ed, root, ['startup', '--target-issue', '9420']);
-      const dir = path.join(root, 'kaola-workflow', 'issue-9420');
-
-      assertForeignSurvived(tag, root, 'issue-9420', r);
-      assert(fs.existsSync(path.join(dir, RECORD_REL)),
-        tag + ' a selection record that predates the claim must survive the rollback — the '
-          + 'transaction may only take back the one it wrote itself; folder now holds '
-          + JSON.stringify(listTree(dir)) + ctx(r));
-      for (const d of ['.cache', path.join('.cache', 'origin')]) {
-        assert(fs.existsSync(path.join(dir, d)),
-          tag + ' kaola-workflow/issue-9420/' + d + ' predates the claim and must not be pruned'
-            + ctx(r));
-      }
-
-      // The record's BYTES are deliberately not pinned. `persistSelectionRecord` is an
-      // unconditional write — "the record is the authority, so a staged file of the same name
-      // never wins" — so a claim over this fixture that SUCCEEDS leaves the new run's bytes too.
-      // The overwrite is the shipped transaction's on every path, not the rollback's, and #932 is
-      // about what a failed claim DELETES.
-    } finally { fs.rmSync(outer, { recursive: true, force: true }); }
-  }
-
-  // =========================================================================================
-  // LEG D — the bundle lane. Its project name is a computed `bundle-<targets>` literal, so it can
-  // never be a reserved directory and no name-based guard reaches it; the adopted-folder case is
-  // the only shape it has. It also runs only through `cmdStartup`, which strips the first fault's
-  // flag — hence the third stand-in, `<project>/.cache` planted as a regular FILE.
-  // =========================================================================================
-  {
-    const tag = '#932[' + ed.label + '/D]';
-    const { root, outer } = newRepo(ed, 'D');
-    const project = 'bundle-9430-9431';
-    try {
-      seedRoadmap(root, 9430);
-      seedRoadmap(root, 9431);
-      seedFolder(root, project, FOREIGN);
-      G.commitAll(root, 'seed content the claim did not create');
-      const dir = path.join(root, 'kaola-workflow', project);
-      assert(!fs.existsSync(path.join(dir, 'workflow-state.md')),
-        tag + ' fixture: the adopted folder carries no state file, which is what makes the claim '
-          + 'adopt it rather than conflict');
-      fs.writeFileSync(path.join(dir, '.cache'), 'not a directory\n');
-
-      const r = runClaim(ed, root, ['startup', '--target-issues', '9430,9431']);
-      const env = parseEnvelope(r.stdout);
-
-      // NON-VACUITY. This lane destroys at EXIT 0 behind a routine `target_set_unavailable`
-      // answer, so the envelope is no evidence about the files — but it is evidence that the run
-      // got as far as the name those files sit under. Deriving the bundle project is the last step
-      // before the mkdir and is downstream of every pre-mutation refusal, so a fixture that
-      // silently stopped earlier reds here instead of reading as "nothing was destroyed".
-      assert(env !== null && env.project === project && env.claim !== 'acquired',
-        tag + ' NON-VACUITY: the run must reach this bundle project and not acquire it, got '
-          + JSON.stringify(env && { project: env.project, claim: env.claim }) + ctx(r));
-
-      assertForeignSurvived(tag, root, project, r);
-    } finally { fs.rmSync(outer, { recursive: true, force: true }); }
-  }
+  // LEGS B, C, D stood here: the record-write-then-rollback case, the pre-existing-record
+  // survival case, and the bundle lane's adopt-and-decline case. All three reached their adopt
+  // code only through an OFFLINE `startup --target-issue(s)` call whose classification depended
+  // on a seeded `kaola-workflow/.roadmap/issue-N.md` as local evidence. ADR 0018 §5 retired that
+  // evidence path (the classifier's offline arm) as a named accepted loss: an OFFLINE claim for an
+  // issue with no active folder now always answers target_unverified, before classification ever
+  // reaches the adopt-and-rollback code these legs drove. Deleted with the mechanism that let them
+  // reach their subject; leg A (the `claim --project` door, unaffected by the retirement) survives
+  // below as the file's only remaining coverage of rollback scoping.
 
   console.log('#932[' + ed.label + '] claim rollback scoping: done');
 }

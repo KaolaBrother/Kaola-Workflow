@@ -27,9 +27,11 @@
 //
 // THE DEFECT. `isSafeName` is PATH safety and nothing more — no separator, no NUL, not `.` or `..` —
 // so `.roadmap` and `archive` both pass it, and `isReservedWorkflowDirName` has exactly one call
-// site in every edition, inside `archiveProjectDir`, with no claim-path caller at all. The name
-// reaches the claim from two doors: the `--project` flag, and `workflow_project:` in a roadmap
-// source, which `projectNameForIssue` reads back out verbatim. Neither door was filtered.
+// site in every edition, inside `archiveProjectDir`, with no claim-path caller at all. At the time
+// this was measured, the name reached the claim from two doors: the `--project` flag, and
+// `workflow_project:` in a roadmap source, which `projectNameForIssue` read back out verbatim.
+// Neither door was filtered. ADR 0018 §5 has since retired the second door — `projectNameForIssue`
+// always returns the `issue-<N>` fallback now — so only the `--project` flag survives below.
 //
 // THE OWNER RULED IT RESOLVES rather than refuses: the claim SUCCEEDS in a legitimate folder and the
 // envelope reports the swap. So exit 0 and an acquiring envelope are REQUIRED here — an answer that
@@ -52,8 +54,9 @@
 // this file checks.
 //
 // FOREIGN vs the run's own: only content that predates the claim AND does not belong to this run is
-// pinned byte-for-byte. On the roadmap-data legs the run's own source lives inside `.roadmap` and is
-// pinned as still-PRESENT only, so a fix that records the resolved name back into it stays legal.
+// pinned byte-for-byte. The run's own placeholder roadmap source lives inside `.roadmap` and is
+// pinned as still-PRESENT only (see `seedRoadmapSource` below), so a claim that leaves unrelated
+// `.roadmap` content alone stays legal.
 //
 // `Archive` runs only where the filesystem actually aliases it to `archive` (APFS and NTFS by
 // default), probed rather than assumed. It is here rather than left to the walkthrough because the
@@ -128,9 +131,10 @@ function newRepo(ed, tag) {
 }
 
 /**
- * The roadmap source the claim resolves its project name from. `workflowProject` is the whole of
- * the roadmap-data door: written into the file rather than passed on argv, which is what makes that
- * door reachable with no operator flag anywhere.
+ * An unrelated roadmap source placeholder, seeded so every leg can pin that the claim leaves it
+ * alone. `workflowProject` (always null now — see the LEGS comment) is kept as a parameter rather
+ * than dropped, since ADR 0018 §5 retired what it used to feed (`projectNameForIssue`'s roadmap
+ * read), not this fixture's shape.
  */
 function seedRoadmapSource(root, issue, workflowProject) {
   const dir = path.join(root, 'kaola-workflow', '.roadmap');
@@ -289,18 +293,19 @@ function assertResolvedAround(tag, root, leg, r, before) {
 }
 
 // ---------------------------------------------------------------------------
-// The legs. TWO DOORS x TWO RESERVED SHAPES, plus the aliasing arm.
+// The legs. ONE DOOR x TWO RESERVED SHAPES, plus the aliasing arm.
 //
-// The doors are not variants of one another. On the flag legs an operator types the name. On the
-// roadmap-data legs NOBODY types anything: the name travels in `workflow_project:` and
-// `projectNameForIssue` reads it back out verbatim. A guard on the roadmap-AUTHORING side answers
-// the second and not the first.
+// ADR 0018 §5 retired the second door this file originally pinned: the roadmap-data door, where
+// NOBODY typed anything and the name travelled in `workflow_project:` for `projectNameForIssue` to
+// read back out verbatim. `projectNameForIssue` now always returns the `issue-<N>` fallback, so
+// that door no longer reaches the claim at all — an OFFLINE `startup --target-issue` with no active
+// folder answers `target_unverified` before name resolution is ever reached (the classifier's own
+// named accepted loss). The two roadmap-data legs (B, D) were deleted with that mechanism; the flag
+// door below is unaffected — `--project` still resolves the same way it always did.
 // ---------------------------------------------------------------------------
 const LEGS = Object.freeze([
   { key: 'A', door: 'flag', reserved: '.roadmap', given: '.roadmap', issue: 9450, foreign: ROADMAP_FOREIGN },
-  { key: 'B', door: 'roadmap-data', reserved: '.roadmap', given: '.roadmap', issue: 9451, foreign: ROADMAP_FOREIGN },
   { key: 'C', door: 'flag', reserved: 'archive', given: 'archive', issue: 9452, foreign: ARCHIVE_FOREIGN },
-  { key: 'D', door: 'roadmap-data', reserved: 'archive', given: 'archive', issue: 9453, foreign: ARCHIVE_FOREIGN },
   { key: 'E', door: 'flag', reserved: 'archive', given: 'Archive', issue: 9454, foreign: ARCHIVE_FOREIGN,
     skip: !CASE_INSENSITIVE_FS },
 ]);
@@ -318,15 +323,14 @@ for (const ed of EDITIONS) {
     const { root, outer } = newRepo(ed, leg.key);
     try {
       seedReserved(root, leg.reserved, leg.foreign);
-      // The run's OWN roadmap source. On the roadmap-data legs this single line IS the entry point;
-      // on the flag legs it carries the em-dash placeholder and the name comes from argv.
-      seedRoadmapSource(root, leg.issue, leg.door === 'roadmap-data' ? leg.given : null);
+      // The run's own roadmap source: an em-dash placeholder unrelated to name resolution (that
+      // door is retired — see above). Its SURVIVAL is still pinned below, as a regression check
+      // against the claim deleting unrelated `.roadmap` content it has no business touching.
+      seedRoadmapSource(root, leg.issue, null);
       G.commitAll(root, 'seed the reserved directory');
 
       const before = listTree(path.join(root, 'kaola-workflow', leg.reserved));
-      const argv = leg.door === 'roadmap-data'
-        ? ['startup', '--target-issue', String(leg.issue)]
-        : ['claim', '--project', leg.given, '--issue', String(leg.issue)];
+      const argv = ['claim', '--project', leg.given, '--issue', String(leg.issue)];
       const r = runClaim(ed, root, argv);
 
       assertResolvedAround(tag, root, leg, r, before);

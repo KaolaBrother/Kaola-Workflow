@@ -13,8 +13,8 @@ claim ──► write the mission list ──► run it ──► finalize ─�
 (script)   (agent, one file)          (agent)    (script tx)  (script tx)
 ```
 
-- **`/workflow-init`** — bootstraps a repository: `CLAUDE.md` guidance, roadmap tracking, docs
-  structure, issue conventions. Run once per project.
+- **`/workflow-init`** — bootstraps a repository: `CLAUDE.md` guidance, docs structure, issue
+  conventions. Run once per project.
 - **`/workflow-next`** — the whole workflow. Selects the target, claims it, writes
   `kaola-workflow/{project}/mission-list.md`, and runs it.
 - **`/kaola-workflow-finalize`** — validates, docks documentation, writes the summary, settles
@@ -219,7 +219,7 @@ still open, which is only possible because nothing has been pushed or closed yet
 ```text
 Final commit on feature branch
     ↓
-preflight        pure read; names any foreign dirt, auto-stashes the claim-time .roadmap source
+preflight        pure read; names any foreign dirt
     ↓
 push_upstream    push the feature branch to origin
     ↓
@@ -229,7 +229,7 @@ merge            fetch, rebase onto origin/<default>, run the validation chains 
 finalize         archive the project folder — CONFIRMED, not assumed. An archive that was required
                  and did not happen stops here with sink_incomplete, before anything is published
     ↓
-stash_restore    restore the auto-stashed .roadmap source
+stash_restore    no-op today — kept for receipts an older sink left mid-run with a stash to pop
     ↓
 archive_commit   stage and commit the archive at its actual destination
     ↓
@@ -280,13 +280,15 @@ via `buildClosureReceipt()` and emits `closure_receipt` plus `closure_invariants
 `--execute` repairs safe local drift and never deletes folders or worktrees. See `api.md` § Closure
 Contract.
 
-## Roadmap
+## Backlog
 
-`kaola-workflow/ROADMAP.md` is a **mirror**, generated from `kaola-workflow/.roadmap/issue-*.md`
-alone. `generate` makes no remote call; `validate-remote` is the only subcommand that touches the
-forge, detecting issues closed remotely but still open locally. Closure removes only the closed
-issue's source file and regenerates the mirror once. An optional `.roadmap/_rules.md` is appended
-under `### Project rules`.
+**The forge is the backlog — there is no local mirror of it** (`decisions/0018-the-forge-is-the-backlog.md`).
+An issue's title, labels, and comments are what the work is; comments override the body where they
+disagree. `claim.js list-open` returns the whole open issue list ordered by its bare `P0`–`P3`
+priority-label tier, then by number — ordering, never selecting; the orchestrator still picks. Before
+claiming, the pick step reads each shortlisted candidate's own body and comments (never the full
+list). The one surviving local file is the optional `kaola-workflow/.roadmap/_rules.md`, for standing
+project-local rules, read directly by the pick step.
 
 ## Editions and runtimes
 

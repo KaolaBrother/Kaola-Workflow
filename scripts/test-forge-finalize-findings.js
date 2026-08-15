@@ -286,6 +286,27 @@ function buildFixture(ed, opts) {
     fs.writeFileSync(path.join(wtPath, IGNORED_ARCHIVE_PATH, 'issue-1.md'), '# 1\n');
     fs.writeFileSync(path.join(wtPath, ADDABLE_ARCHIVE_PATH), '# Roadmap\n');
   }
+  // ADR 0018 §5: `existingPaths` in cmdFinalize's linked-run archive-stage block is
+  // `['kaola-workflow/.roadmap', 'kaola-workflow/ROADMAP.md']` filtered by fs.existsSync — plus,
+  // in principle, `result.dest`, but `dest` lives under MAIN's project root and a linked worktree's
+  // `root` can never be its ancestor, so `path.relative(root, dest)` always starts with `..` and is
+  // excluded (claim.js:4825-4837, #832's own comment). Retiring `reconcileRoadmapForClosure` (the
+  // production code that used to leave these two paths behind on a HEALTHY linked run) means
+  // `existingPaths` is now permanently empty for any run that does not carry them for some OTHER
+  // reason — so `archive_stage_failed` (the finding raised by the `git add` over `existingPaths`,
+  // claim.js:4839-4870) cannot fire either, on ANY linked fixture that does not plant them itself.
+  // `archiveStageCandidates` is that other reason, for the fault-injection leg specifically: it
+  // plants the same two paths Part C already does (same constants, same untracked shape so `git
+  // add` has real work), WITHOUT the .gitignore rule, so a healthy run WOULD stage them cleanly —
+  // it is `lockIndex` (held by the caller) that makes staging fail, not the fixture. This is
+  // deliberately NOT used by the healthy-control leg above: planting these paths there would
+  // recreate the exact accident retirement exposed (a fixture manufacturing "something to stage"
+  // that no real linked run produces any more) — see the healthy-control comment.
+  if (o.archiveStageCandidates) {
+    fs.mkdirSync(path.join(wtPath, IGNORED_ARCHIVE_PATH), { recursive: true });
+    fs.writeFileSync(path.join(wtPath, IGNORED_ARCHIVE_PATH, 'issue-1.md'), '# 1\n');
+    fs.writeFileSync(path.join(wtPath, ADDABLE_ARCHIVE_PATH), '# Roadmap\n');
+  }
 
   // Part D: the dirt the run leaves in the worktree at finalize time. Written LAST so the
   // validation hash `seed()` recorded is the one the transaction re-computes — the run under test
@@ -368,15 +389,40 @@ const unstagedEmitters = new Map();
 
 for (const ed of EDITIONS) {
   // ---- healthy control: the finding is CAUSED by the fault, not carried by the fixture -------
+  // ADR 0018 §5: this used to assert archive_stage==='staged' UNCONDITIONALLY — true for every
+  // edition when `reconcileRoadmapForClosure` was still live, because a HEALTHY linked run always
+  // left `kaola-workflow/.roadmap` and/or `ROADMAP.md` behind for the archive step to pick up. That
+  // production mechanism is retired, and the four editions diverge in what survives it, which is
+  // itself worth pinning rather than glossing over:
+  //   - root/codex (ed.unstageType): `archive_stage='staged'` is set ONLY inside `if
+  //     (existingPaths.length > 0)` (claim.js:4839-4843) — a SEPARATE step from the unconditional
+  //     `git rm --cached` that un-stages the live folder. With existingPaths now permanently empty
+  //     on a healthy linked run, that inner block never runs, and archive_stage stays 'skipped'
+  //     (its documented default, api.md:380).
+  //   - gitlab/gitea: `archive_stage='staged'` is set UNCONDITIONALLY once the combined `git rm
+  //     --cached <live folder> [+ git add existingArchivePaths]` try succeeds (kaola-gitlab-
+  //     workflow-claim.js:4550-4557) — existingArchivePaths being empty just means the `git add`
+  //     is skipped, not that 'staged' is withheld. Their semantics never depended on the roadmap
+  //     candidates existing, so retirement changes nothing for them: a healthy run still stages
+  //     (unstages the live folder from the index) and still reads 'staged'.
+  // Asserting a blanket 'staged' was a fixture accident for root/codex (team-lead ruling,
+  // m984-fixture-rebuild) but an ACCURATE, unaffected observation for gitlab/gitea — collapsing
+  // both into one assertion would either miss the retirement (root/codex) or invent a regression
+  // that was never there (gitlab/gitea), so the two are asserted on ed.unstageType, the same axis
+  // that already separates their staging mechanisms throughout this file.
   let fx = buildFixture(ed);
   try {
     const ok = runFinalize(ed, fx, false);
     assert(ok.status === 0,
       'behavioural[' + ed.label + '] healthy finalize must exit 0, got ' + ok.status
         + '\nstdout: ' + ok.stdout + '\nstderr: ' + ok.stderr);
-    assert(ok.tx && ok.tx.archive_stage === 'staged',
-      'behavioural[' + ed.label + '] healthy finalize must record archive_stage=staged, got: '
-        + JSON.stringify(ok.tx));
+    const expectedStage = ed.unstageType ? 'skipped' : 'staged';
+    assert(ok.tx && ok.tx.archive_stage === expectedStage,
+      'behavioural[' + ed.label + '] a healthy LINKED finalize must record archive_stage='
+        + expectedStage + ' (' + (ed.unstageType
+          ? 'nothing left in the worktree to stage — no local roadmap source survives retirement'
+          : 'the unconditional live-folder unstage still succeeds regardless of roadmap-candidate '
+            + 'existence') + '), got: ' + JSON.stringify(ok.tx));
     assert(!ok.findings.includes('archive_stage_failed'),
       'behavioural[' + ed.label + '] healthy finalize must raise NO archive_stage_failed — a '
         + 'fixture that always fails would green the fault leg for the wrong reason; findings: '
@@ -387,7 +433,12 @@ for (const ed of EDITIONS) {
   } finally { destroyFixture(fx); }
 
   // ---- the fault: the archive staging genuinely cannot write the index ------------------------
-  fx = buildFixture(ed);
+  // ADR 0018 §5: `archiveStageCandidates` plants the same two fixed paths Part C already relies on
+  // (buildFixture, above) so `existingPaths.length > 0` is genuinely true and the `git add` this
+  // leg's assertions are about is genuinely attempted — retirement left this the ONLY way to reach
+  // it on a linked run (see buildFixture's comment). A healthy run over this same fixture would
+  // stage them cleanly; `lockIndex` below is what makes staging fail.
+  fx = buildFixture(ed, { archiveStageCandidates: true });
   try {
     const bad = runFinalize(ed, fx, true);
     assert(bad.status === 0,

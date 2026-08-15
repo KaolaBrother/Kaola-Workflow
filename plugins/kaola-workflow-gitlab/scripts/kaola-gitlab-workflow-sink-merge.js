@@ -1061,16 +1061,11 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebase
   // Emit closure receipt
   const archiveDest = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
   const archiveField = fs.existsSync(archiveDest) ? 'closed' : 'failed';
-  const roadmapSourceFile = path.join(mainRoot, 'kaola-workflow', '.roadmap', 'issue-' + args.issue + '.md');
-  // #336: keep-open inverts the existence test — the source MUST survive ('kept'), else 'failed'.
-  const roadmapSourceField = keepIssueOpen
-    ? (fs.existsSync(roadmapSourceFile) ? 'kept' : 'failed')
-    : (!fs.existsSync(roadmapSourceFile) ? 'absent' : 'failed');
+  // ADR 0018 §5: roadmap_source_removed / roadmap_regenerated are retired — buildClosureReceipt no
+  // longer has a schema entry for either, so there is nothing left to compute here.
 
   const receipt = buildClosureReceipt(args.project, args.issue, {
     archive: archiveField,
-    roadmap_source_removed: roadmapSourceField,
-    roadmap_regenerated: 'skipped',
     remote_issue_closed: remoteIssueClosed,
     claim_label_removed: claimLabelRemoved,
     worktree_removed: worktreeRemoved,
@@ -1545,7 +1540,10 @@ function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers,
       // #893: archived_paths ships present-and-EMPTY from the start, as removed_duplicates does — a
       // consumer that must tell "committed nothing under the archive" from "this sink does not
       // report" cannot rely on a field that is sometimes absent.
-      stash_ref: null, removed_duplicates: [], archived_paths: [],
+      // ADR 0018 §5: stash_ref is retired with the bucket-1 auto-stash — a fresh receipt no longer
+      // seeds it. stash_restore below stays tolerant of an OLDER on-disk receipt that still carries
+      // one (a stash left by a pre-retirement sink run that has not yet been restored).
+      removed_duplicates: [], archived_paths: [],
       steps
     }, extra || {});
   };
@@ -1795,7 +1793,7 @@ function repoWideIgnoredNames(root, rels) {
   } catch (_) { return new Set(); }
 }
 
-function sinkPreflight(mainRoot, project, branch, issueNumbers) {
+function sinkPreflight(mainRoot, project, branch) {
   // #562: worktree-clean data-loss guard — the --sink merge step force-removes the linked worktree with
   // NO clean precondition, so a dirty worktree's uncommitted work would be destroyed. Mirror the legacy
   // path's assertWorktreeClean. It throws on a dirty OR unprobeable worktree (fail-closed); convert to
@@ -1821,8 +1819,9 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
       }
     }
   } catch (_) {}
-  const issueSet = new Set((issueNumbers || []).map(n => String(n)));
-  const roadmapSources = [], projDuplicates = [], foreignDirt = [];
+  // ADR 0018 §5 retired the bucket-1 auto-stash of a claim-time roadmap source: no production code
+  // writes into kaola-workflow/.roadmap/ any more, so there is nothing left to catch here.
+  const projDuplicates = [], foreignDirt = [];
   for (const line of lines) {
     // #907: the STATUS COLUMN is read here; the PATH comes from the kernel's decoder. This used to be
     // a SECOND, divergent porcelain parser that did not even unwrap git's C-quoting, so a quoted path
@@ -1834,8 +1833,6 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
     const decoded = adaptiveSchema.parsePorcelainPaths(line);
     if (decoded.length === 0) continue;
     const filePath = decoded[0];
-    const roadmapMatch = filePath.match(/^kaola-workflow\/\.roadmap\/issue-(\d+)\.md$/);
-    if (roadmapMatch && issueSet.has(roadmapMatch[1])) { roadmapSources.push(filePath); continue; }
     const projStateFiles = [
       'kaola-workflow/' + project + '/workflow-plan.md', 'kaola-workflow/' + project + '/workflow-state.md',
       'kaola-workflow/' + project + '/workflow-tasks.json', 'kaola-workflow/' + project + '/.cache/dispatch-log.jsonl'
@@ -1896,22 +1893,11 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
   if (foreignDirt.length > 0) {
     return { ok: false, reason: 'sink_blocked', foreign_dirt: foreignDirt, detail: 'main checkout carries changes not owned by this sink; resolve before re-running. This sink never touches another project\'s files.' };
   }
-  let stashRef = null;
-  if (roadmapSources.length > 0) {
-    try {
-      execFileSync('git', ['-C', mainRoot, 'stash', 'push', '-m', 'kw-sink-' + project, '--', ...roadmapSources], { encoding: 'utf8' });
-      try {
-        const stashList = execFileSync('git', ['-C', mainRoot, 'stash', 'list', '--format=%gd %gs'], { encoding: 'utf8' });
-        const stashLine = stashList.split('\n').find(l => l.includes('kw-sink-' + project));
-        if (stashLine) stashRef = stashLine.split(' ')[0];
-      } catch (_) { stashRef = 'stash@{0}'; }
-    } catch (_) {}
-  }
   const removedDuplicates = [];
   for (const dup of projDuplicates) {
     try { fs.unlinkSync(path.join(mainRoot, dup)); removedDuplicates.push(dup); } catch (_) {}
   }
-  return { ok: true, stashRef, removedDuplicates };
+  return { ok: true, removedDuplicates };
 }
 
 // #694/#705: the ONE keep-open intent derivation for the --sink transaction — reused by the finalize
@@ -2012,13 +1998,12 @@ function runSinkTransaction(args, mainRoot, defBranch) {
     if (step === 'preflight') {
       const memberSet = deriveMemberSet(mainRoot, args.project, args.issueNumbers);
       args.issueNumbers = memberSet.members; args.member_source = memberSet.source;
-      const preResult = sinkPreflight(mainRoot, args.project, args.branch, args.issueNumbers);
+      const preResult = sinkPreflight(mainRoot, args.project, args.branch);
       if (!preResult.ok) {
         // sink_blocked and worktree_dirty KEEP — proceeding destroys the user's own uncommitted
         // work, so no proceed-path exists.
         sinkEmit({ result: 'refuse', reason: preResult.reason || 'sink_blocked', ...(preResult.foreign_dirt ? { foreign_dirt: preResult.foreign_dirt } : {}), detail: preResult.detail }, 1); return;
       }
-      if (preResult.stashRef) receipt.stash_ref = preResult.stashRef;
       if (preResult.removedDuplicates) receipt.removed_duplicates = preResult.removedDuplicates;
       stepDone('preflight'); continue;
     }
@@ -2192,15 +2177,11 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       let archiveFailure = null;
       try {
         const { archiveProjectDir } = require('./kaola-gitlab-workflow-claim');
-        // #705: sole archiver — if keep-open is in force, retain the kept-open member roadmap source(s)
-        // (an open issue stays tracked) via per-member excludeIssues; a closing run keeps none.
-        const keepOpenAtFinalize = deriveSinkKeepOpen(mainRoot, args, receipt);
-        const finalizeMembers = (Array.isArray(args.issueNumbers) && args.issueNumbers.length)
-          ? args.issueNumbers
-          : (args.issue != null ? [args.issue] : []);
+        // ADR 0018 §5: archiveProjectDir no longer touches kaola-workflow/.roadmap/ at all, so the
+        // keep-open roadmap-source retention that used to be scoped here via excludeIssues (#705)
+        // is retired with it — there is no local roadmap source left for a kept-open issue to lose.
         const archiveResult = archiveProjectDir(mainRoot, args.project, 'closed', undefined, {
           keepWorktree: false,
-          excludeIssues: keepOpenAtFinalize ? finalizeMembers : [],
         });
         // An incomplete archive fails the sink loudly, whatever made it incomplete. The former
         // discriminator was `missing.length > 0` OR a non-allowlisted snapshot_error, and BOTH halves
@@ -2426,7 +2407,23 @@ function runSinkTransaction(args, mainRoot, defBranch) {
         forcePaths = requiredPaths.filter(p => ignoredHere.has(p));
       }
       const commitPaths = (archiveIgnored ? [] : [ps]).concat(stagedRoadmap, liveTracked ? [livePathspec] : []);
-      const excludes = [exRcpt, exFb, exLiveRcpt, exLiveFb];
+      // The live-path excludes are only meaningful when livePathspec itself is in commitPaths —
+      // otherwise nothing includes that subtree and the exclude has no include to narrow. Measured
+      // (git 2.54.0), narrower than "any unreached subtree": `git add` silently stages NOTHING at
+      // all, exit 0, when an `:(exclude,glob)`'s directory component is a literal STRING PREFIX of
+      // another pathspec's (the include's) leaf directory component — e.g. exclude
+      // `kaola-workflow/issue-9500/**/x` beside an include whose leaf dir is
+      // `issue-9500.archived-<ts>` (a #700 collision-suffixed dest, built from the same
+      // `args.project`, so this triggers whenever the archive gets suffixed). A second real include
+      // pathspec masks it either way — measured. Boundary verified with OUR OWN
+      // `**/sink-receipt.json` / `**/sink-fallback.json` tail only: at that tail, an unrelated
+      // exclude subtree sharing no such prefix does not trigger it — but a wider tail (`**` alone, or
+      // `**/x`) trips it regardless of the prefix relationship, so this scoping does not generalise
+      // to a different glob tail. This surfaced once `stagedRoadmap` stopped reliably supplying that
+      // second include (ADR 0018 §5 retired the roadmap-mirror regeneration that used to do so) — the
+      // bug could always have fired once the archive collision-suffixed (#700); the retirement
+      // removed the mask, it did not create the defect.
+      const excludes = [exRcpt, exFb].concat(liveTracked ? [exLiveRcpt, exLiveFb] : []);
       // The staging runs TWICE (once before the archived_paths report, once after the durable copy is
       // appended to the summary), so the ordinary sweep and the #901 forced sweep are one step. The
       // errors are RETURNED, never discarded: `git add <dir>` exits 1 whenever an ignored directory

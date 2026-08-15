@@ -1,7 +1,5 @@
 #!/usr/bin/env node
 'use strict';
-const fs = require('fs');
-const path = require('path');
 const { execFileSync } = require('child_process');
 const { readActiveFolders } = require('./kaola-workflow-active-folders');
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema'); // LANE_STALENESS_MS (byte-identical anchor)
@@ -13,12 +11,6 @@ const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 // ---------------------------------------------------------------------------
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
-
-function field(content, name) {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = content.match(new RegExp('^' + escaped + ':[ \\t]*(.+)$', 'm'));
-  return match ? match[1].trim() : '';
-}
 
 function ghExec(args) {
   if (OFFLINE) return '';
@@ -288,29 +280,15 @@ function cmdClassify(argv) {
     return;
   }
 
-  // OFFLINE path — read from local roadmap file
+  // OFFLINE path — ADR 0018 §5 named accepted loss: no local evidence source survives the
+  // roadmap-source retirement. A target not already caught by the active-folder check above answers
+  // target_unverified honestly, rather than reading a local roadmap file that no longer exists as a
+  // producer. This also drops the `blocked by #N` -> depends-on:#N offline inference (same loss).
   if (OFFLINE) {
-    const roadmapFile = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + args.issue + '.md');
-    if (!fs.existsSync(roadmapFile) && !activeFolders.some(f => f.issue_number === args.issue)) {
-      process.stdout.write(JSON.stringify({
-        verdict: 'target_unverified',
-        reasoning: 'OFFLINE and no local evidence for issue #' + args.issue + ' (no kaola-workflow/.roadmap/issue-' + args.issue + '.md and no active folder in this repository)'
-      }) + '\n');
-      return;
-    }
-    let labels = [];
-    let body = '';
-    if (fs.existsSync(roadmapFile)) {
-      const content = fs.readFileSync(roadmapFile, 'utf8');
-      const nextStep = field(content, 'next_step');
-      if (/blocked by #\d+/i.test(nextStep)) {
-        const m = nextStep.match(/#(\d+)/);
-        if (m) labels = [{ name: 'depends-on:#' + m[1] }];
-      }
-      body = content;
-    }
-    const result = classify({ number: args.issue, labels, body });
-    process.stdout.write(JSON.stringify(result) + '\n');
+    process.stdout.write(JSON.stringify({
+      verdict: 'target_unverified',
+      reasoning: 'OFFLINE and no local evidence for issue #' + args.issue + ' (not in an active folder in this repository)'
+    }) + '\n');
     return;
   }
 

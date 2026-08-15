@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
 const forge = require('./kaola-gitea-forge');
 const active = require('./kaola-gitea-workflow-active-folders');
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema'); // LANE_STALENESS_MS (byte-identical anchor)
@@ -24,12 +22,6 @@ function parseArgs(argv) {
   return args;
 }
 
-function field(content, name) {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = content.match(new RegExp('^' + escaped + ':[ \\t]*(.+)$', 'm'));
-  return match ? match[1].trim() : '';
-}
-
 const DEPENDS_ON_REGEX = /^depends-on:#(\d+)$/;
 function parseDependsOn(labels) {
   for (const label of labels || []) {
@@ -49,22 +41,6 @@ function checkDependsOn(depIid) {
   } catch (_) {}
   if (state !== 'closed') return { verdict: 'blocked', reasoning: 'depends-on:#' + depIid + ' is still open' };
   return null;
-}
-
-function localRoadmapIssue(issueIid, repoRoot) {
-  const roadmapFile = path.join(repoRoot, 'kaola-workflow', '.roadmap', 'issue-' + issueIid + '.md');
-  const labels = [];
-  let body = '';
-  if (fs.existsSync(roadmapFile)) {
-    const content = fs.readFileSync(roadmapFile, 'utf8');
-    const nextStep = field(content, 'next_step');
-    if (/blocked by #\d+/i.test(nextStep)) {
-      const match = nextStep.match(/#(\d+)/);
-      if (match) labels.push({ name: 'depends-on:#' + match[1] });
-    }
-    body = content;
-  }
-  return { issue_iid: issueIid, labels, body };
 }
 
 function issueHasWorkflowInProgressLabel(labels) {
@@ -252,15 +228,15 @@ function classifyIssue(issueIid, root) {
     return { verdict: 'owned', reasoning: 'active local folder already exists' };
   }
 
+  // ADR 0018 §5 named accepted loss: no local evidence source survives the roadmap-source
+  // retirement. A target not already caught by the active-folder check above answers
+  // target_unverified honestly, rather than reading a local roadmap file that no longer exists as a
+  // producer. This also drops the `blocked by #N` -> depends-on:#N offline inference (same loss).
   if (OFFLINE) {
-    const roadmapFile = path.join(repoRoot, 'kaola-workflow', '.roadmap', 'issue-' + issueIid + '.md');
-    if (!fs.existsSync(roadmapFile) && !activeFolders.some(f => f.issue_iid === issueIid)) {
-      return {
-        verdict: 'target_unverified',
-        reasoning: 'OFFLINE and no local evidence for issue #' + issueIid + ' (no kaola-workflow/.roadmap/issue-' + issueIid + '.md and no active folder in this repository)'
-      };
-    }
-    return classify(localRoadmapIssue(issueIid, repoRoot));
+    return {
+      verdict: 'target_unverified',
+      reasoning: 'OFFLINE and no local evidence for issue #' + issueIid + ' (not in an active folder in this repository)'
+    };
   }
 
   // #507/#519: bounded retry; transient/genuine by stderr-class. A genuine-negative clean_nonzero
@@ -333,17 +309,12 @@ function cmdClassify() {
     return;
   }
 
+  // ADR 0018 §5 named accepted loss: same honest OFFLINE answer as classifyIssue above.
   if (OFFLINE) {
-    const roadmapFile = path.join(repoRoot, 'kaola-workflow', '.roadmap', 'issue-' + args.issue + '.md');
-    if (!fs.existsSync(roadmapFile) && !activeFolders.some(f => f.issue_iid === args.issue)) {
-      process.stdout.write(JSON.stringify({
-        verdict: 'target_unverified',
-        reasoning: 'OFFLINE and no local evidence for issue #' + args.issue + ' (no kaola-workflow/.roadmap/issue-' + args.issue + '.md and no active folder in this repository)'
-      }) + '\n');
-      return;
-    }
-    const result = classify(localRoadmapIssue(args.issue, repoRoot));
-    process.stdout.write(JSON.stringify(result) + '\n');
+    process.stdout.write(JSON.stringify({
+      verdict: 'target_unverified',
+      reasoning: 'OFFLINE and no local evidence for issue #' + args.issue + ' (not in an active folder in this repository)'
+    }) + '\n');
     return;
   }
 

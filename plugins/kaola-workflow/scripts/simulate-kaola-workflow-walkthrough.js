@@ -129,6 +129,32 @@ function runClaimRaw(args, cwd) {
   return { parsed: JSON.parse(result.stdout), exitStatus: result.status, stderr: result.stderr };
 }
 
+// ADR 0018 §5 retired the offline claim-evidence path — a not-yet-active issue no longer
+// classifies as anything but target_unverified offline, so acquiring a fresh target now drives
+// the real classifier online against a gh mock instead of planting a local roadmap source.
+function runClaimOnlineAcquire(args, cwd) {
+  const binDir = path.join(cwd, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  const ghMockScript = [
+    "'use strict';",
+    "const a = process.argv.slice(2).join(' ');",
+    "if (a.includes('repo view')) { process.stdout.write(JSON.stringify({owner:{login:'test'},name:'repo'}) + '\\n'); process.exit(0); }",
+    "const m = a.match(/issue view (\\d+)/);",
+    "if (m) { process.stdout.write(JSON.stringify({number:parseInt(m[1]),state:'open',title:'issue '+m[1],body:'',labels:[]}) + '\\n'); process.exit(0); }",
+    "process.stdout.write('\\n'); process.exit(0);"
+  ].join('\n');
+  fs.writeFileSync(path.join(binDir, 'g' + 'h.js'), ghMockScript);
+  const result = spawnSync(process.execPath, [claimScript, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'g' + 'h.js') })
+  });
+  if (result.error) throw result.error;
+  assert(result.status === 0,
+    'online claim command failed: exit ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+  return JSON.parse(result.stdout);
+}
+
 function assertNoLegacyCoordDirs(root) {
   for (const name of ['lo' + 'cks', 'sess' + 'ions', 'tick' + 'ers']) {
     assert(!fs.existsSync(path.join(root, 'kaola-workflow', '.' + name)), 'legacy coordination dir must not exist: .' + name);
@@ -316,24 +342,14 @@ function testCodexFinalizeNeutralizesArchivedResume333() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-attest-'));
   try {
     initGitRepo(root);
-    // Seed local roadmap evidence so the offline classifier can verify the target.
-    const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
-    fs.mkdirSync(roadmapDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(roadmapDir, 'issue-284.md'),
-      'issue: #284\ntitle: —\nstatus: open\nworkflow_project: issue-284\nnext_step: ready\n'
-    );
     // Claim (startup) to create the project state.
-    const acquired = runClaim(['startup', '--target-issue', '284', '--runtime', 'codex', '--sink', 'pr'], root);
+    const acquired = runClaimOnlineAcquire(['startup', '--target-issue', '284', '--runtime', 'codex', '--sink', 'pr'], root);
     assert(acquired.claim === 'acquired', 'AC3 setup: startup must acquire issue-284, got: ' + JSON.stringify(acquired));
     seedAdaptiveFinalizeFixture(root, 'issue-284');
 
     // DELETED with its mechanism: the dispatch-log seeding. It existed solely so the retired
     // checkDispatchAttestations probe would find a workflow-planner entry; no consumer reads the
     // log on this path any more, so seeding it would be fixture dressing for nobody.
-
-    // Plant roadmap entry (finalize reads it for roadmap cleanup).
-    plantRoadmap(root, 284, '');
 
     // Finalize — offline mode.
     const finalizeResult = runClaim(['finalize', '--project', 'issue-284'], root);
@@ -385,13 +401,7 @@ function testSelectionEvidenceDockingCodex() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-selection-evidence-codex-'));
   try {
     initGitRepo(root);
-    const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
-    fs.mkdirSync(roadmapDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(roadmapDir, 'issue-653203.md'),
-      'issue: #653203\ntitle: —\nstatus: open\nworkflow_project: issue-653203\nnext_step: ready\n'
-    );
-    const acquired = runClaim(['startup', '--target-issue', '653203', '--runtime', 'codex', '--sink', 'pr'], root);
+    const acquired = runClaimOnlineAcquire(['startup', '--target-issue', '653203', '--runtime', 'codex', '--sink', 'pr'], root);
     assert(acquired.claim === 'acquired', 'selection-evidence (codex): startup must acquire issue-653203, got: ' + JSON.stringify(acquired));
     seedAdaptiveFinalizeFixture(root, 'issue-653203');
 
@@ -399,8 +409,6 @@ function testSelectionEvidenceDockingCodex() {
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, 'selection-evidence.md'),
       'selection_mode: single-issue\n\n```json\n{"recommended_bundle":{"primary_issue":653203,"issues":[653203],"confidence":"low"}}\n```\n');
-
-    plantRoadmap(root, 653203, '');
 
     const finalizeResult = runClaim(['finalize', '--project', 'issue-653203'], root);
     assert(finalizeResult.status === 'closed',
@@ -416,16 +424,9 @@ function testSelectionEvidenceDockingCodex() {
       'selection-evidence (codex): selection-evidence.md must survive under the archived project .cache/, expected at ' + archivedEvidencePath);
 
     // (b) absent — a second project with no docked selection-evidence file.
-    const roadmapDir2 = path.join(root, 'kaola-workflow', '.roadmap');
-    fs.writeFileSync(
-      path.join(roadmapDir2, 'issue-653204.md'),
-      'issue: #653204\ntitle: —\nstatus: open\nworkflow_project: issue-653204\nnext_step: ready\n'
-    );
-    const acquired2 = runClaim(['startup', '--target-issue', '653204', '--runtime', 'codex', '--sink', 'pr'], root);
+    const acquired2 = runClaimOnlineAcquire(['startup', '--target-issue', '653204', '--runtime', 'codex', '--sink', 'pr'], root);
     assert(acquired2.claim === 'acquired', 'selection-evidence (codex): second startup must acquire issue-653204, got: ' + JSON.stringify(acquired2));
     seedAdaptiveFinalizeFixture(root, 'issue-653204');
-
-    plantRoadmap(root, 653204, '');
 
     const finalizeResult2 = runClaim(['finalize', '--project', 'issue-653204'], root);
     assert(finalizeResult2.status === 'closed',
@@ -461,7 +462,6 @@ function testKeepOpenArchiveStamp333() {
       '## Sink', 'branch: workflow/issue-333', 'issue_number: 333', 'sink: merge', ''
     ].join('\n'));
     seedAdaptiveFinalizeFixture(root, 'issue-333');
-    plantRoadmap(root, 333, '');
     const result = runClaim(['finalize', '--project', 'issue-333', '--keep-open'], root);
     assert(result.status === 'closed', '#333: keep-open finalize should report closed');
     assert(result.issue_disposition === 'kept-open',
@@ -1666,15 +1666,7 @@ function main() {
     assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-163')),
       'kaola-workflow/issue-163 must NOT be created when target is unverified');
 
-    // Seed local roadmap evidence so the offline classifier can verify the target.
-    const roadmapDir = path.join(tmp, 'kaola-workflow', '.roadmap');
-    fs.mkdirSync(roadmapDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(roadmapDir, 'issue-163.md'),
-      'issue: #163\ntitle: —\nstatus: open\nworkflow_project: issue-163\nnext_step: ready\n'
-    );
-
-    const acquired = runClaim(['startup', '--target-issue', '163', '--runtime', 'codex', '--sink', 'pr'], tmp);
+    const acquired = runClaimOnlineAcquire(['startup', '--target-issue', '163', '--runtime', 'codex', '--sink', 'pr'], tmp);
     assert(acquired.claim === 'acquired', 'Codex startup should acquire explicit issue');
     assert(acquired.project === 'issue-163', 'Codex startup should derive project from issue');
     const stateFile = path.join(tmp, 'kaola-workflow', 'issue-163', 'workflow-state.md');
@@ -1745,7 +1737,7 @@ function main() {
     testCodexFinalizeArchiveVerifiesBeforeDelete();  // #426
     testCodexFinalizeClosesIssueBundleMembers();      // #427
     testCodexBundleFinalizeAllOpenCloseIsPending();   // #508
-    testCodexFinalizeRoadmapResidueDetection();       // #428
+    // testCodexFinalizeRoadmapResidueDetection() DELETED (#428) — see comment at its former definition site.
 
     console.log('Kaola-Workflow walkthrough simulation passed');
   } finally {
@@ -1929,47 +1921,12 @@ function testCodexBundleFinalizeAllOpenCloseIsPending() {
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
-// ---------------------------------------------------------------------------
-// #428: reconcileRoadmapForClosure emits roadmap_removed_by_root on the receipt.
-// After a successful in-place finalize the receipt carries the dual-root map field
-// and the roadmap source file is removed (no residue on disk).
-// ---------------------------------------------------------------------------
-function testCodexFinalizeRoadmapResidueDetection() {
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-cx-428-residue-')));
-  try {
-    initGitRepo(tmp);
-    plantFolder(tmp, 'issue-428cx', 428, null);
-    seedAdaptiveFinalizeFixture(tmp, 'issue-428cx');
-    plantRoadmap(tmp, 428, '');
-
-    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-428cx'], {
-      cwd: tmp, encoding: 'utf8', timeout: 60000,
-      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
-    });
-
-    assert(result.status === 0,
-      'codex #428 residue: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-    const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
-    assert(lines.length > 0, 'codex #428 residue: expected JSON output');
-    const out = JSON.parse(lines[lines.length - 1]);
-    assert(out.status === 'closed', 'codex #428 residue: status must be closed, got ' + JSON.stringify(out.status));
-    const receipt = out.closure_receipt;
-    assert(receipt != null, 'codex #428 residue: closure_receipt must be present');
-    // The dual-root roadmap removal map must be present on the receipt.
-    assert(
-      receipt.roadmap_removed !== undefined || receipt.roadmap_removed_by_root !== undefined,
-      'codex #428 residue: closure_receipt must carry roadmap_removed or roadmap_removed_by_root field'
-    );
-    // The source must be removed (no residue on disk).
-    assert(
-      !fs.existsSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-428.md')),
-      'codex #428 residue: .roadmap/issue-428.md must be removed after finalize'
-    );
-    console.log('testCodexFinalizeRoadmapResidueDetection: PASSED');
-  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-}
-
-
+// DELETED: testCodexFinalizeRoadmapResidueDetection (#428). Its entire premise was the
+// dual-root roadmap receipt (roadmap_removed / roadmap_removed_by_root) and .roadmap/issue-N.md
+// source removal on finalize — ADR 0018 §5 retires both with the roadmap.js mirror itself; no
+// producer emits either field or removes a roadmap source anymore. Nothing else in the scenario
+// (a plain single-issue finalize to closed) survives it as a distinct case — that path is already
+// covered by testCodexFinalizeNeutralizesArchivedResume333 and the bundle finalize tests above.
 
 
 main();

@@ -12,7 +12,8 @@ moments.
   tier, install path), as a tier label plus a pointer per cell, never a restated mechanism.
 - [API](api.md) — script CLIs, envelopes, and external contracts.
 - [Conventions](conventions.md) — coding, testing, Git, and review rules.
-- [Workflow State Contract](workflow-state-contract.md) — durable state and the generated roadmap mirror.
+- [Workflow State Contract](workflow-state-contract.md) — durable state, and why the forge, not a
+  local file, is the backlog.
 - [Agent Source](agents-source.md) — vendored agent provenance and refresh procedure.
 
 ## Runtime editions
@@ -22,26 +23,30 @@ moments.
 
 ## Decisions
 
-[`decisions/`](decisions/) holds the full catalog. Two records describe what ships today, one is
-accepted but not yet built; the rest are history, and most of them describe the node/DAG executor
-that ADR 0017 retired.
+[`decisions/`](decisions/) holds the full catalog. Three records describe what ships today; the rest
+are history, and most of them describe the node/DAG executor that ADR 0017 retired.
 
 - **[0017 — The mission list: four fields where the DAG was](decisions/0017-the-mission-list.md)** — the
   design of record. A run is one file of `item` / `status` / `dispatched` / `result`, written at three
   moments, with no script required. Concurrency carries no machinery. The sink reports and the
   orchestrator owns the outcome; the refusal count in the run design is zero. Derived additively from
   an observed bare-session run, not by subtracting from the DAG.
-- **[0018 — The forge is the backlog](decisions/0018-the-forge-is-the-backlog.md)** — accepted, **not
-  yet built**. The backlog lives on the forge; `.roadmap/issue-N.md` and the `ROADMAP.md` mirror are
-  retired, priority becomes a bare `P0`–`P3` label, and the pick step reads shortlisted issues'
-  bodies and comments. Derived by measuring a live consumer and walking every field to a producer;
-  five of its own claims were reversed under adversarial review before it stabilized.
+- **[0018 — The forge is the backlog](decisions/0018-the-forge-is-the-backlog.md)** — the local backlog
+  layer is retired: `.roadmap/issue-N.md` sources and the `ROADMAP.md` mirror are gone, and an issue's
+  title, labels, and comments are what the work is — nothing local mirrors them. Priority is a bare
+  `P0`–`P3` forge label, ordered (never selected) by `list-open`; the pick step reads each shortlisted
+  issue's body and comments before claiming, with comments winning where they contradict the body; and
+  finalize now requires a run to comment what it corrected, not only file what it found. The one
+  surviving local file is the optional `kaola-workflow/.roadmap/_rules.md`. Migrating an existing
+  consumer repo off its old `.roadmap/` sources (ADR §8 step 6) is not yet built. Derived by measuring
+  a live consumer and walking every field to a producer; five of its own claims were reversed under
+  adversarial review before it stabilized.
 - **[0016 — The substrate: bookkeeping over gates](decisions/0016-the-substrate-bookkeeping-over-gates.md)** —
   completed by 0017. *Delete the verdict, keep the measurement.* Read it for why the finalize door and
   the sink measure and report rather than refuse.
 
 Everything numbered 0001–0015 and every `D-NNN-NN` record predates 0017. They remain accurate as
-history and as rationale for machinery that still ships around the run (claim, roadmap, sink, release,
+history and as rationale for machinery that still ships around the run (claim, sink, release,
 reviewer-profile generation, the runtime editions) — but where one describes plan grammar, role nodes,
 write sets, gates, epochs, or typed refusals, 0017 supersedes it.
 

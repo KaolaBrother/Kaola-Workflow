@@ -1,7 +1,13 @@
 # 0018 — The forge is the backlog
 
-- **Status:** Accepted — all four §7 rulings settled 2026-08-15; build sequence in §8. Migration is
-  step 6 and owns the risk.
+- **Status:** Accepted, and **§8 steps 1–5 shipped 2026-08-15** — the pick step reads shortlisted
+  issues' bodies and comments, priority is a bare `P0`–`P3` forge label with the sorter connected as
+  *ordering*, the injected `CLAUDE.md` guidance sits in a named region under a cross-surface pin,
+  finalize requires a run to comment what it corrected, and the whole roadmap layer — four
+  `roadmap.js` copies, the mirror, the per-issue sources, the receipt fields, the invariants, the
+  drift classes, the sink's stash bucket — is deleted. **Step 6, consumer migration, is not done and
+  owns the remaining risk.** Acceptance was a run, not a suite: with `roadmap.js` gone,
+  `claim.js status` and `list-open` both execute and answer correctly.
 - **Date:** 2026-08-15
 - **Supersedes (if accepted):** the 2026-08-12 ruling that `ROADMAP.md`'s *active work* means claimed
   runs only, and with it the `.roadmap/issue-N.md` per-issue source file. **Does not supersede** ADR
@@ -32,14 +38,18 @@ spaces) and 107,376 bytes of prose. Of the prose:
 
 - **9/81 are verbatim body copies** (similarity 0.995–1.000; next closest 0.841). #638's is 5,158
   characters against a 5,133-character body — the whole body, pipe-escaped, in one table cell.
-- **72/81 are not body copies.** Twenty were hand-traced. About three-quarters are digests of
-  material durably recorded **on the forge or in the repo** — but frequently *not* the issue's own
-  thread: #494's volumes live in open #509's thread, `D-505-01` in closed #501/#504/#510, and #334's
-  `D-392-01` literal is in **#146's** thread. Of the twenty, **3 carried a measurement whose only
-  non-roadmap home is a committed test or `CHANGELOG.md`** (#143's `0.1227` mm lives in
-  `crates/cadcore-verify/tests/probe_143_filleted_box.rs`), and **2 carried a family-attribution
-  link recorded nowhere else at all** (#535/#536's "issue-497 family"). The editorial vocabulary is
-  homeless too: **`REFRAMED` appears in no body or comment of any of the 81 open issues.**
+- **72/81 are not body copies** — they are digests of material recorded elsewhere, and *elsewhere* is
+  frequently **not the issue's own thread**: #494's volumes live in open #509's thread, `D-505-01` in
+  closed #501/#504/#510, and #334's `D-392-01` literal is in **#146's**. Measured over the whole set
+  rather than sampled: 652 checkable atoms from all 81, searched against **512 issues (81 open + 431
+  closed)** and the repo's committed files. **Result: 79 of 81 are fully forge-held, 0 are
+  repo-held-only, and exactly 2 are homeless** — #535's *"the remainder outside the issue-528
+  umbrella, same issue-497-rooted family"* and #536's *"Same issue-497 family."* No thread anywhere
+  attributes either to an "issue-497 family", though 22 other issues cross-reference #497 directly.
+  (An earlier 20-file hand sample put three more in a repo-held-only class; the full sweep dissolved
+  it — #143's `0.1227` mm, cited as living only in a test file, is stated in **#393's** thread. The
+  sample was not wrong about the two homeless lines, only about the class above them.) One editorial
+  token is genuinely homeless as well: **`REFRAMED` appears in no body or comment of any open issue.**
 - The tag's version part duplicates `milestone:*` (77/79) and its severity part duplicates
   `severity:*` (47/79). **`P1`–`P4` (47/81) match no label the consumer's forge defines.**
 - Counter-evidence found while checking, and it points the same way: **#535's local blob is already
@@ -215,12 +225,24 @@ worktree reconciliation exist for this file class alone. On the consumer, **371 
    `next.skeleton.md` (read the shortlist before claiming), and `finalize.skeleton.md` (tag what you
    file, comment what you corrected). §2 is a record of what happens when one rule sits on several
    surfaces with no declared relationship — so this one is pinned, e.g.
-   `<!-- PIN: forge-is-the-backlog -->`, and `test-route-reachability.js` derives its universe the way
-   it already does for `consent-in-conversation`: **every surface whose committed bytes carry the pin
-   owes the roster, a surface that never asks is never obligated.** That admits per-surface wording
-   (the consent pin already differs between next and finalize) while making silent disappearance from
-   one surface impossible. The three §2 statements drifted precisely because they were unpinned
-   incidental prose.
+   `<!-- PIN: forge-is-the-backlog -->`. That admits per-surface wording (the consent pin already
+   differs between next and finalize) while making silent disappearance from one surface impossible.
+   The three §2 statements drifted precisely because they were unpinned incidental prose.
+
+   **Correction, measured during the build.** This record first claimed `test-route-reachability.js`
+   *derives* a pin's universe from shipped bytes "the way it already does for
+   `consent-in-conversation`". **False, and the error is instructive:** the byte-scan
+   (`test-route-reachability.js:550`) is purpose-built for `codex-dispatch-model-routing` alone, and
+   the sentence this record generalised — *"the universe is derived, not listed"* — is scoped to that
+   one pin. `consent-in-conversation` is **listed**, in the hand-authored `REQUIRED_BLOCKS` array of
+   `templates/routing/required-blocks.js` (16 entries, one per surface topic). So a new pin **owes a
+   manifest entry per topic that carries it**, and that entry is a test artifact — the party placing
+   the markers must not also author the thing that judges their presence. Adding the markers without
+   it took the suite from 331/0 to **330 passing / 73 failing**, every failure an `orphan-surface`
+   report naming the unregistered marker. That red is the reverse-orphan sentinel doing its job, and
+   it is this record's own proof of the convention that **a guard is evidence only once
+   mutation-proven**: the pin mechanism was demonstrated armed by an unplanned mutation rather than
+   asserted from a green run.
 
    Keep the two mechanisms distinct in the build: **the pin** says a rule must appear on the surfaces
    that invoke it (tool-side, cross-surface, tested); **the region** says which lines the tool owns
@@ -299,9 +321,12 @@ ordering that opens it is wrong however tidy it looks.
    deletion below it**: retirement deletes `next_step`, which is physically where 47 of 81 tiers live
    today.
 3. **Give the mechanism text its region and its pin** (§5 item 9). Init gains the marked region;
-   the rule gains `<!-- PIN: forge-is-the-backlog -->` and `test-route-reachability.js` picks it up
-   from shipped bytes. Additive for new repos, and it is what converts init from *add-only* to
-   *reconcile* — so **step 6 is impossible before this one.**
+   the rule gains `<!-- PIN: forge-is-the-backlog -->`, **and each surface topic carrying it owes a
+   `REQUIRED_BLOCKS` entry in `templates/routing/required-blocks.js`** — the universe is listed, not
+   derived (§5 item 9's correction), and placing a marker without registering it reds the suite by
+   design. That entry is a test artifact and belongs to whoever did not place the markers. Additive
+   for new repos, and it is what converts init from *add-only* to *reconcile* — so **step 6 is
+   impossible before this one.**
 4. **Stop reading the sources, one capability at a time.** Each slice is independently green and
    takes its own tests and doc rows with it: the classifier's offline arm, `projectNameForIssue`'s
    roadmap door, closure-audit's roadmap classes with their finding types and registries, and the
@@ -347,10 +372,21 @@ the upgrade:
   them, and that SHA belongs in the migration report. What history does not make *findable* is §5's
   homeless content. Migration closes §1's sampling gap mechanically rather than by argument: diff
   every digest against `gh issue view N --comments` and the repo, then post the residue as a comment
-  **only on the issues where residue actually exists**. The sample sizes that set: ~15 of 20 were
-  already forge-held, 3 more had their atom in a committed test or `CHANGELOG.md`, and **2 of 20 were
-  homeless** — roughly eight issues repo-wide, not eighty-one. Consent (ruling 4) is then a
-  single-digit ask, and the measurement decides its size rather than an assumption.
+  **only on the issues where residue actually exists**. That set is now measured over all 81 rather
+  than extrapolated: **79 forge-held, 0 repo-held-only, exactly 2 homeless** (#535 and #536, both the
+  same "issue-497 family" attribution). So the preservation step is **two comments, not eighty-one**,
+  and ruling 4's consent ask is that small. Deletion manifest, for the record: 82 tracked files /
+  287,087 bytes, preserved by the pre-deletion HEAD.
+- **Two surfaces this record did not name, both found by measuring rather than reading.** The
+  consumer cites `ROADMAP.md` **11 more times across five live documents** (`concerns.md`,
+  `development-state.md`, `requirements.md`, `milestones.md`, `docs/README.md`) as a status pointer —
+  outside this tool's build sequence, which only touches its own skeletons, `README.md` and
+  `docs/api.md`, so **only the consumer can repair those** and the migration proposal must say so.
+  And a shipped test (`oracle_495_498_fillet_landed_honesty.rs:62`) already cites a
+  `.roadmap/issue-495.md` that closure deleted long ago: **the dangling-citation failure mode exists
+  today**, under the shrink-only mechanism. Migration does not invent it; it generalises it from
+  "whichever issues happen to be closed" to all 81 at once, which is an argument for doing the
+  citation sweep as part of step 6 rather than a reason to hesitate.
 
 ## Method note
 
@@ -369,7 +405,11 @@ before it stabilized**, and they are listed rather than quietly corrected:
   cross-references resolve through sibling and closed issues, and a measurable residue resolves
   nowhere.
 
-Twenty of the seventy-two digests were traced by hand; the generalisation from twenty to
-seventy-two is the weakest remaining link and is stated rather than hidden. "Nowhere on the forge"
-rests on the full open corpus plus targeted search of the specific closed issues cited; decimal
-tokenization in forge search makes a closed-issue occurrence impossible to exclude with certainty.
+**That weakest link is now closed, and closing it corrected this record twice.** The 20-of-72 hand
+sample has been replaced by a full sweep — 652 atoms from all 81 sources against 512 issues (81 open
++ 431 closed) and the repo. It confirmed the two homeless lines exactly, and **dissolved the
+repo-held-only class this record had asserted**: #143's `0.1227` mm turned out to be stated in #393's
+thread, invisible to a sample that searched only #143's own. The lesson generalises past this record:
+a cross-referencing corpus cannot be sampled per-item, because *elsewhere* is usually **another
+item**. Where the count now stands — 79 forge-held, 0 repo-held-only, 2 homeless — is measured, not
+inferred.

@@ -153,21 +153,40 @@ fs.writeFileSync(HOSTILE_SHIM,
   + "process.stderr.write('hostile forge shim: the offline claim must not shell the forge CLI\\n');\n"
   + 'process.exit(97);\n');
 
+// ADR 0018 §5 retired the classifier's OFFLINE local-roadmap-evidence read: OFFLINE + no active
+// folder for the target now unconditionally answers target_unverified (both bundle members would
+// refuse the claim with target_set_unverified, making every assertion below vacuous). Re-bootstrap
+// through the same seam Job 1 (simulate-workflow-walkthrough.js's plantRoadmapIssue) uses:
+// KAOLA_CLASSIFIER_MOCK_SCRIPT (#495, claim.js:1096-1101), which classifyIssue() spawns in place of
+// the real classifier when set. Every scenario in this file wants the SAME answer for both bundle
+// members (42 and 47) — an unconditional green, with no per-issue branching — so a static mock
+// suffices; there is no delegate-when-unregistered need like the walkthrough's, since this file has
+// no scenario that wants the REAL classifier's OFFLINE answer for anything.
+const CLASSIFIER_MOCK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fbl-classifier-mock-'));
+const CLASSIFIER_MOCK_SCRIPT = path.join(CLASSIFIER_MOCK_DIR, 'mock-classifier.js');
+fs.writeFileSync(CLASSIFIER_MOCK_SCRIPT,
+  "'use strict';\nprocess.stdout.write(JSON.stringify({ verdict: 'green', reasoning: 'no dependency block' }) + '\\n');\n"
+  + 'process.exit(0);\n');
+
+// KAOLA_CLASSIFIER_MOCK_SCRIPT is honoured by all four editions now: gitlab and gitea's
+// `classifyIssue` spawns it too (kaola-{gitlab,gitea}-workflow-claim.js), the same shape canonical
+// and codex already used, with the shipped in-process classify path left byte-identical behind an
+// early return. Was a two-edition limit (root/codex only, tracked by a now-deleted
+// `editionSupportsClassifierMock` helper) while gitlab/gitea classified in-process with no hook to
+// redirect; the seam has since been ported into production for all four.
+
 function cleanup(dir) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* best-effort */ } }
 
-// makeRepo — a real repository carrying roadmap entries for both bundle members. OFFLINE is what
-// makes the classifier answer green from the roadmap alone, which is why no forge mock is needed:
-// the defect under test lives in the claim script's own opts threading, not in the forge shim.
+// makeRepo — a real repository for the bundle claim to run in. ADR 0018 §5: this used to also seed
+// `.roadmap/issue-N.md` for both bundle members — the classifier's retired OFFLINE local-evidence
+// read that fed. No production code anywhere reads that file any more (in ANY of the four editions),
+// so nothing plants it now; CLASSIFIER_MOCK_SCRIPT above is what makes OFFLINE classify answer green
+// instead, for all four editions.
 function makeRepo(tag) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fbl-' + tag + '-')));
   G.init(root, { branch: 'main', email: GIT_ENV.GIT_AUTHOR_EMAIL, name: GIT_ENV.GIT_AUTHOR_NAME });
   G.git(root, ['config', 'commit.gpgsign', 'false'], STDIO_Q);
   fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
-  const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
-  fs.mkdirSync(roadmapDir, { recursive: true });
-  for (const n of [42, 47]) {
-    fs.writeFileSync(path.join(roadmapDir, 'issue-' + n + '.md'), '# Issue ' + n + '\ntitle: Test issue ' + n + '\n');
-  }
   G.commitAll(root, 'seed', undefined, STDIO_Q);
   return root;
 }
@@ -178,6 +197,7 @@ function runClaim(edition, root, args) {
     KAOLA_WORKFLOW_OFFLINE: '1',
     KAOLA_WORKTREE_NATIVE: '1',
     KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+    KAOLA_CLASSIFIER_MOCK_SCRIPT: CLASSIFIER_MOCK_SCRIPT,
   });
   env[edition.mockEnv] = HOSTILE_SHIM;
   // The whole contract is at the process boundary: argv -> claim transaction -> files on disk ->

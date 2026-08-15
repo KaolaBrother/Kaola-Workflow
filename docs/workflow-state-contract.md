@@ -99,10 +99,13 @@ file but is only as complete as its own source walk.
 
 ## Durable Sources
 
-- Forge issues (GitHub, GitLab, or Gitea) are the canonical backlog and closure source when online.
-- `kaola-workflow/.roadmap/issue-*.md` files are the durable local source for active roadmap rows.
-  Do not purge the directory; closing an issue removes only that issue source file before
-  regenerating the mirror.
+- Forge issues (GitHub, GitLab, or Gitea) are the canonical backlog and closure source when
+  online — an issue's title, labels and comments are the work, with comments overriding the body.
+  There is no local mirror to keep current; see
+  [ADR 0018](decisions/0018-the-forge-is-the-backlog.md).
+- `kaola-workflow/.roadmap/_rules.md` is the one optional local file that survives: standing
+  project-local rules, read directly by the pick step. Nothing else is generated or tracked under
+  `kaola-workflow/.roadmap/`.
 - `kaola-workflow/{project}/mission-list.md` is the run's coordination record: the goal in its H1
   and one entry per mission with `item` / `status` / `dispatched` / `result`. No script writes it —
   the orchestrator does, at three moments (created, dispatched, closed). It is the one file a
@@ -118,43 +121,30 @@ file but is only as complete as its own source walk.
   recognize such a marker. It is never newly authored, so these parses do not fire for a freshly
   claimed project.
 
-### Roadmap issue-source fields
+### Reserved directory names and the archive refusal (issue #930)
 
-Each `kaola-workflow/.roadmap/issue-{N}.md` carries `issue`, `title`, `status`, `workflow_project`
-and `next_step`; the GitLab and Gitea editions add `labels` and `url`. Only `workflow_project` is read
-back as an identifier, and it is the one field whose value becomes a name on disk.
+A project name reaches the claim through one door: the `--project` flag. (A second door once existed
+— a roadmap source's `workflow_project:` field, read back verbatim by `projectNameForIssue` — but it
+was retired under [ADR 0018](decisions/0018-the-forge-is-the-backlog.md) §5; `projectNameForIssue`
+now always returns the `issue-{N}` fallback.) The only filter on the surviving door is path safety
+(`isSafeName`: not empty, not `.` or `..`, no `/`, `\` or NUL) — nothing else is checked, so a reserved
+or placeholder value is not rejected but adopted verbatim. `archive`, and any name beginning with `.`,
+are skipped by `readActiveFolders` before path safety is even consulted, so such a run is claimed but
+invisible to status and to the active-folder sweep. See `api.md` § Claiming is bookkeeping, not a gate
+for how the claim *resolves* a reserved name rather than refusing it, reporting the substitution on the
+envelope as `reserved_project` / `reserved_project_note`.
 
-**`workflow_project` names the project directory a claim will create, verbatim.** `—` is the sole
-token meaning *not yet assigned*; an absent, empty or whitespace-only field means the same. On any of
-those, a claim derives the name `issue-{N}` instead. **Any other path-safe value is adopted as
-written** — it becomes the active folder `kaola-workflow/{value}/`, the worktree directory, the
-archive destination and the `project` field of the sink receipt. The branch is unaffected: it stays
-`workflow/issue-{N}`, and `workflow/gitlab-issue-{N}` or `workflow/gitea-issue-{N}` on those forges.
-
-The only filter is path safety (`isSafeName`: not empty, not `.` or `..`, no `/`, `\` or NUL). A value
-failing it is not reported — it is silently replaced by `issue-{N}`. Nothing else is checked, so a
-placeholder is not rejected but adopted: writing `unclaimed`, `TBD` or `none` produces a project,
-worktree and archive literally named that, which reads as *unclaimed* to every later reader of the
-folder while in fact naming a claimed run. Two cases are worse than misleading — `archive`, and any
-name beginning with `.`, are skipped by `readActiveFolders` before path safety is even consulted, so
-such a run is claimed but invisible to status and to the active-folder sweep. Write `—` when no
-project is assigned yet, and a real, intended name otherwise.
-
-**Such a run can be claimed, but it can no longer be archived (issue #930).** The claim side is
-unchanged — a reserved name is still adopted and the folder is still invisible to enumeration — but
-`archiveProjectDir` now refuses every dot-prefixed name, and `archive` **in any casing**, outright with
-`reason: "archive_reserved_directory"` at exit 1, before the archive step moves, copies, stamps or
-deletes anything. The casing matters because the comparison has to agree with the filesystem rather
-than with the string: on a case-insensitive volume `kaola-workflow/Archive` *is* `kaola-workflow/archive`,
-so an exact-match test would let `Archive` through to destroy the very band it was meant to protect.
+**Such a run can be claimed, but it can no longer be archived.** `archiveProjectDir` refuses every
+dot-prefixed name, and `archive` **in any casing**, outright with `reason: "archive_reserved_directory"`
+at exit 1, before the archive step moves, copies, stamps or deletes anything — see `api.md` § Finalize
+envelope. The casing matters because the comparison has to agree with the filesystem rather than with
+the string: on a case-insensitive volume `kaola-workflow/Archive` *is* `kaola-workflow/archive`, so an
+exact-match test would let `Archive` through to destroy the very band it was meant to protect.
 Previously finalization derived the archive destination from the project name alone and relocated
-whatever directory that named: a run claimed as `.roadmap` moved the entire backlog — every
-`issue-*.md` source and `_rules.md` — under `kaola-workflow/archive/`, and under `--keep-worktree` it
-also committed the deletion of those tracked files onto the feature branch the sink merges. The
-recovery for such a run is to release or discard it and re-claim under a real project name.
-
-This field is not how a bundle is formed: a bundle's folder name and branch stem are derived from its
-issue set (see Bundle project and branch naming below), never read from here.
+whatever directory that named: a run claimed as `.roadmap` moved the entire `kaola-workflow/.roadmap/`
+directory — today just `_rules.md` — under `kaola-workflow/archive/`, and under `--keep-worktree` it
+also committed that deletion onto the feature branch the sink merges. The recovery for such a run is to
+release or discard it and re-claim under a real project name.
 
 ## Archive Destination
 
@@ -270,9 +260,9 @@ patched in place by the later lifecycle verbs. Its blocks:
   `deriveRunPosture(worktreePath)`; never inherited from an environment variable). An optional
   `issue_action: close | comment_keep_open` line (default `close` when absent) marks a keep-open
   partial-close terminal: the orchestrator writes `comment_keep_open` at the closure decision to
-  keep the issue OPEN — `finalize` / `sink-merge` then preserve the roadmap source, comment instead
-  of closing, refuse a PR/MR sink (keep-open is merge-sink-only), and **release the claim on every
-  issue left open**. Release means both artifacts: the `workflow:in-progress` label and the
+  keep the issue OPEN — `finalize` / `sink-merge` then comment instead of closing (there is no local
+  roadmap source left to preserve), refuse a PR/MR sink (keep-open is merge-sink-only), and **release
+  the claim on every issue left open**. Release means both artifacts: the `workflow:in-progress` label and the
   `<!-- kw:claim project=<slug> -->` marker comment. The classifier blocks a re-claim on either, so
   removing only the label leaves the issue claimed — an issue kept open is an issue meant to be
   claimable again.
@@ -414,28 +404,6 @@ The closure contract — the invariants a completed issue must satisfy, the clos
 and which path populates which field — lives in `api.md` § Closure Contract, with its
 machine-readable half in `scripts/kaola-workflow-closure-contract.js`. The archived
 `workflow-state.md` carries the same terminal facts in its `## Closure` block.
-
-## Generated Mirrors
-
-- `kaola-workflow/ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md`. Treat it as a
-  mirror, not a source.
-- Regenerate the mirror after issue state changes, after removing the source file for a closed
-  issue, or after creating a new per-issue source file.
-- **Single-owner finalize invariant**: during finalize, the per-issue source removal
-  (`kaola-workflow/.roadmap/issue-N.md`) and `ROADMAP.md` regeneration are performed exactly once by
-  `cmdFinalize` / `archiveProjectDir`. The transaction's staging step only stages the result with
-  `git add`; it does not re-run the removal or the regeneration.
-- `kaola-workflow-roadmap.js generate` must not replace a generated roadmap that still lists active
-  issues with `none` solely because `.roadmap/` is missing.
-- An **optional** project-local file `kaola-workflow/.roadmap/_rules.md` may carry standing
-  project-specific workflow rules. When present and non-empty, `generate` (and `validate`, and the
-  GitLab/Gitea `refresh`) appends its contents to the `ROADMAP.md` `## Rules` section under a
-  `### Project rules` sub-heading. The `_` prefix keeps it out of the `^issue-\d+\.md$` issue-row
-  matcher, so it is never read as a roadmap row. When the file is absent or empty the generated
-  output is byte-identical to the built-in Rules block. Because the content lives in the project's
-  own committed repo, it survives both regeneration and plugin updates — unlike a hand-edit of the
-  generated mirror (wiped on regen) or an edit of the shared `RULES_BLOCK` (leaks into every
-  project).
 
 ## Legacy Or Transitional State
 

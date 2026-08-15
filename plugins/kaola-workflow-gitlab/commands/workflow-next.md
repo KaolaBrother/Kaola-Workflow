@@ -20,7 +20,7 @@ required.
 taking one. There is no durable valve and nothing collects an approval on your behalf: this rule is
 the whole mechanism, so it lives or dies with your judgement. A destructive Git operation, a
 deployment, a credential action, a schema or public-API change, deleting working capability,
-reorganizing someone's issues or roadmap — state what you propose and why, then wait for the answer.
+reorganizing someone's issues — state what you propose and why, then wait for the answer.
 Everything checkable is yours to decide and get on with.
 <!-- /PIN -->
 
@@ -31,12 +31,14 @@ You select the target. No script picks for you.
 - **The user named an issue** — in the arguments or in the prompt ("work on #N") → that issue IS the
   target. Never substitute another, and never adopt an active folder's issue in its place.
 - **The user described a task but named no issue** → resolve the description to the issue it
-  belongs to, or file one, before claiming. The described task IS the target; roadmap priority
+  belongs to, or file one, before claiming. The described task IS the target; priority tier
   never outranks the work the user asked for.
+<!-- PIN: forge-is-the-backlog -->
 - **The user named neither** — the common "work on the next issue" case → you read the backlog and
-  rank it: `kaola-workflow/ROADMAP.md` (its `## Active Work` table's `Next Step` column and any
-  `### Project rules` block), each `kaola-workflow/.roadmap/issue-*.md`, the open issue list, the
-  active folders, and the archived summaries. Rank by the roadmap priority frontier, then by scope.
+  rank it: the open issue list ordered by its `P0`–`P3` priority tier (`list-open`, below), any
+  `kaola-workflow/.roadmap/_rules.md` standing rules, the active folders, and the archived summaries.
+  Rank by that priority tier, then by scope.
+<!-- /PIN -->
   Exclude what is not yours to take: issues already closed, already claimed, or occupied by another
   live session. **State the selection aloud before you claim it.** If you pass over the frontier
   issue, say which one and why.
@@ -85,23 +87,15 @@ the user — that is their uncommitted work, not yours.
 If a GitLab remote and an authenticated `glab` are available, read the open issues:
 
 ```bash
-glab issue list --limit 100 --json number,title,state,labels,assignees,updatedAt,url
-```
-
-If GitLab is unavailable, or `KAOLA_WORKFLOW_OFFLINE=1` is set, continue from the local
-roadmap sources and say why the remote read was skipped.
-
-`kaola-workflow/ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md`; check it is
-current, and do not hand-edit the mirror:
-
-```bash
 kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
 CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
-[ -f "$KAOLA_SCRIPTS/kaola-gitlab-workflow-roadmap.js" ] && node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-roadmap.js" validate
+node "$CLAIM_JS" list-open
 ```
 
-A stale mirror is a warning, not a stop: say so and continue. Do not run `generate` automatically
-and do not stage or commit the mirror here — closure owns that.
+That returns every open issue, ordered by its `P0`–`P3` priority tier then by number — never
+filtered or truncated to a single "winner"; ordering is not selecting. If the remote is unavailable,
+or `KAOLA_WORKFLOW_OFFLINE=1` is set, it returns no issues: there is nothing local to rank, so name
+an issue directly or resume an already-claimed active folder.
 
 A run that ended by opening a review request instead of merging leaves its folder open until that
 request lands. Sweep those once here, so a folder whose request has since merged or closed is
@@ -112,6 +106,18 @@ kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "
 CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
 node "$CLAIM_JS" watch-mr >/dev/null 2>&1 || true
 ```
+
+<!-- PIN: forge-is-the-backlog -->
+Before claiming, read each shortlisted candidate's own body and comments — the handful you are
+ranking for this claim, never the full list fetched above. Comments are current state: where a
+comment contradicts the body, the comment wins, and you say so aloud when you state the selection.
+<!-- /PIN -->
+
+```bash
+glab issue view {N} --comments -F json
+```
+
+Repeat this once per shortlisted issue, substituting its number for `{N}`.
 
 ## Step 3 — Claim
 
@@ -263,6 +269,5 @@ Each run implements one explicitly selected set of issues — normally three to 
 After finalization closes every issue in the set and archives the active folder, stop and await
 explicit re-direction. Do not auto-route into the next issue in line.
 
-A multi-issue closure is all-or-nothing: finalization closes every issue in the set, removes every
-matching `.roadmap/issue-N.md` source, regenerates the roadmap mirror once, archives one folder, and
-stops.
+A multi-issue closure is all-or-nothing: finalization closes every issue in the set, archives one
+folder, and stops.

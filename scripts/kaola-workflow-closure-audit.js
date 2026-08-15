@@ -4,15 +4,16 @@
 // Closure-audit (issue #165, child of closure-system-v2 epic #161).
 //
 // Reports "closure drift" — completed work that still shows as active — across:
-//   (a) stale kaola-workflow/.roadmap/issue-N.md sources for closed issues
-//   (b) the generated ROADMAP.md still listing closed issues
 //   (c) closed remote issues still carrying the workflow:in-progress label
-//   (d) archive workflow-state.md says closed but the .roadmap source survives
 //   (e) an active folder exists for a closed issue (report only)
 //   (f) an active sink=pr folder whose PR is merged/closed but was never archived (report only)
 //
-// Dry-run JSON is the default. `--execute` repairs only SAFE local drift:
-// it removes stale .roadmap sources, regenerates ROADMAP.md, and removes the
+// ADR 0018 §5: the local-roadmap-mirror classes — (a) stale kaola-workflow/.roadmap/issue-N.md
+// sources for closed issues, (b) the generated ROADMAP.md still listing closed issues, and (d)
+// archive workflow-state.md says closed but the .roadmap source survives — are retired. There is no
+// local roadmap source or mirror left for a closure to leave stale.
+//
+// Dry-run JSON is the default. `--execute` repairs only SAFE local drift: it removes the
 // in-progress label from closed issues when online. It NEVER deletes active
 // folders or worktrees — that surface belongs to stale-worktree-check /
 // stale-worktree-cleanup. Classes (e) and (f) are report-only in both modes.
@@ -37,11 +38,6 @@ const {
   probeIssueState,
   readActiveFolders
 } = require('./kaola-workflow-active-folders');
-const {
-  regenerateRoadmap,
-  readRoadmapIssues,
-  roadmapDir
-} = require('./kaola-workflow-roadmap');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const CLAIM_LABEL = 'workflow:in-progress';
@@ -68,8 +64,8 @@ const USAGE = [
   '  --project <name>  Scope the verdict to one workflow project. Its member issues are read from',
   '                    that project\'s own workflow-state.md, live or archived.',
   '  --issue <N>       Add issue N to the scope. Repeatable.',
-  '  --execute         Repair safe local drift. Scoped, only scoped findings are repaired;',
-  '                    ROADMAP.md is always rebuilt whole, because the mirror is one file.',
+  '  --execute         Repair safe local drift (currently: the in-progress label). Scoped, only',
+  '                    scoped findings are repaired.',
   '  --help, -h        Print this usage and exit 0.',
   '',
   'Scoped runs add scope, current_project_clean, current_project_drift and',
@@ -240,54 +236,15 @@ function collectClosedSet(candidateNumbers) {
   return { closed, unresolved };
 }
 
-function roadmapSourceFiles(root) {
-  const dir = roadmapDir(root);
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir)
-    .map(f => {
-      const m = f.match(/^issue-(\d+)\.md$/);
-      return m ? { issue_number: Number(m[1]), file: 'kaola-workflow/.roadmap/' + f } : null;
-    })
-    .filter(Boolean);
-}
-
-function archiveClosedIssues(root) {
-  const set = new Set();
-  const archiveBase = path.join(root, 'kaola-workflow', 'archive');
-  if (!fs.existsSync(archiveBase)) return set;
-  for (const entry of fs.readdirSync(archiveBase, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    let content;
-    try {
-      content = fs.readFileSync(path.join(archiveBase, entry.name, 'workflow-state.md'), 'utf8');
-    } catch (_) { continue; }
-    if (field(content, 'status') !== 'closed') continue;
-    // #336: a keep-open partial-close archive deliberately preserves its roadmap source; it
-    // must never feed the archive_closed stale-source class (--execute would delete it).
-    // 'closed_remote' still wins: if the kept-open issue is later genuinely closed on the
-    // forge, that source becomes legitimately stale and the audit may remove it.
-    if (field(content, 'issue_action') === 'comment_keep_open') continue;
-    // #903: a bundle archive closes all_or_nothing, so EVERY member issue closed with it. Reading
-    // only the scalar primary left members invisible to the archive_closed stale-source class — a
-    // measured gap, not a hypothesis. Any OTHER closure_policy cannot promise that, so it
-    // contributes the primary alone; `--execute` deletes the sources this set authorizes, so the
-    // policy is read before a member is trusted (the same care the comment_keep_open arm above takes).
-    const policy = field(content, 'closure_policy');
-    const numbers = (!policy || policy === 'all_or_nothing')
-      ? stateIssueNumbers(content)
-      : [parseInt(field(content, 'issue_number'), 10)];
-    for (const n of numbers) {
-      if (Number.isInteger(n) && n > 0) set.add(n);
-    }
-  }
-  return set;
-}
+// ADR 0018 §5: roadmapSourceFiles and archiveClosedIssues stood here — the .roadmap/issue-N.md
+// scanner and the closed-archive-issue-number collector that fed detectStaleRoadmapSources'
+// 'archive_closed' reason. Both are retired with the drift class they existed only to serve.
 
 // (g) #832: prove archive CONTENT, not existence. `verifyArchiveComplete` cannot cover this class —
 // it is SOURCE-relative and runs at copy time, before the loss; an archive gutted afterwards (the
 // worktree that held it was deleted, or the sink's own receipt writer mkdir-ed a bare `.cache/`
-// skeleton) passes every existing check and drops silently out of archiveClosedIssues, which
-// `continue`s on any read error.
+// skeleton) passed every existing check and dropped silently out of the (now-retired)
+// archiveClosedIssues, which `continue`d on any read error — this class exists independently of it.
 //
 // The required set is derived from the archive's OWN record, never a blanket demand: only
 // workflow-state.md is unconditionally required (the #676 identity anchor).
@@ -372,32 +329,12 @@ function detectArchiveSummaryCitationMissing(root) {
   return out.sort((a, b) => a.project.localeCompare(b.project));
 }
 
-// (a)+(d): one entry per issue_number. 'closed_remote' wins over 'archive_closed'.
-function detectStaleRoadmapSources(srcFiles, closedSet, archiveClosed) {
-  const byNumber = new Map();
-  for (const src of srcFiles) {
-    const n = src.issue_number;
-    let reason = null;
-    if (closedSet.has(n)) reason = 'closed_remote';
-    else if (archiveClosed.has(n)) reason = 'archive_closed';
-    if (!reason) continue;
-    const existing = byNumber.get(n);
-    if (!existing || (existing.reason === 'archive_closed' && reason === 'closed_remote')) {
-      byNumber.set(n, { issue_number: n, file: src.file, reason });
-    }
-  }
-  return Array.from(byNumber.values()).sort((a, b) => a.issue_number - b.issue_number);
-}
-
-// (b): derived from the same closed-set.
-function detectMirrorClosed(root, closedSet) {
-  const out = [];
-  for (const it of readRoadmapIssues(roadmapDir(root))) {
-    const n = parseInt(String(it.issue).replace('#', ''), 10);
-    if (Number.isInteger(n) && closedSet.has(n)) out.push(n);
-  }
-  return out;
-}
+// ADR 0018 §5: detectStaleRoadmapSources ((a)+(d)) and detectMirrorClosed ((b)) stood here. Measured
+// before retirement: mirror_lists_closed_issues' issue-number set was always a strict subset of
+// stale_roadmap_sources' 'closed_remote'-reasoned entries — both read the identical
+// kaola-workflow/.roadmap/issue-N.md sources (readRoadmapIssues over roadmapDir, the same directory
+// roadmapSourceFiles scanned), and mirror_lists_closed_issues added no reason it wouldn't also flag
+// under closed_remote. Retired together with the sources they read.
 
 // (c): remote-dependent. 'skipped_offline' only when OFFLINE; online gh failure
 // reports an empty array plus a stderr warning (not a skip).
@@ -482,20 +419,17 @@ function detectUnarchivedPrFolders(folders) {
 // Single detection pass. executeRepairs consumes this; it never re-detects.
 function buildAuditReport(root) {
   const folders = readActiveFolders(root, { excludeClosedIssues: false });
-  const srcFiles = roadmapSourceFiles(root);
-  const archiveClosed = archiveClosedIssues(root);
 
   // #903: readActiveFolders already supplies every folder's bundle members (issue_numbers) and this
   // set threw them away, so a bundle's non-primary issues were never probed at all — measured with a
   // positive control. Members now enter the candidate set alongside the scalar primary; collectClosedSet
   // dedupes, so the remote-probe count stays O(distinct N).
-  const candidates = srcFiles.map(s => s.issue_number)
-    .concat(folders.map(f => f.issue_number).filter(n => n != null))
+  // ADR 0018 §5: the roadmap-source issue numbers this set used to fold in are gone with
+  // roadmapSourceFiles — the two classes they only fed are retired.
+  const candidates = folders.map(f => f.issue_number).filter(n => n != null)
     .concat(folders.reduce((acc, f) => acc.concat(f.issue_numbers || []), []));
   const { closed: closedSet, unresolved } = collectClosedSet(candidates);
 
-  const staleRoadmap = detectStaleRoadmapSources(srcFiles, closedSet, archiveClosed);
-  const mirrorClosed = detectMirrorClosed(root, closedSet);
   const staleLabels = detectStaleLabels();
   const activeClosed = detectActiveClosedFolders(folders, closedSet);
   const unarchivedPr = detectUnarchivedPrFolders(folders);
@@ -505,8 +439,6 @@ function buildAuditReport(root) {
   const citationMissing = detectArchiveSummaryCitationMissing(root);
 
   const drift = {
-    stale_roadmap_sources: staleRoadmap,
-    mirror_lists_closed_issues: mirrorClosed,
     stale_in_progress_labels: staleLabels,
     active_folder_for_closed_issue: activeClosed,
     unarchived_pr_folders: unarchivedPr,
@@ -562,8 +494,7 @@ function partitionDriftByScope(drift, scope) {
 // finding carrying neither a matching project nor a scoped issue falls to the out-of-scope half,
 // where an operator still sees it.
 function scopePredicate(key, scope) {
-  if (key === 'stale_roadmap_sources') return f => scope.issues.has(f.issue_number);
-  if (key === 'mirror_lists_closed_issues' || key === 'unresolved_closed_state') return n => scope.issues.has(n);
+  if (key === 'unresolved_closed_state') return n => scope.issues.has(n);
   if (key === 'stale_in_progress_labels') return f => scope.issues.has(f.number);
   if (key === 'archive_content_incomplete' || key === 'archive_summary_citation_missing') {
     return f => scope.project != null && archiveNameMatchesProject(f.project, scope.project);
@@ -603,20 +534,8 @@ function driftIsClean(drift, scope) {
 // Consumes the report from buildAuditReport — does NOT re-run detection.
 // Repairs only safe local roadmap sources + regenerate + remote label removal.
 function executeRepairs(root, report) {
-  const roadmapSourcesRemoved = [];
-  for (const src of report.drift.stale_roadmap_sources) {
-    const abs = path.join(roadmapDir(root), 'issue-' + src.issue_number + '.md');
-    try {
-      fs.unlinkSync(abs);
-      roadmapSourcesRemoved.push(src.issue_number);
-    } catch (e) {
-      if (e.code === 'ENOENT') roadmapSourcesRemoved.push(src.issue_number);
-      else process.stderr.write('closure-audit: failed to remove ' + src.file + ': ' + e.message + '\n');
-    }
-  }
-  let roadmapRegenerated = false;
-  try { regenerateRoadmap(root); roadmapRegenerated = true; } catch (_) { roadmapRegenerated = false; }
-
+  // ADR 0018 §5: the stale-.roadmap-source removal + regenerateRoadmap repair stood here — there is
+  // no local roadmap source or mirror left for --execute to repair.
   const labelsRemoved = [];
   const labelsFailed = [];
   let labelsSkippedReason = null;
@@ -637,8 +556,6 @@ function executeRepairs(root, report) {
   }
 
   const repairedObj = {
-    roadmap_sources_removed: roadmapSourcesRemoved,
-    roadmap_regenerated: roadmapRegenerated,
     labels_removed: labelsRemoved,
     labels_failed: labelsFailed
   };
@@ -700,10 +617,7 @@ function main() {
   if (scope.archive_name_ambiguous) scopeOut.archive_name_ambiguous = true;
 
   if (args.execute) {
-    // Repairs consume the SCOPED drift, so an unrelated project's stale source is never deleted and
-    // an unrelated issue's label is never touched. regenerateRoadmap stays a whole-mirror rebuild:
-    // ROADMAP.md is one generated file derived from all surviving sources, so there is no partial
-    // rebuild to scope it to. That is inherent to the mirror, not a gap in the scoping.
+    // Repairs consume the SCOPED drift, so an unrelated issue's label is never touched.
     const result = executeRepairs(root, { drift: inScope });
     process.stdout.write(JSON.stringify({
       dry_run: false,
@@ -737,7 +651,6 @@ module.exports = {
   buildAuditReport,
   executeRepairs,
   collectClosedSet,
-  detectStaleRoadmapSources,
   // #832: archive CONTENT proof — exported for direct unit coverage of the record-derived rule.
   detectArchiveContentIncomplete,
   archiveRequiredContent,

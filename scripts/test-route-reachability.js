@@ -837,6 +837,15 @@ const FOREIGN_MARKERS = new Set([
   // presence obligation is what enforces it here, via one manifest block per topic. Deleting a
   // topic's consent paragraph still reds — on the block, not on the sentinel.
   '<!-- PIN: consent-in-conversation -->',
+  // Same shape as consent-in-conversation: the forge-is-the-backlog rule is restated once per
+  // topic (next, init, finalize) rather than pointed at, and next/init each carry MULTIPLE spans
+  // of this one marker text on the same surface. The reverse sentinel keys marker -> single block
+  // via a plain Map, so registering nx-/in-/fn-forge-is-the-backlog would each overwrite the
+  // last one in — every occurrence would resolve to whichever block happened to be declared last,
+  // reporting orphan-surface on the other two topics' surfaces (measured: 61 false failures before
+  // this entry was added). The three FORWARD presence blocks below are what actually enforce each
+  // topic's wording; deleting any one span still reds its own block.
+  '<!-- PIN: forge-is-the-backlog -->',
 ].map(norm));
 
 // Legacy in-scope pin tokens the derived-universe manifest cannot fold cleanly (present on a

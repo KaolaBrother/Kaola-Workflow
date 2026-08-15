@@ -1,6 +1,6 @@
 ---
 name: kaola-workflow-init
-description: Use when setting up a project for Kaola-Workflow for Codex, also called kaola-workflow or workflow-init, or refreshing its Codex-specific guidance, roadmap, and documentation scaffold.
+description: Use when setting up a project for Kaola-Workflow for Codex, also called kaola-workflow or workflow-init, or refreshing its Codex-specific guidance and documentation scaffold.
 ---
 
 # Kaola-Workflow Init
@@ -84,6 +84,11 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 
 ## Kaola-Workflow
 
+<!-- KW-CLAUDE-MANAGED-START -->
+Everything between this marker and its matching END below is owned by `workflow-init`: a later run
+may replace it in full. Nothing outside the two markers is touched — that content, wherever you have
+added or changed it in this file, is yours.
+
 - Start and resume all workflow work through the workflow router entrypoint your runtime installs.
 - A run claims an explicitly selected set of issues — normally three to five, sometimes one — each open, unclaimed, and closeable on its own evidence, and records what it owns in `kaola-workflow/{project}/workflow-state.md`: which issues, which branch, which worktree. An issue runs alone when it moves something the others read, when closing it needs a value call from the user, or when its scope is not knowable until it has been investigated.
 - `kaola-workflow/{project}/mission-list.md` is the run's coordination record and the one file a successor needs. No script owns this file; you write it. An H1 carrying the goal in one line, then one item per mission.
@@ -102,18 +107,25 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 - That objective prompt must not use "next issue in line" or any phrasing that implies automatic cross-issue continuation. Each workflow run targets one selected set of issues; finishing the set is the terminal event. The completion contract requires explicit re-direction for the next set.
 - Treat nonessential workflow bookkeeping as autonomous: generated project names, collision suffixes like `-2`, cache/artifact paths, and harmless ordering choices are selected automatically and recorded.
 - For essential technical decisions, apply your own judgment, apply the selected answer, and say what the evidence was.
-- Take irreversible and value-laden calls to the user and ask, in conversation, before acting: risky Git synchronization, destructive rewrites, deployment or credential actions, and issue or roadmap reorganization. Nothing collects that approval for you.
-- GitLab issues are the roadmap source of truth when available; `kaola-workflow/ROADMAP.md` is the local active-work mirror.
-- `kaola-workflow/ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md`; do not hand-edit the mirror.
-- In `.roadmap/issue-N.md`, `workflow_project` becomes a directory name verbatim: write `—` when no project is assigned yet, and a claim derives `issue-N`. Any other value is taken as a real, intended name, so a placeholder like `unclaimed` or `TBD` produces a folder literally called that.
-- Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file.
+- Take irreversible and value-laden calls to the user and ask, in conversation, before acting: risky Git synchronization, destructive rewrites, deployment or credential actions, and issue reorganization. Nothing collects that approval for you.
+<!-- PIN: forge-is-the-backlog -->
+- GitLab issues are the backlog: title, labels and comments are what the work is — comments override the body.
+- `kaola-workflow/.roadmap/_rules.md` is the one optional local file that survives, for standing
+  project-local rules read directly; nothing else is generated or tracked under
+  `kaola-workflow/.roadmap/`.
+<!-- /PIN -->
 - Active work lives in `kaola-workflow/{project}/` until archived or safely discarded.
-- Roadmap/research sessions create or refine issues; workflow runs implement one selected set and refresh the mirror.
+<!-- PIN: forge-is-the-backlog -->
+- Roadmap/research sessions create or refine issues on the forge; workflow runs implement one selected set — there is no local mirror to refresh.
+<!-- /PIN -->
 - After resume or compaction, read `workflow-state.md` and `mission-list.md` before continuing: the H1 is the goal, `done` items carry what is already known, `in-flight` items are the decision to make, `todo` items are what remains.
 - Resuming an `in-flight` item means looking for the WORK, not the worker: if the output its `dispatched` line promised has landed, close it; otherwise re-dispatch, unless the dispatch is provably still alive.
-- End each cycle by docking docs against code changes, resolving closure decisions, updating issues, refreshing the roadmap, archiving completed workflow folders, and then the final commit and push.
+- End each cycle by docking docs against code changes, resolving closure decisions, updating issues, archiving completed workflow folders, and then the final commit and push.
 - Active issue work runs in a repo-local worktree at `<repo-root>/.kw/worktrees/<project>/` by default; set `KAOLA_WORKTREE_NATIVE=0` to disable. See README for the full contract.
+<!-- PIN: forge-is-the-backlog -->
 - Top-priority labels: declare in `kaola-workflow/config.json` (`priority_top_tier_labels`) when the repo uses something other than P0–P3 naming.
+<!-- /PIN -->
+<!-- KW-CLAUDE-MANAGED-END -->
 
 ## Project Conventions
 
@@ -132,7 +144,6 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 - `docs/api.md` — APIs, schemas, events, and external contracts.
 - `docs/conventions.md` — coding, testing, Git, and review rules.
 - `docs/decisions/` — architecture decision records.
-- `kaola-workflow/ROADMAP.md` — active implementation roadmap.
 
 ## Maintenance
 
@@ -240,7 +251,6 @@ way to run.
 
 ```text
 kaola-workflow/
-  ROADMAP.md
   archive/
 docs/
   README.md
@@ -319,41 +329,6 @@ Canonical `AGENTS.md` redirect block to write:
 
 ## Initial File Bodies
 
-### `kaola-workflow/ROADMAP.md`
-
-```markdown
-# Kaola-Workflow Roadmap
-
-This file mirrors active unfinished work. GitLab issues are the source of truth when available.
-
-## Active Work
-
-| Issue | Title | Status | Workflow Project | Next Step |
-|-------|-------|--------|------------------|-----------|
-| none | Initialize roadmap | open | none | Link GitLab issues or add active work |
-
-## Rules
-
-- A separate roadmap/research session owns discovering and adding future work to GitLab issues.
-- `kaola-workflow-next` fetches GitLab issues and mirrors active implementation work here.
-- After each `kaola-workflow-next` cycle, refresh this file from issue state.
-- Move completed workflow project folders to `kaola-workflow/archive/`.
-- Close linked GitLab issues only after acceptance criteria pass.
-- Keep commit and push as the final Finalization step after docs, issues, roadmap,
-  archive, and metadata are complete.
-```
-
-After creating or confirming `kaola-workflow/ROADMAP.md`, bootstrap the per-issue directory and regenerate:
-
-```bash
-mkdir -p kaola-workflow/.roadmap
-kaola_script(){ _n="$1"; _p="plugins/kaola-workflow-gitlab/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow-gitlab/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
-ROADMAP_JS="$(kaola_script kaola-gitlab-workflow-roadmap.js)"
-[ -f "$ROADMAP_JS" ] && node "$ROADMAP_JS" generate
-```
-
-If `kaola-gitlab-workflow-roadmap.js` is unavailable (not yet installed), skip this step.
-
 ### `docs/README.md`
 
 ```markdown
@@ -417,7 +392,7 @@ If `kaola-gitlab-workflow-claim.js` is unavailable (manual install without the s
 
 ---
 
-## Git And Roadmap Summary
+## Git And Issue Summary
 
 After edits:
 
@@ -429,7 +404,7 @@ After edits:
    - whether `CLAUDE.md` was created or updated
    - whether AGENTS.md was created, was already conforming, or was migrated
    - which required `CLAUDE.md` sections are present
-   - which docs/roadmap files were created
+   - which docs files were created
    - whether GitLab issues were available for sync
 4. Do not commit unless the user explicitly asks.
 

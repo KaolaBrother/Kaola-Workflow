@@ -232,7 +232,6 @@ const scriptFiles = [
   'kaola-gitea-workflow-classifier.js',
   'kaola-gitea-workflow-closure-audit.js',
   'kaola-gitea-workflow-compact-context.js',
-  'kaola-gitea-workflow-roadmap.js',
   'kaola-gitea-workflow-sink-merge.js',
   'kaola-gitea-workflow-sink-pr.js',
   'kaola-workflow-resolve-agent-model.js',
@@ -258,7 +257,6 @@ const installSupportScripts = [
   'kaola-gitea-workflow-classifier.js',
   'kaola-gitea-workflow-closure-audit.js',
   'kaola-gitea-workflow-compact-context.js',
-  'kaola-gitea-workflow-roadmap.js',
   'kaola-gitea-workflow-sink-merge.js',
   'kaola-gitea-workflow-sink-pr.js',
   'kaola-workflow-resolve-agent-model.js',
@@ -339,20 +337,6 @@ assert(
   !/install-codex-agent-profiles\.js"?\s+"\$PWD"/.test(read(giteaInitSkill)),
   giteaInitSkill + ' must not mandate a per-repo "$PWD" agent install (#571)'
 );
-assertConcept(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'Gitea missing roadmap source safeguard', [
-  'guardAgainstMissingRoadmapSource',
-  'non-empty generated ROADMAP.md',
-  'kaola-workflow/.roadmap is missing'
-]);
-assertConcept(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'Gitea atomic roadmap writes and exclusive issue source creation', [
-  'writeFileAtomicReplace',
-  'createFileExclusive',
-  'updated: issue-'
-]);
-assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, "sub === 'validate-remote'");
-assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'function validateRemote');
-assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'cmdValidateRemote');
-assertIncludes(`${pluginRoot}/scripts/test-gitea-workflow-scripts.js`, 'testGiteaRoadmapValidateRemote');
 // #401 Part 1: the forge plan-validator refusal-matrix anchor must remain wired into the suite.
 
 // Gitea forge pair CLAUDE.md template must be byte-identical
@@ -602,16 +586,14 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
 // is the #294 fail-open class) and the surviving pointer in the command, so neither half can vanish.
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', "band && band !== project && band.indexOf(project + '.archived-') !== 0");
 
-// #505 ITEM 3: forge shared-function-presence guard. The hand-ported claim/sink-merge/classifier/
-// roadmap/repair-state ports must carry the shared top-level functions that define the data layer.
+// #505 ITEM 3: forge shared-function-presence guard. The hand-ported claim/sink-merge/classifier
+// ports must carry the shared top-level functions that define the data layer.
 // Pinning by function name (the #492 assertIncludes approach) means a silent DROP turns chain RED.
 // Each validator pins its OWN edition's ports only.
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'closeIssueIdempotent');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'buildBranchName');
 // checkDispatchAttestations left the shared set with the planner-attestation retirement; it is
 // now swept as an ABSENCE with the rest of that chain, above.
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-roadmap.js', 'readRoadmapIssues');
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-roadmap.js', 'roadmapDir');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'deriveMemberSet');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'readStateIssueNumbers');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'probeIssueClosed');

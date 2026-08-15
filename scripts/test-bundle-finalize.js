@@ -398,7 +398,7 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
 // ---------------------------------------------------------------------------
 
 (function testBundleFinalizeAllMembers() {
-  console.log('Test (1): bundle finalize closes all 3 members, removes all roadmap sources, archives one folder');
+  console.log('Test (1): bundle finalize closes all 3 members, archives one folder');
   const tmpRoot = makeTmpRoot();
   const binDir = path.join(tmpRoot, 'bin');
   const logFile = path.join(tmpRoot, 'gh-calls.log');
@@ -438,12 +438,6 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
     const liveDir = path.join(tmpRoot, 'kaola-workflow', project);
     assert(!fs.existsSync(liveDir), 'live project dir is gone after finalize');
 
-    // All three .roadmap source files were removed
-    for (const n of [42, 47, 53]) {
-      const src = path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + n + '.md');
-      assert(!fs.existsSync(src), 'roadmap source issue-' + n + '.md was removed');
-    }
-
     // Closure receipt fields
     const receipt = out && out.closure_receipt;
     assert(receipt != null, 'closure_receipt present in output');
@@ -461,16 +455,6 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
       assert(Array.isArray(receipt.failed_issue_closures), 'receipt has failed_issue_closures array');
       if (Array.isArray(receipt.failed_issue_closures)) {
         assert(receipt.failed_issue_closures.length === 0, 'failed_issue_closures is empty');
-      }
-
-      // roadmap_sources_removed: three entries
-      assert(Array.isArray(receipt.roadmap_sources_removed), 'receipt has roadmap_sources_removed array');
-      if (Array.isArray(receipt.roadmap_sources_removed)) {
-        assert(receipt.roadmap_sources_removed.length === 3, 'roadmap_sources_removed has 3 entries, got ' + receipt.roadmap_sources_removed.length);
-        for (const n of [42, 47, 53]) {
-          assert(receipt.roadmap_sources_removed.includes('issue-' + n + '.md'),
-            'roadmap_sources_removed contains issue-' + n + '.md');
-        }
       }
 
       // issue_numbers on the receipt
@@ -650,7 +634,7 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
 // ---------------------------------------------------------------------------
 
 (function testSingleIssueFinalizeRegression() {
-  console.log('Test (3): single-issue finalize — one issue closed, one roadmap source removed, receipt has NO bundle fields');
+  console.log('Test (3): single-issue finalize — one issue closed, receipt has NO bundle fields');
   const tmpRoot = makeTmpRoot();
   const binDir = path.join(tmpRoot, 'bin');
   const project = 'issue-99';
@@ -675,10 +659,6 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
     assert(out !== null, 'single-issue finalize emits JSON');
     assert(out.status === 'closed', 'status is closed, got ' + JSON.stringify(out && out.status));
 
-    // Roadmap source removed
-    const src = path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-99.md');
-    assert(!fs.existsSync(src), 'roadmap source issue-99.md was removed for single issue');
-
     // Archive folder exists; live project dir gone
     assert(out && out.dest && fs.existsSync(out.dest), 'archive folder exists');
     assert(!fs.existsSync(path.join(tmpRoot, 'kaola-workflow', project)), 'live project dir gone');
@@ -696,13 +676,6 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
         receipt.failed_issue_closures == null || (Array.isArray(receipt.failed_issue_closures) && receipt.failed_issue_closures.length === 0),
         'single-issue receipt has no failed_issue_closures bundle field; got ' + JSON.stringify(receipt.failed_issue_closures)
       );
-      assert(
-        receipt.roadmap_sources_removed == null || (Array.isArray(receipt.roadmap_sources_removed) && receipt.roadmap_sources_removed.length === 0),
-        'single-issue receipt has no roadmap_sources_removed bundle field; got ' + JSON.stringify(receipt.roadmap_sources_removed)
-      );
-      // Standard single-issue receipt fields still present
-      assert(receipt.roadmap_source_removed != null, 'receipt has roadmap_source_removed (scalar)');
-      assert(receipt.roadmap_regenerated != null, 'receipt has roadmap_regenerated');
     }
 
     // Closure invariants pass for the single-issue path
@@ -715,137 +688,10 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
   }
 })();
 
-// ---------------------------------------------------------------------------
-// Test (4): checkClosureInvariants per-issue — violation when a member's roadmap source still exists
-// ---------------------------------------------------------------------------
-
-(function testCheckClosureInvariantsPerIssue() {
-  console.log('Test (4): checkClosureInvariants per-issue — violation when bundle member source still present');
-  const tmpRoot = makeTmpRoot();
-  try {
-    initGitRepo(tmpRoot);
-
-    // Create a roadmap mirror with no active issues (so mirror is clean)
-    const roadmapDir = path.join(tmpRoot, 'kaola-workflow');
-    fs.mkdirSync(roadmapDir, { recursive: true });
-    fs.writeFileSync(path.join(roadmapDir, 'ROADMAP.md'), '# Kaola-Workflow Roadmap\n\nNo active issues.\n');
-
-    // Leave issue-47.md present (not removed) — should trigger roadmap-source-absent violation
-    writeRoadmapFile(tmpRoot, 47);
-
-    // Create archive dest with a closed state file
-    const archiveDest = path.join(tmpRoot, 'kaola-workflow', 'archive', 'bundle-42-47-53');
-    fs.mkdirSync(archiveDest, { recursive: true });
-    fs.writeFileSync(path.join(archiveDest, 'workflow-state.md'), [
-      '# Kaola-Workflow State',
-      'name: bundle-42-47-53',
-      'status: closed',
-      'step: complete'
-    ].join('\n') + '\n');
-
-    // Build a receipt for a bundle project where member 47's roadmap source still exists
-    const receipt = {
-      project: 'bundle-42-47-53',
-      issue_number: 42,
-      issue_numbers: [42, 47, 53],
-      archive: 'closed',
-      roadmap_source_removed: 'removed',   // scalar says removed (primary was removed)
-      roadmap_regenerated: 'regenerated',
-      remote_issue_closed: 'already_closed',
-      claim_label_removed: 'removed',       // so in-progress-label-removed passes
-      worktree_removed: 'missing',
-      branch_removed: 'kept',
-      claim_planner_attested: 'missing',
-      warnings: []
-    };
-
-    // Call checkClosureInvariants directly (exported)
-    const invariantResult = checkClosureInvariants(tmpRoot, receipt, archiveDest);
-
-    // Should have a violation for roadmap-source-absent (member 47's source still present)
-    assert(invariantResult.ok === false, 'invariants fail when member 47 source still present');
-    const ids = invariantResult.violations.map(v => v.id);
-    assert(ids.includes('roadmap-source-absent'), 'roadmap-source-absent violation fired for bundle; violations: ' + JSON.stringify(invariantResult.violations));
-
-    // Now remove member 47's source and confirm invariants pass
-    fs.unlinkSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-47.md'));
-    const invariantResult2 = checkClosureInvariants(tmpRoot, receipt, archiveDest);
-    assert(invariantResult2.ok === true, 'invariants pass after all member sources removed; violations: ' + JSON.stringify(invariantResult2.violations));
-
-  } finally {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
-  }
-})();
-
-// ---------------------------------------------------------------------------
-// Test (5): roadmap-mirror-clean is row-anchored (#339) — cross-reference vs active row
-// ---------------------------------------------------------------------------
-
-(function testMirrorCleanCrossReference() {
-  console.log('Test (5): roadmap-mirror-clean (#339) — cross-reference to #N in another row passes; active | #N | row violates');
-  const tmpRoot = makeTmpRoot();
-  try {
-    initGitRepo(tmpRoot);
-
-    const roadmapDir = path.join(tmpRoot, 'kaola-workflow');
-    fs.mkdirSync(roadmapDir, { recursive: true });
-
-    // Archive dest with a closed state file (so archive-state-closed passes)
-    const archiveDest = path.join(tmpRoot, 'kaola-workflow', 'archive', 'issue-562');
-    fs.mkdirSync(archiveDest, { recursive: true });
-    fs.writeFileSync(path.join(archiveDest, 'workflow-state.md'), [
-      '# Kaola-Workflow State',
-      'name: issue-562',
-      'status: closed',
-      'step: complete'
-    ].join('\n') + '\n');
-
-    // Single-issue receipt (no issue_numbers): issue #562 fully closed
-    const receipt = {
-      project: 'issue-562',
-      issue_number: 562,
-      archive: 'closed',
-      roadmap_source_removed: 'removed',
-      roadmap_regenerated: 'regenerated',
-      remote_issue_closed: 'already_closed',
-      claim_label_removed: 'removed',
-      worktree_removed: 'missing',
-      branch_removed: 'kept',
-      claim_planner_attested: 'missing',
-      warnings: []
-    };
-
-    const tableHeader =
-      '# Kaola-Workflow Roadmap\n\n' +
-      '| Issue | Title | Status | Project | Next Step |\n' +
-      '|-------|-------|--------|---------|----------|\n';
-
-    // Fixture A (AC1): the ONLY #562 mention is a legitimate cross-reference
-    // inside ANOTHER issue's row (next_step cell of the #485 row).
-    fs.writeFileSync(path.join(roadmapDir, 'ROADMAP.md'),
-      tableHeader +
-      '| #485 | layered rendering | open | issue-485 | place_inside (#562 opacity) |\n');
-    const resA = checkClosureInvariants(tmpRoot, receipt, archiveDest);
-    assert(resA.ok === true,
-      '#339 A: cross-reference-only mirror must pass closure invariants; violations: ' + JSON.stringify(resA.violations));
-    assert(!resA.violations.some(v => v.id === 'roadmap-mirror-clean'),
-      '#339 A: no roadmap-mirror-clean violation for a cross-reference inside another row');
-
-    // Fixture B (AC2): an actual active `| #562 | ...` row must still violate.
-    fs.writeFileSync(path.join(roadmapDir, 'ROADMAP.md'),
-      tableHeader +
-      '| #485 | layered rendering | open | issue-485 | place_inside (#562 opacity) |\n' +
-      '| #562 | opacity flag | active | issue-562 | TBD |\n');
-    const resB = checkClosureInvariants(tmpRoot, receipt, archiveDest);
-    assert(resB.ok === false,
-      '#339 B: mirror with an active #562 row must fail closure invariants');
-    assert(resB.violations.some(v => v.id === 'roadmap-mirror-clean'),
-      '#339 B: roadmap-mirror-clean violation fires for an active row; violations: ' + JSON.stringify(resB.violations));
-
-  } finally {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
-  }
-})();
+// Tests (4)/(5) stood here: checkClosureInvariants' roadmap-source-absent and
+// roadmap-mirror-clean checks (the latter #339's row-anchored cross-reference-vs-active-row
+// distinction). Both checks are retired under ADR 0018 §5 — there is no local roadmap source or
+// mirror left for a closure to leave clean. Deleted with their mechanism.
 
 // ---------------------------------------------------------------------------
 // Test (#371): cmdRelease bundle path — clears the advisory claim for EVERY member

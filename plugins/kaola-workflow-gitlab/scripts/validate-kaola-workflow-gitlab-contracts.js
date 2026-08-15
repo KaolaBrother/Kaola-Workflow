@@ -232,7 +232,6 @@ const scriptFiles = [
   'kaola-gitlab-workflow-claim.js',
   'kaola-gitlab-workflow-classifier.js',
   'kaola-gitlab-workflow-compact-context.js',
-  'kaola-gitlab-workflow-roadmap.js',
   'kaola-gitlab-workflow-sink-merge.js',
   'kaola-gitlab-workflow-sink-mr.js',
   'kaola-workflow-resolve-agent-model.js',
@@ -257,7 +256,6 @@ const installSupportScripts = [
   'kaola-gitlab-workflow-claim.js',
   'kaola-gitlab-workflow-classifier.js',
   'kaola-gitlab-workflow-compact-context.js',
-  'kaola-gitlab-workflow-roadmap.js',
   'kaola-gitlab-workflow-sink-merge.js',
   'kaola-gitlab-workflow-sink-mr.js',
   'kaola-workflow-resolve-agent-model.js',
@@ -332,20 +330,6 @@ assert(
   !/install-codex-agent-profiles\.js"?\s+"\$PWD"/.test(read(gitlabInitSkill)),
   gitlabInitSkill + ' must not mandate a per-repo "$PWD" agent install (#571)'
 );
-assertConcept(`${pluginRoot}/scripts/kaola-gitlab-workflow-roadmap.js`, 'GitLab missing roadmap source safeguard', [
-  'guardAgainstMissingRoadmapSource',
-  'non-empty generated ROADMAP.md',
-  'kaola-workflow/.roadmap is missing'
-]);
-assertConcept(`${pluginRoot}/scripts/kaola-gitlab-workflow-roadmap.js`, 'GitLab atomic roadmap writes and exclusive issue source creation', [
-  'writeFileAtomicReplace',
-  'createFileExclusive',
-  'updated: issue-'
-]);
-assertIncludes(`${pluginRoot}/scripts/kaola-gitlab-workflow-roadmap.js`, "sub === 'validate-remote'");
-assertIncludes(`${pluginRoot}/scripts/kaola-gitlab-workflow-roadmap.js`, 'function validateRemote');
-assertIncludes(`${pluginRoot}/scripts/kaola-gitlab-workflow-roadmap.js`, 'cmdValidateRemote');
-assertIncludes(`${pluginRoot}/scripts/test-gitlab-workflow-scripts.js`, 'testGitLabRoadmapValidateRemote');
 // #401 Part 1: the forge plan-validator refusal-matrix anchor must remain wired into the suite.
 
 // GitLab forge pair CLAUDE.md template must be byte-identical
@@ -600,16 +584,14 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
 // is the #294 fail-open class) and the surviving pointer in the command, so neither half can vanish.
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', "band && band !== project && band.indexOf(project + '.archived-') !== 0");
 
-// #505 ITEM 3: forge shared-function-presence guard. The hand-ported claim/sink-merge/classifier/
-// roadmap/repair-state ports must carry the shared top-level functions that define the data layer.
+// #505 ITEM 3: forge shared-function-presence guard. The hand-ported claim/sink-merge/classifier
+// ports must carry the shared top-level functions that define the data layer.
 // Pinning by function name (the #492 assertIncludes approach) means a silent DROP turns chain RED.
 // Each validator pins its OWN edition's ports only.
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'closeIssueIdempotent');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'buildBranchName');
 // checkDispatchAttestations left the shared set with the planner-attestation retirement; it is
 // now swept as an ABSENCE with the rest of that chain, above.
-assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-roadmap.js', 'readRoadmapIssues');
-assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-roadmap.js', 'roadmapDir');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-sink-merge.js', 'deriveMemberSet');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-sink-merge.js', 'readStateIssueNumbers');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-sink-merge.js', 'probeIssueClosed');

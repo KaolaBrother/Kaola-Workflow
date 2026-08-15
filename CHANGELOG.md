@@ -1,5 +1,108 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **The pick step reads each shortlisted candidate's own body and comments before claiming, and
+  comments win where they contradict the body — #985 (ADR 0018 §5 item 5, §8 step 1).**
+  `/workflow-next` selected and claimed work from titles alone: the live-state fetch pulled only
+  `number,title,state,labels,assignees,updatedAt,url`, and no step ever opened an issue. Scoped to
+  the shortlist deliberately — reading the whole backlog trades one drift class for a rate/context
+  class, which is a worse trade, not a safer one. `gh` and `glab` read body-plus-comments through
+  their own porcelain flag (`gh issue view {N} --json body,comments`, `glab issue view {N} --comments
+  -F json`); `tea` has no such view, so the gitea variant runs through `kaola-gitea-forge.js`'s
+  existing `tea api` transport instead of a second owner/repo-resolution copy in shell. Prose-only,
+  in `next.skeleton.md` plus one new slot entry; renders to the 18 tracked routing surfaces via
+  `generate-routing-surfaces.js --write`.
+
+- **`claim.js list-open` orders the open issue list by a bare `P0`–`P3` forge label — ordering, never
+  selecting — #984 (ADR 0018 §5 item 2, ruling 2).** The priority sorter was not new: `priorityTier`,
+  `readPriorityConfig` and `listOpenIssues` have shipped in **all four** `claim.js` copies since they
+  were written, faithfully hand-ported to both forge editions, and called from **zero** production
+  sites in any of them. `kaola-workflow-init`'s SKILL surface has been telling consumers to declare
+  `priority_top_tier_labels` "when the repo uses something other than P0–P3 naming" for a machine
+  nobody could reach. `list-open` is the entry point that reaches it: it returns the **whole** open
+  list reordered by tier then number — never truncated, never filtered, never "the top one", because
+  `next.skeleton.md`'s *"You select the target. No script picks for you"* is untouched. The suite
+  pins that boundary with a set-equality assertion, and the boundary was mutation-proven: making the
+  entry point return one issue reds 6 assertions across 3 test functions.
+
+- **The guidance `workflow-init` injects into a consumer's `CLAUDE.md` now lands inside a marked
+  region — #984 (ADR 0018 §5 item 9).** Injected guidance previously landed **unmarked**: the
+  authoring-side splice resolves away at render, so a consumer's `CLAUDE.md` carried no marker of any
+  kind and init could not tell its own wording from the user's. That is why its contract could only
+  ever be *"add only missing durable guidance"* — it was **structurally incapable of retiring a stale
+  rule**, and one consumer's file had already fused injected text and a hand-added amendment into a
+  single line that nothing could safely edit. `KW-CLAUDE-MANAGED-START` / `-END` (deliberately not the
+  renderer-intercepted `REGION:` form, so the markers survive into the rendered file) bound what the
+  tool owns; everything outside stays the repo owner's, including rules that deliberately override
+  shipped command prose. Separately, the backlog rule now carries `<!-- PIN: forge-is-the-backlog -->`
+  across all three routing skeletons with per-topic entries in `required-blocks.js`, so it cannot
+  vanish from one surface unnoticed.
+
+- **Finalization requires a run to comment what it corrected, not only to file what it found —
+  #984 (ADR 0018 §5 item 9).** Step 7 has always mandated `filed: #N` for new defects; nothing
+  required a run to record that the issue it just closed was **wrong as filed**. The forcing
+  observation: a four-issue run found three of its four issues wrong as filed — one issue's *title*
+  asserted a figure the measurement disproved — and every correction survived only because a human
+  happened to write it into the thread. With the pick step now reading comments as current state,
+  that write is what the next run's read depends on: *a correction is not a follow-up; a follow-up is
+  new work with its own `filed: #N`, a correction is the record of what this issue turned out to be.*
+
+### Removed
+
+- **The local backlog layer is retired: the forge is the backlog — #984 (ADR 0018).** Gone:
+  `kaola-workflow-roadmap.js` in all four editions with every subcommand it carried (`generate`,
+  `migrate`, `refresh`, `validate`, `validate-remote`, `init-issue`, `project-name`), the
+  `kaola-workflow/ROADMAP.md` mirror, the per-issue `.roadmap/issue-N.md` sources, the roadmap
+  closure-receipt fields and closure invariants, closure-audit's `stale_roadmap_sources` /
+  `mirror_lists_closed_issues` drift classes and the `main_roadmap_mirror_not_regenerated` finding,
+  the sink's roadmap auto-stash and keep-open source retention, and the dual-root mirror
+  reconciliation. An issue's **title, labels, and comments are what the work is**; nothing local
+  mirrors them.
+
+  **The measurement that forced it**, taken on a consumer repo sitting at 81 open issues and 81
+  local sources — a state every existing check called *reconciled*: **78 of 81** titles carried stray
+  quotes the renderer never stripped and 4 disagreed with the forge outright; **7** held local-only
+  `status:` values that the only remote check skipped by construction; **0 of 81** populated
+  `workflow_project`; `url`/`updated_at`/`labels` were read by **nothing** and 2 of the 18 that had
+  them were already wrong; and `next_step` had grown to **110,398 bytes — 72% of a 154KB mirror**.
+  Walking all 652 checkable atoms against 512 issues and the repo: **79 of 81 were already
+  forge-held, and exactly 2 lines existed nowhere else.**
+
+  **The structural defect was that shrinking was automated and growing never was.** Closure removed
+  a source; no GitHub path ever created one. Finalization *mandates* filing follow-ups — so the
+  workflow required the one action that broke its own invariant, silently, every run, while
+  `validate`, `validate-remote` and all six audit classes returned clean. GitLab and Gitea had
+  already shipped the other half as `refresh`, which overwrote `next_step` with the issue URL on
+  every run: had that ever been ported to GitHub, its first execution would have destroyed all
+  110KB of that consumer's hand-written prose. The local-content-store model was never protected by
+  anything — it survived because one edition happened to lack a command.
+
+  **Named accepted losses**, so they are not discovered later: an offline claim with no active
+  folder now answers `target_unverified` (the local source was its only evidence), and the offline
+  `blocked by #N` → `depends-on:#N` inference is gone with the prose it parsed.
+
+  **`kaola-workflow/.roadmap/_rules.md` survives** as the one optional local file, for standing
+  project-local rules — now read **directly** by the pick step instead of through a generated
+  section of the deleted mirror.
+
+### Fixed
+
+- **`archive_commit` could stage nothing at all, exit 0, and report success — #984.** When an
+  `:(exclude,glob)` names a directory that is a strict string **prefix** of the include's leaf
+  directory (`kaola-workflow/issue-9500/**/sink-receipt.json` against include
+  `kaola-workflow/archive/issue-9500-archived-XYZ/`), `git add` (2.54.0) exits 0 and stages
+  **nothing**, with a real file sitting under the include. The live-path excludes are now gated on
+  the same `liveTracked` flag as their include, so an exclude never outlives the include it narrows.
+  **This defect could always have fired**: #700's collision-suffixed archive destination always
+  shared that prefix, and a second live include merely masked it — retiring the roadmap mirror
+  removed the mask rather than creating the bug. Reproduced, isolated to the prefix relationship by a
+  one-variable-at-a-time grid, and separately measured to have a second trigger path in the glob tail
+  (`**` or `**/x` trips it regardless of any prefix relationship), which the code comment now scopes
+  explicitly rather than claiming the narrow case is the only one.
+
 ## [9.9.0] - 2026-08-14
 
 ### Changed

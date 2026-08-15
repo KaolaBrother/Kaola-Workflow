@@ -400,18 +400,6 @@ const NON_ATOMIC_EXEMPT = [
     why: 'the repo-level adaptive config default, which is not project state',
   },
   {
-    file: 'kaola-workflow-roadmap.js', api: 'writeFileSync', klass: 'outside-project-space',
-    why: 'the roadmap mirror and issue sources live at kaola-workflow/ and kaola-workflow/.roadmap/, outside every project folder — and are written through this file\'s own atomic replace regardless',
-  },
-  {
-    file: 'kaola-workflow-roadmap.js', api: 'openSync', klass: 'outside-project-space',
-    why: 'the same writer\'s temp create and its O_EXCL new-issue create, both outside project space',
-  },
-  {
-    file: 'kaola-workflow-roadmap.js', api: 'renameSync', klass: 'atomic-helper-internal',
-    why: 'the rename that completes this file\'s own copy of the atomic replace, which is how the roadmap mirror is published; the destination is outside project space in any case',
-  },
-  {
     file: 'kaola-workflow-run-chains.js', api: 'writeFileSync', klass: 'atomic-helper-internal',
     why: 'the fd write inside this file\'s own copy of the atomic replace, which is how chain-receipt.json is recorded',
   },

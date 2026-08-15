@@ -13,7 +13,7 @@ Three commands ship. Everything below is invoked by them or by hand.
 
 | Command | Owns |
 |---|---|
-| `/workflow-init` | bootstrap a repository: `CLAUDE.md`, roadmap tracking, docs structure, issue conventions |
+| `/workflow-init` | bootstrap a repository: `CLAUDE.md`, backlog guidance, docs structure, issue conventions |
 | `/workflow-next` | select, claim, write the mission list, run it |
 | `/kaola-workflow-finalize` | validate, dock docs, summarize, close, archive, commit, sink |
 
@@ -75,7 +75,7 @@ and claims another issue, fixes the argument, or works offline.
 | `no_target` | `answer` | 0 | neither `--target-issue` nor `--target-issues` resolved |
 | `target_ambiguity` | `answer` | 0 | both resolved simultaneously (flag or env, any combination) |
 | `target_unavailable` | `answer` | 0 | remote issue validation failed (`gh` / `glab` / `tea` call failed) and `KAOLA_WORKFLOW_OFFLINE=1` is not set |
-| `target_unverified` | `answer` | 0 | offline, and no local `.roadmap/issue-N.md` and no active folder for the target |
+| `target_unverified` | `answer` | 0 | offline, and no active folder for the target |
 | `target_indeterminate` | `answer` | 0 | the classifier subprocess faulted transiently (spawn error, signal, timeout) through all 3 attempts. A clean non-zero exit is determinate and reports `target_unavailable` instead. `reasoning_class` is `classifier_error` |
 | `dirty_tree_refused` | `consent` | 1 | in-place claim (`KAOLA_WORKTREE_NATIVE=0`) onto a dirty tree. The subject is the user's own uncommitted work, so it asks: carries an `ask` plus `options: ['commit','stash','worktree']`. An unprobeable tree reads as dirty |
 | `acquired` / `owned` | — | 0 | the folder is yours |
@@ -83,10 +83,9 @@ and claims another issue, fixes the argument, or works offline.
 A project name that would not be a project folder is **resolved, not refused** (#933). The reserved
 set is `archive` (case-folded) and any dot-prefixed name — `kaola-workflow/.roadmap/` is the backlog
 and `kaola-workflow/archive/` the archive band, and a claim must not write run state into either.
-The name reaches the claim by two doors, `--project` and `workflow_project:` in a roadmap source,
-and neither is filtered by `isSafeName`, which answers path safety only. Both converge on
-`claimProject`, which substitutes the run's ordinary `issue-<N>` folder and reports the swap on the
-acquiring envelope:
+The name reaches the claim through one door, `--project`, which is not filtered by `isSafeName`,
+which answers path safety only. It converges on `claimProject`, which substitutes the run's ordinary
+`issue-<N>` folder and reports the swap on the acquiring envelope:
 
 | Field | Content |
 |---|---|
@@ -300,9 +299,6 @@ about the exit code, `status` or `reasons` turns on it.
 ```json
 {
   "status": "closed",
-  "roadmap_source_removed": "removed|absent|kept|failed",
-  "roadmap_regenerated": "regenerated|skipped|failed",
-  "roadmap_regenerated_by_root": { "worktree": "regenerated|skipped|failed", "main": "regenerated|skipped|failed" },
   "claim_label_removed": "removed|already_absent|skipped_offline|failed",
   "resolved_project_note": "prose naming the supplied spelling and the one it resolved to",
   "archive_state_stamped": "not_needed|repaired|failed",
@@ -316,15 +312,6 @@ about the exit code, `status` or `reasons` turns on it.
 }
 ```
 
-- `roadmap_regenerated_by_root` reports the mirror rebuild **once per root**, in the same enum as the
-  scalar. A run from a linked worktree rebuilds two mirrors — the worktree's and the main checkout's —
-  and `roadmap_regenerated` can only carry one of them, so it keeps its existing meaning (the invoking
-  tree's outcome) and this map says which mirror is stale. `main` reads `skipped` when the run did not
-  rebuild main's mirror at all, which is the ordinary case for a plain checkout and for
-  `--keep-worktree`. When main's rebuild throws, `roadmap_regenerated_main_error` carries the error's
-  own message and the finding `main_roadmap_mirror_not_regenerated` is raised. **The exit stays 0**:
-  a stale mirror is reported, never gated — a reader of the receipt is told which mirror to rebuild.
-
 - `resolved_project_note` reports that the supplied `--project` did not match the run's directory
   name and was resolved to the one that exists. It is **absent** when the spelling was already exact.
   `--project` is the one input the transaction never reconciled against the durable record, and the
@@ -332,7 +319,7 @@ about the exit code, `status` or `reasons` turns on it.
   slug used to let every path-based step succeed while the claim-marker delete silently matched
   nothing, and the archive was written under the supplied spelling while git's case-sensitive index
   left the live run folder tracked beside it. The name is therefore resolved **once, before anything
-  is composed from it**, and every downstream read — archive path, roadmap paths, the removal
+  is composed from it**, and every downstream read — archive path, the removal
   pathspec, the marker, the receipt — sees the resolved spelling. The resolution is uniform across
   filesystems: it neither refuses nor stays silent. The same field appears on the `--check`
   pre-flight envelope, which must name the same folder the run will, and on the sink's envelope,
@@ -391,7 +378,7 @@ not support it.
 | `residue_attribution` | `unattributable_unknown`, present only when the attribution above could not be made at all — git could not be asked, or the branch carries no commits of its own. The residue is staged exactly as it was before this classification existed, and this field is why: with no evidence of what the run authored, "all of it is foreign" would be an ordinary run left unfinished rather than a finding |
 | `finalize_commit_probe` | `failed` when the finalize commit's `git diff --cached --quiet` exited neither 0 nor 1 |
 | `finalize_commit_probe_detail` | git's own message |
-| `findings` | the **de-duplicated list of typed fault names** raised anywhere in the block: `archive_unstage_failed`, `archive_stage_failed`, `archive_commit_probe_failed`, `residue_probe_failed`, `residue_stage_failed`, `residue_unattributed`, `finalize_commit_probe_failed`, `main_roadmap_mirror_not_regenerated`, `claim_release_skipped_offline`. Absent or empty on a healthy **online** run |
+| `findings` | the **de-duplicated list of typed fault names** raised anywhere in the block: `archive_unstage_failed`, `archive_stage_failed`, `archive_commit_probe_failed`, `residue_probe_failed`, `residue_stage_failed`, `residue_unattributed`, `finalize_commit_probe_failed`, `claim_release_skipped_offline`. Absent or empty on a healthy **online** run |
 
 `finalize_commit` gains the value **`'unknown'`**, and it means *we could not tell*, not *nothing
 happened*. It is set when the residue probe or the staged probe failed — one could not enumerate what
@@ -422,8 +409,8 @@ claimed online, so the finding is worded conditionally and names the issues it a
 report, not a gate, and `closure_invariants.ok` stays `true` — `skipped_offline` remains an allowed
 value of that invariant, unchanged.
 
-**One edition difference in the finding-type count.** The GitLab and Gitea ports raise **eight**
-finding types where canonical and Codex raise **nine**. The delta is exactly one, `archive_unstage_failed`.
+**One edition difference in the finding-type count.** The GitLab and Gitea ports raise **seven**
+finding types where canonical and Codex raise **eight**. The delta is exactly one, `archive_unstage_failed`.
 All four editions now stage the archive the same way — a `git rm -r --cached` of the live run folder
 followed by a scoped `git add` of a computed candidate-path list — but the forge ports run both calls
 inside **one** try/catch, so a fault in either raises the single `archive_stage_failed`, while
@@ -771,9 +758,9 @@ all four byte-identical copies. Nothing keeps the two spellings in step.
 - **Script**: `kaola-workflow-sink-merge.js` (GitHub) / `kaola-gitlab-workflow-sink-merge.js` /
   `kaola-gitea-workflow-sink-merge.js`.
 - **`--sink` mode** is one resumable transaction: preflight (pure read; names any foreign dirt with
-  zero mutation, auto-stashes the claim-time `.roadmap/issue-N.md`) → push branch → rebase onto the
-  mainline → run the validation chains → fast-forward merge (with a bounded race retry,
-  `MAX_AUTOMERGE_RETRIES=3`) → push mainline → close the issue idempotently → archive → clean up.
+  zero mutation) → push branch → rebase onto the mainline → run the validation chains →
+  fast-forward merge (with a bounded race retry, `MAX_AUTOMERGE_RETRIES=3`) → push mainline →
+  close the issue idempotently → archive → clean up.
 - Preflight does **not** count finalize's own archive mirror as foreign dirt (issue #893): untracked
   paths under `kaola-workflow/archive/<project>/` — the tree `cmdFinalize --keep-worktree` writes into
   the main checkout and leaves for this sink's archive step to commit. Existence and content are two
@@ -1045,35 +1032,28 @@ shared `buildClosureReceipt()` helper (issue #164) and emits `closure_receipt` p
 **Fail-closed archive result boundary.** The shared `archiveSucceeded(result)` predicate returns
 true only for `{ archived: true }` or the idempotent retry result `{ skipped: "source-missing" }`.
 Finalize, release/discard, and merged/closed PR/MR watch callers must pass this post-call predicate
-before roadmap regeneration or removal, remote issue or label disposition, worktree/branch/claim
-cleanup, terminal receipt stamping, or success output. Thrown errors, `archive_incomplete`, missing
-fields, and every other result shape stop with the live authority preserved.
+before remote issue or label disposition, worktree/branch/claim cleanup, terminal receipt stamping,
+or success output. Thrown errors, `archive_incomplete`, missing fields, and every other result shape
+stop with the live authority preserved.
 
 ### Closure invariants
 
 For a completed linked issue N:
 
-1. `kaola-workflow/.roadmap/issue-N.md` is absent.
-2. Generated `kaola-workflow/ROADMAP.md` does not list `#N` as active work.
-3. `kaola-workflow/{project}/` is absent from active folders.
-4. `kaola-workflow/archive/{project}/workflow-state.md` exists with `status: closed` and
+1. `kaola-workflow/{project}/` is absent from active folders.
+2. `kaola-workflow/archive/{project}/workflow-state.md` exists with `status: closed` and
    `step: complete` when a local archive is available.
-5. The remote issue is closed only after acceptance passes and implementation is published.
-6. The remote issue does not carry `workflow:in-progress` after closure.
-7. Any branch or worktree cleanup is either complete or explicitly reported by the stale-worktree
+3. The remote issue is closed only after acceptance passes and implementation is published.
+4. The remote issue does not carry `workflow:in-progress` after closure.
+5. Any branch or worktree cleanup is either complete or explicitly reported by the stale-worktree
    tooling.
 
 `checkClosureInvariants(root, receipt, archiveDest)` checks them as named violations:
 
-- `roadmap-source-absent` — invariant 1.
-- `roadmap-mirror-clean` — invariant 2, row-anchored: only an active table row `| #N | …` at line
-  start violates; cross-references to `#N` inside other rows are allowed after closure.
-- `roadmap-residue-clean` — `roadmap_residue` is empty after roadmap reconciliation. A non-empty
-  residue means a `.roadmap/issue-*.md` source survived finalization in one of the cleaned roots.
-- `in-progress-label-removed` — invariant 6. Skipped, not violated, when `KAOLA_WORKFLOW_OFFLINE=1`
+- `in-progress-label-removed` — invariant 4. Skipped, not violated, when `KAOLA_WORKFLOW_OFFLINE=1`
   or when `claim_label_removed` is `skipped_offline`.
-- `active-folder-absent` — invariant 3.
-- `archive-state-closed` — invariant 4; skipped when `archiveDest` is absent.
+- `active-folder-absent` — invariant 1.
+- `archive-state-closed` — invariant 2; skipped when `archiveDest` is absent.
 - `branch-worktree-resolved` — neither `worktree_removed` nor `branch_removed` is `failed`.
 - `remote-members-closed` — for a bundle, every member of `issue_numbers` is closed. A member left
   in `failed_issue_closures` or `open_issues` while online is a violation. Never fires for
@@ -1081,12 +1061,10 @@ For a completed linked issue N:
 
 `ok` is `true` only when `violations` is empty.
 
-**Keep-open inversion.** When the receipt records `keep_open_requested: true`,
-`checkClosureInvariants` REPLACES invariants 1 and 2 with their inverse under the single name
-`keep-open-roadmap-preserved`: `kaola-workflow/.roadmap/issue-N.md` MUST be preserved and the
-regenerated `ROADMAP.md` MUST still list `#N`. Invariants 3, 4, 6 and 7 apply unchanged. The
-inversion keys on the recorded **intent**, not on the mutable `remote_issue_closed` token, which
-flips to `already_closed` when the issue was auto-closed on the forge.
+**Retired: the roadmap-source invariants.** The `.roadmap/issue-N.md`-absent and
+`ROADMAP.md`-does-not-list-`#N` invariants above, and the keep-open inversion that preserved their
+counterparts under `keep-open-roadmap-preserved`, went with `reconcileRoadmapForClosure` under ADR
+0018 §5 — there is no local roadmap source or mirror left for a closure to leave clean or preserved.
 
 **Retired: the WARN-FIRST attestation invariant.** `claim_planner_attested` went with its producer
 chain (`checkDispatchAttestations`, the `--attest-planner-spawn` back-fill) when the mandatory
@@ -1108,10 +1086,6 @@ success.
   "issue_number": "N",
   "archive": "closed|abandoned|skipped|failed",
   "anchored_root": "/absolute/path/to/main/root",
-  "roadmap_source_removed": "removed|absent|kept|failed",
-  "roadmap_regenerated": "regenerated|skipped|failed",
-  "roadmap_removed": { "/path/to/main/root": ["issue-42.md"] },
-  "roadmap_residue": [],
   "remote_issue_closed": "closed|already_closed|kept_open|partial|close_pending|skipped_offline|failed",
   "closure": { "attempted": [], "closed": [], "failed": [], "skipped_offline": [], "kept_open": [] },
   "claim_label_removed": "removed|already_absent|skipped_offline|failed",
@@ -1127,12 +1101,8 @@ success.
 
 - `anchored_root` — the resolved main root at finalize time. Absent on single-root runs where the
   resolution is trivial.
-- `anchored_root`, `roadmap_removed`, `roadmap_residue` and `closure` are attached **after**
-  `buildClosureReceipt()` returns, because the builder filters by `CLOSURE_RECEIPT_FIELDS`.
-- `roadmap_removed` — per-root map of `.roadmap/issue-*.md` filenames removed. Keys are absolute root
-  paths; a worktree run carries two.
-- `roadmap_residue` — absolute paths of sources that could NOT be removed. **Attached only when
-  non-empty**; its absence is the clean case.
+- `anchored_root` and `closure` are attached **after** `buildClosureReceipt()` returns, because the
+  builder filters by `CLOSURE_RECEIPT_FIELDS`.
 - `closure` — per-issue audit record; all five sub-fields are arrays of issue numbers.
 - `selection_evidence` — advisory. `probeSelectionEvidence` checks the archive then live `.cache/`
   for a file matching `/^selection-evidence\./`. No invariant and no warning on absence: a
@@ -1156,10 +1126,6 @@ comment_keep_open` (written at the closure decision; default `close` when absent
   Truth still wins: online and already closed on the forge records `already_closed` plus a warning.
   `sink-merge` posts a mechanical keep-open comment with no `close`/`fix`/`resolve #N` substring
   instead of closing; the claim label is removed in both modes.
-- `roadmap_source_removed` records `kept` — `archiveProjectDir` skips the unlink, and `ROADMAP.md`
-  is regenerated still listing `#N`. The `closure-audit` `archive_closed` stale-source class
-  excludes a `status: closed` archive carrying `issue_action: comment_keep_open`, so `--execute`
-  never deletes the preserved source.
 
 **Keep-open is merge-sink-only**, fenced at three layers: the finalize prose refuses a non-merge
 sink under keep-open; a `sink-merge` exit-3 is a blocked refusal requiring manual remediation rather
@@ -1175,8 +1141,7 @@ absent on single-issue receipts.
   "issue_numbers": [42, 47, 53],
   "closed_issues": [42, 47, 53],
   "failed_issue_closures": [],
-  "open_issues": [],
-  "roadmap_sources_removed": ["issue-42.md", "issue-47.md", "issue-53.md"]
+  "open_issues": []
 }
 ```
 
@@ -1205,10 +1170,9 @@ uses to produce a receipt, exported from each forge's claim module (`kaola-workf
 
 `sink-merge` is the only path that sets `remote_issue_closed: 'closed'` and
 `branch_removed: 'removed'` — it owns the remote-close and branch-delete steps. `cmdFinalize` and
-the watchers set `branch_removed: 'kept'`. `sink-merge` derives `archive` and
-`roadmap_source_removed` by probing post-conditions (finalize already archived);
-`roadmap_regenerated` is `skipped` because it does not regenerate the mirror. The exit-3
-merge-impossible fallback returns before any receipt is emitted.
+the watchers set `branch_removed: 'kept'`. `sink-merge` derives `archive` by probing post-conditions
+(finalize already archived). The exit-3 merge-impossible fallback returns before any receipt is
+emitted.
 
 ### `watch-pr` / `watch-mr` output
 
@@ -1232,16 +1196,17 @@ no close keyword), `unknown` when the probe is unavailable.
 ### Closure history
 
 The contract was decomposed across four issues, all shipped: **#162** made roadmap source cleanup
-mandatory after closure (invariants 1, 2); **#163** guaranteed `workflow:in-progress` label cleanup
-(invariant 6) and added the `audit-labels` / `repair-labels` subcommands; **#164** unified closure
-execution behind the shared receipt (invariants 1–4, 6, 7); **#165** added the closure audit and
-repair command for drift detection. GitLab and Gitea ports followed in #166 and #167.
+mandatory after closure — that reconciliation was retired under ADR 0018 §5, so this is history,
+not current behaviour; **#163** guaranteed `workflow:in-progress` label cleanup
+(`in-progress-label-removed`) and added the `audit-labels` / `repair-labels` subcommands; **#164**
+unified closure execution behind the shared receipt; **#165** added the closure audit and repair
+command for drift detection. GitLab and Gitea ports followed in #166 and #167.
 
 ## Closure audit and repair — `kaola-workflow-closure-audit.js`
 
-Reports **closure drift** — completed work that still shows as active — across local roadmap
-sources, the generated `ROADMAP.md`, active folders, archive state, remote issue state, and the
-`workflow:in-progress` label. A dedicated script, not a `claim.js` subcommand.
+Reports **closure drift** — completed work that still shows as active — across active folders,
+archive state, remote issue state, and the `workflow:in-progress` label. A dedicated script, not a
+`claim.js` subcommand.
 
 ```bash
 node scripts/kaola-workflow-closure-audit.js                             # repository-wide, dry-run: report drift as JSON, change nothing
@@ -1269,12 +1234,10 @@ repository-wide default, whose envelope is unchanged.
 | exit `0` | every successful run, **including one that found drift**. There is deliberately no verdict in the exit code |
 | exit `1` | operator-input error only: unknown flag, a missing or malformed flag value, or a `--project` resolving to no `workflow-state.md` anywhere with no `--issue` given. stdout is empty. Answering "clean" for a mistyped project name is the failure this replaces |
 | `attribution` | on scoped archive findings only, `"name_match"` or `"ambiguous_name_match"`. The two archive classes are attributed by name alone, because the artifact they report missing is itself the record that would carry an issue number |
-| scoped `--execute` | repairs only in-scope drift, but still rebuilds `ROADMAP.md` whole — the mirror is one generated file derived from all surviving sources, so there is no partial rebuild |
+| scoped `--execute` | repairs only in-scope drift — `stale_in_progress_labels` is already filtered to the scope's own issues before the repair runs, so a scoped run never touches an out-of-scope label |
 
 | Key | Meaning |
 |-----|---------|
-| `stale_roadmap_sources` | `.roadmap/issue-N.md` exists for a closed issue. `reason` is `closed_remote` (closed on the forge) or `archive_closed` (an archive says `status: closed` but the source survives). `closed_remote` wins when both apply |
-| `mirror_lists_closed_issues` | Generated `ROADMAP.md` still lists a closed issue |
 | `stale_in_progress_labels` | Closed remote issues still carrying `workflow:in-progress` |
 | `active_folder_for_closed_issue` | An active folder whose linked issue is closed. `dirty` flags uncommitted content. **Report-only** |
 | `unarchived_pr_folders` | An active `sink: pr` folder whose PR is MERGED/CLOSED but was never archived. **Report-only** |
@@ -1282,10 +1245,9 @@ repository-wide default, whose envelope is unchanged.
 | `unresolved_closed_state` | (omitted when empty) Issue numbers whose closed state could not be determined because the remote check timed out or failed. Present in both `drift` and `counts` |
 | `archive_summary_citation_missing` | (omitted when empty) An archived `finalization-summary.md` cites a bare-relative `.cache/…` artifact that is not in the archive — a record pointing at evidence nobody can read. **Report-only**, and it carries the cited path so one `ls` settles it. Append-log citations (`.jsonl`) are excluded: their disposal is a documented step, so absence there is correct. A narrative mention of a path that lives elsewhere reads as a citation, so the class has a known false-positive mode and is a prompt to adjudicate, not a verdict |
 
-**Safe-repair boundary.** `--execute` only ever (1) deletes stale `.roadmap/issue-N.md` sources,
-(2) regenerates `ROADMAP.md`, and (3) removes `workflow:in-progress` from closed issues when online.
-It **never** deletes active folders or worktrees. The report-only classes are carried verbatim into
-`reported_not_repaired` in both modes — they may hold un-finalized work.
+**Safe-repair boundary.** `--execute` only ever removes `workflow:in-progress` from closed issues
+when online. It **never** deletes active folders or worktrees. The report-only classes are carried
+verbatim into `reported_not_repaired` in both modes — they may hold un-finalized work.
 
 **Offline** (`KAOLA_WORKFLOW_OFFLINE=1`): local-only classes still run; remote-dependent classes
 report the string `"skipped_offline"` rather than an array, and `--execute` performs no remote label
@@ -1337,9 +1299,9 @@ They cover **disjoint** drift surfaces and are intentionally separate:
 
 | | `closure-audit` | `stale-worktree-check` / `-cleanup` |
 |---|---|---|
-| **Surface** | roadmap sources, `ROADMAP.md`, active folders, archive state, remote issue state, advisory labels (invariants 1, 2, 3, 5, 6) | Git worktrees and branches (invariant 7) |
-| **`--execute` repairs** | stale `.roadmap` sources, mirror regeneration, stale labels | removes worktrees and deletes local branches |
-| **Never touches** | worktrees, branches, **active folders** | roadmap sources, `ROADMAP.md`, labels, archive folders |
+| **Surface** | active folders, archive state, remote issue state, advisory labels (invariants 1, 2, 3, 4) | Git worktrees and branches (invariant 5) |
+| **`--execute` repairs** | stale labels | removes worktrees and deletes local branches |
+| **Never touches** | worktrees, branches, **active folders** | labels, archive folders |
 
 Run both for full coverage.
 
@@ -1428,35 +1390,26 @@ It keeps every ref whose tag belongs to a live project, determined across **ever
 that exists but cannot be read (unprovable-dead ⇒ keep). Add-only on collisions, scoped strictly to
 `barrier/<tag>/*`, and fails closed — deleting nothing — if the worktree set cannot be enumerated.
 
-## Roadmap Operations — `kaola-workflow-roadmap.js`
+## Roadmap layer — retired
 
-Manages the local roadmap mirror (`kaola-workflow/ROADMAP.md`) and per-issue metadata files
-(`kaola-workflow/.roadmap/issue-{N}.md`).
+`kaola-workflow-roadmap.js` (all four editions), the `ROADMAP.md` mirror it generated, and the
+per-issue `kaola-workflow/.roadmap/issue-{N}.md` sources it read and wrote are gone —
+[ADR 0018](decisions/0018-the-forge-is-the-backlog.md) §5 retired the whole layer: the mirror, the
+sources, the closure-receipt fields, the closure invariants, the drift classes, and the sink's
+roadmap stash bucket. `generate`, `validate`, `validate-remote`, `migrate`/`refresh`, `init-issue`
+and `project-name` no longer exist on any edition. The forge is the backlog now — an issue's title,
+labels and comments are the work, comments overriding the body — and there is no local copy to keep
+current.
 
-| Subcommand | Contract |
-|---|---|
-| `generate` | regenerate `ROADMAP.md` from `.roadmap/issue-*.md` sources alone. **Makes no remote call.** Atomic write-replace; no change = no-op. Guards against replacing a non-empty generated ROADMAP when `.roadmap/` is missing |
-| `validate` | assert `ROADMAP.md` is current with its sources. Exit 0 on match; exit 1 plus a remediation message when stale |
-| `validate-remote` | the only subcommand that touches the forge. Iterates `.roadmap/issue-*.md` marked `status: open` and checks whether each is closed remotely — **one direction, local outward.** It cannot see an issue open on the remote with no local source, because there is no file to iterate for one; it is a stale-source check, not a general roadmap-drift check. Exit 0 when clean; exit 1 with remediation on drift. Success states its domain — `ok: N open local sources compared against the remote, none closed there`, or `ok: nothing compared — no open local sources …` — so a vacuous pass over an empty `.roadmap/` cannot be read as a verified-clean one. Skips all network calls under `KAOLA_WORKFLOW_OFFLINE=1` |
-| `migrate` | one-time: parse the current `ROADMAP.md` table and create per-issue sources. Skips existing files. GitLab and Gitea swap this for `refresh` |
-| `init-issue --issue N [--title] [--status] [--workflow-project] [--next-step]` | create one `.roadmap/issue-{N}.md`. Exclusive creation — fails if the file exists |
-| `project-name --issue N` | print the `workflow_project` field from `.roadmap/issue-{N}.md`. Exit 1 if the field is missing or `—`. That field names the project directory a claim creates **verbatim**: `—`, absent or empty means unassigned and yields `issue-{N}`, and any other path-safe value is adopted as written. Nothing else validates it, so a placeholder becomes a real folder name — see `workflow-state-contract.md` § Roadmap issue-source fields |
-
-**Closure cleanup is automatic.** When an active folder is finalized (`cmdFinalize`) or archived
-after a PR merge (`watch-pr` on MERGED), closure removes the corresponding `.roadmap/issue-{N}.md`
-and regenerates `ROADMAP.md`. Scoped to closed-status archives only; abandoned folders leave the
-entry untouched so the issue can be reopened. Finalizing from a linked worktree stages only the
-finalized project's own paths — its `kaola-workflow/archive/<project>/` band, the live-folder→archive
-rename, `kaola-workflow/.roadmap/`, and `kaola-workflow/ROADMAP.md` — rather than a broad
-`git add -A kaola-workflow/`, so a stray foreign archive folder is never swept into the commit.
-
-**Exports:** `regenerateRoadmap(root)` (returns `'generated'` or `'up-to-date'`; prints nothing),
-`validateRemote(root[, stats])` (returns the drift array; pass `stats` to receive `checked`, the
-number of sources actually compared — open **and** parseable entries, not files present),
-`readRoadmapIssues(dir)`, `roadmapDir(root)`, and
-`buildRoadmapContent(issues, dir)`. When `dir` is provided and `<dir>/_rules.md` is non-empty, its
-contents are appended to the Rules section under `### Project rules`; all call sites within a script
-must thread `dir` consistently so `generate` output matches the `validate` recomputation.
+**What survives.** `kaola-workflow/.roadmap/` is still a reserved project-name directory (see
+`reserved_project` above) and still holds one optional file, `_rules.md`, for standing project-local
+rules — read directly by the pick step, never generated (see `workflow-state-contract.md` § Durable
+Sources). Finalizing (`cmdFinalize`) no longer reconciles a roadmap mirror — that automatic
+reconciliation (`reconcileRoadmapForClosure`) was retired with the rest of the layer — but finalize's
+`roadmap_staged` field (above) still stages `kaola-workflow/.roadmap/` and `kaola-workflow/ROADMAP.md`
+into the archive commit when either is found on disk, so a not-yet-migrated consumer repo's tracked
+files land in the commit rather than being left as untracked residue. A freshly initialized repo never
+creates either path.
 
 ## Run-gap sweep — `kaola-workflow-gap-sweep.js`
 
@@ -1645,8 +1598,6 @@ primitives.
 `resolveOutputPath`, `getGitTopLevel`, `classifyScope`, `resolveDiffBase`, `computeChangedFiles`,
 `forgeReferencedScripts`, `isEditionCouplingPath`.
 
-**`scripts/kaola-workflow-roadmap.js`** — see Roadmap Operations above.
-
 **`scripts/kaola-workflow-ledger-compare.js`** — `countComplete(missionListText)`,
 `compareLedgers(srcText, destText)`. Record-regression guard for the finalize Step-8a artifact
 mirror: fails closed only when the destination `mission-list.md` records strictly more
@@ -1663,8 +1614,6 @@ opts)`, `fastForwardMain(args, opts)`, `finalValidationPassed(root, project)`,
 **`kaola-gitlab-workflow-claim.js`** — `getCoordRoot(root)` (same contract); `cmdSinkFallback()`
 checks both the live folder and the archive before updating state, returning
 `{updated: false, reason: 'project archived'}` rather than recreating an archived project.
-
-**`kaola-gitlab-workflow-roadmap.js`** — `regenerateRoadmap(root)`, `validateRemote(root[, stats])`.
 
 ### Gitea edition
 
@@ -1683,5 +1632,3 @@ returns `{pr, project}`, updating the `## Sink` block with `pr_url`, `pr_number`
 **`kaola-gitea-workflow-sink-merge.js`** — `classifyMergeError(error)`, `closeLinkedIssue(root,
 project, issueIid, opts)`, `fastForwardMain(args, opts)`, `finalValidationPassed(root, project)`,
 `runDirectMerge(args, opts)`, `assertBranchHasNonWorkflowChanges(...)`.
-
-**`kaola-gitea-workflow-roadmap.js`** — `regenerateRoadmap(root)`, `validateRemote(root[, stats])`.

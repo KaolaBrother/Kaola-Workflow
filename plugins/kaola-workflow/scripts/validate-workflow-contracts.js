@@ -234,7 +234,7 @@ for (const file of nextSurfaces) {
   assertIncludes(file, 'The user named an issue');
   assertIncludes(file, 'Never substitute another, and never adopt an active folder');
   assertIncludes(file, 'The user described a task but named no issue');
-  assertIncludes(file, 'roadmap priority');
+  assertIncludes(file, 'priority tier');
   assertIncludes(file, 'State the selection aloud before you claim it');
   // Everything before the claim is free, and the claim itself is bookkeeping rather than a door.
   assertIncludes(file, 'Everything before the claim is free');
@@ -352,15 +352,15 @@ if (claudeMdLines > 200) {
 // generated. `.cache/` stood here for the per-node evidence files; an item's outcome now lives in
 // the mission list's own `result` field, so the record to pin is the list.
 assertConcept('CLAUDE.md', 'compact durable state contract', [
-  'kaola-workflow/.roadmap/issue-*.md',
-  'do not purge',
+  'kaola-workflow/.roadmap/_rules.md',
+  'is the one optional local file that survives',
   'kaola-workflow/{project}/',
   'workflow-state.md',
   'mission-list.md'
 ]);
 assertConcept('commands/workflow-init.md', 'generated CLAUDE durable state contract', [
-  'kaola-workflow/.roadmap/issue-*.md',
-  'do not purge',
+  'kaola-workflow/.roadmap/_rules.md',
+  'is the one optional local file that survives',
   'kaola-workflow/{project}/',
   'workflow-state.md',
   // The injected block grounds durable state on the run's mission list — the one coordination
@@ -369,11 +369,9 @@ assertConcept('commands/workflow-init.md', 'generated CLAUDE durable state contr
   'dispatched',
   'in-flight'
 ]);
-assertConcept('docs/workflow-state-contract.md', 'durable sources and generated mirrors', [
+assertConcept('docs/workflow-state-contract.md', 'durable sources', [
   'durable sources',
-  'kaola-workflow/.roadmap/issue-*.md',
   'workflow-state.md',
-  'generated mirrors',
   'fast-summary.md'
 ]);
 assertConcept('docs/workflow-state-contract.md', 'legacy coordination as transitional only', [
@@ -386,7 +384,6 @@ assertConcept('docs/workflow-state-contract.md', 'legacy coordination as transit
 assertConcept('docs/api.md', 'closure contract invariants and receipt schema', [
   '## Closure Contract',
   'closure invariants',
-  'roadmap_source_removed',
   'remote_issue_closed',
   'claim_label_removed',
   'kaola-workflow-closure-contract.js',
@@ -410,29 +407,6 @@ assertConcept('docs/api.md', 'audit-labels/repair-labels forge parity', [
 ]);
 assertConcept('docs/workflow-state-contract.md', 'closure contract cross-reference', [
   'closure contract'
-]);
-assertConcept('scripts/kaola-workflow-roadmap.js', 'missing roadmap source safeguard', [
-  'guardAgainstMissingRoadmapSource',
-  'non-empty generated ROADMAP.md',
-  'kaola-workflow/.roadmap is missing'
-]);
-assertConcept('scripts/kaola-workflow-roadmap.js', 'atomic roadmap writes and exclusive issue source creation', [
-  'writeFileAtomicReplace',
-  'createFileExclusive',
-  "fs.openSync(tmp, 'wx')",
-  'fs.renameSync(tmp, filePath)',
-  "fs.openSync(filePath, 'wx')",
-  'fs.fsyncSync(fd)'
-]);
-assertConcept('scripts/simulate-workflow-walkthrough.js', 'roadmap safeguard behavior', [
-  'testRoadmapGenerateMissingSourceGuard',
-  'preserve existing active roadmap rows'
-]);
-assertConcept('scripts/simulate-workflow-walkthrough.js', 'roadmap concurrency regression behavior', [
-  'testRoadmapGenerateAtomicReplace',
-  'testRoadmapInitIssueConcurrentExclusive',
-  'concurrent init-issue should create exactly one source file',
-  'final-path exclusivity'
 ]);
 assertConcept('scripts/simulate-workflow-walkthrough.js', 'startup and cleanup hardening regressions', [
   'testStartupJsonAndSiblingWorktrees',

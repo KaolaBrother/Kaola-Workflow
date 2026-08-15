@@ -47,7 +47,6 @@ const COMMON_SCRIPTS = [
   'kaola-workflow-active-folders.js',
   'kaola-workflow-classifier.js',
   'kaola-workflow-closure-audit.js',
-  'kaola-workflow-roadmap.js',
   'kaola-workflow-sink-merge.js',
   'kaola-workflow-sink-pr.js',
   'release-surface-drift.js',
@@ -470,7 +469,7 @@ const FORGE_CLASSIFIER_EXPORT_SUPERSET = {
 };
 
 // #553: GENERALIZE the #550 single-classifier guard into a FAMILY over every DIVERGENT forge hand-port that
-// participates in a cross-script require (claim / sink-merge / roadmap / active-folders /
+// participates in a cross-script require (claim / sink-merge / active-folders /
 // closure-audit) — the same "a cross-required name resolves to undefined → TypeError on a failing path no
 // green chain hits" class (#550) was unguarded for these. Each entry reuses the proven require()+Object.keys
 // superset mechanism. `canonicalOnly` lists canonical exports that are GENUINELY edition-specific — defined
@@ -484,7 +483,6 @@ const FORGE_EXPORT_SUPERSET_FAMILY = [
   FORGE_CLASSIFIER_EXPORT_SUPERSET,
   { label: 'forge claim module.exports superset', canonical: 'scripts/kaola-workflow-claim.js', ports: forgeBothPorts('claim'), canonicalOnly: ['ghExec'] },
   { label: 'forge sink-merge module.exports superset', canonical: 'scripts/kaola-workflow-sink-merge.js', ports: forgeBothPorts('sink-merge') },
-  { label: 'forge roadmap module.exports superset', canonical: 'scripts/kaola-workflow-roadmap.js', ports: forgeBothPorts('roadmap') },
   { label: 'forge active-folders module.exports superset', canonical: 'scripts/kaola-workflow-active-folders.js', ports: forgeBothPorts('active-folders') },
   { label: 'forge closure-audit module.exports superset', canonical: 'scripts/kaola-workflow-closure-audit.js', ports: forgeBothPorts('closure-audit') },
 ];

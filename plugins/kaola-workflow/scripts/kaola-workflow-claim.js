@@ -14,7 +14,6 @@ const {
   getIssueStateSnapshot
 } = require('./kaola-workflow-active-folders');
 
-const roadmapModule = require('./kaola-workflow-roadmap');
 const closureContract = require('./kaola-workflow-closure-contract');
 // issue #227 (adaptive path): forge-neutral constants + toggle resolution.
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
@@ -290,21 +289,31 @@ function listOpenIssues(root) {
   }
 }
 
+// ADR 0018 §5 item 2 / §8 step 2: the CLI entry point for the priority-tier sorter above.
+// Ordering is not selecting (next.skeleton.md:39: "You select the target. No script picks for
+// you.") — this always returns the FULL open-issue list, tier-sorted then number-sorted, never
+// truncated or filtered to a single "winner". listOpenIssues already degrades to [] on any error
+// (including OFFLINE) rather than throwing, so this command exits 0 unconditionally.
+function cmdListOpen() {
+  const root = getRoot();
+  output({ issues: listOpenIssues(root) });
+}
+
+// ADR 0018 §5: the roadmap-source `workflow_project:` read is retired (0/81 measured populated on
+// the consumer that forced this record — the fallback below is what every real call already took).
+// `root` is kept in the signature so every call site above stays untouched.
 function projectNameForIssue(root, issueNumber) {
-  const roadmapFile = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issueNumber + '.md');
-  try {
-    const name = field(fs.readFileSync(roadmapFile, 'utf8'), 'workflow_project');
-    if (name && name !== '—' && isSafeName(name)) return name;
-  } catch (_) {}
   return 'issue-' + issueNumber;
 }
 
 // #933: a claim must not write run state into a directory that is not a project folder. The name
-// reaches the claim from two doors — the `--project` flag, and `workflow_project:` in a roadmap
-// source, which `projectNameForIssue` above reads back out verbatim — and `isSafeName` filters
-// neither, because it is PATH safety and nothing more. Both doors were measured landing
+// reached the claim from two doors — the `--project` flag, and `workflow_project:` in a roadmap
+// source, which `projectNameForIssue` above used to read back out verbatim — and `isSafeName`
+// filtered neither, because it is PATH safety and nothing more. Both doors were measured landing
 // `workflow-state.md` (and, through startup, `.cache/origin/selection-record.json`) inside
-// `kaola-workflow/.roadmap/` and `kaola-workflow/archive/` at exit 0 with claim `acquired`.
+// `kaola-workflow/.roadmap/` and `kaola-workflow/archive/` at exit 0 with claim `acquired`. The
+// roadmap door is retired under ADR 0018 §5 (`projectNameForIssue` above now always returns the
+// fallback); the `--project` door and the resolution below are unchanged.
 //
 // The owner ruled this RESOLVES rather than refuses. Nothing is destroyed here — the adopted
 // directory keeps everything it arrived with — so this is not the destruction class where a refusal
@@ -2433,156 +2442,6 @@ function probeSelectionEvidence(cacheDirCandidates) {
   return 'absent';
 }
 
-// #395.2: remove the roadmap source(s) for the given member numbers (respecting keep-open),
-// reconcile the MAIN-repo staged-ADD orphan (#297), and regenerate the mirror. Extracted so BOTH
-// archiveProjectDir's close loop AND cmdFinalize's source-missing backstop call ONE convergent
-// path — the #395 bug was that a crash between renameSync and this loop left the roadmap source
-// permanently live (the backstop early-returned BEFORE any roadmap removal, so finalize re-run
-// could never converge). Idempotent: ENOENT/already-removed read as 'absent' and never error.
-// #705: opts.keepRoadmapSource keeps EVERY member's source (whole-run keep-open); opts.excludeIssues
-// is the PER-MEMBER form — a set/array of member numbers whose sources are RETAINED while the rest
-// are still removed (a mixed close/keep-open bundle: the kept-open issue stays tracked, the closing
-// members' sources go). An open issue must never be dropped from the mirror.
-// Returns { roadmap_source_removed (scalar, primary), roadmap_regenerated, roadmap_sources_removed }.
-// #916: plus roadmap_regenerated_by_root { worktree, main } — the SAME enum, once per root, because
-// a linked run rebuilds two mirrors and the scalar can only carry one of them; and
-// roadmap_regenerated_main_error, present only when main's rebuild threw.
-function reconcileRoadmapForClosure(root, memberNumbers, primaryNumber, opts, mainRoot, linkedRoot) {
-  let roadmapSourceRemoved = 'absent';
-  let roadmapRegenerated = 'skipped';
-  const removedSources = [];
-  const stagedReconciled = []; // #403.7: MAIN staged-ADD orphans actually unstaged (#297) — recorded, not silent
-  const roadmapByRoot = {}; // #428: dual-root per-member removal map
-  const residue = [];       // #428: files that survived despite a removal attempt
-  // #705: normalize the per-member keep-open set ONCE (numbers; tolerant of string entries).
-  const excludeSet = (opts && Array.isArray(opts.excludeIssues))
-    ? new Set(opts.excludeIssues.map(Number)) : null;
-  for (const issueN of memberNumbers) {
-    const roadmapFilePath = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
-    let thisRemoved = 'absent';
-    // #336/#705: preserve this member's roadmap source when keep-open is in force for the whole run
-    // (keepRoadmapSource) OR when this specific member is in the per-member excludeIssues keep-open
-    // set — the issue stays open, so it must stay tracked in the mirror.
-    const keepThis = !!(opts && opts.keepRoadmapSource) || (excludeSet !== null && excludeSet.has(Number(issueN)));
-    if (keepThis) {
-      thisRemoved = 'kept';
-    } else {
-      try {
-        fs.unlinkSync(roadmapFilePath);
-        thisRemoved = 'removed';
-      } catch (e) {
-        thisRemoved = (e.code === 'ENOENT') ? 'absent' : 'failed';
-      }
-    }
-    if (issueN === primaryNumber) roadmapSourceRemoved = thisRemoved;
-    if (thisRemoved === 'removed') removedSources.push('issue-' + issueN + '.md');
-    // #428: track worktree-root removal state; main-root starts at same value (updated below).
-    let thisRemovedWorktree = thisRemoved;
-    let thisRemovedMain = (mainRoot && mainRoot !== linkedRoot) ? 'absent' : thisRemovedWorktree;
-    // #297/#428: reconcile the MAIN-repo roadmap source for a linked worktree run.
-    // #297 handled the staged-ADD orphan (file NOT on HEAD). #428 adds removal of committed files.
-    if (mainRoot && mainRoot !== linkedRoot) {
-      try {
-        const mainRoadmapRel = path.join('kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
-        let onHead = false;
-        try {
-          execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', 'HEAD:' + mainRoadmapRel],
-            { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
-          onHead = true;
-        } catch (_) { onHead = false; }
-        if (!onHead) {
-          // #403.7: only record an actual unstage — the staged-ADD orphan must be present in the
-          // index for `rm --cached` to do work (probe via diff --cached --name-only). --ignore-unmatch
-          // means rm never errors when nothing is staged, so probe first to avoid a false receipt.
-          let wasStaged = false;
-          try {
-            const staged = execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--name-only', '--', mainRoadmapRel],
-              { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-            wasStaged = staged.length > 0;
-          } catch (_) { wasStaged = false; }
-          execFileSync('git', ['-C', mainRoot, 'rm', '--cached', '--force', '--ignore-unmatch', mainRoadmapRel],
-            { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
-          const mainRoadmapAbs = path.join(mainRoot, mainRoadmapRel);
-          try { fs.unlinkSync(mainRoadmapAbs); } catch (e2) { if (e2.code !== 'ENOENT') throw e2; }
-          if (wasStaged) stagedReconciled.push('issue-' + issueN + '.md');
-          thisRemovedMain = 'absent'; // was only a staged-ADD orphan, no committed copy
-        } else if (!keepThis) {
-          // #428: file IS committed on main's HEAD — remove the working-tree copy and stage the deletion
-          // so the sink commit drops it from main.
-          // Exception: when keepWorktree is true, the archive commit on the feature branch will carry
-          // the deletion when it is merged to main at sink-merge time; don't stage on main now or it
-          // leaves main's index dirty (regression lock for #297 R1).
-          const mainRoadmapAbs = path.join(mainRoot, mainRoadmapRel);
-          if (!(opts && opts.keepWorktree)) {
-            // (1) remove the working-tree file in main
-            try { fs.unlinkSync(mainRoadmapAbs); thisRemovedMain = 'removed'; }
-            catch (e) { thisRemovedMain = (e.code === 'ENOENT') ? 'absent' : 'failed'; }
-            // (2) stage the deletion so the sink commit drops it from main's HEAD
-            try {
-              execFileSync('git', ['-C', mainRoot, 'rm', '--cached', '--force', '--ignore-unmatch', mainRoadmapRel],
-                { stdio: ['ignore', 'ignore', 'ignore'] });
-            } catch (_) {}
-          } else {
-            // keepWorktree: the file still exists on main; its deletion will come via sink-merge.
-            thisRemovedMain = 'kept';
-          }
-        }
-      } catch (_) {}
-    }
-    // #428: build per-member dual-root record
-    roadmapByRoot[issueN] = {
-      worktree: thisRemovedWorktree === 'removed' || thisRemovedWorktree === 'absent' || thisRemovedWorktree === 'kept',
-      main:     thisRemovedMain     === 'removed' || thisRemovedMain     === 'absent' || thisRemovedMain     === 'kept',
-    };
-    // #428: record residue (surviving files despite a removal attempt, or after a failed unlink)
-    if (!keepThis) {
-      if (fs.existsSync(roadmapFilePath))
-        residue.push({ issue: issueN, root: 'worktree', path: roadmapFilePath, reason: 'unlink_failed' });
-      // For keepWorktree, the main-root file intentionally survives (will be removed at sink-merge),
-      // so don't flag it as residue.
-      if (mainRoot && mainRoot !== linkedRoot && !(opts && opts.keepWorktree)) {
-        const mainAbs = path.join(mainRoot, 'kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
-        if (fs.existsSync(mainAbs))
-          residue.push({ issue: issueN, root: 'main', path: mainAbs, reason: 'unlink_failed' });
-      }
-    }
-  }
-  try {
-    roadmapModule.regenerateRoadmap(root);
-    roadmapRegenerated = 'regenerated';
-  } catch (_) {
-    roadmapRegenerated = 'failed';
-  }
-  // #428: also regenerate the MAIN roadmap when this is a linked worktree run.
-  // Skip when keepWorktree is true: the feature-branch merge will carry the deletion + regeneration.
-  // #916: the mirror is rebuilt in TWO roots and only the linked one had a field. A main-root
-  // failure left `roadmap_regenerated: 'regenerated'` — the LINKED root's honest answer — beside a
-  // MAIN mirror still advertising the issue that just closed, and the bare catch ate the only
-  // account of why. The scalar keeps its meaning exactly (it is what the merged-folder warning on
-  // 'failed' reads); the second root is reported BESIDE it, per-root, in the vocabulary
-  // roadmap_removed_by_root already uses, so a reader can tell WHICH mirror is stale.
-  const roadmapLinkedRun = !!(mainRoot && mainRoot !== linkedRoot);
-  // Not a linked run: `root` IS main, so both keys describe the one rebuild that happened.
-  let roadmapRegeneratedMain = roadmapLinkedRun ? 'skipped' : roadmapRegenerated;
-  let roadmapRegenerateMainError = null;
-  if (roadmapLinkedRun && !(opts && opts.keepRoadmapSource) && !(opts && opts.keepWorktree)) {
-    try {
-      roadmapModule.regenerateRoadmap(mainRoot);
-      roadmapRegeneratedMain = 'regenerated';
-    } catch (e) {
-      // The message is the evidence: it names which read or write refused, and it is the only thing
-      // that tells an operator what to clear before main's mirror can be rebuilt.
-      roadmapRegeneratedMain = 'failed';
-      roadmapRegenerateMainError = String((e && e.message) || e).trim().slice(0, 300);
-    }
-  }
-  const reconciled = { roadmap_source_removed: roadmapSourceRemoved, roadmap_regenerated: roadmapRegenerated, roadmap_sources_removed: removedSources, roadmap_staged_reconciled: stagedReconciled, roadmap_removed_by_root: roadmapByRoot, roadmap_residue: residue, roadmap_regenerated_by_root: { worktree: roadmapRegenerated, main: roadmapRegeneratedMain } };
-  // Attached only when there IS a failure: a key carrying `null` would still read as an error
-  // report to anyone (or anything) scanning the receipt for one.
-  if (roadmapRegenerateMainError !== null) reconciled.roadmap_regenerated_main_error = roadmapRegenerateMainError;
-  return reconciled;
-}
-
 // #686: shared barrier-ref tag sanitizer — MUST reproduce the projectTag computation the retired
 // DAG-era barrier machinery (adaptive-node.js / plan-validator.js, both since deleted) USED to anchor
 // `refs/kaola-workflow/barrier/<tag>/<node>`
@@ -2672,13 +2531,8 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
   // MEASUREMENT in verifyArchiveComplete: every file the source holds must reach the destination
   // before either live copy is deleted.
   const state = stateFile(root, project);
-  let archiveIssueNumber = null;
-  // #328: read issue_numbers early (before rename) so we have the full member list
-  let archiveIssueNumbersRaw = '';
   try {
     let content = fs.readFileSync(state, 'utf8');
-    archiveIssueNumber = parseInt(field(content, 'issue_number'), 10);
-    archiveIssueNumbersRaw = (field(content, 'issue_numbers') || '').trim();
     content = removeLegacyStateBlocks(content);
     // #333: status/step/#324-normalization/next_command/Last Updated all in one helper.
     content = stampTerminalState(content, statusValue, opts);
@@ -2870,56 +2724,9 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
       } catch (_) { /* fail-soft: a single ref-delete failure must not abort the reap or the archive */ }
     }
   } catch (_) { /* fail-soft: archiving must never be blocked/rolled back by a ref-reap failure */ }
-  let roadmapSourceRemoved = 'absent';
-  let roadmapRegenerated = 'skipped';
-  // #328: accumulate removed sources for bundle path (plural array)
-  const removedSources = [];
-  let stagedReconciled = []; // #403.7: MAIN staged-ADD orphans actually unstaged (#297)
-  if (statusValue === 'closed') {
-    // #328: for a bundle project, use the pre-read member array (archiveIssueNumbersRaw was
-    // captured BEFORE the renameSync so we can parse it now even though the file moved)
-    let archiveIssueNumbers = [];
-    if (archiveIssueNumbersRaw) {
-      archiveIssueNumbers = archiveIssueNumbersRaw.split(',')
-        .map(s => parseInt(s.trim(), 10))
-        .filter(n => Number.isFinite(n) && n > 0);
-    }
-    if (archiveIssueNumbers.length === 0 && Number.isInteger(archiveIssueNumber) && archiveIssueNumber > 0) {
-      archiveIssueNumbers = [archiveIssueNumber];
-    }
-    // #395.2: the per-member roadmap removal + MAIN-orphan reconcile + regenerate is now ONE shared
-    // helper, reused by the cmdFinalize source-missing backstop so a crash-resume converges.
-    const reconciled = reconcileRoadmapForClosure(root, archiveIssueNumbers, archiveIssueNumber, opts, mainRoot, linkedRoot);
-    roadmapSourceRemoved = reconciled.roadmap_source_removed;
-    roadmapRegenerated = reconciled.roadmap_regenerated;
-    for (const s of reconciled.roadmap_sources_removed) removedSources.push(s);
-    stagedReconciled = reconciled.roadmap_staged_reconciled || [];
-    // #428: surface dual-root removal map + residue so cmdFinalize can attach them to the receipt.
-    const closedResult = {
-      archived: true,
-      dest,
-      roadmap_source_removed: roadmapSourceRemoved,
-      roadmap_regenerated: roadmapRegenerated,
-      roadmap_sources_removed: removedSources,
-      roadmap_staged_reconciled: stagedReconciled,
-      roadmap_removed_by_root: reconciled.roadmap_removed_by_root || {},
-      roadmap_residue: reconciled.roadmap_residue || [],
-      // #916: the per-root REBUILD outcome, beside the per-root removal map above.
-      roadmap_regenerated_by_root: reconciled.roadmap_regenerated_by_root || {},
-    };
-    if (reconciled.roadmap_regenerated_main_error) {
-      closedResult.roadmap_regenerated_main_error = reconciled.roadmap_regenerated_main_error;
-    }
-    return closedResult;
-  }
-  return {
-    archived: true,
-    dest,
-    roadmap_source_removed: roadmapSourceRemoved,
-    roadmap_regenerated: roadmapRegenerated,
-    roadmap_sources_removed: removedSources,
-    roadmap_staged_reconciled: stagedReconciled,
-  };
+  // ADR 0018 §5: the roadmap-source unlink + MAIN-orphan reconcile + mirror regenerate that used to
+  // run here on a closed status is retired — there is no local roadmap mirror left to keep in sync.
+  return { archived: true, dest };
 }
 
 // #832: classify the fate of an archive destination the CALLING root cannot commit, so a receipt
@@ -3225,69 +3032,10 @@ function commitDiscardArchive(result, project, baseBranch, opts) {
 // its own close, so it never has a genuine close to verify at this seam).
 function checkClosureInvariants(root, receipt, archiveDest, opts) {
   const violations = [];
-  const issueNumber = receipt.issue_number;
   const abandoned = receipt && receipt.archive === 'abandoned';
-  // #328: for a bundle project, loop roadmap-source-absent + roadmap-mirror-clean checks
-  // over ALL members; fall back to scalar issue_number for single-issue (AC#1 unchanged).
-  const memberNumbers = Array.isArray(receipt.issue_numbers) && receipt.issue_numbers.length
-    ? receipt.issue_numbers
-    : (Number.isInteger(issueNumber) && issueNumber > 0 ? [issueNumber] : []);
-  // #336: keep-open inverts the roadmap checks — the source MUST survive and the mirror MUST
-  // still list #N (the issue stays open).
-  // #396.3: key on the RECORDED INTENT (keep_open_requested), not the mutable remote_issue_closed
-  // token. When keep-open is requested but the issue was already auto-closed on the forge, the token
-  // flips to 'already_closed' → the old keying took the CLOSE branch and flagged roadmap-source-absent
-  // + roadmap-mirror-clean even though keeping the source was correct. Fall back to the legacy token
-  // when keep_open_requested is absent (older receipts / callers that don't set it).
-  const keepOpen = (receipt.keep_open_requested === true) ||
-    (receipt.keep_open_requested === undefined && receipt.remote_issue_closed === 'kept_open');
-  if (!abandoned && memberNumbers.length > 0) {
-    const invSourceAbsent = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'roadmap-source-absent');
-    const invMirrorClean = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'roadmap-mirror-clean');
-    const invKeep = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'keep-open-roadmap-preserved');
-    for (const n of memberNumbers) {
-      const roadmapFile = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + n + '.md');
-      const roadmapMirror = path.join(root, 'kaola-workflow', 'ROADMAP.md');
-      // #339: an active row in the generated mirror is exactly `| #N | …` at
-      // line start (kaola-workflow-roadmap.js buildTableRow). A bare substring
-      // match also hits legitimate cross-references to #N inside OTHER rows
-      // (e.g. "place_inside (#562 opacity)" in a dependency note), so anchor
-      // on the row's issue column instead.
-      const sourceExists = fs.existsSync(roadmapFile);
-      let mirrorListsN = false;
-      try {
-        const content = fs.readFileSync(roadmapMirror, 'utf8');
-        mirrorListsN = new RegExp('^\\| #' + n + ' \\|', 'm').test(content);
-      } catch (_) {}
-      if (keepOpen) {
-        // Inverted preservation check: violation when the source is MISSING or the mirror
-        // no longer lists #N. One invariant id, member-suffixed like the bundle pattern.
-        if (!sourceExists || !mirrorListsN) {
-          const baseDescK = invKeep ? invKeep.description : 'keep-open roadmap source/mirror not preserved';
-          violations.push({
-            id: 'keep-open-roadmap-preserved',
-            description: memberNumbers.length > 1 ? (baseDescK + ' (issue #' + n + ')') : baseDescK
-          });
-        }
-        continue;
-      }
-      if (sourceExists) {
-        const baseDesc = invSourceAbsent ? invSourceAbsent.description : 'roadmap source file still present';
-        violations.push({
-          id: 'roadmap-source-absent',
-          description: memberNumbers.length > 1 ? (baseDesc + ' (issue #' + n + ')') : baseDesc
-        });
-      }
-      if (mirrorListsN) {
-        const baseDesc2 = invMirrorClean ? invMirrorClean.description : 'ROADMAP.md still lists issue as active';
-        violations.push({
-          id: 'roadmap-mirror-clean',
-          description: memberNumbers.length > 1 ? (baseDesc2 + ' (issue #' + n + ')') : baseDesc2
-        });
-      }
-    }
-  }
-  // outside issueNumber guard: 'skipped_offline' must not violate even when issueNumber is null
+  // ADR 0018 §5: the roadmap-source-absent / roadmap-mirror-clean / keep-open-roadmap-preserved
+  // checks are retired with reconcileRoadmapForClosure — there is no local roadmap source or mirror
+  // left for a closure to leave clean or preserved.
   const labelStatus = receipt.claim_label_removed;
   if (labelStatus !== 'skipped_offline' && labelStatus !== 'removed' && labelStatus !== 'already_absent') {
     const invLabel = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'in-progress-label-removed');
@@ -4763,43 +4511,8 @@ function cmdFinalize() {
             }
           }
         } catch (_) {}
-        // #395.2: the #395 NON-CONVERGENT-RECOVERY fix. A kill in archiveProjectDir's gap (live
-        // folder renamed to archive, but the roadmap-source-unlink loop never ran) leaves the
-        // archive present + the roadmap source(s) still live + ROADMAP.md still listing a closed
-        // issue. archiveProjectDir early-returned source-missing BEFORE its roadmap loop, so
-        // finalize re-run never cleaned up (a permanent orphan). Now, when the archived state is
-        // terminal-closed (not keep-open) and any member's roadmap source is still live, run the
-        // SAME reconcile helper so re-run / resume routing converges. Idempotent.
-        if (!keepIssueOpen) {
-          // member set: prefer issue_numbers from the archived state, else scalar issue_number.
-          const rawNums = (field(raw, 'issue_numbers') || '').trim();
-          let members = rawNums
-            ? rawNums.split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n) && n > 0)
-            : [];
-          const primaryN = parseInt(field(raw, 'issue_number'), 10);
-          if (members.length === 0 && Number.isFinite(primaryN) && primaryN > 0) members = [primaryN];
-          const sourceLive = members.some(n => fs.existsSync(path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + n + '.md')));
-          if (sourceLive) {
-            let mainRoot3, linkedRoot3;
-            try {
-              mainRoot3 = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
-              linkedRoot3 = fs.realpathSync(root);
-            } catch (_) { mainRoot3 = null; }
-            const rec = reconcileRoadmapForClosure(root, members, Number.isFinite(primaryN) ? primaryN : (members[0] || null), { keepRoadmapSource: false }, mainRoot3, linkedRoot3);
-            // surface the convergence on the result so the receipt reflects the repair (not 'failed').
-            result.roadmap_source_removed = rec.roadmap_source_removed;
-            result.roadmap_regenerated = rec.roadmap_regenerated;
-            result.roadmap_sources_removed = rec.roadmap_sources_removed;
-            result.roadmap_reconciled_on_resume = true;
-            // #428: surface dual-root removal map + residue from the resume reconcile path.
-            if (rec.roadmap_removed_by_root) result.roadmap_removed_by_root = rec.roadmap_removed_by_root;
-            if (rec.roadmap_residue) result.roadmap_residue = rec.roadmap_residue;
-            // #916: this backstop calls the SAME helper, so main's mirror can fail here too — and a
-            // convergence path that repairs the roadmap silently is the defect it exists to fix.
-            if (rec.roadmap_regenerated_by_root) result.roadmap_regenerated_by_root = rec.roadmap_regenerated_by_root;
-            if (rec.roadmap_regenerated_main_error) result.roadmap_regenerated_main_error = rec.roadmap_regenerated_main_error;
-          }
-        }
+        // ADR 0018 §5: the #395 roadmap-source-unlink convergence backstop is retired along with
+        // reconcileRoadmapForClosure — there is no local roadmap mirror left to converge.
       }
     } catch (_) { archiveStateStamped = 'failed'; }
   }
@@ -4993,8 +4706,6 @@ function cmdFinalize() {
   const probeDegraded = isProbeDegraded(OFFLINE, remoteIssueClosed);
   const closureReceipt = buildClosureReceipt(args.project, issueNumber, {
     archive: result.skipped ? 'skipped' : (result.archived ? 'closed' : 'failed'),
-    roadmap_source_removed: result.roadmap_source_removed,
-    roadmap_regenerated: result.roadmap_regenerated,
     remote_issue_closed: remoteIssueClosed,
     claim_label_removed: claimLabelRemoved,
     worktree_removed: worktreeRemoved,
@@ -5012,31 +4723,10 @@ function cmdFinalize() {
   // #426: attach anchored_root post-build (added to CLOSURE_RECEIPT_FIELDS in n3; kept here
   // so the receipt carries the durable main-root path independent of schema update).
   if (closureReceipt) closureReceipt.anchored_root = cmdFinalizeIsLinkedRun ? cmdFinalizeMainRoot : root;
-  // #428: dual-root roadmap receipt
-  if (result.roadmap_removed_by_root) closureReceipt.roadmap_removed = result.roadmap_removed_by_root;
-  if (result.roadmap_residue && result.roadmap_residue.length > 0) closureReceipt.roadmap_residue = result.roadmap_residue;
-  // #916: the per-root mirror REBUILD outcome. roadmap_regenerated stays the linked root's scalar —
-  // repurposing it would change what the 'failed' warning means — so this is where a reader of the
-  // receipt learns which of the two mirrors is stale.
-  if (result.roadmap_regenerated_by_root) closureReceipt.roadmap_regenerated_by_root = result.roadmap_regenerated_by_root;
-  if (result.roadmap_regenerated_main_error) closureReceipt.roadmap_regenerated_main_error = result.roadmap_regenerated_main_error;
-  // The durable half. Recorded, never gated: finalize still exits 0 and still archives — the
-  // orchestrator decides whether to rebuild main's mirror by hand. Without this the finding lives
-  // only on this process's stdout, and the successor who opens the archived run folder instead
-  // reads a closure that mentions the roadmap nowhere at all.
-  if (result.roadmap_regenerated_by_root && result.roadmap_regenerated_by_root.main === 'failed') {
-    recordFinalizeFinding('main_roadmap_mirror_not_regenerated',
-      'The MAIN repo root\'s kaola-workflow/ROADMAP.md was NOT regenerated, so main\'s roadmap '
-        + 'mirror is stale and can still list an issue this run closed. The linked worktree\'s own '
-        + 'mirror rebuilt fine, which is the outcome `roadmap_regenerated: regenerated` reports — '
-        + 'the two roots are reported separately in `roadmap_regenerated_by_root`.',
-      ['main root: ' + (cmdFinalizeIsLinkedRun ? cmdFinalizeMainRoot : root)]
-        .concat(result.roadmap_regenerated_main_error
-          ? ['', 'regenerateRoadmap said:', '', '```', result.roadmap_regenerated_main_error, '```']
-          : [])
-        .concat(['', 'Clear the cause above, then rebuild it by hand: '
-          + '`node scripts/kaola-workflow-roadmap.js generate` from the main root.']));
-  }
+  // ADR 0018 §5: the dual-root roadmap receipt (roadmap_removed / roadmap_residue /
+  // roadmap_regenerated_by_root / roadmap_regenerated_main_error) and the
+  // main_roadmap_mirror_not_regenerated finding are retired with reconcileRoadmapForClosure — there
+  // is no local mirror rebuild left to report on.
   // #427: structured closure roll-up (post-build — not a flat schema field; Decision-5 trap).
   {
     const issueSet = issueNumbers.length > 0 ? issueNumbers : (issueNumber ? [issueNumber] : []);
@@ -5056,16 +4746,6 @@ function cmdFinalize() {
     closureReceipt.closed_issues = closedIssues;
     closureReceipt.failed_issue_closures = failedIssueClosures;
     closureReceipt.open_issues = openIssues; // #369: members still open while online (visible, never silent)
-    closureReceipt.roadmap_sources_removed = result.roadmap_sources_removed || [];
-  }
-  // #403.7: record the #297 MAIN staged-ADD orphan unstage (was silent: `roadmap_staged:true` then
-  // the file vanished). Attach only when something was actually reconciled.
-  if (Array.isArray(result.roadmap_staged_reconciled) && result.roadmap_staged_reconciled.length > 0) {
-    closureReceipt.roadmap_staged_reconciled = result.roadmap_staged_reconciled;
-  }
-  // #395.2: surface a resume-time roadmap convergence so the receipt is honest about the repair.
-  if (result.roadmap_reconciled_on_resume) {
-    closureReceipt.roadmap_reconciled_on_resume = true;
   }
   // #336: surface keep-open probe-truth warnings (issue already closed on the forge).
   if (keepOpenWarnings.length > 0) {
@@ -6475,9 +6155,6 @@ function cmdWatchPr() {
           mismatched: archiveResult.mismatched });
         continue;
       }
-      if (archiveResult && (archiveResult.roadmap_source_removed === 'failed' || archiveResult.roadmap_regenerated === 'failed')) {
-        warnings.push({ folder: folder.project, roadmap_source_removed: archiveResult.roadmap_source_removed, roadmap_regenerated: archiveResult.roadmap_regenerated });
-      }
       let worktreeRemoved = 'failed';
       try {
         const wtResult = removeWorktree(root, folder.project, folder);
@@ -6519,8 +6196,6 @@ function cmdWatchPr() {
       }
       const folderReceipt = buildClosureReceipt(folder.project, folder.issue_number, {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'closed' : 'failed'),
-        roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
-        roadmap_regenerated: archiveResult ? archiveResult.roadmap_regenerated : 'failed',
         remote_issue_closed: mergedRemoteToken,
         claim_label_removed: claimLabelStatus,
         worktree_removed: worktreeRemoved,
@@ -6532,7 +6207,6 @@ function cmdWatchPr() {
         folderReceipt.closed_issues = mClosed.sort(function(a, b){ return a - b; });
         folderReceipt.failed_issue_closures = mFailed.sort(function(a, b){ return a - b; });
         folderReceipt.open_issues = mOpen.sort(function(a, b){ return a - b; });
-        folderReceipt.roadmap_sources_removed = archiveResult ? (archiveResult.roadmap_sources_removed || []) : [];
       }
       const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
       // #333: append the terminal receipt to the archived state. watch-pr archives into the MAIN
@@ -6598,8 +6272,6 @@ function cmdWatchPr() {
       }
       const folderReceipt = buildClosureReceipt(folder.project, folder.issue_number, {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'abandoned' : 'failed'),
-        roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
-        roadmap_regenerated: archiveResult ? archiveResult.roadmap_regenerated : 'failed',
         remote_issue_closed: 'skipped_offline',
         claim_label_removed: claimLabelStatus2,
         worktree_removed: worktreeRemoved,
@@ -6608,7 +6280,6 @@ function cmdWatchPr() {
       // #328: attach bundle receipt fields after builder (filter bypass)
       if (Array.isArray(folder.issue_numbers) && folder.issue_numbers.length > 0) {
         folderReceipt.issue_numbers = folder.issue_numbers;
-        folderReceipt.roadmap_sources_removed = archiveResult ? (archiveResult.roadmap_sources_removed || []) : [];
       }
       const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
       const cleanupEntry2 = { folder: folder.project, claim_label_removed: claimLabelStatus2,
@@ -6665,9 +6336,9 @@ function buildClosureReceipt(project, issueNumber, steps) {
       if (key === 'warnings') continue;
       // #395.1: a step that DIDN'T run passes `undefined` for its field; copying it would
       // overwrite emptyReceipt()'s seeded 'failed' default with `undefined`, so the field
-      // VANISHES from the receipt JSON (fail-loud contract violation — roadmap_source_removed /
-      // roadmap_regenerated disappear after a finalize crash). Skip undefined so seeded
-      // defaults survive when a stage didn't populate the field.
+      // VANISHES from the receipt JSON (fail-loud contract violation — a status field
+      // disappears from the receipt instead of showing its seeded failure default). Skip
+      // undefined so seeded defaults survive when a stage didn't populate the field.
       if (Object.prototype.hasOwnProperty.call(fields, key) && steps[key] !== undefined) {
         receipt[key] = steps[key];
       }
@@ -6810,7 +6481,7 @@ function cmdLegacyWorktreeCleanup() {
   }
 }
 
-const USAGE = 'usage: kaola-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|watch-pr|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|verify-sink|stale-worktree-check|stale-worktree-cleanup|legacy-worktree-cleanup|audit-labels|repair-labels|barrier-ref-sweep>\n'
+const USAGE = 'usage: kaola-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|watch-pr|bootstrap|startup|finalize|pick-next|list-open|resume|worktree-status|worktree-finalize|sink-fallback|verify-sink|stale-worktree-check|stale-worktree-cleanup|legacy-worktree-cleanup|audit-labels|repair-labels|barrier-ref-sweep>\n'
   + '  flags: --project P [--json] [--force] [--strict] [--issue N] [--target-issue N] [--target-issues A,B] [--pr-number N]\n'
   + '         [--branch B] [--reason R] [--runtime claude|codex|opencode] [--sink merge|mr|pr] [--workflow-path VALUE (retired, ignored)]\n'
   + '         [--keep-worktree] [--keep-open|--keep-issue-open] [--keep-branch] [--execute] [--archive] [--export]\n'
@@ -6848,6 +6519,7 @@ function main() {
   if (sub === 'bootstrap' || sub === 'startup') return cmdStartup();
   if (sub === 'finalize') return cmdFinalize();
   if (sub === 'pick-next') return cmdPickNext();
+  if (sub === 'list-open') return cmdListOpen();
   if (sub === 'resume') return cmdResume();
   if (sub === 'worktree-status') return cmdWorktreeStatus();
   if (sub === 'stale-worktree-check') return cmdStaleWorktreeCheck();

@@ -132,7 +132,6 @@ const sharedScripts = [
   'kaola-workflow-active-folders.js',
   'kaola-workflow-claim.js',
   'kaola-workflow-classifier.js',
-  'kaola-workflow-roadmap.js',
   'kaola-workflow-sink-merge.js',
   'kaola-workflow-sink-pr.js',
   'validate-workflow-contracts.js',
@@ -193,13 +192,12 @@ if (claudeMdLines > 200) {
   process.stderr.write('notice: CLAUDE.md is ' + claudeMdLines + ' lines, above the recommended 200. '
     + 'Nothing fails on this. Move detail to docs/ or skills, and offer the user help trimming it.\n');
 }
-// Both docs/workflow-state-contract.md concepts (durable sources / generated mirrors, and legacy
-// coordination as transitional only) are asserted with these exact term lists by
-// scripts/validate-workflow-contracts.js on the same repo-root path.
+// Both docs/workflow-state-contract.md concepts (durable sources, and legacy coordination as
+// transitional only) are asserted with these exact term lists by scripts/validate-workflow-contracts.js
+// on the same repo-root path.
 assertConcept('docs/api.md', 'closure contract invariants and receipt schema', [
   '## Closure Contract',
   'closure invariants',
-  'roadmap_source_removed',
   'remote_issue_closed',
   'claim_label_removed',
   'kaola-workflow-closure-contract.js',
@@ -208,20 +206,6 @@ assertConcept('docs/api.md', 'closure contract invariants and receipt schema', [
   '#164',
   '#165'
 ]);
-assertConcept(`${pluginRoot}/scripts/kaola-workflow-roadmap.js`, 'missing roadmap source safeguard', [
-  'guardAgainstMissingRoadmapSource',
-  'non-empty generated ROADMAP.md',
-  'kaola-workflow/.roadmap is missing'
-]);
-assertConcept(`${pluginRoot}/scripts/kaola-workflow-roadmap.js`, 'atomic roadmap writes and exclusive issue source creation', [
-  'writeFileAtomicReplace',
-  'createFileExclusive',
-  "fs.openSync(tmp, 'wx')",
-  'fs.renameSync(tmp, filePath)',
-  "fs.openSync(filePath, 'wx')",
-  'fs.fsyncSync(fd)'
-]);
-
 function extractRedirectBlock(file) {
   const text = read(file);
   const fenceOpen = '```markdown';
@@ -372,13 +356,13 @@ for (const file of workflowInitCommands606) {
 }
 
 // #572 (AC5): cross-forge content parity. The three forges' injected templates must be
-// byte-identical MODULO the single forge-noun line (GitHub/GitLab/Gitea issues are the roadmap
-// source of truth …). The within-forge-pair byte checks above already prove cmd==skill per
+// byte-identical MODULO the single forge-noun line (GitHub/GitLab/Gitea issues are the backlog
+// …). The within-forge-pair byte checks above already prove cmd==skill per
 // forge, so comparing the three cmd templates (normalizing the forge noun out) covers all six
 // surfaces transitively — the #309 "one semantic change, mirrored verbatim" invariant.
 function normalizeForgeNoun(tpl) {
-  return tpl.replace(/^- (?:GitHub|GitLab|Gitea) issues are the roadmap source of truth/m,
-    '- <FORGE> issues are the roadmap source of truth');
+  return tpl.replace(/^- (?:GitHub|GitLab|Gitea) issues are the backlog:/m,
+    '- <FORGE> issues are the backlog:');
 }
 const githubTemplateNorm = normalizeForgeNoun(githubCmdTemplate);
 assert(normalizeForgeNoun(gitlabCmdTemplate) === githubTemplateNorm,

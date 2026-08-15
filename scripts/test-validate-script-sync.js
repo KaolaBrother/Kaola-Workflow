@@ -5,7 +5,7 @@
 //
 // #550 was a forge classifier omitting a cross-required export → TypeError on a failing path no green chain
 // hit. #553 generalized that single-classifier guard into a FAMILY over every divergent forge hand-port
-// (claim/sink-merge/roadmap/active-folders/closure-audit) with a `canonicalOnly` exclude for
+// (claim/sink-merge/active-folders/closure-audit) with a `canonicalOnly` exclude for
 // genuinely-edition-specific canonical exports. This test proves the mechanism: the family covers the right
 // modules, a real missing cross-required export is CAUGHT, and a canonicalOnly name is correctly EXCLUDED.
 // Wired into the claude chain. The live forge ports are validated by validate-script-sync.js itself in
@@ -119,11 +119,11 @@ assert(typeof sync.checkCommittedKernelParity === 'function',
 
 // 1) The family generalizes beyond the classifier to the divergent cross-required hand-ports.
 const fam = sync.FORGE_EXPORT_SUPERSET_FAMILY;
-// The floor was 7 while repair-state was a cross-required hand-port; it is deleted, so the
-// family is the six that remain. What the floor is for — proving the guard is not empty — holds.
-assert(Array.isArray(fam) && fam.length >= 6, '#553: FORGE_EXPORT_SUPERSET_FAMILY has >=6 entries, got ' + (fam && fam.length));
+// The floor was 6 while roadmap.js was a cross-required hand-port; ADR 0018 §5 retired it, so the
+// family is the five that remain. What the floor is for — proving the guard is not empty — holds.
+assert(Array.isArray(fam) && fam.length >= 5, '#553: FORGE_EXPORT_SUPERSET_FAMILY has >=5 entries, got ' + (fam && fam.length));
 const bases = fam.map(e => path.basename(e.canonical));
-for (const need of ['kaola-workflow-classifier.js', 'kaola-workflow-claim.js', 'kaola-workflow-sink-merge.js', 'kaola-workflow-roadmap.js', 'kaola-workflow-active-folders.js', 'kaola-workflow-closure-audit.js']) {
+for (const need of ['kaola-workflow-classifier.js', 'kaola-workflow-claim.js', 'kaola-workflow-sink-merge.js', 'kaola-workflow-active-folders.js', 'kaola-workflow-closure-audit.js']) {
   assert(bases.includes(need), '#553: family covers ' + need);
 }
 // Backward-compat: the original classifier entry + symbol are still exported.

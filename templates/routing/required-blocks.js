@@ -295,6 +295,73 @@ const REQUIRED_BLOCKS = [
     surface_type_tag: 'both',
     content_tokens: ['--issue-numbers', 'issue_numbers'],
   },
+
+  // ==== forge-is-the-backlog: one marker, three topics ====
+  //
+  // "The forge's open list is the backlog truth" (docs/workflow-state-contract.md /
+  // this repo's own CLAUDE.md) has no other durable carrier on a shipped surface: a
+  // reader in a consumer repo cannot resolve either doc, so the rule is restated on
+  // each topic that touches backlog selection, the priority-tier sorter, or the
+  // gap-sweep filing/correction step. Same shape as consent-in-conversation — one
+  // marker text legitimately repeated across topics, so the REVERSE orphan-sentinel
+  // cannot key it to a single block and the marker is declared foreign in
+  // scripts/test-route-reachability.js; the FORWARD presence obligation below is
+  // what actually enforces each topic's wording.
+  {
+    // Two independent spans on this one topic: Step 1's "user named neither" bullet
+    // (which sources rank the backlog from — the tier-sorted `list-open`, `_rules.md`,
+    // active folders, archived summaries) and Step 2's pre-claim shortlist-read
+    // paragraph (comment beats body). Tokens are drawn from both, so gutting either
+    // span alone — while leaving the other and the marker intact — still reds this
+    // block.
+    block_id: 'nx-forge-is-the-backlog',
+    topic: 'next',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: forge-is-the-backlog -->',
+      'the open issue list ordered by its `P0`–`P3` priority tier (`list-open`, below)',
+      'Rank by that priority tier, then by scope.',
+      'read each shortlisted candidate\'s own body and comments',
+      'Comments are current state: where a comment contradicts the body, the comment wins',
+    ],
+  },
+  {
+    // Three independent spans inside the injected `## Kaola-Workflow` block this
+    // topic writes into a consumer's CLAUDE.md: the `_rules.md`-survives bullet,
+    // the roadmap-session-vs-workflow-run split, and the top-priority-labels
+    // override. One token per span (plus one extra in the first), so any single
+    // span gutted alone — marker and the other two spans intact — still reds.
+    block_id: 'in-forge-is-the-backlog',
+    topic: 'init',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: forge-is-the-backlog -->',
+      'is the one optional local file that survives',
+      'nothing else is generated or tracked under',
+      'there is no local mirror to refresh',
+      'Top-priority labels: declare in `kaola-workflow/config.json` (`priority_top_tier_labels`)',
+    ],
+  },
+  {
+    // One span at Step 7 — the run-gap-sweep filing rule and the correction-posting
+    // rule that follows it. The correction paragraph is the newer half: it is what
+    // makes "the forge is the backlog truth" survive contact with a run that finds
+    // the filed issue was wrong, rather than closing quietly over stale text.
+    block_id: 'fn-forge-is-the-backlog',
+    topic: 'finalize',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: forge-is-the-backlog -->',
+      'For each real run-discovered defect, file a follow-up and record `filed: #N`.',
+      'append the matching `gap: <class> — <text>` line to `.cache/run-gaps-manual.md` and re-run the scanner, so what is written was actually swept.',
+      'post that correction as a comment on the issue before it closes.',
+      'Never close quietly against text now known to be wrong.',
+      'A correction is not a follow-up: a follow-up is new work with its own `filed: #N`; a correction is the record of what this issue turned out to be, and it lands on the issue it corrects.',
+    ],
+  },
 ];
 
 const TOPICS = ['next', 'init', 'finalize'];

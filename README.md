@@ -58,7 +58,7 @@ A few beliefs follow from that order.
 
 ```
    /workflow-init            once per project — generates CLAUDE.md,
-        │                    ROADMAP.md, and the docs map
+        │                    AGENTS.md, and the docs map
         ▼
    /workflow-next            per cycle
         │
@@ -98,7 +98,7 @@ default cap of 500 turns. Examples:
 /goal finish issue #42 — every mission-list item done, validation green,
       the issue closed and the folder archived.
 /goal use kaola-workflow to finish all remaining open issues, one at a
-      time, until ROADMAP.md has no active entries.
+      time, until the open issue list is empty.
 ```
 
 **Codex.** `/goal` is gated behind a feature flag in current Codex CLI
@@ -126,7 +126,7 @@ technical decisions should be made with the orchestrator's own judgment, then
 applied and recorded. Prompt the user only for true external authorization or
 materially user-owned choices, such as risky Git synchronization, destructive
 rewrites,
-credential or deployment actions, or issue/roadmap reorganization.
+credential or deployment actions, or issue reorganization.
 
 Each `/workflow-next` run targets one explicitly selected set of issues —
 normally three to five, sometimes one — and ends at Finalization closure,
@@ -770,7 +770,7 @@ kaola-workflow-finalize
 ```
 
 Each Codex pack provides the same workflow as the Claude commands — the mission list,
-review, documentation docking, roadmap refresh, archive, and the sink. They depend on no
+review, documentation docking, archive, and the sink. They depend on no
 external agent packages. Instead,
 `kaola-workflow-init` automatically installs Codex-native role profiles that
 mirror the Claude workflow roles:
@@ -840,7 +840,7 @@ Initialize each project once:
 /workflow-init
 ```
 
-This creates or updates `CLAUDE.md`, `AGENTS.md`, `kaola-workflow/ROADMAP.md`, and the baseline documentation map without replacing existing project guidance. The generated `CLAUDE.md` keeps commands, hard rules, durable state invariants, workflow pointers, and documentation links in root memory while leaving long details in docs or skills. `AGENTS.md` provides a mandatory redirect block that directs agents to read `CLAUDE.md` before taking any action in the repository.
+This creates or updates `CLAUDE.md`, `AGENTS.md`, and the baseline documentation map without replacing existing project guidance. The generated `CLAUDE.md` keeps commands, hard rules, durable state invariants, workflow pointers, and documentation links in root memory while leaving long details in docs or skills. `AGENTS.md` provides a mandatory redirect block that directs agents to read `CLAUDE.md` before taking any action in the repository.
 
 In any Claude Code session, run:
 
@@ -855,10 +855,15 @@ and runs it.
 
 **You** select the target; no script picks for you. If the user named an issue, that issue is the
 target and nothing substitutes for it. If the user described a task with no issue number, resolve the
-description to the issue it belongs to (or file one) first. If neither, read the backlog —
-`kaola-workflow/ROADMAP.md` and its `### Project rules`, each `kaola-workflow/.roadmap/issue-*.md`,
-the open issue list, the active folders, the archived summaries — rank by the priority frontier, and
-**state the selection aloud before claiming it**.
+description to the issue it belongs to (or file one) first. If neither, read the backlog — the open
+issue list ordered by its `P0`–`P3` priority tier (`kaola-workflow-claim.js list-open`), any
+`kaola-workflow/.roadmap/_rules.md` standing rules, the active folders, and the archived summaries —
+rank by that tier, then by scope, excluding what is not yours to take (closed, already claimed, or
+occupied by another live session), and **state the selection aloud before claiming it**.
+
+Before claiming, read each shortlisted candidate's own body and comments — the handful you are
+ranking for this claim, never the whole list `list-open` returned. Comments are current state: where
+a comment contradicts the body, the comment wins, and say so aloud when you state the selection.
 
 Everything before the claim is free: dispatch read-only agents, read whatever you need, ask the user
 when the pick is genuinely ambiguous. A clean selection claims without asking.
@@ -875,11 +880,11 @@ Anything else reports a fact about the target rather than a verdict about you �
 retry, work offline, or re-state your reason and claim something else. The one thing it puts back to
 you is your own uncommitted work: that is a question, not a refusal.
 
-A name that could not be a project folder is resolved the same way. `kaola-workflow/.roadmap/` is
-the backlog and `kaola-workflow/archive/` the archive band, so a claim naming either — by
-`--project`, or by `workflow_project:` in a roadmap source, which needs nobody to type it — claims
-the run's ordinary `issue-<N>` folder instead, and the envelope carries `reserved_project` naming
-what it declined. The run proceeds; nothing in the reserved directory is touched.
+A name that could not be a project folder is resolved the same way. `kaola-workflow/.roadmap/` (home
+to the optional `_rules.md`) and `kaola-workflow/archive/` are reserved, so a claim naming either via
+`--project` claims the run's ordinary `issue-<N>` folder instead, and the envelope carries
+`reserved_project` naming what it declined. The run proceeds; nothing in the reserved directory is
+touched.
 
 A run normally carries **three to five issues**; one issue is the exception rather than the norm.
 Members are admissible when they are all open, unclaimed, and each **closeable on its own
@@ -992,8 +997,8 @@ conflict halts and asks a human; it is never auto-resolved.
 ### Active-work tracking
 
 Active work is tracked under `{project-root}/kaola-workflow/{project-name}/` while active and
-archived to `{project-root}/kaola-workflow/archive/`; unfinished work is tracked in
-`{project-root}/kaola-workflow/ROADMAP.md`. An active folder holds two durable files —
+archived to `{project-root}/kaola-workflow/archive/`; unfinished work is the forge's own open issue
+list — there is no local mirror of it. An active folder holds two durable files —
 `workflow-state.md` (what the run owns) and `mission-list.md` (what it is doing) — plus a `.cache/`
 directory for whatever the run chooses to keep there.
 
@@ -1015,9 +1020,8 @@ when developing locally. Drift between `scripts/` and
 | `kaola-workflow-claim.js` (GitHub) / `kaola-gitlab-workflow-claim.js` (GitLab) / `kaola-gitea-workflow-claim.js` (Gitea) | Active-folder coordination: claim, release/discard, status, watch-pr (watch-mr on GitLab), bootstrap/startup, finalize, pick-next, resume, worktree-status, worktree-finalize, stale-worktree-check, stale-worktree-cleanup, legacy-worktree-cleanup. Provisions a per-claim Git worktree at `<repo-root>/.kw/worktrees/<project>/` by default on every claim; set `KAOLA_WORKTREE_NATIVE=0` to disable. | All phases |
 | `kaola-workflow-active-folders.js` | Shared library: reads the active-folder table from `kaola-workflow/{project}/workflow-state.md`. Imported by claim, classifier, and sink scripts. | Library |
 | `kaola-workflow-classifier.js` | Parallel-work classifier: marks each open issue green/yellow/red/blocked based on dependency graph, exact file-path overlaps, shared-infra directories, and active folders. | Startup |
-| `kaola-workflow-roadmap.js` (GitHub) / `kaola-gitlab-workflow-roadmap.js` (GitLab) / `kaola-gitea-workflow-roadmap.js` (Gitea) | Regenerates `kaola-workflow/ROADMAP.md` from `kaola-workflow/.roadmap/issue-{N}.md`, and appends an optional project-local `kaola-workflow/.roadmap/_rules.md` to the generated `## Rules` section under a `### Project rules` sub-heading (no-op, byte-identical output, when the file is absent or empty). Shared subcommands: `generate`, `validate`, `validate-remote`, `init-issue`, `project-name`; GitHub also supports `migrate`, while GitLab/Gitea support `refresh`. | Planning, Finalization |
 | `kaola-workflow-gap-sweep.js` | Sweeps the run's own discovered defects from `.cache/` — waived red chains, plus whatever the orchestrator seeded into `.cache/run-gaps-manual.md` — and reconciles them against the summary's `## Run gaps` section in both directions. | Finalization |
-| `kaola-workflow-closure-audit.js` (GitHub) / `kaola-gitlab-workflow-closure-audit.js` (GitLab) / `kaola-gitea-workflow-closure-audit.js` (Gitea) | Reports closure drift (stale `.roadmap` sources, `ROADMAP.md` listing closed issues, stale `workflow:in-progress` labels, active folders/unarchived PR/MR folders for closed issues). Dry-run JSON by default; `--execute` repairs only safe local roadmap/label drift and never deletes active folders or worktrees. GitLab edition uses `unarchived_mr_folders` with lowercase MR state matching (`merged`/`closed`). Gitea edition keeps `unarchived_pr_folders` with lowercase PR state matching (`merged`/`closed`). Complements `stale-worktree-check`/`-cleanup` (which owns worktree/branch drift). | On demand / audit |
+| `kaola-workflow-closure-audit.js` (GitHub) / `kaola-gitlab-workflow-closure-audit.js` (GitLab) / `kaola-gitea-workflow-closure-audit.js` (Gitea) | Reports closure drift (stale `workflow:in-progress` labels, active folders for closed issues, unarchived PR/MR folders for closed issues). Dry-run JSON by default; `--execute` repairs only the stale in-progress label and never deletes active folders or worktrees. GitLab edition uses `unarchived_mr_folders` with lowercase MR state matching (`merged`/`closed`). Gitea edition keeps `unarchived_pr_folders` with lowercase PR state matching (`merged`/`closed`). Complements `stale-worktree-check`/`-cleanup` (which owns worktree/branch drift). | On demand / audit |
 | `kaola-workflow-sink-merge.js` (GitHub) / `kaola-gitlab-workflow-sink-merge.js` (GitLab) / `kaola-gitea-workflow-sink-merge.js` (Gitea) | Finalization merge sink: fetch, rebase onto `origin/main`, FF-only merge with retry on race conditions, push, close the issue, and clean up the branch. Falls back to the PR sink when the merge is impossible. | Finalization |
 | `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab) / `kaola-gitea-workflow-sink-pr.js` (Gitea) | Finalization PR/MR sink: push the branch, open a PR via `gh pr create` (GitHub), `glab mr create` (GitLab), or `tea pr create` (Gitea), record the PR/MR URL, and optionally enable auto-merge. | Finalization |
 | `kaola-workflow-compact-context.js` | Wired to the `SessionStart` (`compact`) hook. Reads the most recent `workflow-state.md` and injects a resume hint into the post-`/compact` session. | Hook |
@@ -1027,7 +1031,7 @@ when developing locally. Drift between `scripts/` and
 
 | Script | What it asserts |
 |--------|-----------------|
-| `simulate-workflow-walkthrough.js` | End-to-end integration test of the claim, finalize, roadmap, sink, and hook surfaces. Must exit 0 with `Workflow walkthrough simulation passed`. Run before claiming any workflow-related change complete. |
+| `simulate-workflow-walkthrough.js` | End-to-end integration test of the claim, finalize, sink, and hook surfaces. Must exit 0 with `Workflow walkthrough simulation passed`. Run before claiming any workflow-related change complete. |
 | `kaola-workflow-validation-runner.js` | Executes a validation command locally in a scrubbed environment, binds command/cwd/env/toolchain/candidate identities, and reduces bounded repetitions to a deterministic `pass`, `fail`, or `inconclusive` receipt. It is self-contained and does not depend on a hosted pipeline. |
 | `test-finalize-door.js` | Pins the finalize door's report-don't-refuse contract: a stale, missing, or red receipt still passes and reports the typed finding twice — on the envelope and durably in the summary — while a lossy archive and a bad release candidate still refuse. |
 | `validate-workflow-contracts.js` | Contractual assertions on the Claude Code surface — command files, agent installs, and documented invariants. **Tag-existence check (issue #177)**: Verifies local git tag `kaola-workflow--v<version>` matches `package.json` version; uses `git rev-parse --verify refs/tags/<tag>` to validate. Skipped when `KAOLA_WORKFLOW_OFFLINE=1` or `.git` absent. |
@@ -1039,7 +1043,7 @@ when developing locally. Drift between `scripts/` and
 
 Kaola-Workflow treats `kaola-workflow/{project}/workflow-state.md` plus the configured forge's issue and PR/MR state as the durable coordination contract. No lease/session layer remains.
 
-The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep generated root-memory files to compact invariants: `ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md` (plus an optional project-local `kaola-workflow/.roadmap/_rules.md` appended under `### Project rules`), `.roadmap/` is not purged wholesale, active work stays under `kaola-workflow/{project}/` until archive or discard, and active artifacts include `workflow-state.md`, `mission-list.md`, and the `.cache/` directory.
+The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep generated root-memory files to compact invariants: the forge is the backlog — an issue's title, labels, and comments (which override the body) are what the work is, and there is no local mirror to keep current; `kaola-workflow/.roadmap/_rules.md` is the one optional local file that survives, for standing project-local rules read directly by the pick step; active work stays under `kaola-workflow/{project}/` until archive or discard, and active artifacts include `workflow-state.md`, `mission-list.md`, and the `.cache/` directory.
 
 **Environment Variables:**
 
@@ -1092,12 +1096,14 @@ configuration — there is no file to write and no flag to pass.
 
 **It does not decide whether two pieces of work may run at the same time.** Whether work runs in parallel is
 the runtime agent's call: where the runtime supports concurrency it is on, and the workflow neither enforces
-nor configures it. Offline classification reads `kaola-workflow/.roadmap/issue-{N}.md` for the `depends-on`
-prerequisite.
+nor configures it. Offline, with no active folder to serve as local evidence, classification answers
+`target_unverified` rather than guessing — there is no local roadmap source left to read a `depends-on`
+prerequisite from.
 
 ### Priority label configuration
 
-The issue sort order in `/workflow-next` startup is determined by:
+The issue sort order, applied by `kaola-workflow-claim.js list-open` (called from the pick step, not
+from claim startup), is determined by:
 
 1. **Workflow label** (`workflow:queued` always wins if present)
 2. **Priority tier** (based on issue labels)
@@ -1126,7 +1132,7 @@ Any issue with a label matching `priority_top_tier_labels` will be sorted as tie
 
 Issue selection is an agent decision, not a hidden script decision. Agents must:
 
-1. Inspect the local roadmap (`kaola-workflow/ROADMAP.md`)
+1. Read the open issue list, ordered by `P0`–`P3` priority tier (`kaola-workflow-claim.js list-open`)
 2. Fetch open forge issues
 3. Classify candidates as green/yellow/red/blocked (using parallel-work guidance if multi-session)
 4. Select the best match based on priority, dependencies, and phase completion
@@ -1179,13 +1185,13 @@ retry on race conditions, push, close the issue, and clean up the branch.
 When offline, the PR sink writes a placeholder receipt so the workflow can
 resume online later.
 
-## Roadmap cycle
+## Backlog cycle
 
-Use a separate research or roadmap session to discover future work and create or refine forge issues. `/workflow-next` is the implementation cycle: it fetches open forge issues, mirrors active unfinished work into `kaola-workflow/ROADMAP.md`, advances one explicitly selected set of issues — normally three to five, sometimes one — then comments on or closes the linked issues after validation.
+Use a separate research session to discover future work and create or refine forge issues. `/workflow-next` is the implementation cycle: it reads the open issue list ordered by `P0`–`P3` priority tier, reads each shortlisted candidate's body and comments (comments override the body), advances one explicitly selected set of issues — normally three to five, sometimes one — then comments on or closes the linked issues after validation.
 
-The local roadmap is a working mirror, not the source of truth. Keep only active unfinished work there; completed workflow folders move to `kaola-workflow/archive/`.
+The forge is the backlog; there is no local mirror to keep current. `kaola-workflow/.roadmap/_rules.md` is the one optional local file that survives, for standing project-local rules read directly by the pick step; completed workflow folders move to `kaola-workflow/archive/`.
 
-The workflow also encourages context discipline: `CLAUDE.md` has a recommended size of under 200 lines — advisory, never enforced, so a longer file draws a notice and an offer to trim rather than a failure — the local roadmap should not become history storage, and agent prompts should include only the relevant phase excerpts needed for the delegated task.
+The workflow also encourages context discipline: `CLAUDE.md` has a recommended size of under 200 lines — advisory, never enforced, so a longer file draws a notice and an offer to trim rather than a failure — and agent prompts should include only the relevant excerpts needed for the delegated task.
 
 Each active workflow maintains two files: `workflow-state.md`, which records what the run owns — issue, branch, worktree, sink, next command — and `mission-list.md`, which records what it is doing. After resume or compaction, read both before continuing.
 
@@ -1272,7 +1278,7 @@ those paths.
   present. User-owned status lines are preserved.
 
 Finalization still owns the final full validation gate. It also reconciles
-documentation with code changes and issue/roadmap state, routes deferred
+documentation with code changes and issue state, routes deferred
 items or conflicts to the user before closing, and
 leaves commit-and-push as the final step on a clean, synced workspace.
 
@@ -1299,7 +1305,7 @@ do not hand-merge entries into `~/.claude/settings.json`.
 
 ## Keep-open partial-close sinks
 
-When a run is complete as a cycle but its issues must **stay open** (partial implementation, residual follow-ups), the main session writes `issue_action: comment_keep_open` into the `## Sink` block at the Closure Decision Gate (issue #336). That choice is **whole-run** — it takes every member of the claimed set with it, including members whose own work finished cleanly. Finalization then runs the full mechanical sink with **no manual FF-push cleanup**: `finalize --keep-open`/`--keep-issue-open` preserves every member's `.roadmap/issue-N.md` source (instead of deleting it) and regenerates `ROADMAP.md` still listing them; `sink-merge --keep-issue-open` merges, pushes, removes the worktree/branch, and releases the claim on every issue left open — **both** artifacts, the `workflow:in-progress` label and the `kw:claim` marker comment, where a normal close removes the label alone because a marker on a closed issue is inert — but posts a keep-open comment instead of closing them. Keep-open is **merge-sink-only** — a PR/MR sink would auto-close the issue via its `Closes #N` body, so the PR/MR sink (including the exit-3 merge-impossible auto-pivot) is refused with a typed BLOCKED, and the `sink-pr`/`sink-mr` scripts themselves refuse a project carrying `issue_action: comment_keep_open`.
+When a run is complete as a cycle but its issues must **stay open** (partial implementation, residual follow-ups), the main session writes `issue_action: comment_keep_open` into the `## Sink` block at the Closure Decision Gate (issue #336). That choice is **whole-run** — it takes every member of the claimed set with it, including members whose own work finished cleanly. Finalization then runs the full mechanical sink with **no manual FF-push cleanup**: `finalize --keep-open`/`--keep-issue-open` archives the folder as `closed_keep_open` (there is no local roadmap source left to preserve); `sink-merge --keep-issue-open` merges, pushes, removes the worktree/branch, and releases the claim on every issue left open — **both** artifacts, the `workflow:in-progress` label and the `kw:claim` marker comment, where a normal close removes the label alone because a marker on a closed issue is inert — but posts a keep-open comment instead of closing them. Keep-open is **merge-sink-only** — a PR/MR sink would auto-close the issue via its `Closes #N` body, so the PR/MR sink (including the exit-3 merge-impossible auto-pivot) is refused with a typed BLOCKED, and the `sink-pr`/`sink-mr` scripts themselves refuse a project carrying `issue_action: comment_keep_open`.
 
 ## Multi-issue bundle lane
 
@@ -1334,7 +1340,7 @@ Setting both `--target-issue` and `--target-issues` (or both env-var equivalents
 
 ### All-or-nothing finalization
 
-`cmdFinalize` on a bundle project closes every issue in `issue_numbers`, removes every `.roadmap/issue-N.md` source file, regenerates `ROADMAP.md` once, and archives the single bundle folder. Partial closure is not a success state — if one issue close fails the attempt is retried or surfaced as a failure.
+`cmdFinalize` on a bundle project closes every issue in `issue_numbers` and archives the single bundle folder. Partial closure is not a success state — if one issue close fails the attempt is retried or surfaced as a failure.
 
 ## Parallel active work
 
