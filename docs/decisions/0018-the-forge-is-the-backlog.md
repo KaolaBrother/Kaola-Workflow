@@ -1,7 +1,7 @@
 # 0018 — The forge is the backlog
 
-- **Status:** Accepted — all four §7 rulings settled 2026-08-15. **Build sequence deliberately not
-  written yet**, per the owner; migration (§8) owns the risk and gets its own step when it is.
+- **Status:** Accepted — all four §7 rulings settled 2026-08-15; build sequence in §8. Migration is
+  step 6 and owns the risk.
 - **Date:** 2026-08-15
 - **Supersedes (if accepted):** the 2026-08-12 ruling that `ROADMAP.md`'s *active work* means claimed
   runs only, and with it the `.roadmap/issue-N.md` per-issue source file. **Does not supersede** ADR
@@ -284,17 +284,50 @@ brick every sink on any consumer that does not gitignore it.
    `gh label create` commands and the per-issue tier mapping derived from the 47 existing local tags;
    the owner executes or approves them. Writing to someone's tracker stays a consent action.
 
-## 8. The risk is the deployment seam, not the design
+## 8. Build sequence
 
-The build sequence follows the rulings and is deliberately not written here. What must be recorded
-now is that **migration carries the risk, not the design**, and it needs its own step rather than
-falling out of the upgrade:
+**Two ordering principles, both forced.** *Give every surviving fact its new home before deleting the
+old one* — §1 measured facts that live nowhere else, so deletion-first would destroy them. And *no
+consumer may pass through a state that refuses work* — §5 item 4 found one such state, and an
+ordering that opens it is wrong however tidy it looks.
+
+1. **The pick step reads the shortlist's issues** (§5 item 5). Ships alone, deletes nothing, and no
+   later step depends on it — but it repays immediately, because the observation that forced it (a
+   run finding three of its four issues wrong as filed) recurs on every run until it lands.
+2. **Give the tier its new home.** Create `P0`–`P3` on the forge (ruling 4: proposed, owner-executed)
+   and connect the dormant sorter as *ordering, never selecting* (§5 item 2). **This gates every
+   deletion below it**: retirement deletes `next_step`, which is physically where 47 of 81 tiers live
+   today.
+3. **Give the mechanism text its region and its pin** (§5 item 9). Init gains the marked region;
+   the rule gains `<!-- PIN: forge-is-the-backlog -->` and `test-route-reachability.js` picks it up
+   from shipped bytes. Additive for new repos, and it is what converts init from *add-only* to
+   *reconcile* — so **step 6 is impossible before this one.**
+4. **Stop reading the sources, one capability at a time.** Each slice is independently green and
+   takes its own tests and doc rows with it: the classifier's offline arm, `projectNameForIssue`'s
+   roadmap door, closure-audit's roadmap classes with their finding types and registries, and the
+   sink's stash bucket + keep-open retention + dual-root reconciliation + envelope fields. The file
+   still exists throughout, so nothing yet claims a capability it does not have.
+5. **Delete the file and every sentence describing it, as one movement.** `roadmap.js` in all four
+   editions, the `nx-roadmap-*` splices, init's `.roadmap/` bootstrap, the mirror, and the roadmap
+   prose in all three skeletons plus `README.md` and `docs/api.md`, with routing surfaces regenerated
+   in the same commit. **Prose ships with its mechanism** — a rule describing a deleted mechanism is
+   the same defect as a test repaired ahead of one. Tests fall out here, deleted with what they pin,
+   never repaired ahead of it. The installer manifests lose the roadmap script and gain its
+   retired-name prune entry.
+6. **Migrate consumers, one repo at a time, on consent** (ruling 3). Never as a side effect of an
+   upgrade. The constraints below are what make this step the risky one:
+
+**Migration carries the risk, not the design.** It needs its own movement rather than falling out of
+the upgrade:
 
 - Retiring the shrink machinery and `validate-remote` while a consumer still carries sources leaves
   its tracked files permanently frozen yet authoritative-looking, with the detector retired in the
   same change.
 - A half-migrated consumer — mirror off the index, still on disk, not ignored — hits §5 item 4 and
-  bricks every sink.
+  bricks every sink. **The operative rule is one line: the mirror leaves disk and index in the same
+  movement, never `git rm --cached`.** A *tracked* frozen mirror is harmless (the tree stays clean);
+  an *untracked* one refuses every sink. So the dangerous state is not "not yet migrated" — it is
+  "migrated halfway", and only one command produces it.
 - **The consumer's own `CLAUDE.md` becomes self-failing.** `VRPCadCore`'s line 114 mandates asserting
   `ls .roadmap/issue-*.md | wc -l` equals the open-issue count; the moment sources are deleted it
   reads `0 == 81` and every finalize violates the project's own rule. That file is owner-owned: the
