@@ -562,10 +562,13 @@ function assertNoPlanAnywhere(repo, label) {
       assertNoPlanAnywhere(fx.repo, c.id);
 
       const { r, out } = fx.finalize();
+      // A finding does not withhold closure — passedWithFinding already asserts
+      // out.status === 'closed' (set once, at the very end of cmdFinalize's
+      // transaction) for every c.expect case reached here. The former secondary
+      // witness — asserting the local roadmap source was removed by closure —
+      // died with reconcileRoadmapForClosure and the roadmap-source layer (ADR
+      // 0018); the subject it stood in for is still covered above.
       passedWithFinding(fx, r, out, c.expect, c.id + ' (' + c.label + ')');
-      // A finding does not withhold closure: the roadmap source is still retired.
-      assert(!fs.existsSync(path.join(fx.repo, 'kaola-workflow', '.roadmap', project + '.md')),
-        c.id + ': closure completes over the finding (roadmap source retired)');
     } finally { rm(fx.base); }
   }
 })();
