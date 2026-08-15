@@ -22,14 +22,20 @@ moments.
 
 ## Decisions
 
-[`decisions/`](decisions/) holds the full catalog. Two records describe what ships today; the rest are
-history, and most of them describe the node/DAG executor that ADR 0017 retired.
+[`decisions/`](decisions/) holds the full catalog. Two records describe what ships today, one is
+accepted but not yet built; the rest are history, and most of them describe the node/DAG executor
+that ADR 0017 retired.
 
 - **[0017 — The mission list: four fields where the DAG was](decisions/0017-the-mission-list.md)** — the
   design of record. A run is one file of `item` / `status` / `dispatched` / `result`, written at three
   moments, with no script required. Concurrency carries no machinery. The sink reports and the
   orchestrator owns the outcome; the refusal count in the run design is zero. Derived additively from
   an observed bare-session run, not by subtracting from the DAG.
+- **[0018 — The forge is the backlog](decisions/0018-the-forge-is-the-backlog.md)** — accepted, **not
+  yet built**. The backlog lives on the forge; `.roadmap/issue-N.md` and the `ROADMAP.md` mirror are
+  retired, priority becomes a bare `P0`–`P3` label, and the pick step reads shortlisted issues'
+  bodies and comments. Derived by measuring a live consumer and walking every field to a producer;
+  five of its own claims were reversed under adversarial review before it stabilized.
 - **[0016 — The substrate: bookkeeping over gates](decisions/0016-the-substrate-bookkeeping-over-gates.md)** —
   completed by 0017. *Delete the verdict, keep the measurement.* Read it for why the finalize door and
   the sink measure and report rather than refuse.
