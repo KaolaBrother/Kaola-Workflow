@@ -158,6 +158,51 @@ worktree reconciliation exist for this file class alone. On the consumer, **371 
    must leave the backlog layer untouched: separating upgrade from migration is what prevents the
    half-migrated state that §8 identifies as sink-bricking. Init's own `.roadmap/` bootstrap and
    `generate` call (`init.skeleton.md:457-462`) are deleted in the same change.
+
+9. **`CLAUDE.md` carries the mechanism, never the backlog.** The injected block states which source
+   answers which question and the format to write back in. It names no issue, no priority and no
+   piece of work: that content has a producer on the forge, and copying it into a prompt surface
+   would rebuild §1's defect in a new file. Mechanism is the one thing with **no producer anywhere
+   except the prompt**, which is why it belongs there and why it is all that belongs there.
+
+   Two questions, two sources, no overlap:
+
+   - **What the work is** — open/closed, title, tier, and every correction since filing → the forge
+     issue, its labels, and **its comments, which override its body**.
+   - **What this run owns** — claimed issues, branch, worktree, what is done → `workflow-state.md`
+     and `mission-list.md` (ADR 0017). Unchanged by this record.
+
+   And two moments, which are what the block exists to guarantee. **Before**: read the shortlist's
+   bodies and comments (item 5). **After**: write back to the forge — close, file follow-ups
+   *tiered* (item 8), and **post the run's corrections as comments on the issues they correct**. That
+   last one closes the loop: the next run's read is only as good as this run's write.
+
+   **The enforcement is the next reader, not a validator** — and the asymmetry against §3 is what
+   makes that sufficient. A missing roadmap source was **silent**: three checks returned clean while
+   eight issues sat unmirrored, for three runs running. A missing comment is **self-revealing**: the
+   next run reads a stale issue and gets it wrong — which is precisely how the 2026-08-15 run
+   discovered three of its four issues were wrong as filed. The old failure hid; this one surfaces at
+   the next read, in the hands of the party who can fix it.
+
+   **Keeping that block current needs a named region, and today there is none.** Injected guidance
+   lands **unmarked** — `<!-- SPLICE:in-shared-001 -->` exists only on the authoring side and is
+   resolved away at render, so a consumer `CLAUDE.md` carries no `PIN`, region or comment marker at
+   all. Init cannot tell its own wording from the user's, which is why its contract can only ever
+   *"add only missing durable guidance"* (`init.skeleton.md:66`) — **structurally incapable of
+   retiring a stale rule.** Already realised: `VRPCadCore`'s `CLAUDE.md:114` has **fused** the
+   injected wording with a hand-added 2026-08-15 amendment into one line, so the tool's half cannot
+   be retired without editing the user's, and that same line hardcodes a script path this ADR
+   deletes. A region (tool-owned inside, user-owned outside) converts init from *add-only* to
+   *reconcile*. It is an anchor, not a gate; it refuses nothing. It also satisfies "one rule, one
+   wording", under which a runtime is a rendering target and divergence must be a **declared named
+   region, never an incidental rewrite** — a consumer `CLAUDE.md` is today an unmarked rendering
+   target that consumers author into, and one of them demonstrably carries an owner rule that
+   *overrides* shipped command prose. Everything outside the region stays theirs, that rule included.
+
+   The block **shrinks**: roughly five roadmap rules become three. Adding the region to an existing
+   consumer is itself an edit to a user-owned file, so it cannot be retroactive — for existing repos
+   the first migration proposes it (*"this is what I would own; everything else stays yours"*), and
+   repos initialized afterwards carry it from the start.
 8. **The run loop's only new duty is tagging what it files.** Finalize Step 7 mandates a follow-up
    per real defect; an issue filed without a `P` label is tier 99 and invisible to the sorter item 2
    connects. So the tier is written in the same breath as `filed: #N`. **That is the whole of it.**
