@@ -1,0 +1,10 @@
+{
+  "project": "bundle-986-990",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:finalize-stages-roadmap-dir",
+      "sample": "finalize's `git add -A -- kaola-workflow/.roadmap` stages every change under that directory, so sources deleted from disk but left in the index are committed inside an unrelated run's `chore: archive`",
+      "count": 1
+    }
+  ]
+}
