@@ -285,7 +285,7 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     init: [
       'KW-CLAUDE-TEMPLATE',
       'AGENTS.md',
-      'kaola-workflow/ROADMAP.md',
+      'there is no local mirror to refresh',
       'kaola-workflow/.roadmap/',
       'workflow-state.md',
       'mission-list.md',
