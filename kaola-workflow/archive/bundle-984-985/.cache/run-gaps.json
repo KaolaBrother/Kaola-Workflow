@@ -1,0 +1,25 @@
+{
+  "project": "bundle-984-985",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:pin-cannot-fail",
+      "sample": "OverCapFallsBack does not red under its own mutation on this Node version, so the pin cannot fail and is not a pin",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:dead-mirror-references",
+      "sample": "production code still names the deleted ROADMAP.md in sink-merge roadmapPathspecs and claim.js archive_stage candidates, harmless but reads as a live claim",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:fixture-cannot-reach-gate",
+      "sample": "test-finalize-door T11 roadmap_staged assertion cannot exercise the archiveAddOk gate because its fixture never populates existingPaths",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:consumer-migration-unbuilt",
+      "sample": "ADR 0018 step 6 consumer migration is designed and measured but not built, and it carries the deployment risk the record names",
+      "count": 1
+    }
+  ]
+}
