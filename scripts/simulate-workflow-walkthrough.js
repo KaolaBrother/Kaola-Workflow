@@ -8787,45 +8787,37 @@ function testClosureAuditTimeoutEnvInvalidFallsBack() {
   }
 }
 
-function testClosureAuditTimeoutEnvOverCapFallsBack() {
-  // Huge integer like '999999999999999999999' parses to 1e21 via parseInt, passes
-  // Number.isInteger guard (pre-fix), and causes execFileSync to throw ERR_OUT_OF_RANGE.
-  // A success-returning shim lets us discriminate: with over-cap env (no clamp),
-  // the probe throws and routes to unresolved — NOT resolve as closed.
-  // With the fix (Math.min(n, 600000)), the timeout is bounded and the probe succeeds.
-  //
-  // ADR 0018 §5: see testClosureAuditTimeoutEnvInvalidFallsBack — the original 'closed_remote'
-  // discriminator is retired; an active folder is now required to put 941 in front of the probe, and
-  // the surviving discriminator is unresolved_closed_state (crash) vs active_folder_for_closed_issue
-  // (success).
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-timeout-overcap-'));
-  const binDir = path.join(tmp, 'bin');
-  try {
-    initGitRepo(tmp);
-    plantActiveFolder(tmp, 'issue-941', 941, null);
-    plantRoadmapIssue(tmp, 941, '');
-    closureAuditShim(binDir, [
-      "const a = process.argv.slice(2).join(' ');",
-      "if (a.includes('issue view')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
-      "else if (a.includes('issue list')) { process.stdout.write('[]\\n'); }",
-      "else { process.stdout.write('{}\\n'); }"
-    ]);
-    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '999999999999999999999' });
-    const unresolved = result.drift.unresolved_closed_state;
-    assert(
-      !(Array.isArray(unresolved) && unresolved.includes(941)),
-      'over-cap KAOLA_GH_REMOTE_TIMEOUT_MS must be clamped, not crash the probe into unresolved_closed_state, got: ' + JSON.stringify(unresolved)
-    );
-    const activeClosed = result.drift.active_folder_for_closed_issue;
-    assert(
-      Array.isArray(activeClosed) && activeClosed.some(f => f.issue_number === 941),
-      'over-cap KAOLA_GH_REMOTE_TIMEOUT_MS must be clamped and detect the closed issue as active_folder_for_closed_issue, got: ' + JSON.stringify(activeClosed)
-    );
-    console.log('testClosureAuditTimeoutEnvOverCapFallsBack: PASSED');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
+// #987: testClosureAuditTimeoutEnvOverCapFallsBack stood here. DELETED, because it could not fail on
+// the mechanism it was named after — and the reason is a fact about the runtime, not about the test.
+//
+// Its premise was that `KAOLA_GH_REMOTE_TIMEOUT_MS='999999999999999999999'` parses to 1e21, survives
+// the `Number.isInteger(n) && n > 0` guard, and makes `execFileSync` throw ERR_OUT_OF_RANGE — so an
+// unclamped timeout would crash the probe into `unresolved_closed_state` and the clamp is what keeps
+// it resolving. On Node v24.18.0 that premise is simply false. Measured directly against
+// `execFileSync`: 2**31, 2**32, 2**53, MAX_SAFE_INTEGER, 1e15, 1e21, 1e300 and Number.MAX_VALUE all
+// pass WITHOUT throwing; the only value that throws is Infinity, which `Number.isInteger` already
+// rejects and which `parseInt` of a digit string can never produce. There is no input that reaches
+// the clamp and crashes, so there is no discriminator to build a pin on.
+//
+// Measured in this suite too, one mutation at a time, against `kaola-workflow-active-folders.js`
+// (`probeIssueState`'s module — NOT closure-audit.js, whose same-named constant feeds a different
+// probe and mutating which reds neither test):
+//   - remove `Math.min(n, 600000)`, i.e. delete the exact mechanism this test named → BOTH tests
+//     still PASS. That is the whole finding.
+//   - remove the `Number.isInteger(n) && n > 0` guard → testClosureAuditTimeoutEnvInvalidFallsBack
+//     REDS with `unresolved_closed_state: [941]`. The axis is armed; only the over-cap half is dead.
+//
+// So the classification #987 asked for is: NOT unreachable (the body ran, the assertions evaluated
+// against real drift arrays), NOT tautological (the identical assertions discriminate in the sibling)
+// — merely mutation-insensitive, because the failure it describes cannot be produced on this runtime.
+// Giving it teeth was considered and is not available at a testable cost: the clamp's surviving
+// effect is bounding the wait at 600000 ms, and REMOTE_TIMEOUT_MS is module-private, so witnessing it
+// needs a ten-minute hang. Deleted rather than relaxed — a threshold moved to make the question go
+// away is what #987 forbids, and an assertion that reads as coverage while watching nothing is worse
+// than its absence, because an absent test does not claim to be looking.
+//
+// THE CLAMP ITSELF IS NOT DEAD AND MUST NOT BE DELETED ON THE STRENGTH OF THIS: it still bounds how
+// long an audit hangs on an absurd env value. What is gone is only the ability to witness it here.
 
 function testClosureAuditExecuteDetectionTimeoutPropagates() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-exec-det-timeout-'));
@@ -11666,7 +11658,6 @@ function buildRegistry() {
   add('testClosureAuditUnresolvedClosedState',            testClosureAuditUnresolvedClosedState);
   add('testClosureAuditProbeFailureUnresolved',           testClosureAuditProbeFailureUnresolved);
   add('testClosureAuditTimeoutEnvInvalidFallsBack',       testClosureAuditTimeoutEnvInvalidFallsBack);
-  add('testClosureAuditTimeoutEnvOverCapFallsBack',       testClosureAuditTimeoutEnvOverCapFallsBack);
   add('testClosureAuditExecuteDetectionTimeoutPropagates', testClosureAuditExecuteDetectionTimeoutPropagates);
   add('testClosureAuditExecuteLabelRemovalTimeoutBreaks', testClosureAuditExecuteLabelRemovalTimeoutBreaks);
   add('testClosureAuditExecuteLabelRemovalNonTimeoutFails', testClosureAuditExecuteLabelRemovalNonTimeoutFails);

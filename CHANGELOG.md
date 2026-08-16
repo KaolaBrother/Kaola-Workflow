@@ -88,7 +88,48 @@
   project-local rules — now read **directly** by the pick step instead of through a generated
   section of the deleted mirror.
 
+- **The last `kaola-workflow/ROADMAP.md` pathspecs, in production code that outlived the mirror —
+  #988.** `sink-merge.js` built the archive commit's pathspec list ending in the mirror, and
+  `claim.js` listed it as an `archive_stage` candidate beside `kaola-workflow/.roadmap`; a third site,
+  the `roadmap_staged` disjunct, went unreachable with them. Nothing was broken — the sink filters to
+  paths present on disk or tracked at HEAD, so an unmatchable pathspec cannot abort `git add` — but
+  after the retirement the pathspec could only ever match an unmigrated consumer's frozen, unchanged
+  copy, which is a no-op stage that reads as a live claim that the tool still maintains a mirror. Two
+  prose sites went with them, including a refusal `detail` that told an operator "the archive +
+  roadmap-source removal + regenerated ROADMAP.md never landed in a commit" about a regeneration that
+  no longer happens. All four editions. **`kaola-workflow/.roadmap` STAYS** — it survives the
+  retirement and holds `_rules.md`, so the candidate list is genuinely non-empty in a real repository;
+  its path-classification sites (`isParkedLanePath`, the residue walker) also stay, because an
+  unmigrated consumer's `ROADMAP.md` still has to be classified correctly.
+
+- **`testClosureAuditTimeoutEnvOverCapFallsBack`, a pin that could not fail — #987.** Deleted, and the
+  reason is a fact about the runtime rather than the test: its premise was that an over-cap
+  `KAOLA_GH_REMOTE_TIMEOUT_MS` makes `execFileSync` throw `ERR_OUT_OF_RANGE`, so the `Math.min(n,
+  600000)` clamp is what keeps the probe resolving. On Node v24.18.0 that is false — `2**53`, `1e21`,
+  `1e300` and `Number.MAX_VALUE` all pass without throwing, and the only value that does throw
+  (`Infinity`) is already rejected by the `Number.isInteger` guard and cannot come out of `parseInt`.
+  Measured in the suite too: deleting the clamp itself left the test green, while deleting the
+  fallback guard reddened its sibling `InvalidFallsBack` with `unresolved_closed_state: [941]` — so
+  the axis is armed and only this half was dead. **The clamp is untouched and is not dead**; it still
+  bounds how long an audit hangs, which costs a ten-minute wait to witness, so teeth were not
+  available at a testable cost. Markers were left at both `REMOTE_TIMEOUT_MS` sites (they are
+  identically named in `active-folders.js` and `closure-audit.js`, and only the first feeds
+  `probeIssueState`) so the absent test is not later mistaken for an absent reason.
+
 ### Fixed
+
+- **T11's `roadmap_staged` assertion could not reach the gate it named — #989.** The finalize-door
+  fixture (`buildMainResidentRun`) never created `kaola-workflow/.roadmap`, so `existingPaths` was
+  structurally empty and `roadmap_staged` read `false` whatever the `archiveAddOk &&` gate did.
+  Measured one mutation at a time: hardcoding the field WAS caught, removing the gate was NOT. The
+  fixture now seeds and commits a tracked `kaola-workflow/.roadmap/_rules.md` before the worktree add
+  — reproducing what a real post-retirement repository carries, not the ruled-out move of planting
+  roadmap-shaped content to manufacture a green — and the gate is reachable for the same reason it is
+  reachable in production. Three assertions: a premise (the worktree carries `.roadmap`, so a fixture
+  that stops providing it reds and says why), the existing outcome-not-presence assertion with its
+  message rewritten, and a new control-leg `roadmap_staged === true`. Both directions mutation-proven
+  on canonical alone, and only the canonical leg reddened, so the four per-edition legs are
+  independent witnesses rather than one mutant reading as four.
 
 - **`archive_commit` could stage nothing at all, exit 0, and report success — #984.** When an
   `:(exclude,glob)` names a directory that is a strict string **prefix** of the include's leaf

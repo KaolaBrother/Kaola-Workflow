@@ -1920,6 +1920,26 @@ function buildMainResidentRun(tag, project, issue, opts) {
   const base = makeBase(tag);
   initSelfHostRepo(path.join(base, 'main'));
   const mainRoot = fs.realpathSync(path.join(base, 'main'));
+  // #989: the `archive_stage` candidate list is `['kaola-workflow/.roadmap']`, and this fixture used
+  // to leave that directory absent — so `existingPaths` was STRUCTURALLY empty and T11's
+  // `roadmap_staged === false` held for a reason that had nothing to do with the gate it names.
+  // Measured, one mutation at a time: hardcoding `roadmap_staged = true` WAS caught, but removing the
+  // `archiveAddOk &&` gate was NOT. An assertion that cannot fail on the thing it describes is not
+  // watching it.
+  //
+  // `_rules.md` is what closes that, and it is NOT the ruled-out move of planting roadmap-shaped
+  // content to manufacture a green. ADR 0018 retired the generated mirror and the per-issue sources;
+  // `kaola-workflow/.roadmap/_rules.md` is the one file under that directory the Durable State
+  // Contract keeps, and it is tracked in this very repository. So the fixture now carries what a real
+  // post-retirement repo carries, and the gate is reachable for the same reason it is reachable in
+  // production. Committed BEFORE the worktree add below, scoped to its own path so the main-resident
+  // run folder written after it stays uncommitted — that residue is the premise of every leg here.
+  const rulesRel = path.join('kaola-workflow', '.roadmap', '_rules.md');
+  fs.mkdirSync(path.join(mainRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
+  fs.writeFileSync(path.join(mainRoot, rulesRel), '# Project rules\n\nStanding project-local rules.\n');
+  G.git(mainRoot, ['add', '--', rulesRel], { stdio: ['ignore', 'ignore', 'ignore'] });
+  G.git(mainRoot, ['commit', '-m', 'chore: seed surviving .roadmap/_rules.md'],
+    { stdio: ['ignore', 'ignore', 'ignore'] });
   const mainProj = path.join(mainRoot, 'kaola-workflow', project);
   fs.mkdirSync(path.join(mainProj, '.cache'), { recursive: true });
   fs.writeFileSync(path.join(mainProj, '.cache', 'evidence.md'), 'run evidence\n');
@@ -2177,9 +2197,20 @@ function fileText(p) { try { return fs.readFileSync(p, 'utf8'); } catch (_) { re
           assert(tx.finalize_commit !== 'nothing_to_commit',
             tag + ': and `nothing_to_commit` is equally a claim about the working tree — the run could '
             + 'not enumerate what to stage, so it does not know; got ' + JSON.stringify(tx.finalize_commit));
+          // #989 PREMISE. The assertion below distinguishes the OUTCOME from the PRESENCE, so it can
+          // only distinguish them where the path is actually present. With `.roadmap` absent,
+          // `existingPaths` is empty, `roadmap_staged` is false whatever the gate does, and the
+          // assertion passes while watching nothing — which is what it did until this fixture carried
+          // `_rules.md`. Assert the presence, so a fixture that stops providing it reds HERE and says
+          // why, instead of quietly restoring the vacuum.
+          assert(fs.existsSync(path.join(fx.wt, 'kaola-workflow', '.roadmap')),
+            tag + ' premise: the worktree must carry `kaola-workflow/.roadmap`, or `existingPaths` is '
+            + 'empty and the `roadmap_staged` assertion below cannot reach the `archiveAddOk` gate it '
+            + 'names — it would pass on a run that had no gate at all');
           assert(tx.roadmap_staged === false,
             tag + ': `roadmap_staged` must follow the OUTCOME of the staging, not the presence of the '
-            + 'paths on disk — derived from a candidate list it reads true while git staged nothing; '
+            + 'paths on disk — the candidate IS present here and git still staged nothing, so a value '
+            + 'derived from the candidate list rather than the add\'s exit status reads true and lies; '
             + 'got ' + JSON.stringify(tx.roadmap_staged));
           assert(findings.length > 0,
             tag + ': the envelope must carry at least one typed finding; got ' + JSON.stringify(tx));
@@ -2208,6 +2239,15 @@ function fileText(p) { try { return fs.readFileSync(p, 'utf8'); } catch (_) { re
             + JSON.stringify(summary.slice(0, 300)));
           assert(committedPaths(fx.wt).indexOf('src/pending-good.js') >= 0,
             tag + ': and the deliverable IS in the tree; got ' + JSON.stringify(committedPaths(fx.wt)));
+          // #989's other half. The statusfail leg pins the FALSE outcome; on its own that is
+          // satisfiable by a build whose `roadmap_staged` is never true — including one that stopped
+          // listing `kaola-workflow/.roadmap` as a candidate at all, which is a real regression this
+          // suite would otherwise wave through. A healthy run over a repo that carries the surviving
+          // `.roadmap` stages it, so say so.
+          assert(tx.roadmap_staged === true,
+            tag + ': a healthy run DOES stage the surviving `kaola-workflow/.roadmap` — without this '
+            + 'the statusfail leg\'s `false` is satisfiable by never staging it at all; got '
+            + JSON.stringify(tx.roadmap_staged));
         } else {
           // THE EXIT-1 ARM. `git diff --cached --quiet` exits 1 when there ARE staged changes and 0
           // when there are none; a non-1 non-0 exit is a FAULT. With no residue to carry, "nothing to

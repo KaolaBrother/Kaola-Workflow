@@ -2509,17 +2509,23 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       ];
       const [excludeReceipt, excludeFallback] = excludeJournalsUnder(projectPathspec);
       const [excludeLiveReceipt, excludeLiveFallback] = excludeJournalsUnder('kaola-workflow/' + args.project + '/');
-      // #700: the archive commit must also carry the roadmap-source removal + regenerated ROADMAP.md
-      // that archiveProjectDir performed in the working tree (the sole-archiver case), so main's HEAD
-      // is not left dirty. Scope to THIS sink's own roadmap files (never a foreign issue's): each
-      // member source (staged as a deletion for a close, preserved for keep-open) + the mirror. A
-      // member with no roadmap source is filtered out so a stale pathspec can't abort staging.
+      // #700: the archive commit must also carry the roadmap-source removal that archiveProjectDir
+      // performed in the working tree (the sole-archiver case), so main's HEAD is not left dirty.
+      // Scope to THIS sink's own roadmap files (never a foreign issue's): each member source, staged
+      // as a deletion for a close and preserved for keep-open. A member with no roadmap source is
+      // filtered out so a stale pathspec can't abort staging.
+      //
+      // #988: the generated `kaola-workflow/ROADMAP.md` mirror stood in this list too. ADR 0018
+      // retired the mirror along with the generator, so nothing produces or modifies that path any
+      // more and the pathspec could only ever match an unmigrated consumer's frozen, unchanged copy —
+      // a no-op stage that read as a live claim that the sink still maintains a mirror. The per-member
+      // sources stay: an unmigrated consumer still carries them, and migrating a consumer off them is
+      // its own deliberate movement (#986), not something a sink does on the way past.
       const memberNums = (Array.isArray(args.issueNumbers) && args.issueNumbers.length)
         ? args.issueNumbers
         : (args.issue != null ? [args.issue] : []);
       const roadmapPathspecs = [];
       for (const n of memberNums) roadmapPathspecs.push('kaola-workflow/.roadmap/issue-' + n + '.md');
-      roadmapPathspecs.push('kaola-workflow/ROADMAP.md');
       // #700: the sole-archiver rename moves the LIVE folder (kaola-workflow/<project>/) into the
       // suffixed archive. When that live folder was tracked (committed on the branch, then merged into
       // main), its removal must be committed too — else main is left with a staged/unstaged deletion
@@ -2528,8 +2534,8 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       const livePathspec = 'kaola-workflow/' + args.project + '/';
       let liveTracked = false;
       try { const t = execFileSync('git', ['-C', mainRoot, 'ls-tree', '--name-only', 'HEAD', '--', livePathspec], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); liveTracked = t.length > 0; } catch (_) { liveTracked = false; }
-      // Only stage a roadmap path that is present (keep-open / regenerated mirror) OR tracked at HEAD
-      // (a close deletion) — a bare pathspec that matches nothing would abort `git add`/`git commit`.
+      // Only stage a roadmap path that is present (keep-open) OR tracked at HEAD (a close deletion) —
+      // a bare pathspec that matches nothing would abort `git add`/`git commit`.
       const stagedRoadmap = roadmapPathspecs.filter(rp => {
         if (fs.existsSync(path.join(mainRoot, rp))) return true;
         try { execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', 'HEAD:' + rp], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; } catch (_) { return false; }
@@ -2758,7 +2764,7 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
           archive_dest: archiveRel,
           branch: args.branch,
           default_branch: defBranch,
-          detail: 'the archive directory (' + archiveRel + ') is neither committed nor present at ' + defBranch + ' HEAD — the archive + roadmap-source removal + regenerated ROADMAP.md never landed in a commit (a collision-suffixed dest escaping the archive commit, #700). Refusing to report status:sinked. The archive_commit step is left NOT done so a re-run retries it.',
+          detail: 'the archive directory (' + archiveRel + ') is neither committed nor present at ' + defBranch + ' HEAD — the archive + roadmap-source removal never landed in a commit (a collision-suffixed dest escaping the archive commit, #700). Refusing to report status:sinked. The archive_commit step is left NOT done so a re-run retries it.',
         }, 1);
         return;
       }

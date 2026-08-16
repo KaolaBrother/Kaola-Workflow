@@ -4556,7 +4556,11 @@ function cmdFinalize() {
       // deletion, which would leave the folder on the branch that `chore: archive` exists to remove it
       // from — so the removal has to be staged explicitly. Both calls share one try/catch, so the
       // one-finding shape is unchanged.
-      const archivePaths = ['kaola-workflow/.roadmap', 'kaola-workflow/ROADMAP.md'];
+      // #988: `kaola-workflow/ROADMAP.md` stood beside `.roadmap` here. ADR 0018 retired the mirror
+      // and its generator, so the path names nothing this tool produces any more. `.roadmap` STAYS —
+      // that directory survives the retirement and holds `_rules.md`, so this list is genuinely
+      // non-empty in a real repository and the staging below has real work to do.
+      const archivePaths = ['kaola-workflow/.roadmap'];
       if (result.dest) {
         const destRel = path.relative(root, result.dest);
         if (destRel && !destRel.startsWith('..') && !path.isAbsolute(destRel)) archivePaths.unshift(destRel);
@@ -4592,8 +4596,7 @@ function cmdFinalize() {
       // non-zero and staged nothing at all, which is a false statement about the index in exactly the
       // run where it matters most.
       finalizeTx.roadmap_staged = archiveAddOk
-        && (fs.existsSync(path.join(root, 'kaola-workflow', '.roadmap'))
-          || fs.existsSync(path.join(root, 'kaola-workflow', 'ROADMAP.md')));
+        && fs.existsSync(path.join(root, 'kaola-workflow', '.roadmap'));
       // #832: the ARCHIVE's fate is decided here, independently of whatever else the commit below
       // carries. The old code read `git diff --cached --quiet` with NO pathspec, so the roadmap
       // staging alone made hasStaged true and the transaction recorded archive_commit:'committed'

@@ -41,6 +41,10 @@ const {
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const CLAIM_LABEL = 'workflow:in-progress';
+// #987: same clamp, same absence of a pin, same reason — and note this constant is NOT the one
+// `probeIssueState` reads (that is the identically-named one in kaola-workflow-active-folders.js).
+// Mutating this one moves neither timeout test, which is what made the original diagnosis land on the
+// wrong module. See the tombstone in simulate-workflow-walkthrough.js.
 const REMOTE_TIMEOUT_MS = (() => {
   const n = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
   return Number.isInteger(n) && n > 0 ? Math.min(n, 600000) : 30000;

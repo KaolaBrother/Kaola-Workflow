@@ -1406,10 +1406,16 @@ current.
 rules — read directly by the pick step, never generated (see `workflow-state-contract.md` § Durable
 Sources). Finalizing (`cmdFinalize`) no longer reconciles a roadmap mirror — that automatic
 reconciliation (`reconcileRoadmapForClosure`) was retired with the rest of the layer — but finalize's
-`roadmap_staged` field (above) still stages `kaola-workflow/.roadmap/` and `kaola-workflow/ROADMAP.md`
-into the archive commit when either is found on disk, so a not-yet-migrated consumer repo's tracked
-files land in the commit rather than being left as untracked residue. A freshly initialized repo never
-creates either path.
+`roadmap_staged` field (above) still stages `kaola-workflow/.roadmap/` into the archive commit when it
+is found on disk, so a not-yet-migrated consumer repo's tracked files under it land in the commit
+rather than being left as untracked residue. A freshly initialized repo never creates that path.
+
+`kaola-workflow/ROADMAP.md` was staged alongside it until #988 and no longer is. Nothing generates or
+modifies the mirror after the retirement, so the pathspec could only ever match an unmigrated
+consumer's frozen, unchanged copy — a no-op stage that read as a live claim that the tool still
+maintains a mirror. The sink's archive commit dropped the same pathspec in the same change. A
+consumer's own `ROADMAP.md` is untouched either way: migrating it off is a separate, deliberate act
+(see ADR 0018 §8 step 6), never something an upgrade or a finalize performs.
 
 ## Run-gap sweep — `kaola-workflow-gap-sweep.js`
 

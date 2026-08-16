@@ -99,14 +99,12 @@ const CANONICAL_LIVE_FOLDER_CLAUSE = 'may still carry the live run folder';
 // ---------------------------------------------------------------------------------------------
 const ALL_OR_NOTHING_CLAIM = 'all-or-nothing over its pathspec list';
 
-// The second claim — "and therefore nothing was staged". Asserted ONLY in part C, on a run that
-// demonstrates it false. Under part A's index lock nothing does reach the index, so there the
-// sentence is unmeasured rather than wrong, and pinning it there would be pinning wording.
-const NONE_STAGED_CLAIMS = Object.freeze([
-  /NONE of these \d+ path\(s\) was staged/,
-  /none of the paths below reached the index/,
-  /none of the paths below was staged/,
-]);
+// #988: NONE_STAGED_CLAIMS stood here — three regexes for "and therefore nothing was staged",
+// asserted ONLY in part C because that was the one run that demonstrated the sentence false. With
+// `kaola-workflow/ROADMAP.md` out of the archive candidate list, part C's run stages nothing, so the
+// sentence is true there and the scans had nothing left to catch. Deleted with the state they
+// described; part A's index lock never measured them either, and pinning them there would have been
+// pinning wording rather than behaviour.
 
 // ---------------------------------------------------------------------------------------------
 // Part D's contract (issue #975): the finding type and the transaction field that carry a
@@ -161,8 +159,11 @@ const OWN_UNTRACKED = 'src/helper.js';
 
 // Part C's two archive candidate paths: the first is covered by the fixture's .gitignore, the
 // second is not. Both are real entries of the archive step's own pathspec list.
+// #988: ADDABLE_ARCHIVE_PATH ('kaola-workflow/ROADMAP.md') stood beside this one and was the other
+// half of the pair — the candidate the fixture left un-ignored so a failing `git add` still had
+// something to stage. It left the archive step's candidate list with the retired mirror, so there is
+// no second candidate to name here any more.
 const IGNORED_ARCHIVE_PATH = 'kaola-workflow/.roadmap';
-const ADDABLE_ARCHIVE_PATH = 'kaola-workflow/ROADMAP.md';
 
 const EDITIONS = Object.freeze([
   {
@@ -278,13 +279,14 @@ function buildFixture(ed, opts) {
   seed(mainRoot);
   G.commitPaths(mainRoot, ['kaola-workflow/'], 'mirror: live folder on main');
 
-  // Part C: both candidates must EXIST for the archive step to put them in one pathspec list, and
-  // ROADMAP.md is left UNTRACKED so the failing `git add` has real work to do on it — a path git
-  // stages nothing for could not witness a partial stage.
+  // Part C: the gitignored candidate must EXIST for the archive step to pathspec it and for the
+  // `git add` to fail on it. #988: this used to plant ADDABLE_ARCHIVE_PATH beside it so the failing
+  // add had a path it could still stage — the partial-stage witness. `kaola-workflow/ROADMAP.md` is
+  // no longer in the candidate list, so planting it here would write a file nothing reads and
+  // nothing stages, which is the same dead-weight-reading-as-a-live-claim that #988 was filed about.
   if (o.ignoredArchivePath) {
     fs.mkdirSync(path.join(wtPath, IGNORED_ARCHIVE_PATH), { recursive: true });
     fs.writeFileSync(path.join(wtPath, IGNORED_ARCHIVE_PATH, 'issue-1.md'), '# 1\n');
-    fs.writeFileSync(path.join(wtPath, ADDABLE_ARCHIVE_PATH), '# Roadmap\n');
   }
   // ADR 0018 §5: `existingPaths` in cmdFinalize's linked-run archive-stage block is
   // `['kaola-workflow/.roadmap', 'kaola-workflow/ROADMAP.md']` filtered by fs.existsSync — plus,
@@ -296,16 +298,19 @@ function buildFixture(ed, opts) {
   // reason — so `archive_stage_failed` (the finding raised by the `git add` over `existingPaths`,
   // claim.js:4839-4870) cannot fire either, on ANY linked fixture that does not plant them itself.
   // `archiveStageCandidates` is that other reason, for the fault-injection leg specifically: it
-  // plants the same two paths Part C already does (same constants, same untracked shape so `git
-  // add` has real work), WITHOUT the .gitignore rule, so a healthy run WOULD stage them cleanly —
-  // it is `lockIndex` (held by the caller) that makes staging fail, not the fixture. This is
-  // deliberately NOT used by the healthy-control leg above: planting these paths there would
-  // recreate the exact accident retirement exposed (a fixture manufacturing "something to stage"
-  // that no real linked run produces any more) — see the healthy-control comment.
+  // plants the candidate Part C also plants (same constant, same untracked shape so `git add` has
+  // real work), WITHOUT the .gitignore rule, so a healthy run WOULD stage it cleanly — it is
+  // `lockIndex` (held by the caller) that makes staging fail, not the fixture. This is deliberately
+  // NOT used by the healthy-control leg above: planting these paths there would recreate the exact
+  // accident retirement exposed (a fixture manufacturing "something to stage" that no real linked
+  // run produces any more) — see the healthy-control comment.
+  //
+  // #988: `kaola-workflow/ROADMAP.md` was planted here too, and is not any more. It left the
+  // candidate list with the mirror it named, so writing it would have given this fixture a file
+  // that no production code reads and no `git add` stages.
   if (o.archiveStageCandidates) {
     fs.mkdirSync(path.join(wtPath, IGNORED_ARCHIVE_PATH), { recursive: true });
     fs.writeFileSync(path.join(wtPath, IGNORED_ARCHIVE_PATH, 'issue-1.md'), '# 1\n');
-    fs.writeFileSync(path.join(wtPath, ADDABLE_ARCHIVE_PATH), '# Roadmap\n');
   }
 
   // Part D: the dirt the run leaves in the worktree at finalize time. Written LAST so the
@@ -529,19 +534,42 @@ for (const ed of EDITIONS) {
 }
 
 // =============================================================================================
-// C — BEHAVIOURAL: the case that FALSIFIES the message, driven end to end
+// C — BEHAVIOURAL: a gitignored archive candidate REPORTS, and reports git's own diagnosis
 //
-// Part A holds the index lock, so nothing reaches the index and "and therefore none of these
-// paths was staged" is merely unmeasured there. This is the case the sentence is actually WRONG
-// about, and it is not hypothetical: the archive step's own pathspec list is
-// `kaola-workflow/.roadmap` and `kaola-workflow/ROADMAP.md`, and a repository may gitignore one
-// of them. git exits 1, stages ROADMAP.md, and the `chore: archive` commit carries it — while the
-// run reports that same path under "paths not staged".
+// WHAT THIS LEG USED TO DO, AND WHY IT NO LONGER DOES (#988). It drove the case that falsifies
+// "and therefore none of these paths was staged": the archive step's pathspec list held BOTH
+// `kaola-workflow/.roadmap` and `kaola-workflow/ROADMAP.md`, a repository could gitignore the
+// first, and git would then exit non-zero having STAGED the second — so the run named a path as
+// unstaged while `chore: archive` carried it. That contradiction was read back out of the index
+// rather than argued from the text, which is what made it a demonstration.
 //
-// The contradiction is read back OUT OF GIT rather than argued from the text, so what is pinned
-// is a demonstrated falsehood and not a choice of words. Canonical and Codex only: the forge
-// ports make one unscoped `git add -A 'kaola-workflow/'`, which SKIPS a gitignored child instead
-// of failing on it, so they have no pathspec list to be wrong about.
+// ADR 0018 retired the generated mirror, and #988 removed `kaola-workflow/ROADMAP.md` from the
+// candidate list with it. The list is now `['kaola-workflow/.roadmap']` plus, in principle,
+// `result.dest` — which on a LINKED run escapes this root and is excluded (#832). One candidate
+// cannot be partially staged, so the state this leg demonstrated is not merely untested here: on
+// this run shape it can no longer occur. The assertions that rested on a path having been staged
+// were DELETED rather than re-pointed, deliberately — see the watch-list note below.
+//
+// WHAT SURVIVES, and it is not nothing: a gitignored candidate must still make the archive
+// staging FAIL, that failure must still REPORT rather than refuse, git's own message must still
+// reach the transaction, and the finding must still be written durably. This is now the
+// total-failure case, and it is pinned as one.
+//
+// WATCH LIST, not work. `pathsNotStaged`'s honest-reporting logic is LIVE and still reachable
+// where the list genuinely holds two candidates — an in-place run (archive dest + `.roadmap`) and
+// the `source-missing` branch. Rebuilding a witness for it would mean adding a second run posture
+// to buildFixture, which is machinery for a failure class this repo has not observed on that
+// shape; recorded here instead of built. It is NOT evidence that the logic is dead — see the
+// marker at pathsNotStaged in claim.js.
+//
+// GIT'S ACTUAL BEHAVIOUR, re-measured on git 2.54.0 while deciding the above, because the two
+// shapes differ and conflating them is what would make a future fixture lie:
+//   - two EXPLICIT pathspecs, one ignored  -> exits NON-ZERO, and stages the other one.
+//   - one DIRECTORY pathspec whose members are mixed -> exits ZERO, silently skipping the ignored
+//     members. So a partial stage cannot be provoked through `kaola-workflow/.roadmap` alone.
+//
+// Canonical and Codex only: the forge ports make one unscoped `git add -A 'kaola-workflow/'`,
+// which SKIPS a gitignored child instead of failing on it, so they have no pathspec list at all.
 // =============================================================================================
 
 for (const ed of EDITIONS.filter(e => e.unstageType)) {
@@ -569,60 +597,33 @@ for (const ed of EDITIONS.filter(e => e.unstageType)) {
       'behavioural-C[' + ed.label + '] the gitignored candidate ' + IGNORED_ARCHIVE_PATH + ' reached '
         + 'the index, so this run is not the partial-stage case the assertions below read it as. '
         + 'ls-files: ' + JSON.stringify(trackedIgnored));
-    // The witness the whole leg rests on: if the addable path is NOT tracked then the pathspec
-    // list really was all-or-nothing on this run, the case was never reproduced, and every
-    // assertion below would be vacuous.
-    const tracked = G.out(fx.wtPath, ['ls-files', '--', ADDABLE_ARCHIVE_PATH]);
-    assert(tracked.includes(ADDABLE_ARCHIVE_PATH),
-      'behavioural-C[' + ed.label + '] WITNESS MISSING: the failing `git add` was expected to stage '
-        + ADDABLE_ARCHIVE_PATH + ' beside the gitignored ' + IGNORED_ARCHIVE_PATH + ', but git does '
-        + 'not track it. Without a path that DID stage there is nothing here to contradict the '
-        + 'message. ls-files: ' + JSON.stringify(tracked));
+    // #988 DELETED FIVE ASSERTIONS HERE, and the reason is recorded rather than left to a diff.
+    // Each of them read a path that the failing `git add` had nonetheless STAGED: the witness
+    // (`ls-files` finds ADDABLE_ARCHIVE_PATH), `archive_unstaged` not naming it, the two
+    // NONE_STAGED_CLAIMS scans over the finding and stderr, and the "Paths not staged:" bullet not
+    // listing it. With one candidate in the list there is no staged path on this run, so every one
+    // of them would now be asserting something about nothing — and worse, their MESSAGES would go
+    // on claiming a contradiction the run no longer produces. A control that stays green while its
+    // own message is false is the failure this file exists to catch, so they were removed with the
+    // state they described instead of being rewritten to keep passing.
+    //
+    // The ALL_OR_NOTHING_CLAIM scan went with them for the same reason: its justification here was
+    // "on the very run that disproves it", and this run no longer disproves it. Part B still pins
+    // that string's absence, and git's real behaviour is recorded in this section's header.
+
     // git's own diagnosis must ride along in the transaction. Checked for PRESENCE only — its
     // wording is git's and its language is the operator's.
     assert(String((bad.tx && bad.tx.archive_stage_detail) || '').trim() !== '',
       'behavioural-C[' + ed.label + '] archive_stage_detail is empty — git\'s own message is the '
         + 'whole diagnosis of a staging fault and must reach the transaction');
 
-    // The run must not name a path it staged as a path it did not stage.
-    const claimedUnstaged = (bad.tx && bad.tx.archive_unstaged) || [];
-    assert(!claimedUnstaged.includes(ADDABLE_ARCHIVE_PATH),
-      'behavioural-C[' + ed.label + '] archive_unstaged lists ' + ADDABLE_ARCHIVE_PATH + ' as a path '
-        + 'that did not stage, and git tracks it: the same `git add` that "failed" staged it, and '
-        + 'the `chore: archive` commit carries it. archive_unstaged: '
-        + JSON.stringify(claimedUnstaged));
-
     const section = findingSection(bad.summary, 'archive_stage_failed');
     assert(section !== null,
       'behavioural-C[' + ed.label + '] the fault must be written durably under '
         + '"### archive_stage_failed" in ' + bad.summary);
-    assert(section !== null && !section.includes(ALL_OR_NOTHING_CLAIM),
-      'behavioural-C[' + ed.label + '] the finding asserts `git add` is "' + ALL_OR_NOTHING_CLAIM
-        + '" on the very run that disproves it, got:\n' + section);
-    for (const claim of NONE_STAGED_CLAIMS) {
-      assert(section !== null && !claim.test(section),
-        'behavioural-C[' + ed.label + '] the archive_stage_failed finding states ' + claim + ' while '
-          + ADDABLE_ARCHIVE_PATH + ' IS in the index. Say what was measured, or say nothing about '
-          + 'the staged set. Section:\n' + section);
-      assert(!claim.test(bad.stderr),
-        'behavioural-C[' + ed.label + '] the finalize warning states ' + claim + ' while '
-          + ADDABLE_ARCHIVE_PATH + ' IS in the index.\nstderr:\n' + bad.stderr);
-    }
-
-    // The bullet list under the finding's not-staged heading is assembled separately from the
-    // `archive_unstaged` field, so it is pinned separately — correcting one and leaving the other
-    // still tells the operator a path is missing from the very commit that carries it. A finding
-    // that no longer makes the claim at all (no such heading) satisfies this by having nothing to
-    // be wrong about.
-    const NOT_STAGED_HEADING = 'Paths not staged:';
-    const listAt = section === null ? -1 : section.indexOf(NOT_STAGED_HEADING);
-    assert(listAt < 0 || !section.slice(listAt).includes('- ' + ADDABLE_ARCHIVE_PATH),
-      'behavioural-C[' + ed.label + '] the finding lists ' + ADDABLE_ARCHIVE_PATH + ' under "'
-        + NOT_STAGED_HEADING + '" while git tracks it and `chore: archive` carries it. Section:\n'
-        + section);
   } finally { destroyFixture(fx); }
 
-  console.log('behavioural-C[' + ed.label + '] a partially-staged `git add` is reported honestly: done');
+  console.log('behavioural-C[' + ed.label + '] a gitignored archive candidate reports, with git\'s diagnosis: done');
 }
 
 // =============================================================================================

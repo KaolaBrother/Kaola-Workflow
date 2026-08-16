@@ -2324,14 +2324,19 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       ];
       const [exRcpt, exFb] = exJournals(ps);
       const [exLiveRcpt, exLiveFb] = exJournals('kaola-workflow/' + args.project + '/');
-      // #700: also commit the roadmap-source removal + regenerated ROADMAP.md + the live-folder removal
-      // (the sole-archiver rename moved a tracked live folder into the suffixed archive), so main's HEAD
-      // is not left dirty. Scope to THIS sink's own files; a path that matches nothing is filtered out.
+      // #700: also commit the roadmap-source removal + the live-folder removal (the sole-archiver
+      // rename moved a tracked live folder into the suffixed archive), so main's HEAD is not left
+      // dirty. Scope to THIS sink's own files; a path that matches nothing is filtered out.
+      //
+      // #988: the generated `kaola-workflow/ROADMAP.md` mirror stood in this list too. ADR 0018
+      // retired the mirror along with the generator, so nothing produces or modifies that path any
+      // more and the pathspec could only ever match an unmigrated consumer's frozen, unchanged copy —
+      // a no-op stage that read as a live claim that the sink still maintains a mirror. The per-member
+      // sources stay: an unmigrated consumer still carries them.
       const memberNums = (Array.isArray(args.issueNumbers) && args.issueNumbers.length)
         ? args.issueNumbers : (args.issue != null ? [args.issue] : []);
       const roadmapPathspecs = [];
       for (const n of memberNums) roadmapPathspecs.push('kaola-workflow/.roadmap/issue-' + n + '.md');
-      roadmapPathspecs.push('kaola-workflow/ROADMAP.md');
       const livePathspec = 'kaola-workflow/' + args.project + '/';
       let liveTracked = false;
       try { const t = execFileSync('git', ['-C', mainRoot, 'ls-tree', '--name-only', 'HEAD', '--', livePathspec], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); liveTracked = t.length > 0; } catch (_) { liveTracked = false; }
@@ -2531,7 +2536,7 @@ function runSinkTransaction(args, mainRoot, defBranch) {
         sinkEmit({
           result: 'refuse', reason: 'sink_incomplete', step: 'archive_commit',
           archive_dest: archiveRel, branch: args.branch, default_branch: defBranch,
-          detail: 'the archive directory (' + archiveRel + ') is neither committed nor present at ' + defBranch + ' HEAD — the archive + roadmap-source removal + regenerated ROADMAP.md never landed in a commit (a collision-suffixed dest escaping the archive commit, #700). Refusing to report status:sinked. The archive_commit step is left NOT done so a re-run retries it.',
+          detail: 'the archive directory (' + archiveRel + ') is neither committed nor present at ' + defBranch + ' HEAD — the archive + roadmap-source removal never landed in a commit (a collision-suffixed dest escaping the archive commit, #700). Refusing to report status:sinked. The archive_commit step is left NOT done so a re-run retries it.',
         }, 1);
         return;
       }

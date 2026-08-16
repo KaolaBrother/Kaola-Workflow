@@ -4182,6 +4182,17 @@ function cmdFinalize() {
   // list and name every candidate as unstaged, which is false in the first case and told the operator
   // to repair an index that already held the file. Returns null when the probe itself fails — the
   // caller then says nothing about the staged set rather than guessing, which is the honest answer.
+  //
+  // #988: THIS IS LIVE, AND IT IS CURRENTLY UNWITNESSED — the two are not the same thing. The one
+  // fixture that drove a genuinely PARTIAL stage (test-forge-finalize-findings.js, behavioural-C)
+  // did it with two archive candidates of differing ignore status, and removing the retired
+  // `kaola-workflow/ROADMAP.md` mirror left the linked-run candidate list holding one. A single
+  // candidate cannot be partly staged, so that leg was reduced to the total-failure case rather than
+  // re-pointed. The partial case still occurs where the list really does hold two — an in-place run
+  // (archive dest + `.roadmap`) and the `source-missing` branch — and rebuilding a witness for it
+  // was weighed and deliberately not built: it needs a second run posture in a shared fixture
+  // builder, for a failure class not observed on that shape. Do not read the missing test as a dead
+  // path and delete this.
   const pathsNotStaged = (root, paths) => {
     if (!paths.length) return [];
     let staged;
@@ -4822,7 +4833,11 @@ function cmdFinalize() {
             + 'folder that `chore: archive` exists to remove.',
           detail ? ['git said:', '', '```', detail, '```'] : []);
       }
-      const candidatePaths = ['kaola-workflow/.roadmap', 'kaola-workflow/ROADMAP.md'];
+      // #988: `kaola-workflow/ROADMAP.md` stood beside `.roadmap` here. ADR 0018 retired the mirror
+      // and its generator, so the path names nothing this tool produces any more. `.roadmap` STAYS —
+      // that directory survives the retirement and holds `_rules.md`, so this list is genuinely
+      // non-empty in a real repository and the staging below has real work to do.
+      const candidatePaths = ['kaola-workflow/.roadmap'];
       // #832: the archive resolves against MAIN's project root, so on a linked run result.dest is
       // OUTSIDE this worktree's index and can never be staged here — `path.relative(root, dest)`
       // escapes the worktree. The archive's fate is recorded honestly below (archiveDisposition)
@@ -4874,7 +4889,7 @@ function cmdFinalize() {
       // staged nothing at all, which is a false statement about the index in exactly the run where it
       // matters most.
       finalizeTx.roadmap_staged = archiveAddOk
-        && existingPaths.some(p => p === 'kaola-workflow/.roadmap' || p === 'kaola-workflow/ROADMAP.md');
+        && existingPaths.some(p => p === 'kaola-workflow/.roadmap');
       // #832: the ARCHIVE's fate is decided here, independently of whatever else the commit below
       // carries. The old code read `git diff --cached --quiet` with NO pathspec, so the roadmap
       // staging alone made hasStaged true and the transaction recorded archive_commit:'committed'
