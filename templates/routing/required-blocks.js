@@ -362,6 +362,33 @@ const REQUIRED_BLOCKS = [
       'A correction is not a follow-up: a follow-up is new work with its own `filed: #N`; a correction is the record of what this issue turned out to be, and it lands on the issue it corrects.',
     ],
   },
+
+  // ==== backlog-migration: the reconcile pass, init only ====
+  //
+  // The retired backlog layer is the one thing init can find in a consumer repo that
+  // it must NOT simply scaffold around, and the section is the only carrier of that
+  // fact on any shipped surface — a consumer reading this command cannot resolve the
+  // decision record it comes from. Losing the section silently would leave init
+  // walking past a layer that no longer works and saying nothing.
+  //
+  // Tokens are drawn from four independent spans — the never-automatic framing, the
+  // forced ordering's first step, the halfway rule, and the declining-is-an-answer
+  // close — so gutting any one of them while leaving the marker and the other three
+  // reds this block. None is a substring of the marker.
+  {
+    block_id: 'in-backlog-migration',
+    topic: 'init',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: backlog-migration -->',
+      'Init never deletes it, and installing or upgrading never migrates it.',
+      '**Tier first.** Priority labels exist and carry each open issue\'s tier *before* anything is deleted.',
+      'Never `git rm --cached`, and never delete from disk alone.',
+      'The dangerous state is not *un*-migrated — a tracked, frozen layer is inert and harmless — it is *half*-migrated.',
+      '**Declining is a complete answer.**',
+    ],
+  },
 ];
 
 const TOPICS = ['next', 'init', 'finalize'];

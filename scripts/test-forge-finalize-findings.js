@@ -968,7 +968,7 @@ const editionsNamedIn = row => EDITION_KEYS.filter(k => EDITION_WORD[k].test(row
 // gone along with the mechanism it documented, not renamed. `docsRow('migrate') === undefined` is
 // therefore the honest, correct answer now, not a bug to route around: the mechanism this control
 // exists to protect (editionsNamedIn's regex matcher) is not retired, only its witness died — the
-// same shape as `plantRoadmapIssue` and `test-forge-bundle-lane.js`'s classifier seam elsewhere in
+// same shape as `seedClassifierVerdictFromBody` and `test-forge-bundle-lane.js`'s classifier seam elsewhere in
 // this run. Re-pointed at a row verified still present, by reading the live file rather than
 // remembering the old one: `docs/api.md`'s install-manifest row is the ONLY OTHER table row in the
 // entire document whose own text names both GitLab and Gitea (confirmed by grepping every `|`-led

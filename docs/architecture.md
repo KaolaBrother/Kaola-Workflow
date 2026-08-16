@@ -14,7 +14,9 @@ claim ──► write the mission list ──► run it ──► finalize ─�
 ```
 
 - **`/workflow-init`** — bootstraps a repository: `CLAUDE.md` guidance, docs structure, issue
-  conventions. Run once per project.
+  conventions. Run once per project. It also reconciles: a repository still carrying the retired
+  local backlog layer (`ROADMAP.md`, `.roadmap/issue-*.md`) is diagnosed and reported, and migrated
+  only on the owner's answer — never as a side effect of installing or upgrading.
 - **`/workflow-next`** — the whole workflow. Selects the target, claims it, writes
   `kaola-workflow/{project}/mission-list.md`, and runs it.
 - **`/kaola-workflow-finalize`** — validates, docks documentation, writes the summary, settles

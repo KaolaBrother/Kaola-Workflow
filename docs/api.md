@@ -13,7 +13,7 @@ Three commands ship. Everything below is invoked by them or by hand.
 
 | Command | Owns |
 |---|---|
-| `/workflow-init` | bootstrap a repository: `CLAUDE.md`, backlog guidance, docs structure, issue conventions |
+| `/workflow-init` | bootstrap a repository: `CLAUDE.md`, backlog guidance, docs structure, issue conventions; and diagnose a retired local backlog layer, reporting and migrating it only on the owner's answer |
 | `/workflow-next` | select, claim, write the mission list, run it |
 | `/kaola-workflow-finalize` | validate, dock docs, summarize, close, archive, commit, sink |
 

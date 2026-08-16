@@ -4,6 +4,44 @@
 
 ### Added
 
+- **`/workflow-init` gains a legacy-backlog reconcile pass — #986 (ADR 0018 §8 step 6, the step the
+  record names as carrying the risk).** Steps 1–5 retired the local backlog layer, which left a
+  consumer still holding one with tracked files nothing reads and no path off them; migration was
+  deliberately kept out of the upgrade, so something had to own it. Init now does: a new
+  `## Step 5 — Legacy Backlog Layer` (unnumbered on skill surfaces) that diagnoses read-only,
+  reports, asks, and acts only on the answer. The report is written to be worth reading even when
+  the owner declines — the file/byte manifest and the commit SHA that preserves every byte, where
+  each open issue's priority tier physically lives today, the residue that resolves nowhere, every
+  file citing the layer, and the `CLAUDE.md`/`AGENTS.md`/`_rules.md` rules that become self-failing
+  once the sources go. Those last are quoted with a proposed replacement and **not edited**: they
+  are the owner's. Acting is ordered — tier onto forge labels first (deletion removes the prose 47
+  of one measured consumer's 81 tiers live inside), residue posted as comments only where residue
+  exists, then deletion as **one movement**, `_rules.md` kept. The operative rule is one line:
+  never `git rm --cached`, and never delete from disk alone. Halfway fails in **both** directions,
+  and the second was measured during this run rather than read: a mirror off the index but on disk
+  is untracked main-root content and `sink_blocked`s every sink (`sinkPreflight` reads `-uall`),
+  while sources gone from disk but still in the index are staged by the next finalize's
+  `git add -A -- kaola-workflow/.roadmap` and land unreviewed inside an unrelated run's
+  `chore: archive` commit. A tracked, frozen layer is inert — declining is a complete answer.
+  Prose-only, in `init.skeleton.md` plus two slot entries (the summary heading renumbers to Step 6);
+  renders to the 18 tracked routing surfaces. The section carries `<!-- PIN: backlog-migration -->`
+  with an `in-backlog-migration` entry in `templates/routing/required-blocks.js`, mutation-proven:
+  gutting the halfway rule alone, marker intact, reds three surfaces by name.
+
+### Changed
+
+- **The walkthrough's `plantRoadmapIssue` fixture helper is renamed to
+  `seedClassifierVerdictFromBody`, and its dead `root` parameter dropped — #990.** ADR 0018 retired
+  the `.roadmap/issue-N.md` sources and repurposed the helper in the same change: its body now only
+  registers a classifier verdict derived from a `blocked by #N` hint, touching no filesystem path.
+  Nothing was broken and the suite was green, so this is the #988 inert-fixture question asked
+  again — and answered the other way, because a name is a stronger false signal than an inert
+  write: it asserts a retired mechanism at 42 call sites, in the file where fixture helpers are how
+  a reader learns what a scenario is about, and it had already cost one wrong-turn investigation.
+  All 42 sites, the definition, its comment block and the two cross-file citations in
+  `test-forge-finalize-findings.js` and `test-forge-bundle-lane.js` move together — the issue's own
+  condition was that it must not be repaired halfway. Full-scope walkthrough: 184/184.
+
 - **The pick step reads each shortlisted candidate's own body and comments before claiming, and
   comments win where they contradict the body — #985 (ADR 0018 §5 item 5, §8 step 1).**
   `/workflow-next` selected and claimed work from titles alone: the live-state fetch pulled only

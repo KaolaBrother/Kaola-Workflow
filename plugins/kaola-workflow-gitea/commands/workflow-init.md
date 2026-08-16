@@ -362,7 +362,43 @@ If `kaola-gitea-workflow-claim.js` is unavailable (manual install without the sc
 
 ---
 
-## Step 5 — Git And Issue Summary
+## Step 5 — Legacy Backlog Layer
+
+<!-- PIN: backlog-migration -->
+Step 1's scan may find `kaola-workflow/ROADMAP.md` or `kaola-workflow/.roadmap/issue-*.md`. That is a **retired** local backlog layer: nothing generates, validates, reads or updates it any more, and `_rules.md` is the one file under `.roadmap/` that survives. Init never deletes it, and installing or upgrading never migrates it. **Diagnose, report, ask, and act only on the answer** — migration is a deliberate movement of its own, and keeping it out of the upgrade is what stops a repo from being left halfway through one.
+
+**Diagnose.** Read-only, and complete before anything is reported:
+
+```bash
+git ls-files -- 'kaola-workflow/.roadmap/issue-*.md' 'kaola-workflow/ROADMAP.md'
+git ls-files -z -- 'kaola-workflow/.roadmap/issue-*.md' 'kaola-workflow/ROADMAP.md' | xargs -0 wc -c | tail -1
+git log -1 --format=%H
+git grep -Iln -e 'ROADMAP\.md' -e '\.roadmap/issue-' -- . ':!kaola-workflow/'
+```
+
+**Report** — and make it worth reading even when the owner declines:
+
+- **The manifest.** How many files, how many bytes, and the commit SHA above. Every byte is preserved by that commit, so deletion loses no content; what it loses is *findability*.
+- **The tier.** Where each open issue's priority lives today. If it lives only in this layer's prose, it has nowhere to be after deletion.
+- **The residue.** Diff each source against its own issue's thread and against the repo. Nearly all of it is a digest of material held elsewhere — but *elsewhere* is often **another issue**, so resolve each fact against the whole tracker, not the issue it was filed under. What resolves nowhere is the only content migration must preserve.
+- **The citations.** Every file the `git grep` found. These are the consumer's own documents and tests; this command does not touch them.
+- **The owner-owned rules.** Any rule in `CLAUDE.md`, `AGENTS.md` or `_rules.md` that asserts the layer exists — a finalize check that counts `issue-*.md` against the open-issue count becomes self-failing the moment the sources go, and a rule pointing readers at a per-row tag in the mirror dangles the same way. Quote the line, propose the replacement, and edit nothing: those files are the owner's.
+
+**Ask.** Creating labels on someone's tracker, posting comments on their issues, deleting tracked files, and editing their rule files are four separate decisions. Put them to the user in conversation and act only on the answer.
+
+**Act, in this order** — the order is forced, and each step's reason is a failure that has been measured:
+
+1. **Tier first.** Priority labels exist and carry each open issue's tier *before* anything is deleted. Deletion removes the prose those tiers physically live in.
+2. **Residue second.** Post the homeless content as comments, only on the issues it belongs to. Content still readable elsewhere needs no comment.
+3. **Deletion third, as one movement.** `git rm` the mirror and the per-issue sources together and commit, keeping `_rules.md`. **Never `git rm --cached`, and never delete from disk alone.** Both halves fail, in opposite directions: a mirror off the index but still on disk is untracked content in the main root and **refuses every sink**; sources gone from disk but still in the index are staged by the next finalize and land, unreviewed, inside an unrelated run's archive commit. The dangerous state is not *un*-migrated — a tracked, frozen layer is inert and harmless — it is *half*-migrated.
+4. **Citations and rule files last**, by the owner, once the deletion has landed.
+
+**Declining is a complete answer.** A frozen layer is read by nothing, blocks nothing, and can be migrated any time. Say so plainly and move on — do not re-offer on the next run.
+<!-- /PIN -->
+
+---
+
+## Step 6 — Git And Issue Summary
 
 After edits:
 
@@ -375,6 +411,7 @@ After edits:
    - whether AGENTS.md was created, was already conforming, or was migrated
    - which required `CLAUDE.md` sections are present
    - which docs files were created
+   - whether a legacy backlog layer was found, and what was decided about it
    - whether Gitea issues were available for sync
 4. Do not commit unless the user explicitly asks.
 

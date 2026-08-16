@@ -5,9 +5,16 @@
   *ordering*, the injected `CLAUDE.md` guidance sits in a named region under a cross-surface pin,
   finalize requires a run to comment what it corrected, and the whole roadmap layer — four
   `roadmap.js` copies, the mirror, the per-issue sources, the receipt fields, the invariants, the
-  drift classes, the sink's stash bucket — is deleted. **Step 6, consumer migration, is not done and
-  owns the remaining risk.** Acceptance was a run, not a suite: with `roadmap.js` gone,
-  `claim.js status` and `list-open` both execute and answer correctly.
+  drift classes, the sink's stash bucket — is deleted. **Step 6 shipped 2026-08-16 (#986)** as
+  `/workflow-init`'s `## Step 5 — Legacy Backlog Layer`: diagnose, report, ask, act only on the
+  answer. Read what it ships precisely — it is the *capability*, and **no consumer has been migrated
+  through it**; a repo still carrying the layer stays exactly as it was until its owner answers.
+  Step 6 also corrected this record on one point, by measurement rather than reading: the halfway
+  state fails in **both** directions, not one. An untracked mirror `sink_blocked`s every sink, as
+  §8 said — and sources deleted from disk but left in the index are staged by the next finalize's
+  `git add -A -- kaola-workflow/.roadmap` and committed, unreviewed, inside an unrelated run's
+  `chore: archive`. Same one-line rule, twice as forced. Acceptance was a run, not a suite: with
+  `roadmap.js` gone, `claim.js status` and `list-open` both execute and answer correctly.
 - **Date:** 2026-08-15
 - **Supersedes (if accepted):** the 2026-08-12 ruling that `ROADMAP.md`'s *active work* means claimed
   runs only, and with it the `.roadmap/issue-N.md` per-issue source file. **Does not supersede** ADR

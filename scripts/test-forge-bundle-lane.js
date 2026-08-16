@@ -156,7 +156,7 @@ fs.writeFileSync(HOSTILE_SHIM,
 // ADR 0018 §5 retired the classifier's OFFLINE local-roadmap-evidence read: OFFLINE + no active
 // folder for the target now unconditionally answers target_unverified (both bundle members would
 // refuse the claim with target_set_unverified, making every assertion below vacuous). Re-bootstrap
-// through the same seam Job 1 (simulate-workflow-walkthrough.js's plantRoadmapIssue) uses:
+// through the same seam Job 1 (simulate-workflow-walkthrough.js's seedClassifierVerdictFromBody) uses:
 // KAOLA_CLASSIFIER_MOCK_SCRIPT (#495, claim.js:1096-1101), which classifyIssue() spawns in place of
 // the real classifier when set. Every scenario in this file wants the SAME answer for both bundle
 // members (42 and 47) — an unconditional green, with no per-issue branching — so a static mock

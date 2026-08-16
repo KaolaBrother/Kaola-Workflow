@@ -132,9 +132,11 @@ const SPLICES = {
   "in-sk-002": {"github":"plugin_root=\"plugins/kaola-workflow\"","gitlab":"plugin_root=\"plugins/kaola-workflow-gitlab\"","gitea":"plugin_root=\"plugins/kaola-workflow-gitea\""},
   "in-sk-003": {"github":"  script_path=\"$(find \"$HOME/.codex/plugins/cache\" -path '*/kaola-workflow/*/scripts/install-codex-agent-profiles.js' -print -quit 2>/dev/null)\"","gitlab":"  script_path=\"$(find \"$HOME/.codex/plugins/cache\" -path '*/kaola-workflow-gitlab/*/scripts/install-codex-agent-profiles.js' -print -quit 2>/dev/null)\"","gitea":"  script_path=\"$(find \"$HOME/.codex/plugins/cache\" -path '*/kaola-workflow-gitea/*/scripts/install-codex-agent-profiles.js' -print -quit 2>/dev/null)\""},
   "in-next-route": {"command":"/workflow-next","skill":"kaola-workflow-next"},
-  // The closing summary is Step 5 of the command's numbered procedure; the skill
-  // has no Step sequence to continue, so it carries the same section unnumbered.
-  "in-summary-heading": {"command":"## Step 5 — Git And Issue Summary","skill":"## Git And Issue Summary"},
+  // The legacy-backlog reconcile pass and the closing summary are Steps 5 and 6 of
+  // the command's numbered procedure; the skill has no Step sequence to continue, so
+  // it carries the same two sections unnumbered.
+  "in-migration-heading": {"command":"## Step 5 — Legacy Backlog Layer","skill":"## Legacy Backlog Layer"},
+  "in-summary-heading": {"command":"## Step 6 — Git And Issue Summary","skill":"## Git And Issue Summary"},
   "in-shared-007": {"github":"If a GitHub issue is known, create the active workflow folder before starting:","gitlab":"If a GitLab issue is known, create the active workflow folder before starting:","gitea":"If a Gitea issue is known, create the active workflow folder before starting:"},
   "in-shared-008": {"github":"Replace `{project}` with the workflow project folder name (e.g., `multi-session-substrate`) and `{N}` with the GitHub issue number. If the issue number is unknown, omit `--issue`.","gitlab":"Replace `{project}` with the workflow project folder name (e.g., `multi-session-substrate`) and `{N}` with the GitLab issue number. If the issue number is unknown, omit `--issue`.","gitea":"Replace `{project}` with the workflow project folder name (e.g., `multi-session-substrate`) and `{N}` with the Gitea issue number. If the issue number is unknown, omit `--issue`."},
   "in-shared-009": {"github":"If `kaola-workflow-claim.js` is unavailable (manual install without the script), skip this step and proceed with local workflow artifacts.","gitlab":"If `kaola-gitlab-workflow-claim.js` is unavailable (manual install without the script), skip this step and proceed with local workflow artifacts.","gitea":"If `kaola-gitea-workflow-claim.js` is unavailable (manual install without the script), skip this step and proceed with local workflow artifacts."},

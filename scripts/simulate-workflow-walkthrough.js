@@ -56,8 +56,8 @@ function runNode(script, args, cwd, extraEnv, opts) {
     Object.entries(process.env).filter(([k]) => !k.startsWith('KAOLA_'))
   );
   // #984/ADR 0018: KAOLA_CLASSIFIER_MOCK_SCRIPT is the one KAOLA_* var this scrub must not drop — it
-  // is the seam plantRoadmapIssue's OFFLINE bootstrap depends on (see classifierMockScript below,
-  // near plantRoadmapIssue). Re-added ahead of extraEnv so a caller supplying its own mock still wins.
+  // is the seam seedClassifierVerdictFromBody's OFFLINE bootstrap depends on (see classifierMockScript below,
+  // near seedClassifierVerdictFromBody). Re-added ahead of extraEnv so a caller supplying its own mock still wins.
   baseEnv.KAOLA_CLASSIFIER_MOCK_SCRIPT = classifierMockScript;
   // Git isolation: prevent developer gpgsign/hooksPath from breaking fixture commits.
   baseEnv.GIT_CONFIG_GLOBAL = '/dev/null';
@@ -192,13 +192,13 @@ function writeProject(root, project, files) {
 }
 
 // ADR 0018 §5 HELD, not deleted (owner ruling): the claim -> status -> release lifecycle this
-// pins is not retired — only its bootstrap (`plantRoadmapIssue`, an OFFLINE local-roadmap-evidence
-// read) is dead now that nothing reads that file. Re-pointing the shared helper at
+// pins is not retired — only its bootstrap (the OFFLINE local-roadmap-evidence read this helper
+// used to perform) is dead now that nothing reads that file. Re-pointing the shared helper at
 // `KAOLA_CLASSIFIER_MOCK_SCRIPT` (#495, claim.js:1096-1101) repairs this in place with no edit here
 // at all — that re-pointing is test authoring and belongs to tdd-guide, alongside
 // test-forge-bundle-lane.js and this same helper. Left exactly as authored; expected RED until then.
 function testClaimStatusRelease(tmp) {
-  plantRoadmapIssue(tmp, 63, '');
+  seedClassifierVerdictFromBody(63, '');
   const first = json(runNode(claimScript, ['startup', '--target-issue', '63', '--runtime', 'claude', '--sink', 'pr'], tmp));
   assert(first.claim === 'acquired', 'startup should acquire explicit issue');
   assert(first.project === 'issue-63', 'project should default from issue number');
@@ -228,7 +228,7 @@ function testClaimStatusRelease(tmp) {
 }
 
 function testFinalize(tmp) {
-  plantRoadmapIssue(tmp, 164, '');
+  seedClassifierVerdictFromBody(164, '');
   json(runNode(claimScript, ['startup', '--target-issue', '164', '--runtime', 'claude'], tmp));
   // This fixture exercises terminal archive normalization directly rather than an
   // authored adaptive run, so it seeds a bound, passing consumer-mode validation record.
@@ -304,7 +304,7 @@ function testKeepOpenArchiveStamp() {
     initGitRepo(tmp);
     const STALE_UPDATED = '2020-01-01T00:00:00.000Z';
     const dir = path.join(tmp, 'kaola-workflow', 'issue-333');
-    plantRoadmapIssue(tmp, 333, '');
+    seedClassifierVerdictFromBody(333, '');
     json(runNode(claimScript, ['startup', '--target-issue', '333'], tmp,
       { KAOLA_WORKTREE_NATIVE: '0' }));
     // A stale `## Last Updated` is the point of the fixture (the archive stamp must be rewritten,
@@ -511,7 +511,7 @@ function testSubagentDispatchHookExists() {
 const classifierScript = path.join(repoRoot, 'scripts', 'kaola-workflow-classifier.js');
 
 // ADR 0018 §5 retired the classifier's OFFLINE local-roadmap-evidence read (`.roadmap/issue-N.md`),
-// so plantRoadmapIssue below no longer writes a file the classifier ever reads. It re-bootstraps
+// so seedClassifierVerdictFromBody below no longer writes a file the classifier ever reads. It re-bootstraps
 // through the seam #495 already built for this purpose — KAOLA_CLASSIFIER_MOCK_SCRIPT
 // (claim.js:1096-1101) — instead: classifyIssue() spawns this mock in place of the real classifier
 // whenever the env var is set, so a test can hand it a canned verdict.
@@ -524,7 +524,7 @@ const classifierScript = path.join(repoRoot, 'scripts', 'kaola-workflow-classifi
 //     value the spawning test set, forwarded verbatim by classifyIssue's env) and immediately
 //     delegates to the real classifier when that is not '1'. This mirrors the retired mechanism
 //     exactly — the roadmap file was only ever consulted on the OFFLINE arm; ONLINE classification
-//     never read it — so an ONLINE scenario that also happens to call plantRoadmapIssue (e.g.
+//     never read it — so an ONLINE scenario that also happens to call seedClassifierVerdictFromBody (e.g.
 //     testStartupExplicitTargetRedAnswers, which needs the REAL online red verdict from a gh mock)
 //     is unaffected.
 //   - An issue number nothing registered also delegates, so a scenario that spawns the real
@@ -597,9 +597,10 @@ function plantActiveFolder(root, project, issueNumber, phase3Body, status) {
 // source. `next_step: ready` never itself carried a `blocked by #N` hint, so every historical call
 // through this OFFLINE arm resolved to plain green; `body` is still inspected for that one shape
 // (the retired inference classifier.js used to parse out of `next_step`) so a caller that plants a
-// dependency hint still gets `blocked`, not a blanket green. `root` is kept in the signature so
-// call sites are untouched — mirrors projectNameForIssue's own retirement shape (claim.js:~303).
-function plantRoadmapIssue(root, issueNumber, body) {
+// dependency hint still gets `blocked`, not a blanket green. The retirement first kept the old
+// name and a vestigial `root` argument so call sites were untouched; both are gone now, because a
+// name is read at every call site whether or not the body ever is.
+function seedClassifierVerdictFromBody(issueNumber, body) {
   const m = /blocked by #(\d+)/i.exec(String(body || ''));
   registerClassifierVerdict(issueNumber, m
     ? { verdict: 'blocked', reasoning: 'OFFLINE and depends-on:#' + m[1] + ' label present; conservative block' }
@@ -1764,7 +1765,7 @@ function testWorktreeNativeOfflineWins() {
   const kwRoot = fs.realpathSync(tmp) + '.kw';
   try {
     initGitRepo(tmp);
-    plantRoadmapIssue(tmp, 506, '');
+    seedClassifierVerdictFromBody(506, '');
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
     const spawnResult = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '506'], {
@@ -2149,7 +2150,7 @@ function testArchiveCommitHonestUnderGitignore832() {
     // is created so the feature branch inherits it.
     fs.writeFileSync(path.join(tmp, '.gitignore'), 'kaola-workflow/archive/\n');
     plantActiveFolder(tmp, project, 8322, null);
-    plantRoadmapIssue(tmp, 8322, '');
+    seedClassifierVerdictFromBody(8322, '');
     G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'plant + gitignore archive'], { encoding: 'utf8' });
 
@@ -2432,7 +2433,7 @@ function testArchiveNeverRelocatesReservedDir930() {
       try {
         initGitRepo(tmp);
         seedForeign(tmp, c);
-        plantRoadmapIssue(tmp, c.issue, '');            // the RUN's own source; closure may remove it
+        seedClassifierVerdictFromBody(c.issue, '');            // the RUN's own source; closure may remove it
         G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
         G.git(tmp, ['commit', '-m', 'seed reserved directory'], { encoding: 'utf8' });
         plantActiveFolder(tmp, given, c.issue, null);
@@ -2456,7 +2457,7 @@ function testArchiveNeverRelocatesReservedDir930() {
       try {
         initGitRepo(tmp);
         seedForeign(tmp, c);
-        plantRoadmapIssue(tmp, c.issue, '');
+        seedClassifierVerdictFromBody(c.issue, '');
         G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
         G.git(tmp, ['commit', '-m', 'seed reserved directory'], { encoding: 'utf8' });
         fs.mkdirSync(kwRoot, { recursive: true });
@@ -2729,7 +2730,7 @@ function testClaimNeverAdoptsReservedDir933() {
         fs.writeFileSync(f, body);
       }
 
-      // The run's OWN roadmap source. Written by hand rather than through plantRoadmapIssue: that
+      // The run's OWN roadmap source. Written by hand rather than through seedClassifierVerdictFromBody: that
       // helper hard-codes `workflow_project: —`, and `field()` reads the FIRST match, so an
       // appended line loses.
       const ownSourceRel = path.join('kaola-workflow', '.roadmap', 'issue-' + c.issue + '.md');
@@ -2853,7 +2854,7 @@ function testFinalizeNarrowStagingExcludesForeignArchive() {
     initGitRepo(tmp);
     // Plant active folder and roadmap issue in main worktree, then commit
     plantActiveFolder(tmp, 'issue-701', 701, null);
-    plantRoadmapIssue(tmp, 701, '');
+    seedClassifierVerdictFromBody(701, '');
     G.git(tmp, ['add', '-A'], { encoding: 'utf8' });
     G.git(tmp, ['commit', '-m', 'plant'], { encoding: 'utf8' });
     // Create linked worktree on a feature branch
@@ -5814,7 +5815,7 @@ function testStartupExplicitTargetRedAnswers() {
   // producer — a target that is already CLOSED on the forge — so the fixture closes issue 71.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-startup-red-'));
   try {
-    plantRoadmapIssue(tmp, 71, 'body: a target that turns out to be closed');
+    seedClassifierVerdictFromBody(71, 'body: a target that turns out to be closed');
     const binDir = path.join(tmp, 'bin');
     writeBundleGhMockScript(binDir, { closedIssues: [71] });
     // ONLINE: `red` is a forge fact, so the offline runner cannot reach this arm at all.
@@ -5926,7 +5927,7 @@ function testFinalizeRemovesClaimLabel() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-914', 914, null);
-    plantRoadmapIssue(tmp, 914, '');
+    seedClassifierVerdictFromBody(914, '');
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
       "const fs = require('fs');",
@@ -5972,7 +5973,7 @@ function testFinalizeNullFolderFallbackReadsArchive() {
     initGitRepo(tmp);
     // Plant active folder (sink: merge default) — issue-915 will appear closed to shim
     plantActiveFolder(tmp, 'issue-915', 915, null);
-    plantRoadmapIssue(tmp, 915, '');
+    seedClassifierVerdictFromBody(915, '');
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
       "const fs = require('fs');",
@@ -6605,7 +6606,7 @@ function testWatchPrEmitsClaimLabelReceipt() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-917', 917, null);
-    plantRoadmapIssue(tmp, 917, '');
+    seedClassifierVerdictFromBody(917, '');
     // Patch state to sink:pr with a pr_url
     const stateFile = path.join(tmp, 'kaola-workflow', 'issue-917', 'workflow-state.md');
     let state = fs.readFileSync(stateFile, 'utf8');
@@ -6770,7 +6771,7 @@ function testFinalizeClaimLabelFailedTriggersInvariant() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-918', 918, null);
-    plantRoadmapIssue(tmp, 918, '');
+    seedClassifierVerdictFromBody(918, '');
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
       "const a = process.argv.slice(2).join(' ');",
@@ -6816,7 +6817,7 @@ function testClearAdvisoryClaimDeletesMarkerComment() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-920', 920, null);
-    plantRoadmapIssue(tmp, 920, '');
+    seedClassifierVerdictFromBody(920, '');
     fs.mkdirSync(binDir, { recursive: true });
     // Shim: --method DELETE branch MUST come before the bare list branch (both contain "comments")
     writeShimFiles(path.join(binDir, 'gh'), [
@@ -6865,7 +6866,7 @@ function testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-921', 921, null);
-    plantRoadmapIssue(tmp, 921, '');
+    seedClassifierVerdictFromBody(921, '');
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
       "const fs = require('fs');",
@@ -7162,7 +7163,7 @@ function testKeepOpenSinkLeavesTheIssueReClaimable() {
     const readState = () => { try { return JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch (_) { return null; } };
 
     // A roadmap source, so the re-claim at the end has an issue to claim.
-    plantRoadmapIssue(tmp, issue, '');
+    seedClassifierVerdictFromBody(issue, '');
     const gitEnv = { ...process.env, ...GIT_ISOLATION_ENV,
       GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
     G.git(tmp, ['add', '-A'], { encoding: 'utf8', env: gitEnv });
@@ -7894,8 +7895,8 @@ function testBundleFinalizeAllOpenCloseIsPending() {
     writeProject(tmp, project, { 'workflow-state.md': stateLines });
 
     // Plant roadmap sources for both members.
-    plantRoadmapIssue(tmp, 61, '');
-    plantRoadmapIssue(tmp, 62, '');
+    seedClassifierVerdictFromBody(61, '');
+    seedClassifierVerdictFromBody(62, '');
 
     // gh mock: both members probe as OPEN (not closed yet — close deferred to sink-merge).
     writeBundleGhMockScript(binDir, { logFile, openIssues: [61, 62] });
@@ -8695,11 +8696,11 @@ function testClosureAuditUnresolvedClosedState() {
     initGitRepo(tmp);
     // ADR 0018 §5: closure-audit's candidate set used to fold in roadmap-source issue numbers
     // ADDITIONALLY to active-folder ones (buildAuditReport's old `candidates = srcFiles...concat
-    // folders...`); that fold is retired along with roadmapSourceFiles, so a bare plantRoadmapIssue
+    // folders...`); that fold is retired along with roadmapSourceFiles, so a bare seedClassifierVerdictFromBody
     // no longer puts 910 in front of the probe at all — an active folder is now the ONLY candidate
     // source (buildAuditReport:429-430).
     plantActiveFolder(tmp, 'issue-910', 910, null);
-    plantRoadmapIssue(tmp, 910, '');
+    seedClassifierVerdictFromBody(910, '');
     closureAuditShim(binDir, ["process.kill(process.pid, 'SIGTERM'); setInterval(() => {}, 1 << 30);"]);
     const result = runClosureAudit([], tmp, binDir, probeTimeoutEnv());
     const unresolved = result.drift.unresolved_closed_state;
@@ -8725,7 +8726,7 @@ function testClosureAuditProbeFailureUnresolved() {
     // ADR 0018 §5: see testClosureAuditUnresolvedClosedState — an active folder is now the only way
     // to put 940 in front of the probe at all.
     plantActiveFolder(tmp, 'issue-940', 940, null);
-    plantRoadmapIssue(tmp, 940, '');
+    seedClassifierVerdictFromBody(940, '');
     closureAuditShim(binDir, [
       "const a = process.argv.slice(2).join(' ');",
       "if (a.includes('issue view')) { process.exitCode = 1; process.stdout.write('not found\\n'); }",
@@ -8763,7 +8764,7 @@ function testClosureAuditTimeoutEnvInvalidFallsBack() {
   try {
     initGitRepo(tmp);
     plantActiveFolder(tmp, 'issue-941', 941, null);
-    plantRoadmapIssue(tmp, 941, '');
+    seedClassifierVerdictFromBody(941, '');
     closureAuditShim(binDir, [
       "const a = process.argv.slice(2).join(' ');",
       "if (a.includes('issue view')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
@@ -9005,8 +9006,8 @@ function testClosureAuditProjectScopePartitions903() {
     const dir555 = plantArchive903(tmp, 'issue-555', { status: 'closed', step: 'complete', issue_number: 555 });
     fs.writeFileSync(path.join(dir700, 'finalization-summary.md'), 'Evidence: .cache/final-validation.md\n');
     fs.writeFileSync(path.join(dir555, 'finalization-summary.md'), 'Evidence: .cache/final-validation.md\n');
-    plantRoadmapIssue(tmp, 700, '');
-    plantRoadmapIssue(tmp, 555, '');
+    seedClassifierVerdictFromBody(700, '');
+    seedClassifierVerdictFromBody(555, '');
 
     // Control on the fixture: unscoped, BOTH are drift, and the unscoped envelope carries none of
     // the scoped keys. Without this leg the partition assertions could pass on a dead fixture.
@@ -11153,7 +11154,7 @@ function testPlanlessAndPlannedInitialAuthority699() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-initial-authority-699-')));
   try {
     initGitRepo(tmp);
-    plantRoadmapIssue(tmp, 6992, '');
+    seedClassifierVerdictFromBody(6992, '');
     // startup writes the claim record into workflow-state.md and EXITS; later CLI processes in
     // this scenario re-read that record from disk and their verdict is asserted.
     // spawn-class: durable-handoff
@@ -11178,7 +11179,7 @@ function testPlanlessAndPlannedInitialAuthority699() {
       const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-planless-' + name + '-699-')));
       try {
         initGitRepo(root);
-        plantRoadmapIssue(root, issue, '');
+        seedClassifierVerdictFromBody(issue, '');
         // The shared planless fixture: this process writes the claim record and exits, and the
         // caller process below reconstructs the claim from that record alone.
         // spawn-class: durable-handoff
@@ -11272,7 +11273,7 @@ function testArchiveCallersFailClosed699() {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-archive-caller-699-')));
     initGitRepo(root);
     plantActiveFolder(root, 'issue-' + issue, issue, null);
-    plantRoadmapIssue(root, issue, '');
+    seedClassifierVerdictFromBody(issue, '');
     const result = spawnSync(process.execPath, [claimScript, subcommand, '--project', 'issue-' + issue], {
       cwd: root, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
         KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0',
@@ -11340,7 +11341,7 @@ function testOfflineNoHistoryClaimRoot699() {
         G.git(root, ['init', '-b', 'main'], { encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV } });
         fs.writeFileSync(path.join(root, 'candidate.txt'), 'uncommitted candidate\n');
       }
-      for (const issue of row.issues) plantRoadmapIssue(root, issue, '');
+      for (const issue of row.issues) seedClassifierVerdictFromBody(issue, '');
       const result = spawnSync(process.execPath, [claimScript, 'startup', ...row.args], {
         cwd: root, encoding: 'utf8', env: { ...process.env, ...GIT_ISOLATION_ENV,
           KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: row.native }
@@ -12533,9 +12534,9 @@ function testBundleClaimCreatesOneFolder() {
   const logFile = path.join(tmp, 'gh-calls.log');
   try {
     initGitRepo(tmp);
-    plantRoadmapIssue(tmp, 42, '');
-    plantRoadmapIssue(tmp, 47, '');
-    plantRoadmapIssue(tmp, 53, '');
+    seedClassifierVerdictFromBody(42, '');
+    seedClassifierVerdictFromBody(47, '');
+    seedClassifierVerdictFromBody(53, '');
     writeBundleGhMockScript(binDir, { logFile, openIssues: [42, 47, 53] });
 
     const result = spawnSync(process.execPath, [claimScript,
@@ -12606,9 +12607,9 @@ function testBundleRefusalLeavesNoFolder() {
   const logFile = path.join(tmp, 'gh-calls.log');
   try {
     initGitRepo(tmp);
-    plantRoadmapIssue(tmp, 42, '');
-    plantRoadmapIssue(tmp, 47, '');
-    plantRoadmapIssue(tmp, 53, '');
+    seedClassifierVerdictFromBody(42, '');
+    seedClassifierVerdictFromBody(47, '');
+    seedClassifierVerdictFromBody(53, '');
     // Member #47 is closed; members 42 and 53 are open
     writeBundleGhMockScript(binDir, { logFile, openIssues: [42, 53], closedIssues: [47] });
 
@@ -12656,8 +12657,8 @@ function testBundleDuplicateIssueBlocking() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-328-dup-')));
   try {
     // Plant roadmap entries
-    plantRoadmapIssue(tmp, 47, '');
-    plantRoadmapIssue(tmp, 77, '');
+    seedClassifierVerdictFromBody(47, '');
+    seedClassifierVerdictFromBody(77, '');
     // Seed a live bundle project for [42,47,53]
     writeProject(tmp, 'bundle-42-47-53', {
       'workflow-state.md': [
@@ -12731,9 +12732,9 @@ function testBundleFinalizeReceiptFields() {
     writeProject(tmp, project, { 'workflow-state.md': stateLines });
 
     // Plant roadmap sources for all three members
-    plantRoadmapIssue(tmp, 42, '');
-    plantRoadmapIssue(tmp, 47, '');
-    plantRoadmapIssue(tmp, 53, '');
+    seedClassifierVerdictFromBody(42, '');
+    seedClassifierVerdictFromBody(47, '');
+    seedClassifierVerdictFromBody(53, '');
 
     // Write a ROADMAP.md mirror that references all three (so regenerate can clean it)
     const roadmapContent = [
@@ -12817,7 +12818,7 @@ function testBundleSingleIssueStateHasNoBundleFields() {
   const tmp = adaptiveTmp('328-ac1');
   try {
     initGitRepo(tmp);
-    plantRoadmapIssue(tmp, 601, '');
+    seedClassifierVerdictFromBody(601, '');
     const out = JSON.parse(runNode(claimScript,
       ['startup', '--target-issue', '601'],
       tmp).stdout);
@@ -13041,8 +13042,8 @@ function testFinalizeClosesIssueBundleMembers() {
     ].join('\n');
     writeProject(tmp, project, { 'workflow-state.md': stateLines });
     seedAdaptiveFinalizeFixture(tmp, project);
-    plantRoadmapIssue(tmp, 42, '');
-    plantRoadmapIssue(tmp, 47, '');
+    seedClassifierVerdictFromBody(42, '');
+    seedClassifierVerdictFromBody(47, '');
 
     // Run finalize OFFLINE — issue closing is skipped, skipped_offline records the bundle members.
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
