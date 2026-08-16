@@ -20,13 +20,37 @@
   never `git rm --cached`, and never delete from disk alone. Halfway fails in **both** directions,
   and the second was measured during this run rather than read: a mirror off the index but on disk
   is untracked main-root content and `sink_blocked`s every sink (`sinkPreflight` reads `-uall`),
-  while sources gone from disk but still in the index are staged by the next finalize's
-  `git add -A -- kaola-workflow/.roadmap` and land unreviewed inside an unrelated run's
-  `chore: archive` commit. A tracked, frozen layer is inert — declining is a complete answer.
+  while sources gone from disk but still in the index were, at the time this shipped, swept into an
+  unrelated run's commit — see the #991 entry below, which removed that second direction from the
+  tool. A tracked, frozen layer is inert — declining is a complete answer.
   Prose-only, in `init.skeleton.md` plus two slot entries (the summary heading renumbers to Step 6);
   renders to the 18 tracked routing surfaces. The section carries `<!-- PIN: backlog-migration -->`
   with an `in-backlog-migration` entry in `templates/routing/required-blocks.js`, mutation-proven:
   gutting the halfway rule alone, marker intact, reds three surfaces by name.
+
+### Fixed
+
+- **Finalize no longer sweeps up a half-migrated `.roadmap/` — #991.** Two call sites named the
+  DIRECTORY where they meant one file. The archive staging ran `git add -A --
+  kaola-workflow/.roadmap`, and — the larger half, and the one the issue did not name because it
+  was filed from reading a single call site — the residue enumerator admitted everything under that
+  directory *plus* `ROADMAP.md` into the `chore: finalize` commit. On a repo part-way through the
+  ADR 0018 §8 step 6 migration, whose owner had deleted the retired per-issue sources from disk
+  intending to review before committing, an unrelated run committed that deletion for them.
+  Both sites now name `kaola-workflow/.roadmap/_rules.md` — the one file the Durable State Contract
+  keeps — in all four editions, with `roadmap_staged` moved in the same edit at each (the canonical
+  and codex copies compare the path string; the gitlab and gitea copies `fs.existsSync` it), so the
+  field keeps its meaning and its existing assertions stand as authored. The residue enumerator's
+  `ROADMAP.md` arm is dropped rather than narrowed: #988 already removed the retired mirror from
+  the archive candidate list, and admitting it here merely moved the sweep one commit over. Dropping
+  it also **restores the designed loud failure** — an untracked mirror now stays untracked and
+  `sink_blocked`s the sink instead of being quietly committed.
+  The issue was filed from reading and said so, explicitly permitting a no-code close. It is closed
+  with code because reachability was then established by **running**: `test-finalize-door.js :: T13`
+  went red on the pre-fix build in all four editions, with the file gone from HEAD after finalize.
+  Both sites are independently mutation-proven, one at a time and canonical-only so each mutant is
+  single-site; reverting either reds `T13(root)` alone. Nothing is lost by the narrowing — a deleted
+  `_rules.md` is still carried, by the residue arm.
 
 ### Changed
 

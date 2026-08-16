@@ -10,10 +10,15 @@
   answer. Read what it ships precisely — it is the *capability*, and **no consumer has been migrated
   through it**; a repo still carrying the layer stays exactly as it was until its owner answers.
   Step 6 also corrected this record on one point, by measurement rather than reading: the halfway
-  state fails in **both** directions, not one. An untracked mirror `sink_blocked`s every sink, as
-  §8 said — and sources deleted from disk but left in the index are staged by the next finalize's
-  `git add -A -- kaola-workflow/.roadmap` and committed, unreviewed, inside an unrelated run's
-  `chore: archive`. Same one-line rule, twice as forced. Acceptance was a run, not a suite: with
+  state failed in **both** directions, not one. An untracked mirror `sink_blocked`s every sink, as
+  §8 said — and sources deleted from disk but left in the index were swept into an unrelated run's
+  commit, unreviewed. **#991 then removed that second direction from the tool** (2026-08-16): both
+  the archive staging and the residue enumerator now name `kaola-workflow/.roadmap/_rules.md`
+  rather than the directory, and the residue enumerator's `ROADMAP.md` arm is gone, which also
+  restores the loud refusal an untracked mirror is supposed to get. So the tool no longer takes a
+  migration decision on the owner's behalf. The one-line rule stands unchanged for the owner —
+  half-migrated is still the state to avoid — but it is now advice about their own repository
+  rather than a warning about what this tool will do to it. Acceptance was a run, not a suite: with
   `roadmap.js` gone, `claim.js status` and `list-open` both execute and answer correctly.
 - **Date:** 2026-08-15
 - **Supersedes (if accepted):** the 2026-08-12 ruling that `ROADMAP.md`'s *active work* means claimed

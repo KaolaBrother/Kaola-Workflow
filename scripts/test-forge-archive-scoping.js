@@ -158,7 +158,10 @@ function buildFixture(ed) {
   const writeNeighbourhood = root => {
     const kw = path.join(root, 'kaola-workflow');
     fs.mkdirSync(path.join(kw, '.roadmap'), { recursive: true });
-    fs.writeFileSync(path.join(kw, '.roadmap', 'issue-1.md'), '# 1 — the project being finalized\n');
+    // #991: the archive candidate is `_rules.md`, the one file that survives the ADR 0018
+    // retirement — a per-issue source is deliberately no longer staged, so seeding one here would
+    // leave `archive_stage: "skipped"` and every scoping assertion below vacuously satisfied.
+    fs.writeFileSync(path.join(kw, '.roadmap', '_rules.md'), '# rules — the project being finalized\n');
     fs.writeFileSync(path.join(kw, 'ROADMAP.md'), '# Roadmap\n\n- #1 the project being finalized\n');
     fs.mkdirSync(path.join(kw, FOREIGN), { recursive: true });
     fs.writeFileSync(path.join(kw, FOREIGN, 'workflow-state.md'),

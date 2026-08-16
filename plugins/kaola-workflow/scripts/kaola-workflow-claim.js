@@ -4834,10 +4834,17 @@ function cmdFinalize() {
           detail ? ['git said:', '', '```', detail, '```'] : []);
       }
       // #988: `kaola-workflow/ROADMAP.md` stood beside `.roadmap` here. ADR 0018 retired the mirror
-      // and its generator, so the path names nothing this tool produces any more. `.roadmap` STAYS —
-      // that directory survives the retirement and holds `_rules.md`, so this list is genuinely
-      // non-empty in a real repository and the staging below has real work to do.
-      const candidatePaths = ['kaola-workflow/.roadmap'];
+      // and its generator, so the path names nothing this tool produces any more.
+      //
+      // #991: and the survivor is the FILE, not the directory. `git add -A` over
+      // `kaola-workflow/.roadmap` stages every change under it, which on a repo part-way through the
+      // ADR 0018 §8 step 6 migration means a disk-only deletion of the retired per-issue sources is
+      // committed inside this run's `chore: archive` — a decision the owner was in the middle of
+      // making, taken by a run that has nothing to do with it. Measured, not reasoned: the pre-fix
+      // build committed exactly that in all four editions (test-finalize-door.js :: T13).
+      // `_rules.md` is the one file under that directory the Durable State Contract keeps, so naming
+      // it directly is both narrower AND the whole of what this staging was ever for.
+      const candidatePaths = ['kaola-workflow/.roadmap/_rules.md'];
       // #832: the archive resolves against MAIN's project root, so on a linked run result.dest is
       // OUTSIDE this worktree's index and can never be staged here — `path.relative(root, dest)`
       // escapes the worktree. The archive's fate is recorded honestly below (archiveDisposition)
@@ -4889,7 +4896,7 @@ function cmdFinalize() {
       // staged nothing at all, which is a false statement about the index in exactly the run where it
       // matters most.
       finalizeTx.roadmap_staged = archiveAddOk
-        && existingPaths.some(p => p === 'kaola-workflow/.roadmap');
+        && existingPaths.some(p => p === 'kaola-workflow/.roadmap/_rules.md');
       // #832: the ARCHIVE's fate is decided here, independently of whatever else the commit below
       // carries. The old code read `git diff --cached --quiet` with NO pathspec, so the roadmap
       // staging alone made hasStaged true and the transaction recorded archive_commit:'committed'
@@ -4971,7 +4978,21 @@ function cmdFinalize() {
           if (SINK_JOURNAL_RE.test(rel)) continue;
           if (!rel.startsWith('kaola-workflow/')) { residue.push(rel); continue; }
           const seg = rel.split('/');
-          if (seg[1] === '.roadmap' || seg[1] === 'ROADMAP.md') { residue.push(rel); continue; }
+          // #991: `_rules.md` ONLY, and no `ROADMAP.md` arm at all. This used to admit everything
+          // under `kaola-workflow/.roadmap/` plus the retired mirror, which made `chore: finalize`
+          // the second and larger half of the same defect the archive staging had: a repo part-way
+          // through the ADR 0018 §8 step 6 migration, whose owner deleted the retired per-issue
+          // sources from disk to review before committing, had that deletion committed for them by
+          // an unrelated run. #988 already dropped `ROADMAP.md` from the archive candidate list for
+          // this reason; leaving it admissible here just moved the sweep one commit over. Dropping
+          // it also restores the DESIGNED loud failure: an untracked mirror now stays untracked and
+          // `sink_blocked`s the sink, instead of being quietly committed. Measured before and after
+          // in all four editions (test-finalize-door.js :: T13).
+          if (seg[1] === '.roadmap') {
+            if (seg.length === 3 && seg[2] === '_rules.md') residue.push(rel);
+            continue;
+          }
+          if (seg[1] === 'ROADMAP.md') continue;
           if (seg[1] === 'archive') {
             const band = seg[2] || '';
             if (band === args.project || band.indexOf(args.project + '.archived-') === 0) residue.push(rel);

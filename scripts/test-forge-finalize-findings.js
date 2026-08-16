@@ -286,7 +286,10 @@ function buildFixture(ed, opts) {
   // nothing stages, which is the same dead-weight-reading-as-a-live-claim that #988 was filed about.
   if (o.ignoredArchivePath) {
     fs.mkdirSync(path.join(wtPath, IGNORED_ARCHIVE_PATH), { recursive: true });
-    fs.writeFileSync(path.join(wtPath, IGNORED_ARCHIVE_PATH, 'issue-1.md'), '# 1\n');
+    // #991: `_rules.md`, not a retired `issue-N.md`. The archive candidate is now the FILE the
+    // Durable State Contract keeps, not the directory, so a per-issue source no longer makes
+    // `existingPaths` non-empty and the staging step this leg is about would never run.
+    fs.writeFileSync(path.join(wtPath, IGNORED_ARCHIVE_PATH, '_rules.md'), '# rules\n');
   }
   // ADR 0018 §5: `existingPaths` in cmdFinalize's linked-run archive-stage block is
   // `['kaola-workflow/.roadmap', 'kaola-workflow/ROADMAP.md']` filtered by fs.existsSync — plus,
@@ -310,7 +313,10 @@ function buildFixture(ed, opts) {
   // that no production code reads and no `git add` stages.
   if (o.archiveStageCandidates) {
     fs.mkdirSync(path.join(wtPath, IGNORED_ARCHIVE_PATH), { recursive: true });
-    fs.writeFileSync(path.join(wtPath, IGNORED_ARCHIVE_PATH, 'issue-1.md'), '# 1\n');
+    // #991: `_rules.md`, not a retired `issue-N.md`. The archive candidate is now the FILE the
+    // Durable State Contract keeps, not the directory, so a per-issue source no longer makes
+    // `existingPaths` non-empty and the staging step this leg is about would never run.
+    fs.writeFileSync(path.join(wtPath, IGNORED_ARCHIVE_PATH, '_rules.md'), '# rules\n');
   }
 
   // Part D: the dirt the run leaves in the worktree at finalize time. Written LAST so the

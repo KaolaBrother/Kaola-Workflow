@@ -2594,6 +2594,96 @@ if (failed > 0) {
 })();
 
 // ---------------------------------------------------------------------------
+// T13 (#991) — finalize's archive staging must not sweep up a disk-only deletion under `.roadmap/`.
+//
+// REACHABILITY, ESTABLISHED BY RUNNING. #991 was filed from READING `git add -A --
+// kaola-workflow/.roadmap` and reasoning about the flag's semantics, and its own body says so: a
+// defect found by reading has not established reachability. This leg is that missing step. It went
+// RED on the pre-fix build — the deletion WAS staged and committed — and that red is the evidence
+// the filing lacked, not a formality performed after the decision.
+//
+// The population is narrow and worth naming, because it is what makes the breadth wrong rather than
+// merely broad: an owner part-way through the ADR 0018 §8 step 6 migration, who has deleted the
+// retired per-issue sources from disk intending to review the deletion before committing it. The
+// next unrelated finalize commits it for them, inside a `chore: archive` attributed to a run that
+// has nothing to do with the migration.
+//
+// The CONTROL is the other half and is load-bearing: `_rules.md` — the one file under that directory
+// the Durable State Contract keeps — must still be carried. A build that fixed this by staging
+// NOTHING would satisfy the hazard leg alone, and that is a real regression, not a fix.
+// ---------------------------------------------------------------------------
+(function T13_archiveStagingDoesNotSweepDiskOnlyRoadmapDeletion() {
+  console.log('T13: archive staging carries `_rules.md` but never a disk-only `.roadmap/` deletion');
+  for (const edition of CLAIM_EDITIONS) {
+    if (!fs.existsSync(edition.claim)) {
+      assert(false, 'T13(' + edition.name + '): the edition claim script exists at ' + edition.claim);
+      continue;
+    }
+    const tag = 'T13(' + edition.name + ')';
+    const project = 'issue-9910';
+    const fx = buildMainResidentRun('t12-' + edition.name, project, 9910,
+      { implCommit: true, residue: true });
+    try {
+      // A retired per-issue source, TRACKED — the shape an unmigrated consumer still carries. Commit
+      // it in main before touching the worktree, so both trees agree it is tracked.
+      // Committed in the LINKED WORKTREE, which is the tree finalize runs over and stages against.
+      // Seeding it in main instead would leave the worktree's own index without the entry, and there
+      // would be nothing for the staging to sweep — the premise below catches exactly that mistake.
+      const legacyRel = 'kaola-workflow/.roadmap/issue-4242.md';
+      fs.mkdirSync(path.join(fx.wt, 'kaola-workflow', '.roadmap'), { recursive: true });
+      fs.writeFileSync(path.join(fx.wt, legacyRel), '# 4242\n\nnext_step: [P1] something\n');
+      G.git(fx.wt, ['add', '--', legacyRel], { stdio: ['ignore', 'ignore', 'ignore'] });
+      G.git(fx.wt, ['commit', '-m', 'chore: seed a retired roadmap source'],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+
+      // PREMISE. Both files must be tracked in the worktree, or this leg measures nothing.
+      const tracked0 = committedPaths(fx.wt);
+      assert(tracked0.indexOf(legacyRel) >= 0,
+        tag + ' premise: the retired source must be TRACKED in the worktree before the deletion, or '
+        + 'there is no index entry for the staging to sweep; got '
+        + JSON.stringify(tracked0.filter(p => p.indexOf('.roadmap') >= 0)));
+      assert(tracked0.indexOf('kaola-workflow/.roadmap/_rules.md') >= 0,
+        tag + ' premise: `_rules.md` must be tracked too, or the control below is vacuous; got '
+        + JSON.stringify(tracked0.filter(p => p.indexOf('.roadmap') >= 0)));
+
+      // THE HAZARD: deleted from DISK ONLY. This is the exact half-migrated state, and the one
+      // command that produces it.
+      fs.unlinkSync(path.join(fx.wt, legacyRel));
+      // And a real `_rules.md` EDIT, so the control asserts a carry that had something to carry.
+      fs.writeFileSync(path.join(fx.wt, 'kaola-workflow/.roadmap/_rules.md'),
+        '# Project rules\n\nStanding project-local rules, amended by this run.\n');
+
+      const r = runFinalizeKeepWorktree(fx, edition.claim);
+      const out = r.json;
+      assert(r.status === 0 && out && out.status === 'closed',
+        tag + ': exit stays 0 and closure completes; got status=' + r.status
+        + ' stderr=' + String(r.stderr || '').slice(0, 300));
+
+      // THE FINDING. The deletion must not have reached the index or a commit.
+      const stagedNow = String(G.git(fx.wt, ['diff', '--cached', '--name-only'],
+        { encoding: 'utf8' }).stdout || '');
+      assert(stagedNow.indexOf(legacyRel) < 0,
+        tag + ': finalize must not STAGE a disk-only deletion of a retired roadmap source — an owner '
+        + 'part-way through migration deletes from disk to review before committing, and `git add -A` '
+        + 'over the whole directory takes that decision away; got staged=' + JSON.stringify(stagedNow));
+      assert(committedPaths(fx.wt).indexOf(legacyRel) >= 0,
+        tag + ': and must not COMMIT it either — the file is still tracked at HEAD after finalize, '
+        + 'because nothing in this run was about that file; got tracked='
+        + JSON.stringify(committedPaths(fx.wt).filter(p => p.indexOf('.roadmap') >= 0)));
+
+      // THE CONTROL. Narrowing must not become "stage nothing".
+      const tx = (out && out.finalize_transaction) || {};
+      assert(tx.roadmap_staged === true,
+        tag + ' control: the surviving `_rules.md` IS still carried — a build that fixed the hazard by '
+        + 'staging nothing at all would pass the assertions above and be a regression; got '
+        + JSON.stringify(tx.roadmap_staged));
+    } finally {
+      removeMainResidentRun(fx);
+    }
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // Final result — AUTHORITATIVE. Two appended blocks now sit after this file's original footer, and
 // the counters are cumulative, so the two earlier summary lines are intermediate totals and THIS is
 // the one that decides the exit code.
