@@ -199,7 +199,7 @@
   `kaola-workflow/archive/issue-9500-archived-XYZ/`), `git add` (2.54.0) exits 0 and stages
   **nothing**, with a real file sitting under the include. The live-path excludes are now gated on
   the same `liveTracked` flag as their include, so an exclude never outlives the include it narrows.
-  **This defect could always have fired**: #700's collision-suffixed archive destination always
+  **This defect could always have fired**: issue-700's collision-suffixed archive destination always
   shared that prefix, and a second live include merely masked it — retiring the roadmap mirror
   removed the mask rather than creating the bug. Reproduced, isolated to the prefix relationship by a
   one-variable-at-a-time grid, and separately measured to have a second trigger path in the glob tail
