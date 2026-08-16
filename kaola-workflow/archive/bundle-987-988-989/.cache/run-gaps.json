@@ -1,0 +1,20 @@
+{
+  "project": "bundle-987-988-989",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:stale-helper-name",
+      "sample": "plantRoadmapIssue plants no roadmap issue; the name outlived the mechanism it named",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:duplicate-constant-name",
+      "sample": "two identically-named REMOTE_TIMEOUT_MS constants, only one of which feeds probeIssueState",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:witness-loss",
+      "sample": "behavioural-C's partial-stage witness dies with the ROADMAP.md pathspec that fed it",
+      "count": 1
+    }
+  ]
+}
