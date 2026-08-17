@@ -1,0 +1,20 @@
+{
+  "project": "bundle-992-993-994",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:tier-duty",
+      "sample": "Step 7 carries no priority-tier duty so an untiered filing sorts last",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:worktree-edition-write",
+      "sample": "regenerate from a linked worktree mutates the main checkout edition trees",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:malformed-gap-rows",
+      "sample": "an all-unreadable Run gaps section stamps zero rather than unknown",
+      "count": 1
+    }
+  ]
+}

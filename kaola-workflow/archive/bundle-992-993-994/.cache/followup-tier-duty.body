@@ -1,0 +1,44 @@
+## Measured
+
+All at `c62e8a3f` unless stated.
+
+- **ADR 0018 asserts the duty.** `docs/decisions/0018-the-forge-is-the-backlog.md:264-265` @`c62e8a3f`:
+  "per real defect; an issue filed without a `P` label is tier 99 and invisible to the sorter item 2
+  connects. So the tier is written in the same breath as `filed: #N`. **That is the whole of it.**"
+- **The shipped prose never carried it.** `templates/routing/finalize.skeleton.md` Step 7 spans
+  `:227-258` @`c62e8a3f`; `sed -n '227,258p' … | grep -niE 'P0|P1|tier|label|priorit'` returns **no
+  match**. There is no priority-tier mention anywhere in Step 7.
+- **An untiered issue sorts to 99.** `scripts/kaola-workflow-claim.js:267-274` @`c62e8a3f`:
+  `priorityTier` returns `{ tier: 99, priority_label: '' }` when no label matches `/^P\d+$/i` and none
+  is in the configured top-tier list.
+- **…but it is NOT invisible.** `listOpenIssues` (`:276-290` @`c62e8a3f`) sorts on that tier
+  (`at - bt || Number(a.number) - Number(b.number)`) and neither filters nor truncates. The ADR's
+  phrase "invisible to the sorter" does not describe what the code does: an untiered issue is listed,
+  and it sorts **last**, beneath every tiered issue — so a P0-urgent defect filed untiered ranks below
+  a P3.
+- **Currently honored by practice, not by prose.** The three issues claimed by the run that found this
+  (#992, #993, #994) all carried `P` labels.
+
+searched: `gh search issues --repo KaolaBrother/Kaola-Workflow "priorityTier"` → 2 hits, both closed
+(#984 the ADR build parent, #150 a GitLab/Gitea `priority_top_tier_labels` port bug); `"tier 99"` → 1
+hit, closed (#99, unrelated). No open duplicate.
+
+## Hypothesis
+
+- That runs have been tiering their filings only because recent orchestrators happened to know the
+  ADR, and a run that does not read `docs/decisions/` will file untiered. **Not observed failing in
+  this repo** — the claim to test is whether any archived run's `filed:` issue landed without a `P`
+  label.
+- That the ADR's "invisible" wording is the origin of the gap: the duty reads as already-enforced
+  machinery rather than as prose someone still has to write. Unverified — an attribution about intent,
+  not a fact about code.
+
+## Proposed remedy (non-binding)
+
+One clause in Step 7's filing paragraph naming the tier alongside `filed: #N`. Notes for whoever takes
+it, not instructions: the filing paragraph sits inside `<!-- PIN: forge-is-the-backlog -->`
+(`finalize.skeleton.md:237-248`), so the clause would land inside an existing pin and needs no new
+marker; and under this project's test-custody rule plus ADR 0018's pin governance, the
+`required-blocks.js` token that would guard it must not be authored by whoever writes the prose.
+Correcting the ADR's "invisible to the sorter" sentence to match the measured behaviour is a separate,
+smaller slice.

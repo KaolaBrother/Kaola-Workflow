@@ -1,0 +1,47 @@
+## Measured
+
+Observed during a real run, not constructed: the run's implementer ran the documented regenerate step
+inside a linked worktree, and the main checkout changed.
+
+- **The command and where it ran.** `node scripts/generate-routing-surfaces.js --write`, executed with
+  cwd `<repo>/.kw/worktrees/bundle-992-993-994` (branch `workflow/bundle-992-993-994`, based on
+  `c62e8a3f`). It reported `rendered 18 surfaces`.
+- **All six MAIN-checkout edition trees changed.** `grep -rl "## Hypothesis"` over each returns 1 file
+  each: `.kimi/`, `.kimi-gitea/`, `.kimi-gitlab/`, `.opencode/`, `.opencode-gitea/`,
+  `.opencode-gitlab/`. Timestamp on `.kimi/skills/kaola-workflow-finalize/SKILL.md` matches the
+  `--write` run.
+- **No MAIN-checkout tracked surface changed.** `grep -rl "## Hypothesis"` over the main checkout's
+  `commands/`, `plugins/`, `templates/` returns **0**. Its `templates/routing/finalize.skeleton.md`
+  likewise returns 0. So the installed edition trees now carry a rule that exists in no tracked file of
+  that checkout.
+- **The worktree has no edition trees of its own** — `ls -d .kimi* .opencode*` inside it returns
+  nothing; they are gitignored and absent from a fresh checkout.
+- **Doubly invisible.** `git status --short` in the main checkout reports nothing for these paths
+  (gitignored), and `generate-routing-surfaces.js --check` does not read edition trees at all — by
+  design, so that editions stay out of `npm test`.
+- **Self-correcting only on merge.** If the branch merges, the trees agree with the tracked tree again.
+  If the branch is discarded, the divergence persists silently until someone regenerates or reinstalls.
+
+searched: `gh search issues --repo KaolaBrother/Kaola-Workflow "generate-routing-surfaces"` → 6 hits,
+all closed except #994 (this run's own, unrelated); nearest is **#969** *"Edition sync --check runs in
+no chain, so four green chains can certify stale .opencode/.kimi trees"* — the same worktree-vs-
+gitignored-edition-tree seam in the **opposite** direction (that one is trees going stale unnoticed;
+this one is trees being written that no tracked file backs). `"worktree edition tree"` → 0 hits. Not a
+duplicate of #969.
+
+## Hypothesis
+
+- That the edition refresh resolves its tree root to the main checkout rather than to the invoking
+  worktree — plausibly because presence is probed against a path derived from the git common directory
+  rather than the working tree. **Derived by reading the observable effect only; the resolution code
+  was not traced.** Phrased as a claim to test, not a cause.
+- That the same applies to any other command spawning the edition sync scripts from a worktree.
+  Untested — only `--write` was exercised.
+
+## Proposed remedy (non-binding)
+
+Either resolve the edition-tree root from the invoking working tree, or detect a linked worktree and
+skip the edition refresh with a printed note saying it was skipped and why. Both are guesses at the
+right shape; the measured requirement is only that running the documented regenerate step inside a
+worktree must not silently mutate a different checkout. A guard for this cannot live in
+`--check` as it stands, since `--check` deliberately does not read edition trees.

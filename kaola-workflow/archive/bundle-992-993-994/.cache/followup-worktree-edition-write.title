@@ -1,0 +1,1 @@
+`generate-routing-surfaces --write` run from a linked worktree mutates the MAIN checkout's gitignored edition trees, invisibly to git and to --check

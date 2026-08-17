@@ -1,0 +1,55 @@
+## Measured
+
+Measured on the branch that shipped the closure backlog-delta fields (#993), base `c62e8a3f`.
+
+- **`parseGapSection` has two return shapes, and one of them is overloaded.**
+  `scripts/kaola-workflow-gap-sweep.js:234-294` returns `null` when the summary file is absent or the
+  `## Run gaps` heading never appears, and returns an array otherwise. It returns `[]` **both** when
+  the section is genuinely empty and when every bullet in it fails the strict row regex
+  (`/^-\s+(\S+)\s+\((.+?)\):\s+(filed:\s*#(\d+)|noise:\s+(.+))$/`, `:265`).
+- **The shipped closure stamp therefore has two states, not three.** `null` → `follow_ups_filed`,
+  `follow_up_numbers`, `net_backlog_delta` all `unknown`; any array → measured, `filed:` rows counted.
+  So a section whose rows are all malformed stamps `follow_ups_filed: 0` — a measured-looking zero for
+  a section nothing could read.
+- **Free-text bullets are ignored deliberately and must NOT be treated as evidence of malformation.**
+  `gap-sweep.js:267-281` states free-text bullets are ignored by design for back-compat and "must
+  never warn". `test-finalize-door.js` T14's `freetext` leg pins this: a section containing `- none`
+  asserts `follow_ups_filed: '0'` and `follow_up_numbers: 'none'`. A bullet-counting detector is
+  therefore wrong, and was tried and rejected during #993 for exactly this reason.
+- **Malformation is not fully silent today.** `gap-sweep.js:275-280` writes a stderr advisory for a
+  line that matches the loose `/^-\s+.*\(.*\):\s*(filed:|noise:)/` shape but fails the strict regex.
+  That advisory is emitted at sweep time and is not carried into the closure receipt.
+- **Rows failing the strict grammar are NOT theoretical — there is a closed precedent.** #726,
+  *"parseGapSection grammar rejects any `## Run gaps` sample containing `)` — a swept manual gap with
+  a paren is silently unmappable (gaps_unswept)"*. That is a documented real case of rows the parser
+  could not map. What has **not** been observed is the new closure stamp mis-reporting because of it —
+  the stamp shipped with #993 and has no history yet.
+
+searched: `gh search issues --repo KaolaBrother/Kaola-Workflow "parseGapSection"` → **1 hit, #726
+(closed)**, the paren-in-sample grammar bug whose fix is the lazy quantifier now guarded by
+"Do not 'simplify' this quantifier" — same parser, adjacent failure, not this conflation.
+`"malformed"` → 4+ hits, nearest **#848 (closed)** *"Four conditions say 'anchor absent' when the
+value was present and failed a shape check"* — **the same conflation class generalized** (absent vs
+present-but-unparseable), so this issue is a fresh instance of a pattern this repo has already named
+and fixed elsewhere, and #848 is the design precedent to read first. `"Run gaps"` → #992/#993 (this
+bundle) plus #971/#681/#868 on unrelated gap-sweep surfaces. Not a duplicate of any.
+
+## Hypothesis
+
+- That a fully-malformed `## Run gaps` section is rare in practice rather than impossible. #726 shows
+  individual unmappable rows happen; whether a section ever had **all** rows unmappable is untested.
+  Claim to test: scan archived runs' `finalization-summary.md` for sections where the loose pattern
+  matched but the strict one did not.
+- That the honest fix belongs **inside** `parseGapSection` rather than beside it, because only the
+  parser knows which lines it attempted to map. Not established — an alternative is a separate
+  reported count rather than a changed return shape.
+
+## Proposed remedy (non-binding)
+
+Give `parseGapSection` a way to report that it saw rows it attempted to map and could not, so the
+closure stamp can degrade those to `unknown` alongside the section-absent case. Whatever the shape, it
+must not disturb the strict regex — the comment at `:256-264` ends "Do not 'simplify' this quantifier"
+— nor the free-text-bullet behaviour pinned by T14, nor `samplesMatch`, nor either refusal direction
+(`gaps_unswept`, `observed_gap_unseeded`). Deliberately deferred once already: during #993 the owner
+ruled that two states ship and this lands as its own slice, rather than reshaping a parser the scanner
+owns late in an unrelated change.
