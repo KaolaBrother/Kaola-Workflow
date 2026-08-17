@@ -6,12 +6,15 @@
 
 - **The finalize surface now states the `## Run gaps` grammar it was only half-describing — #998,
   #1000.** Two archived summaries were unreadable to the scanner for two different reasons: a heading
-  written `## Run gaps (reviewer-recorded, non-mechanical)` reads as **no section at all** (1 of 128
+  written `## Run gaps (reviewer-recorded, non-mechanical)` reads as **no section at all** (1 of 133
   such headings in the archive; it carried zero filings, so it lost nothing), and two sections written
   as markdown tables are located but never read (`issue-725` and its `.archived-*` sibling, 7 and 1
   `filed: #N` cells sitting in plain text). Both were filed asking whether the parser should widen.
   **It should not, and it did not — `kaola-workflow-gap-sweep.js` is byte-untouched by this change.**
-  The owner ruled strict-and-state-it: the observed rate is 1-in-128 and 2-in-154, `parseGapSection`
+  The owner ruled strict-and-state-it: measured at this commit over all 160 tracked archived
+  summaries, the rate is **1 unlocatable heading of 133** and **2 table-shaped sections of the 132 the
+  parser does locate** — the single heading the parser cannot enter is exactly the parenthetical one —
+  `parseGapSection`
   already degrades an unreadable section to `unknown` rather than a confident zero, and nothing
   re-reads an archived summary — `computeBacklogDelta` probes archive-first but only the run's own
   just-archived folder — so the historical loss is closed and the value of any widening is entirely
@@ -27,7 +30,7 @@
   as unswept rather than a wrong count. Only `- manual:foo (transient flake): filed: #998` parses, and
   no prompt surface anywhere stated that form. The heading rule was likewise stated on **no shipped
   surface** — two targeted searches over `templates/`, `commands/`, `plugins/*/`, `docs/`, `README.md`
-  and the scanner return nothing — so a 1-in-128 rate is not evidence that authors were told and
+  and the scanner return nothing — so a 1-in-133 rate is not evidence that authors were told and
   improvised.
   Four sentences now ship, inserted after the paragraph they complete in
   `templates/routing/finalize.skeleton.md` and reusing `docs/conventions.md`'s existing two-form
@@ -46,7 +49,10 @@
   reds on all 12 obligated surfaces and names itself, with no other block or token touched. The
   suite's assertion count is unchanged at 331 by design: the per-surface findings are detail under one
   rollup assertion, so a stable count here is not evidence of a dead pin. `docs/conventions.md` gains
-  the same heading rule in the same words so the human doc and the runtime surface cannot drift, and
+  the same heading rule in the same two load-bearing clauses, so the human doc and the runtime surface
+  do not now disagree — **not** a guarantee they cannot: `fn-run-gaps-grammar` pins the 12 runtime
+  surfaces against the skeleton and stops there, and nothing binds `docs/conventions.md` to either, so
+  a later skeleton edit can still diverge from it silently. And
   `docs/api.md`'s tail-only phrasing is left alone on purpose — it describes what `--check` verifies,
   not how to author a row, and a third restatement of a grammar is how the drift starts.
   ADR 0017's watch list gains the declined widening as a row whose arming observation is a section
