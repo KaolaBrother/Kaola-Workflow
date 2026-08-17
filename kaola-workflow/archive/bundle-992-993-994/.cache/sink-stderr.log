@@ -8,3 +8,10 @@ To https://github.com/KaolaBrother/Kaola-Workflow.git
 切换到分支 'main'
 切换到分支 'workflow/bundle-992-993-994'
 切换到分支 'main'
+To https://github.com/KaolaBrother/Kaola-Workflow.git
+   c62e8a3f..304a16bf  main -> main
+✓ Closed issue KaolaBrother/Kaola-Workflow#992 (`filed: #N` is verified syntactically only — a nonexistent or empty-bodied follow-up passes the gap-sweep gate)
+✓ Closed issue KaolaBrother/Kaola-Workflow#993 (The closure receipt records dispositions but not the run's backlog delta — filed vs closed is invisible exactly where convergence is decided)
+✓ Closed issue KaolaBrother/Kaola-Workflow#994 (Follow-up filing has no body contract — measured facts, static hypotheses, and remedies ship undifferentiated, and the next run pays blanket re-verification)
+To https://github.com/KaolaBrother/Kaola-Workflow.git
+ - [deleted]           workflow/bundle-992-993-994
