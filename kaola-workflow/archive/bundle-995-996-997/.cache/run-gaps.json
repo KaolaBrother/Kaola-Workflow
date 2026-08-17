@@ -1,0 +1,25 @@
+{
+  "project": "bundle-995-996-997",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:route-reachability-count-stale",
+      "sample": "test-route-reachability.js:1008 claims 9 of 30 content-led blocks; measured 10 of 19",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:run-gaps-table-unreadable",
+      "sample": "a markdown-table Run gaps section is invisible to parseGapSection",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:run-gaps-heading-must-stand-alone",
+      "sample": "a Run gaps heading with a parenthetical classifies as section-absent",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:edition-drift-detector-unscheduled",
+      "sample": "nothing schedules D0 after a worktree --write on a non-edition diff",
+      "count": 1
+    }
+  ]
+}
