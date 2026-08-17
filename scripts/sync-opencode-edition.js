@@ -806,18 +806,53 @@ function runWrite(configForce, forge) {
 // rewrites it.
 function runRefreshPresent() {
   const refreshed = [];
+  let changed = 0;
   for (const forge of forgeLayout.FORGES) {
     if (!fs.existsSync(outDirs(forge).root)) continue;
-    writeAgents(forge);
-    writeCommands(forge);
-    writeHooks(forge);
-    writePlugin(forge);
-    pruneRetired(forge);
+    changed += writeAgents(forge);
+    changed += writeCommands(forge);
+    changed += writeHooks(forge);
+    changed += writePlugin(forge);
+    changed += pruneRetired(forge);
     refreshed.push(treeLabel(forge));
   }
   if (refreshed.length) {
     console.log('sync-opencode-edition: refreshed ' + refreshed.length + ' present tree(s): '
       + refreshed.join(', ') + '.');
+  }
+  // The two-root resolution above is deliberate; a run being silent about it is not. Every line
+  // this function prints names a tree by its repo-relative label ('.opencode'), which reads as
+  // "beside me" in the one posture where it is not — so a worktree run that renders real edits
+  // leaves the MAIN checkout's deployed-from trees carrying prose that exists in no tracked file
+  // there, and nothing says so: the trees are gitignored, and no chain-resident guard reads one.
+  // The reader who could act on it is the one who cannot see it happened.
+  //
+  // Gated on the refresh actually changing something there. The writers content-compare, so an
+  // in-parity refresh leaves the other checkout byte- and mtime-identical, and announcing then
+  // attaches a warning to a run that touched nothing.
+  //
+  // The count includes pruneRetired, and the note says "change(s)" rather than "file(s) written"
+  // for that reason: a refresh can DELETE from the other checkout and write nothing, which is the
+  // more destructive half of the same cross-checkout reach and the half a write-only count would
+  // report as a silent no-op.
+  //
+  // "change(s)" is also the only unit that stays true across both editions. A prune can remove a
+  // whole retired directory in one call and count it once, so the number is changes applied, never
+  // a file tally — measured on the kimi side, where a 5-file skill directory counts as 1. Keep the
+  // unit vague rather than the count wrong: the gate only needs "something moved there", and it
+  // cannot read zero when something did.
+  //
+  // stderr, not stdout: this script's stdout is a parsed interface in another mode
+  // (--print-tree-root is consumed as a path by the edition installers), so an advisory stays off
+  // the stream a caller might capture. It is self-contained rather than a rider on the line above,
+  // because the two streams need not interleave in order once either is redirected.
+  if (changed > 0 && TREE_ROOT !== REPO) {
+    console.error('sync-opencode-edition: NOTE — ' + changed
+      + ' change(s) in a checkout that is not this one.');
+    console.error('  ' + refreshed.join(', ') + ' under ' + TREE_ROOT);
+    console.error('  now render THIS checkout\'s canonical sources (' + REPO
+      + '), including anything uncommitted here.');
+    console.error('  Verify from that root: npm run test:kaola-workflow:editions');
   }
 }
 

@@ -261,8 +261,13 @@ worktree reconciliation exist for this file class alone. On the consumer, **371 
    inside a user-owned file (consumer-side, an ownership boundary). Conflating them would put a
    fail-closed test on a file the tool does not own.
 8. **The run loop's only new duty is tagging what it files.** Finalize Step 7 mandates a follow-up
-   per real defect; an issue filed without a `P` label is tier 99 and invisible to the sorter item 2
-   connects. So the tier is written in the same breath as `filed: #N`. **That is the whole of it.**
+   per real defect; an issue filed without a `P` label is tier 99, and the sorter item 2 connects
+   ranks it **last, beneath every tiered issue** — so a P0-urgent defect filed untiered sorts below
+   a P3. *(Corrected 2026-08-17, #995: this sentence read "invisible to the sorter", which the code
+   does not do. `listOpenIssues` sorts on the tier and neither filters nor truncates,
+   `claim.js:281-291`; the tier-99 default is `claim.js:272-279`. An untiered issue is listed —
+   demoted, never hidden.)* So the tier is written in the same breath as `filed: #N`.
+   **That is the whole of it.**
    The point of this record is that after migration there is no local copy, therefore no drift,
    therefore nothing to reconcile — adding a maintenance mechanism to the loop would rebuild exactly
    what §5 removes. A repo that upgraded but never ran init still carries frozen sources; the loop

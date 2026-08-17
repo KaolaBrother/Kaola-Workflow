@@ -2200,15 +2200,30 @@ function appendClosureBlock(destDir, fields) {
 // rule). Free-text bullets under the heading are ignored by the grammar BY DESIGN, so a section of
 // them is a located section carrying zero filings — the same measured zero, not a third answer.
 // `issuesClosed` comes from the claimed set, never from the summary, so it never degrades here.
+//
+// LOCATING IS NOT READING. A section can be present, carry its filings in plain sight, and still be
+// unreadable to the grammar — rows with no parenthesised sample, a row wrapped across physical
+// lines, a section written as a markdown table. All three produce an array, and the array is what
+// used to make this a confident `0`; measured over 154 archived runs, 6 sections lost 18 filings
+// that way, and the reader who opens the summary finds the numbers sitting there with no reason to
+// doubt the count. parseGapSection now carries out `unaccountedFiled`, the `filed: #N` refs it
+// walked past, and any of them is enough: a PARTIAL read is not a measurement of the whole — a
+// count that reached one of three rows is not "one follow-up", it is an undercount rendered as an
+// integer, which is worse than no count because nothing downstream can tell it from a right one.
 function computeBacklogDelta(issuesClosed, projectDirCandidates) {
   let filed = null;
+  let unaccountedFiled = 0;
   for (const dir of (projectDirCandidates || [])) {
     if (!dir) continue;
     let entries = null;
     try { entries = parseGapSection(path.join(dir, 'finalization-summary.md')); } catch (_) { entries = null; }
-    if (entries !== null) { filed = entries.filter(e => e.kind === 'filed'); break; }
+    if (entries !== null) {
+      filed = entries.filter(e => e.kind === 'filed');
+      unaccountedFiled = Number(entries.unaccountedFiled) || 0;
+      break;
+    }
   }
-  if (filed === null) {
+  if (filed === null || unaccountedFiled > 0) {
     return { issuesClosed: issuesClosed, followUpsFiled: 'unknown',
       followUpNumbers: 'unknown', netBacklogDelta: 'unknown' };
   }

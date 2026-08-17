@@ -293,7 +293,13 @@ patched in place by the later lifecycle verbs. Its blocks:
   `issues_closed`, `follow_ups_filed`, `follow_up_numbers`, and `net_backlog_delta`. The last four
   are the run's backlog delta — the size of the claimed set its closure decision is closing, and
   the follow-ups the `## Run gaps` section of its `finalization-summary.md` filed against it. A
-  lane that could not locate that section stamps `unknown` rather than a `0` nobody measured.
+  lane that could not locate that section stamps `unknown` rather than a `0` nobody measured — and
+  so does one that located it and walked past a `filed: #N` it could not read, because locating a
+  heading is not reading what is under it. Rows carrying no parenthesised sample, a row wrapped
+  across physical lines, and a section written as a markdown table all read as present-but-unread;
+  a partial read degrades too, since a count that reached one row of three is an undercount
+  rendered as an integer and nothing downstream can tell it from a right one. Prose and free-text
+  bullets under the heading carry no filing and keep their measured `0`.
 
 ### What this file no longer carries
 

@@ -229,8 +229,33 @@ function runScan(opts) {
 // Gate (--check mode)
 // ---------------------------------------------------------------------------
 
+// How many `filed: #N` refs one line of the section carries. The spelling is the strict grammar's
+// own tail (see the row regex below) and deliberately nothing looser: a bare `#N` cited in passing
+// is not a filing, and a `noise:` disposition is a row the run decided NOT to file. Both wider
+// keyings were measured against this repository's archive and both are wrong — `#N` anywhere flags
+// three sections that merely mention an issue number, and `filed:`/`noise:`/`#N` together flags
+// eight more whose unread text records no filing at all.
+function countFiledRefs(line) {
+  return (String(line).match(/filed:\s*#\d+/g) || []).length;
+}
+
 // Parse the ## Run gaps section from a summary file.
 // Returns an array of { reasonClass, sample, kind, ref } or null if section absent.
+//
+// The array also carries a non-enumerable `unaccountedFiled`: how many `filed: #N` refs sit in the
+// section on lines this scan did not read — a bullet that missed the grammar, a continuation line
+// of a row that wrapped, a section written as a markdown table. An empty array used to mean two
+// unrelated things — "the section is present and records no filing" and "the section is present and
+// I read none of it" — and the closure stamp reported the second as a measured `0`. Measured over
+// 154 archived summaries: 6 sections carry 18 filings this scan accounted for none of, every one of
+// them stamped as a confident zero or an undercount. Free text stays free text: prose under the
+// heading carries no `filed: #N`, so it reads 0 here and keeps its measured zero.
+//
+// A PROPERTY ON THE ARRAY, not a new return shape. runCheck reads this value four ways — `!== null`
+// and `.length > 0` to arm observed_gap_unseeded, `.length === 0` for the vacuous pass, `.find` in
+// the forward match — and a non-array shape turns `.length > 0` into `undefined > 0`, disarming a
+// refusal with no error and no output. Array.isArray, .length, .find and .filter all keep working
+// here by construction, so every one of those reads stays untouched rather than re-audited.
 function parseGapSection(summaryPath) {
   if (!fs.existsSync(summaryPath)) return null;
   const raw = fs.readFileSync(summaryPath, 'utf8');
@@ -238,6 +263,7 @@ function parseGapSection(summaryPath) {
 
   let inSection = false;
   const entries = [];
+  let unaccountedFiled = 0;
 
   for (const line of lines) {
     const l = line.trim();
@@ -248,7 +274,12 @@ function parseGapSection(summaryPath) {
     // Stop at the next ## heading.
     if (inSection && /^## /.test(l)) break;
     if (!inSection) continue;
-    if (!l.startsWith('- ')) continue;
+    // Not a bullet at all — a table row, or the continuation of a bullet that wrapped. The scan has
+    // never read these and does not start now; it only records the filings it is walking past.
+    if (!l.startsWith('- ')) {
+      unaccountedFiled += countFiledRefs(l);
+      continue;
+    }
 
     // Grammar: "- <reasonClass> (<sample>): filed: #N"
     //       OR "- <reasonClass> (<sample>): noise: <text>"
@@ -264,6 +295,8 @@ function parseGapSection(summaryPath) {
     // both shapes. Do not "simplify" this quantifier.
     const m = l.match(/^-\s+(\S+)\s+\((.+?)\):\s+(filed:\s*#(\d+)|noise:\s+(.+))$/);
     if (!m) {
+      // The bullet was not read, so any filing written on it was not read either.
+      unaccountedFiled += countFiledRefs(l);
       // A line that looks like a mapping attempt but fails the strict grammar used to be dropped
       // silently, and then surfaced far away as a gaps_unswept / observed_gap_unseeded refusal with
       // nothing pointing at the offending line. Warn on that population only: a parenthesised
@@ -290,7 +323,11 @@ function parseGapSection(summaryPath) {
     }
   }
 
-  return inSection ? entries : null;
+  if (!inSection) return null;
+  // Non-enumerable, so the count travels with the rows without becoming one: JSON.stringify,
+  // Object.keys and object spread all skip it, and nothing that reads this array reads it by key.
+  Object.defineProperty(entries, 'unaccountedFiled', { value: unaccountedFiled });
+  return entries;
 }
 
 // Does a ## Run gaps summary sample denote the SAME gap as a seeded sample?

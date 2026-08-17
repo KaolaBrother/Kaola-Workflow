@@ -345,26 +345,41 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    // One span at Step 7, carrying four independent rules: what to file, how the
-    // filed body is typed, that the filing was verified to have landed, and what to
-    // do when the run's own findings correct the issue it is closing. The correction
-    // rule is what makes "the forge is the backlog truth" survive contact with a run
-    // that finds the filed issue was wrong, rather than closing quietly over stale
-    // text; the typed-body and verification rules are what keep the thing it files
-    // from being unreadable to the next run, or from not existing at all.
+    // One span at Step 7, carrying five independent rules: what to file, that what
+    // is filed carries a priority tier, how the filed body is typed, that the filing
+    // was verified to have landed, and what to do when the run's own findings correct
+    // the issue it is closing. The correction rule is what makes "the forge is the
+    // backlog truth" survive contact with a run that finds the filed issue was wrong,
+    // rather than closing quietly over stale text; the typed-body and verification
+    // rules are what keep the thing it files from being unreadable to the next run,
+    // or from not existing at all; the tier rule is what keeps it findable, since
+    // filing and TIERING are separate duties and the step long mandated only the
+    // first — a run that obeyed it exactly produced an untiered issue, which
+    // `listOpenIssues` gives tier 99 and sorts LAST, beneath every tiered one.
+    // Nothing else on a shipped surface tells a finalize reader that: the sorter's
+    // own rule is carried on the NEXT topic, not on the surface doing the filing.
     //
-    // Tokens are drawn from every one of the four rules, one per obligation rather
-    // than one per paragraph, so gutting a single obligation — the stamping duty,
-    // the reading-derived-cause default, the non-binding remedy label, the duplicate
-    // probe, the existence-and-body check, or where that check is recorded — reds
-    // this block even with the marker and the other obligations intact. None is a
-    // substring of the marker.
+    // Tokens are drawn from every one of the five rules, one per obligation rather
+    // than one per paragraph, so gutting a single obligation — the tier duty, its
+    // measured consequence, the stamping duty, the reading-derived-cause default,
+    // the non-binding remedy label, the duplicate probe, the existence-and-body
+    // check, or where that check is recorded — reds this block even with the marker
+    // and the other obligations intact. None is a substring of the marker.
+    //
+    // THE TIER RULE TAKES TWO TOKENS, because it is two obligations. The duty is one;
+    // the consequence is the other, and it is pinned separately because it is the
+    // part that was MEASURED and the part easy to re-word wrong: an untiered issue is
+    // listed and sorts LAST — not hidden, not dropped, not invisible to the sorter. A
+    // pin holding only the duty stays green while the reason decays back into that
+    // wrong wording, which is exactly what makes a reader treat the label as cosmetic.
     //
     // NOT pinned, deliberately: the scope-limiting close of the typed-body rule
     // ("This adds no measurement obligation…") states what the rule does NOT demand,
-    // and the negative restatement of the stamping duty ("an unstamped number does
-    // not belong in that section") re-expresses an obligation already pinned below.
-    // Pinning either would freeze wording that carries no obligation of its own.
+    // the negative restatement of the stamping duty ("an unstamped number does not
+    // belong in that section") re-expresses an obligation already pinned below, and
+    // the tier rule's closing stakes ("so an urgent defect filed untiered ranks below
+    // a backlog one") restate its consequence. Pinning any would freeze wording that
+    // carries no obligation of its own.
     block_id: 'fn-forge-is-the-backlog',
     topic: 'finalize',
     runtime_tag: 'both',
@@ -372,6 +387,9 @@ const REQUIRED_BLOCKS = [
     content_tokens: [
       '<!-- PIN: forge-is-the-backlog -->',
       'For each real run-discovered defect, file a follow-up and record `filed: #N`.',
+      // The tier duty and its measured consequence, in surface order.
+      'Give it a priority tier in the same breath',
+      'an issue filed without a `P0`–`P3` label sorts **last** on the open list, beneath every tiered issue',
       'append the matching `gap: <class> — <text>` line to `.cache/run-gaps-manual.md` and re-run the scanner, so what is written was actually swept.',
       'post that correction as a comment on the issue before it closes.',
       'Never close quietly against text now known to be wrong.',

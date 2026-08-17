@@ -2021,12 +2021,20 @@ for (const script of sync.HOOK_SCRIPTS) {
   };
   // scriptRoot is the checkout the script is INVOKED FROM; cwd is the process's working directory.
   // They are passed separately on purpose — "not cwd" is half of what K13 pins.
+  // The two streams are returned SEPARATELY as well as merged. K16 below is the only caller that
+  // needs them apart, and it needs them apart for a reason the merged view cannot express: this
+  // script's stdout is a parsed interface in another mode, so "which stream" is itself a property.
   const runSync = (scriptRoot, cwd, args) => {
     // spawn-class: environment
     const r = spawnSync(process.execPath,
       [path.join(scriptRoot, 'scripts', 'sync-kimi-edition.js')].concat(args),
       { cwd, encoding: 'utf8', env: childEnv });
-    return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
+    return {
+      status: r.status,
+      out: (r.stdout || '') + (r.stderr || ''),
+      stdout: r.stdout || '',
+      stderr: r.stderr || '',
+    };
   };
   const runGenerator = (scriptRoot, args) => {
     // spawn-class: environment
@@ -2409,6 +2417,164 @@ for (const script of sync.HOOK_SCRIPTS) {
           'K14: ...and --check did not repair it either. A check that writes destroys the evidence '
           + 'it was run to report, which is the defect the drift block at the top of this file exists '
           + 'to stop being repeated');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // K16 — A REFRESH THAT REACHES ANOTHER CHECKOUT SAYS SO.
+    //
+    // K13 pins WHERE the tree lands, and that is unchanged and deliberate: a refresh run from a
+    // linked worktree writes the MAIN checkout's trees. What it leaves behind is a reader in main
+    // whose deployed-from trees just moved under them with nothing to notice — the trees are
+    // gitignored, so `git status` is silent, and every chain-resident guard renders in memory
+    // rather than reading a tree. The announcement is the entire remedy, and until this band
+    // nothing read it: K13 and K14 are both green with the note deleted, so it could be removed
+    // and every suite would stay green over the same invisibility it was added to end.
+    //
+    // FOUR PROPERTIES, AS RESULTS. The wording is deliberately NOT pinned — it changed twice on
+    // the day it shipped, and a test holding the sentence would have reddened twice for nothing.
+    // What must hold is:
+    //
+    //   fires    a refresh that changes something in a checkout that is not this one is announced,
+    //            and the announcement names the root a reader has to go and look at. A note that
+    //            reports the reach without the destination is a warning nobody can act on.
+    //   silent   from the checkout that owns the tree, EVEN WHEN FILES ARE WRITTEN. This is the leg
+    //            that rots into a false positive, so it carries a control proving the write really
+    //            happened — without it, silence is indistinguishable from a refresh that did nothing.
+    //   silent   when the refresh changed nothing there. The writers content-compare, so an
+    //            in-parity refresh leaves the other checkout byte-identical; a warning attached to
+    //            a run that touched nothing teaches a reader to skip the one that did not.
+    //   stderr   and never stdout. Not tidiness: this script's stdout is a parsed interface in
+    //            another mode — both edition installers read --print-tree-root as a filesystem path
+    //            — so an advisory on that stream is a line a caller will try to open.
+    //
+    // THE COUNT IS NOT ASSERTED, deliberately, and this edition is where that matters most: a
+    // retired skill DIRECTORY is removed with recursive:true and counted once, so a five-file
+    // folder is one change. The number is changes applied, never a file tally, and a leg comparing
+    // it to a file count would pin an arithmetic the script explicitly disclaims.
+    // -----------------------------------------------------------------------
+    const K16_NOTE = 'NOTE';
+    const k16MainTree = path.join(mainRoot, sync.treeLabel(DEF_FORGE));
+    const k16Ready = fs.existsSync(k16MainTree) && fs.existsSync(path.join(wtRoot, 'scripts'));
+    assert(k16Ready,
+      'K16: K13\'s two-root fixture is still standing — main\'s ' + sync.treeLabel(DEF_FORGE)
+      + ' is present at ' + k16MainTree + ' and the worktree has a checkout to run from. Without '
+      + 'both, every leg below reports on a refresh that found no tree to touch, and each one '
+      + 'would read as a pass');
+    if (k16Ready) {
+      // The root the note must name, in BOTH spellings. The fixture lives under a tmpdir that is a
+      // symlink on macOS (/var -> /private/var) and the script prints the root git resolved, which
+      // may be the realpath — so a comparison against the fixture's own spelling alone would red on
+      // the platform rather than on the property.
+      const k16Roots = [mainRoot];
+      try { k16Roots.push(fs.realpathSync(mainRoot)); } catch (_) { /* the literal spelling stands */ }
+      const namesTheOtherRoot = s => k16Roots.some(r => String(s).includes(r));
+
+      const k16Agent = (fs.existsSync(path.join(wtRoot, 'agents'))
+        ? fs.readdirSync(path.join(wtRoot, 'agents')).filter(f => f.endsWith('.md')).sort() : [])[0] || '';
+      assert(k16Agent !== '' && fs.existsSync(path.join(mainRoot, 'agents', k16Agent)),
+        'K16: both checkouts hold a canonical agent to edit — with none there is no way to make a '
+        + 'refresh change anything, and the fires-leg below would be observing an empty refresh');
+
+      if (k16Agent && fs.existsSync(path.join(mainRoot, 'agents', k16Agent))) {
+        const k16Rendered = path.join(mainRoot,
+          sync.skillRel('kaola-role-' + k16Agent.replace(/\.md$/, ''), DEF_FORGE));
+
+        // SETTLE FIRST. The in-parity leg needs a refresh that genuinely changes nothing, and what
+        // K13 left is not that by construction: it wrote ONE forge with --write, while
+        // --refresh-present covers every tree that is present. So one run settles the tree and the
+        // NEXT one is the measurement.
+        runSync(wtRoot, wtRoot, ['--refresh-present']);
+
+        // (a) SILENT WHEN NOTHING CHANGED IN THE OTHER CHECKOUT.
+        const r0 = runSync(wtRoot, wtRoot, ['--refresh-present']);
+        assert(r0.status === 0,
+          'K16: --refresh-present from the linked worktree succeeds — exit ' + r0.status + ': '
+          + head(r0.out));
+        // One word, not the sentence. This line is only printed when a tree was found present, so
+        // its presence is the whole signal; matching more of it would put this band's controls back
+        // in the business of holding wording that has already been reworded twice.
+        assert(r0.stdout.includes('refreshed'),
+          'K16: control — that in-parity run did find a tree and refresh it (stdout: '
+          + head(r0.stdout) + '). A run that found nothing present is silent for a reason that has '
+          + 'nothing to do with the gate, and the assertion below would then pass forever without '
+          + 'ever observing the gate it names');
+        assert(!r0.stderr.includes(K16_NOTE),
+          'K16: a refresh that changed NOTHING in the other checkout stays silent. It announced '
+          + 'anyway: ' + head(r0.stderr) + '. The writers content-compare, so this run left the '
+          + 'other checkout byte-identical — a warning attached to a run that touched nothing is '
+          + 'how a reader learns to skip the one that did');
+
+        // (b) FIRES on a real cross-checkout change, (c) NAMES the root, (d) on STDERR only.
+        const WT_MARK_16 = 'K16-MARKER-FROM-THE-WORKTREE';
+        fs.appendFileSync(path.join(wtRoot, 'agents', k16Agent), '\n' + WT_MARK_16 + '\n');
+        const r1 = runSync(wtRoot, wtRoot, ['--refresh-present']);
+        assert(r1.status === 0,
+          'K16: the changing refresh succeeds — exit ' + r1.status + ': ' + head(r1.out));
+        assert(readIf(k16Rendered).includes(WT_MARK_16),
+          'K16: control — that refresh really did change the OTHER checkout. ' + k16Rendered
+          + ' does not carry the marker just planted in the worktree\'s canonical agent, so there '
+          + 'was no cross-checkout change to announce and the three assertions below would be '
+          + 'asking whether a note fired for an event that never happened');
+        assert(r1.stderr.includes(K16_NOTE),
+          'K16: a refresh that changes a checkout which is not this one ANNOUNCES it. It said '
+          + 'nothing: ' + head(r1.stderr) + '. The trees are gitignored and no chain reads one, so '
+          + 'with this note gone the reader who could act on the change is the only one who cannot '
+          + 'see it happened');
+        assert(namesTheOtherRoot(r1.stderr),
+          'K16: ...and names the root a reader has to go and look at. The announcement does not '
+          + 'contain ' + mainRoot + ': ' + head(r1.stderr) + '. Every other line this script prints '
+          + 'names a tree by its repo-relative label, which reads as "beside me" in the one posture '
+          + 'where it is not, so an announcement without the absolute root repeats the confusion it '
+          + 'exists to clear');
+        assert(!r1.stdout.includes(K16_NOTE),
+          'K16: ...and it lands on stderr, never stdout. It is on stdout: ' + head(r1.stdout)
+          + '. This script\'s stdout is a parsed interface in another mode — both edition '
+          + 'installers consume --print-tree-root as a filesystem path — so an advisory there is a '
+          + 'line a caller will try to open');
+
+        // (e) SILENT FROM THE CHECKOUT THAT OWNS THE TREE, THOUGH FILES ARE WRITTEN.
+        const MAIN_MARK_16 = 'K16-MARKER-FROM-MAIN';
+        fs.appendFileSync(path.join(mainRoot, 'agents', k16Agent), '\n' + MAIN_MARK_16 + '\n');
+        const r2 = runSync(mainRoot, mainRoot, ['--refresh-present']);
+        assert(r2.status === 0,
+          'K16: --refresh-present from the main checkout succeeds — exit ' + r2.status + ': '
+          + head(r2.out));
+        assert(readIf(k16Rendered).includes(MAIN_MARK_16),
+          'K16: control — the main-checkout refresh WROTE, and wrote real changes. ' + k16Rendered
+          + ' does not carry the marker planted in main\'s own canonical agent, so this run changed '
+          + 'nothing and the silence below would be the changed-nothing gate rather than the '
+          + 'same-checkout gate this leg is for');
+        assert(!r2.stderr.includes(K16_NOTE) && !r2.stdout.includes(K16_NOTE),
+          'K16: ...and a refresh from the checkout that OWNS the tree says nothing, on either '
+          + 'stream. It announced: ' + head(r2.out) + '. Nothing crossed a checkout boundary here — '
+          + 'the reader is already looking at the tree that changed, and a note in the ordinary '
+          + 'posture is the false positive that empties the real one of meaning');
+
+        // (f) A DELETION-ONLY REFRESH FIRES TOO. The count sums the prunes, because a refresh can
+        // DELETE from the other checkout and write nothing — the more destructive half of the same
+        // reach, and the half a write-only count reports as a silent no-op. The stray skill folder
+        // goes into MAIN's tree and the refresh runs from the WORKTREE, whose sources the tree is
+        // otherwise in parity with after the settle, so the prune is the only change there is. It
+        // carries two files on purpose: the whole directory counts as ONE change, which is why no
+        // assertion here reads the number.
+        runSync(wtRoot, wtRoot, ['--refresh-present']);
+        const k16Stray = path.join(k16MainTree, 'skills', '__k16-retired-probe');
+        fs.mkdirSync(k16Stray, { recursive: true });
+        fs.writeFileSync(path.join(k16Stray, 'SKILL.md'), '# K16 retired-artifact probe\n');
+        fs.writeFileSync(path.join(k16Stray, 'NOTES.md'), 'second file, still one change\n');
+        const r3 = runSync(wtRoot, wtRoot, ['--refresh-present']);
+        assert(!fs.existsSync(k16Stray),
+          'K16: control — the stray really is a retired skill directory and the refresh pruned it. '
+          + 'It is still at ' + k16Stray + ', so this refresh deleted nothing and the assertion '
+          + 'below would be reading a note raised by some other change');
+        // Presence only. Whether the announcement names the root is pinned once, above, on the
+        // firing leg; re-asserting it here made this leg red for a reason that is not its own —
+        // measured, by a mutation that dropped the root and reddened two legs instead of one.
+        assert(r3.stderr.includes(K16_NOTE),
+          'K16: a refresh whose ONLY change in the other checkout is a deletion is announced too. '
+          + 'It was silent: ' + head(r3.stderr) + '. A gate counting writes alone reports the '
+          + 'destructive half of a cross-checkout reach as a no-op');
       }
     }
   } finally {

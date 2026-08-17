@@ -2698,14 +2698,20 @@ if (failed > 0) {
 //
 // WHY THE `## Run gaps` SECTION IS THE SOURCE. `run-gaps.json` carries the swept classes but no issue
 // numbers; the filing refs live only in the summary's `## Run gaps` prose, under the strict grammar
-// `- <class> (<sample>): filed: #N`. So "unmeasurable" here means exactly one thing: the section could
-// not be located — no summary, or a summary with no such heading — which is what parseGapSection
-// reports as `null` rather than as an empty list.
+// `- <class> (<sample>): filed: #N`. So "unmeasurable" here means the count could not be READ off that
+// prose, and LOCATING the heading is not reading it. Measured over this repository's own 154 archived
+// summaries: 6 sections carry 18 `filed: #N` refs the scan accounted for none of, and every one of
+// them stamps a confident `0` (or an undercount) today. Their three shapes — mapping rows with no
+// parenthesised sample, a strict-grammar row wrapped across physical lines, and a section written as
+// a markdown table — each have a leg below, taken verbatim from the archived run that exhibits them.
 //
-// FREE TEXT IS NOT MALFORMED. `- none` and prose notes under the heading are ignored BY DESIGN for
-// back-compat (parseGapSection says so and deliberately does not even warn on them), so a section
-// carrying one is a section carrying zero filings — a MEASUREMENT, and the same answer as an empty
-// one. An implementation counting `- ` bullets reads 1 there and is wrong twice over.
+// FREE TEXT AND PROSE ARE NOT UNREADABLE. `- none`, and a paragraph saying the sweep was clean, are
+// ignored BY DESIGN for back-compat (parseGapSection says so and deliberately does not even warn on
+// them), so such a section carries zero filings — a MEASUREMENT, and the same answer as an empty one.
+// An implementation counting `- ` bullets reads 1 on `- none` and is wrong twice over. Prose is the
+// LARGEST population in the archive and all of it is correct today, which is why the degradation must
+// key on filings the parse did not account for and never on "the section had content I did not
+// parse": those two rules agree on every leg below except the prose one, and that leg is the control.
 //
 // FOUR EDITIONS, like T13: the GitLab and Gitea claim ports are hand-mirrored and policed by nothing,
 // so a fix applied to three copies and missed on the fourth is caught here or not at all.
@@ -2815,6 +2821,142 @@ function closureBlockOf(dest) {
       + JSON.stringify(freeText.follow_ups_filed));
     assert(freeText.follow_up_numbers === 'none',
       base + ' freetext: and no numbers to list; got ' + JSON.stringify(freeText.follow_up_numbers));
+
+    // ---- THE UNREADABLE LEGS (#997). Three shapes, all four editions. Every fixture below is a
+    // VERBATIM `## Run gaps` section from this repository's own archive — not an invented near-miss.
+    // The shape #997 hypothesised (a bullet that nearly matches the parenthesised form, which the
+    // parser's own advisory at gap-sweep.js:275 detects) occurs ZERO times in 154 archived summaries;
+    // the advisory has never fired. These three are what actually loses refs, and none of them trips
+    // that advisory — which is exactly why a fix keyed to it would change nothing and why these
+    // fixtures, not that one, are what this leg drives.
+    //
+    // ASSERTED ON THE STAMP ONLY. How the parser comes to know it could not account for the section
+    // — a third return state, the state it already has for an unlocatable one, a count carried out
+    // alongside the rows — is the implementation's to choose, and nothing below can see the
+    // difference. These read the archived `## Closure` block and nothing else.
+
+    // NO SAMPLE GROUP. Five unambiguous `manual:<class>` -> `filed: #N` mappings, none carrying the
+    // parenthesised sample the grammar requires. Fails strict (needs `\S+\s+\(`) and fails the
+    // advisory too (needs a `(`), so the parser drops five filings without knowing it dropped
+    // anything. Archive: bundle-904-905-906-907-908-909-910, the largest single loss in the corpus.
+    const noSample = legFields(edition, base + ' nosample', 'issue-9934', 9934,
+      '# Finalization Summary\n\n'
+      + '## Run gaps\n'
+      + '\n'
+      + '- manual:relative-plan-receipt-placement: filed: #911\n'
+      + '- manual:forge-sinkpreflight-divergence: filed: #912\n'
+      + '- manual:env-allowlist-silently-discarded: filed: #913\n'
+      + '- manual:keep-output-run-folder-band: filed: #915\n'
+      + '- manual:finding-type-count-divergence: filed: #914\n');
+    assert(noSample.follow_ups_filed === 'unknown',
+      base + ' nosample: the section names five filings in plain sight and the parse accounted for '
+      + 'none of them. `0` here is the same false claim the absent leg forbids, made over a section '
+      + 'that is present — and it is the MORE dangerous of the two, because a reader who opens the '
+      + 'summary finds the numbers right there and no reason to doubt the count; got '
+      + JSON.stringify(noSample.follow_ups_filed));
+    assert(noSample.follow_up_numbers === 'unknown',
+      base + ' nosample: and the list with it. `none` would assert this run filed nothing while '
+      + '#911, #912, #913, #915 and #914 sit unread in the section it was computed from; got '
+      + JSON.stringify(noSample.follow_up_numbers));
+    assert(noSample.net_backlog_delta === 'unknown',
+      base + ' nosample: the delta is arithmetic over a term that was not measured, so it is not '
+      + 'measured either; got ' + JSON.stringify(noSample.net_backlog_delta));
+    assert(noSample.issues_closed === '1',
+      base + ' nosample: `issues_closed` comes from the claimed set, not from the summary, so an '
+      + 'unreadable gap section must not degrade it too; got '
+      + JSON.stringify(noSample.issues_closed));
+
+    // WRAPPED — THE PARTIAL CASE, and the leg that discriminates the shipped rule from the cheaper
+    // one. Rows 1 and 3 are written in the EXACT strict grammar and fail only because the scan is
+    // line-based and their continuation lines do not begin with `- `. Row 2 is single-line and
+    // parses. So SOMETHING mapped: a rule that degrades only when the whole section failed reads
+    // this as a measured `1` and reports #512 as the run's only filing, silently dropping #509. A
+    // partial read is not a measurement of the whole. Archive: issue-500.
+    const wrapped = legFields(edition, base + ' wrapped', 'issue-9935', 9935,
+      '# Finalization Summary\n\n'
+      + '## Run gaps\n'
+      + '- manual:verdict-check-vs-486-adversarial-verifier (n4 emitted verdict:refuted, the correct #486\n'
+      + '  investigation outcome, but adversarial-verifier ∈ GATE_VERDICT_ROLES so --verdict-check blocked\n'
+      + '  the run until the gate-verdict was reframed to the deliverable-soundness axis): filed: #509\n'
+      + '- deferred_red_chain (claude:512): filed: #512\n'
+      + '- manual:run-chains-600s-timeout (claude chain ~574s standalone exit 0, but run-chains\' hardcoded\n'
+      + '  600s spawnSync timeout records it red at finalize; waived via --accept-known-red claude:512 with\n'
+      + '  standalone-green evidence): filed: #512\n');
+    assert(wrapped.follow_ups_filed === 'unknown',
+      base + ' wrapped: one of three mapping rows parsed, so `1` is not the number of follow-ups '
+      + 'this run filed — it is the number the scan happened to reach. An undercount rendered as a '
+      + 'plain integer is worse than no count: it is a measurement that is wrong, and nothing '
+      + 'downstream can tell it from one that is right; got ' + JSON.stringify(wrapped.follow_ups_filed));
+    assert(wrapped.follow_up_numbers === 'unknown',
+      base + ' wrapped: and the list must not name #512 alone while #509 is recorded one row above '
+      + 'it in the same section; got ' + JSON.stringify(wrapped.follow_up_numbers));
+    assert(wrapped.net_backlog_delta === 'unknown',
+      base + ' wrapped: a partial count makes the delta wrong by exactly as much, and it renders as '
+      + 'a confident `0` — the run looks backlog-neutral; got '
+      + JSON.stringify(wrapped.net_backlog_delta));
+
+    // TABLE. Heading, nine content rows, seven filings, ZERO bullets — so the section is located,
+    // the scan reads no `- ` line, and the result is indistinguishable from a section carrying
+    // nothing. This is the shape that proves an empty parse cannot mean "measured zero": no bullet
+    // was malformed here because there was never a bullet, and a test written around malformed
+    // bullets would never reach it. Archive: issue-725.
+    const table = legFields(edition, base + ' table', 'issue-9936', 9936,
+      '# Finalization Summary\n\n'
+      + '## Run gaps\n'
+      + '\n'
+      + '| Gap | Disposition |\n'
+      + '|---|---|\n'
+      + '| discard/release structurally unavailable for schema-2 projects (`state_compliance_authority_invalid`) | filed: #735 |\n'
+      + '| replan prepare evidence check reads legacy `body`/`receipt_sha256`, refuses schema-2 receipts | filed: #734 |\n'
+      + '| schema-2 freeze omits one-row-per-node compliance pre-seed (+ stale task mirror at fold) | filed: #719 (workaround applied) |\n'
+      + '| replan prepare candidate-digest false positive on schema-2 attempts | filed: #720 (workaround applied) |\n'
+      + '| epoch activation lacks cross-epoch review-journal rotation | filed: #722 (workaround applied) |\n'
+      + '| finalize attribution sweep not epoch-lineage-aware | filed: #724 (workaround applied, evidence above) |\n'
+      + '| proxy EADDRNOTAVAIL on rapid gh bursts (claim escalation ×5) | noise: environmental flake, recovered by retry |\n'
+      + '| sink-merge FF-race gate red: detectReviewRuntime misclassifies a default-named (`kaola-workflow`) self-dev checkout as opencode → `#712[self-dev]` fails in the main root (pre-existing; reproduced on pristine main `7c40f33b`; sink completed manually against the green worktree receipt) | filed: #736 |\n'
+      + '| GAP-5/6/7 unowned-file discoveries (required-blocks.js, forge sinks tests, test-bundle-finalize) | resolved in-run: owned + fixed by the epoch-2 repair (n1-repair write set) |\n');
+    assert(table.follow_ups_filed === 'unknown',
+      base + ' table: seven filings are written under the heading in a form the scan does not read, '
+      + 'and "I found no bullets" is not "the operator filed nothing"; got '
+      + JSON.stringify(table.follow_ups_filed));
+    assert(table.follow_up_numbers === 'unknown',
+      base + ' table: and the list with it; got ' + JSON.stringify(table.follow_up_numbers));
+    assert(table.net_backlog_delta === 'unknown',
+      base + ' table: and the delta, which today reports this run as having SHORTENED the backlog by '
+      + 'one while it in fact filed seven; got ' + JSON.stringify(table.net_backlog_delta));
+
+    // PROSE — THE CONTROL, and the reason the three legs above mean what they say. A `## Run gaps`
+    // section carrying only a prose "nothing to map" statement is the single largest population in
+    // the archive and every one of them is CORRECT today: somebody looked, there were no gaps, and
+    // zero is the measurement. Without this leg, a build that degrades whenever the section has
+    // content and the parse produced no entries passes all three legs above and reds nothing — while
+    // converting the archive's largest correct population into `unknown`. Note what this fixture
+    // carries: parentheses, backticks, a colon before a bracket, and the token `deferred-red`. What
+    // it does NOT carry is a filing. Archive: bundle-587-589.
+    const prose = legFields(edition, base + ' prose', 'issue-9937', 9937,
+      '# Finalization Summary\n\n'
+      + '## Run gaps\n'
+      + '\n'
+      + '**none** — gap sweep clean. `kaola-workflow/bundle-587-589/.cache/run-gaps.json` has\n'
+      + '`sweptClasses: []` (no repairs, halts, or deferred-red to map).\n');
+    assert(prose.follow_ups_filed === '0',
+      base + ' prose: a section that says in prose that the sweep was clean is a section somebody '
+      + 'read and answered — the same measured zero as an empty one, not a third answer. This is the '
+      + 'assertion that stops "unreadable" from widening into "not in the grammar"; got '
+      + JSON.stringify(prose.follow_ups_filed));
+    assert(prose.follow_up_numbers === 'none',
+      base + ' prose: and nothing to list; got ' + JSON.stringify(prose.follow_up_numbers));
+    assert(prose.net_backlog_delta === '-1',
+      base + ' prose: both terms measured, so the delta is too; got '
+      + JSON.stringify(prose.net_backlog_delta));
+
+    // The second pair, on the same footing as the first. `table` is the sharpest partner for `empty`
+    // because the two are IDENTICAL to the parse — heading located, no row read — and opposite in
+    // fact: one section carries nothing, the other carries seven filings.
+    assert(table.follow_ups_filed !== empty.follow_ups_filed,
+      base + ': "the section was read and carried nothing" and "the section could not be read" must '
+      + 'not render the same. Locating a heading is not measuring what is under it. Both read '
+      + JSON.stringify(empty.follow_ups_filed));
 
     // ---- THE PAIR. Neither constant satisfies this one.
     assert(absent.follow_ups_filed !== empty.follow_ups_filed,

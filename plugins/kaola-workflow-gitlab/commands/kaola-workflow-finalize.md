@@ -211,7 +211,9 @@ node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-gap-sweep.js" --project {project} --c
 ```
 
 <!-- PIN: forge-is-the-backlog -->
-For each real run-discovered defect, file a follow-up and record `filed: #N`. For each non-defect,
+For each real run-discovered defect, file a follow-up and record `filed: #N`. Give it a priority tier
+in the same breath: an issue filed without a `P0`–`P3` label sorts **last** on the open list, beneath
+every tiered issue, so an urgent defect filed untiered ranks below a backlog one. For each non-defect,
 record `noise: <justification>`. If you hand-typed a `## Run gaps` row the scanner never observed,
 append the matching `gap: <class> — <text>` line to `.cache/run-gaps-manual.md` and re-run the
 scanner, so what is written was actually swept.

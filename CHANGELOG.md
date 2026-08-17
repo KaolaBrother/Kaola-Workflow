@@ -87,6 +87,68 @@
   `kaola-workflow-gap-sweep.js` copies move together, canonical and codex byte-identical, with
   `validate-script-sync.js` and `edition-sync.js --check` both green.
 
+### Fixed
+
+- **A sync that writes another checkout's edition trees now says so — #996.** The routing
+  generator's `--write` refreshes the six gitignored edition trees, and those trees resolve to the
+  MAIN checkout even when the run is in a linked worktree. That resolution is deliberate and
+  unchanged: the tree is derived, a machine holds exactly one of it, and a tree written inside a
+  worktree dies with the worktree — the failure that behaviour was built to close, and that both
+  edition installers now depend on by taking their source tree from `--print-tree-root`. What was
+  missing was the report. Every line the refresh printed named a tree by its repo-relative label
+  (`.opencode`), which reads as "beside me" in the one posture where it is not, so a worktree run
+  that rendered real edits left main's deployed-from trees carrying prose in no tracked file there
+  with nothing saying so — the trees are gitignored and no chain-resident guard reads one. Measured
+  cost of the silence: an issue filed against the fix, four days after it shipped, from the
+  observable effect alone.
+  `--refresh-present` now prints a four-line note when it writes into a root other than the invoking
+  checkout, naming that root, this one, the trees refreshed, and
+  `npm run test:kaola-workflow:editions` as the check to run there. It is **gated on the refresh
+  having actually changed something there**: the writers content-compare, so an in-parity refresh
+  leaves the other checkout byte- and mtime-identical and a warning over that is noise. The count
+  includes the prune, because a refresh that only DELETES from the other checkout is the more
+  destructive half of the same reach and a write-only count would report it as a no-op. It is
+  reported as changes applied rather than a file count, because a prune can remove a retired
+  directory in one call — the unit is kept vague so the number is never wrong. It goes to
+  **stderr**, because this script's
+  stdout is a parsed interface in another mode — both edition installers read `--print-tree-root` as
+  a path, and a stray line there would make them deploy from nowhere. No flag, gate, refusal or skip
+  was added, and no root resolution changed.
+
+- **Step 7 now tells a run to tier the follow-ups it files — #995.** ADR 0018 recorded the duty —
+  "the tier is written in the same breath as `filed: #N`" — and the shipped prose never carried it:
+  Step 7 of the finalize surface returned no match for `P0`, `P1`, `tier`, `label` or `priorit`
+  anywhere. An issue filed with no `P` label takes tier 99 (`kaola-workflow-claim.js:272-279`), and
+  `listOpenIssues` (`:281-291`) sorts on that tier while neither filtering nor truncating — so an
+  untiered follow-up is listed and sorts **last**, beneath every tiered issue, and a P0-urgent defect
+  filed untiered ranks below a P3. The filing paragraph now names the tier alongside `filed: #N`,
+  inside the existing `forge-is-the-backlog` pin, and the manifest pins the duty and its measured
+  consequence as **two** tokens rather than one: a block holding only the duty stays green while the
+  reason decays back into the wrong wording. Both were mutation-proven armed across all twelve
+  obligated surfaces, and each token was mutated alone to show it fires on its own.
+  ADR 0018's own sentence is corrected in place — it said an untiered issue is "invisible to the
+  sorter", which the code does not do. It is demoted, never hidden.
+
+- **A `## Run gaps` section the parser could not read no longer stamps a confident zero — #997.**
+  `parseGapSection` returned an empty array both for a section that records no filing and for one it
+  read nothing of, and the closure stamp rendered the second as a measured `follow_ups_filed: 0`.
+  The hypothesis as filed — that such sections would be caught by the parser's own loose advisory —
+  **measured zero**: that advisory has never fired across 154 archived summaries, so a fix keyed to
+  it would have changed nothing. The harm was larger and differently shaped. Measured over the same
+  corpus, **6 sections silently lose 18 `filed: #N` refs** in three shapes the parser and its warning
+  are both blind to: mapping rows carrying no parenthesised sample; a correctly-formed row wrapped
+  across physical lines, where one row parses and two do not so the stamp reads `1` against three
+  recorded mappings; and a section written as a markdown table, which has no bullets at all and is
+  indistinguishable from an empty one. The parser now carries out `unaccountedFiled` — the
+  `filed: #N` refs it walked past — and the stamp degrades to `unknown` when any is present. The key
+  is deliberately narrow: a bare `#N` cited in passing appears in three archived sections that are
+  correct today, and `noise:` dispositions record no filing, so both are excluded and neither is
+  flagged. It rides as a **non-enumerable property on the returned array**, so `Array.isArray`,
+  `.length`, `.find` and `.filter` all keep working and both refusal directions stay untouched by
+  construction rather than by re-audit — a shape returning an object would have turned `.length > 0`
+  into `undefined > 0` and disarmed `observed_gap_unseeded` with no error and no output. The strict
+  row grammar is unchanged: its lazy quantifier is load-bearing on seven real archived rows.
+
 ## [9.10.0] - 2026-08-16
 
 ### Added
