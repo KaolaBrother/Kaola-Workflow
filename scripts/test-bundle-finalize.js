@@ -1001,6 +1001,234 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
 })();
 
 // ---------------------------------------------------------------------------
+// Test (#992/#993/#994): the CLOSURE DELTA — what this run took off the backlog and what it put
+// back on. The archived `## Closure` block records five terminal facts and none of them is a
+// quantity, so the one question a successor asks of a finished run — did the backlog get smaller
+// or larger — is answerable only by re-reading the forge. Four fields answer it in the record:
+// `issues_closed`, `follow_ups_filed`, `follow_up_numbers`, `net_backlog_delta`.
+//
+// WHY THE BUNDLE LANE IS WHERE `issues_closed` IS PINNED. On the shipped merge lane cmdFinalize
+// closes ZERO issues — `mergeLaneDeferred` defaults true and the real `gh issue close` calls happen
+// later, in sink-merge.js, after `appendClosureBlock` has already written a heading-guarded block
+// the sink can never revise (this is exactly what the neighbouring #508 test measures: `closure.closed
+// === []` and zero close calls). So `issues_closed` is NOT a count of closes this process made; it is
+// the size of the set this run's closure decision is closing — `closure.attempted`, the claimed set.
+// A four-member bundle makes that distinguishable from every plausible near-miss: an implementation
+// stamping `closed.length` would say 0 here, and one stamping 1 would be reading the scalar
+// `issue_number` instead of the member array.
+//
+// WHY THE THREE LEGS. `net_backlog_delta = follow_ups_filed - issues_closed`, rendered with an
+// explicit sign when non-zero. Three renderings exist and each leg produces exactly one of them
+// against the SAME four-member claimed set, so the delta cannot be right by coincidence:
+//   4 filed  ->  `0`    (the issue's own worked example: a run that replaced what it closed)
+//  14 filed  -> `+10`   (its second: a run that found ten more problems than it fixed)
+//   0 filed  ->  `-4`   (and the measured-zero half: parsed, empty, NOT unmeasurable)
+//
+// The `noise:` row in leg A is load-bearing. The `## Run gaps` grammar carries two kinds of entry
+// and only one of them is a FILING; an implementation counting rows rather than `filed:` refs reads
+// 5 here and gets both the count and the delta wrong.
+//
+// ZERO NEW FORGE CALLS. The gap section is on disk, in the run's own finalization-summary.md, and
+// resolving it must cost nothing on the wire. The mock logs every invocation; the three legs claim
+// identical members under an identical project name in three separate roots, so their call logs must
+// come out BYTE-IDENTICAL however many follow-ups the summary names.
+// ---------------------------------------------------------------------------
+
+// The `## Closure` block of an ARCHIVED state, as a field map. That copy is the only one: the block
+// is appended after archiveProjectDir has already renamed the live folder away.
+function closureBlockFields(dest) {
+  let s = '';
+  try { s = fs.readFileSync(path.join(dest, 'workflow-state.md'), 'utf8'); } catch (_) { return null; }
+  const m = s.match(/^## Closure$/m);
+  if (!m) return null;
+  const rest = s.slice(m.index + m[0].length);
+  const end = rest.indexOf('\n## ');
+  const fields = {};
+  for (const line of (end < 0 ? rest : rest.slice(0, end)).split('\n')) {
+    const kv = line.match(/^([a-z_]+):\s*(.*)$/);
+    if (kv) fields[kv[1]] = kv[2].trim();
+  }
+  return fields;
+}
+
+// A gh mock that logs EVERY invocation twice: `calls.log` gets the verb + subject (argv[0..2]),
+// `full.log` gets the whole argv line. The first is what the byte-identity comparison across legs
+// reads; the second is what proves no call anywhere NAMED a follow-up issue number.
+function writeLoggingGhMock(binDir, callsLog, fullLog) {
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(binDir, 'gh.js'), [
+    "'use strict';",
+    'const fs = require("fs");',
+    'const argv = process.argv.slice(2);',
+    'const a = argv.join(" ");',
+    'try { fs.appendFileSync(' + JSON.stringify(callsLog) + ', argv.slice(0, 3).join(" ") + "\\n"); } catch (_) {}',
+    'try { fs.appendFileSync(' + JSON.stringify(fullLog) + ', a + "\\n"); } catch (_) {}',
+    'if (a.includes("repo view")) {',
+    '  process.stdout.write(JSON.stringify({owner:{login:"test"},name:"repo"}) + "\\n");',
+    '  process.exit(0);',
+    '}',
+    'const closeM = a.match(/^issue close (\\d+)/);',
+    'if (closeM) { process.stdout.write("\\n"); process.exit(0); }',
+    'const viewM = a.match(/issue view (\\d+)/);',
+    'if (viewM) {',
+    '  process.stdout.write(JSON.stringify({number:parseInt(viewM[1]),state:"open",title:"issue "+viewM[1],body:"",labels:[]}) + "\\n");',
+    '  process.exit(0);',
+    '}',
+    'if (a.includes("api") && a.includes("comments")) { process.stdout.write("[]\\n"); process.exit(0); }',
+    'if (a.includes("api")) { process.exit(0); }',
+    'process.stdout.write("\\n");',
+    'process.exit(0);',
+  ].join('\n'));
+}
+
+// One leg: a four-member bundle finalized on the merge lane over a summary whose `## Run gaps`
+// section carries `gapRows`. Returns the archived block's fields plus both call logs.
+function runClosureDeltaLeg(gapRows) {
+  const project = 'bundle-9201-9204';
+  const members = [9201, 9202, 9203, 9204];
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  const callsLog = path.join(tmpRoot, 'gh-calls.log');
+  const fullLog = path.join(tmpRoot, 'gh-full.log');
+  try {
+    initGitRepo(tmpRoot);
+    writeBundleStateFile(tmpRoot, project, members[0], members);
+    // The run's own summary, written by the orchestrator at Step 6 and archived with the folder.
+    // `## Run gaps` rows are in the scanner's STRICT grammar — the same one parseGapSection owns —
+    // because a free-text bullet is dropped by design and would make this fixture measure nothing.
+    fs.writeFileSync(
+      path.join(tmpRoot, 'kaola-workflow', project, 'finalization-summary.md'),
+      ['# Finalization Summary', '', '## Run gaps', ''].concat(gapRows).join('\n') + '\n');
+    writeLoggingGhMock(binDir, callsLog, fullLog);
+    seedAdaptiveFinalizeFixture(tmpRoot, project);
+
+    const result = runFinalize(['finalize', '--project', project, '--keep-worktree'], tmpRoot, binDir);
+    const out = parseOutput(result);
+    return {
+      project, members, status: result.status, out,
+      fields: out && out.dest ? closureBlockFields(out.dest) : null,
+      calls: readLog(callsLog),
+      full: readLog(fullLog),
+      stderr: result.stderr,
+    };
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+(function testClosureBlockRecordsBacklogDelta() {
+  console.log('Test (#992/#993/#994): the archived ## Closure block records the run\'s backlog delta');
+
+  // Leg A — four filings and one noise row against four claimed issues: the delta is 0.
+  const legA = runClosureDeltaLeg([
+    '- manual:flaky-probe (a transient probe timeout): filed: #7001',
+    '- manual:slow-suite (the suite ran 12m over budget): filed: #7002',
+    '- deferred_red_chain (codex:99): noise: a one-off, not worth an issue',
+    '- manual:doc-drift (the docs lagged the code): filed: #7003',
+    '- manual:missing-pin (the guard had no mutation proof): filed: #7004',
+  ]);
+  // Leg B — fourteen filings against the same four: the delta is +10, the issue's worked example.
+  const legB = runClosureDeltaLeg(Array.from({ length: 14 }, (_, i) =>
+    '- manual:gap-' + (i + 1) + ' (observation ' + (i + 1) + '): filed: #' + (7101 + i)));
+  // Leg C — a `## Run gaps` section that is PRESENT and EMPTY: nothing was filed, and that is a
+  // MEASUREMENT. The delta is -4. Its twin (a section that is absent, which is not a measurement at
+  // all) is in scripts/test-finalize-door.js, where the two `unknown` legs live.
+  const legC = runClosureDeltaLeg([]);
+
+  for (const [label, leg] of [['A (4 filed)', legA], ['B (14 filed)', legB], ['C (0 filed)', legC]]) {
+    assert(leg.status === 0,
+      '#992 ' + label + ': merge-lane bundle finalize must exit 0; got ' + leg.status
+      + '\nstderr: ' + String(leg.stderr || '').slice(0, 400));
+    assert(leg.fields !== null,
+      '#992 ' + label + ': the archived state must carry a parseable ## Closure block; dest='
+      + JSON.stringify(leg.out && leg.out.dest));
+  }
+
+  // ---- Coverage 1: the claimed-set size, on the lane that closes nothing ----
+  for (const [label, leg] of [['A', legA], ['B', legB], ['C', legC]]) {
+    const f = leg.fields || {};
+    assert(f.issue_disposition === 'close-pending',
+      '#992 ' + label + ': the merge lane is honestly close-pending — this is the premise the '
+      + '`issues_closed` reading rests on, and if it moved, the count below is measuring a '
+      + 'different lane; got ' + JSON.stringify(f.issue_disposition));
+    assert(f.issues_closed === '4',
+      '#992 ' + label + ': `issues_closed` is the size of the set this run\'s closure decision is '
+      + 'closing — the four claimed members the sink will close after the merge — NOT the number of '
+      + '`gh issue close` calls this process made, which is zero on this lane by design (#508). A `0` '
+      + 'here is `closure.closed.length`; a `1` is the scalar `issue_number` instead of the member '
+      + 'array; got ' + JSON.stringify(f.issues_closed) + ' with closure='
+      + JSON.stringify(leg.out && leg.out.closure_receipt && leg.out.closure_receipt.closure));
+  }
+
+  // ---- Coverage 3: filings, their numbers, and the signed delta ----
+  const fA = legA.fields || {};
+  assert(fA.follow_ups_filed === '4',
+    '#992 A: `follow_ups_filed` counts the `filed:` refs in `## Run gaps`, and that section carries '
+    + 'FIVE rows of which one is `noise:` — a noise row is an observation the run decided not to '
+    + 'file, so counting rows rather than filings reads 5; got ' + JSON.stringify(fA.follow_ups_filed));
+  assert(fA.follow_up_numbers === '7001,7002,7003,7004',
+    '#992 A: `follow_up_numbers` lists the filed issue numbers in the order the section names them, '
+    + 'comma-separated with no spaces — and the `noise:` row contributes none, because it has no '
+    + 'number to contribute; got ' + JSON.stringify(fA.follow_up_numbers));
+  assert(fA.net_backlog_delta === '0',
+    '#992 A: four closed and four filed is a net-zero run, and zero renders bare — the sign is '
+    + 'explicit only when there is a direction to state; got ' + JSON.stringify(fA.net_backlog_delta));
+
+  const fB = legB.fields || {};
+  assert(fB.follow_ups_filed === '14',
+    '#992 B: fourteen `filed:` rows is fourteen filings; got ' + JSON.stringify(fB.follow_ups_filed));
+  assert(fB.follow_up_numbers === '7101,7102,7103,7104,7105,7106,7107,7108,7109,7110,7111,7112,7113,7114',
+    '#992 B: every filed number is listed, in section order; got ' + JSON.stringify(fB.follow_up_numbers));
+  assert(fB.net_backlog_delta === '+10',
+    '#992 B: fourteen filed against four closed GREW the backlog by ten, and a growth reported as '
+    + '`10` reads as a magnitude with no direction — the leading `+` is what makes the sign of the '
+    + 'delta legible without arithmetic; got ' + JSON.stringify(fB.net_backlog_delta));
+
+  const fC = legC.fields || {};
+  assert(fC.follow_ups_filed === '0',
+    '#992 C: a `## Run gaps` section that is PRESENT and carries no filing is a measured zero, and '
+    + 'it must read as one; got ' + JSON.stringify(fC.follow_ups_filed));
+  assert(fC.follow_up_numbers === 'none',
+    '#992 C: with nothing filed the number list is `none` — an empty value would be '
+    + 'indistinguishable from a field that failed to render; got ' + JSON.stringify(fC.follow_up_numbers));
+  assert(fC.net_backlog_delta === '-4',
+    '#992 C: four closed and nothing filed SHRANK the backlog by four; got '
+    + JSON.stringify(fC.net_backlog_delta));
+
+  // ---- Coverage 5: zero new forge calls ----
+  //
+  // These three are CONTROLS, not red-first pins: before the fields exist there is no new call to
+  // make, so they pass on the baseline and can only ever fire against an implementation that
+  // resolved the gap section over the wire instead of off the disk it is already sitting on.
+  for (const [label, leg] of [['A', legA], ['B', legB], ['C', legC]]) {
+    // NON-VACUITY. Every assertion below is over the call log, and two empty logs are byte-identical
+    // and name no follow-up either — a mock that was never reached would satisfy all of them while
+    // watching nothing.
+    assert(leg.calls.length >= 4,
+      '#992 ' + label + ': the gh mock must actually have been reached, or the forge-traffic '
+      + 'assertions below are true of nothing; got ' + JSON.stringify(leg.calls));
+    const closeCalls = leg.calls.filter(c => c.startsWith('issue close'));
+    assert(closeCalls.length === 0,
+      '#992 ' + label + ' (#497 invariant): zero `gh issue close` calls on the merge lane — the '
+      + 'closure delta is a REPORT about the claimed set, never an instruction to close it early; '
+      + 'got ' + JSON.stringify(closeCalls));
+    const followUpNumbers = leg.full.join('\n').match(/\b7(0|1)\d\d\b/g) || [];
+    assert(followUpNumbers.length === 0,
+      '#992 ' + label + ': no forge call may NAME a follow-up issue number — the numbers are in the '
+      + 'run\'s own finalization-summary.md, and a filing this run already made needs no probe to '
+      + 'confirm it exists; got ' + JSON.stringify(followUpNumbers.slice(0, 8)));
+  }
+  assert(legA.calls.join('\n') === legC.calls.join('\n'),
+    '#992: legs A and C claim the SAME four members under the SAME project name and differ only in '
+    + 'how many follow-ups their summary names, so their forge traffic must be identical. A '
+    + 'difference here is the new fields buying their answer on the wire. A=\n'
+    + legA.calls.join('\n') + '\nC=\n' + legC.calls.join('\n'));
+  assert(legB.calls.join('\n') === legC.calls.join('\n'),
+    '#992: and fourteen filings cost no more forge traffic than zero. B=\n'
+    + legB.calls.join('\n') + '\nC=\n' + legC.calls.join('\n'));
+})();
+
+// ---------------------------------------------------------------------------
 // Test (#592): `--sink --issue-numbers A,B` (no `--issue`) must actually run the
 // closure loop — not skip it. Pre-fix, the closure step's gate was
 // `!OFFLINE && args.issue != null`; with only `--issue-numbers` (no `--issue`), the

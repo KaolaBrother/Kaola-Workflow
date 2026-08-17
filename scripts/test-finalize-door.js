@@ -2684,6 +2684,158 @@ if (failed > 0) {
 })();
 
 // ---------------------------------------------------------------------------
+// T14 (#993/#994) — THE DEGRADATION PAIR. "nothing was filed" and "what was filed could not be
+// measured" are different facts, and a field that renders both as `0` destroys the difference
+// silently — the successor reading the archived run sees a confident zero and has no way to learn it
+// was never measured. This is the house's oldest rule about closure fields (`finalize_commit:
+// 'unknown'`, `changed_paths_probe: 'unavailable'`, `issue_disposition: 'unknown'`): a value that
+// could not be MEASURED degrades to a named token, never to a plausible number.
+//
+// THE TWO HALVES ARE ASSERTED AS A PAIR, deliberately. Either one alone is satisfiable by a build
+// that is wrong about the other: an implementation that always says `unknown` passes the absent leg,
+// one that always says `0` passes the empty leg, and the final assertion — that the two legs DISAGREE
+// — is the only one neither can satisfy. That assertion is the field's whole reason to exist.
+//
+// WHY THE `## Run gaps` SECTION IS THE SOURCE. `run-gaps.json` carries the swept classes but no issue
+// numbers; the filing refs live only in the summary's `## Run gaps` prose, under the strict grammar
+// `- <class> (<sample>): filed: #N`. So "unmeasurable" here means exactly one thing: the section could
+// not be located — no summary, or a summary with no such heading — which is what parseGapSection
+// reports as `null` rather than as an empty list.
+//
+// FREE TEXT IS NOT MALFORMED. `- none` and prose notes under the heading are ignored BY DESIGN for
+// back-compat (parseGapSection says so and deliberately does not even warn on them), so a section
+// carrying one is a section carrying zero filings — a MEASUREMENT, and the same answer as an empty
+// one. An implementation counting `- ` bullets reads 1 there and is wrong twice over.
+//
+// FOUR EDITIONS, like T13: the GitLab and Gitea claim ports are hand-mirrored and policed by nothing,
+// so a fix applied to three copies and missed on the fourth is caught here or not at all.
+// ---------------------------------------------------------------------------
+
+// The `## Closure` block of the archived state this finalize wrote, as a field map.
+function closureBlockOf(dest) {
+  let s = '';
+  try { s = fs.readFileSync(path.join(String(dest), 'workflow-state.md'), 'utf8'); } catch (_) { return null; }
+  const m = s.match(/^## Closure$/m);
+  if (!m) return null;
+  const rest = s.slice(m.index + m[0].length);
+  const end = rest.indexOf('\n## ');
+  const fields = {};
+  for (const line of (end < 0 ? rest : rest.slice(0, end)).split('\n')) {
+    const kv = line.match(/^([a-z_]+):\s*(.*)$/);
+    if (kv) fields[kv[1]] = kv[2].trim();
+  }
+  return fields;
+}
+
+(function T14_closureDeltaDegradesToATokenNeverToZero() {
+  console.log('T14: an unmeasurable follow-up count degrades to `unknown`, and a measured zero stays `0`');
+
+  // `summary` is the finalization-summary.md this run's orchestrator left behind, or null for the run
+  // that left none. Returns the archived ## Closure block.
+  function legFields(edition, tag, project, issue, summary) {
+    const fx = buildMainResidentRun(tag, project, issue, { implCommit: true, residue: true });
+    try {
+      if (summary !== null) {
+        fs.writeFileSync(path.join(fx.mainProj, 'finalization-summary.md'), summary);
+      }
+      const r = runFinalizeKeepWorktree(fx, edition.claim);
+      const out = r.json;
+      assert(r.status === 0 && out && out.status === 'closed',
+        tag + ': exit stays 0 and closure completes — an unmeasurable field is a REPORT, and nothing '
+        + 'here refuses; got status=' + r.status + ' stderr=' + String(r.stderr || '').slice(0, 300));
+      const fields = out && out.dest ? closureBlockOf(out.dest) : null;
+      assert(fields !== null,
+        tag + ': the archived state must carry a parseable ## Closure block; dest='
+        + JSON.stringify(out && out.dest));
+      return fields || {};
+    } finally {
+      removeMainResidentRun(fx);
+    }
+  }
+
+  for (const edition of CLAIM_EDITIONS) {
+    if (!fs.existsSync(edition.claim)) {
+      assert(false, 'T14(' + edition.name + '): the edition claim script exists at ' + edition.claim);
+      continue;
+    }
+    const base = 'T14(' + edition.name + ')';
+
+    // ---- ABSENT: this run wrote no summary at all, so finalize's own `## Validation` /
+    // `## Changed Paths` writer creates one with no `## Run gaps` heading anywhere in it.
+    const absent = legFields(edition, base + ' absent', 'issue-9931', 9931, null);
+    assert(absent.follow_ups_filed === 'unknown',
+      base + ' absent: there is no `## Run gaps` section to read, so the number of follow-ups this '
+      + 'run filed was never measured. `0` here is a claim — "this run filed nothing" — that nobody '
+      + 'made and nothing checked, and the archived record is the last place that claim can be '
+      + 'corrected; got ' + JSON.stringify(absent.follow_ups_filed));
+    assert(absent.net_backlog_delta === 'unknown',
+      base + ' absent: the delta is arithmetic over a term that was not measured, so it is not '
+      + 'measured either — an implementation that treats the missing count as zero reports a '
+      + 'confident `-1` for a run whose net effect on the backlog is simply not known; got '
+      + JSON.stringify(absent.net_backlog_delta));
+    // THE THIRD DEGRADED FIELD. It is here because it was the one value in this block resting on
+    // prose alone: the field spec enumerates `<a,b,c>|none` and offers no third token, so the
+    // shipped `unknown` was chosen but pinned by nothing, and a later reader "restoring" it to the
+    // documented `none` — or dropping the line, since a list of nothing looks like nothing to
+    // render — would have stayed green forever. `none` is a MEASUREMENT ("we looked; nobody filed
+    // anything"), and this lane did not look.
+    assert(absent.follow_up_numbers === 'unknown',
+      base + ' absent: the number list degrades with its count. `none` here would assert that this '
+      + 'run filed nothing, over a section nobody could read — the same false confidence '
+      + '`follow_ups_filed: unknown` exists to refuse, one field to its left; got '
+      + JSON.stringify(absent.follow_up_numbers));
+    // The measured half of the SAME block still reads normally: degradation is scoped to the term
+    // that could not be read, and does not spread to the one that could.
+    assert(absent.issues_closed === '1',
+      base + ' absent: `issues_closed` comes from the claimed set, not from the summary, so an '
+      + 'unreadable gap section must not degrade it too; got ' + JSON.stringify(absent.issues_closed));
+
+    // ---- EMPTY: the heading is there and carries nothing. Somebody looked and found no gaps.
+    const empty = legFields(edition, base + ' empty', 'issue-9932', 9932,
+      '# Finalization Summary\n\n## Run gaps\n\n');
+    assert(empty.follow_ups_filed === '0',
+      base + ' empty: a `## Run gaps` section that is present and carries no filing is a measurement '
+      + 'whose answer is zero, and it must read as a number; got '
+      + JSON.stringify(empty.follow_ups_filed));
+    assert(empty.follow_up_numbers === 'none',
+      base + ' empty: with nothing filed the list reads `none` — an empty value would be '
+      + 'indistinguishable from a field that failed to render; got '
+      + JSON.stringify(empty.follow_up_numbers));
+    assert(empty.net_backlog_delta === '-1',
+      base + ' empty: one issue closed and nothing filed is a backlog one shorter, and with both '
+      + 'terms measured the delta is too; got ' + JSON.stringify(empty.net_backlog_delta));
+
+    // ---- FREE TEXT: `- none` under the heading. parseGapSection ignores it by design and does not
+    // even warn, so this is the same measured zero — not a third answer, and not `1`.
+    const freeText = legFields(edition, base + ' freetext', 'issue-9933', 9933,
+      '# Finalization Summary\n\n## Run gaps\n\n- none\n');
+    assert(freeText.follow_ups_filed === '0',
+      base + ' freetext: `- none` is a free-text bullet the gap grammar ignores by design, so the '
+      + 'section carries zero FILINGS — counting bullets rather than `filed:` refs reads 1; got '
+      + JSON.stringify(freeText.follow_ups_filed));
+    assert(freeText.follow_up_numbers === 'none',
+      base + ' freetext: and no numbers to list; got ' + JSON.stringify(freeText.follow_up_numbers));
+
+    // ---- THE PAIR. Neither constant satisfies this one.
+    assert(absent.follow_ups_filed !== empty.follow_ups_filed,
+      base + ': "nobody measured" and "measured, and it was zero" must not render the same. This is '
+      + 'the assertion the field exists for: an implementation that always says `unknown` passes the '
+      + 'absent leg, one that always says `0` passes the empty leg, and only a build that actually '
+      + 'distinguishes the two passes here. Both read '
+      + JSON.stringify(absent.follow_ups_filed));
+    assert(absent.net_backlog_delta !== empty.net_backlog_delta,
+      base + ': and the delta inherits the distinction — a run whose effect on the backlog is '
+      + 'unknown must not be recorded as the same fact as a run that measurably shortened it by one. '
+      + 'Both read ' + JSON.stringify(absent.net_backlog_delta));
+    assert(absent.follow_up_numbers !== empty.follow_up_numbers,
+      base + ': and so does the list. The regression this forbids is the plausible one — the field '
+      + 'spec enumerates `<a,b,c>|none` and no third token, so collapsing the unmeasured lane onto '
+      + 'the documented `none` looks like tidying and is the conflation itself. Both read '
+      + JSON.stringify(absent.follow_up_numbers));
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // Final result — AUTHORITATIVE. Two appended blocks now sit after this file's original footer, and
 // the counters are cumulative, so the two earlier summary lines are intermediate totals and THIS is
 // the one that decides the exit code.

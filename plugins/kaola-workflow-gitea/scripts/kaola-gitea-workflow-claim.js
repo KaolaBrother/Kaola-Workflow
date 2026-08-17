@@ -27,6 +27,11 @@ const closureContract = require('./kaola-workflow-closure-contract');
 // archive rollup line below. All three come from the kernel, so nothing in the finalize/archive
 // path loads a plan reader.
 const { parseGoal } = adaptiveSchema;
+// #992: the `## Run gaps` row grammar has ONE owner — the gate that refuses on it — and the closure
+// block now reports over the same rows. Import that parser instead of restating its regex: a second
+// spelling would count filings the gate does not, and the two would disagree silently. Module load
+// is side-effect-free (fs + path + declarations, and a `require.main` guard around its CLI).
+const { parseGapSection } = require('./kaola-gitea-workflow-gap-sweep');
 
 const CLAIM_LABEL = forge.CLAIM_LABEL || 'workflow:in-progress';
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
@@ -2159,16 +2164,63 @@ function appendClosureBlock(destDir, fields) {
     const p = path.join(destDir, 'workflow-state.md');
     let s = fs.readFileSync(p, 'utf8');
     if (/^## Closure$/m.test(s)) return false;
+    // #992: the backlog-delta half is supplied by the finalize path, which holds both terms. The
+    // watch-pr and sink-sole-archiver lanes measure neither, and a lane that did not measure says so
+    // — rendering a plausible number there would be the exact conflation the fields exist to end.
+    const delta = key => (fields[key] === undefined || fields[key] === null) ? 'unknown' : fields[key];
     s = s.trimEnd() + '\n\n## Closure\n' +
       'archived_at: ' + new Date().toISOString() + '\n' +
       'issue_disposition: ' + fields.issueDisposition + '\n' +
       'claim_label_removed: ' + fields.claimLabelRemoved + '\n' +
       'worktree_removed: ' + fields.worktreeRemoved + '\n' +
-      'closure_invariants: ' + fields.closureInvariants + '\n';
+      'closure_invariants: ' + fields.closureInvariants + '\n' +
+      // #992/#993/#994: what this run took off the backlog and what it put back on — the one
+      // question a successor asks of a finished run that five terminal tokens cannot answer.
+      'issues_closed: ' + delta('issuesClosed') + '\n' +
+      'follow_ups_filed: ' + delta('followUpsFiled') + '\n' +
+      'follow_up_numbers: ' + delta('followUpNumbers') + '\n' +
+      'net_backlog_delta: ' + delta('netBacklogDelta') + '\n';
     // Atomic: this is the same workflow-state.md whose torn form readActiveFolders silently skips.
     writeFile(p, s);
     return true;
   } catch (_) { return false; }
+}
+
+// #992/#993/#994: the run's backlog delta, for the `## Closure` block above. The filing refs live
+// ONLY in the `## Run gaps` prose of the run's own finalization-summary.md (run-gaps.json carries
+// the swept classes but no issue numbers), so this reads the disk that summary is already sitting on
+// and costs nothing on the wire. Candidates are probed archive-first then live, the order
+// probeSelectionEvidence uses and for the same reason: archiveProjectDir has already run.
+//
+// DEGRADATION. parseGapSection reports a section it could not LOCATE as null — no summary, or a
+// summary with no such heading — and a section it located as an array. A located section carrying no
+// filing is a MEASUREMENT whose answer is zero; only an unlocatable one was never measured, and that
+// degrades to `unknown` rather than to a `0` nobody claimed (the finalize_commit / changed_paths_probe
+// rule). Free-text bullets under the heading are ignored by the grammar BY DESIGN, so a section of
+// them is a located section carrying zero filings — the same measured zero, not a third answer.
+// `issuesClosed` comes from the claimed set, never from the summary, so it never degrades here.
+function computeBacklogDelta(issuesClosed, projectDirCandidates) {
+  let filed = null;
+  for (const dir of (projectDirCandidates || [])) {
+    if (!dir) continue;
+    let entries = null;
+    try { entries = parseGapSection(path.join(dir, 'finalization-summary.md')); } catch (_) { entries = null; }
+    if (entries !== null) { filed = entries.filter(e => e.kind === 'filed'); break; }
+  }
+  if (filed === null) {
+    return { issuesClosed: issuesClosed, followUpsFiled: 'unknown',
+      followUpNumbers: 'unknown', netBacklogDelta: 'unknown' };
+  }
+  const net = filed.length - issuesClosed;
+  return {
+    issuesClosed: issuesClosed,
+    followUpsFiled: String(filed.length),
+    // DOCUMENT order — the order the run filed them. Sorting would discard that and gain nothing.
+    followUpNumbers: filed.length > 0 ? filed.map(e => e.ref).join(',') : 'none',
+    // The sign is explicit only when there is a direction to state: a growth reported as `10` reads
+    // as a magnitude, and the leading `+` is what makes the direction legible without arithmetic.
+    netBacklogDelta: net === 0 ? '0' : (net > 0 ? '+' + net : String(net)),
+  };
 }
 
 // n5 (#653 finding D3): advisory selection-evidence probe. A file matching selection-evidence.*
@@ -4518,6 +4570,13 @@ function cmdFinalize() {
   // sink-merge, so the default merge lane is honestly close-pending, never a false `closed`).
   const issueDisposition = keepIssueOpen ? 'kept-open'
     : (remoteIssueClosed === 'already_closed' ? 'closed' : 'close-pending');
+  // #992: the size of the set this run's closure decision is CLOSING — the claimed set the sink will
+  // close after the merge, not a count of close calls this process made, which is zero on the shipped
+  // merge lane by design (#508/#617) and would report every such run as having closed nothing. A
+  // keep-open run declined to close, so its decision closes zero.
+  const backlogDelta = computeBacklogDelta(
+    keepIssueOpen ? 0 : ((closureReceipt.closure && closureReceipt.closure.attempted) || []).length,
+    [result.dest, path.join(root, 'kaola-workflow', args.project)]);
   // #333: append the compact terminal receipt to the archived state (facts only known after the
   // rename: claim/worktree disposition + issue disposition). Presence-guarded / idempotent.
   if (result.dest) {
@@ -4525,7 +4584,11 @@ function cmdFinalize() {
       issueDisposition: issueDisposition,
       claimLabelRemoved: claimLabelRemoved,
       worktreeRemoved: worktreeRemoved,
-      closureInvariants: invariantResult.ok ? 'ok' : ('violations:' + invariantResult.violations.length)
+      closureInvariants: invariantResult.ok ? 'ok' : ('violations:' + invariantResult.violations.length),
+      issuesClosed: backlogDelta.issuesClosed,
+      followUpsFiled: backlogDelta.followUpsFiled,
+      followUpNumbers: backlogDelta.followUpNumbers,
+      netBacklogDelta: backlogDelta.netBacklogDelta
     });
   }
   // #333: keep-worktree commit block MOVED here (commit-last) — after the ## Closure append so the

@@ -202,6 +202,22 @@ record `noise: <justification>`. If you hand-typed a `## Run gaps` row the scann
 append the matching `gap: <class> — <text>` line to `.cache/run-gaps-manual.md` and re-run the
 scanner, so what is written was actually swept.
 
+Structure the body of the issue you file so the next run can separate evidence from inference. In
+that body, `## Measured` carries only what this run observed, and every figure there names the
+commit it was measured at and the command or artifact it came from — an unstamped number does not
+belong in that section. `## Hypothesis` carries attributions no run has confirmed; a cause derived
+by reading code lands there by default, phrased as a claim to test.
+`## Proposed remedy (non-binding)` is optional and carries that label when it appears. Add one
+`searched:` line recording the duplicate probe you actually ran — its query and its hit count, at
+the mechanism or symbol level, since a title-word search will not find a symbol the forge has
+tokenized. This adds no measurement obligation: it forbids exactly one thing, an unstamped figure
+or an unrun attribution presented as established fact.
+
+After filing, confirm the issue exists and its body is non-empty, and record the issue number and
+the body length you saw in this run's own record — a create that failed silently leaves a
+`filed: #N` pointing at nothing. That record is the mission list's result line, never the
+`## Run gaps` row, whose grammar the scanner owns.
+
 When this run's own findings contradict or correct the issue as filed — a wrong premise, a disproved
 figure, a symptom that never existed, a justification the run replaced — post that correction as a
 comment on the issue before it closes. Never close quietly against text now known to be wrong. A

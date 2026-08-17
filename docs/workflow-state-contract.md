@@ -289,7 +289,11 @@ patched in place by the later lifecycle verbs. Its blocks:
   paths stamp (for example `closed_keep_open`).
 - `## Lease` — legacy, deprecated. Preserved for backward compatibility on read only.
 - `## Closure` — appended at archive time by `appendClosureBlock`: `archived_at`,
-  `issue_disposition`, `claim_label_removed`, `worktree_removed`, and `closure_invariants`.
+  `issue_disposition`, `claim_label_removed`, `worktree_removed`, `closure_invariants`,
+  `issues_closed`, `follow_ups_filed`, `follow_up_numbers`, and `net_backlog_delta`. The last four
+  are the run's backlog delta — the size of the claimed set its closure decision is closing, and
+  the follow-ups the `## Run gaps` section of its `finalization-summary.md` filed against it. A
+  lane that could not locate that section stamps `unknown` rather than a `0` nobody measured.
 
 ### What this file no longer carries
 

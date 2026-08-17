@@ -346,6 +346,16 @@ function testKeepOpenArchiveStamp() {
     assert(/^## Closure$/m.test(st), '#333: keep-open archived state must carry a ## Closure block');
     assert(st.includes('issue_disposition: kept-open'),
       '#333: keep-open archived ## Closure must record issue_disposition: kept-open');
+    // #992: the closure DELTA, on the one lane whose decision closes nothing. `issues_closed` is the
+    // size of the set this run's closure decision is closing, and a keep-open run decided to close
+    // NONE of its claimed set — so the honest count is 0 even though the set is non-empty
+    // (`closure.attempted` is [333] and `closure.kept_open` is [333]). This is the half of the field
+    // its bundle twin cannot reach: over in test-bundle-finalize.js a merge-lane bundle stamps 4, so
+    // an implementation that hardcodes `closure.attempted.length` reds HERE and one that hardcodes
+    // `closure.closed.length` reds THERE. Neither alone pins the field; the pair does.
+    assert(/^issues_closed: 0$/m.test(st),
+      '#992: a keep-open run closes nothing, so its ## Closure block must record issues_closed: 0 — '
+      + 'stamping the claimed-set size here would report a closure that was explicitly declined; got: ' + st);
     // ADR 0018 §5: the roadmap-source-preservation checks stood here — "must PRESERVE
     // kaola-workflow/.roadmap/issue-333.md" and the JSON/receipt `roadmap_source_removed: 'kept'`
     // assertions. There is no local roadmap source left to keep or remove; the envelope field is

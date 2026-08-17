@@ -1,5 +1,92 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **A follow-up a run files now carries a typed body — #994.** Step 7 said, in full, what a
+  follow-up must be: "file a follow-up and record `filed: #N`". The gap-sweep gate verified the
+  reconciliation bookkeeping and nothing constrained what the filed body could assert, so the
+  producer of most claimed work was the one step with no content contract at all. Measured on a
+  consumer repo, three consecutive bundles whose claimed sets had been filed by the immediately
+  preceding run found four of four, then three of four, then three of four wrong somewhere in
+  their filed text. The wrongness was not one phenomenon: a stale figure whose census predated a
+  sibling fix in its own bundle is fully preventable; a cause derived by reading and never run is
+  at minimum labelable; a remedy prediction is not preventable at filing time at all — one such
+  was built, measured and rejected at a 50.2% signed-volume error, which is the process working.
+  Shipping the four classes undifferentiated left the consuming run one sound posture, blanket
+  suspicion, and made a filed remedy read as an instruction.
+  Step 7 now types the body: `## Measured` for what the run observed, every figure naming the
+  commit it was measured at and the command or artifact it came from; `## Hypothesis` for
+  attributions no run has confirmed, where a cause derived by reading code lands by default;
+  `## Proposed remedy (non-binding)` optional and wearing that label; and one `searched:` line
+  recording the duplicate probe actually run, at the mechanism or symbol level. It adds **no**
+  measurement obligation — it forbids exactly one thing, an unstamped figure or an unrun
+  attribution presented as established fact, which is honest sorting of evidence the filing run
+  already has. A mandatory re-measure-everything gate was considered and rejected as over-broad
+  (rejected-route and historical figures cannot be re-measured) and therefore certain to be gamed.
+  This converges with #985: the pick step reads bodies and comments, so a typed body lets the next
+  run confirm `## Measured` at its stamps and aim its probe at `## Hypothesis` — targeted
+  suspicion replacing blanket suspicion.
+
+- **A run verifies that the follow-up it filed actually exists — #992.** `gap-sweep --check`
+  validates `filed: #N` rows by regex alone, by design: the live issue-existence probe is skipped
+  to keep the script forge-neutral, and "the syntactic check is the floor". So the gate certified a
+  row whether or not the named issue existed or had a body. Measured on a consumer repo: an issue
+  creation failed, a fallback path swallowed the error, and a run filed an issue with an **empty
+  body** — the gap it was meant to capture existed only as a number, and the gate passed. Step 7
+  now requires confirming, after filing, that the issue exists and its body is non-empty, and
+  recording the issue number and the body length in the run's own record — the mission list's
+  result line, never the `## Run gaps` row, whose grammar the scanner owns.
+  **The script's floor is deliberately re-affirmed, not raised.** Wiring a forge adapter into the
+  `--check` online probe so a row fails closed on a nonexistent issue was specified as an optional
+  second layer and was **declined** by the owner: `kaola-workflow-gap-sweep.js` stays forge-neutral
+  bookkeeping, and no new refusal enters a design whose refusal count is zero over something that
+  destroys nothing. No per-forge divergence is declared either — all three forges can express an
+  existence and non-empty-body check, and a region whose reason cannot name a runtime difference is
+  drift rather than divergence, so the prose names no forge CLI.
+
+  Both rules are prose-only, added inside the existing `<!-- PIN: forge-is-the-backlog -->` span in
+  `templates/routing/finalize.skeleton.md`; they render to the 18 tracked routing surfaces and reach
+  12 finalize surfaces across claude/codex/opencode/kimi × github/gitlab/gitea. The edit is
+  additive-only — `+16/-0` on the skeleton and all six rendered surfaces, no deleted line anywhere —
+  so the `independent slices` guidance and the correction-comment rule are byte-untouched. Seven new
+  `content_tokens` join the existing `fn-forge-is-the-backlog` entry in
+  `templates/routing/required-blocks.js`, one per obligation rather than one per paragraph, and each
+  is mutation-proven armed one mutant at a time: dropping the stamping duty, the `## Hypothesis`
+  default, the `(non-binding)` label, the `searched:` opener, the non-empty-body half, or the
+  record's destination reds exactly its own token and no other. No new pin marker was added.
+
+- **The closure receipt now records the run's backlog delta — #993.** A finalize run knew both sides
+  of its own backlog effect and computed neither: the `## Closure` block recorded dispositions
+  (`issue_disposition`, `claim_label_removed`, `worktree_removed`, `closure_invariants`) and no number
+  said whether the run grew or shrank the backlog. Measured on a consumer repo, runs closed 4 and
+  filed 4 twice, then closed 4 and filed 14, and over a fortnight the repo created 152 issues against
+  99 closed — net +53, each run locally correct, the aggregate discovered only by a hand-run forge
+  query weeks into the trend. The closure decision is exactly where an operator weighs closing the set
+  against carrying the remainder, and it made that call without the one number that prices it.
+  The block now carries `issues_closed`, `follow_ups_filed`, `follow_up_numbers` and
+  `net_backlog_delta`, all derived from artifacts already on disk at stamp time — **zero new forge
+  calls**, with a live control asserting it, so offline and keep-open behaviour are untouched.
+  **`issues_closed` is the size of the set the run's closure decision is closing, not a count of
+  closes this process performed.** That distinction was forced by measurement: on the shipped merge
+  lane the finalize transaction closes nothing — the sink closes afterwards, and the block is
+  write-once — so the literal reading would have stamped a positive delta on every ordinary run and
+  the issue's own worked example would never have fired. No companion disposition field was added:
+  `issue_disposition` already sits directly above and says what state that closure is in. Keep-open
+  stamps `0`.
+  A section the parser could not locate degrades to `unknown` across all three derived fields rather
+  than to a plausible `0`, following the house pattern for values that could not be measured. The
+  reverse case — a section located but with every row failing the strict grammar — still reports `0`,
+  and is **deliberately not addressed here**: the parser returns the same empty array for that as for
+  a genuinely empty section, free-text bullets are ignored by design and so cannot be read as evidence
+  of malformation, and distinguishing the two needs a mechanism inside the scanner's parser rather
+  than beside it. Filed as its own slice.
+  `parseGapSection` is reused rather than reimplemented; `docs/workflow-state-contract.md` gains the
+  four field names in emission order. The four `kaola-workflow-claim.js` copies and four
+  `kaola-workflow-gap-sweep.js` copies move together, canonical and codex byte-identical, with
+  `validate-script-sync.js` and `edition-sync.js --check` both green.
+
 ## [9.10.0] - 2026-08-16
 
 ### Added

@@ -585,4 +585,7 @@ if (require.main === module) {
   process.exit(main(process.argv));
 }
 
-module.exports = { main };
+// parseGapSection is exported because the closure block reports over the SAME rows this gate refuses
+// on, and one grammar with two spellings is two grammars. Its null-vs-array distinction is part of
+// the contract: null is a section that could not be located, [] a located section carrying nothing.
+module.exports = { main, parseGapSection };

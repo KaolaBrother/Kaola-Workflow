@@ -345,10 +345,26 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    // One span at Step 7 — the run-gap-sweep filing rule and the correction-posting
-    // rule that follows it. The correction paragraph is the newer half: it is what
-    // makes "the forge is the backlog truth" survive contact with a run that finds
-    // the filed issue was wrong, rather than closing quietly over stale text.
+    // One span at Step 7, carrying four independent rules: what to file, how the
+    // filed body is typed, that the filing was verified to have landed, and what to
+    // do when the run's own findings correct the issue it is closing. The correction
+    // rule is what makes "the forge is the backlog truth" survive contact with a run
+    // that finds the filed issue was wrong, rather than closing quietly over stale
+    // text; the typed-body and verification rules are what keep the thing it files
+    // from being unreadable to the next run, or from not existing at all.
+    //
+    // Tokens are drawn from every one of the four rules, one per obligation rather
+    // than one per paragraph, so gutting a single obligation — the stamping duty,
+    // the reading-derived-cause default, the non-binding remedy label, the duplicate
+    // probe, the existence-and-body check, or where that check is recorded — reds
+    // this block even with the marker and the other obligations intact. None is a
+    // substring of the marker.
+    //
+    // NOT pinned, deliberately: the scope-limiting close of the typed-body rule
+    // ("This adds no measurement obligation…") states what the rule does NOT demand,
+    // and the negative restatement of the stamping duty ("an unstamped number does
+    // not belong in that section") re-expresses an obligation already pinned below.
+    // Pinning either would freeze wording that carries no obligation of its own.
     block_id: 'fn-forge-is-the-backlog',
     topic: 'finalize',
     runtime_tag: 'both',
@@ -360,6 +376,19 @@ const REQUIRED_BLOCKS = [
       'post that correction as a comment on the issue before it closes.',
       'Never close quietly against text now known to be wrong.',
       'A correction is not a follow-up: a follow-up is new work with its own `filed: #N`; a correction is the record of what this issue turned out to be, and it lands on the issue it corrects.',
+      // The typed body: the section that carries only observation, the stamping duty
+      // that makes it observation, the section unconfirmed attributions default into,
+      // the label the optional remedy must wear, and the duplicate probe.
+      '`## Measured` carries only what this run observed',
+      'every figure there names the commit it was measured at and the command or artifact it came from',
+      '`## Hypothesis` carries attributions no run has confirmed; a cause derived by reading code lands there by default',
+      '`## Proposed remedy (non-binding)` is optional and carries that label when it appears.',
+      'Add one `searched:` line recording the duplicate probe you actually ran — its query and its hit count',
+      // The filing verification: the check itself, and the record it lands in. The
+      // second is not decoration — routing it to the `## Run gaps` row instead would
+      // put free text through a strict parser-owned grammar the scanner owns.
+      'confirm the issue exists and its body is non-empty, and record the issue number and the body length you saw in this run\'s own record',
+      'That record is the mission list\'s result line, never the `## Run gaps` row',
     ],
   },
 
