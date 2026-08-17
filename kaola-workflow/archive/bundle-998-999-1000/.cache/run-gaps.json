@@ -1,0 +1,40 @@
+{
+  "project": "bundle-998-999-1000",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:finalize-surface-omits-scanner",
+      "sample": "the finalize surface splices only the --check gate, never the --json scanner run that produces run-gaps.json",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:chains-stale-culprit-absent",
+      "sample": "finalize --check --json reports validation chains_stale as a bare token with no culprit paths, so the reason must be diagnosed by reading the hash producer",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:docs-commit-stales-chain-receipt",
+      "sample": "on a self-host repo a docs-only commit changes the code-tree hash, so documentation docking after Step 1 validation stales a green four-chain receipt",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:t14-t20-citation",
+      "sample": "T14 is cited as the free-text-bullet silence pin, but the silence is T20 in a different suite",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:docs-index-omits-gap-sweep",
+      "sample": "docs/README.md indexes no gap-sweep section, leaving the only reader-facing grammar description unindexed",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:manifest-assertion-count-insensitive",
+      "sample": "adding a four-token manifest block left the suite assertion count unchanged, so the count cannot witness a new pin",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:scanner-owns-grammar-phrase",
+      "sample": "the finalize surface still defers with \"whose grammar the scanner owns\" a short way below the statement that now gives it",
+      "count": 1
+    }
+  ]
+}
