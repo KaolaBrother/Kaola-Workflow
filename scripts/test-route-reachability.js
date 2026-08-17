@@ -1005,8 +1005,8 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
 //     it either), and a comment-shaped first token that is not a PIN/CARD marker — `<!-- pin: x -->`
 //     (isMarker is case-SENSITIVE) or `<!-- NOTE: ... -->` — which would otherwise slip past both
 //     this floor and the reverse orphan-sentinel that keys on recognized markers.
-//     Blocks legitimately led by a plain content token (9 of the 30 today) are NOT marker-led and
-//     need no distinctive sibling: their first token is itself the distinctive one.
+//     Blocks legitimately led by a plain content token are NOT marker-led and need no distinctive
+//     sibling: their first token is itself the distinctive one.
 {
   const violations = [];
   for (const b of REQUIRED_BLOCKS) {

@@ -518,6 +518,10 @@ The orchestrator MUST:
    - `- <reasonClass> (<sample>): noise: <one-line justification>` — gap justified as not
      worth tracking.
 
+   The heading itself must read exactly `## Run gaps`, with nothing else on the line. A heading
+   carrying a qualifier reads as no section at all, and the whole section is skipped however
+   well-formed its rows are.
+
    The `<sample>` is delimited by the FIRST `): ` that is followed by a valid `filed:`/`noise:`
    tail (issue #726). Consequently a sample may itself contain parentheses — e.g.
    `- manual:api-probe (retryAfter(from:)): filed: #N` — and a `noise:` justification, which is

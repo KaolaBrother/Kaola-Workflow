@@ -236,6 +236,24 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
+    // The grammar the gap scanner actually parses, stated where the section is
+    // written. Four independently-deletable obligations, one token each: a
+    // heading carrying a qualifier reads as section-absent, the two bullet forms
+    // are the only rows read, and prose or a markdown-table row is not a gap
+    // however plainly its issue number sits in the text. Each row token carries
+    // its `- <reasonClass> (<sample>):` head, so dropping the head alone reds.
+    block_id: 'fn-run-gaps-grammar',
+    topic: 'finalize',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      'Write the heading exactly `## Run gaps`, with nothing else on the line',
+      '`- <reasonClass> (<sample>): filed: #N` — gap tracked by an open issue.',
+      '`- <reasonClass> (<sample>): noise: <one-line justification>` — gap justified as not worth tracking.',
+      'a line that is not a bullet in one of those two forms — prose, or a row of a markdown table — is not read as a gap',
+    ],
+  },
+  {
     // R3's replacement, and the reason the refusal could go: the sink reports,
     // and the orchestrator is accountable for the branch ending up right. All
     // three resolutions are named, because "merge anyway and report" is the

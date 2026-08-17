@@ -4,6 +4,55 @@
 
 ### Added
 
+- **The finalize surface now states the `## Run gaps` grammar it was only half-describing — #998,
+  #1000.** Two archived summaries were unreadable to the scanner for two different reasons: a heading
+  written `## Run gaps (reviewer-recorded, non-mechanical)` reads as **no section at all** (1 of 128
+  such headings in the archive; it carried zero filings, so it lost nothing), and two sections written
+  as markdown tables are located but never read (`issue-725` and its `.archived-*` sibling, 7 and 1
+  `filed: #N` cells sitting in plain text). Both were filed asking whether the parser should widen.
+  **It should not, and it did not — `kaola-workflow-gap-sweep.js` is byte-untouched by this change.**
+  The owner ruled strict-and-state-it: the observed rate is 1-in-128 and 2-in-154, `parseGapSection`
+  already degrades an unreadable section to `unknown` rather than a confident zero, and nothing
+  re-reads an archived summary — `computeBacklogDelta` probes archive-first but only the run's own
+  just-archived folder — so the historical loss is closed and the value of any widening is entirely
+  forward-looking. Both issues therefore close with **no parser change**, which is why this entry is
+  filed under Added rather than Fixed: nothing in code was repaired.
+  Stating it turned up the finding neither issue reported, and it is the reason this was worth doing
+  at all. **The authoring surface was not silent — it was misleading.** Its one sentence about the
+  section named the row's *tail* and omitted its *head*: "`## Run gaps` carries one line per swept gap,
+  each either `filed: #N` or `noise: <justification>`". Every literal completion of that sentence
+  parses to **zero rows** — `- filed: #998` and `- manual:foo: filed: #998` both yield no row (their
+  refs land in `unaccountedFiled`, so the record degrades honestly), and `- manual:foo: noise:
+  transient flake` yields no row and **no trace at all**, whose real cost is a mapped gap coming back
+  as unswept rather than a wrong count. Only `- manual:foo (transient flake): filed: #998` parses, and
+  no prompt surface anywhere stated that form. The heading rule was likewise stated on **no shipped
+  surface** — two targeted searches over `templates/`, `commands/`, `plugins/*/`, `docs/`, `README.md`
+  and the scanner return nothing — so a 1-in-128 rate is not evidence that authors were told and
+  improvised.
+  Four sentences now ship, inserted after the paragraph they complete in
+  `templates/routing/finalize.skeleton.md` and reusing `docs/conventions.md`'s existing two-form
+  wording verbatim rather than authoring a fourth variant of it: write the heading exactly
+  `## Run gaps` with nothing else on the line; the two bullet forms with their
+  `- <reasonClass> (<sample>):` head; and what a heading qualifier or a non-bullet line costs. They
+  render to the 6 tracked finalize surfaces and reach **12** finalize surfaces across
+  claude/codex/opencode/kimi × github/gitlab/gitea, which takes **three** regeneration steps rather
+  than one because both edition generators read the rendered command surfaces. The edit is
+  additive-only — `+11/-0` on the skeleton and on each rendered surface — and names **no typed refusal
+  code**, deliberately: routing surfaces carry zero `reason:` codes today and ADR 0017's lexicon
+  watch-list row arms on one appearing on a runtime surface at all.
+  A new content-led manifest block `fn-run-gaps-grammar` holds all four sentences, one token per
+  independently-deletable obligation, and each is **mutation-proven armed** by removing that one
+  statement from the skeleton and regenerating so the mutation reaches what ships — a token dropped
+  reds on all 12 obligated surfaces and names itself, with no other block or token touched. The
+  suite's assertion count is unchanged at 331 by design: the per-surface findings are detail under one
+  rollup assertion, so a stable count here is not evidence of a dead pin. `docs/conventions.md` gains
+  the same heading rule in the same words so the human doc and the runtime surface cannot drift, and
+  `docs/api.md`'s tail-only phrasing is left alone on purpose — it describes what `--check` verifies,
+  not how to author a row, and a third restatement of a grammar is how the drift starts.
+  ADR 0017's watch list gains the declined widening as a row whose arming observation is a section
+  improvised **after** the surface began stating the rule; the three known instances all predate the
+  statement and are recorded as the row's reason, not its trigger.
+
 - **A follow-up a run files now carries a typed body — #994.** Step 7 said, in full, what a
   follow-up must be: "file a follow-up and record `filed: #N`". The gap-sweep gate verified the
   reconciliation bookkeeping and nothing constrained what the filed body could assert, so the
@@ -88,6 +137,22 @@
   `validate-script-sync.js` and `edition-sync.js --check` both green.
 
 ### Fixed
+
+- **A comment in `test-route-reachability.js` no longer states a count nothing maintains — #999.** The
+  parenthetical at `:1008` read "Blocks legitimately led by a plain content token (9 of the 30 today)".
+  Measured against `templates/routing/required-blocks.js` with the harness's own marker predicate,
+  both figures were wrong and the denominator was off by 11, not by 1: **10** content-led of **19**
+  blocks, 9 marker-led. A reader would reasonably assume only the numerator had drifted. Nothing read
+  the figure, and the surrounding floor was mutation-proven armed during the run that found this, so
+  this was descriptive drift and not a disarmed guard.
+  The number is **deleted rather than restated**, and the sentence's reasoning is kept intact: a
+  content-led block is not marker-led and needs no distinctive sibling, because its first token is
+  itself the distinctive one. The count is derivable in one line from the manifest, nothing catches it
+  drifting, and restating a fresher figure only resets the same clock — so no pin was added either,
+  since a guard on the figure would re-create the hand-maintained count being removed. A sweep of that
+  file found this was its only `(N of the M …)` parenthetical, so there were no siblings to correct.
+  One incidental benefit: with the figure gone, adding the 20th block in the same release carried no
+  stale-comment cost.
 
 - **A sync that writes another checkout's edition trees now says so — #996.** The routing
   generator's `--write` refreshes the six gitignored edition trees, and those trees resolve to the

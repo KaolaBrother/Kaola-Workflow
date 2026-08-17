@@ -185,6 +185,17 @@ last thing a reader has after the folder is archived:
 findings land — do not delete them, and do not soften them. `## Run gaps` carries one line per swept
 gap, each either `filed: #N` or `noise: <justification>`.
 
+Write the heading exactly `## Run gaps`, with nothing else on the line, and write each swept gap in
+exactly one of two forms:
+
+- `- <reasonClass> (<sample>): filed: #N` — gap tracked by an open issue.
+- `- <reasonClass> (<sample>): noise: <one-line justification>` — gap justified as not worth tracking.
+
+A heading carrying a qualifier reads as no section at all, and a line that is not a bullet in one of
+those two forms — prose, or a row of a markdown table — is not read as a gap however plainly its
+issue number sits in the text. Either way the closure record loses the count, and a gap you did map
+can still come back as unswept.
+
 ## Step 7 — Run-gap sweep
 
 Finishing an issue includes capturing the defects the run itself discovered. Sweep them and reconcile
