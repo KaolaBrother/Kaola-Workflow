@@ -1152,7 +1152,16 @@ function computeChainsStaleDiagnostics(root, project, receipt) {
 }
 function attachChainsStaleDiagnostics(payload, root, project, receipt) {
   const diag = computeChainsStaleDiagnostics(root, project, receipt);
-  return diag ? Object.assign(payload, diag) : payload;
+  if (!diag) return payload;
+  Object.assign(payload, diag);
+  // The hint was rendered inside finding() BEFORE this attach ran, so it was written by a call that
+  // had not yet been told which kind of drift it was describing. Re-render it now that we know.
+  // Both `chains_stale` construction sites route through here, so this is the one place it belongs.
+  // When the diagnostics decline we return above and the undiagnosed sentence stands — a hint that
+  // renders FROM diagnostics has to survive their absence.
+  const rendered = validationHint('chains_stale', diag);
+  if (rendered) payload.operator_hint = rendered;
+  return payload;
 }
 
 // The condition-specific operator templates for the validation family, carried across verbatim so
@@ -1160,7 +1169,25 @@ function attachChainsStaleDiagnostics(payload, root, project, receipt) {
 // through to the generic fallback: the kernel registry's family-hint rung is gone with the registry.
 const VALIDATION_HINTS = Object.freeze({
   chains_unverified: () => 'No chain receipt found. Run kaola-workflow-run-chains.js after the last commit so HEAD is covered.',
-  chains_stale: () => 'Chain receipt is stale — the tree advanced since the chains ran. Regenerate the receipt over HEAD.',
+  // Kind-aware, because "a CHANGELOG line moved" and "half of scripts/ moved" are different facts
+  // and the operator was being handed one sentence for both. Naming the kind is EXTRA information,
+  // never a substitute for the instruction: test-consumed prose sits inside the code-tree hash by
+  // construction — that is the only reason a prose edit stales the receipt at all — so no drift kind
+  // makes the regenerate skippable, and every arm below still commands it. Absent diagnostics fall
+  // through to the original sentence verbatim.
+  chains_stale: (ctx) => {
+    const kind = ctx && ctx.stale_kind;
+    if (kind === 'code') {
+      return 'Chain receipt is stale — code changed since the chains ran. Regenerate the receipt over HEAD.';
+    }
+    if (kind === 'prose-only') {
+      return 'Chain receipt is stale — only test-consumed prose changed since the chains ran, and that prose is inside the code-tree hash, so the receipt is stale all the same. Regenerate the receipt over HEAD; landing tracked prose before the chains run avoids the repeat.';
+    }
+    if (kind === 'mixed') {
+      return 'Chain receipt is stale — both code and test-consumed prose changed since the chains ran. Regenerate the receipt over HEAD.';
+    }
+    return 'Chain receipt is stale — the tree advanced since the chains ran. Regenerate the receipt over HEAD.';
+  },
   chains_empty: () => 'Chain receipt has an empty chains[] array — zero chains were verified. Regenerate the receipt with kaola-workflow-run-chains.js over a resolved chain set (the producer itself refuses to write an empty chains[] receipt; see the no_chains refusal).',
   chains_red: (ctx) => {
     const timedOut = (ctx && Array.isArray(ctx.timedOutChains)) ? ctx.timedOutChains.filter(Boolean) : [];

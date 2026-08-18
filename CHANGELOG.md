@@ -39,6 +39,33 @@
   pins the **ordering** — a scan spliced after the gate would satisfy a "mentions `--json`" check
   and supply nothing.
 
+- **The `chains_stale` operator hint now names which kind of drift stalled the receipt — #1003.**
+  The sentence an operator reads was identical whether one `CHANGELOG.md` line moved or half of
+  `scripts/` did: `VALIDATION_HINTS.chains_stale` was a **zero-argument** template, while
+  `chains_red` one line below already took a `ctx`. Nothing was wrong with the old sentence — it was
+  true, just uninformative — which is why this is filed under Added. #648 named this enrichment as
+  its item B.3 and it never shipped: `git log --oneline -S "chains_stale: (ctx)" --all -- scripts/`
+  returns **0 commits**, and the commit that landed #648's diagnostics touched no `OPERATOR_HINTS`.
+  The hint now distinguishes `code`, `prose-only` and `mixed`, and **every arm still commands the
+  regenerate**. That constraint is the point rather than a detail: test-consumed prose sits inside
+  the code-tree hash *by construction* — the only reason a prose edit stales a receipt at all — so
+  no drift kind makes the re-run skippable, and a hint reading the discrimination as permission to
+  proceed would convert a true measurement into a false licence and be strictly worse than the
+  generic sentence it replaced. The `prose-only` arm also carries the sequencing lesson #648 wanted:
+  land tracked prose *before* stamping.
+  Rendered in `attachChainsStaleDiagnostics` rather than at either call site, because
+  `operator_hint` is built inside `finding()` **before** the diagnostics attach — the hint was
+  written by a call that had not yet been told the answer. Both `chains_stale` construction sites
+  route through that one function, and where the diagnostics decline (a receipt bound to no clean
+  commit, or a dirty-stamped worktree) the original sentence stands byte-for-byte. Guarded by `T16`
+  in `test-finalize-door.js`, which reads the hint off the shipped finding rather than the template
+  — the defect was the ordering, not the template body — asserts distinctness **after scrubbing
+  path-shaped tokens** so it cannot be satisfied by interpolating the culprit list, and carries an
+  explicit forbidden register (`optional`, `safe to proceed`, `no need to re-run`, …) that is
+  negation-aware, so stating the constraint does not trip it. Mutation-proven in both directions:
+  the pins red on the old zero-arg sentence, and planting "it is safe to proceed without a re-run"
+  reds exactly one assertion — the excuse guard.
+
 - **The finalize surface now states the `## Run gaps` grammar it was only half-describing — #998,
   #1000.** Two archived summaries were unreadable to the scanner for two different reasons: a heading
   written `## Run gaps (reviewer-recorded, non-mechanical)` reads as **no section at all** (1 of 133

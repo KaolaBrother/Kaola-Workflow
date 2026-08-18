@@ -3188,6 +3188,266 @@ function closureBlockOf(dest) {
 })();
 
 // ---------------------------------------------------------------------------
+// T16 (#1003) — the `chains_stale` OPERATOR HINT names WHAT drifted.
+//
+// T15 pinned the culprit DATA onto both consumers. The prose travelling beside it did not move:
+// `VALIDATION_HINTS.chains_stale` is a ZERO-ARGUMENT template, so the one sentence an operator
+// actually reads is identical whether a single CHANGELOG line moved or half of `scripts/` did. The
+// finding already knows which — `attachChainsStaleDiagnostics` puts `stale_kind` on it — but
+// `operator_hint` is rendered inside `finding()` BEFORE that attach runs, so the hint is written by
+// a call that has not yet been told the answer. This block pins that ordering seam shut.
+//
+// THE CONTRACT, in full, because it is a values call and not a wording preference:
+//
+//   (1) `code`       — the hint says CODE moved.
+//   (2) `prose-only` — the hint says only TEST-CONSUMED PROSE moved.
+//   (3) `mixed`      — the hint says BOTH.
+//   (4) all three STILL DIRECT A REGENERATE, unhedged.
+//   (5) diagnostics absent → the hint is EXACTLY today's sentence, byte for byte.
+//
+// (4) IS THE LOAD-BEARING CLAUSE. `prose-only` does not mean "skip the re-run": test-consumed prose
+// sits inside `codeTreeHash` BY CONSTRUCTION, which is the only reason such a change stales the
+// receipt at all. A hint that reads the discrimination as permission to proceed converts a true
+// measurement into a false licence, and would be strictly WORSE than today's uninformative
+// sentence. The value of naming the kind is that an operator can tell a CHANGELOG line from a code
+// change without reading the hash producer — never that one of them stops costing a re-run.
+// `EXCUSES` below is that forbidden register, written out so the contract is legible instead of
+// inferred from a red.
+//
+// WHERE IT IS READ. Through the SHIPPED producer only: every hint asserted here is the one
+// `evaluateChainReceipt` put on a real finding over a real stale fixture, read back off the
+// finalize transaction envelope AND out of the durable `## Validation` section. Calling the
+// template directly would pass even if the re-render never happened, because the defect IS the
+// ordering — the template body is not where it goes wrong.
+//
+// DISTINCTNESS IS ASSERTED ON CONTENT, NOT ON `!==`. A bare inequality goes green the moment a hint
+// interpolates anything the fixtures vary — the culprit paths, most obviously. So the three hints
+// are also compared with every path-shaped token scrubbed out, on top of the per-kind content pins.
+//
+// (5) IS A REGRESSION GUARD AND IT PASSES TODAY. The literal below is the contract, not a snapshot:
+// changing the undiagnosed sentence is a values call for the owner, so this pin is not repaired by
+// re-copying whatever the schema currently says.
+// ---------------------------------------------------------------------------
+(function T16_chainsStaleHintNamesTheDrift() {
+  console.log('T16: the chains_stale operator hint says WHAT drifted, and never excuses the re-run');
+
+  // The exact sentence `VALIDATION_HINTS.chains_stale` renders when the finding carried no
+  // diagnostics — the only case in which the hint is allowed to stay generic.
+  const TODAY_HINT = 'Chain receipt is stale — the tree advanced since the chains ran. Regenerate the receipt over HEAD.';
+
+  // Every entry is an AFFIRMATIVE excuse — a phrasing that tells the operator the regenerate is
+  // optional. None can be produced by a truthful sentence about a stale receipt, so a hint tripping
+  // one is wrong about the mechanism, not merely worded differently.
+  const EXCUSES = [
+    { label: '"no re-run" / "no need to regenerate"', re: /\bno\s+(?:need\s+(?:to|for)\s+)?(?:a\s+|the\s+)?(?:re-?run|re-?generat\w*|regenerat\w*|re-?stamp\w*)/i },
+    { label: '"no need to"', re: /\bno\s+need\s+to\b/i },
+    { label: '"need not" / "does not need" / "don\'t need"', re: /\bneed\s+not\b|\bdoes\s*n[o']?t\s+need\b|\bdo\s*n[o']?t\s+need\b/i },
+    { label: '"not necessary" / "not required"', re: /\bnot\s+(?:strictly\s+)?(?:necessary|required)\b/i },
+    { label: '"unnecessary"', re: /\bunnecessary\b/i },
+    { label: '"safe to proceed/skip/continue/..."', re: /\bsafe\s+to\s+(?:proceed|skip|continue|ignore|finalize|merge|tag|ship|go|move)\b/i },
+    { label: '"can/may/could skip or ignore or proceed"', re: /\b(?:can|could|may|might|feel\s+free\s+to|ok(?:ay)?\s+to|fine\s+to)\s+(?:be\s+)?(?:safely\s+)?(?:skip|skipped|ignore|ignored|proceed|continue)\b/i },
+    { label: '"skippable"', re: /\bskippable\b/i },
+    { label: '"optional"', re: /\boptional\b/i },
+    { label: '"harmless" / "benign" / "cosmetic"', re: /\b(?:harmless|benign|cosmetic)\b/i },
+    { label: '"still valid" / "not really stale"', re: /\bstill\s+valid\b|\bnot\s+(?:really|actually|genuinely|truly)\s+stale\b/i },
+    { label: '"no action"', re: /\bno\s+action\b/i },
+    { label: '"proceed anyway" / "proceed without" / "proceed as-is"', re: /\bproceed\s+(?:anyway|without|as[-\s]is)\b/i },
+    { label: '"ignore this/it/the ..."', re: /\bignore\s+(?:this|it|the)\b/i },
+  ];
+
+  // The first affirmative excuse in `hint`, or null. NEGATION-AWARE on purpose: "it is NOT safe to
+  // skip the re-run" states the contract rather than breaking it, and a pin that red-flagged it
+  // would be forbidding the correct sentence.
+  function excuseIn(hint) {
+    const s = String(hint || '');
+    for (const e of EXCUSES) {
+      const re = new RegExp(e.re.source, e.re.flags.replace('g', '') + 'g');
+      let m;
+      while ((m = re.exec(s)) !== null) {
+        if (!m[0]) break;
+        const before = s.slice(Math.max(0, m.index - 20), m.index);
+        if (/(?:\bnot|\bnever|n['’]t)\s+$/i.test(before)) continue;
+        return { label: e.label, phrase: m[0] };
+      }
+    }
+    return null;
+  }
+
+  // Path-shaped tokens out, so distinctness cannot be bought by interpolating the culprit list.
+  const scrub = s => String(s).replace(/[A-Za-z0-9_./-]+\.(?:js|md|json|ts|sh|yml|yaml)\b/g, '<path>');
+
+  // The two halves clause (4) is made of: it commands the regenerate, and it does not take it back.
+  function assertDirectsRegenerate(label, hint) {
+    assert(/\b(?:regenerate|regenerating|regenerated|re-?generate|re-?run|re-?stamp)\b/i.test(hint),
+      label + ': the hint STILL DIRECTS A REGENERATE. Naming the drift kind is extra information, '
+      + 'never a substitute for the instruction — a receipt this finding calls stale is stale, and '
+      + 'the operator has to be told what to do about it; got ' + JSON.stringify(hint));
+    const ex = excuseIn(hint);
+    assert(ex === null,
+      label + ': ...and never EXCUSES it. Test-consumed prose is inside codeTreeHash by construction '
+      + '— that is the only reason a prose edit stales the receipt at all — so no drift kind makes '
+      + 'the re-run skippable, and a hint saying otherwise turns a true measurement into a false '
+      + 'licence. Forbidden register hit: ' + (ex && ex.label) + ' via ' + JSON.stringify(ex && ex.phrase)
+      + '; full hint: ' + JSON.stringify(hint));
+  }
+
+  // One leg. Stales a fixture the way T15 does, then reads the hint off the SHIPPED finding — the
+  // finalize transaction envelope — and out of the durable section, never off the template.
+  function hintLeg(spec) {
+    const fx = buildFinalizeFixture('t16', spec.project, spec.issue);
+    try {
+      const produced = produceGreenReceipt(fx.repo, fx.project, fx.greenMock);
+      assert(produced.receipt !== null, spec.label + ': the producer wrote a chain receipt'
+        + '\nstderr: ' + String(produced.result.stderr || '').slice(0, 300));
+      if (!produced.receipt) return null;
+      if (spec.mutateReceipt) {
+        putReceiptEverywhere(fx.repo, fx.project, JSON.stringify(spec.mutateReceipt(produced.receipt)));
+      }
+      spec.staleTree(fx.repo);
+      G.commitAll(fx.repo, 'drift after the chains ran');
+
+      const fin = fx.finalize();
+      const v = (fin.out && fin.out.validation) || null;
+      assert(fin.r.status === 0 && v && v.classification === 'chains_stale',
+        spec.label + ': finalize passes over the stale receipt and its envelope carries the finding '
+        + 'OBJECT; got status=' + fin.r.status + ' validation=' + JSON.stringify(v));
+      if (!v) return null;
+      // The fixture premise, asserted before anything is concluded from the hint: a red HERE means
+      // the staging never produced the drift kind this leg is about, and every hint assertion below
+      // would be measuring the wrong scenario.
+      assert(v.stale_kind === spec.expectKind,
+        spec.label + ' [fixture premise]: the finding classifies the drift '
+        + JSON.stringify(spec.expectKind) + ' — if THIS fails the fixture is wrong, not the hint; got '
+        + JSON.stringify({ kind: v.stale_kind, paths: v.stale_paths }));
+
+      const summary = readFinalizationSummary(fx.repo, fx.project, fin.out && fin.out.dest);
+      assert(summary !== null, spec.label + ': finalization-summary.md exists after finalize');
+      const body = summary ? String(sectionBody(summary.text, '## Validation') || '') : '';
+      assert(body.trim().length > 0,
+        spec.label + ': the archived summary carries a non-empty `## Validation` section');
+
+      const hint = v.operator_hint;
+      assert(typeof hint === 'string' && hint.trim().length > 0,
+        spec.label + ': the finding carries a non-empty `operator_hint` string; got ' + JSON.stringify(hint));
+      // `validationHint` falls through to a generic sentence whenever the template returns empty —
+      // a silent degrade that looks exactly like a working hint unless something reads the text. A
+      // ctx-taking template that mishandles an unexpected shape lands here, so the fallback is
+      // named and refused rather than left as an unnoticed pass.
+      assert(typeof hint === 'string' && !/^Validation reported \(reason:/.test(hint),
+        spec.label + ': and it is the chains_stale template\'s OWN sentence, not validationHint\'s '
+        + 'generic fallback — falling through renders a hint that is technically non-empty and says '
+        + 'nothing this issue asked for; got ' + JSON.stringify(hint));
+      assert(typeof hint === 'string' && body.includes(hint),
+        spec.label + ': and the DURABLE `## Validation` copy carries that same sentence verbatim — '
+        + 'the envelope is read once, the summary outlives the process; got section='
+        + JSON.stringify(body.slice(0, 500)));
+
+      if (spec.check) spec.check({ label: spec.label, hint: String(hint || ''), control: v, body });
+      return String(hint || '');
+    } finally { rm(fx.base); }
+  }
+
+  const hints = {};
+
+  // ---- CODE-stale. Same staging as T15a.
+  hints.code = hintLeg({
+    project: 'issue-9111', issue: 9111, label: 'T16a (code-stale hint)', expectKind: 'code',
+    staleTree: repo => fs.writeFileSync(path.join(repo, 'newcode.js'), 'module.exports = 1003;\n'),
+    check: ({ label, hint }) => {
+      assertDirectsRegenerate(label, hint);
+      assert(/\bcode\b/i.test(hint),
+        label + ': the hint says CODE moved — the whole point of a kind-aware hint is that the '
+        + 'operator learns which of the two answers they are holding without going to read the hash '
+        + 'producer; got ' + JSON.stringify(hint));
+      assert(!/prose[-\s]?only/i.test(hint),
+        label + ': and never labels a code change prose-only; got ' + JSON.stringify(hint));
+    }
+  });
+
+  // ---- PROSE-ONLY-stale. Same staging as T15b: CHANGELOG.md is test-consumed on self-host, so it
+  // is receipt-VISIBLE (it stales the receipt) yet classified prose. THE LEG THAT MATTERS MOST.
+  hints['prose-only'] = hintLeg({
+    project: 'issue-9112', issue: 9112, label: 'T16b (prose-only-stale hint)', expectKind: 'prose-only',
+    staleTree: repo => fs.appendFileSync(path.join(repo, 'CHANGELOG.md'), '\n- a narrative line\n'),
+    check: ({ label, hint }) => {
+      assertDirectsRegenerate(label, hint);
+      assert(/\bprose\b/i.test(hint),
+        label + ': the hint names PROSE — `stale_kind: prose-only` travels beside it in the same '
+        + 'envelope, and a hint that will not say the word leaves the two facts unlinked; got '
+        + JSON.stringify(hint));
+      assert(/\bonly\b|\bsolely\b|\bexclusively\b|\bnothing\s+but\b|\bno\s+code\b|\bnothing\s+else\b/i.test(hint),
+        label + ': and says only prose moved — the ONLY-ness is the whole discrimination, and a '
+        + 'sentence that merely mentions prose reads the same over a mixed drift; got '
+        + JSON.stringify(hint));
+    }
+  });
+
+  // ---- MIXED. Both culprits in one commit; the hint must not collapse to either neighbour.
+  hints.mixed = hintLeg({
+    project: 'issue-9113', issue: 9113, label: 'T16c (mixed-stale hint)', expectKind: 'mixed',
+    staleTree: repo => {
+      fs.writeFileSync(path.join(repo, 'newcode.js'), 'module.exports = 1003;\n');
+      fs.appendFileSync(path.join(repo, 'CHANGELOG.md'), '\n- a narrative line\n');
+    },
+    check: ({ label, hint }) => {
+      assertDirectsRegenerate(label, hint);
+      assert(/\bcode\b/i.test(hint) && /\bprose\b/i.test(hint),
+        label + ': the hint names BOTH — a mixed drift that reports as either one alone tells the '
+        + 'operator something false about what they are looking at; got ' + JSON.stringify(hint));
+    }
+  });
+
+  // ---- DEGRADE. `computeChainsStaleDiagnostics` declines over a receipt it cannot bind to a clean
+  // commit, so `stale_kind` never arrives and there is nothing to specialise on. The hint is then
+  // today's sentence EXACTLY. This is the regression half: it passes before the fix and must go on
+  // passing after, because a hint that renders from diagnostics has to survive their absence.
+  for (const d of [
+    { project: 'issue-9114', issue: 9114, key: 'degradeDirty', label: 'T16d (dirty-stamped receipt)',
+      mutateReceipt: r => Object.assign({}, r, { workTreeHash: 'deadbeefdeadbeef' }) },
+    { project: 'issue-9115', issue: 9115, key: 'degradeNoHead', label: 'T16e (receipt carries no headSha)',
+      mutateReceipt: r => { const c = Object.assign({}, r); delete c.headSha; return c; } },
+  ]) {
+    hints[d.key] = hintLeg({
+      project: d.project, issue: d.issue, label: d.label, mutateReceipt: d.mutateReceipt,
+      expectKind: undefined,
+      staleTree: repo => fs.writeFileSync(path.join(repo, 'newcode.js'), 'module.exports = 1003;\n'),
+      check: ({ label, hint, control }) => {
+        assert(control.stale_kind === undefined,
+          label + ' [fixture premise]: the finding declines to diagnose an unbindable receipt; got '
+          + JSON.stringify(control.stale_kind));
+        assert(hint === TODAY_HINT,
+          label + ': with no diagnostics the hint is EXACTLY the undiagnosed sentence, byte for byte '
+          + '— there is no kind to name, and inventing one (or degrading to a stub) would report a '
+          + 'measurement that was never taken. Changing this sentence is a values call for the owner, '
+          + 'so this pin is not repaired by re-copying whatever the schema now says.'
+          + '\n  expected: ' + JSON.stringify(TODAY_HINT)
+          + '\n  actual:   ' + JSON.stringify(hint));
+      }
+    });
+  }
+
+  // ---- CROSS-LEG. The per-kind pins above each read one hint in isolation; these read them against
+  // each other, which is where a copy-paste implementation and an interpolation-only one show up.
+  for (const k of ['code', 'prose-only', 'mixed']) {
+    assert(typeof hints[k] === 'string' && hints[k] !== TODAY_HINT,
+      'T16f: the `' + k + '` hint is no longer the undiagnosed sentence — the finding HAD '
+      + '`stale_kind` when this hint was rendered, and rendering it before the diagnostics attach '
+      + 'is the defect #1003 names; got ' + JSON.stringify(hints[k]));
+  }
+  for (const [a, b] of [['code', 'prose-only'], ['code', 'mixed'], ['prose-only', 'mixed']]) {
+    assert(typeof hints[a] === 'string' && typeof hints[b] === 'string' && scrub(hints[a]) !== scrub(hints[b]),
+      'T16f: the `' + a + '` and `' + b + '` hints are DIFFERENT SENTENCES, and still different once '
+      + 'every path-shaped token is scrubbed — a hint varying only by interpolating the culprit list '
+      + 'would satisfy a bare `!==` while the kind sentence never moved; got '
+      + JSON.stringify({ [a]: hints[a], [b]: hints[b] }));
+  }
+  assert(hints.degradeDirty === TODAY_HINT && hints.degradeNoHead === TODAY_HINT,
+    'T16f: both degrade legs render the identical undiagnosed sentence — the two ways diagnostics '
+    + 'can be absent are not two different reports; got '
+    + JSON.stringify({ dirty: hints.degradeDirty, noHeadSha: hints.degradeNoHead }));
+})();
+
+// ---------------------------------------------------------------------------
 // Final result — AUTHORITATIVE. Two appended blocks now sit after this file's original footer, and
 // the counters are cumulative, so the two earlier summary lines are intermediate totals and THIS is
 // the one that decides the exit code.
