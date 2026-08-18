@@ -284,6 +284,16 @@ conversion.
 | `changed_paths` | `## Changed Paths` | `adaptiveSchema.changedPathsSinceBase(root, base, project)` — `git diff <base>...HEAD --name-only` minus the bookkeeping band |
 | `mission_list` | `## Mission List` | `{ items, outcome_while_not_done }` — how many missions the run's own record holds, and the `item:` line of each one carrying an outcome while its `status` is not `done` |
 
+**The durable write is fill-if-empty, and it never overwrites prose.** All three land through one
+writer, `appendSummarySection`, and what it does turns on what the heading already holds: absent,
+and the section is appended at the tail; present with an empty body, and it is filled **in place**,
+keeping its position relative to its neighbours; present with content, and it is left exactly as
+written. So the transaction never overwrites prose an orchestrator wrote, and the section is
+idempotent by **content rather than by heading** — a crash-resumed re-entry still cannot stack a
+second copy of a section that already says something, while a summary that pre-created the three
+headings, as the finalize surface's Step 6 instructs, receives the measurements instead of dropping
+them. `## Finalize Findings` is written by the same function under a different rule (see below).
+
 `changed_paths_probe` is added to the envelope only when it is not `measured`; `unavailable` means
 the branch diff could not be enumerated, which is reported as "not measured", never as a verdict
 either way.

@@ -3448,6 +3448,335 @@ function closureBlockOf(dest) {
 })();
 
 // ---------------------------------------------------------------------------
+// T17 (#1004) — THE THREE FINALIZE REPORTS MUST SURVIVE A SUMMARY THAT ALREADY CARRIES THEIR
+// HEADINGS.
+//
+// T3/T4/T15 all assert the durable half over a run that wrote NO summary, so finalize's writer
+// created the file and every heading in it. That is not the shape a real run has. The finalize
+// Step 6 surface hands the orchestrator a summary skeleton listing `## Validation`,
+// `## Changed Paths` and `## Mission List` among its headings and tells it not to delete them — and
+// `appendSummarySection` declines to write into a heading that already exists. So on an OBEDIENT
+// run all three measurements are computed and then dropped, and the archived record carries three
+// bare headings where the findings should be. Measured over this repository's own archive: 15 empty
+// `## Validation`, 17 empty `## Changed Paths`, 3 empty `## Mission List` in 157 summaries.
+//
+// THE RULING IS FILL-IF-EMPTY, and its two halves are ONE behaviour, so they are asserted over the
+// same fixture family rather than as two unrelated tests:
+//
+//   heading ABSENT            -> appended, exactly as today (T3/T4/T15 already cover it)
+//   heading present, EMPTY    -> the script FILLS it                         (legs A and B)
+//   heading present, CONTENT  -> left exactly as written, NOT overwritten    (leg C)
+//
+// BOTH EMPTY FORMS ARE DRIVEN, because they parse differently and a fix keyed to one misses the
+// other. Leg A plants the heading block VERBATIM as Step 6 emits it — consecutive `## ` lines with
+// nothing at all between them, so the section body is the empty string. Leg B plants the
+// blank-line-separated form real orchestrators actually write, where the body is `\n`. Only a rule
+// that keys on `body.trim() === ''` satisfies both.
+//
+// THE HEADINGS ARE NOT SPELLED IN THIS FILE'S OWN CONVENTION. `STEP6_HEADINGS` below is the list
+// the finalize skeleton emits, and every planted fixture is built from it; the assertions read the
+// result back through this file's own `sectionBody`, which is the same first-occurrence, up-to-the-
+// next-`## ` grammar the writer commits to. A fixture written in a private spelling would pin the
+// test's idea of the format instead of the seam between the surface that plants the heading and the
+// script that has to fill it.
+//
+// TWO WAYS TO PASS THIS WITHOUT FIXING ANYTHING, both closed:
+//   - append a SECOND copy of the heading lower down. `sectionBody` reads the FIRST occurrence, so
+//     an appended duplicate would leave the planted section empty and the test green if it only
+//     looked for the content anywhere. Every leg counts the heading and demands exactly one.
+//   - satisfy leg C by never writing at all. Leg C's fixture leaves the other two headings EMPTY in
+//     the same file, so the same finalize must fill those two while preserving the third. A build
+//     that writes nothing fails the fill half; `replace: true` fails the preserve half.
+// ---------------------------------------------------------------------------
+
+// The heading block `templates/routing/finalize.skeleton.md` Step 6 tells the orchestrator to
+// create, in its order. Three of these are written by the finalize transaction itself.
+const STEP6_HEADINGS = Object.freeze([
+  '## Delivered',
+  '## Files Changed',
+  '## Test Coverage',
+  '## Validation',
+  '## Changed Paths',
+  '## Mission List',
+  '## Documentation Docking',
+  '## Run gaps',
+  '## Follow-Up Items',
+  '## Status: READY FOR FINAL GIT GATE',
+]);
+// The three of them the script owns, i.e. the three callers that pass no `replace`.
+const SCRIPT_OWNED_HEADINGS = Object.freeze(['## Validation', '## Changed Paths', '## Mission List']);
+
+// How many lines of `text` ARE the heading, exactly. A `## Validation` that occurs twice is the
+// duplicate-append failure mode, not a fill.
+function headingOccurrences(text, heading) {
+  return String(text || '').split('\n').filter(l => l.trim() === heading).length;
+}
+
+// Every `## ` heading of `text`, in document order. `### ` sub-headings are excluded, matching the
+// writer's own grammar (its literal is `'\n## '`, whose fourth character cannot be `#`).
+//
+// The trailing `## Status:` heading is normalized to its bare key, because the archive REWRITES its
+// value — `READY FOR FINAL GIT GATE` becomes `ARCHIVED AFTER FINAL GIT GATE` (#324, claim.js:2625)
+// so a merged run cannot read as still awaiting the gate. That is a different mechanism and not this
+// one's business; what matters here is where the heading SITS.
+function headingSequence(text) {
+  return String(text || '').split('\n')
+    .filter(l => /^##\s/.test(l))
+    .map(l => l.trim())
+    .map(l => l.startsWith('## Status:') ? '## Status:' : l);
+}
+
+(function T17_prePlantedHeadingsAreFilledAndContentIsPreserved() {
+  console.log('T17: finalize fills its own pre-planted headings, and never overwrites one carrying content');
+
+  // The mission list the run record leg is measured over: two items, the second carrying an outcome
+  // while its status is not `done`. `items: 2` is the count the section must report, and the
+  // contradiction is what makes the section say something a bare heading cannot.
+  const MISSION_LIST = [
+    '# goal: pin the fill-if-empty writer',
+    '',
+    '- item: author the behavioural test',
+    '  status: done',
+    '  result: scripts/test-finalize-door.js T17',
+    '- item: author the four-copy port pin',
+    '  status: in-flight',
+    '  result: scripts/simulate-workflow-walkthrough.js',
+    ''
+  ].join('\n');
+
+  // The prose leg C plants under one script-owned heading. Deliberately unlike anything the writer
+  // emits, so "it survived" and "it was rewritten" can never be confused.
+  const HAND_WRITTEN = 'Chains re-run by hand after the rebase; all four green at 14:02. '
+    + 'This paragraph is the operator\'s, not the transaction\'s.';
+
+  // A summary built from STEP6_HEADINGS. `sep` is what sits between headings ('' for the verbatim
+  // skeleton, '\n' for the blank-line form real runs write); `content` maps a heading to prose that
+  // heading must carry.
+  function plantSummary(project, sep, content) {
+    const out = ['# Finalization — Summary: ' + project, ''];
+    for (const h of STEP6_HEADINGS) {
+      out.push(h);
+      const body = (content || {})[h];
+      if (body) out.push('', body, '');
+      else if (sep) out.push('');
+    }
+    return out.join('\n') + '\n';
+  }
+
+  // One leg: a self-host repo on a workflow branch carrying an undescribed code path, a run folder
+  // holding a mission list and the PLANTED summary, and a fresh green receipt stamped last. Same
+  // construction as T4, plus the two files this block is about.
+  function runLeg(tag, project, issue, planted) {
+    const base = makeBase(tag);
+    const repo = path.join(base, 'repo');
+    const binDir = path.join(base, 'bin');
+    try {
+      initSelfHostRepo(repo);
+      // Diverge from main so `## Changed Paths` has a real path to report rather than the
+      // "none outside the run-state and documentation bands." sentence, which a hand-written
+      // section could plausibly resemble.
+      G.checkout(repo, 'workflow/' + project, { create: true });
+      fs.writeFileSync(path.join(repo, 'src', 'orphan.js'), 'module.exports = "orphan";\n');
+      G.commitAll(repo, 'work no record describes');
+
+      const dir = writePlanlessProject(repo, project, issue);
+      writeRoadmap(repo, issue, project);
+      fs.writeFileSync(path.join(dir, 'mission-list.md'), MISSION_LIST);
+      // Planted BEFORE the receipt is stamped, so the tree the chains were addressed to is the tree
+      // finalize re-addresses: this leg is about the writer, and a fixture that staled its own
+      // receipt would be measuring a different finding.
+      fs.writeFileSync(path.join(dir, 'finalization-summary.md'), planted);
+
+      const gh = writeGhMock(binDir, [issue]);
+      const greenMock = writeGreenChainMock(binDir);
+      const produced = produceGreenReceipt(repo, project, greenMock);
+      assert(produced.receipt !== null, tag + ': the producer wrote a chain receipt'
+        + '\nstderr: ' + String(produced.result.stderr || '').slice(0, 300));
+
+      const r = runClaim(['finalize', '--project', project, '--base', 'main'], repo, gh);
+      const out = lastJson(r);
+      assert(r.status === 0, tag + ': finalize exits 0 over a pre-planted summary — nothing here '
+        + 'refuses; got ' + r.status
+        + '\nstdout: ' + String(r.stdout || '').slice(0, 800)
+        + '\nstderr: ' + String(r.stderr || '').slice(0, 400));
+      const summary = readFinalizationSummary(repo, project, out && out.dest);
+      assert(summary !== null, tag + ': finalization-summary.md exists after finalize (live or archived)');
+      return { out, summary, text: summary ? summary.text : '' };
+    } finally { rm(base); }
+  }
+
+  // THE FILL IS IN PLACE — the section stays exactly where Step 6 put it.
+  //
+  // This is the assertion that separates the two implementations that both "fill". Reusing the
+  // existing `replace` machinery — cut the section out, then let the tail of the function append the
+  // block — fills the heading and RELOCATES it: `## Validation` lands at the end of the file, below
+  // `## Status: ARCHIVED AFTER FINAL GIT GATE`, and the orchestrator's document order is gone. The
+  // ruling is that the script FILLS the heading, and filling is not relocating; the order the
+  // orchestrator wrote is part of what the record is for.
+  //
+  // BOUND AS ORDER, NOT AS OFFSETS OR SPELLING. The planted headings are read back out of the result
+  // in document order and compared to the order they were planted in, so this fails if and only if a
+  // section MOVED relative to its neighbours. How the implementation slices the string is invisible
+  // to it, and a section appended by some OTHER mechanism (a `## Finalize Findings` flush, say) is
+  // filtered out rather than miscounted as a reordering.
+  //
+  // SCOPED TO THE FILL-IF-EMPTY PATH. `replace: true` — the `## Finalize Findings` accumulator — cuts
+  // and re-appends at the tail today, and that is measured, shipped behaviour this issue has no
+  // business moving. Nothing here reaches it: every heading compared below is one of the three the
+  // fill-if-empty callers own, or an inert skeleton heading around them.
+  function assertPlantedOrderUnchanged(tag, planted, text) {
+    const expected = headingSequence(planted);
+    const got = headingSequence(text).filter(h => expected.indexOf(h) !== -1);
+    assert(JSON.stringify(got) === JSON.stringify(expected),
+      tag + ': the filled sections stay WHERE STEP 6 PUT THEM. Filling a heading is not relocating '
+      + 'it — a fill that reuses the cut-and-append path moves the section to the end of the file, '
+      + 'below the status heading, and destroys the document order the orchestrator wrote. Planted '
+      + 'order ' + JSON.stringify(expected) + ', got ' + JSON.stringify(got)
+      + '\n----- summary -----\n' + text);
+  }
+
+  // The fill half, asserted over one leg's archived summary. `form` names the shape for the message.
+  function assertAllThreeFilled(tag, form, leg) {
+    const { out, text } = leg;
+    // (0) The planted skeleton is still ONE skeleton. Every script-owned heading occurs exactly
+    // once — a second copy appended at the bottom is the failure mode that would make each content
+    // assertion below pass while the section the orchestrator planted stayed bare.
+    for (const h of SCRIPT_OWNED_HEADINGS) {
+      assert(headingOccurrences(text, h) === 1,
+        tag + ': `' + h + '` occurs exactly once in the archived summary — the fix FILLS the '
+        + 'heading Step 6 planted, it does not append a second copy of it further down and leave '
+        + 'the reader\'s eye on the empty one; got ' + headingOccurrences(text, h) + ' occurrences'
+        + '\n----- summary -----\n' + text);
+      const body = sectionBody(text, h);
+      assert(body !== null && body.trim() !== '',
+        tag + ' (' + form + '): `' + h + '` was planted EMPTY by the Step 6 template and finalize '
+        + 'computed its finding, so the finding must be IN it. An empty section here is the '
+        + 'measurement being taken and then dropped — the archived summary is the last place it can '
+        + 'be read; got ' + JSON.stringify(body)
+        + '\n----- summary -----\n' + text);
+    }
+
+    // (1) `## Validation` carries the classification the SAME run put on its envelope. Bound to the
+    // envelope rather than to a literal token so the seam is what is pinned: the two halves of the
+    // report have to agree, whatever this fixture's receipt turned out to classify as.
+    const classification = (out && out.validation && out.validation.classification) || null;
+    assert(typeof classification === 'string' && classification.length > 0,
+      tag + ': the envelope carries a validation classification to compare the durable copy against; '
+      + 'got ' + JSON.stringify(out && out.validation));
+    const vBody = sectionBody(text, '## Validation') || '';
+    assert(new RegExp('^classification: ' + String(classification) + '$', 'm').test(vBody),
+      tag + ' (' + form + '): the pre-planted `## Validation` carries the classification this run '
+      + 'reported on its envelope (' + JSON.stringify(classification) + '); got '
+      + JSON.stringify(vBody));
+
+    // (2) `## Changed Paths` carries the list, as the `- <path>` bullets the writer renders.
+    const cp = (out && Array.isArray(out.changed_paths)) ? out.changed_paths.map(String) : [];
+    assert(cp.includes('src/orphan.js'),
+      tag + ': fixture premise — the envelope reports the undescribed code path; got ' + JSON.stringify(cp));
+    const cBody = sectionBody(text, '## Changed Paths') || '';
+    assert(cp.length > 0 && cp.every(p => cBody.split('\n').some(l => l.trim() === '- ' + p)),
+      tag + ' (' + form + '): the pre-planted `## Changed Paths` lists every path the envelope '
+      + 'reported, one `- <path>` bullet each; envelope=' + JSON.stringify(cp)
+      + ' section=' + JSON.stringify(cBody));
+
+    // (3) `## Mission List` carries the run record's own count. The fixture's list has two items and
+    // one contradiction, so a section reporting either is a section that was actually written.
+    const mBody = sectionBody(text, '## Mission List') || '';
+    assert(/^items: 2$/m.test(mBody),
+      tag + ' (' + form + '): the pre-planted `## Mission List` reports the run record\'s item count '
+      + '(2 items in this fixture); got ' + JSON.stringify(mBody));
+    assert(mBody.includes('carrying an outcome while their status is not `done`: 1'),
+      tag + ' (' + form + '): ...and the contradiction it found — the second item fills in an '
+      + 'outcome while its status still reads `in-flight`; got ' + JSON.stringify(mBody));
+  }
+
+  // ---- LEG A: the VERBATIM Step 6 skeleton — consecutive `## ` lines, nothing between them, so
+  // each section body is the empty string. This is what the template literally emits.
+  const legA = runLeg('t17a', 'issue-9106', 9106, plantSummary('issue-9106', '', null));
+  assert(/\n## Validation\n## Changed Paths\n## Mission List\n/.test(
+    plantSummary('issue-9106', '', null)),
+  'T17a: fixture premise — the planted summary really is the consecutive-heading form the Step 6 '
+    + 'template emits, with nothing between the three script-owned headings');
+  assertAllThreeFilled('T17a', 'consecutive-heading form', legA);
+  assertPlantedOrderUnchanged('T17a', plantSummary('issue-9106', '', null), legA.text);
+  // The cut must not eat its neighbours: every OTHER Step 6 heading is still there, exactly once.
+  // `## Status: READY FOR FINAL GIT GATE` is excluded from the verbatim half and checked by PREFIX
+  // instead: the archive deliberately rewrites that sentinel to `ARCHIVED AFTER FINAL GIT GATE`
+  // (#324, so a merged run cannot read as still awaiting the gate), which is a different mechanism
+  // and not this one's business. What matters here is that the heading LINE survives.
+  const STATUS_HEADING = '## Status: READY FOR FINAL GIT GATE';
+  for (const h of STEP6_HEADINGS) {
+    if (h === STATUS_HEADING) continue;
+    assert(headingOccurrences(legA.text, h) === 1,
+      'T17a: `' + h + '` survives, exactly once — filling a section must not consume the heading '
+      + 'that terminates it, and in this form the next heading is the very next line; got '
+      + headingOccurrences(legA.text, h) + ' occurrences\n----- summary -----\n' + legA.text);
+  }
+  assert(legA.text.split('\n').filter(l => l.trim().startsWith('## Status:')).length === 1,
+    'T17a: the trailing `## Status:` heading survives too (its sentinel is rewritten at archive by '
+    + 'a different mechanism, so only the heading line is asserted here)'
+    + '\n----- summary -----\n' + legA.text);
+
+  // ---- LEG B: the blank-line form real orchestrators write, where each empty body is `\n` rather
+  // than ''. It reaches the same rule only if "empty" means `body.trim() === ''`.
+  const legB = runLeg('t17b', 'issue-9107', 9107, plantSummary('issue-9107', '\n', null));
+  assertAllThreeFilled('T17b', 'blank-line form', legB);
+  assertPlantedOrderUnchanged('T17b', plantSummary('issue-9107', '\n', null), legB.text);
+
+  // ---- LEG C: THE OWNER'S DECISION. One script-owned heading already carries the operator's own
+  // prose; the other two are empty. The same finalize must fill those two and leave this one exactly
+  // as written. This is the half that says the fix is FILL-IF-EMPTY and not `replace: true`.
+  const legC = runLeg('t17c', 'issue-9108', 9108,
+    plantSummary('issue-9108', '\n', { '## Changed Paths': HAND_WRITTEN }));
+  {
+    const text = legC.text;
+    const body = sectionBody(text, '## Changed Paths');
+    assert(body !== null && body.trim() === HAND_WRITTEN,
+      'T17c: `## Changed Paths` already carried the operator\'s own prose, and the finalize writer '
+      + 'LEFT IT EXACTLY AS WRITTEN. The ruling on #1004 is fill-if-empty: a section somebody wrote '
+      + 'is theirs, and a transaction that restates it over the top destroys a record nobody agreed '
+      + 'to lose — that is `replace: true`, which is the OTHER fix and was not the one chosen; got '
+      + JSON.stringify(body) + '\n----- summary -----\n' + text);
+    // The writer's own opening line is unique to persistChangedPathsToSummary, so its absence
+    // anywhere in the file is the sharpest available statement that this section was not restated —
+    // including restated into a second copy of the heading somewhere else.
+    assert(!text.includes('Files this branch changed outside the run-state and documentation bands:'),
+      'T17c: ...and its own rendering of that list appears NOWHERE in the summary — not under the '
+      + 'operator\'s heading, and not under a second copy of it appended lower down'
+      + '\n----- summary -----\n' + text);
+    assert(headingOccurrences(text, '## Changed Paths') === 1,
+      'T17c: `## Changed Paths` still occurs exactly once; got '
+      + headingOccurrences(text, '## Changed Paths'));
+
+    // ...and in the SAME run, the two headings that were empty got filled. Preserving content is
+    // only correct behaviour if filling still happens beside it; a build that simply never writes
+    // passes the three assertions above and fails these.
+    const classification = (legC.out && legC.out.validation && legC.out.validation.classification) || null;
+    const vBody = sectionBody(text, '## Validation') || '';
+    assert(typeof classification === 'string'
+      && new RegExp('^classification: ' + String(classification) + '$', 'm').test(vBody),
+    'T17c: the EMPTY `## Validation` in the same file was filled with this run\'s classification '
+      + '(' + JSON.stringify(classification) + ') — preserving a written section and filling an '
+      + 'empty one are one rule, and a build that writes nothing at all satisfies only half of it; '
+      + 'got ' + JSON.stringify(vBody));
+    const mBody = sectionBody(text, '## Mission List') || '';
+    assert(/^items: 2$/m.test(mBody),
+      'T17c: ...and so was the empty `## Mission List`; got ' + JSON.stringify(mBody));
+    for (const h of SCRIPT_OWNED_HEADINGS) {
+      assert(headingOccurrences(text, h) === 1,
+        'T17c: `' + h + '` occurs exactly once; got ' + headingOccurrences(text, h)
+        + '\n----- summary -----\n' + text);
+    }
+    // ...and the two it filled are still where they were planted, beside the one it left alone.
+    // This is the leg where a relocating fill is most visible to a reader: the preserved section
+    // stays put by definition (nothing wrote it), so cutting and re-appending the other two strands
+    // the operator's prose in the middle and orphans the transaction's own findings at the tail.
+    assertPlantedOrderUnchanged('T17c',
+      plantSummary('issue-9108', '\n', { '## Changed Paths': HAND_WRITTEN }), text);
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // Final result — AUTHORITATIVE. Two appended blocks now sit after this file's original footer, and
 // the counters are cumulative, so the two earlier summary lines are intermediate totals and THIS is
 // the one that decides the exit code.

@@ -261,10 +261,14 @@ function isAtomicWriteResidue(name) {
 // completed sink would otherwise leave nowhere — above all the post-rebase test result, which
 // under `stdio: 'inherit'` scrolled past and was never written down when it was GREEN.
 //
-// `## Sink Findings` sits in the same finalization-summary.md, under the same presence-guarded /
-// swallow-on-error discipline, as the `## Validation` and `## Changed Paths` sections the finalize
-// report writes there — a measurement writer must never be able to fail the operation it reports
-// on. Returns the absolute path written, or null when there was nothing to write.
+// `## Sink Findings` sits in the same finalization-summary.md, under the same swallow-on-error
+// discipline as the `## Validation` and `## Changed Paths` sections the finalize report writes
+// there — a measurement writer must never be able to fail the operation it reports on. It parts
+// company with them on idempotence: this one is guarded on the HEADING's presence, where those two
+// are guarded on the CONTENT under it (#1004) — the finalize Step 6 skeleton pre-creates their
+// headings bare, so a presence guard there dropped the finding. Nothing pre-creates
+// `## Sink Findings`, and one caller writes it once. Returns the absolute path written, or null
+// when there was nothing to write.
 //
 // #931's archive_collision rides HERE and not on persistArchivedPathsToSummary, which early-returns
 // on an empty staged-path list: a disclosure hung behind that gate goes silent on exactly the run

@@ -206,6 +206,48 @@
 
 ### Fixed
 
+- **The three finalize sections are now filled when the heading is already there — #1004.**
+  `appendSummarySection` declined to write whenever its heading already existed, so a
+  `finalization-summary.md` that already carried `## Validation`, `## Changed Paths` or
+  `## Mission List` had the measurement computed for it and then dropped, silently, at exit 0. What
+  put the heading there is the finalize surface's own Step 6, which tells the orchestrator to
+  pre-create exactly those three and says "do not delete them, and do not soften them" — so obeying
+  the surface literally is what defeated the mechanism the surface exists to feed. Measured over this
+  repo's **157** archived summaries: `## Validation` present 49, **15 empty**; `## Changed Paths`
+  present 48, **17 empty**; `## Mission List` present 12, **3 empty**. The filled ones are the runs
+  whose summary did not pre-create the heading, so the append path was taken; the two outcomes
+  differ by nothing else.
+  **The loss is asymmetric, which is why an empty heading reads as harmless.** On a green run the
+  dropped section restates a receipt that was fine anyway. On a run whose chain receipt was stale,
+  red, empty or absent, `## Validation` is the only durable place that finding survives — the
+  envelope is gone when the process exits, and the empty heading is what a successor reads instead.
+  The writer is now **fill-if-empty, in place**. A heading that is absent is appended at the tail,
+  unchanged from before; a heading present with an empty body is filled where it already sits,
+  keeping its position relative to its neighbours; and **a heading already carrying content is left
+  exactly as written and never overwritten**. It is therefore idempotent by **content rather than by
+  heading**, which is what preserves the guard's original purpose — a crash-resumed re-entry still
+  cannot stack a second copy of a section that already says something. The `replace: true` caller
+  (`## Finalize Findings`) is **untouched**, including that it still restates its section at the
+  tail. All **four** shipped `kaola-workflow-claim.js` copies move together: canonical, the
+  byte-identical Codex plugin copy, and the GitLab and Gitea hand-ports. No prose surface changed
+  and nothing was regenerated — Step 6 still ships the three headings, and that is now correct
+  rather than harmful.
+  **The guards are mutation-proven, not assertion-counted.** New behavioural legs in
+  `test-finalize-door.js` drive real finalize subprocesses over planted summaries, and a new
+  four-copy pin in `simulate-workflow-walkthrough.js` lifts each copy's function out of its own file
+  and drives it against real bytes, one copy mutated at a time. A fill that relocates the section to
+  the tail instead of filling it in place reds exactly three door assertions, and all three are the
+  new ones. That coverage was owed: before this change, **no test anywhere pre-created one of the
+  three headings in a fixture**, so the entire durable-half contract was green over the
+  create-if-absent branch alone, and the declining branch — the one that was wrong — was untested
+  in every suite.
+  `docs/decisions/D-653-01.md` accepted this same declining behaviour as a known residual in July,
+  and is **not contradicted**: it ruled on a `## Attestation` section a contractor could pre-seed,
+  accepting it as fenced by the `## Closure` block and the stdout receipt. That producer no longer
+  exists in any copy — `validate-workflow-contracts.js` asserts `claim.js` does not contain the
+  string — and the reasoning does not transfer, because `## Closure` carries none of `validation`,
+  `changed_paths` or `mission_list`.
+
 - **A `chains_stale` finding now carries its culprit paths to both consumers that dropped them —
   #1002.** `finalize --check` reported `"validation": "chains_stale"` as a bare token: no path, no
   kind, neither hash. The diagnostics existed — `attachChainsStaleDiagnostics` computes

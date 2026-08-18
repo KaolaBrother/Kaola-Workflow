@@ -3703,29 +3703,46 @@ function probeFinalizeValidationGate(root, authorityDir, authorityState, base) {
 // The durable half of the two reports. `## Validation` and `## Changed Paths` in the run's
 // finalization-summary.md are where the measurements outlive the process that took them — without
 // them the conversion from refusal to report would be a deletion. Both are idempotent across a
-// crash-resumed re-entry (the heading is checked first) and swallow-on-error, like the other
-// summary writers: they record measurements, so they must never be able to fail a finalize.
-// #938: `replace` RESTATES an existing section instead of declining to write it. Idempotence by
-// heading is right for a section written once out of a value that is already complete (`##
-// Validation`, `## Changed Paths`), and wrong for an accumulator that keeps growing: the findings
-// section has to be writable before the commit that carries it AND again if a later step finds
-// something, or one of the two is silently lost. Only the findings flush passes it; every other
-// caller is byte-identical to before.
+// crash-resumed re-entry (a section already carrying content is left exactly as written) and
+// swallow-on-error, like the other summary writers: they record measurements, so they must never be
+// able to fail a finalize.
+// #938: `replace` RESTATES an existing section instead of declining to write it. Idempotence is
+// right for a section written once out of a value that is already complete (`## Validation`, `##
+// Changed Paths`), and wrong for an accumulator that keeps growing: the findings section has to be
+// writable before the commit that carries it AND again if a later step finds something, or one of
+// the two is silently lost. Only the findings flush passes it, and it alone relocates the section
+// it restates to the tail of the file.
+// #1004: idempotence is by CONTENT, not by heading. Step 6 of the finalize surface tells the
+// orchestrator to pre-create `## Validation`, `## Changed Paths` and `## Mission List`, so keying
+// on the heading meant an obedient run computed all three findings and then dropped them — 15, 17
+// and 3 empty sections in this repository's own 157 archived summaries. A heading whose body is
+// blank is the finding's own slot and gets FILLED where it sits; a heading whose body carries prose
+// is the operator's record and is never overwritten.
 function appendSummarySection(projectDir, heading, lines, replace) {
   try {
     const p = path.join(projectDir, 'finalization-summary.md');
     let s = '';
     try { s = fs.readFileSync(p, 'utf8'); } catch (_) { /* create-if-absent */ }
     const existing = s.match(new RegExp('^' + heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'm'));
+    const block = [heading, ''].concat(lines).join('\n') + '\n';
     if (existing) {
-      if (!replace) return false;
-      // Cut the heading through to the next `## ` heading (never a `### ` sub-heading, which is
-      // three hashes and so cannot match) or to end of file.
+      // The section runs from its heading to the next `## ` heading (never a `### ` sub-heading,
+      // which is three hashes and so cannot match) or to end of file.
       const after = s.indexOf('\n## ', existing.index + heading.length);
+      if (!replace) {
+        // Fill-if-empty, SPLICED WHERE IT SITS. Cutting the section and letting the tail of this
+        // function re-append it would also fill the heading, and would move it below every heading
+        // that followed it; the document order is the orchestrator's, not this writer's.
+        const end = after < 0 ? s.length : after + 1;
+        if (s.slice(existing.index + heading.length, end).trim() !== '') return false;
+        const tail = s.slice(end);
+        writeFile(p, s.slice(0, existing.index) + block + (tail ? '\n' + tail : ''));
+        return true;
+      }
+      // Cut the heading through to the end of its section, and re-append at the tail below.
       s = s.slice(0, existing.index) + (after < 0 ? '' : s.slice(after + 1));
       if (!s.trim()) s = '';
     }
-    const block = [heading, ''].concat(lines).join('\n') + '\n';
     writeFile(p, s ? (s.trimEnd() + '\n\n' + block) : block);
     return true;
   } catch (_) { return false; }
@@ -4007,10 +4024,11 @@ function cmdFinalize() {
   // #907: EVERY mechanical fault this transaction observes, collected in one place. The owner's
   // ruling is report-do-not-refuse, and a report has two halves — a typed token on the envelope and a
   // durable line in the archived run record. The accumulator exists because the durable half is
-  // written by appendSummarySection, which is idempotent BY HEADING: a per-fault write would land the
-  // first fault and silently drop every one after it, which is the same silence this converts. So the
-  // faults are collected and flushed together, at every exit from the block below — including the
-  // refusing ones, or a run that refuses downstream would lose the findings it had already made.
+  // written by appendSummarySection, which is idempotent BY CONTENT (#1004): a per-fault write would
+  // land the first fault and then decline over the section it had just filled, silently dropping
+  // every one after it, which is the same silence this converts. So the faults are collected and
+  // flushed together, at every exit from the block below — including the refusing ones, or a run
+  // that refuses downstream would lose the findings it had already made.
   //
   // #938: flushed as often as it likes rather than once. The write RESTATES the whole accumulated
   // set, so an early flush costs nothing and a later one loses nothing — which is what lets the
@@ -4902,8 +4920,8 @@ function cmdFinalize() {
             + (detail ? detail + '\n' : ''));
           // The durable half goes through the shared accumulator, flushed once below. Writing the
           // section here directly was correct only while this was the ONLY fault that could reach it —
-          // appendSummarySection is idempotent by heading, so a second fault in the same run would
-          // have been silently dropped.
+          // appendSummarySection is idempotent by content (#1004), so a second fault in the same run
+          // would have found the section already filled and been silently dropped.
           recordFinalizeFinding('residue_stage_failed',
             'The `chore: finalize` commit could not stage the finalization residue: `git add` exited '
               + 'non-zero, and the transaction recorded `finalize_commit: nothing_to_commit` — the run '

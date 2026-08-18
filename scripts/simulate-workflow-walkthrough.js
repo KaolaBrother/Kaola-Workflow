@@ -5266,6 +5266,265 @@ function testStaleDiagnosticsPortedToAllEditions1002() {
   console.log('testStaleDiagnosticsPortedToAllEditions1002: PASSED');
 }
 
+// #1004: `appendSummarySection` must FILL a heading whose body is empty and LEAVE a heading whose
+// body carries content exactly as written. The shipped writer declines on ANY existing heading, and
+// the finalize Step 6 surface tells the orchestrator to pre-create `## Validation`,
+// `## Changed Paths` and `## Mission List` — so on an obedient run all three of the finalize
+// transaction's own findings are computed and then dropped. Measured over this repository's own
+// archive: 15 empty `## Validation`, 17 empty `## Changed Paths`, 3 empty `## Mission List` in 157
+// summaries.
+//
+// SAME CLASS AS THE #832 AND #1002 PORT GUARDS ABOVE, and here for the same reason: claim.js is a
+// DIVERGENT HAND-PORT on gitlab and gitea. `edition-sync.js` excludes it by design,
+// `validate-script-sync.js` covers canonical -> codex only, and no gitlab or gitea suite reaches
+// this writer at all — so a fix landed in three copies and missed in the fourth ships silently. The
+// four paths are spelled out because no registry enumerates the claim.js ports as data.
+//
+// BEHAVIOURAL, NOT A SOURCE REGEX — and that is a departure from the two guards above, on purpose.
+// Those pin ASSIGNMENTS, which have no observable other than their text. This one pins a RULE with
+// an observable: what the function leaves on disk. A regex would have to freeze a spelling, and the
+// spelling is not the contract — an emptiness test can be written a dozen ways, and even the exact
+// line that is wrong today (`if (!replace) return false;`) is CORRECT sitting inside a non-empty
+// branch. So each copy's shipped `appendSummarySection` is lifted out of its own file and driven,
+// and every assertion is about bytes. Nothing below can be satisfied by naming a variable well.
+//
+// THE ENVIRONMENT IS ISOLATED; THE SUBJECT NEVER IS. `fs`, `path`, `os`, the sibling
+// adaptive-schema and a `writeFile` doing exactly what claim.js's own fallback branch does are
+// supplied to the lifted source. Every OTHER function it calls is lifted from THE SAME FILE, so
+// what runs is that edition's shipped code and not a re-implementation of it.
+//
+// THE ABSENT LEG IS THE HARNESS CONTROL, and it is asserted first for a reason:
+// `appendSummarySection` wraps its whole body in `catch (_) { return false; }`, so a fault inside it
+// is indistinguishable from a decision not to write. The absent leg passes on today's code and on
+// any correct fix, so a red there means this pin could not evaluate that copy — not that the
+// behaviour regressed. Read it as a message about the harness; read the other legs as verdicts.
+function testFillIfEmptySummarySectionPortedToAllEditions1004() {
+  const claims = [
+    'scripts/kaola-workflow-claim.js',
+    'plugins/kaola-workflow/scripts/kaola-workflow-claim.js',
+    'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js',
+    'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js',
+  ];
+
+  // A top-level `function <name>(` ... up to the next top-level `function `, or null.
+  const lift = (src, name) => {
+    const marker = '\nfunction ' + name + '(';
+    const at = src.indexOf(marker);
+    if (at === -1) return null;
+    const end = src.indexOf('\nfunction ', at + 1);
+    return src.slice(at + 1, end === -1 ? src.length : end);
+  };
+  // `name` plus every top-level function it calls, transitively. `writeFile` is deliberately NOT
+  // lifted — it is the one dependency this pin substitutes, and a lifted declaration would shadow
+  // the substitute and drag the atomic-replace helper in with it.
+  const liftWithDeps = (src, name) => {
+    const seen = new Set(['writeFile']);
+    const queue = [name];
+    const parts = [];
+    while (queue.length) {
+      const n = queue.shift();
+      if (seen.has(n)) continue;
+      seen.add(n);
+      const body = lift(src, n);
+      if (body === null) continue;
+      parts.push(body);
+      for (const call of body.match(/\b[A-Za-z_$][A-Za-z0-9_$]*\s*\(/g) || []) {
+        queue.push(call.replace(/\s*\($/, ''));
+      }
+    }
+    return parts.length ? parts.join('\n') : null;
+  };
+
+  // Exactly the grammar the writer commits to: the body of the FIRST `## Heading`, up to the next
+  // line-initial `## ` or EOF. A `### ` sub-heading does not terminate a section, in the writer
+  // (`'\n## '`) and therefore here.
+  const bodyOf = (text, heading) => {
+    const lines = String(text || '').split('\n');
+    const at = lines.findIndex(l => l.trim() === heading);
+    if (at < 0) return null;
+    const out = [];
+    for (let i = at + 1; i < lines.length; i++) {
+      if (/^##\s/.test(lines[i])) break;
+      out.push(lines[i]);
+    }
+    return out.join('\n');
+  };
+  const occurrences = (text, heading) =>
+    String(text || '').split('\n').filter(l => l.trim() === heading).length;
+  // Every `## ` heading, in document order — the observable that says whether a fill stayed put.
+  const headingSeq = text =>
+    String(text || '').split('\n').filter(l => /^##\s/.test(l)).map(l => l.trim());
+
+  for (const rel of claims) {
+    const abs = path.join(repoRoot, rel);
+    const src = fs.readFileSync(abs, 'utf8');
+    assert(src.indexOf('\nfunction appendSummarySection(') !== -1,
+      '#1004 port guard: ' + rel + ' has no appendSummarySection() — the writer behind '
+        + '`## Validation`, `## Changed Paths` and `## Mission List` must exist in every edition');
+
+    const source = liftWithDeps(src, 'appendSummarySection');
+    assert(source !== null, '#1004 port guard: ' + rel + ' — appendSummarySection() could not be '
+      + 'lifted out of the file for evaluation');
+    let schema = null;
+    try { schema = require(path.join(path.dirname(abs), 'kaola-workflow-adaptive-schema.js')); }
+    catch (_) { schema = null; }
+    // claim.js's own writeFile fallback branch, verbatim in effect: the atomic-replace helper is
+    // environment, not subject.
+    const writeFileStub = (file, content) => {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, content);
+    };
+    const append = new Function('fs', 'path', 'os', 'adaptiveSchema', 'writeFile',
+      source + '\nreturn appendSummarySection;')(fs, path, os, schema, writeFileStub);
+    assert(typeof append === 'function',
+      '#1004 port guard: ' + rel + ' — the lifted appendSummarySection is not callable');
+
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fill-if-empty-1004-')));
+    try {
+      const summaryPath = path.join(dir, 'finalization-summary.md');
+      // Plant `before`, call the shipped writer, hand back what it left.
+      const drive = (before, heading, lines, replace) => {
+        fs.writeFileSync(summaryPath, before);
+        append(dir, heading, lines, replace);
+        return fs.readFileSync(summaryPath, 'utf8');
+      };
+
+      // ---- CONTROL (harness): a heading that is ABSENT is appended. True today and true after any
+      // correct fix. A red here says this copy could not be evaluated in isolation — most likely it
+      // gained a dependency the lift does not reach, whose ReferenceError the writer's own
+      // `catch (_) { return false; }` then swallowed.
+      {
+        const after = drive('# Finalization — Summary: issue-1004\n\n## Delivered\n\nthe fix\n',
+          '## Validation', ['classification: chains_green']);
+        assert(occurrences(after, '## Validation') === 1
+          && (bodyOf(after, '## Validation') || '').trim() === 'classification: chains_green',
+        '#1004 port guard [harness control]: ' + rel + ' — appending an ABSENT heading is unchanged '
+          + 'behaviour, so a failure here is this pin failing to evaluate the shipped function, not '
+          + 'the function failing. Got:\n' + after);
+      }
+
+      // ---- THE FIX, form 1: the VERBATIM Step 6 skeleton — consecutive `## ` lines with nothing
+      // between them, so the section body is the empty string.
+      {
+        const after = drive('# Finalization — Summary: issue-1004\n\n'
+          + '## Validation\n## Changed Paths\n## Mission List\n',
+        '## Validation', ['classification: chains_green', 'green: true']);
+        assert((bodyOf(after, '## Validation') || '').trim() === 'classification: chains_green\ngreen: true',
+          '#1004 port guard: ' + rel + ' — a `## Validation` heading planted by Step 6 with NOTHING '
+            + 'under it must be FILLED. Declining here is the whole defect: the finding is computed '
+            + 'and then dropped, and the archived summary is the last place it could have been read. '
+            + 'Got:\n' + after);
+        assert(occurrences(after, '## Validation') === 1,
+          '#1004 port guard: ' + rel + ' — ...into THAT heading. A second copy appended lower down '
+            + 'leaves the planted section bare and the reader looking at it. Got:\n' + after);
+        assert(occurrences(after, '## Changed Paths') === 1 && occurrences(after, '## Mission List') === 1,
+          '#1004 port guard: ' + rel + ' — ...and the headings that FOLLOW it survive. In this form '
+            + 'the section ends at the very next line, so a fill that over-reaches consumes the next '
+            + 'two headings whole. Got:\n' + after);
+        // THE FILL IS IN PLACE. Reusing the `replace` machinery — cut the section, then let the tail
+        // of the function append the block — also "fills" the heading, and relocates it to the end
+        // of the file. Filling is not relocating: the order the orchestrator wrote is part of what
+        // the record is for. Bound as ORDER so no string-slicing choice can red it.
+        assert(JSON.stringify(headingSeq(after))
+          === JSON.stringify(['## Validation', '## Changed Paths', '## Mission List']),
+        '#1004 port guard: ' + rel + ' — ...and `## Validation` stays FIRST, where it was planted. '
+          + 'A fill that cuts the section out and re-appends it at the tail moves it below every '
+          + 'heading that followed it. Got: ' + JSON.stringify(headingSeq(after)) + '\n' + after);
+      }
+
+      // ---- THE FIX, form 2: the blank-line form real orchestrators write, where the empty body is
+      // `\n` rather than ''. Only a rule keyed on `body.trim() === ''` reaches both forms.
+      {
+        const after = drive('# Finalization — Summary: issue-1004\n\n'
+          + '## Validation\n\n## Changed Paths\n\n## Mission List\n\n',
+        '## Changed Paths', ['Files this branch changed:', '', '- src/orphan.js']);
+        assert((bodyOf(after, '## Changed Paths') || '').trim()
+          === 'Files this branch changed:\n\n- src/orphan.js',
+        '#1004 port guard: ' + rel + ' — the blank-line form is the shape orchestrators actually '
+          + 'write, and its empty body is `\\n`, not `\'\'`. A fill keyed on the body being '
+          + 'STRICTLY empty misses every real summary in the archive. Got:\n' + after);
+        assert(occurrences(after, '## Changed Paths') === 1,
+          '#1004 port guard: ' + rel + ' — ...exactly once. Got:\n' + after);
+        // In place here too, and this leg witnesses it from the MIDDLE of the document rather than
+        // the front: `## Changed Paths` has a heading on either side of it.
+        assert(JSON.stringify(headingSeq(after))
+          === JSON.stringify(['## Validation', '## Changed Paths', '## Mission List']),
+        '#1004 port guard: ' + rel + ' — ...and it stays BETWEEN its two neighbours. Got: '
+          + JSON.stringify(headingSeq(after)) + '\n' + after);
+      }
+
+      // ---- THE FIX, form 3: the heading is LAST in the file, so the section runs to EOF and there
+      // is no `\n## ` terminator to find. Distinct branch, distinct leg.
+      //
+      // NO ORDER ASSERTION HERE, deliberately: the target is already the last heading, so a fill
+      // that relocated it to the tail would land it in exactly the same place. An assertion that
+      // cannot fail on the property it names is not watching it — the two legs above are where
+      // relocation is witnessed, and each of them has a heading after the one being filled.
+      {
+        const after = drive('# Finalization — Summary: issue-1004\n\n## Delivered\n\nthe fix\n\n'
+          + '## Mission List\n\n', '## Mission List', ['items: 2']);
+        assert((bodyOf(after, '## Mission List') || '').trim() === 'items: 2',
+          '#1004 port guard: ' + rel + ' — an empty section that runs to EOF is filled too; there is '
+            + 'no next heading to bound it and it is still empty. Got:\n' + after);
+        assert((bodyOf(after, '## Delivered') || '').trim() === 'the fix'
+          && occurrences(after, '## Delivered') === 1,
+        '#1004 port guard: ' + rel + ' — ...without taking what came BEFORE it with it. Got:\n' + after);
+      }
+
+      // ---- THE OWNER'S DECISION: a section carrying content is left exactly as written. This is
+      // the half that distinguishes the ruling from `replace: true`, which is the other fix and was
+      // not the one chosen. A run's own summary prose is the operator's; restating over it destroys
+      // a record nobody agreed to lose.
+      {
+        const prose = 'Chains re-run by hand after the rebase; all four green at 14:02.';
+        const before = '# Finalization — Summary: issue-1004\n\n'
+          + '## Validation\n\n' + prose + '\n\n## Changed Paths\n\n';
+        const after = drive(before, '## Validation', ['classification: chains_red', 'green: false']);
+        assert((bodyOf(after, '## Validation') || '').trim() === prose,
+          '#1004 port guard: ' + rel + ' — a `## Validation` section that already carries prose is '
+            + 'LEFT EXACTLY AS WRITTEN. The ruling on #1004 is fill-if-empty, not `replace: true`: '
+            + 'filling what is blank and overwriting what somebody wrote are different powers. '
+            + 'Got:\n' + after);
+        assert(after.indexOf('classification: chains_red') === -1,
+          '#1004 port guard: ' + rel + ' — ...and the writer\'s own lines appear NOWHERE in the '
+            + 'file, including under a second copy of the heading appended lower down. Got:\n' + after);
+        assert(occurrences(after, '## Validation') === 1,
+          '#1004 port guard: ' + rel + ' — ...and the heading still occurs exactly once. Got:\n' + after);
+      }
+
+      // ---- THE FOURTH CALLER, unchanged. `## Finalize Findings` passes `replace: true` and MUST
+      // still restate: it is an accumulator flushed more than once per run, so a later flush that
+      // declined would silently lose every finding after the first. Regression pin — green today,
+      // and a fix that reads "fill-if-empty" as "never overwrite" breaks it.
+      //
+      // ITS POSITION IS DELIBERATELY NOT PINNED. `replace: true` cuts and re-appends at the tail
+      // today, which RELOCATES the section — measured, shipped, working behaviour that #1004 has no
+      // business moving. The in-place rule above is scoped to the fill-if-empty path alone, and
+      // nothing in this leg looks at where the section ended up.
+      {
+        const before = '# Finalization — Summary: issue-1004\n\n'
+          + '## Finalize Findings\n\n### old_fault\n\nthe first flush\n\n## Changed Paths\n\nkept\n';
+        const after = drive(before, '## Finalize Findings',
+          ['### old_fault', '', 'the first flush', '', '### later_fault', '', 'the second flush'], true);
+        const body = bodyOf(after, '## Finalize Findings') || '';
+        assert(body.includes('the second flush') && body.includes('the first flush'),
+          '#1004 port guard: ' + rel + ' — `replace: true` still RESTATES the whole accumulated set. '
+            + 'The findings flush is written once before the commit that carries it and again if a '
+            + 'later step finds something; a flush that declined would drop everything after the '
+            + 'first. Got:\n' + after);
+        assert(occurrences(after, '## Finalize Findings') === 1,
+          '#1004 port guard: ' + rel + ' — ...in one section, not two. Got:\n' + after);
+        assert((bodyOf(after, '## Changed Paths') || '').trim() === 'kept',
+          '#1004 port guard: ' + rel + ' — ...and the replace cut stops at the next `## ` heading. '
+            + 'Got:\n' + after);
+      }
+    } finally {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+    }
+  }
+  console.log('testFillIfEmptySummarySectionPortedToAllEditions1004: PASSED');
+}
+
 function testSinkMergeBlocksUnpushedCommits() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-merge-block-')));
   const remotePath = initGitRepoWithBareRemote(tmp);
@@ -11695,6 +11954,7 @@ function buildRegistry() {
   add('testProbeHelpersFailClosed',                       testProbeHelpersFailClosed);
   add('testArchiveIntegrityPortedToAllEditions832',       testArchiveIntegrityPortedToAllEditions832);
   add('testStaleDiagnosticsPortedToAllEditions1002',      testStaleDiagnosticsPortedToAllEditions1002);
+  add('testFillIfEmptySummarySectionPortedToAllEditions1004', testFillIfEmptySummarySectionPortedToAllEditions1004);
   add('testSinkMergeBlocksUnpushedCommits',               testSinkMergeBlocksUnpushedCommits);
   add('testAssertWorktreeCleanFailsClosedOnProbeFault',   testAssertWorktreeCleanFailsClosedOnProbeFault);
   add('testAssertWorktreeCleanFailsClosedOnListProbeFault', testAssertWorktreeCleanFailsClosedOnListProbeFault);
