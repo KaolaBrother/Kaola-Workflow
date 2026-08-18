@@ -187,6 +187,49 @@ const REQUIRED_BLOCKS = [
       'reports a fact about the target rather than a verdict',
     ],
   },
+  {
+    // The axiom layer is reached from a `next` surface by a POINTER — a short
+    // paragraph naming the axioms and where they live — never by carrying the
+    // block, which is embedded in the workflow-init CLAUDE.md template instead.
+    // The pointer is the only thing on a shipped `next` surface that tells a
+    // reader in a consumer repo that a tie-breaking order exists at all, and
+    // where to read it; deleting it costs the whole layer at dispatch time and
+    // leaves nothing behind to notice.
+    //
+    // This block was declared once, deleted with the routing-surface
+    // extraction, and its absence went unseen because all twelve surfaces kept
+    // carrying the pointer anyway. Nothing else watches it: the paragraph sits
+    // in the shared skeleton body, so no PIN marker delimits it and the reverse
+    // orphan-sentinel has nothing to key on — which is also why this block is
+    // CONTENT-LED rather than marker-led. Adding a marker would mean editing the
+    // skeleton; the prose is distinctive enough without one.
+    //
+    // ONE TOKEN PER OBLIGATION, each a short span, so a rewrap or a reworded
+    // connective survives and a deleted RULE does not:
+    //   - subordination: axioms break ties, they never outrank a shipped rule.
+    //     This is the surface's only remaining carrier of that boundary.
+    //   - the referent is a NAMED block, not a gesture at "the axioms".
+    //   - where that block is, in a form that resolves from a consumer repo —
+    //     the part that rots silently, because a pointer that no longer points
+    //     still reads fine.
+    //   - the axioms are an ORDER; without that they are a list.
+    //   - recording the derivation is optional. A pointer that made it a proof
+    //     obligation would be a new gate wearing a pointer's name.
+    // Each of the five is absent from a `next` surface once the paragraph is
+    // removed and appears exactly once while it is there — measured on all
+    // twelve — so none is satisfied from elsewhere on the surface.
+    block_id: 'nx-first-principles',
+    topic: 'next',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      'When nothing already settles a situation',
+      '`## First Principles` block',
+      'workflow-init `CLAUDE.md`',
+      'applied in priority order',
+      'useful and never required',
+    ],
+  },
 
   // ==== finalize (basename kaola-workflow-finalize on both surface types) ====
   {

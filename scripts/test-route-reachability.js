@@ -898,6 +898,15 @@ const GENERATED_SURFACE_CONTENT = (() => {
   return map;
 })();
 
+// The one reader of the live surface tree, shared by the real run and by the
+// red-proofs that mutate a copy of it. Tracked surfaces come off disk; the six
+// generated trees come from the in-memory render. A generated path the render
+// did not produce falls through to the disk read and then to `null`, which reds
+// as absent-surface — absent-but-expected is loud, never skipped.
+const readRealSurface = rel => (GENERATED_SURFACE_CONTENT.has(rel)
+  ? GENERATED_SURFACE_CONTENT.get(rel)
+  : (exists(rel) ? fs.readFileSync(path.join(REPO, rel), 'utf8') : null));
+
 // Topic basenames — READ FROM THE GENERATED-SURFACE REGISTRY, the same TOPICS table that renders
 // the surfaces and drives the T1/T2 emitted-target set. That is the no-drift anchor: a rename or a
 // fourth topic follows here for free, and a hand-typed basename can never disagree with what
@@ -1054,13 +1063,7 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
 {
   const realResult = checkManifest({
     blocks: REQUIRED_BLOCKS,
-    // Tracked surfaces come off disk; the six generated trees come from the
-    // in-memory render. A generated path that the render did not produce falls
-    // through to the disk read and then to `null`, which reds as absent-surface —
-    // absent-but-expected is loud, never skipped.
-    readSurface: rel => (GENERATED_SURFACE_CONTENT.has(rel)
-      ? GENERATED_SURFACE_CONTENT.get(rel)
-      : (exists(rel) ? fs.readFileSync(path.join(REPO, rel), 'utf8') : null)),
+    readSurface: readRealSurface,
     editions: MANIFEST_EDITIONS,
     topicBasename: TOPIC_BASENAME,
     foreignMarkers: FOREIGN_MARKERS,
@@ -1143,6 +1146,66 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
   }
   assert(exists('templates/axioms.md'),
     'the canonical First Principles source must exist');
+}
+
+// --- AXIOM POINTER SANITY: the `next` surfaces reach the axiom layer by a short POINTER — the
+//     layer itself is embedded in the workflow-init CLAUDE.md template, and the pointer is what
+//     tells a reader in a consumer repo that a tie-breaking order exists and where to read it.
+//     Its presence obligation is the manifest block below, and this band is what makes the BLOCK's
+//     own deletion loud.
+//
+//     WHY A BAND AND NOT JUST THE BLOCK: the block is content-led — the pointer sits in the shared
+//     skeleton body with no PIN marker around it — so the reverse orphan-sentinel, which keys
+//     marker -> block, cannot notice it leave. That is not hypothetical: this block was declared,
+//     then deleted with the routing-surface extraction, and every suite stayed green for months
+//     because all twelve surfaces went on carrying the pointer regardless. A presence obligation
+//     nothing notices the absence of is one edit from gone, and this is the shape of edit that
+//     took it.
+//
+//     A POINTER, NOT THE BLOCK. Do not widen this to the axiom text: carrying the five axioms onto
+//     a `next` surface is a different decision from pointing at them, and the byte-identity guard
+//     that owns the embeds is testAxiomBlockByteIdentity, not this file.
+{
+  const AXIOM_POINTER_BLOCK = 'nx-first-principles';
+  const block = REQUIRED_BLOCKS.find(b => b.block_id === AXIOM_POINTER_BLOCK);
+  // Named, not derived — the block IS the subject — but asserted, so a rename reds here instead of
+  // quietly resolving to `undefined` and checking nothing.
+  assert(!!block,
+    `axiom pointer: the manifest must carry the ${AXIOM_POINTER_BLOCK} block — it is the only `
+    + 'presence obligation on the axiom pointer, and being content-led it leaves no marker behind '
+    + 'for the reverse orphan-sentinel to trip on');
+  if (block) {
+    const { error, files } = deriveObligated(block, MANIFEST_EDITIONS, TOPIC_BASENAME);
+    assert(block.topic === 'next',
+      `axiom pointer: ${AXIOM_POINTER_BLOCK} must stay on the next topic, got ${JSON.stringify(block.topic)}`);
+
+    // WIDTH, CHECKED TWICE, because the two comparisons fail on different things and neither
+    // subsumes the other.
+    //
+    // (a) DERIVED — the block must obligate the FULL both/both universe, whatever that universe
+    //     currently is. This is what catches a tag NARROWED (surface_type_tag dropped to
+    //     'command'), which would silently stop watching the three Codex skill packs while the
+    //     manifest still looked like it covered the topic.
+    const everyTree = MANIFEST_EDITIONS.command.length + MANIFEST_EDITIONS.skill.length;
+    assert(!error && files.length === everyTree,
+      `axiom pointer: the ${AXIOM_POINTER_BLOCK} block must obligate all ${everyTree} next surfaces `
+      + `(both/both), got ${files.length}${error ? ' (' + error + ')' : ''}`);
+
+    // (b) LITERAL — and this one is the count itself, not a comparison against the registry. Read
+    //     off the same edition tables it measures, (a) shrinks in lockstep with them: delete a
+    //     forge and both sides fall from twelve to eight together, and the pointer stops being
+    //     checked on four surfaces with nothing red. That is the failure mode the sibling floors in
+    //     this file and in testAxiomBlockByteIdentity both document about their own forge term. The
+    //     literal is what makes the forge term visible HERE.
+    //     It is a two-place edit on purpose: a fourth forge, or a third additive runtime, reds this
+    //     line, and the correct response is to confirm the NEW surfaces carry the pointer and then
+    //     move the number — never to move the number first.
+    const NEXT_SURFACES = 12;   // 3 forges x (claude command + codex skill + opencode + kimi)
+    assert(files.length === NEXT_SURFACES,
+      `axiom pointer: the axiom pointer is obligated on ${files.length} next surface(s), expected `
+      + `${NEXT_SURFACES}. If the surface universe legitimately changed, verify the pointer is on `
+      + `every new surface BEFORE changing this number; derived set: ${files.join(', ')}`);
+  }
 }
 
 // --- SUPERSET PROOF: every legacy in-scope T-pin token folds into a manifest
@@ -1325,6 +1388,97 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     });
     assert(r.failures.length > 0,
       'RED-PROOF closure-audit-vacuous-guard: gutting the closure-audit interior while keeping the bare PIN marker must red the derived-universe checker (a content_token that is a substring of its own marker is vacuous)');
+  }
+
+  // (8) AXIOM-POINTER PER-SURFACE INDEPENDENCE — the LIVE nx-first-principles block, exercised
+  //     against a copy of the REAL surface tree with the pointer paragraph removed from ONE
+  //     surface at a time. A guard is evidence only once mutation-proven, and an N-site mutant
+  //     proves >=1, never N: this loops the mutation over every obligated surface separately and
+  //     requires the failure to NAME the surface it was planted on, so "one surface reds" can
+  //     never be mistaken for "the surfaces are watched".
+  //
+  //     THE MUTATION IS STRUCTURAL, NOT TOKEN-SHAPED. It removes the whole pointer paragraph, the
+  //     way a surface actually loses it. Deleting exactly the substrings the manifest greps for
+  //     would prove the loop runs, not that the tokens track the prose a reader depends on.
+  //
+  //     GREEN CONTROL FIRST. A loop that reds for a reason unrelated to the planted defect reads
+  //     as a proof and is not one, so the unmutated tree is asserted clean before anything is cut.
+  {
+    const block = REQUIRED_BLOCKS.find(b => b.block_id === 'nx-first-principles');
+    assert(!!block, 'RED-PROOF axiom-pointer: the nx-first-principles block must exist to mutate');
+    if (block) {
+      const obligated = deriveObligated(block, MANIFEST_EDITIONS, TOPIC_BASENAME).files;
+      const real = {};
+      for (const f of obligated) real[f] = readRealSurface(f);
+      const unreadable = obligated.filter(f => real[f] === null);
+      assert(unreadable.length === 0,
+        'RED-PROOF axiom-pointer: every obligated next surface must be readable before it can be '
+        + 'mutated; unreadable: ' + JSON.stringify(unreadable));
+
+      const missingTokenFailures = surfaces => checkManifest({
+        blocks: [block],
+        readSurface: mapSurface(surfaces),
+        editions: MANIFEST_EDITIONS,
+        topicBasename: TOPIC_BASENAME,
+        foreignMarkers: FOREIGN_MARKERS,
+      }).failures.filter(m => m.startsWith(`missing-token: block ${block.block_id} `));
+
+      const control = missingTokenFailures(real);
+      assert(control.length === 0,
+        'RED-PROOF axiom-pointer (green control): the unmutated tree must produce no missing-token '
+        + 'failure for the axiom pointer — got ' + JSON.stringify(control));
+
+      // The loop below asks "is the pin armed on each surface separately", and that question only
+      // has an answer against a tree that still carries the pointer everywhere. On a tree that has
+      // already lost it, every iteration inherits the standing failure and the loop emits a wall of
+      // cascade instead of a finding. So it runs only behind the control — which is ASSERTED, not
+      // assumed, one line up, and the real breakage is already reported there and by the real-run
+      // MANIFEST check. Nothing goes unenforced in the skipped case; what is skipped is a verdict
+      // that would be noise.
+      if (control.length === 0) {
+        // The paragraph's lead is a literal, and a surface whose pointer cannot be located is
+        // reported as unwitnessed rather than skipped, so a reworded lead reds here instead of
+        // quietly turning the mutation into a no-op.
+        const POINTER_LEAD = '**First Principles.**';
+        const stripPointer = body => {
+          const lines = String(body).split('\n');
+          const start = lines.findIndex(l => l.startsWith(POINTER_LEAD));
+          if (start < 0) return null;
+          let end = start;
+          while (end < lines.length && lines[end].trim() !== '') end++;
+          while (end < lines.length && lines[end].trim() === '') end++;
+          return lines.slice(0, start).concat(lines.slice(end)).join('\n');
+        };
+        // A failure names the surface it was found on as its suffix; the surface is what this loop
+        // reports, never the token list, which would bury the finding it exists to make readable.
+        const surfaceOf = m => m.slice(m.lastIndexOf(' absent from ') + ' absent from '.length);
+
+        const unwitnessed = [];
+        for (const target of obligated) {
+          const stripped = stripPointer(real[target]);
+          if (stripped === null) {
+            unwitnessed.push(`${target} — no paragraph led by ${JSON.stringify(POINTER_LEAD)} to remove`);
+            continue;
+          }
+          const named = new Set(
+            missingTokenFailures(Object.assign({}, real, { [target]: stripped })).map(surfaceOf));
+          if (!named.has(target)) {
+            unwitnessed.push(`${target} — removing its pointer reddened no failure naming it `
+              + `(named instead: ${[...named].join(', ') || 'nothing'})`);
+            continue;
+          }
+          named.delete(target);
+          if (named.size > 0) {
+            unwitnessed.push(`${target} — removing its pointer also reddened ${[...named].join(', ')}, `
+              + 'so a per-surface failure cannot be told from a tree-wide one');
+          }
+        }
+        assert(unwitnessed.length === 0,
+          `RED-PROOF axiom-pointer: removing the pointer paragraph from any ONE of the `
+          + `${obligated.length} next surfaces must red naming THAT surface and no other; `
+          + `unwitnessed: ${JSON.stringify(unwitnessed)}`);
+      }
+    }
   }
 }
 

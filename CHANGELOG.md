@@ -4,6 +4,34 @@
 
 ### Added
 
+- **The axiom pointer on the twelve `next` surfaces is guarded again, and three stale reach counts
+  are corrected — #1007.** Filed as a documentation defect about one number; the measurement found a
+  false mechanism claim underneath it. `docs/decisions/D-645-01.md` §6 asserted that a missing axiom
+  pointer "reds `npm test` immediately". The enforcement it named — the `nx-first-principles` entry
+  in `templates/routing/required-blocks.js` — had been **deleted in an unrelated extraction**, so the
+  claim was false. Measured rather than argued: with the entry gone, stripping the pointer from all
+  **twelve** `next` surfaces left `generate-routing-surfaces --check`, `test-route-reachability`
+  (368 assertions), `testAxiomBlockByteIdentity` (14 surfaces), `test-generate-routing-surfaces` and
+  the kimi edition suite **all exit 0**; the only guard that fired read a single file and lived in
+  `test:kaola-workflow:editions`, absent from `npm test`.
+  The entry is restored, content-led over five tokens, and **mutation-proven one surface at a time**:
+  each of the six tracked surfaces reds on its own when stripped, naming itself and the
+  additive-edition renders derived from it. Its obligated width is the **literal `12`** — the same
+  lesson the axiom guard's `+ 2` records, and independently reproduced here: drop a forge and the
+  derived comparison shrinks to 8 and passes over four unchecked surfaces while the literal reds.
+  `test-route-reachability.js` runs in the claude chain, so `npm test` executes it.
+  **Prose corrected**, in `docs/conventions.md`: the axiom layer's reach said *twelve workflow-init
+  `CLAUDE.md`-template surfaces*, which was wrong twice — the count is fourteen, and two of those are
+  repo-root prose files that are not workflow-init templates at all and are hand-maintained rather
+  than generated. The guard-width passage now carries `+ 2` and passes at 14→10 rather than 12→8.
+  Both corrected sentences point at the producer that prints the count rather than asserting it.
+  **`D-645-01` is annotated, not rewritten** — `docs/decisions/` is excluded from the contract
+  validator as history by construction, so a dated note records what changed instead. That note also
+  records a third claim that does not hold: §5's "never cite an axiom to justify skipping a typed
+  gate, refusal, or barrier" ships nowhere, and was **deliberately not restored** — `typed gate` and
+  `barrier` return zero matches across `templates/`, `commands/` and root `CLAUDE.md`, so re-adding
+  it would introduce a rule about machinery later decisions removed.
+
 - **Checking an issue's premise before building on it is now a standing default in the axiom layer —
   #1006.** The practice was near-universal and named on no rule surface: **62 of 406** archived runs
   record a premise check, and **19 of the 20 most recent** do, while

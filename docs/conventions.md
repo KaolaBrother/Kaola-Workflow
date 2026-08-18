@@ -332,9 +332,15 @@ sits. Where a universe is derived from the artifact under test, partially anchor
 one **absolute** count belongs in a different file. `test-generate-routing-surfaces`'s `registry
 derives 18 surfaces` is that anchor for the routing registry, and it is mutation-proven — delete a
 forge from both edition tables and it fails at 18→12, while the walkthrough's
-`testAxiomBlockByteIdentity` passes at 12→8 surfaces, its width `FORGES.length × (2 +
-runtimeEditionCount)` shrinking in lockstep with the registry it measures. That floor is left derived
-on purpose, and says so where it is written. `test-route-reachability` held the green side of this
+`testAxiomBlockByteIdentity` passes at 14→10 surfaces, the derived term of its width
+`FORGES.length × (2 + runtimeEditionCount) + 2` shrinking in lockstep with the registry it measures.
+That term is left derived on purpose, and says so where it is written. **The trailing `+ 2` is a
+literal for the opposite reason, and the contrast is the lesson.** It counts the two named,
+non-derived surfaces (root `CLAUDE.md`, `README.md`); written as `NAMED_SURFACES.length` it would
+shrink in lockstep with the very list it measures, so dropping a surface from that list and staling
+it yields `PASSED (13 surfaces)` — green over a fully stale file. Mutation-proven, not argued. A
+count is safe to derive only from something the mutation cannot move; where the list IS the subject,
+write the number. `test-route-reachability` held the green side of this
 contrast, and the floor the row above describes still holds it: that universe is still registry-derived
 and still passes at 12→8. What changed is the **suite**, which now reds under the same mutation at
 `T19b universe: … 6 … found 4` — a later band added for an unrelated purpose. That is an incidental
@@ -845,15 +851,26 @@ See `docs/decisions/D-579-01.md` for the full decision record.
 
 `templates/axioms.md` is the single canonical source for the workflow’s five tie-breaking axioms
 (correct first; then save human time; then spend as little as possible; machines decide facts,
-humans decide values; own your own verdicts). It reaches consumers by EMBEDDING byte-identically
-into the twelve workflow-init CLAUDE.md-template surfaces — never per-edition copies, since
-`templates/` has no runtime `require()` consumer and the `BYTE_IDENTICAL_GROUPS` mechanism is built
-for that case, not this one. The drift guard is a `simulate-workflow-walkthrough.js` scenario,
-`testAxiomBlockByteIdentity`, comparing the canonical file’s content against all twelve surfaces —
-the six tracked command/skill files read from disk, plus the six opencode/kimi surfaces rendered in
-memory via the same sync scripts that generate them, mutation-proven on the previously-uncovered
-opencode/kimi trees. The six `next` routing surfaces carry a short reference pointer to the block rather than the
-block itself; that pointer is prose the generator renders, not a `required-blocks.js` entry.
+humans decide values; own your own verdicts) **and for the standing-default paragraphs beneath them**
+— the file’s own intro distinguishes the two, because a standing default read as a tie-breaker
+applies only when nothing else settles the case, which inverts it. It reaches consumers by EMBEDDING
+byte-identically into fourteen surfaces — never per-edition copies, since `templates/` has no runtime
+`require()` consumer and the `BYTE_IDENTICAL_GROUPS` mechanism is built for that case, not this one.
+Read the count off `node scripts/simulate-workflow-walkthrough.js --only
+testAxiomBlockByteIdentity`, which prints it, rather than from this sentence. The drift guard is that
+scenario, comparing the canonical file’s content against all fourteen — the six tracked
+workflow-init command/skill files read from disk, the six opencode/kimi surfaces rendered in memory
+via the same sync scripts that generate them, and root `CLAUDE.md` and `README.md`. Those last two
+are **hand-maintained, not generated**: `generate-routing-surfaces.js --write` does not touch them,
+so an axiom edit must update both by hand or the guard reds all fourteen. Each surface is
+mutation-proven to fail on its own. The twelve `next` routing surfaces carry a short reference
+pointer to the block rather than the block itself. That pointer **is** a `required-blocks.js` entry
+(`nx-first-principles`), checked by `scripts/test-route-reachability.js` inside `npm test`: it was
+declared with the axiom layer, deleted in an unrelated extraction, and restored once a mutation
+showed the pointer could be stripped from all twelve surfaces with every chain still green. Its
+obligated width is the literal `12`, for the reason the row on partially-anchored universes gives —
+delete a forge and the derived comparison shrinks to 8 and passes over four unchecked surfaces,
+while the literal reds.
 
 **Tie-breaker protocol.** Axioms apply only when no shipped rule already resolves a situation — walk
 them in priority order. Recording a one-line derivation alongside the work is useful and never
