@@ -11394,7 +11394,7 @@ function testSinkTransactionCleanEndToEnd() {
 // startsWith guard keeps a blanked/emptied axioms.md from producing a false green (includes('') is
 // always true), so the guard is load-bearing on BOTH the canonical file and every embed.
 //
-// TWELVE SURFACES, DERIVED. The list used to be six hand-typed paths, which covered the tracked
+// TWELVE DERIVED SURFACES. The list used to be six hand-typed paths, which covered the tracked
 // trees and left the six GENERATED ones — .opencode{,-gitlab,-gitea} and .kimi{,-gitlab,-gitea} —
 // free to drift with nothing to catch it. Neither half is typed here now: the tracked six come from
 // the routing registry that renders them, and the generated six are rendered through the sync
@@ -11407,6 +11407,17 @@ function testSinkTransactionCleanEndToEnd() {
 // on-disk tree equals, so the subject is always present and can never be a stale tree. Absence is
 // still loud, one level up: the expected surface COUNT is derived independently, so a renderer that
 // yields nothing reds instead of silently shrinking the sweep.
+//
+// #1005: TWO NAMED SURFACES — the repo's OWN prose. Twelve derived surfaces made this guard total over
+// what the workflow SHIPS and blind to the two files that state the same axioms to a reader of this
+// repository: root CLAUDE.md's `## First Principles` block and README.md's numbered axiom list. Both
+// sat outside the sweep and both had drifted — CLAUDE.md agreed byte-for-byte for 22 days and then
+// diverged in two axioms with all three standing paragraphs dropped, and README.md was never identical
+// and diverges in DIFFERENT places, its intro agreeing with canonical exactly where CLAUDE.md's does
+// not. Three surfaces, pairwise inconsistent, while this guard reported a clean twelve: a guard green
+// on a stale surface is the defect, not the fix. They are NAMED, not derived, because they ARE the
+// subject — no registry emits them — exactly as INIT_TOPIC is named. Owner ruling: both converge on
+// the canonical block, with no declared divergent region on either.
 function testAxiomBlockByteIdentity() {
   const routing = require('./generate-routing-surfaces.js');
   const opencodeSync = require('./sync-opencode-edition.js');
@@ -11439,28 +11450,65 @@ function testAxiomBlockByteIdentity() {
     surfaces.push({ id: kimiSync.skillRel(base, forge), body: kimiSync.renderCommand(canon, base, forge) });
   }
 
-  // ANTI-VACUITY, and its HONEST boundary — the two terms of this width are not equally anchored.
+  // #1005: the repo's own two prose surfaces. Named, not derived — they ARE the subject, exactly as
+  // INIT_TOPIC is — but each is asserted to exist, so a rename or a move reds here instead of quietly
+  // dropping a surface out of the sweep.
+  const NAMED_SURFACES = ['CLAUDE.md', 'README.md'];
+  for (const rel of NAMED_SURFACES) {
+    const abs = path.join(repoRoot, rel);
+    assert(fs.existsSync(abs),
+      'the repo-root ' + rel + ' this guard checks must exist at ' + rel + ' (named surface missing or renamed)');
+    surfaces.push({ id: rel, body: read(abs) });
+  }
+
+  // ANTI-VACUITY, and its HONEST boundary — the three terms of this width are not equally anchored.
   // The RUNTIME term is independent: it is read off the filesystem (one `sync-<runtime>-edition.js`
   // per additive runtime), so deleting a runtime from any table cannot shrink expectation and
   // measurement together. Deriving it from surfaces.length would be a guard that cannot fail.
+  // The NAMED term is independent, and ONLY because it is the literal `2` below and not
+  // NAMED_SURFACES.length: drop either repo-root path from that list and the measurement shrinks while
+  // the expectation does not, so the floor reds naming what survived. Adding a third named surface is
+  // deliberately a two-place edit — that cost IS the floor. Written as NAMED_SURFACES.length it would
+  // shrink in lockstep and enforce nothing, which is the FORGE term's failure mode, below.
   // The FORGE term is NOT independent: it comes from the same registry this measures, so deleting a
   // forge from the edition tables shrinks both sides in lockstep and this floor stays green —
   // mutation-proved. That case is caught one guard over, by test-generate-routing-surfaces.js's
   // "registry derives 18 surfaces" assertion, which is why it is left rather than re-anchored. Do
   // not read this comment as claiming the width is independent of everything; it is independent of
-  // the runtime list only.
+  // the runtime list and of the named-surface list, and not of the forge list.
   const runtimeEditionCount = fs.readdirSync(path.join(repoRoot, 'scripts'))
     .filter(f => /^sync-[a-z0-9-]+-edition\.js$/.test(f)).length;
-  const expected = routing.FORGES.length * (2 + runtimeEditionCount); // claude + codex + each additive runtime
+  // per forge: claude + codex + each additive runtime; plus the two repo-root prose surfaces
+  const expected = routing.FORGES.length * (2 + runtimeEditionCount) + 2;
   assert(surfaces.length === expected,
-    'the axiom block must be checked on every runtime x forge init surface — expected ' + expected
+    'the axiom block must be checked on every runtime x forge init surface AND on both repo-root prose '
+      + 'surfaces — expected ' + expected
       + ', derived ' + surfaces.length + ' (' + surfaces.map(s => s.id).join(', ') + ')');
 
+  // The verdict is unchanged and singular: `s.body.includes(axioms)`, one comparison idiom for all
+  // fourteen surfaces, a whole-block byte match no partial or reworded embed can satisfy. What #1005
+  // changed is only the REPORT. Two of the fourteen are hand-maintained prose that drift independently
+  // of each other and of the twelve, so "one of them did not match" would send the reader diffing a
+  // canonical block against a thousand-line document, and a fail-fast on the first stale surface would
+  // hide the second behind it. The lines below run only after a surface has ALREADY failed the
+  // comparison; they explain a verdict and never decide one.
+  const canonLines = axioms.split('\n').filter(l => l.trim() !== '');
+  const drifted = [];
   for (const s of surfaces) {
-    assert(s.body.includes(axioms),
-      s.id + ' must embed the canonical templates/axioms.md First Principles block byte-identically ' +
-      '(drift from templates/axioms.md detected)');
+    if (s.body.includes(axioms)) continue;
+    const missing = canonLines.find(l => !s.body.includes(l));
+    drifted.push(s.id + ' — stale: ' + (missing
+      ? 'first canonical line absent from it is ' +
+        JSON.stringify(missing.length > 100 ? missing.slice(0, 100) + '\u2026' : missing)
+      : 'every canonical line appears, but not as one contiguous byte-identical block ' +
+        '(blank-line, ordering or indentation drift)'));
   }
+  assert(drifted.length === 0,
+    drifted.length + ' of ' + surfaces.length + ' surfaces do not embed the canonical templates/axioms.md '
+      + 'First Principles block byte-identically'
+      + (drifted.length === surfaces.length ? ' (EVERY surface — templates/axioms.md itself is what moved)' : '')
+      + ':\n    ' + drifted.join('\n    '));
+
   console.log('testAxiomBlockByteIdentity: PASSED (' + surfaces.length + ' surfaces)');
 }
 

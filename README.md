@@ -19,21 +19,31 @@ That creed in one line:
 
 **Make coding agents do more — more automation, less manual toil, faster results — without ever trading away accuracy.**
 
-It is codified as five **first-principles axioms** (`templates/axioms.md`), applied in priority order whenever a situation is not already settled. When they conflict, the higher one wins:
+It is codified as five **first-principles axioms**, canonical in `templates/axioms.md` and reproduced here byte-for-byte. When they conflict, the higher one wins.
 
-1. **Correct first.** Never trade correctness for speed or cost; rework is the most expensive outcome there is.
+## First Principles
+
+These are the workflow's tie-breaking axioms, applied in priority order whenever a situation is not already settled.
+
+1. **Correct first.** Never trade correctness for speed or cost; rework is the most expensive outcome.
 2. **Then save human time.** Remove manual steps and shorten the wait, without weakening axiom 1.
 3. **Then spend as little as possible.** Use the cheapest sufficient mechanism — parallelism, extra agents, and higher model tiers are means, not goals.
-4. **Machines decide facts; humans decide values.** Irreversible or value-laden calls go to you; leave everything checkable to run automatically.
-5. **Own your own verdicts.** Never let a system the workflow does not own — CI, an external service — be the judge of done.
+4. **Machines decide facts; humans decide values.** Take irreversible and value-laden calls to the user and ask, in conversation; leave everything checkable to run automatically.
+5. **Own your own verdicts.** Never let a system the workflow does not own (CI, an external service) be the judge of done.
 
-The axiom layer is embedded byte-identically into every generated project's guidance (all twelve `workflow-init` surfaces, with a machine-enforced drift guard).
+**Tie-breaker protocol:** when nothing else covers a situation, resolve it by walking these axioms in order and record a one-line derivation alongside the work. Recording it is useful and never required.
+
+**Dispatch production; keep decisions:** the orchestrator's context is the run's scarcest resource — a handoff costs once, inline residue taxes every later decision — so delegating discretionary production is the default and only the deciding stays inline; weigh the economics per case by judgment, with no justifier, evidence line, or approval attached.
+
+**Parallel by default:** concurrency is the standing default for independent work, and work that genuinely feeds other work runs in order because it has to. Nothing inspects that choice — no proof, no evidence line, no cap: you can tell the difference, and the frontier is in front of you. Width stays sized to the true shape of the task rather than pushed as wide as it will go.
+
+That block is not a paraphrase of the canonical one — it is a byte-identical copy, and so are the twelve `workflow-init` surfaces this project ships (four runtimes × three forges) and the root `CLAUDE.md` it runs on. The test suite holds all fourteen to the same bytes, which means the axioms you just read are themselves one of the guarded surfaces.
 
 A few beliefs follow from that order.
 
 **An item is a mission, not a specification.** It carries no role, no file list, no dependency edge, no model, no width. Carrying evidence is the point — *"investigate whether X still holds; the claim is at `foo.js:120`"* is an item; a schedule is not. The orchestrator decides how to run an item **when it reaches it**, with everything it has learned by then.
 
-**Concurrency carries no machinery at all.** There is no disjointness proof, no serializer taxonomy, no evidence line, no fan-out cap, and nothing inspects the decision. The frontier is not computed — it is the list minus done minus in-flight, visible by reading. Independent work runs concurrently because that is faster; work that feeds other work runs in order because it has to. The agent can already tell the difference.
+**Concurrency carries no machinery at all.** There is no disjointness proof and no serializer taxonomy. The frontier is not computed — it is the list minus done minus in-flight, visible by reading.
 
 **Tools stay tools.** Subagents and worktrees are offered and declinable — decline either and the run still finishes. A tool you cannot decline and still finish would be a gate wearing a tool's name, and there are none.
 
@@ -43,7 +53,7 @@ A few beliefs follow from that order.
 
 **Correctness *is* efficiency.** Independent review and local, self-owned validation catch mistakes before they compound. Preventing rework is the cheapest optimization there is, and no external pipeline is ever the judge of done.
 
-### What you get
+## What you get
 
 - **One resumable file per run** — a successor with no context reads it top to bottom: the H1 is the goal, `done` items and their `result` are what is known, `in-flight` items are the only decision to make, `todo` is what remains.
 - **A claim that is bookkeeping, not a gate** — it records which issues, branch and worktree the run owns, so parallel sessions do not collide.

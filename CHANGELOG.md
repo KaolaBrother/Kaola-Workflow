@@ -206,6 +206,51 @@
 
 ### Fixed
 
+- **This repository's own two statements of the axioms now are the axioms — #1005.**
+  `templates/axioms.md` is the canonical axiom layer, pinned byte-identically since #645 into every
+  `workflow-init` surface — 12 of them, four runtimes × three forges. Root `CLAUDE.md` and `README.md`
+  each carried a **third and a fourth wording** of the same five axioms, and the guard could see
+  neither: it reported `PASSED (12 surfaces)` while both were stale. **They had drifted in different
+  places, so the three surfaces were pairwise inconsistent.** Measured against canonical at the
+  pre-fix commit: `CLAUDE.md` differed in **2 of 5** axioms (4 and 5) plus the intro sentence,
+  `README.md` in **3 of 5** (1, 4 and 5); all three standing paragraphs — `**Tie-breaker protocol:**`,
+  `**Dispatch production; keep decisions:**`, `**Parallel by default:**` — were absent from both; and
+  README's intro clause agreed with canonical *exactly where `CLAUDE.md`'s did not* ("not already
+  settled" against "not already resolved by a rule"). **One of the four differences was not cosmetic.**
+  README's axiom 4 read "Irreversible or value-laden calls go to you", having dropped the clause **"and
+  ask, in conversation"** — the consent mechanism itself, and the only thing in axiom 4 that says *how*
+  a value-laden call reaches the user rather than merely that it does.
+  **`CLAUDE.md` did once agree, and the git record names what broke it.** It was byte-identical to
+  canonical from `06d22d35` (2026-07-09) to `ad196273` (2026-07-22) — **13 days** — and it drifted
+  without being edited: `ad196273` grew canonical by the three standing paragraphs and propagated to
+  "+6 init embeds" and the generated surfaces, and root `CLAUDE.md` was not on that list. `README.md`
+  never matched at any commit in which `templates/axioms.md` existed.
+  Both files now carry the canonical block verbatim — heading, intro, five axioms, three standing
+  paragraphs — with **no declared divergent region on either**. `templates/axioms.md` is byte-untouched:
+  canonical did not move, the two strays came to it. Convergence changed **wrapping** as well as
+  wording, because canonical's lines are unwrapped and `CLAUDE.md`'s axioms were hard-wrapped near 100
+  columns; re-wrapping one axiom back reds the guard on its own.
+  **Carrying the canonical paragraphs turned two paragraphs already in `CLAUDE.md` into a second
+  wording of a rule now sitting above them, so they were folded rather than left to compete.** Dropped
+  as restatement: "Decompose to genuine independence and dispatch that wide — no wider, no narrower"
+  and "You decide, uninspected" (canonical: "Width stays sized to the true shape of the task"…"Nothing
+  inspects that choice"), the two enumerated items canonical already names ("no evidence line, no
+  fan-out cap"), and the whole first sentence of the local `Dispatch production; keep decisions`
+  paragraph. Kept because canonical does not say them: the *definition* of the frontier (`list minus
+  done minus in-flight`), the three rejected mechanisms canonical does not enumerate (disjointness
+  check, antichain sweep, serializer taxonomy), and the declinability rule — "a tool you cannot decline
+  and still finish is a gate wearing a tool's name" — which appears nowhere in the axiom layer.
+  `CLAUDE.md` goes **198 → 195 lines**: the block costs 2 and the fold gives back 5. The 200-line cap
+  is advisory and could not have failed a build at any size, so nothing was contorted to fit it.
+  **The guard went 12 → 14 surfaces**, and both additions are mutation-proven to red on their own:
+  dropping only `**Parallel by default:**` from `CLAUDE.md`, changing one word of its axiom 1, dropping
+  the same paragraph from `README.md`, changing one word of README's intro, and re-wrapping
+  `CLAUDE.md`'s axiom 3 each fail the guard, each naming exactly one surface and the first canonical
+  line missing from it — never the other, and never a generated surface. **It witnesses the block and
+  nothing around it.** README's prose sentence about how many surfaces are guarded sits *outside* the
+  compared bytes and was corrected by hand, not by the guard; it now says fourteen and names the two
+  new ones, one of which is the file the sentence is written in.
+
 - **The three finalize sections are now filled when the heading is already there — #1004.**
   `appendSummarySection` declined to write whenever its heading already existed, so a
   `finalization-summary.md` that already carried `## Validation`, `## Changed Paths` or
