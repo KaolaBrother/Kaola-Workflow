@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [9.11.0] - 2026-08-18
 
 ### Added
 
