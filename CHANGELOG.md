@@ -4,6 +4,48 @@
 
 ### Added
 
+- **Checking an issue's premise before building on it is now a standing default in the axiom layer —
+  #1006.** The practice was near-universal and named on no rule surface: **62 of 406** archived runs
+  record a premise check, and **19 of the 20 most recent** do, while
+  `grep -rn -i 'premise' templates/ agents/ skills/ commands/` returned exactly **two** hits — one
+  sentence rendered twice, obliging a run to *report* a premise that died and obliging nothing to go
+  looking for one. `templates/axioms.md` gains a fourth standing-default paragraph, **Check the premise
+  before it shapes the work**, and it reaches all fourteen guarded surfaces.
+  **It is a standing default, not a sixth axiom.** The five numbered axioms are tie-breakers, reached
+  only when nothing else settles a situation; a premise check applies every time work is picked up, so
+  numbering it would have made it conditional on the absence of a rule. It sits after the tie-breaker
+  protocol and before **Dispatch production; keep decisions**, because it governs picking work up
+  rather than handing it out.
+  **It obliges carrying the measurement forward, never a bare verdict**, because the real outcome is
+  almost never binary. Of **52** named premise artifacts only **15** carry an explicit verdict line,
+  and those read "PARTIALLY-CONFIRMED — the fact is exactly right; the line number is stale by +2",
+  "SAFE WITH CONDITIONS … executing the claim literally would turn the claude chain red", and
+  "CONFIRMED on solution minimalism; literally REFUTED if scope restraint counts". The dominant shape
+  is *right, with a detail that would have misrouted the work* — a stale locator, a miscounted set, a
+  clause that breaks if executed literally — and CONFIRMED/REFUTED discards precisely the detail that
+  redirects it. The run that shipped this is three more instances: its own issue named 3 call sites
+  where there were 12 across 4 shipped copies; an archive figure read 15 where 16 had been filed; and a
+  supporting count transcribed a day-of-month as a duration, claiming a 22-day agreement window that is
+  really 12 days 20 hours.
+  **The intro sentence was re-scoped in the same edit, and leaving it would have inverted the new
+  paragraph.** It read "These are the workflow's tie-breaking axioms, applied in priority order
+  whenever a situation is not already settled" — one scope for the whole block, under which every
+  standing paragraph beneath it applies *only when nothing else settles the case*, the exact opposite
+  of a standing default. It now separates the numbered tie-breakers from the standing defaults that
+  follow them. That sentence already mis-scoped **Dispatch production; keep decisions** and **Parallel
+  by default**; the new paragraph is what made it load-bearing.
+  **Nothing inspects that any of this was done, and nothing was built to.** No standard location,
+  filename or schema for the premise artifact, no gate, no evidence line, no close-time check — the
+  measured scatter is real (3 locations, 3 naming shapes, a verdict line on 15 of 52) and is watch-list
+  material, because a convention over it would be justified by nothing stronger than *the agent might
+  file it untidily*. The refusal count for this is zero.
+  Propagation is the whole cost of the change. The canonical block is embedded byte-for-byte in **14**
+  surfaces — 6 tracked `workflow-init` surfaces, 6 rendered opencode/kimi edition copies, and root
+  `CLAUDE.md` and `README.md` — and **those last two are hand-maintained**, so
+  `generate-routing-surfaces.js --write` moves twelve and can never move them.
+  `testAxiomBlockByteIdentity` holds all fourteen to the same bytes. `CLAUDE.md` is 197 lines; its
+  200-line cap is advisory and cannot fail a build at any size.
+
 - **The finalize surface now splices the run-gap scanner, not just the gate it feeds — #1001.**
   `templates/routing/slots.js` defined one gap-sweep invocation, `fz-gapsweep-run`, and it was the
   `--check` gate. The gate **consumes** `.cache/run-gaps.json`; the scanner **produces** it, and the

@@ -23,7 +23,7 @@ It is codified as five **first-principles axioms**, canonical in `templates/axio
 
 ## First Principles
 
-These are the workflow's tie-breaking axioms, applied in priority order whenever a situation is not already settled.
+The numbered axioms are tie-breakers, applied in priority order whenever a situation is not already settled; the paragraphs that follow them are standing defaults that hold whether or not anything else settles the case.
 
 1. **Correct first.** Never trade correctness for speed or cost; rework is the most expensive outcome.
 2. **Then save human time.** Remove manual steps and shorten the wait, without weakening axiom 1.
@@ -32,6 +32,8 @@ These are the workflow's tie-breaking axioms, applied in priority order whenever
 5. **Own your own verdicts.** Never let a system the workflow does not own (CI, an external service) be the judge of done.
 
 **Tie-breaker protocol:** when nothing else covers a situation, resolve it by walking these axioms in order and record a one-line derivation alongside the work. Recording it is useful and never required.
+
+**Check the premise before it shapes the work:** an issue is a claim recorded earlier against a tree that has since moved, so establish what is true *now* at the place it points and let the measurement rather than the filed text decide what gets built. The usual outcome is neither *right* nor *wrong* but right-with-a-detail-that-misroutes — a stale locator, a miscounted set, a clause that breaks if executed literally — so carry the measurement forward, never a bare verdict. Where the two disagree the issue gets corrected, not quietly worked around. Nothing inspects that you did this.
 
 **Dispatch production; keep decisions:** the orchestrator's context is the run's scarcest resource — a handoff costs once, inline residue taxes every later decision — so delegating discretionary production is the default and only the deciding stays inline; weigh the economics per case by judgment, with no justifier, evidence line, or approval attached.
 
