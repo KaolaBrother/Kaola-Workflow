@@ -163,6 +163,16 @@ found and fixed, no-impact reasons, and a verdict of `DOCKED` or `BLOCKED`. Only
 
 ## Step 6 — Write the summary
 
+The `## Run gaps` section below is written from what the sweep observed, so scan before writing it.
+The scan writes `.cache/run-gaps.json` and reports its `sweptClasses` — one row of that section per
+class it names — and Step 7 reconciles the section you wrote against that same artifact:
+
+```bash
+kaola_script(){ _n="$1"; _p="plugins/kaola-workflow-gitlab/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow-gitlab/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
+CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-gap-sweep.js" --project {project} --json
+```
+
 Create `kaola-workflow/{project}/finalization-summary.md`. It is the run's closing record and the
 last thing a reader has after the folder is archived:
 

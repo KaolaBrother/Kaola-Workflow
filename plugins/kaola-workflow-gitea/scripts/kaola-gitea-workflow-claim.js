@@ -3735,6 +3735,16 @@ function persistValidationToSummary(projectDir, validation) {
   const lines = ['classification: ' + (v.classification || 'unknown'),
     'green: ' + (v.green === true)];
   if (v.mode) lines.push('mode: ' + v.mode);
+  // #1002: the same culprit diagnostics the `--check` envelope carries, in the finding's own field
+  // names, because this copy is the one that outlives the process. Bulleted the way `## Changed
+  // Paths` below already bullets a path list. Nothing is written when the finding declined to
+  // diagnose: an empty list here would read as "measured, nothing changed".
+  if (v.stale_kind) lines.push('stale_kind: ' + v.stale_kind);
+  if (v.stale_paths_truncated) lines.push('stale_paths_truncated: true');
+  if (v.stale_paths && v.stale_paths.length) {
+    lines.push('stale_paths:');
+    for (const rel of v.stale_paths) lines.push('- ' + rel);
+  }
   for (const d of (v.detail || [])) lines.push('', d);
   if (!v.green && v.operator_hint) lines.push('', v.operator_hint);
   return appendSummarySection(projectDir, '## Validation', lines);
@@ -3829,6 +3839,9 @@ function persistMissionListToSummary(projectDir, mission) {
 //   checks.staging_guard         — 'ok' or the guard's reason
 //   checks.validation            — the validation CLASSIFICATION ('chains_green' when green)
 //   checks.dirty_paths           — uncommitted non-`kaola-workflow/` paths in the run root
+//   checks.stale_paths,          — the culprits a `chains_stale` finding named, verbatim; all three
+//     .stale_kind,                 absent unless the finding carried them
+//     .stale_paths_truncated
 //   authority                    — { main_root, linked_root, source, source_dir, dest_dir }: the
 //                                  topology the answers above were predicted over, so a reader can
 //                                  see WHICH tree each one came from
@@ -3914,6 +3927,19 @@ function evaluateFinalizePreconditions(root, project, opts) {
       options.base || null);
     checks.validation = (report.validation && report.validation.classification) || 'not_checked';
     checks.changed_paths = report.changed_paths;
+    // #1002: `chains_stale` names a condition and nothing that caused it, so a reader holding this
+    // envelope could not tell a CHANGELOG edit from a code change — two answers that demand opposite
+    // actions. The finding already computed the difference, and it travels ALONGSIDE the
+    // classification in the finding's own field names: `validation` is a documented bare token with
+    // live readers, and a fact that fits in sibling keys never justifies reshaping it. Verbatim —
+    // same members, same cap, same order — and NOT `changed_paths`, which measures this branch
+    // against its base rather than drift since the receipt.
+    // Absent stays absent: the diagnostics decline over a receipt bound to no clean commit, where an
+    // empty list would read as "measured, nothing changed" — a claim nothing made.
+    const diag = report.validation || {};
+    if (diag.stale_paths) checks.stale_paths = diag.stale_paths;
+    if (diag.stale_kind) checks.stale_kind = diag.stale_kind;
+    if (diag.stale_paths_truncated) checks.stale_paths_truncated = diag.stale_paths_truncated;
   }
 
   return { checks, reasons, authority: prediction.topology };

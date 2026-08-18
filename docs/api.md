@@ -240,7 +240,13 @@ preconditions come back from one invocation instead of one per re-run. Zero side
 ```
 
 `checks` carries `mirror`, `workflow_state`, `implementation_commit`, `staging_guard`, `validation`,
-`changed_paths`, `dirty_paths`. `reasons` carries the most specific token per unmet precondition and
+`changed_paths`, `dirty_paths`, and — only when a `chains_stale` finding named them — `stale_paths`,
+`stale_kind` and `stale_paths_truncated`. `validation` is the bare classification token; the three
+stale fields sit beside it rather than inside it, so a reader can tell a prose edit from a code
+change without re-deriving the hashes. They are the finding's own values, verbatim, and absent when
+it declined to diagnose — an empty list would read as "measured, nothing changed". **`stale_paths` is
+not `changed_paths`**: the first is drift since the receipt was stamped, the second is this branch
+against its base, and the two routinely disagree. `reasons` carries the most specific token per unmet precondition and
 is empty when the run is finalize-ready. Nothing short-circuits: a failed rung never hides a later
 one. `validation` is reported as state, never as a reason — it stopped being a precondition when it
 stopped being a verdict.
@@ -1424,11 +1430,18 @@ Usage: kaola-workflow-gap-sweep.js --project <name> [--json] [--check]
                                    [--summary <path>] [--output <path>] [--offline]
 ```
 
-Two modes. The **scanner** (default) scans the run's `.cache/` for gaps the run itself discovered
-and writes `.cache/run-gaps.json`. The **gate** (`--check`) verifies every swept gap is mapped in
-`finalization-summary.md` `## Run gaps`, one line each, either `filed: #N` or
-`noise: <justification>`. An orchestrator-authored row the scanner never observed is added to
-`.cache/run-gaps-manual.md` and re-swept, so what is written was actually swept.
+Two modes, and they are exclusive — neither runs the other. The **scanner** (default) scans the run's
+`.cache/` for gaps the run itself discovered, writes `.cache/run-gaps.json`, and under `--json`
+reports the `sweptClasses` the `## Run gaps` section is written from. The **gate** (`--check`) reads
+that artifact back and verifies every swept gap is mapped in `finalization-summary.md` `## Run gaps`,
+one line each, either `filed: #N` or `noise: <justification>`. An orchestrator-authored row the
+scanner never observed is added to `.cache/run-gaps-manual.md` and re-swept, so what is written was
+actually swept.
+
+The gate consumes; it never produces. Run against an artifact no scanner wrote it refuses
+`artifact_missing` and exits 1, which is why the finalize surface splices **both** invocations — the
+scan in Step 6, ahead of the section its `sweptClasses` populates, and the gate in Step 7 to
+reconcile the two sides.
 
 ## Telemetry — `kaola-workflow-telemetry-report.js`
 

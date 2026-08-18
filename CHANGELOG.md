@@ -4,6 +4,41 @@
 
 ### Added
 
+- **The finalize surface now splices the run-gap scanner, not just the gate it feeds — #1001.**
+  `templates/routing/slots.js` defined one gap-sweep invocation, `fz-gapsweep-run`, and it was the
+  `--check` gate. The gate **consumes** `.cache/run-gaps.json`; the scanner **produces** it, and the
+  two modes are exclusive — `main()` is an if/else and `runCheck` never calls `runScan`. So the
+  surface shipped step 3 of the three-step sequence `docs/conventions.md` states as a MUST, and
+  omitted step 1 on all **12** finalize surfaces (6 tracked, 6 gitignored additive-edition copies).
+  **This was never a silent wrong verdict.** Measured: the gate fails closed, refusing
+  `{"result":"refuse","reason":"artifact_missing"}` with exit 1 and naming the missing step in its
+  own payload. The cost was a stop the surface had not told the reader how to clear.
+  **What the archive census found is why this was worth doing.** Across the 177 runs archived since
+  gap-sweep was born (`issue-435`, 2026-06-13 — the 228 before it hold nothing, so whole-archive
+  percentages are meaningless), the artifact is present 140 times, and in the most recent 40 runs it
+  is present **40 of 40** with **zero** cases of a stamped `## Run gaps` row lacking a populated
+  artifact behind it. The omission was costing nothing in outcomes. It was costing something in
+  mechanism: the producer has **no automated caller anywhere**, so all 140 artifacts were hand-typed,
+  and all **27** populated artifacts in the recent 40 carry a `manual:*` class — machine-recorded
+  proof that an operator wrote the seed and then invoked the producer, every time. Exactly **one**
+  archived run of 140 records having done so. The single genuine escape post-dating the reverse
+  check is `bundle-888-889-890-892-893-894-895` (2026-08-01): six hand-written seed lines, six
+  summary rows, three real filings — and an artifact reading `sweptClasses: []`, because the scanner
+  was never re-run over the seed.
+  **Consumers were more exposed than this repo.** `install.sh` ships no `docs/`, so an installed
+  consumer never receives `conventions.md:507` and its only remaining route to the producer was
+  hitting the refusal. A new `fz-gapsweep-scan` slot now renders the scanner per forge and splices at
+  the head of `## Step 6`, **ahead of the `## Run gaps` grammar** rather than beside the gate,
+  because its reported `sweptClasses` is what tells the author which rows to write and Step 7
+  reconciles the two sides afterwards. Step 7's three references to "the scanner" — including
+  "re-run the scanner" — now have an antecedent. `kaola-workflow-gap-sweep.js` is byte-untouched,
+  which is why this is filed under Added: no code was repaired. Guarded by `T6c` in
+  `test-route-reachability.js`, which reads the **rendered** surfaces (never the skeleton), derives
+  its universe from `GENERATED_SURFACES` so the gitignored editions cannot make it vacuous, asserts
+  that universe is 6 before asserting over it, binds each surface to its own forge basename, and
+  pins the **ordering** — a scan spliced after the gate would satisfy a "mentions `--json`" check
+  and supply nothing.
+
 - **The finalize surface now states the `## Run gaps` grammar it was only half-describing — #998,
   #1000.** Two archived summaries were unreadable to the scanner for two different reasons: a heading
   written `## Run gaps (reviewer-recorded, non-mechanical)` reads as **no section at all** (1 of 133
@@ -143,6 +178,40 @@
   `validate-script-sync.js` and `edition-sync.js --check` both green.
 
 ### Fixed
+
+- **A `chains_stale` finding now carries its culprit paths to both consumers that dropped them —
+  #1002.** `finalize --check` reported `"validation": "chains_stale"` as a bare token: no path, no
+  kind, neither hash. The diagnostics existed — `attachChainsStaleDiagnostics` computes
+  `stale_paths` / `stale_kind` at the same `evaluateChainReceipt` call the `--check` path itself
+  makes — and were discarded one frame later. Reproduced on two independently staged stale trees
+  (a committed code file, and a `CHANGELOG.md` edit that is test-consumed on self-host): the two
+  envelopes came back **byte-identical**, though one means "re-run the chains" and the other means
+  "a prose line moved". Reading which was which required opening `computeCodeTreeHash` — the manual
+  archaeology #648 shipped its emission to end.
+  **The issue named one drop site; there were two, and they lose different things.**
+  `evaluateFinalizePreconditions` flattened the finding to `classification` and lost everything.
+  `persistValidationToSummary` renders a fixed field list, so `finalization-summary.md`'s
+  `## Validation` kept both hashes — they ride inside `detail[0]` — and lost the paths. That is the
+  **durable** copy, so its loss outlived the run that took it. The finalize transaction's own
+  envelope was never affected; it assigns the whole finding object and always carried the culprits.
+  **This is not a regression of #648.** `--check` did not exist when #648 landed:
+  `evaluateFinalizePreconditions` arrived 19 days later and was born flattening, and #648's own
+  verifying surface (`plan-validator.js --finalize-check`) has since been retired with the plan
+  grammar, taking its five tests with it. Its emission survives today only on
+  `run-chains --release-check`.
+  Both sites now carry `stale_paths`, `stale_kind` and `stale_paths_truncated` verbatim — same
+  members, same cap, same order — across all four `*claim.js` copies. **`checks.validation` is
+  unchanged**, still the documented bare token: the facts fit in sibling keys, and a fact that fits
+  beside a contract never justifies reshaping it. `stale_paths` is deliberately **not**
+  `changed_paths`, which already sat in that envelope answering a different question — drift since
+  the receipt versus this branch against its base — and the two disagreed in the very run that filed
+  this. Absent stays absent: where the diagnostics decline (a receipt bound to no clean commit, or a
+  dirty-stamped worktree) nothing is emitted, because an empty list would read as "measured, nothing
+  changed". Guarded by `T15a`–`T15e` in `test-finalize-door.js`; `T15b` is the load-bearing one,
+  pinning that the prose-only and code-stale envelopes are now distinguishable.
+  Not converted to a refusal, and the drop is **generic rather than `chains_stale`-specific** — the
+  same two renderers discard `chains_red`'s `redChains[]`, which only reads as sighted because that
+  classification happens to name its culprit inside `detail`. Left as an observation, not built on.
 
 - **A comment in `test-route-reachability.js` no longer states a count nothing maintains — #999.** The
   parenthetical at `:1008` read "Blocks legitimately led by a plain content token (9 of the 30 today)".

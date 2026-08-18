@@ -145,6 +145,10 @@ const SPLICES = {
 
   // ---- finalize: forge nouns + the per-forge script invocations. ---------
   "fz-runchains-run": {"github":"node \"$KAOLA_SCRIPTS/kaola-workflow-run-chains.js\" --project {project}","gitlab":"node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-run-chains.js\" --project {project}","gitea":"node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-run-chains.js\" --project {project}"},
+  // gap-sweep's two modes are exclusive and both are spliced: the scanner writes the artifact and
+  // reports `sweptClasses` (Step 6, before the section those classes are written into), the gate
+  // reads it back (Step 7). A surface carrying only the gate can just refuse `artifact_missing`.
+  "fz-gapsweep-scan": {"github":"node \"$KAOLA_SCRIPTS/kaola-workflow-gap-sweep.js\" --project {project} --json","gitlab":"node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-gap-sweep.js\" --project {project} --json","gitea":"node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-gap-sweep.js\" --project {project} --json"},
   "fz-gapsweep-run": {"github":"node \"$KAOLA_SCRIPTS/kaola-workflow-gap-sweep.js\" --project {project} --check","gitlab":"node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-gap-sweep.js\" --project {project} --check","gitea":"node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-gap-sweep.js\" --project {project} --check"},
   "fz-issue-closure": {"github":"If the project links issues, close every GitHub issue in the set — but only","gitlab":"If the project links issues, close every GitLab issue in the set — but only","gitea":"If the project links issues, close every Gitea issue in the set — but only"},
   "fz-sink-issue": {"github":"SINK_ISSUE=$(grep '^issue_number:' \"$SINK_STATE_FILE\" | awk '{print $2}')","gitlab":"SINK_ISSUE=$(grep '^issue_iid:' \"$SINK_STATE_FILE\" | awk '{print $2}')\n[ -z \"$SINK_ISSUE\" ] && SINK_ISSUE=$(grep '^issue_number:' \"$SINK_STATE_FILE\" | awk '{print $2}')","gitea":"SINK_ISSUE=$(grep '^issue_number:' \"$SINK_STATE_FILE\" | awk '{print $2}')"},

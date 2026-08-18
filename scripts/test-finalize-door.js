@@ -2978,6 +2978,216 @@ function closureBlockOf(dest) {
 })();
 
 // ---------------------------------------------------------------------------
+// T15 (#1002) — a `chains_stale` finding reaches BOTH finalize consumers CARRYING ITS CULPRITS.
+//
+// T3d already pins that a stale receipt reports its TOKEN twice. The token is where the report
+// stops: `chains_stale` names a condition and names nothing that caused it, so a reader holding the
+// envelope cannot tell a CHANGELOG edit from a code change, and the two answers demand opposite
+// actions (regenerate the receipt vs. go look at what changed). The producer already computed the
+// difference — the finding object `evaluateChainReceipt` returns carries `stale_paths` and
+// `stale_kind` — and two consumers throw it away. This block pins that they stop.
+//
+// Field names are the PAYLOAD'S OWN, at both sites: `stale_paths`, `stale_kind`,
+// `stale_paths_truncated`. One wording, so nobody has to learn a second spelling for the same fact.
+//
+// WHAT IS DELIBERATELY NOT CHANGED. `checks.validation` stays the bare classification STRING. It is
+// a documented envelope contract with live readers (docs/api.md, `finalize --check`), and reshaping
+// it into an object would break them to carry a fact that fits perfectly well in sibling keys. So
+// the diagnostics arrive ALONGSIDE it, exactly as `changed_paths` and `dirty_paths` already do — and
+// T15 asserts the string is still a string, so a fix that reshapes it fails here.
+//
+// `checks.stale_paths` IS NOT `checks.changed_paths`. They answer different questions over different
+// intervals — "what moved since the chains ran" vs "what this branch changed since its base" — and in
+// the run that filed #1002 they genuinely disagreed. The code leg below asserts that disagreement
+// directly, so an implementation that aliases one onto the other cannot pass.
+//
+// THE WORKING CONTROL. The finalize TRANSACTION envelope (the `validation` object on the finalize
+// emit) assigns the whole finding and already carries everything. Every leg asserts it. That is not
+// spare coverage: without it a red on the two consumers could equally mean "the fixture never
+// produced diagnostics at all", and the pins would be measuring the fixture instead of the drop.
+//
+// ABSENCE IS A VALUE. `computeChainsStaleDiagnostics` declines to answer when the receipt is not
+// bound to a resolvable clean commit (no headSha, or a dirty-stamped worktree), and the two degrade
+// legs pin that the consumers say NOTHING there rather than emitting `[]` — an empty list reads as
+// "measured, and nothing changed", which over a stale receipt is a claim the code never made.
+// ---------------------------------------------------------------------------
+(function T15_chainsStaleCarriesItsCulprits() {
+  console.log('T15: a chains_stale finding carries its culprit paths onto `--check` and into `## Validation`');
+
+  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const has = (obj, key) => !!obj && Object.prototype.hasOwnProperty.call(obj, key);
+  // The `## Validation` body as trimmed, non-empty lines — the section is a key/value block plus
+  // free paragraphs, and every assertion below is about a LINE, never about a substring that could
+  // land inside an interpolated hash or hint sentence.
+  const bodyLines = body => String(body || '').split('\n').map(l => l.trim()).filter(Boolean);
+
+  // One leg. Stales a fixture, then reads the SAME finding through all three consumers: the
+  // read-only `--check` envelope, the finalize transaction envelope (control), and the durable
+  // `## Validation` section. `mutateReceipt` is for the degrade legs; `staleTree` commits the drift.
+  function leg(spec) {
+    const fx = buildFinalizeFixture('t15', spec.project, spec.issue);
+    try {
+      const produced = produceGreenReceipt(fx.repo, fx.project, fx.greenMock);
+      assert(produced.receipt !== null, spec.label + ': the producer wrote a chain receipt'
+        + '\nstderr: ' + String(produced.result.stderr || '').slice(0, 300));
+      if (!produced.receipt) return;
+      if (spec.mutateReceipt) {
+        putReceiptEverywhere(fx.repo, fx.project, JSON.stringify(spec.mutateReceipt(produced.receipt)));
+      }
+      spec.staleTree(fx.repo);
+      G.commitAll(fx.repo, 'drift after the chains ran');
+
+      // (1) THE READ-ONLY PRE-FLIGHT — drop site 1.
+      const chk = fx.finalize(['--check', '--json']);
+      const checks = (chk.out && chk.out.checks) || null;
+      assert(chk.r.status === 0 && checks !== null,
+        spec.label + ': `finalize --check --json` emits a checks envelope and exits 0 — a receipt '
+        + 'finding is state, never an unmet precondition; got status=' + chk.r.status
+        + ' stdout=' + String(chk.r.stdout || '').slice(0, 500));
+      if (!checks) return;
+      assert(checks.validation === 'chains_stale',
+        spec.label + ': the pre-flight classifies the receipt chains_stale, and `validation` is still '
+        + 'the BARE TOKEN STRING the documented envelope promises — a fix that reshapes it into an '
+        + 'object breaks every existing reader; got ' + JSON.stringify(checks.validation));
+
+      // (2) THE TRANSACTION ENVELOPE — the working control, green before the fix.
+      const fin = fx.finalize();
+      const v = (fin.out && fin.out.validation) || null;
+      assert(fin.r.status === 0 && v && v.classification === 'chains_stale',
+        spec.label + ' [control]: finalize passes over the stale receipt and its envelope carries the '
+        + 'finding OBJECT; got status=' + fin.r.status + ' validation=' + JSON.stringify(v));
+      if (!v) return;
+
+      // (3) THE DURABLE COPY — drop site 2.
+      const summary = readFinalizationSummary(fx.repo, fx.project, fin.out && fin.out.dest);
+      assert(summary !== null, spec.label + ': finalization-summary.md exists after finalize');
+      const lines = summary ? bodyLines(sectionBody(summary.text, '## Validation')) : null;
+      assert(lines !== null && lines.length > 0,
+        spec.label + ': the archived summary carries a non-empty `## Validation` section');
+
+      spec.check({ label: spec.label, checks, control: v, lines: lines || [] });
+    } finally { rm(fx.base); }
+  }
+
+  // ---- CODE-stale: one new source file, committed after the receipt was stamped.
+  leg({
+    project: 'issue-9101', issue: 9101, label: 'T15a (code-stale)',
+    staleTree: repo => fs.writeFileSync(path.join(repo, 'newcode.js'), 'module.exports = 1002;\n'),
+    check: ({ label, checks, control, lines }) => {
+      assert(eq(control.stale_paths, ['newcode.js']) && control.stale_kind === 'code',
+        label + ' [control]: the finding itself names the culprit — if this fails the FIXTURE is '
+        + 'wrong, not the consumers; got ' + JSON.stringify({ p: control.stale_paths, k: control.stale_kind }));
+      assert(eq(checks.stale_paths, ['newcode.js']),
+        label + ': `checks.stale_paths` carries the culprit path the finding computed, verbatim; got '
+        + JSON.stringify(checks.stale_paths));
+      assert(checks.stale_kind === 'code',
+        label + ': `checks.stale_kind` says the drift is CODE; got ' + JSON.stringify(checks.stale_kind));
+      // The anti-aliasing pin. `changed_paths` is measured against the branch base and is EMPTY here
+      // (this fixture never left main), while `stale_paths` is measured against the receipt's own
+      // commit and is not. Satisfying stale_paths by pointing it at changed_paths fails here.
+      assert(!(checks.changed_paths || []).includes('newcode.js')
+        && (checks.stale_paths || []).includes('newcode.js'),
+        label + ': `stale_paths` and `changed_paths` answer DIFFERENT questions and disagree here — '
+        + 'the first is drift since the receipt, the second is this branch against its base; got '
+        + 'changed_paths=' + JSON.stringify(checks.changed_paths)
+        + ' stale_paths=' + JSON.stringify(checks.stale_paths));
+      assert(lines.includes('stale_kind: code'),
+        label + ': the durable `## Validation` records `stale_kind: code` on its own line; got '
+        + JSON.stringify(lines));
+      assert(lines.includes('stale_paths:') && lines.includes('- newcode.js'),
+        label + ': and lists the culprit under a `stale_paths:` label, one `- <path>` bullet per '
+        + 'path — the same rendering `## Changed Paths` already uses; got ' + JSON.stringify(lines));
+      // Negative half of the discrimination this issue is about: a code-stale record must not read
+      // like the prose-only one below.
+      assert(!lines.includes('stale_kind: prose-only'),
+        label + ': and never claims prose-only; got ' + JSON.stringify(lines));
+    }
+  });
+
+  // ---- PROSE-ONLY-stale: CHANGELOG.md is in SELF_HOST_TEST_CONSUMED, so it is code-VISIBLE (it
+  // stales the receipt) yet classified prose. THE PIN THAT MATTERS MOST: before the fix this leg's
+  // `--check` envelope and `## Validation` section were byte-identical to T15a's, which is exactly
+  // the indistinguishability #1002 names.
+  leg({
+    project: 'issue-9102', issue: 9102, label: 'T15b (prose-only-stale)',
+    staleTree: repo => fs.appendFileSync(path.join(repo, 'CHANGELOG.md'), '\n- a narrative line\n'),
+    check: ({ label, checks, control, lines }) => {
+      assert(eq(control.stale_paths, ['CHANGELOG.md']) && control.stale_kind === 'prose-only',
+        label + ' [control]: the finding itself classifies the drift prose-only; got '
+        + JSON.stringify({ p: control.stale_paths, k: control.stale_kind }));
+      assert(eq(checks.stale_paths, ['CHANGELOG.md']),
+        label + ': `checks.stale_paths` names the prose file; got ' + JSON.stringify(checks.stale_paths));
+      assert(checks.stale_kind === 'prose-only',
+        label + ': `checks.stale_kind` reads `prose-only` — THE discrimination #1002 exists for: this '
+        + 'envelope and T15a\'s were identical before, and they demand different actions; got '
+        + JSON.stringify(checks.stale_kind));
+      assert(lines.includes('stale_kind: prose-only'),
+        label + ': the durable `## Validation` records `stale_kind: prose-only`; got ' + JSON.stringify(lines));
+      assert(lines.includes('stale_paths:') && lines.includes('- CHANGELOG.md'),
+        label + ': and names the prose culprit; got ' + JSON.stringify(lines));
+      assert(!lines.includes('- newcode.js'),
+        label + ': and names nothing the code leg named; got ' + JSON.stringify(lines));
+    }
+  });
+
+  // ---- TRUNCATED: more culprits than the producer will list. The cap is production's to choose, so
+  // nothing here spells it — the control says what the finding held and the consumers must match it
+  // EXACTLY, flag included. A consumer that copies the list and drops the flag reports twenty paths
+  // as if they were all of them.
+  leg({
+    project: 'issue-9103', issue: 9103, label: 'T15c (truncated)',
+    staleTree: repo => {
+      for (let i = 0; i < 40; i++) {
+        fs.writeFileSync(path.join(repo, 'bulk' + String(i).padStart(2, '0') + '.js'), 'module.exports = ' + i + ';\n');
+      }
+    },
+    check: ({ label, checks, control, lines }) => {
+      assert(control.stale_paths_truncated === true && (control.stale_paths || []).length < 40,
+        label + ' [control]: the finding capped its list and flagged the cap; got length='
+        + (control.stale_paths || []).length + ' truncated=' + JSON.stringify(control.stale_paths_truncated));
+      assert(eq(checks.stale_paths, control.stale_paths),
+        label + ': `checks.stale_paths` reproduces the finding\'s list exactly — same members, same '
+        + 'cap, same order; got ' + JSON.stringify(checks.stale_paths));
+      assert(checks.stale_paths_truncated === true,
+        label + ': `checks.stale_paths_truncated` survives too — without it a capped list reads as a '
+        + 'complete one; got ' + JSON.stringify(checks.stale_paths_truncated));
+      assert(lines.includes('stale_paths_truncated: true'),
+        label + ': and the durable `## Validation` says the list was cut; got ' + JSON.stringify(lines.slice(0, 8)));
+      assert((control.stale_paths || []).length > 0 && control.stale_paths.every(p => lines.includes('- ' + p)),
+        label + ': every path the finding kept is a bullet in the durable section; got '
+        + JSON.stringify(lines.slice(0, 8)));
+    }
+  });
+
+  // ---- DEGRADE (dirty-stamped receipt) and DEGRADE (no headSha). computeChainsStaleDiagnostics
+  // refuses to answer over a receipt it cannot bind to a clean commit. Both consumers must then be
+  // SILENT — no key, not an empty one.
+  for (const d of [
+    { project: 'issue-9104', issue: 9104, label: 'T15d (dirty-stamped receipt)',
+      mutateReceipt: r => Object.assign({}, r, { workTreeHash: 'deadbeefdeadbeef' }) },
+    { project: 'issue-9105', issue: 9105, label: 'T15e (receipt carries no headSha)',
+      mutateReceipt: r => { const c = Object.assign({}, r); delete c.headSha; return c; } },
+  ]) {
+    leg({
+      project: d.project, issue: d.issue, label: d.label, mutateReceipt: d.mutateReceipt,
+      staleTree: repo => fs.writeFileSync(path.join(repo, 'newcode.js'), 'module.exports = 1002;\n'),
+      check: ({ label, checks, control, lines }) => {
+        assert(!has(control, 'stale_paths') && !has(control, 'stale_kind'),
+          label + ' [control]: the finding itself declines to diagnose an unbindable receipt; got '
+          + JSON.stringify({ p: control.stale_paths, k: control.stale_kind }));
+        assert(!has(checks, 'stale_paths') && !has(checks, 'stale_kind'),
+          label + ': so the pre-flight emits NEITHER key — `[]` would read as "measured, nothing '
+          + 'changed", which over a stale receipt is a claim nothing made; got '
+          + JSON.stringify({ stale_paths: checks.stale_paths, stale_kind: checks.stale_kind }));
+        assert(!lines.some(l => /^stale_(paths|kind)/.test(l)),
+          label + ': and the durable `## Validation` invents no diagnostics either; got '
+          + JSON.stringify(lines));
+      }
+    });
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // Final result — AUTHORITATIVE. Two appended blocks now sit after this file's original footer, and
 // the counters are cumulative, so the two earlier summary lines are intermediate totals and THIS is
 // the one that decides the exit code.

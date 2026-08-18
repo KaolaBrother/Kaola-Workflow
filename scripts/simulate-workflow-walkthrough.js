@@ -5178,6 +5178,94 @@ function testArchiveIntegrityPortedToAllEditions832() {
   console.log('testArchiveIntegrityPortedToAllEditions832: PASSED');
 }
 
+// #1002: the culprit diagnostics a `chains_stale` finding carries — `stale_paths`, `stale_kind`,
+// `stale_paths_truncated` — pinned on BOTH of their writers: the `finalize --check` envelope
+// (`evaluateFinalizePreconditions`) and the durable `## Validation` section
+// (`persistValidationToSummary`). Same class as the #832 guard above, same reason: claim.js is a
+// DIVERGENT HAND-PORT on gitlab + gitea, so nothing generates it and nothing byte-checks it. Two of
+// the four copies were otherwise unguarded — disabling the gitlab `checks.stale_kind` assignment
+// leaves edition-sync, validate-script-sync and the gitlab suite all green, and no gitlab/gitea test
+// mentions these fields at all. The codex copy rides on whole-file byte-identity with canonical;
+// gitlab and gitea ride on nothing.
+//
+// Pinned per COPY and per SITE, never in aggregate — an aggregate assertion cannot witness WHICH
+// port dropped the line. Pinned as the GUARDED WRITE rather than a bare token, because these same
+// field names appear in the `checks.*` doc comment above evaluateFinalizePreconditions in every
+// copy, so a file-wide substring match would be satisfied by prose alone. The `if (...)` half is
+// contract too, not formatting: absent stays absent, because an empty list here would read as
+// "measured, nothing changed" — a claim nothing made.
+//
+// The four paths are spelled out for the same reason the #832 guard spells them out: no registry
+// enumerates the claim.js ports as data (COMMON_SCRIPTS covers canonical->codex only, which is
+// exactly the hole this pin fills).
+function testStaleDiagnosticsPortedToAllEditions1002() {
+  const claims = [
+    'scripts/kaola-workflow-claim.js',
+    'plugins/kaola-workflow/scripts/kaola-workflow-claim.js',
+    'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js',
+    'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js',
+  ];
+  // Both writers carry the same function name in all four ports — this pair took no port-specific
+  // rename — so one site list serves every copy.
+  const sites = [
+    {
+      fn: 'evaluateFinalizePreconditions',
+      what: 'the `finalize --check` envelope',
+      required: [
+        { label: '`checks.stale_paths`, assigned from the finding and only when it carried one',
+          re: /if\s*\(\s*diag\.stale_paths\s*\)\s*\{?\s*checks\.stale_paths\s*=\s*diag\.stale_paths\b/ },
+        { label: '`checks.stale_kind`, assigned from the finding and only when it carried one',
+          re: /if\s*\(\s*diag\.stale_kind\s*\)\s*\{?\s*checks\.stale_kind\s*=\s*diag\.stale_kind\b/ },
+        { label: '`checks.stale_paths_truncated`, assigned from the finding and only when it carried one',
+          re: /if\s*\(\s*diag\.stale_paths_truncated\s*\)\s*\{?\s*checks\.stale_paths_truncated\s*=\s*diag\.stale_paths_truncated\b/ },
+      ],
+    },
+    {
+      fn: 'persistValidationToSummary',
+      what: 'the durable `## Validation` section of finalization-summary.md',
+      required: [
+        { label: 'the `stale_kind: ` line, emitted from the finding\'s own field',
+          re: /if\s*\(\s*v\.stale_kind\s*\)\s*\{?\s*lines\.push\(\s*'stale_kind: '\s*\+\s*v\.stale_kind\b/ },
+        { label: 'the `stale_paths_truncated: true` line',
+          re: /if\s*\(\s*v\.stale_paths_truncated\s*\)\s*\{?\s*lines\.push\(\s*'stale_paths_truncated: true'\s*\)/ },
+        { label: 'the non-empty guard on the `stale_paths` list',
+          re: /if\s*\(\s*v\.stale_paths\s*&&\s*v\.stale_paths\.length\s*\)/ },
+        { label: 'the `stale_paths:` list header',
+          re: /lines\.push\(\s*'stale_paths:'\s*\)/ },
+        { label: 'the per-path bullet the list header promises',
+          re: /for\s*\(\s*const\s+\w+\s+of\s+v\.stale_paths\s*\)\s*lines\.push\(\s*'- '\s*\+\s*\w+\s*\)/ },
+      ],
+    },
+  ];
+  for (const rel of claims) {
+    const src = fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+    for (const site of sites) {
+      const start = src.indexOf('function ' + site.fn + '(');
+      assert(start !== -1,
+        '#1002 port guard: ' + rel + ' has no ' + site.fn + '() — ' + site.what + ' must exist in '
+          + 'every edition');
+      // Scoped to the function BODY so the `checks.*` doc comment that sits ABOVE the envelope
+      // writer cannot stand in for the code — and then STRIPPED OF COMMENTS, because a body-scoped
+      // regex is still satisfied by the very line it is looking for sitting commented out. That is
+      // not hypothetical: `// if (diag.stale_paths) checks.stale_paths = diag.stale_paths;` was
+      // measured passing this guard before the strip was added. Both writers contain zero block
+      // comments and zero mid-line `//` today, so dropping whole comment lines and `/* */` spans
+      // cannot swallow live code or a `//` inside a string literal.
+      const after = src.indexOf('\nfunction ', start + 1);
+      const body = src.slice(start, after === -1 ? src.length : after)
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split('\n').filter(line => !/^\s*\/\//.test(line)).join('\n');
+      for (const r of site.required) {
+        assert(r.re.test(body),
+          '#1002 port guard: ' + rel + ' ' + site.fn + '() must carry ' + r.label + ' in '
+            + site.what + ' — claim.js is a DIVERGENT hand-port on gitlab/gitea, so nothing '
+            + 'generates it and nothing byte-checks it; a line skipped here ships silently');
+      }
+    }
+  }
+  console.log('testStaleDiagnosticsPortedToAllEditions1002: PASSED');
+}
+
 function testSinkMergeBlocksUnpushedCommits() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-merge-block-')));
   const remotePath = initGitRepoWithBareRemote(tmp);
@@ -11606,6 +11694,7 @@ function buildRegistry() {
   add('testSinkRefusesDirtyWorktree',                     testSinkRefusesDirtyWorktree);
   add('testProbeHelpersFailClosed',                       testProbeHelpersFailClosed);
   add('testArchiveIntegrityPortedToAllEditions832',       testArchiveIntegrityPortedToAllEditions832);
+  add('testStaleDiagnosticsPortedToAllEditions1002',      testStaleDiagnosticsPortedToAllEditions1002);
   add('testSinkMergeBlocksUnpushedCommits',               testSinkMergeBlocksUnpushedCommits);
   add('testAssertWorktreeCleanFailsClosedOnProbeFault',   testAssertWorktreeCleanFailsClosedOnProbeFault);
   add('testAssertWorktreeCleanFailsClosedOnListProbeFault', testAssertWorktreeCleanFailsClosedOnListProbeFault);

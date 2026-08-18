@@ -177,6 +177,16 @@ found and fixed, no-impact reasons, and a verdict of `DOCKED` or `BLOCKED`. Only
 
 ## Step 6 — Write the summary
 
+The `## Run gaps` section below is written from what the sweep observed, so scan before writing it.
+The scan writes `.cache/run-gaps.json` and reports its `sweptClasses` — one row of that section per
+class it names — and Step 7 reconciles the section you wrote against that same artifact:
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-gap-sweep.js" --project {project} --json
+```
+
 Create `kaola-workflow/{project}/finalization-summary.md`. It is the run's closing record and the
 last thing a reader has after the folder is archived:
 
