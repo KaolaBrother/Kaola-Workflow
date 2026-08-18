@@ -1,0 +1,20 @@
+{
+  "project": "bundle-1001-1002",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:hint-enrichment-unshipped",
+      "sample": "VALIDATION_HINTS.chains_stale is a zero-arg template while chains_red one line below takes ctx; #648 item B.3 never shipped",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:handport-coverage-generalized",
+      "sample": "a mutant gitlab claim.js passes edition-sync, validate-script-sync and the gitlab suite; only per-behaviour token pins cover the divergent forge ports",
+      "count": 1
+    },
+    {
+      "reasonClass": "manual:generic-payload-projection",
+      "sample": "both finalize validation renderers project a fixed field list, so any finding payload richer than that list loses keys; chains_red loses redChains[]",
+      "count": 1
+    }
+  ]
+}
