@@ -11422,6 +11422,7 @@ function testAxiomBlockByteIdentity() {
   const routing = require('./generate-routing-surfaces.js');
   const opencodeSync = require('./sync-opencode-edition.js');
   const kimiSync = require('./sync-kimi-edition.js');
+  const grokSync = require('./sync-grok-edition.js');
 
   const axioms = read(path.join(repoRoot, 'templates', 'axioms.md'));
   assert(axioms.startsWith('## First Principles'),
@@ -11448,6 +11449,7 @@ function testAxiomBlockByteIdentity() {
     const ocRel = path.relative(repoRoot, path.join(opencodeSync.outDirs(forge).command, base + '.md'));
     surfaces.push({ id: ocRel, body: opencodeSync.renderCommand(canon, forge, ocRel) });
     surfaces.push({ id: kimiSync.skillRel(base, forge), body: kimiSync.renderCommand(canon, base, forge) });
+    surfaces.push({ id: grokSync.commandRel(base, forge), body: grokSync.renderCommand(canon, base, forge) });
   }
 
   // #1005: the repo's own two prose surfaces. Named, not derived — they ARE the subject, exactly as

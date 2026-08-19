@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 // runtime-edition-forge.js — the runtime x forge layout, single-sourced.
 //
-// An ADDITIVE runtime edition (opencode, Kimi Code) is a runtime, not a forge:
+// An ADDITIVE runtime edition (opencode, Kimi Code, Grok CLI) is a runtime, not a forge:
 // it is not wired into `npm test`, `edition-sync.js`, `install.sh`, or the SIX
 // routing surfaces, and it keeps its own suite. It nevertheless has to KNOW the
 // forge it is being installed for, because the workflow prose is forge-shaped:
@@ -21,9 +21,9 @@
 //     kaola-workflow-install-manifest.js (`renameIfPorted`), the same transform
 //     install.sh consumes.
 //
-// Neither of those sources is modified by this module: it reads them. The two
-// runtime editions and their two installers consume it, so adding a forge or a
-// topic is a zero-edit change here.
+// Neither of those sources is modified by this module: it reads them. The
+// additive runtime editions (opencode, Kimi, Grok) and their installers consume
+// it, so adding a forge or a topic is a zero-edit change here.
 //
 // CLI (used by the installers, which cannot require() a node module inline):
 //   --forge=<f> --scripts-dir    absolute dir holding that forge's support scripts

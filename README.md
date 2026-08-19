@@ -1,6 +1,6 @@
 # Kaola-Workflow
 
-**Bookkeeping for coding agents.** You hand Kaola-Workflow an issue; it claims the work, writes the run's **mission list**, and runs it. The mission list is one file per run — an H1 carrying the goal, then items with four fields: `item` / `status` / `dispatched` / `result`. That is the whole coordination mechanism, and it exists so a session that dies mid-flight can be resumed by a successor with no context at all. Runs on four agent runtimes — **Claude Code, Codex, [opencode](https://opencode.ai), and [Kimi Code](https://www.kimi.com/code)** — across the **GitHub, GitLab, and Gitea** forges.
+**Bookkeeping for coding agents.** You hand Kaola-Workflow an issue; it claims the work, writes the run's **mission list**, and runs it. The mission list is one file per run — an H1 carrying the goal, then items with four fields: `item` / `status` / `dispatched` / `result`. That is the whole coordination mechanism, and it exists so a session that dies mid-flight can be resumed by a successor with no context at all. Runs on five agent runtimes — **Claude Code, Codex, [opencode](https://opencode.ai), [Kimi Code](https://www.kimi.com/code), and Grok CLI** — across the **GitHub, GitLab, and Gitea** forges.
 
 ## Philosophy
 
@@ -39,7 +39,7 @@ The numbered axioms are tie-breakers, applied in priority order whenever a situa
 
 **Parallel by default:** concurrency is the standing default for independent work, and work that genuinely feeds other work runs in order because it has to. Nothing inspects that choice — no proof, no evidence line, no cap: you can tell the difference, and the frontier is in front of you. Width stays sized to the true shape of the task rather than pushed as wide as it will go.
 
-That block is not a paraphrase of the canonical one — it is a byte-identical copy, and so are the twelve `workflow-init` surfaces this project ships (four runtimes × three forges) and the root `CLAUDE.md` it runs on. The test suite holds all fourteen to the same bytes, which means the axioms you just read are themselves one of the guarded surfaces.
+That block is not a paraphrase of the canonical one — it is a byte-identical copy, and so are the generated `workflow-init` surfaces this project ships and the root `CLAUDE.md` it runs on. The test suite holds that set to the same bytes (`testAxiomBlockByteIdentity` prints the count), which means the axioms you just read are themselves one of the guarded surfaces.
 
 A few beliefs follow from that order.
 
@@ -59,12 +59,12 @@ A few beliefs follow from that order.
 
 - **One resumable file per run** — a successor with no context reads it top to bottom: the H1 is the goal, `done` items and their `result` are what is known, `in-flight` items are the only decision to make, `todo` is what remains.
 - **A claim that is bookkeeping, not a gate** — it records which issues, branch and worktree the run owns, so parallel sessions do not collide.
-- **Subagents and worktrees** as declinable tools, with 14 vendored roles across all four runtimes.
-- **Multi-model** across Claude Code, Codex, opencode, and Kimi Code, right-sizing the model per dispatch.
+- **Subagents and worktrees** as declinable tools, with 14 vendored roles across all five runtimes.
+- **Multi-model** across Claude Code, Codex, opencode, Kimi Code, and Grok CLI, right-sizing the model per dispatch (Grok inherits the session model and effort).
 - **Independent review** — generated, runtime-neutral reviewer contracts (`code-reviewer`, `adversarial-verifier`, `security-reviewer`) with deterministic profile identity across runtimes.
 - **Self-owned validation** — the four local edition chains produce a candidate-bound receipt; a consumer repo records its own verdict instead. Nothing waits on a hosted pipeline.
 - **A finalization that reports** — validation classification, the paths the run changed, and the sink's findings all land on the envelope *and* durably in the archived summary.
-- **Four agent runtimes** (Claude Code, Codex, opencode, Kimi Code) across **three forges** (GitHub, GitLab, Gitea).
+- **Five agent runtimes** (Claude Code, Codex, opencode, Kimi Code, Grok CLI) across **three forges** (GitHub, GitLab, Gitea).
 
 ## Overview
 
@@ -149,7 +149,7 @@ which then drives one `/workflow-next` run per set until the scope is met.
 
 ## Workflow roles
 
-The workflow is built from a small, shared set of **roles**. All four runtimes provide the same role set — Claude Code installs vendored agents, Codex installs native `.toml` role profiles, opencode generates `.opencode/agent/` definitions, and Kimi Code generates `kaola-role-*` role-contract Skills — so the roles and model tiers below apply across runtimes.
+The workflow is built from a small, shared set of **roles**. All five runtimes provide the same role set — Claude Code installs vendored agents, Codex installs native `.toml` role profiles, opencode generates `.opencode/agent/` definitions, Kimi Code generates `kaola-role-*` role-contract Skills, and Grok CLI generates named `.grok/agents/` definitions — so the roles and model tiers below apply across runtimes. On Grok the `opus`/`sonnet` tokens stay classification metadata; every subagent inherits the session model and effort.
 
 Claude Code's agents are vendored directly from this repository; the prompts are derived from Everything Claude Code (ECC) under the MIT License (see [docs/agents-source.md](docs/agents-source.md) for the pinned upstream commit, attribution, and refresh procedure).
 
@@ -224,7 +224,7 @@ instead.
 
 Kaola-Workflow installs along two independent axes:
 
-- **Agent runtime** — where the coding agent runs: **Claude Code**, **Codex**, **opencode**, or **Kimi Code**. Each has its own installer.
+- **Agent runtime** — where the coding agent runs: **Claude Code**, **Codex**, **opencode**, **Kimi Code**, or **Grok CLI**. Each has its own installer.
 - **Git forge** — where issues and PRs/MRs live: **GitHub** (default), **GitLab**, or **Gitea**.
 
 | Runtime | Installer | Forge selection |
@@ -233,8 +233,9 @@ Kaola-Workflow installs along two independent axes:
 | **Codex** | `codex plugin marketplace add` + the matching plugin entry | per-plugin entry (`kaola-workflow`, `-gitlab`, `-gitea`) |
 | **opencode** | `./install-opencode.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 | **Kimi Code** | `./install-kimi.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
+| **Grok CLI** | `./install-grok.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 
-**Install/refresh every runtime at once — `./install-all.sh`.** To reinstall all four runtimes from the current checkout in one step, run `./install-all.sh --yes` (defaults: `--forge=github`, `--global`). It is a thin orchestrator: it runs each per-runtime installer above unchanged, prints the short SHA being installed, and ends with a per-runtime **PASS/FAIL summary table** — exiting non-zero if any runtime fails (continue-through by default; `--strict` aborts at the first failure). Skip one with `--skip=<runtime[,...]>` (logged, never silent) and preview without changes via `--check`. This entrypoint never folds the additive editions into `install.sh`/`npm test`/`edition-sync` — the per-runtime installers remain the individual path. The individual installers below are still fully supported.
+**Install/refresh every runtime at once — `./install-all.sh`.** To reinstall every runtime from the current checkout in one step, run `./install-all.sh --yes` (defaults: `--forge=github`, `--global`). It is a thin orchestrator: it runs each per-runtime installer above unchanged, prints the short SHA being installed, and ends with a per-runtime **PASS/FAIL summary table** — exiting non-zero if any runtime fails (continue-through by default; `--strict` aborts at the first failure). Skip one with `--skip=<runtime[,...]>` (logged, never silent) and preview without changes via `--check`. This entrypoint never folds the additive editions into `install.sh`/`npm test`/`edition-sync` — the per-runtime installers remain the individual path. The individual installers below are still fully supported.
 
 Forge editions:
 
@@ -246,9 +247,11 @@ Claude Code and Codex share the forge editions — pick one forge at a time; all
 
 **Kimi Code** is likewise an **additive** runtime (not a git forge): `./install-kimi.sh` touches none of the existing edition machinery, resolves its support scripts under `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts`, and never touches `~/.claude/`. It takes the same generated `--forge` axis. See [docs/kimi-edition.md](docs/kimi-edition.md).
 
-Being additive is about *edition machinery*, not about forge support: both runtimes remain outside `install.sh`, `edition-sync.js`, `npm test`, and the routing-surface contract, and each keeps its own suite (`node scripts/test-opencode-edition.js`, `node scripts/test-kimi-edition.js`).
+**Grok CLI** is likewise an **additive** runtime (not a git forge): `./install-grok.sh` touches none of the existing edition machinery, resolves its support scripts under `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.grok/agents/*.md` (`spawn_subagent` types); the three commands ship as `.grok/commands/*.md`. Every subagent inherits the session model and effort. It takes the same generated `--forge` axis. See [docs/grok-edition.md](docs/grok-edition.md).
 
-**The same workflow runs everywhere** — Claude Code, Codex, opencode, and Kimi Code. No installer writes the shared `~/.config/kaola-workflow/config.json`: there is no workflow path to select and no install-time configuration to seed. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) for each additive runtime.
+Being additive is about *edition machinery*, not about forge support: these runtimes remain outside `install.sh`, `edition-sync.js`, `npm test`, and the routing-surface contract, and each keeps its own suite (`node scripts/test-opencode-edition.js`, `node scripts/test-kimi-edition.js`, `node scripts/test-grok-edition.js`).
+
+**The same workflow runs everywhere** — Claude Code, Codex, opencode, Kimi Code, and Grok CLI. No installer writes the shared `~/.config/kaola-workflow/config.json`: there is no workflow path to select and no install-time configuration to seed. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) / [Grok CLI](docs/grok-edition.md) for each additive runtime.
 
 ### Claude Code
 
@@ -379,6 +382,17 @@ Kimi Code is an additive runtime — installed by its own script, not `--forge`.
 ```
 
 Hooks install as a managed `[[hooks]]` block in the **global** Kimi `config.toml` — Kimi has no project-scoped hooks config, so the hooks activate machine-wide whatever the install scope. Full detail: [docs/kimi-edition.md](docs/kimi-edition.md).
+
+### grok
+
+Grok CLI is an additive runtime — installed by its own script, not `--forge`. The grok edition delivers the workflow the Grok-native way: the three commands become flat `.grok/commands/*.md` slash commands and each vendored role ships as a named `.grok/agents/<role>.md` (`spawn_subagent` type). Every subagent **inherits the session model and effort** — there is no two-tier mapping, and a role's `opus`/`sonnet` token is declarative metadata only. From a local clone:
+
+```bash
+./install-grok.sh --global --yes   # deploy agents+commands into ${GROK_HOME:-~/.grok}
+./install-grok.sh --yes            # deploy into the current project (.grok/{agents,commands})
+```
+
+Hooks install as `${GROK_HOME:-~/.grok}/hooks/kaola-workflow-hooks.json` — global regardless of install scope. Full detail: [docs/grok-edition.md](docs/grok-edition.md).
 
 ## Codex
 
@@ -1564,7 +1578,7 @@ git pull
 ./install.sh
 ```
 
-To converge all four runtimes from one synchronized checkout, reinstall each runtime explicitly
+To converge every runtime from one synchronized checkout, reinstall each runtime explicitly
 (replace the Codex marketplace selector with the installed row reported by
 `codex plugin list --json`):
 
@@ -1592,6 +1606,9 @@ node <active-plugin-root>/scripts/install-codex-agent-profiles.js --global
 
 # Kimi Code — additive runtime, global install.
 ./install-kimi.sh --global --yes
+
+# Grok CLI — additive runtime, global install.
+./install-grok.sh --global --yes
 ```
 
 Restart Claude Code after reinstalling. If Codex hook content changed, open a new

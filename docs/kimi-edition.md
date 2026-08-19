@@ -249,7 +249,7 @@ token anywhere in the generated tree (the kimi twin of the opencode #544 path-le
 > The Kimi runtime is also covered by the top-level **`./install-all.sh`**
 > ("install/refresh every runtime" — see [README](../README.md#installation)),
 > which invokes this installer unchanged (`--global` by default) as the fourth
-> leg of its four-runtime sequence, with a per-runtime PASS/FAIL summary. It stays
+> leg of its five-runtime sequence, with a per-runtime PASS/FAIL summary. It stays
 > a thin orchestrator — it does **not** fold Kimi into
 > `install.sh`/`edition-sync.js`/`npm test` (the additive-edition boundary,
 > D-530-02, is preserved).

@@ -4,10 +4,12 @@ node_modules/
 .codex/
 .opencode/
 .kimi/
+.grok/
 # Per-forge generated trees for the additive runtime editions (.opencode-gitlab,
-# .kimi-gitea, …). Same generated-artifact posture as the bare trees above.
+# .kimi-gitea, .grok-gitlab, …). Same generated-artifact posture as the bare trees above.
 .opencode-*/
 .kimi-*/
+.grok-*/
 kaola-workflow/.locks/
 kaola-workflow/.sessions/
 kaola-workflow/.tickers/

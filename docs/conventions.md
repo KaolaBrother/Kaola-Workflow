@@ -854,22 +854,24 @@ See `docs/decisions/D-579-01.md` for the full decision record.
 humans decide values; own your own verdicts) **and for the standing-default paragraphs beneath them**
 — the file’s own intro distinguishes the two, because a standing default read as a tie-breaker
 applies only when nothing else settles the case, which inverts it. It reaches consumers by EMBEDDING
-byte-identically into fourteen surfaces — never per-edition copies, since `templates/` has no runtime
+byte-identically into the surfaces that `testAxiomBlockByteIdentity` prints — never per-edition copies, since `templates/` has no runtime
 `require()` consumer and the `BYTE_IDENTICAL_GROUPS` mechanism is built for that case, not this one.
 Read the count off `node scripts/simulate-workflow-walkthrough.js --only
 testAxiomBlockByteIdentity`, which prints it, rather than from this sentence. The drift guard is that
-scenario, comparing the canonical file’s content against all fourteen — the six tracked
-workflow-init command/skill files read from disk, the six opencode/kimi surfaces rendered in memory
-via the same sync scripts that generate them, and root `CLAUDE.md` and `README.md`. Those last two
+scenario, comparing the canonical file’s content against every surface it constructed — the six tracked
+workflow-init command/skill files read from disk, the additive-runtime init surfaces rendered in memory
+via the same sync scripts that generate them (one `sync-*-edition.js` per runtime, currently
+opencode, kimi, and grok), and root `CLAUDE.md` and `README.md`. Those last two
 are **hand-maintained, not generated**: `generate-routing-surfaces.js --write` does not touch them,
-so an axiom edit must update both by hand or the guard reds all fourteen. Each surface is
-mutation-proven to fail on its own. The twelve `next` routing surfaces carry a short reference
+so an axiom edit must update both by hand or the guard reds the printed set. Each surface is
+mutation-proven to fail on its own. The `next` routing surfaces carry a short reference
 pointer to the block rather than the block itself. That pointer **is** a `required-blocks.js` entry
 (`nx-first-principles`), checked by `scripts/test-route-reachability.js` inside `npm test`: it was
 declared with the axiom layer, deleted in an unrelated extraction, and restored once a mutation
-showed the pointer could be stripped from all twelve surfaces with every chain still green. Its
-obligated width is the literal `12`, for the reason the row on partially-anchored universes gives —
-delete a forge and the derived comparison shrinks to 8 and passes over four unchecked surfaces,
+showed the pointer could be stripped from every obligated next surface with every chain still green. Its
+obligated width is the literal `NEXT_SURFACES` in that file (currently 15 — three forges × claude,
+codex, opencode, kimi, grok), for the reason the row on partially-anchored universes gives —
+delete a forge and a derived comparison shrinks and passes over unchecked surfaces,
 while the literal reds.
 
 **Tie-breaker protocol.** Axioms apply only when no shipped rule already resolves a situation — walk

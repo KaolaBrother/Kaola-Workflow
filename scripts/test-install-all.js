@@ -90,6 +90,7 @@ const KNOWN_INSTALLERS = [
   { runtime: 'opencode', file: 'install-opencode.sh',                                         ref: 'install-opencode.sh' },
   { runtime: 'codex',    file: 'plugins/kaola-workflow/scripts/install-codex-agent-profiles.js', ref: 'install-codex-agent-profiles.js' },
   { runtime: 'kimi',     file: 'install-kimi.sh',                                             ref: 'install-kimi.sh' },
+  { runtime: 'grok',     file: 'install-grok.sh',                                             ref: 'install-grok.sh' },
 ];
 
 // ---- tree-derived installer set (so the list above can never go stale) ----
@@ -182,9 +183,10 @@ for (const inst of discovered) {
   }
 }
 
-// The RUNTIMES source-of-truth array in the wrapper lists exactly the four.
-assert(/RUNTIMES=\(claude opencode codex kimi\)/.test(wrapperSrc),
-  'install-all.sh RUNTIMES array lists the four runtimes in order');
+// The RUNTIMES source-of-truth array in the wrapper lists exactly the known installers.
+const KNOWN_RUNTIME_LIST = KNOWN_INSTALLERS.map(i => i.runtime).join(' ');
+assert(wrapperSrc.includes('RUNTIMES=(' + KNOWN_RUNTIME_LIST + ')'),
+  'install-all.sh RUNTIMES array lists the known runtimes in KNOWN_INSTALLERS order');
 
 // ---- 2. BEHAVIOR: drive install-all.sh against stub installers ----
 const tmpRoots = [];
@@ -361,6 +363,7 @@ function stubRoot(opts) {
     opencode: writeStub(root, 'install-opencode.sh',   'bash', codes.opencode ?? 0, '.ran-opencode'),
     codex:    writeStub(root, 'plugins/kaola-workflow/scripts/install-codex-agent-profiles.js', 'node', codes.codex ?? 0, '.ran-codex'),
     kimi:     writeStub(root, 'install-kimi.sh',       'bash', codes.kimi ?? 0, '.ran-kimi'),
+    grok:     writeStub(root, 'install-grok.sh',       'bash', codes.grok ?? 0, '.ran-grok'),
   };
   const treeVersion = opts.treeVersion || '5.0.0';
   // opts.pluginDir / opts.pluginName let a case build a FORGE edition manifest

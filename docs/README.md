@@ -8,7 +8,7 @@ moments.
 
 - [Architecture](architecture.md) — system structure and data flow. Includes
   [Runtime capability divergence](architecture.md#runtime-capability-divergence) — the one place the
-  four runtimes' differences are recorded (dispatch carrier, command/skill surface, hooks, model &
+  runtimes' differences are recorded (dispatch carrier, command/skill surface, hooks, model &
   tier, install path), as a tier label plus a pointer per cell, never a restated mechanism.
 - [API](api.md) — script CLIs, envelopes, and external contracts.
 - [Conventions](conventions.md) — coding, testing, Git, and review rules.
@@ -20,6 +20,7 @@ moments.
 
 - [opencode Edition](opencode-edition.md) — additive opencode runtime (`opencode.json` + `.opencode/` tree; model and effort inherited from the session, opt-in per-tier model pin; installs via `install-opencode.sh`).
 - [kimi Edition](kimi-edition.md) — additive Kimi Code runtime (`.kimi/skills/` tree + managed `[[hooks]]` block; roles as Skills, inherit-only model tier; installs via `install-kimi.sh`).
+- [grok Edition](grok-edition.md) — additive Grok CLI runtime (`.grok/agents/` + `.grok/commands/` + hooks JSON; named `spawn_subagent` types; inherit-only model and effort; installs via `install-grok.sh`).
 
 ## Decisions
 
