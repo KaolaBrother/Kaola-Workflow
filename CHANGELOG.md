@@ -8,7 +8,7 @@
   is often dash, which rejects `--version`. The runner retries `sh -c :` for the
   execution-shell probe so a `run` receipt is not `inconclusive` for
   `execution_shell_version_probe_failed` on Debian/Ubuntu. The existing suite pin is
-  `#904 control: run over a child that binds nothing PASSES`.
+  the 904-control: `run` over a child that binds nothing PASSES.
 
 - **Hook stage promotion re-checks the staged tree and hooks.json bytes, not only inode
   identity.** Overlay filesystems can reuse inode numbers after `rm`/`unlink`+create, so
