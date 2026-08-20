@@ -781,6 +781,7 @@ const { REQUIRED_BLOCKS } = require('../templates/routing/required-blocks.js');
 const opencodeSync = require('./sync-opencode-edition.js');
 const kimiSync = require('./sync-kimi-edition.js');
 const grokSync = require('./sync-grok-edition.js');
+const cursorSync = require('./sync-cursor-edition.js');
 const {
   FORGES: ROUTING_FORGES,
   GENERATED_SURFACES: ROUTING_SURFACES,
@@ -804,6 +805,10 @@ const RUNTIME_EDITIONS = [
   {
     id: 'grok',
     surfaceFor: forge => base => grokSync.commandRel(base, forge),
+  },
+  {
+    id: 'cursor',
+    surfaceFor: forge => base => cursorSync.commandRel(base, forge),
   },
 ];
 
@@ -899,6 +904,7 @@ const GENERATED_SURFACE_CONTENT = (() => {
       map.set(ocRel, opencodeSync.renderCommand(canon, forge, ocRel));
       map.set(kimiSync.skillRel(base, forge), kimiSync.renderCommand(canon, base, forge));
       map.set(grokSync.commandRel(base, forge), grokSync.renderCommand(canon, base, forge));
+      map.set(cursorSync.commandRel(base, forge), cursorSync.renderCommand(canon, base, forge));
     }
   }
   return map;
@@ -1206,7 +1212,7 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     //     It is a two-place edit on purpose: a fourth forge, or a third additive runtime, reds this
     //     line, and the correct response is to confirm the NEW surfaces carry the pointer and then
     //     move the number — never to move the number first.
-    const NEXT_SURFACES = 15;   // 3 forges x (claude command + codex skill + opencode + kimi + grok)
+    const NEXT_SURFACES = 18;   // 3 forges x (claude command + codex skill + opencode + kimi + grok + cursor)
     assert(files.length === NEXT_SURFACES,
       `axiom pointer: the axiom pointer is obligated on ${files.length} next surface(s), expected `
       + `${NEXT_SURFACES}. If the surface universe legitimately changed, verify the pointer is on `

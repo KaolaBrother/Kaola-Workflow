@@ -234,7 +234,7 @@ Claude resolver to this opencode form at generation time; canonical `commands/*.
 > The opencode runtime is also covered by the top-level **`./install-all.sh`**
 > ("install/refresh every runtime" — see [README](../README.md#installation)),
 > which invokes this installer unchanged (`--global` by default) as one leg of
-> its five-runtime sequence. `install-all.sh` is a thin orchestrator: it does
+> its six-runtime sequence. `install-all.sh` is a thin orchestrator: it does
 > **not** fold opencode into `install.sh`/`edition-sync.js`/`npm test` — the
 > additive-edition boundary (D-530-02) is preserved.
 

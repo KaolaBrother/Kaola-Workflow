@@ -3,7 +3,7 @@
 # edition in sequence, with a per-runtime PASS/FAIL summary.
 #
 # This is a THIN ORCHESTRATOR, not a coupling: it CALLS each installer unchanged
-# and never folds the additive editions (opencode/kimi/grok) into install.sh,
+# and never folds the additive editions (opencode/kimi/grok/cursor) into install.sh,
 # edition-sync.js, npm test, or the six routing surfaces. The additive-edition
 # boundary (D-530-02) is preserved — each edition stays independently
 # installable and independently tested. The only thing this script adds is a
@@ -54,7 +54,7 @@ esac
 
 # Ordered runtime list — the single source of truth this script iterates and the
 # contract test (scripts/test-install-all.js) cross-checks against the tree.
-RUNTIMES=(claude opencode codex kimi grok)
+RUNTIMES=(claude opencode codex kimi grok cursor)
 
 # Codex marketplace-plugin convergence inputs.
 # KAOLA_CODEX_BIN is a test seam ONLY (scripts/test-install-all.js points it at a
@@ -103,22 +103,23 @@ Reinstall/refresh every Kaola-Workflow runtime edition in sequence:
   3. codex     Codex         (install-codex-agent-profiles.js)
   4. kimi      Kimi Code     (install-kimi.sh)
   5. grok      Grok CLI      (install-grok.sh)
+  6. cursor    Cursor        (install-cursor.sh)
 
 Options:
   --forge=github|gitlab|gitea   Forge for every forge-aware runtime (default: github).
-                                Threaded to Claude, opencode, Kimi Code, and Grok CLI. Codex
+                                Threaded to Claude, opencode, Kimi Code, Grok CLI, and Cursor. Codex
                                 selects its forge by marketplace plugin entry instead.
-  --global                      Install opencode/Codex/Kimi/Grok into the global config root (default)
-  --project[=DIR]               Install opencode/Codex/Kimi/Grok into a project dir (default: CWD)
+  --global                      Install opencode/Codex/Kimi/Grok/Cursor into the global config root (default)
+  --project[=DIR]               Install opencode/Codex/Kimi/Grok/Cursor into a project dir (default: CWD)
   --yes                         Non-interactive; forward -y to every interactive installer
-  --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi,grok) — logged loudly
+  --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi,grok,cursor) — logged loudly
   --strict                      Fail-fast: stop at the first failing runtime
   --check                       Dry run: print HEAD + the command each runtime would run,
                                 and report a pending Codex plugin upgrade or refresh; no changes
   -h, --help                    Show this help
 
 The Claude installer (install.sh) has no global/project concept — it installs
-its plugin regardless of scope; --global/--project apply to the other four.
+its plugin regardless of scope; --global/--project apply to the other five.
 The Codex installer accepts neither --yes nor --forge, so those are
 not forwarded to it; Codex picks its forge by which marketplace plugin entry
 you add (kaola-workflow, -gitlab, -gitea). Exit status is non-zero if ANY runtime failed
@@ -630,9 +631,9 @@ echo "install-all: root=$ROOT scope=$SCOPE forge=$FORGE$( [[ "$YES" == "1" ]] &&
 # Per-runtime scope flags for the additive runtimes (install.sh has no
 # global/project concept, so it never receives them).
 if [[ "$SCOPE" == "global" ]]; then
-  OC_SCOPE=(--global);            KIMI_SCOPE=(--global);            GROK_SCOPE=(--global);            CODEX_SCOPE=(--global)
+  OC_SCOPE=(--global);            KIMI_SCOPE=(--global);            GROK_SCOPE=(--global);            CURSOR_SCOPE=(--global);            CODEX_SCOPE=(--global)
 else
-  OC_SCOPE=(--target "$PROJECT_DIR"); KIMI_SCOPE=(--target "$PROJECT_DIR"); GROK_SCOPE=(--target "$PROJECT_DIR"); CODEX_SCOPE=("$PROJECT_DIR")
+  OC_SCOPE=(--target "$PROJECT_DIR"); KIMI_SCOPE=(--target "$PROJECT_DIR"); GROK_SCOPE=(--target "$PROJECT_DIR"); CURSOR_SCOPE=(--target "$PROJECT_DIR"); CODEX_SCOPE=("$PROJECT_DIR")
 fi
 
 # Build each runtime's command as a non-empty array (bash-3.2 set -u safe:
@@ -653,6 +654,9 @@ KIMI_CMD=(bash "$ROOT/install-kimi.sh" --forge="$FORGE" "${KIMI_SCOPE[@]}")
 GROK_CMD=(bash "$ROOT/install-grok.sh" --forge="$FORGE" "${GROK_SCOPE[@]}")
 [[ "$YES" == "1" ]] && GROK_CMD+=(--yes)
 
+CURSOR_CMD=(bash "$ROOT/install-cursor.sh" --forge="$FORGE" "${CURSOR_SCOPE[@]}")
+[[ "$YES" == "1" ]] && CURSOR_CMD+=(--yes)
+
 run_one claude   "${CLAUDE_CMD[@]}"
 run_one opencode "${OPENCODE_CMD[@]}"
 run_one codex    "${CODEX_CMD[@]}"
@@ -663,6 +667,7 @@ if ! converge_codex_plugin && [[ "$STRICT" == "1" ]]; then
 fi
 run_one kimi     "${KIMI_CMD[@]}"
 run_one grok     "${GROK_CMD[@]}"
+run_one cursor   "${CURSOR_CMD[@]}"
 
 print_summary
 overall=$?

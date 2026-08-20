@@ -118,7 +118,7 @@ const checkoutReal = fs.realpathSync(checkout);
 // installers self-heal a stale/missing .opencode/.kimi by regenerating it into the repo —
 // a legitimate write into the observed root that would be indistinguishable from an escape,
 // so it must have already happened by the time a baseline is taken.
-for (const gen of ['sync-opencode-edition.js', 'sync-kimi-edition.js', 'sync-grok-edition.js']) {
+for (const gen of ['sync-opencode-edition.js', 'sync-kimi-edition.js', 'sync-grok-edition.js', 'sync-cursor-edition.js']) {
   // spawn-class: environment
   const r = spawnSync(process.execPath,
     [path.join(checkout, 'scripts', gen), '--forge=github', '--write'],

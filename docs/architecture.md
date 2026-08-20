@@ -302,14 +302,14 @@ plus `scripts/validate-script-sync.js` enforce that. `kaola-workflow-adaptive-sc
 file held **byte-identical** across all four trees: it is the cross-edition drift anchor, and every
 constant shared between a producer and a consumer lives there so the two cannot disagree.
 
-**Three additive runtime editions** — opencode, Kimi, and Grok — are runtimes, not forges. They are not wired
+**Four additive runtime editions** — opencode, Kimi, Grok, and Cursor — are runtimes, not forges. They are not wired
 into `npm test`, `edition-sync.js`, `install.sh`, or the routing generator's render targets, but
 their sync scripts derive their command surfaces from that same routing registry (via
 `runtime-edition-forge.js`), so the `generate-routing-surfaces.js --write` that a routing-surface
-change already mandates also brings every `.opencode`/`.kimi`/`.grok` tree already on the machine back into
+change already mandates also brings every `.opencode`/`.kimi`/`.grok`/`.cursor` tree already on the machine back into
 parity — always the main checkout's trees, and never creating one that is absent. They carry their
-own suites (`test-opencode-edition.js`, `test-kimi-edition.js`, `test-grok-edition.js`). See
-`opencode-edition.md`, `kimi-edition.md`, and `grok-edition.md`.
+own suites (`test-opencode-edition.js`, `test-kimi-edition.js`, `test-grok-edition.js`, `test-cursor-edition.js`). See
+`opencode-edition.md`, `kimi-edition.md`, `grok-edition.md`, and `cursor-edition.md`.
 
 ### Runtime capability divergence
 
@@ -327,16 +327,16 @@ level; the session's value carries.
 **The forge axis multiplies two of the columns.** claude and codex each ship against three
 forges (github, gitlab, gitea), so a claude or codex pointer may resolve to three trees rather than
 one — where it does, the pointer's own path says so, and where the artifact is forge-independent it
-does not. opencode, kimi, and grok take `--forge` inside their own standalone installers instead. Runtimes
+does not. opencode, kimi, grok, and cursor take `--forge` inside their own standalone installers instead. Runtimes
 and forge editions are different axes; this table is indexed by runtime.
 
-| | claude | codex | opencode | kimi | grok |
-|---|---|---|---|---|---|
-| **dispatch carrier** | full — `agents/`; § Agent profiles below | full — `plugins/kaola-workflow/config/agents.toml` (registry); `plugins/*/agents/*.toml` | full — `docs/opencode-edition.md` § What gets generated | substituted — `docs/kimi-edition.md` § Roles as Skills; enforced by `KIMI_RUNTIME_NATIVE` in `scripts/test-kimi-edition.js` | full — `docs/grok-edition.md` § What gets generated |
-| **command / skill surface** | rendered — `scripts/generate-routing-surfaces.js` (`COMMAND_EDITIONS`); skeletons in `templates/routing/` | rendered — `scripts/generate-routing-surfaces.js` (`SKILL_EDITIONS`); skeletons in `templates/routing/` | rendered — `docs/opencode-edition.md` § Installer command set; consumes `commandSources()` via `scripts/sync-opencode-edition.js` | rendered — `docs/kimi-edition.md` § Installer command set; consumes `commandSources()` via `scripts/sync-kimi-edition.js` | rendered — `docs/grok-edition.md` § What gets generated; consumes `commandSources()` via `scripts/sync-grok-edition.js` |
-| **hooks** | full — `hooks/hooks.json`; merge at `install.sh` (`MERGE_SETTINGS`) | full — `plugins/*/config/hooks.json` (three trees, and unlike the other codex artifacts these differ per forge); merge at `plugins/*/scripts/install-codex-agent-profiles.js` | substituted — `docs/opencode-edition.md` § Hooks; `templates/opencode/plugins/kaola-workflow-hooks.js` | partial — `docs/kimi-edition.md` § Hooks; event mapping `docs/decisions/D-703-01.md` | full — `docs/grok-edition.md` § Hooks |
-| **model & tier handling** | full — `scripts/kaola-workflow-resolve-agent-model.js` (header comment); shipped rule at `commands/kaola-workflow-finalize.md` § Agent Model Dispatch | full — `CODEX_PINNED_STANDARD_ROLES` / `CODEX_PINNED_REASONING_ROLES` in `scripts/kaola-workflow-adaptive-schema.js`; every carrier copy and the guard binding them, `docs/conventions.md` § Bundle Lane | partial — `docs/opencode-edition.md` § Model and effort — inherited from the session | inherited — `docs/kimi-edition.md` § One model tier — every subagent inherits the session model; enforced by `KIMI_RUNTIME_NATIVE` in `scripts/test-kimi-edition.js` | inherited — `docs/grok-edition.md` § One model tier — every subagent inherits the session model; enforced by `GROK_RUNTIME_NATIVE` in `scripts/test-grok-edition.js` |
-| **install path** | full — `install.sh` | partial — the split stated at `install-all.sh` (§ Codex marketplace-plugin convergence); profiles and hooks at `plugins/kaola-workflow/scripts/install-codex-agent-profiles.js` | substituted — `install-opencode.sh`; `docs/opencode-edition.md` § Deploy layout — project vs global (scope-dependent) | substituted — `install-kimi.sh`; `docs/kimi-edition.md` § Deploy layout — project vs global (scope-dependent) | substituted — `install-grok.sh`; `docs/grok-edition.md` § Installer |
+| | claude | codex | opencode | kimi | grok | cursor |
+|---|---|---|---|---|---|---|
+| **dispatch carrier** | full — `agents/`; § Agent profiles below | full — `plugins/kaola-workflow/config/agents.toml` (registry); `plugins/*/agents/*.toml` | full — `docs/opencode-edition.md` § What gets generated | substituted — `docs/kimi-edition.md` § Roles as Skills; enforced by `KIMI_RUNTIME_NATIVE` in `scripts/test-kimi-edition.js` | full — `docs/grok-edition.md` § What gets generated | full — `docs/cursor-edition.md` § What gets generated |
+| **command / skill surface** | rendered — `scripts/generate-routing-surfaces.js` (`COMMAND_EDITIONS`); skeletons in `templates/routing/` | rendered — `scripts/generate-routing-surfaces.js` (`SKILL_EDITIONS`); skeletons in `templates/routing/` | rendered — `docs/opencode-edition.md` § Installer command set; consumes `commandSources()` via `scripts/sync-opencode-edition.js` | rendered — `docs/kimi-edition.md` § Installer command set; consumes `commandSources()` via `scripts/sync-kimi-edition.js` | rendered — `docs/grok-edition.md` § What gets generated; consumes `commandSources()` via `scripts/sync-grok-edition.js` | rendered — `docs/cursor-edition.md` § What gets generated; consumes `commandSources()` via `scripts/sync-cursor-edition.js` |
+| **hooks** | full — `hooks/hooks.json`; merge at `install.sh` (`MERGE_SETTINGS`) | full — `plugins/*/config/hooks.json` (three trees, and unlike the other codex artifacts these differ per forge); merge at `plugins/*/scripts/install-codex-agent-profiles.js` | substituted — `docs/opencode-edition.md` § Hooks; `templates/opencode/plugins/kaola-workflow-hooks.js` | partial — `docs/kimi-edition.md` § Hooks; event mapping `docs/decisions/D-703-01.md` | full — `docs/grok-edition.md` § Hooks | partial — `docs/cursor-edition.md` § Hooks; `sessionStart` injection (`preCompact` cannot inject) |
+| **model & tier handling** | full — `scripts/kaola-workflow-resolve-agent-model.js` (header comment); shipped rule at `commands/kaola-workflow-finalize.md` § Agent Model Dispatch | full — `CODEX_PINNED_STANDARD_ROLES` / `CODEX_PINNED_REASONING_ROLES` in `scripts/kaola-workflow-adaptive-schema.js`; every carrier copy and the guard binding them, `docs/conventions.md` § Bundle Lane | partial — `docs/opencode-edition.md` § Model and effort — inherited from the session | inherited — `docs/kimi-edition.md` § One model tier — every subagent inherits the session model; enforced by `KIMI_RUNTIME_NATIVE` in `scripts/test-kimi-edition.js` | inherited — `docs/grok-edition.md` § One model tier — every subagent inherits the session model; enforced by `GROK_RUNTIME_NATIVE` in `scripts/test-grok-edition.js` | inherited — `docs/cursor-edition.md` § One model tier — every subagent inherits the session model; enforced by `CURSOR_RUNTIME_NATIVE` in `scripts/test-cursor-edition.js` |
+| **install path** | full — `install.sh` | partial — the split stated at `install-all.sh` (§ Codex marketplace-plugin convergence); profiles and hooks at `plugins/kaola-workflow/scripts/install-codex-agent-profiles.js` | substituted — `install-opencode.sh`; `docs/opencode-edition.md` § Deploy layout — project vs global (scope-dependent) | substituted — `install-kimi.sh`; `docs/kimi-edition.md` § Deploy layout — project vs global (scope-dependent) | substituted — `install-grok.sh`; `docs/grok-edition.md` § Installer | substituted — `install-cursor.sh`; `docs/cursor-edition.md` § Installer |
 
 The label grades the capability, not the pointer. Two cells carry **two** pointers because one alone
 loses half the fact: codex model & tier separates the source constants from the carrier set that
@@ -344,7 +344,7 @@ renders them, and kimi's dispatch carrier separates the readable description fro
 machine-enforced declaration. The weakest pointer is claude's dispatch carrier: no prose names the
 dispatch mechanism itself, so the first pointer is the directory, and § Agent profiles below carries
 only what the profiles contain. claude and codex have no per-edition doc, which is why their cells
-point at code where opencode's, kimi's, and grok's point at prose.
+point at code where opencode's, kimi's, grok's, and cursor's point at prose.
 
 **No `hooks.json` in any edition registers a `PreToolUse` or `PostToolUse` hook** — across all six
 they register `SessionStart` and `SubagentStart` only, and

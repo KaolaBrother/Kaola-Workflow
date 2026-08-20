@@ -91,6 +91,7 @@ const KNOWN_INSTALLERS = [
   { runtime: 'codex',    file: 'plugins/kaola-workflow/scripts/install-codex-agent-profiles.js', ref: 'install-codex-agent-profiles.js' },
   { runtime: 'kimi',     file: 'install-kimi.sh',                                             ref: 'install-kimi.sh' },
   { runtime: 'grok',     file: 'install-grok.sh',                                             ref: 'install-grok.sh' },
+  { runtime: 'cursor',   file: 'install-cursor.sh',                                           ref: 'install-cursor.sh' },
 ];
 
 // ---- tree-derived installer set (so the list above can never go stale) ----
@@ -133,7 +134,7 @@ for (const i of KNOWN_INSTALLERS) {
 
 // The real four must be fully covered.
 assert(missingFromWrapper(KNOWN_INSTALLERS, wrapperSrc).length === 0,
-  'guard: all four known installers are referenced in install-all.sh');
+  'guard: all known installers are referenced in install-all.sh');
 
 // The other direction: every installer DISCOVERED IN THE TREE must be wired into
 // install-all.sh and accounted for in KNOWN_INSTALLERS. This is what fails red for
@@ -364,6 +365,7 @@ function stubRoot(opts) {
     codex:    writeStub(root, 'plugins/kaola-workflow/scripts/install-codex-agent-profiles.js', 'node', codes.codex ?? 0, '.ran-codex'),
     kimi:     writeStub(root, 'install-kimi.sh',       'bash', codes.kimi ?? 0, '.ran-kimi'),
     grok:     writeStub(root, 'install-grok.sh',       'bash', codes.grok ?? 0, '.ran-grok'),
+    cursor:   writeStub(root, 'install-cursor.sh',     'bash', codes.cursor ?? 0, '.ran-cursor'),
   };
   const treeVersion = opts.treeVersion || '5.0.0';
   // opts.pluginDir / opts.pluginName let a case build a FORGE edition manifest

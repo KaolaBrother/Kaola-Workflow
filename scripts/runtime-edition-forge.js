@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 // runtime-edition-forge.js — the runtime x forge layout, single-sourced.
 //
-// An ADDITIVE runtime edition (opencode, Kimi Code, Grok CLI) is a runtime, not a forge:
+// An ADDITIVE runtime edition (opencode, Kimi Code, Grok CLI, Cursor) is a runtime, not a forge:
 // it is not wired into `npm test`, `edition-sync.js`, `install.sh`, or the SIX
 // routing surfaces, and it keeps its own suite. It nevertheless has to KNOW the
 // forge it is being installed for, because the workflow prose is forge-shaped:
@@ -22,7 +22,7 @@
 //     install.sh consumes.
 //
 // Neither of those sources is modified by this module: it reads them. The
-// additive runtime editions (opencode, Kimi, Grok) and their installers consume
+// additive runtime editions (opencode, Kimi, Grok, Cursor) and their installers consume
 // it, so adding a forge or a topic is a zero-edit change here.
 //
 // CLI (used by the installers, which cannot require() a node module inline):

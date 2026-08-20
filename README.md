@@ -1,6 +1,6 @@
 # Kaola-Workflow
 
-**Bookkeeping for coding agents.** You hand Kaola-Workflow an issue; it claims the work, writes the run's **mission list**, and runs it. The mission list is one file per run — an H1 carrying the goal, then items with four fields: `item` / `status` / `dispatched` / `result`. That is the whole coordination mechanism, and it exists so a session that dies mid-flight can be resumed by a successor with no context at all. Runs on five agent runtimes — **Claude Code, Codex, [opencode](https://opencode.ai), [Kimi Code](https://www.kimi.com/code), and Grok CLI** — across the **GitHub, GitLab, and Gitea** forges.
+**Bookkeeping for coding agents.** You hand Kaola-Workflow an issue; it claims the work, writes the run's **mission list**, and runs it. The mission list is one file per run — an H1 carrying the goal, then items with four fields: `item` / `status` / `dispatched` / `result`. That is the whole coordination mechanism, and it exists so a session that dies mid-flight can be resumed by a successor with no context at all. Runs on six agent runtimes — **Claude Code, Codex, [opencode](https://opencode.ai), [Kimi Code](https://www.kimi.com/code), Grok CLI, and Cursor** — across the **GitHub, GitLab, and Gitea** forges.
 
 ## Philosophy
 
@@ -59,12 +59,12 @@ A few beliefs follow from that order.
 
 - **One resumable file per run** — a successor with no context reads it top to bottom: the H1 is the goal, `done` items and their `result` are what is known, `in-flight` items are the only decision to make, `todo` is what remains.
 - **A claim that is bookkeeping, not a gate** — it records which issues, branch and worktree the run owns, so parallel sessions do not collide.
-- **Subagents and worktrees** as declinable tools, with 14 vendored roles across all five runtimes.
-- **Multi-model** across Claude Code, Codex, opencode, Kimi Code, and Grok CLI, right-sizing the model per dispatch (Grok inherits the session model and effort).
+- **Subagents and worktrees** as declinable tools, with 14 vendored roles across all six runtimes.
+- **Multi-model** across Claude Code, Codex, opencode, Kimi Code, Grok CLI, and Cursor, right-sizing the model per dispatch (Grok and Cursor inherit the session model and effort).
 - **Independent review** — generated, runtime-neutral reviewer contracts (`code-reviewer`, `adversarial-verifier`, `security-reviewer`) with deterministic profile identity across runtimes.
 - **Self-owned validation** — the four local edition chains produce a candidate-bound receipt; a consumer repo records its own verdict instead. Nothing waits on a hosted pipeline.
 - **A finalization that reports** — validation classification, the paths the run changed, and the sink's findings all land on the envelope *and* durably in the archived summary.
-- **Five agent runtimes** (Claude Code, Codex, opencode, Kimi Code, Grok CLI) across **three forges** (GitHub, GitLab, Gitea).
+- **Six agent runtimes** (Claude Code, Codex, opencode, Kimi Code, Grok CLI, Cursor) across **three forges** (GitHub, GitLab, Gitea).
 
 ## Overview
 
@@ -149,7 +149,7 @@ which then drives one `/workflow-next` run per set until the scope is met.
 
 ## Workflow roles
 
-The workflow is built from a small, shared set of **roles**. All five runtimes provide the same role set — Claude Code installs vendored agents, Codex installs native `.toml` role profiles, opencode generates `.opencode/agent/` definitions, Kimi Code generates `kaola-role-*` role-contract Skills, and Grok CLI generates named `.grok/agents/` definitions — so the roles and model tiers below apply across runtimes. On Grok the `opus`/`sonnet` tokens stay classification metadata; every subagent inherits the session model and effort.
+The workflow is built from a small, shared set of **roles**. All six runtimes provide the same role set — Claude Code installs vendored agents, Codex installs native `.toml` role profiles, opencode generates `.opencode/agent/` definitions, Kimi Code generates `kaola-role-*` role-contract Skills, Grok CLI generates named `.grok/agents/` definitions, and Cursor generates named `.cursor/agents/` definitions — so the roles and model tiers below apply across runtimes. On Grok and Cursor the `opus`/`sonnet` tokens stay classification metadata; every subagent inherits the session model and effort.
 
 Claude Code's agents are vendored directly from this repository; the prompts are derived from Everything Claude Code (ECC) under the MIT License (see [docs/agents-source.md](docs/agents-source.md) for the pinned upstream commit, attribution, and refresh procedure).
 
@@ -224,7 +224,7 @@ instead.
 
 Kaola-Workflow installs along two independent axes:
 
-- **Agent runtime** — where the coding agent runs: **Claude Code**, **Codex**, **opencode**, **Kimi Code**, or **Grok CLI**. Each has its own installer.
+- **Agent runtime** — where the coding agent runs: **Claude Code**, **Codex**, **opencode**, **Kimi Code**, **Grok CLI**, or **Cursor**. Each has its own installer.
 - **Git forge** — where issues and PRs/MRs live: **GitHub** (default), **GitLab**, or **Gitea**.
 
 | Runtime | Installer | Forge selection |
@@ -234,6 +234,7 @@ Kaola-Workflow installs along two independent axes:
 | **opencode** | `./install-opencode.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 | **Kimi Code** | `./install-kimi.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 | **Grok CLI** | `./install-grok.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
+| **Cursor** | `./install-cursor.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 
 **Install/refresh every runtime at once — `./install-all.sh`.** To reinstall every runtime from the current checkout in one step, run `./install-all.sh --yes` (defaults: `--forge=github`, `--global`). It is a thin orchestrator: it runs each per-runtime installer above unchanged, prints the short SHA being installed, and ends with a per-runtime **PASS/FAIL summary table** — exiting non-zero if any runtime fails (continue-through by default; `--strict` aborts at the first failure). Skip one with `--skip=<runtime[,...]>` (logged, never silent) and preview without changes via `--check`. This entrypoint never folds the additive editions into `install.sh`/`npm test`/`edition-sync` — the per-runtime installers remain the individual path. The individual installers below are still fully supported.
 
@@ -249,9 +250,11 @@ Claude Code and Codex share the forge editions — pick one forge at a time; all
 
 **Grok CLI** is likewise an **additive** runtime (not a git forge): `./install-grok.sh` touches none of the existing edition machinery, resolves its support scripts under `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.grok/agents/*.md` (`spawn_subagent` types); the three commands ship as `.grok/commands/*.md`. Every subagent inherits the session model and effort. It takes the same generated `--forge` axis. See [docs/grok-edition.md](docs/grok-edition.md).
 
-Being additive is about *edition machinery*, not about forge support: these runtimes remain outside `install.sh`, `edition-sync.js`, `npm test`, and the routing-surface contract, and each keeps its own suite (`node scripts/test-opencode-edition.js`, `node scripts/test-kimi-edition.js`, `node scripts/test-grok-edition.js`).
+**Cursor** is likewise an **additive** runtime (not a git forge): `./install-cursor.sh` touches none of the existing edition machinery, resolves its support scripts under `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.cursor/agents/*.md` (`Task` types); the three commands ship as `.cursor/commands/*.md`. Every subagent inherits the session model and effort. Compact resume after a session compact is a declared divergence (`sessionStart` `additional_context`; `preCompact` cannot inject). It takes the same generated `--forge` axis. See [docs/cursor-edition.md](docs/cursor-edition.md).
 
-**The same workflow runs everywhere** — Claude Code, Codex, opencode, Kimi Code, and Grok CLI. No installer writes the shared `~/.config/kaola-workflow/config.json`: there is no workflow path to select and no install-time configuration to seed. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) / [Grok CLI](docs/grok-edition.md) for each additive runtime.
+Being additive is about *edition machinery*, not about forge support: these runtimes remain outside `install.sh`, `edition-sync.js`, `npm test`, and the routing-surface contract, and each keeps its own suite (`node scripts/test-opencode-edition.js`, `node scripts/test-kimi-edition.js`, `node scripts/test-grok-edition.js`, `node scripts/test-cursor-edition.js`).
+
+**The same workflow runs everywhere** — Claude Code, Codex, opencode, Kimi Code, Grok CLI, and Cursor. No installer writes the shared `~/.config/kaola-workflow/config.json`: there is no workflow path to select and no install-time configuration to seed. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) / [Grok CLI](docs/grok-edition.md) / [Cursor](docs/cursor-edition.md) for each additive runtime.
 
 ### Claude Code
 
@@ -393,6 +396,17 @@ Grok CLI is an additive runtime — installed by its own script, not `--forge`. 
 ```
 
 Hooks install as `${GROK_HOME:-~/.grok}/hooks/kaola-workflow-hooks.json` — global regardless of install scope. Full detail: [docs/grok-edition.md](docs/grok-edition.md).
+
+### cursor
+
+Cursor is an additive runtime — installed by its own script, not `--forge`. The cursor edition delivers the workflow the Cursor-native way: the three commands become flat `.cursor/commands/*.md` slash commands (not Skills — Skills lack `$ARGUMENTS`) and each vendored role ships as a named `.cursor/agents/<role>.md` (`Task` type). Every subagent **inherits the session model and effort** — there is no two-tier mapping, and a role's `opus`/`sonnet` token is declarative metadata only. From a local clone:
+
+```bash
+./install-cursor.sh --global --yes   # deploy agents+commands into ${CURSOR_HOME:-~/.cursor}
+./install-cursor.sh --yes            # deploy into the current project (.cursor/{agents,commands})
+```
+
+Hooks merge into `.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (global). Compact resume injects via `sessionStart` `additional_context`; `preCompact` cannot inject. Full detail: [docs/cursor-edition.md](docs/cursor-edition.md).
 
 ## Codex
 
@@ -1609,6 +1623,9 @@ node <active-plugin-root>/scripts/install-codex-agent-profiles.js --global
 
 # Grok CLI — additive runtime, global install.
 ./install-grok.sh --global --yes
+
+# Cursor — additive runtime, global install.
+./install-cursor.sh --global --yes
 ```
 
 Restart Claude Code after reinstalling. If Codex hook content changed, open a new

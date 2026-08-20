@@ -698,10 +698,10 @@ Design-rationale provenance — issue refs, decision IDs, invariant tags, ADR ci
 
 ### What counts as a prompt surface
 
-The full set across all four editions (claude / codex / gitlab / gitea) plus the opencode and kimi runtime editions:
+The full set across all four editions (claude / codex / gitlab / gitea) plus the opencode, kimi, grok, and cursor runtime editions:
 
-- **Agent definitions** — `agents/*.md` (root), `plugins/*/agents/*.toml` (all three plugin editions), opencode `agents/*.md` (generated from canonical), kimi `.kimi/skills/kaola-role-*/SKILL.md` role contracts (generated from canonical by `scripts/sync-kimi-edition.js`)
-- **Commands** — `commands/*.md` (github-claude), `plugins/kaola-workflow-gitlab/commands/`, `plugins/kaola-workflow-gitea/commands/`, Codex `skills/kaola-workflow-*/SKILL.md` (including the two forge-codex SKILL packs), opencode generated command mirrors, kimi generated command skills (`.kimi/skills/<command>/SKILL.md`)
+- **Agent definitions** — `agents/*.md` (root), `plugins/*/agents/*.toml` (all three plugin editions), opencode `agents/*.md` (generated from canonical), kimi `.kimi/skills/kaola-role-*/SKILL.md` role contracts (generated from canonical by `scripts/sync-kimi-edition.js`), grok `.grok/agents/*.md` (generated from canonical by `scripts/sync-grok-edition.js`), cursor `.cursor/agents/*.md` (generated from canonical by `scripts/sync-cursor-edition.js`)
+- **Commands** — `commands/*.md` (github-claude), `plugins/kaola-workflow-gitlab/commands/`, `plugins/kaola-workflow-gitea/commands/`, Codex `skills/kaola-workflow-*/SKILL.md` (including the two forge-codex SKILL packs), opencode generated command mirrors, kimi generated command skills (`.kimi/skills/<command>/SKILL.md`), grok `.grok/commands/*.md`, cursor `.cursor/commands/*.md`
 - **Skills** — `plugins/*/skills/*/SKILL.md` across all three plugin editions
 
 The six routing surfaces from §Routing / adaptive prose (#400) are a subset of this set.
@@ -861,7 +861,7 @@ testAxiomBlockByteIdentity`, which prints it, rather than from this sentence. Th
 scenario, comparing the canonical file’s content against every surface it constructed — the six tracked
 workflow-init command/skill files read from disk, the additive-runtime init surfaces rendered in memory
 via the same sync scripts that generate them (one `sync-*-edition.js` per runtime, currently
-opencode, kimi, and grok), and root `CLAUDE.md` and `README.md`. Those last two
+opencode, kimi, grok, and cursor), and root `CLAUDE.md` and `README.md`. Those last two
 are **hand-maintained, not generated**: `generate-routing-surfaces.js --write` does not touch them,
 so an axiom edit must update both by hand or the guard reds the printed set. Each surface is
 mutation-proven to fail on its own. The `next` routing surfaces carry a short reference
@@ -869,8 +869,8 @@ pointer to the block rather than the block itself. That pointer **is** a `requir
 (`nx-first-principles`), checked by `scripts/test-route-reachability.js` inside `npm test`: it was
 declared with the axiom layer, deleted in an unrelated extraction, and restored once a mutation
 showed the pointer could be stripped from every obligated next surface with every chain still green. Its
-obligated width is the literal `NEXT_SURFACES` in that file (currently 15 — three forges × claude,
-codex, opencode, kimi, grok), for the reason the row on partially-anchored universes gives —
+obligated width is the literal `NEXT_SURFACES` in that file (currently 18 — three forges × claude,
+codex, opencode, kimi, grok, cursor), for the reason the row on partially-anchored universes gives —
 delete a forge and a derived comparison shrinks and passes over unchecked surfaces,
 while the literal reds.
 

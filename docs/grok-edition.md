@@ -83,7 +83,7 @@ does not run through `install.sh --forge`.
 > The Grok runtime is also covered by the top-level **`./install-all.sh`**
 > ("install/refresh every runtime" — see [README](../README.md#installation)),
 > which invokes this installer unchanged (`--global` by default) as the fifth
-> leg of its five-runtime sequence, with a per-runtime PASS/FAIL summary. It stays
+> leg of its six-runtime sequence, with a per-runtime PASS/FAIL summary. It stays
 > a thin orchestrator — it does **not** fold Grok into
 > `install.sh`/`edition-sync.js`/`npm test`.
 
