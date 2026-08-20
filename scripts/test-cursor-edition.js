@@ -34,6 +34,7 @@ const { spawnSync } = require('child_process');
 const forgeLayout = require('./runtime-edition-forge.js');
 const reviewerGenerator = require('./generate-reviewer-profiles.js');
 const G = require('./test-git-fixture');
+const syncMod = require('./sync-cursor-edition.js');
 
 const REPO = path.resolve(__dirname, '..');
 const SYNC_JS = path.join(REPO, 'scripts', 'sync-cursor-edition.js');
@@ -317,11 +318,13 @@ function commandRel(name, forge) {
     assert(!Object.prototype.hasOwnProperty.call(fm, 'tools') || !/\bmcp__/.test(String(fm.tools)),
       'G1[' + name + ']: tools: is absent, or contains no mcp__ ids — got '
       + JSON.stringify(fm.tools));
+    const canonFm = parseFrontmatter(fs.readFileSync(path.join(REPO, 'agents', name + '.md'), 'utf8')).fm;
+    const toolSet = new Set(syncMod.parseTools(canonFm.tools).map(x => String(x).toLowerCase()));
+    const expectedReadonly = syncMod.isReadOnlyRole(toolSet) ? 'true' : 'false';
+    assert(fm.readonly === expectedReadonly,
+      'G1[' + name + ']: readonly matches Write/Edit derivation from canonical tools — expected '
+      + expectedReadonly + ' got ' + JSON.stringify(fm.readonly));
   }
-  assert(parseFrontmatter(read(agentRel('knowledge-lookup'))).fm.readonly === 'true',
-    'G1[knowledge-lookup]: readonly is true (no Write/Edit tools)');
-  assert(parseFrontmatter(read(agentRel('implementer'))).fm.readonly === 'false',
-    'G1[implementer]: readonly is false (Write/Edit tools)');
 }
 
 // ---------------------------------------------------------------------------
