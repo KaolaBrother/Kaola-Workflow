@@ -548,6 +548,8 @@ for (const role of reviewerGenerator.ROLES) {
   const hookRel = '.cursor/hooks/kaola-workflow-subagent-dispatch-log.sh';
   assert(exists(hookRel), 'G5: payload-adapted dispatch-log hook is generated');
   const hookText = exists(hookRel) ? read(hookRel) : '';
+  assert(hookText.startsWith('#!/bin/sh\n'),
+    'G5: adapted dispatch-log keeps the shebang as line 1 so Cursor can exec it');
   assert(/subagent_type/.test(hookText) && /subagent_id/.test(hookText),
     'G5: dispatch-log source accepts Cursor subagent_type / subagent_id');
   assert(/agent_type/.test(hookText) && /agent_id/.test(hookText),
@@ -556,6 +558,8 @@ for (const role of reviewerGenerator.ROLES) {
     'G5: dispatch-log source accepts subagent_model');
   assert(exists('.cursor/hooks/kaola-workflow-compact-context.sh'),
     'G5: compact wrapper is generated');
+  assert(read('.cursor/hooks/kaola-workflow-compact-context.sh').startsWith('#!/bin/sh\n'),
+    'G5: compact wrapper keeps the shebang as line 1');
 }
 
 {

@@ -51,7 +51,7 @@ Everything under `.cursor/` is **generated from canonical** by
 | ---------------- | --------------------- | ----- |
 | `agents/<name>.md` | `.cursor/agents/<name>.md` | Cursor agent frontmatter (`name`, `description`, `model: inherit`, `readonly`). Claude `tools:` (including MCP ids) are dropped. Descriptions that are not plain YAML scalars are JSON-quoted. Reviewer identity is a body comment block (`<!-- cursor-reviewer-identity:start|end -->`); `resolved_profile_hash` is re-stamped over the cursor bytes. |
 | `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). `Agent(` dispatch cards become `Task(`. Install-time `model="{...}"` lines are stripped. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
-| `hooks/<script>.sh` | `.cursor/hooks/<script>.sh` | Dispatch-log is payload-adapted (`agent_type \|\| subagent_type`, `agent_id \|\| subagent_id`, `model \|\| subagent_model`). Compact-context is wrapped as JSON `{additional_context}` for `sessionStart`. |
+| `hooks/<script>.sh` | `.cursor/hooks/<script>.sh` | Dispatch-log is payload-adapted (`agent_type \|\| subagent_type`, `agent_id \|\| subagent_id`, `model \|\| subagent_model`). Adapted copies keep the shebang as line 1. Compact-context is wrapped as JSON `{additional_context}` for `sessionStart`. |
 | mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). `sessionStart` + `subagentStart`. Project-shaped commands use `.cursor/hooks/…`. A `--global` install rewrites that prefix to `./hooks/`. |
 
 Generated agents are deliberately model-agnostic.

@@ -13,7 +13,8 @@
   (`CURSOR_RUNTIME_NATIVE.inherit_session_model`). Compact resume injects via `sessionStart`
   `additional_context` because Cursor `preCompact` cannot inject
   (`CURSOR_RUNTIME_NATIVE.session_start_resume_injection`); durable resume is `mission-list.md`.
-  Dispatch-log accepts Cursor `subagent_type` / `subagent_id` / `subagent_model`. The edition stays
+  Dispatch-log accepts Cursor `subagent_type` / `subagent_id` / `subagent_model`. Adapted hook
+  copies keep the shebang as line 1 so Cursor can exec them. The edition stays
   out of `npm test`, `edition-sync.js`, and `install.sh`; `install-all.sh` names it so a runtime
   cannot be silently dropped. Suite: `node scripts/test-cursor-edition.js`. See
   `docs/cursor-edition.md`. GitHub issue creation was blocked in the delivery environment (`gh` is
