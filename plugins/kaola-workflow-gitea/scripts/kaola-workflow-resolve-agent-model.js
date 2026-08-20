@@ -168,7 +168,7 @@ function loadCodexSessionProof({ codexHome, threadId } = {}) {
             if (metaId === requested) {
               if (candidate) ambiguous = true;
               else {
-                candidate = { fd, stat };
+                candidate = { fd, stat, path: full };
                 keepFd = true;
               }
             }
@@ -190,6 +190,12 @@ function loadCodexSessionProof({ codexHome, threadId } = {}) {
     const content = readSessionDescriptor(candidate.fd, Number(beforeRead.size));
     const afterRead = fs.fstatSync(candidate.fd, { bigint: true });
     if (content === null || !sameDescriptorStat(beforeRead, afterRead)) return absent();
+    // fd ctime is not updated on rename on some kernels/overlay; the pathname
+    // still moving out from under the held inode is the swap the suite pins.
+    let named;
+    try { named = fs.lstatSync(candidate.path, { bigint: true }); }
+    catch (_) { return absent(); }
+    if (!sameDescriptorStat(afterRead, named)) return absent();
     let metaSeen = false;
     let latest = null;
     try {

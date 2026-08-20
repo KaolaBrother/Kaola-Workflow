@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Codex session proof re-checks the pathname after a stable fd read.** `loadCodexSessionProof`
+  already compared `fstat` of the held descriptor across the read, but a rename+symlink swap leaves
+  that fd on the original inode — and on kernels/overlay that do not bump ctime on rename, the fd
+  comparison stays green. After the read, the resolver `lstat`s the discovered path and requires the
+  same descriptor as the fd; a swapped name is `absent`. The existing suite pin is
+  `descriptor stability rejects a renamed validated inode`.
+
 - **Cursor additive runtime edition.** First-class Cursor support, not Claude-compat leftovers.
   `./install-cursor.sh` deploys named `.cursor/agents/` (`Task` types), flat `.cursor/commands/`
   slash commands, hook scripts under `.cursor/hooks/`, and a merged `.cursor/hooks.json`
