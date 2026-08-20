@@ -1,7 +1,7 @@
 {
   "name": "kaola-workflow",
   "version": "7.13.0",
-  "description": "Kaola-Workflow for Codex, a public repo-backed workflow pack driven by an adaptive, resumable mission list, automated Codex agent profiles, roadmap mirroring, TDD execution, review, and finalization gates.",
+  "description": "Kaola-Workflow for Codex, driven by an adaptive, resumable mission list, using GitHub issues, pull requests, gh, and repo-backed workflow artifacts.",
   "author": {
     "name": "KaolaBrother",
     "url": "https://github.com/KaolaBrother"
@@ -13,6 +13,9 @@
     "codex",
     "kaola-workflow",
     "workflow",
+    "github",
+    "gh",
+    "pull-requests",
     "workflow-init",
     "skills",
     "agents",

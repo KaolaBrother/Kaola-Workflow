@@ -1,7 +1,7 @@
 {
   "name": "kaola-workflow",
   "version": "9.13.0",
-  "description": "Adaptive Kaola-Workflow for Claude Code and Codex — a GitHub-issue-driven mission list: one file of item / status / dispatched / result that the orchestrator writes as it decomposes, dispatches and closes work. Multi-model orchestration with resumable on-disk coordination state.",
+  "description": "Adaptive Kaola-Workflow — an issue-driven mission list: one file of item / status / dispatched / result that the orchestrator writes as it decomposes, dispatches and closes work. Six runtimes (Claude Code, Codex, Cursor, opencode, Kimi Code, Grok CLI) across GitHub, GitLab, and Gitea, with resumable on-disk coordination state.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/KaolaBrother/Kaola-Workflow.git"
@@ -11,11 +11,20 @@
     "url": "https://github.com/KaolaBrother/Kaola-Workflow/issues"
   },
   "keywords": [
-    "claude-code",
     "workflow",
     "agents",
+    "coding-agents",
+    "mission-list",
+    "claude-code",
+    "codex",
+    "cursor",
+    "opencode",
+    "kimi",
+    "grok",
+    "gitlab",
+    "gitea",
     "tdd",
-    "claude-agents"
+    "multi-agent"
   ],
   "files": [
     ".agents/plugins/",

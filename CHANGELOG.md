@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Public package and Codex-plugin listing copy catch up to the mission list and six runtimes.**
+  Root `package.json` still named only Claude Code and Codex on a GitHub-only issue-driven
+  workflow, with `claude-agents` keywords. The GitHub Codex `plugin.json` still advertised
+  roadmap mirroring and finalization gates, and omitted the GitHub forge keywords its
+  GitLab/Gitea siblings carry. Listing copy now matches what ships: an adaptive mission list,
+  six runtimes, three forges; the Codex listing drops the retired local-backlog and gate
+  claims and aligns with the sibling wording and keyword set.
+
 ## [9.13.0] - 2026-08-20
 
 ### Added
