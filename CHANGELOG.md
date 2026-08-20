@@ -4,6 +4,22 @@
 
 ### Added
 
+- **Validation-runner execution-shell identity is comparable on dash.** POSIX `/bin/sh`
+  is often dash, which rejects `--version`. The runner retries `sh -c :` for the
+  execution-shell probe so a `run` receipt is not `inconclusive` for
+  `execution_shell_version_probe_failed` on Debian/Ubuntu. The existing suite pin is
+  `#904 control: run over a child that binds nothing PASSES`.
+
+- **Hook stage promotion re-checks the staged tree and hooks.json bytes, not only inode
+  identity.** Overlay filesystems can reuse inode numbers after `rm`/`unlink`+create, so
+  `dev`+`ino` of a replaced live path can still match the staged inode. After promoting a
+  hook directory the installer requires `treeIdentityIsCurrent`; after promoting
+  `hooks.json` it requires the live bytes equal the staged payload, and rollback refuses
+  when they do not. `cleanupOwnedFile` also requires size/mtime/ctime so a reused inode
+  with foreign bytes is not unlinked. Existing suite pins:
+  `a live path replaced immediately after promotion must fail closed`,
+  `a replaced hooks.json stage must fail closed`.
+
 - **Codex session proof re-checks the pathname after a stable fd read.** `loadCodexSessionProof`
   already compared `fstat` of the held descriptor across the read, but a rename+symlink swap leaves
   that fd on the original inode — and on kernels/overlay that do not bump ctime on rename, the fd

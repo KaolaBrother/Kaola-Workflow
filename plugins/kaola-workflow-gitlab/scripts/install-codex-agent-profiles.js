@@ -1348,6 +1348,9 @@ function ownedPathMatches(file, expectedStat, expectedKind) {
 
 function cleanupOwnedFile(file, expectedStat) {
   if (!file || !expectedStat || !ownedPathMatches(file, expectedStat, 'file')) return false;
+  const current = lstatIfPresent(file);
+  // Overlay can reuse ino after unlink+create; size/mtime/ctime distinguish a replacement.
+  if (!current || !sameFileVersion(current, expectedStat)) return false;
   try {
     fs.unlinkSync(file);
     return !lstatIfPresent(file);
@@ -1662,7 +1665,8 @@ function prepareHookScriptReplacement(stableDir, relPaths, sourceRoot) {
         state.installed = true;
         state.installedStat = state.stage.stat;
         const installedCurrent = lstatIfPresent(state.active);
-        assert(installedCurrent && sameFileIdentity(installedCurrent, state.installedStat),
+        assert(installedCurrent && sameFileIdentity(installedCurrent, state.installedStat)
+          && treeIdentityIsCurrent(state.active, state.stage.entries),
           `hook destination changed during stage promotion: ${state.active}`);
       }
     } catch (error) {
@@ -1883,6 +1887,7 @@ function updateHooks() {
   let hooksInstalled = false;
   let hooksInstalledStat = null;
   let hooksOriginalStat = null;
+  let hooksNextBytes = null;
   try {
     // Build and read every input before staging anything. A malformed template,
     // unsafe destination, or unreadable later source leaves both live outputs alone.
@@ -1915,6 +1920,7 @@ function updateHooks() {
 
     const merged = mergeHooks(existing, managedHooks);
     const next = JSON.stringify(merged, null, 2) + '\n';
+    hooksNextBytes = next;
     const hooksChanged = next !== current;
 
     transaction = prepareHookScriptReplacement(targetStableDir, relPaths, pluginRoot);
@@ -1952,7 +1958,8 @@ function updateHooks() {
       hooksInstalled = true;
       hooksInstalledStat = hooksStage.stat;
       const installedCurrent = lstatIfPresent(targetHooks);
-      assert(installedCurrent && sameFileIdentity(installedCurrent, hooksInstalledStat),
+      assert(installedCurrent && sameFileIdentity(installedCurrent, hooksInstalledStat)
+        && read(targetHooks) === next,
         `hook destination changed during stage promotion: ${targetHooks}`);
     }
 
@@ -1962,15 +1969,16 @@ function updateHooks() {
   } catch (error) {
     if (hooksInstalled) {
       const installedCurrent = lstatIfPresent(targetHooks);
-      if ((!installedCurrent || sameFileIdentity(installedCurrent, hooksInstalledStat))
-          && hooksBackup && ownedPathMatches(hooksBackup.path, hooksBackup.stat, 'file')) {
+      const stillOwned = !installedCurrent
+        || (hooksNextBytes != null && read(targetHooks) === hooksNextBytes);
+      if (stillOwned && hooksBackup && ownedPathMatches(hooksBackup.path, hooksBackup.stat, 'file')) {
         try {
           fs.renameSync(hooksBackup.path, targetHooks);
           hooksBackup = null;
         } catch (rollbackError) {
           error.message += `; hooks.json rollback failed: ${rollbackError.message}`;
         }
-      } else if (installedCurrent && sameFileIdentity(installedCurrent, hooksInstalledStat)) {
+      } else if (stillOwned && installedCurrent && sameFileIdentity(installedCurrent, hooksInstalledStat)) {
         try {
           if (!hooksOriginalStat) {
             fs.unlinkSync(targetHooks);

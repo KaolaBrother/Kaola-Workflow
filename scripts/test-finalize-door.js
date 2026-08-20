@@ -1554,7 +1554,17 @@ function assertNoPlanAnywhere(repo, label) {
       'T8n(W9) premise: the band exists ONLY in main — that is what makes it reachable solely through '
       + 'the fallback, and invisible to a check on the local path');
     const bandBefore = walkFiles(mainBand, '', []).sort().join('|');
-    const w9 = runRecord(wt, ['--project', 'Archive', '--verdict', 'pass', '--command', 'swift test']);
+    // On a case-insensitive filesystem, `Archive` is the band (the case-variant
+    // route the kernel catches by directory identity). On a case-sensitive one
+    // it is a different directory, so the same result is pinned with the
+    // literal band segment `archive`.
+    let caseFolds = false;
+    try {
+      const viaCase = fs.statSync(path.join(mainRoot, 'kaola-workflow', 'Archive'));
+      const viaLiteral = fs.statSync(mainBand);
+      caseFolds = viaCase.dev === viaLiteral.dev && viaCase.ino === viaLiteral.ino;
+    } catch (_) { caseFolds = false; }
+    const w9 = runRecord(wt, ['--project', caseFolds ? 'Archive' : 'archive', '--verdict', 'pass', '--command', 'swift test']);
     assert(w9.status === 2,
       'T8n(W9): a `--project` that resolves into the durable archive band is a USAGE error — no checkout '
       + 'and no re-run turns the band into a run folder, so it is exit 2 and not an inconclusive '

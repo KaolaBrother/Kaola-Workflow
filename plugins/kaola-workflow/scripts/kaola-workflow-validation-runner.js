@@ -375,7 +375,7 @@ function identityForPath(file, commandHead, environment, cwd, options) {
     return { comparable: false, reason: 'realpath_unresolved', identity: null };
   }
   const probeArgs = Array.isArray(opts.version_args) ? opts.version_args : ['--version'];
-  const result = spawnSync(real, probeArgs, {
+  const spawnProbe = args => spawnSync(real, args, {
     cwd,
     env: environment,
     encoding: 'buffer',
@@ -383,6 +383,15 @@ function identityForPath(file, commandHead, environment, cwd, options) {
     maxBuffer: opts.max_buffer || MAX_OUTPUT_BYTES,
     windowsHide: true,
   });
+  let result = spawnProbe(probeArgs);
+  // POSIX /bin/sh is often dash, which rejects --version (exit 2, "Illegal option --").
+  // The execution-shell identity still has to be comparable on those hosts.
+  if ((result.error || result.signal || result.status !== 0)
+      && commandHead === 'execution-shell'
+      && probeArgs.length === 1 && probeArgs[0] === '--version') {
+    const retry = spawnProbe(['-c', ':']);
+    if (!retry.error && !retry.signal && retry.status === 0) result = retry;
+  }
   const stdout = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout || '');
   const stderr = Buffer.isBuffer(result.stderr) ? result.stderr : Buffer.from(result.stderr || '');
   if (result.error || result.signal || result.status !== 0) {
