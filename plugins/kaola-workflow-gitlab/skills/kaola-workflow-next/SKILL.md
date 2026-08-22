@@ -7,7 +7,7 @@ description: Use when starting, resuming, or running Kaola-Workflow for Codex wo
 
 Keep every installed role's existing standard-tier or reasoning-tier classification, and set the
 model and reasoning effort explicitly on each spawn. Standard-tier roles dispatch with
-`model: "gpt-5.6-sol"` and `reasoning_effort: "medium"`. Reasoning-tier roles dispatch with
+`model: "gpt-5.6-luna"` and `reasoning_effort: "max"`. Reasoning-tier roles dispatch with
 `model: "gpt-5.6-sol"` and `reasoning_effort: "xhigh"`.
 
 Standard-tier roles: `code-explorer`, `investigator`, `knowledge-lookup`, `tdd-guide`,
@@ -16,8 +16,8 @@ Standard-tier roles: `code-explorer`, `investigator`, `knowledge-lookup`, `tdd-g
 Reasoning-tier roles: `planner`, `code-architect`, `build-error-resolver`, `code-reviewer`,
 `security-reviewer`, `adversarial-verifier`, `synthesizer`.
 
-These mappings are fixed for every spawn. Do not escalate, downgrade, or otherwise override a
-standard-tier role's model or reasoning effort based on task breadth, latency, prior results, risk,
+These mappings are fixed for every spawn. Do not escalate, downgrade, or otherwise override either
+tier's model or reasoning effort based on task breadth, latency, prior results, risk, availability,
 or any other condition. The role classification remains unchanged.
 <!-- /PIN -->
 

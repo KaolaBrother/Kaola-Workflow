@@ -404,17 +404,16 @@ tier** is declared once by `CODEX_PINNED_STANDARD_ROLES` and `CODEX_PINNED_REASO
 `kaola-workflow-adaptive-schema.js`, rendered from there into the Codex SKILL surfaces — see
 `conventions.md` § Bundle Lane for every carrier copy and the guard that binds the roster to those
 constants. **What each tier resolves to** is a separate fact in a separate place, and the schema holds
-no model or effort literal at all: it is authored twice, as named constants (`CODEX_STANDARD_MODEL`,
-`CODEX_STANDARD_EFFORT`, `CODEX_REASONING_MODEL`, `CODEX_REASONING_EFFORT`) in
-`kaola-workflow-codex-preflight.js`, and as typed literals in the dispatch-routing pin of
-`templates/routing/next.skeleton.md` and `finalize.skeleton.md`, which is what ships to the SKILL
-surfaces. The two are bound: `test-route-reachability.js` builds its expected efforts from those
-constants and asserts every shipped surface states the matching one, so the prose and the validator
-cannot drift apart, and `validate-kaola-workflow-contracts.js` cross-binds preflight to the
-installer's own copies. Note the shape of that binding — it pins the **effort** and accepts any model
-string, so a model change is caught by the contract validator rather than by the prose check. Both mappings are fixed, so a standard-tier task never
-changes model or reasoning effort for task-specific reasons. No other runtime's model resolution
-changes.
+no model or effort literal at all: the live pairs are authored as typed literals in the
+dispatch-routing pin of `templates/routing/next.skeleton.md` and `finalize.skeleton.md`, which is what
+ships to the SKILL surfaces. `test-route-reachability.js` independently states both complete expected
+pairs, asserts every shipped surface matches them, and mutation-proves that changing either half or
+adding an alternate route reds. `validate-kaola-workflow-contracts.js` separately asserts the live
+README pairs. The `CODEX_STANDARD_*` and `CODEX_REASONING_*` constants in
+`kaola-workflow-codex-preflight.js` remain historical profile values used for stale-install migration,
+not live dispatch authority; the contract validator continues to bind those migration values to the
+installer's copies. Both live mappings are fixed, so a standard-tier task never changes model or
+reasoning effort for task-specific reasons. No other runtime's model resolution changes.
 
 ## Testing
 

@@ -4,6 +4,10 @@
 
 ### Changed
 
+- **Codex standard-tier routing is fixed at Luna/max — #1010.** `kaola-workflow-next` and
+  `kaola-workflow-finalize` now dispatch every standard-tier role with `gpt-5.6-luna` / `max`;
+  reasoning-tier roles remain fixed at `gpt-5.6-sol` / `xhigh`, with no task-specific exceptions.
+
 - **Public package and Codex-plugin listing copy catch up to the mission list and six runtimes.**
   Root `package.json` still named only Claude Code and Codex on a GitHub-only issue-driven
   workflow, with `claude-agents` keywords. The GitHub Codex `plugin.json` still advertised

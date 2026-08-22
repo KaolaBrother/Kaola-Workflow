@@ -43,12 +43,13 @@ names the installed agent role and passes a dispatch packet:
 - `prompt` — the task prompt
 - `cwd` — the working directory
 - `model` / `reasoning_effort` — selected from the role's existing tier for this spawn; the
-  per-tier pair is authored twice, as the `CODEX_STANDARD_*`/`CODEX_REASONING_*` constants in
-  `kaola-workflow-codex-preflight.js` and as typed literals in the dispatch-routing pin of
+  live per-tier pair is authored as typed literals in the dispatch-routing pin of
   `templates/routing/next.skeleton.md` and `finalize.skeleton.md`, which is what ships to the Codex
-  next/finalize SKILLs. `test-route-reachability.js` binds the two, pinning the effort and accepting
-  any model string; the installer's own copies are cross-bound by
-  `validate-kaola-workflow-contracts.js`
+  next/finalize SKILLs. `test-route-reachability.js` independently states both complete expected
+  pairs and binds every shipped surface to them. The `CODEX_STANDARD_*`/`CODEX_REASONING_*`
+  preflight constants remain historical stale-profile migration values, not dispatch authority;
+  `validate-kaola-workflow-contracts.js` cross-binds those migration values to the installer copies
+  and separately asserts the live README pairs
 
 The mapping is fixed for every spawn. A standard-tier role always uses the standard-tier pair;
 task breadth, latency, prior outcomes, and risk do not create an escalation or any other

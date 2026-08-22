@@ -65,16 +65,42 @@ function codexModelRoutingBlock(content) {
   return start >= 0 && end > start ? content.slice(start, end) : '';
 }
 
-function hasStandardTierDispatchException(content) {
+function hasTierDispatchException(content) {
   const normalized = norm(content);
-  return /standard-tier\b.{0,180}\b(?:may|can)\b.{0,180}\b(?:use|dispatch|switch|select|escalat|downgrad)/i
+  return /(?:standard|reasoning)-tier\b.{0,180}\b(?:may|can)\b.{0,180}\b(?:use|dispatch|switch|select|escalat|downgrad|override|fall back)/i
     .test(normalized)
-    || /standard-tier\b.{0,120}\b(?:exception|override|trigger)s?\b/i.test(normalized)
+    || /(?:standard|reasoning)-tier\b.{0,120}\b(?:exception|override|trigger|fallback)s?\b/i.test(normalized)
     || /per-task\b.{0,100}\b(?:model|reasoning(?:-| )effort)\b.{0,100}\bexceptions?\b.{0,50}\b(?:may|can|permit)\b/i
       .test(normalized)
     || /\b(?:temporary|recorded)\b.{0,100}\b(?:exception|override|trigger)\b/i.test(normalized)
-    || /Sol\/?medium\b.{0,120}\bunavailable\b.{0,120}\b(?:use|select|substitute|fall back to)\b/i
+    || /(?:Luna\/?max|Sol\/?xhigh)\b.{0,120}\bunavailable\b.{0,120}\b(?:use|select|substitute|fall back to)\b/i
       .test(normalized);
+}
+
+const CANONICAL_TIER_DISPATCH_CLAUSES = [
+  'Standard-tier roles dispatch with `model: "gpt-5.6-luna"` and `reasoning_effort: "max"`.',
+  'Reasoning-tier roles dispatch with `model: "gpt-5.6-sol"` and `reasoning_effort: "xhigh"`.',
+];
+
+function hasExplicitModelEffortPair(content) {
+  const value = '(?:"[^"]+"|`[^`]+`|[A-Za-z0-9][A-Za-z0-9._-]*)';
+  return [
+    new RegExp(`\\bmodel\\s*:\\s*${value}[\\s\\S]{0,180}?`
+      + `\\breasoning_effort\\s*:\\s*${value}`, 'i'),
+    new RegExp(`\\breasoning_effort\\s*:\\s*${value}[\\s\\S]{0,180}?`
+      + `\\bmodel\\s*:\\s*${value}`, 'i'),
+  ].some(pattern => pattern.test(content));
+}
+
+// Exactly two pair claims are legal: the ruling clauses above. After removing one occurrence of
+// each, any remaining labelled pair (either order or quoting style) or shorthand pair is an extra
+// route. No context, verb, inability synonym, or historical-prose exemption changes that result.
+function hasAlternateTierDispatchPair(content) {
+  let remainder = norm(content);
+  for (const clause of CANONICAL_TIER_DISPATCH_CLAUSES) remainder = remainder.replace(clause, '');
+  if (hasExplicitModelEffortPair(remainder)) return true;
+  const shorthandPair = /\b(?:gpt-[a-z0-9.-]+|luna|sol|terra)\/(?:low|medium|high|xhigh|max)\b/gi;
+  return shorthandPair.test(remainder);
 }
 
 function hasProfileOwnedDispatchConflict(content) {
@@ -105,7 +131,8 @@ function codexDispatchCallSiteValid(content, skillName) {
     && callSite.includes('`reasoning_effort`')
     && /per-spawn model routing/i.test(callSite)
     && !hasProfileOwnedDispatchConflict(content)
-    && !hasStandardTierDispatchException(content);
+    && !hasTierDispatchException(content)
+    && !hasAlternateTierDispatchPair(content);
 }
 
 // This is deliberately a prose-contract validator, not a profile/config assertion: the routing
@@ -116,13 +143,14 @@ function codexModelRoutingContractValid(content) {
   const block = codexModelRoutingBlock(content);
   if (!block) return false;
   const normalized = norm(block);
-  return normalized.includes('Standard-tier roles dispatch with `model: "gpt-5.6-sol"` and `reasoning_effort: "medium"`.')
+  return normalized.includes('Standard-tier roles dispatch with `model: "gpt-5.6-luna"` and `reasoning_effort: "max"`.')
     && normalized.includes('Reasoning-tier roles dispatch with `model: "gpt-5.6-sol"` and `reasoning_effort: "xhigh"`.')
     && normalized.includes('These mappings are fixed for every spawn.')
-    && normalized.includes('Do not escalate, downgrade, or otherwise override a standard-tier role\'s model or reasoning effort based on task breadth, latency, prior results, risk, or any other condition.')
+    && normalized.includes('Do not escalate, downgrade, or otherwise override either tier\'s model or reasoning effort based on task breadth, latency, prior results, risk, availability, or any other condition.')
     && normalized.includes('The role classification remains unchanged.')
-    && !normalized.includes('gpt-5.6-luna')
-    && !hasStandardTierDispatchException(content);
+    && !normalized.includes('gpt-5.6-terra')
+    && !hasTierDispatchException(content)
+    && !hasAlternateTierDispatchPair(content);
 }
 
 // ---------------------------------------------------------------------------
@@ -449,8 +477,8 @@ for (const ed of codexEditions) {
       if (modelRoutingBlock) {
         allModelRoutingBlocks.push(modelRoutingBlock);
         const mutations = [
-          ['standard model', modelRoutingBlock.replace('gpt-5.6-sol', 'gpt-5.6-terra')],
-          ['standard effort', modelRoutingBlock.replace('reasoning_effort: "medium"', 'reasoning_effort: "high"')],
+          ['standard model', modelRoutingBlock.replace('gpt-5.6-luna', 'gpt-5.6-terra')],
+          ['standard effort', modelRoutingBlock.replace('reasoning_effort: "max"', 'reasoning_effort: "high"')],
           ['reasoning model', modelRoutingBlock.replace(
             'Reasoning-tier roles dispatch with\n`model: "gpt-5.6-sol"`',
             'Reasoning-tier roles dispatch with\n`model: "gpt-5.6-terra"`')],
@@ -478,14 +506,84 @@ for (const ed of codexEditions) {
           && !codexDispatchCallSiteValid(triggerList, name),
           `T19 model-routing mutation: a standard-tier trigger list reds ${file}`);
         const perTaskException = content.replace(modelRoutingBlock,
-          `${modelRoutingBlock}\nPer-task model exceptions may use Sol/high for quick work.`);
+          `${modelRoutingBlock}\nPer-task model exceptions may use Luna/high for quick work.`);
         assert(!codexModelRoutingContractValid(perTaskException)
           && !codexDispatchCallSiteValid(perTaskException, name),
           `T19 model-routing mutation: a generic per-task exception reds ${file}`);
-        const availabilityException = `${content}\nIf Sol/medium is unavailable, use Terra/high instead.`;
-        assert(!codexModelRoutingContractValid(availabilityException)
-          && !codexDispatchCallSiteValid(availabilityException, name),
-          `T19 complete-surface mutation: a standard-tier availability exception reds ${file}`);
+        const alternateStandardPair = content.replace(modelRoutingBlock,
+          `${modelRoutingBlock}\nFor a difficult standard role, dispatch with model: "gpt-5.6-sol" `
+          + `and reasoning_effort: "xhigh".`);
+        assert(!codexModelRoutingContractValid(alternateStandardPair)
+          && !codexDispatchCallSiteValid(alternateStandardPair, name),
+          `T19 model-routing mutation: a natural-language alternate standard pair reds ${file}`);
+        const alternateReasoningPair = content.replace(modelRoutingBlock,
+          `${modelRoutingBlock}\nFor a routine reasoning role, dispatch with model: "gpt-5.6-luna" `
+          + `and reasoning_effort: "max".`);
+        assert(!codexModelRoutingContractValid(alternateReasoningPair)
+          && !codexDispatchCallSiteValid(alternateReasoningPair, name),
+          `T19 model-routing mutation: a natural-language alternate reasoning pair reds ${file}`);
+        const admittedBypasses = [
+          ['standard-tier subject after qualifier',
+            'For difficult work, standard-tier dispatch uses model: "gpt-5.6-sol" and reasoning_effort: "xhigh".'],
+          ['reasoning-tier subject after qualifier',
+            'For routine work, reasoning-tier dispatch uses model: "gpt-5.6-luna" and reasoning_effort: "max".'],
+          ['standard role pair passed on spawn',
+            'For a difficult standard role, pass model: "gpt-5.6-sol" and reasoning_effort: "xhigh" on the spawn.'],
+          ['reasoning task pair passed on spawn',
+            'For a routine reasoning task, pass model: "gpt-5.6-luna" and reasoning_effort: "max" on the spawn.'],
+          ['standard-pair inability fallback',
+            'When Luna/max cannot be used, fall back to gpt-5.6-terra/high.'],
+          ['reasoning-pair inability fallback',
+            'When Sol/xhigh cannot be used, fall back to gpt-5.6-luna/max.'],
+        ];
+        for (const [label, sentence] of admittedBypasses) {
+          const mutant = `${content}\n${sentence}`;
+          assert(!codexModelRoutingContractValid(mutant)
+            && !codexDispatchCallSiteValid(mutant, name),
+            `T19 model-routing mutation: ${label} reds ${file}`);
+        }
+        const historicalProfileFact = `${content}\nHistorical profile migration recognizes `
+          + `model: "gpt-5.6-sol" and reasoning_effort: "medium".`;
+        assert(!codexModelRoutingContractValid(historicalProfileFact)
+          && !codexDispatchCallSiteValid(historicalProfileFact, name),
+          `T19 model-routing mutation: a historical profile pair is still an extra pair claim in ${file}`);
+        const fallbackBesideHistory = `${historicalProfileFact}\nWhen Luna/max cannot be used, `
+          + 'fall back to gpt-5.6-terra/high.';
+        assert(!codexModelRoutingContractValid(fallbackBesideHistory)
+          && !codexDispatchCallSiteValid(fallbackBesideHistory, name),
+          `T19 model-routing mutation: a historical fact cannot exempt an adjacent fallback in ${file}`);
+        const pairSyntaxMutants = [
+          ['duplicate canonical standard pair', CANONICAL_TIER_DISPATCH_CLAUSES[0]],
+          ['duplicate canonical reasoning pair', CANONICAL_TIER_DISPATCH_CLAUSES[1]],
+          ['historical exemption smuggling a live route',
+            'Historical profile migration recognizes model: "gpt-5.6-sol" and reasoning_effort: "medium" for standard role dispatch.'],
+          ['bare model then effort',
+            'Extra pair: model: gpt-5.6-terra and reasoning_effort: high.'],
+          ['bare effort then model',
+            'Extra pair: reasoning_effort: high and model: gpt-5.6-terra.'],
+          ['backticked-bare model then effort',
+            'Extra pair: model: `gpt-5.6-terra` and reasoning_effort: `high`.'],
+          ['backticked-bare effort then model',
+            'Extra pair: reasoning_effort: `high` and model: `gpt-5.6-terra`.'],
+          ['double-quoted effort then model',
+            'Extra pair: reasoning_effort: "high" and model: "gpt-5.6-terra".'],
+          ['historical reverse-order pair',
+            'Historical profile migration recognizes reasoning_effort: "medium" and model: "gpt-5.6-sol".'],
+          ['historical shorthand pair',
+            'Historical profile migration recognizes Sol/medium.'],
+        ];
+        for (const [label, sentence] of pairSyntaxMutants) {
+          const mutant = `${content}\n${sentence}`;
+          assert(!codexModelRoutingContractValid(mutant)
+            && !codexDispatchCallSiteValid(mutant, name),
+            `T19 model-routing mutation: ${label} reds ${file}`);
+        }
+        for (const [tier, pair] of [['standard', 'Luna/max'], ['reasoning', 'Sol/xhigh']]) {
+          const availabilityException = `${content}\nIf ${pair} is unavailable, use Terra/high instead.`;
+          assert(!codexModelRoutingContractValid(availabilityException)
+            && !codexDispatchCallSiteValid(availabilityException, name),
+            `T19 complete-surface mutation: a ${tier}-tier availability fallback reds ${file}`);
+        }
       }
 
       const callSite = codexDispatchCallSite(content, name);
@@ -542,7 +640,6 @@ for (const ed of codexEditions) {
 {
   const { GENERATED_SURFACES } = require('./generate-routing-surfaces.js');
   const schema = require('./kaola-workflow-adaptive-schema.js');
-  const codexPreflight = require('./kaola-workflow-codex-preflight.js');
 
   // The registry, as ONE map. This is the answer the block has to carry.
   const EXPECTED_TIER = new Map([
@@ -614,21 +711,22 @@ for (const ed of codexEditions) {
     return defects;
   };
 
-  // effortDefects — PURE. The tier->effort mapping, bound to the constants the Codex installer and
-  // preflight validate installed profiles against, so the prose and the validator cannot drift
-  // apart. T19 pins the same two sentences as literals; this is the binding to the constant, which
-  // is what makes the roster's tier names joinable to an actual effort at dispatch.
-  const effortDefects = (block, efforts) => {
+  // pairDefects — PURE. The live tier->model/effort policy is independent of the historical
+  // profile constants used to recognise and migrate stale installs. This joins each roster tier to
+  // its complete live pair, rather than allowing either half to change alone.
+  const pairDefects = (block, pairs) => {
     const flat = norm(block);
-    return Object.entries(efforts)
-      .filter(([tier, effort]) => !new RegExp(
-        `${tier}-tier roles dispatch with \`model: "[^"]+"\` and \`reasoning_effort: "${effort}"\``, 'i')
+    return Object.entries(pairs)
+      .filter(([tier, pair]) => !new RegExp(
+        `${tier}-tier roles dispatch with \`model: "${pair.model}"\` and `
+          + `\`reasoning_effort: "${pair.effort}"\``, 'i')
         .test(flat))
-      .map(([tier, effort]) => `${tier}-tier is not stated as reasoning_effort "${effort}"`);
+      .map(([tier, pair]) => `${tier}-tier is not stated as model "${pair.model}" `
+        + `with reasoning_effort "${pair.effort}"`);
   };
-  const EXPECTED_EFFORTS = {
-    standard: codexPreflight.CODEX_STANDARD_EFFORT,
-    reasoning: codexPreflight.CODEX_REASONING_EFFORT,
+  const EXPECTED_PAIRS = {
+    standard: { model: 'gpt-5.6-luna', effort: 'max' },
+    reasoning: { model: 'gpt-5.6-sol', effort: 'xhigh' },
   };
 
   // The obligated universe: every generated surface whose COMMITTED bytes ask the question.
@@ -650,10 +748,10 @@ for (const ed of codexEditions) {
     assert(defects.length === 0,
       `T19b roster: ${row.path} must ship the role->tier membership its own instruction demands — `
       + `${defects.length} defect(s): ${defects.join('; ')}`);
-    const efforts = effortDefects(block, EXPECTED_EFFORTS);
-    assert(efforts.length === 0,
-      `T19b effort: ${row.path} must state the tier->effort pair the Codex profile constants define — `
-      + `${efforts.join('; ')}`);
+    const pairs = pairDefects(block, EXPECTED_PAIRS);
+    assert(pairs.length === 0,
+      `T19b pair: ${row.path} must state the complete live tier->model/effort policy — `
+      + `${pairs.join('; ')}`);
   }
 
   // MUTATION PROOF. The detectors are pure, so every direction is proved against synthetic blocks
@@ -732,14 +830,29 @@ for (const ed of codexEditions) {
         + `${EXPECTED_TIER.size} roles absent — got ${strippedDefects.length}`);
     }
 
-    // (g) the effort binding reads the BLOCK, not the constant's name.
-    assert(effortDefects(goodBlock, EXPECTED_EFFORTS).length === 2,
-      'T19b mutation (RED): a block stating no tier->effort pair reds on both tiers');
+    // (g) the complete-pair binding reads the BLOCK, not the constants' names, and each half bites.
+    assert(pairDefects(goodBlock, EXPECTED_PAIRS).length === 2,
+      'T19b mutation (RED): a block stating no tier->model/effort pair reds on both tiers');
     const liveBlock = codexModelRoutingBlock(routingSurfaces[0].content);
-    assert(effortDefects(liveBlock, { standard: 'high', reasoning: EXPECTED_EFFORTS.reasoning })
+    assert(pairDefects(liveBlock, {
+      ...EXPECTED_PAIRS,
+      standard: { ...EXPECTED_PAIRS.standard, model: 'gpt-5.6-terra' },
+    })
       .some(d => /^standard-tier/.test(d)),
-      'T19b mutation (RED): a standard effort other than the pinned constant reds');
-    assert(effortDefects(liveBlock.replace(`"${EXPECTED_EFFORTS.reasoning}"`, '"high"'), EXPECTED_EFFORTS)
+      'T19b mutation (RED): changing the live standard-tier model reds');
+    assert(pairDefects(liveBlock, {
+      ...EXPECTED_PAIRS,
+      standard: { ...EXPECTED_PAIRS.standard, effort: 'high' },
+    })
+      .some(d => /^standard-tier/.test(d)),
+      'T19b mutation (RED): changing the live standard-tier effort reds');
+    const reasoningModelClause = `Reasoning-tier roles dispatch with\n`
+      + `\`model: "${EXPECTED_PAIRS.reasoning.model}"\``;
+    assert(pairDefects(liveBlock.replace(reasoningModelClause,
+      'Reasoning-tier roles dispatch with\n`model: "gpt-5.6-terra"`'), EXPECTED_PAIRS)
+      .some(d => /^reasoning-tier/.test(d)),
+      'T19b mutation (RED): changing the reasoning-tier model in the block reds');
+    assert(pairDefects(liveBlock.replace(`"${EXPECTED_PAIRS.reasoning.effort}"`, '"high"'), EXPECTED_PAIRS)
       .some(d => /^reasoning-tier/.test(d)),
       'T19b mutation (RED): downgrading the reasoning-tier effort in the block reds');
   }

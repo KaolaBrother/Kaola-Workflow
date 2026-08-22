@@ -190,7 +190,7 @@ governs exactly one case — an ad-hoc dispatch pointed at this repository's
 directory it was dispatched from.
 
 Codex keeps those role classifications unchanged but resolves them explicitly at each subagent
-spawn: `standard` dispatches as `gpt-5.6-sol` / `medium`, while `reasoning` dispatches as
+spawn: `standard` dispatches as `gpt-5.6-luna` / `max`, while `reasoning` dispatches as
 `gpt-5.6-sol` / `xhigh`. Both mappings are fixed: standard-tier model and reasoning effort never
 change for an individual task. Other runtimes retain their existing model routing.
 
@@ -686,8 +686,8 @@ The audit must keep these facts separate:
   preflight migrates or refuses any profile that pins them. The unpinned profile
   does not select the dispatch pair: each Codex spawn explicitly carries the
   model and reasoning effort selected from its role classification. Standard is
-  Sol/medium and reasoning is Sol/xhigh. These mappings have no per-task escalation, downgrade, or
-  other model/reasoning exception.
+  Luna/max and reasoning is Sol/xhigh. These mappings have no per-task
+  escalation, downgrade, or other model/reasoning exception.
 
 Recommended posture when the user asks the agent to configure Codex for
 Kaola-Workflow:
@@ -856,7 +856,7 @@ or illegal pins are malformed. This profile rule is separate from dispatch: Code
 fixed pair documented above. The user-owned root
 `model_reasoning_effort` controls the parent session and is never rewritten by profile migration.
 
-Every standard-tier Codex spawn explicitly carries Sol/medium. The workflow does not select a
+Every standard-tier Codex spawn explicitly carries Luna/max. The workflow does not select a
 different model or reasoning effort for a standard role based on task or runtime conditions.
 
 **Say where the deliverable goes.** A role that can write (`Write`/`Edit` in its manifest) writes its
