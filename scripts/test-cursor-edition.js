@@ -492,6 +492,52 @@ function commandRel(name, forge) {
     'G2[workflow-next]: script resolver names CURSOR_HOME');
 }
 
+// #1014: canonical command next (not Codex skills) must carry the heading Cursor
+// substitutes for CURSOR_MODEL_DISPATCH_BLOCK. Absence is a no-op in the generator.
+{
+  const nextCommands = [
+    'commands/workflow-next.md',
+    'plugins/kaola-workflow-gitlab/commands/workflow-next.md',
+    'plugins/kaola-workflow-gitea/commands/workflow-next.md',
+  ];
+  for (const rel of nextCommands) {
+    assert(/## Agent Model Dispatch/.test(read(rel)),
+      'G2-dispatch[' + rel + ']: canonical command next MUST carry ## Agent Model Dispatch '
+      + '(Codex skills are not required to carry this heading)');
+  }
+}
+
+// #1014: generated next and finalize share the strengthened CURSOR_MODEL_DISPATCH_BLOCK.
+{
+  const block = String(syncMod.CURSOR_MODEL_DISPATCH_BLOCK || '');
+  function assertStrengthenedDispatch(label, text) {
+    const body = String(text || '');
+    assert(body.includes(block.replace(/\s+$/, '')),
+      label + ': must contain the same CURSOR_MODEL_DISPATCH_BLOCK text as the shared constant');
+    assert(/\binherit\b/i.test(body) && /omit|do not pass|never pass/i.test(body),
+      label + ': omit per-call model= including inherit (do not pass inherit)');
+    assert(/subagent_type:\s*"<role>"/.test(body),
+      label + ': dispatch names subagent_type: "<role>"');
+    assert(/\bgeneralPurpose\b/.test(body)
+      && /substitut|impersonat|costume|do not use/i.test(body),
+      label + ': forbid generalPurpose impersonation — name generalPurpose; do not substitute it '
+      + '/ do not use a prompt costume');
+    assert(body.includes('.cursor/agents/implementer.md'),
+      label + ': catalog-preflight sentinel names .cursor/agents/implementer.md in cwd');
+    assert(/new chat/i.test(body) && /copied|this session|cold.?start/i.test(body),
+      label + ': if files were just copied this session, stop named dispatch and start a new chat');
+    assert(/Invalid enum/i.test(body) && /inline/i.test(body)
+      && /generalPurpose|inherit/i.test(body),
+      label + ': Invalid-enum / advertised catalog lacks the role → do the work inline; '
+      + 'do not retry as generalPurpose/inherit');
+  }
+  assertStrengthenedDispatch('G2-dispatch[CURSOR_MODEL_DISPATCH_BLOCK]', block);
+  assertStrengthenedDispatch('G2-dispatch[.cursor/commands/workflow-next.md]',
+    exists(commandRel('workflow-next')) ? read(commandRel('workflow-next')) : '');
+  assertStrengthenedDispatch('G2-dispatch[.cursor/commands/kaola-workflow-finalize.md]',
+    exists(commandRel('kaola-workflow-finalize')) ? read(commandRel('kaola-workflow-finalize')) : '');
+}
+
 // ---------------------------------------------------------------------------
 // G2-declaration: CURSOR_RUNTIME_NATIVE.frontmatter_tier_pin exists, names
 // the two canonical class pins, and the generated tree matches it.
@@ -831,11 +877,13 @@ for (const role of reviewerGenerator.ROLES) {
       const cursorHome = opts.cursorHome || fs.mkdtempSync(path.join(tmpBase(), 'cursor-i-ch-'));
       const dest = opts.dest || fs.mkdtempSync(path.join(tmpBase(), 'cursor-i-dest-'));
       const args = ['--yes'].concat(opts.skipTarget ? [] : ['--target', dest]).concat(extraArgs || []);
-      // spawn-class: environment
-      const r = spawnSync('bash', [INSTALLER].concat(args), {
+      const spawnOpts = {
         env: Object.assign({}, process.env, { HOME: home, CURSOR_HOME: cursorHome }),
         encoding: 'utf8',
-      });
+      };
+      if (opts.cwd) spawnOpts.cwd = opts.cwd;
+      // spawn-class: environment
+      const r = spawnSync('bash', [INSTALLER].concat(args), spawnOpts);
       return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '', home, cursorHome, dest };
     }
     const clean = r => {
@@ -894,6 +942,46 @@ for (const role of reviewerGenerator.ROLES) {
       assert(!/\.cursor\/hooks\//.test(globalMapping),
         'G8-global: mapping commands do not keep the project-shaped .cursor/hooks/ prefix');
       clean(r);
+    }
+
+    // #1014: --global from a git work tree dual-writes the Task catalog at
+    // <toplevel>/.cursor/agents (do NOT spawn --global with cwd = this repo).
+    {
+      const gitRepo = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-git-'));
+      try {
+        G.init(gitRepo);
+        const r = runInstaller(['--global'], { skipTarget: true, cwd: gitRepo });
+        assert(r.status === 0,
+          'G8-global-git: install-cursor.sh --global from a git-fixture cwd exits 0 (got '
+          + r.status + ' — ' + firstLine(r) + ')');
+        assert(fs.existsSync(path.join(gitRepo, '.cursor', 'agents', 'implementer.md')),
+          'G8-global-git: --global from a git-fixture cwd writes <toplevel>/.cursor/agents/implementer.md');
+        assert(!fs.existsSync(path.join(r.cursorHome, '.cursor')),
+          'G8-global-git: still creates NO nested .cursor/ under CURSOR_HOME');
+        assert(fs.existsSync(path.join(r.cursorHome, 'agents', 'knowledge-lookup.md')),
+          'G8-global-git: still deploys un-nested agents under $CURSOR_HOME/agents/');
+        clean(r);
+      } finally {
+        try { fs.rmSync(gitRepo, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
+
+    // #1014: --global from a directory with no git toplevel must not invent cwd/.cursor/.
+    {
+      const plain = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-nongit-'));
+      try {
+        const r = runInstaller(['--global'], { skipTarget: true, cwd: plain });
+        assert(r.status === 0,
+          'G8-global-nongit: --global from a non-git cwd exits 0 (got ' + r.status
+          + ' — ' + firstLine(r) + ')');
+        assert(!fs.existsSync(path.join(plain, '.cursor')),
+          'G8-global-nongit: --global from a directory with no git toplevel does not invent a project .cursor/ tree');
+        assert(!fs.existsSync(path.join(r.cursorHome, '.cursor')),
+          'G8-global-nongit: still creates NO nested .cursor/ under CURSOR_HOME');
+        clean(r);
+      } finally {
+        try { fs.rmSync(plain, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
     }
 
     // --forge=gitlab renders `.cursor-gitlab/` as the generator SOURCE tree, then
@@ -1040,6 +1128,32 @@ for (const role of reviewerGenerator.ROLES) {
           'G8-uninstall: a user-authored helper in the scripts dir survives');
       }
       clean(r);
+    }
+  }
+}
+
+// #1014: catalog preflight copies only listCanonAgents() names. A stray
+// user-agent.md in CURSOR_HOME/agents must not land in project .cursor/agents.
+// Prefer the exported helper; missing export is RED.
+{
+  const copy = syncMod.copyListCanonAgents;
+  assert(typeof copy === 'function',
+    'G9-catalog: sync-cursor-edition.js exports copyListCanonAgents(srcDir, destDir) '
+    + '(copies only listCanonAgents() names; not a glob of *.md)');
+  if (typeof copy === 'function') {
+    const src = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g9-src-'));
+    const dest = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g9-dest-'));
+    try {
+      fs.writeFileSync(path.join(src, 'implementer.md'), '# implementer\n');
+      fs.writeFileSync(path.join(src, 'user-agent.md'), '# stray\n');
+      copy(src, dest);
+      assert(fs.existsSync(path.join(dest, 'implementer.md')),
+        'G9-catalog: listCanonAgents() name implementer.md is copied into the project agents dir');
+      assert(!fs.existsSync(path.join(dest, 'user-agent.md')),
+        'G9-catalog: stray user-agent.md in CURSOR_HOME/agents is NOT copied into project .cursor/agents');
+    } finally {
+      try { fs.rmSync(src, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      try { fs.rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
     }
   }
 }

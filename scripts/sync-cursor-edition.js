@@ -96,6 +96,16 @@ function listCanonAgents() {
     .map(f => f.slice(0, -3));
 }
 
+function copyListCanonAgents(srcDir, destDir) {
+  fs.mkdirSync(destDir, { recursive: true });
+  const names = new Set(listCanonAgents());
+  for (const name of names) {
+    const src = path.join(srcDir, name + '.md');
+    if (!fs.existsSync(src)) continue;
+    fs.copyFileSync(src, path.join(destDir, name + '.md'));
+  }
+}
+
 function listCanonCommands(forge) {
   return forgeLayout.commandSources(forge || DEFAULT_FORGE).map(s => s.basename).sort();
 }
@@ -171,9 +181,27 @@ const CURSOR_MODEL_DISPATCH_BLOCK = [
   'Named Cursor agents carry generated frontmatter that pins their canonical standard or reasoning',
   'tier at medium or high effort. The one-family allowlist keeps the dispatch surface portable',
   'while the canonical class selects the generated tier pin.',
-  'Omit per-call model overrides from `Task`; the card only names the role.',
+  'Omit per-call model on `Task`, including `inherit`. Do not pass inherit.',
   '',
-  'Dispatch a role with `Task` using `subagent_type: "<role>"`.',
+  'Dispatch a role with `Task` using `subagent_type: "<role>"` only.',
+  '',
+  'Do not substitute `generalPurpose` (or any other built-in) plus a prompt costume;',
+  'impersonation is the bug.',
+  '',
+  'Catalog preflight: require `.cursor/agents/implementer.md` in the cwd. If missing, copy only',
+  'the canonical Kaola role names (not every `*.md` from the user tree) from, in order: git',
+  'toplevel `.cursor/agents/` (worktree → main), else `${CURSOR_HOME:-$HOME/.cursor}/agents/`.',
+  'If still missing: print `./install-cursor.sh --target "$PWD"` and do not name a Task type.',
+  'If this session just copied files: stop named dispatch. Cold start. Start a new chat in the',
+  'workspace that now contains `.cursor/agents`, then re-run `/workflow-next`. If files were',
+  'already present: proceed.',
+  '',
+  'Keep the Cursor workspace at the repo root that holds `.cursor/agents`. A worktree is a cwd.',
+  'Do not reopen `agent --workspace` inside `.kw/worktrees/` unless that directory already has',
+  'the 14 agent files before the session starts.',
+  '',
+  'On `Invalid enum value` … `received \'<role>\'`: do the work inline and record tool-unavailable.',
+  'Do not retry as `generalPurpose` / `inherit`.',
   '',
 ].join('\n');
 
@@ -265,18 +293,19 @@ function assertModelDispatchAnchorMatched(canonBody, substituted, label) {
     + 'MODEL_DISPATCH_HEADING to the heading canonical now uses:\n  - ' + nearMiss.join('\n  - '));
 }
 
-function transformCommandBody(body, forge, label) {
+function transformCommandBody(body, forge, label, commandName) {
   forge = forge || DEFAULT_FORGE;
   const lines = rewriteModelDispatchInstructions(body, CURSOR_MODEL_DISPATCH_GUIDANCE).split(/\r?\n/);
   const out = [];
   let substitutedModelDispatch = false;
   let i = 0;
+  const block = CURSOR_MODEL_DISPATCH_BLOCK.replace(/\s+$/, '');
   while (i < lines.length) {
     const line = lines[i];
     if (MODEL_DISPATCH_HEADING.test(line)) {
       while (out.length && out[out.length - 1].trim() === '') out.pop();
       if (out.length) out.push('');
-      out.push(CURSOR_MODEL_DISPATCH_BLOCK.replace(/\s+$/, ''));
+      out.push(block);
       out.push('');
       substitutedModelDispatch = true;
       i++;
@@ -293,6 +322,9 @@ function transformCommandBody(body, forge, label) {
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime cursor');
   text = rewriteClaudeScriptPaths(text, forge);
+  if (commandName === 'workflow-init' && !text.includes(block)) {
+    text = text.replace(/\s+$/, '') + '\n\n' + block + '\n';
+  }
   assertNoModelDispatchResidue(text, label);
   return text;
 }
@@ -306,7 +338,7 @@ function renderCommand(canonContent, commandName, forge) {
   if (fm['argument-hint']) lines.push('argument-hint: ' + fm['argument-hint']);
   lines.push('---');
   lines.push('');
-  lines.push(transformCommandBody(body, forge, commandRel(commandName, forge)).trim().replace(/\s+$/, ''));
+  lines.push(transformCommandBody(body, forge, commandRel(commandName, forge), commandName).trim().replace(/\s+$/, ''));
   return lines.join('\n') + '\n';
 }
 
@@ -769,7 +801,7 @@ module.exports = {
   adaptHookForCursor, HOOK_ADAPTATIONS,
   expectedHookFiles, retiredHookFiles, retiredAgentFiles, retiredCommandFiles,
   parseFrontmatter, parseTools, isReadOnlyRole, yamlScalar,
-  listCanonAgents, listCanonCommands,
+  listCanonAgents, copyListCanonAgents, listCanonCommands,
   CANON_AGENTS_DIR, CANON_HOOKS_DIR,
   REPO,
   HOOK_SCRIPTS,

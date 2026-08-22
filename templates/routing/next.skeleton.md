@@ -34,6 +34,15 @@ reorganizing someone's issues — state what you propose and why, then wait for 
 Everything checkable is yours to decide and get on with.
 <!-- /PIN -->
 
+<!-- REGION:command — command-only (Codex skill strips it; Delegation stays REGION:skill) -->
+## Agent Model Dispatch
+
+Use the installed role name as `subagent_type`. You MUST pass `model=` from that
+role's installed profile; never omit it. Never substitute a generic type. If the
+named role cannot be spawned, do the work inline and say so — that is tool
+unavailability.
+
+<!-- /REGION -->
 ## Step 1 — Pick the work
 
 You select the target. No script picks for you.

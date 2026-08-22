@@ -69,6 +69,16 @@ the generator does not invent a fallback roster. Cursor's `Task` tool accepts
 an optional `model` but has no separate effort field, so generated command cards
 omit `model` and the child takes the model from its custom-agent frontmatter.
 
+Cursor CLI loads custom `Task` types from the **workspace** `.cursor/agents`,
+not from `~/.cursor/agents`. `--global` and `install-all.sh`'s default write
+`${CURSOR_HOME}/{agents,commands}` (un-nested). That layout is not
+dispatch-capable by itself unless the installer also dual-wrote the project
+catalog because the process cwd was inside a git work tree. A worktree is a
+cwd: do not point `agent --workspace` at `.kw/worktrees/<project>/` unless the
+14 agent files already exist there **before** the session starts. After
+materializing `.cursor/agents`, start a new chat; a mid-session copy does not
+change this session's Task enum.
+
 **Declared runtime divergences.** The declarations are the
 `frontmatter_tier_pin` and `session_start_resume_injection` entries in the
 `CURSOR_RUNTIME_NATIVE` table in `scripts/test-cursor-edition.js`. The suite
@@ -112,8 +122,10 @@ does not run through `install.sh --forge`.
 > The Cursor runtime is also covered by the top-level **`./install-all.sh`**
 > ("install/refresh every runtime" — see [README](../README.md#installation)),
 > which invokes this installer unchanged (`--global` by default) as the sixth
-> leg of its six-runtime sequence, with a per-runtime PASS/FAIL summary. It stays
-> a thin orchestrator — it does **not** fold Cursor into
+> leg of its six-runtime sequence, with a per-runtime PASS/FAIL summary. `--global`
+> alone does not populate the workspace Task catalog unless cwd is a git work
+> tree and the dual-write lands `<toplevel>/.cursor/agents`. It stays a thin
+> orchestrator — it does **not** fold Cursor into
 > `install.sh`/`edition-sync.js`/`npm test`.
 
 ```bash
@@ -138,6 +150,10 @@ install still finds the main-checkout trees).
 - **GLOBAL** (`--global`): they land under `${CURSOR_HOME:-$HOME/.cursor}/{agents,commands}`
   with **no** nested `.cursor/` directory. Mapping is merged into
   `${CURSOR_HOME:-$HOME/.cursor}/hooks.json` with command paths rewritten to `./hooks/`.
+  If the installer cwd is inside a git work tree, the same agents and commands are
+  also written to `$(git rev-parse --show-toplevel)/.cursor/{agents,commands}`
+  (Task types are workspace-scoped). `--global` from a directory with no git
+  toplevel does not invent a project `.cursor/` tree.
 - Support scripts always land under
   `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/{scripts,hooks}`.
 

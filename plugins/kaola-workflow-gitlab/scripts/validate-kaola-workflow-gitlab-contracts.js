@@ -213,6 +213,14 @@ for (const file of commandFiles.filter(file => path.basename(file).startsWith('k
   assertNotIncludes(file, 'kaola_agent_model');
 }
 
+// #1014: command next is a separate pin — do not fold it into the kaola-workflow- basename loop.
+{
+  const nextCmd = pluginRoot + '/commands/workflow-next.md';
+  assertIncludes(nextCmd, '## Agent Model Dispatch');
+  assertIncludes(nextCmd, 'You MUST pass `model=');
+  assertNotIncludes(nextCmd, 'model="{');
+}
+
 // #372: the advisor-gate vocabulary is retired — ban it across command + skill files so the
 // removed mandates cannot silently return (concat-built; no literal in this source).
 const advisorGateTokens372 = [

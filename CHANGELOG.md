@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Cursor Task catalog is workspace `.cursor/agents`, and `/workflow-next` now carries the dispatch heading — #1014.**
+  Cursor CLI loads named `Task` types from the workspace tree, not `~/.cursor/agents`.
+  `install-cursor.sh --global` still writes un-nested `${CURSOR_HOME}/{agents,commands}`;
+  from a git work tree it also dual-writes `<toplevel>/.cursor/{agents,commands}`.
+  Generated next/finalize omit per-call `model` (including `inherit`), forbid
+  `generalPurpose` impersonation, and fail closed on a missing catalog. After
+  materializing agents, start a new chat.
+
 ## [9.14.0] - 2026-08-22
 
 ### Changed

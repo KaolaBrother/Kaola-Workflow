@@ -21,7 +21,11 @@
 #
 # DEPLOY LAYOUT (scope-dependent):
 #   - PROJECT (--target/$PWD): agents and commands land under <project>/.cursor/{agents,commands}.
-#   - GLOBAL (--global): they land DIRECTLY under ${CURSOR_HOME:-$HOME/.cursor}/{agents,commands}.
+#   - GLOBAL (--global): they land DIRECTLY under ${CURSOR_HOME:-$HOME/.cursor}/{agents,commands}
+#     with no nested .cursor/ under CURSOR_HOME. When the installer process cwd is inside a git
+#     work tree, the same 14 agents + 3 commands are also written to
+#     $(git rev-parse --show-toplevel)/.cursor/{agents,commands} (Task types are workspace-scoped).
+#     --global from a directory with no git toplevel does not invent a project .cursor/ tree.
 #   - Support scripts ALWAYS land under the Cursor home (user-level):
 #     ${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/{scripts,hooks}.
 #   - Project installs merge mapping into <project>/.cursor/hooks.json and copy hook
@@ -440,6 +444,17 @@ fi
 confirm_install
 copy_agents "$LAYOUT_DEST/agents"
 copy_commands "$LAYOUT_DEST/commands"
+if [[ "$GLOBAL" -eq 1 ]]; then
+  git_toplevel="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -n "$git_toplevel" ]]; then
+    project_layout="$git_toplevel/.cursor"
+    if [[ "$project_layout" != "$LAYOUT_DEST" && "$git_toplevel" != "$DEST_ROOT" ]]; then
+      echo "Task types are workspace-scoped; also deploying agents+commands → $project_layout"
+      copy_agents "$project_layout/agents"
+      copy_commands "$project_layout/commands"
+    fi
+  fi
+fi
 install_support_scripts
 install_hooks_json
 
