@@ -156,6 +156,8 @@ const retired = [
 const phaseCommands = [
   'commands/kaola-workflow-finalize.md'
 ];
+// #1014: do not add workflow-next to phaseCommands — that list requires model="{
+// placeholders and assertEveryDispatchHasModel; next has no Agent cards.
 
 // #770: the retired path SELECTOR vocabulary — KAOLA_PATH/--workflow-path no longer select or
 // refuse anything, and the reason codes they used to feed are gone. Scoped to these agent-facing
@@ -211,6 +213,21 @@ assert(!exists('commands/kaola-workflow.md'), 'legacy kaola-workflow command mus
 // forever. Forge-renamed, so the pin is the sweep's own noun.
 assertIncludes('commands/workflow-next.md', 'watch-pr');
 assertIncludes('commands/workflow-next.md', '## Co-active Folders');
+assert(!phaseCommands.includes('commands/workflow-next.md')
+  && !phaseCommands.some(f => /workflow-next/.test(f)),
+  'phaseCommands must not include workflow-next (next has no Agent cards; do not fold it into the finalize model="{ loop)');
+{
+  const nextCommandCopies = [
+    'commands/workflow-next.md',
+    'plugins/kaola-workflow-gitlab/commands/workflow-next.md',
+    'plugins/kaola-workflow-gitea/commands/workflow-next.md',
+  ];
+  for (const file of nextCommandCopies) {
+    assertIncludes(file, '## Agent Model Dispatch');
+    assertIncludes(file, 'You MUST pass `model=');
+    assertNotIncludes(file, 'model="{');
+  }
+}
 for (const token of retired) assertNotIncludes('commands/workflow-next.md', token);
 for (const token of retiredPathSelector) assertNotIncludes('commands/workflow-next.md', token);
 // #372: sweep the retired advisor-gate vocabulary over workflow-init.md too (the consult-mandate
@@ -481,6 +498,18 @@ assertIncludes('commands/workflow-init.md', 'never by a vendor model name');
         file + ': the injected consumer CLAUDE.md template must teach the mission list — the ' +
         'KW-CLAUDE-TEMPLATE region is missing "' + taught + '"');
     }
+    assert(!template.includes(norm('configured model')),
+      file + ': the KW-CLAUDE-TEMPLATE overlay must not contain "configured model"');
+    assert(!template.includes(norm('ships its model in its installed profile')),
+      file + ': the KW-CLAUDE-TEMPLATE overlay must not contain "ships its model in its installed profile"');
+    assert(template.includes(norm(
+      'Use the vendored agent role names exactly as installed; prefer short names like `planner`. '
+      + 'Spawn the type this runtime\'s installed workflow-next / finalize instructions name for that role. '
+      + 'Follow those instructions for whether the spawn call carries a model argument. '
+      + 'Do not substitute a generic built-in type unless those same instructions explicitly map the role onto one.'
+    )),
+      file + ': the KW-CLAUDE-TEMPLATE overlay must teach spawn-the-installed-next/finalize-type '
+      + '(not pass-the-configured-model)');
   }
 }
 
