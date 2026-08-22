@@ -1,0 +1,12 @@
+Kaola-Workflow · cursor edition (github) — refreshing generated tree...
+Deploying globally (github) → /tmp/kw-cursor-1014-chome.yb3Fg4
+Installed workflow agents → /tmp/kw-cursor-1014-chome.yb3Fg4/agents/ (14)
+Installed workflow commands → /tmp/kw-cursor-1014-chome.yb3Fg4/commands/
+Task types are workspace-scoped; also deploying agents+commands → /private/tmp/kw-cursor-1014-probe23.f5IY91/.cursor
+Installed workflow agents → /private/tmp/kw-cursor-1014-probe23.f5IY91/.cursor/agents/ (14)
+Installed workflow commands → /private/tmp/kw-cursor-1014-probe23.f5IY91/.cursor/commands/
+Support scripts skipped (--no-scripts).
+Hooks JSON skipped (--no-scripts).
+
+Next: open the project in Cursor and run a workflow command, e.g.:
+  /workflow-init
