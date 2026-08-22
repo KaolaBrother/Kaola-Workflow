@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow",
-  "version": "9.13.1",
+  "version": "9.14.0",
   "description": "Adaptive Kaola-Workflow — an issue-driven mission list: one file of item / status / dispatched / result that the orchestrator writes as it decomposes, dispatches and closes work. Six runtimes (Claude Code, Codex, Cursor, opencode, Kimi Code, Grok CLI) across GitHub, GitLab, and Gitea, with resumable on-disk coordination state.",
   "repository": {
     "type": "git",
