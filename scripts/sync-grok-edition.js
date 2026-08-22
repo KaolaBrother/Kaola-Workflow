@@ -12,10 +12,11 @@
 // installer copies into the Grok hooks dir). Deterministic, idempotent, and
 // parity-checked by test-grok-edition.js.
 //
-// ONE model tier: every subagent inherits the session model and effort. The
-// spawn tool accepts an optional `model` and no effort; generated surfaces omit
-// both. The canonical opus/sonnet tokens stay classification metadata and are
-// not spawn arguments.
+// The session supplies the model, while each generated agent carries an effort
+// derived from its canonical model class: sonnet/standard → medium and
+// opus/reasoning → high. The spawn tool accepts an optional `model` and no
+// per-call effort; generated command surfaces omit the model override while
+// generated agents retain `model: inherit` plus their role effort pin.
 //
 // FORGE AXIS (--forge=github|gitlab|gitea, default github). github writes `.grok/`;
 // a forge writes `.grok-<forge>/`. Command sources come from the routing-surface
@@ -99,6 +100,23 @@ function listCanonCommands(forge) {
   return forgeLayout.commandSources(forge || DEFAULT_FORGE).map(s => s.basename).sort();
 }
 
+const GROK_MODEL_EFFORTS = Object.freeze({
+  sonnet: 'medium',
+  standard: 'medium',
+  opus: 'high',
+  reasoning: 'high',
+});
+
+function effortForModelToken(modelToken, agentName) {
+  const token = String(modelToken == null ? '' : modelToken).trim();
+  const effort = GROK_MODEL_EFFORTS[token.toLowerCase()];
+  if (effort) return effort;
+  const shown = token || '<absent>';
+  throw new Error('sync-grok-edition: cannot derive Grok effort for role "'
+    + agentName + '": unsupported canonical model token "' + shown
+    + '" (expected sonnet, standard, opus, or reasoning)');
+}
+
 function canonCommandPath(basename, forge) {
   const src = forgeLayout.commandSources(forge || DEFAULT_FORGE).find(s => s.basename === basename);
   if (!src) throw new Error(`no command surface "${basename}" for forge ${forge || DEFAULT_FORGE}`);
@@ -114,11 +132,13 @@ function renderAgent(canonContent, agentName, forge) {
   const { fm, body } = parseFrontmatter(canonContent);
   const toolSet = lowerSet(parseTools(fm.tools));
   const isReviewer = REVIEWER_ROLES.has(agentName);
+  const effort = effortForModelToken(fm.model, agentName);
   const lines = ['---'];
   lines.push('name: ' + agentName);
   lines.push('description: ' + yamlScalar(fm.description || ''));
   lines.push('prompt_mode: full');
   lines.push('model: inherit');
+  lines.push('effort: ' + effort);
   lines.push('permission_mode: ' + (isReadOnlyRole(toolSet) ? 'plan' : 'default'));
   lines.push('agents_md: true');
   lines.push('---');
@@ -145,14 +165,15 @@ function renderAgent(canonContent, agentName, forge) {
 
 const GROK_MODEL_DISPATCH_GUIDANCE =
   'Omit a per-call model override; sub-agents inherit the session model. '
-  + 'Raise the session effort to make every dispatched role think harder.';
+  + 'Their effort follows the canonical role class: sonnet/standard roles use medium, '
+  + 'and opus/reasoning roles use high.';
 
 const GROK_MODEL_DISPATCH_BLOCK = [
-  '## Model and effort are inherited',
+  '## Model is inherited; effort follows the role',
   '',
-  'A subagent runs the model and reasoning effort of the session that dispatched it.',
-  'Nothing is configured per role. Omit `model` on `spawn_subagent`. To make a dispatched',
-  "role think harder, raise the session's own effort — every role you dispatch follows it.",
+  'A subagent inherits the session model, while its effort follows the canonical role class.',
+  'Generated agents pin effort: medium for sonnet/standard roles and high for opus/reasoning',
+  'roles. Omit `model` on `spawn_subagent`; choose the named role and its pinned effort.',
   '',
   'Dispatch a role with `spawn_subagent` using `subagent_type: "<role>"`.',
   '',

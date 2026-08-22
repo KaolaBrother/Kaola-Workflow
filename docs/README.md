@@ -20,7 +20,7 @@ moments.
 
 - [opencode Edition](opencode-edition.md) — additive opencode runtime (`opencode.json` + `.opencode/` tree; model and effort inherited from the session, opt-in per-tier model pin; installs via `install-opencode.sh`).
 - [kimi Edition](kimi-edition.md) — additive Kimi Code runtime (`.kimi/skills/` tree + managed `[[hooks]]` block; roles as Skills, inherit-only model tier; installs via `install-kimi.sh`).
-- [grok Edition](grok-edition.md) — additive Grok CLI runtime (`.grok/agents/` + `.grok/commands/` + hooks JSON; named `spawn_subagent` types; inherit-only model and effort; installs via `install-grok.sh`).
+- [grok Edition](grok-edition.md) — additive Grok CLI runtime (`.grok/agents/` + `.grok/commands/` + hooks JSON; named `spawn_subagent` types; session-inherited model with standard/reasoning effort tiers (`medium`/`high`); installs via `install-grok.sh`).
 - [cursor Edition](cursor-edition.md) — additive Cursor runtime (`.cursor/agents/` + `.cursor/commands/` + merged `hooks.json`; named `Task` types; inherit-only model and effort; `sessionStart` resume inject; installs via `install-cursor.sh`).
 
 ## Decisions

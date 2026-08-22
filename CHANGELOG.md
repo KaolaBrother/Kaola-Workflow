@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Grok generated agents now carry tiered effort — #1012.** Standard canonical
+  classes emit `effort: medium` and reasoning classes emit `effort: high`, while
+  agents retain `model: inherit` and command cards continue to omit `model=`. The
+  additive boundary and vendor-neutral canonical prompts are unchanged. Grok CLI
+  1.0.5 live close evidence passed `tdd-guide` at medium and `code-reviewer` at
+  high from an xhigh parent, while three `implementer` A/B legs still recorded
+  high despite a medium native or inline definition; this is documented as a
+  runtime limitation/inference, not a generator failure. No config seeding,
+  per-call override, or second pin path was added.
+
 ## [9.13.1] - 2026-08-22
 
 ### Changed

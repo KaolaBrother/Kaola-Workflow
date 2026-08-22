@@ -16,9 +16,9 @@
 // install.sh / edition-sync.js / npm test. It is delivered the Grok-native
 // way: named agents under `.grok/agents/<role>.md` (spawn_subagent types),
 // flat commands under `.grok/commands/<name>.md`, and `.grok/hooks/`
-// (payload-adapted dispatch-log + generated hooks.json). ONE model tier:
-// every subagent inherits the session model, so generated surfaces carry
-// no per-dispatch model override and no effort field.
+// (payload-adapted dispatch-log + generated hooks.json). TWO canonical model
+// classes: every subagent keeps model: inherit, while standard/reasoning
+// agents carry the native effort pins medium/high respectively.
 //
 // Outside `npm test`, the forge chains, and the fast gate: an additive
 // runtime edition is not a forge. The script exists so the suite is
@@ -117,13 +117,37 @@ const trackedAgents = () => fs.readdirSync(path.join(REPO, 'agents'))
 const commandNamesFor = forge => forgeLayout.commandSources(forge)
   .map(s => s.basename.replace(/\.md$/, '')).sort();
 
+function canonicalAgentClass(name) {
+  const { fm } = parseFrontmatter(read('agents/' + name + '.md'));
+  const model = String(fm.model || '').trim().toLowerCase();
+  const binding = GROK_MODEL_CLASS_TIERS[model];
+  return binding
+    ? { model, tier: binding.tier, effort: binding.effort }
+    : { model, tier: 'unknown', effort: null };
+}
+
+function canonicalRosters(names) {
+  const rosters = { standard: [], reasoning: [], unknown: [] };
+  for (const name of names) rosters[canonicalAgentClass(name).tier].push(name);
+  for (const tier of Object.keys(rosters)) rosters[tier].sort();
+  return rosters;
+}
+
 // ---------------------------------------------------------------------------
-// GROK_RUNTIME_NATIVE — the inherit-session-model divergence as a DECLARED
-// table entry, not merely as prose. Deleting the declaration reds this suite.
+// GROK_RUNTIME_NATIVE — the two-tier effort binding as a DECLARED table entry,
+// not merely as prose. Deleting the declaration reds this suite.
 // ---------------------------------------------------------------------------
 const GROK_RUNTIME_NATIVE = Object.freeze({
-  inherit_session_model:
-    'Grok subagents inherit the session model, so generated surfaces carry no per-dispatch model override and no effort field; raise session /effort to make every dispatched role think harder.',
+  tiered_effort_pin:
+    'Grok subagents inherit the session model, so generated agents keep model: inherit while canonical standard/reasoning model classes stamp effort: medium/high respectively.',
+});
+
+// The canonical model tokens are the existing portable class markers, not a
+// second role roster. Derive each expected Grok binding from agents/*.md so a
+// role addition or tier move is judged by the canonical frontmatter itself.
+const GROK_MODEL_CLASS_TIERS = Object.freeze({
+  sonnet: Object.freeze({ tier: 'standard', effort: 'medium' }),
+  opus: Object.freeze({ tier: 'reasoning', effort: 'high' }),
 });
 
 // ---------------------------------------------------------------------------
@@ -245,6 +269,7 @@ assert(treeLabel('github') === '.grok'
 
 const canonAgents = trackedAgents();
 const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
+const canonRosters = canonicalRosters(canonAgents);
 
 // ---------------------------------------------------------------------------
 // G0 — THE SUBJECT UNDER TEST IS THE GENERATOR'S OUTPUT, derived from TRACKED
@@ -265,6 +290,13 @@ const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
     'G0-roster: the canonical agents/ inventory and routing-registry command surfaces are both non-empty');
   assert(canonAgents.includes('knowledge-lookup'),
     'G0-roster: knowledge-lookup is in the canonical agents/*.md inventory');
+  assert(canonRosters.standard.length > 0,
+    'G0-roster: canonical sonnet model class derives a non-empty standard roster');
+  assert(canonRosters.reasoning.length > 0,
+    'G0-roster: canonical opus model class derives a non-empty reasoning roster');
+  assert(canonRosters.unknown.length === 0,
+    'G0-roster: every canonical agent model belongs to the known sonnet/opus classes — unknown='
+    + JSON.stringify(canonRosters.unknown));
 }
 
 function agentRel(name, forge) {
@@ -276,10 +308,12 @@ function commandRel(name, forge) {
 
 // ---------------------------------------------------------------------------
 // G1: agents — exact set = canonical agents/*.md. knowledge-lookup MUST be
-// present. Frontmatter: name, description, model: inherit. NO effort: /
-// reasoning_effort:. Frontmatter `tools:` is absent or contains no Claude MCP
-// tool ids (mcp__). Body examples may still name those tools — Grok inspect
-// dropped knowledge-lookup for an unquoted YAML description, not for body mcp__.
+// present. Frontmatter: name, description, model: inherit, and effort derived
+// from the canonical model class (standard/sonnet → medium, reasoning/opus →
+// high). `reasoning_effort:` is not a Grok agent field. Frontmatter `tools:`
+// is absent or contains no Claude MCP tool ids (mcp__). Body examples may still
+// name those tools — Grok inspect dropped knowledge-lookup for an unquoted YAML
+// description, not for body mcp__.
 // ---------------------------------------------------------------------------
 {
   const dir = path.join(TREE_ROOT, '.grok', 'agents');
@@ -300,8 +334,16 @@ function commandRel(name, forge) {
       'G1[' + name + ']: frontmatter has a non-empty description');
     assert(fm.model === 'inherit',
       'G1[' + name + ']: frontmatter model is inherit — got ' + JSON.stringify(fm.model));
-    assert(!/^\s*effort\s*:/m.test(raw) && !/^\s*reasoning_effort\s*:/m.test(raw),
-      'G1[' + name + ']: NO effort: / reasoning_effort: field (session /effort is the native knob)');
+    const canonical = canonicalAgentClass(name);
+    assert(canonical.tier !== 'unknown',
+      'G1[' + name + ']: canonical model class is known — got ' + JSON.stringify(canonical.model));
+    assert(fm.effort === canonical.effort,
+      'G1[' + name + ']: effort is ' + JSON.stringify(canonical.effort) + ' for canonical '
+      + canonical.tier + ' tier — got ' + JSON.stringify(fm.effort));
+    assert((raw.match(/^\s*effort\s*:/gm) || []).length === 1,
+      'G1[' + name + ']: carries exactly one effort: field');
+    assert(!/^\s*reasoning_effort\s*:/m.test(raw),
+      'G1[' + name + ']: does not use reasoning_effort: (Grok native field is effort:)');
     assert(!/\bmcp__/.test(raw),
       'G1[' + name + ']: frontmatter carries no Claude MCP tool id (mcp__) — a tools: list of those '
       + 'ids drops the agent on Grok inspect; body examples may still name them');
@@ -399,29 +441,36 @@ function commandRel(name, forge) {
 }
 
 // ---------------------------------------------------------------------------
-// G2-declaration: GROK_RUNTIME_NATIVE.inherit_session_model exists, names
-// inherit + session model, and the generated tree matches it.
+// G2-declaration: GROK_RUNTIME_NATIVE.tiered_effort_pin exists, names the two
+// canonical effort pins, and the generated tree matches it. The separate
+// model: inherit assertion below must remain even if this declaration changes.
 // ---------------------------------------------------------------------------
 {
-  const KEY = 'inherit_session_model';
+  const KEY = 'tiered_effort_pin';
   const reason = GROK_RUNTIME_NATIVE[KEY];
   assert(typeof reason === 'string' && reason.trim().length >= 20,
     'G2-declaration: GROK_RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason');
-  assert(/inherit/i.test(reason) && /session model/i.test(reason),
-    'G2-declaration: the "' + KEY + '" reason must state that Grok subagents inherit the session model');
+  assert(/standard.*reasoning/i.test(reason)
+    && /medium/i.test(reason) && /high/i.test(reason),
+    'G2-declaration: the "' + KEY + '" reason must state standard/reasoning '
+    + 'medium/high effort pins');
   for (const name of canonAgents) {
     const rel = agentRel(name);
     if (!exists(rel)) continue;
-    const { raw } = parseFrontmatter(read(rel));
+    const { fm, raw } = parseFrontmatter(read(rel));
+    const canonical = canonicalAgentClass(name);
     assert(/^\s*model\s*:\s*inherit\s*$/m.test(raw),
-      'G2-declaration: ' + rel + ' carries model: inherit, matching inherit_session_model');
-    assert(!/^\s*effort\s*:/m.test(raw) && !/^\s*reasoning_effort\s*:/m.test(raw),
-      'G2-declaration: ' + rel + ' carries an effort field, contradicting inherit_session_model');
+      'G2-declaration: ' + rel + ' independently carries model: inherit (the model contract is '
+      + 'separate from ' + KEY + ')');
+    assert(fm.effort === canonical.effort,
+      'G2-declaration: ' + rel + ' carries effort: ' + canonical.effort
+      + ' for canonical ' + canonical.tier + ' tier');
   }
   for (const rel of generatedTreeFiles('.grok')) {
     const content = read(rel);
     assert(!/\bmodel="/.test(content),
-      'G2-declaration: ' + rel + ' carries a per-call model=" override, contradicting inherit_session_model');
+      'G2-declaration: ' + rel + ' carries a per-call model=" override, contradicting '
+      + KEY);
   }
 }
 
@@ -621,6 +670,17 @@ for (const role of reviewerGenerator.ROLES) {
       : [];
     assert(JSON.stringify(agents) === JSON.stringify(canonAgents),
       'G7[' + forge + ']: agent set is the canonical roster, including knowledge-lookup');
+    for (const name of canonAgents) {
+      const rel = agentRel(name, forge);
+      const content = exists(rel) ? read(rel) : '';
+      const { fm } = parseFrontmatter(content);
+      const canonical = canonicalAgentClass(name);
+      assert(fm.model === 'inherit',
+        'G7[' + forge + '][' + name + ']: generated model remains inherit');
+      assert(fm.effort === canonical.effort,
+        'G7[' + forge + '][' + name + ']: generated effort follows canonical '
+        + canonical.tier + ' tier — expected ' + canonical.effort + ' got ' + JSON.stringify(fm.effort));
+    }
     const c = runGeneratorCli(['--forge=' + forge, '--check']);
     assert(c.status === 0,
       'G7[' + forge + ']: --check is green after --write (got ' + c.status + ')');

@@ -60,7 +60,7 @@ A few beliefs follow from that order.
 - **One resumable file per run** — a successor with no context reads it top to bottom: the H1 is the goal, `done` items and their `result` are what is known, `in-flight` items are the only decision to make, `todo` is what remains.
 - **A claim that is bookkeeping, not a gate** — it records which issues, branch and worktree the run owns, so parallel sessions do not collide.
 - **Subagents and worktrees** as declinable tools, with 14 vendored roles across all six runtimes.
-- **Multi-model** across Claude Code, Codex, opencode, Kimi Code, Grok CLI, and Cursor, right-sizing the model per dispatch (Grok and Cursor inherit the session model and effort).
+- **Multi-model** across Claude Code, Codex, opencode, Kimi Code, Grok CLI, and Cursor, right-sizing the model per dispatch (Grok inherits the session model and stamps standard/reasoning effort at `medium`/`high`; Cursor inherits the session model and effort).
 - **Independent review** — generated, runtime-neutral reviewer contracts (`code-reviewer`, `adversarial-verifier`, `security-reviewer`) with deterministic profile identity across runtimes.
 - **Self-owned validation** — the four local edition chains produce a candidate-bound receipt; a consumer repo records its own verdict instead. Nothing waits on a hosted pipeline.
 - **A finalization that reports** — validation classification, the paths the run changed, and the sink's findings all land on the envelope *and* durably in the archived summary.
@@ -149,7 +149,7 @@ which then drives one `/workflow-next` run per set until the scope is met.
 
 ## Workflow roles
 
-The workflow is built from a small, shared set of **roles**. All six runtimes provide the same role set — Claude Code installs vendored agents, Codex installs native `.toml` role profiles, opencode generates `.opencode/agent/` definitions, Kimi Code generates `kaola-role-*` role-contract Skills, Grok CLI generates named `.grok/agents/` definitions, and Cursor generates named `.cursor/agents/` definitions — so the roles and model tiers below apply across runtimes. On Grok and Cursor the `opus`/`sonnet` tokens stay classification metadata; every subagent inherits the session model and effort.
+The workflow is built from a small, shared set of **roles**. All six runtimes provide the same role set — Claude Code installs vendored agents, Codex installs native `.toml` role profiles, opencode generates `.opencode/agent/` definitions, Kimi Code generates `kaola-role-*` role-contract Skills, Grok CLI generates named `.grok/agents/` definitions, and Cursor generates named `.cursor/agents/` definitions — so the roles and model tiers below apply across runtimes. On Grok, every subagent inherits the session model while canonical standard/reasoning classes emit `medium`/`high` effort; on Cursor the `opus`/`sonnet` tokens stay classification metadata and every subagent inherits the session model and effort.
 
 Claude Code's agents are vendored directly from this repository; the prompts are derived from Everything Claude Code (ECC) under the MIT License (see [docs/agents-source.md](docs/agents-source.md) for the pinned upstream commit, attribution, and refresh procedure).
 
@@ -248,7 +248,7 @@ Claude Code and Codex share the forge editions — pick one forge at a time; all
 
 **Kimi Code** is likewise an **additive** runtime (not a git forge): `./install-kimi.sh` touches none of the existing edition machinery, resolves its support scripts under `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts`, and never touches `~/.claude/`. It takes the same generated `--forge` axis. See [docs/kimi-edition.md](docs/kimi-edition.md).
 
-**Grok CLI** is likewise an **additive** runtime (not a git forge): `./install-grok.sh` touches none of the existing edition machinery, resolves its support scripts under `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.grok/agents/*.md` (`spawn_subagent` types); the three commands ship as `.grok/commands/*.md`. Every subagent inherits the session model and effort. It takes the same generated `--forge` axis. See [docs/grok-edition.md](docs/grok-edition.md).
+**Grok CLI** is likewise an **additive** runtime (not a git forge): `./install-grok.sh` touches none of the existing edition machinery, resolves its support scripts under `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.grok/agents/*.md` (`spawn_subagent` types); the three commands ship as `.grok/commands/*.md`. Every subagent inherits the session model; standard/reasoning roles carry `medium`/`high` effort. It takes the same generated `--forge` axis. See [docs/grok-edition.md](docs/grok-edition.md).
 
 **Cursor** is likewise an **additive** runtime (not a git forge): `./install-cursor.sh` touches none of the existing edition machinery, resolves its support scripts under `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.cursor/agents/*.md` (`Task` types); the three commands ship as `.cursor/commands/*.md`. Every subagent inherits the session model and effort. Compact resume after a session compact is a declared divergence (`sessionStart` `additional_context`; `preCompact` cannot inject). It takes the same generated `--forge` axis. See [docs/cursor-edition.md](docs/cursor-edition.md).
 
@@ -388,7 +388,7 @@ Hooks install as a managed `[[hooks]]` block in the **global** Kimi `config.toml
 
 ### grok
 
-Grok CLI is an additive runtime — installed by its own script, not `--forge`. The grok edition delivers the workflow the Grok-native way: the three commands become flat `.grok/commands/*.md` slash commands and each vendored role ships as a named `.grok/agents/<role>.md` (`spawn_subagent` type). Every subagent **inherits the session model and effort** — there is no two-tier mapping, and a role's `opus`/`sonnet` token is declarative metadata only. From a local clone:
+Grok CLI is an additive runtime — installed by its own script, not `--forge`. The grok edition delivers the workflow the Grok-native way: the three commands become flat `.grok/commands/*.md` slash commands and each vendored role ships as a named `.grok/agents/<role>.md` (`spawn_subagent` type). Every subagent **inherits the session model**; canonical standard/reasoning roles emit `effort: medium`/`high`, while their class tokens remain portable metadata. From a local clone:
 
 ```bash
 ./install-grok.sh --global --yes   # deploy agents+commands into ${GROK_HOME:-~/.grok}
