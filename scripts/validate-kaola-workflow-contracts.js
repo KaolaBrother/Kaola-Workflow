@@ -504,7 +504,7 @@ assert(!blockMatch[1].includes('docs-lookup'),
 const normalizedReadme = norm(readmeText);
 for (const [tier, model, effort] of [
   ['standard', 'gpt-5.6-luna', 'max'],
-  ['reasoning', 'gpt-5.6-sol', 'xhigh'],
+  ['reasoning', 'gpt-5.6-sol', 'high'],
 ]) {
   const fragment = '`' + tier + '` dispatches as `' + model + '` / `' + effort + '`';
   assert(normalizedReadme.includes(fragment),

@@ -191,7 +191,7 @@ directory it was dispatched from.
 
 Codex keeps those role classifications unchanged but resolves them explicitly at each subagent
 spawn: `standard` dispatches as `gpt-5.6-luna` / `max`, while `reasoning` dispatches as
-`gpt-5.6-sol` / `xhigh`. Both mappings are fixed: standard-tier model and reasoning effort never
+`gpt-5.6-sol` / `high`. Both mappings are fixed: standard-tier model and reasoning effort never
 change for an individual task. Other runtimes retain their existing model routing.
 
 Three roles are locally authored rather than derived from ECC:
@@ -686,7 +686,7 @@ The audit must keep these facts separate:
   preflight migrates or refuses any profile that pins them. The unpinned profile
   does not select the dispatch pair: each Codex spawn explicitly carries the
   model and reasoning effort selected from its role classification. Standard is
-  Luna/max and reasoning is Sol/xhigh. These mappings have no per-task
+  Luna/max and reasoning is Sol/high. These mappings have no per-task
   escalation, downgrade, or other model/reasoning exception.
 
 Recommended posture when the user asks the agent to configure Codex for

@@ -6,7 +6,7 @@
 Keep every installed role's existing standard-tier or reasoning-tier classification, and set the
 model and reasoning effort explicitly on each spawn. Standard-tier roles dispatch with
 `model: "gpt-5.6-luna"` and `reasoning_effort: "max"`. Reasoning-tier roles dispatch with
-`model: "gpt-5.6-sol"` and `reasoning_effort: "xhigh"`.
+`model: "gpt-5.6-sol"` and `reasoning_effort: "high"`.
 
 <!-- SLOT:codex-tier-roster -->
 
