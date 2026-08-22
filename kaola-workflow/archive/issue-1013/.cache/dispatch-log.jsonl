@@ -1,0 +1,7 @@
+{"ts":"2026-08-22T10:23:32Z","agent_type":"tdd-guide","agent_id":"01a028ff-33de-7ac1-837b-e6eb7c161b01","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"gpt-5.6-luna","model_planned":"sonnet"}
+{"ts":"2026-08-22T10:24:50Z","agent_type":"doc-updater","agent_id":"01a02900-63f0-78f2-ad46-aa2d62ced4e3","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"gpt-5.6-luna","model_planned":"sonnet"}
+{"ts":"2026-08-22T10:28:40Z","agent_type":"implementer","agent_id":"01a02903-e398-7622-9ce8-02a5d545eb6d","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"gpt-5.6-luna","model_planned":"sonnet"}
+{"ts":"2026-08-22T10:35:44Z","agent_type":"code-reviewer","agent_id":"01a0290a-5e59-7411-b70f-68a44cd09abe","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"gpt-5.6-sol","model_planned":"opus"}
+{"ts":"2026-08-22T10:35:53Z","agent_type":"adversarial-verifier","agent_id":"01a0290a-823c-74e1-818d-db284382a140","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"gpt-5.6-sol","model_planned":"opus"}
+{"ts":"2026-08-22T10:36:01Z","agent_type":"tdd-guide","agent_id":"01a0290a-a3ff-7d40-bfea-5316b71f9be2","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"gpt-5.6-luna","model_planned":"sonnet"}
+{"ts":"2026-08-22T10:54:10Z","agent_type":"doc-updater","agent_id":"01a0291b-3e8d-7fe3-8996-062beb613731","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow","model":"gpt-5.6-luna","model_planned":"sonnet"}
