@@ -12,10 +12,11 @@
 // subagentStart dispatch-log). Deterministic, idempotent, and parity-checked
 // by test-cursor-edition.js.
 //
-// ONE model tier: every subagent inherits the session model and effort. The
-// spawn tool accepts an optional `model` and no effort; generated surfaces omit
-// both. The canonical opus/sonnet tokens stay classification metadata and are
-// not spawn arguments.
+// Canonical model classes drive the generated agent tier pins: sonnet/standard
+// render the raw `model: grok-4.6[effort=medium]` line, while opus/reasoning
+// render `model: grok-4.6[effort=high]`. Task cards still omit per-dispatch
+// model overrides. The allowlist stays within one model family so only the
+// canonical class selects the generated effort tier.
 //
 // FORGE AXIS (--forge=github|gitlab|gitea, default github). github writes `.cursor/`;
 // a forge writes `.cursor-<forge>/`. Command sources come from the routing-surface
@@ -109,15 +110,33 @@ function isReadOnlyRole(toolSet) {
   return !(toolSet.has('write') || toolSet.has('edit'));
 }
 
+const CURSOR_MODEL_CLASS_PINS = Object.freeze({
+  sonnet: 'grok-4.6[effort=medium]',
+  standard: 'grok-4.6[effort=medium]',
+  opus: 'grok-4.6[effort=high]',
+  reasoning: 'grok-4.6[effort=high]',
+});
+
+function cursorModelPin(canonicalModel, agentName) {
+  const token = String(canonicalModel == null ? '' : canonicalModel).trim().toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(CURSOR_MODEL_CLASS_PINS, token)) {
+    throw new Error('sync-cursor-edition: agent "' + (agentName || '(unnamed)')
+      + '" requires a canonical model token sonnet, standard, opus, or reasoning; received '
+      + (token ? JSON.stringify(token) : '(absent)'));
+  }
+  return CURSOR_MODEL_CLASS_PINS[token];
+}
+
 function renderAgent(canonContent, agentName, forge) {
   forge = forge || DEFAULT_FORGE;
   const { fm, body } = parseFrontmatter(canonContent);
   const toolSet = lowerSet(parseTools(fm.tools));
+  const modelPin = cursorModelPin(fm.model, agentName);
   const isReviewer = REVIEWER_ROLES.has(agentName);
   const lines = ['---'];
   lines.push('name: ' + agentName);
   lines.push('description: ' + yamlScalar(fm.description || ''));
-  lines.push('model: inherit');
+  lines.push('model: ' + modelPin);
   lines.push('readonly: ' + (isReadOnlyRole(toolSet) ? 'true' : 'false'));
   lines.push('---');
   lines.push('');
@@ -142,15 +161,17 @@ function renderAgent(canonContent, agentName, forge) {
 }
 
 const CURSOR_MODEL_DISPATCH_GUIDANCE =
-  'Omit a per-call model override; sub-agents inherit the session model. '
-  + 'Raise the session effort to make every dispatched role think harder.';
+  'Use the named Cursor agent; generated frontmatter pins its canonical standard or reasoning tier '
+  + 'to the approved model family at medium or high effort. Omit per-call model overrides; the '
+  + 'one-family allowlist keeps dispatch cards portable while tier selection stays in generated agent metadata.';
 
 const CURSOR_MODEL_DISPATCH_BLOCK = [
-  '## Model and effort are inherited',
+  '## Generated agent tier pins',
   '',
-  'A subagent runs the model and reasoning effort of the session that dispatched it.',
-  'Nothing is configured per role. Omit `model` on `Task`. To make a dispatched',
-  "role think harder, raise the session's own effort — every role you dispatch follows it.",
+  'Named Cursor agents carry generated frontmatter that pins their canonical standard or reasoning',
+  'tier at medium or high effort. The one-family allowlist keeps the dispatch surface portable',
+  'while the canonical class selects the generated tier pin.',
+  'Omit per-call model overrides from `Task`; the card only names the role.',
   '',
   'Dispatch a role with `Task` using `subagent_type: "<role>"`.',
   '',
@@ -212,8 +233,8 @@ function assertNoModelDispatchResidue(text, label) {
   }
   if (problems.length) {
     throw new Error('sync-cursor-edition: a Claude-only `model=` instruction survived into '
-      + (label || '(command)') + ' — this runtime inherits the session model and must not '
-      + 'honour a per-dispatch override:\n  - ' + problems.join('\n  - '));
+      + (label || '(command)') + ' — generated Cursor agents carry tier pins in frontmatter and '
+      + 'Task cards must not carry a per-dispatch override:\n  - ' + problems.join('\n  - '));
   }
 }
 

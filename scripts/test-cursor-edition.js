@@ -16,9 +16,9 @@
 // way: named agents under `.cursor/agents/<role>.md` (Task types),
 // flat commands under `.cursor/commands/<name>.md`, hook scripts under
 // `.cursor/hooks/`, and `.cursor/hooks.json` (sessionStart resume inject +
-// subagentStart dispatch-log). ONE model tier: every subagent inherits the
-// session model, so generated surfaces carry no per-dispatch model override
-// and no effort field. Compact resume after a session compact is a declared
+// subagentStart dispatch-log). Two canonical model classes: standard/reasoning
+// agents carry unquoted Grok 4.6 frontmatter pins with medium/high effort. Command
+// cards carry no per-dispatch model override. Compact resume after a session compact is a declared
 // divergence: preCompact cannot inject; sessionStart additional_context can,
 // on a new session only.
 //
@@ -120,15 +120,41 @@ const trackedAgents = () => fs.readdirSync(path.join(REPO, 'agents'))
 const commandNamesFor = forge => forgeLayout.commandSources(forge)
   .map(s => s.basename.replace(/\.md$/, '')).sort();
 
+function canonicalAgentClass(name) {
+  const { fm } = parseFrontmatter(read('agents/' + name + '.md'));
+  const model = String(fm.model || '').trim().toLowerCase();
+  const binding = CURSOR_MODEL_CLASS_TIERS[model];
+  return binding
+    ? { model, tier: binding.tier, pin: binding.pin }
+    : { model, tier: 'unknown', pin: null };
+}
+
+function canonicalRosters(names) {
+  const rosters = { standard: [], reasoning: [], unknown: [] };
+  for (const name of names) rosters[canonicalAgentClass(name).tier].push(name);
+  for (const tier of Object.keys(rosters)) rosters[tier].sort();
+  return rosters;
+}
+
 // ---------------------------------------------------------------------------
-// CURSOR_RUNTIME_NATIVE — the inherit-session-model divergence as a DECLARED
+// CURSOR_RUNTIME_NATIVE — the frontmatter tier pin as a DECLARED
 // table entry, not merely as prose. Deleting the declaration reds this suite.
 // ---------------------------------------------------------------------------
 const CURSOR_RUNTIME_NATIVE = Object.freeze({
-  inherit_session_model:
-    'Cursor subagents inherit the session model, so generated surfaces carry no per-dispatch model override and no effort field; raise session effort to make every dispatched role think harder.',
+  frontmatter_tier_pin:
+    'Cursor generated agent frontmatter pins canonical standard/reasoning model classes to unquoted grok-4.6[effort=medium/high]; command cards omit per-call model dispatch.',
   session_start_resume_injection:
     'Cursor preCompact cannot inject into the agent after compact; sessionStart additional_context is the injection surface, and only on a new session. Durable resume is mission-list.md.',
+});
+
+// The canonical model tokens are the existing portable class markers, not a
+// second role roster. Derive each expected Cursor binding from agents/*.md so a
+// role addition or tier move is judged by the canonical frontmatter itself.
+const CURSOR_MODEL_CLASS_TIERS = Object.freeze({
+  sonnet: Object.freeze({ tier: 'standard', pin: 'grok-4.6[effort=medium]' }),
+  standard: Object.freeze({ tier: 'standard', pin: 'grok-4.6[effort=medium]' }),
+  opus: Object.freeze({ tier: 'reasoning', pin: 'grok-4.6[effort=high]' }),
+  reasoning: Object.freeze({ tier: 'reasoning', pin: 'grok-4.6[effort=high]' }),
 });
 
 // ---------------------------------------------------------------------------
@@ -250,6 +276,7 @@ assert(treeLabel('github') === '.cursor'
 
 const canonAgents = trackedAgents();
 const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
+const canonRosters = canonicalRosters(canonAgents);
 
 // ---------------------------------------------------------------------------
 // G0 — THE SUBJECT UNDER TEST IS THE GENERATOR'S OUTPUT, derived from TRACKED
@@ -270,6 +297,37 @@ const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
     'G0-roster: the canonical agents/ inventory and routing-registry command surfaces are both non-empty');
   assert(canonAgents.includes('knowledge-lookup'),
     'G0-roster: knowledge-lookup is in the canonical agents/*.md inventory');
+  assert(canonRosters.standard.length > 0,
+    'G0-roster: canonical sonnet/standard model class derives a non-empty standard roster');
+  assert(canonRosters.reasoning.length > 0,
+    'G0-roster: canonical opus/reasoning model class derives a non-empty reasoning roster');
+  assert(canonRosters.unknown.length === 0,
+    'G0-roster: every canonical agent model belongs to the known sonnet/standard or opus/reasoning classes — unknown='
+    + JSON.stringify(canonRosters.unknown));
+}
+
+// An unrecognised canonical class must be rejected by the subject rather than
+// silently inventing a fallback roster or emitting inherit. This synthetic
+// canonical document exercises the generator's fail-closed branch directly.
+{
+  const unknownCanonical = [
+    '---',
+    'name: cursor-unknown-class-probe',
+    'description: unknown class probe',
+    'model: unsupported-class-token',
+    '---',
+    '',
+    'probe',
+    '',
+  ].join('\n');
+  let rejected = false;
+  try {
+    syncMod.renderAgent(unknownCanonical, 'cursor-unknown-class-probe');
+  } catch (_) {
+    rejected = true;
+  }
+  assert(rejected,
+    'G0-roster: renderAgent rejects an unsupported canonical model token (fail closed; no invented roster)');
 }
 
 function agentRel(name, forge) {
@@ -281,8 +339,9 @@ function commandRel(name, forge) {
 
 // ---------------------------------------------------------------------------
 // G1: agents — exact set = canonical agents/*.md. knowledge-lookup MUST be
-// present. Frontmatter: name, description, model: inherit. NO effort: /
-// reasoning_effort:. Frontmatter `tools:` is absent or contains no Claude MCP
+// present. Frontmatter: name, description, and one exact unquoted model pin
+// derived from the canonical model class. NO separate effort: /
+// reasoning_effort: field. Frontmatter `tools:` is absent or contains no Claude MCP
 // tool ids (mcp__). Body examples may still name those tools — Grok inspect
 // dropped knowledge-lookup for an unquoted YAML description, not for body mcp__.
 // ---------------------------------------------------------------------------
@@ -303,10 +362,17 @@ function commandRel(name, forge) {
     assert(fm.name === name, 'G1[' + name + ']: frontmatter name is the role — got ' + JSON.stringify(fm.name));
     assert(typeof fm.description === 'string' && fm.description.trim().length > 0,
       'G1[' + name + ']: frontmatter has a non-empty description');
-    assert(fm.model === 'inherit',
-      'G1[' + name + ']: frontmatter model is inherit — got ' + JSON.stringify(fm.model));
+    const canonical = canonicalAgentClass(name);
+    assert(canonical.tier !== 'unknown',
+      'G1[' + name + ']: canonical model class is known — got ' + JSON.stringify(canonical.model));
+    const modelLines = raw.split(/\r?\n/).filter(line => /^\s*model\s*:/.test(line));
+    assert(modelLines.length === 1 && modelLines[0] === 'model: ' + canonical.pin,
+      'G1[' + name + ']: model line is exactly the unquoted canonical tier pin '
+      + JSON.stringify(canonical.pin) + ' — got ' + JSON.stringify(modelLines));
+    assert(!/^\s*model\s*:\s*["']/m.test(raw),
+      'G1[' + name + ']: model pin is not YAML-quoted (bracket syntax must remain raw)');
     assert(!/^\s*effort\s*:/m.test(raw) && !/^\s*reasoning_effort\s*:/m.test(raw),
-      'G1[' + name + ']: NO effort: / reasoning_effort: field (session effort is the native knob)');
+      'G1[' + name + ']: no separate effort: / reasoning_effort: field (effort belongs in model ID)');
     assert(fm.readonly === 'true' || fm.readonly === 'false',
       'G1[' + name + ']: frontmatter readonly is true or false — got ' + JSON.stringify(fm.readonly));
     assert(!/^\s*prompt_mode\s*:/m.test(raw) && !/^\s*permission_mode\s*:/m.test(raw)
@@ -332,7 +398,7 @@ function commandRel(name, forge) {
 // not a hand list. No line-start Agent( cards (rewrite target is Task().
 // No CLAUDE_PLUGIN_ROOT, no ~/.claude/kaola-workflow. --runtime cursor present
 // (not --runtime claude). No model="{...}" placeholders, no per-call model="
-// overrides, no vendor slugs.
+// overrides, and no vendor model dispatch in command cards.
 // ---------------------------------------------------------------------------
 {
   const dir = path.join(TREE_ROOT, '.cursor', 'commands');
@@ -358,6 +424,8 @@ function commandRel(name, forge) {
       'G2[' + name + ']: frontmatter has a non-empty description');
     assert(!CANON_CARD.test(content),
       'G2[' + name + ']: no line-start Agent( dispatch card (rewrite target is Task()');
+    assert(!/\bmodel\s*=\s*["']/.test(content),
+      'G2[' + name + ']: generated Task cards stay free of per-call model dispatch');
     const canonHits = [...canon.matchAll(/^Agent\(\n\s+subagent_type="([^"]+)"/gm)].map(m => m[1]);
     const cursorHits = [...content.matchAll(/^Task\(\n\s+subagent_type="([^"]+)"/gm)].map(m => m[1]);
     canonCards += canonHits.length;
@@ -400,9 +468,11 @@ function commandRel(name, forge) {
     assert(!/model="\{/.test(content),
       'G2-leak: ' + rel + ': no model="{...}" placeholder');
     assert(!/\bmodel="/.test(content),
-      'G2-leak: ' + rel + ': no per-call model=" override (inherit the session model)');
-    assert(!VENDOR_SLUG.test(content),
-      'G2-leak: ' + rel + ': no vendor model slug (grok-4.x / grok-build)');
+      'G2-leak: ' + rel + ': no per-call model=" override in generated dispatch surfaces');
+    if (!/\/agents\//.test(rel)) {
+      assert(!VENDOR_SLUG.test(content),
+        'G2-leak: ' + rel + ': no vendor model slug in command/hook surfaces');
+    }
     const lines = content.split('\n');
     for (let i = 0; i < lines.length; i++) {
       const m = lines[i].match(B2_MODEL_NOUN);
@@ -423,16 +493,17 @@ function commandRel(name, forge) {
 }
 
 // ---------------------------------------------------------------------------
-// G2-declaration: CURSOR_RUNTIME_NATIVE.inherit_session_model exists, names
-// inherit + session model, and the generated tree matches it.
+// G2-declaration: CURSOR_RUNTIME_NATIVE.frontmatter_tier_pin exists, names
+// the two canonical class pins, and the generated tree matches it.
 // ---------------------------------------------------------------------------
 {
-  const KEY = 'inherit_session_model';
+  const KEY = 'frontmatter_tier_pin';
   const reason = CURSOR_RUNTIME_NATIVE[KEY];
   assert(typeof reason === 'string' && reason.trim().length >= 20,
     'G2-declaration: CURSOR_RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason');
-  assert(/inherit/i.test(reason) && /session model/i.test(reason),
-    'G2-declaration: the "' + KEY + '" reason must state that Cursor subagents inherit the session model');
+  assert(/frontmatter/i.test(reason) && /standard/i.test(reason) && /reasoning/i.test(reason)
+    && /medium/i.test(reason) && /high/i.test(reason) && /unquoted/i.test(reason),
+    'G2-declaration: the "' + KEY + '" reason must state unquoted standard/reasoning medium/high frontmatter pins');
   const resumeKey = 'session_start_resume_injection';
   const resumeReason = CURSOR_RUNTIME_NATIVE[resumeKey];
   assert(typeof resumeReason === 'string' && resumeReason.trim().length >= 20,
@@ -444,15 +515,17 @@ function commandRel(name, forge) {
     const rel = agentRel(name);
     if (!exists(rel)) continue;
     const { raw } = parseFrontmatter(read(rel));
-    assert(/^\s*model\s*:\s*inherit\s*$/m.test(raw),
-      'G2-declaration: ' + rel + ' carries model: inherit, matching inherit_session_model');
+    const canonical = canonicalAgentClass(name);
+    assert(raw.split(/\r?\n/).includes('model: ' + canonical.pin),
+      'G2-declaration: ' + rel + ' carries the canonical unquoted frontmatter pin '
+      + JSON.stringify(canonical.pin));
     assert(!/^\s*effort\s*:/m.test(raw) && !/^\s*reasoning_effort\s*:/m.test(raw),
-      'G2-declaration: ' + rel + ' carries an effort field, contradicting inherit_session_model');
+      'G2-declaration: ' + rel + ' carries a separate effort field; effort belongs in the model ID');
   }
   for (const rel of generatedTreeFiles('.cursor')) {
     const content = read(rel);
     assert(!/\bmodel="/.test(content),
-      'G2-declaration: ' + rel + ' carries a per-call model=" override, contradicting inherit_session_model');
+      'G2-declaration: ' + rel + ' carries a per-call model=" override; command cards must omit dispatch model');
   }
 }
 

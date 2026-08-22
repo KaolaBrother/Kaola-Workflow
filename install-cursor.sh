@@ -30,8 +30,8 @@
 #     and copy scripts to ${CURSOR_HOME:-$HOME/.cursor}/hooks/. Existing non-kaola
 #     hook entries are preserved. Skip with --no-scripts.
 #
-# Models: every subagent inherits the session model and effort. This installer seeds no
-# per-role model or effort config.
+# Models: generated agents carry raw per-tier frontmatter pins from the canonical standard/
+# reasoning classes; this installer seeds no user-specific per-role model or effort config.
 
 set -euo pipefail
 
