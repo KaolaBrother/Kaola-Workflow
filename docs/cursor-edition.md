@@ -51,8 +51,8 @@ Everything under `.cursor/` is **generated from canonical** by
 | ---------------- | --------------------- | ----- |
 | `agents/<name>.md` | `.cursor/agents/<name>.md` | Cursor agent frontmatter (`name`, `description`, an unquoted `model: grok-4.6[effort=medium]` or `model: grok-4.6[effort=high]` derived from the canonical class, and `readonly`). Claude `tools:` (including MCP ids) are dropped. Descriptions that are not plain YAML scalars are JSON-quoted. Reviewer identity is a body comment block (`<!-- cursor-reviewer-identity:start|end -->`); `resolved_profile_hash` is re-stamped over the cursor bytes. |
 | `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). `Agent(` dispatch cards become `Task(`. Install-time `model="{...}"` lines are stripped. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
-| `hooks/<script>.sh` | `.cursor/hooks/<script>.sh` | Dispatch-log is payload-adapted (`agent_type \|\| subagent_type`, `agent_id \|\| subagent_id`, `model \|\| subagent_model`). Adapted copies keep the shebang as line 1. Compact-context is wrapped as JSON `{additional_context}` for `sessionStart`. |
-| mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). `sessionStart` + `subagentStart`. Project-shaped commands use `.cursor/hooks/…`. A `--global` install rewrites that prefix to `./hooks/`. |
+| `hooks/<script>.sh` | `.cursor/hooks/<script>.sh` | Dispatch-log is payload-adapted (`agent_type \|\| subagent_type`, `agent_id \|\| subagent_id`, `model \|\| subagent_model`). Adapted copies keep the shebang as line 1. Compact-context is wrapped as JSON `{additional_context}` for `sessionStart`. A second `sessionStart` wrapper runs `kaola-workflow-ensure-cursor-catalog.js` and prints `{}` so it does not emit `additional_context`. |
+| mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). `sessionStart` (compact resume + catalog ensure) + `subagentStart`. Project-shaped commands use `.cursor/hooks/…`. A `--global` install rewrites that prefix to `./hooks/`. |
 
 Generated agents carry a model-and-effort pin derived from the canonical agent
 class. The canonical `sonnet`/`standard` and `opus`/`reasoning` tokens remain the
@@ -70,14 +70,26 @@ an optional `model` but has no separate effort field, so generated command cards
 omit `model` and the child takes the model from its custom-agent frontmatter.
 
 Cursor CLI loads custom `Task` types from the **workspace** `.cursor/agents`,
-not from `~/.cursor/agents`. `--global` and `install-all.sh`'s default write
+not from `~/.cursor/agents`. The workspace catalog is refreshed from
+`${CURSOR_HOME:-$HOME/.cursor}/agents`: all 14 canonical role files must be
+byte-identical to that global tree; global is the source of truth (not git
+toplevel). `sessionStart` runs an ensure wrapper that prints `{}`. `/workflow-next`
+runs `kaola-workflow-ensure-cursor-catalog.js` via the same `kaola_script`
+resolver as claim.js. Dest is always `<cwd>/.cursor/agents`. The script prints
+one of `already-present` | `copied` | `missing-source` (exit 0 on the first two,
+1 on `missing-source`). `already-present` means dest is in-sync (all 14
+byte-identical) and a named omit-model `Task` may proceed; `copied` still
+requires a cold start (new chat, then re-run `/workflow-next`); `missing-source`
+means print `./install-cursor.sh --target "$PWD"` and do not name a Task type.
+`--global` and `install-all.sh`'s default write
 `${CURSOR_HOME}/{agents,commands}` (un-nested). That layout is not
 dispatch-capable by itself unless the installer also dual-wrote the project
 catalog because the process cwd was inside a git work tree. A worktree is a
 cwd: do not point `agent --workspace` at `.kw/worktrees/<project>/` unless the
 14 agent files already exist there **before** the session starts. After
 materializing `.cursor/agents`, start a new chat; a mid-session copy does not
-change this session's Task enum.
+change this session's Task enum. `templates/routing/init.skeleton.md` is not a
+Cursor dispatch surface for this catalog.
 
 **Declared runtime divergences.** The declarations are the
 `frontmatter_tier_pin` and `session_start_resume_injection` entries in the
@@ -100,9 +112,9 @@ These are Cursor product limits, not alternate pin paths:
 3. **Resume.** Resuming a subagent can drop the frontmatter effort and return to
    the picker. Use a fresh dispatch for cost control, not a second pin path.
 4. **Cloud vs local.** Cloud Agents may not load project hooks or fire
-   `sessionStart`; the live IDE Task path remains the restricted path unless a
-   later measurement for this edition shows otherwise. Durable resume remains
-   `mission-list.md`.
+   `sessionStart` (so the catalog-ensure hook may not run there); the live IDE
+   Task path remains the restricted path unless a later measurement for this
+   edition shows otherwise. Durable resume remains `mission-list.md`.
 
 No config seeding, inline model override, or second pin path is added for these
 limits.
@@ -156,6 +168,9 @@ install still finds the main-checkout trees).
   toplevel does not invent a project `.cursor/` tree.
 - Support scripts always land under
   `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/{scripts,hooks}`.
+  `kaola-workflow-ensure-cursor-catalog.js` is a Cursor-only extra: the installer
+  copies and `--uninstall` removes it by name. It is **not** listed in
+  `kaola-workflow-install-manifest.js`.
 
 `--uninstall` removes only kaola-deployed names and strips kaola entries from
 `hooks.json`. It never deletes the user's `hooks.json` file. A subsequent bare
@@ -165,10 +180,13 @@ install redeploys the edition.
 
 Cursor's hook model is a JSON mapping at `.cursor/hooks.json` (project) or
 `~/.cursor/hooks.json` (global). Payloads use `subagent_type` / `subagent_id` /
-`subagent_model`. This edition ships a payload-adapted dispatch-log plus a
-compact wrapper. Both are fail-open.
+`subagent_model`. This edition ships a payload-adapted dispatch-log, a compact wrapper, and a
+catalog-ensure wrapper. Compact resume and catalog materialize are different
+jobs. The ensure wrapper prints `{}` so it does not clobber compact-resume.
+Both sessionStart commands use a 5s timeout. All are fail-open.
 
 | Event | Claude payload | Cursor payload | Adaptation |
 | --- | --- | --- | --- |
 | `subagentStart` | `agent_type` / `agent_id` | `subagent_type` / `subagent_id` | dispatch-log accepts `agent_type \|\| subagent_type` and `agent_id \|\| subagent_id` |
 | `sessionStart` resume | compact stdout injected after compact | `additional_context` JSON, new session only | wrapper turns compact-context.js stdout into `{additional_context}`. `preCompact` cannot inject — declared as `session_start_resume_injection`. Durable resume is `mission-list.md`. |
+| `sessionStart` catalog | n/a | wrapper stdout is `{}` | `kaola-workflow-ensure-cursor-catalog.sh` copies the 14 canon roles from `$CURSOR_HOME/agents` into `<cwd>/.cursor/agents`. Mid-session copy still needs a new chat. |

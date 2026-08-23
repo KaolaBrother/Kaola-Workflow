@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Cursor workspace Task catalog refreshes from `$CURSOR_HOME/agents` — #1016.**
+  `kaola-workflow-ensure-cursor-catalog.js` keeps the 14 canonical roles under
+  `<cwd>/.cursor/agents` byte-identical to `${CURSOR_HOME:-$HOME/.cursor}/agents`
+  (global is the source of truth; no git-toplevel preference). Status tokens:
+  `already-present`, `copied`, `missing-source`. `sessionStart` runs
+  `kaola-workflow-ensure-cursor-catalog.sh`, which prints `{}` so compact-resume
+  is not clobbered; `/workflow-next` runs the same ensure script. A mid-session
+  copy still needs a new chat. Cloud Agents may not fire `sessionStart`.
+  `install-cursor.sh` deploys the extra script outside the support-file manifest.
+  `templates/routing/init.skeleton.md` is unchanged.
+
 ## [9.14.1] - 2026-08-22
 
 ### Changed

@@ -238,7 +238,7 @@ install_support_scripts() {
   [[ -f "$manifest" ]] || { echo "warning: install manifest not found; skipping support scripts." >&2; return; }
   local dest="$home/kaola-workflow/scripts"
   mkdir -p "$dest"
-  local name src
+  local name src extra_ensure extra_ensure_src
   local deployed=()
   while IFS= read -r name || [[ -n "$name" ]]; do
     [[ -n "$name" ]] || continue
@@ -252,6 +252,14 @@ install_support_scripts() {
     chmod +x "$dest/$name"
     deployed+=("$name")
   done < <(node "$manifest" --forge="$FORGE" --scripts 2>/dev/null)
+  # Cursor-only extra: catalog ensure. Not in the github supportScripts manifest.
+  extra_ensure="kaola-workflow-ensure-cursor-catalog.js"
+  extra_ensure_src="$SCRIPT_DIR/scripts/$extra_ensure"
+  if [[ -f "$extra_ensure_src" ]]; then
+    cp "$extra_ensure_src" "$dest/$extra_ensure"
+    chmod +x "$dest/$extra_ensure"
+    deployed+=("$extra_ensure")
+  fi
   if [[ ${#deployed[@]} -gt 0 ]]; then
     local stale_file stale_name is_current
     for stale_file in "$dest"/*.js; do
@@ -390,6 +398,7 @@ uninstall_edition() {
       rm -f "$scripts_dir/$name"
     done < <(node "$manifest" --forge="$FORGE" --scripts 2>/dev/null)
   fi
+  rm -f "$scripts_dir/kaola-workflow-ensure-cursor-catalog.js"
   remove_retired_support_scripts "$scripts_dir"
   if [[ -d "$hooks_dir" ]]; then
     local hook

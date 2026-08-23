@@ -1158,6 +1158,591 @@ for (const role of reviewerGenerator.ROLES) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// G10 (#1016): catalog ensure CLI + card routing + Cursor-only install extra
+// + sessionStart hook. Plan of record 5383907624, Layer 1–2 overridden by
+// amendment 5383958037 (global `$cursorHome/agents` is source of truth;
+// already-present = all listCanonAgents() names byte-identical to global).
+// Do not pin git-toplevel-as-preferred-source.
+// ---------------------------------------------------------------------------
+const G10_ENSURE_JS = 'kaola-workflow-ensure-cursor-catalog.js';
+const G10_ENSURE_PATH = path.join(REPO, 'scripts', G10_ENSURE_JS);
+
+function g10LoadEnsure() {
+  if (!fs.existsSync(G10_ENSURE_PATH)) {
+    return { ok: false, reason: 'file missing' };
+  }
+  try {
+    const resolved = require.resolve(G10_ENSURE_PATH);
+    delete require.cache[resolved];
+    const mod = require(G10_ENSURE_PATH);
+    if (typeof mod.ensureCursorCatalog !== 'function') {
+      return { ok: false, reason: 'ensureCursorCatalog export missing', mod: mod };
+    }
+    return { ok: true, fn: mod.ensureCursorCatalog, mod: mod };
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e) };
+  }
+}
+
+function g10StatusToken(result) {
+  if (result == null) return '';
+  if (typeof result === 'string') {
+    const m = String(result).match(/\b(already-present|copied|missing-source)\b/);
+    return m ? m[1] : String(result).trim();
+  }
+  if (typeof result === 'object') {
+    const s = result.status || result.token || result.result;
+    if (typeof s === 'string') {
+      const m = s.match(/\b(already-present|copied|missing-source)\b/);
+      return m ? m[1] : s.trim();
+    }
+  }
+  return '';
+}
+
+function g10WriteCanonAgents(dir, bodyForName) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of canonAgents) {
+    fs.writeFileSync(path.join(dir, name + '.md'), bodyForName(name), 'utf8');
+  }
+}
+
+function g10Rm(dir) {
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+}
+
+{
+  const loaded = g10LoadEnsure();
+  const destOf = cwd => path.join(cwd, '.cursor', 'agents');
+
+  assert(loaded.ok,
+    'G10-ensure: scripts/' + G10_ENSURE_JS + ' exports ensureCursorCatalog({ cwd, cursorHome }) — '
+    + loaded.reason);
+
+  // already-present: all canon names exist under dest AND each is byte-identical
+  // to the same name under $cursorHome/agents. A unique marker that matches global stays.
+  {
+    const cwd = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-ap-cwd-'));
+    const cursorHome = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-ap-home-'));
+    try {
+      const marker = 'G10-MARKER-ALREADY-PRESENT-' + Date.now() + '\n';
+      g10WriteCanonAgents(path.join(cursorHome, 'agents'), n => '# global ' + n + '\n' + marker);
+      g10WriteCanonAgents(destOf(cwd), n => '# global ' + n + '\n' + marker);
+      if (!loaded.ok) {
+        assert(false, 'G10-ensure[already-present]: all listCanonAgents() dest files byte-identical '
+          + 'to $cursorHome/agents → already-present (module missing)');
+      } else {
+        const result = loaded.fn({ cwd: cwd, cursorHome: cursorHome });
+        assert(g10StatusToken(result) === 'already-present',
+          'G10-ensure[already-present]: status already-present when dest is complete and '
+          + 'byte-identical to global — got ' + JSON.stringify(result));
+        const body = fs.readFileSync(path.join(destOf(cwd), 'implementer.md'), 'utf8');
+        assert(body.includes(marker.trim()),
+          'G10-ensure[already-present]: matching dest marker survives (do not overwrite in-sync dest)');
+      }
+    } finally {
+      g10Rm(cwd); g10Rm(cursorHome);
+    }
+  }
+
+  // Lone implementer.md is not already-present.
+  {
+    const cwd = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-lone-cwd-'));
+    const cursorHome = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-lone-home-'));
+    try {
+      g10WriteCanonAgents(path.join(cursorHome, 'agents'), n => '# home ' + n + '\n');
+      fs.mkdirSync(destOf(cwd), { recursive: true });
+      fs.writeFileSync(path.join(destOf(cwd), 'implementer.md'), '# home implementer\n');
+      if (!loaded.ok) {
+        assert(false, 'G10-ensure[lone-implementer]: a lone dest implementer.md is not already-present '
+          + '(module missing)');
+      } else {
+        const result = loaded.fn({ cwd: cwd, cursorHome: cursorHome });
+        assert(g10StatusToken(result) === 'copied',
+          'G10-ensure[lone-implementer]: incomplete dest is copied, not already-present — got '
+          + JSON.stringify(result));
+        for (const name of canonAgents) {
+          assert(fs.existsSync(path.join(destOf(cwd), name + '.md')),
+            'G10-ensure[lone-implementer]: dest has canon name ' + name + '.md after refresh');
+        }
+      }
+    } finally {
+      g10Rm(cwd); g10Rm(cursorHome);
+    }
+  }
+
+  // Drifted dest prompt is not present → copy/overwrite from global.
+  {
+    const cwd = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-drift-cwd-'));
+    const cursorHome = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-drift-home-'));
+    try {
+      g10WriteCanonAgents(path.join(cursorHome, 'agents'), n => '# HOME ' + n + '\n');
+      g10WriteCanonAgents(destOf(cwd), n => '# DRIFT ' + n + '\n');
+      if (!loaded.ok) {
+        assert(false, 'G10-ensure[drift]: dest bytes that differ from global are refreshed from '
+          + '$cursorHome/agents (module missing)');
+      } else {
+        const result = loaded.fn({ cwd: cwd, cursorHome: cursorHome });
+        assert(g10StatusToken(result) === 'copied',
+          'G10-ensure[drift]: drifted dest is copied, not already-present — got '
+          + JSON.stringify(result));
+        const body = fs.readFileSync(path.join(destOf(cwd), 'implementer.md'), 'utf8');
+        assert(body === '# HOME implementer\n',
+          'G10-ensure[drift]: dest implementer.md is replaced by global bytes — got '
+          + JSON.stringify(body.slice(0, 80)));
+      }
+    } finally {
+      g10Rm(cwd); g10Rm(cursorHome);
+    }
+  }
+
+  // Refresh copies only listCanonAgents() names from $cursorHome/agents.
+  // Dest is always <cwd>/.cursor/agents. Stray user-agent.md in dest or home stays out.
+  {
+    const cwd = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-copy-cwd-'));
+    const cursorHome = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-copy-home-'));
+    try {
+      g10WriteCanonAgents(path.join(cursorHome, 'agents'), n => '# HOME ' + n + '\n');
+      fs.writeFileSync(path.join(cursorHome, 'agents', 'user-agent.md'), '# stray-home\n');
+      fs.mkdirSync(destOf(cwd), { recursive: true });
+      const destStray = path.join(destOf(cwd), 'user-agent.md');
+      fs.writeFileSync(destStray, '# stray-dest\n');
+      if (!loaded.ok) {
+        assert(false, 'G10-ensure[copied]: dest empty-of-canon copies listCanonAgents() names from '
+          + '$cursorHome/agents only (module missing)');
+      } else {
+        const result = loaded.fn({ cwd: cwd, cursorHome: cursorHome });
+        assert(g10StatusToken(result) === 'copied',
+          'G10-ensure[copied]: incomplete dest → copied — got ' + JSON.stringify(result));
+        assert(fs.existsSync(path.join(destOf(cwd), 'implementer.md')),
+          'G10-ensure[copied]: dest is <cwd>/.cursor/agents and receives implementer.md');
+        assert(fs.readFileSync(path.join(destOf(cwd), 'implementer.md'), 'utf8') === '# HOME implementer\n',
+          'G10-ensure[copied]: canon files come from $cursorHome/agents');
+        for (const name of canonAgents) {
+          assert(fs.existsSync(path.join(destOf(cwd), name + '.md')),
+            'G10-ensure[copied]: dest receives canon name ' + name + '.md');
+        }
+        assert(fs.existsSync(destStray) && fs.readFileSync(destStray, 'utf8') === '# stray-dest\n',
+          'G10-ensure[copied]: user-owned extra file in dest is not touched');
+        assert(fs.readFileSync(destStray, 'utf8') !== '# stray-home\n',
+          'G10-ensure[copied]: $cursorHome/agents/user-agent.md is not copied into dest');
+      }
+    } finally {
+      g10Rm(cwd); g10Rm(cursorHome);
+    }
+  }
+
+  // Drop git-toplevel-as-preferred-source: even when git toplevel has a different
+  // catalog, dest is <cwd>/.cursor/agents and bytes come from $cursorHome/agents.
+  {
+    const repo = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-git-'));
+    const cursorHome = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-git-home-'));
+    try {
+      G.init(repo);
+      g10WriteCanonAgents(path.join(repo, '.cursor', 'agents'), n => '# TOPLEVEL ' + n + '\n');
+      g10WriteCanonAgents(path.join(cursorHome, 'agents'), n => '# HOME ' + n + '\n');
+      const cwd = path.join(repo, 'consumer');
+      fs.mkdirSync(cwd, { recursive: true });
+      if (!loaded.ok) {
+        assert(false, 'G10-ensure[global-source]: copy from $cursorHome/agents, not git toplevel '
+          + 'in preference to home (module missing)');
+      } else {
+        const result = loaded.fn({ cwd: cwd, cursorHome: cursorHome });
+        assert(g10StatusToken(result) === 'copied',
+          'G10-ensure[global-source]: empty dest under cwd → copied from global — got '
+          + JSON.stringify(result));
+        const destBody = fs.existsSync(path.join(destOf(cwd), 'implementer.md'))
+          ? fs.readFileSync(path.join(destOf(cwd), 'implementer.md'), 'utf8') : '';
+        assert(destBody === '# HOME implementer\n',
+          'G10-ensure[global-source]: dest bytes are from $cursorHome/agents, not git toplevel — got '
+          + JSON.stringify(destBody.slice(0, 80)));
+        const topBody = fs.readFileSync(path.join(repo, '.cursor', 'agents', 'implementer.md'), 'utf8');
+        assert(topBody === '# TOPLEVEL implementer\n',
+          'G10-ensure[global-source]: git-toplevel catalog is not the dest and is not preferred');
+      }
+    } finally {
+      g10Rm(repo); g10Rm(cursorHome);
+    }
+  }
+
+  // missing-source: $cursorHome/agents has no implementer.md. Do not invent files.
+  {
+    const cwd = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-miss-cwd-'));
+    const cursorHome = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-miss-home-'));
+    try {
+      fs.mkdirSync(path.join(cursorHome, 'agents'), { recursive: true });
+      fs.writeFileSync(path.join(cursorHome, 'agents', 'user-agent.md'), '# not-canon\n');
+      if (!loaded.ok) {
+        assert(false, 'G10-ensure[missing-source]: empty global canon → missing-source, no invented '
+          + 'files (module missing)');
+      } else {
+        let threw = false;
+        let result = null;
+        try {
+          result = loaded.fn({ cwd: cwd, cursorHome: cursorHome });
+        } catch (e) {
+          threw = true;
+          result = e;
+        }
+        const token = g10StatusToken(result);
+        assert(token === 'missing-source' || (threw && /missing-source/i.test(String(result))),
+          'G10-ensure[missing-source]: status missing-source when $cursorHome/agents has no '
+          + 'implementer.md — got ' + JSON.stringify(token || String(result && result.message || result)));
+        assert(!fs.existsSync(path.join(destOf(cwd), 'implementer.md')),
+          'G10-ensure[missing-source]: does not invent dest implementer.md');
+      }
+    } finally {
+      g10Rm(cwd); g10Rm(cursorHome);
+    }
+  }
+}
+
+{
+  assert(fs.existsSync(G10_ENSURE_PATH),
+    'G10-cli: scripts/' + G10_ENSURE_JS + ' exists');
+
+  const iso = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-iso-'));
+  try {
+    if (!fs.existsSync(G10_ENSURE_PATH)) {
+      assert(false, 'G10-cli: isolated require() of ' + G10_ENSURE_JS
+        + ' without sync-cursor-edition.js beside it (file missing)');
+    } else {
+      const isoFile = path.join(iso, G10_ENSURE_JS);
+      fs.copyFileSync(G10_ENSURE_PATH, isoFile);
+      assert(!fs.existsSync(path.join(iso, 'sync-cursor-edition.js')),
+        'G10-cli: isolation dir has no sync-cursor-edition.js');
+      try {
+        const resolved = require.resolve(isoFile);
+        delete require.cache[resolved];
+        const mod = require(isoFile);
+        assert(typeof mod.ensureCursorCatalog === 'function',
+          'G10-cli: isolated require() exports ensureCursorCatalog (self-contained under '
+          + '$CURSOR_HOME/kaola-workflow/scripts/)');
+
+        const destOfIso = cwd => path.join(cwd, '.cursor', 'agents');
+        function isoDestNames(cwd) {
+          const dest = destOfIso(cwd);
+          if (!fs.existsSync(dest)) return [];
+          return fs.readdirSync(dest).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3));
+        }
+        function assertIsoRoster(names, label) {
+          assert(Array.isArray(names) && names.length === canonAgents.length,
+            'G10-cli[isolated-drive]: ' + label + ' roster length equals canonAgents ('
+            + canonAgents.length + ') — got ' + JSON.stringify(names));
+          for (const name of canonAgents) {
+            assert(names.indexOf(name) !== -1,
+              'G10-cli[isolated-drive]: ' + label + ' includes canon name ' + name
+              + ' — got ' + JSON.stringify(names));
+          }
+        }
+
+        if (typeof mod.listCanonAgents === 'function') {
+          assertIsoRoster(mod.listCanonAgents(), 'isolated listCanonAgents()');
+        }
+
+        {
+          const cwd = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-iso-copy-cwd-'));
+          const cursorHome = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-iso-copy-home-'));
+          try {
+            g10WriteCanonAgents(path.join(cursorHome, 'agents'), n => '# ISO-HOME ' + n + '\n');
+            fs.writeFileSync(path.join(cursorHome, 'agents', 'user-agent.md'), '# stray-home\n');
+            const result = mod.ensureCursorCatalog({ cwd: cwd, cursorHome: cursorHome });
+            assert(g10StatusToken(result) === 'copied',
+              'G10-cli[isolated-drive]: dest empty-of-canon → copied — got '
+              + JSON.stringify(result));
+            assertIsoRoster(isoDestNames(cwd).filter(n => n !== 'user-agent'),
+              'dest after isolated copy');
+            for (const name of canonAgents) {
+              assert(fs.existsSync(path.join(destOfIso(cwd), name + '.md')),
+                'G10-cli[isolated-drive]: dest has canon name ' + name + '.md');
+            }
+            assert(!fs.existsSync(path.join(destOfIso(cwd), 'user-agent.md')),
+              'G10-cli[isolated-drive]: dest does not receive $cursorHome/agents/user-agent.md');
+          } finally {
+            g10Rm(cwd); g10Rm(cursorHome);
+          }
+        }
+
+        {
+          const cwd = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-iso-lone-cwd-'));
+          const cursorHome = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-iso-lone-home-'));
+          try {
+            g10WriteCanonAgents(path.join(cursorHome, 'agents'), n => '# ISO-HOME ' + n + '\n');
+            fs.mkdirSync(destOfIso(cwd), { recursive: true });
+            fs.writeFileSync(path.join(destOfIso(cwd), 'implementer.md'),
+              '# ISO-HOME implementer\n');
+            const result = mod.ensureCursorCatalog({ cwd: cwd, cursorHome: cursorHome });
+            assert(g10StatusToken(result) === 'copied',
+              'G10-cli[isolated-drive]: lone matching dest implementer.md → copied, not '
+              + 'already-present — got ' + JSON.stringify(result));
+            assert(g10StatusToken(result) !== 'already-present',
+              'G10-cli[isolated-drive]: lone dest implementer.md is not already-present');
+            assertIsoRoster(isoDestNames(cwd), 'dest after isolated lone-implementer copy');
+            for (const name of canonAgents) {
+              assert(fs.existsSync(path.join(destOfIso(cwd), name + '.md')),
+                'G10-cli[isolated-drive]: lone dest then has canon name ' + name + '.md');
+            }
+          } finally {
+            g10Rm(cwd); g10Rm(cursorHome);
+          }
+        }
+
+        if (typeof mod.listCanonAgents !== 'function') {
+          const cwd = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-iso-roster-cwd-'));
+          const cursorHome = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-iso-roster-home-'));
+          try {
+            g10WriteCanonAgents(path.join(cursorHome, 'agents'), n => '# ISO-HOME ' + n + '\n');
+            mod.ensureCursorCatalog({ cwd: cwd, cursorHome: cursorHome });
+            assertIsoRoster(isoDestNames(cwd), 'dest after copy (listCanonAgents not exported)');
+          } finally {
+            g10Rm(cwd); g10Rm(cursorHome);
+          }
+        }
+      } catch (e) {
+        assert(false, 'G10-cli: isolated require() without sync-cursor-edition.js beside it must work — '
+          + String((e && e.message) || e));
+      }
+    }
+  } finally {
+    g10Rm(iso);
+  }
+
+  function runEnsureCli(cwd, cursorHome) {
+    // spawn-class: environment
+    return spawnSync(process.execPath, [G10_ENSURE_PATH], {
+      cwd: cwd,
+      env: Object.assign({}, process.env, { CURSOR_HOME: cursorHome }),
+      encoding: 'utf8',
+    });
+  }
+
+  if (!fs.existsSync(G10_ENSURE_PATH)) {
+    assert(false, 'G10-cli: stdout contains already-present | copied | missing-source (file missing)');
+    assert(false, 'G10-cli: already-present and copied exit 0; missing-source exits non-zero (file missing)');
+  } else {
+    const homeAp = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-cli-ap-home-'));
+    const cwdAp = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-cli-ap-cwd-'));
+    const homeCp = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-cli-cp-home-'));
+    const cwdCp = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-cli-cp-cwd-'));
+    const homeMs = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-cli-ms-home-'));
+    const cwdMs = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-cli-ms-cwd-'));
+    try {
+      g10WriteCanonAgents(path.join(homeAp, 'agents'), n => '# cli ' + n + '\n');
+      g10WriteCanonAgents(path.join(cwdAp, '.cursor', 'agents'), n => '# cli ' + n + '\n');
+      const ap = runEnsureCli(cwdAp, homeAp);
+      const apOut = String(ap.stdout || '') + String(ap.stderr || '');
+      assert(/\balready-present\b/.test(apOut),
+        'G10-cli: stdout contains already-present when dest is in-sync — got '
+        + JSON.stringify(apOut.slice(0, 200)));
+      assert(ap.status === 0,
+        'G10-cli: already-present exits 0 (got ' + ap.status + ')');
+
+      g10WriteCanonAgents(path.join(homeCp, 'agents'), n => '# cli-home ' + n + '\n');
+      const cp = runEnsureCli(cwdCp, homeCp);
+      const cpOut = String(cp.stdout || '') + String(cp.stderr || '');
+      assert(/\bcopied\b/.test(cpOut),
+        'G10-cli: stdout contains copied when dest is filled from global — got '
+        + JSON.stringify(cpOut.slice(0, 200)));
+      assert(cp.status === 0, 'G10-cli: copied exits 0 (got ' + cp.status + ')');
+
+      fs.mkdirSync(path.join(homeMs, 'agents'), { recursive: true });
+      const ms = runEnsureCli(cwdMs, homeMs);
+      const msOut = String(ms.stdout || '') + String(ms.stderr || '');
+      assert(/\bmissing-source\b/.test(msOut),
+        'G10-cli: stdout contains missing-source when global has no implementer.md — got '
+        + JSON.stringify(msOut.slice(0, 200)));
+      assert(ms.status !== 0 && ms.status != null,
+        'G10-cli: missing-source exits non-zero (got ' + ms.status + ')');
+    } finally {
+      g10Rm(homeAp); g10Rm(cwdAp); g10Rm(homeCp); g10Rm(cwdCp); g10Rm(homeMs); g10Rm(cwdMs);
+    }
+  }
+}
+
+{
+  const block = String(syncMod.CURSOR_MODEL_DISPATCH_BLOCK || '');
+  const nextBody = exists(commandRel('workflow-next')) ? read(commandRel('workflow-next')) : '';
+  function assertG10Block(label, body) {
+    const text = String(body || '');
+    assert(/kaola-workflow-ensure-cursor-catalog\.js/.test(text),
+      label + ': names kaola-workflow-ensure-cursor-catalog.js');
+    assert(/\binherit\b/i.test(text) && /omit|do not pass|never pass/i.test(text),
+      label + ': omit per-call model= including inherit (do not pass inherit)');
+    assert(/subagent_type:\s*"<role>"/.test(text),
+      label + ': dispatch names subagent_type: "<role>"');
+    assert(/\bgeneralPurpose\b/.test(text) && /substitut|impersonat|costume|do not use/i.test(text),
+      label + ': forbid generalPurpose impersonation');
+    assert(text.includes('.cursor/agents/implementer.md'),
+      label + ': keeps catalog path example .cursor/agents/implementer.md');
+    assert(/new chat/i.test(text) && /copied|this session|cold.?start/i.test(text),
+      label + ': copied / new role files / prompt-byte refresh still require cold start and a new chat');
+    assert(/Invalid enum/i.test(text) && /inline/i.test(text)
+      && /generalPurpose|inherit/i.test(text),
+      label + ': Invalid-enum → do the work inline; do not retry as generalPurpose/inherit');
+    assert(/\balready-present\b/.test(text) && /\bcopied\b/.test(text)
+      && /\bmissing-source\b/.test(text),
+      label + ': names status tokens already-present | copied | missing-source');
+    assert(/\balready-present\b/.test(text) && /\bTask\b/.test(text)
+      && /omit|do not pass|never pass/i.test(text),
+      label + ': already-present → named omit-model Task (not “only implementer.md exists”)');
+    assert(/\bcopied\b/.test(text) && /new chat/i.test(text) && /workflow-next/.test(text),
+      label + ': copied → stop named dispatch; cold start; new chat; re-run /workflow-next');
+    assert(/\bmissing-source\b/.test(text) && /install-cursor\.sh/.test(text)
+      && /--target/.test(text),
+      label + ': missing-source → print ./install-cursor.sh --target "$PWD" (or global install path); '
+      + 'do not name a Task type');
+    assert(!/in order:\s*git\s+toplevel/i.test(text),
+      label + ': must not prefer git toplevel over $CURSOR_HOME/agents as catalog source');
+  }
+  assertG10Block('G10-block[CURSOR_MODEL_DISPATCH_BLOCK]', block);
+  assertG10Block('G10-block[.cursor/commands/workflow-next.md]', nextBody);
+}
+
+{
+  const manifest = require('./kaola-workflow-install-manifest.js');
+  const githubScripts = manifest.supportScripts('github');
+  assert(Array.isArray(githubScripts) && !githubScripts.includes(G10_ENSURE_JS),
+    'G10-install: supportScripts(\'github\') does not include ' + G10_ENSURE_JS
+    + ' (Cursor-only extra script)');
+
+  const firstLine = r => String(r.stderr || r.stdout || '').split('\n')[0];
+  function runInstaller(extraArgs, opts) {
+    opts = opts || {};
+    const home = opts.home || fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-i-home-'));
+    const cursorHome = opts.cursorHome || fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-i-ch-'));
+    const dest = opts.dest || fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-i-dest-'));
+    const args = ['--yes'].concat(opts.skipTarget ? [] : ['--target', dest]).concat(extraArgs || []);
+    const spawnOpts = {
+      env: Object.assign({}, process.env, { HOME: home, CURSOR_HOME: cursorHome }),
+      encoding: 'utf8',
+    };
+    if (opts.cwd) spawnOpts.cwd = opts.cwd;
+    // spawn-class: environment
+    const r = spawnSync('bash', [INSTALLER].concat(args), spawnOpts);
+    return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '', home, cursorHome, dest };
+  }
+  const clean = r => {
+    for (const d of [r.home, r.cursorHome, r.dest]) g10Rm(d);
+  };
+
+  const deployedRel = ch => path.join(ch, 'kaola-workflow', 'scripts', G10_ENSURE_JS);
+
+  {
+    const r = runInstaller(['--global'], { skipTarget: true });
+    assert(r.status === 0,
+      'G10-install: install-cursor.sh --global exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
+    const deployed = fs.existsSync(deployedRel(r.cursorHome));
+    assert(deployed,
+      'G10-install: --global deploys ' + G10_ENSURE_JS + ' to $CURSOR_HOME/kaola-workflow/scripts/');
+
+    const r2 = runInstaller(['--global'], {
+      skipTarget: true, home: r.home, cursorHome: r.cursorHome, dest: r.dest,
+    });
+    assert(r2.status === 0,
+      'G10-install: re-running --global exits 0 (stale-clean pass)');
+    assert(deployed && fs.existsSync(deployedRel(r.cursorHome)),
+      'G10-install: extra-script is in the deployed set so post-manifest stale cleanup does not delete it');
+
+    const ru = runInstaller(['--uninstall', '--global'], {
+      skipTarget: true, home: r.home, cursorHome: r.cursorHome, dest: r.dest,
+    });
+    assert(ru.status === 0,
+      'G10-install: --uninstall --global exits 0 (got ' + ru.status + ' — ' + firstLine(ru) + ')');
+    assert(deployed && !fs.existsSync(deployedRel(r.cursorHome)),
+      'G10-install: --uninstall --global removes ' + G10_ENSURE_JS);
+    clean(r);
+  }
+}
+
+{
+  const skelPath = path.join(REPO, 'templates', 'routing', 'init.skeleton.md');
+  const skel = fs.existsSync(skelPath) ? fs.readFileSync(skelPath, 'utf8') : '';
+  assert(fs.existsSync(skelPath), 'G10-overlay-untouched: templates/routing/init.skeleton.md exists');
+  assert(!/\bgeneralPurpose\b/.test(skel),
+    'G10-overlay-untouched: init.skeleton.md does not contain generalPurpose');
+  assert(!/kaola-workflow-ensure-cursor-catalog/.test(skel),
+    'G10-overlay-untouched: init.skeleton.md does not contain kaola-workflow-ensure-cursor-catalog');
+}
+
+{
+  const mappingText = typeof syncMod.renderCursorHooksJson === 'function'
+    ? syncMod.renderCursorHooksJson()
+    : (exists('.cursor/hooks.json') ? read('.cursor/hooks.json') : '{}');
+  let parsed = null;
+  try { parsed = JSON.parse(mappingText); } catch (_) { parsed = null; }
+  const session = parsed && parsed.hooks && Array.isArray(parsed.hooks.sessionStart)
+    ? parsed.hooks.sessionStart : [];
+  assert(session.length >= 2,
+    'G10-hook: sessionStart includes a second command for ensure (not folded into the compact wrapper) — got '
+    + JSON.stringify(session));
+  const sessionBlob = JSON.stringify(session);
+  assert(/compact/i.test(sessionBlob),
+    'G10-hook: compact wrapper remains as a sessionStart command');
+  const ensureEntries = session.filter(e => /ensure|catalog/i.test(String((e && e.command) || '')));
+  assert(ensureEntries.length >= 1,
+    'G10-hook: sessionStart has an ensure-catalog command distinct from compact-context.sh');
+  const compactEntries = session.filter(e => /compact/i.test(String((e && e.command) || '')));
+  assert(compactEntries.length >= 1 && ensureEntries.every(e => compactEntries.indexOf(e) === -1),
+    'G10-hook: ensure is not folded into compact-context.sh');
+  for (const e of session) {
+    const t = e && e.timeout;
+    assert(t === 5 || t === undefined || t <= 5,
+      'G10-hook: sessionStart timeout stays 5s-compatible — got ' + JSON.stringify(t));
+  }
+
+  const ensureCmd = String((ensureEntries[0] && ensureEntries[0].command) || '');
+  const ensureBase = path.basename(ensureCmd);
+  const hookRel = ensureCmd.indexOf('.cursor/hooks/') === 0
+    ? ensureCmd
+    : (ensureBase ? '.cursor/hooks/' + ensureBase : '');
+  assert(!!ensureBase && exists(hookRel),
+    'G10-hook: ensure hook script exists under .cursor/hooks/ — looked for ' + JSON.stringify(hookRel));
+
+  const hookAbs = hookRel ? path.join(TREE_ROOT, hookRel) : '';
+  if (!hookAbs || !fs.existsSync(hookAbs)) {
+    assert(false, 'G10-hook: driving the ensure hook on a missing catalog (hook script missing)');
+  } else {
+    const cwd = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-hook-cwd-'));
+    const cursorHome = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-hook-home-'));
+    try {
+      g10WriteCanonAgents(path.join(cursorHome, 'agents'), n => '# hook-home ' + n + '\n');
+      if (fs.existsSync(G10_ENSURE_PATH)) {
+        const scriptsDir = path.join(cursorHome, 'kaola-workflow', 'scripts');
+        fs.mkdirSync(scriptsDir, { recursive: true });
+        fs.copyFileSync(G10_ENSURE_PATH, path.join(scriptsDir, G10_ENSURE_JS));
+      }
+      // spawn-class: environment
+      const r = spawnSync('bash', [hookAbs], {
+        cwd: cwd,
+        env: Object.assign({}, process.env, { CURSOR_HOME: cursorHome, HOME: cursorHome }),
+        input: '{}',
+        encoding: 'utf8',
+      });
+      const out = String(r.stdout || '').trim();
+      let noClobber = out === '' || out === '{}';
+      if (!noClobber) {
+        try {
+          const j = JSON.parse(out);
+          noClobber = !j.additional_context;
+        } catch (_) { noClobber = false; }
+      }
+      assert(noClobber,
+        'G10-hook: stdout on a missing catalog is {} (or empty additional_context) so it does not '
+        + 'clobber compact-resume — got ' + JSON.stringify(out.slice(0, 200)));
+      assert(fs.existsSync(path.join(cwd, '.cursor', 'agents', 'implementer.md')),
+        'G10-hook: after the hook, dest has implementer.md when $CURSOR_HOME/agents can supply it');
+      for (const name of canonAgents) {
+        assert(fs.existsSync(path.join(cwd, '.cursor', 'agents', name + '.md')),
+          'G10-hook: after the hook, dest has every canonAgents name including ' + name
+          + '.md (not only implementer.md)');
+      }
+    } finally {
+      g10Rm(cwd); g10Rm(cursorHome);
+    }
+  }
+}
+
 if (failed) {
   console.error('\ncursor-edition test FAILED: ' + failed + ' failure(s), ' + passed + ' passed.'
     + driftVerdict);
