@@ -67,7 +67,30 @@ The canonical `agents/*.md` model class is mapped at generation time: standard
 roles receive `model: grok-4.6[effort=high]`. Unknown class tokens fail closed;
 the generator does not invent a fallback roster. Cursor's `Task` tool accepts
 an optional `model` but has no separate effort field, so generated command cards
-omit `model` and the child takes the model from its custom-agent frontmatter.
+omit `model`.
+
+Reliable IDE and CLI dispatch is one wording, embedded in `/workflow-next` and
+`/kaola-workflow-finalize`. `/workflow-init` is the shared all-runtime
+bootstrapper; it does not carry Cursor spawn teaching or a Cursor overlay freeze.
+Overlay source is `templates/routing/init.skeleton.md` (runtime-neutral).
+Dispatch teaching is only `/workflow-next` and `/kaola-workflow-finalize`. Named
+dispatch is `Task` with
+`subagent_type: "<role>"` only; do not substitute `generalPurpose` plus a
+prompt costume. Omit per-call model, including `inherit` — do not pass inherit.
+The IDE Task schema lists inherit as the default; that default is for built-ins.
+For named Kaola types, omit anyway; do not pass inherit to satisfy the schema.
+Do not pass `cursor-grok-4.6-xhigh` as the Task model. Never resume a Kaola
+subagent; fresh dispatch only (resume drops frontmatter effort). The Task prompt
+is the mission and locator; do not paste the role contract onto a named type.
+
+Two guarantees, and no second pin path:
+
+- **(A) Role.** Dispatch is the workspace catalog plus the named type.
+- **(B) Effort.** The CLI stream envelope is the oracle
+  (`cursor-grok-4.6-medium` vs `cursor-grok-4.6-high`). The IDE picker clamp
+  (selected session Grok 4.6 / `selectedModels`) is a typed deferral; do not
+  add a `Task(model=)` workaround. Do not claim IDE children display distinct
+  effort.
 
 Cursor CLI loads custom `Task` types from the **workspace** `.cursor/agents`,
 not from `~/.cursor/agents`. The workspace catalog is refreshed from
@@ -88,8 +111,11 @@ catalog because the process cwd was inside a git work tree. A worktree is a
 cwd: do not point `agent --workspace` at `.kw/worktrees/<project>/` unless the
 14 agent files already exist there **before** the session starts. After
 materializing `.cursor/agents`, start a new chat; a mid-session copy does not
-change this session's Task enum. `templates/routing/init.skeleton.md` is not a
-Cursor dispatch surface for this catalog.
+change this session's Task enum. Overlay source is
+`templates/routing/init.skeleton.md` (runtime-neutral). `/workflow-init` is the
+shared all-runtime bootstrapper; it does not carry Cursor spawn teaching or a
+Cursor overlay freeze. Dispatch teaching is only `/workflow-next` and
+`/kaola-workflow-finalize`.
 
 **Declared runtime divergences.** The declarations are the
 `frontmatter_tier_pin` and `session_start_resume_injection` entries in the
@@ -106,12 +132,20 @@ These are Cursor product limits, not alternate pin paths:
 
 1. **Cold start.** Agent files can be loaded at session start. After install or
    sync, use a new chat for close evidence; a mid-session edit is inconclusive.
-2. **One-family picker clamp.** Cursor may expose one Grok thinking variant per
-   picker family. If a fresh session still runs both classes at the saved
-   variant, record a typed deferral; do not add a `Task(model=)` workaround.
-3. **Resume.** Resuming a subagent can drop the frontmatter effort and return to
-   the picker. Use a fresh dispatch for cost control, not a second pin path.
-4. **Cloud vs local.** Cloud Agents may not load project hooks or fire
+2. **CLI envelope oracle.** Named omit-model Tasks on CLI resolve effort in the
+   stream envelope (`cursor-grok-4.6-medium` vs `cursor-grok-4.6-high`). That
+   envelope is the measurement. Do not pass inherit, `cursor-grok-4.6-xhigh`,
+   or any other per-call model to force it.
+3. **IDE picker clamp.** The selected session Grok 4.6 / `selectedModels`
+   picker may clamp children to one thinking variant. That is a typed
+   deferral; do not add a `Task(model=)` workaround, and do not claim IDE
+   children display distinct effort.
+4. **IDE Task schema inherit default.** The schema lists inherit as the default
+   for built-ins. For named Kaola types that default is a trap: omit the model
+   argument anyway.
+5. **Resume.** Never resume a Kaola subagent. Resume drops frontmatter effort.
+   Fresh dispatch only; not a second pin path.
+6. **Cloud vs local.** Cloud Agents may not load project hooks or fire
    `sessionStart` (so the catalog-ensure hook may not run there); the live IDE
    Task path remains the restricted path unless a later measurement for this
    edition shows otherwise. Durable resume remains `mission-list.md`.

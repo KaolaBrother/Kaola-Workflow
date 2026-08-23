@@ -173,8 +173,9 @@ function renderAgent(canonContent, agentName, forge) {
 
 const CURSOR_MODEL_DISPATCH_GUIDANCE =
   'Use the named Cursor agent; generated frontmatter pins its canonical standard or reasoning tier '
-  + 'to the approved model family at medium or high effort. Omit per-call model overrides; the '
-  + 'one-family allowlist keeps dispatch cards portable while tier selection stays in generated agent metadata.';
+  + 'to the approved model family at medium or high effort. Omit per-call model; do not claim IDE '
+  + 'children display distinct effort. The one-family allowlist keeps dispatch cards portable while '
+  + 'tier selection stays in generated agent metadata.';
 
 const CURSOR_MODEL_DISPATCH_BLOCK = [
   '## Generated agent tier pins',
@@ -182,12 +183,23 @@ const CURSOR_MODEL_DISPATCH_BLOCK = [
   'Named Cursor agents carry generated frontmatter that pins their canonical standard or reasoning',
   'tier at medium or high effort. The one-family allowlist keeps the dispatch surface portable',
   'while the canonical class selects the generated tier pin.',
-  'Omit per-call model on `Task`, including `inherit`. Do not pass inherit.',
   '',
-  'Dispatch a role with `Task` using `subagent_type: "<role>"` only.',
+  'Dispatch a role with `Task` using `subagent_type: "<role>"` only. Do not substitute',
+  '`generalPurpose` (or any other built-in) plus a prompt costume; impersonation is the bug.',
+  'The Task prompt is the mission and locator; do not paste the role contract onto a named type.',
   '',
-  'Do not substitute `generalPurpose` (or any other built-in) plus a prompt costume;',
-  'impersonation is the bug.',
+  'Omit per-call model on `Task`, including `inherit`. Do not pass inherit. The IDE Task schema',
+  'lists inherit as the default; that default is for built-ins. For named Kaola types, omit anyway;',
+  'do not pass inherit to satisfy the schema. Do not pass `cursor-grok-4.6-xhigh` (xhigh) as the',
+  'Task model.',
+  '',
+  'Never resume a Kaola subagent; fresh dispatch only. Resume drops frontmatter effort.',
+  '',
+  'Two guarantees, not one measurement. (A) Role dispatch is the workspace catalog plus the',
+  'named type. (B) Effort pins: the CLI stream envelope is the oracle (`cursor-grok-4.6-medium` vs',
+  '`cursor-grok-4.6-high`). The IDE picker clamp (selected session Grok 4.6 / selectedModels) is a',
+  'typed deferral; it forbids a `Task(model=)` workaround. Do not claim IDE children display',
+  'distinct effort.',
   '',
   'Before named dispatch, run `kaola-workflow-ensure-cursor-catalog.js` via the same `kaola_script`',
   'resolver this card already uses for claim.js: `$CURSOR_HOME/kaola-workflow/scripts/`',
@@ -263,7 +275,12 @@ function stripCardModelPlaceholders(text) {
 }
 
 function assertNoModelDispatchResidue(text, label) {
-  const probe = text.split(CURSOR_MODEL_DISPATCH_GUIDANCE).join('');
+  // The shared block names the forbidden `Task(model=)` workaround; that mention is
+  // teaching, not a leaked Claude per-call override. Strip the substituted wording
+  // (and leftover GUIDANCE) before scanning for residue.
+  const probe = String(text || '')
+    .split(CURSOR_MODEL_DISPATCH_GUIDANCE).join('')
+    .split(CURSOR_MODEL_DISPATCH_BLOCK.replace(/\s+$/, '')).join('');
   const problems = [];
   if (/(?<!`)``(?!`)/.test(probe)) problems.push('empty code span `` — a strip cut inside a code span');
   for (const line of probe.split(/\r?\n/)) {
@@ -303,7 +320,7 @@ function assertModelDispatchAnchorMatched(canonBody, substituted, label) {
     + 'MODEL_DISPATCH_HEADING to the heading canonical now uses:\n  - ' + nearMiss.join('\n  - '));
 }
 
-function transformCommandBody(body, forge, label, commandName) {
+function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   const lines = rewriteModelDispatchInstructions(body, CURSOR_MODEL_DISPATCH_GUIDANCE).split(/\r?\n/);
   const out = [];
@@ -332,9 +349,6 @@ function transformCommandBody(body, forge, label, commandName) {
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime cursor');
   text = rewriteClaudeScriptPaths(text, forge);
-  if (commandName === 'workflow-init' && !text.includes(block)) {
-    text = text.replace(/\s+$/, '') + '\n\n' + block + '\n';
-  }
   assertNoModelDispatchResidue(text, label);
   return text;
 }
@@ -348,7 +362,7 @@ function renderCommand(canonContent, commandName, forge) {
   if (fm['argument-hint']) lines.push('argument-hint: ' + fm['argument-hint']);
   lines.push('---');
   lines.push('');
-  lines.push(transformCommandBody(body, forge, commandRel(commandName, forge), commandName).trim().replace(/\s+$/, ''));
+  lines.push(transformCommandBody(body, forge, commandRel(commandName, forge)).trim().replace(/\s+$/, ''));
   return lines.join('\n') + '\n';
 }
 
@@ -856,7 +870,8 @@ module.exports = {
   rewriteClaudeScriptPaths, CURSOR_KAOLA_SCRIPT, cursorKaolaScript,
   rewriteModelDispatchInstructions, rewriteModelDispatchParagraph, sentenceStart,
   stripCardModelPlaceholders, assertNoModelDispatchResidue, assertModelDispatchAnchorMatched,
-  CURSOR_MODEL_DISPATCH_GUIDANCE, CURSOR_MODEL_DISPATCH_BLOCK, MODEL_DISPATCH_HEADING,
+  CURSOR_MODEL_DISPATCH_GUIDANCE, CURSOR_MODEL_DISPATCH_BLOCK,
+  MODEL_DISPATCH_HEADING,
   renderCursorHooksJson, rewriteHooksJsonForGlobal, mergeDestHooks, stripDestHooks,
   renderCompactWrapper, COMPACT_WRAPPER, renderEnsureWrapper, ENSURE_WRAPPER, mappingRel,
   treeLabel, agentRel, commandRel, canonCommandPath, runCheck, runWrite,

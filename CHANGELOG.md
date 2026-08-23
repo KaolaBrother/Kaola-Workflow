@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Cursor next/finalize cards teach reliable IDE+CLI dispatch.** One wording
+  now names omit-model `Task` with `subagent_type: "<role>"`, forbids
+  `generalPurpose` costumes and `Task(model=)` workarounds, treats the IDE
+  schema inherit default as a trap, and records the CLI stream envelope
+  (`cursor-grok-4.6-medium` vs `cursor-grok-4.6-high`) as the effort oracle
+  while the IDE picker clamp is a typed deferral. Never resume a Kaola
+  subagent. Catalog preflight is unchanged. `templates/routing/init.skeleton.md`
+  is not a Cursor dispatch overlay for this teaching. `/workflow-init` stays
+  the all-runtime command (no Cursor spawn block, no Cursor freeze footer);
+  spawn teaching is next/finalize only — #1017.
+
 ## [9.14.2] - 2026-08-23
 
 ### Changed

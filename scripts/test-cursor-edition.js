@@ -80,6 +80,75 @@ function assert(cond, msg) {
   failed++; console.error('FAIL: ' + msg);
 }
 
+// Reliable Cursor IDE + CLI dispatch teaching (measured 2026-08-23). Shared by
+// G2-dispatch and G10-block so CURSOR_MODEL_DISPATCH_BLOCK and generated
+// next/finalize cannot drift. A card that only documents this in
+// docs/cursor-edition.md is not enough.
+//
+// Inherit omit is extracted so a card that says "pass inherit because the Task
+// schema requires it" plus "Do not pass xhigh" can be asserted false on its
+// own. A whole-body /omit|do not pass|never pass/i is the vacuous pin.
+function cursorDispatchInheritTeachingOk(body) {
+  const text = String(body || '');
+  return /\bIDE\b/i.test(text)
+    && /\bschema\b/i.test(text)
+    && /\binherit\b/i.test(text)
+    && /default/i.test(text)
+    && /named/i.test(text)
+    && /do not pass inherit/i.test(text);
+}
+
+function assertReliableCursorDispatchTeaching(label, text) {
+  const body = String(text || '');
+  assert(/\bresume\b/i.test(body)
+    && /never resume|do not resume|fresh dispatch/i.test(body),
+    label + ': names resume and forbids it (never resume / do not resume / fresh dispatch)');
+  assert(cursorDispatchInheritTeachingOk(body),
+    label + ': names the IDE Task schema inherit default; named Kaola types still omit '
+    + '(do not pass inherit to satisfy the schema)');
+  assert(/(?:cursor-grok-4\.6-xhigh|\bxhigh\b)/i.test(body)
+    && /\bTask\b/.test(body)
+    && /omit|do not pass|never pass|not pass/i.test(body),
+    label + ': names cursor-grok-4.6-xhigh (or xhigh) and forbids passing it as the Task model');
+  assert(/\bprompt\b/i.test(body)
+    && /\bmission\b/i.test(body)
+    && /\blocator\b/i.test(body)
+    && /do not paste|role contract/i.test(body),
+    label + ': Task prompt is the mission and locator; do not paste the role contract / costume '
+    + 'onto a named type');
+  assert(/(?:envelope|\bCLI\b)/i.test(body)
+    && /cursor-grok-4\.6-medium/.test(body)
+    && /cursor-grok-4\.6-high/.test(body),
+    label + ': names CLI stream envelope as the effort oracle and the medium vs high split '
+    + '(cursor-grok-4.6-medium / cursor-grok-4.6-high)');
+  assert(/clamp/i.test(body)
+    && /selectedModels|selected session|Grok 4\.6/i.test(body)
+    && /deferral/i.test(body)
+    && /Task\(model=/.test(body)
+    && /workaround|do not|never|forbid/i.test(body),
+    label + ': names the IDE picker clamp (selected session Grok 4.6 / selectedModels) as a typed '
+    + 'deferral and forbids a Task(model=) workaround');
+  assert(/\bIDE\b/i.test(body)
+    && /display/i.test(body)
+    && /effort/i.test(body)
+    && /do not claim/i.test(body),
+    label + ': do not claim IDE children display distinct effort');
+}
+
+{
+  const adversarialInheritPayload = [
+    'Never resume. Fresh dispatch.',
+    'IDE Task schema inherit default for named types: pass inherit because the Task schema requires it.',
+    'Do not pass cursor-grok-4.6-xhigh as the Task model.',
+    'Task prompt is the mission and locator; do not paste the role contract onto a named type.',
+    'CLI envelope oracle cursor-grok-4.6-medium vs cursor-grok-4.6-high.',
+    'IDE picker clamp selected session Grok 4.6 selectedModels typed deferral forbids a Task(model=) workaround.',
+  ].join('\n');
+  assert(!cursorDispatchInheritTeachingOk(adversarialInheritPayload),
+    'G11-inherit-pin: inherit teaching must reject a card that says pass inherit because the '
+    + 'Task schema requires it (xhigh-only "Do not pass" is not inherit omit)');
+}
+
 function runGenerator(args) {
   // spawn-class: environment
   return spawnSync(process.execPath, [SYNC_JS].concat(args), { encoding: 'utf8' });
@@ -452,9 +521,30 @@ function commandRel(name, forge) {
     'G2: generated Task( count equals canonical Agent( count');
 }
 
+// G2-leak forbids dispatching with a vendor slug on command/hook cards. The
+// teaching block is the sole allowed place those CLI envelope names appear.
+function stripCursorModelDispatchBlock(content) {
+  const block = String(syncMod.CURSOR_MODEL_DISPATCH_BLOCK || '').replace(/\s+$/, '');
+  if (!block) return String(content || '');
+  return String(content || '').split(block).join('');
+}
+
 {
   const B2_MODEL_NOUN = /\b(Opus|Sonnet)\b/;
   const VENDOR_SLUG = /\bgrok-4\.\d\b|\bgrok-build\b/;
+  const dispatchBlock = String(syncMod.CURSOR_MODEL_DISPATCH_BLOCK || '');
+  assert(VENDOR_SLUG.test(dispatchBlock),
+    'G2-leak: CURSOR_MODEL_DISPATCH_BLOCK names envelope slugs that match VENDOR_SLUG '
+    + '(exemption is required; do not weaken the regex)');
+  assert(!VENDOR_SLUG.test(stripCursorModelDispatchBlock(dispatchBlock)),
+    'G2-leak: stripping CURSOR_MODEL_DISPATCH_BLOCK leaves no vendor slug');
+  assert(VENDOR_SLUG.test(stripCursorModelDispatchBlock(dispatchBlock + '\ngrok-4.6 leftover\n')),
+    'G2-leak: grok-4.N outside the teaching block still fails');
+  assert(VENDOR_SLUG.test(stripCursorModelDispatchBlock(dispatchBlock + '\ngrok-build leftover\n')),
+    'G2-leak: grok-build outside the teaching block still fails');
+  assert(VENDOR_SLUG.test(stripCursorModelDispatchBlock(
+    dispatchBlock + '\nUse `cursor-grok-4.6-medium` for this Task.\n')),
+    'G2-leak: cursor-grok-4.6-medium outside the teaching block still fails');
   let runtimeCursor = 0;
   for (const rel of generatedTreeFiles('.cursor')) {
     const content = read(rel);
@@ -470,7 +560,7 @@ function commandRel(name, forge) {
     assert(!/\bmodel="/.test(content),
       'G2-leak: ' + rel + ': no per-call model=" override in generated dispatch surfaces');
     if (!/\/agents\//.test(rel)) {
-      assert(!VENDOR_SLUG.test(content),
+      assert(!VENDOR_SLUG.test(stripCursorModelDispatchBlock(content)),
         'G2-leak: ' + rel + ': no vendor model slug in command/hook surfaces');
     }
     const lines = content.split('\n');
@@ -514,7 +604,7 @@ function commandRel(name, forge) {
     const body = String(text || '');
     assert(body.includes(block.replace(/\s+$/, '')),
       label + ': must contain the same CURSOR_MODEL_DISPATCH_BLOCK text as the shared constant');
-    assert(/\binherit\b/i.test(body) && /omit|do not pass|never pass/i.test(body),
+    assert(/\binherit\b/i.test(body) && /do not pass inherit/i.test(body),
       label + ': omit per-call model= including inherit (do not pass inherit)');
     assert(/subagent_type:\s*"<role>"/.test(body),
       label + ': dispatch names subagent_type: "<role>"');
@@ -530,6 +620,7 @@ function commandRel(name, forge) {
       && /generalPurpose|inherit/i.test(body),
       label + ': Invalid-enum / advertised catalog lacks the role → do the work inline; '
       + 'do not retry as generalPurpose/inherit');
+    assertReliableCursorDispatchTeaching(label, body);
   }
   assertStrengthenedDispatch('G2-dispatch[CURSOR_MODEL_DISPATCH_BLOCK]', block);
   assertStrengthenedDispatch('G2-dispatch[.cursor/commands/workflow-next.md]',
@@ -1567,7 +1658,7 @@ function g10Rm(dir) {
     const text = String(body || '');
     assert(/kaola-workflow-ensure-cursor-catalog\.js/.test(text),
       label + ': names kaola-workflow-ensure-cursor-catalog.js');
-    assert(/\binherit\b/i.test(text) && /omit|do not pass|never pass/i.test(text),
+    assert(/\binherit\b/i.test(text) && /do not pass inherit/i.test(text),
       label + ': omit per-call model= including inherit (do not pass inherit)');
     assert(/subagent_type:\s*"<role>"/.test(text),
       label + ': dispatch names subagent_type: "<role>"');
@@ -1594,6 +1685,7 @@ function g10Rm(dir) {
       + 'do not name a Task type');
     assert(!/in order:\s*git\s+toplevel/i.test(text),
       label + ': must not prefer git toplevel over $CURSOR_HOME/agents as catalog source');
+    assertReliableCursorDispatchTeaching(label, text);
   }
   assertG10Block('G10-block[CURSOR_MODEL_DISPATCH_BLOCK]', block);
   assertG10Block('G10-block[.cursor/commands/workflow-next.md]', nextBody);
@@ -1661,8 +1753,63 @@ function g10Rm(dir) {
   assert(fs.existsSync(skelPath), 'G10-overlay-untouched: templates/routing/init.skeleton.md exists');
   assert(!/\bgeneralPurpose\b/.test(skel),
     'G10-overlay-untouched: init.skeleton.md does not contain generalPurpose');
+  assert(!/\binherit\b/.test(skel),
+    'G10-overlay-untouched: init.skeleton.md does not contain inherit');
+  assert(!/cursor-grok-4\.6-xhigh/.test(skel),
+    'G10-overlay-untouched: init.skeleton.md does not contain cursor-grok-4.6-xhigh');
+  assert(!/Task\(model=/.test(skel),
+    'G10-overlay-untouched: init.skeleton.md does not contain Task(model=)');
   assert(!/kaola-workflow-ensure-cursor-catalog/.test(skel),
     'G10-overlay-untouched: init.skeleton.md does not contain kaola-workflow-ensure-cursor-catalog');
+}
+
+{
+  const initRel = commandRel('workflow-init');
+  const initBody = exists(initRel) ? read(initRel) : '';
+  const dispatchBlock = String(syncMod.CURSOR_MODEL_DISPATCH_BLOCK || '').replace(/\s+$/, '');
+  assert(exists(initRel),
+    'G11-init-no-spawn: generated ' + initRel + ' exists');
+  assert(dispatchBlock.length > 0,
+    'G11-init-no-spawn: CURSOR_MODEL_DISPATCH_BLOCK is non-empty (exact-includes pin would be vacuous)');
+  assert(!/cursor-grok-4\.6-medium/.test(initBody),
+    'G11-init-no-spawn: generated workflow-init must not contain cursor-grok-4.6-medium '
+    + '(CLI envelope oracle belongs on next/finalize only)');
+  assert(!/cursor-grok-4\.6-high/.test(initBody),
+    'G11-init-no-spawn: generated workflow-init must not contain cursor-grok-4.6-high '
+    + '(CLI envelope oracle belongs on next/finalize only)');
+  assert(!initBody.includes(dispatchBlock),
+    'G11-init-no-spawn: generated workflow-init must not contain the full CURSOR_MODEL_DISPATCH_BLOCK text');
+  // /workflow-init is the all-runtime bootstrapper. Cursor spawn teaching
+  // (assertReliableCursorDispatchTeaching) belongs on next/finalize only —
+  // do not apply that helper to this surface.
+  assert(!/Cursor overlay freeze/i.test(initBody)
+      && !/Cursor Task spawn/i.test(initBody)
+      && !/^##\s+Cursor[^\n]*freeze/im.test(initBody),
+    'G11-init-no-spawn: generated workflow-init must not contain a Cursor-only freeze heading '
+    + 'or Cursor Task spawn / Cursor overlay freeze teaching');
+  assert(!/\binherit\b/.test(initBody),
+    'G11-init-no-spawn: generated workflow-init must not contain inherit '
+    + '(spawn contract belongs on next/finalize only)');
+  assert(!/Task\(model=/.test(initBody),
+    'G11-init-no-spawn: generated workflow-init must not contain Task(model= '
+    + '(spawn contract belongs on next/finalize only)');
+  assert(!/subagent_type:\s*"<role>"/.test(initBody),
+    'G11-init-no-spawn: generated workflow-init must not contain subagent_type: "<role>" '
+    + '(spawn contract belongs on next/finalize only)');
+  assert(!/\bgeneralPurpose\b/.test(initBody),
+    'G11-init-no-spawn: generated workflow-init must not contain generalPurpose '
+    + '(spawn contract belongs on next/finalize only)');
+  const freezeBlock = String(syncMod.CURSOR_INIT_OVERLAY_FREEZE || '').replace(/\s+$/, '');
+  if (freezeBlock.length > 0) {
+    assert(!initBody.includes(freezeBlock),
+      'G11-init-no-spawn: generated workflow-init must not contain the full '
+      + 'CURSOR_INIT_OVERLAY_FREEZE text (leftover constant must not land on init)');
+  }
+  assert(/### Compact Template/.test(initBody)
+      && /KW-CLAUDE-TEMPLATE-START/.test(initBody)
+      && /## Step 2 — Synthesize `CLAUDE\.md`/.test(initBody),
+    'G11-init-no-spawn: generated workflow-init must still carry the shared compact overlay / '
+    + 'CLAUDE.md writer job (canonical Compact Template fence, not Cursor-specific wording)');
 }
 
 {
