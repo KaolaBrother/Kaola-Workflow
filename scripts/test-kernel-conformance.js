@@ -388,6 +388,10 @@ const NON_ATOMIC_EXEMPT = [
     why: 'the sink-staged union copies only into paths that do not exist yet, from a staged worktree copy that outlives the step',
   },
   {
+    file: 'kaola-workflow-ensure-cursor-catalog.js', api: 'copyFileSync', klass: 'mirror-copy',
+    why: 'copies the 14 canonical agent files into <cwd>/.cursor/agents, a consumer workspace catalog rather than a kernel record; a torn dest is re-derived by re-running the idempotent copy',
+  },
+  {
     file: 'kaola-workflow-sink-merge.js', api: 'writeFileSync', klass: 'outside-project-space',
     why: 'a cwd probe written only when KAOLA_WORKFLOW_DEBUG_CWD names a path, which is a diagnostic target outside any project folder',
   },
