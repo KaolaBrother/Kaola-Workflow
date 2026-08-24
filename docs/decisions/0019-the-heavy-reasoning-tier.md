@@ -130,7 +130,10 @@ Frontmatter: `agents/planner.md`, `agents/code-architect.md`. Resolver:
 `kaola-workflow-resolve-agent-model.js` `DEFAULT_AGENT_MODELS` (held byte-equal to frontmatter).
 Skeletons: `templates/routing/next.skeleton.md` + `finalize.skeleton.md` (codex three-way routing
 contract, escalation carve-out, scope-stating dispatch guidance) and regeneration of every
-rendered surface. Sync: `sync-grok-edition.js` (`GROK_MODEL_EFFORTS` + prose),
+rendered surface. Also `init.skeleton.md`: the consumer-`CLAUDE.md` managed block's one
+tier-naming example — `planner (reasoning tier)` — misstates planner's tier once it moves to
+heavy; the rule it illustrates (function + tier, never a vendor model) is unchanged, only the
+example instance updates (`planner (heavy-reasoning tier)`). No test pins that literal. Sync: `sync-grok-edition.js` (`GROK_MODEL_EFFORTS` + prose),
 `sync-cursor-edition.js` (pin map + allowlist), `sync-opencode-edition.js` (tier classification).
 Reviewer bodies: the three reviewer agents (scope clamp; contract hashes re-stamp). Tests
 (tdd-guide custody): the tier tables pinned in `test-grok-edition.js`, `test-cursor-edition.js`,
