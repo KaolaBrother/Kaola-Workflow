@@ -34,6 +34,17 @@ in every Agent call exactly as shown; never omit the `model=` line on any dispat
 agent's frontmatter `model:` is rewritten to `inherit`, so a dispatch that omits `model=` does not
 fall back to that role's assigned model — it runs the role on this session's model instead.
 
+The reviewer carve-out below is the sole dispatch exception: for that bounded heavy
+re-dispatch, pass `model="fable"` instead of the installed reviewer `opus` model; reviewer
+resting dispatches and all other roles continue to pass their installed profile model.
+
+Reviewer-class roles retain their installed reasoning-tier (`opus`) profile as the resting profile.
+One carve-out: the orchestrator may re-dispatch a reviewer-class role at heavy when a reasoning-tier
+attempt failed to finish the review, or the surface is judged complex before dispatch.
+
+The bounded heavy re-dispatch uses the approved `fable` profile only. Each reviewer dispatch must
+state the review scope — the dispatched surface under review and what acceptance looks like.
+
 ## Step 1 — Final validation
 
 Gate on repo kind. It is detected, never configured.

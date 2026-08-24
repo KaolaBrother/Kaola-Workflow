@@ -60,7 +60,7 @@ A few beliefs follow from that order.
 - **One resumable file per run** — a successor with no context reads it top to bottom: the H1 is the goal, `done` items and their `result` are what is known, `in-flight` items are the only decision to make, `todo` is what remains.
 - **A claim that is bookkeeping, not a gate** — it records which issues, branch and worktree the run owns, so parallel sessions do not collide.
 - **Subagents and worktrees** as declinable tools, with 14 vendored roles across all six runtimes.
-- **Multi-model** across Claude Code, Codex, opencode, Kimi Code, Grok CLI, and Cursor, right-sizing the model per dispatch (Grok inherits the session model and stamps standard/reasoning effort at `medium`/`high`; Cursor renders standard/reasoning frontmatter pins at medium/high and leaves `Task` cards model-free).
+- **Multi-model** across Claude Code, Codex, opencode, Kimi Code, Grok CLI, and Cursor, right-sizing the model per dispatch (Grok inherits the session model and stamps standard/reasoning/heavy effort at `medium`/`high`/`xhigh`; Cursor renders standard/reasoning/heavy frontmatter pins at medium/high/xhigh and leaves `Task` cards model-free).
 - **Independent review** — generated, runtime-neutral reviewer contracts (`code-reviewer`, `adversarial-verifier`, `security-reviewer`) with deterministic profile identity across runtimes.
 - **Self-owned validation** — the four local edition chains produce a candidate-bound receipt; a consumer repo records its own verdict instead. Nothing waits on a hosted pipeline.
 - **A finalization that reports** — validation classification, the paths the run changed, and the sink's findings all land on the envelope *and* durably in the archived summary.
@@ -197,6 +197,14 @@ fixed: a role's tier pair never changes for an individual task, except the one r
 heavy re-dispatch carve-out on the next/finalize routing pin. Other runtimes retain their
 edition-specific model routing.
 
+Claude reviewer-class roles rest on their `opus` profile. The `/workflow-next` and
+`/kaola-workflow-finalize` command runtime permits one bounded re-dispatch at the approved
+`fable` profile when a reasoning-tier review fails to finish or the surface is judged complex
+before dispatch; every reviewer dispatch states the surface under review and what acceptance
+looks like. Generated additive-runtime command surfaces preserve the scope-and-acceptance packet
+but omit that dynamic reviewer escalation because those runtimes have no equivalent per-call
+override.
+
 Three roles are locally authored rather than derived from ECC:
 
 - `adversarial-verifier` — a refute-by-default skeptic generated from the same versioned reviewer
@@ -251,9 +259,9 @@ Claude Code and Codex share the forge editions — pick one forge at a time; all
 
 **Kimi Code** is likewise an **additive** runtime (not a git forge): `./install-kimi.sh` touches none of the existing edition machinery, resolves its support scripts under `${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts`, and never touches `~/.claude/`. It takes the same generated `--forge` axis. See [docs/kimi-edition.md](docs/kimi-edition.md).
 
-**Grok CLI** is likewise an **additive** runtime (not a git forge): `./install-grok.sh` touches none of the existing edition machinery, resolves its support scripts under `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.grok/agents/*.md` (`spawn_subagent` types); the three commands ship as `.grok/commands/*.md`. Every subagent inherits the session model; standard/reasoning roles carry `medium`/`high` effort. It takes the same generated `--forge` axis. See [docs/grok-edition.md](docs/grok-edition.md).
+**Grok CLI** is likewise an **additive** runtime (not a git forge): `./install-grok.sh` touches none of the existing edition machinery, resolves its support scripts under `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.grok/agents/*.md` (`spawn_subagent` types); the three commands ship as `.grok/commands/*.md`. Every subagent inherits the session model; standard/reasoning/heavy roles carry `medium`/`high`/`xhigh` effort, with heavy verified live. It takes the same generated `--forge` axis. See [docs/grok-edition.md](docs/grok-edition.md).
 
-**Cursor** is likewise an **additive** runtime (not a git forge): `./install-cursor.sh` touches none of the existing edition machinery, resolves its support scripts under `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.cursor/agents/*.md` (`Task` types); the three commands ship as `.cursor/commands/*.md`. Cursor CLI loads those Task types from the **workspace** `.cursor/agents`, not `~/.cursor/agents`. The workspace catalog is refreshed from `$CURSOR_HOME/agents` (all 14 roles byte-identical; global is the source of truth). A `sessionStart` ensure hook prints `{}`; `/workflow-next` runs the ensure script. `./install-all.sh` / `install-cursor.sh --global` is not dispatch-capable by itself unless the installer dual-wrote the project catalog (cwd inside a git work tree). A worktree is a cwd; do not point the Cursor workspace at `.kw/worktrees/<project>/` unless the 14 agent files exist there before the session. After materializing agents, start a new chat — a mid-session copy does not change this session's Task enum. Cloud Agents may not fire `sessionStart`. Canonical standard/reasoning classes render unquoted Grok 4.6 medium/high model-effort pins in agent frontmatter, while `Task` cards omit per-call `model`; cold-start, picker-clamp, resume, and cloud/local limits remain documented. Compact resume after a session compact is a declared divergence (`sessionStart` `additional_context`; `preCompact` cannot inject). It takes the same generated `--forge` axis. See [docs/cursor-edition.md](docs/cursor-edition.md).
+**Cursor** is likewise an **additive** runtime (not a git forge): `./install-cursor.sh` touches none of the existing edition machinery, resolves its support scripts under `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.cursor/agents/*.md` (`Task` types); the three commands ship as `.cursor/commands/*.md`. Cursor CLI loads those Task types from the **workspace** `.cursor/agents`, not `~/.cursor/agents`. The workspace catalog is refreshed from `$CURSOR_HOME/agents` (all 14 roles byte-identical; global is the source of truth). A `sessionStart` ensure hook prints `{}`; `/workflow-next` runs the ensure script. `./install-all.sh` / `install-cursor.sh --global` is not dispatch-capable by itself unless the installer dual-wrote the project catalog (cwd inside a git work tree). A worktree is a cwd; do not point the Cursor workspace at `.kw/worktrees/<project>/` unless the 14 agent files exist there before the session. After materializing agents, start a new chat — a mid-session copy does not change this session's Task enum. Cloud Agents may not fire `sessionStart`. Canonical standard/reasoning/heavy classes render unquoted Grok 4.6 medium/high/xhigh model-effort pins in agent frontmatter, while `Task` cards omit per-call `model`; cold-start, picker-clamp, resume, and cloud/local limits remain documented. Compact resume after a session compact is a declared divergence (`sessionStart` `additional_context`; `preCompact` cannot inject). It takes the same generated `--forge` axis. See [docs/cursor-edition.md](docs/cursor-edition.md).
 
 Being additive is about *edition machinery*, not about forge support: these runtimes remain outside `install.sh`, `edition-sync.js`, `npm test`, and the routing-surface contract, and each keeps its own suite (`node scripts/test-opencode-edition.js`, `node scripts/test-kimi-edition.js`, `node scripts/test-grok-edition.js`, `node scripts/test-cursor-edition.js`).
 
@@ -380,7 +388,7 @@ opencode is an additive runtime — installed by its own script, not `--forge`. 
 
 ### kimi
 
-Kimi Code is an additive runtime — installed by its own script, not `--forge`. The kimi edition delivers the workflow the Kimi-native way: the three commands become directory-form Skills (so `/workflow-next` works as-is) and each vendored role ships as a `kaola-role-*` contract Skill, which dispatch prompts bind to Kimi's built-in `coder`/`explore` subagents. Every subagent **inherits the session model** — there is no two-tier effort mapping, and a role's tier is declarative metadata only. From a local clone:
+Kimi Code is an additive runtime — installed by its own script, not `--forge`. The kimi edition delivers the workflow the Kimi-native way: the three commands become directory-form Skills (so `/workflow-next` works as-is) and each vendored role ships as a `kaola-role-*` contract Skill, which dispatch prompts bind to Kimi's built-in `coder`/`explore` subagents. Every subagent **inherits the session model** — there is no per-dispatch three-tier effort mapping, and a role's standard/reasoning/heavy tier is declarative metadata only. From a local clone:
 
 ```bash
 ./install-kimi.sh --global --yes   # deploy skills into ${KIMI_CODE_HOME:-~/.kimi-code}/skills (all projects)
@@ -391,7 +399,7 @@ Hooks install as a managed `[[hooks]]` block in the **global** Kimi `config.toml
 
 ### grok
 
-Grok CLI is an additive runtime — installed by its own script, not `--forge`. The grok edition delivers the workflow the Grok-native way: the three commands become flat `.grok/commands/*.md` slash commands and each vendored role ships as a named `.grok/agents/<role>.md` (`spawn_subagent` type). Every subagent **inherits the session model**; canonical standard/reasoning roles emit `effort: medium`/`high`, while their class tokens remain portable metadata. From a local clone:
+Grok CLI is an additive runtime — installed by its own script, not `--forge`. The grok edition delivers the workflow the Grok-native way: the three commands become flat `.grok/commands/*.md` slash commands and each vendored role ships as a named `.grok/agents/<role>.md` (`spawn_subagent` type). Every subagent **inherits the session model**; canonical standard/reasoning/heavy roles emit `effort: medium`/`high`/`xhigh`, while their class tokens remain portable metadata. From a local clone:
 
 ```bash
 ./install-grok.sh --global --yes   # deploy agents+commands into ${GROK_HOME:-~/.grok}
@@ -402,7 +410,7 @@ Hooks install as `${GROK_HOME:-~/.grok}/hooks/kaola-workflow-hooks.json` — glo
 
 ### cursor
 
-Cursor is an additive runtime — installed by its own script, not `--forge`. The cursor edition delivers the workflow the Cursor-native way: the three commands become flat `.cursor/commands/*.md` slash commands (not Skills — Skills lack `$ARGUMENTS`) and each vendored role ships as a named `.cursor/agents/<role>.md` (`Task` type). Cursor CLI loads those Task types from the **workspace** `.cursor/agents`, not `~/.cursor/agents`. The workspace catalog is refreshed from `$CURSOR_HOME/agents` (all 14 byte-identical; global is source of truth). `sessionStart` runs an ensure hook that prints `{}`; next runs the ensure script. `--global` / `install-all.sh` default is not dispatch-capable by itself unless the dual-write materialized project agents (cwd inside a git work tree). A worktree is a cwd; do not point the workspace at `.kw/worktrees/<project>/` unless the 14 agent files exist there before the session. After materializing agents, start a new chat — a mid-session copy does not change this session's Task enum. Cloud Agents may not fire `sessionStart`. Canonical standard/reasoning classes render unquoted Grok 4.6 `medium`/`high` pins in agent frontmatter; `Task` omits per-call `model`, and Cursor's cold-start, picker-clamp, resume, and cloud/local limits remain declared. From a local clone:
+Cursor is an additive runtime — installed by its own script, not `--forge`. The cursor edition delivers the workflow the Cursor-native way: the three commands become flat `.cursor/commands/*.md` slash commands (not Skills — Skills lack `$ARGUMENTS`) and each vendored role ships as a named `.cursor/agents/<role>.md` (`Task` type). Cursor CLI loads those Task types from the **workspace** `.cursor/agents`, not `~/.cursor/agents`. The workspace catalog is refreshed from `$CURSOR_HOME/agents` (all 14 byte-identical; global is source of truth). `sessionStart` runs an ensure hook that prints `{}`; next runs the ensure script. `--global` / `install-all.sh` default is not dispatch-capable by itself unless the dual-write materialized project agents (cwd inside a git work tree). A worktree is a cwd; do not point the workspace at `.kw/worktrees/<project>/` unless the 14 agent files exist there before the session. After materializing agents, start a new chat — a mid-session copy does not change this session's Task enum. Cloud Agents may not fire `sessionStart`. Canonical standard/reasoning/heavy classes render unquoted Grok 4.6 `medium`/`high`/`xhigh` pins in agent frontmatter; `Task` omits per-call `model`, and Cursor's cold-start, picker-clamp, resume, and cloud/local limits remain declared. From a local clone:
 
 ```bash
 ./install-cursor.sh --global --yes   # ${CURSOR_HOME:-~/.cursor} plus project .cursor/ when cwd is a git tree
@@ -855,13 +863,15 @@ the work locally under `local-authorized` only when you explicitly disable deleg
 Standalone role TOMLs include the same `description` and `nickname_candidates` metadata as the
 managed `config.toml` block and deliberately omit both runtime keys. Exact historical Sol/medium or
 Sol/xhigh profile pins are treated as stale managed profiles and migrated back to omission; partial
-or illegal pins are malformed. This profile rule is separate from dispatch: Codex passes both
-`model` and `reasoning_effort` on each spawn from the role's existing tier classification, using the
-fixed pair documented above. The user-owned root
+or illegal pins are malformed. Those legacy migration forms are separate from live dispatch:
+Codex passes both `model` and `reasoning_effort` on each spawn from the role's three-tier
+classification, using Luna/max for standard, Sol/medium for reasoning, and Sol/high for heavy. The user-owned root
 `model_reasoning_effort` controls the parent session and is never rewritten by profile migration.
 
-Every standard-tier Codex spawn explicitly carries Luna/max. The workflow does not select a
-different model or reasoning effort for a standard role based on task or runtime conditions.
+Every standard-tier Codex spawn explicitly carries Luna/max, every reasoning-tier spawn carries
+Sol/medium, and every heavy-tier spawn carries Sol/high. The workflow does not select a different
+model or reasoning effort for a role based on task or runtime conditions, except the one bounded
+reviewer-class heavy re-dispatch.
 
 **Say where the deliverable goes.** A role that can write (`Write`/`Edit` in its manifest) writes its
 full deliverable to a path the dispatch names and returns a compact summary; a read-only role returns

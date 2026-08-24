@@ -1130,6 +1130,48 @@ const readRealSurface = rel => (GENERATED_SURFACE_CONTENT.has(rel)
   ? GENERATED_SURFACE_CONTENT.get(rel)
   : (exists(rel) ? fs.readFileSync(path.join(REPO, rel), 'utf8') : null));
 
+// ---------------------------------------------------------------------------
+// T20: ADR 0019 reviewer dispatch contract — Claude commands carry the one bounded heavy
+// re-dispatch and the scope packet, while Grok/Cursor generated commands retain their declared
+// divergence and omit dynamic reviewer escalation (their generated agent pins have no per-call
+// override). Read the canonical GitHub command surfaces here; generate-routing-surfaces --check
+// separately binds the GitLab/Gitea command copies byte-for-byte to the same skeleton.
+// ---------------------------------------------------------------------------
+{
+  const REVIEWER_HEAVY_REDISPATCH = /One carve-out:\s*the orchestrator may re-dispatch a reviewer-class role at heavy when a reasoning-tier attempt failed to finish the review, or the surface is judged complex before dispatch\./i;
+  const REVIEWER_HEAVY_MODEL_EXCEPTION = /reviewer carve-out below is the sole dispatch exception:\s*for that bounded heavy re-dispatch, pass\s+`?model="fable"`?\s+instead of the installed reviewer `?opus`? model/i;
+  const REVIEW_SCOPE_PACKET = /Each reviewer dispatch must state the review scope\s+—\s+the dispatched surface under review and what acceptance looks like\./i;
+  const reviewerCommandSurfaces = ROUTING_SURFACES.filter(row =>
+    row.forge === 'github' && row.surface_type === 'command'
+      && (row.topic === 'next' || row.topic === 'finalize'));
+  assert(reviewerCommandSurfaces.length === 2,
+    'T20 universe: GitHub Claude next/finalize must provide exactly two command surfaces');
+
+  for (const row of reviewerCommandSurfaces) {
+    const canonical = fs.readFileSync(path.join(REPO, row.path), 'utf8');
+    const normalized = norm(canonical);
+    assert(REVIEWER_HEAVY_REDISPATCH.test(normalized),
+      `T20 Claude contract: ${row.path} must carry the one bounded reviewer-class heavy re-dispatch `
+      + '(reasoning-tier attempt failed to finish the review OR surface judged complex before dispatch)');
+    assert(REVIEWER_HEAVY_MODEL_EXCEPTION.test(normalized),
+      `T20 Claude contract: ${row.path} must make the sanctioned reviewer heavy re-dispatch executable `
+      + 'with explicit model="fable" instead of the resting reviewer opus/profile model');
+    assert(REVIEW_SCOPE_PACKET.test(normalized),
+      `T20 Claude contract: ${row.path} must require each reviewer dispatch to state the dispatched `
+      + 'surface under review and what acceptance looks like');
+
+    const basename = path.basename(row.path, '.md');
+    for (const [runtime, renderCommand] of [
+      ['Grok', grokSync.renderCommand],
+      ['Cursor', cursorSync.renderCommand],
+    ]) {
+      const generated = renderCommand(canonical, basename, 'github');
+      assert(!REVIEWER_HEAVY_REDISPATCH.test(norm(generated)),
+        `T20 divergence: generated ${runtime} ${basename} must omit dynamic reviewer heavy re-dispatch`);
+    }
+  }
+}
+
 // Topic basenames — READ FROM THE GENERATED-SURFACE REGISTRY, the same TOPICS table that renders
 // the surfaces and drives the T1/T2 emitted-target set. That is the no-drift anchor: a rename or a
 // fourth topic follows here for free, and a hand-typed basename can never disagree with what

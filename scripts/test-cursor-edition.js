@@ -16,8 +16,8 @@
 // way: named agents under `.cursor/agents/<role>.md` (Task types),
 // flat commands under `.cursor/commands/<name>.md`, hook scripts under
 // `.cursor/hooks/`, and `.cursor/hooks.json` (sessionStart resume inject +
-// subagentStart dispatch-log). Two canonical model classes: standard/reasoning
-// agents carry unquoted Grok 4.6 frontmatter pins with medium/high effort. Command
+// subagentStart dispatch-log). Three canonical model classes: standard/reasoning/heavy
+// agents carry unquoted Grok 4.6 frontmatter pins with medium/high/xhigh effort. Command
 // cards carry no per-dispatch model override. Compact resume after a session compact is a declared
 // divergence: preCompact cannot inject; sessionStart additional_context can,
 // on a new session only.

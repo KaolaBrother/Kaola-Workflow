@@ -1343,9 +1343,11 @@ function testInstallSchemaPruneManifest332() {
       const body = fs.readFileSync(path.join(agentsDir, f), 'utf8');
       const m = body.match(NAME_RE);
       assert(m && m[1] === role, '#332 AC3: ' + f + ' must have name = "' + role + '"');
-      const pinned = profilePolicy.CODEX_PINNED_STANDARD_ROLES.includes(role);
+      const standard = profilePolicy.CODEX_PINNED_STANDARD_ROLES.includes(role);
       const reasoning = profilePolicy.CODEX_PINNED_REASONING_ROLES.includes(role);
-      assert(pinned !== reasoning, '#332 AC3: ' + role + ' must belong to exactly one profile class');
+      const heavy = profilePolicy.CODEX_PINNED_HEAVY_ROLES.includes(role);
+      assert([standard, reasoning, heavy].filter(Boolean).length === 1,
+        '#332 AC3: ' + role + ' must belong to exactly one profile class');
       assert(!/^model\s*=/m.test(body) && !/^model_reasoning_effort\s*=/m.test(body),
         '#332 AC3: ' + role + ' must inherit the parent session by omitting both runtime keys');
     }

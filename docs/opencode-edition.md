@@ -111,7 +111,7 @@ drift](#config-drift-and---adopt-config)) and `--adopt-config` regenerates the f
 
 The **model**-pin path below is a different, opt-in feature and is unaffected.
 
-### Opt-in: pin the two tiers to different models
+### Opt-in: pin the standard and reasoning model classes
 
 Effort is inherited and not configurable per role, but the **model** still is. If you want the
 reasoning-tier roles on a different model from the rest, pin via env (or hand-edit
@@ -119,6 +119,11 @@ reasoning-tier roles on a different model from the rest, pin via env (or hand-ed
 
 - `KAOLA_OPENCODE_STANDARD_MODEL` — pin the standard tier to a `provider/model`
 - `KAOLA_OPENCODE_REASONING_MODEL` — pin the reasoning tier to a `provider/model`
+
+The canonical `fable` heavy class is deliberately classified as reasoning by
+`sync-opencode-edition.js`, so planner and code-architect are included in the
+reasoning-role override list. There is no separate heavy effort or model pin:
+the session supplies effort for every role.
 
 The seeded `opencode.json` carries this as a commented-out scaffold: a top-level `model` for the
 standard tier and `agent.<role>.model` overrides for the reasoning-tier roles. That roster is
@@ -128,6 +133,11 @@ inherits the model you already use.
 
 > A role that pins a model no longer inherits the session's effort either — that is opencode's
 > coupling, not this edition's, and it is the trade this opt-in makes.
+
+Generated command surfaces preserve the reviewer scope-and-acceptance packet but
+omit Claude's one-bounded reviewer heavy re-dispatch. opencode's `task` tool has
+no per-call model or effort parameter; reviewers follow the session and any
+user-owned model pin that applies to their classified role.
 
 > `opencode.json` is **user-owned**: `--write` regenerates agents/commands but
 > **preserves** this file. Use `--write-config` to reset it from the template.
@@ -394,7 +404,7 @@ The named flag always carries the `--forge=` the check ran under. Exit code is 1
 | Delivery | plugin (`.codex-plugin/` + `skills/` + `agents/*.toml`) | `opencode.json` + `.opencode/agent` + `.opencode/command` |
 | Agent format | TOML profiles | Markdown (frontmatter + prompt body) |
 | Forge coupling | shares the forge edition machinery (github/gitlab/gitea) | `--forge` flag; variants generated from the routing registry, outside the edition machinery |
-| Models | baked per-agent | **inherited** — a subagent runs the model and reasoning effort of the session that dispatched it; a per-tier model pin is opt-in |
+| Models | baked per-agent | **inherited** — a subagent runs the model and reasoning effort of the session that dispatched it; standard/reasoning model pins are opt-in, with `fable` classified as reasoning |
 
 ## Verification
 

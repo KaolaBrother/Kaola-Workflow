@@ -1547,13 +1547,18 @@ every shipped Codex SKILL matches them; `validate-kaola-workflow-contracts.js` s
 live README pairs. The `CODEX_STANDARD_*` and `CODEX_REASONING_*` constants in
 `scripts/kaola-workflow-codex-preflight.js` remain historical profile values used for stale-install
 migration and are not live dispatch authority. The contract validator still cross-binds those
-migration constants to the installer's copies. This document does not restate the values.
+migration constants to the installer's copies. The live pairs are `standard` →
+`gpt-5.6-luna` / `max`, `reasoning` → `gpt-5.6-sol` / `medium`, and `heavy` →
+`gpt-5.6-sol` / `high`; the heavy roster is `planner` and `code-architect`.
 
 The mappings are fixed for every Codex spawn. A role always receives its tier pair and has no
 task-specific model or reasoning-effort escalation, downgrade, or other exception, except the one
-reviewer-class heavy re-dispatch carve-out.
+reviewer-class heavy re-dispatch carve-out. Reviewers rest at reasoning (`Sol/medium`), with heavy
+(`Sol/high`) as the bounded escalation target.
 This contract is Codex-only; the resolver and model routing for Claude Code, opencode, and Kimi
-are unchanged.
+are edition-specific. Claude reviewers rest on `opus` and may receive one bounded `fable`
+re-dispatch in command runtime; every reviewer dispatch states its surface and acceptance.
+Generated additive command surfaces omit that dynamic escalation while preserving the scope packet.
 
 ## Environment Variables
 

@@ -43,7 +43,7 @@ Everything under `.grok/` is **generated from canonical** by
 
 | Canonical source | grok edition output | Notes |
 | ---------------- | ------------------- | ----- |
-| `agents/<name>.md` | `.grok/agents/<name>.md` | Grok agent frontmatter (`name`, `description`, `prompt_mode`, `model: inherit`, tier-derived `effort: medium|high`, `permission_mode`, `agents_md`). The generator maps canonical `sonnet`/`standard` classes to `medium` and `opus`/`reasoning` classes to `high`. Claude `tools:` (including MCP ids) are dropped so Grok will load the role. Descriptions that are not plain YAML scalars are JSON-quoted — an unquoted colon in `knowledge-lookup`'s description made Grok silently skip the file. Reviewer identity is a body comment block; `resolved_profile_hash` is re-stamped over the grok bytes. |
+| `agents/<name>.md` | `.grok/agents/<name>.md` | Grok agent frontmatter (`name`, `description`, `prompt_mode`, `model: inherit`, tier-derived `effort: medium|high|xhigh`, `permission_mode`, `agents_md`). The generator maps canonical `sonnet`/`standard` classes to `medium`, `opus`/`reasoning` classes to `high`, and `fable`/`heavy` classes to `xhigh`. Claude `tools:` (including MCP ids) are dropped so Grok will load the role. Descriptions that are not plain YAML scalars are JSON-quoted — an unquoted colon in `knowledge-lookup`'s description made Grok silently skip the file. Reviewer identity is a body comment block; `resolved_profile_hash` is re-stamped over the grok bytes. |
 | `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. `Agent(` dispatch cards become `spawn_subagent(`. Install-time `model="{...}"` lines are stripped. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
 | `hooks/<script>.sh` | `.grok/hooks/<script>.sh` | Dispatch-log is payload-adapted (`agent_type \|\| agentType \|\| subagentType`). |
 | `hooks/hooks.json` (mapping) | `.grok/hooks/hooks.json` | SessionStart `compact` + SubagentStart. Commands use `${GROK_HOME:-$HOME/.grok}` (Grok expands this). The installer copies the file to `${GROK_HOME:-$HOME/.grok}/hooks/kaola-workflow-hooks.json`, and on a project install also to `<project>/.grok/hooks/hooks.json`. |
@@ -52,13 +52,14 @@ Generated agents are deliberately model-agnostic. Regenerating the tree never
 overwrites a user's `[subagents.models]` or `[subagents.roles.*]` in
 `$GROK_HOME/config.toml`.
 
-## Two effort tiers — every subagent inherits the session model
+## Three effort tiers — every subagent inherits the session model
 
 Generated agents remain model-inheriting: every frontmatter keeps `model: inherit`, so
 the session supplies the model. The existing canonical class token also binds the
 runtime effort: standard (`sonnet`, or its `standard` alias) emits `effort: medium`,
-while reasoning (`opus`, or its `reasoning` alias) emits `effort: high`. Tier
-membership is unchanged and the canonical tokens remain vendor-neutral.
+reasoning (`opus`, or its `reasoning` alias) emits `effort: high`, and heavy (`fable`,
+or its `heavy` alias) emits `effort: xhigh`. Tier membership is unchanged and the
+canonical tokens remain vendor-neutral.
 
 `spawn_subagent` has no effort parameter, so effort belongs on each generated
 `.grok/agents/<role>.md`. Command cards continue to omit `model=`; they name only
@@ -69,8 +70,14 @@ membership is unchanged and the canonical tokens remain vendor-neutral.
 `GROK_RUNTIME_NATIVE` table in `scripts/test-grok-edition.js` declares the
 effort tiers. Independently, the suite asserts that every generated agent
 retains `model: inherit`, emits the effort for its canonical class
-(`medium` for standard and `high` for reasoning), and that command cards carry
-no per-call `model=` override.
+(`medium` for standard, `high` for reasoning, and `xhigh` for heavy), and that
+command cards carry no per-call `model=` override.
+
+The #1018 live probe verified that a generated `effort: xhigh` planner reaches a
+child at `reasoning_effort: xhigh` on Grok CLI 1.0.5. Generated command surfaces
+preserve the reviewer scope-and-acceptance packet but omit Claude's one-bounded
+reviewer heavy re-dispatch: `spawn_subagent` has no per-call effort override, so
+Grok reviewers remain on their static generated effort.
 
 **Observed Grok CLI 1.0.5 limitation.** The live close probe passed with the
 actual `tdd-guide` at `medium` and `code-reviewer` at `high` from an `xhigh`

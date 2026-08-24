@@ -457,12 +457,18 @@ assert(JSON.stringify(sortGitlabPolicy(gitlabInstaller.CODEX_PINNED_STANDARD_ROL
 assert(JSON.stringify(sortGitlabPolicy(gitlabInstaller.CODEX_PINNED_REASONING_ROLES))
     === JSON.stringify(sortGitlabPolicy(gitlabSchema.CODEX_PINNED_REASONING_ROLES)),
   'GitLab installer reasoning-role policy must match adaptive schema');
+assert(JSON.stringify(sortGitlabPolicy(gitlabInstaller.CODEX_PINNED_HEAVY_ROLES))
+    === JSON.stringify(sortGitlabPolicy(gitlabSchema.CODEX_PINNED_HEAVY_ROLES)),
+  'GitLab installer heavy-role policy must match adaptive schema');
 assert(JSON.stringify(sortGitlabPolicy(gitlabPreflight.CODEX_PINNED_STANDARD_ROLES))
     === JSON.stringify(sortGitlabPolicy(gitlabSchema.CODEX_PINNED_STANDARD_ROLES)),
   'GitLab preflight role-metadata policy must match adaptive schema');
 assert(JSON.stringify(sortGitlabPolicy(gitlabPreflight.CODEX_PINNED_REASONING_ROLES))
     === JSON.stringify(sortGitlabPolicy(gitlabSchema.CODEX_PINNED_REASONING_ROLES)),
   'GitLab preflight reasoning-role policy must match adaptive schema');
+assert(JSON.stringify(sortGitlabPolicy(gitlabPreflight.CODEX_PINNED_HEAVY_ROLES))
+    === JSON.stringify(sortGitlabPolicy(gitlabSchema.CODEX_PINNED_HEAVY_ROLES)),
+  'GitLab preflight heavy-role policy must match adaptive schema');
 assert(gitlabInstaller.CODEX_STANDARD_MODEL === 'gpt-5.6-sol'
     && gitlabInstaller.CODEX_STANDARD_EFFORT === 'medium'
     && gitlabPreflight.CODEX_STANDARD_MODEL === gitlabInstaller.CODEX_STANDARD_MODEL

@@ -80,7 +80,7 @@ dispatch-prompt change only, still with zero canonical impact.
 
 ## One model tier — every subagent inherits the session model
 
-There is **no Reasoning/Standard two-tier mapping** on Kimi. This edition follows the Codex
+There is **no per-dispatch three-tier mapping** on Kimi. This edition follows the Codex
 **inherit** precedent — and, since #927, the opencode edition's too: on all three, a subagent
 runs the model and reasoning effort of the session that dispatched it. Kimi Code has no
 per-dispatch model override and no per-role effort control at all. Consequences, all enforced by
@@ -93,8 +93,8 @@ the test:
   per-call model override; sub-agents inherit the session model."* Capitalized vendor
   model nouns never appear in the generated tree because they no longer appear in the
   CANONICAL source either — there is no model-noun rewrite transform left to apply (the
-  lowercase `opus`/`sonnet` plan-ledger tier tokens are the portable cross-edition
-  contract and remain).
+  lowercase `sonnet`/`opus`/`fable` plan-ledger tier tokens are the portable
+  cross-edition contract and remain).
 
 **Declared runtime divergence.** Kimi is the one runtime whose subagents cannot carry a
 per-dispatch tier: every subagent inherits the session model. That is a genuine capability
@@ -109,6 +109,10 @@ declaration turns the kimi suite red instead of passing silently.
 Because the tier is inert here, the canonical prose states tier rules in runtime-neutral,
 always-true form (e.g. "bookkeeping is never escalated to a higher reasoning tier"), which
 reads correctly on Kimi as written, with nothing rewritten on the way out.
+
+Generated command Skills preserve the reviewer scope-and-acceptance packet but omit
+Claude's one-bounded reviewer heavy re-dispatch. Kimi has no per-call model or effort
+override, so its reviewer Skills remain session-inherited.
 
 ## Reviewer behavior derivation
 

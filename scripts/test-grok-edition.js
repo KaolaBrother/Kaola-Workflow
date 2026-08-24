@@ -16,9 +16,9 @@
 // install.sh / edition-sync.js / npm test. It is delivered the Grok-native
 // way: named agents under `.grok/agents/<role>.md` (spawn_subagent types),
 // flat commands under `.grok/commands/<name>.md`, and `.grok/hooks/`
-// (payload-adapted dispatch-log + generated hooks.json). TWO canonical model
-// classes: every subagent keeps model: inherit, while standard/reasoning
-// agents carry the native effort pins medium/high respectively.
+// (payload-adapted dispatch-log + generated hooks.json). THREE canonical model
+// classes: every subagent keeps model: inherit, while standard/reasoning/heavy
+// agents carry the native effort pins medium/high/xhigh respectively.
 //
 // Outside `npm test`, the forge chains, and the fast gate: an additive
 // runtime edition is not a forge. The script exists so the suite is
@@ -138,7 +138,7 @@ function canonicalRosters(names) {
 }
 
 // ---------------------------------------------------------------------------
-// GROK_RUNTIME_NATIVE — the two-tier effort binding as a DECLARED table entry,
+// GROK_RUNTIME_NATIVE — the three-tier effort binding as a DECLARED table entry,
 // not merely as prose. Deleting the declaration reds this suite.
 // ---------------------------------------------------------------------------
 const GROK_RUNTIME_NATIVE = Object.freeze({
@@ -353,7 +353,7 @@ function commandRel(name, forge) {
 // G1: agents — exact set = canonical agents/*.md. knowledge-lookup MUST be
 // present. Frontmatter: name, description, model: inherit, and effort derived
 // from the canonical model class (standard/sonnet → medium, reasoning/opus →
-// high). `reasoning_effort:` is not a Grok agent field. Frontmatter `tools:`
+// high, heavy/fable → xhigh). `reasoning_effort:` is not a Grok agent field. Frontmatter `tools:`
 // is absent or contains no Claude MCP tool ids (mcp__). Body examples may still
 // name those tools — Grok inspect dropped knowledge-lookup for an unquoted YAML
 // description, not for body mcp__.

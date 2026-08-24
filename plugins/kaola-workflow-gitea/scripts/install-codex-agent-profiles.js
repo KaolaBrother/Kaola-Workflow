@@ -118,7 +118,7 @@ if (process.argv.some(a => a === '--enable-adaptive' || a.startsWith('--enable-a
 }
 
 // Named profiles omit model/effort so every role inherits the current parent session. The role lists
-// retain only declarative standard/reasoning metadata classes; no variant generation occurs.
+// retain only declarative standard/reasoning/heavy metadata classes; no variant generation occurs.
 // no adaptive-schema require here.
 
 function assert(condition, message) {

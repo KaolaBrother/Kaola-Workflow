@@ -430,12 +430,18 @@ assert(JSON.stringify(sorted(codexInstaller.CODEX_PINNED_STANDARD_ROLES))
 assert(JSON.stringify(sorted(codexInstaller.CODEX_PINNED_REASONING_ROLES))
     === JSON.stringify(sorted(codexSchema.CODEX_PINNED_REASONING_ROLES)),
   'Codex installer reasoning-role policy must match adaptive schema');
+assert(JSON.stringify(sorted(codexInstaller.CODEX_PINNED_HEAVY_ROLES))
+    === JSON.stringify(sorted(codexSchema.CODEX_PINNED_HEAVY_ROLES)),
+  'Codex installer heavy-role policy must match adaptive schema');
 assert(JSON.stringify(sorted(codexPreflight.CODEX_PINNED_STANDARD_ROLES))
     === JSON.stringify(sorted(codexSchema.CODEX_PINNED_STANDARD_ROLES)),
   'Codex preflight role-metadata policy must match adaptive schema');
 assert(JSON.stringify(sorted(codexPreflight.CODEX_PINNED_REASONING_ROLES))
     === JSON.stringify(sorted(codexSchema.CODEX_PINNED_REASONING_ROLES)),
   'Codex preflight reasoning-role policy must match adaptive schema');
+assert(JSON.stringify(sorted(codexPreflight.CODEX_PINNED_HEAVY_ROLES))
+    === JSON.stringify(sorted(codexSchema.CODEX_PINNED_HEAVY_ROLES)),
+  'Codex preflight heavy-role policy must match adaptive schema');
 assert(codexInstaller.CODEX_STANDARD_MODEL === 'gpt-5.6-sol'
     && codexInstaller.CODEX_STANDARD_EFFORT === 'medium'
     && codexPreflight.CODEX_STANDARD_MODEL === codexInstaller.CODEX_STANDARD_MODEL

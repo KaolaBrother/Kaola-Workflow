@@ -18,15 +18,23 @@ moments.
 
 ## Runtime editions
 
-- [opencode Edition](opencode-edition.md) — additive opencode runtime (`opencode.json` + `.opencode/` tree; model and effort inherited from the session, opt-in per-tier model pin; installs via `install-opencode.sh`).
-- [kimi Edition](kimi-edition.md) — additive Kimi Code runtime (`.kimi/skills/` tree + managed `[[hooks]]` block; roles as Skills, inherit-only model tier; installs via `install-kimi.sh`).
-- [grok Edition](grok-edition.md) — additive Grok CLI runtime (`.grok/agents/` + `.grok/commands/` + hooks JSON; named `spawn_subagent` types; session-inherited model with standard/reasoning effort tiers (`medium`/`high`); installs via `install-grok.sh`).
-- [cursor Edition](cursor-edition.md) — additive Cursor runtime (`.cursor/agents/` + `.cursor/commands/` + merged `hooks.json`; named `Task` types load from the workspace `.cursor/agents` tree, not `~/.cursor/agents`; workspace catalog is refreshed byte-identically from `$CURSOR_HOME/agents`; `--global` from a git work tree dual-writes the project catalog; canonical standard/reasoning classes render unquoted Grok 4.6 medium/high frontmatter pins while `Task` omits `model`; `sessionStart` compact resume + catalog-ensure `{}` hook and runtime limits; Cloud Agents may not fire `sessionStart`; installs via `install-cursor.sh`).
+- [opencode Edition](opencode-edition.md) — additive opencode runtime (`opencode.json` + `.opencode/` tree; model and effort inherited from the session, with canonical `fable` classified alongside reasoning for the optional model pin; installs via `install-opencode.sh`).
+- [kimi Edition](kimi-edition.md) — additive Kimi Code runtime (`.kimi/skills/` tree + managed `[[hooks]]` block; roles as Skills, inherit-only model tier, including the canonical heavy marker; installs via `install-kimi.sh`).
+- [grok Edition](grok-edition.md) — additive Grok CLI runtime (`.grok/agents/` + `.grok/commands/` + hooks JSON; named `spawn_subagent` types; session-inherited model with standard/reasoning/heavy effort tiers (`medium`/`high`/`xhigh`, with heavy verified live); installs via `install-grok.sh`).
+- [cursor Edition](cursor-edition.md) — additive Cursor runtime (`.cursor/agents/` + `.cursor/commands/` + merged `hooks.json`; named `Task` types load from the workspace `.cursor/agents` tree, not `~/.cursor/agents`; workspace catalog is refreshed byte-identically from `$CURSOR_HOME/agents`; `--global` from a git work tree dual-writes the project catalog; canonical standard/reasoning/heavy classes render unquoted Grok 4.6 medium/high/xhigh frontmatter pins while `Task` omits `model`; `sessionStart` compact resume + catalog-ensure `{}` hook and runtime limits; Cloud Agents may not fire `sessionStart`; installs via `install-cursor.sh`).
 
 ## Decisions
 
-[`decisions/`](decisions/) holds the full catalog. Three records describe what ships today; the rest
-are history, and most of them describe the node/DAG executor that ADR 0017 retired.
+[`decisions/`](decisions/) holds the full catalog. ADR 0019 records the three-tier implementation
+present on this branch and pending merge to `main`; the remaining entries are current design records
+or history, and most of the older records describe the node/DAG executor that ADR 0017 retired.
+
+- **[0019 — The heavy-reasoning tier](decisions/0019-the-heavy-reasoning-tier.md)** — the accepted
+  standard/reasoning/heavy axis: planner and code-architect are canonical heavy roles; Codex uses
+  Luna/max, Sol/medium, and Sol/high; Grok and Cursor carry heavy effort pins; OpenCode classifies
+  `fable` with reasoning and Kimi remains session-inherited. Claude reviewers rest on `opus` with
+  one bounded `fable` escalation in command runtime. Additive generated command surfaces omit that
+  dynamic reviewer escalation while preserving reviewer scope and acceptance wording.
 
 - **[0017 — The mission list: four fields where the DAG was](decisions/0017-the-mission-list.md)** — the
   design of record. A run is one file of `item` / `status` / `dispatched` / `result`, written at three

@@ -75,7 +75,7 @@ try {
     const dest = path.join(agentsDir, `${agent}.md`);
     const body = fs.readFileSync(src);
     fs.writeFileSync(dest, body);
-    assert(/\bmodel:\s*(sonnet|opus|haiku)\b/.test(frontmatter(dest)),
+    assert(/\bmodel:\s*(sonnet|opus|haiku|fable)\b/.test(frontmatter(dest)),
       `${agent} seed frontmatter should be a concrete model (pre-#153 state)`);
     manifestLines.push(`${agent}.md\t${sha256(body)}`);
   }

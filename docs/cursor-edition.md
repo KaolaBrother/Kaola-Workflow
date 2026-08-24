@@ -49,25 +49,27 @@ Everything under `.cursor/` is **generated from canonical** by
 
 | Canonical source | cursor edition output | Notes |
 | ---------------- | --------------------- | ----- |
-| `agents/<name>.md` | `.cursor/agents/<name>.md` | Cursor agent frontmatter (`name`, `description`, an unquoted `model: grok-4.6[effort=medium]` or `model: grok-4.6[effort=high]` derived from the canonical class, and `readonly`). Claude `tools:` (including MCP ids) are dropped. Descriptions that are not plain YAML scalars are JSON-quoted. Reviewer identity is a body comment block (`<!-- cursor-reviewer-identity:start|end -->`); `resolved_profile_hash` is re-stamped over the cursor bytes. |
+| `agents/<name>.md` | `.cursor/agents/<name>.md` | Cursor agent frontmatter (`name`, `description`, an unquoted `model: grok-4.6[effort=medium]`, `model: grok-4.6[effort=high]`, or `model: grok-4.6[effort=xhigh]` derived from the canonical class, and `readonly`). Claude `tools:` (including MCP ids) are dropped. Descriptions that are not plain YAML scalars are JSON-quoted. Reviewer identity is a body comment block (`<!-- cursor-reviewer-identity:start|end -->`); `resolved_profile_hash` is re-stamped over the cursor bytes. |
 | `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). `Agent(` dispatch cards become `Task(`. Install-time `model="{...}"` lines are stripped. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
 | `hooks/<script>.sh` | `.cursor/hooks/<script>.sh` | Dispatch-log is payload-adapted (`agent_type \|\| subagent_type`, `agent_id \|\| subagent_id`, `model \|\| subagent_model`). Adapted copies keep the shebang as line 1. Compact-context is wrapped as JSON `{additional_context}` for `sessionStart`. A second `sessionStart` wrapper runs `kaola-workflow-ensure-cursor-catalog.js` and prints `{}` so it does not emit `additional_context`. |
 | mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). `sessionStart` (compact resume + catalog ensure) + `subagentStart`. Project-shaped commands use `.cursor/hooks/…`. A `--global` install rewrites that prefix to `./hooks/`. |
 
 Generated agents carry a model-and-effort pin derived from the canonical agent
-class. The canonical `sonnet`/`standard` and `opus`/`reasoning` tokens remain the
-roster authority; generated frontmatter uses the raw, unquoted
-`grok-4.6[effort=medium]` and `grok-4.6[effort=high]` values respectively.
+class. The canonical `sonnet`/`standard`, `opus`/`reasoning`, and `fable`/`heavy`
+tokens remain the roster authority; generated frontmatter uses the raw, unquoted
+`grok-4.6[effort=medium]`, `grok-4.6[effort=high]`, and
+`grok-4.6[effort=xhigh]` values respectively.
 
-## Tiered frontmatter pins — model-free Task dispatch
+## Three-tier frontmatter pins — model-free Task dispatch
 
 The canonical `agents/*.md` model class is mapped at generation time: standard
 (`sonnet`/`standard`) roles receive the unquoted
-`model: grok-4.6[effort=medium]` line, and reasoning (`opus`/`reasoning`)
-roles receive `model: grok-4.6[effort=high]`. Unknown class tokens fail closed;
-the generator does not invent a fallback roster. Cursor's `Task` tool accepts
-an optional `model` but has no separate effort field, so generated command cards
-omit `model`.
+`model: grok-4.6[effort=medium]` line, reasoning (`opus`/`reasoning`) roles
+receive `model: grok-4.6[effort=high]`, and heavy (`fable`/`heavy`) roles receive
+the raw, unquoted `model: grok-4.6[effort=xhigh]`. Unknown class tokens fail
+closed; the generator does not invent a fallback roster. Cursor's `Task` tool
+accepts an optional `model` but has no separate effort field, so generated
+command cards omit `model`.
 
 Reliable IDE and CLI dispatch is one wording, embedded in `/workflow-next` and
 `/kaola-workflow-finalize`. `/workflow-init` is the shared all-runtime
@@ -87,10 +89,15 @@ Two guarantees, and no second pin path:
 
 - **(A) Role.** Dispatch is the workspace catalog plus the named type.
 - **(B) Effort.** The CLI stream envelope is the oracle
-  (`cursor-grok-4.6-medium` vs `cursor-grok-4.6-high`). The IDE picker clamp
+  (`cursor-grok-4.6-medium` vs `cursor-grok-4.6-high` vs `cursor-grok-4.6-xhigh`). The IDE picker clamp
   (selected session Grok 4.6 / `selectedModels`) is a typed deferral; do not
   add a `Task(model=)` workaround. Do not claim IDE children display distinct
   effort.
+
+Generated command surfaces preserve the reviewer scope-and-acceptance packet but
+omit Claude's one-bounded reviewer heavy re-dispatch. Cursor's `Task` dispatch
+has no documented per-call effort override; reviewer behavior therefore follows
+the static generated frontmatter pin.
 
 Cursor CLI loads custom `Task` types from the **workspace** `.cursor/agents`,
 not from `~/.cursor/agents`. The workspace catalog is refreshed from
@@ -133,7 +140,8 @@ These are Cursor product limits, not alternate pin paths:
 1. **Cold start.** Agent files can be loaded at session start. After install or
    sync, use a new chat for close evidence; a mid-session edit is inconclusive.
 2. **CLI envelope oracle.** Named omit-model Tasks on CLI resolve effort in the
-   stream envelope (`cursor-grok-4.6-medium` vs `cursor-grok-4.6-high`). That
+   stream envelope (`cursor-grok-4.6-medium` vs `cursor-grok-4.6-high` vs
+   `cursor-grok-4.6-xhigh`). That
    envelope is the measurement. Do not pass inherit, `cursor-grok-4.6-xhigh`,
    or any other per-call model to force it.
 3. **IDE picker clamp.** The selected session Grok 4.6 / `selectedModels`

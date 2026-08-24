@@ -10,8 +10,10 @@
   `gpt-5.6-sol` / `medium`, `heavy` as `gpt-5.6-sol` / `high`, with one reviewer-class re-dispatch
   carve-out when reasoning-tier failed to finish or the surface is judged complex. Grok binds
   fable/heavy to `effort: xhigh`; Cursor pins `grok-4.6[effort=xhigh]`. OpenCode classifies
-  `fable` as reasoning so planner-class stays on the override list. Reviewer bodies clamp
-  findings to the dispatched surface.
+  `fable` as reasoning so planner-class stays on the override list, while Kimi remains
+  session-inherited. Claude reviewers rest on `opus` with one bounded `fable` escalation in command
+  runtime. Every reviewer dispatch states its surface and acceptance; generated additive runtimes
+  omit that dynamic escalation. Reviewer bodies clamp findings to the dispatched surface.
 
 
 ## [9.14.3] - 2026-08-23

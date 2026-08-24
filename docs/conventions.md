@@ -53,7 +53,9 @@ names the installed agent role and passes a dispatch packet:
 
 The mapping is fixed for every spawn. A role always uses its tier pair (standard, reasoning, or
 heavy); task breadth, latency, prior outcomes, and risk do not create an escalation or any other
-model/reasoning exception, except the one reviewer-class heavy re-dispatch carve-out.
+model/reasoning exception, except the one reviewer-class heavy re-dispatch carve-out. The Codex
+pairs are standard `gpt-5.6-luna` / `max`, reasoning `gpt-5.6-sol` / `medium`, and heavy
+`gpt-5.6-sol` / `high`; reviewers rest at reasoning and use heavy only for that bounded re-dispatch.
 
 Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 

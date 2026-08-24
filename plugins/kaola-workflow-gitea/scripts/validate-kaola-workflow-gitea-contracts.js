@@ -459,12 +459,18 @@ assert(JSON.stringify(sortGiteaPolicy(giteaInstaller.CODEX_PINNED_STANDARD_ROLES
 assert(JSON.stringify(sortGiteaPolicy(giteaInstaller.CODEX_PINNED_REASONING_ROLES))
     === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_REASONING_ROLES)),
   'Gitea installer reasoning-role policy must match adaptive schema');
+assert(JSON.stringify(sortGiteaPolicy(giteaInstaller.CODEX_PINNED_HEAVY_ROLES))
+    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_HEAVY_ROLES)),
+  'Gitea installer heavy-role policy must match adaptive schema');
 assert(JSON.stringify(sortGiteaPolicy(giteaPreflight.CODEX_PINNED_STANDARD_ROLES))
     === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_STANDARD_ROLES)),
   'Gitea preflight role-metadata policy must match adaptive schema');
 assert(JSON.stringify(sortGiteaPolicy(giteaPreflight.CODEX_PINNED_REASONING_ROLES))
     === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_REASONING_ROLES)),
   'Gitea preflight reasoning-role policy must match adaptive schema');
+assert(JSON.stringify(sortGiteaPolicy(giteaPreflight.CODEX_PINNED_HEAVY_ROLES))
+    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_HEAVY_ROLES)),
+  'Gitea preflight heavy-role policy must match adaptive schema');
 assert(giteaInstaller.CODEX_STANDARD_MODEL === 'gpt-5.6-sol'
     && giteaInstaller.CODEX_STANDARD_EFFORT === 'medium'
     && giteaPreflight.CODEX_STANDARD_MODEL === giteaInstaller.CODEX_STANDARD_MODEL
