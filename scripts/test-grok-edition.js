@@ -127,8 +127,12 @@ function canonicalAgentClass(name) {
 }
 
 function canonicalRosters(names) {
-  const rosters = { standard: [], reasoning: [], unknown: [] };
-  for (const name of names) rosters[canonicalAgentClass(name).tier].push(name);
+  const rosters = { standard: [], reasoning: [], heavy: [], unknown: [] };
+  for (const name of names) {
+    const tier = canonicalAgentClass(name).tier;
+    if (!rosters[tier]) rosters[tier] = [];
+    rosters[tier].push(name);
+  }
   for (const tier of Object.keys(rosters)) rosters[tier].sort();
   return rosters;
 }
@@ -139,7 +143,7 @@ function canonicalRosters(names) {
 // ---------------------------------------------------------------------------
 const GROK_RUNTIME_NATIVE = Object.freeze({
   tiered_effort_pin:
-    'Grok subagents inherit the session model, so generated agents keep model: inherit while canonical standard/reasoning model classes stamp effort: medium/high respectively.',
+    'Grok subagents inherit the session model, so generated agents keep model: inherit while canonical standard/reasoning/heavy model classes stamp effort: medium/high/xhigh respectively.',
 });
 
 // The canonical model tokens are the existing portable class markers, not a
@@ -148,7 +152,23 @@ const GROK_RUNTIME_NATIVE = Object.freeze({
 const GROK_MODEL_CLASS_TIERS = Object.freeze({
   sonnet: Object.freeze({ tier: 'standard', effort: 'medium' }),
   opus: Object.freeze({ tier: 'reasoning', effort: 'high' }),
+  fable: Object.freeze({ tier: 'heavy', effort: 'xhigh' }),
 });
+
+// #1018: GROK_MODEL_EFFORTS is the production map (not exported). Assert the
+// fable key exists; the probe later binds xhigh or high. Do not accept a
+// missing key as "not yet measured".
+const GROK_SYNC_SRC = fs.readFileSync(path.join(REPO, 'scripts', 'sync-grok-edition.js'), 'utf8');
+const GROK_MODEL_EFFORTS_PIN = (() => {
+  const m = GROK_SYNC_SRC.match(/const GROK_MODEL_EFFORTS = Object\.freeze\(\{([\s\S]*?)\}\)/);
+  const out = {};
+  if (!m) return out;
+  for (const row of m[1].split('\n')) {
+    const mm = row.match(/^\s*([A-Za-z0-9_-]+)\s*:\s*'([^']+)'/);
+    if (mm) out[mm[1]] = mm[2];
+  }
+  return out;
+})();
 
 // ---------------------------------------------------------------------------
 // Additive boundary — grok is a runtime, not a forge. Read the tree; do not
@@ -294,9 +314,22 @@ const canonRosters = canonicalRosters(canonAgents);
     'G0-roster: canonical sonnet model class derives a non-empty standard roster');
   assert(canonRosters.reasoning.length > 0,
     'G0-roster: canonical opus model class derives a non-empty reasoning roster');
+  assert(canonRosters.heavy.includes('planner') && canonRosters.heavy.includes('code-architect'),
+    'G0-roster: planner-class (planner, code-architect) is the heavy (fable) roster — heavy='
+    + JSON.stringify(canonRosters.heavy));
   assert(canonRosters.unknown.length === 0,
-    'G0-roster: every canonical agent model belongs to the known sonnet/opus classes — unknown='
+    'G0-roster: every canonical agent model belongs to the known sonnet/opus/fable classes — unknown='
     + JSON.stringify(canonRosters.unknown));
+  assert(Object.prototype.hasOwnProperty.call(GROK_MODEL_EFFORTS_PIN, 'fable'),
+    'G0-fable: GROK_MODEL_EFFORTS must include a fable entry (probe binds xhigh or high later)');
+  assert(GROK_MODEL_EFFORTS_PIN.fable === 'xhigh' || GROK_MODEL_EFFORTS_PIN.fable === 'high',
+    'G0-fable: GROK_MODEL_EFFORTS.fable must be xhigh or high — got '
+    + JSON.stringify(GROK_MODEL_EFFORTS_PIN.fable));
+  for (const name of canonAgents) {
+    if (name === 'planner' || name === 'code-architect') continue;
+    assert(canonicalAgentClass(name).model !== 'fable',
+      'G0-roster: ' + name + ' must not change tier to fable — got ' + canonicalAgentClass(name).model);
+  }
 }
 
 function agentRel(name, forge) {
@@ -304,6 +337,16 @@ function agentRel(name, forge) {
 }
 function commandRel(name, forge) {
   return treeLabel(forge || DEFAULT_FORGE) + '/commands/' + name + '.md';
+}
+
+{
+  const heavyVariants = ['code-reviewer-heavy', 'adversarial-verifier-heavy', 'security-reviewer-heavy'];
+  for (const name of heavyVariants) {
+    assert(!canonAgents.includes(name),
+      'G0-ac6: no grok heavy-variant reviewer agent ' + name + ' in the canonical roster (escalation is claude+codex only)');
+    assert(!exists(agentRel(name)),
+      'G0-ac6: generated grok tree must not ship ' + name);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -337,8 +380,11 @@ function commandRel(name, forge) {
     const canonical = canonicalAgentClass(name);
     assert(canonical.tier !== 'unknown',
       'G1[' + name + ']: canonical model class is known — got ' + JSON.stringify(canonical.model));
-    assert(fm.effort === canonical.effort,
-      'G1[' + name + ']: effort is ' + JSON.stringify(canonical.effort) + ' for canonical '
+    const expectedEffort = canonical.model === 'fable'
+      ? (GROK_MODEL_EFFORTS_PIN.fable || canonical.effort)
+      : canonical.effort;
+    assert(fm.effort === expectedEffort,
+      'G1[' + name + ']: effort is ' + JSON.stringify(expectedEffort) + ' for canonical '
       + canonical.tier + ' tier — got ' + JSON.stringify(fm.effort));
     assert((raw.match(/^\s*effort\s*:/gm) || []).length === 1,
       'G1[' + name + ']: carries exactly one effort: field');
@@ -451,9 +497,9 @@ function commandRel(name, forge) {
   assert(typeof reason === 'string' && reason.trim().length >= 20,
     'G2-declaration: GROK_RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason');
   assert(/standard.*reasoning/i.test(reason)
-    && /medium/i.test(reason) && /high/i.test(reason),
-    'G2-declaration: the "' + KEY + '" reason must state standard/reasoning '
-    + 'medium/high effort pins');
+    && /medium/i.test(reason) && /high/i.test(reason) && /heavy/i.test(reason),
+    'G2-declaration: the "' + KEY + '" reason must state standard/reasoning/heavy '
+    + 'medium/high/xhigh effort pins');
   for (const name of canonAgents) {
     const rel = agentRel(name);
     if (!exists(rel)) continue;

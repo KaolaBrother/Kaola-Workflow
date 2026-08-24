@@ -67,20 +67,71 @@ function codexModelRoutingBlock(content) {
 
 function hasTierDispatchException(content) {
   const normalized = norm(content);
-  return /(?:standard|reasoning)-tier\b.{0,180}\b(?:may|can)\b.{0,180}\b(?:use|dispatch|switch|select|escalat|downgrad|override|fall back)/i
+  return /(?:standard|reasoning|heavy)-tier\b.{0,180}\b(?:may|can)\b.{0,180}\b(?:use|dispatch|switch|select|escalat|downgrad|override|fall back)/i
     .test(normalized)
-    || /(?:standard|reasoning)-tier\b.{0,120}\b(?:exception|override|trigger|fallback)s?\b/i.test(normalized)
+    || /(?:standard|reasoning|heavy)-tier\b.{0,120}\b(?:exception|override|trigger|fallback)s?\b/i.test(normalized)
     || /per-task\b.{0,100}\b(?:model|reasoning(?:-| )effort)\b.{0,100}\bexceptions?\b.{0,50}\b(?:may|can|permit)\b/i
       .test(normalized)
     || /\b(?:temporary|recorded)\b.{0,100}\b(?:exception|override|trigger)\b/i.test(normalized)
-    || /(?:Luna\/?max|Sol\/?high)\b.{0,120}\bunavailable\b.{0,120}\b(?:use|select|substitute|fall back to)\b/i
+    || /(?:Luna\/?max|Sol\/?(?:medium|high))\b.{0,120}\bunavailable\b.{0,120}\b(?:use|select|substitute|fall back to)\b/i
       .test(normalized);
+}
+
+// The one ADR 0019 reviewer-class heavy re-dispatch is required, not an exception. Strip it
+// before the exception detector so a second carve-out / override still reds.
+function stripSanctionedReviewerCarveOut(content) {
+  return String(content).replace(
+    /One carve-out:\s*the orchestrator may re-dispatch a reviewer-class role at heavy when a reasoning-tier attempt failed to finish the review,\s*or the surface is judged complex before dispatch\.?/gi,
+    '');
 }
 
 const CANONICAL_TIER_DISPATCH_CLAUSES = [
   'Standard-tier roles dispatch with `model: "gpt-5.6-luna"` and `reasoning_effort: "max"`.',
-  'Reasoning-tier roles dispatch with `model: "gpt-5.6-sol"` and `reasoning_effort: "high"`.',
+  'Reasoning-tier roles dispatch with `model: "gpt-5.6-sol"` and `reasoning_effort: "medium"`.',
+  'Heavy-tier roles dispatch with `model: "gpt-5.6-sol"` and `reasoning_effort: "high"`.',
 ];
+
+// Live PIN roster membership. Planner-class is heavy (sol/high), never reasoning (sol/medium).
+const PLANNER_CLASS_ROLES = Object.freeze(['planner', 'code-architect']);
+const REASONING_REST_ROLES = Object.freeze([
+  'build-error-resolver',
+  'code-reviewer',
+  'security-reviewer',
+  'adversarial-verifier',
+  'synthesizer',
+]);
+const TIER_WORD = /\b(standard|reasoning|heavy)\b/gi;
+const roleNeedle = role => new RegExp(`(^|[^A-Za-z0-9_-])${role}([^A-Za-z0-9_-]|$)`);
+
+function codexRosterTiers(block, universe) {
+  const found = new Map();
+  let context = null;
+  for (const line of String(block).split('\n')) {
+    const words = [...new Set([...line.matchAll(TIER_WORD)].map(m => m[1].toLowerCase()))];
+    const lineTier = words.length === 1 ? words[0] : null;
+    for (const role of universe) {
+      if (!roleNeedle(role).test(line)) continue;
+      if (!found.has(role)) found.set(role, new Set());
+      found.get(role).add(lineTier || context || '(no tier)');
+    }
+    if (words.length > 0) context = lineTier;
+  }
+  return found;
+}
+
+function liveCodexPinRosterValid(block) {
+  const universe = [...PLANNER_CLASS_ROLES, ...REASONING_REST_ROLES];
+  const found = codexRosterTiers(block, universe);
+  for (const role of PLANNER_CLASS_ROLES) {
+    const claimed = found.get(role);
+    if (!claimed || claimed.size !== 1 || [...claimed][0] !== 'heavy') return false;
+  }
+  for (const role of REASONING_REST_ROLES) {
+    const claimed = found.get(role);
+    if (!claimed || claimed.size !== 1 || [...claimed][0] !== 'reasoning') return false;
+  }
+  return true;
+}
 
 function hasExplicitModelEffortPair(content) {
   const value = '(?:"[^"]+"|`[^`]+`|[A-Za-z0-9][A-Za-z0-9._-]*)';
@@ -92,7 +143,7 @@ function hasExplicitModelEffortPair(content) {
   ].some(pattern => pattern.test(content));
 }
 
-// Exactly two pair claims are legal: the ruling clauses above. After removing one occurrence of
+// Exactly three pair claims are legal: the ruling clauses above. After removing one occurrence of
 // each, any remaining labelled pair (either order or quoting style) or shorthand pair is an extra
 // route. No context, verb, inability synonym, or historical-prose exemption changes that result.
 function hasAlternateTierDispatchPair(content) {
@@ -131,25 +182,29 @@ function codexDispatchCallSiteValid(content, skillName) {
     && callSite.includes('`reasoning_effort`')
     && /per-spawn model routing/i.test(callSite)
     && !hasProfileOwnedDispatchConflict(content)
-    && !hasTierDispatchException(content)
+    && !hasTierDispatchException(stripSanctionedReviewerCarveOut(content))
     && !hasAlternateTierDispatchPair(content);
 }
 
 // This is deliberately a prose-contract validator, not a profile/config assertion: the routing
-// decision is made for each spawn, after the role's existing standard/reasoning classification is
-// known. The negative check prevents a plausible near-miss where a fixed standard pair quietly
+// decision is made for each spawn, after the role's existing standard/reasoning/heavy classification
+// is known. The negative check prevents a plausible near-miss where a fixed standard pair quietly
 // regains a per-task exception elsewhere on the same live dispatch surface.
 function codexModelRoutingContractValid(content) {
   const block = codexModelRoutingBlock(content);
   if (!block) return false;
   const normalized = norm(block);
-  return normalized.includes('Standard-tier roles dispatch with `model: "gpt-5.6-luna"` and `reasoning_effort: "max"`.')
-    && normalized.includes('Reasoning-tier roles dispatch with `model: "gpt-5.6-sol"` and `reasoning_effort: "high"`.')
+  return CANONICAL_TIER_DISPATCH_CLAUSES.every(clause => normalized.includes(clause))
     && normalized.includes('These mappings are fixed for every spawn.')
-    && normalized.includes('Do not escalate, downgrade, or otherwise override either tier\'s model or reasoning effort based on task breadth, latency, prior results, risk, availability, or any other condition.')
+    && normalized.includes('Do not escalate, downgrade, or otherwise override a tier\'s model or reasoning effort based on task breadth, latency, prior results, risk, availability, or any other condition.')
     && normalized.includes('The role classification remains unchanged.')
+    && /one carve-out/i.test(normalized)
+    && /re-dispatch a reviewer-class role at heavy/i.test(normalized)
+    && /failed to finish/i.test(normalized)
+    && /complex/i.test(normalized)
+    && liveCodexPinRosterValid(block)
     && !normalized.includes('gpt-5.6-terra')
-    && !hasTierDispatchException(content)
+    && !hasTierDispatchException(stripSanctionedReviewerCarveOut(content))
     && !hasAlternateTierDispatchPair(content);
 }
 
@@ -473,7 +528,7 @@ for (const ed of codexEditions) {
 
       const modelRoutingBlock = codexModelRoutingBlock(content);
       assert(codexModelRoutingContractValid(content),
-        `T19 model routing: ${file} carries the bounded Codex per-spawn standard/reasoning contract`);
+        `T19 model routing: ${file} carries the bounded Codex per-spawn standard/reasoning/heavy contract and lists planner-class on Heavy-tier, not Reasoning-tier`);
       if (modelRoutingBlock) {
         allModelRoutingBlocks.push(modelRoutingBlock);
         const mutations = [
@@ -482,7 +537,11 @@ for (const ed of codexEditions) {
           ['reasoning model', modelRoutingBlock.replace(
             'Reasoning-tier roles dispatch with\n`model: "gpt-5.6-sol"`',
             'Reasoning-tier roles dispatch with\n`model: "gpt-5.6-terra"`')],
-          ['reasoning effort', modelRoutingBlock.replace('reasoning_effort: "high"', 'reasoning_effort: "xhigh"')],
+          ['reasoning effort', modelRoutingBlock.replace('reasoning_effort: "medium"', 'reasoning_effort: "xhigh"')],
+          ['heavy model', modelRoutingBlock.replace(
+            'Heavy-tier roles dispatch with\n`model: "gpt-5.6-sol"`',
+            'Heavy-tier roles dispatch with\n`model: "gpt-5.6-terra"`')],
+          ['heavy effort', modelRoutingBlock.replace('reasoning_effort: "high"', 'reasoning_effort: "xhigh"')],
           ['fixed mapping', modelRoutingBlock.replace('fixed for every spawn', 'selected for each spawn')],
           ['classification stability', modelRoutingBlock.replace('remains unchanged', 'may change')],
         ];
@@ -490,6 +549,10 @@ for (const ed of codexEditions) {
           assert(!codexModelRoutingContractValid(content.replace(modelRoutingBlock, mutatedBlock)),
             `T19 model-routing mutation: ${label} reds ${file}`);
         }
+        const plannerAsReasoning = modelRoutingBlock
+          .replace(/Heavy-tier roles:[^\n]*/i, 'Reasoning-tier roles: `planner`, `code-architect`.');
+        assert(!liveCodexPinRosterValid(plannerAsReasoning),
+          `T19 roster mutation: listing planner-class under Reasoning-tier reds ${file}`);
         const temporaryException = content.replace(modelRoutingBlock,
           `${modelRoutingBlock}\nA standard-tier task may use Sol/xhigh for complex work.`);
         assert(!codexModelRoutingContractValid(temporaryException)
@@ -534,6 +597,8 @@ for (const ed of codexEditions) {
           ['standard-pair inability fallback',
             'When Luna/max cannot be used, fall back to gpt-5.6-terra/high.'],
           ['reasoning-pair inability fallback',
+            'When Sol/medium cannot be used, fall back to gpt-5.6-luna/max.'],
+          ['heavy-pair inability fallback',
             'When Sol/high cannot be used, fall back to gpt-5.6-luna/max.'],
         ];
         for (const [label, sentence] of admittedBypasses) {
@@ -578,7 +643,7 @@ for (const ed of codexEditions) {
             && !codexDispatchCallSiteValid(mutant, name),
             `T19 model-routing mutation: ${label} reds ${file}`);
         }
-        for (const [tier, pair] of [['standard', 'Luna/max'], ['reasoning', 'Sol/high']]) {
+        for (const [tier, pair] of [['standard', 'Luna/max'], ['reasoning', 'Sol/medium'], ['heavy', 'Sol/high']]) {
           const availabilityException = `${content}\nIf ${pair} is unavailable, use Terra/high instead.`;
           assert(!codexModelRoutingContractValid(availabilityException)
             && !codexDispatchCallSiteValid(availabilityException, name),
@@ -614,11 +679,11 @@ for (const ed of codexEditions) {
 // ---------------------------------------------------------------------------
 // T19b: THE ROSTER — a surface that ASKS for a role's tier must SHIP the membership.
 //
-// T19's block orders the orchestrator to dispatch each role at "its existing standard-tier or
-// reasoning-tier classification" and fixes the effort per tier. It never says WHICH roles are in
-// which tier. The membership does ship — CODEX_PINNED_STANDARD_ROLES / CODEX_PINNED_REASONING_ROLES
-// are installed three times over in the Codex tree — but nothing renders it, prints it, or points a
-// prompt at it, so at dispatch the split is unreachable from the one surface that demands it. An
+// T19's block orders the orchestrator to dispatch each role at "its existing standard-tier,
+// reasoning-tier, or heavy-tier classification" and fixes the effort per tier. It never says WHICH
+// roles are in which tier. The membership does ship — CODEX_PINNED_STANDARD_ROLES /
+// CODEX_PINNED_REASONING_ROLES / CODEX_PINNED_HEAVY_ROLES (or equivalent) — and must be rendered
+// into the PIN. Planner-class (planner, code-architect) maps to heavy, not reasoning. An
 // instruction that asks a question whose answer it does not ship is the defect. The roster is
 // generated into the block FROM those constants, which is what makes it unable to drift from them.
 //
@@ -642,13 +707,34 @@ for (const ed of codexEditions) {
   const schema = require('./kaola-workflow-adaptive-schema.js');
 
   // The registry, as ONE map. This is the answer the block has to carry.
+  // Planner-class is independently heavy: do not derive it from CODEX_PINNED_REASONING_ROLES.
+  const heavyRoles = Array.isArray(schema.CODEX_PINNED_HEAVY_ROLES)
+    ? [...schema.CODEX_PINNED_HEAVY_ROLES] : [];
+  assert(Array.isArray(schema.CODEX_PINNED_HEAVY_ROLES) && heavyRoles.length > 0,
+    'T19b registry: production must export CODEX_PINNED_HEAVY_ROLES (planner-class heavy membership)');
   const EXPECTED_TIER = new Map([
     ...schema.CODEX_PINNED_STANDARD_ROLES.map(role => [role, 'standard']),
-    ...schema.CODEX_PINNED_REASONING_ROLES.map(role => [role, 'reasoning']),
+    ...REASONING_REST_ROLES.map(role => [role, 'reasoning']),
+    ...PLANNER_CLASS_ROLES.map(role => [role, 'heavy']),
   ]);
   assert(EXPECTED_TIER.size
-    === schema.CODEX_PINNED_STANDARD_ROLES.length + schema.CODEX_PINNED_REASONING_ROLES.length,
-    'T19b registry: no role is in both Codex tiers (the two pinned lists are disjoint)');
+    === schema.CODEX_PINNED_STANDARD_ROLES.length + REASONING_REST_ROLES.length + PLANNER_CLASS_ROLES.length,
+    'T19b registry: no role is in two Codex tiers (standard / reasoning / heavy are disjoint)');
+  for (const role of PLANNER_CLASS_ROLES) {
+    assert(EXPECTED_TIER.get(role) === 'heavy',
+      `T19b registry: ${role} is planner-class and must map to heavy, not ${EXPECTED_TIER.get(role) || '(absent)'}`);
+    assert(!schema.CODEX_PINNED_REASONING_ROLES.includes(role),
+      `T19b registry: ${role} must not remain on CODEX_PINNED_REASONING_ROLES`);
+    assert(heavyRoles.includes(role),
+      `T19b registry: ${role} must be a member of CODEX_PINNED_HEAVY_ROLES`);
+  }
+  assert(JSON.stringify([...schema.CODEX_PINNED_REASONING_ROLES].sort())
+      === JSON.stringify([...REASONING_REST_ROLES].sort()),
+    'T19b registry: remaining reasoning-tier is build-error-resolver, the three reviewers, and synthesizer');
+  for (const role of heavyRoles) {
+    assert(EXPECTED_TIER.get(role) === 'heavy',
+      `T19b registry: ${role} is on CODEX_PINNED_HEAVY_ROLES but is not the heavy (planner-class) membership`);
+  }
 
   // A SECOND, INDEPENDENT enumeration of role names, so the "on the roster but not in the registry"
   // direction has something to recognise. Deriving the universe from EXPECTED_TIER alone would make
@@ -670,7 +756,7 @@ for (const ed of codexEditions) {
   // `reasoning_effort` does not match \breasoning\b (the underscore is a word character), so the
   // effort sentences do not masquerade as tier labels; `reasoning effort` in prose does, and a line
   // carrying both words is treated as ambiguous, which is the safe reading.
-  const TIER_WORD = /\b(standard|reasoning)\b/gi;
+  const TIER_WORD = /\b(standard|reasoning|heavy)\b/gi;
 
   // codexRosterTiers — PURE. (block text, role universe) -> Map(role -> Set of claimed tiers).
   // A role claimed under two tiers keeps both, so "listed twice, disagreeing" is a defect rather
@@ -726,7 +812,8 @@ for (const ed of codexEditions) {
   };
   const EXPECTED_PAIRS = {
     standard: { model: 'gpt-5.6-luna', effort: 'max' },
-    reasoning: { model: 'gpt-5.6-sol', effort: 'high' },
+    reasoning: { model: 'gpt-5.6-sol', effort: 'medium' },
+    heavy: { model: 'gpt-5.6-sol', effort: 'high' },
   };
 
   // The obligated universe: every generated surface whose COMMITTED bytes ask the question.
@@ -761,6 +848,7 @@ for (const ed of codexEditions) {
     const goodBlock = [
       `Standard-tier roles: ${tiered('standard').join(', ')}.`,
       `Reasoning-tier roles: ${tiered('reasoning').join(', ')}.`,
+      `Heavy-tier roles: ${tiered('heavy').join(', ')}.`,
     ].join('\n');
     assert(rosterDefects(goodBlock, EXPECTED_TIER, ROLE_UNIVERSE).length === 0,
       'T19b mutation (GREEN): a roster that matches the registry has no defects — the detector is '
@@ -768,7 +856,8 @@ for (const ed of codexEditions) {
 
     // Heading-plus-list is an equally valid rendering; the reader must not force one shape.
     const listBlock = ['**Standard tier**', ...tiered('standard').map(r => `- \`${r}\``),
-      '**Reasoning tier**', ...tiered('reasoning').map(r => `- \`${r}\``)].join('\n');
+      '**Reasoning tier**', ...tiered('reasoning').map(r => `- \`${r}\``),
+      '**Heavy tier**', ...tiered('heavy').map(r => `- \`${r}\``)].join('\n');
     assert(rosterDefects(listBlock, EXPECTED_TIER, ROLE_UNIVERSE).length === 0,
       'T19b mutation (GREEN): a heading-plus-list rendering reads the same as one line per tier');
 
@@ -831,8 +920,8 @@ for (const ed of codexEditions) {
     }
 
     // (g) the complete-pair binding reads the BLOCK, not the constants' names, and each half bites.
-    assert(pairDefects(goodBlock, EXPECTED_PAIRS).length === 2,
-      'T19b mutation (RED): a block stating no tier->model/effort pair reds on both tiers');
+    assert(pairDefects(goodBlock, EXPECTED_PAIRS).length === 3,
+      'T19b mutation (RED): a block stating no tier->model/effort pair reds on all three tiers');
     const liveBlock = codexModelRoutingBlock(routingSurfaces[0].content);
     assert(pairDefects(liveBlock, {
       ...EXPECTED_PAIRS,
@@ -855,6 +944,15 @@ for (const ed of codexEditions) {
     assert(pairDefects(liveBlock.replace(`"${EXPECTED_PAIRS.reasoning.effort}"`, '"xhigh"'), EXPECTED_PAIRS)
       .some(d => /^reasoning-tier/.test(d)),
       'T19b mutation (RED): changing the reasoning-tier effort to xhigh reds');
+    const heavyModelClause = `Heavy-tier roles dispatch with\n`
+      + `\`model: "${EXPECTED_PAIRS.heavy.model}"\``;
+    assert(pairDefects(liveBlock.replace(heavyModelClause,
+      'Heavy-tier roles dispatch with\n`model: "gpt-5.6-terra"`'), EXPECTED_PAIRS)
+      .some(d => /^heavy-tier/.test(d)),
+      'T19b mutation (RED): changing the heavy-tier model in the block reds');
+    assert(pairDefects(liveBlock.replace(`"${EXPECTED_PAIRS.heavy.effort}"`, '"xhigh"'), EXPECTED_PAIRS)
+      .some(d => /^heavy-tier/.test(d)),
+      'T19b mutation (RED): changing the heavy-tier effort to xhigh reds');
   }
 }
 

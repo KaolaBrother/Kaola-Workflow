@@ -149,7 +149,7 @@ which then drives one `/workflow-next` run per set until the scope is met.
 
 ## Workflow roles
 
-The workflow is built from a small, shared set of **roles**. All six runtimes provide the same role set — Claude Code installs vendored agents, Codex installs native `.toml` role profiles, opencode generates `.opencode/agent/` definitions, Kimi Code generates `kaola-role-*` role-contract Skills, Grok CLI generates named `.grok/agents/` definitions, and Cursor generates named `.cursor/agents/` definitions — so the roles and model tiers below apply across runtimes. On Grok, every subagent inherits the session model while canonical standard/reasoning classes emit `medium`/`high` effort; on Cursor the canonical `opus`/`sonnet` classes render medium/high frontmatter pins and command cards omit per-call `model`.
+The workflow is built from a small, shared set of **roles**. All six runtimes provide the same role set — Claude Code installs vendored agents, Codex installs native `.toml` role profiles, opencode generates `.opencode/agent/` definitions, Kimi Code generates `kaola-role-*` role-contract Skills, Grok CLI generates named `.grok/agents/` definitions, and Cursor generates named `.cursor/agents/` definitions — so the roles and model tiers below apply across runtimes. On Grok, every subagent inherits the session model while canonical standard/reasoning/heavy classes emit `medium`/`high`/`xhigh` effort; on Cursor the canonical `sonnet`/`opus`/`fable` classes render medium/high/xhigh frontmatter pins and command cards omit per-call `model`.
 
 Claude Code's agents are vendored directly from this repository; the prompts are derived from Everything Claude Code (ECC) under the MIT License (see [docs/agents-source.md](docs/agents-source.md) for the pinned upstream commit, attribution, and refresh procedure).
 
@@ -158,8 +158,8 @@ Claude Code's agents are vendored directly from this repository; the prompts are
 | `code-explorer` | Read — code-fact discovery | standard |
 | `investigator` | Read — investigations that must RUN: builds, tests, reproductions, measurements, bisects, A/B legs (executes, never edits tracked files) | standard |
 | `knowledge-lookup` | Read — external docs (when needed) | standard |
-| `planner` | Planning — plan authoring | reasoning |
-| `code-architect` | Planning — design | reasoning |
+| `planner` | Planning — plan authoring | heavy |
+| `code-architect` | Planning — design | heavy |
 | `tdd-guide` | Write — per-task TDD executor | standard |
 | `implementer` | Write — implementation without test-first ceremony; refactors, scaffolding, config, UI, migrations | standard |
 | `build-error-resolver` | Write — validation repair when needed | reasoning |
@@ -191,9 +191,11 @@ governs exactly one case — an ad-hoc dispatch pointed at this repository's
 directory it was dispatched from.
 
 Codex keeps those role classifications unchanged but resolves them explicitly at each subagent
-spawn: `standard` dispatches as `gpt-5.6-luna` / `max`, while `reasoning` dispatches as
-`gpt-5.6-sol` / `high`. Both mappings are fixed: standard-tier model and reasoning effort never
-change for an individual task. Other runtimes retain their edition-specific model routing.
+spawn: `standard` dispatches as `gpt-5.6-luna` / `max`, `reasoning` dispatches as
+`gpt-5.6-sol` / `medium`, and `heavy` dispatches as `gpt-5.6-sol` / `high`. Those mappings are
+fixed: a role's tier pair never changes for an individual task, except the one reviewer-class
+heavy re-dispatch carve-out on the next/finalize routing pin. Other runtimes retain their
+edition-specific model routing.
 
 Three roles are locally authored rather than derived from ECC:
 
@@ -687,8 +689,9 @@ The audit must keep these facts separate:
   preflight migrates or refuses any profile that pins them. The unpinned profile
   does not select the dispatch pair: each Codex spawn explicitly carries the
   model and reasoning effort selected from its role classification. Standard is
-  Luna/max and reasoning is Sol/high. These mappings have no per-task
-  escalation, downgrade, or other model/reasoning exception.
+  Luna/max, reasoning is Sol/medium, and heavy is Sol/high. These mappings have
+  no per-task escalation, downgrade, or other model/reasoning exception, except
+  the one reviewer-class heavy re-dispatch carve-out on the next/finalize pin.
 
 Recommended posture when the user asks the agent to configure Codex for
 Kaola-Workflow:

@@ -473,6 +473,26 @@ assert(gitlabInstaller.CODEX_REASONING_MODEL === 'gpt-5.6-sol'
     && gitlabPreflight.CODEX_REASONING_MODEL === gitlabInstaller.CODEX_REASONING_MODEL
     && gitlabPreflight.CODEX_REASONING_EFFORT === gitlabInstaller.CODEX_REASONING_EFFORT,
   'GitLab installer/preflight historical reasoning migration pair must be gpt-5.6-sol/xhigh');
+
+// #1018: live per-spawn Codex routing is three-way. Rendered next/finalize
+// skills must carry the standard/reasoning/heavy pairs (not the historical
+// installer/preflight migration constants above).
+for (const rel of [
+  pluginRoot + '/skills/kaola-workflow-next/SKILL.md',
+  pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md',
+]) {
+  const text = read(rel);
+  const n = norm(text);
+  assert(/standard-tier/i.test(n) && /gpt-5\.6-luna/.test(n) && /reasoning_effort:\s*"max"/.test(text),
+    rel + ' must render standard-tier as gpt-5.6-luna / max');
+  assert(/reasoning-tier/i.test(n) && /gpt-5\.6-sol/.test(n) && /reasoning_effort:\s*"medium"/.test(text),
+    rel + ' must render reasoning-tier resting as gpt-5.6-sol / medium');
+  assert(/heavy/i.test(n) && /gpt-5\.6-sol/.test(n) && /reasoning_effort:\s*"high"/.test(text),
+    rel + ' must render heavy-tier as gpt-5.6-sol / high');
+  assert(/do not escalate/i.test(n) && /re-dispatch/i.test(n) && /reviewer/i.test(n) && /failed to finish/i.test(n) && /complex/i.test(n),
+    rel + ' do-not-escalate pin must carry the one reviewer-class heavy re-dispatch carve-out');
+}
+
 assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', '.codex-plugin');
 assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', 'isCodexPluginScriptDir');
 

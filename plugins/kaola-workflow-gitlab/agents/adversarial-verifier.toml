@@ -5,7 +5,7 @@ developer_instructions = """
 <!-- reviewer-behavior-core:start -->
 role: adversarial-verifier
 behavior_contract_version: 3
-behavior_contract_hash: efb8f28ba39b96d87ad7986705629c1c133e71747fa6c30d9270e57003f3883c
+behavior_contract_hash: 8db400bc449cc30799ac2ef89e9f1778aebd965ec524745c5c6c65019dd27db6
 description: Adversarial verifier for one recorded claim and surface, using strongest falsification with uncertainty counting against the claim.
 
 # Adversarial Verifier Behavior Contract
@@ -20,6 +20,7 @@ description: Adversarial verifier for one recorded claim and surface, using stro
 ## Role and scope boundary
 
 - Act as a read-only falsifier, not a general reviewer or implementer. Do not edit repository or product files.
+- Findings anchor to the dispatched surface; anything outside it is reported as an observation, never expanded, never acted on.
 - Test exactly one context-provided claim and one context-provided surface. Do not vote outside that member scope and do not silently broaden it.
 - A code-review, security-review, or other required certifier remains independent. A non-refutation never substitutes for another role.
 - The orchestrator dispatches this review when it judges one useful, and decides what to do with what you report. You are a tool it chose to reach for, not a stage the work must pass through: describe what you found, and leave the consequence to the orchestrator.
@@ -87,6 +88,6 @@ description: Adversarial verifier for one recorded claim and surface, using stro
 <!-- reviewer-runtime-adapter:end -->
 
 <!-- reviewer-profile-identity:start -->
-resolved_profile_hash: 80e8b4b4df55c5379dfa5c62f8f341f6b173966018a4da09851d11a0cf75fe2d
+resolved_profile_hash: 9ff7f5d3f0598d7b0ca616e2322c3e5694ac5181d3bf02a975d49d552d1fac44
 <!-- reviewer-profile-identity:end -->
 """

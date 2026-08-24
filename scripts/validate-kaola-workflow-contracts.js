@@ -496,19 +496,44 @@ assert(extraInReadme.length === 0,
 assert(!blockMatch[1].includes('docs-lookup'),
   'README role catalog must not list the retired docs-lookup role');
 
-// #957/#1010: README states the live per-tier Codex model/effort pair in normative prose
-// ("`standard` dispatches as ... while `reasoning` dispatches as ..."). This live routing contract
-// is deliberately independent of the installer/preflight constants pinned above: those constants
-// identify historical profile values for migration, while these pairs govern each new spawn.
-// Normalized, because the reasoning fragment line-wraps in the source markdown.
+// #957/#1010/#1018: README states the live per-tier Codex model/effort pair in normative prose.
+// #1018 extends the two-way table to three-way: reasoning rests at sol/medium; heavy is sol/high.
+// This live routing contract is deliberately independent of the installer/preflight constants
+// pinned above: those constants identify historical profile values for migration, while these
+// pairs govern each new spawn. Normalized, because the fragment line-wraps in the source markdown.
 const normalizedReadme = norm(readmeText);
 for (const [tier, model, effort] of [
   ['standard', 'gpt-5.6-luna', 'max'],
-  ['reasoning', 'gpt-5.6-sol', 'high'],
+  ['reasoning', 'gpt-5.6-sol', 'medium'],
+  ['heavy', 'gpt-5.6-sol', 'high'],
 ]) {
   const fragment = '`' + tier + '` dispatches as `' + model + '` / `' + effort + '`';
   assert(normalizedReadme.includes(fragment),
     'README Codex dispatch prose has drifted from the live ' + tier + '-tier routing contract; expected: ' + fragment);
+}
+
+const routingSkels = [
+  'templates/routing/next.skeleton.md',
+  'templates/routing/finalize.skeleton.md',
+];
+for (const rel of routingSkels) {
+  const text = read(rel);
+  const n = norm(text);
+  assert(/standard-tier/i.test(n) && /gpt-5\.6-luna/.test(n) && /reasoning_effort:\s*"max"/.test(text),
+    rel + ' must render standard-tier as gpt-5.6-luna / max');
+  assert(/reasoning-tier/i.test(n) && /gpt-5\.6-sol/.test(n) && /reasoning_effort:\s*"medium"/.test(text),
+    rel + ' must render reasoning-tier resting as gpt-5.6-sol / medium');
+  assert(/heavy/i.test(n) && /gpt-5\.6-sol/.test(n) && /reasoning_effort:\s*"high"/.test(text),
+    rel + ' must render heavy-tier as gpt-5.6-sol / high');
+  assert(/do not escalate/i.test(n) && /re-dispatch/i.test(n) && /reviewer/i.test(n) && /failed to finish/i.test(n) && /complex/i.test(n),
+    rel + ' do-not-escalate pin must carry the one reviewer-class heavy re-dispatch carve-out');
+}
+{
+  const initText = read('templates/routing/init.skeleton.md');
+  assert(initText.includes('`planner (heavy-reasoning tier)`'),
+    '#1018 AC-11: init.skeleton.md consumer example must be planner (heavy-reasoning tier)');
+  assert(!initText.includes('`planner (reasoning tier)`'),
+    '#1018 AC-11: init.skeleton.md must not keep planner (reasoning tier) as the example');
 }
 
 

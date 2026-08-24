@@ -170,9 +170,11 @@ function deniedPermissionAxes(toolSet) {
   return PERMISSION_AXES.filter(a => !a.tools.some(t => toolSet.has(t))).map(a => a.axis);
 }
 
-// Canonical model tier: opus → reasoning, everything else (sonnet/inherit) → standard.
+// Canonical model tier: opus and fable → reasoning, everything else (sonnet/inherit) → standard.
+// fable must classify as reasoning so planner-class stays on the per-role override list.
 function roleTier(canonModelValue) {
-  return String(canonModelValue || '').toLowerCase() === 'opus' ? 'reasoning' : 'standard';
+  const token = String(canonModelValue || '').toLowerCase();
+  return (token === 'opus' || token === 'fable') ? 'reasoning' : 'standard';
 }
 
 function listCanonAgents() {

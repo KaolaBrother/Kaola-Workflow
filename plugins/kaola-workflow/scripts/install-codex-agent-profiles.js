@@ -80,8 +80,11 @@ const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
   'doc-updater', 'metric-optimizer',
 ]);
 const CODEX_PINNED_REASONING_ROLES = Object.freeze([
-  'planner', 'code-architect', 'build-error-resolver', 'code-reviewer',
+  'build-error-resolver', 'code-reviewer',
   'security-reviewer', 'adversarial-verifier', 'synthesizer',
+]);
+const CODEX_PINNED_HEAVY_ROLES = Object.freeze([
+  'planner', 'code-architect',
 ]);
 // These roles run outside the adaptive Node Ledger. Their named workflow/plan/finalization
 // artifacts are the authoritative durable result; when a caller supplies a seeded evidence file,
@@ -730,7 +733,7 @@ function validateProfileText(text, role, expectedMeta = null) {
 
   const modelLines = shape.fields.filter(field => field === 'model');
   const effortLines = shape.fields.filter(field => field === 'model_reasoning_effort');
-  if (!CODEX_PINNED_STANDARD_ROLES.includes(role) && !CODEX_PINNED_REASONING_ROLES.includes(role)) {
+  if (!CODEX_PINNED_STANDARD_ROLES.includes(role) && !CODEX_PINNED_REASONING_ROLES.includes(role) && !CODEX_PINNED_HEAVY_ROLES.includes(role)) {
     reasons.push(`role "${role}" has no Codex profile-tier policy`);
   }
   if (modelLines.length > 0) reasons.push("top-level 'model' must be omitted to inherit the parent session");
@@ -2917,6 +2920,7 @@ module.exports = {
   EFFORT_VALUES,
   CODEX_PINNED_STANDARD_ROLES,
   CODEX_PINNED_REASONING_ROLES,
+  CODEX_PINNED_HEAVY_ROLES,
   CODEX_ORCHESTRATION_ROLES,
   CODEX_STANDARD_MODEL,
   CODEX_STANDARD_EFFORT,

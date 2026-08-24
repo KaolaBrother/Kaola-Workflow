@@ -51,9 +51,9 @@ names the installed agent role and passes a dispatch packet:
   `validate-kaola-workflow-contracts.js` cross-binds those migration values to the installer copies
   and separately asserts the live README pairs
 
-The mapping is fixed for every spawn. A standard-tier role always uses the standard-tier pair;
-task breadth, latency, prior outcomes, and risk do not create an escalation or any other
-model/reasoning exception.
+The mapping is fixed for every spawn. A role always uses its tier pair (standard, reasoning, or
+heavy); task breadth, latency, prior outcomes, and risk do not create an escalation or any other
+model/reasoning exception, except the one reviewer-class heavy re-dispatch carve-out.
 
 Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 
@@ -215,13 +215,13 @@ list by hand:
 | gitlab/gitea contract validators | agent counts |
 | the two forge `test-*-workflow-scripts.js` | counts |
 | `scripts/test-agent-profile-parity.js` | `TOML_TREES` per-tree profile **count** |
-| `scripts/kaola-workflow-adaptive-schema.js` | `CODEX_PINNED_STANDARD_ROLES` / `CODEX_PINNED_REASONING_ROLES` — a role in neither has "no Codex profile-tier policy" |
-| the six Codex SKILL surfaces | the per-spawn tier roster, **generated** from those same two constants into the `codex-dispatch-model-routing` PIN (#944) — no hand edit, but a new role needs `generate-routing-surfaces.js --write`, and `test-route-reachability.js` T19b reds if the shipped roster and the constants disagree in either direction |
-| `scripts/kaola-workflow-codex-preflight.js` | its **own** copy of both tier lists (authored `require`-free, so it cannot import the schema) |
-| `plugins/*/scripts/install-codex-agent-profiles.js` (×3) | a **third** copy of both tier lists |
+| `scripts/kaola-workflow-adaptive-schema.js` | `CODEX_PINNED_STANDARD_ROLES` / `CODEX_PINNED_REASONING_ROLES` / `CODEX_PINNED_HEAVY_ROLES` — a role in none of the three has "no Codex profile-tier policy" |
+| the six Codex SKILL surfaces | the per-spawn tier roster, **generated** from those same three constants into the `codex-dispatch-model-routing` PIN (#944) — no hand edit, but a new role needs `generate-routing-surfaces.js --write`, and `test-route-reachability.js` T19b reds if the shipped roster and the constants disagree in either direction |
+| `scripts/kaola-workflow-codex-preflight.js` | its **own** copy of the three tier lists (authored `require`-free, so it cannot import the schema) |
+| `plugins/*/scripts/install-codex-agent-profiles.js` (×3) | a **third** copy of the three tier lists |
 | `README.md` | the ```text codex role catalog, set-equality-checked against `plugins/kaola-workflow/config/agents.toml` by `validate-kaola-workflow-contracts.js`; and the Agent/Tier table, which is **not** machine-checked — keep it in step by hand |
 
-Note the tier lists exist in **three** independent copies. Adding a role to only the schema leaves the
+Note the three tier lists exist in **three** independent copies. Adding a role to only the schema leaves the
 Codex install/doctor chain red; that duplication is the standing cost of the diagnostic's
 `require`-free authoring. An agent-set delta is itself a cross-edition diff.
 

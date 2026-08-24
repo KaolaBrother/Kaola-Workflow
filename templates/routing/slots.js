@@ -68,14 +68,15 @@ SLOTS['in-claim-resolver'] = resolverFor('CLAIM_JS', {
 // codex-tier-roster — the ONE slot with no topic prefix, because it is the same answer on two
 // topics: the Codex routing PIN ships on both the next and the finalize skill.
 //
-// That PIN orders every spawn at its role's existing standard- or reasoning-tier classification
+// That PIN orders every spawn at its role's existing standard-, reasoning-, or heavy-tier classification
 // and fixes the model and effort per tier — a question whose answer no prompt surface carried.
 // The membership is RENDERED here from the kernel's own registry rather than restated as prose:
-// a role added to either pinned list reaches all six dispatch surfaces on the next render, and
+// a role added to any of the three pinned lists reaches all six dispatch surfaces on the next render, and
 // there is no second enumeration for the shipped instruction to drift away from.
 const {
   CODEX_PINNED_STANDARD_ROLES,
   CODEX_PINNED_REASONING_ROLES,
+  CODEX_PINNED_HEAVY_ROLES,
 } = require('../../scripts/kaola-workflow-adaptive-schema.js');
 
 // tierRoster — one tier's line(s), wrapped to the skeletons' prose column. The wrap is COMPUTED,
@@ -102,6 +103,10 @@ SLOTS['codex-tier-roster'] = [
   tierRoster('Standard-tier roles:', CODEX_PINNED_STANDARD_ROLES),
   '',
   tierRoster('Reasoning-tier roles:', CODEX_PINNED_REASONING_ROLES),
+  '',
+  tierRoster('Heavy-tier roles:', CODEX_PINNED_HEAVY_ROLES),
+  '',
+  'Those three lists are the complete live Codex PIN roster.',
 ].join('\n');
 
 const SPLICES = {

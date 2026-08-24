@@ -23,14 +23,14 @@ const DEFAULT_AGENT_MODELS = {
   'code-explorer': 'sonnet',
   'investigator': 'sonnet',
   'knowledge-lookup': 'sonnet',
-  planner: 'opus',
+  planner: 'fable',
   // These defaults are each role's declarative tier, and that tier does reach the other runtimes —
   // transitively, through the pins above, never as a dispatch-time lookup. The Codex tier classes are
   // held in lockstep with this map and the opencode reasoning-role list derives from the frontmatter
   // this map is held equal to, so re-tiering a role here re-tiers it there at the next sync; the
   // dispatch-log hook, the one component reading this map directly at runtime, follows immediately.
   // A Claude Code dispatch follows none of it.
-  'code-architect': 'opus',
+  'code-architect': 'fable',
   'tdd-guide': 'sonnet',
   'implementer': 'sonnet',
   'build-error-resolver': 'opus',

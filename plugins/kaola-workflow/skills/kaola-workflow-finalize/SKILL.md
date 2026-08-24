@@ -5,20 +5,30 @@ description: Use when Kaola-Workflow for Codex work, also called kaola-workflow,
 <!-- PIN: codex-dispatch-model-routing -->
 ## Codex Per-Spawn Model Routing
 
-Keep every installed role's existing standard-tier or reasoning-tier classification, and set the
+Keep every installed role's existing standard-tier, reasoning-tier, or heavy-tier classification, and set the
 model and reasoning effort explicitly on each spawn. Standard-tier roles dispatch with
 `model: "gpt-5.6-luna"` and `reasoning_effort: "max"`. Reasoning-tier roles dispatch with
+`model: "gpt-5.6-sol"` and `reasoning_effort: "medium"`. Heavy-tier roles dispatch with
 `model: "gpt-5.6-sol"` and `reasoning_effort: "high"`.
 
 Standard-tier roles: `code-explorer`, `investigator`, `knowledge-lookup`, `tdd-guide`,
 `implementer`, `doc-updater`, `metric-optimizer`.
 
-Reasoning-tier roles: `planner`, `code-architect`, `build-error-resolver`, `code-reviewer`,
-`security-reviewer`, `adversarial-verifier`, `synthesizer`.
+Reasoning-tier roles: `build-error-resolver`, `code-reviewer`, `security-reviewer`,
+`adversarial-verifier`, `synthesizer`.
 
-These mappings are fixed for every spawn. Do not escalate, downgrade, or otherwise override either
+Heavy-tier roles: `planner`, `code-architect`.
+
+Those three lists are the complete live Codex PIN roster.
+
+These mappings are fixed for every spawn. Do not escalate, downgrade, or otherwise override a
 tier's model or reasoning effort based on task breadth, latency, prior results, risk, availability,
-or any other condition. The role classification remains unchanged.
+or any other condition. The role classification remains unchanged. One carve-out: the orchestrator
+may re-dispatch a reviewer-class role at heavy when a reasoning-tier attempt failed to finish the
+review, or the surface is judged complex before dispatch.
+
+Each reviewer dispatch must state the review scope — the dispatched surface under review and what
+acceptance looks like.
 <!-- /PIN -->
 
 # Kaola-Workflow Finalize

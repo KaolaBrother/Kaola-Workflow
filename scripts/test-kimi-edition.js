@@ -480,6 +480,15 @@ const KIMI_RUNTIME_NATIVE = Object.freeze({
       'K2-declaration: ' + rel + ' carries a per-call model=" override, contradicting the declared '
         + 'inherit_session_model divergence');
   }
+
+  // #1018: a third canonical token (fable) must not grow a kimi model: field.
+  // The inherit contract is unchanged.
+  const fableProbe = sync.renderAgent('---\nname: planner\nmodel: fable\n---\n\nbody\n', 'planner');
+  const fableFm = fableProbe.match(/^---\n([\s\S]*?)\n---/);
+  assert(!fableFm || !/^\s*model\s*:/m.test(fableFm[1]),
+    'K2-fable: renderAgent of a fable-class agent still carries no model: frontmatter field');
+  assert(!/\bmodel="/.test(fableProbe),
+    'K2-fable: renderAgent of a fable-class agent still carries no per-call model=" override');
 }
 
 // ---------------------------------------------------------------------------

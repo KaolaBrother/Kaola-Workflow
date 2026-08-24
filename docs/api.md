@@ -1542,15 +1542,16 @@ its `DEFAULT_AGENT_MODELS` entry (asserted by `test-agent-model-resolver.js`).
 Codex subagent dispatch uses the existing role tier as a separate per-spawn contract. The per-tier
 model/effort pair is authored as typed literals in the dispatch-routing pin of
 `templates/routing/next.skeleton.md` and `finalize.skeleton.md`, which is what ships to the SKILL
-surfaces. `test-route-reachability.js` independently states both complete expected pairs and asserts
+surfaces. `test-route-reachability.js` independently states the complete three-way expected pairs and asserts
 every shipped Codex SKILL matches them; `validate-kaola-workflow-contracts.js` separately asserts the
 live README pairs. The `CODEX_STANDARD_*` and `CODEX_REASONING_*` constants in
 `scripts/kaola-workflow-codex-preflight.js` remain historical profile values used for stale-install
 migration and are not live dispatch authority. The contract validator still cross-binds those
 migration constants to the installer's copies. This document does not restate the values.
 
-The mappings are fixed for every Codex spawn. A `standard` role always receives the standard-tier
-pair and has no task-specific model or reasoning-effort escalation, downgrade, or other exception.
+The mappings are fixed for every Codex spawn. A role always receives its tier pair and has no
+task-specific model or reasoning-effort escalation, downgrade, or other exception, except the one
+reviewer-class heavy re-dispatch carve-out.
 This contract is Codex-only; the resolver and model routing for Claude Code, opencode, and Kimi
 are unchanged.
 

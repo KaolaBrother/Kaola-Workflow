@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **The heavy-reasoning tier (#1018).** Planner-class (`planner`, `code-architect`) defaults to
+  `fable` and live on `CODEX_PINNED_HEAVY_ROLES` (Heavy-tier), not the reasoning roster. Codex
+  live spawn is three-way: `standard` as `gpt-5.6-luna` / `max`, `reasoning` as
+  `gpt-5.6-sol` / `medium`, `heavy` as `gpt-5.6-sol` / `high`, with one reviewer-class re-dispatch
+  carve-out when reasoning-tier failed to finish or the surface is judged complex. Grok binds
+  fable/heavy to `effort: xhigh`; Cursor pins `grok-4.6[effort=xhigh]`. OpenCode classifies
+  `fable` as reasoning so planner-class stays on the override list. Reviewer bodies clamp
+  findings to the dispatched surface.
+
+
 ## [9.14.3] - 2026-08-23
 
 ### Changed

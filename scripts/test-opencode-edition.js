@@ -702,6 +702,18 @@ for (const role of reasoning) {
     'A8[' + role + ']: pinned reasoning tier carries the given provider/model');
 }
 
+// #1018 / ADR 0019: fable classifies as reasoning so planner/code-architect stay
+// on the per-role override list after they re-tier from opus to fable. The
+// live roleTier('opus')-only branch would silently drop them to standard.
+assert(sync.roleTier('fable') === 'reasoning',
+  'A8-fable: roleTier(fable) classifies as reasoning, not standard');
+assert(sync.roleTier('opus') === 'reasoning',
+  'A8-fable: roleTier(opus) remains reasoning');
+assert(sync.roleTier('sonnet') === 'standard',
+  'A8-fable: roleTier(sonnet) remains standard');
+assert(reasoning.includes('planner') && reasoning.includes('code-architect'),
+  'A8-fable: planner and code-architect stay on the per-role override list — got [' + reasoning.join(' , ') + ']');
+
 // A12 / S1-contract / A12-options — DELETED WITH THEIR MECHANISM. Per-role effort tiering is
 // removed, so every subject these three bands read is gone:
 //

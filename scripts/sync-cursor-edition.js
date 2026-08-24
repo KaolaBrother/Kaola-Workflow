@@ -13,8 +13,9 @@
 // by test-cursor-edition.js.
 //
 // Canonical model classes drive the generated agent tier pins: sonnet/standard
-// render the raw `model: grok-4.6[effort=medium]` line, while opus/reasoning
-// render `model: grok-4.6[effort=high]`. Task cards still omit per-dispatch
+// render the raw `model: grok-4.6[effort=medium]` line, opus/reasoning
+// render `model: grok-4.6[effort=high]`, and fable/heavy render
+// `model: grok-4.6[effort=xhigh]`. Task cards still omit per-dispatch
 // model overrides. The allowlist stays within one model family so only the
 // canonical class selects the generated effort tier.
 //
@@ -126,13 +127,15 @@ const CURSOR_MODEL_CLASS_PINS = Object.freeze({
   standard: 'grok-4.6[effort=medium]',
   opus: 'grok-4.6[effort=high]',
   reasoning: 'grok-4.6[effort=high]',
+  fable: 'grok-4.6[effort=xhigh]',
+  heavy: 'grok-4.6[effort=xhigh]',
 });
 
 function cursorModelPin(canonicalModel, agentName) {
   const token = String(canonicalModel == null ? '' : canonicalModel).trim().toLowerCase();
   if (!Object.prototype.hasOwnProperty.call(CURSOR_MODEL_CLASS_PINS, token)) {
     throw new Error('sync-cursor-edition: agent "' + (agentName || '(unnamed)')
-      + '" requires a canonical model token sonnet, standard, opus, or reasoning; received '
+      + '" requires a canonical model token sonnet, standard, opus, reasoning, fable, or heavy; received '
       + (token ? JSON.stringify(token) : '(absent)'));
   }
   return CURSOR_MODEL_CLASS_PINS[token];
@@ -172,16 +175,18 @@ function renderAgent(canonContent, agentName, forge) {
 }
 
 const CURSOR_MODEL_DISPATCH_GUIDANCE =
-  'Use the named Cursor agent; generated frontmatter pins its canonical standard or reasoning tier '
-  + 'to the approved model family at medium or high effort. Omit per-call model; do not claim IDE '
+  'Use the named Cursor agent; generated frontmatter pins its canonical standard, reasoning, or '
+  + 'fable/heavy tier to the approved model family at medium, high, or xhigh effort '
+  + '(fable pins grok-4.6[effort=xhigh]). Omit per-call model; do not claim IDE '
   + 'children display distinct effort. The one-family allowlist keeps dispatch cards portable while '
   + 'tier selection stays in generated agent metadata.';
 
 const CURSOR_MODEL_DISPATCH_BLOCK = [
   '## Generated agent tier pins',
   '',
-  'Named Cursor agents carry generated frontmatter that pins their canonical standard or reasoning',
-  'tier at medium or high effort. The one-family allowlist keeps the dispatch surface portable',
+  'Named Cursor agents carry generated frontmatter that pins their canonical standard, reasoning,',
+  'or fable/heavy tier at medium, high, or xhigh effort. The fable / heavy pin is',
+  '`grok-4.6[effort=xhigh]`. The one-family allowlist keeps the dispatch surface portable',
   'while the canonical class selects the generated tier pin.',
   '',
   'Dispatch a role with `Task` using `subagent_type: "<role>"` only. Do not substitute',
@@ -190,8 +195,8 @@ const CURSOR_MODEL_DISPATCH_BLOCK = [
   '',
   'Omit per-call model on `Task`, including `inherit`. Do not pass inherit. The IDE Task schema',
   'lists inherit as the default; that default is for built-ins. For named Kaola types, omit anyway;',
-  'do not pass inherit to satisfy the schema. Do not pass `cursor-grok-4.6-xhigh` (xhigh) as the',
-  'Task model.',
+  'do not pass inherit to satisfy the schema. `grok-4.6[effort=xhigh]` is the fable / heavy pin',
+  'on generated agent frontmatter; xhigh is allowed when it is that fable pin, not a Task override.',
   '',
   'Never resume a Kaola subagent; fresh dispatch only. Resume drops frontmatter effort.',
   '',

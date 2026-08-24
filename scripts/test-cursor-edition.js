@@ -106,10 +106,8 @@ function assertReliableCursorDispatchTeaching(label, text) {
   assert(cursorDispatchInheritTeachingOk(body),
     label + ': names the IDE Task schema inherit default; named Kaola types still omit '
     + '(do not pass inherit to satisfy the schema)');
-  assert(/(?:cursor-grok-4\.6-xhigh|\bxhigh\b)/i.test(body)
-    && /\bTask\b/.test(body)
-    && /omit|do not pass|never pass|not pass/i.test(body),
-    label + ': names cursor-grok-4.6-xhigh (or xhigh) and forbids passing it as the Task model');
+  assert(/grok-4\.6\[effort=xhigh\]/.test(body) && /fable/i.test(body),
+    label + ': names grok-4.6[effort=xhigh] as the fable / heavy pin (xhigh is allowed when it is the fable pin)');
   assert(/\bprompt\b/i.test(body)
     && /\bmission\b/i.test(body)
     && /\blocator\b/i.test(body)
@@ -199,8 +197,12 @@ function canonicalAgentClass(name) {
 }
 
 function canonicalRosters(names) {
-  const rosters = { standard: [], reasoning: [], unknown: [] };
-  for (const name of names) rosters[canonicalAgentClass(name).tier].push(name);
+  const rosters = { standard: [], reasoning: [], heavy: [], unknown: [] };
+  for (const name of names) {
+    const tier = canonicalAgentClass(name).tier;
+    if (!rosters[tier]) rosters[tier] = [];
+    rosters[tier].push(name);
+  }
   for (const tier of Object.keys(rosters)) rosters[tier].sort();
   return rosters;
 }
@@ -211,7 +213,7 @@ function canonicalRosters(names) {
 // ---------------------------------------------------------------------------
 const CURSOR_RUNTIME_NATIVE = Object.freeze({
   frontmatter_tier_pin:
-    'Cursor generated agent frontmatter pins canonical standard/reasoning model classes to unquoted grok-4.6[effort=medium/high]; command cards omit per-call model dispatch.',
+    'Cursor generated agent frontmatter pins canonical standard/reasoning/heavy model classes to unquoted grok-4.6[effort=medium/high/xhigh]; command cards omit per-call model dispatch.',
   session_start_resume_injection:
     'Cursor preCompact cannot inject into the agent after compact; sessionStart additional_context is the injection surface, and only on a new session. Durable resume is mission-list.md.',
 });
@@ -224,7 +226,23 @@ const CURSOR_MODEL_CLASS_TIERS = Object.freeze({
   standard: Object.freeze({ tier: 'standard', pin: 'grok-4.6[effort=medium]' }),
   opus: Object.freeze({ tier: 'reasoning', pin: 'grok-4.6[effort=high]' }),
   reasoning: Object.freeze({ tier: 'reasoning', pin: 'grok-4.6[effort=high]' }),
+  fable: Object.freeze({ tier: 'heavy', pin: 'grok-4.6[effort=xhigh]' }),
+  heavy: Object.freeze({ tier: 'heavy', pin: 'grok-4.6[effort=xhigh]' }),
 });
+
+// #1018: CURSOR_MODEL_CLASS_PINS is the production map (not exported). The
+// allowlist/pin must gain fable -> grok-4.6[effort=xhigh].
+const CURSOR_SYNC_SRC = fs.readFileSync(path.join(REPO, 'scripts', 'sync-cursor-edition.js'), 'utf8');
+const CURSOR_MODEL_CLASS_PINS_PIN = (() => {
+  const m = CURSOR_SYNC_SRC.match(/const CURSOR_MODEL_CLASS_PINS = Object\.freeze\(\{([\s\S]*?)\}\)/);
+  const out = {};
+  if (!m) return out;
+  for (const row of m[1].split('\n')) {
+    const mm = row.match(/^\s*([A-Za-z0-9_-]+)\s*:\s*'([^']+)'/);
+    if (mm) out[mm[1]] = mm[2];
+  }
+  return out;
+})();
 
 // ---------------------------------------------------------------------------
 // Additive boundary — cursor is a runtime, not a forge. Read the tree; do not
@@ -370,9 +388,22 @@ const canonRosters = canonicalRosters(canonAgents);
     'G0-roster: canonical sonnet/standard model class derives a non-empty standard roster');
   assert(canonRosters.reasoning.length > 0,
     'G0-roster: canonical opus/reasoning model class derives a non-empty reasoning roster');
+  assert(canonRosters.heavy.includes('planner') && canonRosters.heavy.includes('code-architect'),
+    'G0-roster: planner-class (planner, code-architect) is the heavy (fable) roster — heavy='
+    + JSON.stringify(canonRosters.heavy));
   assert(canonRosters.unknown.length === 0,
-    'G0-roster: every canonical agent model belongs to the known sonnet/standard or opus/reasoning classes — unknown='
+    'G0-roster: every canonical agent model belongs to the known sonnet/opus/fable classes — unknown='
     + JSON.stringify(canonRosters.unknown));
+  assert(Object.prototype.hasOwnProperty.call(CURSOR_MODEL_CLASS_PINS_PIN, 'fable'),
+    'G0-fable: CURSOR_MODEL_CLASS_PINS must include a fable entry');
+  assert(CURSOR_MODEL_CLASS_PINS_PIN.fable === 'grok-4.6[effort=xhigh]',
+    'G0-fable: CURSOR_MODEL_CLASS_PINS.fable must be grok-4.6[effort=xhigh] — got '
+    + JSON.stringify(CURSOR_MODEL_CLASS_PINS_PIN.fable));
+  for (const name of canonAgents) {
+    if (name === 'planner' || name === 'code-architect') continue;
+    assert(canonicalAgentClass(name).model !== 'fable',
+      'G0-roster: ' + name + ' must not change tier to fable — got ' + canonicalAgentClass(name).model);
+  }
 }
 
 // An unrecognised canonical class must be rejected by the subject rather than
@@ -399,11 +430,47 @@ const canonRosters = canonicalRosters(canonAgents);
     'G0-roster: renderAgent rejects an unsupported canonical model token (fail closed; no invented roster)');
 }
 
+{
+  const fableCanonical = [
+    '---',
+    'name: planner',
+    'description: fable class probe',
+    'model: fable',
+    '---',
+    '',
+    'probe',
+    '',
+  ].join('\n');
+  let rendered = '';
+  let accepted = false;
+  try {
+    rendered = syncMod.renderAgent(fableCanonical, 'planner');
+    accepted = true;
+  } catch (e) {
+    accepted = false;
+    rendered = String(e && e.message || e);
+  }
+  assert(accepted,
+    'G0-fable: renderAgent accepts fable (must not silently classify as standard) — ' + rendered);
+  assert(/model: grok-4\.6\[effort=xhigh\]/.test(rendered),
+    'G0-fable: renderAgent pins fable as grok-4.6[effort=xhigh] — got ' + rendered.slice(0, 200));
+}
+
 function agentRel(name, forge) {
   return treeLabel(forge || DEFAULT_FORGE) + '/agents/' + name + '.md';
 }
 function commandRel(name, forge) {
   return treeLabel(forge || DEFAULT_FORGE) + '/commands/' + name + '.md';
+}
+
+{
+  const heavyVariants = ['code-reviewer-heavy', 'adversarial-verifier-heavy', 'security-reviewer-heavy'];
+  for (const name of heavyVariants) {
+    assert(!canonAgents.includes(name),
+      'G0-ac6: no cursor heavy-variant reviewer agent ' + name + ' (escalation is claude+codex only)');
+    assert(!exists(agentRel(name)),
+      'G0-ac6: generated cursor tree must not ship ' + name);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -639,8 +706,8 @@ function stripCursorModelDispatchBlock(content) {
   assert(typeof reason === 'string' && reason.trim().length >= 20,
     'G2-declaration: CURSOR_RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason');
   assert(/frontmatter/i.test(reason) && /standard/i.test(reason) && /reasoning/i.test(reason)
-    && /medium/i.test(reason) && /high/i.test(reason) && /unquoted/i.test(reason),
-    'G2-declaration: the "' + KEY + '" reason must state unquoted standard/reasoning medium/high frontmatter pins');
+    && /medium/i.test(reason) && /high/i.test(reason) && /unquoted/i.test(reason) && /heavy|xhigh/i.test(reason),
+    'G2-declaration: the "' + KEY + '" reason must state unquoted standard/reasoning/heavy medium/high/xhigh frontmatter pins');
   const resumeKey = 'session_start_resume_injection';
   const resumeReason = CURSOR_RUNTIME_NATIVE[resumeKey];
   assert(typeof resumeReason === 'string' && resumeReason.trim().length >= 20,

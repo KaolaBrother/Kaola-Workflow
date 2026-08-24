@@ -13,8 +13,8 @@
 // parity-checked by test-grok-edition.js.
 //
 // The session supplies the model, while each generated agent carries an effort
-// derived from its canonical model class: sonnet/standard → medium and
-// opus/reasoning → high. The spawn tool accepts an optional `model` and no
+// derived from its canonical model class: sonnet/standard → medium,
+// opus/reasoning → high, and fable/heavy → xhigh. The spawn tool accepts an optional `model` and no
 // per-call effort; generated command surfaces omit the model override while
 // generated agents retain `model: inherit` plus their role effort pin.
 //
@@ -105,6 +105,8 @@ const GROK_MODEL_EFFORTS = Object.freeze({
   standard: 'medium',
   opus: 'high',
   reasoning: 'high',
+  fable: 'xhigh',
+  heavy: 'xhigh',
 });
 
 function effortForModelToken(modelToken, agentName) {
@@ -114,7 +116,7 @@ function effortForModelToken(modelToken, agentName) {
   const shown = token || '<absent>';
   throw new Error('sync-grok-edition: cannot derive Grok effort for role "'
     + agentName + '": unsupported canonical model token "' + shown
-    + '" (expected sonnet, standard, opus, or reasoning)');
+    + '" (expected sonnet, standard, opus, reasoning, fable, or heavy)');
 }
 
 function canonCommandPath(basename, forge) {
@@ -166,14 +168,15 @@ function renderAgent(canonContent, agentName, forge) {
 const GROK_MODEL_DISPATCH_GUIDANCE =
   'Omit a per-call model override; sub-agents inherit the session model. '
   + 'Their effort follows the canonical role class: sonnet/standard roles use medium, '
-  + 'and opus/reasoning roles use high.';
+  + 'opus/reasoning roles use high, and fable/heavy roles use xhigh.';
 
 const GROK_MODEL_DISPATCH_BLOCK = [
   '## Model is inherited; effort follows the role',
   '',
   'A subagent inherits the session model, while its effort follows the canonical role class.',
-  'Generated agents pin effort: medium for sonnet/standard roles and high for opus/reasoning',
-  'roles. Omit `model` on `spawn_subagent`; choose the named role and its pinned effort.',
+  'Generated agents pin effort: medium for sonnet/standard roles, high for opus/reasoning',
+  'roles, and xhigh for fable/heavy roles. Planner-class is the heavy roster. Omit `model` on',
+  '`spawn_subagent`; choose the named role and its pinned effort.',
   '',
   'Dispatch a role with `spawn_subagent` using `subagent_type: "<role>"`.',
   '',

@@ -25,6 +25,92 @@ const reviewerGenerator = require('./generate-reviewer-profiles');
 // resolved by SPAWNING the resolver against an installed tree, never by calling it in-process.
 const resolver = require('./kaola-workflow-resolve-agent-model.js');
 
+// #1018 / ADR 0019: three-tier axis pins that do not need an install. Source
+// frontmatter, resolver map, routing skeletons, and reviewer bodies are the
+// subjects. These must go RED on the two-tier HEAD and green only after the
+// implementer lands the recorded decision.
+{
+  const initSkel = fs.readFileSync(path.join(root, 'templates/routing/init.skeleton.md'), 'utf8');
+  assert(initSkel.includes('`planner (heavy-reasoning tier)`'),
+    '#1018 AC-11: templates/routing/init.skeleton.md consumer CLAUDE.md example must be planner (heavy-reasoning tier)');
+  assert(!initSkel.includes('`planner (reasoning tier)`'),
+    '#1018 AC-11: init.skeleton.md must not keep the pre-re-tier example planner (reasoning tier)');
+  assert(/Name roles by function and reasoning tier, never by a vendor model name/.test(initSkel),
+    '#1018 AC-11: the naming-rule sentence itself is unchanged word for word');
+  assert(/model_reasoning_effort\s*=\s*"ultra"/.test(initSkel),
+    '#1018 AC-11: init.skeleton.md session-posture model_reasoning_effort = "ultra" stays untouched');
+
+  const PLANNER_CLASS = ['planner', 'code-architect'];
+  const REVIEWER_CLASS = reviewerGenerator.ROLES.slice();
+  const extractFmModel = (rel) => {
+    const text = fs.readFileSync(path.join(root, rel), 'utf8');
+    const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (!m) return '';
+    const row = m[1].split(/\r?\n/).find(line => /^model\s*:/.test(line));
+    return row ? row.replace(/^model\s*:\s*/, '').trim() : '';
+  };
+  for (const role of PLANNER_CLASS) {
+    const fm = extractFmModel('agents/' + role + '.md');
+    assert.strictEqual(fm, 'fable',
+      '#1018 AC-1: agents/' + role + '.md source frontmatter must be model: fable; got ' + JSON.stringify(fm));
+    assert.strictEqual(resolver.DEFAULT_AGENT_MODELS[role], 'fable',
+      '#1018 AC-1: DEFAULT_AGENT_MODELS[' + role + '] must be fable (byte-equal to source frontmatter); got '
+      + JSON.stringify(resolver.DEFAULT_AGENT_MODELS[role]));
+  }
+  for (const [role, model] of Object.entries(resolver.DEFAULT_AGENT_MODELS)) {
+    if (PLANNER_CLASS.includes(role)) continue;
+    assert.notStrictEqual(model, 'fable',
+      '#1018 AC-1: ' + role + ' must keep its current tier and must not become fable; got ' + model);
+    const fm = extractFmModel('agents/' + role + '.md');
+    assert.strictEqual(fm, model,
+      '#1018 AC-1: ' + role + ' source frontmatter (' + fm + ') must stay byte-equal to DEFAULT_AGENT_MODELS (' + model + ')');
+  }
+  for (const role of REVIEWER_CLASS) {
+    assert.strictEqual(resolver.DEFAULT_AGENT_MODELS[role], 'opus',
+      '#1018 AC-1: reviewer-class ' + role + ' stays reasoning (opus); got '
+      + JSON.stringify(resolver.DEFAULT_AGENT_MODELS[role]));
+  }
+
+  const routingSkels = [
+    'templates/routing/next.skeleton.md',
+    'templates/routing/finalize.skeleton.md',
+  ];
+  for (const rel of routingSkels) {
+    const text = fs.readFileSync(path.join(root, rel), 'utf8');
+    const norm = text.replace(/\s+/g, ' ');
+    assert(/standard-tier/i.test(norm) && /gpt-5\.6-luna/.test(norm) && /reasoning_effort:\s*"max"/.test(text),
+      '#1018 AC-2: ' + rel + ' must render standard-tier as gpt-5.6-luna / max');
+    assert(/reasoning-tier/i.test(norm) && /gpt-5\.6-sol/.test(norm) && /reasoning_effort:\s*"medium"/.test(text),
+      '#1018 AC-2: ' + rel + ' must render reasoning-tier resting as gpt-5.6-sol / medium');
+    assert(/heavy/i.test(norm) && /gpt-5\.6-sol/.test(norm) && /reasoning_effort:\s*"high"/.test(text),
+      '#1018 AC-2: ' + rel + ' must render heavy-tier as gpt-5.6-sol / high');
+    assert(/do not escalate/i.test(norm) && /downgrade/i.test(norm),
+      '#1018 AC-2: ' + rel + ' must keep the do-not-escalate/downgrade pin');
+    const carve = /re-dispatch/i.test(norm) && /reviewer/i.test(norm) && /heavy/i.test(norm)
+      && /failed to finish/i.test(norm) && /complex/i.test(norm);
+    assert(carve,
+      '#1018 AC-2: ' + rel + ' do-not-escalate pin must carry exactly one carve-out: orchestrator may re-dispatch a reviewer-class role at heavy when reasoning-tier failed to finish or the surface is judged complex before dispatch');
+    assert(/reviewer dispatch/i.test(norm) && /scope/i.test(norm) && /surface/i.test(norm),
+      '#1018 AC-7: ' + rel + ' dispatch guidance must require each reviewer dispatch to state the review scope / dispatched surface');
+  }
+
+  const clampNeedles = [
+    /dispatched surface/i,
+    /observation/i,
+    /never expanded/i,
+    /never acted on/i,
+  ];
+  for (const role of REVIEWER_CLASS) {
+    const body = fs.readFileSync(path.join(root, 'agents', role + '.md'), 'utf8');
+    for (const re of clampNeedles) {
+      assert(re.test(body),
+        '#1018 AC-7: agents/' + role + '.md must carry reviewer scope-clamp wording matching ' + re
+        + ' (findings anchor to the dispatched surface; out-of-scope as observations, never expanded, never acted on)');
+    }
+  }
+}
+
+
 function renderClaudeInstalledReviewer(source) {
   let rendered = source.replace(/^model:\s*\S+\s*$/m, 'model: inherit');
   const matches = [...rendered.matchAll(/^resolved_profile_hash:\s*([0-9a-f]{64})\s*$/gm)];
@@ -2897,6 +2983,7 @@ function enableMultiAgentV2(homeRoot) {
   }
 }
 
+
 function readInstalledCommand(name) {
   return fs.readFileSync(path.join(tmp, '.claude', 'commands', name), 'utf8');
 }
@@ -2965,7 +3052,7 @@ try {
   // #610: the plan-column tier rename (opus/sonnet → reasoning/standard) is the PLAN vocabulary only —
   // it must NOT leak into the Claude Agent(model=…) rendering, which stays the concrete Claude aliases
   // (they feed the harness verbatim). A neutral token as an Agent model value would be a dispatch bug.
-  assert(!/model="(reasoning|standard)"/.test(allCommands),
+  assert(!/model="(reasoning|standard|heavy)"/.test(allCommands),
     'installed commands must render concrete Claude model aliases, never the neutral plan-tier tokens');
 
   const requiredAgents = ['code-explorer','knowledge-lookup','planner','code-architect','tdd-guide',
@@ -3024,9 +3111,10 @@ try {
   // whatever its source frontmatter already declared.
   //
   // #935 (owner-ruled) moved build-error-resolver and adversarial-verifier from the standard tier
-  // to the reasoning tier, so those two entries carry the ruled value rather than the pre-removal
-  // one. They are the ONLY entries that have moved, and each moved by an explicit ruling — a
-  // decision, never a green-suite convenience.
+  // to the reasoning tier. #1018 (owner-ruled, ADR 0019) then re-tiered the planner class
+  // (planner, code-architect) from reasoning (`opus`) to heavy-reasoning (`fable`). Those are
+  // the ONLY entries that have moved, and each moved by an explicit ruling — a decision, never
+  // a green-suite convenience. Reviewer-class stays `opus`.
   //
   // This table is INDEPENDENTLY DERIVED from DEFAULT_AGENT_MODELS — do not "fix" a failure here by
   // editing this table to match the resolver. The two agreeing is the whole assertion; if they
@@ -3045,8 +3133,8 @@ try {
     'code-explorer': 'sonnet',
     investigator: 'sonnet',
     'knowledge-lookup': 'sonnet',
-    planner: 'opus',
-    'code-architect': 'opus',
+    planner: 'fable',
+    'code-architect': 'fable',
     'tdd-guide': 'sonnet',
     implementer: 'sonnet',
     'build-error-resolver': 'opus',

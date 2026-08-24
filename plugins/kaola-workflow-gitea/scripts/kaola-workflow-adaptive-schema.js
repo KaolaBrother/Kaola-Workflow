@@ -65,7 +65,7 @@ const MISSION_LIST_FILE = 'mission-list.md';
 const PLAN_FILE = 'workflow-plan.md';
 
 // Codex role profile policy. Every known profile omits runtime-strength keys and inherits the parent
-// pair. The historical standard/reasoning classes remain declarative metadata and wait defaults.
+// pair. The standard / reasoning / heavy classes remain declarative metadata and wait defaults.
 const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
   'code-explorer',
   'investigator',
@@ -76,13 +76,15 @@ const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
   'metric-optimizer',
 ]);
 const CODEX_PINNED_REASONING_ROLES = Object.freeze([
-  'planner',
-  'code-architect',
   'build-error-resolver',
   'code-reviewer',
   'security-reviewer',
   'adversarial-verifier',
   'synthesizer',
+]);
+const CODEX_PINNED_HEAVY_ROLES = Object.freeze([
+  'planner',
+  'code-architect',
 ]);
 
 // Claim identity. Forge-neutral and side-effect-free so every edition hashes the same
@@ -1607,6 +1609,7 @@ module.exports = {
   PLAN_FILE,
   CODEX_PINNED_STANDARD_ROLES,
   CODEX_PINNED_REASONING_ROLES,
+  CODEX_PINNED_HEAVY_ROLES,
   isPlainObject,
   canonicalJson,
   sha256Hex,
