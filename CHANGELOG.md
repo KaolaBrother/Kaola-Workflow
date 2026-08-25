@@ -16,6 +16,12 @@
   and `scripts/test-install-all.js`; own suite `node scripts/test-zcode-edition.js`. Docs:
   `docs/zcode-edition.md`.
 
+### Fixed
+
+- **ZCode edition suite registration (#1027).** `test:kaola-workflow:editions` now runs
+  `test-zcode-edition.js` alongside the other additive runtimes, so the suite-registration guard
+  and the complete additive-editions lane cannot silently omit ZCode.
+
 ## [9.15.0] - 2026-08-24
 
 ### Changed
