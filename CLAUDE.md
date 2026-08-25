@@ -144,7 +144,7 @@ Two tiers. `test:kaola-workflow:claude` is the **fast gate**: every cheap step a
 ## Commands
 
 - Install: `./install.sh --forge=github|gitlab|gitea`; `./install-all.sh --forge=github` for every
-  runtime; `./install-opencode.sh` / `./install-kimi.sh` / `./install-grok.sh` / `./install-cursor.sh` for those additive editions alone.
+  runtime; `./install-opencode.sh` / `./install-kimi.sh` / `./install-grok.sh` / `./install-cursor.sh` / `./install-zcode.sh` for those additive editions alone.
 - The installed command surface is three: `/workflow-init`, `/workflow-next`, `/kaola-workflow-finalize`.
 - Lint/typecheck/build: unknown (Node scripts only, no formal pipeline).
 
@@ -177,7 +177,7 @@ architecture docs if structure changed · inline comments where public interface
 - **Prose changes propagate to generated surfaces.** Command and SKILL surfaces render from skeletons in
   `templates/routing/` — edit the skeleton and regenerate, never a rendered surface.
   `node scripts/generate-routing-surfaces.js --check` prints the surface count and runs in every chain.
-- **opencode, kimi, grok, and cursor are additive runtime editions**, not forges: absent from `npm test`,
+- **opencode, kimi, grok, cursor, and zcode are additive runtime editions**, not forges: absent from `npm test`,
   `edition-sync.js` and `install.sh`. An edition-only diff owes no four-chain run; run its own suite.
 - **A guard reads what ships, not what was authored**; a threshold cannot see a rule beneath its bar; and
   **specify the result, never the method** — a mechanism claim in a brief rots and makes the agent wrong,

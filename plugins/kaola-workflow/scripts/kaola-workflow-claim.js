@@ -6641,7 +6641,7 @@ function cmdLegacyWorktreeCleanup() {
 
 const USAGE = 'usage: kaola-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|watch-pr|bootstrap|startup|finalize|pick-next|list-open|resume|worktree-status|worktree-finalize|sink-fallback|verify-sink|stale-worktree-check|stale-worktree-cleanup|legacy-worktree-cleanup|audit-labels|repair-labels|barrier-ref-sweep>\n'
   + '  flags: --project P [--json] [--force] [--strict] [--issue N] [--target-issue N] [--target-issues A,B] [--pr-number N]\n'
-  + '         [--branch B] [--reason R] [--runtime claude|codex|opencode|kimi|grok] [--sink merge|mr|pr] [--workflow-path VALUE (retired, ignored)]\n'
+  + '         [--branch B] [--reason R] [--runtime claude|codex|opencode|kimi|grok|zcode] [--sink merge|mr|pr] [--workflow-path VALUE (retired, ignored)]\n'
   + '         [--keep-worktree] [--keep-open|--keep-issue-open] [--keep-branch] [--execute] [--archive] [--export]\n'
   + '  finalize --project P --check [--json]\n'
   + '               ONE read-only pass over EVERY finalize precondition (mirror, workflow_state,\n'

@@ -36,11 +36,11 @@ One canonical axis, three tokens, declared where the two existing ones already l
 heavy-reasoning**. Every edition keeps deriving its binding from that token; no new authoring
 surface exists.
 
-| tier | claude | codex | grok | cursor | opencode | kimi |
-|---|---|---|---|---|---|---|
-| standard | `sonnet` | `gpt-5.6-luna` / `max` | inherit + `effort: medium` | `grok-4.6[effort=medium]` | session model | session model |
-| reasoning | `opus` | `gpt-5.6-sol` / `medium` | inherit + `effort: high` | `grok-4.6[effort=high]` | per-role override list | session model |
-| heavy | `fable` | `gpt-5.6-sol` / `high` | inherit + `effort: xhigh` | `grok-4.6[effort=xhigh]` | classifies as reasoning | session model |
+| tier | claude | codex | grok | cursor | opencode | kimi | zcode |
+|---|---|---|---|---|---|---|---|
+| standard | `sonnet` | `gpt-5.6-luna` / `max` | inherit + `effort: medium` | `grok-4.6[effort=medium]` | session model | session model | `GLM-5.3` / `thoughtLevel: high` |
+| reasoning | `opus` | `gpt-5.6-sol` / `medium` | inherit + `effort: high` | `grok-4.6[effort=high]` | per-role override list | session model | `GLM-5.3` / `thoughtLevel: max` |
+| heavy | `fable` | `gpt-5.6-sol` / `high` | inherit + `effort: xhigh` | `grok-4.6[effort=xhigh]` | classifies as reasoning | session model | `GLM-5.3` / `thoughtLevel: max` |
 
 Claude aliases are unversioned on purpose (owner): they float with model updates. Claude effort is
 **not** pinned — all three tiers run the runtime's default effort. A per-subagent `effort` key

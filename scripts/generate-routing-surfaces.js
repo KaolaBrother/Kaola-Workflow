@@ -358,7 +358,7 @@ function cmdCheck(ir) {
 function refreshPresentEditionTrees() {
   const { spawnSync } = require('child_process');
   let failed = 0;
-  for (const script of ['sync-opencode-edition.js', 'sync-kimi-edition.js', 'sync-grok-edition.js', 'sync-cursor-edition.js']) {
+  for (const script of ['sync-opencode-edition.js', 'sync-kimi-edition.js', 'sync-grok-edition.js', 'sync-cursor-edition.js', 'sync-zcode-edition.js']) {
     const abs = path.join(__dirname, script);
     if (!fs.existsSync(abs)) continue; // a checkout that does not carry the edition generators
     const r = spawnSync(process.execPath, [abs, '--refresh-present'], { cwd: REPO, stdio: 'inherit' });

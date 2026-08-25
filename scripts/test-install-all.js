@@ -92,6 +92,7 @@ const KNOWN_INSTALLERS = [
   { runtime: 'kimi',     file: 'install-kimi.sh',                                             ref: 'install-kimi.sh' },
   { runtime: 'grok',     file: 'install-grok.sh',                                             ref: 'install-grok.sh' },
   { runtime: 'cursor',   file: 'install-cursor.sh',                                           ref: 'install-cursor.sh' },
+  { runtime: 'zcode',     file: 'install-zcode.sh',                                             ref: 'install-zcode.sh' },
 ];
 
 // ---- tree-derived installer set (so the list above can never go stale) ----
@@ -366,6 +367,7 @@ function stubRoot(opts) {
     kimi:     writeStub(root, 'install-kimi.sh',       'bash', codes.kimi ?? 0, '.ran-kimi'),
     grok:     writeStub(root, 'install-grok.sh',       'bash', codes.grok ?? 0, '.ran-grok'),
     cursor:   writeStub(root, 'install-cursor.sh',     'bash', codes.cursor ?? 0, '.ran-cursor'),
+    zcode:     writeStub(root, 'install-zcode.sh',       'bash', codes.zcode ?? 0, '.ran-zcode'),
   };
   const treeVersion = opts.treeVersion || '5.0.0';
   // opts.pluginDir / opts.pluginName let a case build a FORGE edition manifest
