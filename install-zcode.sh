@@ -447,8 +447,11 @@ confirm_install
 copy_agents "$LAYOUT_DEST/agents"
 copy_commands "$LAYOUT_DEST/commands"
 sync_agents_to_user_scope
-install_support_scripts
+# The edition dir and the support-script home can alias (globally or when a
+# project sets ZCODE_HOME to its .zcode directory), so real manifest scripts
+# must always be the final copy. Hooks are safe to refresh in either location.
 install_edition_dir
+install_support_scripts
 merge_config
 
 echo ""

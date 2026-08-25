@@ -74,11 +74,16 @@ merged `config.json` are workspace surfaces and live under `<project>/.zcode/`.
 [--uninstall] [--no-scripts] [--yes]`
 
 - **Project** (default / `--target`): agents + commands under `<target>/.zcode/{agents,commands}`,
-  agent roster synced to `${ZCODE_HOME:-~/.zcode}/agents`, hook shells + script launchers under
-  `<target>/.zcode/kaola-workflow/`, hook mapping merged into `<target>/.zcode/config.json`,
-  real support scripts under `${ZCODE_HOME:-~/.zcode}/kaola-workflow/scripts`.
+  agent roster synced to `${ZCODE_HOME:-~/.zcode}/agents`, hook shells + script launchers staged
+  under `<target>/.zcode/`, hook mapping merged into `<target>/.zcode/config.json`, and real
+  support scripts staged under `${ZCODE_HOME:-~/.zcode}/kaola-workflow/scripts`.
 - **`--global`**: agents and commands land directly under `${ZCODE_HOME:-~/.zcode}/{agents,commands}`
   (no nested `.zcode/`), with the hook mapping merged into `${ZCODE_HOME:-~/.zcode}/config.json`.
+  The installer stages generated launchers first and copies real manifest support scripts last.
+  Thus real scripts win wherever the edition layout and `${ZCODE_HOME:-~/.zcode}` coincide; with
+  distinct paths, project launchers remain in the project edition directory and real scripts remain
+  in the shared home path, so a command invoked from a non-Kaola consumer cwd does not recurse
+  through a launcher.
 - **`--uninstall`** removes only kaola-deployed names — the staged and user-scope agent copies,
   the commands, the support scripts and hook shells, and kaola-owned entries in `config.json`.
   Foreign agents, foreign config keys, and foreign hook entries survive.

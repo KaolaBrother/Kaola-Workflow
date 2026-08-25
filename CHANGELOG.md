@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Seven-runtime metadata reconciliation (#1028).** README, package metadata, and the additive
+  edition install notes now describe Claude Code, Codex, opencode, Kimi Code, Grok CLI, Cursor, and
+  ZCode; the Kimi, Grok, and Cursor sequence notes retain their fourth, fifth, and sixth leg
+  ordinals within the seven-runtime sequence.
+
+- **ZCode support-script convergence (#1030).** Generated launchers stage first and real manifest
+  support scripts copy last, so real scripts win wherever the edition layout and
+  `${ZCODE_HOME:-$HOME/.zcode}` coincide. With distinct paths, project launchers remain in the
+  project edition directory and real scripts remain in the shared home path; a consumer cwd
+  therefore resolves a real support script without recursively re-entering a launcher.
+
+### Tests
+
+- **Release-stable changelog witness (#1031).** The ZCode edition suite now checks for a ZCode entry
+  in any bracketed release section and mutation-checks that removing those entries makes the witness
+  fail. The focused `node scripts/test-zcode-edition.js` run passed with 695/695 assertions.
+
 ## [9.17.0] - 2026-08-25
 
 ### Added

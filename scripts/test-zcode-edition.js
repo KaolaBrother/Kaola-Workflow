@@ -969,6 +969,58 @@ for (const role of reviewerGenerator.ROLES) {
       clean(r);
     }
 
+    // A project whose <target>/.zcode is also $ZCODE_HOME exercises the same
+    // physical support-script directory as --global, without the GLOBAL flag.
+    // The ordinary project copy order must still leave the real support script
+    // available to a consumer cwd rather than the generated self-launcher.
+    {
+      const aliasDest = fs.mkdtempSync(path.join(tmpBase(), 'zcode-alias-dest-'));
+      const aliasHome = fs.mkdtempSync(path.join(tmpBase(), 'zcode-alias-home-'));
+      const aliasZcodeHome = path.join(aliasDest, '.zcode');
+      const consumerCwd = fs.mkdtempSync(path.join(tmpBase(), 'zcode-alias-consumer-'));
+      const consumerPackage = path.join(consumerCwd, 'package.json');
+      try {
+        fs.writeFileSync(consumerPackage, JSON.stringify({ name: 'zcode-alias-consumer-fixture' }) + '\n');
+        const r = runInstaller([], {
+          home: aliasHome,
+          zcodeHome: aliasZcodeHome,
+          dest: aliasDest,
+          cwd: consumerCwd,
+        });
+        assertReal(path.resolve(r.dest, '.zcode') === path.resolve(r.zcodeHome),
+          'G8-project-alias: fixture has <target>/.zcode exactly equal to $ZCODE_HOME');
+        assertReal(r.status === 0,
+          'G8-project-alias: install-zcode.sh --target exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
+        const consumerScriptName = 'kaola-workflow-claim.js';
+        const consumerScript = path.join(r.zcodeHome, 'kaola-workflow', 'scripts', consumerScriptName);
+        const deployedSource = fs.existsSync(consumerScript)
+          ? fs.readFileSync(consumerScript, 'utf8') : '';
+        const consumerPackageJson = JSON.parse(fs.readFileSync(consumerPackage, 'utf8'));
+        assertReal(consumerPackageJson.name !== 'kaola-workflow',
+          'G8-project-alias: fixture package name is not kaola-workflow, so installed-first resolution is exercised');
+        // spawn-class: environment
+        const invoked = spawnSync(process.execPath, [consumerScript, '--help'], {
+          cwd: consumerCwd,
+          env: Object.assign({}, process.env, { HOME: r.home, ZCODE_HOME: r.zcodeHome }),
+          encoding: 'utf8',
+          timeout: 1000,
+          killSignal: 'SIGKILL',
+          maxBuffer: 1024 * 1024,
+        });
+        const timedOut = !!invoked.error && invoked.error.code === 'ETIMEDOUT';
+        const isLauncher = /zcode-edition support launcher/.test(deployedSource);
+        assertReal(!isLauncher && invoked.status === 0 && !timedOut,
+          'G8-project-alias-consumer: when <target>/.zcode === $ZCODE_HOME, the installed '
+          + consumerScriptName + ' is the real support script (not a self-launcher) and '
+          + '--help exits 0 from a non-kaola-workflow cwd — launcher=' + isLauncher
+          + ', status=' + invoked.status + ', error=' + (invoked.error && invoked.error.code || 'none'));
+      } finally {
+        for (const d of [consumerCwd, aliasHome, aliasDest]) {
+          try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+        }
+      }
+    }
+
     // --global: agents/commands land under ZCODE_HOME, un-nested.
     {
       const r = runInstaller(['--global'], { skipTarget: true });
@@ -986,6 +1038,42 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-global: creates NO nested .zcode/ under ZCODE_HOME');
       const globalConfig = path.join(r.zcodeHome, 'config.json');
       assertReal(fs.existsSync(globalConfig), 'G8-global: merges hooks into $ZCODE_HOME/config.json');
+
+      // A consumer cwd must prefer the real support script installed in the global
+      // support directory. The generated edition launcher has the same basename;
+      // if it overwrites the real script, a non-kaola-workflow package cwd selects
+      // that launcher first and recursively re-executes it. The invocation is
+      // deliberately bounded so the regression witness can never recurse forever.
+      const consumerCwd = fs.mkdtempSync(path.join(tmpBase(), 'zcode-consumer-'));
+      const consumerPackage = path.join(consumerCwd, 'package.json');
+      const consumerScriptName = 'kaola-workflow-claim.js';
+      const consumerScript = path.join(r.zcodeHome, 'kaola-workflow', 'scripts', consumerScriptName);
+      try {
+        fs.writeFileSync(consumerPackage, JSON.stringify({ name: 'zcode-consumer-fixture' }) + '\n');
+        const consumerPackageJson = JSON.parse(fs.readFileSync(consumerPackage, 'utf8'));
+        assertReal(consumerPackageJson.name !== 'kaola-workflow',
+          'G8-global-consumer: fixture package name is not kaola-workflow, so installed-first resolution is exercised');
+        const deployedSource = fs.existsSync(consumerScript)
+          ? fs.readFileSync(consumerScript, 'utf8') : '';
+        // spawn-class: environment
+        const invoked = spawnSync(process.execPath, [consumerScript, '--help'], {
+          cwd: consumerCwd,
+          env: Object.assign({}, process.env, { HOME: r.home, ZCODE_HOME: r.zcodeHome }),
+          encoding: 'utf8',
+          timeout: 1000,
+          killSignal: 'SIGKILL',
+          maxBuffer: 1024 * 1024,
+        });
+        const timedOut = !!invoked.error && invoked.error.code === 'ETIMEDOUT';
+        const isLauncher = /zcode-edition support launcher/.test(deployedSource);
+        assertReal(!isLauncher && invoked.status === 0 && !timedOut,
+          'G8-global-consumer: from a non-kaola-workflow package cwd, the installed '
+          + consumerScriptName + ' is the real support script (not a self-launcher) and '
+          + '--help exits 0 — launcher=' + isLauncher + ', status=' + invoked.status
+          + ', error=' + (invoked.error && invoked.error.code || 'none'));
+      } finally {
+        try { fs.rmSync(consumerCwd, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
       clean(r);
     }
 
@@ -1117,12 +1205,79 @@ for (const role of reviewerGenerator.ROLES) {
   }
   {
     const changelog = fs.readFileSync(path.join(REPO, 'CHANGELOG.md'), 'utf8');
-    // The canonical heading is the bracketed `## [Unreleased]`. The section
-    // boundary is any OTHER `## ` heading — the lookahead must tolerate the
-    // optional `[` or it would cut AT the Unreleased heading itself.
-    const unreleased = changelog.split(/\n##\s+(?!\[?Unreleased)/)[0];
-    assertReal(/##\s*\[?Unreleased/.test(unreleased) && /zcode/i.test(unreleased),
-      'D2: CHANGELOG.md has a zcode entry under [Unreleased]');
+    // A release cut moves the entry out of [Unreleased]. Keep the witness over
+    // every bracketed release section, including [Unreleased] when present.
+    function hasZcodeReleaseEntry(text) {
+      const lines = String(text).split(/\r?\n/);
+      let inRelease = false;
+      let bullet = [];
+      let found = false;
+      const flush = () => {
+        if (inRelease && bullet.length && /\bzcode\b/i.test(bullet.join('\n'))) found = true;
+        bullet = [];
+      };
+      for (const line of lines) {
+        if (/^##\s+/.test(line)) {
+          flush();
+          inRelease = /^##\s+\[[^\]]+\]/.test(line);
+          continue;
+        }
+        if (inRelease && /^###\s+/.test(line)) {
+          flush();
+          continue;
+        }
+        if (inRelease && /^\s*[-*]\s+/.test(line)) {
+          flush();
+          bullet = [line];
+          continue;
+        }
+        if (inRelease && bullet.length) {
+          if (line.trim() === '') flush();
+          else bullet.push(line);
+        }
+      }
+      flush();
+      return found;
+    }
+    function removeZcodeEntries(text) {
+      const lines = String(text).split(/\r?\n/);
+      const out = [];
+      let inRelease = false;
+      let bullet = [];
+      const flush = () => {
+        if (!bullet.length || !/\bzcode\b/i.test(bullet.join('\n'))) out.push(...bullet);
+        bullet = [];
+      };
+      for (const line of lines) {
+        if (/^##\s+/.test(line)) {
+          flush();
+          inRelease = /^##\s+\[[^\]]+\]/.test(line);
+          out.push(line);
+          continue;
+        }
+        if (inRelease && (/^###\s+/.test(line) || line.trim() === '')) {
+          flush();
+          out.push(line);
+          continue;
+        }
+        if (inRelease && /^\s*[-*]\s+/.test(line)) {
+          flush();
+          bullet = [line];
+          continue;
+        }
+        if (inRelease && bullet.length) bullet.push(line);
+        else out.push(line);
+      }
+      flush();
+      return out.join('\n');
+    }
+    assertReal(hasZcodeReleaseEntry(changelog),
+      'D2: CHANGELOG.md has a zcode entry in a release section (including [Unreleased])');
+    const withoutZcode = removeZcodeEntries(changelog);
+    assertReal(withoutZcode !== changelog,
+      'D2-mutation: removing the zcode entry changes the changelog witness input');
+    assertReal(!hasZcodeReleaseEntry(withoutZcode),
+      'D2-mutation: removing the zcode entry makes the release-stable witness fail');
   }
 }
 
