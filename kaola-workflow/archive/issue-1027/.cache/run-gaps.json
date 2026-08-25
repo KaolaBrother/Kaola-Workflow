@@ -1,0 +1,10 @@
+{
+  "project": "issue-1027",
+  "sweptClasses": [
+    {
+      "reasonClass": "manual:documentation-stale-runtime-count",
+      "sample": "README.md and package.json still say six runtimes after ZCode made seven",
+      "count": 1
+    }
+  ]
+}
