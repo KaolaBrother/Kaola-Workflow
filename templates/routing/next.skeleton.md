@@ -17,8 +17,6 @@ or any other condition. The role classification remains unchanged. One carve-out
 may re-dispatch a reviewer-class role at heavy when a reasoning-tier attempt failed to finish the
 review, or the surface is judged complex before dispatch.
 
-Each reviewer dispatch must state the review scope — the dispatched surface under review and what
-acceptance looks like.
 <!-- /PIN -->
 <!-- /REGION -->
 
@@ -40,6 +38,8 @@ reorganizing someone's issues — state what you propose and why, then wait for 
 Everything checkable is yours to decide and get on with.
 <!-- /PIN -->
 
+<!-- SLOT:main-authored-handoff -->
+
 <!-- REGION:command — command-only (Codex skill strips it; Delegation stays REGION:skill) -->
 ## Agent Model Dispatch
 
@@ -56,10 +56,10 @@ Reviewer-class roles retain their installed reasoning-tier (`opus`) profile as t
 One carve-out: the orchestrator may re-dispatch a reviewer-class role at heavy when a reasoning-tier
 attempt failed to finish the review, or the surface is judged complex before dispatch.
 
-The bounded heavy re-dispatch uses the approved `fable` profile only. Each reviewer dispatch must
-state the review scope — the dispatched surface under review and what acceptance looks like.
+The bounded heavy re-dispatch uses the approved `fable` profile only.
 
 <!-- /REGION -->
+
 ## Step 1 — Pick the work
 
 You select the target. No script picks for you.

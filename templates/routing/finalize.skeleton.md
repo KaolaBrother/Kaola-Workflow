@@ -17,8 +17,6 @@ or any other condition. The role classification remains unchanged. One carve-out
 may re-dispatch a reviewer-class role at heavy when a reasoning-tier attempt failed to finish the
 review, or the surface is judged complex before dispatch.
 
-Each reviewer dispatch must state the review scope — the dispatched surface under review and what
-acceptance looks like.
 <!-- /PIN -->
 <!-- /REGION -->
 
@@ -45,6 +43,8 @@ result, and you are the only party with enough context to be.
 Read `kaola-workflow/{project}/workflow-state.md` for what this run owns, and
 `kaola-workflow/{project}/mission-list.md` for what it set out to do.
 
+<!-- SLOT:main-authored-handoff -->
+
 <!-- REGION:command — the `model="{...}"` placeholders are filled at install time for this surface; the skill surface has no placeholder to fill and resolves each role's model from its installed profile at spawn time -->
 ## Agent Model Dispatch
 
@@ -62,10 +62,10 @@ Reviewer-class roles retain their installed reasoning-tier (`opus`) profile as t
 One carve-out: the orchestrator may re-dispatch a reviewer-class role at heavy when a reasoning-tier
 attempt failed to finish the review, or the surface is judged complex before dispatch.
 
-The bounded heavy re-dispatch uses the approved `fable` profile only. Each reviewer dispatch must
-state the review scope — the dispatched surface under review and what acceptance looks like.
+The bounded heavy re-dispatch uses the approved `fable` profile only.
 
 <!-- /REGION -->
+
 ## Step 1 — Final validation
 
 Gate on repo kind. It is detected, never configured.

@@ -966,6 +966,7 @@ for (const ed of codexEditions) {
 // obligating 4-of-6 surfaces by omission is structurally impossible.
 // ===========================================================================
 const { REQUIRED_BLOCKS } = require('../templates/routing/required-blocks.js');
+const { SLOTS } = require('../templates/routing/slots.js');
 
 // THE SURFACE UNIVERSE IS TWELVE TREES, NOT SIX. Six are tracked (three claude
 // command dirs + three codex skills dirs); six are GENERATED and gitignored —
@@ -1137,8 +1138,131 @@ const readRealSurface = rel => (GENERATED_SURFACE_CONTENT.has(rel)
   : (exists(rel) ? fs.readFileSync(path.join(REPO, rel), 'utf8') : null));
 
 // ---------------------------------------------------------------------------
+// T21: the main-authored handoff is one delimited byte block on both dispatch
+// topics. The production slot is the canonical expected byte source. This guard
+// reads FINAL consumer bytes: tracked command /
+// skill files from disk and additive runtime commands from GENERATED_SURFACE_CONTENT.
+// ---------------------------------------------------------------------------
+const HANDOFF_OPEN = '<!-- PIN: main-authored-handoff -->';
+const HANDOFF_CLOSE = '<!-- /PIN -->';
+const HANDOFF_LABELS = [
+  '`Mission:`',
+  '`Context:`',
+  '`Authority:`',
+  '`Scope and custody:`',
+  '`Acceptance:`',
+  '`Deliverable:`',
+  '`Stop and report:`',
+];
+const HANDOFF_SEMANTIC_NEEDLES = [
+  'Before each named-role spawn, main writes a compact task-specific brief that the role can execute '
+    + 'from that brief, its installed profile, and the named repository evidence alone; inherited conversation is never required.',
+  'The role profile remains authoritative for universal role behavior.',
+  'Main retains product intent, value decisions, integration, acceptance of returned work, review consequences, and the final done verdict.',
+  'Planning and design (`planner`, `code-architect`) receive',
+  'Investigation roles receive an exact question or claim, evidence surface, and authority or measurement standard.',
+  '`tdd-guide` receives acceptance claims, the baseline, test custody, the production exclusion, and the required RED evidence; `implementer` receives',
+  'Repair, convergence, documentation, and optimization roles receive the concrete candidate, failure, or input;',
+  '`code-reviewer` and `security-reviewer` receive the exact candidate, dispatched surface, and acceptance; `adversarial-verifier` receives exactly one claim and one surface.',
+  'Keep the packet sparse: include only task-specific facts, decisions, bounds, and evidence; do not repeat the role profile.',
+  'This is handoff guidance, not a new workflow record or a machine-graded prompt schema.',
+  'The mission list remains the recovery index:',
+];
+
+function countText(text, needle) {
+  let count = 0, from = 0;
+  while (true) {
+    const at = String(text).indexOf(needle, from);
+    if (at < 0) return count;
+    count++;
+    from = at + needle.length;
+  }
+}
+
+// extractDelimitedBlock — PURE. A malformed marker pair is a failure, never a
+// missing-value pass. The returned block intentionally excludes the line break
+// after the closing marker, matching the slot's delimited bytes.
+function extractDelimitedBlock(content) {
+  if (content === null || content === undefined) {
+    return { block: null, openCount: 0, closeCount: 0 };
+  }
+  const text = String(content);
+  const openCount = countText(text, HANDOFF_OPEN);
+  if (openCount !== 1) return { block: null, openCount, closeCount: 0 };
+  const start = text.indexOf(HANDOFF_OPEN);
+  const end = text.indexOf(HANDOFF_CLOSE, start);
+  if (end < start) return { block: null, openCount, closeCount: 0 };
+  return {
+    block: text.slice(start, end + HANDOFF_CLOSE.length),
+    openCount,
+    // `<!-- /PIN -->` closes many independent pins on a shipped surface. The
+    // first close after this unique opening marker is the handoff delimiter.
+    closeCount: 1,
+  };
+}
+
+function handoffBlockFailures(block) {
+  const failures = [];
+  if (typeof block !== 'string' || !block.startsWith(HANDOFF_OPEN) || !block.endsWith(HANDOFF_CLOSE)) {
+    failures.push('handoff block is not one complete delimited main-authored-handoff block');
+    return failures;
+  }
+  if (countText(block, HANDOFF_OPEN) !== 1) {
+    failures.push('handoff block must contain exactly one opening marker');
+  }
+  const normalized = norm(block);
+  const positions = HANDOFF_LABELS.map(label => normalized.indexOf(label));
+  HANDOFF_LABELS.forEach((label, i) => {
+    if (countText(normalized, label) !== 1) {
+      failures.push(`handoff label ${label} must occur exactly once (got ${countText(normalized, label)})`);
+    }
+    if (positions[i] < 0) failures.push(`handoff label ${label} is absent`);
+  });
+  for (let i = 1; i < positions.length; i++) {
+    if (positions[i - 1] >= 0 && positions[i] >= 0 && positions[i - 1] >= positions[i]) {
+      failures.push(`handoff labels are out of order: ${HANDOFF_LABELS[i - 1]} before ${HANDOFF_LABELS[i]}`);
+    }
+  }
+  for (const needle of HANDOFF_SEMANTIC_NEEDLES) {
+    if (!normalized.includes(norm(needle))) failures.push(`handoff semantic needle absent: ${needle}`);
+  }
+  return failures;
+}
+
+const HANDOFF_SLOT = SLOTS['main-authored-handoff'];
+const HANDOFF_EXPECTED_BLOCK = typeof HANDOFF_SLOT === 'string' ? HANDOFF_SLOT : '';
+assert(typeof HANDOFF_SLOT === 'string' && HANDOFF_SLOT.length > 0,
+  'T21 source: SLOTS[main-authored-handoff] must be a non-empty canonical block');
+for (const failure of handoffBlockFailures(HANDOFF_EXPECTED_BLOCK)) {
+  assert(false, `T21 canonical block: ${failure}`);
+}
+
+function handoffSurfaceFailures(surfaceMap, expected, files) {
+  const failures = [];
+  for (const file of files) {
+    const content = surfaceMap[file];
+    if (content === null || content === undefined) {
+      failures.push(`handoff absent-surface: ${file}`);
+      continue;
+    }
+    const extracted = extractDelimitedBlock(content);
+    if (extracted.block === null) {
+      failures.push(`handoff malformed block on ${file} (open=${extracted.openCount}, close=${extracted.closeCount})`);
+      continue;
+    }
+    for (const failure of handoffBlockFailures(extracted.block)) {
+      failures.push(`handoff semantic mismatch on ${file}: ${failure}`);
+    }
+    if (extracted.block !== expected) {
+      failures.push(`handoff byte mismatch on ${file}`);
+    }
+  }
+  return failures;
+}
+
+// ---------------------------------------------------------------------------
 // T20: ADR 0019 reviewer dispatch contract — Claude commands carry the one bounded heavy
-// re-dispatch and the scope packet, while Grok/Cursor generated commands retain their declared
+// re-dispatch and the shared handoff specialization, while Grok/Cursor generated commands retain their declared
 // divergence and omit dynamic reviewer escalation (their generated agent pins have no per-call
 // override). Read the canonical GitHub command surfaces here; generate-routing-surfaces --check
 // separately binds the GitLab/Gitea command copies byte-for-byte to the same skeleton.
@@ -1162,9 +1286,13 @@ const readRealSurface = rel => (GENERATED_SURFACE_CONTENT.has(rel)
     assert(REVIEWER_HEAVY_MODEL_EXCEPTION.test(normalized),
       `T20 Claude contract: ${row.path} must make the sanctioned reviewer heavy re-dispatch executable `
       + 'with explicit model="fable" instead of the resting reviewer opus/profile model');
-    assert(REVIEW_SCOPE_PACKET.test(normalized),
-      `T20 Claude contract: ${row.path} must require each reviewer dispatch to state the dispatched `
-      + 'surface under review and what acceptance looks like');
+    const handoff = extractDelimitedBlock(canonical);
+    assert(handoff.block === HANDOFF_EXPECTED_BLOCK && handoffBlockFailures(handoff.block).length === 0,
+      `T20 Claude contract: ${row.path} must carry the shared handoff specialization for reviewer `
+      + 'candidate/surface identity and acceptance');
+    assert(!REVIEW_SCOPE_PACKET.test(normalized),
+      `T20 Claude contract: ${row.path} must remove the obsolete reviewer-only scope sentence; `
+      + 'the shared handoff specialization is now authoritative');
 
     const basename = path.basename(row.path, '.md');
     for (const [runtime, renderCommand] of [
@@ -1259,7 +1387,12 @@ function checkManifest({ blocks, readSurface, editions, topicBasename, foreignMa
     ? foreignMarkers
     : new Set((foreignMarkers || []).map(norm));
   let obligatedCount = 0;
-  const markerToBlock = new Map();
+  // A marker may intentionally lead more than one topic block. The shared handoff
+  // is one byte-identical block on both `next` and `finalize`, so the reverse
+  // sentinel must resolve by the block whose derived surface set contains the
+  // observed file rather than by last-write-wins marker identity. Ambiguous
+  // overlap still reds below; this widens only the legitimate disjoint case.
+  const markerToBlocks = new Map();
 
   // FORWARD — every content token present on every surface the block obligates.
   for (const b of blocks) {
@@ -1270,7 +1403,11 @@ function checkManifest({ blocks, readSurface, editions, topicBasename, foreignMa
     }
     obligatedCount += files.length;
     const first = b.content_tokens[0];
-    if (isMarker(first)) markerToBlock.set(norm(first), b);
+    if (isMarker(first)) {
+      const marker = norm(first);
+      if (!markerToBlocks.has(marker)) markerToBlocks.set(marker, []);
+      markerToBlocks.get(marker).push(b);
+    }
     for (const f of files) {
       const content = readSurface(f);
       if (content === null) {
@@ -1304,14 +1441,16 @@ function checkManifest({ blocks, readSurface, editions, topicBasename, foreignMa
     for (const raw of markers) {
       const m = norm(raw);
       if (foreign.has(m)) continue;
-      const b = markerToBlock.get(m);
-      if (!b) {
+      const candidates = markerToBlocks.get(m) || [];
+      if (candidates.length === 0) {
         failures.push(`orphan-surface: marker ${JSON.stringify(raw.trim())} on ${f} has no manifest block`);
         continue;
       }
-      const { files } = deriveObligated(b, editions, topicBasename);
-      if (!files.includes(f)) {
-        failures.push(`orphan-surface: marker ${JSON.stringify(raw.trim())} on ${f} not obligated by block ${b.block_id}`);
+      const matches = candidates.filter(b => deriveObligated(b, editions, topicBasename).files.includes(f));
+      if (matches.length === 0) {
+        failures.push(`orphan-surface: marker ${JSON.stringify(raw.trim())} on ${f} is not obligated by any of the ${candidates.length} manifest blocks`);
+      } else if (matches.length > 1) {
+        failures.push(`orphan-surface: marker ${JSON.stringify(raw.trim())} on ${f} is ambiguously obligated by blocks ${matches.map(b => b.block_id).join(', ')}`);
       }
     }
   }
@@ -1342,6 +1481,114 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
   for (const msg of realResult.failures) assert(false, `MANIFEST ${msg}`);
   assert(realResult.failures.length === 0,
     `MANIFEST: derived-universe presence check clean over ${realResult.obligatedCount} obligated file-checks`);
+}
+
+// T21 REAL-RUN — derive the two shared-block obligations from the manifest and
+// compare the COMPLETE delimited bytes on every resulting consumer surface.
+// Both/both is intentional: the same marker appears on next and finalize, but
+// each block's derived file set is topic-specific and disjoint.
+{
+  const handoffBlocks = ['nx-main-authored-handoff', 'fn-main-authored-handoff']
+    .map(id => REQUIRED_BLOCKS.find(block => block.block_id === id));
+  assert(handoffBlocks.every(Boolean),
+    'T21 universe: required-block manifest must declare both next and finalize handoff blocks');
+  const topics = handoffBlocks.filter(Boolean).map(block => block.topic).sort();
+  assert(topics.join(',') === 'finalize,next',
+    `T21 universe: handoff applies only to next/finalize, got ${topics.join(',')}`);
+
+  const filesByTopic = new Map();
+  for (const block of handoffBlocks) {
+    if (!block) continue;
+    const derived = deriveObligated(block, MANIFEST_EDITIONS, TOPIC_BASENAME);
+    const unique = new Set(derived.files);
+    assert(!derived.error && derived.files.length === 21 && unique.size === 21,
+      `T21 universe: ${block.block_id} must derive exactly 21 unique runtime/forge surfaces, got `
+      + `${derived.files.length}${derived.error ? ` (${derived.error})` : ''}`);
+    filesByTopic.set(block.topic, derived.files);
+  }
+
+  const obligated = [...filesByTopic.values()].flat();
+  const uniqueObligated = new Set(obligated);
+  assert(obligated.length === 42 && uniqueObligated.size === 42,
+    `T21 universe: next/finalize must derive exactly 42 unique surfaces, got `
+    + `${obligated.length} (${uniqueObligated.size} unique)`);
+  assert(obligated.length > 0,
+    'T21 universe: an empty handoff surface set would make byte parity vacuous');
+
+  const surfaces = Object.fromEntries(obligated.map(file => [file, readRealSurface(file)]));
+  const failures = handoffSurfaceFailures(surfaces, HANDOFF_EXPECTED_BLOCK, obligated);
+  for (const failure of failures) assert(false, `T21 ${failure}`);
+  assert(failures.length === 0,
+    `T21 parity: complete main-authored-handoff bytes must match on all ${obligated.length} surfaces`);
+
+  // T21 MUTATION CLOSURE — the clean tree above is the control. Each mutant is
+  // applied to one derived surface in memory, then the same full-block and
+  // semantic detector is run against the complete 42-surface map. A target-only
+  // finding proves the guard is attached to the mutated subject rather than to a
+  // standing tree-wide failure.
+  const reorderAuthorityScope = block => {
+    const lines = String(block).split('\n');
+    const authority = lines.findIndex(line => line.startsWith('- `Authority:`'));
+    const scope = lines.findIndex(line => line.startsWith('- `Scope and custody:`'));
+    const acceptance = lines.findIndex(line => line.startsWith('- `Acceptance:`'));
+    if (authority < 0 || scope <= authority || acceptance <= scope) return block;
+    return lines.slice(0, authority)
+      .concat(lines.slice(scope, acceptance), lines.slice(authority, scope), lines.slice(acceptance))
+      .join('\n');
+  };
+  const mutationSpecs = [
+    {
+      label: 'missing-complete-block',
+      mutate: content => content.replace(HANDOFF_EXPECTED_BLOCK, ''),
+    },
+    {
+      label: 'reordered-authority-scope',
+      mutate: content => content.replace(HANDOFF_EXPECTED_BLOCK, reorderAuthorityScope(HANDOFF_EXPECTED_BLOCK)),
+    },
+    {
+      // Same-length ASCII case drift: exactly one byte changes inside task-specific wording.
+      label: 'one-byte-wording-drift',
+      mutate: content => content.replace('brief that', 'brieF that'),
+    },
+  ];
+  const cleanControl = failures.length === 0;
+  assert(cleanControl,
+    'T21 mutation control: the unmutated 42-surface tree must be clean before planting mutants');
+
+  let mutationLegs = 0;
+  let nonNoopControls = 0;
+  let caughtMutants = 0;
+  if (cleanControl) {
+    for (const target of obligated) {
+      for (const spec of mutationSpecs) {
+        mutationLegs++;
+        const original = surfaces[target];
+        const mutated = spec.mutate(original);
+        const changed = mutated !== original;
+        if (changed) nonNoopControls++;
+        assert(changed,
+          `T21 mutation ${spec.label}: mutation must change bytes on ${target}`);
+
+        const mutantSurfaces = Object.assign({}, surfaces, { [target]: mutated });
+        const mutantFailures = handoffSurfaceFailures(
+          mutantSurfaces, HANDOFF_EXPECTED_BLOCK, obligated);
+        const targetFailures = mutantFailures.filter(failure => failure.includes(target));
+        const unrelatedFailures = mutantFailures.filter(failure => !failure.includes(target));
+        const caught = targetFailures.length > 0 && unrelatedFailures.length === 0;
+        if (caught) caughtMutants++;
+        assert(caught,
+          `T21 mutation ${spec.label}: must catch ${target} without unrelated-surface cascade; `
+          + `target failures=${targetFailures.length}, unrelated=${unrelatedFailures.length}`);
+      }
+    }
+  }
+  const expectedMutationLegs = obligated.length * mutationSpecs.length;
+  assert(mutationLegs === expectedMutationLegs && expectedMutationLegs === 126,
+    `T21 mutation count: expected 42 targets x 3 families = 126 legs, got ${mutationLegs}`);
+  assert(nonNoopControls === 126,
+    `T21 mutation controls: expected 126 non-noop mutants, got ${nonNoopControls}`);
+  assert(caughtMutants === 126,
+    `T21 mutation closure: expected 126 target-only caught mutants, got ${caughtMutants}`);
 }
 
 // --- NON-VACUITY FLOOR (manifest-wide) — every marker-led block must carry at least ONE
@@ -1623,7 +1870,63 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
       'RED-PROOF orphan-surface: a rogue marker with no manifest block must red the reverse orphan-sentinel');
   }
 
-  // (6) SUPERSET-PROOF — a legacy pin whose token no manifest block carries and
+  // (6) SHARED-MARKER NON-OBLIGATED — a known shared marker is carried by a
+  // command-only manifest block but appears on the in-scope skill surface. The
+  // forward obligation is clean; the reverse sentinel must reach the new
+  // candidates.length > 0 / matches.length === 0 branch rather than treating
+  // this as an unknown marker.
+  {
+    const blocks = [{ block_id: 'shared-marker-command-only', topic: 't',
+      runtime_tag: 'claude-live', surface_type_tag: 'command',
+      content_tokens: [HANDOFF_OPEN, 'anchor-token'] }];
+    const surfaces = {
+      'cmd/foo.md': `${HANDOFF_OPEN} anchor-token`,
+      'skl/foo/SKILL.md': `${HANDOFF_OPEN} unrelated-surface-prose`,
+    };
+    const r = checkManifest({
+      blocks,
+      readSurface: mapSurface(surfaces),
+      editions: ED,
+      topicBasename: TB,
+      foreignMarkers: new Set(),
+    });
+    const expected = `orphan-surface: marker ${JSON.stringify(HANDOFF_OPEN)} on skl/foo/SKILL.md `
+      + 'is not obligated by any of the 1 manifest blocks';
+    assert(r.obligatedCount === 1 && r.failures.length === 1 && r.failures[0] === expected,
+      'RED-PROOF shared-marker-non-obligated: the known shared marker must take the exact '
+      + `matches.length === 0 rejection, with clean forward obligations; got ${JSON.stringify(r.failures)}`);
+  }
+
+  // (7) SHARED-MARKER AMBIGUITY — two same-marker command blocks genuinely
+  // overlap on the observed command surface. Both forward obligations are
+  // clean; the reverse sentinel must reach matches.length > 1 and name both
+  // owning blocks. An exact failure assertion keeps this tied to the branch.
+  {
+    const blocks = [
+      { block_id: 'shared-marker-overlap-a', topic: 't', runtime_tag: 'claude-live',
+        surface_type_tag: 'command', content_tokens: [HANDOFF_OPEN, 'anchor-a'] },
+      { block_id: 'shared-marker-overlap-b', topic: 't', runtime_tag: 'claude-live',
+        surface_type_tag: 'command', content_tokens: [HANDOFF_OPEN, 'anchor-b'] },
+    ];
+    const surfaces = {
+      'cmd/foo.md': `${HANDOFF_OPEN} anchor-a anchor-b`,
+      'skl/foo/SKILL.md': 'skill-surface-without-the-shared-marker',
+    };
+    const r = checkManifest({
+      blocks,
+      readSurface: mapSurface(surfaces),
+      editions: ED,
+      topicBasename: TB,
+      foreignMarkers: new Set(),
+    });
+    const expected = `orphan-surface: marker ${JSON.stringify(HANDOFF_OPEN)} on cmd/foo.md `
+      + 'is ambiguously obligated by blocks shared-marker-overlap-a, shared-marker-overlap-b';
+    assert(r.obligatedCount === 2 && r.failures.length === 1 && r.failures[0] === expected,
+      'RED-PROOF shared-marker-ambiguity: overlapping known-marker blocks must take the exact '
+      + `matches.length > 1 rejection and name both blocks; got ${JSON.stringify(r.failures)}`);
+  }
+
+  // (8) SUPERSET-PROOF — a legacy pin whose token no manifest block carries and
   //     which is not allow-listed must NOT fold → the superset proof reds.
   {
     const blocks = [{ block_id: 'b1', topic: 't', runtime_tag: 'both', surface_type_tag: 'both',
@@ -1633,7 +1936,7 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
       'RED-PROOF superset-proof: an unfolded, non-allow-listed legacy token must fail the superset proof');
   }
 
-  // (7) CLOSURE-AUDIT VACUOUS-GUARD (#637) — the LIVE fn-closure-audit block
+  // (9) CLOSURE-AUDIT VACUOUS-GUARD (#637) — the LIVE fn-closure-audit block
   //     (imported straight from the real manifest, not a synthetic stand-in) is
   //     exercised against a fixture where every real finalize surface's marker
   //     is PRESERVED but its interior prose is GUTTED. Pre-fix, the block's 2nd
@@ -1661,7 +1964,7 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
       'RED-PROOF closure-audit-vacuous-guard: gutting the closure-audit interior while keeping the bare PIN marker must red the derived-universe checker (a content_token that is a substring of its own marker is vacuous)');
   }
 
-  // (8) AXIOM-POINTER PER-SURFACE INDEPENDENCE — the LIVE nx-first-principles block, exercised
+  // (10) AXIOM-POINTER PER-SURFACE INDEPENDENCE — the LIVE nx-first-principles block, exercised
   //     against a copy of the REAL surface tree with the pointer paragraph removed from ONE
   //     surface at a time. A guard is evidence only once mutation-proven, and an N-site mutant
   //     proves >=1, never N: this loops the mutation over every obligated surface separately and

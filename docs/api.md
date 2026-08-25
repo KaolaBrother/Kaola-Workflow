@@ -17,6 +17,20 @@ Three commands ship. Everything below is invoked by them or by hand.
 | `/workflow-next` | select, claim, write the mission list, run it |
 | `/kaola-workflow-finalize` | validate, dock docs, summarize, close, archive, commit, sink |
 
+## Routing-surface handoff interface (#1029)
+
+`/workflow-next` and `/kaola-workflow-finalize` render the same named-role handoff guidance from
+[`SLOTS['main-authored-handoff']`](../templates/routing/slots.js), referenced by the two routing
+skeletons and propagated to their command/skill surfaces. It is prompt-level routing guidance: the
+packet supplies task-specific facts, authority, bounds, acceptance, a deliverable locator, and a
+stop/report boundary, while the installed role profile remains authoritative for universal role
+behavior and main retains product intent and the final verdict.
+
+The existing model/tier dispatch contract is unchanged. Role tier and runtime routing continue to
+select the model/effort pair; the handoff does not select, override, or persist that choice. This
+addition introduces no CLI flag, API method, JSON envelope key, mission-list field, workflow-state
+field, or other workflow schema entry.
+
 ## Emit and refusal envelopes
 
 The scripts share a framed-output convention so a caller can always recover a machine-readable

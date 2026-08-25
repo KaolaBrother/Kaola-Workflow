@@ -311,6 +311,23 @@ parity — always the main checkout's trees, and never creating one that is abse
 own suites (`test-opencode-edition.js`, `test-kimi-edition.js`, `test-grok-edition.js`, `test-cursor-edition.js`, `test-zcode-edition.js`). See
 `opencode-edition.md`, `kimi-edition.md`, `grok-edition.md`, `cursor-edition.md`, and `zcode-edition.md`.
 
+### Main-authored handoff routing
+
+`SLOTS['main-authored-handoff']` in [`templates/routing/slots.js`](../templates/routing/slots.js)
+is the single canonical source. [`next.skeleton.md`](../templates/routing/next.skeleton.md) and
+[`finalize.skeleton.md`](../templates/routing/finalize.skeleton.md) each insert that slot once,
+unconditionally and outside `REGION` directives; no other routing topic receives it. The generator
+derives 42 consumers for this slot: 7 runtimes (Claude, Codex, opencode, Kimi, Grok, Cursor, and
+ZCode) × 3 forges × 2 topics (`next` and `finalize`) = 42 surfaces, comprising 12 tracked
+surfaces (six per topic) and 30 additive command-lane surfaces (15 per topic).
+
+The objective oracle is [`scripts/test-route-reachability.js`](../scripts/test-route-reachability.js):
+it derives that universe from the routing registry and additive renderers, compares the complete
+delimited block bytes with the canonical slot, checks the seven labels and main/profile authority,
+role-family, sparse-packet, and non-schema boundaries, and mutation-tests each target. The verified
+candidate run recorded 823 assertions and caught 126 target-only mutants across missing-block,
+reordered-label, and one-byte-drift mutations.
+
 ### Runtime capability divergence
 
 Where the runtimes differ, they differ **here** — one table, one place. Every cell is a **tier

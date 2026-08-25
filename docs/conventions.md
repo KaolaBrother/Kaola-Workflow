@@ -81,6 +81,33 @@ filesystem result must not be described as proof of those per-process settings.
 
 See `docs/api.md` § Installation and edition sync for the explicit doctor boundary.
 
+## Main-authored handoff packets (#1029)
+
+The `/workflow-next` and `/kaola-workflow-finalize` routing surfaces use one canonical
+[main-authored handoff slot](../templates/routing/slots.js) when main dispatches a named role. The
+packet has exactly these seven labels, in this order:
+
+1. `Mission` — one result to produce or one question to answer.
+2. `Context` — candidate/worktree and baseline identity, measured facts, labeled hypotheses, and only the upstream evidence this task needs.
+3. `Authority` — settled decisions, decisions the role may recommend but not make, and unresolved user-owned decisions.
+4. `Scope and custody` — read/write bounds, exclusions, test-versus-production ownership, and co-active ownership relevant to avoiding collisions.
+5. `Acceptance` — falsifiable conditions for the deliverable and its stopping boundary; specify the required result and proof, not an implementation method. This is not the workflow's final done verdict.
+6. `Deliverable` — what returns and the exact path, commit, or evidence locator where the full result lands.
+7. `Stop and report` — contradictory evidence, result-changing ambiguity, a capability gap, an out-of-scope finding, or a user-owned decision that must return to main.
+
+Keep the packet sparse: include task-specific facts, decisions, bounds, and evidence only. Do not
+pad it with `N/A` values or repeat the installed profile. Specialize the task facts by role family:
+planning/design gets the goal, non-goals, constraints, invariants, and decision envelope;
+investigation gets the exact claim, evidence surface, and measurement standard;
+`tdd-guide` and `implementer` get their separate test/production custody and verification
+boundaries; repair, convergence, documentation, and optimization get the candidate, failure or
+input plus their retest/docking/metric stop condition; reviewers get the exact candidate, surface,
+and acceptance, while `adversarial-verifier` gets exactly one claim and one surface.
+
+This packet is handoff guidance, not a dispatch mandate, a new workflow record, a machine-graded
+prompt schema, a grader or score, or an approval gate. The mission list remains the recovery index:
+one H1 plus `item`, `status`, `dispatched`, and `result` for each item.
+
 ## Joining a dispatch
 
 Dispatching a subagent does not end at the spawn call, but nothing prescribes the join: how long to

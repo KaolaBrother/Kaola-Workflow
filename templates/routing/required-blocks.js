@@ -47,6 +47,18 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
+    block_id: 'nx-main-authored-handoff',
+    topic: 'next',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: main-authored-handoff -->',
+      'Before each named-role spawn, main writes a compact task-specific brief',
+      'Use these labels in this order:',
+      'Keep the packet sparse: include only task-specific facts, decisions, bounds, and evidence; do not',
+    ],
+  },
+  {
     block_id: 'in-consent-in-conversation',
     topic: 'init',
     runtime_tag: 'both',
@@ -92,6 +104,18 @@ const REQUIRED_BLOCKS = [
     content_tokens: [
       '<!-- PIN: consent-in-conversation -->',
       'Irreversible and value-laden calls belong to the user — ask, in conversation, before taking one.',
+    ],
+  },
+  {
+    block_id: 'fn-main-authored-handoff',
+    topic: 'finalize',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      '<!-- PIN: main-authored-handoff -->',
+      'Before each named-role spawn, main writes a compact task-specific brief',
+      'Use these labels in this order:',
+      'Keep the packet sparse: include only task-specific facts, decisions, bounds, and evidence; do not',
     ],
   },
 

@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { SLOTS } = require('../templates/routing/slots.js');
 
 const root = path.resolve(__dirname, '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-models-'));
@@ -75,6 +76,13 @@ const resolver = require('./kaola-workflow-resolve-agent-model.js');
     'templates/routing/next.skeleton.md',
     'templates/routing/finalize.skeleton.md',
   ];
+  const HANDOFF_SLOT_REF = '<!-- SLOT:main-authored-handoff -->';
+  const HANDOFF_REVIEWER_NEEDLE = '`code-reviewer` and `security-reviewer` receive the exact candidate, dispatched surface, and acceptance;';
+  const canonicalHandoff = SLOTS['main-authored-handoff'];
+  assert.strictEqual(typeof canonicalHandoff, 'string',
+    '#1018 AC-7: SLOTS[main-authored-handoff] must be the canonical shared handoff string');
+  assert(canonicalHandoff.replace(/\s+/g, ' ').includes(HANDOFF_REVIEWER_NEEDLE),
+    '#1018 AC-7: canonical main-authored-handoff slot must carry reviewer exact candidate / dispatched surface / acceptance specialization');
   for (const rel of routingSkels) {
     const text = fs.readFileSync(path.join(root, rel), 'utf8');
     const norm = text.replace(/\s+/g, ' ');
@@ -90,8 +98,8 @@ const resolver = require('./kaola-workflow-resolve-agent-model.js');
       && /failed to finish/i.test(norm) && /complex/i.test(norm);
     assert(carve,
       '#1018 AC-2: ' + rel + ' do-not-escalate pin must carry exactly one carve-out: orchestrator may re-dispatch a reviewer-class role at heavy when reasoning-tier failed to finish or the surface is judged complex before dispatch');
-    assert(/reviewer dispatch/i.test(norm) && /scope/i.test(norm) && /surface/i.test(norm),
-      '#1018 AC-7: ' + rel + ' dispatch guidance must require each reviewer dispatch to state the review scope / dispatched surface');
+    assert.strictEqual(text.split(HANDOFF_SLOT_REF).length - 1, 1,
+      '#1018 AC-7: ' + rel + ' must contain exactly one main-authored-handoff slot reference');
   }
 
   const clampNeedles = [

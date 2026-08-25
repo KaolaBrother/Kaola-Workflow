@@ -229,6 +229,17 @@ substitution. That rendered literal is what puts the role on its assigned
 model: a dispatch that carries no `model=` runs on the session's own model
 instead.
 
+### Named-role handoffs
+
+When `/workflow-next` or `/kaola-workflow-finalize` dispatches a named role, main supplies a
+bounded, falsifiable brief that is self-sufficient from the brief, the installed role profile,
+and named repository evidence; inherited conversation is not required. The packet carries only
+task-specific facts, authority, scope, acceptance, a locator, and stop conditions. Universal
+behavior remains owned by the profile, while main keeps product intent, integration, and the final
+done verdict. The canonical wording lives in the [routing slot](templates/routing/slots.js) and is
+inserted by the [next](templates/routing/next.skeleton.md) and
+[finalize](templates/routing/finalize.skeleton.md) skeletons.
+
 ## Installation
 
 ### Runtimes and forges
