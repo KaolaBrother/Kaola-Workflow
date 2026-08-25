@@ -993,6 +993,7 @@ const opencodeSync = require('./sync-opencode-edition.js');
 const kimiSync = require('./sync-kimi-edition.js');
 const grokSync = require('./sync-grok-edition.js');
 const cursorSync = require('./sync-cursor-edition.js');
+const zcodeSync = require('./sync-zcode-edition.js');
 const {
   FORGES: ROUTING_FORGES,
   GENERATED_SURFACES: ROUTING_SURFACES,
@@ -1020,6 +1021,10 @@ const RUNTIME_EDITIONS = [
   {
     id: 'cursor',
     surfaceFor: forge => base => cursorSync.commandRel(base, forge),
+  },
+  {
+    id: 'zcode',
+    surfaceFor: forge => base => zcodeSync.commandRel(base, forge),
   },
 ];
 
@@ -1116,6 +1121,7 @@ const GENERATED_SURFACE_CONTENT = (() => {
       map.set(kimiSync.skillRel(base, forge), kimiSync.renderCommand(canon, base, forge));
       map.set(grokSync.commandRel(base, forge), grokSync.renderCommand(canon, base, forge));
       map.set(cursorSync.commandRel(base, forge), cursorSync.renderCommand(canon, base, forge));
+      map.set(zcodeSync.commandRel(base, forge), zcodeSync.renderCommand(canon, base, forge));
     }
   }
   return map;
