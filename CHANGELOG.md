@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Self-sufficient named-role handoffs (#1029).** `/workflow-next` and
+  `/kaola-workflow-finalize` now carry a bounded seven-label brief for each named-role spawn,
+  with task-specific facts and falsifiable result acceptance; roles can work without inherited
+  conversation while installed profiles and main retain authority. Canonical wording is in
+  `templates/routing/slots.js`; no mission-list, CLI, or workflow-state schema changed.
+
 ## [9.16.0] - 2026-08-25
 
 ### Added
@@ -15,12 +25,6 @@
   `~/.zcode/agents/` — ZCode discovers subagents only at user scope. Wired into `install-all.sh`
   and `scripts/test-install-all.js`; own suite `node scripts/test-zcode-edition.js`. Docs:
   `docs/zcode-edition.md`.
-
-- **Self-sufficient named-role handoffs (#1029).** `/workflow-next` and
-  `/kaola-workflow-finalize` now carry a bounded seven-label brief for each named-role spawn,
-  with task-specific facts and falsifiable result acceptance; roles can work without inherited
-  conversation while installed profiles and main retain authority. Canonical wording is in
-  `templates/routing/slots.js`; no mission-list, CLI, or workflow-state schema changed.
 
 ### Fixed
 
