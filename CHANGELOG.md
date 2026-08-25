@@ -6330,7 +6330,7 @@ Issues #4–#10 already delivered the parallel-workflow substrate (shared `kaola
 
 - **Epic Case 10 (pre-commit hook regression)**: new walkthrough block exercises the hook end-to-end against a real git repo with a lock file. Sub-tests 10A–10E cover wrong-session block (exit 2 + `BLOCKED` stderr), owning-session pass-through, non-commit short-circuit, missing `KAOLA_SESSION_ID` short-circuit, and multi-project split-commit guard.
 
-## [Unreleased]
+## Unreleased
 
 ### Documentation
 
