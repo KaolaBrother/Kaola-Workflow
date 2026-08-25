@@ -1471,7 +1471,7 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     //     It is a two-place edit on purpose: a fourth forge, or a third additive runtime, reds this
     //     line, and the correct response is to confirm the NEW surfaces carry the pointer and then
     //     move the number — never to move the number first.
-    const NEXT_SURFACES = 18;   // 3 forges x (claude command + codex skill + opencode + kimi + grok + cursor)
+    const NEXT_SURFACES = 21;   // 3 forges x (claude command + codex skill + opencode + kimi + grok + cursor + zcode)
     assert(files.length === NEXT_SURFACES,
       `axiom pointer: the axiom pointer is obligated on ${files.length} next surface(s), expected `
       + `${NEXT_SURFACES}. If the surface universe legitimately changed, verify the pointer is on `
