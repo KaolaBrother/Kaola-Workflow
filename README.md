@@ -1,6 +1,6 @@
 # Kaola-Workflow
 
-**Bookkeeping for coding agents.** You hand Kaola-Workflow an issue; it claims the work, writes the run's **mission list**, and runs it. The mission list is one file per run — an H1 carrying the goal, then items with four fields: `item` / `status` / `dispatched` / `result`. That is the whole coordination mechanism, and it exists so a session that dies mid-flight can be resumed by a successor with no context at all. Runs on six agent runtimes — **Claude Code, Codex, [opencode](https://opencode.ai), [Kimi Code](https://www.kimi.com/code), Grok CLI, and Cursor** — across the **GitHub, GitLab, and Gitea** forges.
+**Bookkeeping for coding agents.** You hand Kaola-Workflow an issue; it claims the work, writes the run's **mission list**, and runs it. The mission list is one file per run — an H1 carrying the goal, then items with four fields: `item` / `status` / `dispatched` / `result`. That is the whole coordination mechanism, and it exists so a session that dies mid-flight can be resumed by a successor with no context at all. Runs on six agent runtimes — **Claude Code, Codex, [opencode](https://opencode.ai), [Kimi Code](https://www.kimi.com/code), Grok CLI, Cursor, and ZCode** — across the **GitHub, GitLab, and Gitea** forges.
 
 ## Philosophy
 
@@ -246,6 +246,7 @@ Kaola-Workflow installs along two independent axes:
 | **Kimi Code** | `./install-kimi.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 | **Grok CLI** | `./install-grok.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 | **Cursor** | `./install-cursor.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
+| **ZCode** | `./install-zcode.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 
 **Install/refresh every runtime at once — `./install-all.sh`.** To reinstall every runtime from the current checkout in one step, run `./install-all.sh --yes` (defaults: `--forge=github`, `--global`). It is a thin orchestrator: it runs each per-runtime installer above unchanged, prints the short SHA being installed, and ends with a per-runtime **PASS/FAIL summary table** — exiting non-zero if any runtime fails (continue-through by default; `--strict` aborts at the first failure). Skip one with `--skip=<runtime[,...]>` (logged, never silent) and preview without changes via `--check`. This entrypoint never folds the additive editions into `install.sh`/`npm test`/`edition-sync` — the per-runtime installers remain the individual path. The individual installers below are still fully supported.
 
@@ -263,9 +264,11 @@ Claude Code and Codex share the forge editions — pick one forge at a time; all
 
 **Cursor** is likewise an **additive** runtime (not a git forge): `./install-cursor.sh` touches none of the existing edition machinery, resolves its support scripts under `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.cursor/agents/*.md` (`Task` types); the three commands ship as `.cursor/commands/*.md`. Cursor CLI loads those Task types from the **workspace** `.cursor/agents`, not `~/.cursor/agents`. The workspace catalog is refreshed from `$CURSOR_HOME/agents` (all 14 roles byte-identical; global is the source of truth). A `sessionStart` ensure hook prints `{}`; `/workflow-next` runs the ensure script. `./install-all.sh` / `install-cursor.sh --global` is not dispatch-capable by itself unless the installer dual-wrote the project catalog (cwd inside a git work tree). A worktree is a cwd; do not point the Cursor workspace at `.kw/worktrees/<project>/` unless the 14 agent files exist there before the session. After materializing agents, start a new chat — a mid-session copy does not change this session's Task enum. Cloud Agents may not fire `sessionStart`. Canonical standard/reasoning/heavy classes render unquoted Grok 4.6 medium/high/xhigh model-effort pins in agent frontmatter, while `Task` cards omit per-call `model`; cold-start, picker-clamp, resume, and cloud/local limits remain documented. Compact resume after a session compact is a declared divergence (`sessionStart` `additional_context`; `preCompact` cannot inject). It takes the same generated `--forge` axis. See [docs/cursor-edition.md](docs/cursor-edition.md).
 
-Being additive is about *edition machinery*, not about forge support: these runtimes remain outside `install.sh`, `edition-sync.js`, `npm test`, and the routing-surface contract, and each keeps its own suite (`node scripts/test-opencode-edition.js`, `node scripts/test-kimi-edition.js`, `node scripts/test-grok-edition.js`, `node scripts/test-cursor-edition.js`).
+**ZCode** is likewise an **additive** runtime (not a git forge): `./install-zcode.sh` touches none of the existing edition machinery, resolves its support scripts under `${ZCODE_HOME:-$HOME/.zcode}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.zcode/agents/*.md` (`Agent` types) and are additionally synced to `~/.zcode/agents/` — ZCode (3.9.1) discovers subagents only at user scope. The three commands ship as `.zcode/commands/*.md`, and hooks merge into a `.zcode/config.json` whose top-level `hooks` object requires `"enabled": true` and offers seven events (no `SubagentStart`). Every agent pins `model: GLM-5.3` plus a canonical-tier `thoughtLevel` (standard `high`, reasoning `max`, heavy `max`); dispatch cards omit per-call model overrides. It takes the same generated `--forge` axis. See [docs/zcode-edition.md](docs/zcode-edition.md).
 
-**The same workflow runs everywhere** — Claude Code, Codex, opencode, Kimi Code, Grok CLI, and Cursor. No installer writes the shared `~/.config/kaola-workflow/config.json`: there is no workflow path to select and no install-time configuration to seed. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) / [Grok CLI](docs/grok-edition.md) / [Cursor](docs/cursor-edition.md) for each additive runtime.
+Being additive is about *edition machinery*, not about forge support: these runtimes remain outside `install.sh`, `edition-sync.js`, `npm test`, and the routing-surface contract, and each keeps its own suite (`node scripts/test-opencode-edition.js`, `node scripts/test-kimi-edition.js`, `node scripts/test-grok-edition.js`, `node scripts/test-cursor-edition.js`, `node scripts/test-zcode-edition.js`).
+
+**The same workflow runs everywhere** — Claude Code, Codex, opencode, Kimi Code, Grok CLI, Cursor, and ZCode. No installer writes the shared `~/.config/kaola-workflow/config.json`: there is no workflow path to select and no install-time configuration to seed. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) / [Grok CLI](docs/grok-edition.md) / [Cursor](docs/cursor-edition.md) / [ZCode](docs/zcode-edition.md) for each additive runtime.
 
 ### Claude Code
 
@@ -418,6 +421,17 @@ Cursor is an additive runtime — installed by its own script, not `--forge`. Th
 ```
 
 Hooks merge into `.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (global). Compact resume injects via `sessionStart` `additional_context`; a second `sessionStart` ensure hook prints `{}`. `preCompact` cannot inject. Full detail: [docs/cursor-edition.md](docs/cursor-edition.md).
+
+### zcode
+
+ZCode is an additive runtime — installed by its own script, not `--forge`. The zcode edition delivers the workflow the ZCode-native way: the three commands become flat `.zcode/commands/*.md` slash commands and each canonical role ships as a named `.zcode/agents/<role>.md` (`Agent` type). ZCode (3.9.1) discovers subagents **only at user scope**, so the installer also syncs the roster to `${ZCODE_HOME:-~/.zcode}/agents/`. Hooks merge into a `.zcode/config.json` whose top-level `hooks` object requires `"enabled": true` and offers seven events (there is no `SubagentStart`). Canonical standard/reasoning/heavy classes render `model: GLM-5.3` plus a camelCase `thoughtLevel` pin — `high` / `max` / `max`; the key is `thoughtLevel`, NOT `reasoningEffort`, and dispatch cards omit per-call model overrides. From a local clone:
+
+```bash
+./install-zcode.sh --global --yes   # ${ZCODE_HOME:-~/.zcode} (agents+commands un-nested)
+./install-zcode.sh --yes            # deploy into the current project (.zcode/{agents,commands} + ~/.zcode/agents sync)
+```
+
+Full detail: [docs/zcode-edition.md](docs/zcode-edition.md).
 
 ## Codex
 

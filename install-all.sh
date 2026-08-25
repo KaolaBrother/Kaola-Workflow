@@ -54,7 +54,7 @@ esac
 
 # Ordered runtime list — the single source of truth this script iterates and the
 # contract test (scripts/test-install-all.js) cross-checks against the tree.
-RUNTIMES=(claude opencode codex kimi grok cursor)
+RUNTIMES=(claude opencode codex kimi grok cursor zcode)
 
 # Codex marketplace-plugin convergence inputs.
 # KAOLA_CODEX_BIN is a test seam ONLY (scripts/test-install-all.js points it at a
@@ -104,6 +104,7 @@ Reinstall/refresh every Kaola-Workflow runtime edition in sequence:
   4. kimi      Kimi Code     (install-kimi.sh)
   5. grok      Grok CLI      (install-grok.sh)
   6. cursor    Cursor        (install-cursor.sh)
+  7. zcode     ZCode         (install-zcode.sh)
 
 Options:
   --forge=github|gitlab|gitea   Forge for every forge-aware runtime (default: github).
@@ -112,7 +113,7 @@ Options:
   --global                      Install opencode/Codex/Kimi/Grok/Cursor into the global config root (default)
   --project[=DIR]               Install opencode/Codex/Kimi/Grok/Cursor into a project dir (default: CWD)
   --yes                         Non-interactive; forward -y to every interactive installer
-  --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi,grok,cursor) — logged loudly
+  --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi,grok,cursor,zcode) — logged loudly
   --strict                      Fail-fast: stop at the first failing runtime
   --check                       Dry run: print HEAD + the command each runtime would run,
                                 and report a pending Codex plugin upgrade or refresh; no changes
@@ -631,9 +632,9 @@ echo "install-all: root=$ROOT scope=$SCOPE forge=$FORGE$( [[ "$YES" == "1" ]] &&
 # Per-runtime scope flags for the additive runtimes (install.sh has no
 # global/project concept, so it never receives them).
 if [[ "$SCOPE" == "global" ]]; then
-  OC_SCOPE=(--global);            KIMI_SCOPE=(--global);            GROK_SCOPE=(--global);            CURSOR_SCOPE=(--global);            CODEX_SCOPE=(--global)
+  OC_SCOPE=(--global);            KIMI_SCOPE=(--global);            GROK_SCOPE=(--global);            CURSOR_SCOPE=(--global);            ZCODE_SCOPE=(--global);            CODEX_SCOPE=(--global)
 else
-  OC_SCOPE=(--target "$PROJECT_DIR"); KIMI_SCOPE=(--target "$PROJECT_DIR"); GROK_SCOPE=(--target "$PROJECT_DIR"); CURSOR_SCOPE=(--target "$PROJECT_DIR"); CODEX_SCOPE=("$PROJECT_DIR")
+  OC_SCOPE=(--target "$PROJECT_DIR"); KIMI_SCOPE=(--target "$PROJECT_DIR"); GROK_SCOPE=(--target "$PROJECT_DIR"); CURSOR_SCOPE=(--target "$PROJECT_DIR"); ZCODE_SCOPE=(--target "$PROJECT_DIR"); CODEX_SCOPE=("$PROJECT_DIR")
 fi
 
 # Build each runtime's command as a non-empty array (bash-3.2 set -u safe:
@@ -657,6 +658,9 @@ GROK_CMD=(bash "$ROOT/install-grok.sh" --forge="$FORGE" "${GROK_SCOPE[@]}")
 CURSOR_CMD=(bash "$ROOT/install-cursor.sh" --forge="$FORGE" "${CURSOR_SCOPE[@]}")
 [[ "$YES" == "1" ]] && CURSOR_CMD+=(--yes)
 
+ZCODE_CMD=(bash "$ROOT/install-zcode.sh" --forge="$FORGE" "${ZCODE_SCOPE[@]}")
+[[ "$YES" == "1" ]] && ZCODE_CMD+=(--yes)
+
 run_one claude   "${CLAUDE_CMD[@]}"
 run_one opencode "${OPENCODE_CMD[@]}"
 run_one codex    "${CODEX_CMD[@]}"
@@ -668,6 +672,7 @@ fi
 run_one kimi     "${KIMI_CMD[@]}"
 run_one grok     "${GROK_CMD[@]}"
 run_one cursor   "${CURSOR_CMD[@]}"
+run_one zcode     "${ZCODE_CMD[@]}"
 
 print_summary
 overall=$?

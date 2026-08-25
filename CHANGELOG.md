@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- **The zcode runtime edition (#1020).** ZCode (measured on 3.9.1) is an additive runtime, not a
+  forge: `scripts/sync-zcode-edition.js` generates `.zcode/` (+ `-gitlab`/`-gitea` forge trees)
+  carrying the canonical agent roster with `model: GLM-5.3` plus a camelCase `thoughtLevel` pin
+  (standard `high`, reasoning `max`, heavy `max` — the key is `thoughtLevel`, NOT
+  `reasoningEffort`), the routing-registry command set stamped `--runtime zcode`, a merged
+  `.zcode/config.json` hook mapping (`hooks.enabled: true`, seven events, no `SubagentStart`),
+  and hook shells + support-script launchers under `.zcode/kaola-workflow/`. `install-zcode.sh`
+  deploys project (`<target>/.zcode/`) or global (`~/.zcode/`) and syncs the agent roster to
+  `~/.zcode/agents/` — ZCode discovers subagents only at user scope. Wired into `install-all.sh`
+  and `scripts/test-install-all.js`; own suite `node scripts/test-zcode-edition.js`. Docs:
+  `docs/zcode-edition.md`.
+
 ### Changed
 
 - **The heavy-reasoning tier (#1018).** Planner-class (`planner`, `code-architect`) defaults to
