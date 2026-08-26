@@ -13,8 +13,9 @@ claim ──► write the mission list ──► run it ──► finalize ─�
 (script)   (agent, one file)          (agent)    (script tx)  (script tx)
 ```
 
-- **`/workflow-init`** — bootstraps a repository: `CLAUDE.md` guidance, docs structure, issue
-  conventions. Run once per project. It also reconciles: a repository still carrying the retired
+- **`/workflow-init`** — bootstraps a repository: universal `AGENTS.md`, the smallest native
+  entrypoint bridge, docs structure, and issue conventions. Run once per project. It also
+  reconciles: a repository still carrying the retired
   local backlog layer (`ROADMAP.md`, `.roadmap/issue-*.md`) is diagnosed and reported, and migrated
   only on the owner's answer — never as a side effect of installing or upgrading.
 - **`/workflow-next`** — the whole workflow. Selects the target, claims it, writes
@@ -320,95 +321,60 @@ responsible for the converged candidate and final verdict. There is no seven-lab
 block, ordering schema, parser, or linter; the routing generator propagates the skeleton prose to
 the command and skill surfaces.
 
+### Project instruction authority
+
+One Kaola-formatted repository has one universal instruction surface: root `AGENTS.md`. Codex,
+opencode, Kimi, Grok, Cursor, and ZCode consume it directly within their documented scopes. Claude
+Code enters through a thin root `CLAUDE.md` containing `@AGENTS.md` plus Claude-only overlay bytes.
+Runtime-specific files never duplicate the universal managed region.
+
+`workflow-init` delegates migration to `kaola-workflow-project-instructions.js`. Its `plan`,
+`check`, and `apply` modes classify ownership, preserve bytes outside managed markers, leave active
+older runs untouched, and return `decision_required` without writing when ownership is ambiguous.
+A successful second apply writes nothing and preserves identical hashes.
+
 ### Runtime capability divergence
 
-Where the runtimes differ, they differ **here** — one table, one place. Every cell is a **tier
-label plus a pointer**, never a restatement of the mechanism: a restated fact rots away from its
-source, and the re-derivation this table exists to end is exactly what a rotted copy causes. Read the
-label for how much of the capability exists; read the pointer for what it is.
+The machine authority is `templates/agents/runtime-capabilities.json`; the cited human map is
+[`runtime-capabilities.md`](runtime-capabilities.md). It distinguishes direct loading from a bridge,
+records profile/dispatch/model/tool/hook/install carriers, and keeps unproved facts as `unknown`.
 
-The labels: **full** — the shared mechanism covers this runtime directly · **partial** — covered,
-with a limitation the pointer names · **rendered** — generated from a shared source, which the
-runtime consumes and never authors · **substituted** — the runtime lacks the shared primitive, so the
-workflow routes the capability through a different one · **inherited** — no control exists at any
-level; the session's value carries.
+Runtimes and forges remain independent axes. The closed role inventory has seven runtime families
+and nine adapter variants: one Claude, three Codex forge variants, and one each for opencode, Kimi,
+Grok, Cursor, and ZCode. Additive installers still take `--forge` to select routing/forge prose; that
+does not create another role-behavior adapter.
 
-**The forge axis multiplies two of the columns.** claude and codex each ship against three
-forges (github, gitlab, gitea), so a claude or codex pointer may resolve to three trees rather than
-one — where it does, the pointer's own path says so, and where the artifact is forge-independent it
-does not. opencode, kimi, grok, cursor, and zcode take `--forge` inside their own standalone installers instead. Runtimes
-and forge editions are different axes; this table is indexed by runtime.
+### Agent behavior and native profiles
 
-| | claude | codex | opencode | kimi | grok | cursor | zcode |
-|---|---|---|---|---|---|---|---|
-| **dispatch carrier** | full — `agents/`; § Agent profiles below | full — `plugins/kaola-workflow/config/agents.toml` (registry); `plugins/*/agents/*.toml` | full — `docs/opencode-edition.md` § What gets generated | substituted — `docs/kimi-edition.md` § Roles as Skills; enforced by `KIMI_RUNTIME_NATIVE` in `scripts/test-kimi-edition.js` | full — `docs/grok-edition.md` § What gets generated | full — `docs/cursor-edition.md` § What gets generated | full — `docs/zcode-edition.md` § What gets generated (user-scope discovery; installer syncs `~/.zcode/agents/`) |
-| **command / skill surface** | rendered — `scripts/generate-routing-surfaces.js` (`COMMAND_EDITIONS`); skeletons in `templates/routing/` | rendered — `scripts/generate-routing-surfaces.js` (`SKILL_EDITIONS`); skeletons in `templates/routing/` | rendered — `docs/opencode-edition.md` § Installer command set; consumes `commandSources()` via `scripts/sync-opencode-edition.js` | rendered — `docs/kimi-edition.md` § Installer command set; consumes `commandSources()` via `scripts/sync-kimi-edition.js` | rendered — `docs/grok-edition.md` § What gets generated; consumes `commandSources()` via `scripts/sync-grok-edition.js` | rendered — `docs/cursor-edition.md` § What gets generated; consumes `commandSources()` via `scripts/sync-cursor-edition.js` | rendered — `docs/zcode-edition.md` § What gets generated; consumes `commandSources()` via `scripts/sync-zcode-edition.js` |
-| **hooks** | full — `hooks/hooks.json`; merge at `install.sh` (`MERGE_SETTINGS`) | full — `plugins/*/config/hooks.json` (three trees); merge at `plugins/*/scripts/install-codex-agent-profiles.js` | substituted — `docs/opencode-edition.md` § Hooks; `templates/opencode/plugins/kaola-workflow-hooks.js` | partial — `docs/kimi-edition.md` § Hooks; event mapping `docs/decisions/D-703-01.md` | full — `docs/grok-edition.md` § Hooks | partial — `docs/cursor-edition.md` § Hooks; `sessionStart` injection (`preCompact` cannot inject) | partial — `docs/zcode-edition.md` § Hooks; merged `config.json` (`hooks.enabled: true`, seven events) |
-| **model & tier handling** | full — `scripts/kaola-workflow-resolve-agent-model.js`; role tiers remain metadata and runtime defaults may be overridden per task | full — tier/profile metadata in `kaola-workflow-adaptive-schema.js` and the three Codex profile registries; runtime selection is inherited or task-sensitive | partial — `docs/opencode-edition.md` § Model and effort — inherited from the session | inherited — `docs/kimi-edition.md` § One model tier — runtime-native session value | partial — `docs/grok-edition.md` § Three effort tiers | partial — `docs/cursor-edition.md` § Three-tier frontmatter metadata and runtime limits | partial — `docs/zcode-edition.md` § Three-tier frontmatter metadata |
-| **install path** | full — `install.sh` | partial — the split stated at `install-all.sh` (§ Codex marketplace-plugin convergence); profiles and hooks at `plugins/kaola-workflow/scripts/install-codex-agent-profiles.js` | substituted — `install-opencode.sh`; `docs/opencode-edition.md` § Deploy layout — project vs global (scope-dependent) | substituted — `install-kimi.sh`; `docs/kimi-edition.md` § Deploy layout — project vs global (scope-dependent) | substituted — `install-grok.sh`; `docs/grok-edition.md` § Installer | substituted — `install-cursor.sh`; `docs/cursor-edition.md` § Installer | substituted — `install-zcode.sh`; `docs/zcode-edition.md` § Installer |
+`templates/agents/behavior-contracts.json` is the only behavioral authority for all 14 roles.
+`scripts/generate-agent-profiles.js` composes each role with the selected native adapter, producing
+126 deterministic renders. Root `agents/*.md`, the 42 Codex TOMLs, and additive runtime profiles are
+outputs. No output is edited as a semantic source.
 
-The label grades the capability, not the pointer. Two cells carry **two** pointers because one alone
-loses half the fact: codex model & tier separates the source constants from the carrier set that
-renders them, and kimi's dispatch carrier separates the readable description from the
-machine-enforced declaration. The weakest pointer is claude's dispatch carrier: no prose names the
-dispatch mechanism itself, so the first pointer is the directory, and § Agent profiles below carries
-only what the profiles contain. claude and codex have no per-edition doc, which is why their cells
-point at code where opencode's, kimi's, grok's, cursor's, and zcode's point at prose.
+The behavior source owns purpose, inputs, authority/custody, writes, deliverable, verification, stop
+conditions, capability requirements, and `standard` / `reasoning` / `heavy` intent. It contains no
+runtime, vendor, native model, tool syntax, home path, or hook vocabulary. Adapters own those native
+differences and may not carry arbitrary universal prompt prose.
 
-The shipped Claude and Codex hook configurations register only compaction resume. Additive runtime
-wrappers may adapt that same packet to their native session-start/compaction event; none provides an
-active spawn-log producer.
+Every render carries a shared `behavior_contract_hash` and a render-specific
+`resolved_profile_hash`. Shared-behavior mutation must reach all nine variants for that role;
+adapter mutation must stay inside one runtime family. Byte identity remains required for true
+forge-neutral twins, but cross-runtime sentence equality is not the oracle.
 
-### Agent profiles
+Provenance is a separate axis in `templates/agents/provenance.json` and
+[`agents-source.md`](agents-source.md). It is validated and durable but excluded from prompt bodies
+and behavior/render hashes.
 
-Each role has a canonical `agents/<name>.md` (installed by `install.sh` for Claude) and a `.toml`
-triple across the three plugin editions. Every Codex profile omits top-level `model` and
-`model_reasoning_effort`; runtime defaults or a task-sensitive dispatch may supply those values.
-All three `.toml` twins for a profile are byte-identical and forge-neutral — no
-CLI binaries, no forge brands.
+Codex profile readiness remains an install-time boundary. The profile installer verifies source,
+manifest, writes, pruning, hooks, and installed bytes; `kaola-workflow-codex-preflight.js --doctor`
+is an explicit diagnostic. Live next/finalize surfaces do not turn it into an entry gate.
 
-`code-reviewer`, `adversarial-verifier` and `security-reviewer` are **generated**, not hand-authored:
-their behavior lives in `templates/reviewers/behavior-contracts.json`, their closed tool/model
-adapters in `templates/reviewers/runtime-adapters.json`, and `scripts/generate-reviewer-profiles.js`
-is the sole writer of the rendered outputs. A shared `behavior_contract_hash` binds the
-runtime-neutral core; each render's `resolved_profile_hash` binds its complete bytes. This proves
-deterministic source and installed bytes — it does not make stochastic model findings identical.
+### Model intent
 
-For non-generated roles, adding a feature paragraph to an `agents/<name>.md` requires mirroring the
-token into all three `.toml` twins before it can be pinned in `test-agent-profile-parity.js`;
-`validate-script-sync.js` `BYTE_IDENTICAL_GROUPS` enforces byte identity across each triple.
-
-Codex profile readiness is an install-time boundary. `install-codex-agent-profiles.js` is the
-authoritative install/upgrade transaction and verifies its completed writes before success;
-`kaola-workflow-codex-preflight.js --doctor` remains an explicit diagnostic. The live Codex
-`next`/`finalize` routing surfaces do not re-certify persisted configuration on entry or resume.
-
-### Model resolution
-
-For Claude Code, there is no install-time model axis and no install-written manifest. `install.sh` deletes a
-pre-existing `~/.claude/agents/.kaola-agent-models.json` on upgrade. The resolver
-(`kaola-workflow-resolve-agent-model.js`) is:
-
-```text
-explicit model passed by the caller  ->  frontmatter (when not `inherit`)  ->  DEFAULT_AGENT_MODELS  ->  ''
-```
-
-**The frontmatter step is inert for an installed agent**: `install_managed_agent()` rewrites every
-installed agent's frontmatter to `model: inherit`, and the step skips `inherit`. It governs exactly
-one case — an ad-hoc dispatch against this repository's source `agents/` tree. Because that is a
-real path, each role's source frontmatter is held byte-equal to its `DEFAULT_AGENT_MODELS` entry
-(asserted by `test-agent-model-resolver.js`), so a role resolves to the same tier from either
-directory.
-
-For Claude Code, a caller may supply a model; otherwise the installed profile and runtime default
-resolver apply. The routing workflow does not add a fixed per-spawn model placeholder or pair.
-
-Codex retains the role tier classifications and profile registries as metadata. A child may inherit
-runtime-native model/effort defaults or receive a task-sensitive override, and omission is valid.
-Next/finalize do not mandate reviewer escalation or a fixed pipeline: reviewers examine a converged
-candidate, return findings to the existing owner, and re-review repaired findings or new claims.
-The `CODEX_*` values retained by preflight are migration metadata for stale installs, not workflow
-policy.
+Role intent is only `standard`, `reasoning`, or `heavy`. The selected adapter maps that intent to a
+native model/effort value or session inheritance. No mission-list field or routing command fixes a
+per-spawn model pair. Current mappings and limitations are documented in
+[`runtime-capabilities.md`](runtime-capabilities.md) and each additive edition guide.
 
 ## Testing
 

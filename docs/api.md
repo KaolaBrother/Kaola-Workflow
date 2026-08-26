@@ -13,9 +13,37 @@ Three commands ship. Everything below is invoked by them or by hand.
 
 | Command | Owns |
 |---|---|
-| `/workflow-init` | bootstrap a repository: `CLAUDE.md`, backlog guidance, docs structure, issue conventions; and diagnose a retired local backlog layer, reporting and migrating it only on the owner's answer |
+| `/workflow-init` | bootstrap a repository: universal `AGENTS.md`, a thin native entrypoint bridge, backlog guidance, docs structure, and issue conventions; migrate only recognized Kaola-owned instruction bytes, and diagnose owner decisions without writing |
 | `/workflow-next` | select, claim, write the mission list, run it |
 | `/kaola-workflow-finalize` | validate, dock docs, summarize, close, archive, commit, sink |
+
+## Project instruction migration — `kaola-workflow-project-instructions.js`
+
+```text
+node scripts/kaola-workflow-project-instructions.js plan|check|apply \
+  --project-root <path> --json
+```
+
+The helper makes root `AGENTS.md` the one universal project contract and keeps root `CLAUDE.md` as
+the `@AGENTS.md` Claude-only bridge/overlay. It never treats a native overlay as a second universal
+authority.
+
+- `plan` is read-only. It classifies both files, computes before/after SHA-256 values, and reports
+  `planned`, `converged`, `active_run_preserved`, or `decision_required`.
+- `check` is read-only. A safe but unapplied plan becomes `drift` and exits 3.
+- `apply` writes only a safe `planned` result, atomically and by exact path. It reports the files
+  written and becomes a byte-identical no-op after convergence.
+
+Known legacy Kaola redirects and correctly formed managed regions are workflow-owned. Surrounding
+owner bytes remain byte-identical. Missing files may be created. Malformed markers, an unrecognized
+owner-only authority, or a split the helper cannot prove safe returns `decision_required`, exits 2,
+and writes nothing. Any active workflow state is fenced as `active_run_preserved`; old runs keep the
+instruction bytes they started with. The helper creates no symlinks and does not inspect or delete
+nested/local runtime instruction files.
+
+The JSON envelope has `schema_version`, `mode`, `status`, `changed`, `files`, `writes`, and
+`reasons`. Each `files.agents` / `files.claude` record carries `classification`,
+`before_sha256`, `after_sha256`, and `outside_bytes_preserved`.
 
 ## Routing-surface handoff interface
 
@@ -1499,11 +1527,14 @@ The `--release-check` step is the gate documented above. `--prepare` bumps the v
 
 | Script | Contract |
 |---|---|
+| `generate-agent-profiles.js --check\|--write\|--print-manifest` | validates the complete 14-role behavior, runtime-capability, and provenance authorities; composes seven runtime families through nine adapter variants; writes/checks the 14 Claude profiles, 42 Codex profiles, three Codex registries, and the 126-render manifest; and exposes logical renders to the five additive edition generators. `--check` exits non-zero on any tracked output drift. Generated prompts exclude provenance. |
+| `kaola-workflow-project-instructions.js plan\|check\|apply --project-root <path> --json` | ownership-safe AGENTS-first project migration described above. The installed GitHub, GitLab, and Gitea copies are identical. |
+| `run-edition-tests.js <scripts/test-*.js>...` | executes every explicitly declared additive edition suite, even after a prior failure; prints child output, retains every failed suite in the final summary, and exits non-zero after all attempts when any child failed. The package script declares opencode, Kimi, Grok, Cursor, and ZCode explicitly so suite registration can see the full lane. |
 | `kaola-workflow-install-manifest.js --forge=<github\|gitlab\|gitea> (--scripts\|--hooks)` | the single source of the support-file list an installer copies. Prints one name per line. Exits 2 on an unknown argument, a missing flag, or an **empty** list — an empty manifest would copy zero support files, so it refuses rather than silently installing nothing. Exports `SUPPORT_SCRIPTS`, `SUPPORT_HOOKS`, `FORGES`, `supportScripts`, `supportHooks`, `renameIfPorted` |
 | `edition-sync.js (--check \| --write \| --materialize-kernel)` | materializes the rename-normalized edition copies from the canonical tree and the byte-identical kernel into each edition. `--check` is the read-only verdict |
 | `validate-script-sync.js` | enforces cross-edition parity, including `BYTE_IDENTICAL_GROUPS`, which auto-expands when a new `.toml` is added to the codex tree |
-| `sync-opencode-edition.js` / `sync-kimi-edition.js` / `sync-grok-edition.js` / `sync-cursor-edition.js` / `sync-zcode-edition.js` | the additive runtime editions; not wired into `npm test` or the forge chains. `--refresh-present` regenerates every edition tree already on the machine and creates none — it is what the routing generator's `--write` calls, so a routing-prose change leaves no installed tree stale. `--print-tree-root` prints the single absolute directory that edition's generated tree lands in and writes nothing. Both modes ignore `--forge`: the answer is the same for all four. Each edition installer takes its source tree from that answer instead of assuming one beside itself, so an install run from a linked worktree finds the tree. When that root is not the invoking checkout, `--refresh-present` announces it **on stderr** — the root written, the root read from, the trees refreshed, and the check to run there (`npm run test:kaola-workflow:editions`) — and only when something there actually changed, written or pruned, since the writers content-compare and an in-parity refresh changes nothing. It reports changes applied, not a file tally: a prune can remove a retired directory in one call. Nothing is added to stdout: `--print-tree-root` is consumed as a path |
-| `install-zcode.sh` | the additive ZCode runtime installer (project `--target` / `--global`, `--forge=github\|gitlab\|gitea`, `--regenerate`, `--uninstall`, `--no-scripts`, `--yes`); project installs stage agents/commands under `<target>/.zcode/` with generated hook/script launchers under `<target>/.zcode/kaola-workflow/`, global installs place agents/commands directly under `${ZCODE_HOME:-~/.zcode}/{agents,commands}`, and both scopes merge hooks into their `config.json`. Generated launchers stage first and real manifest support scripts land last, so real scripts win wherever the edition layout and `${ZCODE_HOME:-~/.zcode}` coincide; with distinct paths, project launchers remain under the project edition directory and real scripts remain under the shared home path. Consumer-cwd resolution therefore selects the real scripts rather than recursing through a generated launcher. Project installs also sync agents to `${ZCODE_HOME:-~/.zcode}/agents/` because ZCode discovers subagents only at user scope. |
+| `sync-opencode-edition.js` / `sync-kimi-edition.js` / `sync-grok-edition.js` / `sync-cursor-edition.js` / `sync-zcode-edition.js` | additive runtime editions outside `npm test` and the forge chains. Each requests native role bytes from `generate-agent-profiles.js`; none parses Claude role prose as semantic input. `--refresh-present` regenerates every edition tree already on the machine and creates none — it is what the routing generator's `--write` calls, so a routing-prose change leaves no present tree stale. `--print-tree-root` prints the single absolute generated-tree root and writes nothing. Each installer resolves its source from that answer, including from a linked worktree. A cross-checkout refresh reports changed trees and the editions check on stderr without contaminating stdout. |
+| `install-zcode.sh` | the additive ZCode runtime installer (project `--target` / `--global`, `--forge=github\|gitlab\|gitea`, `--regenerate`, `--uninstall`, `--no-scripts`, `--yes`); project installs stage agents/commands under `<target>/.zcode/` with generated hook/script launchers under `<target>/.zcode/kaola-workflow/`, global installs place agents/commands directly under `${ZCODE_HOME:-~/.zcode}/{agents,commands}`, and both scopes merge hooks only into the executable user carrier `${ZCODE_HOME:-~/.zcode}/cli/config.json`. Project `.zcode/config.json` and legacy `${ZCODE_HOME:-~/.zcode}/config.json` are ignored carriers and remain untouched. Generated launchers stage first and real manifest support scripts land last, so real scripts win wherever the edition layout and `${ZCODE_HOME:-~/.zcode}` coincide; with distinct paths, project launchers remain under the project edition directory and real scripts remain under the shared home path. Consumer-cwd resolution therefore selects the real scripts rather than recursing through a generated launcher. Project installs also sync agents to `${ZCODE_HOME:-~/.zcode}/agents/` because ZCode discovers subagents only at user scope. |
 | `kaola-workflow-ensure-cursor-catalog.js` | Cursor-only catalog materialize. No flags. Source `${CURSOR_HOME:-$HOME/.cursor}/agents`; dest `<cwd>/.cursor/agents`; copies only the 14 canonical role names. Isolated (does not `require` `sync-cursor-edition.js`; does not prefer git toplevel). Exports `ensureCursorCatalog({ cwd, cursorHome })`, `listCanonAgents`, `CANON_AGENT_NAMES`. CLI prints one status token then a newline: `already-present` or `copied` (exit 0), `missing-source` (exit 1). `install-cursor.sh` deploys and uninstalls the file as an extra support script; it is not in `kaola-workflow-install-manifest.js` |
 | `install-codex-agent-profiles.js` | authoritative Codex install/upgrade transaction; validates source profiles and targets, writes and prunes the managed set, records the manifest, installs hooks, and verifies the result before success |
 | `kaola-workflow-codex-preflight.js --doctor` | explicit user-invoked diagnostic for installed plugin, agent-profile, managed-config, manifest, and hook state. Ordinary workflow entry/resume never invokes it or treats its result as a readiness gate |
@@ -1539,23 +1570,21 @@ retired `parallel_mode`) is ignored, never rewritten.
 
 ### Agent model resolution
 
-For Claude Code, there is **no install-written agent model manifest**. `install.sh` deletes a pre-existing
-`~/.claude/agents/.kaola-agent-models.json` on upgrade and never reads one. `KAOLA_AGENT_DIR` is
-respected when set.
+`templates/agents/behavior-contracts.json` assigns every role one runtime-neutral `intent_class`:
+`standard`, `reasoning`, or `heavy`. It contains no vendor or model identifier. The selected entry in
+`templates/agents/runtime-capabilities.json` maps that intent to a native carrier or inheritance:
 
-The Claude Code `resolve-agent-model` path resolves in three steps: **explicit model from the caller → frontmatter (when
-not `inherit`) → `DEFAULT_AGENT_MODELS`**, falling back to `''` only when no step answers. For an
-installed agent the frontmatter step is inert, because install rewrites every installed agent's
-frontmatter to `model: inherit`. It governs exactly one case: an ad-hoc dispatch against this
-repository's source `agents/` tree. Each role's source frontmatter is therefore held byte-equal to
-its `DEFAULT_AGENT_MODELS` entry (asserted by `test-agent-model-resolver.js`).
+- Claude profile `model` values are adapter data;
+- Codex omits a fixed profile model and inherits runtime/task policy;
+- opencode and Kimi inherit the session model/effort under the documented adapter boundary;
+- Grok carries native effort while inheriting the session model;
+- Cursor carries the native model/effort parameter;
+- ZCode carries an explicit model plus camelCase `thoughtLevel`.
 
-Codex subagent dispatch retains the existing role tiers as metadata. A child may inherit the
-runtime-native model/effort defaults or receive a task-sensitive override; omission is valid. The
-`CODEX_STANDARD_*` and `CODEX_REASONING_*` preflight constants remain stale-profile migration data,
-not dispatch authority. This contract is Codex-only; other runtimes keep their own native resolver.
-Reviewers examine a converged candidate, return findings to the existing owner, and re-review repaired
-findings or new claims. No next/finalize policy fixes a model pair, pipeline, or escalation count.
+The exact current mappings are machine data and are summarized in `runtime-capabilities.md`. No
+mission-list field, routing command, or handoff prose fixes a per-spawn model pair. A missing required
+native capability yields `capability_gap`; it is not emulated by granting wider tools or silently
+dropping the restriction.
 
 ## Environment Variables
 

@@ -3,8 +3,8 @@
 #
 # Additive standalone installer (does NOT modify install.sh, install-opencode.sh, or the
 # claude/codex/gitlab/gitea/opencode editions). Kimi Code is a runtime (like opencode), not
-# a git forge, so it is delivered the kimi-native way: SKILL.md skills under a skills/ dir +
-# a managed [[hooks]] block in the kimi config.toml.
+# a git forge, so it is delivered the kimi-native way: custom profiles under agents/,
+# command-only SKILL.md entries under skills/, plus a managed [[hooks]] block in config.toml.
 #
 # FORGE: --forge=github|gitlab|gitea selects which forge's workflow prose and support scripts
 # to deploy (default github). The runtime is still not a forge — this installer remains
@@ -17,16 +17,18 @@
 #   ./install-kimi.sh                         # deploy into the current directory
 #   ./install-kimi.sh --target /path/to/repo  # deploy into a specific project
 #   ./install-kimi.sh --forge=gitlab          # deploy the GitLab-shaped edition
-#   ./install-kimi.sh --global                # deploy skills to ${KIMI_CODE_HOME:-~/.kimi-code}/skills
+#   ./install-kimi.sh --global                # deploy agents+commands to ${KIMI_CODE_HOME:-~/.kimi-code}
 #   ./install-kimi.sh --regenerate            # refresh the generated tree from canonical here
 #
-# COMMAND SKILLS: the install deploys the workflow command skills (kaola-workflow-finalize,
-# workflow-init, workflow-next) plus all 14 kaola-role-* skills into the skills/ dir. The
-# generated .kimi/ tree is produced by sync-kimi-edition.js from the canonical sources.
+# COMMAND SKILLS + NATIVE AGENTS: the install deploys the three workflow command Skills and
+# all 14 native custom-agent profiles. Roles are discovered from the native agents/ directory;
+# the old kaola-role-* Skill fallback is retired and cleaned during upgrade.
 #
 # DEPLOY LAYOUT (scope-dependent):
-#   - PROJECT (--target/$PWD): skills land under <project>/.kimi-code/skills/<name>/SKILL.md.
-#   - GLOBAL (--global): skills land DIRECTLY under ${KIMI_CODE_HOME:-$HOME/.kimi-code}/skills/.
+#   - PROJECT (--target/$PWD): agents and command Skills land under
+#     <project>/.kimi-code/{agents,skills}/.
+#   - GLOBAL (--global): agents and command Skills land directly under
+#     ${KIMI_CODE_HOME:-$HOME/.kimi-code}/{agents,skills}/.
 #   - Support scripts + hook scripts ALWAYS land under the kimi home (user-level, shared by
 #     every project): ${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/{scripts,hooks}.
 #   - The hooks fragment (.kimi/hooks/kimi-hooks.toml, __KIMI_HOME__ substituted with the
@@ -69,7 +71,7 @@ usage() {
   cat <<'EOF'
 Usage: ./install-kimi.sh [--target DIR] [--forge=github|gitlab|gitea] [--global]
                          [--regenerate] [--uninstall] [--no-scripts] [--yes]
-  --target DIR     deploy skills into DIR/.kimi-code/skills (default: current directory)
+  --target DIR     deploy skills + agents into DIR/.kimi-code (default: current directory)
   --forge F        github (default), gitlab, or gitea — which forge's workflow prose
                    and support scripts to deploy
   --global         deploy skills into ${KIMI_CODE_HOME:-~/.kimi-code}/skills (all projects)
@@ -224,7 +226,7 @@ remove_retired_support_scripts() {
   done
 }
 
-# Workflow command-skill set: deployed alongside all kaola-role-* skills. Any OTHER skill fails
+# Workflow command-skill set. Any OTHER skill fails
 # CLOSED (skipped + warned) so a future canonical command cannot silently widen the install.
 # Single source of truth for the deploy set (used by copy_skills).
 WORKFLOW_COMMANDS=(
@@ -266,18 +268,23 @@ copy_skills() {
     [[ -d "$stale" ]] || continue
     rm -rf "$stale"
   done
-  # Re-copy via a fail-CLOSED ALLOWLIST: the workflow command skills + all kaola-role-* skills,
-  # anything else skipped.
+  # v10 migration: current roles previously shipped as kaola-role-* Skills. Their exact names
+  # derive from the native profile roster; remove only those names, never the namespace.
+  local profile role_name
+  for profile in "$SOURCE_TREE/agents/"*.md; do
+    [[ -f "$profile" ]] || continue
+    role_name="kaola-role-$(basename "$profile" .md)"
+    [[ -d "$skills_dest/$role_name" ]] || continue
+    rm -rf "$skills_dest/$role_name"
+  done
+  # Re-copy via a fail-CLOSED ALLOWLIST: only workflow command Skills.
   local src_dir base skill_count=0 skipped=0
   for src_dir in "$SOURCE_TREE/skills/"*/; do
     [[ -d "$src_dir" ]] || continue
     base="$(basename "$src_dir")"
     if ! in_array "$base" "${WORKFLOW_COMMANDS[@]}"; then
-      case "$base" in
-        kaola-role-*) : ;;   # role skills: always
-        *) echo "warning: skipping unrecognized skill not in the workflow command / role set: $base" >&2
-           skipped=$((skipped + 1)); continue ;;
-      esac
+      echo "warning: skipping unrecognized skill not in the workflow command set: $base" >&2
+      skipped=$((skipped + 1)); continue
     fi
     # Replace, never merge — see the `cp -R` note above. Dirs only, so a non-directory entry a
     # user keeps under this name is left for `cp` to fail on rather than silently deleted.
@@ -298,6 +305,44 @@ copy_skills() {
     exit 1
   fi
   echo "Installed workflow skills → $skills_dest/"
+}
+
+MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
+
+copy_agents() {
+  local agents_dest="$1"
+  local source_agents="$SOURCE_TREE/agents"
+  [[ -d "$source_agents" ]] || { echo "Install error: native agent source missing: $source_agents" >&2; exit 1; }
+  mkdir -p "$agents_dest"
+  if [[ "$source_agents" -ef "$agents_dest" ]]; then
+    echo "Self-dev deploy (source $source_agents is already the live agents tree) → copy skipped."
+    return
+  fi
+
+  # Preflight the complete roster before writing anything. A same-name file without our marker is
+  # user-owned, even when its name matches a Kaola role; fail closed and preserve its bytes.
+  local src base dest count=0
+  for src in "$source_agents/"*.md; do
+    [[ -f "$src" ]] || continue
+    base="$(basename "$src")"
+    dest="$agents_dest/$base"
+    if ! grep -qF "$MANAGED_AGENT_MARKER" "$src"; then
+      echo "Install error: generated native agent lacks ownership marker: $src" >&2
+      exit 1
+    fi
+    if [[ -f "$dest" ]] && ! grep -qF "$MANAGED_AGENT_MARKER" "$dest"; then
+      echo "Install error: refusing to overwrite unmanaged native agent: $dest" >&2
+      exit 1
+    fi
+    count=$((count + 1))
+  done
+  [[ "$count" -gt 0 ]] || { echo "Install error: no native agent profiles found in $source_agents" >&2; exit 1; }
+
+  for src in "$source_agents/"*.md; do
+    [[ -f "$src" ]] || continue
+    cp "$src" "$agents_dest/$(basename "$src")"
+  done
+  echo "Installed native agent profiles → $agents_dest/ ($count)"
 }
 
 # Install the support scripts + hook scripts the workflow skills invoke. Scripts land in
@@ -476,12 +521,14 @@ strip_hooks_config() {
 # config.toml (preserving the rest). The SHARED ~/.config/kaola-workflow/config.json is
 # kept for any co-installed Claude/Codex/opencode edition.
 uninstall_edition() {
-  local home skills_dest
+  local home skills_dest agents_dest
   home="$(kimi_home)"
   if [[ "$GLOBAL" -eq 1 ]]; then
     skills_dest="$home/skills"
+    agents_dest="$home/agents"
   else
     skills_dest="${TARGET:-$PWD}/.kimi-code/skills"
+    agents_dest="${TARGET:-$PWD}/.kimi-code/agents"
   fi
   echo "Uninstalling Kaola-Workflow · kimi edition ($FORGE) from → $skills_dest"
   if [[ -d "$skills_dest" && "$SOURCE_TREE/skills" -ef "$skills_dest" ]]; then
@@ -501,9 +548,29 @@ uninstall_edition() {
     rm -rf "$skills_dest/$retired"
     echo "Removed retired role skill: $skills_dest/$retired"
   done
+  local profile migrated
+  for profile in "$SOURCE_TREE/agents/"*.md; do
+    [[ -f "$profile" ]] || continue
+    migrated="$skills_dest/kaola-role-$(basename "$profile" .md)"
+    [[ -d "$migrated" ]] || continue
+    rm -rf "$migrated"
+    echo "Removed migrated role skill: $migrated"
+  done
   rmdir "$skills_dest" 2>/dev/null || true
-  if [[ "$GLOBAL" -ne 1 ]]; then rmdir "${TARGET:-$PWD}/.kimi-code" 2>/dev/null || true; fi
   echo "Removed deployed skills."
+  for profile in "$SOURCE_TREE/agents/"*.md; do
+    [[ -f "$profile" ]] || continue
+    local deployed_agent="$agents_dest/$(basename "$profile")"
+    [[ -f "$deployed_agent" ]] || continue
+    if grep -qF "$MANAGED_AGENT_MARKER" "$deployed_agent"; then
+      rm -f "$deployed_agent"
+    else
+      echo "Preserved unmanaged native agent: $deployed_agent"
+    fi
+  done
+  rmdir "$agents_dest" 2>/dev/null || true
+  if [[ "$GLOBAL" -ne 1 ]]; then rmdir "${TARGET:-$PWD}/.kimi-code" 2>/dev/null || true; fi
+  echo "Removed managed native agent profiles."
   # Support scripts + hook scripts (kimi-home dir; honors $KIMI_CODE_HOME). Removed by name;
   # the kaola-workflow dirs are rmdir'd only once empty.
   local scripts_dir="$home/kaola-workflow/scripts"
@@ -555,6 +622,7 @@ confirm_install() {
   cat <<EOF
 About to install the Kaola-Workflow kimi edition:
   skills              → $SKILLS_DEST
+  native agents       → $AGENTS_DEST
   support scripts     → $(kimi_home)/kaola-workflow/scripts
   hook scripts        → $(kimi_home)/kaola-workflow/hooks
   hooks config block  → $(kimi_home)/config.toml (managed block)
@@ -575,14 +643,17 @@ fi
 if [[ "$GLOBAL" -eq 1 ]]; then
   DEST_ROOT="$(kimi_home)"
   SKILLS_DEST="$DEST_ROOT/skills"
+  AGENTS_DEST="$DEST_ROOT/agents"
   echo "Deploying globally ($FORGE) → $DEST_ROOT"
 else
   DEST_ROOT="${TARGET:-$PWD}"
   SKILLS_DEST="$DEST_ROOT/.kimi-code/skills"
+  AGENTS_DEST="$DEST_ROOT/.kimi-code/agents"
   echo "Deploying into project ($FORGE) → $DEST_ROOT"
 fi
 
 confirm_install
+copy_agents "$AGENTS_DEST"
 copy_skills "$SKILLS_DEST"
 install_support_scripts
 merge_hooks_config

@@ -1,18 +1,13 @@
 ---
 name: build-error-resolver
-description: Build and TypeScript error resolution specialist. Use PROACTIVELY when build fails or type errors occur. Fixes build/type errors only with minimal diffs, no architectural edits. Focuses on getting the build green quickly.
-tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob"]
+description: "Build and TypeScript error resolution specialist. Use PROACTIVELY when build fails or type errors occur. Fixes build/type errors only with minimal diffs, no architectural edits. Focuses on getting the build green quickly."
+tools: ["Read","Write","Edit","Grep","Glob","Bash"]
 model: opus
+behavior_contract_version: 1
+behavior_contract_hash: 5eb58ceb279082ec72d2f7a3e77ff3f938e8417432beb25f1e71ce871abff957
+resolved_profile_hash: bd1eaf6082a828bc34bd4ddc91e5bb37501958ac7288396fd2946c41930535e6
 ---
-<!--
-kaola-workflow-managed-agent: true
-upstream: https://github.com/affaan-m/everything-claude-code/blob/922d2d8f8b64f4e50936e24465cb3bcac81ac0e1/agents/build-error-resolver.md
-source-commit: 922d2d8f8b64f4e50936e24465cb3bcac81ac0e1
-source-blob-sha: 2ab19ac35497ae2e1b7a33f238a6953867fc5572
-source-sha256: 57e8d92be91812bafae1240cf628f39e5910e6e3c69a78edb51db764192e7afc
-license: MIT License
-copyright: Copyright (c) 2026 Affaan Mustafa
--->
+<!-- kaola-workflow-managed-agent: true -->
 
 ## Prompt Defense Baseline
 
@@ -140,3 +135,15 @@ or deleting working capability, stop, say what you would do and why, and ask.
 ## Output Contract
 
 Report what you changed and what proves it: the files you touched, the commands you ran with their exit codes, and the build state before and after (`build-green` when the build and typecheck pass). Say where the result landed — the paths you changed and, if you wrote a longer record to a file, that file's path. Give the whole record, not a one-line paraphrase of it.
+
+<!-- runtime-adapter:start -->
+runtime: claude
+behavior_contract_version: 1
+behavior_contract_hash: 5eb58ceb279082ec72d2f7a3e77ff3f938e8417432beb25f1e71ce871abff957
+adapter_capabilities_hash: a37d8dc46eaf900e371e8985b2007cd0c42713a4be6e05977f66b1fb27efbf65
+
+## Runtime adapter
+
+- Follow the native carrier and capability boundary declared for this runtime.
+- If a required capability is unavailable, stop without mutation and report `capability_gap: <missing capability> — <required action>`.
+<!-- runtime-adapter:end -->

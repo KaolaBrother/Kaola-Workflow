@@ -142,7 +142,7 @@ behind.
 
 ## Step 4 — Documentation update
 
-Read the project-root `CLAUDE.md` for its Documentation Update Checklist (create or append it if
+Read the project-root `AGENTS.md` for its Documentation Update Checklist (create or append it if
 missing). Update the docs, or record an explicit no-impact reason. Resolve the worktree first:
 
 ```bash

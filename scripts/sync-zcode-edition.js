@@ -9,15 +9,16 @@
 // install.sh --forge= machinery or edition-sync.js. It is delivered the
 // ZCode-native way: named agents under `.zcode/agents/<role>.md` (Agent
 // dispatch types), flat commands under `.zcode/commands/<name>.md`, a merged
-// `.zcode/config.json` whose top-level `hooks` object requires
+// user-scope `${ZCODE_HOME:-$HOME/.zcode}/cli/config.json` whose top-level `hooks` object requires
 // `"enabled": true` and offers exactly seven events (SessionStart,
 // UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse,
 // PostToolUseFailure, Stop — there is no SubagentStart), and support
 // scripts/hook shells under `.zcode/kaola-workflow/{scripts,hooks}`.
 // Deterministic, idempotent, parity-checked by test-zcode-edition.js.
 //
-// ZCode discovers subagents ONLY at user scope (~/.zcode/agents), so the
-// installer additionally syncs the staged agent roster to the user home.
+// ZCode discovers subagents and executable hook configuration ONLY at user scope,
+// so the installer additionally syncs the staged agent roster and merges the hooks
+// into the live user configuration.
 //
 // Canonical model classes drive the generated agent tier pins (measured on
 // ZCode 3.9.1): every agent renders `model: GLM-5.3` plus exactly one
@@ -38,7 +39,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const reviewerGen = require('./generate-reviewer-profiles');
+const agentGen = require('./generate-agent-profiles');
 const forgeLayout = require('./runtime-edition-forge');
 
 const REPO = path.resolve(__dirname, '..');
@@ -57,7 +58,7 @@ function treeLabel(forge) {
   return '.zcode' + forgeLayout.outSuffix(forge || DEFAULT_FORGE);
 }
 
-const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
+const MANAGED_ROLES = new Set(agentGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
 
 // No runtime-neutral hook shells are active in the ZCode edition. The generator retains ownership
@@ -94,9 +95,7 @@ function yamlScalar(value) {
 }
 
 function listCanonAgents() {
-  return fs.readdirSync(CANON_AGENTS_DIR)
-    .filter(f => f.endsWith('.md'))
-    .map(f => f.slice(0, -3));
+  return [...agentGen.ROLES];
 }
 
 function listCanonCommands(forge) {
@@ -109,58 +108,9 @@ function canonCommandPath(basename, forge) {
   return src.absPath;
 }
 
-// The tier binding, derived from the canonical model-class token. Same model
-// at different effort is confirmed on ZCode 3.9.1: GLM-5.3 exposes reasoning
-// variants low|high|max, so the canonical tier selects ONLY the thoughtLevel.
-const ZCODE_MODEL_CLASS_PINS = Object.freeze({
-  sonnet: Object.freeze({ tier: 'standard', model: 'GLM-5.3', thoughtLevel: 'high' }),
-  standard: Object.freeze({ tier: 'standard', model: 'GLM-5.3', thoughtLevel: 'high' }),
-  opus: Object.freeze({ tier: 'reasoning', model: 'GLM-5.3', thoughtLevel: 'max' }),
-  reasoning: Object.freeze({ tier: 'reasoning', model: 'GLM-5.3', thoughtLevel: 'max' }),
-  fable: Object.freeze({ tier: 'heavy', model: 'GLM-5.3', thoughtLevel: 'max' }),
-  heavy: Object.freeze({ tier: 'heavy', model: 'GLM-5.3', thoughtLevel: 'max' }),
-});
-
-function zcodeModelPin(canonicalModel, agentName) {
-  const token = String(canonicalModel == null ? '' : canonicalModel).trim().toLowerCase();
-  if (!Object.prototype.hasOwnProperty.call(ZCODE_MODEL_CLASS_PINS, token)) {
-    throw new Error('sync-zcode-edition: agent "' + (agentName || '(unnamed)')
-      + '" requires a canonical model token sonnet, standard, opus, reasoning, fable, or heavy; received '
-      + (token ? JSON.stringify(token) : '(absent)'));
-  }
-  return ZCODE_MODEL_CLASS_PINS[token];
-}
-
 function renderAgent(canonContent, agentName, forge) {
-  forge = forge || DEFAULT_FORGE;
-  const { fm, body } = parseFrontmatter(canonContent);
-  const pin = zcodeModelPin(fm.model, agentName);
-  const isReviewer = REVIEWER_ROLES.has(agentName);
-  const lines = ['---'];
-  lines.push('name: ' + agentName);
-  lines.push('description: ' + yamlScalar(fm.description || ''));
-  lines.push('model: ' + pin.model);
-  lines.push('thoughtLevel: ' + pin.thoughtLevel);
-  lines.push('---');
-  lines.push('');
-  if (isReviewer) {
-    lines.push('<!-- zcode-reviewer-identity:start -->');
-    if (fm.behavior_contract_version) lines.push('behavior_contract_version: ' + fm.behavior_contract_version);
-    if (fm.behavior_contract_hash) lines.push('behavior_contract_hash: ' + fm.behavior_contract_hash);
-    lines.push('resolved_profile_hash: ' + ZERO_HASH);
-    lines.push('<!-- zcode-reviewer-identity:end -->');
-    lines.push('');
-  }
-  const bodyText = String(body)
-    .replace(/--runtime claude\b/g, '--runtime zcode')
-    .trim().replace(/\s+$/, '');
-  lines.push(bodyText);
-  let content = lines.join('\n') + '\n';
-  if (isReviewer) {
-    const normalized = reviewerGen.normalizeResolvedProfileHash(content);
-    content = normalized.replace(ZERO_HASH, reviewerGen.sha256(normalized));
-  }
-  return content;
+  if (!MANAGED_ROLES.has(agentName)) throw new Error('sync-zcode-edition: unknown role ' + agentName);
+  return agentGen.renderRuntimeRole('zcode', agentName).content;
 }
 
 const ZCODE_MODEL_DISPATCH_GUIDANCE =
@@ -195,72 +145,6 @@ const ZCODE_MODEL_DISPATCH_BLOCK = [
   '',
 ].join('\n');
 
-const MODEL_MENTION = /model=/;
-const VENDOR_NOUN = /\b(?:opus|sonnet|grok|cursor)\b/i;
-
-function sentenceStart(text, at) {
-  const re = /[.:]\s+(?=[A-Z`])/g;
-  let start = 0;
-  let m;
-  while ((m = re.exec(text)) !== null && m.index < at) start = m.index + m[0].length;
-  return start;
-}
-
-function rewriteModelDispatchParagraph(para, guidance) {
-  const at = para.search(MODEL_MENTION);
-  if (at < 0) return para;
-  return para.slice(0, sentenceStart(para, at)) + guidance;
-}
-
-function rewriteModelDispatchInstructions(text, guidance) {
-  const out = [];
-  let fenced = false;
-  let para = [];
-  function flushPara() {
-    if (!para.length) return;
-    out.push(rewriteModelDispatchParagraph(para.join('\n'), guidance));
-    para = [];
-  }
-  for (const line of text.split(/\r?\n/)) {
-    if (/^\s*```/.test(line)) {
-      flushPara();
-      fenced = !fenced;
-      out.push(line);
-    } else if (fenced) {
-      out.push(line);
-    } else if (line.trim() === '') {
-      flushPara();
-      out.push(line);
-    } else {
-      para.push(line);
-    }
-  }
-  flushPara();
-  return out.join('\n');
-}
-
-function stripCardModelPlaceholders(text) {
-  return text.replace(/^[ \t]*model="\{[^"\n]*\}",?[ \t]*\r?\n/gm, '');
-}
-
-function assertNoModelDispatchResidue(text, label) {
-  const probe = String(text || '')
-    .split(ZCODE_MODEL_DISPATCH_GUIDANCE).join('')
-    .split(ZCODE_MODEL_DISPATCH_BLOCK.replace(/\s+$/, '')).join('');
-  const problems = [];
-  if (/(?<!`)``(?!`)/.test(probe)) problems.push('empty code span `` — a strip cut inside a code span');
-  for (const line of probe.split(/\r?\n/)) {
-    if (MODEL_MENTION.test(line)) problems.push('unrewritten model= instruction: ' + line.trim());
-  }
-  if (/\bmodel\s*=\s*["']/.test(probe)) problems.push('a literal per-call model assignment survived');
-  if (VENDOR_NOUN.test(probe)) problems.push('a vendor model noun survived: ' + String(probe).trim().slice(0, 80));
-  if (problems.length) {
-    throw new Error('sync-zcode-edition: a Claude-only dispatch instruction survived into '
-      + (label || '(command)') + ' — generated ZCode agents carry tier pins in frontmatter and '
-      + 'Agent cards must not carry a per-dispatch override:\n  - ' + problems.join('\n  - '));
-  }
-}
-
 const ZCODE_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _zh="${ZCODE_HOME:-$HOME/.zcode}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_zh/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_zh/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
 
@@ -274,46 +158,19 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + zcodeKaolaScript(forge));
 }
 
-const MODEL_DISPATCH_HEADING = /^##\s+Agent Model Dispatch\s*$/;
-const MODEL_DISPATCH_HEADING_NEAR_MISS = /^##\s+.*\bModel\b/;
-
-function assertModelDispatchAnchorMatched(canonBody, substituted, label) {
-  if (substituted) return;
-  const nearMiss = canonBody.split(/\r?\n/)
-    .filter(l => MODEL_DISPATCH_HEADING_NEAR_MISS.test(l) && !MODEL_DISPATCH_HEADING.test(l))
-    .map(l => l.trim());
-  if (!nearMiss.length) return;
-  throw new Error('sync-zcode-edition: model-dispatch anchor missed in ' + (label || '(command)')
-    + ' — canonical carries a section this transform did not substitute. Re-anchor '
-    + 'MODEL_DISPATCH_HEADING to the heading canonical now uses:\n  - ' + nearMiss.join('\n  - '));
-}
-
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
-  const lines = rewriteModelDispatchInstructions(body, ZCODE_MODEL_DISPATCH_GUIDANCE).split(/\r?\n/);
+  const lines = body.split(/\r?\n/);
   const out = [];
-  let substitutedModelDispatch = false;
   let i = 0;
   const block = ZCODE_MODEL_DISPATCH_BLOCK.replace(/\s+$/, '');
   while (i < lines.length) {
     const line = lines[i];
-    if (MODEL_DISPATCH_HEADING.test(line)) {
-      while (out.length && out[out.length - 1].trim() === '') out.pop();
-      if (out.length) out.push('');
-      out.push(block);
-      out.push('');
-      substitutedModelDispatch = true;
-      i++;
-      while (i < lines.length && !/^#{1,6}\s/.test(lines[i])) i++;
-      continue;
-    }
     out.push(line);
     i++;
   }
-  assertModelDispatchAnchorMatched(body, substitutedModelDispatch, label);
   let text = out.join('\n');
   // ZCode's dispatch tool is also Agent( — the canonical Agent( cards stay verbatim.
-  text = stripCardModelPlaceholders(text);
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime zcode');
   text = rewriteClaudeScriptPaths(text, forge);
@@ -325,7 +182,6 @@ function transformCommandBody(body, forge, label) {
       + 'Named dispatch uses the `Agent(` card with the named role as `subagent_type`:\n\n'
       + 'Agent(\n  prompt="<the mission and locator>",\n  subagent_type="<role>"\n)\n';
   }
-  assertNoModelDispatchResidue(text, label);
   return text;
 }
 
@@ -363,7 +219,17 @@ function renderZcodeConfigJson(forge) {
 }
 
 function rewriteConfigJsonForGlobal(json, forge) {
-  return String(json).split(treeLabel(forge) + '/kaola-workflow/').join('./kaola-workflow/');
+  const parsed = JSON.parse(String(json));
+  const prefix = 'sh ' + treeLabel(forge) + '/kaola-workflow/';
+  for (const entries of Object.values((parsed && parsed.hooks) || {})) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      if (!entry || typeof entry.command !== 'string' || !entry.command.startsWith(prefix)) continue;
+      entry.command = 'sh "${ZCODE_HOME:-$HOME/.zcode}/kaola-workflow/'
+        + entry.command.slice(prefix.length) + '"';
+    }
+  }
+  return JSON.stringify(parsed, null, 2) + '\n';
 }
 
 function isKaolaHookEntry(entry) {
@@ -444,7 +310,6 @@ function adaptHookForZcode(script, content) {
 function renderCompactWrapper(forge) {
   forge = forge || DEFAULT_FORGE;
   const compactJs = forgeLayout.scriptName('kaola-workflow-compact-context.js', forge);
-  const label = treeLabel(forge);
   return [
     '#!/bin/sh',
     '# zcode-edition: SessionStart resume-context wrapper. Feeds the hook payload to the',
@@ -452,7 +317,7 @@ function renderCompactWrapper(forge) {
     '# its stdout through. Generated by scripts/sync-zcode-edition.js; do not hand-edit.',
     '',
     'HOOK_INPUT="$(cat)"',
-    'SCRIPT="' + label + '/kaola-workflow/scripts/' + compactJs + '"',
+    'SCRIPT="${ZCODE_HOME:-$HOME/.zcode}/kaola-workflow/scripts/' + compactJs + '"',
     '[ -f "$SCRIPT" ] || exit 0',
     'printf \'%s\' "$HOOK_INPUT" | node "$SCRIPT" 2>/dev/null || true',
     'exit 0',
@@ -855,16 +720,13 @@ if (require.main === module) main();
 module.exports = {
   renderAgent, renderCommand, transformCommandBody,
   rewriteClaudeScriptPaths, ZCODE_KAOLA_SCRIPT, zcodeKaolaScript,
-  rewriteModelDispatchInstructions, rewriteModelDispatchParagraph, sentenceStart,
-  stripCardModelPlaceholders, assertNoModelDispatchResidue, assertModelDispatchAnchorMatched,
   ZCODE_MODEL_DISPATCH_GUIDANCE, ZCODE_MODEL_DISPATCH_BLOCK,
-  MODEL_DISPATCH_HEADING,
   renderZcodeConfigJson, rewriteConfigJsonForGlobal, mergeDestHooks, stripDestHooks,
   renderCompactWrapper, COMPACT_WRAPPER, adaptHookForZcode, HOOK_ADAPTATIONS,
   renderSupportLauncher, manifestSupportScripts,
   treeLabel, agentRel, commandRel, configRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
-  ZCODE_MODEL_CLASS_PINS, ZCODE_HOOK_EVENTS,
+  ZCODE_HOOK_EVENTS,
   expectedHookFiles, retiredHookFiles: retiredEditionFiles, retiredAgentFiles, retiredCommandFiles,
   parseFrontmatter, yamlScalar,
   listCanonAgents, listCanonCommands,

@@ -208,7 +208,7 @@ assert(!phaseCommands.includes('commands/workflow-next.md')
 for (const token of retired) assertNotIncludes('commands/workflow-next.md', token);
 for (const token of retiredPathSelector) assertNotIncludes('commands/workflow-next.md', token);
 // #372: sweep the retired advisor-gate vocabulary over workflow-init.md too (the consult-mandate
-// bullet lived here, inside the byte-locked KW-CLAUDE-TEMPLATE region).
+// bullet lived here, inside the byte-locked KW-AGENTS-TEMPLATE region).
 for (const token of retired) assertNotIncludes('commands/workflow-init.md', token);
 for (const token of retiredPathSelector) assertNotIncludes('commands/workflow-init.md', token);
 
@@ -312,6 +312,7 @@ for (const file of [
   'hooks/hooks.json',
   'install.sh',
   'README.md',
+  'AGENTS.md',
   'CLAUDE.md'
 ]) {
   for (const token of retired) assertNotIncludes(file, token);
@@ -329,29 +330,29 @@ assert(exists('scripts/kaola-workflow-resolve-agent-model.js'), 'agent model res
 assert(!exists('scripts/kaola-workflow-subagent-statusline.js'), 'subagent status line helper must not exist');
 
 assert(exists('docs/workflow-state-contract.md'), 'detailed workflow state contract doc is missing');
-// CLAUDE.md length is a RECOMMENDATION and never a build failure: nothing about this file's size
+// AGENTS.md length is a RECOMMENDATION and never a build failure: nothing about this file's size
 // may red a chain. A file past the recommended size is something to tell the user about and offer
 // to help trim, not a reason to refuse the run — the same reason nothing else here refuses.
 // Counted on PHYSICAL lines so the number reported is the number `wc -l` prints. The previous
 // check split on newlines and counted the trailing empty element, so its "200" was really 198: a
 // 199-line file threw, failing a rule that permitted it, and because this sits at column 0 the
 // throw took the whole validator down rather than reporting one finding.
-const claudeMdLines = read('CLAUDE.md').replace(/\n$/, '').split(/\r?\n/).length;
-if (claudeMdLines > 200) {
-  process.stderr.write('notice: CLAUDE.md is ' + claudeMdLines + ' lines, above the recommended 200. '
+const agentsMdLines = read('AGENTS.md').replace(/\n$/, '').split(/\r?\n/).length;
+if (agentsMdLines > 200) {
+  process.stderr.write('notice: AGENTS.md is ' + agentsMdLines + ' lines, above the recommended 200. '
     + 'Nothing fails on this. Move detail to docs/ or skills, and offer the user help trimming it.\n');
 }
 // Kept in step with the injected block below — they are the same contract, one authored and one
 // generated. `.cache/` stood here for the per-node evidence files; an item's outcome now lives in
 // the mission list's own `result` field, so the record to pin is the list.
-assertConcept('CLAUDE.md', 'compact durable state contract', [
+assertConcept('AGENTS.md', 'compact durable state contract', [
   'kaola-workflow/.roadmap/_rules.md',
   'is the one optional local file that survives',
   'kaola-workflow/{project}/',
   'workflow-state.md',
   'mission-list.md'
 ]);
-assertConcept('commands/workflow-init.md', 'generated CLAUDE durable state contract', [
+assertConcept('commands/workflow-init.md', 'generated AGENTS durable state contract', [
   'kaola-workflow/.roadmap/_rules.md',
   'is the one optional local file that survives',
   'kaola-workflow/{project}/',
@@ -421,13 +422,19 @@ assertConcept('README.md', 'pointer to detailed state contract', [
   'durable-state map',
   'active artifacts include'
 ]);
-assertIncludes('CLAUDE.md', 'active folders');
-assert(exists('AGENTS.md'), 'AGENTS.md must exist at repo root (dogfood redirect)');
-assertIncludes('AGENTS.md', '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
-assertIncludes('commands/workflow-init.md', '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
+assertIncludes('AGENTS.md', 'Active work lives in');
+assert(exists('AGENTS.md'), 'AGENTS.md must exist at repo root as the universal authority');
+assertIncludes('AGENTS.md', '<!-- KW-AGENTS-MANAGED-START -->');
+assertNotIncludes('AGENTS.md', 'READ CLAUDE.md BEFORE ANY ACTION');
+assertIncludes('CLAUDE.md', '@AGENTS.md');
+assertIncludes('CLAUDE.md', '<!-- KW-CLAUDE-OVERLAY-MANAGED-START -->');
+assertNotIncludes('CLAUDE.md', '## The mission list');
+assertIncludes('commands/workflow-init.md', '<!-- KW-AGENTS-MANAGED-START -->');
+assertIncludes('commands/workflow-init.md', 'kaola-workflow-project-instructions.js');
+assertIncludes('commands/workflow-init.md', 'decision_required');
 
 // #606: the Claude dispatch-posture config-audit line must be present in the root workflow-init
-// command, outside the KW-CLAUDE-TEMPLATE region (in the Codex-hooks-note area).
+// command, outside the KW-AGENTS-TEMPLATE region (in the Codex-hooks-note area).
 assertIncludes('commands/workflow-init.md', 'claude_dispatch_posture: teams | classic');
 
 // #609: the injected ## Kaola-Workflow template must forbid vendor-model embellishment of the
@@ -436,8 +443,8 @@ assertIncludes('commands/workflow-init.md', 'claude_dispatch_posture: teams | cl
 // constraint sentence on the root Claude workflow-init surface (the codex validator pins all six).
 assertIncludes('commands/workflow-init.md', 'never by a vendor model name');
 
-// The injected consumer CLAUDE.md template is the only place this repo teaches a downstream project
-// how the workflow runs, and it lives exclusively inside the KW-CLAUDE-TEMPLATE region of the init
+// The injected consumer AGENTS.md template is the only place this repo teaches a downstream project
+// how the workflow runs, and it lives exclusively inside the KW-AGENTS-TEMPLATE region of the init
 // surfaces. Every retired-vocabulary ban here ran over the next and finalize surfaces, which do not
 // carry the template — so rewriting that region to teach the retired DAG executor passed everything.
 // Ban the SAME list inside the region, and assert the mission-list vocabulary POSITIVELY: absence of
@@ -445,8 +452,8 @@ assertIncludes('commands/workflow-init.md', 'never by a vendor model name');
 // Scoped to the region, not the whole surface — the surrounding command prose may legitimately name
 // a retired mechanism while describing its removal.
 {
-  const TEMPLATE_START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
-  const TEMPLATE_END = '<!-- KW-CLAUDE-TEMPLATE-END -->';
+  const TEMPLATE_START = '<!-- KW-AGENTS-TEMPLATE-START -->';
+  const TEMPLATE_END = '<!-- KW-AGENTS-TEMPLATE-END -->';
   // The rule the template must teach, in the region's own words. Every needle is load-bearing: the
   // record's name, its four fields, the write discipline, and the uncomputed frontier.
   const missionListVocabulary = ['mission-list.md', '`item`', '`status`', '`dispatched`', '`result`',
@@ -458,33 +465,33 @@ assertIncludes('commands/workflow-init.md', 'never by a vendor model name');
     const from = content.indexOf(TEMPLATE_START);
     const to = content.indexOf(TEMPLATE_END);
     assert(from !== -1 && to !== -1 && to > from,
-      file + ': KW-CLAUDE-TEMPLATE-START/END markers missing or inverted — every assertion below ' +
+      file + ': KW-AGENTS-TEMPLATE-START/END markers missing or inverted — every assertion below ' +
       'would inspect nothing');
     const template = norm(content.slice(from + TEMPLATE_START.length, to));
     assert(template.trim().length > 0,
-      file + ': the KW-CLAUDE-TEMPLATE region is empty — the bans below would pass vacuously');
+      file + ': the KW-AGENTS-TEMPLATE region is empty — the bans below would pass vacuously');
 
     for (const gone of retiredExecutor) {
       assert(!template.includes(norm(gone)),
-        file + ': the injected consumer CLAUDE.md template must not teach the retired DAG executor — ' +
-        'found "' + gone + '" inside the KW-CLAUDE-TEMPLATE region');
+        file + ': the injected consumer AGENTS.md template must not teach the retired DAG executor — ' +
+        'found "' + gone + '" inside the KW-AGENTS-TEMPLATE region');
     }
     for (const taught of missionListVocabulary) {
       assert(template.includes(norm(taught)),
-        file + ': the injected consumer CLAUDE.md template must teach the mission list — the ' +
-        'KW-CLAUDE-TEMPLATE region is missing "' + taught + '"');
+        file + ': the injected consumer AGENTS.md template must teach the mission list — the ' +
+        'KW-AGENTS-TEMPLATE region is missing "' + taught + '"');
     }
     assert(!template.includes(norm('configured model')),
-      file + ': the KW-CLAUDE-TEMPLATE overlay must not contain "configured model"');
+      file + ': the KW-AGENTS-TEMPLATE overlay must not contain "configured model"');
     assert(!template.includes(norm('ships its model in its installed profile')),
-      file + ': the KW-CLAUDE-TEMPLATE overlay must not contain "ships its model in its installed profile"');
+      file + ': the KW-AGENTS-TEMPLATE overlay must not contain "ships its model in its installed profile"');
     assert(template.includes(norm(
       'Use the vendored agent role names exactly as installed; prefer short names like `planner`. '
       + 'Spawn the type this runtime\'s installed workflow-next / finalize instructions name for that role. '
       + 'Follow those instructions for whether the spawn call carries a model argument. '
       + 'Do not substitute a generic built-in type unless those same instructions explicitly map the role onto one.'
     )),
-      file + ': the KW-CLAUDE-TEMPLATE overlay must teach spawn-the-installed-next/finalize-type '
+      file + ': the KW-AGENTS-TEMPLATE overlay must teach spawn-the-installed-next/finalize-type '
       + '(not pass-the-configured-model)');
   }
 }
@@ -876,12 +883,14 @@ for (const reviewerBody of [
   }
 }
 
-// #422.3: the md↔toml agent-profile token-pin contract (test-agent-profile-parity.js) must be wired
-// into the claude test chain (mirrors how test-route-reachability.js guards the route surface).
+// #1033: runtime-native profiles are checked from the one behavioral authority and architecture
+// acceptance is wired into the producer-selected chain.
 {
   const claudeChain = (packageJson.scripts || {})['test:kaola-workflow:claude'] || '';
-  assert(claudeChain.includes('test-agent-profile-parity.js'),
-    '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
+  assert(claudeChain.includes('generate-agent-profiles.js --check'),
+    '#1033: scripts."test:kaola-workflow:claude" must check generated runtime-native profiles');
+  assert(claudeChain.includes('test-runtime-agent-architecture.js'),
+    '#1033: scripts."test:kaola-workflow:claude" must run runtime architecture acceptance');
 }
 
 // #505 ITEM 1 / #816: the foreign-archive staging guard is no longer bash prose — it moved INTO

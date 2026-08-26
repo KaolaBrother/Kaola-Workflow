@@ -104,7 +104,10 @@ assertNotIncludes(nextSkill210, 'Ask the user once at startup');
 assertNotIncludes(nextSkill210, 'How should delegation be handled');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--project "$PICK_NEXT_PROJECT" --reason git-freshness-block');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Active folder lifecycle');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'kaola-workflow-project-instructions.js');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'decision_required');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, '<!-- KW-AGENTS-MANAGED-START -->');
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'READ CLAUDE.md BEFORE ANY ACTION');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Do not create or edit CLAUDE.md');
 // #571: global-default regression locks — pin primary install is --global; forbid retired per-repo mandate.
 const initSkill = `${pluginRoot}/skills/kaola-workflow-init/SKILL.md`;
@@ -179,16 +182,16 @@ for (const edition of ['claude', 'codex', 'gitlab', 'gitea']) {
   assert(testScript.includes(`npm run test:kaola-workflow:${edition}`), `package.json scripts.test must chain test:kaola-workflow:${edition}`);
 }
 assert(exists('docs/workflow-state-contract.md'), 'detailed workflow state contract doc is missing');
-// CLAUDE.md length is a RECOMMENDATION and never a build failure: nothing about this file's size
+// AGENTS.md length is a RECOMMENDATION and never a build failure: nothing about this file's size
 // may red a chain. A file past the recommended size is something to tell the user about and offer
 // to help trim, not a reason to refuse the run — the same reason nothing else here refuses.
 // Counted on PHYSICAL lines so the number reported is the number `wc -l` prints. The previous
 // check split on newlines and counted the trailing empty element, so its "200" was really 198: a
 // 199-line file threw, failing a rule that permitted it, and because this sits at column 0 the
 // throw took the whole validator down rather than reporting one finding.
-const claudeMdLines = read('CLAUDE.md').replace(/\n$/, '').split(/\r?\n/).length;
-if (claudeMdLines > 200) {
-  process.stderr.write('notice: CLAUDE.md is ' + claudeMdLines + ' lines, above the recommended 200. '
+const agentsMdLines = read('AGENTS.md').replace(/\n$/, '').split(/\r?\n/).length;
+if (agentsMdLines > 200) {
+  process.stderr.write('notice: AGENTS.md is ' + agentsMdLines + ' lines, above the recommended 200. '
     + 'Nothing fails on this. Move detail to docs/ or skills, and offer the user help trimming it.\n');
 }
 // Both docs/workflow-state-contract.md concepts (durable sources, and legacy coordination as
@@ -205,39 +208,18 @@ assertConcept('docs/api.md', 'closure contract invariants and receipt schema', [
   '#164',
   '#165'
 ]);
-function extractRedirectBlock(file) {
+function extractAgentsTemplate(file) {
   const text = read(file);
-  const fenceOpen = '```markdown';
-  const fenceClose = '\n```';
-  let idx = 0;
-  while (idx < text.length) {
-    const fence = text.indexOf(fenceOpen, idx);
-    if (fence === -1) break;
-    const blockStart = fence + fenceOpen.length;
-    const blockEnd = text.indexOf(fenceClose, blockStart);
-    if (blockEnd === -1) break;
-    const block = text.slice(blockStart, blockEnd + 1).trim();
-    if (block.includes('# AGENTS.md') && block.includes('> **MANDATORY — READ CLAUDE.md')) {
-      return block;
-    }
-    idx = blockEnd + fenceClose.length;
-  }
-  throw new Error(file + ': no AGENTS.md redirect block found (must contain # AGENTS.md and MANDATORY sentinel)');
-}
-
-function extractClaudeTemplate(file) {
-  const text = read(file);
-  const START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
-  const END = '<!-- KW-CLAUDE-TEMPLATE-END -->';
+  const START = '<!-- KW-AGENTS-TEMPLATE-START -->';
+  const END = '<!-- KW-AGENTS-TEMPLATE-END -->';
   const startIdx = text.indexOf(START);
   const endIdx = text.indexOf(END);
   if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {
-    throw new Error(file + ': missing KW-CLAUDE-TEMPLATE-START/END markers');
+    throw new Error(file + ': missing KW-AGENTS-TEMPLATE-START/END markers');
   }
   return text.slice(startIdx + START.length, endIdx).trim();
 }
 
-// AGENTS.md redirect block must be byte-identical across all forge init files
 const initFiles = [
   'commands/workflow-init.md',
   'plugins/kaola-workflow-gitlab/commands/workflow-init.md',
@@ -246,28 +228,21 @@ const initFiles = [
   'plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md',
   'plugins/kaola-workflow-gitea/skills/kaola-workflow-init/SKILL.md'
 ];
-const redirectBlocks = initFiles.map(f => ({ file: f, block: extractRedirectBlock(f) }));
-const referenceBlock = redirectBlocks[0].block;
-for (const { file, block } of redirectBlocks.slice(1)) {
-  assert(block === referenceBlock,
-    'AGENTS.md redirect block must be byte-identical in ' + file + ' vs ' + redirectBlocks[0].file);
-}
-
-// CLAUDE.md template must be byte-identical within each forge pair
-const githubCmdTemplate = extractClaudeTemplate('commands/workflow-init.md');
-const githubSkillTemplate = extractClaudeTemplate(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`);
+// The universal AGENTS.md template must be byte-identical within each forge pair.
+const githubCmdTemplate = extractAgentsTemplate('commands/workflow-init.md');
+const githubSkillTemplate = extractAgentsTemplate(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`);
 assert(githubCmdTemplate === githubSkillTemplate,
-  'CLAUDE.md template must be byte-identical within GitHub forge pair (commands/workflow-init.md vs GitHub SKILL.md)');
+  'AGENTS.md template must be byte-identical within GitHub forge pair (commands/workflow-init.md vs GitHub SKILL.md)');
 
-const gitlabCmdTemplate = extractClaudeTemplate('plugins/kaola-workflow-gitlab/commands/workflow-init.md');
-const gitlabSkillTemplate = extractClaudeTemplate('plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md');
+const gitlabCmdTemplate = extractAgentsTemplate('plugins/kaola-workflow-gitlab/commands/workflow-init.md');
+const gitlabSkillTemplate = extractAgentsTemplate('plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md');
 assert(gitlabCmdTemplate === gitlabSkillTemplate,
-  'CLAUDE.md template must be byte-identical within GitLab forge pair');
+  'AGENTS.md template must be byte-identical within GitLab forge pair');
 
-const giteaCmdTemplate = extractClaudeTemplate('plugins/kaola-workflow-gitea/commands/workflow-init.md');
-const giteaSkillTemplate = extractClaudeTemplate('plugins/kaola-workflow-gitea/skills/kaola-workflow-init/SKILL.md');
+const giteaCmdTemplate = extractAgentsTemplate('plugins/kaola-workflow-gitea/commands/workflow-init.md');
+const giteaSkillTemplate = extractAgentsTemplate('plugins/kaola-workflow-gitea/skills/kaola-workflow-init/SKILL.md');
 assert(giteaCmdTemplate === giteaSkillTemplate,
-  'CLAUDE.md template must be byte-identical within Gitea forge pair');
+  'AGENTS.md template must be byte-identical within Gitea forge pair');
 
 // #572 (AC4): the injected ## Kaola-Workflow template must be re-grounded on the adaptive
 // mission-list model — NO retired 6-phase-as-default vocabulary may survive in the consumer
@@ -278,7 +253,7 @@ assert(giteaCmdTemplate === giteaSkillTemplate,
 const PHASE_NUMBER_BAN = /Phase\s+\d/;                  // "Phase 1" … "Phase 4"
 const PHASE_FILE_BAN = /phase file|phase artifact/i;   // "phase files" / "current phase file"
 for (const file of initFiles) {
-  const tpl = extractClaudeTemplate(file);
+  const tpl = extractAgentsTemplate(file);
   assert(!PHASE_NUMBER_BAN.test(tpl),
     file + ': injected ## Kaola-Workflow template must not teach a numbered Phase <n> model (#572 — adaptive is the unconditional default)');
   assert(!PHASE_FILE_BAN.test(tpl),
@@ -343,7 +318,7 @@ for (const file of initFiles) {
 }
 
 // #606: the Claude dispatch-posture config-audit line must be present in all three workflow-init
-// COMMAND surfaces (root + gitlab + gitea) — outside the KW-CLAUDE-TEMPLATE region, so this check
+// COMMAND surfaces (root + gitlab + gitea) — outside the KW-AGENTS-TEMPLATE region, so this check
 // does not touch the initFiles SKILL entries (they stay byte-identical to their template blocks).
 const workflowInitCommands606 = [
   'commands/workflow-init.md',
@@ -577,31 +552,26 @@ for (const rel of routingSkels) {
 // The claim no longer emits an executable next-skill target. Generated skill surfaces are checked
 // by their own routing/edition parity generators; workflow state remains claim/sink/liveness data.
 
-// #422.3: the agent-profile md↔toml token-pin test must be wired into the claude chain.
+// #1033: the universal behavior authority and seven runtime adapters must be checked by the
+// producer-selected chain.
 {
   const pkg = JSON.parse(read('package.json'));
   const claudeChain = (pkg.scripts || {})['test:kaola-workflow:claude'] || '';
-  assert(claudeChain.includes('test-agent-profile-parity.js'),
-    '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
+  assert(claudeChain.includes('generate-agent-profiles.js --check'),
+    '#1033: scripts."test:kaola-workflow:claude" must check generated agent profiles');
+  assert(claudeChain.includes('test-runtime-agent-architecture.js'),
+    '#1033: scripts."test:kaola-workflow:claude" must run runtime architecture acceptance');
 }
 
 
-// Reviewer-contract-v2 repository/install wall. Generated sources, all three Codex installer
-// editions, the root/plugin-cache preflight, validation-runner distribution, and reviewer-v2
+// All-role repository/install wall. Generated sources, all three Codex installer
+// editions, the root/plugin-cache preflight, validation-runner distribution, and profile
 // lifecycle APIs must agree before any installed-scope compliance claim can be made.
 {
-  const generator = require('./generate-reviewer-profiles.js');
-  // #889: this validator is step 3 of the codex chain, the only chain that does not run
-  // validate-vendored-agents.js. The sweep runs here too so no chain can go green over a
-  // half-finished contract bump, and so the whole remainder is reported in one message.
-  const contractPinErrors = generator.checkContractVersionPins(root);
-  assert(contractPinErrors.length === 0,
-    'reviewer behavior contract version pins must all match '
-    + `generate-reviewer-profiles.js (${generator.REVIEWER_BEHAVIOR_CONTRACT_VERSION}): `
-    + contractPinErrors.join('; '));
+  const generator = require('./generate-agent-profiles.js');
   const generatedErrors = generator.checkGeneratedProfiles(root);
   assert(generatedErrors.length === 0,
-    'generated reviewer profiles must be current: ' + generatedErrors.join('; '));
+    'generated runtime-native agent profiles must be current: ' + generatedErrors.join('; '));
 
   const editionRoots = [
     'plugins/kaola-workflow',
@@ -614,16 +584,16 @@ for (const rel of routingSkels) {
     installerFiles.push(read(installerFile));
     const installer = require(path.join(root, installerFile));
     const sourceCheck = installer.validateSourceProfiles(path.join(root, edition));
-    assert(sourceCheck.ok, edition + ' reviewer/profile source contract failed: ' + sourceCheck.errors.join('; '));
+    assert(sourceCheck.ok, edition + ' agent profile source contract failed: ' + sourceCheck.errors.join('; '));
     assert(sourceCheck.repair === null, edition + ' current source must not carry a repair command');
     for (const role of generator.ROLES) {
       const entry = sourceCheck.entries.find(candidate => candidate.role === role);
       assert(entry && entry.profileContract,
-        edition + ' must expose generated reviewer identity for ' + role);
-      assert(entry.profileContract.behavior_contract_version === generator.REVIEWER_BEHAVIOR_CONTRACT_VERSION,
-        edition + ' must bind behavior contract version '
-        + generator.REVIEWER_BEHAVIOR_CONTRACT_VERSION + ' for ' + role);
+        edition + ' must expose generated agent identity for ' + role);
+      assert(Number.isInteger(entry.profileContract.behavior_contract_version),
+        edition + ' must bind an integer behavior contract version for ' + role);
       assert(/^[0-9a-f]{64}$/.test(entry.profileContract.behavior_contract_hash)
+        && /^[0-9a-f]{64}$/.test(entry.profileContract.adapter_capabilities_hash)
         && /^[0-9a-f]{64}$/.test(entry.profileContract.resolved_profile_hash),
       edition + ' must bind behavior and resolved profile hashes for ' + role);
       assert(!/^model(?:_reasoning_effort)?\s*=/m.test(entry.sourceText),

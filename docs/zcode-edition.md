@@ -1,11 +1,17 @@
 # Kaola-Workflow · zcode Edition
 
-ZCode (measured against **ZCode 3.9.1**) is a coding-agent **runtime**, not a git forge, and this
+ZCode is a coding-agent **runtime**, not a git forge, and this
 edition is **additive**: it rides none of `install.sh`, `edition-sync.js`, `npm test`, or the
 routing-surface `--check` contract, and it keeps its own suite
 (`node scripts/test-zcode-edition.js`). The workflow prose is not forked — the commands are
-generated from the same routing surfaces every other runtime ships, and the role roster is the
-canonical `agents/*.md` set.
+generated from the same routing surfaces every other runtime ships, and all 14 role bodies come from
+the shared behavior authority.
+
+ZCode loads user-global `~/.zcode/AGENTS.md` and then the workspace-root `AGENTS.md` directly;
+`CLAUDE.md` is onboarding migration input, not the ongoing project authority. Kaola therefore adds
+no ZCode project-instruction bridge. The public install page exposed ZCode 3.8.1 during the
+2026-08-27 research and no local binary was available, so exact 3.9.1 behavior is **unknown**, not
+presented as measured. See [runtime capabilities](runtime-capabilities.md#zcode).
 
 ## Forge axis
 
@@ -22,12 +28,15 @@ than from `install.sh`:
 
 `node scripts/sync-zcode-edition.js --write` renders, per forge tree:
 
-- `.zcode/agents/<role>.md` — the exact canonical roster (all roles including `knowledge-lookup`),
-  with ZCode frontmatter (see the tier pins below).
+- `.zcode/agents/<role>.md` — one native render for every shared role, with ZCode frontmatter,
+  an explicit capability-derived `tools` allowlist, shared behavior identity, and render-specific
+  hash (see the tier pins below).
 - `.zcode/commands/<name>.md` — exactly the routing-registry `commandSources(forge)` set
   (`workflow-init`, `workflow-next`, `kaola-workflow-finalize`), keeping the canonical
   `Agent(` dispatch wording and stamping claim/startup invocations `--runtime zcode`.
-- `.zcode/config.json` — the hook mapping (see [Hooks](#hooks)).
+- `.zcode/config.json` — a deterministic generated hook-mapping template; ZCode does not execute
+  this workspace carrier, and the installer does not merge it into a consumer project (see
+  [Hooks](#hooks)).
 - `.zcode/kaola-workflow/hooks/` — the SessionStart compact-context wrapper; no dispatch hook is installed.
 - `.zcode/kaola-workflow/scripts/` — one launcher per install-manifest support script; each
   resolves the real script under `${ZCODE_HOME:-~/.zcode}/kaola-workflow/scripts` (or the
@@ -40,15 +49,14 @@ linked worktree that is the main checkout, not the worktree.
 
 ## Three-tier frontmatter pins
 
-Measured on ZCode 3.9.1: ZCode supports **the same model at different reasoning effort** —
-`GLM-5.3` exposes reasoning variants `low | high | max` — so the canonical tier selects only the
-effort, not the model. Every generated agent pins:
+The ZCode adapter currently maps runtime-neutral intent to one explicit model plus native thought
+level:
 
-| canonical tier | class token (`model:` in `agents/*.md`) | generated frontmatter |
-|---|---|---|
-| standard | `sonnet` | `model: GLM-5.3` + `thoughtLevel: high` |
-| reasoning | `opus` | `model: GLM-5.3` + `thoughtLevel: max` |
-| heavy (fable) | `fable` | `model: GLM-5.3` + `thoughtLevel: max` |
+| intent class | generated frontmatter |
+|---|---|
+| standard | `model: GLM-5.3` + `thoughtLevel: high` |
+| reasoning | `model: GLM-5.3` + `thoughtLevel: max` |
+| heavy | `model: GLM-5.3` + `thoughtLevel: max` |
 
 The frontmatter key is camelCase **`thoughtLevel`** — the ZCode docs explicitly warn that the
 key is thoughtLevel, NOT reasoningEffort (and not `effort`), and it only takes effect together
@@ -56,17 +64,18 @@ with an explicit `model`. Generated dispatch cards therefore carry no per-call m
 with the named type. The canonical reviewer heavy re-dispatch carve-out is not expressible
 per-call here, so a reviewer re-dispatch runs at its named type's pinned tier.
 
-Reviewer-class agents keep their behavior-contract identity lines and carry a re-stamped
-`resolved_profile_hash` computed over the ZCode render bytes (the same discipline as the
-opencode/kimi/cursor editions).
+Every role keeps its behavior-contract identity and carries a `resolved_profile_hash` computed over
+the ZCode render bytes. `sync-zcode-edition.js` requests these renders from
+`generate-agent-profiles.js`; it does not parse a Claude role file. Reviewer roles have no separate
+source or transform.
 
 ## Path selection
 
 ZCode discovers **subagents only at user scope**: `~/.zcode/agents/<name>.md`
 (workspace-scope agents are unsupported in this beta). So `install-zcode.sh` stages the roster
 under `<project>/.zcode/agents/` **and** syncs the same files to
-`${ZCODE_HOME:-~/.zcode}/agents/` — the user scope is the one ZCode reads. Commands and the
-merged `config.json` are workspace surfaces and live under `<project>/.zcode/`.
+`${ZCODE_HOME:-~/.zcode}/agents/` — the user scope is the one ZCode reads. Commands remain workspace
+surfaces under `<project>/.zcode/`; executable hooks come only from the user CLI configuration.
 
 ## Installer
 
@@ -75,30 +84,39 @@ merged `config.json` are workspace surfaces and live under `<project>/.zcode/`.
 
 - **Project** (default / `--target`): agents + commands under `<target>/.zcode/{agents,commands}`,
   agent roster synced to `${ZCODE_HOME:-~/.zcode}/agents`, hook shells + script launchers staged
-  under `<target>/.zcode/`, hook mapping merged into `<target>/.zcode/config.json`, and real
-  support scripts staged under `${ZCODE_HOME:-~/.zcode}/kaola-workflow/scripts`.
+  under `<target>/.zcode/`, real support scripts staged under
+  `${ZCODE_HOME:-~/.zcode}/kaola-workflow/scripts`, and the hook mapping merged into
+  `${ZCODE_HOME:-~/.zcode}/cli/config.json`. The installer does not use or rewrite
+  `<target>/.zcode/config.json`.
 - **`--global`**: agents and commands land directly under `${ZCODE_HOME:-~/.zcode}/{agents,commands}`
-  (no nested `.zcode/`), with the hook mapping merged into `${ZCODE_HOME:-~/.zcode}/config.json`.
+  (no nested `.zcode/`), with the hook mapping merged into
+  `${ZCODE_HOME:-~/.zcode}/cli/config.json`; legacy `${ZCODE_HOME:-~/.zcode}/config.json` is not a
+  live hook carrier and is not rewritten.
   The installer stages generated launchers first and copies real manifest support scripts last.
   Thus real scripts win wherever the edition layout and `${ZCODE_HOME:-~/.zcode}` coincide; with
   distinct paths, project launchers remain in the project edition directory and real scripts remain
   in the shared home path, so a command invoked from a non-Kaola consumer cwd does not recurse
   through a launcher.
 - **`--uninstall`** removes only kaola-deployed names — the staged and user-scope agent copies,
-  the commands, the support scripts and hook shells, and kaola-owned entries in `config.json`.
+  the commands, the support scripts and hook shells, and Kaola-owned entries in the live
+  `cli/config.json`.
   Foreign agents, foreign config keys, and foreign hook entries survive.
 - `install-all.sh` runs this installer as the `zcode` runtime alongside the others.
 
 ## Hooks
 
-ZCode hooks live under the top-level `hooks` object of `config.json` and require
-`"enabled": true`. ZCode 3.9.1 offers exactly **seven** events — `SessionStart`,
+ZCode documents seven current hook events — `SessionStart`,
 `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`,
-`Stop` — and there is **no `SubagentStart`**. The edition registers:
+`Stop` — and no `SubagentStart`. User and plugin hooks execute, but current official documentation
+states that workspace/project hook configuration is ignored. Both install scopes merge only into
+`${ZCODE_HOME:-$HOME/.zcode}/cli/config.json`; project `.zcode/config.json` and the legacy
+`${ZCODE_HOME:-$HOME/.zcode}/config.json` are neither used nor rewritten. The edition registers:
 
 - `SessionStart` → `kaola-workflow-compact-context.sh` (resume-context wrapper around the
   compact-context support script).
 
-`--merge-hooks --dest=<file>` merges kaola entries into a live `config.json` (foreign keys and
-foreign hook entries preserved, `hooks.enabled` forced true); `--strip-hooks --dest=<file>`
-removes only kaola-owned entries. Both are what the installer and `--uninstall` call.
+`--merge-hooks --dest=<file>` merges kaola entries into a `config.json` (foreign keys and foreign
+hook entries preserved, `hooks.enabled` forced true); `--strip-hooks --dest=<file>` removes only
+kaola-owned entries. Both are what the installer and `--uninstall` call. This proves managed
+filesystem bytes only. The installer invokes it only for the documented user CLI carrier; a
+generated project template does not override ZCode's documented project-hook execution limit.

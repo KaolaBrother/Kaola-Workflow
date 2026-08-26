@@ -78,12 +78,12 @@ function assertConcept(file, concept, terms) {
 
 function extractClaudeTemplate(file) {
   const text = read(file);
-  const START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
-  const END = '<!-- KW-CLAUDE-TEMPLATE-END -->';
+  const START = '<!-- KW-AGENTS-TEMPLATE-START -->';
+  const END = '<!-- KW-AGENTS-TEMPLATE-END -->';
   const startIdx = text.indexOf(START);
   const endIdx = text.indexOf(END);
   if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {
-    throw new Error(file + ': missing KW-CLAUDE-TEMPLATE-START/END markers');
+    throw new Error(file + ': missing KW-AGENTS-TEMPLATE-START/END markers');
   }
   return text.slice(startIdx + START.length, endIdx).trim();
 }
@@ -285,7 +285,9 @@ for (const skill of listFiles(pluginRoot + '/skills', file => file.endsWith('SKI
 const gitlabSkillsBase = `${pluginRoot}/skills`;
 const gitlabInitSkill = `${gitlabSkillsBase}/kaola-workflow-init/SKILL.md`;
 assertNotIncludes(gitlabInitSkill, 'Do not create or edit CLAUDE.md');
-assertIncludes(gitlabInitSkill, '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
+assertIncludes(gitlabInitSkill, 'kaola-workflow-project-instructions.js');
+assertIncludes(gitlabInitSkill, 'decision_required');
+assertNotIncludes(gitlabInitSkill, 'READ CLAUDE.md BEFORE ANY ACTION');
 assertIncludes(gitlabInitSkill, 'plugin_root="plugins/kaola-workflow-gitlab"');
 assert(
   !/plugin_root="plugins\/kaola-workflow"(?!-)/.test(read(gitlabInitSkill)),
@@ -311,7 +313,7 @@ assert(gitlabCmdTemplate === gitlabSkillTemplate,
   'CLAUDE.md template must be byte-identical within GitLab forge pair');
 
 // #606: the Claude dispatch-posture config-audit line must be present in the GitLab workflow-init
-// command, outside the KW-CLAUDE-TEMPLATE region.
+// command, outside the KW-AGENTS-TEMPLATE region.
 assertIncludes(`${pluginRoot}/commands/workflow-init.md`, 'claude_dispatch_posture: teams | classic');
 
 for (const file of listFiles(pluginRoot + '/scripts', file =>
@@ -458,22 +460,23 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   assertByteParity(path.join('agents', tomlFile));
 }
 
-// #422.3: the agent-profile md↔toml token-pin test must be wired into the claude chain.
+// #1033: the generated all-role architecture wall must be wired into the Claude chain.
 {
   const pkg = JSON.parse(read('package.json'));
   const claudeChain = (pkg.scripts || {})['test:kaola-workflow:claude'] || '';
-  assert(claudeChain.includes('test-agent-profile-parity.js'),
-    '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
+  assert(claudeChain.includes('generate-agent-profiles.js --check')
+    && claudeChain.includes('test-runtime-agent-architecture.js'),
+  '#1033: Claude chain must check generated profiles and runtime architecture acceptance');
 }
 
 // Reviewer-contract-v2 edition wall: prove generated source identity, exact installed-profile
 // enforcement, read-only-but-gating cache inspection, validation-runner distribution, shared
 // lifecycle exports, and the complete authoring/execution/finalization guidance family.
 {
-  const generator = require(path.join(root, 'scripts', 'generate-reviewer-profiles.js'));
+  const generator = require(path.join(root, 'scripts', 'generate-agent-profiles.js'));
   const generatedErrors = generator.checkGeneratedProfiles(root);
   assert(generatedErrors.length === 0,
-    'generated reviewer profiles must be current: ' + generatedErrors.join('; '));
+    'generated agent profiles must be current: ' + generatedErrors.join('; '));
 
   const installerFile = pluginRoot + '/scripts/install-codex-agent-profiles.js';
   const installer = require(path.join(root, installerFile));
@@ -483,14 +486,14 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   for (const role of generator.ROLES) {
     const entry = sourceCheck.entries.find(candidate => candidate.role === role);
     assert(entry && entry.profileContract
-      && entry.profileContract.behavior_contract_version === generator.REVIEWER_BEHAVIOR_CONTRACT_VERSION,
-    pluginRoot + ' must expose reviewer contract version '
-      + generator.REVIEWER_BEHAVIOR_CONTRACT_VERSION + ' for ' + role);
+      && Number.isInteger(entry.profileContract.behavior_contract_version),
+    pluginRoot + ' must expose an agent contract version for ' + role);
     assert(/^[0-9a-f]{64}$/.test(entry.profileContract.behavior_contract_hash)
+      && /^[0-9a-f]{64}$/.test(entry.profileContract.adapter_capabilities_hash)
       && /^[0-9a-f]{64}$/.test(entry.profileContract.resolved_profile_hash),
-    pluginRoot + ' must bind behavior and resolved profile hashes for ' + role);
+    pluginRoot + ' must bind behavior, adapter, and resolved profile hashes for ' + role);
     assert(!/^model(?:_reasoning_effort)?\s*=/m.test(entry.sourceText),
-      pluginRoot + ' reviewer profiles must inherit the parent model by omission');
+      pluginRoot + ' agent profiles must inherit the parent model by omission');
   }
   assertIncludes(installerFile, 'profile_contracts');
   assertIncludes(installerFile, 'profile_source_repair');

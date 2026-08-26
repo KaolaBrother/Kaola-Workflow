@@ -84,7 +84,13 @@ discards the leg atomically.
 The repo ships four editions (claude / codex / gitlab / gitea), each with its own validators and walkthroughs wired as a separate `npm` chain: `test:kaola-workflow:claude`, `:codex`, `:gitlab`, `:gitea`. `npm test` runs all four — but **chained with `&&`, so it short-circuits on the first failure**. A red codex/gitlab/gitea chain sitting *behind* a green claude chain is therefore never reached, and a Finalization gate that records only `npm test` (or only the claude walkthrough) can ship a change that broke an edition validator or walkthrough undetected.
 
 - **A cross-edition diff MUST have all four chains green, recorded before Finalization.** "Cross-edition" = the diff touches any of: `plugins/kaola-workflow-{gitlab,gitea}/…`, the codex `validate-kaola-workflow-contracts.js`, or any edition-port script (the forge-renamed `kaola-{gitlab,gitea}-workflow-*.js`, the codex byte-mirrors under `plugins/kaola-workflow/scripts/`, or shared scripts in `COMMON_SCRIPTS` / `BYTE_IDENTICAL_GROUPS`).
-- **Recording the four chains: use `npm run test:parallel` (#358), or run them sequentially.** `test:parallel` spawns all four chains concurrently, ALWAYS runs every chain to completion (no `&&` short-circuit), prints a per-chain PASS/FAIL summary plus the failing chain's last-50-line output tail, and exits non-zero iff any chain failed — its summary satisfies the "all four recorded" requirement at a wall-clock of roughly the slowest single chain. The runner sets `TEST_PARALLEL=1` in each chain's environment, which widens the load-sensitive closure-audit hang-probe margins (`probeTimeoutEnv()`, 300ms → 2000ms) so the known `testClosureAuditExecuteLabelRemovalTimeoutBreaks` CPU-contention flake does not trip under concurrency. Ad-hoc concurrent runs WITHOUT `TEST_PARALLEL=1` remain flake-prone — use the runner, not hand-rolled parallelism. `npm test` stays the canonical sequential gate; the sequential invocation is in `CLAUDE.md` § Running Tests.
+- **Recording the four chains: use `npm run test:parallel` (#358), or run them sequentially.** `test:parallel` spawns all four chains concurrently, ALWAYS runs every chain to completion (no `&&` short-circuit), prints a per-chain PASS/FAIL summary plus the failing chain's last-50-line output tail, and exits non-zero iff any chain failed — its summary satisfies the "all four recorded" requirement at a wall-clock of roughly the slowest single chain. The runner sets `TEST_PARALLEL=1` in each chain's environment, which widens the load-sensitive closure-audit hang-probe margins (`probeTimeoutEnv()`, 300ms → 2000ms) so the known `testClosureAuditExecuteLabelRemovalTimeoutBreaks` CPU-contention flake does not trip under concurrency. Ad-hoc concurrent runs WITHOUT `TEST_PARALLEL=1` remain flake-prone — use the runner, not hand-rolled parallelism. `npm test` stays the canonical sequential gate; the universal invocation is in `AGENTS.md` § Running Tests.
+- **The additive editions lane never short-circuits (#1034).** `npm run test:kaola-workflow:editions`
+  passes the explicit opencode, Kimi, Grok, Cursor, and ZCode suite list to
+  `scripts/run-edition-tests.js`. The runner attempts every declared child, records every failure,
+  and exits non-zero only after all attempts finish. A source-spelling assertion is not acceptable
+  uninstall coverage: exercise the real installer against a sandbox, assert the retired artifact is
+  absent, and mutation-prove the guard by deleting the cleanup behavior.
 - **Single-scenario dev loop (#357).** `node scripts/simulate-workflow-walkthrough.js --list` prints the scenario registry (one name per line; ordering-coupled head scenarios carry a `[shared-tmp group]` marker and always run as one unit); `--only <name|prefix>` runs just the matching scenario(s) in seconds — use it to reproduce a single failure instead of re-running the full suite (the full-run sentinel prints only on full runs). The harness is fail-closed and isolated: a missing gh-shim file throws instead of falling through to the real `gh`, `runNode` children get a 120s timeout, a scrubbed `KAOLA_*` env, and global-git-config isolation (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`), and the gitlab/gitea edition runner-of-runners print a delimited `CHILD FAILURE` block (last-30-line stdout/stderr tails) when a child test file fails.
 - A claude-only green is **insufficient evidence** for such a diff: surface each chain's exit code, do not infer the other three from `npm test` passing.
 - **Edition behavioral coverage (issue #342).** A green forge chain certifies *structure* (registries, forbidden tokens, file existence) — it is **insufficient evidence of forge behavioral parity** unless an edition-level test exercises the feature. A cross-edition feature that adds or changes behavior in a HAND-PORTED edition script (the forge-renamed `kaola-{gitlab,gitea}-workflow-*.js`) MUST add behavioral scenarios to that edition's walkthrough (`simulate-{gitlab,gitea}-workflow-walkthrough.js`) driving the real edition CLI, mirroring the root coverage modulo forge nouns. Byte-synced scripts (the codex mirrors under `plugins/kaola-workflow/scripts/`, enforced by `validate-script-sync.js`) inherit root behavioral coverage and need no duplicate scenarios. A throwaway `$TMPDIR` smoke proves a repair but is not coverage — commit the scenarios (the #328 CR1/CR2 lesson: the gitlab/gitea bundle-finalization half shipped under four green chains because the chains certified structure only).
@@ -183,31 +189,23 @@ path refusal.
 
 The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / the orchestrator's no-target survey) spans all four editions. Any change to bundle-related code — `claimExplicitBundle`, `claimBundle`, bundle state fields, bundle branch naming, or bundle finalization — is a **cross-edition diff** and MUST have all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green before Finalization. The cross-edition validation rules from § Testing — Cross-Edition Validation apply without exception. The bundle lane's edition behavioral coverage lives in the gitlab/gitea walkthroughs, mirroring `simulate-workflow-walkthrough.js` §#328 — keep them in lockstep when bundle behavior changes (see § Testing — Cross-Edition Validation, Edition behavioral coverage).
 
-**Agent-set deltas carry an exact-match registration surface (#340).** Adding or removing an agent
-profile (root `agents/<name>.md` or a plugin `agents/<name>.toml`) breaks exact-match registries and
-by-name dispatch registrations that are **keyed on no symbol of the new file** — so a symbol-grep
-cannot find them. **Nothing refuses ahead of the chains any more**: the freeze-time registration wall
-went with the plan validator, so an omission surfaces only when the affected chain runs. Walk the
-list by hand:
+**Agent-set deltas are generator-schema changes.** Adding or removing a role begins in the exact role
+inventory in `templates/agents/behavior-contracts.json` and the generator's closed `ROLES` list. Do
+not create a root Markdown file or plugin TOML first. The generalized generator and manifest own the
+complete registration surface:
 
 | Path | What pins the roster |
 |------|----------------------|
-| `plugins/*/agents/<name>.toml` (×3) | the three sibling edition profiles, byte-identical |
-| `plugins/*/config/agents.toml` (×3) | the `[agents.<name>]` codex-dispatch table — without it the agent is undispatchable in the codex/gitlab/gitea runtimes even though the profile installs |
-| `scripts/validate-vendored-agents.js` | `localAgents` exact listing |
-| `install.sh` **and** `uninstall.sh` | `REQUIRED_AGENTS` — a missing uninstall name orphans the installed agent. On **removal**, also `uninstall.sh`'s `RETIRED_AGENTS`: uninstall deletes the agent manifest, so a retired name missing there is a permanent strand no later install can heal (#977) |
-| `scripts/kaola-workflow-resolve-agent-model.js` (×4, byte-identical) | `DEFAULT_AGENT_MODELS` |
-| gitlab/gitea contract validators | agent counts |
-| the two forge `test-*-workflow-scripts.js` | counts |
-| `scripts/test-agent-profile-parity.js` | `TOML_TREES` per-tree profile **count** |
-| `scripts/kaola-workflow-adaptive-schema.js` | `CODEX_PINNED_STANDARD_ROLES` / `CODEX_PINNED_REASONING_ROLES` / `CODEX_PINNED_HEAVY_ROLES` — retained tier classifications and profile metadata |
-| `scripts/kaola-workflow-codex-preflight.js` | its **own** copy of the three tier lists (authored `require`-free, so it cannot import the schema) |
-| `plugins/*/scripts/install-codex-agent-profiles.js` (×3) | a **third** copy of the three tier lists |
-| `README.md` | the ```text codex role catalog, set-equality-checked against `plugins/kaola-workflow/config/agents.toml` by `validate-kaola-workflow-contracts.js`; and the Agent/Tier table, which is **not** machine-checked — keep it in step by hand |
+| `templates/agents/behavior-contracts.json` | exactly one complete behavior record and intent class per role |
+| `templates/agents/provenance.json` | exactly one origin/local classification and source record per role |
+| `scripts/generate-agent-profiles.js` | exact role set, schema, native rendering, three Codex registries, and output manifest |
+| `agents/generated-agent-manifest.json` | 9 renders per role and the behavior/render hashes |
+| installers and preflight | selected-source, managed-set, installed-byte, and pruning proof from the generated inventory |
+| additive edition suites | native carrier/discovery, mutation reachability, and install/uninstall behavior |
+| `README.md` and `docs/agents-source.md` | human role/intent catalog and source classification |
 
-Note the three tier lists exist in **three** independent copies. Adding a role to only the schema leaves the
-Codex install/doctor chain red; that duplication is the standing cost of the diagnostic's
-`require`-free authoring. An agent-set delta is itself a cross-edition diff.
+An agent-set delta is a cross-runtime and cross-edition diff. Regenerate all profiles, run the
+architecture mutation suite, every additive edition suite, and the producer-selected forge chains.
 
 ## Forge-Neutral Plugin Agent Profiles (issue #341)
 
@@ -222,31 +220,24 @@ Codex install/doctor chain red; that duplication is the standing cost of the dia
   transiently stale mid-run):
   `node plugins/kaola-workflow-{gitlab,gitea}/scripts/validate-kaola-workflow-{gitlab,gitea}-contracts.js --forbidden-only <file>...`
 
-## Generated Reviewer Profiles and Proof Boundaries (#696 / D-696-01)
+## Generated role profiles and proof boundaries
 
-`code-reviewer`, `adversarial-verifier`, and `security-reviewer` are generated-profile exceptions to
-the ordinary hand-mirrored agent workflow:
+All 14 roles follow one workflow:
 
-1. Edit `templates/reviewers/behavior-contracts.json` for runtime-neutral behavior or
-   `templates/reviewers/runtime-adapters.json` for closed tools/model-policy/evidence-transport data.
-   Adapter data must never grow arbitrary prompt, prefix, suffix, or instruction fields.
-2. Edit `scripts/generate-reviewer-profiles.js` only when rendering or validation rules change.
-3. Run `node scripts/generate-reviewer-profiles.js --write`, then `--check`. Never hand-edit any of
-   its three Claude Markdown outputs or nine Codex TOML outputs across GitHub, GitLab, and Gitea
-   (`EXPECTED_OUTPUT_PATHS` in the generator is the list).
-4. Run `node scripts/test-agent-profile-parity.js` and `node scripts/test-opencode-edition.js`.
-   OpenCode must preserve normalized behavior-core bytes and identity after its runtime transform.
+1. Edit `templates/agents/behavior-contracts.json` for runtime-neutral behavior,
+   `templates/agents/runtime-capabilities.json` for an evidence-backed native difference, or
+   `templates/agents/provenance.json` for origin metadata. Do not mix those axes.
+2. Edit `scripts/generate-agent-profiles.js` only when schema, hashing, or native rendering changes.
+3. Run `node scripts/generate-agent-profiles.js --write`, then `--check`. Never hand-edit a generated
+   Claude Markdown, Codex TOML, additive runtime profile, Codex registry, or manifest.
+4. Run `node scripts/test-runtime-agent-architecture.js` and
+   `npm run test:kaola-workflow:editions`. A behavior mutation must reach all nine variants; an
+   adapter mutation must remain isolated to one runtime family.
 
 `behavior_contract_hash` establishes deterministic runtime-neutral contract equivalence.
-`resolved_profile_hash` establishes deterministic complete-render byte identity. Neither hash means
-that stochastic models must emit identical findings, explanations, or outcomes. Installer/preflight
-checks may claim exact selected-source, installed-file, manifest, and plugin-cache bytes only; they
-must not claim proprietary prompt-load attestation without a public runtime introspection contract.
-Codex reviewer profiles remain runtime-unpinned by omission and may not emit top-level `model` or
-`model_reasoning_effort`. Their top-level schema is closed to `name`, `description`,
-`nickname_candidates`, and `developer_instructions`; behavior and resolved-profile identity lines
-live inside `developer_instructions` so they remain runtime-verifiable without becoming unsupported
-Codex role fields.
+`resolved_profile_hash` establishes deterministic complete-render byte identity. Neither proves
+stochastic output identity or private prompt-load attestation. Installer/preflight checks may claim
+only exact selected-source, installed-file, manifest, and plugin-cache bytes.
 
 ## Local validation receipts
 
@@ -256,35 +247,12 @@ to a deterministic `pass`, `fail`, or `inconclusive` receipt. Timeout, signal, m
 candidate mutation, unresolved executable identity, or any other incomparability is `inconclusive`,
 never pass. It is self-contained and depends on no hosted pipeline.
 
-## Agent profile parity
+## Agent profile equivalence
 
-**Non-generated agent-profile md↔toml token-pin parity contract (#422, see
-`docs/decisions/D-422-01.md`).**
-Three-part machine-enforced contract:
-
-1. **`.toml` triple byte-identity** — `validate-script-sync.js` `BYTE_IDENTICAL_GROUPS`
-   includes a programmatic entry for every `plugins/kaola-workflow/agents/*.toml` file
-   (built via `readdirSync`), covering every base-role profile.
-   Any byte divergence between the three plugin-tree copies of a `.toml` reds the validation
-   run. A new profile added to the codex tree is auto-covered.
-
-2. **Derived sentence parity** — for non-generated roles, `scripts/test-agent-profile-parity.js`
-   derives its obligations from the corpus rather than from a curated list: a rule sentence carried
-   by at least two thirds of the hand-maintained canonical profiles must appear in every
-   hand-maintained `.md` AND in all three `.toml` twins of each, and `ROLE_PINS` carries the
-   role-specific rules no consensus can reach — each pin asserted present in its source `.md`
-   first, so a pin whose source wording has moved fails loudly instead of enforcing nothing.
-   A drift between the `.md` and the twins reds the claude chain and is caught before the
-   four-chain gate.
-
-3. **Chain pinning** — `test-agent-profile-parity.js` is wired into the claude chain and
-   pinned by all four `validate-*-contracts.js`, so a missing or renamed guard file reds
-   every chain.
-
-**Workflow:** For a non-generated role, mirror a new feature paragraph into all three `.toml`
-twins; a rule shared by two thirds of the hand-maintained roles is enforced automatically, and a
-role-specific rule needs a `ROLE_PINS` entry in `test-agent-profile-parity.js`. For the three
-generated reviewer roles, use the canonical JSON + generator workflow above instead.
+Cross-runtime equivalence is source identity plus semantic mutation, not prose parity. Every role
+has one behavior record; every native render records that behavior hash and its own complete-render
+hash. The generated manifest pins the closed 126-render inventory. The three Codex forge profiles
+for a role remain byte-identical because forge identity does not change role behavior.
 
 **`config/hooks.json` family (#418.1).** The three plugin-tree `config/hooks.json` files
 (`plugins/kaola-workflow/`, `plugins/kaola-workflow-gitlab/`, `plugins/kaola-workflow-gitea/`)
@@ -302,13 +270,13 @@ coverage universe from the author side of the artifact, while the defect lived o
 
 | Guard | Its subject | Why it could not see the defect |
 |---|---|---|
-| `test-agent-profile-parity` consensus | policy shared across ≥⌈2N/3⌉ of 11 profiles | test custody is shared by 2 roles — below the bar by construction, not by tuning |
-| reviewer contradiction check, token table, vocabulary ban | `contractText`, built from `sections[].lines` | section headings were in no scanned region, yet render as `## <heading>` to 12 surfaces |
+| retired sentence-consensus profile guard | policy shared across a threshold of hand-maintained profiles | a small role-specific rule sat below the threshold; ADR 0020 retires this oracle in favor of one behavior source plus mutation reachability |
+| generated-role contradiction and vocabulary guards | authored contract fields only | render-owned text can still escape unless the guard also reads generated bytes |
 | opencode `A3` / kimi `K5-kinds` | the write/edit restriction axis | that axis had become unreachable; the live axis (`bash: deny`) was new and unguarded |
 | the retired-vocabulary cleanup | the authored contract | `node-id` lived in the generator's own render, which nothing read for vocabulary |
 | `test-route-reachability` | a universe derived from the edition tables | the forge term is the registry measuring itself — 12→8 surfaces, and at the time an unchanged assertion count (325→325) |
 
-Two rules follow, and they are the ones stated in `CLAUDE.md`:
+Two rules follow, and they are the ones stated in `AGENTS.md`:
 
 **A guard reads what ships, not what was authored.** The question worth asking of a content guard is
 not *what does it catch* but *what renders to a consumer that it never reads*. Scanning the authored
@@ -321,7 +289,7 @@ forge from both edition tables and it fails at 18→12, while the walkthrough's
 `FORGES.length × (2 + runtimeEditionCount) + 2` shrinking in lockstep with the registry it measures.
 That term is left derived on purpose, and says so where it is written. **The trailing `+ 2` is a
 literal for the opposite reason, and the contrast is the lesson.** It counts the two named,
-non-derived surfaces (root `CLAUDE.md`, `README.md`); written as `NAMED_SURFACES.length` it would
+non-derived surfaces (root `AGENTS.md`, `README.md`); written as `NAMED_SURFACES.length` it would
 shrink in lockstep with the very list it measures, so dropping a surface from that list and staling
 it yields `PASSED (13 surfaces)` — green over a fully stale file. Mutation-proven, not argued. A
 count is safe to derive only from something the mutation cannot move; where the list IS the subject,
@@ -354,18 +322,19 @@ rejects. The per-guard non-vacuity assertions that already exist stay; nothing g
 
 ## Adding a role agent
 
-A new role agent is a fresh `agents/<name>.md` plus its three plugin `.toml` twins, registered
-across the surface in § Bundle Lane above. Two authoring rules survive from the era when a validator
-enforced them, and they are now review-enforced:
+A new role starts as a complete record in `templates/agents/behavior-contracts.json`, a matching
+record in `templates/agents/provenance.json`, and a generator `ROLES` entry. Generated native files
+come last. Two authoring rules apply:
 
-- **Declare the tools.** The agent file needs a parsable `tools:` front-matter manifest. Whether it
-  can write is derived from that manifest and nothing else — never from a hand-maintained list.
+- **Declare capabilities semantically.** `capability_requirements` states repository read, scoped
+  write, command execution, and external research needs. The selected adapter renders the native
+  tools or permissions; universal behavior never names them.
 - **Say where the deliverable goes.** `Write`/`Edit` present ⇒ the agent writes its own output to a
   path the dispatch names. `Write`/`Edit` absent ⇒ the agent RETURNS its full deliverable as its
   final message, for the orchestrator to persist. A read-only agent that writes files, or a writing
   agent that returns its deliverable only in chat, loses work at the dispatch boundary.
 
-Three roles are exceptions handled by the generator, not by hand: see § Generated Reviewer Profiles.
+No role is an exception to generation. See § Generated role profiles and proof boundaries.
 
 ## Two validation tiers — the fast gate is SAMPLED (#801)
 
@@ -683,9 +652,11 @@ Design-rationale provenance — issue refs, decision IDs, invariant tags, ADR ci
 
 ### What counts as a prompt surface
 
-The full set across all four editions (claude / codex / gitlab / gitea) plus the opencode, kimi, grok, and cursor runtime editions:
+The full set across all four forge editions plus opencode, Kimi, Grok, Cursor, and ZCode:
 
-- **Agent definitions** — `agents/*.md` (root), `plugins/*/agents/*.toml` (all three plugin editions), opencode `agents/*.md` (generated from canonical), kimi `.kimi/skills/kaola-role-*/SKILL.md` role contracts (generated from canonical by `scripts/sync-kimi-edition.js`), grok `.grok/agents/*.md` (generated from canonical by `scripts/sync-grok-edition.js`), cursor `.cursor/agents/*.md` (generated from canonical by `scripts/sync-cursor-edition.js`)
+- **Agent definitions** — every profile recorded in `agents/generated-agent-manifest.json`, including
+  Claude Markdown, Codex TOML, and native additive runtime renders. The five additive sync scripts
+  consume `generate-agent-profiles.js`; none authors behavior.
 - **Commands** — `commands/*.md` (github-claude), `plugins/kaola-workflow-gitlab/commands/`, `plugins/kaola-workflow-gitea/commands/`, Codex `skills/kaola-workflow-*/SKILL.md` (including the two forge-codex SKILL packs), opencode generated command mirrors, kimi generated command skills (`.kimi/skills/<command>/SKILL.md`), grok `.grok/commands/*.md`, cursor `.cursor/commands/*.md`
 - **Skills** — `plugins/*/skills/*/SKILL.md` across all three plugin editions
 
@@ -723,7 +694,8 @@ The following forms are runtime identifiers or structural placeholders, not desi
 | `docs/decisions/D-NNN-NN.md` | Full decision record: context, decision, consequences, alternatives |
 | Git commit messages | Traceability link from code change to issue/decision |
 | `docs/conventions.md` (this file) | Durable policy rules — may cite issues and decision records by number |
-| `CLAUDE.md` | Concise rule stubs — may reference this file by path |
+| `AGENTS.md` | Concise universal rule stubs — may reference this file by path |
+| `CLAUDE.md` and other runtime overlays | Native bridge/configuration only; no copied provenance or universal contract |
 
 ### Enforcement
 
@@ -846,7 +818,7 @@ testAxiomBlockByteIdentity`, which prints it, rather than from this sentence. Th
 scenario, comparing the canonical file’s content against every surface it constructed — the six tracked
 workflow-init command/skill files read from disk, the additive-runtime init surfaces rendered in memory
 via the same sync scripts that generate them (one `sync-*-edition.js` per runtime, currently
-opencode, kimi, grok, and cursor), and root `CLAUDE.md` and `README.md`. Those last two
+opencode, kimi, grok, cursor, and zcode), and root `CLAUDE.md` and `README.md`. Those last two
 are **hand-maintained, not generated**: `generate-routing-surfaces.js --write` does not touch them,
 so an axiom edit must update both by hand or the guard reds the printed set. Each surface is
 mutation-proven to fail on its own. The `next` routing surfaces carry a short reference
@@ -854,8 +826,8 @@ pointer to the block rather than the block itself. That pointer **is** a `requir
 (`nx-first-principles`), checked by `scripts/test-route-reachability.js` inside `npm test`: it was
 declared with the axiom layer, deleted in an unrelated extraction, and restored once a mutation
 showed the pointer could be stripped from every obligated next surface with every chain still green. Its
-obligated width is the literal `NEXT_SURFACES` in that file (currently 18 — three forges × claude,
-codex, opencode, kimi, grok, cursor), for the reason the row on partially-anchored universes gives —
+obligated width is the literal `NEXT_SURFACES` in that file (currently 21 — three forges × claude,
+codex, opencode, kimi, grok, cursor, zcode), for the reason the row on partially-anchored universes gives —
 delete a forge and a derived comparison shrinks and passes over unchecked surfaces,
 while the literal reds.
 

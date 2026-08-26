@@ -44,6 +44,7 @@ const codexDir = path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts');
 // script token, which normalizeHooksJson() rewrites before the byte-compare.
 const COMMON_SCRIPTS = [
   'kaola-workflow-claim.js',
+  'kaola-workflow-project-instructions.js',
   'kaola-workflow-active-folders.js',
   'kaola-workflow-classifier.js',
   'kaola-workflow-closure-audit.js',
@@ -209,6 +210,17 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow/scripts/kaola-workflow-codex-preflight.js',
       'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-codex-preflight.js',
       'plugins/kaola-workflow-gitea/scripts/kaola-workflow-codex-preflight.js',
+    ],
+  },
+  {
+    // #1033: workflow-init resolves this ownership-preserving AGENTS.md/overlay migration helper
+    // in every supported forge install, so every installed carrier must ship identical bytes.
+    label: 'project-instruction migration helper copies',
+    files: [
+      'scripts/kaola-workflow-project-instructions.js',
+      'plugins/kaola-workflow/scripts/kaola-workflow-project-instructions.js',
+      'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-project-instructions.js',
+      'plugins/kaola-workflow-gitea/scripts/kaola-workflow-project-instructions.js',
     ],
   },
   {

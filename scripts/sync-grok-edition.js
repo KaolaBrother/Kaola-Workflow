@@ -30,7 +30,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const reviewerGen = require('./generate-reviewer-profiles');
+const agentGen = require('./generate-agent-profiles');
 const forgeLayout = require('./runtime-edition-forge');
 
 const REPO = path.resolve(__dirname, '..');
@@ -49,7 +49,7 @@ function treeLabel(forge) {
   return '.grok' + forgeLayout.outSuffix(forge || DEFAULT_FORGE);
 }
 
-const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
+const MANAGED_ROLES = new Set(agentGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
 
 // No runtime-neutral hook scripts are active in the Grok edition. The generator retains ownership
@@ -91,32 +91,11 @@ function yamlScalar(value) {
 }
 
 function listCanonAgents() {
-  return fs.readdirSync(CANON_AGENTS_DIR)
-    .filter(f => f.endsWith('.md'))
-    .map(f => f.slice(0, -3));
+  return [...agentGen.ROLES];
 }
 
 function listCanonCommands(forge) {
   return forgeLayout.commandSources(forge || DEFAULT_FORGE).map(s => s.basename).sort();
-}
-
-const GROK_MODEL_EFFORTS = Object.freeze({
-  sonnet: 'medium',
-  standard: 'medium',
-  opus: 'high',
-  reasoning: 'high',
-  fable: 'xhigh',
-  heavy: 'xhigh',
-});
-
-function effortForModelToken(modelToken, agentName) {
-  const token = String(modelToken == null ? '' : modelToken).trim();
-  const effort = GROK_MODEL_EFFORTS[token.toLowerCase()];
-  if (effort) return effort;
-  const shown = token || '<absent>';
-  throw new Error('sync-grok-edition: cannot derive Grok effort for role "'
-    + agentName + '": unsupported canonical model token "' + shown
-    + '" (expected sonnet, standard, opus, reasoning, fable, or heavy)');
 }
 
 function canonCommandPath(basename, forge) {
@@ -125,44 +104,9 @@ function canonCommandPath(basename, forge) {
   return src.absPath;
 }
 
-function isReadOnlyRole(toolSet) {
-  return !(toolSet.has('write') || toolSet.has('edit'));
-}
-
 function renderAgent(canonContent, agentName, forge) {
-  forge = forge || DEFAULT_FORGE;
-  const { fm, body } = parseFrontmatter(canonContent);
-  const toolSet = lowerSet(parseTools(fm.tools));
-  const isReviewer = REVIEWER_ROLES.has(agentName);
-  const effort = effortForModelToken(fm.model, agentName);
-  const lines = ['---'];
-  lines.push('name: ' + agentName);
-  lines.push('description: ' + yamlScalar(fm.description || ''));
-  lines.push('prompt_mode: full');
-  lines.push('model: inherit');
-  lines.push('effort: ' + effort);
-  lines.push('permission_mode: ' + (isReadOnlyRole(toolSet) ? 'plan' : 'default'));
-  lines.push('agents_md: true');
-  lines.push('---');
-  lines.push('');
-  if (isReviewer) {
-    lines.push('<!-- grok-reviewer-identity:start -->');
-    if (fm.behavior_contract_version) lines.push('behavior_contract_version: ' + fm.behavior_contract_version);
-    if (fm.behavior_contract_hash) lines.push('behavior_contract_hash: ' + fm.behavior_contract_hash);
-    lines.push('resolved_profile_hash: ' + ZERO_HASH);
-    lines.push('<!-- grok-reviewer-identity:end -->');
-    lines.push('');
-  }
-  const bodyText = rewriteClaudeScriptPaths(body, forge)
-    .replace(/--runtime claude\b/g, '--runtime grok')
-    .trim().replace(/\s+$/, '');
-  lines.push(bodyText);
-  let content = lines.join('\n') + '\n';
-  if (isReviewer) {
-    const normalized = reviewerGen.normalizeResolvedProfileHash(content);
-    content = normalized.replace(ZERO_HASH, reviewerGen.sha256(normalized));
-  }
-  return content;
+  if (!MANAGED_ROLES.has(agentName)) throw new Error('sync-grok-edition: unknown role ' + agentName);
+  return agentGen.renderRuntimeRole('grok', agentName).content;
 }
 
 const GROK_MODEL_DISPATCH_GUIDANCE =
@@ -182,67 +126,6 @@ const GROK_MODEL_DISPATCH_BLOCK = [
   '',
 ].join('\n');
 
-const MODEL_MENTION = /model=/;
-
-function sentenceStart(text, at) {
-  const re = /[.:]\s+(?=[A-Z`])/g;
-  let start = 0;
-  let m;
-  while ((m = re.exec(text)) !== null && m.index < at) start = m.index + m[0].length;
-  return start;
-}
-
-function rewriteModelDispatchParagraph(para, guidance) {
-  const at = para.search(MODEL_MENTION);
-  if (at < 0) return para;
-  return para.slice(0, sentenceStart(para, at)) + guidance;
-}
-
-function rewriteModelDispatchInstructions(text, guidance) {
-  const out = [];
-  let fenced = false;
-  let para = [];
-  function flushPara() {
-    if (!para.length) return;
-    out.push(rewriteModelDispatchParagraph(para.join('\n'), guidance));
-    para = [];
-  }
-  for (const line of text.split(/\r?\n/)) {
-    if (/^\s*```/.test(line)) {
-      flushPara();
-      fenced = !fenced;
-      out.push(line);
-    } else if (fenced) {
-      out.push(line);
-    } else if (line.trim() === '') {
-      flushPara();
-      out.push(line);
-    } else {
-      para.push(line);
-    }
-  }
-  flushPara();
-  return out.join('\n');
-}
-
-function stripCardModelPlaceholders(text) {
-  return text.replace(/^[ \t]*model="\{[^"\n]*\}",?[ \t]*\r?\n/gm, '');
-}
-
-function assertNoModelDispatchResidue(text, label) {
-  const probe = text.split(GROK_MODEL_DISPATCH_GUIDANCE).join('');
-  const problems = [];
-  if (/(?<!`)``(?!`)/.test(probe)) problems.push('empty code span `` — a strip cut inside a code span');
-  for (const line of probe.split(/\r?\n/)) {
-    if (MODEL_MENTION.test(line)) problems.push('unrewritten model= instruction: ' + line.trim());
-  }
-  if (problems.length) {
-    throw new Error('sync-grok-edition: a Claude-only `model=` instruction survived into '
-      + (label || '(command)') + ' — this runtime inherits the session model and must not '
-      + 'honour a per-dispatch override:\n  - ' + problems.join('\n  - '));
-  }
-}
-
 const GROK_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _gh="${GROK_HOME:-$HOME/.grok}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_gh/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_gh/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
 
@@ -256,49 +139,21 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + grokKaolaScript(forge));
 }
 
-const MODEL_DISPATCH_HEADING = /^##\s+Agent Model Dispatch\s*$/;
-const MODEL_DISPATCH_HEADING_NEAR_MISS = /^##\s+.*\bModel\b/;
-
-function assertModelDispatchAnchorMatched(canonBody, substituted, label) {
-  if (substituted) return;
-  const nearMiss = canonBody.split(/\r?\n/)
-    .filter(l => MODEL_DISPATCH_HEADING_NEAR_MISS.test(l) && !MODEL_DISPATCH_HEADING.test(l))
-    .map(l => l.trim());
-  if (!nearMiss.length) return;
-  throw new Error('sync-grok-edition: model-dispatch anchor missed in ' + (label || '(command)')
-    + ' — canonical carries a section this transform did not substitute. Re-anchor '
-    + 'MODEL_DISPATCH_HEADING to the heading canonical now uses:\n  - ' + nearMiss.join('\n  - '));
-}
-
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
-  const lines = rewriteModelDispatchInstructions(body, GROK_MODEL_DISPATCH_GUIDANCE).split(/\r?\n/);
+  const lines = body.split(/\r?\n/);
   const out = [];
-  let substitutedModelDispatch = false;
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    if (MODEL_DISPATCH_HEADING.test(line)) {
-      while (out.length && out[out.length - 1].trim() === '') out.pop();
-      if (out.length) out.push('');
-      out.push(GROK_MODEL_DISPATCH_BLOCK.replace(/\s+$/, ''));
-      out.push('');
-      substitutedModelDispatch = true;
-      i++;
-      while (i < lines.length && !/^#{1,6}\s/.test(lines[i])) i++;
-      continue;
-    }
     out.push(line);
     i++;
   }
-  assertModelDispatchAnchorMatched(body, substitutedModelDispatch, label);
   let text = out.join('\n');
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'spawn_subagent(\n$1');
-  text = stripCardModelPlaceholders(text);
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime grok');
   text = rewriteClaudeScriptPaths(text, forge);
-  assertNoModelDispatchResidue(text, label);
   return text;
 }
 
@@ -636,14 +491,12 @@ if (require.main === module) main();
 module.exports = {
   renderAgent, renderCommand, transformCommandBody,
   rewriteClaudeScriptPaths, GROK_KAOLA_SCRIPT, grokKaolaScript,
-  rewriteModelDispatchInstructions, rewriteModelDispatchParagraph, sentenceStart,
-  stripCardModelPlaceholders, assertNoModelDispatchResidue, assertModelDispatchAnchorMatched,
-  GROK_MODEL_DISPATCH_GUIDANCE, GROK_MODEL_DISPATCH_BLOCK, MODEL_DISPATCH_HEADING,
+  GROK_MODEL_DISPATCH_GUIDANCE, GROK_MODEL_DISPATCH_BLOCK,
   renderGrokHooksJson, treeLabel, agentRel, commandRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   adaptHookForGrok, HOOK_ADAPTATIONS,
   expectedHookFiles, retiredHookFiles, retiredAgentFiles, retiredCommandFiles,
-  parseFrontmatter, parseTools, isReadOnlyRole, yamlScalar,
+  parseFrontmatter, parseTools, yamlScalar,
   listCanonAgents, listCanonCommands,
   CANON_AGENTS_DIR, CANON_HOOKS_DIR,
   REPO,

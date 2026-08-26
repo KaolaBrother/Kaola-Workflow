@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "evidence": {
+    "claude_instructions": {
+      "kind": "official_docs",
+      "locator": "https://code.claude.com/docs/en/memory",
+      "observed_at": "2026-08-27T00:00:00Z",
+      "claim": "The native project entrypoint is CLAUDE.md and @AGENTS.md is the documented bridge."
+    },
+    "codex_instructions": {
+      "kind": "official_docs",
+      "locator": "https://learn.chatgpt.com/docs/agent-configuration/agents-md",
+      "observed_at": "2026-08-27T00:00:00Z",
+      "claim": "AGENTS.md is discovered from repository root to the current working directory."
+    },
+    "opencode_instructions": {
+      "kind": "official_docs",
+      "locator": "https://opencode.ai/docs/rules/",
+      "observed_at": "2026-08-27T00:00:00Z",
+      "claim": "Project and global AGENTS.md files are supported directly."
+    },
+    "kimi_instructions": {
+      "kind": "official_source",
+      "locator": "https://github.com/MoonshotAI/kimi-code/blob/%40moonshot-ai%2Fkimi-code%400.38.0/packages/agent-core-v2/src/agent/profile/context.ts",
+      "observed_at": "2026-08-27T00:00:00Z",
+      "claim": "AGENTS.md files are loaded from global and project scopes."
+    },
+    "grok_instructions": {
+      "kind": "official_docs",
+      "locator": "https://docs.x.ai/build/features/project-rules",
+      "observed_at": "2026-08-27T00:00:00Z",
+      "claim": "AGENTS.md project rules are loaded directly from repository root to the current directory."
+    },
+    "cursor_instructions": {
+      "kind": "official_docs",
+      "locator": "https://cursor.com/docs/rules",
+      "observed_at": "2026-08-27T00:00:00Z",
+      "claim": "Root and nested AGENTS.md files are supported directly."
+    },
+    "zcode_instructions": {
+      "kind": "official_docs",
+      "locator": "https://zcode.z.ai/en/docs/agents",
+      "observed_at": "2026-08-27T00:00:00Z",
+      "claim": "User-global and workspace-root AGENTS.md files are supported directly."
+    }
+  },
+  "runtimes": {
+    "claude": {
+      "runtime": "claude",
+      "evidence": [
+        "claude_instructions"
+      ],
+      "capabilities": {
+        "named_roles": true,
+        "deterministic_profiles": true,
+        "capability_gap": "explicit",
+        "instruction_loading": "bridge",
+        "profile_format": "markdown_yaml",
+        "role_dispatch": "named_profile",
+        "model_carrier": "profile_model",
+        "tool_binding": "profile_tools",
+        "hook_scope": "user_and_project",
+        "intent_mapping": {
+          "standard": "sonnet",
+          "reasoning": "opus",
+          "heavy": "fable"
+        }
+      }
+    },
+    "codex-github": {
+      "runtime": "codex",
+      "evidence": [
+        "codex_instructions"
+      ],
+      "capabilities": {
+        "named_roles": true,
+        "deterministic_profiles": true,
+        "capability_gap": "explicit",
+        "instruction_loading": "direct",
+        "profile_format": "toml",
+        "role_dispatch": "named_profile",
+        "model_carrier": "inherit_by_omission",
+        "tool_binding": "host_policy",
+        "hook_scope": "plugin_runtime",
+        "intent_mapping": {
+          "standard": "inherit",
+          "reasoning": "inherit",
+          "heavy": "inherit"
+        }
+      }
+    },
+    "codex-gitlab": {
+      "runtime": "codex",
+      "evidence": [
+        "codex_instructions"
+      ],
+      "capabilities": {
+        "named_roles": true,
+        "deterministic_profiles": true,
+        "capability_gap": "explicit",
+        "instruction_loading": "direct",
+        "profile_format": "toml",
+        "role_dispatch": "named_profile",
+        "model_carrier": "inherit_by_omission",
+        "tool_binding": "host_policy",
+        "hook_scope": "plugin_runtime",
+        "intent_mapping": {
+          "standard": "inherit",
+          "reasoning": "inherit",
+          "heavy": "inherit"
+        }
+      }
+    },
+    "codex-gitea": {
+      "runtime": "codex",
+      "evidence": [
+        "codex_instructions"
+      ],
+      "capabilities": {
+        "named_roles": true,
+        "deterministic_profiles": true,
+        "capability_gap": "explicit",
+        "instruction_loading": "direct",
+        "profile_format": "toml",
+        "role_dispatch": "named_profile",
+        "model_carrier": "inherit_by_omission",
+        "tool_binding": "host_policy",
+        "hook_scope": "plugin_runtime",
+        "intent_mapping": {
+          "standard": "inherit",
+          "reasoning": "inherit",
+          "heavy": "inherit"
+        }
+      }
+    },
+    "opencode": {
+      "runtime": "opencode",
+      "evidence": [
+        "opencode_instructions"
+      ],
+      "capabilities": {
+        "named_roles": true,
+        "deterministic_profiles": true,
+        "capability_gap": "explicit",
+        "instruction_loading": "direct",
+        "profile_format": "markdown_yaml",
+        "role_dispatch": "named_profile",
+        "model_carrier": "profile_or_inherit",
+        "tool_binding": "profile_permissions",
+        "hook_scope": "plugin_runtime",
+        "intent_mapping": {
+          "standard": "inherit",
+          "reasoning": "inherit",
+          "heavy": "inherit"
+        }
+      }
+    },
+    "kimi": {
+      "runtime": "kimi",
+      "evidence": [
+        "kimi_instructions"
+      ],
+      "capabilities": {
+        "named_roles": true,
+        "deterministic_profiles": true,
+        "capability_gap": "explicit",
+        "instruction_loading": "direct",
+        "profile_format": "markdown_yaml",
+        "role_dispatch": "named_profile",
+        "model_carrier": "session_inherit",
+        "tool_binding": "profile_tools",
+        "hook_scope": "user_and_project",
+        "intent_mapping": {
+          "standard": "inherit",
+          "reasoning": "inherit",
+          "heavy": "inherit"
+        }
+      }
+    },
+    "grok": {
+      "runtime": "grok",
+      "evidence": [
+        "grok_instructions"
+      ],
+      "capabilities": {
+        "named_roles": true,
+        "deterministic_profiles": true,
+        "capability_gap": "explicit",
+        "instruction_loading": "direct",
+        "profile_format": "markdown_yaml",
+        "role_dispatch": "named_profile",
+        "model_carrier": "session_inherit_plus_profile_effort",
+        "tool_binding": "profile_tools",
+        "hook_scope": "user_and_project",
+        "intent_mapping": {
+          "standard": "medium",
+          "reasoning": "high",
+          "heavy": "xhigh"
+        }
+      }
+    },
+    "cursor": {
+      "runtime": "cursor",
+      "evidence": [
+        "cursor_instructions"
+      ],
+      "capabilities": {
+        "named_roles": true,
+        "deterministic_profiles": true,
+        "capability_gap": "explicit",
+        "instruction_loading": "direct_nested",
+        "profile_format": "markdown_yaml_parameters",
+        "role_dispatch": "named_profile",
+        "model_carrier": "profile_model_effort",
+        "tool_binding": "readonly_flag",
+        "hook_scope": "user_and_project",
+        "model": "grok-4.6",
+        "intent_mapping": {
+          "standard": "medium",
+          "reasoning": "high",
+          "heavy": "xhigh"
+        }
+      }
+    },
+    "zcode": {
+      "runtime": "zcode",
+      "evidence": [
+        "zcode_instructions"
+      ],
+      "capabilities": {
+        "named_roles": true,
+        "deterministic_profiles": true,
+        "capability_gap": "explicit",
+        "instruction_loading": "direct_workspace_root",
+        "profile_format": "markdown_yaml_thought",
+        "role_dispatch": "named_profile",
+        "model_carrier": "profile_model_thought",
+        "tool_binding": "profile_tools",
+        "hook_scope": "user_only",
+        "model": "GLM-5.3",
+        "intent_mapping": {
+          "standard": "high",
+          "reasoning": "max",
+          "heavy": "max"
+        }
+      }
+    }
+  }
+}

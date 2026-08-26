@@ -67,14 +67,15 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    // The consumer's CLAUDE.md is the one artifact loaded in EVERY session of
+    // The consumer's AGENTS.md is the universal artifact loaded directly or
+    // through the runtime-native bridge in every supported runtime session;
     // the repo the workflow was installed into; the next surface loads only
     // when the command is invoked, and its text is not addressable from a
     // consumer repo at all — it lives in the installed command/skill tree, not
     // in the repo. So the format is RESTATED here rather than pointed at.
     //
     // The restatement is a strict SUBSET of the next skeleton's wording: the
-    // mission-list guidance in the KW-CLAUDE-TEMPLATE region is built only
+    // mission-list guidance in the KW-AGENTS-TEMPLATE region is built only
     // from whole sentences of `next.skeleton.md`, in that skeleton's own order,
     // shortened by omission and never rephrased.
     block_id: 'in-mission-list',
@@ -194,7 +195,7 @@ const REQUIRED_BLOCKS = [
   {
     // The axiom layer is reached from a `next` surface by a POINTER — a short
     // paragraph naming the axioms and where they live — never by carrying the
-    // block, which is embedded in the workflow-init CLAUDE.md template instead.
+    // block, which is embedded in the workflow-init AGENTS.md template instead.
     // The pointer is the only thing on a shipped `next` surface that tells a
     // reader in a consumer repo that a tie-breaking order exists at all, and
     // where to read it; deleting it costs the whole layer at dispatch time and
@@ -229,7 +230,7 @@ const REQUIRED_BLOCKS = [
     content_tokens: [
       'When nothing already settles a situation',
       '`## First Principles` block',
-      'workflow-init `CLAUDE.md`',
+      'workflow-init `AGENTS.md`',
       'applied in priority order',
       'useful and never required',
     ],

@@ -384,6 +384,14 @@ const NON_ATOMIC_EXEMPT = [
     why: 'the archive move renames the project DIRECTORY, which is atomic on the filesystem and is not a file write at all',
   },
   {
+    file: 'kaola-workflow-project-instructions.js', api: 'writeFileSync', klass: 'atomic-helper-internal',
+    why: 'the ownership-safe instruction migration fills a random same-directory temp file; it never writes AGENTS.md or CLAUDE.md in place',
+  },
+  {
+    file: 'kaola-workflow-project-instructions.js', api: 'renameSync', klass: 'atomic-helper-internal',
+    why: 'the rename publishes that complete temp file atomically after classification and before the next instruction file is considered',
+  },
+  {
     file: 'kaola-workflow-sink-merge.js', api: 'copyFileSync', klass: 'mirror-copy',
     why: 'the sink-staged union copies only into paths that do not exist yet, from a staged worktree copy that outlives the step',
   },

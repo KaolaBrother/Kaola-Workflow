@@ -3367,18 +3367,20 @@ function testInstallSchemaPruneManifest332Gitea() {
     const manifest = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
     assert.strictEqual(manifest.schema_version, 1, '#332 gt AC3: manifest schema_version 1');
     assert.strictEqual(manifest.roles.length, GT_ROSTER_TOMLS.length, '#332 gt AC3: manifest must list every shipped role');
-    for (const role of ['code-reviewer', 'adversarial-verifier', 'security-reviewer']) {
-      const file = role + '.toml';
+    for (const file of tomls) {
+      const role = file.replace(/\.toml$/, '');
       const sourceBytes = fs.readFileSync(path.join(giteaPluginRoot, 'agents', file));
       const installedBytes = fs.readFileSync(path.join(agentsDir, file));
       assert.ok(sourceBytes.equals(installedBytes),
-        'reviewer contract: installed ' + file + ' must byte-match the selected source');
+        'agent contract: installed ' + file + ' must byte-match the selected source');
       const text = installedBytes.toString('utf8');
       assert.deepStrictEqual(manifest.profile_contracts[file], {
+        role,
         behavior_contract_version: Number(text.match(/^behavior_contract_version: (\d+)$/m)[1]),
         behavior_contract_hash: text.match(/^behavior_contract_hash: ([0-9a-f]{64})$/m)[1],
+        adapter_capabilities_hash: text.match(/^adapter_capabilities_hash: ([0-9a-f]{64})$/m)[1],
         resolved_profile_hash: text.match(/^resolved_profile_hash: ([0-9a-f]{64})$/m)[1],
-      }, 'reviewer contract: manifest must bind behavior/profile identity for ' + file);
+      }, 'agent contract: manifest must bind behavior/adapter/profile identity for ' + file);
     }
     assert.strictEqual(r.stdout.trim().split('\n').pop(), 'status: ok', '#332 gt AC3: stdout must end with status: ok');
   } finally {
@@ -3463,13 +3465,15 @@ function testGiteaPreflight332() {
       fs.readFileSync(path.join(giteaPluginRoot, 'agents', 'code-reviewer.toml'))),
     'reviewer contract: project autofix must restore exact source bytes');
 
-    // AC7a: malformed -> profiles_malformed under --no-autofix
+    // AC7a: an incomplete installed copy differs from the selected generated source, so the
+    // complete self-hashed profile contract reports profiles_stale under --no-autofix.
     fs.writeFileSync(ce, savedCe.replace(/^name = "code-explorer"\n/m, ''));
     r = pf(['--project-root', root, '--no-autofix', '--json']);
-    assert.notStrictEqual(r.status, 0, '#332 gt AC7a: malformed must refuse');
+    assert.notStrictEqual(r.status, 0, '#332 gt AC7a: incomplete installed profile must refuse');
     j = JSON.parse(r.stdout);
-    assert.strictEqual(j.status, 'profiles_malformed', '#332 gt AC7a: status profiles_malformed');
-    assert.strictEqual(j.malformed[0].role, 'code-explorer', '#332 gt AC7a: malformed role correct');
+    assert.strictEqual(j.status, 'profiles_stale', '#332 gt AC7a: status profiles_stale');
+    assert.ok(j.stale_profiles.some(item => item.role === 'code-explorer'),
+      '#332 gt AC7a: stale_profiles names code-explorer');
 
     // AC8: autofix repairs.
     r = pf(['--project-root', root, '--json']);

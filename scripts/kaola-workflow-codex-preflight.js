@@ -94,13 +94,7 @@ const CODEX_STANDARD_EFFORT = 'medium';
 const CODEX_REASONING_MODEL = 'gpt-5.6-sol';
 const CODEX_REASONING_EFFORT = 'xhigh';
 const MANIFEST_SCHEMA_VERSION = 1;
-const REVIEWER_ROLES = Object.freeze(['code-reviewer', 'adversarial-verifier', 'security-reviewer']);
-// #889: an embedded copy of the reviewer behavior-contract version. This file ships inside a
-// plugin tree, where scripts/generate-reviewer-profiles.js does not exist, so it cannot read the
-// number from its source. It is swept instead: that module's CONTRACT_VERSION_PIN_SITES lists
-// this path and checkContractVersionPins fails every chain when the two disagree.
-const REVIEWER_BEHAVIOR_CONTRACT_VERSION = 3;
-const REVIEWER_SOURCE_REPAIR = 'node scripts/generate-reviewer-profiles.js --write && node scripts/generate-reviewer-profiles.js --check';
+const AGENT_SOURCE_REPAIR = 'node scripts/generate-agent-profiles.js --write && node scripts/generate-agent-profiles.js --check';
 const CODEX_ROLE_TOP_LEVEL_FIELDS = Object.freeze([
   'name', 'description', 'nickname_candidates', 'developer_instructions',
 ]);
@@ -161,8 +155,12 @@ function tomlKeyLabel(raw) {
 
 function profileTopLevelShape(text) {
   const source = String(text);
-  const instructionRe = /^developer_instructions\s*=\s*"""([\s\S]*?)"""\s*(?:\r?\n|$)/gm;
-  const instructionMatches = [...source.matchAll(instructionRe)];
+  const instructionRe = /^developer_instructions\s*=\s*("""|''')([\s\S]*?)\1\s*(?:\r?\n|$)/gm;
+  const instructionMatches = [...source.matchAll(instructionRe)].map(match => {
+    const normalized = [match[0], match[2]];
+    normalized.index = match.index;
+    return normalized;
+  });
   let outside = '';
   let cursor = 0;
   for (const match of instructionMatches) {
@@ -233,161 +231,59 @@ function genericShapeReasons(shape) {
   });
 }
 
-function reviewerShapeReasons(shape) {
-  return shape.violations.map(violation => {
-    if (violation.kind === 'line_endings') return 'reviewer_toml_line_endings_forbidden';
-    if (violation.kind === 'control') return 'reviewer_toml_control_character_forbidden';
-    if (violation.kind === 'instruction_backslash') return 'reviewer_instruction_toml_backslash_forbidden';
-    if (violation.kind === 'backslash') return 'reviewer_toml_backslash_forbidden';
-    if (violation.kind === 'field') return `reviewer_adapter_field_forbidden: ${violation.value}`;
-    if (violation.kind === 'table') return `reviewer_adapter_table_forbidden: ${violation.value}`;
-    if (violation.kind === 'duplicate') return `reviewer_top_level_field_duplicate: ${violation.value}`;
-    return `reviewer_adapter_syntax_forbidden: line=${violation.line} ${violation.value}`;
-  });
-}
 
-function reviewerProfileContract(text, role) {
+function agentProfileContract(text, role) {
   const reasons = [];
-  if (!REVIEWER_ROLES.includes(role)) return { reasons, identity: null };
-
-  const shape = profileTopLevelShape(text);
-  const source = shape.source;
-  const instructionMatch = shape.instructionMatch;
-  const instructionText = shape.instructionBody || '';
-  reasons.push(...reviewerShapeReasons(shape));
-
-  const coreStarts = instructionText.split('<!-- reviewer-behavior-core:start -->').length - 1;
-  const coreEnds = instructionText.split('<!-- reviewer-behavior-core:end -->').length - 1;
-  let core = '';
-  let coreStart = -1;
-  let coreEnd = -1;
-  if (coreStarts !== 1 || coreEnds !== 1) {
-    reasons.push(`reviewer_behavior_core_invalid: starts=${coreStarts} ends=${coreEnds}`);
-  } else {
-    coreStart = instructionText.indexOf('<!-- reviewer-behavior-core:start -->');
-    const endMarkerStart = instructionText.indexOf('<!-- reviewer-behavior-core:end -->', coreStart);
-    coreEnd = endMarkerStart + '<!-- reviewer-behavior-core:end -->'.length;
-    if (endMarkerStart < coreStart) {
-      reasons.push('reviewer_behavior_core_invalid: markers_out_of_order');
-      coreStart = -1;
-      coreEnd = -1;
-    } else {
-      core = instructionText.slice(coreStart, coreEnd);
+  const source = String(text || '');
+  const instructionMatch = source.match(/^developer_instructions\s*=\s*'''([\s\S]*?)'''\s*$/m)
+    || source.match(/^developer_instructions\s*=\s*"""([\s\S]*?)"""\s*$/m);
+  const instructionText = instructionMatch ? instructionMatch[1] : '';
+  if (!instructionMatch) reasons.push('agent_developer_instructions_missing');
+  const startCount = instructionText.split('<!-- runtime-adapter:start -->').length - 1;
+  const endCount = instructionText.split('<!-- runtime-adapter:end -->').length - 1;
+  if (startCount !== 1 || endCount !== 1) {
+    reasons.push(`agent_runtime_adapter_invalid: starts=${startCount} ends=${endCount}`);
+  }
+  const fields = {};
+  for (const field of ['runtime', 'behavior_contract_version', 'behavior_contract_hash',
+    'adapter_capabilities_hash', 'resolved_profile_hash']) {
+    const matches = [...instructionText.matchAll(new RegExp(`^${field}:\\s*([^\\r\\n]+)\\s*$`, 'gm'))];
+    if (matches.length !== 1) reasons.push(`agent_${field}_not_unique: count=${matches.length}`);
+    else fields[field] = matches[0][1].trim();
+  }
+  if (fields.runtime && fields.runtime !== 'codex') reasons.push(`agent_runtime_mismatch: ${fields.runtime}`);
+  if (fields.behavior_contract_version && !/^\d+$/.test(fields.behavior_contract_version)) {
+    reasons.push('agent_behavior_contract_version_invalid');
+  }
+  for (const field of ['behavior_contract_hash', 'adapter_capabilities_hash', 'resolved_profile_hash']) {
+    if (fields[field] && !/^[0-9a-f]{64}$/.test(fields[field])) reasons.push(`agent_${field}_invalid`);
+  }
+  if (fields.resolved_profile_hash && /^[0-9a-f]{64}$/.test(fields.resolved_profile_hash)) {
+    const normalized = source.replace(
+      /(resolved_profile_hash:\s*)[0-9a-f]{64}/g,
+      '$1' + '0'.repeat(64),
+    );
+    const expected = sha256Hex(normalized);
+    if (fields.resolved_profile_hash !== expected) {
+      reasons.push(`agent_resolved_profile_hash_mismatch: expected=${expected} got=${fields.resolved_profile_hash}`);
     }
   }
-  const coreRoleMatches = [...core.matchAll(/^role:[ \t]*([^\r\n]+)[ \t]*$/gm)];
-  if (coreRoleMatches.length !== 1) {
-    reasons.push(`reviewer_behavior_core_role_not_unique: count=${coreRoleMatches.length}`);
-  } else if (coreRoleMatches[0][1].trim() !== role) {
-    reasons.push('reviewer_behavior_core_role_mismatch');
-  }
-
-  const versionFields = [...instructionText.matchAll(
-    /^behavior_contract_version[ \t]*:[ \t]*([^\r\n]*)[ \t]*$/gm,
-  )];
-  let coreVersion = null;
-  if (versionFields.length === 0) {
-    reasons.push('reviewer_behavior_core_version_missing');
-  } else if (versionFields.length !== 1) {
-    reasons.push(`reviewer_behavior_contract_version_not_unique: count=${versionFields.length}`);
-  } else {
-    const rawVersion = versionFields[0][1].trim();
-    if (!/^\d+$/.test(rawVersion)) {
-      reasons.push('reviewer_behavior_core_version_missing');
-    } else {
-      coreVersion = Number(rawVersion);
-    }
-    if (coreStart < 0 || versionFields[0].index < coreStart
-        || versionFields[0].index + versionFields[0][0].length > coreEnd) {
-      reasons.push('reviewer_behavior_contract_version_outside_core');
-    }
-  }
-  if (coreVersion !== null && coreVersion !== REVIEWER_BEHAVIOR_CONTRACT_VERSION) {
-    reasons.push(`reviewer_contract_version_unsupported: expected=${REVIEWER_BEHAVIOR_CONTRACT_VERSION} got=${coreVersion}`);
-  }
-
-  const behaviorFields = [...instructionText.matchAll(
-    /^behavior_contract_hash[ \t]*:[ \t]*([^\r\n]*)[ \t]*$/gm,
-  )];
-  let coreBehaviorHash = null;
-  if (behaviorFields.length === 0) {
-    reasons.push('reviewer_behavior_core_hash_missing');
-  } else if (behaviorFields.length !== 1) {
-    reasons.push(`reviewer_behavior_contract_hash_not_unique: count=${behaviorFields.length}`);
-  } else {
-    const rawHash = behaviorFields[0][1].trim();
-    if (/^[0-9a-f]{64}$/.test(rawHash)) coreBehaviorHash = rawHash;
-    else reasons.push('reviewer_behavior_core_hash_missing');
-    if (coreStart < 0 || behaviorFields[0].index < coreStart
-        || behaviorFields[0].index + behaviorFields[0][0].length > coreEnd) {
-      reasons.push('reviewer_behavior_contract_hash_outside_core');
-    }
-  }
-
-  const identityStarts = instructionText.split('<!-- reviewer-profile-identity:start -->').length - 1;
-  const identityEnds = instructionText.split('<!-- reviewer-profile-identity:end -->').length - 1;
-  let identityStart = -1;
-  let identityEnd = -1;
-  if (identityStarts !== 1 || identityEnds !== 1) {
-    reasons.push(`reviewer_profile_identity_invalid: starts=${identityStarts} ends=${identityEnds}`);
-  } else {
-    identityStart = instructionText.indexOf('<!-- reviewer-profile-identity:start -->');
-    const endMarkerStart = instructionText.indexOf('<!-- reviewer-profile-identity:end -->', identityStart);
-    identityEnd = endMarkerStart + '<!-- reviewer-profile-identity:end -->'.length;
-    if (endMarkerStart < identityStart) {
-      reasons.push('reviewer_profile_identity_invalid: markers_out_of_order');
-      identityStart = -1;
-      identityEnd = -1;
-    }
-  }
-
-  const resolvedFields = [...instructionText.matchAll(
-    /^resolved_profile_hash[ \t]*:[ \t]*([^\r\n]*)[ \t]*$/gm,
-  )];
-  let resolvedProfileHash = null;
-  if (resolvedFields.length === 0) {
-    reasons.push('reviewer_resolved_profile_hash_missing');
-  } else if (resolvedFields.length !== 1) {
-    reasons.push(`reviewer_resolved_profile_hash_not_unique: count=${resolvedFields.length}`);
-  } else {
-    const match = resolvedFields[0];
-    const rawHash = match[1].trim();
-    if (/^[0-9a-f]{64}$/.test(rawHash)) {
-      resolvedProfileHash = rawHash;
-      const bodyOffset = instructionMatch.index + instructionMatch[0].indexOf(instructionMatch[1]);
-      const valueOffset = bodyOffset + match.index + match[0].indexOf(rawHash);
-      const normalized = source.slice(0, valueOffset) + '0'.repeat(64)
-        + source.slice(valueOffset + rawHash.length);
-      const expected = sha256Hex(normalized);
-      if (resolvedProfileHash !== expected) {
-        reasons.push(`reviewer_resolved_profile_hash_mismatch: expected=${expected} got=${resolvedProfileHash}`);
-      }
-    } else {
-      reasons.push('reviewer_resolved_profile_hash_missing');
-    }
-    if (identityStart < 0 || match.index < identityStart
-        || match.index + match[0].length > identityEnd) {
-      reasons.push('reviewer_resolved_profile_hash_outside_identity');
-    }
-  }
-
-  const identity = reasons.length === 0
-      && coreVersion === REVIEWER_BEHAVIOR_CONTRACT_VERSION
-      && coreBehaviorHash && resolvedProfileHash
-    ? {
-      behavior_contract_version: coreVersion,
-      behavior_contract_hash: coreBehaviorHash,
-      resolved_profile_hash: resolvedProfileHash,
-    }
-    : null;
+  const identity = reasons.length === 0 ? {
+    role,
+    behavior_contract_version: Number(fields.behavior_contract_version),
+    behavior_contract_hash: fields.behavior_contract_hash,
+    adapter_capabilities_hash: fields.adapter_capabilities_hash,
+    resolved_profile_hash: fields.resolved_profile_hash,
+  } : null;
   return { reasons: [...new Set(reasons)], identity };
 }
+
 
 function repositoryRepairCommand(scriptDir) {
   let cursor = path.resolve(scriptDir);
   for (let i = 0; i < 5; i++) {
-    if (fs.existsSync(path.join(cursor, 'scripts', 'generate-reviewer-profiles.js'))) {
-      return `cd ${cursor} && ${REVIEWER_SOURCE_REPAIR}`;
+    if (fs.existsSync(path.join(cursor, 'scripts', 'generate-agent-profiles.js'))) {
+      return `cd ${cursor} && ${AGENT_SOURCE_REPAIR}`;
     }
     const parent = path.dirname(cursor);
     if (parent === cursor) break;
@@ -1724,7 +1620,7 @@ function validateProfileText(text, role, expectedMeta = null) {
     // should land, so a profile cannot be required to promise a path nobody has chosen yet.
   }
 
-  reasons.push(...reviewerProfileContract(text, role).reasons);
+  reasons.push(...agentProfileContract(text, role).reasons);
 
   return [...new Set(reasons)];
 }
@@ -1890,7 +1786,7 @@ function readTemplateRoles(scriptDir) {
     entry.sourcePath = sourcePath;
     entry.sourceText = sourceText;
     entry.sourceSha256 = 'sha256:' + sha256Hex(Buffer.from(sourceText, 'utf8'));
-    entry.profileContract = reviewerProfileContract(sourceText, entry.role).identity;
+    entry.profileContract = agentProfileContract(sourceText, entry.role).identity;
     for (const reason of validateProfileText(sourceText, entry.role, entry)) {
       sourceErrors.push(`agents/${entry.basename}: ${reason}`);
     }
@@ -2177,11 +2073,13 @@ function inspectScope({
         const reasons = validateProfileText(txt, role, expected);
         const sourceDrift = !!(expected && typeof expected.sourceText === 'string' && txt !== expected.sourceText);
         if (posture === 'legacy_pinned') {
-          const nonPinReasons = reasons.filter(reason => !LEGACY_PIN_ONLY_REASONS.has(reason));
+          const nonPinReasons = reasons.filter(reason =>
+            !LEGACY_PIN_ONLY_REASONS.has(reason)
+            && !reason.startsWith('agent_resolved_profile_hash_mismatch:'));
           if (nonPinReasons.length === 0) legacyPinnedProfiles.push({ role, file: name });
           else malformed.push({ role, file: name, reasons: nonPinReasons });
         } else if (reasons.length > 0) {
-          if (sourceDrift && REVIEWER_ROLES.includes(role)) {
+          if (sourceDrift) {
             addStaleProfile(role, name, 'profile_bytes_mismatch: installed profile differs from bundled source');
             for (const reason of reasons) addStaleProfile(role, name, reason);
           } else {
@@ -2198,8 +2096,8 @@ function inspectScope({
             addStaleProfile(role, name,
               `manifest_file_hash_mismatch: expected=${actualFileHash} got=${recordedFileHash || 'missing'}`);
           }
-          if (REVIEWER_ROLES.includes(role)) {
-            const actualIdentity = reviewerProfileContract(txt, role).identity;
+          {
+            const actualIdentity = agentProfileContract(txt, role).identity;
             const recordedIdentity = manifest.profile_contracts && manifest.profile_contracts[name];
             if (!actualIdentity || JSON.stringify(recordedIdentity) !== JSON.stringify(actualIdentity)) {
               addStaleProfile(role, name, 'manifest_profile_contract_mismatch');
@@ -4003,7 +3901,7 @@ module.exports = {
   checkManagedBlock,
   checkProfiles,
   validateProfileText,
-  reviewerProfileContract,
+  agentProfileContract,
   classifyProfilePinPosture,
   inspectScope,
   readManifest,
@@ -4018,9 +3916,7 @@ module.exports = {
   CODEX_STANDARD_EFFORT,
   CODEX_REASONING_MODEL,
   CODEX_REASONING_EFFORT,
-  REVIEWER_ROLES,
-  REVIEWER_BEHAVIOR_CONTRACT_VERSION,
-  REVIEWER_SOURCE_REPAIR,
+  AGENT_SOURCE_REPAIR,
   // #598: effort-gated dispatch-posture derivation (pure; exported for unit tests).
   detectCodexDispatchMode,
   deriveDispatchPosture,

@@ -32,7 +32,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const forgeLayout = require('./runtime-edition-forge.js');
-const reviewerGenerator = require('./generate-reviewer-profiles.js');
+const reviewerGenerator = require('./generate-agent-profiles.js');
 const G = require('./test-git-fixture');
 const syncMod = require('./sync-cursor-edition.js');
 
@@ -1618,10 +1618,11 @@ function g10Rm(dir) {
   assert(exists(initRel),
     'G11: generated ' + initRel + ' exists');
   assert(/### Compact Template/.test(initBody)
-      && /KW-CLAUDE-TEMPLATE-START/.test(initBody)
-      && /## Step 2 — Synthesize `CLAUDE\.md`/.test(initBody),
-    'G11: generated workflow-init must still carry the shared compact overlay / '
-    + 'CLAUDE.md writer job (canonical Compact Template fence, not Cursor-specific wording)');
+      && /KW-AGENTS-TEMPLATE-START/.test(initBody)
+      && /## Step 2 — Reconcile project instructions/.test(initBody)
+      && /kaola-workflow-project-instructions\.js/.test(initBody),
+    'G11: generated workflow-init must carry the shared AGENTS.md authority migration job '
+    + '(canonical Compact Template fence, not Cursor-specific wording)');
 }
 
 {

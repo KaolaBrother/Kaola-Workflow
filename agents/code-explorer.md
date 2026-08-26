@@ -1,18 +1,13 @@
 ---
 name: code-explorer
-description: Deeply analyzes existing codebase features by tracing execution paths, mapping architecture layers, and documenting dependencies to inform new development.
+description: "Deeply analyzes existing codebase features by tracing execution paths, mapping architecture layers, and documenting dependencies to inform new development."
+tools: ["Read","Write","Edit","Grep","Glob"]
 model: sonnet
-tools: [Read, Write, Grep, Glob]
+behavior_contract_version: 1
+behavior_contract_hash: c920a497f1558516f12034f53e70b5ed09b9200e9ea38271d2bd9d5fbeb32183
+resolved_profile_hash: e4916b82b3f4bbab604a74af24cc72795389a26ee72a01e181d649ade7947fcc
 ---
-<!--
-kaola-workflow-managed-agent: true
-upstream: https://github.com/affaan-m/everything-claude-code/blob/922d2d8f8b64f4e50936e24465cb3bcac81ac0e1/agents/code-explorer.md
-source-commit: 922d2d8f8b64f4e50936e24465cb3bcac81ac0e1
-source-blob-sha: a391679941f71b8ff0e12cc6d9bb025a899eabb7
-source-sha256: 4ee5dfcdbdf625c41ba4a57bb4e45d56badaecc745bc36c94231c0f0136d087c
-license: MIT License
-copyright: Copyright (c) 2026 Affaan Mustafa
--->
+<!-- kaola-workflow-managed-agent: true -->
 
 ## Prompt Defense Baseline
 
@@ -93,3 +88,15 @@ by working around a missing tool is a defect, not a best effort.
 ## Output Contract
 
 Do not edit repository or product files — writing up your own findings is your only write. Report the full deliverable and say where it landed: write it to a file and give that path, or give the findings inline when they are short. Never hand back a one-line paraphrase of a rich deliverable; the detail is the whole value of this role, and a summary that loses it loses the work.
+
+<!-- runtime-adapter:start -->
+runtime: claude
+behavior_contract_version: 1
+behavior_contract_hash: c920a497f1558516f12034f53e70b5ed09b9200e9ea38271d2bd9d5fbeb32183
+adapter_capabilities_hash: a37d8dc46eaf900e371e8985b2007cd0c42713a4be6e05977f66b1fb27efbf65
+
+## Runtime adapter
+
+- Follow the native carrier and capability boundary declared for this runtime.
+- If a required capability is unavailable, stop without mutation and report `capability_gap: <missing capability> — <required action>`.
+<!-- runtime-adapter:end -->

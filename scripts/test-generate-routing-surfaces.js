@@ -17,9 +17,9 @@
 
 const { renderSkeleton, condMatches, resolveKeyed } = require('./generate-routing-surfaces.js');
 const { GENERATED_SURFACES, loadSkeleton, reportTypedFailure } = require('./generate-routing-surfaces.js');
-// ONE list, two consumers: the reviewer generator owns the retired-vocabulary ban and the routing
+// ONE list, two consumers: the all-role generator owns the retired-vocabulary ban and the routing
 // surfaces are held to the same bytes rather than to a second copy that could drift from it.
-const { RETIRED_VOCABULARY_BAN } = require('./generate-reviewer-profiles.js');
+const { RETIRED_VOCABULARY_BAN } = require('./generate-agent-profiles.js');
 const { applyRenames } = require('../templates/routing/rename-table.js');
 const { SLOTS, SPLICES } = require('../templates/routing/slots.js');
 const fs = require('fs');
@@ -283,7 +283,7 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   const ir = { slots: SLOTS, splices: SPLICES };
   const requiredByTopic = {
     init: [
-      'KW-CLAUDE-TEMPLATE',
+      'KW-AGENTS-TEMPLATE',
       'AGENTS.md',
       'there is no local mirror to refresh',
       'kaola-workflow/.roadmap/',

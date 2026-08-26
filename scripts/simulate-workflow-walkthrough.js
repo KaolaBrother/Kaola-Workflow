@@ -11355,10 +11355,10 @@ function testSinkTransactionCleanEndToEnd() {
   }
 }
 
-// #645: the First Principles axiom block embedded in every workflow-init CLAUDE.md template must stay
+// #645: the First Principles axiom block embedded in every workflow-init AGENTS.md template must stay
 // byte-identical to the canonical templates/axioms.md — the single source the `next` routing surfaces
 // point to ("canonical source templates/axioms.md"). If any embed (or the canonical file) drifts, the
-// consumer's CLAUDE.md and the pointer's referent would silently disagree; this reds npm test. The
+// consumer's AGENTS.md and the pointer's referent would silently disagree; this reds npm test. The
 // startsWith guard keeps a blanked/emptied axioms.md from producing a false green (includes('') is
 // always true), so the guard is load-bearing on BOTH the canonical file and every embed.
 //
@@ -11378,14 +11378,10 @@ function testSinkTransactionCleanEndToEnd() {
 //
 // #1005: TWO NAMED SURFACES — the repo's OWN prose. Twelve derived surfaces made this guard total over
 // what the workflow SHIPS and blind to the two files that state the same axioms to a reader of this
-// repository: root CLAUDE.md's `## First Principles` block and README.md's numbered axiom list. Both
-// sat outside the sweep and both had drifted — CLAUDE.md agreed byte-for-byte for 22 days and then
-// diverged in two axioms with all three standing paragraphs dropped, and README.md was never identical
-// and diverges in DIFFERENT places, its intro agreeing with canonical exactly where CLAUDE.md's does
-// not. Three surfaces, pairwise inconsistent, while this guard reported a clean twelve: a guard green
-// on a stale surface is the defect, not the fix. They are NAMED, not derived, because they ARE the
-// subject — no registry emits them — exactly as INIT_TOPIC is named. Owner ruling: both converge on
-// the canonical block, with no declared divergent region on either.
+// repository: root AGENTS.md's `## First Principles` block and README.md's numbered axiom list. They
+// are NAMED, not derived, because they ARE the subject — no registry emits them — exactly as
+// INIT_TOPIC is named. Root CLAUDE.md deliberately left this set in #1033: it is now a thin runtime
+// bridge into AGENTS.md and duplicating the universal block there would violate the architecture.
 function testAxiomBlockByteIdentity() {
   const routing = require('./generate-routing-surfaces.js');
   const opencodeSync = require('./sync-opencode-edition.js');
@@ -11427,13 +11423,18 @@ function testAxiomBlockByteIdentity() {
   // #1005: the repo's own two prose surfaces. Named, not derived — they ARE the subject, exactly as
   // INIT_TOPIC is — but each is asserted to exist, so a rename or a move reds here instead of quietly
   // dropping a surface out of the sweep.
-  const NAMED_SURFACES = ['CLAUDE.md', 'README.md'];
+  const NAMED_SURFACES = ['AGENTS.md', 'README.md'];
   for (const rel of NAMED_SURFACES) {
     const abs = path.join(repoRoot, rel);
     assert(fs.existsSync(abs),
       'the repo-root ' + rel + ' this guard checks must exist at ' + rel + ' (named surface missing or renamed)');
     surfaces.push({ id: rel, body: read(abs) });
   }
+  const claudeOverlay = read(path.join(repoRoot, 'CLAUDE.md'));
+  assert(/^@AGENTS\.md$/m.test(claudeOverlay),
+    '#1033: root CLAUDE.md must bridge to the universal AGENTS.md contract');
+  assert(!claudeOverlay.includes(axioms),
+    '#1033: root CLAUDE.md must not duplicate the universal First Principles block');
 
   // ANTI-VACUITY, and its HONEST boundary — the three terms of this width are not equally anchored.
   // The RUNTIME term is independent: it is read off the filesystem (one `sync-<runtime>-edition.js`

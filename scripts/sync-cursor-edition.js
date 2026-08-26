@@ -31,7 +31,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const reviewerGen = require('./generate-reviewer-profiles');
+const agentGen = require('./generate-agent-profiles');
 const forgeLayout = require('./runtime-edition-forge');
 
 const REPO = path.resolve(__dirname, '..');
@@ -50,7 +50,7 @@ function treeLabel(forge) {
   return '.cursor' + forgeLayout.outSuffix(forge || DEFAULT_FORGE);
 }
 
-const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
+const MANAGED_ROLES = new Set(agentGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
 
 // No runtime-neutral hook scripts are active in the Cursor edition. The generator retains ownership
@@ -93,9 +93,7 @@ function yamlScalar(value) {
 }
 
 function listCanonAgents() {
-  return fs.readdirSync(CANON_AGENTS_DIR)
-    .filter(f => f.endsWith('.md'))
-    .map(f => f.slice(0, -3));
+  return [...agentGen.ROLES];
 }
 
 function copyListCanonAgents(srcDir, destDir) {
@@ -142,36 +140,8 @@ function cursorModelPin(canonicalModel, agentName) {
 }
 
 function renderAgent(canonContent, agentName, forge) {
-  forge = forge || DEFAULT_FORGE;
-  const { fm, body } = parseFrontmatter(canonContent);
-  const toolSet = lowerSet(parseTools(fm.tools));
-  const modelPin = cursorModelPin(fm.model, agentName);
-  const isReviewer = REVIEWER_ROLES.has(agentName);
-  const lines = ['---'];
-  lines.push('name: ' + agentName);
-  lines.push('description: ' + yamlScalar(fm.description || ''));
-  lines.push('model: ' + modelPin);
-  lines.push('readonly: ' + (isReadOnlyRole(toolSet) ? 'true' : 'false'));
-  lines.push('---');
-  lines.push('');
-  if (isReviewer) {
-    lines.push('<!-- cursor-reviewer-identity:start -->');
-    if (fm.behavior_contract_version) lines.push('behavior_contract_version: ' + fm.behavior_contract_version);
-    if (fm.behavior_contract_hash) lines.push('behavior_contract_hash: ' + fm.behavior_contract_hash);
-    lines.push('resolved_profile_hash: ' + ZERO_HASH);
-    lines.push('<!-- cursor-reviewer-identity:end -->');
-    lines.push('');
-  }
-  const bodyText = rewriteClaudeScriptPaths(body, forge)
-    .replace(/--runtime claude\b/g, '--runtime cursor')
-    .trim().replace(/\s+$/, '');
-  lines.push(bodyText);
-  let content = lines.join('\n') + '\n';
-  if (isReviewer) {
-    const normalized = reviewerGen.normalizeResolvedProfileHash(content);
-    content = normalized.replace(ZERO_HASH, reviewerGen.sha256(normalized));
-  }
-  return content;
+  if (!MANAGED_ROLES.has(agentName)) throw new Error('sync-cursor-edition: unknown role ' + agentName);
+  return agentGen.renderRuntimeRole('cursor', agentName).content;
 }
 
 const CURSOR_MODEL_DISPATCH_GUIDANCE =
@@ -232,72 +202,6 @@ const CURSOR_MODEL_DISPATCH_BLOCK = [
   '',
 ].join('\n');
 
-const MODEL_MENTION = /model=/;
-
-function sentenceStart(text, at) {
-  const re = /[.:]\s+(?=[A-Z`])/g;
-  let start = 0;
-  let m;
-  while ((m = re.exec(text)) !== null && m.index < at) start = m.index + m[0].length;
-  return start;
-}
-
-function rewriteModelDispatchParagraph(para, guidance) {
-  const at = para.search(MODEL_MENTION);
-  if (at < 0) return para;
-  return para.slice(0, sentenceStart(para, at)) + guidance;
-}
-
-function rewriteModelDispatchInstructions(text, guidance) {
-  const out = [];
-  let fenced = false;
-  let para = [];
-  function flushPara() {
-    if (!para.length) return;
-    out.push(rewriteModelDispatchParagraph(para.join('\n'), guidance));
-    para = [];
-  }
-  for (const line of text.split(/\r?\n/)) {
-    if (/^\s*```/.test(line)) {
-      flushPara();
-      fenced = !fenced;
-      out.push(line);
-    } else if (fenced) {
-      out.push(line);
-    } else if (line.trim() === '') {
-      flushPara();
-      out.push(line);
-    } else {
-      para.push(line);
-    }
-  }
-  flushPara();
-  return out.join('\n');
-}
-
-function stripCardModelPlaceholders(text) {
-  return text.replace(/^[ \t]*model="\{[^"\n]*\}",?[ \t]*\r?\n/gm, '');
-}
-
-function assertNoModelDispatchResidue(text, label) {
-  // The shared block names the forbidden `Task(model=)` workaround; that mention is
-  // teaching, not a leaked Claude per-call override. Strip the substituted wording
-  // (and leftover GUIDANCE) before scanning for residue.
-  const probe = String(text || '')
-    .split(CURSOR_MODEL_DISPATCH_GUIDANCE).join('')
-    .split(CURSOR_MODEL_DISPATCH_BLOCK.replace(/\s+$/, '')).join('');
-  const problems = [];
-  if (/(?<!`)``(?!`)/.test(probe)) problems.push('empty code span `` — a strip cut inside a code span');
-  for (const line of probe.split(/\r?\n/)) {
-    if (MODEL_MENTION.test(line)) problems.push('unrewritten model= instruction: ' + line.trim());
-  }
-  if (problems.length) {
-    throw new Error('sync-cursor-edition: a Claude-only `model=` instruction survived into '
-      + (label || '(command)') + ' — generated Cursor agents carry tier pins in frontmatter and '
-      + 'Task cards must not carry a per-dispatch override:\n  - ' + problems.join('\n  - '));
-  }
-}
-
 const CURSOR_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _gh="${CURSOR_HOME:-$HOME/.cursor}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_gh/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_gh/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
 
@@ -311,50 +215,22 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + cursorKaolaScript(forge));
 }
 
-const MODEL_DISPATCH_HEADING = /^##\s+Agent Model Dispatch\s*$/;
-const MODEL_DISPATCH_HEADING_NEAR_MISS = /^##\s+.*\bModel\b/;
-
-function assertModelDispatchAnchorMatched(canonBody, substituted, label) {
-  if (substituted) return;
-  const nearMiss = canonBody.split(/\r?\n/)
-    .filter(l => MODEL_DISPATCH_HEADING_NEAR_MISS.test(l) && !MODEL_DISPATCH_HEADING.test(l))
-    .map(l => l.trim());
-  if (!nearMiss.length) return;
-  throw new Error('sync-cursor-edition: model-dispatch anchor missed in ' + (label || '(command)')
-    + ' — canonical carries a section this transform did not substitute. Re-anchor '
-    + 'MODEL_DISPATCH_HEADING to the heading canonical now uses:\n  - ' + nearMiss.join('\n  - '));
-}
-
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
-  const lines = rewriteModelDispatchInstructions(body, CURSOR_MODEL_DISPATCH_GUIDANCE).split(/\r?\n/);
+  const lines = body.split(/\r?\n/);
   const out = [];
-  let substitutedModelDispatch = false;
   let i = 0;
   const block = CURSOR_MODEL_DISPATCH_BLOCK.replace(/\s+$/, '');
   while (i < lines.length) {
     const line = lines[i];
-    if (MODEL_DISPATCH_HEADING.test(line)) {
-      while (out.length && out[out.length - 1].trim() === '') out.pop();
-      if (out.length) out.push('');
-      out.push(block);
-      out.push('');
-      substitutedModelDispatch = true;
-      i++;
-      while (i < lines.length && !/^#{1,6}\s/.test(lines[i])) i++;
-      continue;
-    }
     out.push(line);
     i++;
   }
-  assertModelDispatchAnchorMatched(body, substitutedModelDispatch, label);
   let text = out.join('\n');
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'Task(\n$1');
-  text = stripCardModelPlaceholders(text);
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime cursor');
   text = rewriteClaudeScriptPaths(text, forge);
-  assertNoModelDispatchResidue(text, label);
   return text;
 }
 
@@ -863,10 +739,7 @@ if (require.main === module) main();
 module.exports = {
   renderAgent, renderCommand, transformCommandBody,
   rewriteClaudeScriptPaths, CURSOR_KAOLA_SCRIPT, cursorKaolaScript,
-  rewriteModelDispatchInstructions, rewriteModelDispatchParagraph, sentenceStart,
-  stripCardModelPlaceholders, assertNoModelDispatchResidue, assertModelDispatchAnchorMatched,
   CURSOR_MODEL_DISPATCH_GUIDANCE, CURSOR_MODEL_DISPATCH_BLOCK,
-  MODEL_DISPATCH_HEADING,
   renderCursorHooksJson, rewriteHooksJsonForGlobal, mergeDestHooks, stripDestHooks,
   renderCompactWrapper, COMPACT_WRAPPER, renderEnsureWrapper, ENSURE_WRAPPER, mappingRel,
   treeLabel, agentRel, commandRel, canonCommandPath, runCheck, runWrite,

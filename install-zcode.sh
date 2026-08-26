@@ -5,8 +5,9 @@
 # install-kimi.sh, install-grok.sh, install-cursor.sh, or the claude/codex/gitlab/gitea
 # editions). ZCode is a runtime (like opencode, Kimi, Grok, and Cursor), not a git forge,
 # so it is delivered the ZCode-native way: named agents under .zcode/agents/, flat
-# commands under .zcode/commands/, and a merged .zcode/config.json (top-level `hooks`
-# object, `"enabled": true`, ZCode's seven events — there is no SubagentStart).
+# commands under .zcode/commands/, and a merged user-scope
+# ${ZCODE_HOME:-$HOME/.zcode}/cli/config.json (top-level `hooks` object,
+# `"enabled": true`, ZCode's seven events — there is no SubagentStart).
 #
 # ZCode discovers subagents ONLY at user scope: a project install stages the agent
 # roster under <project>/.zcode/agents/ AND syncs the same files to
@@ -26,14 +27,14 @@
 #   ./install-zcode.sh --regenerate            # refresh the generated tree from canonical here
 #
 # DEPLOY LAYOUT (scope-dependent):
-#   - PROJECT (--target/$PWD): agents and commands land under <project>/.zcode/{agents,commands},
-#     the edition's hook shells + script launchers under <project>/.zcode/kaola-workflow/,
-#     and the hook mapping merges into <project>/.zcode/config.json. The agent roster is
-#     ALSO synced to ${ZCODE_HOME:-~/.zcode}/agents/ (ZCode discovers subagents only at
-#     user scope).
+#   - PROJECT (--target/$PWD): agents and commands land under <project>/.zcode/{agents,commands}.
+#     The agent roster is ALSO synced to ${ZCODE_HOME:-~/.zcode}/agents/ and hooks are
+#     merged into ${ZCODE_HOME:-~/.zcode}/cli/config.json because ZCode discovers both
+#     only at user scope.
 #   - GLOBAL (--global): agents and commands land DIRECTLY under
 #     ${ZCODE_HOME:-$HOME/.zcode}/{agents,commands} with no nested .zcode/ under the
-#     ZCode home, and the hook mapping merges into ${ZCODE_HOME:-$HOME/.zcode}/config.json.
+#     ZCode home, and the hook mapping merges into
+#     ${ZCODE_HOME:-$HOME/.zcode}/cli/config.json.
 #   - Support scripts (the real ones, from the install manifest) ALWAYS land under
 #     ${ZCODE_HOME:-$HOME/.zcode}/kaola-workflow/{scripts,hooks}. Skip with --no-scripts.
 #
@@ -75,8 +76,9 @@ Usage: ./install-zcode.sh [--target DIR] [--forge=github|gitlab|gitea] [--global
 SUPPORT SCRIPTS + HOOKS: workflow commands resolve support scripts via
 ${ZCODE_HOME:-$HOME/.zcode}/kaola-workflow/scripts (the list comes from
 scripts/kaola-workflow-install-manifest.js); hook shells land in the live
-.zcode/kaola-workflow/hooks (or ~/.zcode/kaola-workflow/hooks) and are wired by a
-merged .zcode/config.json whose top-level hooks object requires "enabled": true.
+${ZCODE_HOME:-$HOME/.zcode}/kaola-workflow/hooks and are wired by a merged
+${ZCODE_HOME:-$HOME/.zcode}/cli/config.json whose top-level hooks object requires
+"enabled": true. Project .zcode/config.json files are not executable hook carriers.
 
 USER-SCOPE AGENTS: ZCode discovers subagents only at user scope (~/.zcode/agents),
 so every project install also syncs the staged .zcode/agents/ roster there.
@@ -308,11 +310,14 @@ install_edition_dir() {
 }
 
 merge_config() {
-  local dest_json="$LAYOUT_DEST/config.json"
-  local merge_args=(--merge-hooks "--dest=$dest_json" "--forge=$FORGE")
-  if [[ "$GLOBAL" -eq 1 ]]; then
-    merge_args+=(--global)
+  if [[ "$NO_SCRIPTS" -eq 1 ]]; then
+    echo "Hook mapping skipped (--no-scripts)."
+    return
   fi
+  # Current ZCode executes user hooks only from <home>/cli/config.json. Project
+  # .zcode/config.json and the legacy <home>/config.json are ignored carriers.
+  local dest_json="$(zcode_home)/cli/config.json"
+  local merge_args=(--merge-hooks "--dest=$dest_json" "--forge=$FORGE" --global)
   if ! node "$SYNC_JS" "${merge_args[@]}"; then
     echo "Install error: failed to merge $dest_json" >&2
     exit 1
@@ -377,8 +382,13 @@ uninstall_edition() {
       done
     fi
   fi
-  if [[ -f "$layout/config.json" ]]; then
-    node "$SYNC_JS" --strip-hooks "--dest=$layout/config.json" "--forge=$FORGE" || true
+  # Strip both the live carrier and the two legacy/ignored locations so an upgrade cleans only
+  # Kaola-owned hook rows without adopting those files as authorities.
+  local live_config="$home/cli/config.json"
+  [[ -f "$live_config" ]] && node "$SYNC_JS" --strip-hooks "--dest=$live_config" "--forge=$FORGE" || true
+  [[ -f "$layout/config.json" ]] && node "$SYNC_JS" --strip-hooks "--dest=$layout/config.json" "--forge=$FORGE" || true
+  if [[ "$layout/config.json" != "$home/config.json" && -f "$home/config.json" ]]; then
+    node "$SYNC_JS" --strip-hooks "--dest=$home/config.json" "--forge=$FORGE" || true
   fi
   rmdir "$layout/kaola-workflow/hooks" 2>/dev/null || true
   rmdir "$layout/kaola-workflow/scripts" 2>/dev/null || true
@@ -429,7 +439,7 @@ confirm_install() {
 About to install the Kaola-Workflow zcode edition:
   agents + commands   → $LAYOUT_DEST (+ agent roster synced to $(zcode_home)/agents)
   support scripts     → $(zcode_home)/kaola-workflow/scripts
-  hook mapping        → $LAYOUT_DEST/config.json (merged; other entries kept)
+  hook mapping        → $(zcode_home)/cli/config.json (merged; other entries kept)
 EOF
   local reply=""
   read -r -p "Proceed? [Y/n] " reply || reply="n"

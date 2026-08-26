@@ -1,139 +1,95 @@
-# Agent Sources and Reviewer Generation
+# Agent Behavior Sources and Provenance
 
-Kaola-Workflow vendors the Claude Code agent prompts it needs so users do not
-have to install Everything Claude Code (ECC) separately. Reviewer profiles have
-an additional local canonical-generation contract documented below.
+Kaola-Workflow has one runtime-neutral behavioral authority for every installed role. Native Claude,
+Codex, opencode, Kimi, Grok, Cursor, and ZCode artifacts are generated outputs, not authoring
+surfaces.
 
-## Upstream
+## Canonical source graph
+
+| Source | Owns | Must not own |
+| --- | --- | --- |
+| `templates/agents/behavior-contracts.json` | The complete 14-role inventory; purpose, inputs, authority/custody, writes, deliverable, verification, stop conditions, capability requirements, and `standard` / `reasoning` / `heavy` intent | Runtime brands, native model names, tool syntax, home paths, hooks, or provenance narration |
+| `templates/agents/runtime-capabilities.json` | Evidence-backed instruction loading, native carriers, dispatch, model/effort mapping, tool binding, hook scope, and nine closed adapter variants | Universal role behavior or arbitrary prompt extensions |
+| `templates/agents/provenance.json` | Origin, pinned commit, license, copyright, upstream path/blob/content hashes, source classification, and local overrides for all roles | Agent-facing prompt content or runtime behavior |
+| `scripts/generate-agent-profiles.js` | Schema validation, deterministic composition, behavior/render hashes, native profile rendering, generated manifest, and check/write modes | Project migration, installation policy, release mutation, or a second behavior source |
+| `agents/generated-agent-manifest.json` | The 14-role, seven-runtime, 126-render inventory and source/output hashes | Provenance prose or independent policy |
+
+The inventory has seven runtime families and nine adapter variants: Claude; Codex for GitHub,
+GitLab, and Gitea; and one each for opencode, Kimi, Grok, Cursor, and ZCode. The three Codex variants
+are forge-neutral for role behavior and render byte-identical profile bodies.
+
+## Identity and proof boundary
+
+`behavior_contract_hash` is calculated from the deterministic runtime-neutral role record. It
+excludes the adapter, package version, forge, and provenance. Every runtime render of one role must
+therefore carry the same behavior identity.
+
+`resolved_profile_hash` binds one complete native render after its own hash field is normalized to
+64 zeroes. It changes when native frontmatter, permissions, model/effort values, or presentation
+bytes change. The two hashes prove deterministic source and filesystem artifacts; they do not prove
+that a proprietary runtime loaded private prompt bytes or that stochastic executions produce the
+same prose or verdict.
+
+Shared-contract mutation tests require a role change to reach all nine variants. Adapter mutation
+tests require a runtime-only change to remain isolated to that runtime family. This semantic and
+native-render proof replaces cross-runtime sentence-paraphrase equality.
+
+## Upstream provenance
+
+Six role contracts are derived from Everything Claude Code (ECC); eight are Kaola-local. The exact
+classification is authoritative in `templates/agents/provenance.json`.
 
 - Repository: <https://github.com/affaan-m/everything-claude-code>
 - Pinned commit: `922d2d8f8b64f4e50936e24465cb3bcac81ac0e1`
 - License: MIT License
 - Copyright: Copyright (c) 2026 Affaan Mustafa
 
-## Vendored Files
+| Role | Upstream path | Upstream blob SHA |
+| --- | --- | --- |
+| `build-error-resolver` | `agents/build-error-resolver.md` | `2ab19ac35497ae2e1b7a33f238a6953867fc5572` |
+| `code-architect` | `agents/code-architect.md` | `e99b3c718087e3be05c1763182cf904b8b25edb4` |
+| `code-explorer` | `agents/code-explorer.md` | `a391679941f71b8ff0e12cc6d9bb025a899eabb7` |
+| `doc-updater` | `agents/doc-updater.md` | `0da663329128a5a03ff811c39c0c01004cab5ac1` |
+| `planner` | `agents/planner.md` | `c311f492bd1d3bae077c86716163966789eefae2` |
+| `tdd-guide` | `agents/tdd-guide.md` | `1d0849840f0f5ed76541a48b2b4b0912b8926024` |
 
-| Local file | Upstream path | Upstream blob SHA |
-|------------|---------------|-------------------|
-| `agents/build-error-resolver.md` | `agents/build-error-resolver.md` | `2ab19ac35497ae2e1b7a33f238a6953867fc5572` |
-| `agents/code-architect.md` | `agents/code-architect.md` | `e99b3c718087e3be05c1763182cf904b8b25edb4` |
-| `agents/code-explorer.md` | `agents/code-explorer.md` | `a391679941f71b8ff0e12cc6d9bb025a899eabb7` |
-| `agents/doc-updater.md` | `agents/doc-updater.md` | `0da663329128a5a03ff811c39c0c01004cab5ac1` |
-| `agents/planner.md` | `agents/planner.md` | `c311f492bd1d3bae077c86716163966789eefae2` |
-| `agents/tdd-guide.md` | `agents/tdd-guide.md` | `1d0849840f0f5ed76541a48b2b4b0912b8926024` |
+The pinned content SHA-256 for each upstream role and every intentional local override also live in
+`templates/agents/provenance.json`. Generated prompt bytes deliberately contain no origin, issue,
+license, or attribution narration; the durable attribution is this document plus the machine source.
 
-## Local and Generated Reviewer Sources
+### Local Overrides
 
-`agents/security-reviewer.md` and `agents/code-reviewer.md` began as ECC-derived local forks, but
-their current profiles are generated from Kaola-Workflow's versioned canonical reviewer source.
-The ECC-derived work remains under the upstream **MIT License, Copyright (c) 2026 Affaan Mustafa**;
-that attribution is honored here at project level rather than inside generated agent-facing prompt
-bytes.
+Each derived role's `local_overrides` array is the exact re-vendor checklist. An empty array means
+the current runtime-neutral contract needs no separately recorded override. `doc-updater` retains
+the documented Kaola tier adjustment; Kaola-local roles record their local authorship in the same
+field. The machine-readable strings, not generated prompt prose, are authoritative.
 
-`adversarial-verifier` is locally authored by Kaola-Workflow and is not derived from ECC. All three
-generated reviewer roles are local/provenance-exempt for `validate-vendored-agents.js`; none is
-re-fetched by the ECC refresh procedure.
+## Kaola-local roles
 
-### Canonical reviewer behavior and adapters
+`adversarial-verifier`, `code-reviewer`, `implementer`, `investigator`, `knowledge-lookup`,
+`metric-optimizer`, `security-reviewer`, and `synthesizer` are recorded as `kaola_local`. Historical
+derivation or earlier hand-authored profile format does not make a runtime render canonical.
 
-- `templates/reviewers/behavior-contracts.json` is the strict canonical behavior source for
-  `code-reviewer`, `adversarial-verifier`, and `security-reviewer`. It owns behavior version,
-  runtime-neutral description, nickname candidates, stable section ids/lines, outcome vocabulary,
-  and finding schema.
-- `templates/reviewers/runtime-adapters.json` is closed adapter data only: tools, model-policy
-  reference, and evidence transport. It cannot contain arbitrary prompt prose. Codex uses
-  `codex-inherit-by-omission`, so generated TOMLs contain neither `model` nor
-  `model_reasoning_effort`.
-- `scripts/generate-reviewer-profiles.js` is the sole writer for the three Claude Markdown outputs:
-  `agents/code-reviewer.md`, `agents/adversarial-verifier.md`, `agents/security-reviewer.md`;
-  and the nine matching Codex TOML outputs across
-  GitHub, GitLab, and Gitea. Do not hand-edit those outputs; edit the canonical JSON or generator,
-  then run `--write` and `--check`.
-- OpenCode is a downstream transform of the generated Claude root. Its normalized reviewer core,
-  behavior version, and behavior hash must remain identical even though its runtime frontmatter and
-  permissions differ.
+## Refresh procedure
 
-### Identity and proof boundary
-
-Every render carries `behavior_contract_version`, `behavior_contract_hash`, and
-`resolved_profile_hash`. The behavior hash covers canonical JSON for the runtime-neutral role
-contract and excludes adapter data. The resolved hash covers the complete rendered UTF-8 profile
-after replacing its one self-hash value with exactly 64 zeroes; this binds all other bytes, including
-adapter/frontmatter structure and final newline.
-
-In Codex TOMLs, those identities are lines inside the triple-quoted `developer_instructions` value;
-the only top-level role fields are `name`, `description`, `nickname_candidates`, and
-`developer_instructions`. Installer, preflight, and parity checks enforce that closed shape because
-Codex ignores a custom-agent definition containing unknown top-level fields. Managed Codex role
-TOMLs also forbid backslashes anywhere in the file, preventing an invalid basic-string escape in a
-description, nickname, or multiline instruction from making the runtime discard the role.
-
-The companion `config/agents.toml` is part of the same install contract. Preflight compares the
-owned block exactly, not merely by role names: every `[agents.<role>]` entry must retain its canonical
-`description`, `nickname_candidates`, and relative `config_file`, with no missing or extra keys.
-This binds runtime role selection to the generated file it was meant to load; mapping a reviewer name
-to another role's valid TOML is stale rather than an acceptable alias.
-
-The normalized behavior-core bytes and behavior identity are deterministic across runtimes. That is
-contract equivalence, not a promise that stochastic models will emit identical findings, prose, or
-domain outcomes. Generator, installer, preflight, managed manifest, and doctor checks prove selected
-source and installed filesystem bytes. They deliberately do not claim that a proprietary runtime
-loaded particular prompt bytes; no public prompt-loader introspection contract is available here.
-
-## Local Overrides
-
-- `agents/doc-updater.md`'s frontmatter `model` field is deliberately
-  overridden from `haiku` to `sonnet` (issue #197). Doc reconciliation is
-  comprehension-heavy code-to-doc work that belongs on Sonnet per the project
-  model-usage rules. The recorded upstream `source-blob-sha` / `source-sha256`
-  still point at the true upstream blob — the vendored file is already
-  non-byte-identical to upstream by design (the Kaola attribution comment and
-  the Prompt Defense Baseline additions diverge it), so the provenance pointers
-  remain accurate upstream-identity references, not byte-equality claims.
-- `agents/tdd-guide.md`'s coverage-gate step is deliberately conditionalized
-  (issue #626). The upstream body unconditionally mandates `npm run
-  test:coverage` with a hardcoded 80%+ requirement, which assumes a coverage
-  command that may not exist in the target repo. The Kaola body now runs the
-  coverage command and applies the project's coverage target only where the
-  repo actually exposes one; otherwise it falls back to verifying via the
-  project's recorded `validation_command`. As above, the recorded upstream
-  `source-blob-sha` / `source-sha256` remain an upstream-identity reference,
-  not a byte-equality claim.
-- `agents/doc-updater.md`'s codemap mission is deliberately conditionalized
-  (issue #626), in addition to the `model` override above. The upstream body
-  hardcodes a codemap/TypeScript mission (`npx tsx scripts/codemaps/
-  generate.ts`, `madge`, `jsdoc2md`, and a `docs/CODEMAPS/` structure) that
-  assumes a toolchain absent in most repos. The Kaola body now runs a
-  Detection step first: only when the repo actually has `scripts/codemaps/`
-  and/or `docs/CODEMAPS/` does it regenerate them via the Codemap Workflow;
-  otherwise it reconciles the doc surfaces the repo actually declares
-  (README, CHANGELOG, `docs/*.md`, `.env.example`) against the diff, and
-  skips with reason rather than inventing structure that doesn't exist.
-- `agents/build-error-resolver.md`'s "When NOT to Use" routing table is
-  deliberately remapped (issue #625). The upstream body routes to
-  `refactor-cleaner` and `architect`, neither of which is an installed
-  Kaola-Workflow role. The Kaola body maps these to the actual installed
-  roles: `refactor-cleaner` → `implementer`, `architect` → `code-architect`.
-
-## Refresh Procedure
-
-1. Choose the upstream commit to vendor and update the pinned commit above.
-2. Fetch the same 6 upstream files from `affaan-m/everything-claude-code` (`security-reviewer` and
-   generated `code-reviewer` are not re-vendored — see **Local and Generated Reviewer Sources**).
-3. Preserve each file's YAML front matter as the first bytes of the file.
-4. Insert the Kaola attribution comment immediately after the closing front
-   matter delimiter. Do not place attribution before the first `---`.
-5. Update the upstream blob SHA table in this document.
-6. Run:
+1. Choose and record the exact upstream commit, path, blob SHA, content SHA-256, license, and
+   copyright in `templates/agents/provenance.json`.
+2. Reconcile upstream behavior into the affected role record in
+   `templates/agents/behavior-contracts.json`; do not copy a runtime-formatted upstream file into a
+   generated output.
+3. Reapply the explicit local overrides in the provenance record.
+4. Regenerate and verify:
 
    ```bash
+   node scripts/generate-agent-profiles.js --write
+   node scripts/generate-agent-profiles.js --check
    node scripts/validate-vendored-agents.js
-   node scripts/generate-reviewer-profiles.js --check
-   node scripts/test-agent-profile-parity.js
-   npm test
+   node scripts/test-runtime-agent-architecture.js
+   npm run test:kaola-workflow:editions
    ```
 
-7. Re-apply the Local Overrides above after any re-vendor — in particular the
-   `agents/doc-updater.md` `model: sonnet` override (issue #197). `validate-vendored-agents.js`
-   checks provenance format only, not file content, so it will NOT flag a silent
-   revert of the model back to `haiku`.
+5. Inspect the generated manifest and native runtime diffs. Never hand-edit a rendered role profile.
+
+The old reviewer-only generator, reviewer-only template directory, and sentence-parity suite are
+retired. Historical changelog and ADR entries may name them as past architecture; no active
+maintenance instruction should invoke them.

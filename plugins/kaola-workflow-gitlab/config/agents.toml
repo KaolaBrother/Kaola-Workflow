@@ -1,69 +1,58 @@
-[agents.code-explorer]
-description = "Kaola-Workflow for Codex codebase researcher: maps affected files, patterns, tests, and config without editing."
-config_file = "./agents/kaola-workflow/code-explorer.toml"
-nickname_candidates = ["Explorer", "Mapper", "Scout"]
-
-[agents.knowledge-lookup]
-description = "Kaola-Workflow for Codex knowledge researcher: checks curated library/API docs (Context7) and, when runtime allows, the open web only when external behavior or expertise matters."
-config_file = "./agents/kaola-workflow/knowledge-lookup.toml"
-nickname_candidates = ["Docs", "Reference", "Lookup"]
-
-[agents.planner]
-description = "Kaola-Workflow for Codex implementation planner: turns a requirement into a stepwise implementation plan with dependencies, risks, phasing, and a testing strategy."
-config_file = "./agents/kaola-workflow/planner.toml"
-nickname_candidates = ["Planner", "Strategist", "Steps"]
-
-[agents.code-architect]
-description = "Kaola-Workflow for Codex architect: produces dependency-safe blueprints, file sets, task order, and validation commands."
-config_file = "./agents/kaola-workflow/code-architect.toml"
-nickname_candidates = ["Architect", "Blueprint", "Designer"]
-
-[agents.tdd-guide]
-description = "Kaola-Workflow for Codex test author: owns independent acceptance meaning and RED evidence, authors the suite from the acceptance surface, and proves it fails on the baseline."
-config_file = "./agents/kaola-workflow/tdd-guide.toml"
-nickname_candidates = ["TDD", "Test Author", "Oracle"]
-
-[agents.implementer]
-description = "Kaola-Workflow for Codex implementing role: writes production code for behavioral logic and for work with no natural failing test alike, reading and running acceptance tests while preserving their meaning; may perform only mechanical test-path maintenance when explicitly needed."
-config_file = "./agents/kaola-workflow/implementer.toml"
-nickname_candidates = ["Implementer", "Builder", "Executor"]
+[agents.adversarial-verifier]
+description = "Adversarial verifier for one recorded claim and surface, using strongest falsification with uncertainty counting against the claim."
+config_file = "./agents/kaola-workflow/adversarial-verifier.toml"
+nickname_candidates = ["Adversary", "Refuter", "Breaker"]
 
 [agents.build-error-resolver]
-description = "Kaola-Workflow for Codex repair specialist: resolves build, type, lint, dependency, and tooling failures with scoped evidence."
+description = "Build and TypeScript error resolution specialist. Use PROACTIVELY when build fails or type errors occur. Fixes build/type errors only with minimal diffs, no architectural edits. Focuses on getting the build green quickly."
 config_file = "./agents/kaola-workflow/build-error-resolver.toml"
-nickname_candidates = ["Resolver", "Repair", "Buildfix"]
 
-[agents.investigator]
-description = "Kaola-Workflow for Codex read-only investigator: runs builds, tests, reproductions, measurements, bisects, and A/B legs to produce recorded evidence without editing tracked files."
-config_file = "./agents/kaola-workflow/investigator.toml"
-nickname_candidates = ["Investigator", "Lab", "Prober"]
+[agents.code-architect]
+description = "Designs feature architectures by analyzing existing codebase patterns and conventions, then providing implementation blueprints with concrete files, interfaces, data flow, and build order."
+config_file = "./agents/kaola-workflow/code-architect.toml"
+
+[agents.code-explorer]
+description = "Deeply analyzes existing codebase features by tracing execution paths, mapping architecture layers, and documenting dependencies to inform new development."
+config_file = "./agents/kaola-workflow/code-explorer.toml"
 
 [agents.code-reviewer]
 description = "Precision-first code review specialist for correctness, regression, scope, maintainability, and test coverage."
 config_file = "./agents/kaola-workflow/code-reviewer.toml"
 nickname_candidates = ["Reviewer", "Critic", "Inspector"]
 
+[agents.doc-updater]
+description = "Documentation and codemap specialist. Use PROACTIVELY for updating codemaps and documentation. Runs /update-codemaps and /update-docs, generates docs/CODEMAPS/*, updates READMEs and guides."
+config_file = "./agents/kaola-workflow/doc-updater.toml"
+
+[agents.implementer]
+description = "The implementing role. Writes production code for behavioral logic and for work with no natural failing test alike — refactors, scaffolding, config/IaC, UI, migrations, glue — reading and running acceptance tests while preserving their meaning; may perform only mechanical test-path maintenance when explicitly needed."
+config_file = "./agents/kaola-workflow/implementer.toml"
+
+[agents.investigator]
+description = "Read-only investigation specialist for work that must RUN to be known — builds, tests, reproductions, measurements, bisects, and A/B legs. Produces recorded measurements, never edits tracked files, never chooses the fix."
+config_file = "./agents/kaola-workflow/investigator.toml"
+
+[agents.knowledge-lookup]
+description = "Authoritative external-knowledge researcher for facts the local codebase cannot establish."
+config_file = "./agents/kaola-workflow/knowledge-lookup.toml"
+
+[agents.metric-optimizer]
+description = "Bounded metric-ratchet specialist for direction-not-destination work — proposes a change, applies it, runs the regression gate, measures the metric (median-of-K), and accepts or rejects it by comparing to the running baseline, iterating until a stop condition fires."
+config_file = "./agents/kaola-workflow/metric-optimizer.toml"
+
+[agents.planner]
+description = "Expert planning specialist for complex features and refactoring. Use PROACTIVELY when users request feature implementation, architectural changes, or complex refactoring. Automatically activated for planning tasks."
+config_file = "./agents/kaola-workflow/planner.toml"
+
 [agents.security-reviewer]
 description = "Security vulnerability detection specialist. Use PROACTIVELY after writing code that handles user input, authentication, API endpoints, or sensitive data. Flags secrets, SSRF, injection, unsafe crypto, and OWASP Top 10 vulnerabilities, then routes fixes to the appropriate role."
 config_file = "./agents/kaola-workflow/security-reviewer.toml"
 nickname_candidates = ["Security", "Audit", "Threat"]
 
-[agents.doc-updater]
-description = "Kaola-Workflow for Codex documentation specialist: updates docs only when behavior, setup, API, architecture, or workflow changed."
-config_file = "./agents/kaola-workflow/doc-updater.toml"
-nickname_candidates = ["Docs", "Docking", "Writer"]
-
-[agents.adversarial-verifier]
-description = "Adversarial verifier for one recorded claim and surface, using strongest falsification with uncertainty counting against the claim."
-config_file = "./agents/kaola-workflow/adversarial-verifier.toml"
-nickname_candidates = ["Adversary", "Refuter", "Breaker"]
-
 [agents.synthesizer]
-description = "Kaola-Workflow for Codex write-convergence specialist: reconciles concurrent write branches by intent on a real merge conflict; reasoning-class, never invoked for cleanly-disjoint work."
+description = "Write-convergence specialist — reconciles concurrent write branches into the feature branch by INTENT when a mechanical merge hits a real conflict. Reasoning-class; never invoked for cleanly-disjoint work (that merges mechanically, no agent)."
 config_file = "./agents/kaola-workflow/synthesizer.toml"
-nickname_candidates = ["Synthesizer", "Merger", "Reconciler"]
 
-[agents.metric-optimizer]
-description = "Kaola-Workflow for Codex metric-ratchet specialist: proposes, applies, regression-gates, and measures a metric (median-of-K) each iteration, accepting or rejecting against the running baseline until a stop condition fires."
-config_file = "./agents/kaola-workflow/metric-optimizer.toml"
-nickname_candidates = ["Optimizer", "Ratchet", "Tuner"]
+[agents.tdd-guide]
+description = "Test author. Holds custody of the test artifact — authors the suite from the acceptance surface, proves it fails on the recorded baseline, and never writes production code. Use PROACTIVELY for new behavior, bug fixes, and any work whose correctness needs an oracle."
+config_file = "./agents/kaola-workflow/tdd-guide.toml"

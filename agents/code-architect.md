@@ -1,18 +1,13 @@
 ---
 name: code-architect
-description: Designs feature architectures by analyzing existing codebase patterns and conventions, then providing implementation blueprints with concrete files, interfaces, data flow, and build order.
+description: "Designs feature architectures by analyzing existing codebase patterns and conventions, then providing implementation blueprints with concrete files, interfaces, data flow, and build order."
+tools: ["Read","Write","Edit","Grep","Glob","Bash"]
 model: fable
-tools: [Read, Write, Grep, Glob, Bash]
+behavior_contract_version: 1
+behavior_contract_hash: 726fa7d66ffba79ed8d9feb15f2fe5a10673ba829fe3f05724189dba5c4c78cc
+resolved_profile_hash: 46379a4bceeb555e3f6afbe56bbdcce671457afceeba2e1636ff4cf4dd52a3e3
 ---
-<!--
-kaola-workflow-managed-agent: true
-upstream: https://github.com/affaan-m/everything-claude-code/blob/922d2d8f8b64f4e50936e24465cb3bcac81ac0e1/agents/code-architect.md
-source-commit: 922d2d8f8b64f4e50936e24465cb3bcac81ac0e1
-source-blob-sha: e99b3c718087e3be05c1763182cf904b8b25edb4
-source-sha256: bb981dc0e80fea545f22c4613f1b1e4af4f8ee03b17333264804d36864b2e9d4
-license: MIT License
-copyright: Copyright (c) 2026 Affaan Mustafa
--->
+<!-- kaola-workflow-managed-agent: true -->
 
 ## Prompt Defense Baseline
 
@@ -119,3 +114,15 @@ would force it to change.
 
 This governs the solution you build, never how closely you read or verify — comprehension and
 verification stay exactly as demanding as they were.
+
+<!-- runtime-adapter:start -->
+runtime: claude
+behavior_contract_version: 1
+behavior_contract_hash: 726fa7d66ffba79ed8d9feb15f2fe5a10673ba829fe3f05724189dba5c4c78cc
+adapter_capabilities_hash: a37d8dc46eaf900e371e8985b2007cd0c42713a4be6e05977f66b1fb27efbf65
+
+## Runtime adapter
+
+- Follow the native carrier and capability boundary declared for this runtime.
+- If a required capability is unavailable, stop without mutation and report `capability_gap: <missing capability> — <required action>`.
+<!-- runtime-adapter:end -->

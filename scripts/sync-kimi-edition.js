@@ -6,23 +6,20 @@
 //
 // Kimi Code is a coding-agent RUNTIME (like Codex/opencode), not a git forge, and it
 // does NOT ride the install.sh --forge= (github/gitlab/gitea) machinery. It is
-// delivered the Kimi-native way: directory-form Skills under `.kimi/skills/<name>/
-// SKILL.md` (Kimi auto-registers each activated skill as the slash command `/<name>`,
-// so command skills keep their canonical basenames) plus `.kimi/hooks/` (byte-copied
-// shell hooks + a generated `kimi-hooks.toml` fragment the installer merges into the
-// global `${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml`). This script is the
+// delivered the Kimi-native way: named custom agents under `.kimi/agents/<role>.md`,
+// three directory-form command Skills under `.kimi/skills/<name>/SKILL.md` (Kimi
+// auto-registers each activated skill as the slash command `/<name>`), plus
+// `.kimi/hooks/` (byte-copied shell hooks + a generated `kimi-hooks.toml` fragment
+// the installer merges into the global `${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml`).
+// This script is the
 // generate-from-canonical twin of sync-opencode-edition.js: deterministic,
 // idempotent, and parity-checked by test-kimi-edition.js.
 //
-// ONE model tier: there is NO Reasoning/Standard split on Kimi (the Codex inherit
-// precedent). Kimi Code's Agent tool supports only three built-in subagent types
-// (`coder`, `explore`, `plan`) and has no per-dispatch model override — every
-// subagent inherits the session model. The 14 canonical roles therefore ship as
-// ROLE-CONTRACT Skills (`kaola-role-<role>`): the command dispatch cards are
-// rewritten to `subagent_type="coder"` (write roles) / `"explore"` (read-only
-// roles — computed from the canonical frontmatter `tools:` array, never hand-listed)
-// plus a prompt-prefix instruction to invoke the matching role Skill. The canonical
-// `model:` tier is meaningless under inherit and is skipped entirely.
+// ONE model tier: there is NO Reasoning/Standard split on Kimi. The 14 canonical
+// roles ship as Kimi custom-agent profiles named `kaola-role-<role>` and dispatch
+// directly by that native name. Each profile inherits the session model while its
+// tool allow-list is rendered from the shared behavior contract through the Kimi
+// adapter. The canonical model tier is therefore intentionally omitted.
 //
 // FORGE AXIS (--forge=github|gitlab|gitea, default github). The runtime is not a
 // forge, but the workflow PROSE is forge-shaped (`gh` vs `glab` vs `tea`, PR vs
@@ -37,14 +34,14 @@
 // own suite (test-kimi-edition.js).
 //
 //   --forge=<f>  github (default) | gitlab | gitea.
-//   --write   regenerate <tree>/skills + <tree>/hooks from canonical.
+//   --write   regenerate <tree>/agents + <tree>/skills + <tree>/hooks from canonical.
 //   --check   assert the generated tree is in byte-parity with a fresh render
 //             (exit 1 on drift).
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
 const path = require('path');
-const reviewerGen = require('./generate-reviewer-profiles');
+const agentGen = require('./generate-agent-profiles');
 const forgeLayout = require('./runtime-edition-forge');
 
 const REPO = path.resolve(__dirname, '..');
@@ -96,7 +93,7 @@ function treeLabel(forge) {
 // kimi bytes (the canonical Claude hash never binds post-transform bytes — the same discipline
 // as the opencode renderAgent). The fields ship in a body HTML comment block at column zero so
 // the Skill frontmatter stays name+description only.
-const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
+const MANAGED_ROLES = new Set(agentGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
 
 // No runtime-neutral hook scripts are active in the kimi edition. The generator still owns the
@@ -116,22 +113,8 @@ function parseFrontmatter(text) {
   return { fm, body: m[2] };
 }
 
-function parseTools(raw) {
-  if (!raw) return [];
-  const inner = String(raw).replace(/^\[/, '').replace(/\]$/, '').trim();
-  if (!inner) return [];
-  return inner.split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
-}
-
-function lowerSet(arr) {
-  return new Set(arr.map(x => String(x).toLowerCase()));
-}
-
 function listCanonAgents() {
-  // Top-level agents/*.md only; the agent tree is flat (one file per role).
-  return fs.readdirSync(CANON_AGENTS_DIR)
-    .filter(f => f.endsWith('.md'))
-    .map(f => f.slice(0, -3));
+  return [...agentGen.ROLES];
 }
 
 // The command surfaces this edition renders FROM, for a forge. Sourced from the
@@ -149,125 +132,11 @@ function canonCommandPath(basename, forge) {
   return src.absPath;
 }
 
-// --- role-kind resolution (read-only set computed from canonical, never hardcoded) --
-//
-// Kimi Code's Agent tool has no named custom subagents — only `coder` (full tools),
-// `explore` (read-only), and `plan`. A canonical role is READ-ONLY (→ `explore`)
-// when its frontmatter `tools:` array lacks both Write and Edit (same test the
-// opencode renderAgent uses for its permission block); everything else → `coder`.
-let ROLE_KIND_CACHE = null;
-function roleKindMap() {
-  if (ROLE_KIND_CACHE) return ROLE_KIND_CACHE;
-  const map = {};
-  for (const name of listCanonAgents()) {
-    const c = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
-    const toolSet = lowerSet(parseTools(parseFrontmatter(c).fm.tools));
-    map[name] = (toolSet.has('write') || toolSet.has('edit')) ? 'coder' : 'explore';
-  }
-  ROLE_KIND_CACHE = map;
-  return map;
-}
-
-// The roles dispatched as `explore`. Empty is the CORRECT answer for the current roster, not a
-// missing restriction: every canonical role carries Write because every role writes its own
-// findings, and Kimi's `explore` cannot write. Mapping a role to `explore` to express a tool
-// restriction would cost it the ability to persist its evidence, so the restriction is carried by
-// restrictionNote() instead — see the declared divergence there.
-function readOnlyRoles() {
-  const map = roleKindMap();
-  return Object.keys(map).filter(n => map[n] === 'explore').sort();
-}
-
-// Canonical tools → the capability a role is denied when its profile grants none of them. The same
-// derivation the opencode generator applies to its `permission:` block, so the two editions agree
-// on what a role may do; only the mechanism differs.
-//
-// DECLARED DIVERGENCE: Kimi has no per-role tool configuration at all. Its Agent tool exposes three
-// built-in subagent types (coder/explore/plan) and a Skill is a prompt package, not an agent
-// definition — so on this runtime the restriction can only be CARRIED BY THE ROLE CONTRACT, not
-// enforced by the runtime. Claude enforces it through the frontmatter `tools:` list and opencode
-// through `permission: <axis>: deny`; here it is an instruction the role is bound to follow. Absent
-// this line a Bash-less canonical role would silently gain shell access on kimi, because every role
-// is dispatched as `coder`.
-const CANONICAL_RESTRICTIONS = Object.freeze([
-  { tools: ['write', 'edit'], clause: 'create or modify files' },
-  { tools: ['bash'], clause: 'run shell commands' },
-]);
-
-// The role-contract restriction line for a canonical tool set, or '' when the profile withholds
-// nothing. Derived from the profile; there is no hand-maintained role list to drift.
-function restrictionNote(toolSet) {
-  const denied = CANONICAL_RESTRICTIONS
-    .filter(r => !r.tools.some(t => toolSet.has(t)))
-    .map(r => r.clause);
-  if (!denied.length) return '';
-  return '**Tool restriction:** this role may not ' + denied.join(' and ')
-    + '. If the task cannot be completed without that, report it as a finding and stop — never do it yourself.';
-}
-
-// The roles whose canonical profile withholds a capability, and the clause each is denied. Exported
-// for inspection: this is the set restrictionNote() actually writes into the generated contracts.
-function restrictedRoles() {
-  const out = {};
-  for (const name of listCanonAgents()) {
-    const c = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
-    const toolSet = lowerSet(parseTools(parseFrontmatter(c).fm.tools));
-    const note = restrictionNote(toolSet);
-    if (note) out[name] = note;
-  }
-  return out;
-}
-
 // --- renderers (pure; exported for parity test) ---
 
 function renderAgent(canonContent, agentName, forge) {
-  forge = forge || DEFAULT_FORGE;
-  const { fm, body } = parseFrontmatter(canonContent);
-  const isReviewer = REVIEWER_ROLES.has(agentName);
-  // Canonical `tools:` is DROPPED from the Skill frontmatter (a Skill is a prompt package), so any
-  // capability the profile withholds has to be restated in the contract or it is lost on kimi.
-  const restriction = restrictionNote(lowerSet(parseTools(fm.tools)));
-  const lines = ['---'];
-  lines.push('name: kaola-role-' + agentName);
-  lines.push('description: ' + (fm.description || ''));
-  // `tools:` and `model:` are DROPPED: a Kimi Skill is a prompt package, not an
-  // agent definition, and every subagent inherits the session model (no tiers).
-  lines.push('---');
-  lines.push('');
-  if (isReviewer) {
-    // Schema-2 reviewer identity as a body HTML comment at column zero (the runtime's
-    // field regexes are line-anchored), keeping the frontmatter name+description only.
-    // behavior_contract_version/hash are preserved from canonical; resolved_profile_hash
-    // is re-stamped over the final kimi bytes below (the canonical Claude hash never
-    // binds post-transform bytes — the opencode renderAgent discipline).
-    lines.push('<!-- kimi-reviewer-identity:start -->');
-    if (fm.behavior_contract_version) lines.push('behavior_contract_version: ' + fm.behavior_contract_version);
-    if (fm.behavior_contract_hash) lines.push('behavior_contract_hash: ' + fm.behavior_contract_hash);
-    lines.push('resolved_profile_hash: ' + ZERO_HASH);
-    lines.push('<!-- kimi-reviewer-identity:end -->');
-    lines.push('');
-  }
-  // Same additive-generation-only discipline as the opencode renderAgent (#544):
-  // the Claude→kimi script-path rewrite applies to the RENDERED body so canonical
-  // agents/*.md are never touched (D-530-02).
-  // rewriteClaudeScriptPaths is a no-op when the patterns are absent (workflow-planner ships the
-  // "Re-derive" prose parenthetical). The scoped `--runtime claude` → `--runtime kimi`
-  // rewrite mirrors transformCommandBody: workflow-planner's claim-startup invocation
-  // must stamp the kimi runtime into workflow-state.md on this edition.
-  const bodyText = rewriteClaudeScriptPaths(body, forge)
-    .replace(/--runtime claude\b/g, '--runtime kimi')
-    .trim().replace(/\s+$/, '');
-  if (restriction) {
-    lines.push(restriction);
-    lines.push('');
-  }
-  lines.push(bodyText);
-  let content = lines.join('\n') + '\n';
-  if (isReviewer) {
-    const normalized = reviewerGen.normalizeResolvedProfileHash(content);
-    content = normalized.replace(ZERO_HASH, reviewerGen.sha256(normalized));
-  }
-  return content;
+  if (!MANAGED_ROLES.has(agentName)) throw new Error('sync-kimi-edition: unknown role ' + agentName);
+  return agentGen.renderRuntimeRole('kimi', agentName).content;
 }
 
 // The edition's ONE answer to the canonical model-dispatch instruction. Canonical states that
@@ -276,115 +145,8 @@ function renderAgent(canonContent, agentName, forge) {
 const KIMI_MODEL_DISPATCH_GUIDANCE = 'Never pass a per-call model override; sub-agents inherit the session model.';
 
 // The instruction's stable signature: a `model=` mention in PROSE. Card placeholders sit alone on
-// their own line inside a dispatch card and are removed by stripCardModelPlaceholders, so this
+// their own line inside a dispatch card and are handled by the native routing renderer, so this
 // matches the INSTRUCTION however it happens to be worded.
-const MODEL_MENTION = /model=/;
-
-// The index at which the sentence containing `at` begins — just past the last sentence terminator
-// before it. A terminator is `.`/`:` + whitespace followed by a capital or a backtick, which is
-// what stops "e.g." (a lowercase follower) from reading as a boundary.
-function sentenceStart(text, at) {
-  const re = /[.:]\s+(?=[A-Z`])/g;
-  let start = 0;
-  let m;
-  while ((m = re.exec(text)) !== null && m.index < at) start = m.index + m[0].length;
-  return start;
-}
-
-// Rewrite ONE prose paragraph: if it carries a `model=` mention, replace from the START OF THAT
-// SENTENCE to the end of the paragraph with `guidance`; otherwise return it untouched. Text before
-// that sentence survives verbatim ("Dispatch `doc-updater` with the changed files, …"). Running to
-// the end of the paragraph is deliberate: every observed wording puts the instruction last, and
-// its trailing clauses ("Pass it exactly as shown; never omit it.") are anaphoric continuations
-// that must not outlive the sentence they refer to.
-function rewriteModelDispatchParagraph(para, guidance) {
-  const at = para.search(MODEL_MENTION);
-  if (at < 0) return para;
-  return para.slice(0, sentenceStart(para, at)) + guidance;
-}
-
-// Restate the canonical model-dispatch instruction in the edition's wording — ANCHORED to whole
-// sentences, never to the `model="{...}"` token inside one (the kimi twin of the opencode
-// rewrite).
-//
-// This replaces a global unanchored strip that excised the placeholder from INSIDE a prose
-// sentence, leaving the surrounding backticks as a literal empty code span (``) while the
-// instruction still read "Pass it exactly as shown; never omit it" — with nothing shown, beside a
-// dispatch card that no longer carried a `model=` line. A token strip can half-apply; replacing a
-// whole sentence run cannot.
-//
-// Prose only: fenced code blocks pass through untouched. A wording this MISSES is not silently
-// shipped — assertNoModelDispatchResidue fails the render.
-function rewriteModelDispatchInstructions(text, guidance) {
-  const out = [];
-  let fenced = false;
-  let para = [];
-  function flushPara() {
-    if (!para.length) return;
-    out.push(rewriteModelDispatchParagraph(para.join('\n'), guidance));
-    para = [];
-  }
-  for (const line of text.split(/\r?\n/)) {
-    if (/^\s*```/.test(line)) {
-      flushPara();
-      fenced = !fenced;
-      out.push(line);
-    } else if (fenced) {
-      out.push(line);
-    } else if (line.trim() === '') {
-      flushPara();
-      out.push(line);
-    } else {
-      para.push(line);
-    }
-  }
-  flushPara();
-  return out.join('\n');
-}
-
-// Card placeholders — the `model="{ROLE_MODEL}"` / `model="{...}"` assignment inside a dispatch
-// card. LINE-anchored (the whole line is the assignment, and the line goes with it), so it can
-// only ever remove a card line. The unanchored predecessor reached into prose; it also left a
-// doubled comma behind, which needed a second global `,{2,}` collapse to repair — removing the
-// line outright leaves nothing to repair.
-function stripCardModelPlaceholders(text) {
-  return text.replace(/^[ \t]*model="\{[^"\n]*\}",?[ \t]*\r?\n/gm, '');
-}
-
-// Fail-loud post-condition. Kimi has no per-dispatch model override, so after the rewrites NO
-// `model=` may survive anywhere on the surface — card placeholders are already gone, and the
-// edition's own guidance names no `model=` token at all. Anything left is a HARD ERROR rather than
-// a silently shipped contradiction: a canonical wording the rewrite did not match, a surviving
-// install-time placeholder, or an empty code span left by a token strip. This is what keeps the
-// transform honest across canonical edits that have not happened yet.
-function assertNoModelDispatchResidue(text, label) {
-  const probe = text.split(KIMI_MODEL_DISPATCH_GUIDANCE).join('');
-  const problems = [];
-  // Exactly two backticks, never three — a ``` fence is not an empty span.
-  if (/(?<!`)``(?!`)/.test(probe)) problems.push('empty code span `` — a strip cut inside a code span');
-  for (const line of probe.split(/\r?\n/)) {
-    if (MODEL_MENTION.test(line)) problems.push('unrewritten model= instruction: ' + line.trim());
-  }
-  if (problems.length) {
-    throw new Error('sync-kimi-edition: a Claude-only `model=` instruction survived into '
-      + (label || '(command)') + ' — this runtime has no per-dispatch model override to honour it,'
-      + ' and the anchored rewrite did not match this wording:\n  - ' + problems.join('\n  - '));
-  }
-}
-
-// kimi-native `kaola_script()` shell resolver (the kimi twin of #544's opencode
-// resolver). The canonical resolver ships a Claude search path verbatim —
-// `$CLAUDE_PLUGIN_ROOT` + `$HOME/.claude/kaola-workflow` (a plugin-resident copy may ALSO add
-// the gitlab/gitea forge dirs). On the kimi edition that is a Claude-path leak: kimi
-// resolves scripts via the kimi home dir honoring `$KIMI_CODE_HOME` (default
-// `~/.kimi-code`), which is where install-kimi.sh deploys the support scripts. This
-// constant is the wholesale replacement for every `kaola_script(){ ... return 1; }`
-// definition line (both the 3-path command form and the 5-path plugin form
-// collapse to this single kimi form — kimi is runtime-only, no forge axis). The
-// self-repo priority rule is preserved: inside the kaola-workflow repo itself,
-// `./scripts` wins; anywhere else the installed copy wins. Single-quoted JS literal:
-// inner `'`→`\'`, the shell `printf '%s\n'` backslash-n is `\\n` so the GENERATED
-// .md carries a literal `\n` (not a JS newline that would split the one-liner).
 const KIMI_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
 
@@ -421,37 +183,11 @@ function rewriteClaudeScriptPaths(text, forge) {
 
 // The canonical section this transform strips at — the TRIGGER, never a heading it emits (kimi
 // drops the heading with the section and leaves the one-line guidance in its place).
-const MODEL_DISPATCH_HEADING = /^##\s+Agent Model Dispatch\s*$/;
-
-// A heading that READS like that section without being it. The strip below is a plain `if`, and a
-// canonical rename once moved the heading out from under it: nothing threw, the section was simply
-// never stripped, and the surface shipped a Claude-shaped heading over prose about a per-dispatch
-// model this runtime does not have. This regex is the missing `else` — deliberately looser than the
-// anchor, because its whole job is to notice that the anchor no longer matches. A surface carrying
-// no such section is silent, which is correct: today only one of the three canonical commands has
-// one, and the other two must render without complaint.
-const MODEL_DISPATCH_HEADING_NEAR_MISS = /^##\s+.*\bModel\b/;
-
-// Fail-loud anchor check, the twin of assertNoModelDispatchResidue above: the strip is this
-// edition's ONLY carrier for a statement about its own runtime that canonical cannot make, so a
-// canonical heading it fails to recognize must name itself rather than no-op.
-function assertModelDispatchAnchorMatched(canonBody, stripped, label) {
-  if (stripped) return;
-  const nearMiss = canonBody.split(/\r?\n/)
-    .filter(l => MODEL_DISPATCH_HEADING_NEAR_MISS.test(l) && !MODEL_DISPATCH_HEADING.test(l))
-    .map(l => l.trim());
-  if (!nearMiss.length) return;
-  throw new Error('sync-kimi-edition: model-dispatch anchor missed in ' + (label || '(command)')
-    + ' — canonical carries a section this transform did not strip, so the edition would ship'
-    + ' without its dispatch instruction. Re-anchor MODEL_DISPATCH_HEADING to the heading canonical'
-    + ' now uses:\n  - ' + nearMiss.join('\n  - '));
-}
-
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   // Anchored model-dispatch rewrite FIRST, on canonical text only — before the loop below
   // substitutes the edition's own one-liner, so that guidance is never fed back through the rewrite.
-  const lines = rewriteModelDispatchInstructions(body, KIMI_MODEL_DISPATCH_GUIDANCE).split(/\r?\n/);
+  const lines = body.split(/\r?\n/);
   const out = [];
   let strippedModelDispatch = false;
   let i = 0;
@@ -465,22 +201,11 @@ function transformCommandBody(body, forge, label) {
     // it (a standalone occurrence outside the block, if any, is separately
     // rewritten below). Detect the heading, skip its flat body up to the next
     // heading line, and leave a single-blank seam around the replacement line.
-    if (MODEL_DISPATCH_HEADING.test(line)) {
-      while (out.length && out[out.length - 1].trim() === '') out.pop();
-      if (out.length) out.push('');
-      out.push(KIMI_MODEL_DISPATCH_GUIDANCE);
-      out.push('');
-      strippedModelDispatch = true;
-      i++;
-      while (i < lines.length && !/^#{1,6}\s/.test(lines[i])) i++;
-      continue;
-    }
     out.push(line);
     i++;
   }
   // A canonical rename that walked out from under the anchor above reports itself here rather than
   // silently leaving the section in place.
-  assertModelDispatchAnchorMatched(body, strippedModelDispatch, label);
   let text = out.join('\n');
   // Dispatch-card rewrite (kimi-specific). Canonical dispatch cards name a kaola ROLE
   // in subagent_type plus an install-time model= placeholder:
@@ -490,28 +215,23 @@ function transformCommandBody(body, forge, label) {
   //     description="...",
   //     prompt="..."
   //   )
-  // Kimi Code's Agent tool has no named custom subagents, so the card is rewritten to
-  // the built-in type for the role's kind (read-only roles → "explore", write roles →
-  // "coder"; roleKindMap is computed from canonical frontmatter, never hand-listed)
-  // and the Skill-contract instruction is prepended to the prompt text so the spawned
-  // subagent loads the role contract itself. Scoped to the literal card opening
+  // Kimi Code discovers custom profiles under its native agents directory. Rewrite the
+  // canonical role name to this edition's collision-resistant `kaola-role-*` profile name
+  // and dispatch it directly. Scoped to the literal card opening
   // (`Agent(` + indented subagent_type= line) and to roles present in the canonical
   // map — prose mentions of `Agent(...)` and unknown role names pass through
   // untouched. Runs BEFORE the generic {X_MODEL} strip below, which then collapses
   // the now-orphaned model= line (and its comma) exactly as on opencode.
-  const kinds = roleKindMap();
+  const roles = new Set(listCanonAgents());
   text = text.replace(
     /Agent\(\n(\s+)subagent_type="([^"]+)",([\s\S]*?)prompt="/g,
     (m, indent, role, mid) => {
-      const kind = kinds[role];
-      if (!kind) return m;
-      return 'Agent(\n' + indent + 'subagent_type="' + kind + '",' + mid
-        + 'prompt="First invoke the `kaola-role-' + role + '` Skill and follow its contract for the entire task. ';
+      if (!roles.has(role)) return m;
+      return 'Agent(\n' + indent + 'subagent_type="kaola-role-' + role + '",' + mid + 'prompt="';
     }
   );
   // Card placeholder lines. The prose forms are already restated by rewriteModelDispatchInstructions
   // above, so this only ever sees a card.
-  text = stripCardModelPlaceholders(text);
   // Tidy trailing whitespace left behind on affected lines.
   text = text.replace(/[ \t]+\n/g, '\n');
   // The canonical workflow-next dispatch emits a claim invocation carrying the
@@ -525,7 +245,6 @@ function transformCommandBody(body, forge, label) {
   // above) is rewritten in full; the earlier transforms do not touch it.
   text = rewriteClaudeScriptPaths(text, forge);
   // Fail loud rather than half-apply: no `model=` may still stand by the time the surface ships.
-  assertNoModelDispatchResidue(text, label);
   return text;
 }
 
@@ -587,17 +306,30 @@ function skillRel(dirName, forge) {
   return treeLabel(forge) + '/skills/' + dirName + '/SKILL.md';
 }
 
-// The EXACT set of skill directories a fresh render produces: one `kaola-role-<agent>`
-// per canonical agent plus one `<command>` per canonical command. Anything else in
+function agentRel(role, forge) {
+  return treeLabel(forge) + '/agents/' + role + '.md';
+}
+
+// The EXACT set of skill directories a fresh render produces: one `<command>` per
+// canonical command. Roles use native custom-agent profiles under `agents/`. Anything else in
 // .kimi/skills/ is a retired surface (e.g. the deleted fast/full `kaola-workflow-fast`
 // / `-phase{1..5}` commands) that a deterministic, idempotent mirror must remove — the
 // generator wrote canonical surfaces but never pruned, so --check reported parity while
 // the edition suite's exact-set assertion (K1) failed on the leftovers.
 function expectedSkillDirs(forge) {
   const set = new Set();
-  for (const name of listCanonAgents()) set.add('kaola-role-' + name);
   for (const file of listCanonCommands(forge)) set.add(file.slice(0, -3));
   return set;
+}
+
+function retiredAgentFiles(forge) {
+  const dir = treePath(path.join(treeLabel(forge), 'agents'));
+  if (!fs.existsSync(dir)) return [];
+  const expected = new Set(listCanonAgents().map(name => name + '.md'));
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.md') && !expected.has(entry.name))
+    .map(entry => entry.name)
+    .sort();
 }
 
 function retiredSkillDirs(forge) {
@@ -646,6 +378,11 @@ function pruneSkills(forge) {
     console.log('pruned     ' + treeLabel(forge) + '/hooks/' + f + ' (retired artifact)');
     removed++;
   }
+  for (const f of retiredAgentFiles(forge)) {
+    fs.rmSync(treePath(path.join(treeLabel(forge), 'agents', f)), { force: true });
+    console.log('pruned     ' + treeLabel(forge) + '/agents/' + f + ' (retired surface)');
+    removed++;
+  }
   return removed;
 }
 
@@ -654,7 +391,7 @@ function writeAgents(forge) {
   for (const name of listCanonAgents()) {
     const canon = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
     const out = renderAgent(canon, name, forge);
-    const rel = skillRel('kaola-role-' + name, forge);
+    const rel = agentRel(name, forge);
     const dest = treePath(rel);
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
       ensureDir(path.dirname(dest));
@@ -809,9 +546,9 @@ function runCheck(forge) {
   const mismatches = [];
   for (const name of listCanonAgents()) {
     const canon = read('agents/' + name + '.md');
-    const rel = skillRel('kaola-role-' + name, forge);
+    const rel = agentRel(name, forge);
     if (!fs.existsSync(treePath(rel))) {
-      mismatches.push({ rel, reason: 'missing generated role skill' });
+      mismatches.push({ rel, reason: 'missing generated native agent profile' });
       continue;
     }
     const expected = renderAgent(canon, name, forge);
@@ -847,6 +584,9 @@ function runCheck(forge) {
   for (const name of retiredSkillDirs(forge)) {
     mismatches.push({ rel: tree + '/skills/' + name, reason: 'retired surface not in canonical — prune (--write removes it)' });
   }
+  for (const f of retiredAgentFiles(forge)) {
+    mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
+  }
   // Same for the byte-copied hooks: one this generator no longer emits is retired, and --check
   // called such a tree green until it was reported here.
   for (const f of retiredHookFiles(forge)) {
@@ -861,7 +601,7 @@ function runCheck(forge) {
   }
   const na = listCanonAgents().length;
   const nc = listCanonCommands(forge).length;
-  console.log('sync-kimi-edition[' + forge + ']: ' + na + ' role skill(s) + ' + nc + ' command skill(s) + '
+  console.log('sync-kimi-edition[' + forge + ']: ' + na + ' native agent profile(s) + ' + nc + ' command skill(s) + '
     + (HOOK_SCRIPTS.length + 1) + ' hook file(s) in parity with canonical.');
 }
 
@@ -905,16 +645,12 @@ if (require.main === module) main();
 module.exports = {
   renderAgent, renderCommand, transformCommandBody,
   rewriteClaudeScriptPaths, KIMI_KAOLA_SCRIPT, kimiKaolaScript,
-  rewriteModelDispatchInstructions, rewriteModelDispatchParagraph, sentenceStart,
-  stripCardModelPlaceholders, assertNoModelDispatchResidue, assertModelDispatchAnchorMatched,
-  KIMI_MODEL_DISPATCH_GUIDANCE, MODEL_DISPATCH_HEADING,
-  renderKimiHooksToml, treeLabel, skillRel, canonCommandPath, runCheck, runWrite,
+  KIMI_MODEL_DISPATCH_GUIDANCE,
+  renderKimiHooksToml, treeLabel, skillRel, agentRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   adaptHookForKimi, HOOK_ADAPTATIONS,
   expectedHookFiles, retiredHookFiles,
-  parseFrontmatter, parseTools,
-  roleKindMap, readOnlyRoles,
-  CANONICAL_RESTRICTIONS, restrictionNote, restrictedRoles,
+  parseFrontmatter,
   listCanonAgents, listCanonCommands,
   CANON_AGENTS_DIR, CANON_HOOKS_DIR,
   REPO,

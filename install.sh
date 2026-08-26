@@ -242,9 +242,9 @@ sha256_file() {
   fi
 }
 
-refresh_reviewer_resolved_profile_hash() {
+refresh_agent_resolved_profile_hash() {
   local dest="$1"
-  node - "$SCRIPT_DIR/scripts/generate-reviewer-profiles.js" "$dest" <<'NODE'
+  node - "$SCRIPT_DIR/scripts/generate-agent-profiles.js" "$dest" <<'NODE'
 const fs = require('fs');
 const generator = require(process.argv[2]);
 const file = process.argv[3];
@@ -264,9 +264,9 @@ fs.renameSync(tmp, file);
 NODE
 }
 
-reviewer_manifest_metadata() {
+agent_manifest_metadata() {
   local role="$1"; local source="$2"; local dest="$3"
-  node - "$SCRIPT_DIR/scripts/generate-reviewer-profiles.js" "$role" "$source" "$dest" <<'NODE'
+  node - "$SCRIPT_DIR/scripts/generate-agent-profiles.js" "$role" "$source" "$dest" <<'NODE'
 const fs = require('fs');
 const generator = require(process.argv[2]);
 const role = process.argv[3];
@@ -276,19 +276,14 @@ const installed = fs.readFileSync(process.argv[5], 'utf8');
 const sourceIdentity = generator.behaviorIdentityFromCore(source);
 const installedIdentity = generator.behaviorIdentityFromCore(installed);
 if (sourceIdentity.role !== role || installedIdentity.role !== role) {
-  throw new Error(`reviewer_role_mismatch: expected ${role}`);
+  throw new Error(`agent_role_mismatch: expected ${role}`);
 }
-// #889: this heredoc cannot `require` a relative path, but it already holds the generator module —
-// argv[2] is scripts/generate-reviewer-profiles.js — so the contract version is read from the one
-// source rather than embedded here. install.sh is no longer part of the bump surface.
-const contractVersion = generator.REVIEWER_BEHAVIOR_CONTRACT_VERSION;
-if (sourceIdentity.behavior_contract_version !== contractVersion
-    || installedIdentity.behavior_contract_version !== contractVersion) {
-  throw new Error(`reviewer_contract_version_mismatch: expected ${contractVersion} for ${role}`);
+if (sourceIdentity.behavior_contract_version !== installedIdentity.behavior_contract_version) {
+  throw new Error(`agent_contract_version_mismatch: ${role}`);
 }
 if (sourceIdentity.behavior_contract_hash !== installedIdentity.behavior_contract_hash
     || sourceIdentity.core !== installedIdentity.core) {
-  throw new Error(`reviewer_behavior_contract_mismatch: ${role}`);
+  throw new Error(`agent_behavior_contract_mismatch: ${role}`);
 }
 
 const rewritten = source.replace(/^model:\s*\S+\s*$/m, 'model: inherit');
@@ -300,7 +295,7 @@ const expected = normalized.replace(
 );
 generator.verifyResolvedProfileHash(installed);
 if (installed !== expected) {
-  throw new Error(`reviewer_installed_bytes_mismatch: ${role}`);
+  throw new Error(`agent_installed_bytes_mismatch: ${role}`);
 }
 process.stdout.write([
   installedIdentity.behavior_contract_version,
@@ -434,9 +429,9 @@ install_agent_files() {
     exit 1
   fi
 
-  if ! node "$SCRIPT_DIR/scripts/generate-reviewer-profiles.js" --check; then
-    echo "Reviewer source profile verification failed." >&2
-    echo "Repair: node scripts/generate-reviewer-profiles.js --write && node scripts/generate-reviewer-profiles.js --check" >&2
+  if ! node "$SCRIPT_DIR/scripts/generate-agent-profiles.js" --check; then
+    echo "Agent source profile verification failed." >&2
+    echo "Repair: node scripts/generate-agent-profiles.js --write && node scripts/generate-agent-profiles.js --check" >&2
     exit 1
   fi
 
@@ -500,17 +495,10 @@ install_agent_files() {
       exit 1
     fi
 
-    case "$agent" in
-      code-reviewer|adversarial-verifier|security-reviewer)
-        refresh_reviewer_resolved_profile_hash "$dest"
-        local reviewer_metadata
-        reviewer_metadata="$(reviewer_manifest_metadata "$agent" "$source_file" "$dest")"
-        printf '%s\t%s\t%s\n' "$file_name" "$(sha256_file "$dest")" "$reviewer_metadata" >> "$manifest_tmp"
-        ;;
-      *)
-        printf '%s\t%s\n' "$file_name" "$(sha256_file "$dest")" >> "$manifest_tmp"
-        ;;
-    esac
+    refresh_agent_resolved_profile_hash "$dest"
+    local agent_metadata
+    agent_metadata="$(agent_manifest_metadata "$agent" "$source_file" "$dest")"
+    printf '%s\t%s\t%s\n' "$file_name" "$(sha256_file "$dest")" "$agent_metadata" >> "$manifest_tmp"
     installed=$((installed + 1))
   done
 
@@ -530,7 +518,7 @@ install_agent_files() {
   fi
   if [[ "$installed" -gt 0 ]]; then
     echo "Verified managed Kaola-Workflow agents."
-    echo "Reviewer installation proof covers filesystem bytes only; runtime prompt loading is not attested."
+    echo "Agent installation proof covers filesystem bytes only; runtime prompt loading is not attested."
   fi
 }
 

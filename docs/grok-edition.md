@@ -9,6 +9,11 @@ slash **commands** under `.grok/commands/`, and a hooks JSON file Grok loads
 from its hooks dir — and is fully **additive**: it touches none of the existing
 `claude`/`codex`/`gitlab`/`gitea`/`opencode`/`kimi` edition machinery.
 
+Grok loads root-to-cwd project rules including `AGENTS.md` directly. Kaola therefore installs no
+project-instruction bridge for Grok; root `AGENTS.md` remains the universal authority. The generated
+`.grok/agents/` profiles add only Grok-native carrier, model/effort, permission, and dispatch data.
+See [runtime capabilities](runtime-capabilities.md#grok-build) for first-party evidence and limits.
+
 ## Forge axis
 
 The runtime is not a forge, but the workflow *prose* is forge-shaped (`gh` vs
@@ -43,7 +48,7 @@ Everything under `.grok/` is **generated from canonical** by
 
 | Canonical source | grok edition output | Notes |
 | ---------------- | ------------------- | ----- |
-| `agents/<name>.md` | `.grok/agents/<name>.md` | Grok agent frontmatter (`name`, `description`, `prompt_mode`, `model: inherit`, tier-derived `effort: medium|high|xhigh`, `permission_mode`, `agents_md`). The generator maps canonical `sonnet`/`standard` classes to `medium`, `opus`/`reasoning` classes to `high`, and `fable`/`heavy` classes to `xhigh`. Claude `tools:` (including MCP ids) are dropped so Grok will load the role. Descriptions that are not plain YAML scalars are JSON-quoted — an unquoted colon in `knowledge-lookup`'s description made Grok silently skip the file. Reviewer identity is a body comment block; `resolved_profile_hash` is re-stamped over the grok bytes. |
+| `templates/agents/behavior-contracts.json` + Grok adapter | `.grok/agents/<name>.md` | 14 native profiles with `name`, `description`, native camelCase `promptMode` / `agentsMd`, `model: inherit`, intent-derived `effort: medium\|high\|xhigh`, an explicit capability-derived `tools` allowlist, shared behavior identity, and render-specific hash. Kaola does not emit `permissionMode: plan`: `plan` is not a legal value of the official enum and permission mode is not the tool-boundary carrier. |
 | `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. `Agent(` dispatch cards become `spawn_subagent(`. Install-time `model="{...}"` lines are stripped. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
 | `hooks/<script>.sh` | `.grok/hooks/<script>.sh` | No runtime-neutral dispatch hook is installed; the generator retains ownership of this directory for stale-artifact cleanup. |
 | `hooks/hooks.json` (mapping) | `.grok/hooks/hooks.json` | SessionStart `compact` only. Commands use `${GROK_HOME:-$HOME/.grok}` (Grok expands this). The installer copies the file to `${GROK_HOME:-$HOME/.grok}/hooks/kaola-workflow-hooks.json`, and on a project install also to `<project>/.grok/hooks/hooks.json`. |
@@ -54,12 +59,10 @@ overwrites a user's `[subagents.models]` or `[subagents.roles.*]` in
 
 ## Three effort tiers — every subagent inherits the session model
 
-Generated agents remain model-inheriting: every frontmatter keeps `model: inherit`, so
-the session supplies the model. The existing canonical class token also binds the
-runtime effort: standard (`sonnet`, or its `standard` alias) emits `effort: medium`,
-reasoning (`opus`, or its `reasoning` alias) emits `effort: high`, and heavy (`fable`,
-or its `heavy` alias) emits `effort: xhigh`. Tier membership is unchanged and the
-canonical tokens remain vendor-neutral.
+Generated agents remain model-inheriting: every frontmatter keeps `model: inherit`, so the session
+supplies the model. Runtime-neutral intent maps only in the Grok adapter: `standard` emits
+`effort: medium`, `reasoning` emits `effort: high`, and `heavy` emits `effort: xhigh`. Native effort
+syntax never enters the shared behavior source.
 
 `spawn_subagent` has no effort parameter, so effort belongs on each generated
 `.grok/agents/<role>.md`. Command cards continue to omit `model=`; they name only
@@ -89,6 +92,15 @@ config seeding, per-call override, or second pin path is added.
 
 An opt-in pin that routes the reasoning-class roster to a different *model* is
 recorded on #1008 and is not part of this edition's first close.
+
+All 14 role bodies come from `templates/agents/behavior-contracts.json` through
+`generate-agent-profiles.js`; `sync-grok-edition.js` requests the Grok render and only owns edition
+layout, commands, hooks, and install packaging. Reviewer roles have no separate source or transform.
+
+The frontmatter spelling and capability boundary come from xAI's first-party
+[`AgentDefinition`](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-agent/src/config.rs),
+which serializes agent keys in camelCase and accepts native `model`, `effort`, `tools`, and
+`disallowedTools`. Unknown snake_case spellings are not adapter aliases.
 
 ## Path selection
 

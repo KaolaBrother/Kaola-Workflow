@@ -61,11 +61,19 @@ find . -maxdepth 2 \( -name 'Makefile' -o -name 'pyproject.toml' -o -name 'Cargo
 
 ---
 
-## Step 2 — Synthesize `CLAUDE.md`
+## Step 2 — Reconcile project instructions
 
-Create `CLAUDE.md` if missing. If it exists, preserve user-authored content and add only missing durable guidance. Do not paste full source files, roadmaps, changelogs, API docs, or long skill text into `CLAUDE.md`.
+Make `AGENTS.md` the universal project contract. A runtime-native instruction file may exist only as
+the smallest bridge to `AGENTS.md` plus that runtime's genuine overlay. Preserve user-authored content
+byte-for-byte outside managed regions; never replace an owner-only file on inference.
 
-Recommended size: under 200 lines. This is a recommendation, not a limit — nothing fails on the count, at any size. If the result would exceed it, say so plainly, name what should move to docs, `.claude/rules/`, skills, or `CLAUDE.local.md`, and offer to trim it together rather than stopping.
+Resolve and run the installed `kaola-workflow-project-instructions.js` helper in `plan` mode first.
+If it reports `decision_required`, ask in conversation and write nothing. If an active run was claimed
+under an older installed version, preserve both instruction files unchanged. `apply` is atomic and
+idempotent: a second apply must be a no-op, while `check` verifies convergence without writing.
+
+Recommended universal size: under 200 lines. This is a recommendation, not a limit. Move long detail
+to documentation or runtime-specific overlays rather than duplicating the universal contract.
 
 Use this policy:
 
@@ -79,7 +87,7 @@ Use this policy:
 | Project Conventions | optional | Only real detected or user-provided conventions |
 | Known Gotchas | optional | Only repeated hazards that would waste time |
 | Documentation Map | yes | Pointers to docs, not embedded docs |
-| Maintenance | yes | Rules for keeping `CLAUDE.md` short |
+| Maintenance | yes | Rules for keeping universal guidance concise |
 
 Optional content belongs elsewhere unless it must be read in every session:
 - Put path-specific rules in `.claude/rules/*.md`.
@@ -90,20 +98,22 @@ Optional content belongs elsewhere unless it must be read in every session:
 
 ### Compact Template
 
-Append equivalent missing sections only. Treat headings with the same meaning as equivalent; do not duplicate. Replace bracketed placeholders with detected values; do not leave placeholder text in `CLAUDE.md`. Omit optional sections when there is no real content.
+Append equivalent missing sections only. Treat headings with the same meaning as equivalent; do not duplicate. Replace bracketed placeholders with detected values; do not leave placeholder text in `AGENTS.md`. Omit optional sections when there is no real content.
 <!-- /REGION -->
 <!-- REGION:skill — the counterpart placement: role profiles live in `.codex/agents/kaola-workflow/` and are wired by the managed block in `.codex/config.toml`, paths that exist only on this runtime -->
 ```
 
-3. Create or update `AGENTS.md` only when needed. Preserve user-authored content.
-4. Create or update `CLAUDE.md` with canonical workflow guidance. If `CLAUDE.md` already exists, update the `## Non-Negotiable Rules` section in-place with the canonical 5 bullets.
+3. Reconcile `AGENTS.md` as the universal authority and preserve user-authored bytes outside the
+   managed region.
+4. Keep any runtime-native first-read instruction file as a thin bridge plus runtime-only overlay;
+   never duplicate the universal sections there.
 
 <!-- SPLICE:in-sk-001 -->
 
    Kaola-Workflow agent profiles live in `.codex/agents/kaola-workflow/` and are wired by the managed block in `.codex/config.toml`.
 <!-- /REGION -->
 
-<!-- KW-CLAUDE-TEMPLATE-START -->
+<!-- KW-AGENTS-TEMPLATE-START -->
 ```markdown
 # Project Instructions
 
@@ -149,7 +159,7 @@ The numbered axioms are tie-breakers, applied in priority order whenever a situa
 
 ## Kaola-Workflow
 
-<!-- KW-CLAUDE-MANAGED-START -->
+<!-- KW-AGENTS-MANAGED-START -->
 Everything between this marker and its matching END below is owned by `workflow-init`: a later run
 may replace it in full. Nothing outside the two markers is touched — that content, wherever you have
 added or changed it in this file, is yours.
@@ -190,7 +200,7 @@ added or changed it in this file, is yours.
 <!-- PIN: forge-is-the-backlog -->
 - Top-priority labels: declare in `kaola-workflow/config.json` (`priority_top_tier_labels`) when the repo uses something other than P0–P3 naming.
 <!-- /PIN -->
-<!-- KW-CLAUDE-MANAGED-END -->
+<!-- KW-AGENTS-MANAGED-END -->
 
 ## Project Conventions
 
@@ -216,7 +226,7 @@ added or changed it in this file, is yours.
 - Add rules only after repeated mistakes, review feedback, or stable project conventions.
 - Do not use `@path` imports for optional reference material.
 ```
-<!-- KW-CLAUDE-TEMPLATE-END -->
+<!-- KW-AGENTS-TEMPLATE-END -->
 
 <!-- REGION:command — the posture probe reads `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` and this session's settings env block, which exist only on this runtime; the skill's counterpart audits its own runtime's config and reports `dispatch_posture` instead -->
 > **Claude dispatch posture note:** Audit dispatch posture for this session before claiming
@@ -350,66 +360,21 @@ CHANGELOG.md
 ## Create `AGENTS.md`
 <!-- /REGION -->
 
-Check whether `AGENTS.md` exists in the project root. Detect conformance by
-reading the second non-blank line: if it equals
-`> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**`,
-the file is conforming — no-op. If the file is missing, write the canonical
-redirect block below. If the file exists but is non-conforming (second
-non-blank line does not match), prepend the redirect block, add a `---`
-divider, then append the original content with the migration note line.
+Resolve the installed project-instruction helper beside the claim script and run:
 
-Worked example of a migrated AGENTS.md (two `---` dividers total):
-
-```text
-# AGENTS.md
-
-> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**
->
-> `CLAUDE.md` in this repository root is the **single canonical source** for all
-> non-negotiable rules, project conventions, workflow constraints, and agent
-> behavior. AGENTS.md exists **only** to direct you there.
->
-> **Required at session start, before any tool call, edit, or response:**
->
-> 1. Read `CLAUDE.md` in full.
-> 2. Treat its `## Non-Negotiable Rules` section as binding for every action you take in this repo.
-> 3. If `CLAUDE.md` is missing, **stop and ask the user** — do not proceed on assumptions.
->
-> Do not skip this step because the task looks small. Do not rely on prior
-> session memory. Re-read on every new session.
-
----
-
-*All other guidance — the workflow, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
-
----
-> Note: the content below is the AGENTS.md contract.
-[original content here]
+```bash
+INSTRUCTIONS_JS="$(kaola_script kaola-workflow-project-instructions.js)"
+node "$INSTRUCTIONS_JS" plan --project-root "$PWD" --json
+node "$INSTRUCTIONS_JS" apply --project-root "$PWD" --json
+node "$INSTRUCTIONS_JS" check --project-root "$PWD" --json
 ```
 
-Canonical `AGENTS.md` redirect block to write:
-
-```markdown
-# AGENTS.md
-
-> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**
->
-> `CLAUDE.md` in this repository root is the **single canonical source** for all
-> non-negotiable rules, project conventions, workflow constraints, and agent
-> behavior. AGENTS.md exists **only** to direct you there.
->
-> **Required at session start, before any tool call, edit, or response:**
->
-> 1. Read `CLAUDE.md` in full.
-> 2. Treat its `## Non-Negotiable Rules` section as binding for every action you take in this repo.
-> 3. If `CLAUDE.md` is missing, **stop and ask the user** — do not proceed on assumptions.
->
-> Do not skip this step because the task looks small. Do not rely on prior
-> session memory. Re-read on every new session.
-
----
-
-*All other guidance — the workflow, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
+The helper owns only `<!-- KW-AGENTS-MANAGED-START -->` through its matching END and the runtime
+overlay's own managed region. Known legacy managed redirects may be migrated; mixed files preserve
+every owner byte outside those regions byte-for-byte. Unknown, malformed, duplicate, or owner-only
+instruction authority returns `decision_required`: ask in conversation and make no write. A project
+claimed under an older installed version returns `active_run_preserved`. Successful reruns are
+idempotent and report `converged` with an empty write list.
 <!-- REGION:command — KNOWN RESIDUAL, structural shape and NOT a capability difference: both surfaces carry this same scaffold tree, under a numbered Step heading here and as item 6 of a Required-Behavior list on the skill. Nothing about either runtime forces that. It is kept rather than collapsed because collapsing costs a real surface: either the command loses its Step 1 to 5 numbering, or it loses the tree itself. A damaged surface is a worse trade than a divergence that says out loud what it is. Collapse it the day the command's Step numbering is reworked for another reason. -->
 ```
 

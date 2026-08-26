@@ -6,36 +6,50 @@ moments.
 
 ## Core
 
-- [Architecture](architecture.md) — system structure and data flow. Includes
-  [Runtime capability divergence](architecture.md#runtime-capability-divergence) — the one place the
-  runtimes' differences are recorded (dispatch carrier, command/skill surface, hooks, model &
-  tier, install path), as a tier label plus a pointer per cell, never a restated mechanism.
+- [Architecture](architecture.md) — system structure and data flow, including the AGENTS-first
+  authority graph and generated-role boundary.
+- [Runtime Capabilities](runtime-capabilities.md) — first-party evidence for direct `AGENTS.md`
+  loading or Claude's thin bridge, plus native role, model/effort, hook, path, precedence, and known
+  unknowns for all seven runtimes.
 - [API](api.md) — script CLIs, envelopes, and external contracts.
 - [Conventions](conventions.md) — coding, testing, Git, and review rules.
 - [Workflow State Contract](workflow-state-contract.md) — durable state, and why the forge, not a
   local file, is the backlog.
-- [Agent Source](agents-source.md) — vendored agent provenance and refresh procedure.
+- [Agent Behavior Sources and Provenance](agents-source.md) — the 14-role behavioral authority,
+  nine adapter variants, 126-render manifest, ECC attribution, and refresh procedure.
 
 ## Runtime editions
 
-- [opencode Edition](opencode-edition.md) — additive opencode runtime (`opencode.json` + `.opencode/` tree; model and effort inherited from the session, with canonical `fable` classified alongside reasoning for the optional model pin; installs via `install-opencode.sh`).
-- [kimi Edition](kimi-edition.md) — additive Kimi Code runtime (`.kimi/skills/` tree + managed `[[hooks]]` block; roles as Skills, inherit-only model tier, including the canonical heavy marker; installs via `install-kimi.sh`).
-- [grok Edition](grok-edition.md) — additive Grok CLI runtime (`.grok/agents/` + `.grok/commands/` + hooks JSON; named `spawn_subagent` types; session-inherited model with standard/reasoning/heavy effort tiers (`medium`/`high`/`xhigh`, with heavy verified live); installs via `install-grok.sh`).
-- [cursor Edition](cursor-edition.md) — additive Cursor runtime (`.cursor/agents/` + `.cursor/commands/` + merged `hooks.json`; named `Task` types load from the workspace `.cursor/agents` tree, not `~/.cursor/agents`; workspace catalog is refreshed byte-identically from `$CURSOR_HOME/agents`; `--global` from a git work tree dual-writes the project catalog; canonical standard/reasoning/heavy classes render unquoted Grok 4.6 medium/high/xhigh frontmatter pins while `Task` omits `model`; `sessionStart` compact resume + catalog-ensure `{}` hook and runtime limits; Cloud Agents may not fire `sessionStart`; installs via `install-cursor.sh`).
-- [zcode Edition](zcode-edition.md) — additive ZCode runtime (`.zcode/agents/` + `.zcode/commands/` + merged `config.json` hooks with `"enabled": true` and seven events; subagents discovered only at user scope, so the installer syncs the roster to `${ZCODE_HOME:-~/.zcode}/agents/`; canonical standard/reasoning/heavy classes render `model: GLM-5.3` plus camelCase `thoughtLevel` `high`/`max`/`max` pins — the key is `thoughtLevel`, NOT `reasoningEffort`; installs via `install-zcode.sh`).
+- [opencode Edition](opencode-edition.md) — direct `AGENTS.md`, native generated profiles, session
+  inheritance, permissions, hooks, and installer behavior.
+- [Kimi Edition](kimi-edition.md) — direct chained `AGENTS.md`, native custom-agent profiles,
+  session-owned model/thinking, hooks, and installer behavior.
+- [Grok Edition](grok-edition.md) — direct root-to-cwd `AGENTS.md`, generated named agents,
+  session-inherited model with native effort pins, and hooks.
+- [Cursor Edition](cursor-edition.md) — direct root/nested `AGENTS.md`, generated named agents,
+  model/effort parameters, workspace catalog behavior, and hooks.
+- [ZCode Edition](zcode-edition.md) — direct user-plus-workspace `AGENTS.md`, user-scope generated
+  agents, `thoughtLevel`, known hook limits, and explicit version/relocation unknowns.
 
 ## Decisions
 
-[`decisions/`](decisions/) holds the full catalog. ADR 0019 records the three-tier implementation
-present on this branch and pending merge to `main`; the remaining entries are current design records
-or history, and most of the older records describe the node/DAG executor that ADR 0017 retired.
+[`decisions/`](decisions/) holds the full catalog. ADR 0020 records the current AGENTS-first
+repository and role-authority architecture. Most older records describe the node/DAG executor that
+ADR 0017 retired or the Claude-first role generation that ADR 0020 supersedes.
 
-- **[0019 — The heavy-reasoning tier](decisions/0019-the-heavy-reasoning-tier.md)** — the accepted
+- **[0020 — AGENTS-first runtime bridges](decisions/0020-agents-first-runtime-bridges.md)** — one
+  universal repository authority, one behavioral source for all 14 roles, evidence-backed native
+  adapters, prompt-external provenance, and ownership-safe migration.
+
+- **[0019 — The heavy-reasoning tier](decisions/0019-the-heavy-reasoning-tier.md)** — historical
+  basis for the accepted
   standard/reasoning/heavy axis: planner and code-architect are canonical heavy roles; Codex uses
   Luna/max, Sol/medium, and Sol/high; Grok and Cursor carry heavy effort pins; OpenCode classifies
   `fable` with reasoning and Kimi remains session-inherited. Claude reviewers rest on `opus` with
   one bounded `fable` escalation in command runtime. Additive generated command surfaces omit that
-  dynamic reviewer escalation while preserving reviewer scope and acceptance wording.
+  dynamic reviewer escalation while preserving reviewer scope and acceptance wording. ADR 0020
+  supersedes its Claude-shaped role-source and adapter details; the runtime-neutral intent classes
+  remain.
 
 - **[0017 — The mission list: four fields where the DAG was](decisions/0017-the-mission-list.md)** — the
   design of record. A run is one file of `item` / `status` / `dispatched` / `result`, written at three
@@ -58,7 +72,7 @@ or history, and most of the older records describe the node/DAG executor that AD
 
 Everything numbered 0001–0015 and every `D-NNN-NN` record predates 0017. They remain accurate as
 history and as rationale for machinery that still ships around the run (claim, sink, release,
-reviewer-profile generation, the runtime editions) — but where one describes plan grammar, role nodes,
+role-profile generation, the runtime editions) — but where one describes plan grammar, role nodes,
 write sets, gates, epochs, or typed refusals, 0017 supersedes it.
 
 ## Other

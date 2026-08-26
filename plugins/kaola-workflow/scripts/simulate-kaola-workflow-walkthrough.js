@@ -1303,20 +1303,22 @@ function testInstallSchemaPruneManifest332() {
     assert(manifest.files && Object.keys(manifest.files).length === ROSTER_TOMLS.length
       && Object.values(manifest.files).every(v => /^sha256:[0-9a-f]{64}$/.test(v)),
       '#463 AC: manifest.files must carry one sha256 entry per shipped role (' + ROSTER_TOMLS.length + ')');
-    for (const role of ['code-reviewer', 'adversarial-verifier', 'security-reviewer']) {
-      const file = role + '.toml';
+    for (const file of tomls) {
+      const role = file.replace(/\.toml$/, '');
       const sourceBytes = fs.readFileSync(path.join(pluginRoot, 'agents', file));
       const installedBytes = fs.readFileSync(path.join(agentsDir, file));
       assert(sourceBytes.equals(installedBytes),
-        'reviewer contract: installed ' + file + ' must byte-match the selected source');
+        'agent contract: installed ' + file + ' must byte-match the selected source');
       const text = installedBytes.toString('utf8');
       const expectedIdentity = {
+        role,
         behavior_contract_version: Number(text.match(/^behavior_contract_version: (\d+)$/m)[1]),
         behavior_contract_hash: text.match(/^behavior_contract_hash: ([0-9a-f]{64})$/m)[1],
+        adapter_capabilities_hash: text.match(/^adapter_capabilities_hash: ([0-9a-f]{64})$/m)[1],
         resolved_profile_hash: text.match(/^resolved_profile_hash: ([0-9a-f]{64})$/m)[1],
       };
       assert(JSON.stringify(manifest.profile_contracts[file]) === JSON.stringify(expectedIdentity),
-        'reviewer contract: manifest must bind behavior/profile identity for ' + file);
+        'agent contract: manifest must bind behavior/adapter/profile identity for ' + file);
     }
     const lastLine = r.stdout.trim().split('\n').pop();
     assert(lastLine === 'status: ok', '#332 AC3: installer stdout must end with `status: ok`, got: ' + lastLine);
@@ -1460,13 +1462,17 @@ function testCodexPreflight332() {
     assert(fs.readFileSync(reviewer).equals(fs.readFileSync(reviewerSource)),
       'reviewer contract: project autofix must restore exact selected source bytes');
 
-    // AC7a: malformed (name stripped) → profiles_malformed under --no-autofix
+    // AC7a after generated-profile unification: removing a required field from installed bytes is
+    // source drift, so the complete self-hashed profile contract reports profiles_stale. The
+    // profiles_malformed bucket is reserved for an invalid selected source, which cannot be
+    // manufactured by mutating only this installed copy.
     fs.writeFileSync(ce, savedCe.replace(/^name = "code-explorer"\n/m, ''));
     r = runScript(preflightScript, ['--project-root', root, '--no-autofix', '--json'], {});
-    assert(r.status !== 0, '#332 AC7a: malformed profile must refuse');
+    assert(r.status !== 0, '#332 AC7a: incomplete installed profile must refuse');
     j = JSON.parse(r.stdout);
-    assert(j.status === 'profiles_malformed', '#332 AC7a: status must be profiles_malformed, got ' + j.status);
-    assert(j.malformed[0].role === 'code-explorer', '#332 AC7a: malformed[0].role must be code-explorer');
+    assert(j.status === 'profiles_stale', '#332 AC7a: status must be profiles_stale, got ' + j.status);
+    assert(j.stale_profiles.some(item => item.role === 'code-explorer'),
+      '#332 AC7a: stale_profiles must name code-explorer');
 
     // AC8: same fixture WITHOUT --no-autofix → autofix repairs, status ok autofixed
     r = runScript(preflightScript, ['--project-root', root, '--json'], {});

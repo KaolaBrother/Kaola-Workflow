@@ -1,19 +1,13 @@
 ---
 name: implementer
-description: The implementing role. Writes production code for behavioral logic and for work with no natural failing test alike — refactors, scaffolding, config/IaC, UI, migrations, glue — reading and running acceptance tests while preserving their meaning; may perform only mechanical test-path maintenance when explicitly needed.
-tools: ["Read", "Write", "Edit", "Bash", "Grep"]
+description: "The implementing role. Writes production code for behavioral logic and for work with no natural failing test alike — refactors, scaffolding, config/IaC, UI, migrations, glue — reading and running acceptance tests while preserving their meaning; may perform only mechanical test-path maintenance when explicitly needed."
+tools: ["Read","Write","Edit","Grep","Glob","Bash"]
 model: sonnet
+behavior_contract_version: 1
+behavior_contract_hash: e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a
+resolved_profile_hash: 2074013f9d43c7ac1d369b17335c1b53711ab5c2356c76b7322cfadf32be5095
 ---
-<!--
-kaola-workflow-managed-agent: true
-locally-authored: true
-note: Locally authored for the adaptive-path implementer role (owner-approved 2026-06-07). Not
-vendored — no upstream provenance. The universal implementing role: it writes production code for
-behavioral logic AND for work with no natural failing unit test (refactors, scaffolding, config/IaC,
-UI, migrations, glue). DISTINCT from tdd-guide, which holds custody of the test artifact — the
-implementer reads and runs acceptance tests; it may make mechanical test-path maintenance only when
-the acceptance claim is unchanged.
--->
+<!-- kaola-workflow-managed-agent: true -->
 
 ## Prompt Defense Baseline
 
@@ -117,3 +111,15 @@ would force it to change.
 
 This governs the solution you build, never how closely you read or verify — comprehension and
 verification stay exactly as demanding as they were.
+
+<!-- runtime-adapter:start -->
+runtime: claude
+behavior_contract_version: 1
+behavior_contract_hash: e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a
+adapter_capabilities_hash: a37d8dc46eaf900e371e8985b2007cd0c42713a4be6e05977f66b1fb27efbf65
+
+## Runtime adapter
+
+- Follow the native carrier and capability boundary declared for this runtime.
+- If a required capability is unavailable, stop without mutation and report `capability_gap: <missing capability> — <required action>`.
+<!-- runtime-adapter:end -->

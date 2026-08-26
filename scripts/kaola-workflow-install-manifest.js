@@ -59,6 +59,7 @@ const repoRoot = findRepoRoot(__dirname);
 // Note: kaola-workflow-ledger-compare.js IS in this list (tracked separately; added in #412).
 const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-claim.js',
+  'kaola-workflow-project-instructions.js',
   'kaola-workflow-active-folders.js',
   'kaola-workflow-closure-audit.js',
   'kaola-workflow-closure-contract.js',

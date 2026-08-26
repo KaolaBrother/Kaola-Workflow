@@ -7,7 +7,7 @@
 // opencode is a coding-agent RUNTIME (like Codex), not a git forge, so it does
 // NOT ride the install.sh --forge= (github/gitlab/gitea) machinery. It is
 // delivered the opencode-native way: a project `opencode.json` plus a generated
-// `.opencode/agent/*.md` + `.opencode/command/*.md` tree. This script is the
+// `.opencode/agents/*.md` + `.opencode/commands/*.md` tree. This script is the
 // generate-from-canonical twin of edition-sync.js: deterministic, idempotent,
 // and parity-checked by test-opencode-edition.js.
 //
@@ -25,11 +25,11 @@
 //
 //   --forge=<f>          github (default) | gitlab | gitea — which forge's command
 //                         surfaces to render from, and which tree to write.
-//   --write              regenerate .opencode/agent + .opencode/command + plugins from canonical;
+//   --write              regenerate .opencode/agents + .opencode/commands + plugins from canonical;
 //                         seed opencode.json only if absent (use --write-config to force).
 //   --write-config       (re)write this repo's opencode.json from the template.
 //   --write-config-to P  write the template opencode.json to path P (installer use).
-//   --check              assert generated agent/command files are in parity with canonical.
+//   --check              assert generated agents/commands are in parity with canonical.
 //
 // Pin a tier to a specific model (opt-in; otherwise every role inherits the session model):
 //   KAOLA_OPENCODE_STANDARD_MODEL   pin the standard tier to a provider/model
@@ -44,9 +44,9 @@ const path = require('path');
 // the opencode bytes so the stamp binds the profile that actually ships. The runtime resolver
 // that once read it back to bind a review receipt retired with the node executor; the stamp is
 // kept because test-opencode-edition.js verifies it against canonical, not for a runtime reader.
-const reviewerGen = require('./generate-reviewer-profiles');
+const agentGen = require('./generate-agent-profiles');
 const forgeLayout = require('./runtime-edition-forge');
-const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
+const MANAGED_ROLES = new Set(agentGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
 
 const REPO = path.resolve(__dirname, '..');
@@ -94,8 +94,8 @@ function outDirs(forge) {
   const root = path.join(TREE_ROOT, '.opencode' + forgeLayout.outSuffix(forge));
   return {
     root,
-    agent: path.join(root, 'agent'),
-    command: path.join(root, 'command'),
+    agent: path.join(root, 'agents'),
+    command: path.join(root, 'commands'),
     hooks: path.join(root, 'hooks'),
     plugins: path.join(root, 'plugins'),
   };
@@ -176,9 +176,7 @@ function roleTier(canonModelValue) {
 }
 
 function listCanonAgents() {
-  return fs.readdirSync(CANON_AGENTS_DIR)
-    .filter(f => f.endsWith('.md'))
-    .map(f => f.slice(0, -3));
+  return [...agentGen.ROLES];
 }
 
 // The command surfaces this edition renders FROM, for a forge. Sourced from the
@@ -209,53 +207,8 @@ function opencodeAgentSuffix() {
 }
 
 function renderAgent(canonContent, agentName, forge) {
-  forge = forge || DEFAULT_FORGE;
-  const { fm, body } = parseFrontmatter(canonContent);
-  const tools = parseTools(fm.tools);
-  const toolSet = lowerSet(tools);
-  const denied = deniedPermissionAxes(toolSet);
-  const isReviewer = REVIEWER_ROLES.has(agentName);
-
-  const lines = ['---'];
-  lines.push('description: ' + (fm.description || ''));
-  lines.push('mode: subagent');
-  // No model field: standard tier inherits opencode.json "model"; reasoning tier
-  // is resolved by the opencode.json agent.<role>.model override. Keeping generated
-  // agents model-agnostic is what lets the user own both tiers in one file.
-  if (denied.length) {
-    lines.push('permission:');
-    for (const axis of denied) lines.push('  ' + axis + ': deny');
-  }
-  // #708: schema-2 reviewer identity. The opencode reviewer profile carries the runtime-neutral
-  // behavior contract (version + hash) from the canonical Claude source, plus a freshly-stamped
-  // resolved_profile_hash over the transformed opencode bytes (NOT the Claude hash — the
-  // frontmatter differs, so the Claude hash no longer binds these bytes). The runtime resolver
-  // these fields once fed is retired with the node executor, so their consumer today is the
-  // edition suite, which checks the stamp against canonical. The hash is re-stamped AFTER the full content
-  // is assembled (below) so it binds every rendered byte.
-  if (isReviewer) {
-    if (fm.behavior_contract_version) lines.push('behavior_contract_version: ' + fm.behavior_contract_version);
-    if (fm.behavior_contract_hash) lines.push('behavior_contract_hash: ' + fm.behavior_contract_hash);
-    lines.push('resolved_profile_hash: ' + ZERO_HASH);
-  }
-  lines.push('---');
-  lines.push('');
-  // #544 (folded into #543): apply the Claude→opencode script-path rewrite to the agent body too
-  // (workflow-planner ships the "Re-derive" prose). Other agents are verbatim (rewriteClaudeScriptPaths
-  // is a no-op when the patterns are absent). Applied to the RENDERED body so canonical agents/*.md
-  // are never touched (additive D-530-02); A6 parity holds because both sides go through renderAgent.
-  const bodyText = rewriteClaudeScriptPaths(body, forge).trim().replace(/\s+$/, '');
-  const suffix = opencodeAgentSuffix(agentName);
-  lines.push(suffix ? bodyText + '\n' + suffix.replace(/\s+$/, '') : bodyText);
-  let content = lines.join('\n') + '\n';
-  if (isReviewer) {
-    // Re-stamp resolved_profile_hash over the final opencode bytes (the transform above changed
-    // the frontmatter, so the Claude hash is invalid here). normalizeResolvedProfileHash asserts
-    // exactly one hash field exists and zeroes it; sha256 + replace yields the binding hash.
-    const normalized = reviewerGen.normalizeResolvedProfileHash(content);
-    content = normalized.replace(ZERO_HASH, reviewerGen.sha256(normalized));
-  }
-  return content;
+  if (!MANAGED_ROLES.has(agentName)) throw new Error('sync-opencode-edition: unknown role ' + agentName);
+  return agentGen.renderRuntimeRole('opencode', agentName).content;
 }
 
 // Rewrite Claude-specific model prose for opencode. Claude Code dispatches carry an explicit
@@ -297,115 +250,8 @@ const OPENCODE_MODEL_DISPATCH_GUIDANCE =
   + 'the task tool has no model or effort parameter.';
 
 // The instruction's stable signature: a `model=` mention in PROSE. Card placeholders sit alone on
-// their own line inside a fenced dispatch card and are removed by stripCardModelPlaceholders, so
+// their own line inside a fenced dispatch card and are handled by the native routing renderer, so
 // this matches the INSTRUCTION however it happens to be worded.
-const MODEL_MENTION = /model=/;
-
-// The index at which the sentence containing `at` begins — just past the last sentence terminator
-// before it. A terminator is `.`/`:` + whitespace followed by a capital or a backtick, which is
-// what stops "e.g." (a lowercase follower) from reading as a boundary.
-function sentenceStart(text, at) {
-  const re = /[.:]\s+(?=[A-Z`])/g;
-  let start = 0;
-  let m;
-  while ((m = re.exec(text)) !== null && m.index < at) start = m.index + m[0].length;
-  return start;
-}
-
-// Rewrite ONE prose paragraph: if it carries a `model=` mention, replace from the START OF THAT
-// SENTENCE to the end of the paragraph with `guidance`; otherwise return it untouched. Text
-// before that sentence survives verbatim ("Dispatch `doc-updater` with the changed files, …").
-// Running to the end of the paragraph is deliberate: every observed wording puts the instruction
-// last, and its trailing clauses ("Pass it exactly as shown; never omit it.") are anaphoric
-// continuations that must not outlive the sentence they refer to.
-function rewriteModelDispatchParagraph(para, guidance) {
-  const at = para.search(MODEL_MENTION);
-  if (at < 0) return para;
-  return para.slice(0, sentenceStart(para, at)) + guidance;
-}
-
-// Restate the canonical model-dispatch instruction in the edition's wording — ANCHORED to whole
-// sentences, never to the `model="{...}"` token inside one.
-//
-// This replaces a global unanchored strip that excised the placeholder from INSIDE a prose
-// sentence, leaving the surrounding backticks as a literal empty code span (``) while the
-// instruction still read "Pass it exactly as shown; never omit it" — with nothing shown, beside a
-// dispatch card that no longer carried a `model=` line, in a file that had already said the
-// opposite 100 lines earlier. A token strip can half-apply; replacing a whole sentence run cannot.
-//
-// Prose only: fenced code blocks pass through untouched. A wording this MISSES is not silently
-// shipped — assertNoModelDispatchResidue fails the render.
-function rewriteModelDispatchInstructions(text, guidance) {
-  const out = [];
-  let fenced = false;
-  let para = [];
-  function flushPara() {
-    if (!para.length) return;
-    out.push(rewriteModelDispatchParagraph(para.join('\n'), guidance));
-    para = [];
-  }
-  for (const line of text.split(/\r?\n/)) {
-    if (/^\s*```/.test(line)) {
-      flushPara();
-      fenced = !fenced;
-      out.push(line);
-    } else if (fenced) {
-      out.push(line);
-    } else if (line.trim() === '') {
-      flushPara();
-      out.push(line);
-    } else {
-      para.push(line);
-    }
-  }
-  flushPara();
-  return out.join('\n');
-}
-
-// Card placeholders — the `model="{ROLE_MODEL}"` / `model="{...}"` assignment inside a dispatch
-// card. LINE-anchored (the whole line is the assignment, and the line goes with it), so it can
-// only ever remove a card line. The unanchored predecessor reached into prose; it also left a
-// doubled comma behind, which needed a second global `,{2,}` collapse to repair — removing the
-// line outright leaves nothing to repair.
-function stripCardModelPlaceholders(text) {
-  return text.replace(/^[ \t]*model="\{[^"\n]*\}",?[ \t]*\r?\n/gm, '');
-}
-
-// Fail-loud post-condition. After the rewrites the only `model=` text this edition may ship is its
-// OWN guidance; anything else is a HARD ERROR rather than a silently shipped contradiction —
-// a canonical wording the rewrite did not match, a surviving install-time placeholder, or an empty
-// code span left by a token strip. This is what keeps the transform honest across canonical edits
-// that have not happened yet: a reworded instruction fails the render instead of half-applying.
-function assertNoModelDispatchResidue(text, label) {
-  // Scan the WHOLE surface, fenced blocks included: the card placeholders are already gone by
-  // this point, so ANY surviving `model=` is residue wherever it sits. Only the edition's own two
-  // wordings are subtracted first.
-  const probe = text
-    .split(OPENCODE_MODEL_DISPATCH_BLOCK).join('')
-    .split(OPENCODE_MODEL_DISPATCH_GUIDANCE).join('');
-  const problems = [];
-  // Exactly two backticks, never three — a ``` fence is not an empty span.
-  if (/(?<!`)``(?!`)/.test(probe)) problems.push('empty code span `` — a strip cut inside a code span');
-  for (const line of probe.split(/\r?\n/)) {
-    if (MODEL_MENTION.test(line)) problems.push('unrewritten model= instruction: ' + line.trim());
-  }
-  if (problems.length) {
-    throw new Error('sync-opencode-edition: a Claude-only `model=` instruction survived into '
-      + (label || '(command)') + ' — this runtime has no model parameter to honour it, and the'
-      + ' anchored rewrite did not match this wording:\n  - ' + problems.join('\n  - '));
-  }
-}
-
-// opencode-native `kaola_script()` shell resolver (issue #544, folded into #543). The canonical
-// resolver ships a CLAUDE search path verbatim — `$CLAUDE_PLUGIN_ROOT` + `$HOME/.claude/kaola-workflow`
-// (a plugin-resident copy may ALSO add the gitlab/gitea forge dirs). On the opencode edition that is a
-// Claude-path leak: opencode resolves scripts via an opencode-native dir honoring `$OPENCODE_CONFIG_DIR`
-// (default `~/.config/opencode`), which is where install-opencode.sh deploys the support scripts. This
-// constant is the wholesale replacement for every `kaola_script(){ ... return 1; }` definition line
-// (both the 3-path command form and the 5-path plugin form collapse to this single opencode
-// form — opencode is runtime-only, no forge axis). Single-quoted JS literal: inner `'`→`\'`, the
-// shell `printf '%s\n'` backslash-n is `\\n` so the GENERATED .md carries a literal `\n` (not a JS
-// newline that would split the one-line resolver).
 const OPENCODE_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _oc="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_oc/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_oc/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
 
@@ -439,57 +285,21 @@ function rewriteClaudeScriptPaths(text, forge) {
 }
 
 // The canonical section this transform substitutes at — the TRIGGER, never a heading it emits.
-const MODEL_DISPATCH_HEADING = /^##\s+Agent Model Dispatch\s*$/;
-
-// A heading that READS like that section without being it. The substitution below is a plain `if`,
-// and a canonical rename once moved the heading out from under it: nothing threw, the block was
-// simply never substituted, and the surface shipped without the one paragraph telling an opencode
-// reader how a role is dispatched on a runtime whose task tool takes no model. This regex is the
-// missing `else` — deliberately looser than the anchor, because its whole job is to notice that the
-// anchor no longer matches. A surface carrying no such section is silent, which is correct: today
-// only one of the three canonical commands has one, and the other two must render without complaint.
-const MODEL_DISPATCH_HEADING_NEAR_MISS = /^##\s+.*\bModel\b/;
-
-// Fail-loud anchor check, the twin of assertNoModelDispatchResidue above: the substitution is this
-// edition's ONLY carrier for a statement about its own runtime that canonical cannot make, so a
-// canonical heading it fails to recognize must name itself rather than no-op.
-function assertModelDispatchAnchorMatched(canonBody, substituted, label) {
-  if (substituted) return;
-  const nearMiss = canonBody.split(/\r?\n/)
-    .filter(l => MODEL_DISPATCH_HEADING_NEAR_MISS.test(l) && !MODEL_DISPATCH_HEADING.test(l))
-    .map(l => l.trim());
-  if (!nearMiss.length) return;
-  throw new Error('sync-opencode-edition: model-dispatch anchor missed in ' + (label || '(command)')
-    + ' — canonical carries a section this transform did not substitute at, so the edition would'
-    + ' ship without its dispatch instruction. Re-anchor MODEL_DISPATCH_HEADING to the heading'
-    + ' canonical now uses:\n  - ' + nearMiss.join('\n  - '));
-}
-
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   // Anchored model-dispatch rewrite FIRST, on canonical text only — before the loop below
   // substitutes OPENCODE_MODEL_DISPATCH_BLOCK, so the edition's own guidance is never fed back
   // through the rewrite.
-  const lines = rewriteModelDispatchInstructions(body, OPENCODE_MODEL_DISPATCH_GUIDANCE).split(/\r?\n/);
+  const lines = body.split(/\r?\n/);
   const out = [];
-  let substitutedModelDispatch = false;
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    if (MODEL_DISPATCH_HEADING.test(line)) {
-      out.push(OPENCODE_MODEL_DISPATCH_BLOCK);
-      substitutedModelDispatch = true;
-      i++;
-      // Skip the canonical section body up to (not including) the next heading line.
-      while (i < lines.length && !/^#{1,6}\s/.test(lines[i])) i++;
-      continue;
-    }
     out.push(line);
     i++;
   }
   // A canonical rename that walked out from under the anchor above reports itself here rather than
   // silently dropping the block.
-  assertModelDispatchAnchorMatched(body, substitutedModelDispatch, label);
   let text = out.join('\n');
   // Dispatch-card `Agent(` openings → the opencode `task` form. Scoped to the literal opening
   // (a line that is exactly `Agent(` immediately followed by an indented `subagent_type=` line)
@@ -498,7 +308,6 @@ function transformCommandBody(body, forge, label) {
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'task(\n$1');
   // Card placeholder lines. The prose forms are already restated by rewriteModelDispatchInstructions
   // above, so this only ever sees a card.
-  text = stripCardModelPlaceholders(text);
   // Tidy trailing whitespace left behind on affected lines.
   text = text.replace(/[ \t]+\n/g, '\n');
   // #F6: the former adapt repair-loop strip (`text.replace(/downgrade to full path \/\s*/g,'')`)
@@ -519,7 +328,6 @@ function transformCommandBody(body, forge, label) {
   text = rewriteClaudeScriptPaths(text, forge);
   // Fail loud rather than half-apply: nothing but the edition's own guidance may still say
   // `model=` by the time the surface ships.
-  assertNoModelDispatchResidue(text, label);
   return text;
 }
 
@@ -529,7 +337,7 @@ function renderCommand(canonContent, forge, label) {
   lines.push('description: ' + (fm.description || ''));
   // opencode file-command frontmatter allows: description, agent, model, subtask.
   // Workflow commands orchestrate in the primary session and dispatch to the
-  // .opencode/agent/* subagents via the task tool, so no `agent:` is set.
+  // .opencode/agents/* subagents via the task tool, so no `agent:` is set.
   lines.push('---');
   lines.push('');
   lines.push(transformCommandBody(body, forge, label).trim().replace(/\s+$/, ''));
@@ -651,7 +459,7 @@ function writeAgents(forge) {
     const dest = path.join(out_dir, name + '.md');
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
       fs.writeFileSync(dest, out);
-      console.log('generated  ' + treeLabel(forge) + '/agent/' + name + '.md');
+      console.log('generated  ' + treeLabel(forge) + '/agents/' + name + '.md');
       wrote++;
     }
   }
@@ -664,11 +472,11 @@ function writeCommands(forge) {
   let wrote = 0;
   for (const file of listCanonCommands(forge)) {
     const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
-    const out = renderCommand(canon, forge, treeLabel(forge) + '/command/' + file);
+    const out = renderCommand(canon, forge, treeLabel(forge) + '/commands/' + file);
     const dest = path.join(out_dir, file);
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
       fs.writeFileSync(dest, out);
-      console.log('generated  ' + treeLabel(forge) + '/command/' + file);
+      console.log('generated  ' + treeLabel(forge) + '/commands/' + file);
       wrote++;
     }
   }
@@ -769,14 +577,29 @@ function pruneRetired(forge) {
   const cmds = retiredMdFiles(dirs.command, listCanonCommands(forge).map(f => f.slice(0, -3)));
   for (const f of cmds) {
     fs.rmSync(path.join(dirs.command, f), { force: true });
-    console.log('pruned     ' + treeLabel(forge) + '/command/' + f + ' (retired surface)');
+    console.log('pruned     ' + treeLabel(forge) + '/commands/' + f + ' (retired surface)');
     removed++;
   }
   const agents = retiredMdFiles(dirs.agent, listCanonAgents());
   for (const f of agents) {
     fs.rmSync(path.join(dirs.agent, f), { force: true });
-    console.log('pruned     ' + treeLabel(forge) + '/agent/' + f + ' (retired surface)');
+    console.log('pruned     ' + treeLabel(forge) + '/agents/' + f + ' (retired surface)');
     removed++;
+  }
+  // Current OpenCode discovers plural directories. The generator fully owned the retired
+  // singular trees, so remove only the Markdown surfaces it could have generated, then remove
+  // the directory when empty; unrelated file types keep the directory alive.
+  for (const legacyName of ['agent', 'command']) {
+    const legacyDir = path.join(dirs.root, legacyName);
+    if (!fs.existsSync(legacyDir)) continue;
+    for (const entry of fs.readdirSync(legacyDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+      fs.rmSync(path.join(legacyDir, entry.name), { force: true });
+      console.log('pruned     ' + treeLabel(forge) + '/' + legacyName + '/' + entry.name
+        + ' (retired singular carrier)');
+      removed++;
+    }
+    try { fs.rmdirSync(legacyDir); } catch (_) { /* preserve unrelated residue */ }
   }
   return removed;
 }
@@ -912,7 +735,7 @@ function runCheck(forge) {
   const mismatches = [];
   for (const name of listCanonAgents()) {
     const canon = read('agents/' + name + '.md');
-    const rel = tree + '/agent/' + name + '.md';
+    const rel = tree + '/agents/' + name + '.md';
     if (!fs.existsSync(treePath(rel))) {
       mismatches.push({ rel, reason: 'missing generated agent', remedy: REMEDY.WRITE });
       continue;
@@ -922,7 +745,7 @@ function runCheck(forge) {
   }
   for (const file of listCanonCommands(forge)) {
     const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
-    const rel = tree + '/command/' + file;
+    const rel = tree + '/commands/' + file;
     if (!fs.existsSync(treePath(rel))) {
       mismatches.push({ rel, reason: 'missing generated command', remedy: REMEDY.WRITE });
       continue;
@@ -966,13 +789,25 @@ function runCheck(forge) {
       }
     }
   }
-  // Retired-surface guard: a *.md in the deployed command/agent dir whose canonical source
+  // Retired-surface guard: a *.md in the deployed commands/agents dir whose canonical source
   // was deleted (e.g. the fast/full commands) must be pruned; --write removes it.
   for (const f of retiredMdFiles(dirs.command, listCanonCommands(forge).map(x => x.slice(0, -3)))) {
-    mismatches.push({ rel: tree + '/command/' + f, reason: 'retired surface not in canonical — prune (--write removes it)', remedy: REMEDY.WRITE });
+    mismatches.push({ rel: tree + '/commands/' + f, reason: 'retired surface not in canonical — prune (--write removes it)', remedy: REMEDY.WRITE });
   }
   for (const f of retiredMdFiles(dirs.agent, listCanonAgents())) {
-    mismatches.push({ rel: tree + '/agent/' + f, reason: 'retired surface not in canonical — prune (--write removes it)', remedy: REMEDY.WRITE });
+    mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired surface not in canonical — prune (--write removes it)', remedy: REMEDY.WRITE });
+  }
+  for (const legacyName of ['agent', 'command']) {
+    const legacyDir = path.join(dirs.root, legacyName);
+    if (!fs.existsSync(legacyDir)) continue;
+    for (const entry of fs.readdirSync(legacyDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+      mismatches.push({
+        rel: tree + '/' + legacyName + '/' + entry.name,
+        reason: 'retired singular native carrier — prune (--write removes it)',
+        remedy: REMEDY.WRITE,
+      });
+    }
   }
   // Same for the byte-copied artifacts: a hook or plugin this generator no longer emits is retired,
   // and --check called such a tree green until it was reported here.
@@ -1051,9 +886,7 @@ if (require.main === module) main();
 module.exports = {
   renderAgent, renderCommand, renderOpencodeJson, renderNeutralConfig,
   transformCommandBody, opencodeAgentSuffix, rewriteClaudeScriptPaths, OPENCODE_KAOLA_SCRIPT,
-  rewriteModelDispatchInstructions, rewriteModelDispatchParagraph, sentenceStart,
-  stripCardModelPlaceholders, assertNoModelDispatchResidue, assertModelDispatchAnchorMatched,
-  OPENCODE_MODEL_DISPATCH_GUIDANCE, OPENCODE_MODEL_DISPATCH_BLOCK, MODEL_DISPATCH_HEADING,
+  OPENCODE_MODEL_DISPATCH_GUIDANCE, OPENCODE_MODEL_DISPATCH_BLOCK,
   opencodeKaolaScript, outDirs, treeLabel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   parseFrontmatter, parseTools, roleTier, reasoningRoles,

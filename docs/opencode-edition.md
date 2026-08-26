@@ -7,6 +7,11 @@ so this edition is delivered the opencode-native way — a project `opencode.jso
 plus a generated `.opencode/` tree — and is fully **additive**: it touches none of
 the existing `claude`/`codex`/`gitlab`/`gitea` edition machinery.
 
+opencode reads root `AGENTS.md` directly; Kaola does not route it through `CLAUDE.md`. Official
+discovery, fallback, and nesting behavior is recorded in
+[runtime capabilities](runtime-capabilities.md#opencode). Runtime-specific profile frontmatter and
+permissions come from the opencode adapter and do not duplicate universal repository or role rules.
+
 ## Forge axis
 
 The runtime is not a forge, but the workflow *prose* is forge-shaped (`gh` vs `glab`
@@ -42,8 +47,8 @@ Everything under `.opencode/` is **generated from canonical** by
 
 | Canonical source        | opencode edition output       | Notes |
 | ----------------------- | ----------------------------- | ----- |
-| `agents/<name>.md`      | `.opencode/agent/<name>.md`   | opencode frontmatter (`description`, `mode: subagent`, read-only `permission`). **No `model:` field** — model-agnostic. Generated reviewers preserve their canonical normalized behavior core and identity. |
-| `commands/<file>.md`    | `.opencode/command/<file>.md` | Claude install-time `model="{...}"` placeholders + all "pass `model=`" instructions rewritten to opencode's inheritance (the `task` tool has no model or effort parameter). The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
+| `templates/agents/behavior-contracts.json` + opencode adapter | `.opencode/agents/<name>.md` | one native render for each of the 14 roles; `mode: subagent`, capability-derived permission denials, session-inherited model, shared behavior hash, and render-specific hash |
+| `commands/<file>.md`    | `.opencode/commands/<file>.md` | Claude install-time `model="{...}"` placeholders + all "pass `model=`" instructions rewritten to opencode's inheritance (the `task` tool has no model or effort parameter). The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
 | `templates/opencode/plugins/*.js` | `.opencode/plugins/kaola-workflow-hooks.js` | Hook adapter plugin; byte-copied from the tracked canonical source by `sync-opencode-edition.js --write` (verified by `--check`; see [Hooks](#hooks)). |
 
 One file is **authored** (not generated) and verified present by the test:
@@ -55,36 +60,18 @@ Generated agents are deliberately model-agnostic, so regenerating the tree never
 overwrites a user's model choices — those live only in the user-owned
 `opencode.json`.
 
-## Reviewer behavior derivation
+## Role behavior derivation
 
-`code-reviewer`, `adversarial-verifier`, and `security-reviewer` are first rendered into their
-canonical Claude roots by `scripts/generate-reviewer-profiles.js` from
-`templates/reviewers/behavior-contracts.json` and the closed runtime adapters. The generator owns
-five Claude Markdown outputs and nine Codex TOML outputs across GitHub, GitLab, and Gitea.
-`sync-opencode-edition.js` then transforms those generated roots into OpenCode
-frontmatter/permissions; it does not maintain a second reviewer prompt.
+`scripts/sync-opencode-edition.js` requests every role through
+`generate-agent-profiles.js`'s opencode adapter. It does not parse or transform a Claude role file.
+The adapter combines the shared role contract with opencode-native frontmatter and permission
+denials. There is no second reviewer path: reviewer roles and the other eleven roles use the same
+source, renderer, hashes, and manifest.
 
-`scripts/test-opencode-edition.js` extracts the delimited reviewer core and proves that role,
-`behavior_contract_version`, `behavior_contract_hash`, and every normalized core byte match the
-canonical generated source. This is deterministic contract equivalence only. OpenCode and another
-runtime may produce different natural-language findings, explanations, or domain outcomes because
-the underlying model execution is stochastic. The transform also makes no claim about private
-runtime prompt-loader bytes; it proves the tracked/generated filesystem surface.
-
-The review mechanism on opencode is the same generated `code-reviewer`/`security-reviewer`
-profiles every runtime carries, documented in `docs/api.md`. Runtime transport differs
-across editions, but the reviewer contract they run does not.
-
-### Schema-2 reviewer identity (#708)
-
-The opencode reviewer profiles carry the schema-2 identity fields
-(`behavior_contract_version`, `behavior_contract_hash`, `resolved_profile_hash`) in their
-frontmatter, stamped by the same transform that generates the profile. The `resolved_profile_hash`
-is **re-stamped over the transformed opencode bytes** (not the Claude hash — the frontmatter
-differs post-transform, so the Claude hash does not bind these bytes). The runtime resolver that
-once read these fields back to bind a review-gate receipt retired with the node/DAG executor;
-nothing currently reads them at run time. `scripts/test-opencode-edition.js` still verifies the
-stamped bytes against canonical.
+Every profile carries `behavior_contract_version`, `behavior_contract_hash`, and
+`resolved_profile_hash`. The behavior identity is shared across runtimes; the resolved hash binds
+the complete opencode bytes. This proves deterministic filesystem equivalence, not identical
+stochastic output or private runtime prompt-load attestation.
 
 ## Model and effort — inherited from the session
 
@@ -146,7 +133,7 @@ user-owned model pin that applies to their classified role.
 On the opencode edition, the router routes directly to the adaptive workflow; there is no
 path-selection step at the router. The canonical `commands/workflow-next.md` is transformed at
 generation time by `sync-opencode-edition.js`'s `transformCommandBody` so the generated
-`.opencode/command/*` matches the opencode router shape, and **canonical `commands/*.md` is never
+`.opencode/commands/*` matches the opencode router shape, and **canonical `commands/*.md` is never
 touched**.
 
 ### Installer command set
@@ -163,7 +150,7 @@ selected forge's script tree, and the installer fails closed if an allowlisted s
 from source.
 
 `sync-opencode-edition.js writeCommands` produces one command file per command surface the routing
-registry declares for the selected forge, into the in-repo `.opencode[-<forge>]/command/` (the
+registry declares for the selected forge, into the in-repo `.opencode[-<forge>]/commands/` (the
 single source the installer copies from). The route-reachability + content-reachability assertions
 read the github tree and stay green.
 
@@ -296,8 +283,8 @@ deploys to a scope-correct location (`copy_tree`'s `layout_root`):
 
 | Scope | Deploy root for agents/commands/plugins/hooks | `opencode.json` |
 | --- | --- | --- |
-| `--target` (project, default `$PWD`) | `<project>/.opencode/{agent,command,plugins,hooks}/` | `<project>/opencode.json` |
-| `--global` | `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/{agent,command,plugins,hooks}/` — **directly** under the config root | `<config>/opencode.json` |
+| `--target` (project, default `$PWD`) | `<project>/.opencode/{agents,commands,plugins,hooks}/` | `<project>/opencode.json` |
+| `--global` | `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/{agents,commands,plugins,hooks}/` — **directly** under the config root | `<config>/opencode.json` |
 
 The config dir **is** opencode's global ".opencode equivalent", so a `--global` install
 writes its subdirs **directly** there — **not** a nested `~/.config/opencode/.opencode/`
@@ -308,6 +295,15 @@ scripts from a sibling `<config>/hooks/` (it derives candidates from its own loc
 `.opencode/hooks/`). Verified by `test-opencode-edition.js` **G1** (a hermetic `--global`
 install asserts the un-nested layout and that no nested `.opencode/` is created).
 
+Older Kaola releases wrote profiles and commands to the non-native singular `agent/` and `command/`
+directories. On install, those directories are migration inputs, not ownership shortcuts. A legacy
+profile is removed only when the previous singular-directory manifest records the same current
+hash; modified, unlisted, and unrelated files survive byte-for-byte. A legacy command is removed
+only when its basename is in Kaola's bounded current-or-retired command set; unrelated commands
+survive. Old ownership metadata and empty singular directories are removed after migration. The
+new native plural `agents/` directory uses its own manifest, and an unmanaged same-name collision
+there makes the install fail closed before deploying any profile.
+
 ## Uninstall
 
 ```bash
@@ -316,7 +312,9 @@ install asserts the un-nested layout and that no nested `.opencode/` is created)
 ./install-opencode.sh --uninstall --global        # remove the global ~/.config/opencode install
 ```
 
-`--uninstall` removes **only** kaola-deployed artifacts from the resolved scope, by
+`--uninstall` removes **only** kaola-deployed artifacts from the resolved scope. Native profiles are
+removed through the plural-directory ownership manifest; unrelated plural profiles and all
+unowned or modified singular-directory files survive. Commands and hooks are removed by
 source-tree filename plus the names the edition retired on purpose (`RETIRED_WORKFLOW_COMMANDS`,
 `RETIRED_HOOKS`, `RETIRED_SUPPORT_SCRIPTS` — a retired name is absent from the source tree and from
 the install manifest, so without those lists it would linger forever; never a blind `rm` of a dir you
@@ -348,6 +346,8 @@ model and effort of the session that dispatched it; pin a tier to a different mo
 ## Develop / regenerate
 
 ```bash
+node scripts/generate-agent-profiles.js --write             # regenerate/check tracked + logical role renders
+node scripts/generate-agent-profiles.js --check
 node scripts/sync-opencode-edition.js --write              # regenerate .opencode/ + seed config
 node scripts/sync-opencode-edition.js --write-config       # re-render opencode.json from the template
 node scripts/sync-opencode-edition.js --refresh-present    # regenerate every tree that already exists; create none (ignores --forge)
@@ -384,7 +384,7 @@ one that would exit 0 having repaired nothing:
 
 ```text
 sync-opencode-edition[github]: PARITY FAILED (3 file(s)):
-  - .opencode/agent/doc-updater.md — stale — regenerate
+  - .opencode/agents/doc-updater.md — stale — regenerate
   - templates/opencode/plugins/probe-unregistered.js — unregistered plugin 'probe-unregistered.js' present in templates/opencode/plugins/ but absent from PLUGIN_SCRIPTS — add it to the allowlist
   - opencode.json — stale — regenerate via --write-config
 Fix: node scripts/sync-opencode-edition.js --forge=github --write-config
@@ -398,16 +398,16 @@ The named flag always carries the `--forge=` the check ran under. Exit code is 1
 
 | Aspect | Codex edition | opencode edition |
 | --- | --- | --- |
-| Delivery | plugin (`.codex-plugin/` + `skills/` + `agents/*.toml`) | `opencode.json` + `.opencode/agent` + `.opencode/command` |
+| Delivery | plugin (`.codex-plugin/` + `skills/` + `agents/*.toml`) | `opencode.json` + `.opencode/agents` + `.opencode/commands` |
 | Agent format | TOML profiles | Markdown (frontmatter + prompt body) |
 | Forge coupling | shares the forge edition machinery (github/gitlab/gitea) | `--forge` flag; variants generated from the routing registry, outside the edition machinery |
 | Models | baked per-agent | **inherited** — a subagent runs the model and reasoning effort of the session that dispatched it; standard/reasoning model pins are opt-in, with `fable` classified as reasoning |
 
 ## Verification
 
-The edition is covered by `scripts/test-opencode-edition.js`: agent/command presence and
-frontmatter, model-agnostic invariant (no `model:` in
-generated agents), byte-for-byte canonical parity including generated reviewer behavior identity,
+The edition is covered by `scripts/test-opencode-edition.js`: all-role/command presence and
+frontmatter, model-agnostic invariant (no `model:` in generated agents), behavior-source reachability,
+adapter isolation, complete-render hashes,
 `opencode.json` JSONC validity,
 **plugin load shape** (A29: the module exports exactly `["default"]`, and a harness walks it the
 way opencode's loader does — `Object.values(mod)`, calling every exported value as a plugin
@@ -419,7 +419,7 @@ nothing, report nothing), **model-prose consistency** (no contradictory "pass `m
 instructions),
 **path-flip** (A22: no Path Intent section / auto-fallback prose on the opencode
 surface), route-reachability (every receipt-emitted command target resolves
-under `.opencode/command/`), **command-set lock-in** (P1: the deployed set is exactly
+under `.opencode/commands/`), **command-set lock-in** (P1: the deployed set is exactly
 the workflow command set), the **folded
 #544 Claude path-leak fix** (A: zero `$CLAUDE_PLUGIN_ROOT` /
 `~/.claude/kaola-workflow` tokens across the deployed `.opencode/` tree), and

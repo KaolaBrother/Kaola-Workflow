@@ -13,6 +13,11 @@ machinery.
 Cursor Cloud Agents may not fire `sessionStart` and may not load project hooks.
 That gap is declared, not papered over; durable resume stays `mission-list.md`.
 
+Cursor reads root and nested `AGENTS.md` directly, combining parent guidance with more-specific
+instructions. Kaola installs no project-instruction bridge for Cursor. Generated agent frontmatter,
+workspace catalog rules, and hooks are Cursor adapter data, not a copy of the universal contract.
+See [runtime capabilities](runtime-capabilities.md#cursor) for first-party evidence and limits.
+
 ## Forge axis
 
 The runtime is not a forge, but the workflow *prose* is forge-shaped (`gh` vs
@@ -49,25 +54,23 @@ Everything under `.cursor/` is **generated from canonical** by
 
 | Canonical source | cursor edition output | Notes |
 | ---------------- | --------------------- | ----- |
-| `agents/<name>.md` | `.cursor/agents/<name>.md` | Cursor agent frontmatter (`name`, `description`, an unquoted `model: grok-4.6[effort=medium]`, `model: grok-4.6[effort=high]`, or `model: grok-4.6[effort=xhigh]` derived from the canonical class, and `readonly`). Claude `tools:` (including MCP ids) are dropped. Descriptions that are not plain YAML scalars are JSON-quoted. Reviewer identity is a body comment block (`<!-- cursor-reviewer-identity:start|end -->`); `resolved_profile_hash` is re-stamped over the cursor bytes. |
+| `templates/agents/behavior-contracts.json` + Cursor adapter | `.cursor/agents/<name>.md` | 14 native profiles with `name`, `description`, intent-mapped `model: grok-4.6[effort=…]`, capability-derived `readonly`, shared behavior identity, and render-specific hash |
 | `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). `Agent(` dispatch cards become `Task(`. Install-time `model="{...}"` lines are stripped. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
 | `hooks/<script>.sh` | `.cursor/hooks/<script>.sh` | No runtime-neutral dispatch hook is installed. Compact-context is wrapped as JSON `{additional_context}` for `sessionStart`. A second `sessionStart` wrapper runs `kaola-workflow-ensure-cursor-catalog.js` and prints `{}` so it does not emit `additional_context`. |
 | mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). `sessionStart` (compact resume + catalog ensure) only. Project-shaped commands use `.cursor/hooks/…`. A `--global` install rewrites that prefix to `./hooks/`. |
 
-Generated agents carry a model-and-effort pin derived from the canonical agent
-class. The canonical `sonnet`/`standard`, `opus`/`reasoning`, and `fable`/`heavy`
-tokens remain the roster authority; generated frontmatter uses the raw, unquoted
-`grok-4.6[effort=medium]`, `grok-4.6[effort=high]`, and
-`grok-4.6[effort=xhigh]` values respectively.
+Generated agents carry a model-and-effort pin derived from the runtime-neutral intent class.
+`standard`, `reasoning`, and `heavy` are the behavior-source values; only the Cursor adapter maps
+them to the raw, unquoted `grok-4.6[effort=medium]`, `grok-4.6[effort=high]`, and
+`grok-4.6[effort=xhigh]` frontmatter values.
 
 ## Three-tier frontmatter pins — model-free Task dispatch
 
-The canonical `agents/*.md` model class is mapped at generation time: standard
-(`sonnet`/`standard`) roles receive the unquoted
-`model: grok-4.6[effort=medium]` line, reasoning (`opus`/`reasoning`) roles
-receive `model: grok-4.6[effort=high]`, and heavy (`fable`/`heavy`) roles receive
-the raw, unquoted `model: grok-4.6[effort=xhigh]`. Unknown class tokens fail
-closed; the generator does not invent a fallback roster. Cursor's `Task` tool
+The behavior source's `standard` roles receive the unquoted
+`model: grok-4.6[effort=medium]` line, `reasoning` roles receive
+`model: grok-4.6[effort=high]`, and `heavy` roles receive the raw, unquoted
+`model: grok-4.6[effort=xhigh]`. Unknown intent tokens fail closed; the generator does not invent a
+fallback roster. Cursor's `Task` tool
 accepts an optional `model` but has no separate effort field, so generated
 command cards omit `model`.
 
@@ -99,67 +102,26 @@ omit Claude's one-bounded reviewer heavy re-dispatch. Cursor's `Task` dispatch
 has no documented per-call effort override; reviewer behavior therefore follows
 the static generated frontmatter pin.
 
-Cursor CLI loads custom `Task` types from the **workspace** `.cursor/agents`,
-not from `~/.cursor/agents`. The workspace catalog is refreshed from
-`${CURSOR_HOME:-$HOME/.cursor}/agents`: all 14 canonical role files must be
-byte-identical to that global tree; global is the source of truth (not git
-toplevel). `sessionStart` runs an ensure wrapper that prints `{}`. `/workflow-next`
-runs `kaola-workflow-ensure-cursor-catalog.js` via the same `kaola_script`
-resolver as claim.js. Dest is always `<cwd>/.cursor/agents`. The script prints
-one of `already-present` | `copied` | `missing-source` (exit 0 on the first two,
-1 on `missing-source`). `already-present` means dest is in-sync (all 14
-byte-identical) and a named omit-model `Task` may proceed; `copied` still
-requires a cold start (new chat, then re-run `/workflow-next`); `missing-source`
-means print `./install-cursor.sh --target "$PWD"` and do not name a Task type.
-`--global` and `install-all.sh`'s default write
-`${CURSOR_HOME}/{agents,commands}` (un-nested). That layout is not
-dispatch-capable by itself unless the installer also dual-wrote the project
-catalog because the process cwd was inside a git work tree. A worktree is a
-cwd: do not point `agent --workspace` at `.kw/worktrees/<project>/` unless the
-14 agent files already exist there **before** the session starts. After
-materializing `.cursor/agents`, start a new chat; a mid-session copy does not
-change this session's Task enum. Overlay source is
-`templates/routing/init.skeleton.md` (runtime-neutral). `/workflow-init` is the
-shared all-runtime bootstrapper; it does not carry Cursor spawn teaching or a
-Cursor overlay freeze. Dispatch teaching is only `/workflow-next` and
-`/kaola-workflow-finalize`.
+All 14 role bodies come from `templates/agents/behavior-contracts.json` through
+`generate-agent-profiles.js`; `sync-cursor-edition.js` requests Cursor renders and owns only edition
+layout, commands, hooks, and install packaging. Reviewer roles have no separate source or transform.
 
-**Declared runtime divergences.** The declarations are the
-`frontmatter_tier_pin` and `session_start_resume_injection` entries in the
-`CURSOR_RUNTIME_NATIVE` table in `scripts/test-cursor-edition.js`. The suite
-asserts each entry exists, that its reason states the fact, and that the
-generated tree matches it — the two raw frontmatter pins above, no separate
-`effort:` / `reasoning_effort:` field, no per-call `model=` override; compact
-resume injects via `sessionStart` `additional_context` because `preCompact`
-cannot inject into the agent.
+Cursor officially discovers custom profiles from both project `.cursor/agents/` and user
+`~/.cursor/agents/`; project definitions win on a name conflict. Kaola's project install writes the
+project location and `--global` writes `${CURSOR_HOME:-$HOME/.cursor}/agents/` directly. A global
+install made while the current directory is inside a git work tree also mirrors the roster to that
+project. The catalog-ensure hook and `kaola-workflow-ensure-cursor-catalog.js` keep this optional
+mirror byte-aligned; they are convergence helpers, not evidence that Cursor lacks its documented
+user-profile carrier.
 
-### Runtime limits
+The official model contract is likewise bounded: `model` is either `inherit` or an exact model ID,
+and bracket parameters carry options such as effort. Team policy, legacy-plan settings, or plan
+availability may force a compatible fallback. Generated Task cards therefore name the role and omit
+a per-call model; the profile remains the one model/effort carrier. Current official documentation
+also allows two child levels (main → child → grandchild), with no deeper spawn.
 
-These are Cursor product limits, not alternate pin paths:
-
-1. **Cold start.** Agent files can be loaded at session start. After install or
-   sync, use a new chat for close evidence; a mid-session edit is inconclusive.
-2. **CLI envelope oracle.** Named omit-model Tasks on CLI resolve effort in the
-   stream envelope (`cursor-grok-4.6-medium` vs `cursor-grok-4.6-high` vs
-   `cursor-grok-4.6-xhigh`). That
-   envelope is the measurement. Do not pass inherit, `cursor-grok-4.6-xhigh`,
-   or any other per-call model to force it.
-3. **IDE picker clamp.** The selected session Grok 4.6 / `selectedModels`
-   picker may clamp children to one thinking variant. That is a typed
-   deferral; do not add a `Task(model=)` workaround, and do not claim IDE
-   children display distinct effort.
-4. **IDE Task schema inherit default.** The schema lists inherit as the default
-   for built-ins. For named Kaola types that default is a trap: omit the model
-   argument anyway.
-5. **Resume.** Never resume a Kaola subagent. Resume drops frontmatter effort.
-   Fresh dispatch only; not a second pin path.
-6. **Cloud vs local.** Cloud Agents may not load project hooks or fire
-   `sessionStart` (so the catalog-ensure hook may not run there); the live IDE
-   Task path remains the restricted path unless a later measurement for this
-   edition shows otherwise. Durable resume remains `mission-list.md`.
-
-No config seeding, inline model override, or second pin path is added for these
-limits.
+Compact resume and catalog synchronization remain edition hook behavior. Durable recovery never
+depends on either hook: `mission-list.md` is the authority after a new local, CLI, or cloud session.
 
 ## Path selection
 
@@ -175,9 +137,9 @@ does not run through `install.sh --forge`.
 > The Cursor runtime is also covered by the top-level **`./install-all.sh`**
 > ("install/refresh every runtime" — see [README](../README.md#installation)),
 > which invokes this installer unchanged (`--global` by default) as the sixth
-> leg of its seven-runtime sequence, with a per-runtime PASS/FAIL summary. `--global`
-> alone does not populate the workspace Task catalog unless cwd is a git work
-> tree and the dual-write lands `<toplevel>/.cursor/agents`. It stays a thin
+> leg of its seven-runtime sequence, with a per-runtime PASS/FAIL summary. The user-scope
+> `$CURSOR_HOME/agents` carrier is native; when cwd is a git work tree the installer also
+> materializes `<toplevel>/.cursor/agents` for a project-local, precedence-winning mirror. It stays a thin
 > orchestrator — it does **not** fold Cursor into
 > `install.sh`/`edition-sync.js`/`npm test`.
 
@@ -205,8 +167,8 @@ install still finds the main-checkout trees).
   `${CURSOR_HOME:-$HOME/.cursor}/hooks.json` with command paths rewritten to `./hooks/`.
   If the installer cwd is inside a git work tree, the same agents and commands are
   also written to `$(git rev-parse --show-toplevel)/.cursor/{agents,commands}`
-  (Task types are workspace-scoped). `--global` from a directory with no git
-  toplevel does not invent a project `.cursor/` tree.
+  as a project-local mirror. `--global` from a directory with no git toplevel does not invent a
+  project `.cursor/` tree; the documented user carrier remains available.
 - Support scripts always land under
   `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/{scripts,hooks}`.
   `kaola-workflow-ensure-cursor-catalog.js` is a Cursor-only extra: the installer

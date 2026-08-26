@@ -1,5 +1,51 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **AGENTS-first, runtime-adapted instruction architecture (#1033).** Root `AGENTS.md` is now the
+  single runtime-neutral repository authority. Claude Code reaches it through the documented thin
+  `CLAUDE.md` `@AGENTS.md` bridge; Codex, opencode, Kimi Code, Grok, Cursor, and ZCode consume
+  `AGENTS.md` directly within their documented discovery scopes. Runtime overlays and adapters may
+  express native carriers, model/effort policy, permissions, and hooks, but may not duplicate the
+  universal contract.
+- **One behavioral source for all 14 roles (#1033).** `templates/agents/behavior-contracts.json`,
+  the evidence-backed adapter map, and prompt-external provenance now feed one generalized
+  generator. The current closed inventory is seven runtime families, nine adapter variants, and
+  126 deterministic native renders. Claude Markdown is a render target, not the interchange format;
+  the reviewer-only generator, reviewer templates, prose-parity test, and Claude-shaped rewrite
+  authority are retired.
+- **Ownership-safe project instruction migration (#1033).** `workflow-init` now uses a standard-
+  library `plan` / `check` / `apply` helper. It updates only Kaola-owned regions, preserves owner
+  bytes outside them, is byte-idempotent, fences active older runs, and returns
+  `decision_required` without writing when ownership is ambiguous.
+
+### Fixed
+
+- **Every additive edition suite is attempted (#1034).** The edition runner executes opencode,
+  Kimi, Grok, Cursor, and ZCode even when an earlier suite fails, preserves the aggregate failure,
+  and reports the attempted set. OpenCode's retired-hook uninstall assertion now observes the real
+  sandboxed post-uninstall result and is mutation-proven instead of pinning a shell loop-variable
+  spelling.
+- **Native role carriers and capability fields converge on official runtime contracts (#1033).**
+  Kimi roles moved from role-shaped Skills to 14 native custom-agent profiles while the three
+  workflow commands remain Skills; direct named dispatch, native tool allowlists, and ownership-safe
+  collision/retirement behavior are covered by the edition suite. OpenCode agents and commands now
+  use the official plural project/global directories; the installer migrates singular legacy agents
+  only with manifest-plus-hash ownership proof and removes only bounded Kaola command names. Grok
+  profiles use camelCase `promptMode` / `agentsMd`, explicit tools, and omit the unsupported
+  `permissionMode: plan`. Kimi, Grok, and ZCode tool carriers and Cursor/ZCode model identifiers come
+  from their adapters. ZCode executable hooks merge only into
+  `${ZCODE_HOME:-$HOME/.zcode}/cli/config.json`; ignored project and legacy user config files remain
+  untouched.
+
+### Documentation
+
+- Added the seven-runtime capability/evidence map, AGENTS-first architecture record, role-source and
+  provenance contract, migration API, and edition-specific adapter boundaries. Unknown size,
+  discovery, relocation, and installed-version facts remain explicitly unknown.
+
 ## [9.17.2] - 2026-08-26
 
 ### Changed

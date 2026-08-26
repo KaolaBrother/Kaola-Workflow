@@ -31,14 +31,16 @@ test -d kaola-workflow && find kaola-workflow -maxdepth 3 -type f | sort
 find docs -maxdepth 3 -type f 2>/dev/null | sort
 ```
 
-3. Create or update `AGENTS.md` only when needed. Preserve user-authored content.
-4. Create or update `CLAUDE.md` with canonical workflow guidance. If `CLAUDE.md` already exists, update the `## Non-Negotiable Rules` section in-place with the canonical 5 bullets.
+3. Reconcile `AGENTS.md` as the universal authority and preserve user-authored bytes outside the
+   managed region.
+4. Keep any runtime-native first-read instruction file as a thin bridge plus runtime-only overlay;
+   never duplicate the universal sections there.
 
    Active folder lifecycle: `kaola-gitea-workflow-claim.js` manages claim/startup (atomic folder create), status, release/discard, watch-pr, and finalize/archive. No legacy coordination layer is used.
 
    Kaola-Workflow agent profiles live in `.codex/agents/kaola-workflow/` and are wired by the managed block in `.codex/config.toml`.
 
-<!-- KW-CLAUDE-TEMPLATE-START -->
+<!-- KW-AGENTS-TEMPLATE-START -->
 ```markdown
 # Project Instructions
 
@@ -84,7 +86,7 @@ The numbered axioms are tie-breakers, applied in priority order whenever a situa
 
 ## Kaola-Workflow
 
-<!-- KW-CLAUDE-MANAGED-START -->
+<!-- KW-AGENTS-MANAGED-START -->
 Everything between this marker and its matching END below is owned by `workflow-init`: a later run
 may replace it in full. Nothing outside the two markers is touched — that content, wherever you have
 added or changed it in this file, is yours.
@@ -125,7 +127,7 @@ added or changed it in this file, is yours.
 <!-- PIN: forge-is-the-backlog -->
 - Top-priority labels: declare in `kaola-workflow/config.json` (`priority_top_tier_labels`) when the repo uses something other than P0–P3 naming.
 <!-- /PIN -->
-<!-- KW-CLAUDE-MANAGED-END -->
+<!-- KW-AGENTS-MANAGED-END -->
 
 ## Project Conventions
 
@@ -151,7 +153,7 @@ added or changed it in this file, is yours.
 - Add rules only after repeated mistakes, review feedback, or stable project conventions.
 - Do not use `@path` imports for optional reference material.
 ```
-<!-- KW-CLAUDE-TEMPLATE-END -->
+<!-- KW-AGENTS-TEMPLATE-END -->
 
 5. Agent role profiles are a one-time GLOBAL install — `workflow-init` does NOT install them per repo.
 
@@ -265,66 +267,21 @@ CHANGELOG.md
 
 ## Create `AGENTS.md`
 
-Check whether `AGENTS.md` exists in the project root. Detect conformance by
-reading the second non-blank line: if it equals
-`> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**`,
-the file is conforming — no-op. If the file is missing, write the canonical
-redirect block below. If the file exists but is non-conforming (second
-non-blank line does not match), prepend the redirect block, add a `---`
-divider, then append the original content with the migration note line.
+Resolve the installed project-instruction helper beside the claim script and run:
 
-Worked example of a migrated AGENTS.md (two `---` dividers total):
-
-```text
-# AGENTS.md
-
-> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**
->
-> `CLAUDE.md` in this repository root is the **single canonical source** for all
-> non-negotiable rules, project conventions, workflow constraints, and agent
-> behavior. AGENTS.md exists **only** to direct you there.
->
-> **Required at session start, before any tool call, edit, or response:**
->
-> 1. Read `CLAUDE.md` in full.
-> 2. Treat its `## Non-Negotiable Rules` section as binding for every action you take in this repo.
-> 3. If `CLAUDE.md` is missing, **stop and ask the user** — do not proceed on assumptions.
->
-> Do not skip this step because the task looks small. Do not rely on prior
-> session memory. Re-read on every new session.
-
----
-
-*All other guidance — the workflow, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
-
----
-> Note: the content below is the AGENTS.md contract.
-[original content here]
+```bash
+INSTRUCTIONS_JS="$(kaola_script kaola-workflow-project-instructions.js)"
+node "$INSTRUCTIONS_JS" plan --project-root "$PWD" --json
+node "$INSTRUCTIONS_JS" apply --project-root "$PWD" --json
+node "$INSTRUCTIONS_JS" check --project-root "$PWD" --json
 ```
 
-Canonical `AGENTS.md` redirect block to write:
-
-```markdown
-# AGENTS.md
-
-> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**
->
-> `CLAUDE.md` in this repository root is the **single canonical source** for all
-> non-negotiable rules, project conventions, workflow constraints, and agent
-> behavior. AGENTS.md exists **only** to direct you there.
->
-> **Required at session start, before any tool call, edit, or response:**
->
-> 1. Read `CLAUDE.md` in full.
-> 2. Treat its `## Non-Negotiable Rules` section as binding for every action you take in this repo.
-> 3. If `CLAUDE.md` is missing, **stop and ask the user** — do not proceed on assumptions.
->
-> Do not skip this step because the task looks small. Do not rely on prior
-> session memory. Re-read on every new session.
-
----
-
-*All other guidance — the workflow, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
+The helper owns only `<!-- KW-AGENTS-MANAGED-START -->` through its matching END and the runtime
+overlay's own managed region. Known legacy managed redirects may be migrated; mixed files preserve
+every owner byte outside those regions byte-for-byte. Unknown, malformed, duplicate, or owner-only
+instruction authority returns `decision_required`: ask in conversation and make no write. A project
+claimed under an older installed version returns `active_run_preserved`. Successful reruns are
+idempotent and report `converged` with an empty write list.
 ```
 
 ## Initial File Bodies

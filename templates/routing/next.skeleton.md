@@ -10,7 +10,7 @@ count, cap, disjointness proof, justification, approval, or fallback stigma atta
 <!-- SLOT:nx-intro -->
 
 **First Principles.** When nothing already settles a situation, break the tie by the First
-Principles axioms (the `## First Principles` block in your project's workflow-init `CLAUDE.md`),
+Principles axioms (the `## First Principles` block in your project's workflow-init `AGENTS.md`),
 applied in priority order. Recording a one-line derivation alongside the work is useful and never
 required.
 

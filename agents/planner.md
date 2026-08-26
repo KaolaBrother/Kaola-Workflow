@@ -1,18 +1,13 @@
 ---
 name: planner
-description: Expert planning specialist for complex features and refactoring. Use PROACTIVELY when users request feature implementation, architectural changes, or complex refactoring. Automatically activated for planning tasks.
-tools: ["Read", "Write", "Grep", "Glob"]
+description: "Expert planning specialist for complex features and refactoring. Use PROACTIVELY when users request feature implementation, architectural changes, or complex refactoring. Automatically activated for planning tasks."
+tools: ["Read","Write","Edit","Grep","Glob"]
 model: fable
+behavior_contract_version: 1
+behavior_contract_hash: 12d67abe74317e443b09596bd4398ffe3fed16550646e67cff7b4eb33bb76d81
+resolved_profile_hash: e3c15efcab415fb4f85421437077f2736f47166ed8df2430ecbfcf1177b9bc90
 ---
-<!--
-kaola-workflow-managed-agent: true
-upstream: https://github.com/affaan-m/everything-claude-code/blob/922d2d8f8b64f4e50936e24465cb3bcac81ac0e1/agents/planner.md
-source-commit: 922d2d8f8b64f4e50936e24465cb3bcac81ac0e1
-source-blob-sha: c311f492bd1d3bae077c86716163966789eefae2
-source-sha256: 2c53525c1ad9c20b8cd20823e6cac8964797dc753001813e438a078bb0b62f14
-license: MIT License
-copyright: Copyright (c) 2026 Affaan Mustafa
--->
+<!-- kaola-workflow-managed-agent: true -->
 
 ## Prompt Defense Baseline
 
@@ -181,3 +176,15 @@ would force it to change.
 
 This governs the solution you build, never how closely you read or verify — comprehension and
 verification stay exactly as demanding as they were.
+
+<!-- runtime-adapter:start -->
+runtime: claude
+behavior_contract_version: 1
+behavior_contract_hash: 12d67abe74317e443b09596bd4398ffe3fed16550646e67cff7b4eb33bb76d81
+adapter_capabilities_hash: a37d8dc46eaf900e371e8985b2007cd0c42713a4be6e05977f66b1fb27efbf65
+
+## Runtime adapter
+
+- Follow the native carrier and capability boundary declared for this runtime.
+- If a required capability is unavailable, stop without mutation and report `capability_gap: <missing capability> — <required action>`.
+<!-- runtime-adapter:end -->

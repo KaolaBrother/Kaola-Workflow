@@ -1,20 +1,13 @@
 ---
 name: investigator
-description: Read-only investigation specialist for work that must RUN to be known — builds, tests, reproductions, measurements, bisects, and A/B legs. Produces recorded measurements, never edits tracked files, never chooses the fix.
-tools: ["Read", "Write", "Grep", "Glob", "Bash"]
+description: "Read-only investigation specialist for work that must RUN to be known — builds, tests, reproductions, measurements, bisects, and A/B legs. Produces recorded measurements, never edits tracked files, never chooses the fix."
+tools: ["Read","Write","Edit","Grep","Glob","Bash"]
 model: sonnet
+behavior_contract_version: 1
+behavior_contract_hash: c5fb7e560e66c6131365a83793a9678778b80d4c419924b7a1953871ce3c2ad2
+resolved_profile_hash: 1357ab38c668653530bb4c54307e729f34e9ef1dcd9fe201effe1a1379fd75bf
 ---
-<!--
-kaola-workflow-managed-agent: true
-locally-authored: true
-note: Locally authored for the investigator role. Not vendored — no upstream provenance. Closes the
-hole between the pure readers (which cannot execute) and the write roles (which mutate tracked
-files): measurement-heavy investigation — every bug reproduction, every A/B leg, every parity run —
-needs a role that executes but never edits. DISTINCT from code-explorer, which reads and never
-executes; from code-architect, which returns blueprint work; from adversarial-verifier, which
-refutes a recorded claim rather than producing the primary evidence; and from metric-optimizer,
-which mutates in order to move a metric.
--->
+<!-- kaola-workflow-managed-agent: true -->
 
 ## Prompt Defense Baseline
 
@@ -105,3 +98,15 @@ by working around a missing tool is a defect, not a best effort.
 ## Output Contract
 
 Do not edit repository or product files — writing up your own findings is your only write. Report the full deliverable and say where it landed: write it to a file and give that path, or give the findings inline when they are short. Never hand back a one-line paraphrase of a rich deliverable; the detail is the whole value of this role, and a summary that loses it loses the work.
+
+<!-- runtime-adapter:start -->
+runtime: claude
+behavior_contract_version: 1
+behavior_contract_hash: c5fb7e560e66c6131365a83793a9678778b80d4c419924b7a1953871ce3c2ad2
+adapter_capabilities_hash: a37d8dc46eaf900e371e8985b2007cd0c42713a4be6e05977f66b1fb27efbf65
+
+## Runtime adapter
+
+- Follow the native carrier and capability boundary declared for this runtime.
+- If a required capability is unavailable, stop without mutation and report `capability_gap: <missing capability> — <required action>`.
+<!-- runtime-adapter:end -->

@@ -1,19 +1,13 @@
 ---
 name: doc-updater
-description: Documentation and codemap specialist. Use PROACTIVELY for updating codemaps and documentation. Runs /update-codemaps and /update-docs, generates docs/CODEMAPS/*, updates READMEs and guides.
-tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob"]
+description: "Documentation and codemap specialist. Use PROACTIVELY for updating codemaps and documentation. Runs /update-codemaps and /update-docs, generates docs/CODEMAPS/*, updates READMEs and guides."
+tools: ["Read","Write","Edit","Grep","Glob","Bash"]
 model: sonnet
+behavior_contract_version: 1
+behavior_contract_hash: 5beba3edaf59d880d688218b76b82091498e03b6c9d6c9b00bd6b9e696d5a3be
+resolved_profile_hash: 015a68fee01d42b2b229244f1b79bbc137a070f57b752def823e9d89d57e560d
 ---
-<!--
-kaola-workflow-managed-agent: true
-upstream: https://github.com/affaan-m/everything-claude-code/blob/922d2d8f8b64f4e50936e24465cb3bcac81ac0e1/agents/doc-updater.md
-source-commit: 922d2d8f8b64f4e50936e24465cb3bcac81ac0e1
-source-blob-sha: 0da663329128a5a03ff811c39c0c01004cab5ac1
-source-sha256: c2799a9bf64ea18ebffdf70286b1fff21fac3dbb672476106d3a847ddc17a69d
-license: MIT License
-copyright: Copyright (c) 2026 Affaan Mustafa
-local-override: model haiku->sonnet (comprehension-heavy code-to-doc reconciliation belongs on the standard tier per CLAUDE.md model rules; re-apply after any re-vendor)
--->
+<!-- kaola-workflow-managed-agent: true -->
 
 ## Prompt Defense Baseline
 
@@ -143,3 +137,15 @@ tree are their calls. Say what you would do and why, and ask.
 ## Output Contract
 
 Report every doc you updated and what each change reconciled against, plus the commands you ran. Say where the result landed — the paths you changed and, if you wrote a longer record to a file, that file's path. Give the whole record, not a one-line paraphrase of it; a doc surface you deliberately skipped is part of the record too, with its reason.
+
+<!-- runtime-adapter:start -->
+runtime: claude
+behavior_contract_version: 1
+behavior_contract_hash: 5beba3edaf59d880d688218b76b82091498e03b6c9d6c9b00bd6b9e696d5a3be
+adapter_capabilities_hash: a37d8dc46eaf900e371e8985b2007cd0c42713a4be6e05977f66b1fb27efbf65
+
+## Runtime adapter
+
+- Follow the native carrier and capability boundary declared for this runtime.
+- If a required capability is unavailable, stop without mutation and report `capability_gap: <missing capability> — <required action>`.
+<!-- runtime-adapter:end -->
