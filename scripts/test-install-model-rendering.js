@@ -32,11 +32,12 @@ const resolver = require('./kaola-workflow-resolve-agent-model.js');
 // implementer lands the recorded decision.
 {
   const initSkel = fs.readFileSync(path.join(root, 'templates/routing/init.skeleton.md'), 'utf8');
-  assert(initSkel.includes('`planner (heavy-reasoning tier)`'),
-    '#1018 AC-11: templates/routing/init.skeleton.md consumer CLAUDE.md example must be planner (heavy-reasoning tier)');
-  assert(!initSkel.includes('`planner (reasoning tier)`'),
-    '#1018 AC-11: init.skeleton.md must not keep the pre-re-tier example planner (reasoning tier)');
-  assert(/Name roles by function and reasoning tier, never by a vendor model name/.test(initSkel),
+  const consumerTemplate = require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE;
+  assert(consumerTemplate.includes('`planner (heavy-reasoning tier)`'),
+    '#1018 AC-11: consumer AGENTS template example must be planner (heavy-reasoning tier)');
+  assert(!consumerTemplate.includes('`planner (reasoning tier)`'),
+    '#1018 AC-11: consumer AGENTS template must not keep the pre-re-tier example planner (reasoning tier)');
+  assert(/Name roles by function and reasoning tier, never by a vendor model name/.test(consumerTemplate),
     '#1018 AC-11: the naming-rule sentence itself is unchanged word for word');
   assert(/model_reasoning_effort\s*=\s*"ultra"/.test(initSkel),
     '#1018 AC-11: init.skeleton.md session-posture model_reasoning_effort = "ultra" stays untouched');

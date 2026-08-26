@@ -546,25 +546,26 @@ if (migrationModule) {
     try { fs.rmSync(sourceProbeRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   }
 
-  // A3-released-region — v9.17.2 emitted a consumer CLAUDE.md whose workflow-owned bytes used the
-  // retired KW-CLAUDE-MANAGED marker, while project-specific content around that envelope remained
-  // owner-authored. Migrating a known AGENTS redirect must replace exactly that old owned region
-  // with the thin bridge. Refusing the released shape or prepending a whole new file both strand a
-  // supported consumer on the old authority direction.
+  // A3-released-template — v9.17.2 emitted a complete consumer CLAUDE.md whose universal contract
+  // lived outside the retired managed region. Exact released bytes are therefore one known whole-
+  // file artifact: retaining their prefix/suffix would preserve a second universal authority. The
+  // whole file may migrate only while its byte identity is intact. Any changed or owner-authored
+  // byte outside that old region makes ownership ambiguous and must require a decision with no
+  // partial migration.
   const releasedClaude = releasedConsumerTemplate();
   assert(Buffer.isBuffer(releasedClaude),
-    'A3[released-region]: the exact v9.17.2 workflow-init consumer template loads from a503edd8');
+    'A3[released-template]: the exact v9.17.2 workflow-init consumer template loads from a503edd8');
   if (releasedClaude) {
     const oldMarker = 'KW-CLAUDE-MANAGED';
     const oldManaged = exactManagedSlice(releasedClaude, oldMarker);
     const oldStart = oldManaged ? releasedClaude.indexOf(oldManaged) : -1;
-    const ownerPrefix = oldStart >= 0 ? releasedClaude.subarray(0, oldStart) : Buffer.alloc(0);
-    const ownerSuffix = oldStart >= 0
+    const releasedPrefix = oldStart >= 0 ? releasedClaude.subarray(0, oldStart) : Buffer.alloc(0);
+    const releasedSuffix = oldStart >= 0
       ? releasedClaude.subarray(oldStart + oldManaged.length) : Buffer.alloc(0);
-    assert(!!oldManaged && ownerPrefix.length > 0 && ownerSuffix.length > 0,
-      'A3[released-region]: released fixture has a bounded old managed region and real owner prefix/suffix');
+    assert(!!oldManaged && releasedPrefix.length > 0 && releasedSuffix.length > 0,
+      'A3[released-template]: released fixture has a bounded old managed region plus universal outer bytes');
 
-    const releasedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-released-region-'));
+    const releasedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-released-template-'));
     try {
       writeInstructionFixture(releasedRoot, Buffer.from(legacyRedirect), releasedClaude);
       const applied = runMigration('apply', releasedRoot);
@@ -573,38 +574,70 @@ if (migrationModule) {
       const canonicalTemplates = require(path.join(ROOT, 'scripts',
         'kaola-workflow-project-instruction-templates.js'));
       const expectedAgents = Buffer.from(canonicalTemplates.AGENTS_TEMPLATE);
-      const expectedClaudeManaged = exactManagedSlice(
-        Buffer.from(canonicalTemplates.CLAUDE_TEMPLATE), migrationModule.CLAUDE_MARKER);
-      const expectedClaude = oldManaged && expectedClaudeManaged
-        ? Buffer.concat([ownerPrefix, expectedClaudeManaged, ownerSuffix]) : null;
+      const expectedClaude = Buffer.from(canonicalTemplates.CLAUDE_TEMPLATE);
 
       assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied'
         && applied.envelope.changed === true,
-      'A3[released-region]: a released legacy redirect plus old managed Claude region migrates automatically');
+      'A3[released-template]: the exact released instruction pair migrates automatically');
       assert(agentsAfter.equals(expectedAgents),
-        'A3[released-region]: the legacy AGENTS redirect becomes the canonical consumer authority');
-      assert(!!expectedClaude && claudeAfter.equals(expectedClaude),
-        'A3[released-region]: migration replaces only the old owned Claude region and preserves '
-          + 'the exact owner prefix/suffix bytes');
+        'A3[released-template]: the legacy AGENTS redirect becomes the canonical consumer authority');
+      assert(claudeAfter.equals(expectedClaude),
+        'A3[released-template]: the exact released CLAUDE template is replaced whole-file by the canonical thin bridge');
       assert(exactLineCount(claudeAfter, '@AGENTS.md') === 1
         && !claudeAfter.includes(Buffer.from('<!-- KW-CLAUDE-MANAGED-START -->'))
-        && !!exactManagedSlice(claudeAfter, migrationModule.CLAUDE_MARKER),
-      'A3[released-region]: migrated Claude region is one thin canonical @AGENTS.md overlay');
-      assert(applied.envelope && applied.envelope.files
-        && applied.envelope.files.claude.outside_bytes_preserved === true,
-      'A3[released-region]: apply attests preservation outside the retired Claude managed envelope');
+        && !!exactManagedSlice(claudeAfter, migrationModule.CLAUDE_MARKER)
+        && !/^##\s+(?:Project Snapshot|Commands|Non-Negotiable Rules|First Principles|Kaola-Workflow|Documentation Map|Maintenance)\s*$/mi.test(String(claudeAfter)),
+      'A3[released-template]: migrated CLAUDE.md contains one bridge and none of the retired universal sections');
 
       const firstAgents = Buffer.from(agentsAfter);
       const firstClaude = Buffer.from(claudeAfter);
       const rerun = runMigration('apply', releasedRoot);
       assert(rerun.status === 0 && rerun.envelope && rerun.envelope.status === 'converged'
         && rerun.envelope.changed === false && rerun.envelope.writes.length === 0,
-      'A3[released-region]: migrated released consumer converges on its second apply');
+      'A3[released-template]: migrated released consumer converges on its second apply');
       assert(fs.readFileSync(path.join(releasedRoot, 'AGENTS.md')).equals(firstAgents)
         && fs.readFileSync(path.join(releasedRoot, 'CLAUDE.md')).equals(firstClaude),
-      'A3[released-region]: converged rerun leaves both migrated files byte-identical');
+      'A3[released-template]: converged rerun leaves both migrated files byte-identical');
     } finally {
       try { fs.rmSync(releasedRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
+
+    const mixedReleasedVariants = [
+      {
+        label: 'changed-prefix',
+        bytes: Buffer.from(String(releasedClaude).replace(
+          '# Project Instructions', '# Owner-adjusted Project Instructions')),
+      },
+      {
+        label: 'owner-suffix',
+        bytes: Buffer.concat([
+          releasedClaude,
+          Buffer.from('\nOWNER_CLAUDE_SUFFIX=must-not-be-adopted\n'),
+        ]),
+      },
+    ];
+    for (const variant of mixedReleasedVariants) {
+      const mixedReleasedRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), `kw-1033-released-mixed-${variant.label}-`));
+      try {
+        assert(!!oldManaged && !!exactManagedSlice(variant.bytes, oldMarker)
+          && exactManagedSlice(variant.bytes, oldMarker).equals(oldManaged)
+          && !variant.bytes.equals(releasedClaude),
+        `A3[released-mixed/${variant.label}]: fixture changes only bytes outside the intact old managed region`);
+        const agentsBefore = Buffer.from(legacyRedirect);
+        const claudeBefore = Buffer.from(variant.bytes);
+        writeInstructionFixture(mixedReleasedRoot, agentsBefore, claudeBefore);
+        const applied = runMigration('apply', mixedReleasedRoot);
+        assert(applied.status === 2 && applied.envelope
+          && applied.envelope.status === 'decision_required'
+          && applied.envelope.changed === false && applied.envelope.writes.length === 0,
+        `A3[released-mixed/${variant.label}]: changed outer bytes require an ownership decision, not partial adoption`);
+        assert(fs.readFileSync(path.join(mixedReleasedRoot, 'AGENTS.md')).equals(agentsBefore)
+          && fs.readFileSync(path.join(mixedReleasedRoot, 'CLAUDE.md')).equals(claudeBefore),
+        `A3[released-mixed/${variant.label}]: decision-required leaves both instruction files byte-identical`);
+      } finally {
+        try { fs.rmSync(mixedReleasedRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
     }
   }
 

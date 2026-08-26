@@ -11355,18 +11355,17 @@ function testSinkTransactionCleanEndToEnd() {
   }
 }
 
-// #645: the First Principles axiom block embedded in every workflow-init AGENTS.md template must stay
-// byte-identical to the canonical templates/axioms.md — the single source the `next` routing surfaces
-// point to ("canonical source templates/axioms.md"). If any embed (or the canonical file) drifts, the
-// consumer's AGENTS.md and the pointer's referent would silently disagree; this reds npm test. The
-// startsWith guard keeps a blanked/emptied axioms.md from producing a false green (includes('') is
-// always true), so the guard is load-bearing on BOTH the canonical file and every embed.
+// #645/#1033: templates/axioms.md is the byte source for the First Principles block on the two
+// repository-authoring surfaces: root AGENTS.md and the user-facing README. Runtime/init surfaces
+// are renderers, never authors, so all 21 must omit the block and point the consumer at AGENTS.md.
+// The startsWith guard keeps a blanked/emptied axioms.md from producing a false green (includes('')
+// is always true), so the guard is load-bearing on BOTH the canonical file and every comparison.
 //
-// TWELVE DERIVED SURFACES. The list used to be six hand-typed paths, which covered the tracked
-// trees and left the six GENERATED ones — .opencode{,-gitlab,-gitea} and .kimi{,-gitlab,-gitea} —
-// free to drift with nothing to catch it. Neither half is typed here now: the tracked six come from
-// the routing registry that renders them, and the generated six are rendered through the sync
-// modules' own renderers. A fourth forge reaches all four runtimes with no edit to this function.
+// TWENTY-ONE DERIVED SURFACES. The list used to be six hand-typed paths, which covered the tracked
+// trees and left generated runtime trees free to drift with nothing to catch it. Neither half is
+// typed here now: the tracked six come from the routing registry that renders them, and the fifteen
+// additive-runtime surfaces are rendered through the sync modules' own renderers. Another forge
+// reaches every runtime with no edit to this function.
 //
 // WHY THE GENERATED TREES ARE RENDERED, NOT READ. They are gitignored and absent from a fresh
 // checkout and from every worktree, so a disk read would face a choice between a permanent false red
@@ -11376,7 +11375,7 @@ function testSinkTransactionCleanEndToEnd() {
 // still loud, one level up: the expected surface COUNT is derived independently, so a renderer that
 // yields nothing reds instead of silently shrinking the sweep.
 //
-// #1005: TWO NAMED SURFACES — the repo's OWN prose. Twelve derived surfaces made this guard total over
+// #1005: TWO NAMED SURFACES — the repo's OWN prose. Twenty-one derived surfaces make this guard total over
 // what the workflow SHIPS and blind to the two files that state the same axioms to a reader of this
 // repository: root AGENTS.md's `## First Principles` block and README.md's numbered axiom list. They
 // are NAMED, not derived, because they ARE the subject — no registry emits them — exactly as
@@ -11403,21 +11402,21 @@ function testAxiomBlockByteIdentity() {
   // Tracked surfaces: straight from the registry rows that render them.
   const surfaces = routing.GENERATED_SURFACES
     .filter(r => r.topic === INIT_TOPIC)
-    .map(r => ({ id: r.path, body: read(path.join(repoRoot, r.path)) }));
+    .map(r => ({ id: r.path, body: read(path.join(repoRoot, r.path)), authorsAxioms: false }));
 
-  // Generated surfaces: rendered in memory from each forge's init COMMAND row (both additive
-  // runtime editions render from the command lane; Kimi packages it as a directory-form Skill).
+  // Generated surfaces: rendered in memory from each forge's init COMMAND row (each additive
+  // runtime renders from the command lane; Kimi packages it as a directory-form Skill).
   for (const forge of routing.FORGES) {
     const row = routing.commandSurfacesForForge(forge).find(r => r.topic === INIT_TOPIC);
     assert(!!row, 'forge ' + forge + ' must ship an ' + INIT_TOPIC + ' command surface to render from');
     const base = path.basename(row.path, '.md');
     const canon = read(path.join(repoRoot, row.path));
     const ocRel = path.relative(repoRoot, path.join(opencodeSync.outDirs(forge).command, base + '.md'));
-    surfaces.push({ id: ocRel, body: opencodeSync.renderCommand(canon, forge, ocRel) });
-    surfaces.push({ id: kimiSync.skillRel(base, forge), body: kimiSync.renderCommand(canon, base, forge) });
-    surfaces.push({ id: grokSync.commandRel(base, forge), body: grokSync.renderCommand(canon, base, forge) });
-    surfaces.push({ id: cursorSync.commandRel(base, forge), body: cursorSync.renderCommand(canon, base, forge) });
-    surfaces.push({ id: zcodeSync.commandRel(base, forge), body: zcodeSync.renderCommand(canon, base, forge) });
+    surfaces.push({ id: ocRel, body: opencodeSync.renderCommand(canon, forge, ocRel), authorsAxioms: false });
+    surfaces.push({ id: kimiSync.skillRel(base, forge), body: kimiSync.renderCommand(canon, base, forge), authorsAxioms: false });
+    surfaces.push({ id: grokSync.commandRel(base, forge), body: grokSync.renderCommand(canon, base, forge), authorsAxioms: false });
+    surfaces.push({ id: cursorSync.commandRel(base, forge), body: cursorSync.renderCommand(canon, base, forge), authorsAxioms: false });
+    surfaces.push({ id: zcodeSync.commandRel(base, forge), body: zcodeSync.renderCommand(canon, base, forge), authorsAxioms: false });
   }
 
   // #1005: the repo's own two prose surfaces. Named, not derived — they ARE the subject, exactly as
@@ -11428,7 +11427,7 @@ function testAxiomBlockByteIdentity() {
     const abs = path.join(repoRoot, rel);
     assert(fs.existsSync(abs),
       'the repo-root ' + rel + ' this guard checks must exist at ' + rel + ' (named surface missing or renamed)');
-    surfaces.push({ id: rel, body: read(abs) });
+    surfaces.push({ id: rel, body: read(abs), authorsAxioms: true });
   }
   const claudeOverlay = read(path.join(repoRoot, 'CLAUDE.md'));
   assert(/^@AGENTS\.md$/m.test(claudeOverlay),
@@ -11460,29 +11459,38 @@ function testAxiomBlockByteIdentity() {
       + 'surfaces — expected ' + expected
       + ', derived ' + surfaces.length + ' (' + surfaces.map(s => s.id).join(', ') + ')');
 
-  // The verdict is unchanged and singular: `s.body.includes(axioms)`, one comparison idiom for all
-  // fourteen surfaces, a whole-block byte match no partial or reworded embed can satisfy. What #1005
-  // changed is only the REPORT. Two of the fourteen are hand-maintained prose that drift independently
-  // of each other and of the twelve, so "one of them did not match" would send the reader diffing a
-  // canonical block against a thousand-line document, and a fail-fast on the first stale surface would
-  // hide the second behind it. The lines below run only after a surface has ALREADY failed the
-  // comparison; they explain a verdict and never decide one.
+  // The census and the ownership split are separate assertions. Keeping the named-author count as
+  // a literal means adding a runtime surface to the authoring set cannot silently weaken the oracle.
+  const authoringSurfaces = surfaces.filter(s => s.authorsAxioms);
+  assert(authoringSurfaces.length === 2
+      && authoringSurfaces.every(s => NAMED_SURFACES.includes(s.id)),
+    '#1033: exactly root AGENTS.md and README.md may author the canonical First Principles block; got '
+      + authoringSurfaces.map(s => s.id).join(', '));
+  assert(surfaces.filter(s => !s.authorsAxioms).length === expected - 2,
+    '#1033: all ' + (expected - 2) + ' runtime/init surfaces must be classified as non-authoring');
+
+  // One whole-block byte comparison serves both sides of the contract: named authoring surfaces must
+  // contain it, while every runtime/init rendering surface must omit it. The report explains which
+  // side failed without changing the verdict.
   const canonLines = axioms.split('\n').filter(l => l.trim() !== '');
-  const drifted = [];
+  const violations = [];
   for (const s of surfaces) {
-    if (s.body.includes(axioms)) continue;
+    const containsAxioms = s.body.includes(axioms);
+    if (containsAxioms === s.authorsAxioms) continue;
+    if (!s.authorsAxioms) {
+      violations.push(s.id + ' — duplicated universal authority: runtime/init surfaces must omit the canonical block');
+      continue;
+    }
     const missing = canonLines.find(l => !s.body.includes(l));
-    drifted.push(s.id + ' — stale: ' + (missing
+    violations.push(s.id + ' — stale: ' + (missing
       ? 'first canonical line absent from it is ' +
         JSON.stringify(missing.length > 100 ? missing.slice(0, 100) + '\u2026' : missing)
       : 'every canonical line appears, but not as one contiguous byte-identical block ' +
         '(blank-line, ordering or indentation drift)'));
   }
-  assert(drifted.length === 0,
-    drifted.length + ' of ' + surfaces.length + ' surfaces do not embed the canonical templates/axioms.md '
-      + 'First Principles block byte-identically'
-      + (drifted.length === surfaces.length ? ' (EVERY surface — templates/axioms.md itself is what moved)' : '')
-      + ':\n    ' + drifted.join('\n    '));
+  assert(violations.length === 0,
+    violations.length + ' of ' + surfaces.length + ' surfaces violate the single-authority '
+      + 'templates/axioms.md contract:\n    ' + violations.join('\n    '));
 
   console.log('testAxiomBlockByteIdentity: PASSED (' + surfaces.length + ' surfaces)');
 }

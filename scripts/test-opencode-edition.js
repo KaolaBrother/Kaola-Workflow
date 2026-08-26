@@ -1832,6 +1832,81 @@ if (exists(pluginRel)) {
       }
     }
 
+    // A previous plural manifest may outlive one of the profiles it recorded. Retirement does
+    // not weaken the topology boundary: a basename absent from SOURCE_AGENT_DIR is still an
+    // owner-selected carrier when it is a symlink or another non-regular node. Exercise the real
+    // project and global installers, and fingerprint the whole scoped world so refusal must happen
+    // before current agents, commands, hooks, plugins, config, or the manifest itself can change.
+    // The hash-equal symlink is the credible near miss: following it makes the old ownership hash
+    // appear valid even though the link and its external target are not Kaola-owned files.
+    const retiredPluralProfile = '__kw-retired-native-profile.md';
+    assert(!existsSync(path.join(generatedPlural, retiredPluralProfile)),
+      'N10-retired-plural fixture: retired basename is absent from SOURCE_AGENT_DIR');
+    for (const scope of ['project', 'global']) {
+      for (const carrier of ['hash-equal-symlink', 'profile-directory']) {
+        const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-retired-plural-home-'));
+        const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-retired-plural-dest-'));
+        const cfg = mkdtempSync(path.join(os.tmpdir(), 'opencode-retired-plural-cfg-'));
+        const outside = mkdtempSync(path.join(os.tmpdir(), 'opencode-retired-plural-outside-'));
+        const layout = scope === 'global' ? cfg : path.join(dest, '.opencode');
+        const plural = path.join(layout, 'agents');
+        const manifest = path.join(plural, AGENT_MANIFEST);
+        const profile = path.join(plural, retiredPluralProfile);
+        const target = path.join(outside, 'owner-profile.md');
+        const retiredBytes = Buffer.from('# Previously deployed, now retired OpenCode agent\n');
+        fs.mkdirSync(plural, { recursive: true });
+        if (carrier === 'hash-equal-symlink') {
+          fs.writeFileSync(target, retiredBytes);
+          fs.symlinkSync(target, profile);
+        } else {
+          fs.mkdirSync(profile);
+          fs.writeFileSync(path.join(profile, 'OWNER_SENTINEL'), 'owner profile directory\n');
+        }
+        fs.writeFileSync(manifest,
+          retiredPluralProfile + '\t' + sha256(retiredBytes) + '\n');
+        assert(fs.lstatSync(manifest).isFile()
+          && readFileSync(manifest, 'utf8').startsWith(retiredPluralProfile + '\t'),
+        'N10-retired-plural-' + scope + '-' + carrier
+          + ' fixture: current plural manifest records the retired basename');
+        if (carrier === 'hash-equal-symlink') {
+          assert(sameSymlink(profile, target) && readFileSync(target).equals(retiredBytes),
+            'N10-retired-plural-' + scope + '-' + carrier
+              + ' fixture: retired profile is a symlink whose followed target matches the recorded hash');
+        } else {
+          assert(fs.lstatSync(profile).isDirectory()
+            && textEquals(path.join(profile, 'OWNER_SENTINEL'), 'owner profile directory\n'),
+          'N10-retired-plural-' + scope + '-' + carrier
+            + ' fixture: retired profile is a non-regular directory carrier');
+        }
+        const roots = scope === 'global' ? [home, cfg, outside] : [home, dest, outside];
+        const before = carrierWorldFingerprint(roots);
+        const result = scope === 'global'
+          ? runGlobalInstaller([], { home, cfg, timeout: 10000 })
+          : runInstaller([], { home, dest, timeout: 10000 });
+        const after = carrierWorldFingerprint(roots);
+        const label = 'N10-retired-plural-' + scope + '-' + carrier;
+        assert(!result.error && !result.ok,
+          label + ' (#1033/R7): install refuses a manifest-recorded retired non-regular profile '
+            + 'without blocking (status ' + result.status + ', error '
+            + (result.error && result.error.code) + ')');
+        assert(after === before,
+          label + ' (#1033/R7): refusal preserves carrier topology and happens before any '
+            + 'agent, plugin, command, hook, config, manifest, or external-target mutation');
+        if (carrier === 'hash-equal-symlink') {
+          assert(sameSymlink(profile, target) && readFileSync(target).equals(retiredBytes),
+            label + ' (#1033/R7): refusal preserves the retired link and its hash-equal external target');
+        } else {
+          assert(fs.lstatSync(profile).isDirectory()
+            && textEquals(path.join(profile, 'OWNER_SENTINEL'), 'owner profile directory\n'),
+          label + ' (#1033/R7): refusal preserves the retired non-regular carrier topology and bytes');
+        }
+        try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
+        try { rmSync(dest, { recursive: true, force: true }); } catch (_) {}
+        try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
+        try { rmSync(outside, { recursive: true, force: true }); } catch (_) {}
+      }
+    }
+
     // A hash-equal target does not turn a singular legacy profile symlink into a Kaola-owned
     // regular file. Cover both migration entry points: install and uninstall may retire the old
     // manifest, but neither may follow/delete the profile link or change its external target.

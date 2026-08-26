@@ -332,10 +332,12 @@ Runtime-specific files never duplicate the universal managed region.
 `check`, and `apply` modes load the one distribution-owned consumer-template module, classify
 ownership, preserve arbitrary bytes and modes outside managed markers, leave active older runs
 untouched, and return `decision_required` without writing when ownership or non-regular topology is
-ambiguous. The exact v9.17.2 redirect pair and its released `KW-CLAUDE-MANAGED` consumer envelope
-migrate once into the contract and thin bridge; this producer repository's richer root contract is
-explicitly preserved. Workflow-init authoring surfaces name this module and writer but contain no
-second universal template. A successful second apply writes nothing and preserves identical hashes.
+ambiguous. The byte-exact v9.17.2 redirect and released consumer-template pair migrates whole-file
+once into the contract and thin bridge; a legacy `KW-CLAUDE-MANAGED` region with any changed outer
+bytes instead requires an owner decision and is not written. This producer repository's richer root
+contract is explicitly preserved. Workflow-init authoring surfaces name this module and writer but
+contain no second universal template. A successful second apply writes nothing and preserves
+identical hashes.
 
 ### Runtime capability divergence
 

@@ -12,6 +12,7 @@ const CLAUDE_MARKER = 'KW-CLAUDE-OVERLAY-MANAGED';
 const LEGACY_CLAUDE_MARKER = 'KW-CLAUDE-MANAGED';
 const V9_AGENTS_SHA256 = 'c4753d725488152d6dda74dd7ee0cfd490b62a81acddaa293886684abce0d67e';
 const V9_CLAUDE_SHA256 = 'a46566fc59e27d84e2f069baa45df014b53b88610d6138b8beb81c349f82e7a3';
+const V9_CONSUMER_CLAUDE_SHA256 = 'bc87e84955366368ea91947606df92fc99805716a1ca676aa12b5bbcdd7d1023';
 const LEGACY_REDIRECT = [
   '# AGENTS.md',
   '',
@@ -167,8 +168,10 @@ function mergeClaude(existingBytes, templateBytes, allowExplicitOverlay) {
   if (existingBytes == null || existingBytes.length === 0) {
     return { classification: 'missing', after: templateBytes, outsideBytesPreserved: true, changed: true };
   }
-  const managed = replaceManaged(
-    existingBytes, templateBytes, CLAUDE_MARKER, [LEGACY_CLAUDE_MARKER]);
+  // The released legacy marker bounded only one region inside a complete universal template.
+  // It is ownership proof only when the entire released file is byte-identical (handled below),
+  // never by itself when owner or changed bytes surround it.
+  const managed = replaceManaged(existingBytes, templateBytes, CLAUDE_MARKER);
   if (managed.after != null || managed.classification === 'ambiguous_managed_region') return managed;
   if (allowExplicitOverlay && explicitClaudeOverlay(existingBytes)) {
     return {
@@ -188,6 +191,14 @@ function classifyProjectInstructions({ agentsBytes, claudeBytes, activeWorkflowS
     };
   }
   const templates = sourceTemplates();
+  if (sha256(agentsBytes) === V9_AGENTS_SHA256
+      && sha256(claudeBytes) === V9_CONSUMER_CLAUDE_SHA256) {
+    return {
+      status: 'planned', changed: true,
+      agents: { classification: 'known_v9_consumer_template', after: templates.agents, changed: true },
+      claude: { classification: 'known_v9_consumer_template', after: templates.claude, changed: true },
+    };
+  }
   if (sha256(agentsBytes) === V9_AGENTS_SHA256 && sha256(claudeBytes) === V9_CLAUDE_SHA256) {
     return {
       status: 'planned', changed: true,
@@ -318,7 +329,7 @@ function main(argv) {
 
 module.exports = {
   AGENTS_MARKER, CLAUDE_MARKER, LEGACY_CLAUDE_MARKER, LEGACY_REDIRECT,
-  V9_AGENTS_SHA256, V9_CLAUDE_SHA256,
+  V9_AGENTS_SHA256, V9_CLAUDE_SHA256, V9_CONSUMER_CLAUDE_SHA256,
   classifyProjectInstructions, execute,
 };
 

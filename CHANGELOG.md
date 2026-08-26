@@ -19,9 +19,10 @@
 - **Ownership-safe project instruction migration (#1033).** `workflow-init` now uses a standard-
   library `plan` / `check` / `apply` helper and one distribution-owned consumer-template module;
   workflow-init surfaces no longer embed a second universal wording. It migrates both the exact
-  v9.17.2 redirect pair and the released `KW-CLAUDE-MANAGED` consumer envelope without copying this
-  producer repository's contract, preserves arbitrary owner bytes and file modes, is byte-
-  idempotent, fences active older runs, refuses non-regular topology, and returns
+  byte-exact v9.17.2 redirect and released consumer-template pair whole-file without copying this
+  producer repository's contract. A legacy `KW-CLAUDE-MANAGED` region with changed outer bytes is
+  owner-ambiguous and remains untouched. The helper preserves arbitrary owner bytes and file modes,
+  is byte-idempotent, fences active older runs, refuses non-regular topology, and returns
   `decision_required` without writing when ownership is ambiguous.
 
 ### Fixed
@@ -39,7 +40,8 @@
   only with manifest-plus-hash ownership proof and removes current singular commands only on exact
   generated-byte proof. Kimi and OpenCode fail closed on unproved same-name profiles, forged
   markers, modified managed bytes, symlink carriers, directories, FIFOs, and other non-regular
-  ownership paths before any runtime write; hash-equal legacy symlinks remain owner topology. Grok
+  ownership paths before any runtime write, including retired plural profiles named only by the
+  preceding manifest; hash-equal legacy symlinks remain owner topology. Grok
   profiles use camelCase `promptMode` / `agentsMd`, explicit tools, and omit the unsupported
   `permissionMode: plan`. Kimi, Grok, and ZCode tool carriers and Cursor/ZCode model identifiers come
   from their adapters. ZCode executable hooks merge only into

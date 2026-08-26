@@ -329,7 +329,7 @@ sweep_retired_agents() {
   [[ -f "$prev_manifest" ]] || return 0
   warn_unsafe_manifest_names "$prev_manifest"
   for dest in "$agent_dir"/*.md; do
-    [[ -f "$dest" ]] || continue
+    [[ -f "$dest" && ! -L "$dest" ]] || continue
     base="$(basename "$dest")"
     # Still shipped by the tree → it was just re-copied; never a sweep candidate.
     if [[ -f "$SOURCE_AGENT_DIR/$base" ]]; then continue; fi
@@ -365,6 +365,20 @@ copy_tree() {
         || -L "$legacy_manifest" || ( -e "$legacy_manifest" && ! -f "$legacy_manifest" ) ]]; then
     echo "Install error: refusing non-regular native agent manifest under $layout_root" >&2
     exit 1
+  fi
+  local manifest_name manifest_hash manifest_rest retired_dest
+  if [[ -f "$agent_manifest" ]]; then
+    while IFS=$'\t' read -r manifest_name manifest_hash manifest_rest \
+        || [[ -n "${manifest_name:-}" ]]; do
+      [[ -n "${manifest_name:-}" ]] || continue
+      is_plain_basename "$manifest_name" || continue
+      [[ -f "$SOURCE_AGENT_DIR/$manifest_name" ]] && continue
+      retired_dest="$layout_root/agents/$manifest_name"
+      if [[ -L "$retired_dest" || ( -e "$retired_dest" && ! -f "$retired_dest" ) ]]; then
+        echo "Install error: refusing non-regular retired native agent: $retired_dest" >&2
+        exit 1
+      fi
+    done < "$agent_manifest"
   fi
   local agent_file agent_base existing_hash recorded_hash source_hash
   for agent_file in "$SOURCE_AGENT_DIR/"*.md; do
