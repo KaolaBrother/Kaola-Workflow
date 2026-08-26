@@ -139,11 +139,10 @@ if [[ "$REGENERATE" -eq 1 ]]; then
   exit 0
 fi
 
-# This edition has never shipped a prior command/agent/hook set, so there is nothing
-# to retire yet. Names added here are removed on install and uninstall by basename.
+# Names here are removed on install and uninstall by basename.
 RETIRED_AGENTS=()
 RETIRED_COMMANDS=()
-RETIRED_HOOKS=()
+RETIRED_HOOKS=(kaola-workflow-subagent-dispatch-log.sh)
 RETIRED_SUPPORT_SCRIPTS=()
 
 WORKFLOW_COMMANDS=(
@@ -367,6 +366,10 @@ uninstall_edition() {
         rm -f "$layout/kaola-workflow/hooks/$(basename "$f")"
       done
     fi
+    for retired in "${RETIRED_HOOKS[@]+"${RETIRED_HOOKS[@]}"}"; do
+      [[ -f "$layout/kaola-workflow/hooks/$retired" ]] || continue
+      rm -f "$layout/kaola-workflow/hooks/$retired"
+    done
     if [[ -d "$SOURCE_TREE/kaola-workflow/scripts" ]]; then
       for f in "$SOURCE_TREE/kaola-workflow/scripts/"*.js; do
         [[ -f "$f" ]] || continue
@@ -403,6 +406,13 @@ uninstall_edition() {
     for hook in "$SOURCE_TREE/kaola-workflow/hooks/"*.sh; do
       [[ -f "$hook" ]] || continue
       rm -f "$hooks_dir/$(basename "$hook")"
+    done
+  fi
+  if [[ -d "$hooks_dir" ]]; then
+    local retired_hook
+    for retired_hook in "${RETIRED_HOOKS[@]+"${RETIRED_HOOKS[@]}"}"; do
+      [[ -f "$hooks_dir/$retired_hook" ]] || continue
+      rm -f "$hooks_dir/$retired_hook"
     done
   fi
   rmdir "$scripts_dir" 2>/dev/null || true

@@ -15,7 +15,6 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { SLOTS } = require('../templates/routing/slots.js');
 
 const root = path.resolve(__dirname, '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-models-'));
@@ -70,36 +69,6 @@ const resolver = require('./kaola-workflow-resolve-agent-model.js');
     assert.strictEqual(resolver.DEFAULT_AGENT_MODELS[role], 'opus',
       '#1018 AC-1: reviewer-class ' + role + ' stays reasoning (opus); got '
       + JSON.stringify(resolver.DEFAULT_AGENT_MODELS[role]));
-  }
-
-  const routingSkels = [
-    'templates/routing/next.skeleton.md',
-    'templates/routing/finalize.skeleton.md',
-  ];
-  const HANDOFF_SLOT_REF = '<!-- SLOT:main-authored-handoff -->';
-  const HANDOFF_REVIEWER_NEEDLE = '`code-reviewer` and `security-reviewer` receive the exact candidate, dispatched surface, and acceptance;';
-  const canonicalHandoff = SLOTS['main-authored-handoff'];
-  assert.strictEqual(typeof canonicalHandoff, 'string',
-    '#1018 AC-7: SLOTS[main-authored-handoff] must be the canonical shared handoff string');
-  assert(canonicalHandoff.replace(/\s+/g, ' ').includes(HANDOFF_REVIEWER_NEEDLE),
-    '#1018 AC-7: canonical main-authored-handoff slot must carry reviewer exact candidate / dispatched surface / acceptance specialization');
-  for (const rel of routingSkels) {
-    const text = fs.readFileSync(path.join(root, rel), 'utf8');
-    const norm = text.replace(/\s+/g, ' ');
-    assert(/standard-tier/i.test(norm) && /gpt-5\.6-luna/.test(norm) && /reasoning_effort:\s*"max"/.test(text),
-      '#1018 AC-2: ' + rel + ' must render standard-tier as gpt-5.6-luna / max');
-    assert(/reasoning-tier/i.test(norm) && /gpt-5\.6-sol/.test(norm) && /reasoning_effort:\s*"medium"/.test(text),
-      '#1018 AC-2: ' + rel + ' must render reasoning-tier resting as gpt-5.6-sol / medium');
-    assert(/heavy/i.test(norm) && /gpt-5\.6-sol/.test(norm) && /reasoning_effort:\s*"high"/.test(text),
-      '#1018 AC-2: ' + rel + ' must render heavy-tier as gpt-5.6-sol / high');
-    assert(/do not escalate/i.test(norm) && /downgrade/i.test(norm),
-      '#1018 AC-2: ' + rel + ' must keep the do-not-escalate/downgrade pin');
-    const carve = /re-dispatch/i.test(norm) && /reviewer/i.test(norm) && /heavy/i.test(norm)
-      && /failed to finish/i.test(norm) && /complex/i.test(norm);
-    assert(carve,
-      '#1018 AC-2: ' + rel + ' do-not-escalate pin must carry exactly one carve-out: orchestrator may re-dispatch a reviewer-class role at heavy when reasoning-tier failed to finish or the surface is judged complex before dispatch');
-    assert.strictEqual(text.split(HANDOFF_SLOT_REF).length - 1, 1,
-      '#1018 AC-7: ' + rel + ' must contain exactly one main-authored-handoff slot reference');
   }
 
   const clampNeedles = [
@@ -3031,26 +3000,17 @@ try {
 
   const finalize = readInstalledCommand('kaola-workflow-finalize.md');
 
-  // The finalize command carries the routed-fix pair (tdd-guide / build-error-resolver) and the
-  // doc-updater tier. The pair is SPLIT: tdd-guide renders standard, build-error-resolver renders
-  // reasoning. Each placeholder resolves from its own source frontmatter, so the split proves the
-  // render reads the per-role declaration rather than one shared routed-fix tier.
-  // (Runtime role resolution is proven per role against the resolver below.)
-  assert(finalize.includes('model="sonnet",'), 'doc-updater should render as sonnet');
+  // The finalize command carries the routed-fix pair (tdd-guide / build-error-resolver) without a
+  // per-spawn model choice. Runtime role defaults and resolver behavior are proven per role below;
+  // this surface must not prescribe a model for doc-updater or any routed repair.
   assert(
     // Anchor on a heading the surface actually carries; `## Steps` was the anchor until the
     // finalize command was rewritten. The subject — blank-line preservation — is unchanged.
     finalize.includes('\n\n## Step 1 — Final validation\n\n'),
     'installer rendering should preserve blank markdown lines'
   );
-  assert(
-    finalize.includes('subagent_type="build-error-resolver",\n  model="opus",'),
-    'finalize routed-fix build-error-resolver block should render as opus'
-  );
-  assert(
-    finalize.includes('subagent_type="tdd-guide",\n  model="sonnet",'),
-    'finalize routed-fix tdd-guide block should render as sonnet'
-  );
+  assert(!/subagent_type="(?:build-error-resolver|tdd-guide|doc-updater)",\n\s+model=/.test(finalize),
+    'finalize routed repairs and doc-updater dispatch must not carry per-spawn model choices');
 
   const allCommands = fs.readdirSync(path.join(tmp, '.claude', 'commands'))
     .filter(name => name.endsWith('.md'))
@@ -3306,8 +3266,8 @@ try {
           }
         }
       }
-      assert(managedIds.length >= 2, '#447 AC1: global hooks.json must carry at least two kaola-workflow: entries; found ' + managedIds.length + ': ' + managedIds.join(', '));
-      const expectedIds = ['kaola-workflow:compact-context', 'kaola-workflow:subagent-dispatch-log'];
+      assert(managedIds.length >= 1, '#447 AC1: global hooks.json must carry a kaola-workflow: entry; found ' + managedIds.length + ': ' + managedIds.join(', '));
+      const expectedIds = ['kaola-workflow:compact-context'];
       for (const id of expectedIds) {
         assert(managedIds.includes(id), '#447 AC1: global hooks.json must carry hook id "' + id + '"; found: ' + managedIds.join(', '));
       }

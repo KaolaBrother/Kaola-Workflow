@@ -256,8 +256,9 @@ function testAC1HooksJson() {
 
     const parsed = JSON.parse(installedRaw);
     // #372: the PostToolUse phantom-advisor hook is retired. #725: the PreToolUse
-    // pre-commit-guard and write-lane hooks are also retired — exactly 2 lifecycle events remain.
-    const EVENTS = ['SessionStart', 'SubagentStart'];
+    // pre-commit-guard and write-lane hooks are also retired; the dispatch-log
+    // SubagentStart hook is retired too — SessionStart is the surviving lifecycle event.
+    const EVENTS = ['SessionStart'];
     for (const event of EVENTS) {
       const entries = (parsed.hooks || {})[event];
       assert(Array.isArray(entries) && entries.length > 0,
@@ -335,9 +336,9 @@ function testAC1HooksJson() {
 //
 // What is KEPT is the #333 claim that merely shared the fixture and never depended on attestation:
 // a real codex-runtime startup claim finalizes to status:closed, archives exactly one folder, and
-// NEUTRALIZES the archived state's resume command. Plus the reappearance guard for both retired
-// attestation fields — the one direction a retirement can still regress in.
-function testCodexFinalizeNeutralizesArchivedResume333() {
+// preserves the claim/sink facts needed to identify the finished run. Plus the reappearance guard
+// for both retired attestation fields — the one direction a retirement can still regress in.
+function testCodexFinalizeArchivesClaimFacts333() {
   // Use an isolated tmp to avoid touching the live kaola-workflow folder.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-attest-'));
   try {
@@ -362,17 +363,15 @@ function testCodexFinalizeNeutralizesArchivedResume333() {
       '#816: the finalize seam emits no attestation field, got: ' +
       JSON.stringify(finalizeResult.closure_receipt && Object.keys(finalizeResult.closure_receipt)));
 
-    // #333: the archived state must not advertise an active resume command. startup seeds
-    // next_command: /kaola-workflow-phase1 issue-284; the archive must neutralize it.
+    // #333: the archived state remains the compact identity anchor for the finished claim.
     const archived284 = fs.readdirSync(path.join(root, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-284'));
     assert(archived284.length === 1, '#333: finalize must archive issue-284');
     const arch284State = fs.readFileSync(path.join(root, 'kaola-workflow', 'archive', archived284[0], 'workflow-state.md'), 'utf8');
-    assert(arch284State.includes('next_command: none (archived)'),
-      '#333: archived state next_command must be neutralized, got: ' + arch284State);
-    assert(!/next_command:.*(kaola-workflow-plan-run|kaola-workflow-phase)/.test(arch284State),
-      '#333: archived state must not retain an active plan-run/phase resume command');
+    assert(arch284State.includes('status: closed'), '#333: archived claim must be terminal');
+    assert(arch284State.includes('issue_number: 284') && arch284State.includes('sink: pr'),
+      '#333: archived claim must preserve issue and sink identity, got: ' + arch284State);
 
-    console.log('testCodexFinalizeNeutralizesArchivedResume333: PASSED');
+    console.log('testCodexFinalizeArchivesClaimFacts333: PASSED');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -441,8 +440,8 @@ function testSelectionEvidenceDockingCodex() {
   }
 }
 
-// #333: keep-open partial-close archive stamp (codex edition). Plant an active project, finalize
-// with --keep-open, assert last_result: closed_keep_open + issue_disposition: kept-open.
+// #333: keep-open partial-close archive stamp (codex edition). Plant a compact active claim,
+// finalize with --keep-open, and assert the archived closure disposition.
 function testKeepOpenArchiveStamp333() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-333-keepopen-'));
   try {
@@ -452,14 +451,20 @@ function testKeepOpenArchiveStamp333() {
     fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
       '# Kaola-Workflow State', '',
       '## Project', 'name: issue-333', 'status: active', '',
-      '## Current Position',
-      'phase: adaptive', 'workflow_path: adaptive', 'step: start',
-      'next_command: /kaola-workflow-plan-run issue-333',
-      'next_skill: kaola-workflow-plan-run issue-333', '',
-      '## Pending Gates', '- workflow-plan', '',
-      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
-      '## Last Updated', '2020-01-01T00:00:00.000Z', '',
-      '## Sink', 'branch: workflow/issue-333', 'issue_number: 333', 'sink: merge', ''
+      '## Sink',
+      'branch: workflow/issue-333',
+      'issue_number: 333',
+      'sink: merge',
+      'main_root: ' + root,
+      'session_marker: walkthrough-333',
+      'claim_ts: 2020-01-01T00:00:00.000Z', ''
+    ].join('\n'));
+    fs.writeFileSync(path.join(projDir, 'mission-list.md'), [
+      '# Keep-open closure', '',
+      '- item: archive the finished claim while leaving the issue open',
+      '  status: done',
+      '  dispatched: main orchestrator',
+      '  result: closure disposition recorded', ''
     ].join('\n'));
     seedAdaptiveFinalizeFixture(root, 'issue-333');
     const result = runClaim(['finalize', '--project', 'issue-333', '--keep-open'], root);
@@ -470,10 +475,8 @@ function testKeepOpenArchiveStamp333() {
     assert(archived.length === 1, '#333: keep-open finalize should archive folder');
     const st = fs.readFileSync(path.join(root, 'kaola-workflow', 'archive', archived[0], 'workflow-state.md'), 'utf8');
     assert(st.includes('status: closed'), '#333: keep-open archived state must be closed');
-    assert(st.includes('last_result: closed_keep_open'),
-      '#333: keep-open archived last_result must be closed_keep_open, got: ' + st);
-    assert(st.includes('next_command: none (archived)'),
-      '#333: keep-open archived next_command must be neutralized');
+    assert(st.includes('session_marker: walkthrough-333') && st.includes('claim_ts: 2020-01-01T00:00:00.000Z'),
+      '#333: keep-open archive must preserve claim liveness identity, got: ' + st);
     assert(/^## Closure$/m.test(st), '#333: keep-open archived state must carry a ## Closure block');
     assert(st.includes('issue_disposition: kept-open'),
       '#333: keep-open archived ## Closure must record issue_disposition: kept-open');
@@ -715,7 +718,7 @@ function test409StableHomeSurvivesDirDeletion() {
         }
       }
     }
-    assert(commandCount >= 2, '#409: expected the two managed hook commands, saw ' + commandCount);
+    assert(commandCount >= 1, '#409: expected at least one surviving managed hook command, saw ' + commandCount);
 
     // 4. Reinstall sweeps a planted stale script (no orphan left in the stable home).
     // #447: stable home lives in global HOME/.codex/kaola-workflow, not in the project .codex.
@@ -740,71 +743,11 @@ function test409StableHomeSurvivesDirDeletion() {
   }
 }
 
-// AC4 (#284): producer test — spawn the bash dispatch-log hook with valid JSON stdin and
-// assert it writes exactly one JSONL line containing "agent_type":"workflow-planner" to the
-// active project's .cache/dispatch-log.jsonl.  Also asserts exit 0 on empty stdin (fail-open).
-function testAC4SubagentDispatchLog() {
-  const dispatchLogScript = path.join(pluginRoot, 'hooks', 'kaola-workflow-subagent-dispatch-log.sh');
-  assert(fs.existsSync(dispatchLogScript), 'AC4: dispatch-log hook script must exist at ' + dispatchLogScript);
-
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-dispatch-'));
-  try {
-    // AC4: git init the tmp repo — the hook resolves the repo root via
-    // `git rev-parse --show-toplevel` using the PROCESS CWD, not the JSON cwd.
-    git(['init', '-b', 'main'], tmp);
-    git(['config', 'user.email', 't@t.t'], tmp);
-    git(['config', 'user.name', 't'], tmp);
-
-    // Plant an active project so the hook finds a workflow-state.md with status: active.
-    const projectName = 'issue-284-dispatchlog';
-    plantFolder(tmp, projectName, 284, null);
-    const cacheDir = path.join(tmp, 'kaola-workflow', projectName, '.cache');
-    const logPath = path.join(cacheDir, 'dispatch-log.jsonl');
-
-    // AC4 GREEN: valid JSON stdin → exactly one line in dispatch-log.jsonl
-    const hookInput = JSON.stringify({ agent_type: 'workflow-planner', agent_id: 'test-x', cwd: tmp });
-    const r1 = spawnSync('bash', [dispatchLogScript], {
-      cwd: tmp,
-      input: hookInput,
-      encoding: 'utf8'
-    });
-    assert(r1.status === 0, 'AC4: dispatch-log hook must exit 0 on valid stdin, stderr: ' + r1.stderr);
-    assert(fs.existsSync(logPath), 'AC4: dispatch-log.jsonl must be created after valid spawn');
-    const logContent = fs.readFileSync(logPath, 'utf8');
-    const logLines = logContent.trim().split('\n').filter(Boolean);
-    assert(logLines.length === 1,
-      'AC4: dispatch-log.jsonl must have exactly 1 line after one hook run, got ' + logLines.length);
-    assert(logLines[0].includes('"agent_type":"workflow-planner"'),
-      'AC4: dispatch-log line must contain agent_type workflow-planner, got: ' + logLines[0]);
-
-    // AC4: exit 0 on EMPTY stdin (fail-open).
-    // First remove the log to verify no new line is written.
-    fs.unlinkSync(logPath);
-    const r2 = spawnSync('bash', [dispatchLogScript], {
-      cwd: tmp,
-      input: '',
-      encoding: 'utf8'
-    });
-    assert(r2.status === 0, 'AC4: dispatch-log hook must exit 0 on empty stdin, stderr: ' + r2.stderr);
-    assert(!fs.existsSync(logPath),
-      'AC4: dispatch-log.jsonl must NOT be created on empty stdin (fail-open)');
-
-    console.log('testAC4SubagentDispatchLog (#284 AC4): PASSED');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
-
 function git(args, cwd) { return spawnSync('git', args, { cwd, encoding: 'utf8' }); }
 function initGitRepo(tmp) {
   git(['init', '-b', 'main'], tmp); git(['config', 'user.email', 't@t.t'], tmp); git(['config', 'user.name', 't'], tmp);
   fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n'); git(['add', '-A'], tmp); git(['commit', '-m', 'init'], tmp);
   const remote = tmp + '-remote'; git(['init', '--bare', remote], path.dirname(tmp)); git(['remote', 'add', 'origin', remote], tmp); git(['push', '-u', 'origin', 'main'], tmp);
-}
-function plantFolder(tmp, project, issue, phase3Body) {
-  const dir = path.join(tmp, 'kaola-workflow', project); fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'workflow-state.md'), ['# State', '', '## Project', 'name: ' + project, 'status: active', '', '## Sink', 'branch: workflow/issue-' + issue, 'issue_number: ' + issue, 'sink: merge', ''].join('\n'));
-  if (phase3Body != null) fs.writeFileSync(path.join(dir, 'phase3-plan.md'), phase3Body);
 }
 function plantRoadmap(tmp, issue, body) {
   const dir = path.join(tmp, 'kaola-workflow', '.roadmap'); fs.mkdirSync(dir, { recursive: true });
@@ -1731,11 +1674,10 @@ function main() {
     testAC1HooksJson();
     testUpdateHooksHardening325();
     test409StableHomeSurvivesDirDeletion();   // #409
-    testCodexFinalizeNeutralizesArchivedResume333();
+    testCodexFinalizeArchivesClaimFacts333();
     testSelectionEvidenceDockingCodex();
     testKeepOpenArchiveStamp333();   // #333
     testAC2CompactPlainStdout();
-    testAC4SubagentDispatchLog();
     testCodexFinalizeArchiveVerifiesBeforeDelete();  // #426
     testCodexFinalizeClosesIssueBundleMembers();      // #427
     testCodexBundleFinalizeAllOpenCloseIsPending();   // #508

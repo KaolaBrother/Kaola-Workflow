@@ -1,34 +1,17 @@
 // .opencode/plugins/kaola-workflow-hooks.js
 //
 // opencode edition hook adapter. opencode's hook model is plugin-based (not the
-// shell + settings.json model Claude Code uses), so this plugin bridges the two:
-// it feeds Claude-style JSON payloads to the EXISTING runtime-neutral hook scripts
-// (single source of truth, copied under .opencode/hooks/ from canonical hooks/),
-// and honors their exit codes (2 = deny → throw, which opencode treats as a tool
-// denial per the official .env-protection plugin pattern).
+// shell + settings.json model Claude Code uses), so this plugin supplies the
+// compact-resume context inline. It does not install a shell dispatch hook.
 //
 // Coverage (mirrors plugins/kaola-workflow/config/hooks.json):
-//   tool.execute.before · task      → kaola-workflow-subagent-dispatch-log.sh (advisory spawn record)
 //   experimental.session.compacting → inject active kaola-workflow resume state
 //
-// Fail-open everywhere (matches the scripts' own philosophy): a missing script, a
-// malformed payload, or a non-git cwd never breaks the session. Only an explicit
-// exit-2 deny throws.
+// Fail-open everywhere: an unreadable state file, malformed state, or a non-git cwd
+// never breaks the session. Only an explicit exit-2 deny throws.
 
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import os from "node:os";
-import { fileURLToPath } from "node:url";
-
-// This plugin's own directory (…/<layout_root>/plugins/) — used to find hooks deployed alongside it
-// at GLOBAL scope, where findRoot (which walks the user's PROJECT tree) never reaches the config root.
-const SELF_DIR = path.dirname(fileURLToPath(import.meta.url));
-const OPENCODE_CONFIG_DIR = process.env.OPENCODE_CONFIG_DIR || path.join(os.homedir(), ".config", "opencode");
-
-const HOOK = {
-  dispatchLog: "kaola-workflow-subagent-dispatch-log.sh",
-};
 
 // Walk up from `start` to the repo/project root (a dir holding .opencode or the
 // kaola-workflow/ state dir). Falls back to `start` itself.
@@ -43,56 +26,17 @@ function findRoot(start) {
   return path.resolve(start || process.cwd());
 }
 
-// Resolve a DEPLOYED artifact across the PROJECT and GLOBAL layouts. Project candidates come FIRST
-// so a project-local install always wins; the trailing candidates handle the GLOBAL install, where
-// the plugin lives at <config>/plugins/ and its siblings at <config>/<dir>/ (NOT under a nested
-// .opencode/), a location findRoot — which walks the user's project tree — never reaches.
-// SELF_DIR/.. works regardless of the config dir name; the explicit config-dir forms (flat + legacy
-// nested) are belt and suspenders. Returns null if none exist (fail-open, matching runHook).
-//
-// Parameterised by directory and name rather than hard-coding `hooks/`: the five candidates ARE the
-// deployed-layout answer, and a second copy of them for a second artifact kind would drift the first
-// time a layout moved. `hookPath` below is the only caller today.
-function deployedPath(root, dir, name) {
-  const candidates = [
-    path.join(root, ".opencode", dir, name),          // project: <project>/.opencode/<dir>/
-    path.join(root, dir, name),                       // project: canonical ./<dir>/
-    path.join(SELF_DIR, "..", dir, name),             // global: sibling of this plugin's dir
-    path.join(OPENCODE_CONFIG_DIR, dir, name),        // global: <config>/<dir>/ (post path-fix)
-    path.join(OPENCODE_CONFIG_DIR, ".opencode", dir, name), // global: legacy nested layout
-  ];
-  for (const p of candidates) {
-    try {
-      if (existsSync(p)) return p;
-    } catch {
-      // unreadable candidate — keep looking
-    }
-  }
-  return null;
+function stateField(text, name, fallback = "unknown") {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = text.match(new RegExp(`^${escaped}:\\s*(.*)$`, "m"));
+  const value = match && match[1] ? match[1].trim() : "";
+  return value || fallback;
 }
 
-function hookPath(root, script) {
-  return deployedPath(root, "hooks", script);
-}
-
-function runHook(root, script, payload) {
-  const p = hookPath(root, script);
-  if (!p) return { status: 0, stderr: "" }; // fail-open: script not deployed
-  try {
-    const r = spawnSync("bash", [p], {
-      input: JSON.stringify(payload),
-      encoding: "utf8",
-      timeout: 10000,
-    });
-    return { status: r.status == null ? 0 : r.status, stderr: r.stderr || "" };
-  } catch {
-    return { status: 0, stderr: "" };
-  }
-}
-
-// Build a compact resume summary from active kaola-workflow project state, to
-// preserve across context compaction (the opencode analog of the Codex
-// compact-resume SessionStart hook).
+// Build a compact resume summary from active kaola-workflow claim facts and the
+// adjacent Mission List, to preserve the durable recovery index across context
+// compaction. The Mission List is intentionally carried as authored: this hook
+// does not parse, validate, or rewrite its H1/item/status/dispatched/result record.
 function buildResumeContext(root) {
   const wfDir = path.join(root, "kaola-workflow");
   if (!existsSync(wfDir)) return null;
@@ -110,14 +54,24 @@ function buildResumeContext(root) {
       const state = path.join(wfDir, proj, "workflow-state.md");
       if (!existsSync(state)) continue;
       const txt = readFileSync(state, "utf8");
-      const status = (txt.match(/^status:\s*(.+)$/m) || [])[1] || "unknown";
-      if (!/active/i.test(status)) continue;
-      const phase = (txt.match(/^current_phase:\s*(.+)$/m) || [])[1] || "";
-      const issue = (txt.match(/^issue:\s*(.+)$/m) || [])[1] || "";
+      const project = stateField(txt, "name", proj);
+      const status = stateField(txt, "status");
+      if (!/^active$/i.test(status)) continue;
+      const branch = stateField(txt, "branch");
+      const worktree = stateField(txt, "worktree_path");
+      const sink = stateField(txt, "sink");
+      const mission = path.join(wfDir, proj, "mission-list.md");
+      const stateRel = path.relative(root, state);
+      const missionRel = path.relative(root, mission);
+      const missionLines = existsSync(mission)
+        ? readFileSync(mission, "utf8").trim().split(/\r?\n/).map((line) => `    ${line}`)
+        : [`    (missing: ${missionRel})`];
       lines.push(
-        `- project \`${proj}\`: status ${status.trim()}${phase ? `, phase ${phase.trim()}` : ""}${
-          issue ? `, issue ${issue.trim()}` : ""
-        }`
+        `- project \`${project}\`: status ${status}, branch ${branch}, worktree ${worktree}, sink ${sink}`,
+        `  Claim state: ${stateRel}`,
+        `  Mission List: ${missionRel}`,
+        ...missionLines,
+        "  Mission List discipline: a completed item and its result are immutable; one dispatch has one result including FAIL; repair or re-review work appends a new mission."
       );
     } catch {
       // skip unreadable project
@@ -145,26 +99,6 @@ function buildResumeContext(root) {
 export default async function KaolaWorkflowHooks({ directory, worktree }) {
   const root = findRoot(worktree || directory);
   return {
-    "tool.execute.before": async (input, output) => {
-      const tool = input && input.tool;
-      const args = (output && output.args) || {};
-
-      // Subagent dispatch log — fire-and-forget; never blocks the dispatch.
-      // opencode's tool.execute.before input carries { tool, sessionID, callID };
-      // thread whichever is present into agent_id (prefer sessionID, fall back to
-      // callID, then empty). The log is advisory — a sparse agent_id degrades the
-      // record, never an outcome.
-      if (tool === "task") {
-        try {
-          const st = args.subagent_type || args.agent || "";
-          const sid = (input && (input.sessionID || input.callID)) || "";
-          runHook(root, HOOK.dispatchLog, { agent_type: st, agent_id: sid, cwd: directory || root });
-        } catch {
-          // advisory; ignore
-        }
-      }
-    },
-
     "experimental.session.compacting": async (_input, output) => {
       try {
         const resume = buildResumeContext(root);
@@ -177,10 +111,9 @@ export default async function KaolaWorkflowHooks({ directory, worktree }) {
   };
 }
 
-// Test-only handles, hung off the default export rather than exported beside it — see the note above
+// Test-only handle, hung off the default export rather than exported beside it — see the note above
 // KaolaWorkflowHooks for why a named export here is not free. `Object.values(mod)` still yields
 // exactly one value, the factory, so the loader has nothing else to call.
 //   const { default: plugin } = await import(<plugin>);
-//   plugin.hookPath(root, script) · plugin.findRoot(start)
-KaolaWorkflowHooks.hookPath = hookPath;
+//   plugin.findRoot(start)
 KaolaWorkflowHooks.findRoot = findRoot;

@@ -175,10 +175,10 @@ RETIRED_ROLE_SKILLS=(
 # forward and uninstall removes by source-tree name, so a retired hook is invisible to both and
 # would live in the kimi home for good. Removal is exactly these names plus what the deploy is
 # about to write, never a sweep of the whole hooks dir. Bounded the same way as the skills list:
-# the edition shipped pre-commit and write-lane from its first release until their retirement
-# three days later, and no other name has ever left its hook set.
+# the edition shipped pre-commit, write-lane, and the dispatch log before their retirement.
 RETIRED_HOOKS=(
   "kaola-workflow-pre-commit.sh" "kaola-workflow-write-lane.sh"
+  "kaola-workflow-subagent-dispatch-log.sh"
 )
 
 # Support scripts this edition deployed on a PREVIOUS release and no longer deploys — the same

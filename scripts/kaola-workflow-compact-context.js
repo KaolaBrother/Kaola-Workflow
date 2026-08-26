@@ -83,22 +83,22 @@ function main() {
   const state = states.find(candidate => hasActiveStatus(candidate.content)) || states[0];
   const relativeState = path.relative(root, state.file);
   const content = state.content;
-  const phase = field(content, 'phase');
-  const step = field(content, 'step');
   const project = field(content, 'name');
-  const nextCommand = field(content, 'next_command');
-  const fallback = field(content, 'inline_emergency_fallback_authorized');
+  const status = field(content, 'status');
+  const branch = field(content, 'branch');
+  const worktree = field(content, 'worktree_path');
+  const sink = field(content, 'sink');
 
   const lines = [
     'Kaola-Workflow compact resume:',
     `- Read ${relativeState} first, then mission-list.md beside it.`,
     `- Project: ${project}`,
-    `- Current phase: ${phase}`,
-    `- Current step: ${step}`,
-    `- Next command: ${nextCommand}`,
-    `- Inline emergency fallback authorized: ${fallback}`,
-    '- In mission-list.md the H1 is the goal; `done` items carry what is already known, `in-flight` items are the decision to make, `todo` items are what remains.',
-    '- If a dispatch or a validation failed, classify and route the failure; do not repair inline unless fallback is explicitly authorized.',
+    `- Claim status: ${status}`,
+    `- Branch: ${branch}`,
+    `- Worktree: ${worktree}`,
+    `- Sink: ${sink}`,
+    '- In mission-list.md the H1 is the goal; each item keeps its status, dispatched record, and result. A completed result is immutable, and a repair or re-review is a new mission.',
+    '- One dispatch has one result, including FAIL. A dispatch or validation failure is a result: close that item and append a new repair mission when more work is needed.',
     '- If state and the mission list disagree, reconcile from what is on disk before dispatching anything further.'
   ];
 

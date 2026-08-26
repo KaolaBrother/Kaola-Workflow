@@ -47,20 +47,18 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    block_id: 'nx-main-authored-handoff',
-    topic: 'next',
+    block_id: 'in-consent-in-conversation',
+    topic: 'init',
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
-      '<!-- PIN: main-authored-handoff -->',
-      'Before each named-role spawn, main writes a compact task-specific brief',
-      'Use these labels in this order:',
-      'Keep the packet sparse: include only task-specific facts, decisions, bounds, and evidence; do not',
+      '<!-- PIN: consent-in-conversation -->',
+      'Irreversible and value-laden calls belong to the user — ask, in conversation, before taking one.',
     ],
   },
   {
-    block_id: 'in-consent-in-conversation',
-    topic: 'init',
+    block_id: 'fn-consent-in-conversation',
+    topic: 'finalize',
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
@@ -76,13 +74,9 @@ const REQUIRED_BLOCKS = [
     // in the repo. So the format is RESTATED here rather than pointed at.
     //
     // The restatement is a strict SUBSET of the next skeleton's wording: the
-    // four format bullets of the KW-CLAUDE-TEMPLATE region are built only from
-    // whole sentences of `next.skeleton.md`, in that skeleton's own order,
-    // shortened by omission and never rephrased. Nothing checks that
-    // mechanically — it is the rule for editing this pair. Reword the next
-    // skeleton and re-excerpt from it; writing a second wording here is how the
-    // two silently drift apart, and a pointer of any kind is the defect this
-    // block exists to prevent.
+    // mission-list guidance in the KW-CLAUDE-TEMPLATE region is built only
+    // from whole sentences of `next.skeleton.md`, in that skeleton's own order,
+    // shortened by omission and never rephrased.
     block_id: 'in-mission-list',
     topic: 'init',
     runtime_tag: 'both',
@@ -94,28 +88,9 @@ const REQUIRED_BLOCKS = [
       'where the output was to land',
       'the list minus done minus in-flight',
       'mission, not a specification',
-    ],
-  },
-  {
-    block_id: 'fn-consent-in-conversation',
-    topic: 'finalize',
-    runtime_tag: 'both',
-    surface_type_tag: 'both',
-    content_tokens: [
-      '<!-- PIN: consent-in-conversation -->',
-      'Irreversible and value-laden calls belong to the user — ask, in conversation, before taking one.',
-    ],
-  },
-  {
-    block_id: 'fn-main-authored-handoff',
-    topic: 'finalize',
-    runtime_tag: 'both',
-    surface_type_tag: 'both',
-    content_tokens: [
-      '<!-- PIN: main-authored-handoff -->',
-      'Before each named-role spawn, main writes a compact task-specific brief',
-      'Use these labels in this order:',
-      'Keep the packet sparse: include only task-specific facts, decisions, bounds, and evidence; do not',
+      'completed item and its result are immutable',
+      'one dispatch has one result',
+      'append a new mission',
     ],
   },
 
@@ -166,6 +141,9 @@ const REQUIRED_BLOCKS = [
       '| `status` | `todo` \\| `in-flight` \\| `done` | on change |',
       '| `dispatched` | what went out and to whom, and **where the output was to land** | at dispatch |',
       '| `result` | where the outcome landed — a path, or a few lines inline | at close |',
+      'completed item is immutable',
+      'one dispatch has one result',
+      'append a new mission',
     ],
   },
   {
@@ -192,8 +170,10 @@ const REQUIRED_BLOCKS = [
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
-      'Nothing inspects that decision: no disjointness proof, no evidence line, no cap, no approval',
-      'Subagents and worktrees are tools, offered and declinable',
+      'Choose dispatch or inline per item',
+      'Dispatch when it materially reduces main-context residue',
+      'Keep one production owner for a cohesive state machine',
+      'Both modes are first-class',
     ],
   },
   {

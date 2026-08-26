@@ -8,8 +8,8 @@
 // and it does NOT ride the install.sh --forge= machinery. It is delivered the
 // Cursor-native way: named agents under `.cursor/agents/<role>.md` (Task
 // types), flat slash commands under `.cursor/commands/<name>.md`, hook scripts
-// under `.cursor/hooks/`, and `.cursor/hooks.json` (sessionStart resume inject +
-// subagentStart dispatch-log). Deterministic, idempotent, and parity-checked
+// under `.cursor/hooks/`, and `.cursor/hooks.json` (sessionStart resume inject).
+// Deterministic, idempotent, and parity-checked
 // by test-cursor-edition.js.
 //
 // Canonical model classes drive the generated agent tier pins: sonnet/standard
@@ -53,9 +53,9 @@ function treeLabel(forge) {
 const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
 
-const HOOK_SCRIPTS = [
-  'kaola-workflow-subagent-dispatch-log.sh',
-];
+// No runtime-neutral hook scripts are active in the Cursor edition. The generator retains ownership
+// of the hooks directory so --write can prune stale dispatch artifacts.
+const HOOK_SCRIPTS = [];
 const COMPACT_WRAPPER = 'kaola-workflow-compact-context.sh';
 const ENSURE_WRAPPER = 'kaola-workflow-ensure-cursor-catalog.sh';
 
@@ -388,10 +388,6 @@ function renderCursorHooksJson() {
           timeout: 5,
         },
       ],
-      subagentStart: [{
-        command: '.cursor/hooks/kaola-workflow-subagent-dispatch-log.sh',
-        timeout: 5,
-      }],
     },
   }, null, 2) + '\n';
 }
@@ -507,13 +503,7 @@ function renderEnsureWrapper(forge) {
   ].join('\n');
 }
 
-const HOOK_ADAPTATIONS = {
-  'kaola-workflow-subagent-dispatch-log.sh': [
-    ["p.agent_type||''", "(p.agent_type||p.subagent_type||'')"],
-    ["p.agent_id||''", "(p.agent_id||p.subagent_id||'')"],
-    ["p.model||''", "(p.model||p.subagent_model||'')"],
-  ],
-};
+const HOOK_ADAPTATIONS = {};
 
 function adaptHookForCursor(script, content) {
   const rules = HOOK_ADAPTATIONS[script] || [];

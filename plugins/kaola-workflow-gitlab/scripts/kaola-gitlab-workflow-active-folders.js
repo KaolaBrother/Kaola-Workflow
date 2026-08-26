@@ -159,7 +159,6 @@ function probeIssueState(issueIid) {
 function parseStateFile(stateFile) {
   const content = fs.readFileSync(stateFile, 'utf8');
   const issueIid = firstPositiveInteger(field(content, 'issue_iid'), field(content, 'issue_number'));
-  const phase = firstPositiveInteger(field(content, 'phase'));
   const projectId = firstPositiveInteger(field(content, 'project_id'));
   // #328: parse issue_numbers (bundle members) — additive; absent → empty array (AC#1)
   const issueNumbersRaw = field(content, 'issue_numbers');
@@ -174,8 +173,6 @@ function parseStateFile(stateFile) {
     issue_numbers,
     bundle_id: field(content, 'bundle_id'),
     closure_policy: field(content, 'closure_policy'),
-    phase,
-    next_command: field(content, 'next_command'),
     branch: field(content, 'branch'),
     worktree_path: field(content, 'worktree_path'),
     sink: field(content, 'sink') || 'merge',
@@ -239,8 +236,6 @@ function readActiveFolders(root, options) {
       issue_numbers: state.issue_numbers,
       bundle_id: state.bundle_id,
       closure_policy: state.closure_policy,
-      phase: state.phase,
-      next_command: state.next_command,
       branch: state.branch,
       worktree_path: state.worktree_path,
       sink: state.sink,
@@ -277,4 +272,3 @@ module.exports = {
 if (require.main === module) {
   process.stdout.write(JSON.stringify(readActiveFolders(getRoot()), null, 2) + '\n');
 }
-

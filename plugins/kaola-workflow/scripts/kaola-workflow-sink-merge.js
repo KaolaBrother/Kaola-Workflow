@@ -1830,7 +1830,6 @@ function sinkPreflight(mainRoot, project, branch) {
       'kaola-workflow/' + project + '/workflow-plan.md',
       'kaola-workflow/' + project + '/workflow-state.md',
       'kaola-workflow/' + project + '/workflow-tasks.json',
-      'kaola-workflow/' + project + '/.cache/dispatch-log.jsonl'
     ];
     if (xy === '??' && projStateFiles.includes(filePath)) {
       // Verify byte-superset: the branch must carry this file.

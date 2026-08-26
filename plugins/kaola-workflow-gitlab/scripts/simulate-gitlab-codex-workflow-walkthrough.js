@@ -76,8 +76,8 @@ function run(script) {
 
 // M4 (#277): static source-text assertion — the gitlab fork claim.js must contain the run_posture
 // derivation.
-// #284: Codex lifecycle hooks (SessionStart/PreToolUse/PostToolUse/SubagentStart) are now wired
-// via plugins/kaola-workflow-gitlab/config/hooks.json; M1 dispatch-log hook ships in this release.
+// #284: the surviving Codex compact-resume hook is wired through
+// plugins/kaola-workflow-gitlab/config/hooks.json.
 const gitlabClaimSrc = fs.readFileSync(
   path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js'), 'utf8');
 if (!gitlabClaimSrc.includes('run_posture')) {
@@ -100,8 +100,7 @@ if (!gitlabClaimSrc.includes('selection_evidence')) {
   throw new Error('#653: gitlab-codex: kaola-gitlab-workflow-claim.js must implement the selection_evidence probe');
 }
 
-// #284: static assertion — config/hooks.json must exist, parse, and register the SubagentStart
-// dispatch-log hook (M1), proving the Codex lifecycle hook producer is wired in this edition.
+// #284: config/hooks.json must exist, parse, and expose the local compact-resume runtime surface.
 const hooksJsonPath = path.join(root, 'plugins/kaola-workflow-gitlab/config/hooks.json');
 if (!fs.existsSync(hooksJsonPath)) {
   throw new Error('#284: plugins/kaola-workflow-gitlab/config/hooks.json must exist');
@@ -112,14 +111,14 @@ try {
 } catch (e) {
   throw new Error('#284: plugins/kaola-workflow-gitlab/config/hooks.json must parse as valid JSON: ' + e.message);
 }
-const subagentEntries = (hooksConfig.hooks && hooksConfig.hooks['SubagentStart']) || [];
-const dispatchLogEntry = subagentEntries.find(
-  e => e.id && e.id.startsWith('kaola-workflow:') &&
-       (e.hooks || []).some(h => h.command && h.command.includes('kaola-workflow-subagent-dispatch-log.sh'))
+const sessionStartEntries = (hooksConfig.hooks && hooksConfig.hooks.SessionStart) || [];
+const compactResumeEntry = sessionStartEntries.find(
+  e => e.id === 'kaola-workflow:compact-context' && e.matcher === 'compact' &&
+       (e.hooks || []).some(h => h.command && h.command.includes('kaola-gitlab-workflow-codex-compact-resume.js'))
 );
-if (!dispatchLogEntry) {
+if (!compactResumeEntry) {
   throw new Error(
-    '#284: config/hooks.json SubagentStart must contain a kaola-workflow: entry whose command references kaola-workflow-subagent-dispatch-log.sh'
+    '#284: config/hooks.json SessionStart must expose the gitlab-codex compact-resume command for compact sessions'
   );
 }
 

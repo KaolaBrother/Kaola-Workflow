@@ -67,22 +67,6 @@ function assertBefore(file, first, second) {
 // release citing two section names that had been deleted from the profile, because no assertion ever
 // compared the two files. Normalized content, so a line-wrapped citation still parses.
 
-function assertEveryDispatchHasModel(file) {
-  const lines = read(file).split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    if (!/^Agent\(\s*$/.test(lines[i])) continue;
-    let hasSubagent = false, hasModel = false;
-    for (let j = i + 1; j < lines.length; j++) {
-      if (/^\)\s*$/.test(lines[j])) break;
-      if (/subagent_type="[^"]+"/.test(lines[j])) hasSubagent = true;
-      if (/model="\{[A-Z_]+_MODEL\}"/.test(lines[j])) hasModel = true;
-    }
-    assert(!hasSubagent || hasModel,
-      file + ' has an Agent( dispatch block at line ' + (i+1) + ' missing a model="{..._MODEL}" line');
-  }
-}
-
-
 // issue #211: inline section slicer derived from
 // scripts/kaola-workflow-classifier.js so the validator carries no classifier
 // dependency. Returns the body of a `## {heading}` section, up to the next
@@ -156,8 +140,8 @@ const retired = [
 const phaseCommands = [
   'commands/kaola-workflow-finalize.md'
 ];
-// #1014: do not add workflow-next to phaseCommands — that list requires model="{
-// placeholders and assertEveryDispatchHasModel; next has no Agent cards.
+// #1014: do not add workflow-next to phaseCommands — finalize is the only routed command
+// with Agent cards, while workflow-next is a lightweight routing surface.
 
 // #770: the retired path SELECTOR vocabulary — KAOLA_PATH/--workflow-path no longer select or
 // refuse anything, and the reason codes they used to feed are gone. Scoped to these agent-facing
@@ -178,10 +162,6 @@ const retiredExecutor = ['workflow-plan.md', 'Node Ledger', 'plan_hash', 'workfl
 for (const file of phaseCommands) {
   assert(exists(file), file + ' is missing');
   assertIncludes(file, 'workflow-state.md');
-  assertIncludes(file, '## Agent Model Dispatch');
-  assertIncludes(file, 'You MUST pass `model=');
-  assertIncludes(file, 'model="{');
-  assertEveryDispatchHasModel(file);
   // The retired heading, in the SHORT form that subsumes the longer "… Contract" wording this
   // used to pin. "Badge" named a cosmetic effect, not the mechanism; the pin follows the
   // vocabulary it forbids, so a half-applied revert of the rename cannot ship one heading here
@@ -192,18 +172,15 @@ for (const file of phaseCommands) {
   for (const token of retiredPathSelector) assertNotIncludes(file, token);
 }
 
-// issue-152: routed-fix Agent blocks must carry explicit model placeholders
+// Routed-fix Agent blocks identify the role they invoke; model and effort are runtime metadata
+// and may be inherited or selected task-sensitively.
 const routedFixFiles = [
   'commands/kaola-workflow-finalize.md',
   'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
   'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
 ];
 for (const file of routedFixFiles) {
-  assertIncludes(file, 'model="{BUILD_ERROR_RESOLVER_MODEL}"');
   assertIncludes(file, 'subagent_type="build-error-resolver"');
-}
-for (const file of routedFixFiles.filter(f => /phase5|finalize/.test(f))) {
-  assertIncludes(file, 'model="{TDD_GUIDE_MODEL}"');
 }
 
 assert(exists('commands/workflow-next.md'), 'workflow-next command is missing');
@@ -223,8 +200,8 @@ assert(!phaseCommands.includes('commands/workflow-next.md')
     'plugins/kaola-workflow-gitea/commands/workflow-next.md',
   ];
   for (const file of nextCommandCopies) {
-    assertIncludes(file, '## Agent Model Dispatch');
-    assertIncludes(file, 'You MUST pass `model=');
+    assertIncludes(file, 'Dispatch when it materially reduces main-context residue');
+    assertIncludes(file, 'Keep one production owner for a cohesive');
     assertNotIncludes(file, 'model="{');
   }
 }
@@ -278,8 +255,8 @@ for (const file of nextSurfaces) {
 
   // CONCURRENCY CARRIES NO MACHINERY. This is a subtraction made durable: without the sentence,
   // nothing stops a proof obligation from being reintroduced as "just a small check".
-  assertIncludes(file, 'no disjointness proof');
-  assertIncludes(file, 'no evidence line, no cap, no approval');
+  assertIncludes(file, 'No dispatch count, cap, disjointness proof');
+  assertIncludes(file, 'justification, approval, or fallback stigma');
   assertIncludes(file, 'Subagents and worktrees are tools, offered and declinable');
 
   // RESUME. The property the whole design was sized to, and the rule that makes it work.
@@ -318,7 +295,6 @@ assertIncludes('scripts/kaola-workflow-claim.js', 'if (require.main === module)'
 assertIncludes('scripts/kaola-workflow-claim.js', 'worktree_path');
 assertIncludes('scripts/kaola-workflow-claim.js', 'mainRootFromCoord');
 assertIncludes('scripts/kaola-workflow-claim.js', "stdio: ['ignore', 'ignore', 'ignore']");
-assertIncludes('scripts/kaola-workflow-claim.js', "'workflow_path: ' + workflowPath");
 assertIncludes('scripts/kaola-workflow-claim.js', 'removeLegacyStateBlocks');
 assertIncludes('scripts/kaola-workflow-active-folders.js', 'excludeClosedIssues');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'readActiveFolders');
@@ -800,10 +776,8 @@ assert(exists('scripts/kaola-workflow-codex-preflight.js'), '#266 codex prefligh
 assertManifestScript('kaola-workflow-codex-preflight.js');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');
 // #725/#770: adaptive is the ONLY installed path — the `installed_paths` union /
-// `resolveInstalledPaths` resolver are retired, and (#770) so is the path SELECTOR itself: the
-// claim no longer gates on a requested path at all, and both resume surfaces emit the next-work
-// command unconditionally, from the ONE shared constant rather than a hardcoded string.
-assertIncludes('scripts/kaola-workflow-claim.js', 'NEXT_COMMAND');
+// `resolveInstalledPaths` resolver and the persisted next-work command are retired. Resumption
+// follows the claim facts and the mission list instead of an executable state field.
 // finalize adaptive prerequisite (#283: phase6 renamed to finalize)
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all

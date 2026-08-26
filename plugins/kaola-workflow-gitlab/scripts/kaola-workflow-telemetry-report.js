@@ -25,9 +25,8 @@
 //
 // INPUTS — kaola-workflow/{project}/.cache/
 //   outcome-log.jsonl    the ranked population.
-//   node-timings.jsonl   re-dispatch evidence (`opened` events).
-//   dispatch-log.jsonl   re-dispatch evidence (agent spawns).
-// All three writers are error-swallowing best-effort sidecars, so each file is INDEPENDENTLY
+//   node-timings.jsonl   execution evidence (`opened` events).
+// Both writers are error-swallowing best-effort sidecars, so each file is INDEPENDENTLY
 // optional and an absent one is the ordinary case, never an error.
 //
 // OUTPUT
@@ -54,7 +53,7 @@
 //     `median_triage_ms: null` — never a fabricated 0, because 0 is a real observation (a refusal
 //     cleared inside the same millisecond) and "we could not see it" must not read as "it was free".
 //
-//   RE-DISPATCH.  A dispatch-log entry or a node-timings `opened` event whose `ts` falls in
+//   RECOVERY WORK. A node-timings `opened` event whose `ts` falls in
 //     (t0, t_end] — strictly after the refusal (a spawn at the refusal instant cannot have been
 //     caused by it) and at-or-before the resume (a spawn at the resume instant IS the resume). At
 //     most ONE per refusal however many signals fire: the metric is "this refusal cost real work",
@@ -88,7 +87,6 @@ const { execFileSync } = require('child_process');
 const {
   OUTCOME_LOG_NAME,
   NODE_TIMINGS_LOG_NAME,
-  DISPATCH_LOG_NAME,
 } = require('./kaola-workflow-adaptive-schema');
 
 // The REPORT schema version, independent of the record's own `v`: the two evolve separately (a new
@@ -98,8 +96,7 @@ const REPORT_SCHEMA_VERSION = 1;
 const USAGE =
   'usage: kaola-workflow-telemetry-report.js --project <name> [--json]\n' +
   '  Ranks the recorded refusal population of one project by MEASURED interruption cost.\n' +
-  '  Reads kaola-workflow/<project>/.cache/{' + OUTCOME_LOG_NAME + ',' + NODE_TIMINGS_LOG_NAME
-    + ',' + DISPATCH_LOG_NAME + '}.\n' +
+  '  Reads kaola-workflow/<project>/.cache/{' + OUTCOME_LOG_NAME + ',' + NODE_TIMINGS_LOG_NAME + '}.\n' +
   '  An ANSWER verb: exit 0 always, writes nothing, never refuses.\n';
 
 // Resolve the USER-REPO root so a `--project` name maps to the same folder every other lifecycle
@@ -178,7 +175,7 @@ function median(samples) {
  * buildReport — PURE. Raw sidecar text in, one canonical report object out. No clock, no path and
  * no iteration-order value reaches the output, so two runs over the same bytes are byte-identical.
  *
- * @param {{project: string, outcome: string, timings: string, dispatch: string}} input
+ * @param {{project: string, outcome: string, timings: string}} input
  * @returns {object} the report envelope, keys in contract order
  */
 function buildReport(input) {
@@ -186,15 +183,11 @@ function buildReport(input) {
   const parsed = parseJsonl(input && input.outcome);
   const records = parsed.rows;
 
-  // Every re-dispatch signal instant, from both independently-optional sources. A node-timings row
+  // Every recovery-work signal instant from the independently-optional node-timings source. A row
   // counts only when it is an `opened` event — a `closed` is the END of work, never the start of
   // new work. Deliberately NOT filtered by node id: the question is whether the run spent a
   // dispatch inside the stop-to-resume interval, and recovery work frequently lands on another node.
   const signals = [];
-  for (const row of parseJsonl(input && input.dispatch).rows) {
-    const at = instant(row.ts);
-    if (at !== null) signals.push(at);
-  }
   for (const row of parseJsonl(input && input.timings).rows) {
     if (row.event !== 'opened') continue;
     const at = instant(row.ts);
@@ -273,14 +266,13 @@ function buildReport(input) {
   };
 }
 
-// reportProject — read the three sidecars for one project and project them. Read-only end to end.
+// reportProject — read the two telemetry sidecars for one project and project them. Read-only end to end.
 function reportProject(repoRoot, project) {
   const cacheDir = path.join(repoRoot, 'kaola-workflow', project, '.cache');
   return buildReport({
     project,
     outcome: readOr(path.join(cacheDir, OUTCOME_LOG_NAME), ''),
     timings: readOr(path.join(cacheDir, NODE_TIMINGS_LOG_NAME), ''),
-    dispatch: readOr(path.join(cacheDir, DISPATCH_LOG_NAME), ''),
   });
 }
 

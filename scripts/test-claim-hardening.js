@@ -1064,6 +1064,22 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     const p = path.join(repo538, 'kaola-workflow', 'issue-' + issueN, 'workflow-state.md');
     return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
   }
+  function assertClaimOnlyState538(state, label) {
+    for (const field of ['phase', 'phase_name', 'workflow_path', 'step', 'next_command', 'next_skill',
+      'main_session_role', 'implementation_owner', 'fix_owner', 'runtime', 'phase_file', 'cache_file',
+      'last_command', 'last_result']) {
+      assert(!new RegExp('^' + field + ':', 'm').test(state),
+        label + ': claim state must not persist retired progress field ' + field);
+    }
+    for (const heading of ['## Current Position', '## Last Evidence', '## Last Updated']) {
+      assert(!new RegExp('^' + heading.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&') + '$', 'm').test(state),
+        label + ': claim state must not persist retired progress heading ' + heading);
+    }
+    assert(/^## Claim Identity$/m.test(state) && /^## Sink$/m.test(state),
+      label + ': claim state retains Claim Identity and Sink facts');
+    assert(/^session_marker: /m.test(state) && /^claim_ts: /m.test(state) && /^sink: /m.test(state),
+      label + ': claim state retains session_marker, claim_ts, and sink facts');
+  }
 
   // (a) DEFAULT (no --workflow-path, no KAOLA_PATH) → ACQUIRED (adaptive default).
   {
@@ -1076,14 +1092,12 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     rmProj538('5380');
     assert(r.json && r.json.status === 'acquired',
       '#538(a): default (no path) must be acquired via adaptive (got ' + JSON.stringify(r.json) + ')');
-    assert(/^workflow_path: adaptive$/m.test(state5380),
-      '#538(a): the default (no requested path) must persist workflow_path: adaptive, got:\n' + state5380);
+    assertClaimOnlyState538(state5380, '#1032(a)');
   }
 
-  // (b) #770: KAOLA_PATH=fast (a retired path name) is silently IGNORED for selection — the claim
-  // ACQUIRES via adaptive regardless. The persisted workflow_path field still echoes the raw
-  // requested value NEVER reaches durable state: the persisted workflow_path is the constant
-  // 'adaptive', and next_command routes unconditionally to the adaptive executor.
+  // (b) A stale path hint must not add progress state. The claim still acquires, and its durable
+  // record carries only claim/sink facts; Mission List and receipt ownership belong to the run and
+  // finalize surfaces, not to this claim record.
   {
     const r = runClaim538(
       ['startup', '--target-issue', '5381'],
@@ -1094,17 +1108,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     rmProj538('5381');
     assert(r.json && r.json.status === 'acquired',
       '#770(b): a stale KAOLA_PATH=fast request must silently acquire via adaptive, no refusal (got ' + JSON.stringify(r.json) + ')');
-    assert(/^workflow_path: adaptive$/m.test(state5381),
-      '#770(b): a stale KAOLA_PATH must leave NO trace — the persisted workflow_path is the constant adaptive, never an echo of the request, got:\n' + state5381);
-    assert(!/^workflow_path: fast$/m.test(state5381),
-      '#770(b): the retired path name must not appear anywhere in durable state, got:\n' + state5381);
-    // The property is "routing is unconditionally adaptive", not "the adaptive command is spelled
-    // <x>". Read the spelling from the schema constant the writer itself uses: this pin survived a
-    // literal `/kaola-workflow-plan-run` long enough for the command to be DELETED out from under
-    // it, and a pin that names a command which no longer exists tests nothing.
-    assert(new RegExp('^next_command: ' + NEXT_COMMAND.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' issue-5381$', 'm').test(state5381),
-      '#770(b): routing must be unconditionally adaptive despite the stale KAOLA_PATH value — expected next_command: '
-        + NEXT_COMMAND + ' issue-5381, got:\n' + state5381);
+    assertClaimOnlyState538(state5381, '#1032(b)');
   }
 
   // (d) #770: --workflow-path full (a retired path name) is silently ignored — ACQUIRES via
@@ -1122,10 +1126,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       '#770(d): a stale --workflow-path full request must silently acquire via adaptive, no refusal (got ' + JSON.stringify(r.json) + ')');
     assert(r.stderr.includes('--workflow-path is retired; running adaptive'),
       '#770(d): the retired flag must print its one-line warn-and-ignore stderr notice, got stderr:\n' + r.stderr);
-    assert(/^workflow_path: adaptive$/m.test(state5383),
-      '#770(d): a stale --workflow-path must leave NO trace — the persisted workflow_path is the constant adaptive, got:\n' + state5383);
-    assert(!/^workflow_path: full$/m.test(state5383),
-      '#770(d): the retired path name must not appear anywhere in durable state, got:\n' + state5383);
+    assertClaimOnlyState538(state5383, '#1032(d)');
   }
 
   // (f) explicit KAOLA_PATH=adaptive → ACQUIRED (adaptive is the only legal path).
@@ -3609,6 +3610,23 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     const p = path.join(projDir825(issueN), 'workflow-state.md');
     return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
   }
+  const RETIRED_ACTIVE_RUN_FIELDS_1032 = Object.freeze([
+    'phase', 'phase_name', 'workflow_path', 'step', 'next_command', 'next_skill',
+    'main_session_role', 'implementation_owner', 'fix_owner',
+    'inline_emergency_fallback_authorized', 'runtime', 'phase_file', 'cache_file',
+    'last_command', 'last_result',
+  ]);
+  function assertNoActiveRunProgress1032(issueN, label) {
+    const state = stateOf825(issueN);
+    for (const field of RETIRED_ACTIVE_RUN_FIELDS_1032) {
+      assert(!new RegExp('^' + field + ':', 'm').test(state),
+        label + ': workflow-state.md must not persist retired active-run field ' + field);
+    }
+    for (const heading of ['## Current Position', '## Last Evidence', '## Last Updated']) {
+      assert(!new RegExp('^' + heading.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&') + '$', 'm').test(state),
+        label + ': workflow-state.md must not persist retired progress heading ' + heading);
+    }
+  }
   function recordPath825(issueN) {
     return path.join(projDir825(issueN), '.cache', 'origin', 'selection-record.json');
   }
@@ -3661,6 +3679,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       cleanup825(82501);
       const r = runClaim825(['startup', '--target-issue', '82501', '--target-source', 'orchestrator_selected']);
       assertCanonicalRecordClaim825(82501, '#825(a)', r, '--target-source orchestrator_selected');
+      assertNoActiveRunProgress1032(82501, '#1032 state writer');
       cleanup825(82501);
     }
 

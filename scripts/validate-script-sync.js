@@ -177,15 +177,6 @@ const BYTE_IDENTICAL_GROUPS = [
     ],
   },
   {
-    label: 'subagent-dispatch-log hook copies',
-    files: [
-      'hooks/kaola-workflow-subagent-dispatch-log.sh',
-      'plugins/kaola-workflow/hooks/kaola-workflow-subagent-dispatch-log.sh',
-      'plugins/kaola-workflow-gitlab/hooks/kaola-workflow-subagent-dispatch-log.sh',
-      'plugins/kaola-workflow-gitea/hooks/kaola-workflow-subagent-dispatch-log.sh',
-    ],
-  },
-  {
     // THE CROSS-EDITION DRIFT ANCHOR. The Oracle Kernel (kaola-workflow-adaptive-schema.js) has ONE
     // canonical source in scripts/; the three forge copies are GENERATED from it
     // (`edition-sync.js --materialize-kernel`) and COMMITTED, because the Codex/forge install path
@@ -301,8 +292,8 @@ const RENAME_NORMALIZED_FAMILIES = [
 
 // #418.1: the per-forge config/hooks.json (codex/gitlab/gitea plugin trees). These are
 // rename-normalized: identical EXCEPT the SessionStart compact-resume command path, which carries the
-// forge-renamed script base name (kaola-{forge}-workflow-codex-compact-resume.js). Every OTHER
-// kaola-workflow-* token in the JSON is a .sh hook that STAYS base-named across all forges, so the
+// forge-renamed script base name (kaola-{forge}-workflow-codex-compact-resume.js). The compact
+// resume hook is the only hook token retained in the JSON, so the
 // generic renameNormalize() (which rewrites every kaola-workflow-<name>) cannot be used — we
 // normalize ONLY the codex-compact-resume token. Reference = codex tree (the base-named source).
 const CONFIG_HOOKS_FAMILY = {
@@ -323,8 +314,7 @@ function normalizeConfigHooks(referenceText, forge) {
 // #629 bullet 1: the root hooks/hooks.json (Claude plugin-root install surface) and its gitlab/gitea
 // ports. MIRRORS CONFIG_HOOKS_FAMILY above: the only per-forge diff is the SessionStart compact-context
 // hook command, which carries the forge-renamed script base name
-// (kaola-{forge}-workflow-compact-context.js). Every other kaola-workflow-* token (the .sh hooks) stays
-// base-named across all forges. Reference = root tree (the base-named source; no plugins/kaola-workflow
+// (kaola-{forge}-workflow-compact-context.js). Reference = root tree (the base-named source; no plugins/kaola-workflow
 // copy of hooks/hooks.json exists — the Codex tree ships hooks via config/hooks.json instead).
 const HOOKS_JSON_FAMILY = {
   label: 'hooks/hooks.json forge ports',

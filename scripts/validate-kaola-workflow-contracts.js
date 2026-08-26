@@ -161,7 +161,6 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'archiveProjectD
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'if (require.main === module)');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'mainRootFromCoord');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, "stdio: ['ignore', 'ignore', 'ignore']");
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, "'workflow_path: ' + workflowPath");
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'removeLegacyStateBlocks');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'readActiveFolders');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'kw:claim\\s+(project|sess)=');
@@ -502,21 +501,11 @@ assert(extraInReadme.length === 0,
 assert(!blockMatch[1].includes('docs-lookup'),
   'README role catalog must not list the retired docs-lookup role');
 
-// #957/#1010/#1018: README states the live per-tier Codex model/effort pair in normative prose.
-// #1018 extends the two-way table to three-way: reasoning rests at sol/medium; heavy is sol/high.
-// This live routing contract is deliberately independent of the installer/preflight constants
-// pinned above: those constants identify historical profile values for migration, while these
-// pairs govern each new spawn. Normalized, because the fragment line-wraps in the source markdown.
+// Tier classifications, role profiles, and runtime-native defaults remain metadata. The workflow
+// policy must not turn them into a fixed per-spawn model/effort pair or reviewer escalation rule.
 const normalizedReadme = norm(readmeText);
-for (const [tier, model, effort] of [
-  ['standard', 'gpt-5.6-luna', 'max'],
-  ['reasoning', 'gpt-5.6-sol', 'medium'],
-  ['heavy', 'gpt-5.6-sol', 'high'],
-]) {
-  const fragment = '`' + tier + '` dispatches as `' + model + '` / `' + effort + '`';
-  assert(normalizedReadme.includes(fragment),
-    'README Codex dispatch prose has drifted from the live ' + tier + '-tier routing contract; expected: ' + fragment);
-}
+assert(/execution economics/i.test(normalizedReadme) || /dispatch.*inline/i.test(normalizedReadme),
+  'README must describe the execution-economics dispatch/inline judgment');
 
 const routingSkels = [
   'templates/routing/next.skeleton.md',
@@ -525,14 +514,12 @@ const routingSkels = [
 for (const rel of routingSkels) {
   const text = read(rel);
   const n = norm(text);
-  assert(/standard-tier/i.test(n) && /gpt-5\.6-luna/.test(n) && /reasoning_effort:\s*"max"/.test(text),
-    rel + ' must render standard-tier as gpt-5.6-luna / max');
-  assert(/reasoning-tier/i.test(n) && /gpt-5\.6-sol/.test(n) && /reasoning_effort:\s*"medium"/.test(text),
-    rel + ' must render reasoning-tier resting as gpt-5.6-sol / medium');
-  assert(/heavy/i.test(n) && /gpt-5\.6-sol/.test(n) && /reasoning_effort:\s*"high"/.test(text),
-    rel + ' must render heavy-tier as gpt-5.6-sol / high');
-  assert(/do not escalate/i.test(n) && /re-dispatch/i.test(n) && /reviewer/i.test(n) && /failed to finish/i.test(n) && /complex/i.test(n),
-    rel + ' do-not-escalate pin must carry the one reviewer-class heavy re-dispatch carve-out');
+  assert(/dispatch when it materially reduces main-context residue/i.test(n),
+    rel + ' must carry the execution-economics dispatch judgment');
+  assert(/runtime-native defaults/i.test(n) || /task-sensitive model/i.test(n),
+    rel + ' must leave model/effort selection to runtime metadata or task context');
+  assert(!/model="\{[A-Z_]+_MODEL\}"/.test(text),
+    rel + ' must not pin a workflow-owned per-spawn model placeholder');
 }
 {
   const initText = read('templates/routing/init.skeleton.md');
@@ -587,40 +574,8 @@ for (const rel of routingSkels) {
 // plugins. require() the schema route constants (no hand-listed drift) and assert each resolves to a
 // `skills/<name>/SKILL.md` dir. A missing skill reds the chain with the unreachable target named.
 //
-// #883: the retired plan-run / adapt / fast / research targets left this list EMPTY, so the loop
-// below had nothing to iterate and the assertion could not run — a dead check wearing the shape of a
-// live one. The route survived the retirement: claim.js still builds `next_skill` from the schema
-// constant (`NEXT_SKILL + ' ' + project`, kaola-workflow-claim.js writeState), so that target is what
-// the contract is now derived from, and the list is fenced against going empty again.
-{
-  const schema = require(path.join(root, pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
-  // Skill targets emitted by claim.js next_skill (output()/resume): the adaptive route constant.
-  // Values are emitted as `<skill> {project}`; reachability is the bare skill name. (Commands are
-  // the Claude-edition surface, asserted in validate-workflow-contracts.)
-  const emittedSkillTargets = [schema.NEXT_SKILL];
-  // Vacuity fence — the failure this check actually suffered. An empty list, or an entry that is not
-  // a usable skill name (a deleted schema constant reads as `undefined`), makes the loop below assert
-  // nothing at all; that must red here rather than pass silently.
-  assert(emittedSkillTargets.length > 0 &&
-    emittedSkillTargets.every(t => typeof t === 'string' && t.length > 0),
-    '#883: the receipt-emitted skill target list must be non-empty and name only resolvable ' +
-    `skills — the route-reachability loop asserts nothing otherwise; got ${JSON.stringify(emittedSkillTargets)}`);
-  // The derivation above is only sound while claim.js emits next_skill FROM the schema constant; if
-  // it ever inlines a literal, this list becomes a parallel hand-kept one and stops tracking the route.
-  assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'adaptiveSchema.NEXT_SKILL');
-  assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, "'next_skill: ' + (data.next_skill || adaptiveSkill)");
-  const installedSkills = new Set(
-    fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })
-      .filter(e => e.isDirectory())
-      .map(e => e.name)
-      .filter(name => exists(`${pluginRoot}/skills/${name}/SKILL.md`))
-  );
-  for (const target of emittedSkillTargets) {
-    assert(installedSkills.has(target),
-      `#400: route-reachability — receipt-emitted skill target "${target}" has no installed ` +
-      `skills/${target}/SKILL.md in ${pluginRoot} (broken route, the #400 dead zone)`);
-  }
-}
+// The claim no longer emits an executable next-skill target. Generated skill surfaces are checked
+// by their own routing/edition parity generators; workflow state remains claim/sink/liveness data.
 
 // #422.3: the agent-profile md↔toml token-pin test must be wired into the claude chain.
 {

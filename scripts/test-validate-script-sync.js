@@ -218,7 +218,7 @@ assert(typeof sync.normalizeHooksJson === 'function', '#629 bullet 1: normalizeH
 assert(typeof sync.checkNormalizedFamily === 'function',
   '#629 bullet 1: checkNormalizedFamily exported (shared family-check primitive)');
 
-// 6a) MECHANISM (RED-PROOF): plant a new PreToolUse matcher into a root-copy FIXTURE without
+// 6a) MECHANISM (RED-PROOF): plant a new SessionStart matcher into a root-copy FIXTURE without
 // mirroring it into the forge copies -> the family check must report drift for every port.
 // Runs entirely against a throwaway tmp tree — never touches the real hooks/hooks.json files.
 if (sync.HOOKS_JSON_FAMILY && typeof sync.checkNormalizedFamily === 'function') {
@@ -226,8 +226,8 @@ if (sync.HOOKS_JSON_FAMILY && typeof sync.checkNormalizedFamily === 'function') 
   try {
     const rootHooksText = fs.readFileSync(path.join(repoRoot, 'hooks/hooks.json'), 'utf8');
     const rootHooks = JSON.parse(rootHooksText);
-    // plant an extra SubagentStart matcher (drift) into the fixture root copy only.
-    rootHooks.hooks.SubagentStart.push({
+    // plant an extra surviving SessionStart matcher (drift) into the fixture root copy only.
+    rootHooks.hooks.SessionStart.push({
       matcher: 'PLANTED-DRIFT',
       hooks: [{ type: 'command', command: 'echo planted', timeout: 5 }],
       description: 'planted drift (test fixture only, never written to a real file)',
@@ -244,7 +244,7 @@ if (sync.HOOKS_JSON_FAMILY && typeof sync.checkNormalizedFamily === 'function') 
     }
     const res = sync.checkNormalizedFamily(sync.HOOKS_JSON_FAMILY, sync.normalizeHooksJson, tmp, 'compact-context-normalized');
     assert(res.drift.length === sync.HOOKS_JSON_FAMILY.ports.length,
-      '#629 bullet 1 RED-PROOF: a PreToolUse matcher planted into the root fixture only (no forge mirror) reds for every port, got ' + JSON.stringify(res));
+      '#629 bullet 1 RED-PROOF: a SessionStart matcher planted into the root fixture only (no forge mirror) reds for every port, got ' + JSON.stringify(res));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

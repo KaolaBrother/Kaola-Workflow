@@ -378,65 +378,6 @@ for (const name of ['workflow-next']) {
 // leaves in its place.
 
 // ---------------------------------------------------------------------------
-// K2-anchor: the canonical section this edition answers must still EXIST. (The kimi twin of
-// test-opencode-edition.js's S2 carrier count.)
-//
-// `transformCommandBody` strips the canonical `## Agent Model Dispatch` section and leaves
-// KIMI_MODEL_DISPATCH_GUIDANCE in its place. That one line is the whole kimi-side statement of a
-// fact canonical cannot state — this runtime has no per-dispatch model override — and every other
-// check in this file reads the GENERATED tree, where deleting the canonical section deletes the
-// section, the strip, the guidance and the expectation together. Measured: with the section
-// removed from the skeleton, this suite stayed green at 516 assertions and said nothing, while the
-// opencode twin went red. The count assertion below is the missing red.
-//
-// WHICH commands must carry it is DERIVED from canonical, never hand-listed — a typed carrier list
-// is a second place for that truth to live, and the copy that stops being true without saying so.
-// The heading is a LITERAL here rather than the generator's exported MODEL_DISPATCH_HEADING:
-// sourcing the expectation from the subject's own constant would make this agree with the
-// generator by construction, and it could then no longer witness generator and canonical
-// disagreeing.
-//
-// The per-file half is ONE-DIRECTIONAL on purpose. A carrier's Skill must show the guidance and
-// must not show the canonical heading. The converse — a NON-carrier must not show the guidance —
-// is deliberately not asserted: the same literal is also this edition's answer to a standalone
-// `model=` instruction anywhere in a body, so a canonical edit that legitimately added one
-// elsewhere would fail a biconditional for being correct.
-// ---------------------------------------------------------------------------
-{
-  const CANON_SECTION = /^##\s+Agent Model Dispatch\s*$/m;
-  // The presence check below is `includes(GUIDANCE)`, which an empty or missing constant would
-  // make true of every file — a green that means the constant vanished, not that the strip fired.
-  const GUIDANCE = sync.KIMI_MODEL_DISPATCH_GUIDANCE;
-  assert(typeof GUIDANCE === 'string' && GUIDANCE.trim().length > 20,
-    'K2-anchor: sync.KIMI_MODEL_DISPATCH_GUIDANCE is a non-trivial string — got '
-      + JSON.stringify(GUIDANCE));
-
-  const canonCarriesSection = file =>
-    CANON_SECTION.test(fs.readFileSync(sync.canonCommandPath(file), 'utf8'));
-  const sectionCarriers = canonCommands.filter(canonCarriesSection);
-  assert(sectionCarriers.length > 0,
-    'K2-anchor: at least ONE canonical command carries `## Agent Model Dispatch` (found '
-      + sectionCarriers.length + ' of ' + canonCommands.length + ') — with none, every per-file '
-      + 'check below ranges over an empty expectation and this guard reports green by having had '
-      + 'nothing to read');
-
-  for (const file of sectionCarriers) {
-    const rel = skillDir(file.slice(0, -3));
-    assert(exists(rel), 'K2-anchor[' + file + ']: generated Skill exists at ' + rel);
-    if (!exists(rel)) continue;
-    const content = read(rel);
-    assert(content.includes(GUIDANCE),
-      'K2-anchor[' + file + ']: ' + rel + ' carries the inherit-model guidance the strip leaves '
-        + 'behind — its canonical source carries `## Agent Model Dispatch`, so the strip fired here '
-        + 'and this line is the only thing telling a Kimi reader there is no model= to pass');
-    assert(!CANON_SECTION.test(content),
-      'K2-anchor[' + file + ']: ' + rel + ' does NOT carry the canonical `## Agent Model Dispatch` '
-        + 'heading — kimi drops the heading with the section, so a surviving one means the strip '
-        + 'never fired and the surface ships Claude-shaped prose about a model= this runtime has no '
-        + 'parameter for');
-  }
-}
-
 // K2-declaration: the model-inheritance divergence must exist as a DECLARED EXEMPTION-TABLE ENTRY,
 // not merely as prose. "One rule, one wording" permits a runtime to diverge only where its
 // capabilities genuinely differ, and only when that divergence is declared as a named entry with a
@@ -770,11 +711,9 @@ for (const role of reviewerGenerator.ROLES) {
 }
 
 // ---------------------------------------------------------------------------
-// K7: hooks — the generated kimi-hooks.toml fragment maps the two canonical
-// hooks.json entries to Kimi [[hooks]] rules (SubagentStart → dispatch-log,
-// and the Claude SessionStart"compact" entry → PostCompact →
-// compact-context.js), and the 1 runtime-neutral shell script is
-// byte-identical to canonical hooks/.
+// K7: hooks — the generated kimi-hooks.toml fragment maps the surviving
+// canonical compaction hook to Kimi's PostCompact rule, and the runtime-neutral
+// shell script remains byte-identical to canonical hooks/.
 // ---------------------------------------------------------------------------
 {
   const toml = read('.kimi/hooks/kimi-hooks.toml');
@@ -804,25 +743,18 @@ for (const role of reviewerGenerator.ROLES) {
     assert(canonEvents.length > 0 && blocks.length === canonEvents.length,
       'K7-canon: the fragment carries one [[hooks]] rule per canonical event entry — canonical='
       + JSON.stringify(canonEvents) + ' (' + canonEvents.length + '), fragment rules=' + blocks.length);
-    // The count above is only half of it: the fragment must map THESE two events, not any two.
-    // SessionStart"compact" is the Claude spelling of the Kimi PostCompact rule, so the pairing is
-    // named rather than assumed — a canonical event renamed on one side alone reds here.
-    assert(JSON.stringify(canonEvents) === JSON.stringify(['SessionStart', 'SubagentStart']),
-      'K7-canon: the canonical event set the kimi fragment maps is {SessionStart, SubagentStart} — '
-      + 'got ' + JSON.stringify(canonEvents) + '; the kimi counterparts asserted above are '
-      + '{PostCompact, SubagentStart}, so a rename on either side must be reconciled deliberately');
+    // The count above is only half of it: the fragment must map the surviving
+    // compaction event, not an arbitrary rule.
+    assert(JSON.stringify(canonEvents) === JSON.stringify(['SessionStart']),
+      'K7-canon: the canonical event set the kimi fragment maps is {SessionStart} — got '
+      + JSON.stringify(canonEvents));
   }
-  assert(blocks.length === 2,
-    'K7: kimi-hooks.toml carries EXACTLY 2 [[hooks]] rules (mapped from canonical hooks.json) — got ' + blocks.length);
-  const ALLOWED_EVENTS = new Set(['SubagentStart', 'PostCompact']);
+  assert(blocks.length === 1,
+    'K7: kimi-hooks.toml carries one [[hooks]] rule for compaction — got ' + blocks.length);
+  const ALLOWED_EVENTS = new Set(['PostCompact']);
   const events = [...toml.matchAll(/^event = "([^"]+)"$/gm)].map(m => m[1]);
-  assert(events.length === 2 && events.every(e => ALLOWED_EVENTS.has(e)),
-    'K7: every [[hooks]] event is a valid Kimi event ∈ {SubagentStart, PostCompact} — got ' + JSON.stringify(events));
-  assert(events.filter(e => e === 'SubagentStart').length === 1
-    && events.filter(e => e === 'PostCompact').length === 1,
-    'K7: event partition is SubagentStart×1 + PostCompact×1 (the canonical 2-entry map)');
-  assert(/event = "SubagentStart"\ncommand = "bash __KIMI_HOME__\/kaola-workflow\/hooks\/kaola-workflow-subagent-dispatch-log\.sh"/.test(toml),
-    'K7: SubagentStart → dispatch-log.sh (matcher omitted)');
+  assert(events.length === 1 && events.every(e => ALLOWED_EVENTS.has(e)),
+    'K7: the surviving [[hooks]] event is PostCompact — got ' + JSON.stringify(events));
   assert(/event = "PostCompact"\ncommand = "node __KIMI_HOME__\/kaola-workflow\/scripts\/kaola-workflow-compact-context\.js"/.test(toml),
     'K7: PostCompact → compact-context.js (the Kimi semantic counterpart of SessionStart"compact")');
   assert(toml.startsWith('# >>> kaola-workflow kimi hooks') && toml.includes('# <<< kaola-workflow kimi hooks'),
@@ -919,6 +851,23 @@ for (const script of sync.HOOK_SCRIPTS) {
   const os = require('os');
 
   const INSTALLER = path.join(REPO, 'install-kimi.sh');
+  // Issue #1032: keep the retired dispatch hook in the bounded list and prove both cleanup paths
+  // consume that list. This source-contract check avoids any real-home install.
+  const installerSource = readFileSync(INSTALLER, 'utf8');
+  const retiredHooks = installerSource.match(/\bRETIRED_HOOKS\s*=\s*\(([^)]*)\)/);
+  const hasRetiredHookCleanup = body => {
+    const loop = String(body).match(/^[ \t]*for[ \t]+retired[ \t]+in[^\n]*RETIRED_HOOKS[^\n]*;[ \t]*do[ \t]*\n([\s\S]*?)^[ \t]*done[ \t]*$/m);
+    return !!loop && /\brm\s+-f\b/.test(loop[1]) && /\$retired\b/.test(loop[1]) && /hooks/.test(loop[1]);
+  };
+  const installStart = installerSource.indexOf('install_support_scripts() {');
+  const uninstallStart = installerSource.indexOf('uninstall_edition() {');
+  assert(retiredHooks && /\bkaola-workflow-subagent-dispatch-log\.sh\b/.test(retiredHooks[1]),
+    'R1: RETIRED_HOOKS contains kaola-workflow-subagent-dispatch-log.sh');
+  assert(installStart >= 0 && uninstallStart > installStart
+    && hasRetiredHookCleanup(installerSource.slice(installStart, uninstallStart)),
+    'R2: install cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
+  assert(uninstallStart >= 0 && hasRetiredHookCleanup(installerSource.slice(uninstallStart)),
+    'R3: uninstall cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
   // The three surviving command topics. `kaola-workflow-adapt` and `kaola-workflow-plan-run`
   // were the node executor's own surfaces and went with it.
   const ADAPTIVE_CORE = [
@@ -1452,8 +1401,8 @@ for (const script of sync.HOOK_SCRIPTS) {
     assert(JSON.stringify(deployedSkills(r1)) === JSON.stringify(deployedSkills(r2)),
       'P4: re-install leaves the deployed skill set unchanged');
     const hookBlockCount = readFileSync(r1.kimiConfig, 'utf8').match(/^\[\[hooks\]\]$/gm) || [];
-    assert(hookBlockCount.length === 2,
-      'P4: re-installed config.toml carries exactly the 2 [[hooks]] rules (no duplication)');
+    assert(hookBlockCount.length === 1,
+      'P4: re-installed config.toml carries exactly the one surviving [[hooks]] rule (no duplication)');
     clean(r1);
     clean(r2);
   }

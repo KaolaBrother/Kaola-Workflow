@@ -2,7 +2,7 @@
 'use strict';
 // Child processes in this file are classified per site (ADR 0013). The ratchet
 // reads the spawn line or the line above it. Two classes appear here:
-//   environment    installer / --write materialize / TREE_ROOT git probe / hook payload
+//   environment    installer / --write materialize / TREE_ROOT git probe
 //   cli-contract   --check / --help / unknown --forge refuse / --print-tree-root
 
 // ---------------------------------------------------------------------------
@@ -15,8 +15,8 @@
 // install.sh / edition-sync.js / npm test. It is delivered the Cursor-native
 // way: named agents under `.cursor/agents/<role>.md` (Task types),
 // flat commands under `.cursor/commands/<name>.md`, hook scripts under
-// `.cursor/hooks/`, and `.cursor/hooks.json` (sessionStart resume inject +
-// subagentStart dispatch-log). Three canonical model classes: standard/reasoning/heavy
+// `.cursor/hooks/`, and `.cursor/hooks.json` (sessionStart compact-resume inject).
+// Three canonical model classes: standard/reasoning/heavy
 // agents carry unquoted Grok 4.6 frontmatter pins with medium/high/xhigh effort. Command
 // cards carry no per-dispatch model override. Compact resume after a session compact is a declared
 // divergence: preCompact cannot inject; sessionStart additional_context can,
@@ -78,73 +78,6 @@ let passed = 0, failed = 0;
 function assert(cond, msg) {
   if (cond) { passed++; return; }
   failed++; console.error('FAIL: ' + msg);
-}
-
-// Reliable Cursor IDE + CLI dispatch teaching (measured 2026-08-23). Shared by
-// G2-dispatch and G10-block so CURSOR_MODEL_DISPATCH_BLOCK and generated
-// next/finalize cannot drift. A card that only documents this in
-// docs/cursor-edition.md is not enough.
-//
-// Inherit omit is extracted so a card that says "pass inherit because the Task
-// schema requires it" plus "Do not pass xhigh" can be asserted false on its
-// own. A whole-body /omit|do not pass|never pass/i is the vacuous pin.
-function cursorDispatchInheritTeachingOk(body) {
-  const text = String(body || '');
-  return /\bIDE\b/i.test(text)
-    && /\bschema\b/i.test(text)
-    && /\binherit\b/i.test(text)
-    && /default/i.test(text)
-    && /named/i.test(text)
-    && /do not pass inherit/i.test(text);
-}
-
-function assertReliableCursorDispatchTeaching(label, text) {
-  const body = String(text || '');
-  assert(/\bresume\b/i.test(body)
-    && /never resume|do not resume|fresh dispatch/i.test(body),
-    label + ': names resume and forbids it (never resume / do not resume / fresh dispatch)');
-  assert(cursorDispatchInheritTeachingOk(body),
-    label + ': names the IDE Task schema inherit default; named Kaola types still omit '
-    + '(do not pass inherit to satisfy the schema)');
-  assert(/grok-4\.6\[effort=xhigh\]/.test(body) && /fable/i.test(body),
-    label + ': names grok-4.6[effort=xhigh] as the fable / heavy pin (xhigh is allowed when it is the fable pin)');
-  assert(/\bprompt\b/i.test(body)
-    && /\bmission\b/i.test(body)
-    && /\blocator\b/i.test(body)
-    && /do not paste|role contract/i.test(body),
-    label + ': Task prompt is the mission and locator; do not paste the role contract / costume '
-    + 'onto a named type');
-  assert(/(?:envelope|\bCLI\b)/i.test(body)
-    && /cursor-grok-4\.6-medium/.test(body)
-    && /cursor-grok-4\.6-high/.test(body),
-    label + ': names CLI stream envelope as the effort oracle and the medium vs high split '
-    + '(cursor-grok-4.6-medium / cursor-grok-4.6-high)');
-  assert(/clamp/i.test(body)
-    && /selectedModels|selected session|Grok 4\.6/i.test(body)
-    && /deferral/i.test(body)
-    && /Task\(model=/.test(body)
-    && /workaround|do not|never|forbid/i.test(body),
-    label + ': names the IDE picker clamp (selected session Grok 4.6 / selectedModels) as a typed '
-    + 'deferral and forbids a Task(model=) workaround');
-  assert(/\bIDE\b/i.test(body)
-    && /display/i.test(body)
-    && /effort/i.test(body)
-    && /do not claim/i.test(body),
-    label + ': do not claim IDE children display distinct effort');
-}
-
-{
-  const adversarialInheritPayload = [
-    'Never resume. Fresh dispatch.',
-    'IDE Task schema inherit default for named types: pass inherit because the Task schema requires it.',
-    'Do not pass cursor-grok-4.6-xhigh as the Task model.',
-    'Task prompt is the mission and locator; do not paste the role contract onto a named type.',
-    'CLI envelope oracle cursor-grok-4.6-medium vs cursor-grok-4.6-high.',
-    'IDE picker clamp selected session Grok 4.6 selectedModels typed deferral forbids a Task(model=) workaround.',
-  ].join('\n');
-  assert(!cursorDispatchInheritTeachingOk(adversarialInheritPayload),
-    'G11-inherit-pin: inherit teaching must reject a card that says pass inherit because the '
-    + 'Task schema requires it (xhigh-only "Do not pass" is not inherit omit)');
 }
 
 function runGenerator(args) {
@@ -588,30 +521,10 @@ function commandRel(name, forge) {
     'G2: generated Task( count equals canonical Agent( count');
 }
 
-// G2-leak forbids dispatching with a vendor slug on command/hook cards. The
-// teaching block is the sole allowed place those CLI envelope names appear.
-function stripCursorModelDispatchBlock(content) {
-  const block = String(syncMod.CURSOR_MODEL_DISPATCH_BLOCK || '').replace(/\s+$/, '');
-  if (!block) return String(content || '');
-  return String(content || '').split(block).join('');
-}
-
+// G2-leak forbids dispatching with a vendor slug on command/hook cards.
 {
   const B2_MODEL_NOUN = /\b(Opus|Sonnet)\b/;
   const VENDOR_SLUG = /\bgrok-4\.\d\b|\bgrok-build\b/;
-  const dispatchBlock = String(syncMod.CURSOR_MODEL_DISPATCH_BLOCK || '');
-  assert(VENDOR_SLUG.test(dispatchBlock),
-    'G2-leak: CURSOR_MODEL_DISPATCH_BLOCK names envelope slugs that match VENDOR_SLUG '
-    + '(exemption is required; do not weaken the regex)');
-  assert(!VENDOR_SLUG.test(stripCursorModelDispatchBlock(dispatchBlock)),
-    'G2-leak: stripping CURSOR_MODEL_DISPATCH_BLOCK leaves no vendor slug');
-  assert(VENDOR_SLUG.test(stripCursorModelDispatchBlock(dispatchBlock + '\ngrok-4.6 leftover\n')),
-    'G2-leak: grok-4.N outside the teaching block still fails');
-  assert(VENDOR_SLUG.test(stripCursorModelDispatchBlock(dispatchBlock + '\ngrok-build leftover\n')),
-    'G2-leak: grok-build outside the teaching block still fails');
-  assert(VENDOR_SLUG.test(stripCursorModelDispatchBlock(
-    dispatchBlock + '\nUse `cursor-grok-4.6-medium` for this Task.\n')),
-    'G2-leak: cursor-grok-4.6-medium outside the teaching block still fails');
   let runtimeCursor = 0;
   for (const rel of generatedTreeFiles('.cursor')) {
     const content = read(rel);
@@ -627,7 +540,7 @@ function stripCursorModelDispatchBlock(content) {
     assert(!/\bmodel="/.test(content),
       'G2-leak: ' + rel + ': no per-call model=" override in generated dispatch surfaces');
     if (!/\/agents\//.test(rel)) {
-      assert(!VENDOR_SLUG.test(stripCursorModelDispatchBlock(content)),
+      assert(!VENDOR_SLUG.test(content),
         'G2-leak: ' + rel + ': no vendor model slug in command/hook surfaces');
     }
     const lines = content.split('\n');
@@ -647,53 +560,6 @@ function stripCursorModelDispatchBlock(content) {
     'G2[workflow-next]: claim invocation stamps --runtime cursor');
   assert(/CURSOR_HOME/.test(read(commandRel('workflow-next'))),
     'G2[workflow-next]: script resolver names CURSOR_HOME');
-}
-
-// #1014: canonical command next (not Codex skills) must carry the heading Cursor
-// substitutes for CURSOR_MODEL_DISPATCH_BLOCK. Absence is a no-op in the generator.
-{
-  const nextCommands = [
-    'commands/workflow-next.md',
-    'plugins/kaola-workflow-gitlab/commands/workflow-next.md',
-    'plugins/kaola-workflow-gitea/commands/workflow-next.md',
-  ];
-  for (const rel of nextCommands) {
-    assert(/## Agent Model Dispatch/.test(read(rel)),
-      'G2-dispatch[' + rel + ']: canonical command next MUST carry ## Agent Model Dispatch '
-      + '(Codex skills are not required to carry this heading)');
-  }
-}
-
-// #1014: generated next and finalize share the strengthened CURSOR_MODEL_DISPATCH_BLOCK.
-{
-  const block = String(syncMod.CURSOR_MODEL_DISPATCH_BLOCK || '');
-  function assertStrengthenedDispatch(label, text) {
-    const body = String(text || '');
-    assert(body.includes(block.replace(/\s+$/, '')),
-      label + ': must contain the same CURSOR_MODEL_DISPATCH_BLOCK text as the shared constant');
-    assert(/\binherit\b/i.test(body) && /do not pass inherit/i.test(body),
-      label + ': omit per-call model= including inherit (do not pass inherit)');
-    assert(/subagent_type:\s*"<role>"/.test(body),
-      label + ': dispatch names subagent_type: "<role>"');
-    assert(/\bgeneralPurpose\b/.test(body)
-      && /substitut|impersonat|costume|do not use/i.test(body),
-      label + ': forbid generalPurpose impersonation — name generalPurpose; do not substitute it '
-      + '/ do not use a prompt costume');
-    assert(body.includes('.cursor/agents/implementer.md'),
-      label + ': catalog-preflight sentinel names .cursor/agents/implementer.md in cwd');
-    assert(/new chat/i.test(body) && /copied|this session|cold.?start/i.test(body),
-      label + ': if files were just copied this session, stop named dispatch and start a new chat');
-    assert(/Invalid enum/i.test(body) && /inline/i.test(body)
-      && /generalPurpose|inherit/i.test(body),
-      label + ': Invalid-enum / advertised catalog lacks the role → do the work inline; '
-      + 'do not retry as generalPurpose/inherit');
-    assertReliableCursorDispatchTeaching(label, body);
-  }
-  assertStrengthenedDispatch('G2-dispatch[CURSOR_MODEL_DISPATCH_BLOCK]', block);
-  assertStrengthenedDispatch('G2-dispatch[.cursor/commands/workflow-next.md]',
-    exists(commandRel('workflow-next')) ? read(commandRel('workflow-next')) : '');
-  assertStrengthenedDispatch('G2-dispatch[.cursor/commands/kaola-workflow-finalize.md]',
-    exists(commandRel('kaola-workflow-finalize')) ? read(commandRel('kaola-workflow-finalize')) : '');
 }
 
 // ---------------------------------------------------------------------------
@@ -796,9 +662,8 @@ for (const role of reviewerGenerator.ROLES) {
 
 // ---------------------------------------------------------------------------
 // G5: hooks — generated mapping at `.cursor/hooks.json` (Cursor loads that
-// path, not hooks/hooks.json). Events are camelCase sessionStart +
-// subagentStart. Dispatch-log accepts subagent_type / subagent_id as well as
-// agent_type / agent_id. Compact wrapper wraps stdout as additional_context.
+// path, not hooks/hooks.json). The surviving sessionStart compact wrapper
+// wraps stdout as additional_context; the dispatch-log hook is retired.
 // ---------------------------------------------------------------------------
 {
   const hooksJsonRel = '.cursor/hooks.json';
@@ -811,8 +676,8 @@ for (const role of reviewerGenerator.ROLES) {
     'G5: hooks.json parses with a hooks object');
   assert(parsed.version === 1, 'G5: hooks.json version is 1 — got ' + JSON.stringify(parsed.version));
   const events = parsed && parsed.hooks ? Object.keys(parsed.hooks).sort() : [];
-  assert(events.includes('sessionStart') && events.includes('subagentStart'),
-    'G5: hooks.json registers sessionStart and subagentStart — got ' + JSON.stringify(events));
+  assert(events.includes('sessionStart'),
+    'G5: hooks.json registers sessionStart — got ' + JSON.stringify(events));
   const session = parsed && parsed.hooks ? parsed.hooks.sessionStart : [];
   const sessionBlob = JSON.stringify(session || []);
   assert(/compact/i.test(sessionBlob),
@@ -822,59 +687,10 @@ for (const role of reviewerGenerator.ROLES) {
   assert(!/CLAUDE_PLUGIN_ROOT/.test(read(hooksJsonRel)),
     'G5: hooks.json carries no CLAUDE_PLUGIN_ROOT');
 
-  const hookRel = '.cursor/hooks/kaola-workflow-subagent-dispatch-log.sh';
-  assert(exists(hookRel), 'G5: payload-adapted dispatch-log hook is generated');
-  const hookText = exists(hookRel) ? read(hookRel) : '';
-  assert(hookText.startsWith('#!/bin/sh\n'),
-    'G5: adapted dispatch-log keeps the shebang as line 1 so Cursor can exec it');
-  assert(/subagent_type/.test(hookText) && /subagent_id/.test(hookText),
-    'G5: dispatch-log source accepts Cursor subagent_type / subagent_id');
-  assert(/agent_type/.test(hookText) && /agent_id/.test(hookText),
-    'G5: dispatch-log source still accepts snake_case agent_type / agent_id');
-  assert(/subagent_model/.test(hookText),
-    'G5: dispatch-log source accepts subagent_model');
   assert(exists('.cursor/hooks/kaola-workflow-compact-context.sh'),
     'G5: compact wrapper is generated');
   assert(read('.cursor/hooks/kaola-workflow-compact-context.sh').startsWith('#!/bin/sh\n'),
     'G5: compact wrapper keeps the shebang as line 1');
-}
-
-{
-  const hookPath = path.join(TREE_ROOT, '.cursor', 'hooks', 'kaola-workflow-subagent-dispatch-log.sh');
-  assert(fs.existsSync(hookPath), 'G5-payload: adapted dispatch-log exists to drive');
-  const repo = fs.mkdtempSync(path.join(tmpBase(), 'cursor-hook-'));
-  try {
-    G.init(repo);
-    const project = path.join(repo, 'kaola-workflow', 'hook-probe');
-    fs.mkdirSync(path.join(project, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(project, 'workflow-state.md'), 'status: active\n');
-    const logPath = path.join(project, '.cache', 'dispatch-log.jsonl');
-    const feed = payload => {
-      // spawn-class: environment
-      return spawnSync('bash', [hookPath], {
-        cwd: repo, input: JSON.stringify(payload), encoding: 'utf8',
-      });
-    };
-    const cases = [
-      { agent_type: 'tdd-guide', agent_id: 'snake-1', cwd: repo },
-      { subagent_type: 'implementer', subagent_id: 'cursor-2', cwd: repo },
-      { subagent_type: 'code-reviewer', agent_id: 'mixed-3', cwd: repo },
-    ];
-    for (const payload of cases) {
-      const r = feed(payload);
-      assert(r.status === 0,
-        'G5-payload: dispatch-log exits 0 on ' + JSON.stringify(payload) + ' (got ' + r.status + ')');
-    }
-    const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
-    assert(log.includes('tdd-guide'),
-      'G5-payload: snake_case agent_type still logs a line');
-    assert(log.includes('implementer'),
-      'G5-payload: subagent_type logs a line (Cursor hook stdin)');
-    assert(log.includes('code-reviewer'),
-      'G5-payload: mixed subagent_type + agent_id logs a line');
-  } finally {
-    try { fs.rmSync(repo, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  }
 }
 
 {
@@ -961,15 +777,15 @@ for (const role of reviewerGenerator.ROLES) {
     let after = JSON.parse(fs.readFileSync(dest, 'utf8'));
     assert(Array.isArray(after.hooks.beforeShellExecution) && after.hooks.beforeShellExecution.length === 1,
       'G6-merge: preserves the user beforeShellExecution entry');
-    assert(Array.isArray(after.hooks.sessionStart) && Array.isArray(after.hooks.subagentStart),
-      'G6-merge: appends sessionStart and subagentStart');
+    assert(Array.isArray(after.hooks.sessionStart),
+      'G6-merge: appends sessionStart');
     const stripped = runGenerator(['--strip-hooks', '--dest=' + dest]);
     assert(stripped.status === 0, 'G6-strip: --strip-hooks exits 0 (got ' + stripped.status + ')');
     after = JSON.parse(fs.readFileSync(dest, 'utf8'));
     assert(Array.isArray(after.hooks.beforeShellExecution),
       'G6-strip: user entries remain');
-    assert(!after.hooks.sessionStart && !after.hooks.subagentStart,
-      'G6-strip: kaola events are removed');
+    assert(!after.hooks.sessionStart,
+      'G6-strip: kaola sessionStart is removed');
     fs.writeFileSync(dest, 'not-json{');
     const refuse = runGeneratorCli(['--merge-hooks', '--dest=' + dest]);
     assert(refuse.status === 1,
@@ -1028,6 +844,23 @@ for (const role of reviewerGenerator.ROLES) {
       + String(syntax.stderr || syntax.stdout).split('\n')[0] + ')');
   }
   if (fs.existsSync(INSTALLER)) {
+    // Issue #1032: inspect the shipped source so the retired dispatch hook stays in the bounded
+    // list and both install/uninstall paths consume that list without touching a real home.
+    const installerSource = fs.readFileSync(INSTALLER, 'utf8');
+    const retiredHooks = installerSource.match(/\bRETIRED_HOOKS\s*=\s*\(([^)]*)\)/);
+    const hasRetiredHookCleanup = body => {
+      const loop = String(body).match(/^[ \t]*for[ \t]+retired[ \t]+in[^\n]*RETIRED_HOOKS[^\n]*;[ \t]*do[ \t]*\n([\s\S]*?)^[ \t]*done[ \t]*$/m);
+      return !!loop && /\brm\s+-f\b/.test(loop[1]) && /\$retired\b/.test(loop[1]) && /hooks/.test(loop[1]);
+    };
+    const installStart = installerSource.indexOf('install_support_scripts() {');
+    const uninstallStart = installerSource.indexOf('uninstall_edition() {');
+    assert(retiredHooks && /\bkaola-workflow-subagent-dispatch-log\.sh\b/.test(retiredHooks[1]),
+      'R1: RETIRED_HOOKS contains kaola-workflow-subagent-dispatch-log.sh');
+    assert(installStart >= 0 && uninstallStart > installStart
+      && hasRetiredHookCleanup(installerSource.slice(installStart, uninstallStart)),
+      'R2: install cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
+    assert(uninstallStart >= 0 && hasRetiredHookCleanup(installerSource.slice(uninstallStart)),
+      'R3: uninstall cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
     const firstLine = r => String(r.stderr || r.stdout || '').split('\n')[0];
     function runInstaller(extraArgs, opts) {
       opts = opts || {};
@@ -1230,8 +1063,8 @@ for (const role of reviewerGenerator.ROLES) {
       assert(Array.isArray(merged.hooks.beforeShellExecution)
         && merged.hooks.beforeShellExecution[0].command === 'echo user-owned',
         'G8-merge: preserves the user beforeShellExecution entry');
-      assert(Array.isArray(merged.hooks.sessionStart) && Array.isArray(merged.hooks.subagentStart),
-        'G8-merge: appends kaola sessionStart and subagentStart');
+      assert(Array.isArray(merged.hooks.sessionStart),
+        'G8-merge: appends kaola sessionStart');
       const userFile = path.join(dest, '.cursor', 'agents', 'notes.md');
       fs.writeFileSync(userFile, 'user-owned, not kaola-deployed\n');
       // spawn-class: environment
@@ -1246,8 +1079,8 @@ for (const role of reviewerGenerator.ROLES) {
       const stripped = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
       assert(Array.isArray(stripped.hooks.beforeShellExecution),
         'G8-merge-uninstall: user hook entries remain');
-      assert(!stripped.hooks.sessionStart && !stripped.hooks.subagentStart,
-        'G8-merge-uninstall: kaola events are stripped');
+      assert(!stripped.hooks.sessionStart,
+        'G8-merge-uninstall: kaola sessionStart is stripped');
       assert(fs.existsSync(userFile),
         'G8-merge-uninstall: a user-owned file in the agents dir survives');
       clean(r);
@@ -1719,46 +1552,6 @@ function g10Rm(dir) {
 }
 
 {
-  const block = String(syncMod.CURSOR_MODEL_DISPATCH_BLOCK || '');
-  const nextBody = exists(commandRel('workflow-next')) ? read(commandRel('workflow-next')) : '';
-  function assertG10Block(label, body) {
-    const text = String(body || '');
-    assert(/kaola-workflow-ensure-cursor-catalog\.js/.test(text),
-      label + ': names kaola-workflow-ensure-cursor-catalog.js');
-    assert(/\binherit\b/i.test(text) && /do not pass inherit/i.test(text),
-      label + ': omit per-call model= including inherit (do not pass inherit)');
-    assert(/subagent_type:\s*"<role>"/.test(text),
-      label + ': dispatch names subagent_type: "<role>"');
-    assert(/\bgeneralPurpose\b/.test(text) && /substitut|impersonat|costume|do not use/i.test(text),
-      label + ': forbid generalPurpose impersonation');
-    assert(text.includes('.cursor/agents/implementer.md'),
-      label + ': keeps catalog path example .cursor/agents/implementer.md');
-    assert(/new chat/i.test(text) && /copied|this session|cold.?start/i.test(text),
-      label + ': copied / new role files / prompt-byte refresh still require cold start and a new chat');
-    assert(/Invalid enum/i.test(text) && /inline/i.test(text)
-      && /generalPurpose|inherit/i.test(text),
-      label + ': Invalid-enum → do the work inline; do not retry as generalPurpose/inherit');
-    assert(/\balready-present\b/.test(text) && /\bcopied\b/.test(text)
-      && /\bmissing-source\b/.test(text),
-      label + ': names status tokens already-present | copied | missing-source');
-    assert(/\balready-present\b/.test(text) && /\bTask\b/.test(text)
-      && /omit|do not pass|never pass/i.test(text),
-      label + ': already-present → named omit-model Task (not “only implementer.md exists”)');
-    assert(/\bcopied\b/.test(text) && /new chat/i.test(text) && /workflow-next/.test(text),
-      label + ': copied → stop named dispatch; cold start; new chat; re-run /workflow-next');
-    assert(/\bmissing-source\b/.test(text) && /install-cursor\.sh/.test(text)
-      && /--target/.test(text),
-      label + ': missing-source → print ./install-cursor.sh --target "$PWD" (or global install path); '
-      + 'do not name a Task type');
-    assert(!/in order:\s*git\s+toplevel/i.test(text),
-      label + ': must not prefer git toplevel over $CURSOR_HOME/agents as catalog source');
-    assertReliableCursorDispatchTeaching(label, text);
-  }
-  assertG10Block('G10-block[CURSOR_MODEL_DISPATCH_BLOCK]', block);
-  assertG10Block('G10-block[.cursor/commands/workflow-next.md]', nextBody);
-}
-
-{
   const manifest = require('./kaola-workflow-install-manifest.js');
   const githubScripts = manifest.supportScripts('github');
   assert(Array.isArray(githubScripts) && !githubScripts.includes(G10_ENSURE_JS),
@@ -1816,66 +1609,18 @@ function g10Rm(dir) {
 
 {
   const skelPath = path.join(REPO, 'templates', 'routing', 'init.skeleton.md');
-  const skel = fs.existsSync(skelPath) ? fs.readFileSync(skelPath, 'utf8') : '';
-  assert(fs.existsSync(skelPath), 'G10-overlay-untouched: templates/routing/init.skeleton.md exists');
-  assert(!/\bgeneralPurpose\b/.test(skel),
-    'G10-overlay-untouched: init.skeleton.md does not contain generalPurpose');
-  assert(!/\binherit\b/.test(skel),
-    'G10-overlay-untouched: init.skeleton.md does not contain inherit');
-  assert(!/cursor-grok-4\.6-xhigh/.test(skel),
-    'G10-overlay-untouched: init.skeleton.md does not contain cursor-grok-4.6-xhigh');
-  assert(!/Task\(model=/.test(skel),
-    'G10-overlay-untouched: init.skeleton.md does not contain Task(model=)');
-  assert(!/kaola-workflow-ensure-cursor-catalog/.test(skel),
-    'G10-overlay-untouched: init.skeleton.md does not contain kaola-workflow-ensure-cursor-catalog');
+  assert(fs.existsSync(skelPath), 'G10: templates/routing/init.skeleton.md exists');
 }
 
 {
   const initRel = commandRel('workflow-init');
   const initBody = exists(initRel) ? read(initRel) : '';
-  const dispatchBlock = String(syncMod.CURSOR_MODEL_DISPATCH_BLOCK || '').replace(/\s+$/, '');
   assert(exists(initRel),
-    'G11-init-no-spawn: generated ' + initRel + ' exists');
-  assert(dispatchBlock.length > 0,
-    'G11-init-no-spawn: CURSOR_MODEL_DISPATCH_BLOCK is non-empty (exact-includes pin would be vacuous)');
-  assert(!/cursor-grok-4\.6-medium/.test(initBody),
-    'G11-init-no-spawn: generated workflow-init must not contain cursor-grok-4.6-medium '
-    + '(CLI envelope oracle belongs on next/finalize only)');
-  assert(!/cursor-grok-4\.6-high/.test(initBody),
-    'G11-init-no-spawn: generated workflow-init must not contain cursor-grok-4.6-high '
-    + '(CLI envelope oracle belongs on next/finalize only)');
-  assert(!initBody.includes(dispatchBlock),
-    'G11-init-no-spawn: generated workflow-init must not contain the full CURSOR_MODEL_DISPATCH_BLOCK text');
-  // /workflow-init is the all-runtime bootstrapper. Cursor spawn teaching
-  // (assertReliableCursorDispatchTeaching) belongs on next/finalize only —
-  // do not apply that helper to this surface.
-  assert(!/Cursor overlay freeze/i.test(initBody)
-      && !/Cursor Task spawn/i.test(initBody)
-      && !/^##\s+Cursor[^\n]*freeze/im.test(initBody),
-    'G11-init-no-spawn: generated workflow-init must not contain a Cursor-only freeze heading '
-    + 'or Cursor Task spawn / Cursor overlay freeze teaching');
-  assert(!/\binherit\b/.test(initBody),
-    'G11-init-no-spawn: generated workflow-init must not contain inherit '
-    + '(spawn contract belongs on next/finalize only)');
-  assert(!/Task\(model=/.test(initBody),
-    'G11-init-no-spawn: generated workflow-init must not contain Task(model= '
-    + '(spawn contract belongs on next/finalize only)');
-  assert(!/subagent_type:\s*"<role>"/.test(initBody),
-    'G11-init-no-spawn: generated workflow-init must not contain subagent_type: "<role>" '
-    + '(spawn contract belongs on next/finalize only)');
-  assert(!/\bgeneralPurpose\b/.test(initBody),
-    'G11-init-no-spawn: generated workflow-init must not contain generalPurpose '
-    + '(spawn contract belongs on next/finalize only)');
-  const freezeBlock = String(syncMod.CURSOR_INIT_OVERLAY_FREEZE || '').replace(/\s+$/, '');
-  if (freezeBlock.length > 0) {
-    assert(!initBody.includes(freezeBlock),
-      'G11-init-no-spawn: generated workflow-init must not contain the full '
-      + 'CURSOR_INIT_OVERLAY_FREEZE text (leftover constant must not land on init)');
-  }
+    'G11: generated ' + initRel + ' exists');
   assert(/### Compact Template/.test(initBody)
       && /KW-CLAUDE-TEMPLATE-START/.test(initBody)
       && /## Step 2 — Synthesize `CLAUDE\.md`/.test(initBody),
-    'G11-init-no-spawn: generated workflow-init must still carry the shared compact overlay / '
+    'G11: generated workflow-init must still carry the shared compact overlay / '
     + 'CLAUDE.md writer job (canonical Compact Template fence, not Cursor-specific wording)');
 }
 

@@ -1071,9 +1071,8 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebase
     worktree_removed: worktreeRemoved,
     branch_removed: branchRemoved
   });
-  // The dispatch-attestation probe is gone with the mechanism it read: claim.js no longer exports
-  // checkDispatchAttestations. Calling a retired export was not a stale comment — it threw AFTER the
-  // merge had landed, so the sink advanced the default branch and then died reporting exit 1.
+  // Closure receipts no longer carry a separate attestation field; existing closure and sink
+  // invariants remain the source of truth for this merge.
   // #369: post-attach the bundle per-member buckets BEFORE the invariant check.
   if (bundleBuckets) {
     receipt.closed_issues = bundleBuckets.closed_issues;
@@ -1835,7 +1834,7 @@ function sinkPreflight(mainRoot, project, branch) {
     const filePath = decoded[0];
     const projStateFiles = [
       'kaola-workflow/' + project + '/workflow-plan.md', 'kaola-workflow/' + project + '/workflow-state.md',
-      'kaola-workflow/' + project + '/workflow-tasks.json', 'kaola-workflow/' + project + '/.cache/dispatch-log.jsonl'
+      'kaola-workflow/' + project + '/workflow-tasks.json'
     ];
     if (xy === '??' && projStateFiles.includes(filePath)) {
       let branchHas = false;
@@ -1921,10 +1920,10 @@ function deriveSinkKeepOpen(mainRoot, args, receipt) {
 
 // #700: persist the SAME terminal metadata cmdFinalize writes — the ## Closure state block +
 // the ## Attestation summary block — into the archive dest, for a --sink that is the SOLE archiver.
-// Attestation reflects the REAL dispatch-log probe of the claim/author seam (no fabrication for inline
-// execution). Presence-guarded/idempotent; disposition/label/invariant fields are honestly PENDING
-// here (the sink's own closure + verify steps perform the real close). Fail-soft; only a missing
-// export (the #550 cross-edition drift class) rethrows.
+// Persist the existing closure metadata for the claim/author seam. Presence-guarded/idempotent;
+// disposition/label/invariant fields are honestly PENDING here (the sink's own closure + verify
+// steps perform the real close). Fail-soft; only a missing export (the #550 cross-edition drift
+// class) rethrows.
 function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) {
   const dest = archiveResult && archiveResult.dest;
   if (!dest) return;

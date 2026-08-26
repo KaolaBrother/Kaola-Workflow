@@ -1,24 +1,9 @@
 <!-- SLOT:fz-frontmatter -->
-<!-- REGION:skill — Codex selects the model and reasoning effort on each spawn from the role's existing tier classification; command runtimes retain their installed-profile model routing -->
-<!-- PIN: codex-dispatch-model-routing -->
-## Codex Per-Spawn Model Routing
-
-Keep every installed role's existing standard-tier, reasoning-tier, or heavy-tier classification, and set the
-model and reasoning effort explicitly on each spawn. Standard-tier roles dispatch with
-`model: "gpt-5.6-luna"` and `reasoning_effort: "max"`. Reasoning-tier roles dispatch with
-`model: "gpt-5.6-sol"` and `reasoning_effort: "medium"`. Heavy-tier roles dispatch with
-`model: "gpt-5.6-sol"` and `reasoning_effort: "high"`.
-
-<!-- SLOT:codex-tier-roster -->
-
-These mappings are fixed for every spawn. Do not escalate, downgrade, or otherwise override a
-tier's model or reasoning effort based on task breadth, latency, prior results, risk, availability,
-or any other condition. The role classification remains unchanged. One carve-out: the orchestrator
-may re-dispatch a reviewer-class role at heavy when a reasoning-tier attempt failed to finish the
-review, or the surface is judged complex before dispatch.
-
-<!-- /PIN -->
-<!-- /REGION -->
+Choose dispatch or inline per item. Dispatch when it materially reduces main-context residue,
+supplies independent judgment, or enables genuinely independent parallel work. Keep one production
+owner for a cohesive state machine, protocol, or integration when handoff and integration cost
+exceed that benefit. Both modes are first-class; width follows the true work frontier. No dispatch
+count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
 
 <!-- SLOT:fz-h1 -->
 
@@ -42,29 +27,17 @@ result, and you are the only party with enough context to be.
 
 Read `kaola-workflow/{project}/workflow-state.md` for what this run owns, and
 `kaola-workflow/{project}/mission-list.md` for what it set out to do.
+The mission list remains exactly an H1 plus `item`, `status`, `dispatched`, and `result`: a
+completed item and its result are immutable; one dispatch has one result including `FAIL`, and
+repair or re-review work must append a new mission.
 
-<!-- SLOT:main-authored-handoff -->
-
-<!-- REGION:command — the `model="{...}"` placeholders are filled at install time for this surface; the skill surface has no placeholder to fill and resolves each role's model from its installed profile at spawn time -->
-## Agent Model Dispatch
-
-Every subagent dispatch below carries an explicit `model=` line — the installer fills each
-`model="{...}"` placeholder from the agent's own installed profile. You MUST pass `model="{...}"`
-in every Agent call exactly as shown; never omit the `model=` line on any dispatch. An installed
-agent's frontmatter `model:` is rewritten to `inherit`, so a dispatch that omits `model=` does not
-fall back to that role's assigned model — it runs the role on this session's model instead.
-
-The reviewer carve-out below is the sole dispatch exception: for that bounded heavy
-re-dispatch, pass `model="fable"` instead of the installed reviewer `opus` model; reviewer
-resting dispatches and all other roles continue to pass their installed profile model.
-
-Reviewer-class roles retain their installed reasoning-tier (`opus`) profile as the resting profile.
-One carve-out: the orchestrator may re-dispatch a reviewer-class role at heavy when a reasoning-tier
-attempt failed to finish the review, or the surface is judged complex before dispatch.
-
-The bounded heavy re-dispatch uses the approved `fable` profile only.
-
-<!-- /REGION -->
+Before a delegated role starts, give it a self-sufficient natural-language brief: the result or
+question, the relevant evidence and authority or custody boundary, the exact worktree, commit, or
+evidence locator where its result lands, and the condition that ends the task. Keep the brief bounded
+and falsifiable; the installed role profile supplies universal behavior and inherited conversation
+is not required. The mission list remains the recovery index. A production result belongs in the
+actual worktree or commit when Git already records it; add a report only for evidence a successor
+cannot derive from those bytes.
 
 ## Step 1 — Final validation
 
@@ -104,19 +77,18 @@ hashes the tree its own shell is in — so `record_path` is where to look for th
 record was written — the `verdict` field, not the exit code, carries whether your validation passed.
 
 On failure, **repair it however you judge best.** Fix it inline for a trivial correction, or
-dispatch it to whichever role fits — `tdd-guide` for a test defect, because it holds custody of the
-test artifact and no other role may write a test path; `build-error-resolver` for build, type, lint
+dispatch it to whichever role fits — `tdd-guide` for an acceptance or test-defect decision because
+it owns the test meaning; the implementer may make mechanical fixture/signature/manifest/adapter/
+harness maintenance when that meaning is unchanged; `build-error-resolver` for build, type, lint
 or tooling; the review gate for a review finding. There is no mandated mode, no justifier to write,
 and no approval attached to that choice. Write fix output to `.cache/final-validation-fix-{n}.md`
 and rerun the exact command that failed.
 
-<!-- REGION:command — the `Agent(...)` call form with an installer-filled `model="{...}"` placeholder is this surface's dispatch shape; the skill surface spawns the same roles by name with no call block to show -->
 Routed-fix dispatches, when you dispatch one:
 
 ```text
 Agent(
   subagent_type="tdd-guide",
-  model="{TDD_GUIDE_MODEL}",
   description="Routed fix: {the failing command}",
   prompt="the exact failure, the evidence path, and the working directory"
 )
@@ -125,13 +97,11 @@ Agent(
 ```text
 Agent(
   subagent_type="build-error-resolver",
-  model="{BUILD_ERROR_RESOLVER_MODEL}",
   description="Routed fix: {the failing command}",
   prompt="the exact failure, the evidence path, and the working directory"
 )
 ```
 
-<!-- /REGION -->
 Run each full relevant command once against the final candidate. Citing an earlier pass instead of
 rerunning is fine, but **state the actual reuse boundary rather than a false absolute**: say which
 state it covered. A finalize-time documentation edit is outside a code or test rerun trigger — never
@@ -180,26 +150,18 @@ ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileS
 [ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"
 ```
 
-<!-- REGION:command — the `Agent(...)` call form with an installer-filled `model="{...}"` placeholder is this surface's dispatch shape; the skill surface spawns the same role by name with no call block to show -->
 Dispatch `doc-updater` with the changed files, the checklist, and the working directory.
 
 ```text
 Agent(
   subagent_type="doc-updater",
-  model="{DOC_UPDATER_MODEL}",
   description="Update docs for {project}",
   prompt="changed files, checklist, Working directory: ${ACTIVE_WORKTREE_PATH}"
 )
 ```
-<!-- /REGION -->
-<!-- REGION:skill — the spawn counterpart of the `Agent(...)` block above: this runtime names the role and passes the model plus reasoning effort selected by the Codex per-spawn routing contract, so there is no command-runtime call block or placeholder -->
-Delegate to the `doc-updater` role with the changed files, the checklist, and
-`Working directory: ${ACTIVE_WORKTREE_PATH}`. Follow the Codex Per-Spawn Model Routing contract above:
-pass both `model` and `reasoning_effort` explicitly on the spawn call as the pair selected for
-`doc-updater`'s existing tier. Per-task model or reasoning-effort exceptions are not allowed. Update docs
-only when behavior, API, setup, architecture, environment, or user-facing workflow changed;
-otherwise write the no-impact reason.
-<!-- /REGION -->
+For the skill surface, delegate to the `doc-updater` role with the same context. Runtime-native
+defaults or a task-sensitive override are both valid; update docs only when behavior, API, setup,
+architecture, environment, or user-facing workflow changed, otherwise write the no-impact reason.
 
 Write the result to `.cache/doc-updater.md`. **Anti-fabrication, required:** instruct `doc-updater`
 to transcribe verified ground truth — real `--json` or `--help` output, real signatures, existing

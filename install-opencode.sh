@@ -208,10 +208,11 @@ RETIRED_WORKFLOW_COMMANDS=(
 # Hook scripts this edition deployed on a PREVIOUS release and no longer generates — the same
 # declaration model as the commands above, read by BOTH paths: removal is exactly these names
 # plus what the deploy is about to write, never a sweep of the whole hooks dir. Bounded by what
-# the edition's hook set ever carried: pre-commit and write-lane shipped from the first hook
-# deploy until their retirement, and no other name has ever left the set.
+# the edition's hook set ever carried: pre-commit, write-lane, and the dispatch log shipped from
+# earlier hook deployments and are now retired.
 RETIRED_HOOKS=(
   kaola-workflow-pre-commit.sh kaola-workflow-write-lane.sh
+  kaola-workflow-subagent-dispatch-log.sh
 )
 # Support scripts this edition deployed on a PREVIOUS release and no longer deploys. The INSTALL path
 # already converges (it enumerates the destination and drops anything absent from what it just

@@ -51,8 +51,8 @@ Everything under `.cursor/` is **generated from canonical** by
 | ---------------- | --------------------- | ----- |
 | `agents/<name>.md` | `.cursor/agents/<name>.md` | Cursor agent frontmatter (`name`, `description`, an unquoted `model: grok-4.6[effort=medium]`, `model: grok-4.6[effort=high]`, or `model: grok-4.6[effort=xhigh]` derived from the canonical class, and `readonly`). Claude `tools:` (including MCP ids) are dropped. Descriptions that are not plain YAML scalars are JSON-quoted. Reviewer identity is a body comment block (`<!-- cursor-reviewer-identity:start|end -->`); `resolved_profile_hash` is re-stamped over the cursor bytes. |
 | `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). `Agent(` dispatch cards become `Task(`. Install-time `model="{...}"` lines are stripped. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
-| `hooks/<script>.sh` | `.cursor/hooks/<script>.sh` | Dispatch-log is payload-adapted (`agent_type \|\| subagent_type`, `agent_id \|\| subagent_id`, `model \|\| subagent_model`). Adapted copies keep the shebang as line 1. Compact-context is wrapped as JSON `{additional_context}` for `sessionStart`. A second `sessionStart` wrapper runs `kaola-workflow-ensure-cursor-catalog.js` and prints `{}` so it does not emit `additional_context`. |
-| mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). `sessionStart` (compact resume + catalog ensure) + `subagentStart`. Project-shaped commands use `.cursor/hooks/…`. A `--global` install rewrites that prefix to `./hooks/`. |
+| `hooks/<script>.sh` | `.cursor/hooks/<script>.sh` | No runtime-neutral dispatch hook is installed. Compact-context is wrapped as JSON `{additional_context}` for `sessionStart`. A second `sessionStart` wrapper runs `kaola-workflow-ensure-cursor-catalog.js` and prints `{}` so it does not emit `additional_context`. |
+| mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). `sessionStart` (compact resume + catalog ensure) only. Project-shaped commands use `.cursor/hooks/…`. A `--global` install rewrites that prefix to `./hooks/`. |
 
 Generated agents carry a model-and-effort pin derived from the canonical agent
 class. The canonical `sonnet`/`standard`, `opus`/`reasoning`, and `fable`/`heavy`
@@ -163,10 +163,9 @@ limits.
 
 ## Path selection
 
-On the cursor edition, the router routes directly to the adaptive workflow. The
-canonical `## Agent Model Dispatch` section is substituted at generation time
-for the model-free Task guidance above; canonical `commands/*.md` is never
-touched.
+On the cursor edition, the router routes directly to the adaptive workflow. Generated commands
+adapt the dispatch call syntax and omit per-call model arguments; canonical `commands/*.md` is
+never touched. There is no canonical model-dispatch section to substitute.
 
 ## Installer
 
@@ -221,14 +220,12 @@ install redeploys the edition.
 ## Hooks
 
 Cursor's hook model is a JSON mapping at `.cursor/hooks.json` (project) or
-`~/.cursor/hooks.json` (global). Payloads use `subagent_type` / `subagent_id` /
-`subagent_model`. This edition ships a payload-adapted dispatch-log, a compact wrapper, and a
+`~/.cursor/hooks.json` (global). This edition ships a compact wrapper and a
 catalog-ensure wrapper. Compact resume and catalog materialize are different
 jobs. The ensure wrapper prints `{}` so it does not clobber compact-resume.
 Both sessionStart commands use a 5s timeout. All are fail-open.
 
 | Event | Claude payload | Cursor payload | Adaptation |
 | --- | --- | --- | --- |
-| `subagentStart` | `agent_type` / `agent_id` | `subagent_type` / `subagent_id` | dispatch-log accepts `agent_type \|\| subagent_type` and `agent_id \|\| subagent_id` |
 | `sessionStart` resume | compact stdout injected after compact | `additional_context` JSON, new session only | wrapper turns compact-context.js stdout into `{additional_context}`. `preCompact` cannot inject — declared as `session_start_resume_injection`. Durable resume is `mission-list.md`. |
 | `sessionStart` catalog | n/a | wrapper stdout is `{}` | `kaola-workflow-ensure-cursor-catalog.sh` copies the 14 canon roles from `$CURSOR_HOME/agents` into `<cwd>/.cursor/agents`. Mid-session copy still needs a new chat. |

@@ -1411,7 +1411,7 @@ function test409StableHomeSurvivesDirDeletion() {
         }
       }
     }
-    assert.ok(commandCount >= 2, '#409 gt: expected the two managed hook commands, saw ' + commandCount);
+    assert.ok(commandCount >= 1, '#409 gt: expected the surviving managed hook command, saw ' + commandCount);
 
     // #447: stable home also lives in global HOME/.codex/kaola-workflow
     const globalStableHome409 = path.join(tempHome409, '.codex', 'kaola-workflow');
@@ -1468,7 +1468,7 @@ function testInstallProfilesFeaturesTableHandling() {
     assert.ok(fs.existsSync(freshHooksPath), '#447 AC1: fresh install must create HOME/.codex/hooks.json (global), not found at: ' + freshHooksPath);
     assert.ok(!fs.existsSync(path.join(fresh, '.codex', 'hooks.json')), '#447 AC5: no hooks.json must be written to project .codex');
     const freshHooks = JSON.parse(fs.readFileSync(freshHooksPath, 'utf8'));
-    const requiredEvents = ['SessionStart', 'SubagentStart'];
+    const requiredEvents = ['SessionStart'];
     for (const event of requiredEvents) {
       const entries = freshHooks.hooks[event];
       assert.ok(Array.isArray(entries) && entries.length > 0, `hooks.json must have entries for ${event}`);
@@ -3588,8 +3588,6 @@ function testGiteaCompactResume266() {
       '## Sink',
       'branch: workflow/issue-266',
       'issue_number: 266',
-      'next_command: /kaola-workflow-next',
-      'next_skill: kaola-workflow-next',
       ''
     ].join('\n'));
 
@@ -3597,32 +3595,37 @@ function testGiteaCompactResume266() {
 
     const input = JSON.stringify({ cwd: root });
 
-    // --- GREEN: run compact-resume → deterministic 6-line packet ---
+    // --- GREEN: run compact-resume → deterministic claim + Mission List packet ---
     const r1 = spawnSync(process.execPath, [giteaCompactResumeScript],
       { input, encoding: 'utf8' });
     assert.strictEqual(r1.status, 0,
       '#266 gt case4: compact-resume must exit 0, got ' + r1.status + '\n' + r1.stderr);
     const lines1 = r1.stdout.trim().split('\n');
-    assert.strictEqual(lines1.length, 6,
-      '#266 gt case4: packet must have 6 lines, got ' + lines1.length + '\n' + r1.stdout);
 
     assert.strictEqual(lines1[0], 'Kaola-Workflow compact resume:',
       '#266 gt case4: line[0] must be header, got ' + lines1[0]);
     assert.ok(lines1[1].includes('issue-266-compact'),
       '#266 gt case4: active project must include project name, got ' + lines1[1]);
+    assert.ok(lines1.some(line => line === 'claim status: active'),
+      '#266 gt case4: packet must retain claim status, got ' + r1.stdout);
+    assert.ok(lines1.some(line => line === 'branch: workflow/issue-266'),
+      '#266 gt case4: packet must retain sink branch, got ' + r1.stdout);
     // The goal is the mission list's H1 — the one thing a zero-context successor needs first.
-    assert.ok(lines1[2].includes('Retire the node executor'),
-      '#266 gt case4: goal line must carry the mission list H1, got ' + lines1[2]);
+    const goalLine = lines1.find(line => line.startsWith('goal:')) || '';
+    assert.ok(goalLine.includes('Retire the node executor'),
+      '#266 gt case4: goal line must carry the mission list H1, got ' + goalLine);
     // In-flight items are the decision to make, so each must carry its dispatched locator:
     // "look for the work, not the worker" needs somewhere to look.
-    assert.ok(lines1[4].includes('delete the node executor'),
-      '#266 gt case4: in-flight line must name the in-flight item, got ' + lines1[4]);
-    assert.ok(lines1[4].includes('dispatched:') && lines1[4].includes('demolish subagent'),
-      '#266 gt case4: in-flight line must carry the dispatched locator, got ' + lines1[4]);
-    assert.ok(!lines1[4].includes('extract subagent'),
-      '#266 gt case4: a done item must not appear on the in-flight line, got ' + lines1[4]);
-    assert.ok(lines1[5].includes('done: 1') && lines1[5].includes('in-flight: 1') && lines1[5].includes('todo: 1'),
-      '#266 gt case4: progress line must count every status, got ' + lines1[5]);
+    const inFlightLine = lines1.find(line => line.startsWith('in-flight:')) || '';
+    assert.ok(inFlightLine.includes('delete the node executor'),
+      '#266 gt case4: in-flight line must name the in-flight item, got ' + inFlightLine);
+    assert.ok(inFlightLine.includes('dispatched:') && inFlightLine.includes('demolish subagent'),
+      '#266 gt case4: in-flight line must carry the dispatched locator, got ' + inFlightLine);
+    assert.ok(!inFlightLine.includes('extract subagent'),
+      '#266 gt case4: a done item must not appear on the in-flight line, got ' + inFlightLine);
+    const countsLine = lines1.find(line => line.startsWith('mission counts:')) || '';
+    assert.ok(countsLine.includes('done: 1') && countsLine.includes('in-flight: 1') && countsLine.includes('todo: 1'),
+      '#266 gt case4: progress line must count every status, got ' + countsLine);
 
     // --- Determinism: two runs → identical stdout ---
     const r2 = spawnSync(process.execPath, [giteaCompactResumeScript],
@@ -3638,12 +3641,12 @@ function testGiteaCompactResume266() {
     assert.strictEqual(rNoList.status, 0,
       '#266 gt case4: a claim with no mission list must still exit 0, got ' + rNoList.status);
     const linesNoList = rNoList.stdout.trim().split('\n');
-    assert.strictEqual(linesNoList.length, 6,
-      '#266 gt case4: packet shape must not depend on the mission list existing, got ' + linesNoList.length);
-    assert.ok(linesNoList[2].includes('unknown'),
-      '#266 gt case4: an absent mission list must read as an unknown goal, got ' + linesNoList[2]);
-    assert.ok(linesNoList[5].includes('done: 0') && linesNoList[5].includes('todo: 0'),
-      '#266 gt case4: an absent mission list must count zero items, got ' + linesNoList[5]);
+    const noListGoal = linesNoList.find(line => line.startsWith('goal:')) || '';
+    assert.ok(noListGoal.includes('unknown'),
+      '#266 gt case4: an absent mission list must read as an unknown goal, got ' + noListGoal);
+    const noListCounts = linesNoList.find(line => line.startsWith('mission counts:')) || '';
+    assert.ok(noListCounts.includes('done: 0') && noListCounts.includes('todo: 0'),
+      '#266 gt case4: an absent mission list must count zero items, got ' + noListCounts);
 
     // --- RED discriminator: no workflow-state → empty stdout ---
     const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-266-compact-empty-'));

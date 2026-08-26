@@ -10,15 +10,11 @@ Everything else under the project folder is evidence, telemetry, or a journal.
 
 ## Layer-0 Durable-Artifact Ruling
 
-The durable kernel is **exactly four records** — Plan, Position, Evidence, Forge chain — because a
-successor resuming from durable state alone has exactly four questions: *what are we doing*, *where
-are we*, *what is already done and why should I believe it*, and *what has already reached the
-outside world*. Every other durable artifact a run leaves behind is therefore either **derivable**
-from those four or a **preference** the successor is free to re-decide.
-
-The mission list answers the first two questions in one file: its H1 carries the goal, its `item`
-lines carry the decomposition, and `status` / `dispatched` carry the position. `workflow-state.md`
-carries the claim — which issues, branch, worktree and sink mode this run owns.
+The durable kernel is deliberately small: the Mission List is the coordination record, while
+`workflow-state.md` is only the claim/sink/liveness record. A successor asks what remains from the
+Mission List and where the run lives from claim facts; receipts and sink artifacts prove what reached
+the outside world. No progress pointer, scheduler record, evidence breadcrumb, or replacement state
+schema is needed.
 
 That claim is only worth anything once it has been applied to every file a run actually writes, so
 the table below rules all of them. It is generated from — and machine-checked against — the
@@ -45,7 +41,7 @@ at the end exist to catch what the named rows do not.
 | Artifact | Ruling | Record | Writer | Why — the derivation, the loss-safety argument, or the question it answers |
 | --- | --- | --- | --- | --- |
 | `mission-list.md` | record | plan | agent | the goal in its H1 and, per item, the mission / status / dispatched / result — decomposition and position in one file |
-| `workflow-state.md` | record | position | script | the resume pointer: status, phase, step, pending gates, sink mode, branch, worktree, claim lineage |
+| `workflow-state.md` | record | claim/sink | script | issue and claim identity, status, branch/worktree, sink/run posture, liveness markers, and genuine closure facts |
 | `.cache/chain-receipt.json` | record | evidence | script | the tests-green oracle receipt (npm repo kind), candidate-bound |
 | `.cache/run-gaps.json` | record | evidence | script | the run-gap sweep result; its writer refuses to overwrite a prior cycle, so it is durable gap evidence |
 | `.cache/origin/selection-record.json` | record | evidence | script | the gate-validated selection record; the degenerate form exists so "explicit target" is distinguishable from "record lost" |
@@ -58,7 +54,6 @@ at the end exist to catch what the named rows do not.
 | `.cache/sink-fallback.json` | record | forge | script | the sink fallback journal, same lifetime rule as sink-receipt.json |
 | `/^\.cache\/[a-z-]+-envelope\.json$/` | derivable | — | script | the cached stdout of a --summary subcommand invocation; re-run the subcommand (the read-only emitters are idempotent). No script reads it back |
 | `.cache/node-timings.jsonl` | preference | — | script | best-effort telemetry, writer swallows every error; its only consumer reports a diagnostic, never a verdict |
-| `.cache/dispatch-log.jsonl` | preference | — | script | hook-written spawn log; advisory telemetry — no check consumes it, so losing it costs a record, never a verdict |
 | `.cache/outcome-log.jsonl` | preference | — | script | the M2 refusal/outcome recorder: append-only economics telemetry whose writer swallows every error and which no gate, transition or successor decision reads — losing it costs a measurement, never a verdict. NOT derivable: which refusal fired, in which invocation, at what wall-clock is not recomputable from the four records once the process exits, and claiming a derivation there would be the more dangerous label |
 | `.cache/wedged-attestation.json` | preference | — | script | historical residue; no producer and no consumer remains in the tree |
 | `fast-summary.md` | preference | — | agent | legacy marker, never newly authored; both readers (classifier scope parse, router folder detection) are tolerant |
@@ -110,9 +105,10 @@ file but is only as complete as its own source walk.
   and one entry per mission with `item` / `status` / `dispatched` / `result`. No script writes it —
   the orchestrator does, at three moments (created, dispatched, closed). It is the one file a
   zero-context successor needs; see `decisions/0017-the-mission-list.md` for the derivation.
-- `kaola-workflow/{project}/workflow-state.md` is the claim record and resume pointer. It records
-  status, phase, step, next command or skill, issue number, sink mode, branch, worktree path when
-  known, and the claim-time session fields. See Workflow State Fields below.
+- `kaola-workflow/{project}/workflow-state.md` is the claim/sink/liveness record. It records issue
+  identity, status, branch/worktree, sink and run posture, `main_root`, `session_marker`, `claim_ts`,
+  and genuine closure facts. It does not carry a progress pointer or executable resume policy. See
+  Workflow State Fields below.
 - `kaola-workflow/{project}/finalization-summary.md` is the terminal artifact, and the only place
   the finalize transaction's own three measurements survive the process that took them
   (`## Validation`, `## Changed Paths` and `## Mission List`).
@@ -232,97 +228,34 @@ sink is about to force-remove would be a new destruction route wearing a rescue'
 ## Workflow State Fields
 
 `workflow-state.md` is written at claim time by `writeState` in `kaola-workflow-claim.js` and
-patched in place by the later lifecycle verbs. Its blocks:
+patched only for sink and terminal closure facts. It is a flat claim/sink/liveness record, not a
+progress journal or execution plan. Its live blocks are:
 
-- `## Project` — `name`, `status`.
-- `## Current Position` — phase, step, runtime, and next command or skill. Key fields:
-  - **`workflow_path`** — always the constant `adaptive`. It is a diagnostic record, not a
-    selection: nothing validates it and nothing refuses over it. A legacy folder carrying another
-    value is tolerated on read.
-  - **`runtime`** — the runtime that claimed the folder (`claude`, `codex`, or `opencode`).
-    Persisted from the `--runtime` startup flag; defaults to `claude`.
-- **`selection_record_digest`** — a single `selection_record_digest: <64 lowercase hex>` line
-  written on every startup/pick-next-originated claim, scalar and bundle alike. The value is
-  `sha256` of the bytes of the PERSISTED `kaola-workflow/{project}/.cache/origin/selection-record.json`.
-  Nothing refuses over the record: a claim arriving without a usable one gets the canonical
-  `selection_mode: none-recorded` record in its place and reports that as `selection_record_note` on
-  the emitted envelope, so the digest always covers bytes that exist. See `api.md` § The typed
-  selection record at claim.
-- **`kaola-workflow/{project}/.cache/origin/`** — the durable home for the origin phase. Pre-claim
-  reconnaissance stages under `kaola-workflow/.origin/<target-key>/` (the project folder does not
-  exist before the claim), and the claim transaction folds that subtree here — relative layout and
-  bytes preserved — then REMOVES the staging directory. `selection-record.json` lands in the same
-  directory and is the authority: the fold runs first, so a staged file of that name never wins.
-  `kaola-workflow/.origin/` is never manufactured when nothing was staged, and a fold failure never
-  blocks the claim.
-- `## Sink` — issue number, sink mode (`merge` or `pr`), branch name, worktree path, and
-  `run_posture` (`worktree` or `in-place`, derived from the actual worktree resolution at startup by
-  `deriveRunPosture(worktreePath)`; never inherited from an environment variable). An optional
-  `issue_action: close | comment_keep_open` line (default `close` when absent) marks a keep-open
-  partial-close terminal: the orchestrator writes `comment_keep_open` at the closure decision to
-  keep the issue OPEN — `finalize` / `sink-merge` then comment instead of closing (there is no local
-  roadmap source left to preserve), refuse a PR/MR sink (keep-open is merge-sink-only), and **release
-  the claim on every issue left open**. Release means both artifacts: the `workflow:in-progress` label and the
-  `<!-- kw:claim project=<slug> -->` marker comment. The classifier blocks a re-claim on either, so
-  removing only the label leaves the issue claimed — an issue kept open is an issue meant to be
-  claimable again.
+- `## Project` — `name` and `status`, plus the issue identity carried by the claim identity block.
+- `## Sink` — issue number, sink mode (`merge` or `pr`), branch, worktree path when known,
+  `run_posture`, and optional keep-open action. The sink fields are the durable ownership and
+  integration facts; an active run has no executable resume pointer.
+- Claim-time liveness — `main_root`, `session_marker`, and `claim_ts`. `main_root` is the resolved
+  main-repository authority; `session_marker` identifies the claiming session; `claim_ts` is the
+  ISO-8601 freshness anchor used by lane classification and stale-receipt safety. These values are
+  written once and never refreshed by partial edits.
+- `selection_record_digest` and `.cache/origin/` — the optional claim provenance fold and digest for
+  the selected issue(s). They are evidence attached to the claim, not progress state, and a missing
+  origin record never becomes an execution instruction.
+- `## Closure` — appended at archive time with `archived_at`, issue/claim/worktree dispositions,
+  closure invariants, issue closure facts, and measured follow-up/backlog facts. The closure contract
+  is status plus existing receipts and sink facts; no progress marker is required.
 
-  Three **claim-time session fields** live in the `## Sink` block immediately after `run_posture`.
-  They are written once by `writeState` and never refreshed — the partial-edit paths
-  (`updateState` / `stampTerminalState`) do not touch them:
+Fresh state contains only these claim/sink/liveness facts and genuine closure data. Older state files
+may still contain retired progress, evidence, or timestamp residue; `removeLegacyStateBlocks` strips
+that residue on active writes, and no reader uses it to resume or close a run. In particular, legacy
+path/command execution policy is inert and never drives an active resume. The Mission List remains
+the sole coordination record: its H1 is the goal and each mission has `item`, `status`, `dispatched`,
+and `result`, with three write moments and immutable completed results.
 
-  - **`main_root`** — the resolved main-repo root path, computed once by `resolveMainRoot(root)`
-    (exported from `kaola-workflow-adaptive-schema.js`) at claim time, so a caller running from a
-    linked or detached worktree reads one authority instead of re-deriving from cwd. Absolute path,
-    no trailing slash.
-  - **`session_marker`** — the session identity for liveness classification, produced by
-    `resolveSessionMarker(env)` (from `kaola-workflow-classifier.js`): `KAOLA_SESSION_MARKER` from
-    the environment when set (letting an orchestrator mint one stable identity for the session),
-    otherwise `s-<pid>-<timestamp-base36>`. Must not reuse any of the legacy `## Lease` field names
-    (`session_id`, `last_heartbeat`, `expires`, `owner_session_id`, `claim_comment_id`) — those are
-    erased by `removeLegacyStateBlocks`.
-  - **`claim_ts`** — the ISO-8601 claim timestamp, the liveness anchor. Together with
-    `LANE_STALENESS_MS` (24 hours, exported from `kaola-workflow-adaptive-schema.js`) it
-    drives the lane-freshness test.
-
-- `## Last Evidence` — `last_command` and `last_result`, the terminal disposition tokens the closure
-  paths stamp (for example `closed_keep_open`).
-- `## Lease` — legacy, deprecated. Preserved for backward compatibility on read only.
-- `## Closure` — appended at archive time by `appendClosureBlock`: `archived_at`,
-  `issue_disposition`, `claim_label_removed`, `worktree_removed`, `closure_invariants`,
-  `issues_closed`, `follow_ups_filed`, `follow_up_numbers`, and `net_backlog_delta`. The last four
-  are the run's backlog delta — the size of the claimed set its closure decision is closing, and
-  the follow-ups the `## Run gaps` section of its `finalization-summary.md` filed against it. A
-  lane that could not locate that section stamps `unknown` rather than a `0` nobody measured — and
-  so does one that located it and walked past a `filed: #N` it could not read, because locating a
-  heading is not reading what is under it. Rows carrying no parenthesised sample, a row wrapped
-  across physical lines, and a section written as a markdown table all read as present-but-unread;
-  a partial read degrades too, since a count that reached one row of three is an undercount
-  rendered as an integer and nothing downstream can tell it from a right one. Prose and free-text
-  bullets under the heading carry no filing and keep their measured `0`.
-
-### What this file no longer carries
-
-`workflow-state.md` records **claim identity and nothing else** — which issues, which branch, which
-worktree, when, by whom, and how the run will sink. The `## Pending Gates` and `## Planning
-Evidence` blocks are gone with the executor that read them, and so are `plan_hash`, `decision`,
-`risk`, `first_node_id`, `first_node_role` and `active_plan_hash`.
-
-They were not kept as inert constants, and the reason is worth stating because it governs every
-future edit to this contract: **a record that still names a mechanism which no longer exists is
-worse than no record.** A later reader takes a field's presence as evidence the thing it describes
-is real, which is exactly the drift this contract exists to prevent. "Retained but inert" is how a
-corpus grows while its owners believe they are shrinking it.
-
-**`plan_hash` has no replacement, deliberately.** It was the freshness key for a frozen plan: proof
-that the bytes being executed were the bytes that were validated. The mission list is not frozen,
-not attested and not machine-verified, so there is nothing for a hash to bind and no reader that
-would check one. Its absence is a design property, not an oversight — the file is a convention the
-orchestrator maintains and a successor reads, and correctness there comes from the orchestrator's
-judgement rather than from a seal. The only content-bound witness left in a run is the chain
-receipt, which binds test results to a tree, not a plan to itself.
-
-A legacy state file that still carries these blocks parses without complaint; nothing reads them.
+Legacy or transitional coordination folders such as `.locks/`, `.sessions/`, and `.tickers/`, plus a
+`fast-summary.md` marker, are tolerated only for old evidence and are not permanent workflow state.
+They are never newly authored by the current lifecycle.
 
 ### Lane classification
 
@@ -342,24 +275,15 @@ match wins):
 resumable. An `ambiguous` lane, or more than one candidate, triggers the resume-ambiguity answer
 (ask before overwriting).
 
-### Delegation policy (Codex)
+### Execution shape (Codex)
 
-`delegation_policy:` records the delegation mode for Codex workflows. It defaults to `delegate`,
-established without prompting; `local-authorized` is an explicit opt-out and `tool-unavailable` is
-auto-detected, not a user choice.
-
-- `delegate` — default. Invoke subagent roles when available; when role profiles are absent, keep
-  `delegate` and record evidenced `local-fallback-tool-unavailable`.
-- `local-authorized` — execute locally; set only when the user explicitly disables delegation.
-- `tool-unavailable` — legacy/explicit value for locally-executed runs when subagent tooling is
-  unavailable.
-
-The per-role compliance vocabulary that accompanied it (`subagent-invoked`,
-`local-fallback-explicit`, `local-fallback-tool-unavailable`, `n/a`, `main-session-direct`) belonged
-to the retired per-node compliance ledger. Nothing writes such a ledger now: whether a mission was
-dispatched or done inline is recorded in the mission list's own `dispatched` field, where
-`dispatched: self` is the inline case. A legacy archived plan carrying a compliance table is read
-tolerantly and never rewritten.
+Execution shape is a per-mission judgment, not persisted workflow state. Dispatch is appropriate
+when it materially reduces main-context residue, supplies independent judgment, or enables genuine
+parallelism. Inline execution or one production owner is appropriate for cohesive feed-forward work
+when handoff and integration cost dominate. Both are first-class, and the Mission List's
+`dispatched` field records the chosen locator (`self` for inline work) without a gate, count, cap, or
+fallback stigma. Tier classifications, role profiles, and runtime-native defaults remain metadata;
+task-sensitive model/effort overrides or omission are valid.
 
 ## Bundle Project State Fields
 

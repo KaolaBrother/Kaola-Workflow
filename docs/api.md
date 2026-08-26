@@ -17,19 +17,14 @@ Three commands ship. Everything below is invoked by them or by hand.
 | `/workflow-next` | select, claim, write the mission list, run it |
 | `/kaola-workflow-finalize` | validate, dock docs, summarize, close, archive, commit, sink |
 
-## Routing-surface handoff interface (#1029)
+## Routing-surface handoff interface
 
-`/workflow-next` and `/kaola-workflow-finalize` render the same named-role handoff guidance from
-[`SLOTS['main-authored-handoff']`](../templates/routing/slots.js), referenced by the two routing
-skeletons and propagated to their command/skill surfaces. It is prompt-level routing guidance: the
-packet supplies task-specific facts, authority, bounds, acceptance, a deliverable locator, and a
-stop/report boundary, while the installed role profile remains authoritative for universal role
-behavior and main retains product intent and the final verdict.
-
-The existing model/tier dispatch contract is unchanged. Role tier and runtime routing continue to
-select the model/effort pair; the handoff does not select, override, or persist that choice. This
-addition introduces no CLI flag, API method, JSON envelope key, mission-list field, workflow-state
-field, or other workflow schema entry.
+`/workflow-next` and `/kaola-workflow-finalize` carry compact natural-language handoff guidance.
+When work is sent to another role, the request names the requested result or question, relevant
+evidence and authority/custody, the exact landing locator, and the stop condition. The receiving
+role's profile remains authoritative for universal behavior; the existing owner keeps product intent
+and the final verdict. There is no handoff slot schema, required block, ordering rule, parser, or
+linter, and no model/effort pair is selected by this prose.
 
 ## Emit and refusal envelopes
 
@@ -1071,8 +1066,9 @@ stop with the live authority preserved.
 For a completed linked issue N:
 
 1. `kaola-workflow/{project}/` is absent from active folders.
-2. `kaola-workflow/archive/{project}/workflow-state.md` exists with `status: closed` and
-   `step: complete` when a local archive is available.
+2. `kaola-workflow/archive/{project}/workflow-state.md` exists with `status: closed` when a local
+   archive is available; the existing sink receipt and closure facts provide the rest of the safety
+   evidence.
 3. The remote issue is closed only after acceptance passes and implementation is published.
 4. The remote issue does not carry `workflow:in-progress` after closure.
 5. Any branch or worktree cleanup is either complete or explicitly reported by the stale-worktree
@@ -1473,9 +1469,9 @@ reconcile the two sides.
 usage: kaola-workflow-telemetry-report.js --project <name> [--json]
 ```
 
-Ranks the recorded outcome population of one project by measured interruption cost, reading
-`.cache/{outcome-log.jsonl, node-timings.jsonl, dispatch-log.jsonl}`. An **answer verb**: exit 0
-always, writes nothing, never refuses. An absent sidecar is the ordinary case (all three writers are
+Ranks the recorded outcome population of one project by measured interruption cost, reading the
+existing `.cache/{outcome-log.jsonl, node-timings.jsonl}` telemetry. An **answer verb**: exit 0
+always, writes nothing, never refuses. An absent sidecar is the ordinary case (the writers are
 best-effort) and reads as an empty file. Damaged JSONL lines are counted and reported, not fatal.
 
 ## Release — `kaola-workflow-release.js`
@@ -1554,26 +1550,12 @@ frontmatter to `model: inherit`. It governs exactly one case: an ad-hoc dispatch
 repository's source `agents/` tree. Each role's source frontmatter is therefore held byte-equal to
 its `DEFAULT_AGENT_MODELS` entry (asserted by `test-agent-model-resolver.js`).
 
-Codex subagent dispatch uses the existing role tier as a separate per-spawn contract. The per-tier
-model/effort pair is authored as typed literals in the dispatch-routing pin of
-`templates/routing/next.skeleton.md` and `finalize.skeleton.md`, which is what ships to the SKILL
-surfaces. `test-route-reachability.js` independently states the complete three-way expected pairs and asserts
-every shipped Codex SKILL matches them; `validate-kaola-workflow-contracts.js` separately asserts the
-live README pairs. The `CODEX_STANDARD_*` and `CODEX_REASONING_*` constants in
-`scripts/kaola-workflow-codex-preflight.js` remain historical profile values used for stale-install
-migration and are not live dispatch authority. The contract validator still cross-binds those
-migration constants to the installer's copies. The live pairs are `standard` →
-`gpt-5.6-luna` / `max`, `reasoning` → `gpt-5.6-sol` / `medium`, and `heavy` →
-`gpt-5.6-sol` / `high`; the heavy roster is `planner` and `code-architect`.
-
-The mappings are fixed for every Codex spawn. A role always receives its tier pair and has no
-task-specific model or reasoning-effort escalation, downgrade, or other exception, except the one
-reviewer-class heavy re-dispatch carve-out. Reviewers rest at reasoning (`Sol/medium`), with heavy
-(`Sol/high`) as the bounded escalation target.
-This contract is Codex-only; the resolver and model routing for Claude Code, opencode, and Kimi
-are edition-specific. Claude reviewers rest on `opus` and may receive one bounded `fable`
-re-dispatch in command runtime; every reviewer dispatch states its surface and acceptance.
-Generated additive command surfaces omit that dynamic escalation while preserving the scope packet.
+Codex subagent dispatch retains the existing role tiers as metadata. A child may inherit the
+runtime-native model/effort defaults or receive a task-sensitive override; omission is valid. The
+`CODEX_STANDARD_*` and `CODEX_REASONING_*` preflight constants remain stale-profile migration data,
+not dispatch authority. This contract is Codex-only; other runtimes keep their own native resolver.
+Reviewers examine a converged candidate, return findings to the existing owner, and re-review repaired
+findings or new claims. No next/finalize policy fixes a model pair, pipeline, or escalation count.
 
 ## Environment Variables
 

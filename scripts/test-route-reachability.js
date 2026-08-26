@@ -22,191 +22,6 @@ const exists = rel => fs.existsSync(path.join(REPO, rel));
 // must still match a needle written as one continuous string.
 const norm = s => String(s).replace(/\s+/g, ' ');
 
-// Control-plane literal validator — retained for the Codex dispatch-block checks below; it binds
-// its checks to the agents.spawn_agent YAML object itself, never to compliant prose elsewhere in
-// the same document.
-function controlPlaneBlockValid(content, spec) {
-  const match = content.match(/```yaml\s*\nagents\.spawn_agent:\n([\s\S]*?)\n```/);
-  if (!match) return false;
-  const block = match[1];
-  const entries = block.split('\n').map(line => line.match(/^  ([a-z_]+): "([^"]*)"$/));
-  if (entries.some(entry => !entry)) return false;
-  const expectedKeys = ['task_name', 'agent_type', 'fork_turns', 'message'];
-  const keys = entries.map(entry => entry[1]);
-  if (keys.length !== expectedKeys.length || keys.some((key, i) => key !== expectedKeys[i])) return false;
-  const values = Object.fromEntries(entries.map(entry => [entry[1], entry[2]]));
-  const message = values.message;
-  return values.task_name === spec.taskName
-    && values.agent_type === spec.agentType
-    && values.fork_turns === 'none'
-    && message.startsWith('Repository root:')
-    && message.includes(spec.targetField)
-    && message.includes(spec.contractField)
-    && message.includes(spec.returnField)
-    && message.includes('Return only')
-    && !message.includes('inherit the full parent conversation');
-}
-
-function conflictingControlPlaneMutations(content) {
-  return [
-    ['duplicate task', content.replace('  agent_type:', '  task_name: "wrong_task"\n  agent_type:')],
-    ['duplicate role', content.replace('  fork_turns:', '  agent_type: "default"\n  fork_turns:')],
-    ['duplicate fork', content.replace('  message:', '  fork_turns: "all"\n  message:')],
-    ['duplicate message', content.replace(
-      /(agents\.spawn_agent:[\s\S]*?  message: "[^"]+")(\n```)/,
-      '$1\n  message: "inherit the full parent conversation"$2')]
-  ];
-}
-
-const CODEX_MODEL_ROUTING_MARKER = '<!-- PIN: codex-dispatch-model-routing -->';
-function codexModelRoutingBlock(content) {
-  const start = content.indexOf(CODEX_MODEL_ROUTING_MARKER);
-  const end = start >= 0 ? content.indexOf('<!-- /PIN -->', start) : -1;
-  return start >= 0 && end > start ? content.slice(start, end) : '';
-}
-
-function hasTierDispatchException(content) {
-  const normalized = norm(content);
-  return /(?:standard|reasoning|heavy)-tier\b.{0,180}\b(?:may|can)\b.{0,180}\b(?:use|dispatch|switch|select|escalat|downgrad|override|fall back)/i
-    .test(normalized)
-    || /(?:standard|reasoning|heavy)-tier\b.{0,120}\b(?:exception|override|trigger|fallback)s?\b/i.test(normalized)
-    || /per-task\b.{0,100}\b(?:model|reasoning(?:-| )effort)\b.{0,100}\bexceptions?\b.{0,50}\b(?:may|can|permit)\b/i
-      .test(normalized)
-    || /\b(?:temporary|recorded)\b.{0,100}\b(?:exception|override|trigger)\b/i.test(normalized)
-    || /(?:Luna\/?max|Sol\/?(?:medium|high))\b.{0,120}\bunavailable\b.{0,120}\b(?:use|select|substitute|fall back to)\b/i
-      .test(normalized);
-}
-
-// The one ADR 0019 reviewer-class heavy re-dispatch is required, not an exception. Strip it
-// before the exception detector so a second carve-out / override still reds.
-function stripSanctionedReviewerCarveOut(content) {
-  return String(content).replace(
-    /One carve-out:\s*the orchestrator may re-dispatch a reviewer-class role at heavy when a reasoning-tier attempt failed to finish the review,\s*or the surface is judged complex before dispatch\.?/gi,
-    '');
-}
-
-const CANONICAL_TIER_DISPATCH_CLAUSES = [
-  'Standard-tier roles dispatch with `model: "gpt-5.6-luna"` and `reasoning_effort: "max"`.',
-  'Reasoning-tier roles dispatch with `model: "gpt-5.6-sol"` and `reasoning_effort: "medium"`.',
-  'Heavy-tier roles dispatch with `model: "gpt-5.6-sol"` and `reasoning_effort: "high"`.',
-];
-
-// Live PIN roster membership. Planner-class is heavy (sol/high), never reasoning (sol/medium).
-const PLANNER_CLASS_ROLES = Object.freeze(['planner', 'code-architect']);
-const REASONING_REST_ROLES = Object.freeze([
-  'build-error-resolver',
-  'code-reviewer',
-  'security-reviewer',
-  'adversarial-verifier',
-  'synthesizer',
-]);
-const TIER_WORD = /\b(standard|reasoning|heavy)\b/gi;
-const roleNeedle = role => new RegExp(`(^|[^A-Za-z0-9_-])${role}([^A-Za-z0-9_-]|$)`);
-
-function codexRosterTiers(block, universe) {
-  const found = new Map();
-  let context = null;
-  for (const line of String(block).split('\n')) {
-    const words = [...new Set([...line.matchAll(TIER_WORD)].map(m => m[1].toLowerCase()))];
-    const lineTier = words.length === 1 ? words[0] : null;
-    for (const role of universe) {
-      if (!roleNeedle(role).test(line)) continue;
-      if (!found.has(role)) found.set(role, new Set());
-      found.get(role).add(lineTier || context || '(no tier)');
-    }
-    if (words.length > 0) context = lineTier;
-  }
-  return found;
-}
-
-function liveCodexPinRosterValid(block) {
-  const universe = [...PLANNER_CLASS_ROLES, ...REASONING_REST_ROLES];
-  const found = codexRosterTiers(block, universe);
-  for (const role of PLANNER_CLASS_ROLES) {
-    const claimed = found.get(role);
-    if (!claimed || claimed.size !== 1 || [...claimed][0] !== 'heavy') return false;
-  }
-  for (const role of REASONING_REST_ROLES) {
-    const claimed = found.get(role);
-    if (!claimed || claimed.size !== 1 || [...claimed][0] !== 'reasoning') return false;
-  }
-  return true;
-}
-
-function hasExplicitModelEffortPair(content) {
-  const value = '(?:"[^"]+"|`[^`]+`|[A-Za-z0-9][A-Za-z0-9._-]*)';
-  return [
-    new RegExp(`\\bmodel\\s*:\\s*${value}[\\s\\S]{0,180}?`
-      + `\\breasoning_effort\\s*:\\s*${value}`, 'i'),
-    new RegExp(`\\breasoning_effort\\s*:\\s*${value}[\\s\\S]{0,180}?`
-      + `\\bmodel\\s*:\\s*${value}`, 'i'),
-  ].some(pattern => pattern.test(content));
-}
-
-// Exactly three pair claims are legal: the ruling clauses above. After removing one occurrence of
-// each, any remaining labelled pair (either order or quoting style) or shorthand pair is an extra
-// route. No context, verb, inability synonym, or historical-prose exemption changes that result.
-function hasAlternateTierDispatchPair(content) {
-  let remainder = norm(content);
-  for (const clause of CANONICAL_TIER_DISPATCH_CLAUSES) remainder = remainder.replace(clause, '');
-  if (hasExplicitModelEffortPair(remainder)) return true;
-  const shorthandPair = /\b(?:gpt-[a-z0-9.-]+|luna|sol|terra)\/(?:low|medium|high|xhigh|max)\b/gi;
-  return shorthandPair.test(remainder);
-}
-
-function hasProfileOwnedDispatchConflict(content) {
-  const normalized = norm(content);
-  return /pass\b.{0,100}\bconfigured model\b/i.test(normalized)
-    || /ships its model in its installed profile/i.test(normalized)
-    || /profile\b.{0,50}\bowns?\b.{0,50}\bmodel/i.test(normalized)
-    || /inherit\w*\b.{0,50}\bmodel\b.{0,50}\bprofile/i.test(normalized)
-    || /(?:model|reasoning effort)\b.{0,100}\b(?:inherited from|owned by|read from)\b.{0,50}\bprofile/i
-      .test(normalized);
-}
-
-function codexDispatchCallSite(content, skillName) {
-  if (skillName === 'kaola-workflow-next') {
-    const match = content.match(/## Delegation\s*([\s\S]*?)(?:\n## |$)/);
-    return match ? match[1] : '';
-  }
-  if (skillName === 'kaola-workflow-finalize') {
-    const match = content.match(/Delegate to the `doc-updater` role([\s\S]*?)\nWrite the result/);
-    return match ? match[1] : '';
-  }
-  return '';
-}
-
-function codexDispatchCallSiteValid(content, skillName) {
-  const callSite = norm(codexDispatchCallSite(content, skillName));
-  return callSite.includes('`model`')
-    && callSite.includes('`reasoning_effort`')
-    && /per-spawn model routing/i.test(callSite)
-    && !hasProfileOwnedDispatchConflict(content)
-    && !hasTierDispatchException(stripSanctionedReviewerCarveOut(content))
-    && !hasAlternateTierDispatchPair(content);
-}
-
-// This is deliberately a prose-contract validator, not a profile/config assertion: the routing
-// decision is made for each spawn, after the role's existing standard/reasoning/heavy classification
-// is known. The negative check prevents a plausible near-miss where a fixed standard pair quietly
-// regains a per-task exception elsewhere on the same live dispatch surface.
-function codexModelRoutingContractValid(content) {
-  const block = codexModelRoutingBlock(content);
-  if (!block) return false;
-  const normalized = norm(block);
-  return CANONICAL_TIER_DISPATCH_CLAUSES.every(clause => normalized.includes(clause))
-    && normalized.includes('These mappings are fixed for every spawn.')
-    && normalized.includes('Do not escalate, downgrade, or otherwise override a tier\'s model or reasoning effort based on task breadth, latency, prior results, risk, availability, or any other condition.')
-    && normalized.includes('The role classification remains unchanged.')
-    && /one carve-out/i.test(normalized)
-    && /re-dispatch a reviewer-class role at heavy/i.test(normalized)
-    && /failed to finish/i.test(normalized)
-    && /complex/i.test(normalized)
-    && liveCodexPinRosterValid(block)
-    && !normalized.includes('gpt-5.6-terra')
-    && !hasTierDispatchException(stripSanctionedReviewerCarveOut(content))
-    && !hasAlternateTierDispatchPair(content);
-}
 
 // ---------------------------------------------------------------------------
 // Routing-target model. The command surface is three topics — init, next, finalize — and the
@@ -454,507 +269,6 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
-// T19: install/upgrade is the Codex profile-readiness boundary. Ordinary next/finalize
-// entry and resume surfaces must not re-certify profile/config bytes or refuse dispatch
-// because persisted runtime-owned state drifted. The fixed per-spawn model contract is
-// independent and remains mandatory on every dispatch-capable Codex skill.
-// ---------------------------------------------------------------------------
-{
-  const expectedDispatchSkills = [
-    'kaola-workflow-finalize',
-    'kaola-workflow-next',
-  ];
-  // A skill is dispatch-capable iff it instructs a role spawn. "on the spawn call" is the phrase
-  // both surviving skills carry (each names the role's configured model at dispatch time); the
-  // other alternatives are older spellings kept so a re-worded surface still registers rather
-  // than silently dropping out of the universe.
-  const dispatchSignal = /(?:on the spawn call|subagent-invoked|agents\.spawn_agent|MUST delegate|Use the `[^`]+` Codex agent role)/;
-  // The init skill EMITS a CLAUDE.md template that itself describes role dispatch. That is text it
-  // WRITES into a consumer repo, never an instruction it follows, so the bounded template region is
-  // excluded before the universe is derived — otherwise init joins the dispatch universe on the
-  // strength of a document it is merely authoring, and then reds for lacking a gate it never needs.
-  const TEMPLATE_REGION = /<!-- KW-CLAUDE-TEMPLATE-START -->[\s\S]*?<!-- KW-CLAUDE-TEMPLATE-END -->/g;
-  const dispatchBody = c => c.replace(TEMPLATE_REGION, '');
-  const recurringGateTokens = [
-    '<!-- PIN: codex-profile-preflight -->',
-    'profile_preflight_refused',
-    '--no-autofix',
-    'kaola-workflow-codex-preflight.js',
-    'KAOLA_CODEX_PREFLIGHT',
-    'normal preflight gate',
-    'profile freshness gate',
-    'config_stale',
-    'managed_block_drift',
-  ];
-  // Case-insensitive: prose names the retired gate in title case ("the Codex Profile Freshness
-  // Gate"), so a case-sensitive lowercase needle reads straight past the capitalization that
-  // actually ships and the guard reports absent on a surface still carrying it.
-  const recurringGateNeedles = recurringGateTokens.map(token => token.toLowerCase());
-  const recurringGateAbsent = content =>
-    recurringGateNeedles.every(needle => !String(content).toLowerCase().includes(needle));
-  const assertRecurringGateAbsent = (content, file) => {
-    assert(recurringGateAbsent(content),
-      `T19 install boundary: ${file} contains no recurring Codex profile/config gate`);
-    for (const token of recurringGateTokens) {
-      assert(!recurringGateAbsent(`${content}\n${token}\n`),
-        `T19 install-boundary mutation: adding ${JSON.stringify(token)} reds ${file}`);
-    }
-  };
-  const allModelRoutingBlocks = [];
-
-  for (const file of [
-    'templates/routing/next.skeleton.md',
-    'templates/routing/finalize.skeleton.md',
-  ]) {
-    assertRecurringGateAbsent(fs.readFileSync(path.join(REPO, file), 'utf8'), file);
-  }
-
-  for (const edition of codexEditions) {
-    const skillNames = fs.readdirSync(path.join(REPO, edition.skillsDir), { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .map(entry => entry.name)
-      .filter(name => {
-        const skillPath = path.join(REPO, edition.skillsDir, name, 'SKILL.md');
-        return fs.existsSync(skillPath) && dispatchSignal.test(dispatchBody(fs.readFileSync(skillPath, 'utf8')));
-      })
-      .sort();
-    assert(JSON.stringify(skillNames) === JSON.stringify(expectedDispatchSkills),
-      `T19: ${edition.skillsDir} dispatch-capable skill universe stays explicit and complete`);
-
-    for (const name of skillNames) {
-      const file = `${edition.skillsDir}/${name}/SKILL.md`;
-      const content = fs.readFileSync(path.join(REPO, file), 'utf8');
-      assertRecurringGateAbsent(content, file);
-
-      const modelRoutingBlock = codexModelRoutingBlock(content);
-      assert(codexModelRoutingContractValid(content),
-        `T19 model routing: ${file} carries the bounded Codex per-spawn standard/reasoning/heavy contract and lists planner-class on Heavy-tier, not Reasoning-tier`);
-      if (modelRoutingBlock) {
-        allModelRoutingBlocks.push(modelRoutingBlock);
-        const mutations = [
-          ['standard model', modelRoutingBlock.replace('gpt-5.6-luna', 'gpt-5.6-terra')],
-          ['standard effort', modelRoutingBlock.replace('reasoning_effort: "max"', 'reasoning_effort: "high"')],
-          ['reasoning model', modelRoutingBlock.replace(
-            'Reasoning-tier roles dispatch with\n`model: "gpt-5.6-sol"`',
-            'Reasoning-tier roles dispatch with\n`model: "gpt-5.6-terra"`')],
-          ['reasoning effort', modelRoutingBlock.replace('reasoning_effort: "medium"', 'reasoning_effort: "xhigh"')],
-          ['heavy model', modelRoutingBlock.replace(
-            'Heavy-tier roles dispatch with\n`model: "gpt-5.6-sol"`',
-            'Heavy-tier roles dispatch with\n`model: "gpt-5.6-terra"`')],
-          ['heavy effort', modelRoutingBlock.replace('reasoning_effort: "high"', 'reasoning_effort: "xhigh"')],
-          ['fixed mapping', modelRoutingBlock.replace('fixed for every spawn', 'selected for each spawn')],
-          ['classification stability', modelRoutingBlock.replace('remains unchanged', 'may change')],
-        ];
-        for (const [label, mutatedBlock] of mutations) {
-          assert(!codexModelRoutingContractValid(content.replace(modelRoutingBlock, mutatedBlock)),
-            `T19 model-routing mutation: ${label} reds ${file}`);
-        }
-        const plannerAsReasoning = modelRoutingBlock
-          .replace(/Heavy-tier roles:[^\n]*/i, 'Reasoning-tier roles: `planner`, `code-architect`.');
-        assert(!liveCodexPinRosterValid(plannerAsReasoning),
-          `T19 roster mutation: listing planner-class under Reasoning-tier reds ${file}`);
-        const temporaryException = content.replace(modelRoutingBlock,
-          `${modelRoutingBlock}\nA standard-tier task may use Sol/xhigh for complex work.`);
-        assert(!codexModelRoutingContractValid(temporaryException)
-          && !codexDispatchCallSiteValid(temporaryException, name),
-          `T19 model-routing mutation: a standard-tier escalation reds ${file}`);
-        const downgradeException = content.replace(modelRoutingBlock,
-          `${modelRoutingBlock}\nA standard-tier task may use Sol/low for routine work.`);
-        assert(!codexModelRoutingContractValid(downgradeException)
-          && !codexDispatchCallSiteValid(downgradeException, name),
-          `T19 model-routing mutation: a standard-tier downgrade reds ${file}`);
-        const triggerList = content.replace(modelRoutingBlock,
-          `${modelRoutingBlock}\nStandard-tier triggers:\n- low-risk tasks use Sol/low.`);
-        assert(!codexModelRoutingContractValid(triggerList)
-          && !codexDispatchCallSiteValid(triggerList, name),
-          `T19 model-routing mutation: a standard-tier trigger list reds ${file}`);
-        const perTaskException = content.replace(modelRoutingBlock,
-          `${modelRoutingBlock}\nPer-task model exceptions may use Luna/high for quick work.`);
-        assert(!codexModelRoutingContractValid(perTaskException)
-          && !codexDispatchCallSiteValid(perTaskException, name),
-          `T19 model-routing mutation: a generic per-task exception reds ${file}`);
-        const alternateStandardPair = content.replace(modelRoutingBlock,
-          `${modelRoutingBlock}\nFor a difficult standard role, dispatch with model: "gpt-5.6-sol" `
-          + `and reasoning_effort: "xhigh".`);
-        assert(!codexModelRoutingContractValid(alternateStandardPair)
-          && !codexDispatchCallSiteValid(alternateStandardPair, name),
-          `T19 model-routing mutation: a natural-language alternate standard pair reds ${file}`);
-        const alternateReasoningPair = content.replace(modelRoutingBlock,
-          `${modelRoutingBlock}\nFor a routine reasoning role, dispatch with model: "gpt-5.6-luna" `
-          + `and reasoning_effort: "max".`);
-        assert(!codexModelRoutingContractValid(alternateReasoningPair)
-          && !codexDispatchCallSiteValid(alternateReasoningPair, name),
-          `T19 model-routing mutation: a natural-language alternate reasoning pair reds ${file}`);
-        const admittedBypasses = [
-          ['standard-tier subject after qualifier',
-            'For difficult work, standard-tier dispatch uses model: "gpt-5.6-sol" and reasoning_effort: "xhigh".'],
-          ['reasoning-tier subject after qualifier',
-            'For routine work, reasoning-tier dispatch uses model: "gpt-5.6-luna" and reasoning_effort: "max".'],
-          ['standard role pair passed on spawn',
-            'For a difficult standard role, pass model: "gpt-5.6-sol" and reasoning_effort: "xhigh" on the spawn.'],
-          ['reasoning task pair passed on spawn',
-            'For a routine reasoning task, pass model: "gpt-5.6-luna" and reasoning_effort: "max" on the spawn.'],
-          ['standard-pair inability fallback',
-            'When Luna/max cannot be used, fall back to gpt-5.6-terra/high.'],
-          ['reasoning-pair inability fallback',
-            'When Sol/medium cannot be used, fall back to gpt-5.6-luna/max.'],
-          ['heavy-pair inability fallback',
-            'When Sol/high cannot be used, fall back to gpt-5.6-luna/max.'],
-        ];
-        for (const [label, sentence] of admittedBypasses) {
-          const mutant = `${content}\n${sentence}`;
-          assert(!codexModelRoutingContractValid(mutant)
-            && !codexDispatchCallSiteValid(mutant, name),
-            `T19 model-routing mutation: ${label} reds ${file}`);
-        }
-        const historicalProfileFact = `${content}\nHistorical profile migration recognizes `
-          + `model: "gpt-5.6-sol" and reasoning_effort: "medium".`;
-        assert(!codexModelRoutingContractValid(historicalProfileFact)
-          && !codexDispatchCallSiteValid(historicalProfileFact, name),
-          `T19 model-routing mutation: a historical profile pair is still an extra pair claim in ${file}`);
-        const fallbackBesideHistory = `${historicalProfileFact}\nWhen Luna/max cannot be used, `
-          + 'fall back to gpt-5.6-terra/high.';
-        assert(!codexModelRoutingContractValid(fallbackBesideHistory)
-          && !codexDispatchCallSiteValid(fallbackBesideHistory, name),
-          `T19 model-routing mutation: a historical fact cannot exempt an adjacent fallback in ${file}`);
-        const pairSyntaxMutants = [
-          ['duplicate canonical standard pair', CANONICAL_TIER_DISPATCH_CLAUSES[0]],
-          ['duplicate canonical reasoning pair', CANONICAL_TIER_DISPATCH_CLAUSES[1]],
-          ['historical exemption smuggling a live route',
-            'Historical profile migration recognizes model: "gpt-5.6-sol" and reasoning_effort: "medium" for standard role dispatch.'],
-          ['bare model then effort',
-            'Extra pair: model: gpt-5.6-terra and reasoning_effort: high.'],
-          ['bare effort then model',
-            'Extra pair: reasoning_effort: high and model: gpt-5.6-terra.'],
-          ['backticked-bare model then effort',
-            'Extra pair: model: `gpt-5.6-terra` and reasoning_effort: `high`.'],
-          ['backticked-bare effort then model',
-            'Extra pair: reasoning_effort: `high` and model: `gpt-5.6-terra`.'],
-          ['double-quoted effort then model',
-            'Extra pair: reasoning_effort: "high" and model: "gpt-5.6-terra".'],
-          ['historical reverse-order pair',
-            'Historical profile migration recognizes reasoning_effort: "medium" and model: "gpt-5.6-sol".'],
-          ['historical shorthand pair',
-            'Historical profile migration recognizes Sol/medium.'],
-        ];
-        for (const [label, sentence] of pairSyntaxMutants) {
-          const mutant = `${content}\n${sentence}`;
-          assert(!codexModelRoutingContractValid(mutant)
-            && !codexDispatchCallSiteValid(mutant, name),
-            `T19 model-routing mutation: ${label} reds ${file}`);
-        }
-        for (const [tier, pair] of [['standard', 'Luna/max'], ['reasoning', 'Sol/medium'], ['heavy', 'Sol/high']]) {
-          const availabilityException = `${content}\nIf ${pair} is unavailable, use Terra/high instead.`;
-          assert(!codexModelRoutingContractValid(availabilityException)
-            && !codexDispatchCallSiteValid(availabilityException, name),
-            `T19 complete-surface mutation: a ${tier}-tier availability fallback reds ${file}`);
-        }
-      }
-
-      const callSite = codexDispatchCallSite(content, name);
-      assert(codexDispatchCallSiteValid(content, name),
-        `T19 call site: ${file} requires both per-spawn model and reasoning effort without profile inheritance`);
-      if (codexDispatchCallSiteValid(content, name)) {
-        const withoutModel = content.replace(callSite, callSite.replace('`model`', '`selected value`'));
-        const withoutEffort = content.replace(callSite,
-          callSite.replace('`reasoning_effort`', '`selected effort`'));
-        const laterConflict = `${content}\nPass the role's configured model on the spawn call.`;
-        const inheritanceConflict = `${content}\nInherit the model from the role's installed profile.`;
-        assert(!codexDispatchCallSiteValid(withoutModel, name),
-          `T19 call-site mutation: omitting model reds ${file}`);
-        assert(!codexDispatchCallSiteValid(withoutEffort, name),
-          `T19 call-site mutation: omitting reasoning_effort reds ${file}`);
-        assert(!codexDispatchCallSiteValid(laterConflict, name),
-          `T19 call-site mutation: a later configured-model conflict reds ${file}`);
-        assert(!codexDispatchCallSiteValid(inheritanceConflict, name),
-          `T19 call-site mutation: a later profile-inheritance conflict reds ${file}`);
-      }
-    }
-  }
-  assert(allModelRoutingBlocks.length === codexEditions.length * expectedDispatchSkills.length
-    && allModelRoutingBlocks.every(block => block === allModelRoutingBlocks[0]),
-    'T19 model routing: all six Codex next/finalize skills carry one byte-identical routing contract');
-}
-
-// ---------------------------------------------------------------------------
-// T19b: THE ROSTER — a surface that ASKS for a role's tier must SHIP the membership.
-//
-// T19's block orders the orchestrator to dispatch each role at "its existing standard-tier,
-// reasoning-tier, or heavy-tier classification" and fixes the effort per tier. It never says WHICH
-// roles are in which tier. The membership does ship — CODEX_PINNED_STANDARD_ROLES /
-// CODEX_PINNED_REASONING_ROLES / CODEX_PINNED_HEAVY_ROLES (or equivalent) — and must be rendered
-// into the PIN. Planner-class (planner, code-architect) maps to heavy, not reasoning. An
-// instruction that asks a question whose answer it does not ship is the defect. The roster is
-// generated into the block FROM those constants, which is what makes it unable to drift from them.
-//
-// THE UNIVERSE IS DERIVED, NOT LISTED. Every generated surface whose COMMITTED bytes carry the
-// routing PIN owes the roster: a seventh surface that acquires the instruction acquires the
-// obligation with it, and a surface that never asks is never obligated. Read from the shipped
-// bytes, never from the skeleton — an authored-only answer is precisely the failure here.
-//
-// FORMAT IS DELIBERATELY NOT PINNED. The reader gives a role the tier named on its own line, else
-// the nearest preceding unambiguous tier word; a line naming both tiers clears the context rather
-// than guessing, so an unlabelled role reads as "(no tier)" and reds instead of inheriting a stale
-// heading. A table, a heading plus a list, or one line per tier all read the same, and a re-wrap
-// cannot redden it. What is pinned is the MAPPING, in both directions.
-//
-// The scan is bounded to the PIN block, which is both the ruling (the roster is generated into that
-// block) and a correctness requirement: role names occur in ordinary prose elsewhere on these
-// surfaces, and a whole-file scan would tier them by accident.
-// ---------------------------------------------------------------------------
-{
-  const { GENERATED_SURFACES } = require('./generate-routing-surfaces.js');
-  const schema = require('./kaola-workflow-adaptive-schema.js');
-
-  // The registry, as ONE map. This is the answer the block has to carry.
-  // Planner-class is independently heavy: do not derive it from CODEX_PINNED_REASONING_ROLES.
-  const heavyRoles = Array.isArray(schema.CODEX_PINNED_HEAVY_ROLES)
-    ? [...schema.CODEX_PINNED_HEAVY_ROLES] : [];
-  assert(Array.isArray(schema.CODEX_PINNED_HEAVY_ROLES) && heavyRoles.length > 0,
-    'T19b registry: production must export CODEX_PINNED_HEAVY_ROLES (planner-class heavy membership)');
-  const EXPECTED_TIER = new Map([
-    ...schema.CODEX_PINNED_STANDARD_ROLES.map(role => [role, 'standard']),
-    ...REASONING_REST_ROLES.map(role => [role, 'reasoning']),
-    ...PLANNER_CLASS_ROLES.map(role => [role, 'heavy']),
-  ]);
-  assert(EXPECTED_TIER.size
-    === schema.CODEX_PINNED_STANDARD_ROLES.length + REASONING_REST_ROLES.length + PLANNER_CLASS_ROLES.length,
-    'T19b registry: no role is in two Codex tiers (standard / reasoning / heavy are disjoint)');
-  for (const role of PLANNER_CLASS_ROLES) {
-    assert(EXPECTED_TIER.get(role) === 'heavy',
-      `T19b registry: ${role} is planner-class and must map to heavy, not ${EXPECTED_TIER.get(role) || '(absent)'}`);
-    assert(!schema.CODEX_PINNED_REASONING_ROLES.includes(role),
-      `T19b registry: ${role} must not remain on CODEX_PINNED_REASONING_ROLES`);
-    assert(heavyRoles.includes(role),
-      `T19b registry: ${role} must be a member of CODEX_PINNED_HEAVY_ROLES`);
-  }
-  assert(JSON.stringify([...schema.CODEX_PINNED_REASONING_ROLES].sort())
-      === JSON.stringify([...REASONING_REST_ROLES].sort()),
-    'T19b registry: remaining reasoning-tier is build-error-resolver, the three reviewers, and synthesizer');
-  for (const role of heavyRoles) {
-    assert(EXPECTED_TIER.get(role) === 'heavy',
-      `T19b registry: ${role} is on CODEX_PINNED_HEAVY_ROLES but is not the heavy (planner-class) membership`);
-  }
-
-  // A SECOND, INDEPENDENT enumeration of role names, so the "on the roster but not in the registry"
-  // direction has something to recognise. Deriving the universe from EXPECTED_TIER alone would make
-  // that direction structurally undetectable: a role the registry does not know would simply never
-  // be looked for. Its bound is stated rather than hidden — a roster naming something that is
-  // neither a registered tier member nor an agent in the tree is not seen here (the surface's
-  // byte-equality with its skeleton, asserted by `generate-routing-surfaces.js --check`, is what
-  // covers that), and the mutation proof below injects such a name to show the direction bites.
-  const AGENT_ROLES = fs.readdirSync(path.join(REPO, 'agents'))
-    .filter(f => f.endsWith('.md')).map(f => f.slice(0, -'.md'.length));
-  const ROLE_UNIVERSE = [...new Set([...EXPECTED_TIER.keys(), ...AGENT_ROLES])].sort();
-  assert(ROLE_UNIVERSE.length >= EXPECTED_TIER.size && EXPECTED_TIER.size > 0,
-    'T19b registry: the role universe is non-empty and covers every pinned role');
-
-  // Role names carry hyphens, so the boundary is "not an identifier character" rather than \b:
-  // \bcode-reviewer\b would also fire inside a longer hyphenated token.
-  const roleNeedle = role => new RegExp(`(^|[^A-Za-z0-9_-])${role}([^A-Za-z0-9_-]|$)`);
-  const NEEDLES = new Map(ROLE_UNIVERSE.map(role => [role, roleNeedle(role)]));
-  // `reasoning_effort` does not match \breasoning\b (the underscore is a word character), so the
-  // effort sentences do not masquerade as tier labels; `reasoning effort` in prose does, and a line
-  // carrying both words is treated as ambiguous, which is the safe reading.
-  const TIER_WORD = /\b(standard|reasoning|heavy)\b/gi;
-
-  // codexRosterTiers — PURE. (block text, role universe) -> Map(role -> Set of claimed tiers).
-  // A role claimed under two tiers keeps both, so "listed twice, disagreeing" is a defect rather
-  // than a last-one-wins silent pass.
-  const codexRosterTiers = (block, universe) => {
-    const found = new Map();
-    let context = null;
-    for (const line of block.split('\n')) {
-      const words = [...new Set([...line.matchAll(TIER_WORD)].map(m => m[1].toLowerCase()))];
-      const lineTier = words.length === 1 ? words[0] : null;
-      for (const role of universe) {
-        if (!(NEEDLES.get(role) || roleNeedle(role)).test(line)) continue;
-        if (!found.has(role)) found.set(role, new Set());
-        found.get(role).add(lineTier || context || '(no tier)');
-      }
-      if (words.length > 0) context = lineTier;
-    }
-    return found;
-  };
-
-  // rosterDefects — PURE detector, both directions. Empty means the shipped roster IS the registry.
-  const rosterDefects = (block, expected, universe) => {
-    const found = codexRosterTiers(block, universe);
-    const defects = [];
-    for (const [role, tier] of expected) {
-      const claimed = found.get(role);
-      if (!claimed) { defects.push(`${role}: absent from the roster (registry: ${tier})`); continue; }
-      if (claimed.size > 1) {
-        defects.push(`${role}: claimed as ${[...claimed].sort().join(' AND ')} — one role, one tier`);
-        continue;
-      }
-      const got = [...claimed][0];
-      if (got !== tier) defects.push(`${role}: roster says ${got}, registry says ${tier}`);
-    }
-    for (const role of found.keys()) {
-      if (!expected.has(role)) defects.push(`${role}: on the roster but not in the Codex tier registry`);
-    }
-    return defects;
-  };
-
-  // pairDefects — PURE. The live tier->model/effort policy is independent of the historical
-  // profile constants used to recognise and migrate stale installs. This joins each roster tier to
-  // its complete live pair, rather than allowing either half to change alone.
-  const pairDefects = (block, pairs) => {
-    const flat = norm(block);
-    return Object.entries(pairs)
-      .filter(([tier, pair]) => !new RegExp(
-        `${tier}-tier roles dispatch with \`model: "${pair.model}"\` and `
-          + `\`reasoning_effort: "${pair.effort}"\``, 'i')
-        .test(flat))
-      .map(([tier, pair]) => `${tier}-tier is not stated as model "${pair.model}" `
-        + `with reasoning_effort "${pair.effort}"`);
-  };
-  const EXPECTED_PAIRS = {
-    standard: { model: 'gpt-5.6-luna', effort: 'max' },
-    reasoning: { model: 'gpt-5.6-sol', effort: 'medium' },
-    heavy: { model: 'gpt-5.6-sol', effort: 'high' },
-  };
-
-  // The obligated universe: every generated surface whose COMMITTED bytes ask the question.
-  const routingSurfaces = GENERATED_SURFACES
-    .map(row => ({ row, content: fs.readFileSync(path.join(REPO, row.path), 'utf8') }))
-    .filter(s => s.content.includes(CODEX_MODEL_ROUTING_MARKER));
-  assert(routingSurfaces.length === codexEditions.length * 2,
-    `T19b universe: the routing instruction ships on ${codexEditions.length * 2} generated surfaces `
-    + `— found ${routingSurfaces.length} (${routingSurfaces.map(s => s.row.path).join(', ')})`);
-  assert(routingSurfaces.length > 0
-    && routingSurfaces.every(s => s.row.surface_type === 'skill')
-    && [...new Set(routingSurfaces.map(s => s.row.topic))].sort().join(',') === 'finalize,next',
-    'T19b universe: the obligated surfaces are exactly the Codex next/finalize SKILLs');
-
-  for (const { row, content } of routingSurfaces) {
-    const block = codexModelRoutingBlock(content);
-    assert(!!block, `T19b: ${row.path} carries a bounded routing block to read the roster out of`);
-    const defects = rosterDefects(block, EXPECTED_TIER, ROLE_UNIVERSE);
-    assert(defects.length === 0,
-      `T19b roster: ${row.path} must ship the role->tier membership its own instruction demands — `
-      + `${defects.length} defect(s): ${defects.join('; ')}`);
-    const pairs = pairDefects(block, EXPECTED_PAIRS);
-    assert(pairs.length === 0,
-      `T19b pair: ${row.path} must state the complete live tier->model/effort policy — `
-      + `${pairs.join('; ')}`);
-  }
-
-  // MUTATION PROOF. The detectors are pure, so every direction is proved against synthetic blocks
-  // and against the real block held in memory; nothing on disk is written.
-  {
-    const tiered = tier => [...EXPECTED_TIER].filter(([, t]) => t === tier).map(([r]) => r);
-    const goodBlock = [
-      `Standard-tier roles: ${tiered('standard').join(', ')}.`,
-      `Reasoning-tier roles: ${tiered('reasoning').join(', ')}.`,
-      `Heavy-tier roles: ${tiered('heavy').join(', ')}.`,
-    ].join('\n');
-    assert(rosterDefects(goodBlock, EXPECTED_TIER, ROLE_UNIVERSE).length === 0,
-      'T19b mutation (GREEN): a roster that matches the registry has no defects — the detector is '
-      + 'satisfiable, so a red is a real disagreement and not an unmeetable shape');
-
-    // Heading-plus-list is an equally valid rendering; the reader must not force one shape.
-    const listBlock = ['**Standard tier**', ...tiered('standard').map(r => `- \`${r}\``),
-      '**Reasoning tier**', ...tiered('reasoning').map(r => `- \`${r}\``),
-      '**Heavy tier**', ...tiered('heavy').map(r => `- \`${r}\``)].join('\n');
-    assert(rosterDefects(listBlock, EXPECTED_TIER, ROLE_UNIVERSE).length === 0,
-      'T19b mutation (GREEN): a heading-plus-list rendering reads the same as one line per tier');
-
-    // The synthetic role is DERIVED to be absent from the universe rather than spelled, so a role
-    // the project actually adds later can never collide with the harness and red these proofs for
-    // a reason that has nothing to do with what they test.
-    let ghostRole = 'unregistered-probe-role';
-    while (ROLE_UNIVERSE.includes(ghostRole)) ghostRole += '-x';
-
-    // (a) registry gains a role the roster does not carry -> RED on that role.
-    const grown = new Map([...EXPECTED_TIER, [ghostRole, 'reasoning']]);
-    const grownDefects = rosterDefects(goodBlock, grown, [...ROLE_UNIVERSE, ghostRole]);
-    assert(grownDefects.length === 1 && grownDefects[0].startsWith(`${ghostRole}: absent`),
-      'T19b mutation (RED): a role added to the registry but missing from the roster reds, and only '
-      + `that role — got ${JSON.stringify(grownDefects)}`);
-
-    // (b) roster carries a role the registry does not classify -> RED.
-    const ghost = `${goodBlock}\nReasoning-tier roles: ${ghostRole}.`;
-    assert(rosterDefects(ghost, EXPECTED_TIER, [...ROLE_UNIVERSE, ghostRole])
-      .includes(`${ghostRole}: on the roster but not in the Codex tier registry`),
-      'T19b mutation (RED): a role on the roster that the registry does not classify reds');
-
-    // (c) one role on the wrong side -> RED, naming both readings.
-    const swapped = goodBlock
-      .replace(`Standard-tier roles: ${tiered('standard').join(', ')}.`,
-        `Standard-tier roles: ${tiered('standard').slice(1).join(', ')}.`)
-      .replace(`Reasoning-tier roles: ${tiered('reasoning').join(', ')}.`,
-        `Reasoning-tier roles: ${tiered('standard')[0]}, ${tiered('reasoning').join(', ')}.`);
-    const swapDefects = rosterDefects(swapped, EXPECTED_TIER, ROLE_UNIVERSE);
-    assert(swapDefects.length === 1
-      && swapDefects[0] === `${tiered('standard')[0]}: roster says reasoning, registry says standard`,
-      `T19b mutation (RED): one role moved to the wrong tier reds — got ${JSON.stringify(swapDefects)}`);
-
-    // (d) a role listed under both tiers -> RED (never last-one-wins).
-    const doubled = `${goodBlock}\nStandard-tier roles: ${tiered('reasoning')[0]}.`;
-    assert(rosterDefects(doubled, EXPECTED_TIER, ROLE_UNIVERSE)
-      .some(d => d.startsWith(`${tiered('reasoning')[0]}: claimed as`)),
-      'T19b mutation (RED): a role claimed under both tiers reds rather than resolving to one');
-
-    // (e) an unlabelled roster must not inherit a stale tier word from the prose above it. This is
-    // the near-miss the reader is most likely to wave through: the names ship, the split does not.
-    const unlabelled = `${goodBlock.split('\n')[0]}\n\n${ROLE_UNIVERSE.join(', ')}`;
-    const unlabelledDefects = rosterDefects(unlabelled, EXPECTED_TIER, ROLE_UNIVERSE);
-    assert(unlabelledDefects.some(d => / says standard, registry says reasoning$/.test(d)),
-      'T19b mutation (RED): a bare list of role names carries no split and reds');
-
-    // (f) the real shipped block, with the roster the fix adds stripped back out, must red again.
-    // Without this the whole pin could be satisfied by a roster that happens to sit outside the
-    // block, or by a detector reading a different region than the one the ruling names.
-    {
-      const live = codexModelRoutingBlock(routingSurfaces[0].content);
-      const stripped = live.split('\n')
-        .filter(line => ![...EXPECTED_TIER.keys()].some(role => roleNeedle(role).test(line)))
-        .join('\n');
-      const strippedDefects = rosterDefects(stripped, EXPECTED_TIER, ROLE_UNIVERSE);
-      assert(strippedDefects.length === EXPECTED_TIER.size
-        && strippedDefects.every(d => /absent from the roster/.test(d)),
-        'T19b mutation (RED): removing every role-naming line from the shipped block reports all '
-        + `${EXPECTED_TIER.size} roles absent — got ${strippedDefects.length}`);
-    }
-
-    // (g) the complete-pair binding reads the BLOCK, not the constants' names, and each half bites.
-    assert(pairDefects(goodBlock, EXPECTED_PAIRS).length === 3,
-      'T19b mutation (RED): a block stating no tier->model/effort pair reds on all three tiers');
-    const liveBlock = codexModelRoutingBlock(routingSurfaces[0].content);
-    assert(pairDefects(liveBlock, {
-      ...EXPECTED_PAIRS,
-      standard: { ...EXPECTED_PAIRS.standard, model: 'gpt-5.6-terra' },
-    })
-      .some(d => /^standard-tier/.test(d)),
-      'T19b mutation (RED): changing the live standard-tier model reds');
-    assert(pairDefects(liveBlock, {
-      ...EXPECTED_PAIRS,
-      standard: { ...EXPECTED_PAIRS.standard, effort: 'high' },
-    })
-      .some(d => /^standard-tier/.test(d)),
-      'T19b mutation (RED): changing the live standard-tier effort reds');
-    const reasoningModelClause = `Reasoning-tier roles dispatch with\n`
-      + `\`model: "${EXPECTED_PAIRS.reasoning.model}"\``;
-    assert(pairDefects(liveBlock.replace(reasoningModelClause,
-      'Reasoning-tier roles dispatch with\n`model: "gpt-5.6-terra"`'), EXPECTED_PAIRS)
-      .some(d => /^reasoning-tier/.test(d)),
-      'T19b mutation (RED): changing the reasoning-tier model in the block reds');
-    assert(pairDefects(liveBlock.replace(`"${EXPECTED_PAIRS.reasoning.effort}"`, '"xhigh"'), EXPECTED_PAIRS)
-      .some(d => /^reasoning-tier/.test(d)),
-      'T19b mutation (RED): changing the reasoning-tier effort to xhigh reds');
-    const heavyModelClause = `Heavy-tier roles dispatch with\n`
-      + `\`model: "${EXPECTED_PAIRS.heavy.model}"\``;
-    assert(pairDefects(liveBlock.replace(heavyModelClause,
-      'Heavy-tier roles dispatch with\n`model: "gpt-5.6-terra"`'), EXPECTED_PAIRS)
-      .some(d => /^heavy-tier/.test(d)),
-      'T19b mutation (RED): changing the heavy-tier model in the block reds');
-    assert(pairDefects(liveBlock.replace(`"${EXPECTED_PAIRS.heavy.effort}"`, '"xhigh"'), EXPECTED_PAIRS)
-      .some(d => /^heavy-tier/.test(d)),
-      'T19b mutation (RED): changing the heavy-tier effort to xhigh reds');
-  }
-}
 
 // ===========================================================================
 // #630 Layer-1 — required-block MANIFEST presence checker (derived-universe),
@@ -966,7 +280,6 @@ for (const ed of codexEditions) {
 // obligating 4-of-6 surfaces by omission is structurally impossible.
 // ===========================================================================
 const { REQUIRED_BLOCKS } = require('../templates/routing/required-blocks.js');
-const { SLOTS } = require('../templates/routing/slots.js');
 
 // THE SURFACE UNIVERSE IS TWELVE TREES, NOT SIX. Six are tracked (three claude
 // command dirs + three codex skills dirs); six are GENERATED and gitignored —
@@ -1074,13 +387,8 @@ const MANIFEST_EDITIONS = {
 // registry-derived on that basis rather than re-anchored.
 //
 // The floor, not the suite. Do not widen this to "the suite stays green": the
-// same mutation now reds T19b, whose expectation is the hand-typed codexEditions
-// literal above and so does not shrink with the registry. It is caught in
-// test-generate-routing-surfaces.js's "registry derives 18 surfaces" assertion
-// too, in the always-selected claude chain. A comment asserting a mutation proof
-// stays true only for the assertion it is written against. This one said "this
-// suite", was true for nine days, and was falsified not by any change to the
-// floor it describes but by an unrelated band landing beside it in the same file.
+// The registry-derived routing surfaces remain the independent anchor for this
+// floor; no orchestration choice or spawn policy is encoded here.
 const RUNTIME_EDITION_MODULES = fs.readdirSync(path.join(REPO, 'scripts'))
   .filter(f => /^sync-[a-z0-9-]+-edition\.js$/.test(f))
   .map(f => f.slice('sync-'.length, -'-edition.js'.length))
@@ -1137,175 +445,10 @@ const readRealSurface = rel => (GENERATED_SURFACE_CONTENT.has(rel)
   ? GENERATED_SURFACE_CONTENT.get(rel)
   : (exists(rel) ? fs.readFileSync(path.join(REPO, rel), 'utf8') : null));
 
-// ---------------------------------------------------------------------------
-// T21: the main-authored handoff is one delimited byte block on both dispatch
-// topics. The production slot is the canonical expected byte source. This guard
-// reads FINAL consumer bytes: tracked command /
-// skill files from disk and additive runtime commands from GENERATED_SURFACE_CONTENT.
-// ---------------------------------------------------------------------------
-const HANDOFF_OPEN = '<!-- PIN: main-authored-handoff -->';
-const HANDOFF_CLOSE = '<!-- /PIN -->';
-const HANDOFF_LABELS = [
-  '`Mission:`',
-  '`Context:`',
-  '`Authority:`',
-  '`Scope and custody:`',
-  '`Acceptance:`',
-  '`Deliverable:`',
-  '`Stop and report:`',
-];
-const HANDOFF_SEMANTIC_NEEDLES = [
-  'Before each named-role spawn, main writes a compact task-specific brief that the role can execute '
-    + 'from that brief, its installed profile, and the named repository evidence alone; inherited conversation is never required.',
-  'The role profile remains authoritative for universal role behavior.',
-  'Main retains product intent, value decisions, integration, acceptance of returned work, review consequences, and the final done verdict.',
-  'Planning and design (`planner`, `code-architect`) receive',
-  'Investigation roles receive an exact question or claim, evidence surface, and authority or measurement standard.',
-  '`tdd-guide` receives acceptance claims, the baseline, test custody, the production exclusion, and the required RED evidence; `implementer` receives',
-  'Repair, convergence, documentation, and optimization roles receive the concrete candidate, failure, or input;',
-  '`code-reviewer` and `security-reviewer` receive the exact candidate, dispatched surface, and acceptance; `adversarial-verifier` receives exactly one claim and one surface.',
-  'Keep the packet sparse: include only task-specific facts, decisions, bounds, and evidence; do not repeat the role profile.',
-  'This is handoff guidance, not a new workflow record or a machine-graded prompt schema.',
-  'The mission list remains the recovery index:',
-];
-
-function countText(text, needle) {
-  let count = 0, from = 0;
-  while (true) {
-    const at = String(text).indexOf(needle, from);
-    if (at < 0) return count;
-    count++;
-    from = at + needle.length;
-  }
-}
-
-// extractDelimitedBlock — PURE. A malformed marker pair is a failure, never a
-// missing-value pass. The returned block intentionally excludes the line break
-// after the closing marker, matching the slot's delimited bytes.
-function extractDelimitedBlock(content) {
-  if (content === null || content === undefined) {
-    return { block: null, openCount: 0, closeCount: 0 };
-  }
-  const text = String(content);
-  const openCount = countText(text, HANDOFF_OPEN);
-  if (openCount !== 1) return { block: null, openCount, closeCount: 0 };
-  const start = text.indexOf(HANDOFF_OPEN);
-  const end = text.indexOf(HANDOFF_CLOSE, start);
-  if (end < start) return { block: null, openCount, closeCount: 0 };
-  return {
-    block: text.slice(start, end + HANDOFF_CLOSE.length),
-    openCount,
-    // `<!-- /PIN -->` closes many independent pins on a shipped surface. The
-    // first close after this unique opening marker is the handoff delimiter.
-    closeCount: 1,
-  };
-}
-
-function handoffBlockFailures(block) {
-  const failures = [];
-  if (typeof block !== 'string' || !block.startsWith(HANDOFF_OPEN) || !block.endsWith(HANDOFF_CLOSE)) {
-    failures.push('handoff block is not one complete delimited main-authored-handoff block');
-    return failures;
-  }
-  if (countText(block, HANDOFF_OPEN) !== 1) {
-    failures.push('handoff block must contain exactly one opening marker');
-  }
-  const normalized = norm(block);
-  const positions = HANDOFF_LABELS.map(label => normalized.indexOf(label));
-  HANDOFF_LABELS.forEach((label, i) => {
-    if (countText(normalized, label) !== 1) {
-      failures.push(`handoff label ${label} must occur exactly once (got ${countText(normalized, label)})`);
-    }
-    if (positions[i] < 0) failures.push(`handoff label ${label} is absent`);
-  });
-  for (let i = 1; i < positions.length; i++) {
-    if (positions[i - 1] >= 0 && positions[i] >= 0 && positions[i - 1] >= positions[i]) {
-      failures.push(`handoff labels are out of order: ${HANDOFF_LABELS[i - 1]} before ${HANDOFF_LABELS[i]}`);
-    }
-  }
-  for (const needle of HANDOFF_SEMANTIC_NEEDLES) {
-    if (!normalized.includes(norm(needle))) failures.push(`handoff semantic needle absent: ${needle}`);
-  }
-  return failures;
-}
-
-const HANDOFF_SLOT = SLOTS['main-authored-handoff'];
-const HANDOFF_EXPECTED_BLOCK = typeof HANDOFF_SLOT === 'string' ? HANDOFF_SLOT : '';
-assert(typeof HANDOFF_SLOT === 'string' && HANDOFF_SLOT.length > 0,
-  'T21 source: SLOTS[main-authored-handoff] must be a non-empty canonical block');
-for (const failure of handoffBlockFailures(HANDOFF_EXPECTED_BLOCK)) {
-  assert(false, `T21 canonical block: ${failure}`);
-}
-
-function handoffSurfaceFailures(surfaceMap, expected, files) {
-  const failures = [];
-  for (const file of files) {
-    const content = surfaceMap[file];
-    if (content === null || content === undefined) {
-      failures.push(`handoff absent-surface: ${file}`);
-      continue;
-    }
-    const extracted = extractDelimitedBlock(content);
-    if (extracted.block === null) {
-      failures.push(`handoff malformed block on ${file} (open=${extracted.openCount}, close=${extracted.closeCount})`);
-      continue;
-    }
-    for (const failure of handoffBlockFailures(extracted.block)) {
-      failures.push(`handoff semantic mismatch on ${file}: ${failure}`);
-    }
-    if (extracted.block !== expected) {
-      failures.push(`handoff byte mismatch on ${file}`);
-    }
-  }
-  return failures;
-}
+const SHARED_TEST_MARKER = '<!-- PIN: manifest-shared-marker-probe -->';
 
 // ---------------------------------------------------------------------------
-// T20: ADR 0019 reviewer dispatch contract — Claude commands carry the one bounded heavy
-// re-dispatch and the shared handoff specialization, while Grok/Cursor generated commands retain their declared
-// divergence and omit dynamic reviewer escalation (their generated agent pins have no per-call
-// override). Read the canonical GitHub command surfaces here; generate-routing-surfaces --check
-// separately binds the GitLab/Gitea command copies byte-for-byte to the same skeleton.
-// ---------------------------------------------------------------------------
-{
-  const REVIEWER_HEAVY_REDISPATCH = /One carve-out:\s*the orchestrator may re-dispatch a reviewer-class role at heavy when a reasoning-tier attempt failed to finish the review, or the surface is judged complex before dispatch\./i;
-  const REVIEWER_HEAVY_MODEL_EXCEPTION = /reviewer carve-out below is the sole dispatch exception:\s*for that bounded heavy re-dispatch, pass\s+`?model="fable"`?\s+instead of the installed reviewer `?opus`? model/i;
-  const REVIEW_SCOPE_PACKET = /Each reviewer dispatch must state the review scope\s+—\s+the dispatched surface under review and what acceptance looks like\./i;
-  const reviewerCommandSurfaces = ROUTING_SURFACES.filter(row =>
-    row.forge === 'github' && row.surface_type === 'command'
-      && (row.topic === 'next' || row.topic === 'finalize'));
-  assert(reviewerCommandSurfaces.length === 2,
-    'T20 universe: GitHub Claude next/finalize must provide exactly two command surfaces');
-
-  for (const row of reviewerCommandSurfaces) {
-    const canonical = fs.readFileSync(path.join(REPO, row.path), 'utf8');
-    const normalized = norm(canonical);
-    assert(REVIEWER_HEAVY_REDISPATCH.test(normalized),
-      `T20 Claude contract: ${row.path} must carry the one bounded reviewer-class heavy re-dispatch `
-      + '(reasoning-tier attempt failed to finish the review OR surface judged complex before dispatch)');
-    assert(REVIEWER_HEAVY_MODEL_EXCEPTION.test(normalized),
-      `T20 Claude contract: ${row.path} must make the sanctioned reviewer heavy re-dispatch executable `
-      + 'with explicit model="fable" instead of the resting reviewer opus/profile model');
-    const handoff = extractDelimitedBlock(canonical);
-    assert(handoff.block === HANDOFF_EXPECTED_BLOCK && handoffBlockFailures(handoff.block).length === 0,
-      `T20 Claude contract: ${row.path} must carry the shared handoff specialization for reviewer `
-      + 'candidate/surface identity and acceptance');
-    assert(!REVIEW_SCOPE_PACKET.test(normalized),
-      `T20 Claude contract: ${row.path} must remove the obsolete reviewer-only scope sentence; `
-      + 'the shared handoff specialization is now authoritative');
-
-    const basename = path.basename(row.path, '.md');
-    for (const [runtime, renderCommand] of [
-      ['Grok', grokSync.renderCommand],
-      ['Cursor', cursorSync.renderCommand],
-    ]) {
-      const generated = renderCommand(canonical, basename, 'github');
-      assert(!REVIEWER_HEAVY_REDISPATCH.test(norm(generated)),
-        `T20 divergence: generated ${runtime} ${basename} must omit dynamic reviewer heavy re-dispatch`);
-    }
-  }
-}
-
+// Topic basenames are read from the generated-surface registry.
 // Topic basenames — READ FROM THE GENERATED-SURFACE REGISTRY, the same TOPICS table that renders
 // the surfaces and drives the T1/T2 emitted-target set. That is the no-drift anchor: a rename or a
 // fourth topic follows here for free, and a hand-typed basename can never disagree with what
@@ -1323,10 +466,6 @@ const TOPIC_BASENAME = Object.fromEntries(routingTopicNames.map(t => [t, {
 // marker (a manifest block deleted while its marker survives on the surface),
 // never on a legitimately-foreign one.
 const FOREIGN_MARKERS = new Set([
-  // Managed across every dispatch-capable Codex skill by T19, not by one
-  // routing topic in this manifest.
-  '<!-- PIN: codex-profile-preflight -->',
-  '<!-- PIN: codex-dispatch-model-routing -->',
   // The consent rule is carried by EVERY topic, so one marker legitimately appears on all three.
   // The reverse sentinel keys marker -> single block, which cannot express that; the FORWARD
   // presence obligation is what enforces it here, via one manifest block per topic. Deleting a
@@ -1387,11 +526,8 @@ function checkManifest({ blocks, readSurface, editions, topicBasename, foreignMa
     ? foreignMarkers
     : new Set((foreignMarkers || []).map(norm));
   let obligatedCount = 0;
-  // A marker may intentionally lead more than one topic block. The shared handoff
-  // is one byte-identical block on both `next` and `finalize`, so the reverse
-  // sentinel must resolve by the block whose derived surface set contains the
-  // observed file rather than by last-write-wins marker identity. Ambiguous
-  // overlap still reds below; this widens only the legitimate disjoint case.
+  // A marker may intentionally lead more than one topic block, so the reverse
+  // sentinel resolves by the block whose derived surface set contains the file.
   const markerToBlocks = new Map();
 
   // FORWARD — every content token present on every surface the block obligates.
@@ -1481,114 +617,6 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
   for (const msg of realResult.failures) assert(false, `MANIFEST ${msg}`);
   assert(realResult.failures.length === 0,
     `MANIFEST: derived-universe presence check clean over ${realResult.obligatedCount} obligated file-checks`);
-}
-
-// T21 REAL-RUN — derive the two shared-block obligations from the manifest and
-// compare the COMPLETE delimited bytes on every resulting consumer surface.
-// Both/both is intentional: the same marker appears on next and finalize, but
-// each block's derived file set is topic-specific and disjoint.
-{
-  const handoffBlocks = ['nx-main-authored-handoff', 'fn-main-authored-handoff']
-    .map(id => REQUIRED_BLOCKS.find(block => block.block_id === id));
-  assert(handoffBlocks.every(Boolean),
-    'T21 universe: required-block manifest must declare both next and finalize handoff blocks');
-  const topics = handoffBlocks.filter(Boolean).map(block => block.topic).sort();
-  assert(topics.join(',') === 'finalize,next',
-    `T21 universe: handoff applies only to next/finalize, got ${topics.join(',')}`);
-
-  const filesByTopic = new Map();
-  for (const block of handoffBlocks) {
-    if (!block) continue;
-    const derived = deriveObligated(block, MANIFEST_EDITIONS, TOPIC_BASENAME);
-    const unique = new Set(derived.files);
-    assert(!derived.error && derived.files.length === 21 && unique.size === 21,
-      `T21 universe: ${block.block_id} must derive exactly 21 unique runtime/forge surfaces, got `
-      + `${derived.files.length}${derived.error ? ` (${derived.error})` : ''}`);
-    filesByTopic.set(block.topic, derived.files);
-  }
-
-  const obligated = [...filesByTopic.values()].flat();
-  const uniqueObligated = new Set(obligated);
-  assert(obligated.length === 42 && uniqueObligated.size === 42,
-    `T21 universe: next/finalize must derive exactly 42 unique surfaces, got `
-    + `${obligated.length} (${uniqueObligated.size} unique)`);
-  assert(obligated.length > 0,
-    'T21 universe: an empty handoff surface set would make byte parity vacuous');
-
-  const surfaces = Object.fromEntries(obligated.map(file => [file, readRealSurface(file)]));
-  const failures = handoffSurfaceFailures(surfaces, HANDOFF_EXPECTED_BLOCK, obligated);
-  for (const failure of failures) assert(false, `T21 ${failure}`);
-  assert(failures.length === 0,
-    `T21 parity: complete main-authored-handoff bytes must match on all ${obligated.length} surfaces`);
-
-  // T21 MUTATION CLOSURE — the clean tree above is the control. Each mutant is
-  // applied to one derived surface in memory, then the same full-block and
-  // semantic detector is run against the complete 42-surface map. A target-only
-  // finding proves the guard is attached to the mutated subject rather than to a
-  // standing tree-wide failure.
-  const reorderAuthorityScope = block => {
-    const lines = String(block).split('\n');
-    const authority = lines.findIndex(line => line.startsWith('- `Authority:`'));
-    const scope = lines.findIndex(line => line.startsWith('- `Scope and custody:`'));
-    const acceptance = lines.findIndex(line => line.startsWith('- `Acceptance:`'));
-    if (authority < 0 || scope <= authority || acceptance <= scope) return block;
-    return lines.slice(0, authority)
-      .concat(lines.slice(scope, acceptance), lines.slice(authority, scope), lines.slice(acceptance))
-      .join('\n');
-  };
-  const mutationSpecs = [
-    {
-      label: 'missing-complete-block',
-      mutate: content => content.replace(HANDOFF_EXPECTED_BLOCK, ''),
-    },
-    {
-      label: 'reordered-authority-scope',
-      mutate: content => content.replace(HANDOFF_EXPECTED_BLOCK, reorderAuthorityScope(HANDOFF_EXPECTED_BLOCK)),
-    },
-    {
-      // Same-length ASCII case drift: exactly one byte changes inside task-specific wording.
-      label: 'one-byte-wording-drift',
-      mutate: content => content.replace('brief that', 'brieF that'),
-    },
-  ];
-  const cleanControl = failures.length === 0;
-  assert(cleanControl,
-    'T21 mutation control: the unmutated 42-surface tree must be clean before planting mutants');
-
-  let mutationLegs = 0;
-  let nonNoopControls = 0;
-  let caughtMutants = 0;
-  if (cleanControl) {
-    for (const target of obligated) {
-      for (const spec of mutationSpecs) {
-        mutationLegs++;
-        const original = surfaces[target];
-        const mutated = spec.mutate(original);
-        const changed = mutated !== original;
-        if (changed) nonNoopControls++;
-        assert(changed,
-          `T21 mutation ${spec.label}: mutation must change bytes on ${target}`);
-
-        const mutantSurfaces = Object.assign({}, surfaces, { [target]: mutated });
-        const mutantFailures = handoffSurfaceFailures(
-          mutantSurfaces, HANDOFF_EXPECTED_BLOCK, obligated);
-        const targetFailures = mutantFailures.filter(failure => failure.includes(target));
-        const unrelatedFailures = mutantFailures.filter(failure => !failure.includes(target));
-        const caught = targetFailures.length > 0 && unrelatedFailures.length === 0;
-        if (caught) caughtMutants++;
-        assert(caught,
-          `T21 mutation ${spec.label}: must catch ${target} without unrelated-surface cascade; `
-          + `target failures=${targetFailures.length}, unrelated=${unrelatedFailures.length}`);
-      }
-    }
-  }
-  const expectedMutationLegs = obligated.length * mutationSpecs.length;
-  assert(mutationLegs === expectedMutationLegs && expectedMutationLegs === 126,
-    `T21 mutation count: expected 42 targets x 3 families = 126 legs, got ${mutationLegs}`);
-  assert(nonNoopControls === 126,
-    `T21 mutation controls: expected 126 non-noop mutants, got ${nonNoopControls}`);
-  assert(caughtMutants === 126,
-    `T21 mutation closure: expected 126 target-only caught mutants, got ${caughtMutants}`);
 }
 
 // --- NON-VACUITY FLOOR (manifest-wide) — every marker-led block must carry at least ONE
@@ -1757,7 +785,6 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     { token: '<!-- PIN: sink-reports-orchestrator-owns -->', surfaces: FN_ALL },
     // next × 6
     { token: 'mission-list.md', surfaces: NX_ALL },
-    { token: 'dispatched: self', surfaces: NX_ALL },
     { token: 'Look for the work, not for the worker.', surfaces: NX_ALL },
     { token: '--target-issue', surfaces: NX_ALL },
     { token: '--target-issues', surfaces: NX_ALL },
@@ -1878,10 +905,10 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
   {
     const blocks = [{ block_id: 'shared-marker-command-only', topic: 't',
       runtime_tag: 'claude-live', surface_type_tag: 'command',
-      content_tokens: [HANDOFF_OPEN, 'anchor-token'] }];
+      content_tokens: [SHARED_TEST_MARKER, 'anchor-token'] }];
     const surfaces = {
-      'cmd/foo.md': `${HANDOFF_OPEN} anchor-token`,
-      'skl/foo/SKILL.md': `${HANDOFF_OPEN} unrelated-surface-prose`,
+      'cmd/foo.md': `${SHARED_TEST_MARKER} anchor-token`,
+      'skl/foo/SKILL.md': `${SHARED_TEST_MARKER} unrelated-surface-prose`,
     };
     const r = checkManifest({
       blocks,
@@ -1890,7 +917,7 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
       topicBasename: TB,
       foreignMarkers: new Set(),
     });
-    const expected = `orphan-surface: marker ${JSON.stringify(HANDOFF_OPEN)} on skl/foo/SKILL.md `
+    const expected = `orphan-surface: marker ${JSON.stringify(SHARED_TEST_MARKER)} on skl/foo/SKILL.md `
       + 'is not obligated by any of the 1 manifest blocks';
     assert(r.obligatedCount === 1 && r.failures.length === 1 && r.failures[0] === expected,
       'RED-PROOF shared-marker-non-obligated: the known shared marker must take the exact '
@@ -1904,12 +931,12 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
   {
     const blocks = [
       { block_id: 'shared-marker-overlap-a', topic: 't', runtime_tag: 'claude-live',
-        surface_type_tag: 'command', content_tokens: [HANDOFF_OPEN, 'anchor-a'] },
+        surface_type_tag: 'command', content_tokens: [SHARED_TEST_MARKER, 'anchor-a'] },
       { block_id: 'shared-marker-overlap-b', topic: 't', runtime_tag: 'claude-live',
-        surface_type_tag: 'command', content_tokens: [HANDOFF_OPEN, 'anchor-b'] },
+        surface_type_tag: 'command', content_tokens: [SHARED_TEST_MARKER, 'anchor-b'] },
     ];
     const surfaces = {
-      'cmd/foo.md': `${HANDOFF_OPEN} anchor-a anchor-b`,
+      'cmd/foo.md': `${SHARED_TEST_MARKER} anchor-a anchor-b`,
       'skl/foo/SKILL.md': 'skill-surface-without-the-shared-marker',
     };
     const r = checkManifest({
@@ -1919,7 +946,7 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
       topicBasename: TB,
       foreignMarkers: new Set(),
     });
-    const expected = `orphan-surface: marker ${JSON.stringify(HANDOFF_OPEN)} on cmd/foo.md `
+    const expected = `orphan-surface: marker ${JSON.stringify(SHARED_TEST_MARKER)} on cmd/foo.md `
       + 'is ambiguously obligated by blocks shared-marker-overlap-a, shared-marker-overlap-b';
     assert(r.obligatedCount === 2 && r.failures.length === 1 && r.failures[0] === expected,
       'RED-PROOF shared-marker-ambiguity: overlapping known-marker blocks must take the exact '

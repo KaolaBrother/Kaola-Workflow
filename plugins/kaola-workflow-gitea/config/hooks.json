@@ -13,20 +13,6 @@
         "description": "Inject Kaola-Workflow resume state after Codex context compaction",
         "id": "kaola-workflow:compact-context"
       }
-    ],
-    "SubagentStart": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"__KW_PLUGIN_ROOT__/hooks/kaola-workflow-subagent-dispatch-log.sh\"",
-            "timeout": 5
-          }
-        ],
-        "description": "Record subagent spawns to .cache/dispatch-log.jsonl for closure attestation",
-        "id": "kaola-workflow:subagent-dispatch-log"
-      }
     ]
   }
 }

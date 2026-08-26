@@ -1,24 +1,9 @@
 <!-- SLOT:nx-frontmatter -->
-<!-- REGION:skill — Codex selects the model and reasoning effort on each spawn from the role's existing tier classification; command runtimes retain their installed-profile model routing -->
-<!-- PIN: codex-dispatch-model-routing -->
-## Codex Per-Spawn Model Routing
-
-Keep every installed role's existing standard-tier, reasoning-tier, or heavy-tier classification, and set the
-model and reasoning effort explicitly on each spawn. Standard-tier roles dispatch with
-`model: "gpt-5.6-luna"` and `reasoning_effort: "max"`. Reasoning-tier roles dispatch with
-`model: "gpt-5.6-sol"` and `reasoning_effort: "medium"`. Heavy-tier roles dispatch with
-`model: "gpt-5.6-sol"` and `reasoning_effort: "high"`.
-
-<!-- SLOT:codex-tier-roster -->
-
-These mappings are fixed for every spawn. Do not escalate, downgrade, or otherwise override a
-tier's model or reasoning effort based on task breadth, latency, prior results, risk, availability,
-or any other condition. The role classification remains unchanged. One carve-out: the orchestrator
-may re-dispatch a reviewer-class role at heavy when a reasoning-tier attempt failed to finish the
-review, or the surface is judged complex before dispatch.
-
-<!-- /PIN -->
-<!-- /REGION -->
+Choose dispatch or inline per item. Dispatch when it materially reduces main-context residue,
+supplies independent judgment, or enables genuinely independent parallel work. Keep one production
+owner for a cohesive state machine, protocol, or integration when handoff and integration cost
+exceed that benefit. Both modes are first-class; width follows the true work frontier. No dispatch
+count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
 
 <!-- SLOT:nx-h1 -->
 
@@ -38,27 +23,13 @@ reorganizing someone's issues — state what you propose and why, then wait for 
 Everything checkable is yours to decide and get on with.
 <!-- /PIN -->
 
-<!-- SLOT:main-authored-handoff -->
-
-<!-- REGION:command — command-only (Codex skill strips it; Delegation stays REGION:skill) -->
-## Agent Model Dispatch
-
-Use the installed role name as `subagent_type`. You MUST pass `model=` from that
-role's installed profile; never omit it. Never substitute a generic type. If the
-named role cannot be spawned, do the work inline and say so — that is tool
-unavailability.
-
-The reviewer carve-out below is the sole dispatch exception: for that bounded heavy
-re-dispatch, pass `model="fable"` instead of the installed reviewer `opus` model; reviewer
-resting dispatches and all other roles continue to pass their installed profile model.
-
-Reviewer-class roles retain their installed reasoning-tier (`opus`) profile as the resting profile.
-One carve-out: the orchestrator may re-dispatch a reviewer-class role at heavy when a reasoning-tier
-attempt failed to finish the review, or the surface is judged complex before dispatch.
-
-The bounded heavy re-dispatch uses the approved `fable` profile only.
-
-<!-- /REGION -->
+Before a delegated role starts, give it a self-sufficient natural-language brief: the result or
+question, the relevant evidence and authority or custody boundary, the exact worktree, commit, or
+evidence locator where its result lands, and the condition that ends the task. Keep the brief bounded
+and falsifiable; the installed role profile supplies universal behavior and inherited conversation
+is not required. The mission list remains the recovery index. A production result belongs in the
+actual worktree or commit when Git already records it; add a report only for evidence a successor
+cannot derive from those bytes.
 
 ## Step 1 — Pick the work
 
@@ -207,6 +178,10 @@ An H1 carrying the goal in one line, then one item per mission:
   result: <where the outcome landed — a path, or a few lines inline>
 ```
 
+Each completed item is immutable and its `result` is immutable; one dispatch has one result,
+including `FAIL`. Repair or re-review work must append a new mission rather than rewriting the
+closed item.
+
 | field | content | written |
 |---|---|---|
 | `item` | the mission — one line of prose, hints and facts | at creation |
@@ -231,15 +206,16 @@ Items may be added at any time. New work discovered mid-run is appended the same
 Read the list. The frontier is not computed — it is the list minus done minus in-flight, visible by
 reading. Pick from it.
 
-**Decide the shape then, not before.** When you reach an item, decide whether to dispatch subagents
-or do the work yourself, and at what width. Nothing inspects that decision: no disjointness proof,
-no evidence line, no cap, no approval. Independent work runs concurrently because that is faster;
-work that genuinely feeds other work runs in order because it has to. You can already tell the
-difference, and the frontier is in front of you.
+**Decide the shape then, not before.** When you reach an item, choose dispatch or inline per item.
+Dispatch when it materially reduces main-context residue, supplies independent judgment, or enables
+genuinely independent parallel work. Keep one production owner for a cohesive state machine,
+protocol, or integration when handoff and integration cost exceed that benefit. Both modes are
+first-class; width follows the true work frontier. No dispatch count, cap, disjointness proof,
+justification, approval, or fallback stigma attaches to the judgment.
 
-Subagents and worktrees are tools, offered and declinable. Delegating production is usually right —
-a handoff costs once, while everything you keep inline taxes every later decision — but a tool you
-cannot decline and still finish would be a gate wearing a tool's name, and there are none here.
+Subagents and worktrees are tools, offered and declinable. Use them when the judgment above says
+they improve the work; keep cohesive feed-forward work with one production owner when that is the
+more efficient shape.
 
 **Three write moments.** These are the whole discipline:
 
@@ -282,18 +258,12 @@ branch and worktree. Keep their commits separate — a commit spanning two folde
 one's diff attributable. Another session's folder is not yours: leave its branch, its worktree and
 its issues alone.
 
-<!-- REGION:skill — it directs every spawn to the Codex Per-Spawn Model Routing contract above and to pass an explicit `model` and `reasoning_effort` pair on the call; that contract renders on this surface only, and command runtimes route each role's model from its installed profile with no per-spawn pair to pass -->
 ## Delegation
 
-Subagent delegation is the default posture and is established without asking the user. Invoke the
-installed role agents for delegated work. For every spawn, follow the Codex Per-Spawn Model Routing
-contract above and pass both `model` and `reasoning_effort` explicitly on the spawn call as the pair
-selected by the role's existing tier. Per-task model or reasoning-effort exceptions are not allowed.
-If the runtime genuinely cannot spawn a role agent, do the work inline and say so — that is a fact
-about tool availability, not a choice to present as a question. Profile drift is not tool
-unavailability and must not be recorded as one.
-
-<!-- /REGION -->
+Delegation is available when the execution-economics judgment calls for it. Use the installed role
+profiles and runtime-native defaults; a task-sensitive model or reasoning-effort override, or
+omission where the runtime supplies a default, is valid. If the runtime cannot spawn a role agent,
+keep the work inline and say so.
 ## Required output
 
 Before continuing or stopping, print:

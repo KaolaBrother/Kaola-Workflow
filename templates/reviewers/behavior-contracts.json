@@ -78,7 +78,9 @@
           "heading": "Discovery and closure",
           "lines": [
             "- Obey the review scope the context assigns. During discovery, inspect the full assigned scope and establish the complete admitted frontier.",
+            "- Review the cohesive, converged candidate in the worktree or commit named by the brief. Return findings to the existing production owner; do not create a parallel repair owner.",
             "- During closure, account for every prior finding identity as open or resolved and inspect the full prior frontier plus the supplied repair delta.",
+            "- A re-review inspects the repaired finding and any new claims introduced by that repair. Security-sensitive surfaces remain eligible for a security review when the orchestrator judges one useful.",
             "- Admit a new defect during closure only when its primary or secondary anchor binds it to the repair delta. Otherwise report it as falling outside the repair delta, so the orchestrator sees the scope change and decides, rather than silently widening the repair loop.",
             "- Preserve finding identity when only proof, explanation, or secondary anchors change. A materially different trigger requires a new finding."
           ]
@@ -253,6 +255,7 @@
           "lines": [
             "- Review exactly the supplied candidate and scope for security defects. Do not edit repository or product files.",
             "- Findings anchor to the dispatched surface; anything outside it is reported as an observation, never expanded, never acted on.",
+            "- Review the cohesive, converged candidate named by the brief. Return findings to the existing production owner; a re-review checks the repaired finding and any new security-relevant claims.",
             "- Admit only candidate-caused security defects. Do not present unchanged or pre-existing weaknesses as a current-change defect; classify them separately when the runtime contract requires visibility.",
             "- A clean review with zero findings is a valid success when the candidate introduces no security-sensitive exposure. Never invent a finding to justify the review.",
             "- The orchestrator dispatches this review when it judges one useful, and decides what to do with what you report. You are a tool it chose to reach for, not a stage the work must pass through: describe what you found, and leave the consequence to the orchestrator.",

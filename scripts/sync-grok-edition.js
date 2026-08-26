@@ -8,7 +8,7 @@
 // and it does NOT ride the install.sh --forge= machinery. It is delivered the
 // Grok-native way: named agents under `.grok/agents/<role>.md` (spawn_subagent
 // types), flat slash commands under `.grok/commands/<name>.md`, and
-// `.grok/hooks/` (payload-adapted dispatch-log + a generated hooks.json the
+// `.grok/hooks/` (payload-adapted hooks + a generated hooks.json the
 // installer copies into the Grok hooks dir). Deterministic, idempotent, and
 // parity-checked by test-grok-edition.js.
 //
@@ -52,9 +52,9 @@ function treeLabel(forge) {
 const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
 
-const HOOK_SCRIPTS = [
-  'kaola-workflow-subagent-dispatch-log.sh',
-];
+// No runtime-neutral hook scripts are active in the Grok edition. The generator retains ownership
+// of the hooks directory so --write can prune stale dispatch artifacts.
+const HOOK_SCRIPTS = [];
 
 function parseFrontmatter(text) {
   const m = String(text).match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
@@ -332,25 +332,11 @@ function renderGrokHooksJson(forge) {
         }],
         id: 'kaola-workflow:compact-context',
       }],
-      SubagentStart: [{
-        matcher: '*',
-        hooks: [{
-          type: 'command',
-          command: 'bash "' + home + '/kaola-workflow/hooks/kaola-workflow-subagent-dispatch-log.sh"',
-          timeout: 5,
-        }],
-        id: 'kaola-workflow:subagent-dispatch-log',
-      }],
     },
   }, null, 2) + '\n';
 }
 
-const HOOK_ADAPTATIONS = {
-  'kaola-workflow-subagent-dispatch-log.sh': [
-    ["p.agent_type||''", "(p.agent_type||p.agentType||p.subagentType||'')"],
-    ["p.agent_id||''", "(p.agent_id||p.agentId||'')"],
-  ],
-};
+const HOOK_ADAPTATIONS = {};
 
 function adaptHookForGrok(script, content) {
   const rules = HOOK_ADAPTATIONS[script] || [];

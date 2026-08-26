@@ -76,8 +76,7 @@ function run(script) {
 
 // M4 (#277): static source-text assertion — the gitea fork claim.js must contain the run_posture
 // derivation.
-// (#284): Codex lifecycle hooks (SessionStart/PreToolUse/PostToolUse/SubagentStart including
-// dispatch-log) are now wired via config/hooks.json + install-codex-agent-profiles.js.
+// (#284): the surviving Codex compact-resume hook is wired through config/hooks.json.
 const giteaClaimSrc = fs.readFileSync(
   path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js'), 'utf8');
 if (!giteaClaimSrc.includes('run_posture')) {
@@ -100,7 +99,7 @@ if (!giteaClaimSrc.includes('selection_evidence')) {
   throw new Error('#653: gitea-codex: kaola-gitea-workflow-claim.js must implement the selection_evidence probe');
 }
 
-// #284: config/hooks.json must exist, parse, and register the SubagentStart dispatch-log hook.
+// #284: config/hooks.json must exist, parse, and expose the local compact-resume runtime surface.
 const hooksConfigPath = path.join(root, 'plugins/kaola-workflow-gitea/config/hooks.json');
 if (!fs.existsSync(hooksConfigPath)) {
   throw new Error('#284: plugins/kaola-workflow-gitea/config/hooks.json must exist');
@@ -111,15 +110,14 @@ try {
 } catch (e) {
   throw new Error('#284: plugins/kaola-workflow-gitea/config/hooks.json must be valid JSON: ' + e.message);
 }
-const subagentEntries = (hooksConfig.hooks && hooksConfig.hooks['SubagentStart']) || [];
-const dispatchLogEntry = subagentEntries.find(
-  e => e.id && e.id.startsWith('kaola-workflow:') &&
-       e.hooks && e.hooks.some(h => h.command && h.command.includes('kaola-workflow-subagent-dispatch-log.sh'))
+const sessionStartEntries = (hooksConfig.hooks && hooksConfig.hooks.SessionStart) || [];
+const compactResumeEntry = sessionStartEntries.find(
+  e => e.id === 'kaola-workflow:compact-context' && e.matcher === 'compact' &&
+       e.hooks && e.hooks.some(h => h.command && h.command.includes('kaola-gitea-workflow-codex-compact-resume.js'))
 );
-if (!dispatchLogEntry) {
+if (!compactResumeEntry) {
   throw new Error(
-    '#284: config/hooks.json SubagentStart must have a kaola-workflow: entry whose command references ' +
-    'kaola-workflow-subagent-dispatch-log.sh'
+    '#284: config/hooks.json SessionStart must expose the gitea-codex compact-resume command for compact sessions'
   );
 }
 

@@ -28,7 +28,7 @@ than from `install.sh`:
   (`workflow-init`, `workflow-next`, `kaola-workflow-finalize`), keeping the canonical
   `Agent(` dispatch wording and stamping claim/startup invocations `--runtime zcode`.
 - `.zcode/config.json` — the hook mapping (see [Hooks](#hooks)).
-- `.zcode/kaola-workflow/hooks/` — shell hooks (dispatch log, SessionStart compact wrapper).
+- `.zcode/kaola-workflow/hooks/` — the SessionStart compact-context wrapper; no dispatch hook is installed.
 - `.zcode/kaola-workflow/scripts/` — one launcher per install-manifest support script; each
   resolves the real script under `${ZCODE_HOME:-~/.zcode}/kaola-workflow/scripts` (or the
   checkout, when running self-dev) and execs it.
@@ -97,9 +97,7 @@ ZCode hooks live under the top-level `hooks` object of `config.json` and require
 `Stop` — and there is **no `SubagentStart`**. The edition registers:
 
 - `SessionStart` → `kaola-workflow-compact-context.sh` (resume-context wrapper around the
-  compact-context support script),
-- `PreToolUse` → the payload-adapted `kaola-workflow-subagent-dispatch-log.sh` (advisory
-  dispatch logging; ZCode hook payload field names are adapted at generation time).
+  compact-context support script).
 
 `--merge-hooks --dest=<file>` merges kaola entries into a live `config.json` (foreign keys and
 foreign hook entries preserved, `hooks.enabled` forced true); `--strip-hooks --dest=<file>`

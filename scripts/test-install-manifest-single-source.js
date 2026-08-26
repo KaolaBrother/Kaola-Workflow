@@ -49,8 +49,17 @@ for (const forge of manifest.FORGES) {
 
   const cliHooks = emit(['--forge=' + forge, '--hooks']);
   assert.strictEqual(cliHooks.status, 0, `manifest --hooks ${forge} must exit 0: ${cliHooks.stderr}`);
-  assert.deepStrictEqual(cliHooks.stdout.trim().split('\n'), manifest.supportHooks(forge),
+  const hookOutput = cliHooks.stdout.trim();
+  assert.deepStrictEqual(hookOutput ? hookOutput.split('\n') : [], manifest.supportHooks(forge),
     `#407: CLI --hooks ${forge} must equal supportHooks('${forge}')`);
+
+  // #1032 D8: the spawn-observation hook and dispatch-log artifact are retired
+  // together. This is an absence assertion on the existing installation source;
+  // it does not introduce a replacement telemetry or orchestration gate.
+  assert.ok(!manifest.supportHooks(forge).some(name => /dispatch-log/.test(name)),
+    `#1032: supportHooks('${forge}') must not install the retired dispatch-log hook`);
+  assert.ok(!manifest.supportScripts(forge).some(name => /dispatch-log/.test(name)),
+    `#1032: supportScripts('${forge}') must not install a retired dispatch-log script`);
 }
 
 // Issue #699: the manual installer must carry the transaction engine under

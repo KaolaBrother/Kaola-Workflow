@@ -260,15 +260,16 @@ function testFinalize(tmp) {
   assert(archived.length === 1, 'finalize should archive folder');
   const archivedState = read(path.join(tmp, 'kaola-workflow', 'archive', archived[0], 'workflow-state.md'));
   assert(archivedState.includes('status: closed'), 'finalize should mark archived state closed');
-  assert(archivedState.includes('step: complete'), 'finalize should mark archived state complete');
+  // #1032: archive state retains the closure status and receipt facts, but no
+  // longer stores active-run progress or terminal command breadcrumbs.
+  assert(!/^(?:phase|phase_name|workflow_path|step|next_command|next_skill|runtime|phase_file|cache_file|last_command|last_result):/m.test(archivedState),
+    '#1032: archived state must not retain retired active-run progress fields');
+  assert(archivedState.includes('## Sink'), '#1032: archived state must retain the proven sink fact');
   assert(!archivedState.includes(retiredBlock), 'finalize should remove legacy lease blocks before archive');
   assert(!archivedState.includes(retiredSessionField), 'finalize should remove legacy session fields before archive');
   // #324: closure normalization of the pre-run evidence writeState seeded at startup. The
   // `## Pending Gates` half of this pin went with the block: the claim no longer seeds a gate
   // list naming a frozen plan, so there is nothing left to normalize at closure.
-  assert(!archivedState.includes('last_command: startup'), '#324: archived state must not keep last_command: startup after closure');
-  assert(archivedState.includes('last_command: finalize'), '#324: archived state last_command normalized to finalize');
-  assert(archivedState.includes('last_result: closed'), '#324: archived state last_result normalized to closed');
   // #324: finalization-summary sentinels neutralized in the archived copy.
   const archivedSummary = read(path.join(tmp, 'kaola-workflow', 'archive', archived[0], 'finalization-summary.md'));
   assert(!archivedSummary.includes('READY FOR FINAL GIT GATE'),
@@ -281,38 +282,22 @@ function testFinalize(tmp) {
     '#324 AC3: archived final-validation.md must not retain the false-absolute "No files changed after those runs"');
   assert(archivedFinalVal.includes('Validation reuse covers'),
     '#324 AC3: archived final-validation.md states the actual reuse boundary instead of the false absolute');
-  // #333: an archived state must not advertise an active resume command. startup --runtime claude
-  // seeds next_command: /kaola-workflow-phase1 issue-164 / next_skill: kaola-workflow-research issue-164.
-  assert(archivedState.includes('next_command: none (archived)'),
-    '#333: archived state next_command must be neutralized to "none (archived)", got: ' + archivedState);
-  assert(archivedState.includes('next_skill: none (archived)'),
-    '#333: archived state next_skill must be neutralized to "none (archived)", got: ' + archivedState);
-  assert(!archivedState.includes('/kaola-workflow-phase1 issue-164'),
-    '#333: archived state must not retain the active /kaola-workflow-phase1 resume command');
 }
 
 // #333: a keep-open partial-close archive must be terminal+truthful. A complete
-// schema-2 adaptive run is archived through `finalize --keep-open`; the
-// archived state must read closed/complete, gates - none, last_result:
-// closed_keep_open, preserve the verified plan hash, refresh ## Last Updated,
-// neutralize next_command, and carry a ## Closure block with kept-open state.
+// schema-2 run is archived through `finalize --keep-open`; the archived state
+// must retain closed status, sink/closure facts, and no retired run-progress
+// fields.
 function testKeepOpenArchiveStamp() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-keepopen-')));
   try {
     // #522: initGitRepo so the finalize gate's attribution sweep can resolve `git diff main...HEAD`.
     // On a plain main branch with no feature branch, the diff is empty → no unattributed files.
     initGitRepo(tmp);
-    const STALE_UPDATED = '2020-01-01T00:00:00.000Z';
     const dir = path.join(tmp, 'kaola-workflow', 'issue-333');
     seedClassifierVerdictFromBody(333, '');
     json(runNode(claimScript, ['startup', '--target-issue', '333'], tmp,
       { KAOLA_WORKTREE_NATIVE: '0' }));
-    // A stale `## Last Updated` is the point of the fixture (the archive stamp must be rewritten,
-    // not inherited), so it is the one state edit that survives. The plan_hash / first-node /
-    // active_plan_hash rewrites and the derived task mirror went with the plan grammar.
-    let state333 = read(statePath(tmp, 'issue-333'));
-    state333 = state333.replace(/(^## Last Updated\n)[^\n]+/m, '$1' + STALE_UPDATED);
-    fs.writeFileSync(statePath(tmp, 'issue-333'), state333);
     // Consumer-mode repo (no package.json), so finalize measures the agent-recorded
     // final-validation.md and this makes it green and BOUND to the tree.
     //
@@ -330,19 +315,11 @@ function testKeepOpenArchiveStamp() {
     assert(archived.length === 1, '#333: keep-open finalize should archive folder');
     const st = read(path.join(tmp, 'kaola-workflow', 'archive', archived[0], 'workflow-state.md'));
     assert(st.includes('status: closed'), '#333: keep-open archived state must be closed');
-    assert(st.includes('step: complete'), '#333: keep-open archived state must be complete');
-    assert(st.includes('last_result: closed_keep_open'),
-      '#333: keep-open archived last_result must be closed_keep_open, got: ' + st);
-    assert(!st.includes('next_command: ' + ADAPTIVE_NEXT_COMMAND),
-      '#333: keep-open archived next_command must not advertise the live adaptive route ('
-        + ADAPTIVE_NEXT_COMMAND + '), got: ' + st);
-    assert(st.includes('next_command: none (archived)'),
-      '#333: keep-open archived next_command must be neutralized');
-    // DELETED: "the archived plan_hash is refreshed from the final plan file". There is no plan
-    // file and no hash of one. The stamp-refresh property the scenario is named for survives on the
-    // ## Last Updated assertion immediately below, which is the same mechanism reading a live field.
-    assert(!st.includes(STALE_UPDATED),
-      '#333: keep-open archived ## Last Updated must be refreshed, got: ' + st);
+    assert(!/^(?:phase|phase_name|workflow_path|step|next_command|next_skill|runtime|phase_file|cache_file|last_command|last_result):/m.test(st),
+      '#1032: keep-open archived state must not retain retired active-run progress fields');
+    assert(!/^## (?:Current Position|Last Evidence|Last Updated)$/m.test(st),
+      '#1032: keep-open archived state must not retain retired progress headings');
+    assert(st.includes('## Sink'), '#1032: keep-open archived state must retain the proven sink fact');
     assert(/^## Closure$/m.test(st), '#333: keep-open archived state must carry a ## Closure block');
     assert(st.includes('issue_disposition: kept-open'),
       '#333: keep-open archived ## Closure must record issue_disposition: kept-open');
@@ -366,8 +343,6 @@ function testKeepOpenArchiveStamp() {
       '#336: keep-open receipt remote_issue_closed must be kept_open, got: ' + JSON.stringify(result.closure_receipt && result.closure_receipt.remote_issue_closed));
     assert(result.closure_invariants && result.closure_invariants.ok === true,
       '#336: keep-open closure_invariants.ok must be true (keep-open-roadmap-preserved holds), got: ' + JSON.stringify(result.closure_invariants));
-    assert(st.includes('last_result: closed_keep_open'),
-      '#336: keep-open archived last_result must remain closed_keep_open');
     console.log('testKeepOpenArchiveStamp: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -385,13 +360,8 @@ function testManualArchiveBackstop() {
     fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
       '# Kaola-Workflow State', '',
       '## Project', 'name: issue-210', 'status: active', '',
-      '## Current Position',
-      'phase: adaptive', 'workflow_path: adaptive', 'step: start',
-      'next_command: /kaola-workflow-plan-run issue-210',
-      'next_skill: kaola-workflow-plan-run issue-210', '',
-      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
-      '## Last Updated', '2020-01-01T00:00:00.000Z', '',
-      '## Sink', 'branch: workflow/issue-210', 'issue_number: 210', 'sink: merge', ''
+      '## Sink', 'branch: workflow/issue-210', 'issue_number: 210', 'sink: merge',
+      'session_marker: session-210', 'claim_ts: 2026-01-01T00:00:00.000Z', ''
     ].join('\n'));
     // Manual archive: bypass archiveProjectDir entirely.
     const archiveDest = path.join(tmp, 'kaola-workflow', 'archive', 'issue-210');
@@ -472,36 +442,19 @@ function testSinkPrUsesFinalizationSummary() {
 
 function testHookShapeNoPhantomAdvisor() {
   // #372: the phantom-advisor PostToolUse hook is retired — hooks.json must carry NO PostToolUse
-  // event. #725: the pre-commit-guard and write-lane PreToolUse hooks are retired, so the surviving
-  // id set is: compact-context (SessionStart), subagent-dispatch-log (SubagentStart).
+  // event. #725: the pre-commit-guard, write-lane PreToolUse, and dispatch-log SubagentStart hooks
+  // are retired, so the surviving id set is compact-context (SessionStart).
   const hooks = JSON.parse(fs.readFileSync(path.join(repoRoot, 'hooks', 'hooks.json'), 'utf8')).hooks;
   const events = Object.keys(hooks);
   assert(!events.includes('PostToolUse'), '#372: hooks.json must have NO PostToolUse event, got ' + events.join(','));
   const ids = [];
   for (const ev of events) for (const block of hooks[ev]) ids.push(block.id);
   ids.sort();
-  assert(JSON.stringify(ids) === JSON.stringify(['kaola-workflow:compact-context', 'kaola-workflow:subagent-dispatch-log']),
-    '#372/#725: expected hook id set (compact-context, subagent-dispatch-log), got ' + JSON.stringify(ids));
+  assert(JSON.stringify(ids) === JSON.stringify(['kaola-workflow:compact-context']),
+    '#372/#725/#1032: expected surviving hook id set (compact-context), got ' + JSON.stringify(ids));
   const raw = fs.readFileSync(path.join(repoRoot, 'hooks', 'hooks.json'), 'utf8');
   assert(!/phantom-advisor/.test(raw), '#372: no phantom-advisor reference in hooks.json');
   assert(!fs.existsSync(path.join(repoRoot, 'hooks', 'kaola-workflow-phantom-advisor.sh')), '#372: phantom-advisor.sh deleted');
-}
-
-
-function testSubagentDispatchHookExists() {
-  // M1 (#277): dispatch-log hook must be installed in the root hooks directory.
-  const hooksDir = path.join(repoRoot, 'hooks');
-  const dispatchLog = path.join(hooksDir, 'kaola-workflow-subagent-dispatch-log.sh');
-  assert(fs.existsSync(dispatchLog), 'M1 (#277): hooks/kaola-workflow-subagent-dispatch-log.sh must exist');
-  const hooksJson = path.join(hooksDir, 'hooks.json');
-  assert(fs.existsSync(hooksJson), 'M1 (#277): hooks/hooks.json must exist');
-  const hooks = JSON.parse(fs.readFileSync(hooksJson, 'utf8'));
-  const subagentHooks = (hooks.hooks && hooks.hooks.SubagentStart) || [];
-  assert(
-    subagentHooks.some(e => e.id === 'kaola-workflow:subagent-dispatch-log'),
-    'M1 (#277): hooks.json must have a SubagentStart entry with id: kaola-workflow:subagent-dispatch-log'
-  );
-  console.log('testSubagentDispatchHookExists: PASSED');
 }
 
 // ---------------------------------------------------------------------------
@@ -678,32 +631,33 @@ function testAdaptiveOffPreservesTwoWay() {
 // testAdaptiveOnStartupAcquires (d) stood here — its central pin, `assert(out.claim === 'acquired',
 // ...)` after `startup --target-issue 905` OFFLINE, asserted the same retired acquisition
 // capability as (a) above, this time as the precondition for asserting the adaptive routing
-// (workflow_path / next_command / next_skill) that `startup` writes into state. There is no
-// non-authored way to reach that written state once the acquisition itself is gone (a real
+// (retired active-run route fields) that `startup` once wrote into state. There is no
+// non-authored way to reach those fields once the acquisition itself is gone (a real
 // `startup` run is what this test's routing assertions actually needed to exercise). Deleted with
 // the mechanism it pinned.
 
 
 
 
-// (h) toggle gates SELECTION only: an in-flight adaptive project resumes via
-// `claim resume` to plan-run even after the switch is flipped OFF (toggle-agnostic).
-// #236 (document-as-designed): an in-flight adaptive project resumes to plan-run.
-// Under #538 resume is unconditionally toggle-agnostic (no switch exists) — still exercised
-// to lock the no-toggle-read contract (a future regression adding a toggle read fails here).
+// (h) an in-flight claim resumes from its durable claim identity without
+// reconstructing the retired active-run route or executor command.
 function testAdaptiveResumeAfterFlipOff() {
   const tmp = adaptiveTmp('resume-flipoff');
   try {
     writeProject(tmp, 'issue-909', {
       'workflow-state.md': [
-        'name: issue-909', 'issue_number: 909', 'status: active',
-        'phase: adaptive', 'workflow_path: adaptive', 'next_command:', ''
+        '# Kaola-Workflow State', '', '## Project',
+        'name: issue-909', 'issue_number: 909', 'status: active', '',
+        '## Sink', 'branch: main', 'sink: merge',
+        'session_marker: session-909', 'claim_ts: 2026-01-01T00:00:00.000Z', ''
       ].join('\n')
     });
     const out = JSON.parse(runNode(claimScript, ['resume'], tmp).stdout);
     assert(out.resumed === true, 'in-flight adaptive must resume');
-    assert(out.next_command === ADAPTIVE_NEXT_COMMAND + ' issue-909',
-      'adaptive resume must emit the adaptive executor (not phaseN), got: ' + out.next_command);
+    assert(out.project === 'issue-909',
+      'claim-only resume must identify the active project, got: ' + JSON.stringify(out));
+    assert(!Object.prototype.hasOwnProperty.call(out, 'next_command'),
+      '#1032: resume must not emit the retired executor command, got: ' + JSON.stringify(out));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveResumeAfterFlipOff: PASSED');
 }
@@ -1846,9 +1800,12 @@ function testWorktreeAdaptiveSuppressed() {
     assert(result.claim === 'acquired', 'adaptive startup 507 should acquire');
     assert(result.worktree_path === '', 'adaptive path must NOT provision a worktree even with KAOLA_WORKTREE_NATIVE=1, got: ' + JSON.stringify(result.worktree_path));
     assert(result.worktree_error === undefined, 'adaptive worktree suppression must not surface worktree_error (policy suppression, not a failed attempt)');
-    // Confirm the adaptive path was actually applied (so the empty worktree_path is the guard, not a refusal).
+    // #1032: the claim remains identifiable by sink/identity facts while the
+    // retired active-run route is absent.
     const state = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-507', 'workflow-state.md'), 'utf8');
-    assert(/^workflow_path:\s*adaptive\s*$/m.test(state), 'workflow-state.md must record workflow_path: adaptive (confirms the adaptive path was applied)');
+    assert(state.includes('## Sink'), 'workflow-state.md must retain sink facts');
+    assert(!/^(?:phase|phase_name|workflow_path|step|next_command|next_skill|runtime|phase_file|cache_file|last_command|last_result):/m.test(state),
+      'workflow-state.md must not retain retired active-run progress fields');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
@@ -2613,7 +2570,7 @@ function testClaimRollbackRemovesOnlyWhatItCreated932() {
 // claim-path caller at all — so a claim resolving `.roadmap` or `archive` still acquires it at
 // exit 0 and writes workflow-state.md, and through the startup door `.cache/origin/`, in among
 // the roadmap SOURCES or the archive band. The state it writes carries the reserved name forward:
-// `name:` and `next_command:` both name it, so every later resume addresses it too.
+// `name:` identifies it, so every later resume addresses it too.
 //
 // THE OWNER RULED THE BEHAVIOUR: resolve around the reserved name and REPORT the swap. The claim
 // SUCCEEDS. So this is not a refusal scenario — exit 0 and an acquiring envelope are REQUIRED here,
@@ -4064,7 +4021,7 @@ function testSinkRefusesOnPushUpstreamFailure() {
 // recorded it as done every time (a no-op receipt attestation). The fix moves the copy INLINE into
 // the 'merge' step, BEFORE the worktree is removed. This test proves the copy is now REAL: an
 // untracked marker file that exists ONLY inside the linked worktree's project folder (mirroring a
-// live kaola-workflow/<project>/.cache/dispatch-log.jsonl crash-resume journal, which is gitignored
+// live kaola-workflow/<project>/.cache/worktree-only-marker.json crash-resume artifact, which is gitignored
 // and therefore invisible to git checkout) must survive into mainRoot after the --sink transaction.
 function testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-wtsync-')));
@@ -4083,8 +4040,8 @@ function testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge() {
       env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' }
     });
     // Untracked live-project marker INSIDE the worktree ONLY (never git-added) — the exact shape of
-    // a gitignored kaola-workflow/<project>/.cache/ crash-resume journal.
-    const markerRel = path.join('kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
+    // a gitignored kaola-workflow/<project>/.cache/ crash-resume artifact.
+    const markerRel = path.join('kaola-workflow', project, '.cache', 'worktree-only-marker.json');
     fs.mkdirSync(path.dirname(path.join(wtPath, markerRel)), { recursive: true });
     fs.writeFileSync(path.join(wtPath, markerRel), '{"marker":"untracked-worktree-only"}\n');
 
@@ -4113,14 +4070,14 @@ function testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge() {
       for (const entry of entries) {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) { if (findMarker(full)) found = true; }
-        else if (entry.name === 'dispatch-log.jsonl') {
+        else if (entry.name === 'worktree-only-marker.json') {
           try { if (fs.readFileSync(full, 'utf8').includes('untracked-worktree-only')) found = true; } catch (_) {}
         }
       }
       return found;
     };
     const survived = findMarker(path.join(tmp, 'kaola-workflow'));
-    assert(survived, '#619(4): the untracked worktree-only marker (dispatch-log.jsonl) must be copied into mainRoot before the worktree is destroyed; not found anywhere under kaola-workflow/');
+    assert(survived, '#619(4): the untracked worktree-only marker must be copied into mainRoot before the worktree is destroyed; not found anywhere under kaola-workflow/');
     console.log('testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -7628,7 +7585,7 @@ function testSinkMergeEmitsClosureReceipt() {
     });
     fs.writeFileSync(path.join(archiveStateDir, 'workflow-state.md'), [
       '# Kaola-Workflow State', '', '## Project', 'name: issue-164r',
-      'status: closed', 'step: complete', '', '## Claim Identity',
+      'status: closed', '', '## Claim Identity',
       'claim_repository_id: ' + anchors164r.claim_repository_id,
       'claim_identity_digest: ' + anchors164r.claim_identity_digest, '',
       '## Sink',
@@ -7927,7 +7884,6 @@ function testKeepOpenMergeFullChain() {
     // state folder is in MAIN until worktree-finalize copies it into the worktree, so patch MAIN.
     const mainState = path.join(tmp, 'kaola-workflow', 'issue-860', 'workflow-state.md');
     let stContent = fs.readFileSync(mainState, 'utf8');
-    stContent = stContent.replace(/^workflow_path:.*$/m, 'workflow_path: adaptive');
     stContent = stContent.trimEnd() + '\nissue_action: comment_keep_open\n';
     fs.writeFileSync(mainState, stContent);
     fs.writeFileSync(mainState, stContent);
@@ -7978,8 +7934,12 @@ function testKeepOpenMergeFullChain() {
       '#336: finalize closure_invariants.ok must be true, got: ' + JSON.stringify(finJson.closure_invariants));
     // #832: the archive resolves against MAIN's project root, never the linked worktree.
     const archived860 = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-860', 'workflow-state.md'), 'utf8');
-    assert(archived860.includes('last_result: closed_keep_open') && archived860.includes('issue_action: comment_keep_open'),
-      '#336: archived state must carry closed_keep_open + issue_action: comment_keep_open');
+    assert(!/^(?:phase|phase_name|workflow_path|step|next_command|next_skill|runtime|phase_file|cache_file|last_command|last_result):/m.test(archived860),
+      '#1032: keep-open archived state must not retain retired active-run progress fields');
+    assert(!/^## (?:Current Position|Last Evidence|Last Updated)$/m.test(archived860),
+      '#1032: keep-open archived state must not retain retired progress headings');
+    assert(archived860.includes('issue_action: comment_keep_open'),
+      '#336: archived state must carry issue_action: comment_keep_open');
 
     const featureHead = G.git(tmp, ['rev-parse', 'workflow/issue-860'], { encoding: 'utf8' }).stdout.trim();
 
@@ -8035,7 +7995,6 @@ function testKeepOpenFinalizeFlagAlias() {
     // ONLY keep-open signal (mirrors the crash-resume path where state-derivation is unavailable).
     const mainState = path.join(tmp, 'kaola-workflow', 'issue-861', 'workflow-state.md');
     let stContent = fs.readFileSync(mainState, 'utf8');
-    stContent = stContent.replace(/^workflow_path:.*$/m, 'workflow_path: adaptive');
     assert(!/^issue_action:/m.test(stContent),
       '#336: flag-alias fixture must NOT carry an issue_action field (the flag is the sole signal)');
     fs.writeFileSync(mainState, stContent);
@@ -8082,8 +8041,12 @@ function testKeepOpenFinalizeFlagAlias() {
       '#336: --keep-issue-open FLAG must yield ok closure invariants, got: ' + JSON.stringify(finJson.closure_invariants));
     // #832: the archive resolves against MAIN's project root, never the linked worktree.
     const archived861 = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-861', 'workflow-state.md'), 'utf8');
-    assert(archived861.includes('last_result: closed_keep_open'),
-      '#336: --keep-issue-open FLAG must stamp last_result: closed_keep_open');
+    assert(archived861.includes('status: closed'),
+      '#336: --keep-issue-open FLAG must archive a closed state');
+    assert(!/^(?:phase|phase_name|workflow_path|step|next_command|next_skill|runtime|phase_file|cache_file|last_command|last_result):/m.test(archived861),
+      '#1032: --keep-issue-open archive must not retain retired active-run progress fields');
+    assert(!/^## (?:Current Position|Last Evidence|Last Updated)$/m.test(archived861),
+      '#1032: --keep-issue-open archive must not retain retired progress headings');
     console.log('testKeepOpenFinalizeFlagAlias: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -8187,7 +8150,7 @@ function testSinkMergePostPushReopenOnMock() {
     const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-517');
     fs.mkdirSync(archiveDir, { recursive: true });
     fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'),
-      'status: closed\nstep: complete\nissue_number: 517\n\n## Sink\nbranch: workflow/issue-517\nissue_number: 517\nsink: merge\nissue_action: comment_keep_open\n');
+      'status: closed\nissue_number: 517\n\n## Sink\nbranch: workflow/issue-517\nissue_number: 517\nsink: merge\nissue_action: comment_keep_open\n');
     G.git(tmp, ['add', '-A'], { encoding: 'utf8', env: gitEnv });
     G.git(tmp, ['commit', '-m', 'chore: finalize keep-open 517'], { encoding: 'utf8', env: gitEnv });
 
@@ -8238,16 +8201,14 @@ function testBundleFinalizeAllOpenCloseIsPending() {
     const stateLines = [
       '# Kaola-Workflow State', '',
       '## Project', 'name: ' + project, 'status: active', '',
-      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
-      'step: complete', 'next_command: /kaola-workflow-finalize ' + project, '',
-      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
-      '## Last Updated', new Date().toISOString(), '',
       '## Sink', 'branch: workflow/' + project,
       'issue_number: 61',
       'issue_numbers: 61,62',
       'bundle_id: ' + project,
       'closure_policy: all_or_nothing',
-      'sink: merge', 'run_posture: in-place', ''
+      'sink: merge', 'run_posture: in-place',
+      'session_marker: session-' + project,
+      'claim_ts: 2026-01-01T00:00:00.000Z', ''
     ].join('\n');
     writeProject(tmp, project, { 'workflow-state.md': stateLines });
 
@@ -8337,7 +8298,7 @@ function testSinkMergeKeepOpenArchivedStateGuard() {
     const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-545');
     fs.mkdirSync(archiveDir, { recursive: true });
     fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'),
-      'status: closed\nstep: complete\nissue_number: 545\n\n## Sink\nbranch: workflow/issue-545\nissue_number: 545\nsink: merge\nissue_action: comment_keep_open\n');
+      'status: closed\nissue_number: 545\n\n## Sink\nbranch: workflow/issue-545\nissue_number: 545\nsink: merge\nissue_action: comment_keep_open\n');
 
     const result = spawnSync(process.execPath, [
       sinkMergeScript, '--project', 'issue-545', '--branch', 'workflow/issue-545', '--issue', '545'
@@ -8385,7 +8346,7 @@ function testSinkPrKeepOpenRefusal() {
     const archDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-900b');
     fs.mkdirSync(archDir, { recursive: true });
     fs.writeFileSync(path.join(archDir, 'workflow-state.md'),
-      'status: closed\nstep: complete\nissue_number: 900\n\n## Sink\nsink: merge\nissue_action: comment_keep_open\n');
+      'status: closed\nissue_number: 900\n\n## Sink\nsink: merge\nissue_action: comment_keep_open\n');
     const archResult = runSinkPr('issue-900b');
     assert(archResult.status !== 0, '#336: sink-pr must refuse an archived keep-open project');
     assert(/merge-sink-only/.test(archResult.stderr),
@@ -8759,7 +8720,7 @@ function testClosureAuditArchiveContentDrift832() {
     const gutted = path.join(archiveBase, 'issue-8325');
     fs.mkdirSync(path.join(gutted, '.cache'), { recursive: true });
     fs.writeFileSync(path.join(gutted, 'workflow-state.md'),
-      'status: closed\nstep: complete\nissue_number: 8325\nplan_hash: ' + 'a'.repeat(64) + '\n');
+      'status: closed\nissue_number: 8325\nplan_hash: ' + 'a'.repeat(64) + '\n');
     fs.writeFileSync(path.join(gutted, 'workflow-plan.md'), plan);
     fs.writeFileSync(path.join(gutted, 'finalization-summary.md'), '# Finalization Summary\n');
 
@@ -8767,7 +8728,7 @@ function testClosureAuditArchiveContentDrift832() {
     const complete = path.join(archiveBase, 'issue-8326');
     fs.mkdirSync(path.join(complete, '.cache'), { recursive: true });
     fs.writeFileSync(path.join(complete, 'workflow-state.md'),
-      'status: closed\nstep: complete\nissue_number: 8326\nplan_hash: ' + 'b'.repeat(64) + '\n');
+      'status: closed\nissue_number: 8326\nplan_hash: ' + 'b'.repeat(64) + '\n');
     fs.writeFileSync(path.join(complete, 'workflow-plan.md'), plan);
     fs.writeFileSync(path.join(complete, 'finalization-summary.md'), '# Finalization Summary\n');
     fs.writeFileSync(path.join(complete, '.cache', 'n1.md'), 'binding: n1\nverdict: pass\n');
@@ -8777,7 +8738,7 @@ function testClosureAuditArchiveContentDrift832() {
     //      holds 170 plan-less archives; flagging them would drown the real signal.
     fs.mkdirSync(path.join(archiveBase, 'issue-8327'), { recursive: true });
     fs.writeFileSync(path.join(archiveBase, 'issue-8327', 'workflow-state.md'),
-      'status: closed\nstep: complete\nissue_number: 8327\n');
+      'status: closed\nissue_number: 8327\n');
 
     // (v) PLAN-HASH-BEARING and PLAN-LESS — the state names a real plan_hash and there is no
     //     workflow-plan.md beside it. Nothing may be required of it but its anchor: the hash names a
@@ -8786,7 +8747,7 @@ function testClosureAuditArchiveContentDrift832() {
     //     archive that never claimed a plan cannot see a demand that keys off the claim.
     fs.mkdirSync(path.join(archiveBase, 'issue-8328'), { recursive: true });
     fs.writeFileSync(path.join(archiveBase, 'issue-8328', 'workflow-state.md'),
-      'status: closed\nstep: complete\nissue_number: 8328\nplan_hash: ' + 'c'.repeat(64) + '\n');
+      'status: closed\nissue_number: 8328\nplan_hash: ' + 'c'.repeat(64) + '\n');
 
     // The class is LOCAL — it must report the same offline, where every remote class is skipped.
     const result = runClosureAuditOffline([], tmp);
@@ -10572,10 +10533,17 @@ function testWorktreeAdaptiveProvisioned() {
       assert(result.worktree_error === undefined,
         'adaptive worktree suppression must not surface worktree_error (policy suppression, not a failed attempt)');
     }
-    // Confirm the adaptive path was actually applied in both states.
+    // #1032: workflow-state is claim-only. The selected route remains in the
+    // claim identity/receipt facts; retired active-run progress is absent.
     const state = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-507', 'workflow-state.md'), 'utf8');
-    assert(/^workflow_path:\s*adaptive\s*$/m.test(state),
-      'workflow-state.md must record workflow_path: adaptive');
+    assert(state.includes('## Claim Identity'),
+      'workflow-state.md must retain claim identity facts');
+    assert(state.includes('## Sink'),
+      'workflow-state.md must retain sink facts');
+    assert(!/^(?:phase|phase_name|workflow_path|step|next_command|next_skill|runtime|phase_file|cache_file|last_command|last_result):/m.test(state),
+      'workflow-state.md must not retain retired active-run progress fields');
+    assert(!/^## (?:Current Position|Last Evidence|Last Updated)$/m.test(state),
+      'workflow-state.md must not retain retired progress headings');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
@@ -11958,7 +11926,6 @@ function buildRegistry() {
   add('testManualArchiveBackstop',                        testManualArchiveBackstop);
   add('testSinkPrUsesFinalizationSummary',                testSinkPrUsesFinalizationSummary);
   add('testHookShapeNoPhantomAdvisor',                    testHookShapeNoPhantomAdvisor);
-  add('testSubagentDispatchHookExists',                   testSubagentDispatchHookExists);
   add('testClassifierDependsOnGate',                      testClassifierDependsOnGate);
   add('testProbeIssueStateOffline',                       testProbeIssueStateOffline);
   add('testProbeIssueStateNullIssue',                     testProbeIssueStateNullIssue);
@@ -12108,12 +12075,6 @@ function buildRegistry() {
   add('testSinkReportsWorkflowOnlyBranch',                testSinkReportsWorkflowOnlyBranch);
   add('testSinkAllowsMixedBranch',                        testSinkAllowsMixedBranch);
   add('testClaimFinalizeSinkChainCompletes',              testClaimFinalizeSinkChainCompletes);
-  add('testDispatchLogHookWorktreeAware338',              testDispatchLogHookWorktreeAware338);
-  add('testDispatchLogEmitsModelFields566',               testDispatchLogEmitsModelFields566);
-  add('testDispatchLogResolverResolvesUnderOpencodeLayout567', testDispatchLogResolverResolvesUnderOpencodeLayout567);
-  add('testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568', testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568);
-  add('testRetiredFinalizeAttestFlagIsInert816',          testRetiredFinalizeAttestFlagIsInert816);
-  add('testInlineFinalizeSeamRaisesNoAttestationAlarm816', testInlineFinalizeSeamRaisesNoAttestationAlarm816);
   add('testSelectionEvidenceDocking',                     testSelectionEvidenceDocking);
   add('testFinalizeIncompleteResumesCrashState',          testFinalizeIncompleteResumesCrashState);
   add('testFinalizeIncompleteNegativeControlAlreadyDone', testFinalizeIncompleteNegativeControlAlreadyDone);
@@ -12441,289 +12402,6 @@ function testClaimFinalizeSinkChainCompletes() {
 // UNCOVERED: nothing that a live mechanism can violate.
 
 
-// ── #338 T3: dispatch-log hook is worktree-aware (dual-root capture) ──────────
-// Producer-side false-negative fix: a role dispatched into a linked worktree must be
-// logged where the worktree's consumers (cmdFinalize) read .cache/dispatch-log.jsonl. The hook
-// runs with cwd=main but must ALSO resolve the dispatched agent's cwd (AGENT_CWD) toplevel and
-// append there. Also assert the in-place case (cwd==main, active project in main) logs once.
-function testDispatchLogHookWorktreeAware338() {
-  const hookPath = path.join(repoRoot, 'hooks', 'kaola-workflow-subagent-dispatch-log.sh');
-  // (a) WORKTREE case: active project ONLY in the linked worktree.
-  const main = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-wt-main-')));
-  try {
-    initGitRepo(main);
-    // git worktree add a linked worktree on a new branch
-    const wt = main + '-wt';
-    const wtAdd = G.git(main, ['worktree', 'add', '-b', 'wt338', wt], { encoding: 'utf8' });
-    assert(wtAdd.status === 0, '#338 T3: git worktree add must succeed: ' + wtAdd.stderr);
-    // Active project state file ONLY in the worktree.
-    const wtProj = path.join(wt, 'kaola-workflow', 'proj');
-    fs.mkdirSync(wtProj, { recursive: true });
-    fs.writeFileSync(path.join(wtProj, 'workflow-state.md'), '# State\nstatus: active\n');
-    // No active project in main → the old hook (hook-cwd only) would log nothing.
-    const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 't', cwd: wt });
-    // The dispatch-log hook is a bash script — it has NO in-process form. What is asserted is its
-    // shell contract: a JSON payload on stdin plus a cwd must yield exit 0 (fail-open) and exactly
-    // one appended record.
-    // spawn-class: cli-contract
-    const hr = spawnSync('bash', [hookPath], { cwd: main, input: payload, encoding: 'utf8' });
-    assert(hr.status === 0, '#338 T3: hook must exit 0 (fail-open), got ' + hr.status);
-    const wtLog = path.join(wtProj, '.cache', 'dispatch-log.jsonl');
-    assert(fs.existsSync(wtLog),
-      '#338 T3: a worktree-dispatched role must be logged under the WORKTREE project .cache/');
-    const wtLogContent = fs.readFileSync(wtLog, 'utf8');
-    assert(wtLogContent.includes('"agent_type":"tdd-guide"'),
-      '#338 T3: worktree dispatch-log must contain the role entry, got: ' + wtLogContent);
-    try { G.git(main, ['worktree', 'remove', '--force', wt], { encoding: 'utf8' }); } catch (_) {}
-    try { fs.rmSync(wt, { recursive: true, force: true }); } catch (_) {}
-  } finally {
-    fs.rmSync(main, { recursive: true, force: true });
-  }
-
-  // (b) IN-PLACE case: active project in main, AGENT_CWD == main → exactly ONE line (no dup).
-  const inplace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-inplace-')));
-  try {
-    initGitRepo(inplace);
-    const proj = path.join(inplace, 'kaola-workflow', 'proj');
-    fs.mkdirSync(proj, { recursive: true });
-    fs.writeFileSync(path.join(proj, 'workflow-state.md'), '# State\nstatus: active\n');
-    const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 't', cwd: inplace });
-    // Same shell contract, in-place posture: stdin payload plus cwd must yield exit 0 and exactly
-    // one appended record (no duplicate).
-    // spawn-class: cli-contract
-    const hr = spawnSync('bash', [hookPath], { cwd: inplace, input: payload, encoding: 'utf8' });
-    assert(hr.status === 0, '#338 T3: in-place hook must exit 0, got ' + hr.status);
-    const log = path.join(proj, '.cache', 'dispatch-log.jsonl');
-    assert(fs.existsSync(log), '#338 T3: in-place active project must still be logged');
-    const count = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).length;
-    assert(count === 1,
-      '#338 T3: in-place run (AGENT_ROOT==HOOK_ROOT) must log EXACTLY once, got ' + count);
-  } finally {
-    fs.rmSync(inplace, { recursive: true, force: true });
-  }
-  console.log('testDispatchLogHookWorktreeAware338: PASSED');
-}
-
-// ── #566: dispatch-log hook emits model + model_planned (observability, fail-open, no new gate) ──
-// The per-node `model` column was the only frozen-plan field with no closed loop. The hook now
-// emits BOTH `model_planned` (resolved fail-open via resolve-agent-model.js for a known role) and
-// `model` (opportunistic, parsed from the STDIN payload — supplied by the codex runtime only; empty
-// for Claude Code SubagentStart and opencode). This test crafts a payload that DOES include `model`
-// (simulating the codex runtime) and asserts both fields are populated.
-function testDispatchLogEmitsModelFields566() {
-  const hookPath = path.join(repoRoot, 'hooks', 'kaola-workflow-subagent-dispatch-log.sh');
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-566-model-')));
-  try {
-    initGitRepo(tmp);
-    const proj = path.join(tmp, 'kaola-workflow', 'proj');
-    fs.mkdirSync(proj, { recursive: true });
-    fs.writeFileSync(path.join(proj, 'workflow-state.md'), '# State\nstatus: active\n');
-    // Payload INCLUDES a `model` field (simulating the codex runtime supply); n1 finding: only the
-    // codex CLI runtime exposes model, so the test injects it directly.
-    const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 't', cwd: tmp, model: 'gpt-5.2' });
-    // Same shell contract with a model field on stdin: exit 0 fail-open plus one well-formed
-    // JSONL record is the envelope this bash entry point owes its caller.
-    // spawn-class: cli-contract
-    const hr = spawnSync('bash', [hookPath], { cwd: tmp, input: payload, encoding: 'utf8' });
-    assert(hr.status === 0, '#566: hook must exit 0 (fail-open), got ' + hr.status);
-    const log = path.join(proj, '.cache', 'dispatch-log.jsonl');
-    assert(fs.existsSync(log), '#566: dispatch-log must be appended');
-    const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
-    assert(lines.length === 1, '#566: exactly one JSONL line expected, got ' + lines.length);
-    const parsed = JSON.parse(lines[0]);
-    assert(parsed.agent_type === 'tdd-guide', '#566: agent_type preserved, got ' + parsed.agent_type);
-    assert(parsed.model_planned && parsed.model_planned.length > 0,
-      '#566: model_planned must be non-empty (resolver returns a tier for tdd-guide), got: ' + JSON.stringify(parsed.model_planned));
-    assert(parsed.model === 'gpt-5.2',
-      '#566: model must equal the payload-supplied value, got: ' + JSON.stringify(parsed.model));
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-  console.log('testDispatchLogEmitsModelFields566: PASSED');
-}
-
-// ── #567: model_planned resolves under the opencode install layout (not just the sibling scripts/) ──
-// #566 hard-coded the resolver as dirname(dirname($0))/scripts, assuming scripts/ is a sibling of
-// hooks/. True for the four plugin editions, FALSE for opencode: there the hook lives at <root>/hooks/
-// while support scripts live at <root>/kaola-workflow/scripts/ — so model_planned came back empty on
-// opencode. This stages that exact layout (sibling scripts/ genuinely absent) and asserts the hook's
-// multi-path resolver search finds the resolver under the opencode-native dir. RED before the fix.
-function testDispatchLogResolverResolvesUnderOpencodeLayout567() {
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-567-oc-')));
-  try {
-    // The dispatched agent's repo — carries the active project the hook appends to.
-    const repo = path.join(tmp, 'repo');
-    fs.mkdirSync(repo, { recursive: true });
-    initGitRepo(repo);
-    const proj = path.join(repo, 'kaola-workflow', 'proj');
-    fs.mkdirSync(proj, { recursive: true });
-    fs.writeFileSync(path.join(proj, 'workflow-state.md'), '# State\nstatus: active\n');
-    // opencode-native layout: hook at <cfg>/hooks/, resolver at <cfg>/kaola-workflow/scripts/
-    // (deliberately NOT <cfg>/scripts/ — the sibling path the old hook looked at).
-    const cfg = path.join(tmp, 'cfg');
-    const ocHooks = path.join(cfg, 'hooks');
-    const ocScripts = path.join(cfg, 'kaola-workflow', 'scripts');
-    fs.mkdirSync(ocHooks, { recursive: true });
-    fs.mkdirSync(ocScripts, { recursive: true });
-    const hookDst = path.join(ocHooks, 'kaola-workflow-subagent-dispatch-log.sh');
-    fs.copyFileSync(path.join(repoRoot, 'hooks', 'kaola-workflow-subagent-dispatch-log.sh'), hookDst);
-    fs.copyFileSync(path.join(repoRoot, 'scripts', 'kaola-workflow-resolve-agent-model.js'),
-      path.join(ocScripts, 'kaola-workflow-resolve-agent-model.js'));
-    // Control: the sibling lookup (<cfg>/scripts) must be genuinely absent, so a pass can only come
-    // from the opencode-native (<cfg>/kaola-workflow/scripts) candidate.
-    assert(!fs.existsSync(path.join(cfg, 'scripts')), '#567: control — sibling scripts/ must be absent');
-    const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 't', cwd: repo });
-    // The hook is DEPLOYED into a foreign install layout (the sibling scripts/ dir is asserted
-    // ABSENT) and probed there. What is under test is resolution against that materialization.
-    // spawn-class: environment
-    const hr = spawnSync('bash', [hookDst], { cwd: repo, input: payload, encoding: 'utf8' });
-    assert(hr.status === 0, '#567: hook must exit 0 (fail-open), got ' + hr.status);
-    const log = path.join(proj, '.cache', 'dispatch-log.jsonl');
-    assert(fs.existsSync(log), '#567: dispatch-log must be appended');
-    const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
-    assert(lines.length === 1, '#567: exactly one JSONL line expected, got ' + lines.length);
-    const parsed = JSON.parse(lines[0]);
-    assert(parsed.model_planned && parsed.model_planned.length > 0,
-      '#567: model_planned must resolve under the opencode layout (resolver at kaola-workflow/scripts/), got: ' + JSON.stringify(parsed.model_planned));
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-  console.log('testDispatchLogResolverResolvesUnderOpencodeLayout567: PASSED');
-}
-
-// ── #568: dispatch-log captures a role spawn when the active project is WORKTREE-resident but the
-// agent cwd is the MAIN repo (opencode worktree posture) ──
-// #338 covered agent cwd == worktree (AGENT_ROOT resolves to the worktree). #568 is the INVERSE:
-// under opencode worktree posture the role agent runs with cwd == MAIN repo while the active
-// workflow-state.md lives in the linked executor worktree. The old dual-root scan resolves BOTH
-// HOOK_ROOT and AGENT_ROOT to main, where no active project exists → nothing logged (M1/M2 blind to
-// role spawns). The fix enumerates the main repo's linked worktrees and logs under the worktree's
-// active project. This stages that exact layout (active project ONLY in the worktree, agent cwd ==
-// main) and asserts the role spawn IS logged exactly once under the worktree project. RED before fix.
-function testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568() {
-  const hookPath = path.join(repoRoot, 'hooks', 'kaola-workflow-subagent-dispatch-log.sh');
-  const main = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-568-wt-')));
-  try {
-    initGitRepo(main);
-    // Linked worktree holds the ACTIVE project; main has NONE.
-    const wt = main + '-wt';
-    const wtAdd = G.git(main, ['worktree', 'add', '-b', 'wt568', wt], { encoding: 'utf8' });
-    assert(wtAdd.status === 0, '#568: git worktree add must succeed: ' + wtAdd.stderr);
-    const wtProj = path.join(wt, 'kaola-workflow', 'issue-568');
-    fs.mkdirSync(wtProj, { recursive: true });
-    fs.writeFileSync(path.join(wtProj, 'workflow-state.md'), '# State\nstatus: active\n');
-    // Control: main has NO active project, so a pass can only come from the worktree scan.
-    assert(!fs.existsSync(path.join(main, 'kaola-workflow')),
-      '#568: control — main must have no active project');
-    // The KEY difference from #338: agent cwd == MAIN repo (NOT the worktree). Under opencode
-    // worktree posture the role agent runs in the main repo while the active state is worktree-resident.
-    const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 'n2', cwd: main });
-    // Same shell contract from the main-repo cwd: exit 0 fail-open plus exactly one record.
-    // spawn-class: cli-contract
-    const hr = spawnSync('bash', [hookPath], { cwd: main, input: payload, encoding: 'utf8' });
-    assert(hr.status === 0, '#568: hook must exit 0 (fail-open), got ' + hr.status);
-    const wtLog = path.join(wtProj, '.cache', 'dispatch-log.jsonl');
-    assert(fs.existsSync(wtLog),
-      '#568: a role agent dispatched with cwd=main MUST still be logged under the worktree-resident active project .cache/');
-    const lines = fs.readFileSync(wtLog, 'utf8').split('\n').filter(Boolean);
-    assert(lines.length === 1, '#568: exactly one JSONL line expected (no dup), got ' + lines.length);
-    assert(lines[0].includes('"agent_type":"tdd-guide"'),
-      '#568: worktree dispatch-log must contain the role-agent entry, got: ' + lines[0]);
-    try { G.git(main, ['worktree', 'remove', '--force', wt], { encoding: 'utf8' }); } catch (_) {}
-    try { fs.rmSync(wt, { recursive: true, force: true }); } catch (_) {}
-  } finally {
-    fs.rmSync(main, { recursive: true, force: true });
-  }
-  console.log('testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568: PASSED');
-}
-
-// ── #816: --attest-contractor-spawn is a RETIRED warn-and-ignore shim ──
-// The finalize seam is orchestrator-owned, so there is nothing to attest and nothing to back-fill.
-// A stale caller still passing the flag must be accepted (never an unknown_flag refusal) and must
-// produce NO dispatch marker and NO receipt field.
-function testRetiredFinalizeAttestFlagIsInert816() {
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-ac2-attest-')));
-  const kwRoot = tmp + '.kw';
-  try {
-    initGitRepo(tmp);
-    const binDir = path.join(tmp, 'bin');
-    writeGhShimForStartup(binDir);
-
-    const sResult = runClaimOnlineLastJson(['startup', '--target-issue', '338001'], tmp, binDir);
-    assert(sResult.claim === 'acquired', '#338 T4: startup must acquire');
-    const project = sResult.selected_project || 'issue-338001';
-    // This attestation fixture exercises finalize directly and never authors an
-    // adaptive plan, so declare its intended planless path before finalization.
-    seedAdaptiveFinalizeFixture(tmp, project);
-
-    // No dispatch-log yet (no flag at claim, no hook in test env).
-    const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
-    assert(!fs.existsSync(dispatchLog), '#816: no dispatch-log before finalize');
-
-    const finResult = runClaimOnlineLastJson(
-      ['finalize', '--project', project, '--attest-contractor-spawn'], tmp, binDir);
-    assert(finResult.status === 'closed',
-      '#816: the retired flag must warn-and-ignore, never refuse, got: ' + JSON.stringify(finResult));
-    const finReceipt = finResult.closure_receipt;
-    assert(finReceipt, '#816: finalize must emit closure_receipt');
-    assert(!('finalize_contractor_attested' in finReceipt),
-      '#816: the retired flag must record no attestation field, got: ' + JSON.stringify(Object.keys(finReceipt)));
-
-    // Nothing may be back-filled into the archived dispatch-log.
-    const archiveLog = path.join(tmp, 'kaola-workflow', 'archive', project, '.cache', 'dispatch-log.jsonl');
-    const archiveContent = fs.existsSync(archiveLog) ? fs.readFileSync(archiveLog, 'utf8') : '';
-    assert(!/finalize-backfill|"agent_type":"contractor"/.test(archiveContent),
-      '#816: the retired flag must back-fill no dispatch marker, got: ' + archiveContent);
-    console.log('testRetiredFinalizeAttestFlagIsInert816: PASSED');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
-  }
-}
-
-// ── #816: an inline finalize is the DESIGN, not a bypass ──
-// NARROWED: the two assertions that depended on a dispatched planner are gone — the
-// --attest-planner-spawn back-fill and `claim_planner_attested === 'attested'` — because the flag,
-// the probe and the field are all retired. The scenario's actual claim never depended on them and
-// is now stronger for it: an inline finalize completes (status:closed), carries NEITHER retired
-// attestation field, and raises NO alarm about having been run inline. Treating inline finalize as
-// suspect is the inversion this retires, and that is exactly what is still asserted.
-function testInlineFinalizeSeamRaisesNoAttestationAlarm816() {
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-ac2-fallback-')));
-  const kwRoot = tmp + '.kw';
-  try {
-    initGitRepo(tmp);
-    const binDir = path.join(tmp, 'bin');
-    writeGhShimForStartup(binDir);
-
-    // Planner WAS dispatched (its back-fill writes a dispatch-log).
-    const sResult = runClaimOnlineLastJson(
-      ['startup', '--target-issue', '338002'], tmp, binDir);
-    assert(sResult.claim === 'acquired', '#338 T5: startup must acquire');
-    const project = sResult.selected_project || 'issue-338002';
-    // Like T4, this fixture never authors an adaptive plan.
-    seedAdaptiveFinalizeFixture(tmp, project);
-
-    // finalize run inline by the orchestrator — the design, not a bypass.
-    const finResult = runClaimOnlineLastJson(['finalize', '--project', project], tmp, binDir);
-    assert(finResult.status === 'closed',
-      '#816: an inline finalize must return status:closed, got: ' + JSON.stringify(finResult));
-    const finReceipt = finResult.closure_receipt;
-    assert(finReceipt, '#816: finalize must emit closure_receipt');
-    assert(!('claim_planner_attested' in finReceipt),
-      'the retired planner attestation field must not reappear on an inline finalize receipt, got: ' + JSON.stringify(Object.keys(finReceipt)));
-    assert(!('finalize_contractor_attested' in finReceipt),
-      '#816: the finalize seam emits no attestation field, got: ' + JSON.stringify(Object.keys(finReceipt)));
-    assert(Array.isArray(finReceipt.warnings) &&
-      !finReceipt.warnings.some(w => /contractor|finalize seam may have been run inline/i.test(String(w))),
-      '#816: an inline finalize raises NO attestation alarm, got: ' + JSON.stringify(finReceipt.warnings));
-    console.log('testInlineFinalizeSeamRaisesNoAttestationAlarm816: PASSED');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
-  }
-}
-
 // ── #296: cmdResume crash-resume after archiveProjectDir ran but impl uncommitted ──
 // Crash state: kaola-workflow/archive/{project}/ exists, no active folder,
 // working tree is dirty (impl not committed) → resumed:true, reason:finalize_incomplete.
@@ -12740,7 +12418,6 @@ function testFinalizeIncompleteResumesCrashState() {
       'name: ' + project,
       'issue_number: 296',
       'status: closed',
-      'step: complete',
       ''
     ].join('\n'));
     // No active folder (the rename already happened).
@@ -12756,8 +12433,8 @@ function testFinalizeIncompleteResumesCrashState() {
       '#296 crash resume: resumed must be true, got: ' + JSON.stringify(result));
     assert(result.reason === 'finalize_incomplete',
       '#296 crash resume: reason must be finalize_incomplete, got: ' + JSON.stringify(result));
-    assert(result.next_command && result.next_command.includes('finalize'),
-      '#296 crash resume: next_command must mention finalize, got: ' + JSON.stringify(result));
+    assert(result.project === project,
+      '#296 crash resume: project must identify the resumable archive, got: ' + JSON.stringify(result));
     console.log('testFinalizeIncompleteResumesCrashState: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -12779,7 +12456,6 @@ function testFinalizeIncompleteNegativeControlAlreadyDone() {
       'name: ' + project,
       'issue_number: 296',
       'status: closed',
-      'step: complete',
       ''
     ].join('\n'));
     // Commit everything so the working tree is clean.
@@ -12816,7 +12492,6 @@ function testFinalizeIncompleteNegativeControlRepoDirty() {
       'name: ' + project,
       'issue_number: 296',
       'status: closed',
-      'step: complete',
       ''
     ].join('\n'));
     // Commit the archive dir so it is clean for this project.
@@ -12868,8 +12543,6 @@ function testFinalizeIncompleteWorktreeReentryFix() {
       'name: ' + project,
       'issue_number: 296',
       'status: closed',
-      'workflow_path: adaptive',
-      'step: complete',
       ''
     ].join('\n'));
     // A real crash archives the whole project folder, so the validation record lives in the
@@ -13075,7 +12748,7 @@ function testBundleDuplicateIssueBlocking() {
     // Seed a live bundle project for [42,47,53]
     writeProject(tmp, 'bundle-42-47-53', {
       'workflow-state.md': [
-        'name: bundle-42-47-53', 'status: active', 'phase: adaptive',
+        'name: bundle-42-47-53', 'status: active',
         'issue_number: 42', 'issue_numbers: 42,47,53',
         'bundle_id: bundle-42-47-53', 'closure_policy: all_or_nothing',
         'branch: workflow/bundle-42-47-53', 'sink: merge', ''
@@ -13131,16 +12804,14 @@ function testBundleFinalizeReceiptFields() {
     const stateLines = [
       '# Kaola-Workflow State', '',
       '## Project', 'name: ' + project, 'status: active', '',
-      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
-      'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
-      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
-      '## Last Updated', new Date().toISOString(), '',
       '## Sink', 'branch: workflow/' + project,
       'issue_number: 42',
       'issue_numbers: 42,47,53',
       'bundle_id: ' + project,
       'closure_policy: all_or_nothing',
-      'sink: merge', 'run_posture: in-place', ''
+      'sink: merge', 'run_posture: in-place',
+      'session_marker: session-' + project,
+      'claim_ts: 2026-01-01T00:00:00.000Z', ''
     ].join('\n');
     writeProject(tmp, project, { 'workflow-state.md': stateLines });
 
@@ -13316,7 +12987,7 @@ function testArchiveCompleteSourceRelative676() {
   const claim = require(claimScript);
   function seedProj676(dir, f) {
     fs.mkdirSync(dir, { recursive: true });
-    if (f.state)   fs.writeFileSync(path.join(dir, 'workflow-state.md'), 'issue_number: 1\nphase: adaptive\n');
+    if (f.state)   fs.writeFileSync(path.join(dir, 'workflow-state.md'), 'issue_number: 1\nstatus: active\n');
     if (f.plan)    fs.writeFileSync(path.join(dir, 'workflow-plan.md'), '<!-- plan_hash: ' + '0'.repeat(64) + ' -->\n');
     if (f.summary) fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization Summary\n');
     if (f.fast)    fs.writeFileSync(path.join(dir, 'fast-summary.md'), '# Fast Summary\n');
@@ -13442,16 +13113,14 @@ function testFinalizeClosesIssueBundleMembers() {
     const stateLines = [
       '# Kaola-Workflow State', '',
       '## Project', 'name: ' + project, 'status: active', '',
-      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
-      'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
-      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
-      '## Last Updated', new Date().toISOString(), '',
       '## Sink', 'branch: workflow/' + project,
       'issue_number: 42',
       'issue_numbers: 42,47',
       'bundle_id: ' + project,
       'closure_policy: all_or_nothing',
-      'sink: merge', 'run_posture: in-place', ''
+      'sink: merge', 'run_posture: in-place',
+      'session_marker: session-' + project,
+      'claim_ts: 2026-01-01T00:00:00.000Z', ''
     ].join('\n');
     writeProject(tmp, project, { 'workflow-state.md': stateLines });
     seedAdaptiveFinalizeFixture(tmp, project);

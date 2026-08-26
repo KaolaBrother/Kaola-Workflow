@@ -76,11 +76,9 @@ const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-telemetry-report.js',
 ]);
 
-// Hooks are forge-neutral (byte-identical across all four trees), so the same list serves
-// every forge. Adding a hook is a one-place edit here.
-const SUPPORT_HOOKS = Object.freeze([
-  'kaola-workflow-subagent-dispatch-log.sh',
-]);
+// No support hook is installed by the active workflow. Hook configuration remains in the
+// installer so upgrades can remove stale managed artifacts and preserve user-owned settings.
+const SUPPORT_HOOKS = Object.freeze([]);
 
 // Per-forge CONTENT-rename overrides: a canonical base whose forge port is NOT a pure prefix
 // rename. gitlab renames sink-pr → sink-mr (merge-request vocabulary); gitea keeps sink-pr but
@@ -140,8 +138,8 @@ function assertForge(forge) {
 }
 
 // CLI: install.sh shells `node kaola-workflow-install-manifest.js --forge=<f> --scripts|--hooks`,
-// one name per line. Self-check (#407 anti-5.4.0-silent-empty): a non-empty list is mandatory —
-// exit 2 on an empty emission so install.sh never silently copies zero support files.
+// one name per line. Scripts must remain non-empty; hooks intentionally emit no lines because
+// the retired dispatch hook is no longer part of the active installation.
 function main(argv) {
   let forge = null;
   let mode = null;
@@ -165,11 +163,11 @@ function main(argv) {
     process.stderr.write(`install-manifest: ${e.message}\n`);
     process.exit(2);
   }
-  if (!Array.isArray(names) || names.length === 0) {
+  if (!Array.isArray(names) || (mode === 'scripts' && names.length === 0)) {
     process.stderr.write(`install-manifest: empty ${mode} list for forge ${forge} — refusing (would copy zero support files)\n`);
     process.exit(2);
   }
-  process.stdout.write(names.join('\n') + '\n');
+  if (names.length > 0) process.stdout.write(names.join('\n') + '\n');
 }
 
 if (require.main === module) {

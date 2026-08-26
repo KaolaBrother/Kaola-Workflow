@@ -60,9 +60,9 @@ function treeLabel(forge) {
 const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
 
-const HOOK_SHELLS = [
-  'kaola-workflow-subagent-dispatch-log.sh',
-];
+// No runtime-neutral hook shells are active in the ZCode edition. The generator retains ownership
+// of the hook directory so --write can prune stale dispatch artifacts.
+const HOOK_SHELLS = [];
 const COMPACT_WRAPPER = 'kaola-workflow-compact-context.sh';
 
 // ZCode 3.9.1 hook events (measured). SubagentStart does NOT exist on ZCode.
@@ -358,10 +358,6 @@ function renderZcodeConfigJson(forge) {
         command: 'sh ' + label + '/kaola-workflow/hooks/' + COMPACT_WRAPPER,
         timeout: 5,
       }],
-      PreToolUse: [{
-        command: 'sh ' + label + '/kaola-workflow/hooks/kaola-workflow-subagent-dispatch-log.sh',
-        timeout: 5,
-      }],
     },
   }, null, 2) + '\n';
 }
@@ -418,13 +414,7 @@ function stripDestHooks(destPath) {
 // Hook shells + support-script launchers under <tree>/kaola-workflow/.
 // ---------------------------------------------------------------------------
 
-const HOOK_ADAPTATIONS = {
-  'kaola-workflow-subagent-dispatch-log.sh': [
-    ["p.agent_type||''", "(p.agent_type||p.subagent_type||'')"],
-    ["p.agent_id||''", "(p.agent_id||p.subagent_id||'')"],
-    ["p.model||''", "(p.model||p.subagent_model||'')"],
-  ],
-};
+const HOOK_ADAPTATIONS = {};
 
 function adaptHookForZcode(script, content) {
   const rules = HOOK_ADAPTATIONS[script] || [];

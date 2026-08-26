@@ -799,24 +799,6 @@ function testGiteaBundleSingleIssueStateHasNoBundleFields() {
   console.log('testGiteaBundleSingleIssueStateHasNoBundleFields: PASSED');
 }
 
-// M1 (#277): dispatch-log hook must be installed in the gitea plugin hooks directory.
-function testGiteaDispatchHookExists() {
-  const hooksDir = path.join(root, 'plugins/kaola-workflow-gitea/hooks');
-  const dispatchLog = path.join(hooksDir, 'kaola-workflow-subagent-dispatch-log.sh');
-  assert.ok(fs.existsSync(dispatchLog), 'M1 (#277): gitea hooks/kaola-workflow-subagent-dispatch-log.sh must exist');
-  const hooksJson = path.join(hooksDir, 'hooks.json');
-  assert.ok(fs.existsSync(hooksJson), 'M1 (#277): gitea hooks/hooks.json must exist');
-  const hooks = JSON.parse(fs.readFileSync(hooksJson, 'utf8'));
-  const subagentHooks = (hooks.hooks && hooks.hooks.SubagentStart) || [];
-  assert.ok(
-    subagentHooks.some(e => e.id === 'kaola-workflow:subagent-dispatch-log'),
-    'M1 (#277): gitea hooks.json must have a SubagentStart entry with id: kaola-workflow:subagent-dispatch-log'
-  );
-  console.log('testGiteaDispatchHookExists: PASSED');
-}
-
-testGiteaDispatchHookExists();
-
 // issue #342: bundle-lane E2E behavioral coverage (mirrors root §#328 modulo forge nouns).
 testGiteaBundleClaimCreatesOneFolder();
 testGiteaClosurePersistence();
@@ -1007,5 +989,4 @@ function testGiteaBundleFinalizeAllOpenCloseIsPending() {
 // producer emits either field or removes a roadmap source anymore. Nothing else in the scenario
 // (a plain single-issue finalize to closed) survives it as a distinct case — that path is already
 // covered by testGiteaClosurePersistence and the bundle finalize tests above.
-
 

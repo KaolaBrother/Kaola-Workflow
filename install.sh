@@ -145,10 +145,11 @@ while IFS= read -r name || [[ -n "$name" ]]; do
   [[ -n "$name" ]] && SUPPORT_HOOK_NAMES+=("$name")
 done < <(node "$INSTALL_MANIFEST" --forge="$FORGE" --hooks)
 # A process-substitution exit code does not reach the `while`, so guard on the RESULT: the manifest
-# exits non-zero (writing nothing) on any error, leaving an empty array — fail LOUDLY on either empty
-# list rather than silently copying zero support files (the 5.4.0 silent-empty regression class).
-if [[ ${#SUPPORT_SCRIPT_NAMES[@]} -eq 0 || ${#SUPPORT_HOOK_NAMES[@]} -eq 0 ]]; then
-  echo "Install error: install manifest emitted an empty support list for forge $FORGE (node $INSTALL_MANIFEST --forge=$FORGE)" >&2
+# exits non-zero (writing nothing) on any error, leaving an empty array — fail LOUDLY when the
+# required support-script list is empty rather than silently copying zero support files. An empty
+# hook list is intentional: the active workflow has no support hook producer.
+if [[ ${#SUPPORT_SCRIPT_NAMES[@]} -eq 0 ]]; then
+  echo "Install error: install manifest emitted an empty support script list for forge $FORGE (node $INSTALL_MANIFEST --forge=$FORGE)" >&2
   exit 1
 fi
 
@@ -690,17 +691,21 @@ rm -f "$SUPPORT_HOOKS_DIR/kaola-workflow-phantom-advisor.sh"
 # SUPPORT_HOOK_NAMES, so a prior install's copy would otherwise linger.
 rm -f "$SUPPORT_HOOKS_DIR/kaola-workflow-pre-commit.sh"
 rm -f "$SUPPORT_HOOKS_DIR/kaola-workflow-write-lane.sh"
-for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
-  hook_file="$SOURCE_HOOKS_DIR/$hook_name"
-  # #363: fail CLOSED on a missing allowlisted hook source (same rationale as the support scripts).
-  if [[ ! -f "$hook_file" ]]; then
-    echo "Install error: allowlisted support hook missing from source: $hook_file" >&2
-    exit 1
-  fi
-  cp "$hook_file" "$SUPPORT_HOOKS_DIR/$hook_name"
-  chmod +x "$SUPPORT_HOOKS_DIR/$hook_name"
-  echo "Installed support hook: $SUPPORT_HOOKS_DIR/$hook_name"
-done
+# Retire the former dispatch hook on upgrade; it is no longer in SUPPORT_HOOK_NAMES.
+rm -f "$SUPPORT_HOOKS_DIR/kaola-workflow-subagent-dispatch-log.sh"
+if [[ ${#SUPPORT_HOOK_NAMES[@]} -gt 0 ]]; then
+  for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
+    hook_file="$SOURCE_HOOKS_DIR/$hook_name"
+    # #363: fail CLOSED on a missing allowlisted hook source (same rationale as the support scripts).
+    if [[ ! -f "$hook_file" ]]; then
+      echo "Install error: allowlisted support hook missing from source: $hook_file" >&2
+      exit 1
+    fi
+    cp "$hook_file" "$SUPPORT_HOOKS_DIR/$hook_name"
+    chmod +x "$SUPPORT_HOOKS_DIR/$hook_name"
+    echo "Installed support hook: $SUPPORT_HOOKS_DIR/$hook_name"
+  done
+fi
 
 # Install hooks.json with $CLAUDE_PLUGIN_ROOT rewritten to absolute install path.
 # Manual install does not set CLAUDE_PLUGIN_ROOT, so the placeholder is replaced
@@ -906,9 +911,11 @@ for script_name in "${SUPPORT_SCRIPT_NAMES[@]}"; do
   verify_executable_file "$SUPPORT_SCRIPTS_DIR/$script_name" "support script" || verification_failed=1
 done
 
-for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
-  verify_executable_file "$SUPPORT_HOOKS_DIR/$hook_name" "support hook" || verification_failed=1
-done
+if [[ ${#SUPPORT_HOOK_NAMES[@]} -gt 0 ]]; then
+  for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
+    verify_executable_file "$SUPPORT_HOOKS_DIR/$hook_name" "support hook" || verification_failed=1
+  done
+fi
 
 if [[ "$verification_failed" -ne 0 ]]; then
   exit 1
@@ -941,7 +948,7 @@ if [[ -f "$SUPPORT_HOOKS_DIR/hooks.json" ]]; then
   echo "Hooks installed to: $SUPPORT_HOOKS_DIR/hooks.json"
   case "$SETTINGS_MERGE_RESULT" in
     merged)
-      echo "Kaola-Workflow hooks (compaction resume, subagent-dispatch-log)"
+      echo "Kaola-Workflow hooks (compaction resume)"
       echo "are now enabled in ~/.claude/settings.json."
       ;;
     skipped)

@@ -44,7 +44,6 @@ Everything under `.opencode/` is **generated from canonical** by
 | ----------------------- | ----------------------------- | ----- |
 | `agents/<name>.md`      | `.opencode/agent/<name>.md`   | opencode frontmatter (`description`, `mode: subagent`, read-only `permission`). **No `model:` field** — model-agnostic. Generated reviewers preserve their canonical normalized behavior core and identity. |
 | `commands/<file>.md`    | `.opencode/command/<file>.md` | Claude install-time `model="{...}"` placeholders + all "pass `model=`" instructions rewritten to opencode's inheritance (the `task` tool has no model or effort parameter). The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
-| `hooks/<script>.sh`     | `.opencode/hooks/<script>.sh` | The 1 runtime-neutral hook script, byte-copied. |
 | `templates/opencode/plugins/*.js` | `.opencode/plugins/kaola-workflow-hooks.js` | Hook adapter plugin; byte-copied from the tracked canonical source by `sync-opencode-edition.js --write` (verified by `--check`; see [Hooks](#hooks)). |
 
 One file is **authored** (not generated) and verified present by the test:
@@ -172,10 +171,9 @@ read the github tree and stay green.
 
 opencode's hook model is **plugin-based** (TS/JS modules), not the shell +
 `settings.json` model Claude Code uses. The opencode edition ships an adapter
-plugin — `.opencode/plugins/kaola-workflow-hooks.js` — that feeds Claude-style
-JSON payloads into the **same runtime-neutral shell scripts** the other editions
-use (single source of truth, byte-copied under `.opencode/hooks/`), and honors
-their exit codes. `throw` = deny (opencode's documented pattern).
+plugin — `.opencode/plugins/kaola-workflow-hooks.js` — that adds compact-resume
+context inline from claim facts and the Mission List. `throw` = deny (opencode's
+documented pattern).
 
 The adapter plugin has a tracked canonical source at
 `templates/opencode/plugins/kaola-workflow-hooks.js` (outside the gitignored `.opencode/`
@@ -196,8 +194,7 @@ silently drift when a future second plugin is added. Enforced by `A11-allowlist`
 
 | Claude/Codex hook | opencode plugin mapping | Script |
 | --- | --- | --- |
-| `SubagentStart` (advisory dispatch log) | `tool.execute.before` · `task` | `kaola-workflow-subagent-dispatch-log.sh` |
-| `SessionStart` compact (resume state) | `experimental.session.compacting` | inline (reads `workflow-state.md`) |
+| `SessionStart` compact (resume state) | `experimental.session.compacting` | inline (reads claim facts and the Mission List) |
 
 Fail-open everywhere (a missing script, malformed payload, or non-git cwd never
 breaks the session); only an explicit exit-2 deny throws.

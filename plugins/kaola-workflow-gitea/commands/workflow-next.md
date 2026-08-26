@@ -2,6 +2,11 @@
 description: Workflow Next. Claims the work, writes the run's mission list, and runs it. Resumable from that one file.
 argument-hint: (optional project name, issue number, or task description)
 ---
+Choose dispatch or inline per item. Dispatch when it materially reduces main-context residue,
+supplies independent judgment, or enables genuinely independent parallel work. Keep one production
+owner for a cohesive state machine, protocol, or integration when handoff and integration cost
+exceed that benefit. Both modes are first-class; width follows the true work frontier. No dispatch
+count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
 
 # Workflow Next
 
@@ -24,72 +29,13 @@ reorganizing someone's issues — state what you propose and why, then wait for 
 Everything checkable is yours to decide and get on with.
 <!-- /PIN -->
 
-<!-- PIN: main-authored-handoff -->
-## Main-Authored Handoff
-
-Before each named-role spawn, main writes a compact task-specific brief that the role can execute
-from that brief, its installed profile, and the named repository evidence alone; inherited
-conversation is never required. The role profile remains authoritative for universal role behavior.
-Main retains product intent, value decisions, integration, acceptance of returned work, review
-consequences, and the final done verdict.
-
-Use these labels in this order:
-
-- `Mission:` one result to produce or one question to answer.
-- `Context:` the candidate/worktree and baseline identity, relevant measured facts, hypotheses
-  labeled as hypotheses, and only the upstream evidence this task needs.
-- `Authority:` decisions already settled, decisions the role may recommend but not make, and any
-  unresolved user-owned decision.
-- `Scope and custody:` the task's read/write boundary, explicit exclusions, test-versus-production
-  ownership, and co-active ownership relevant to avoiding collisions.
-- `Acceptance:` falsifiable conditions for this role's deliverable and its stopping boundary. State
-  the required result and proof, not an implementation method. This is not the workflow's final done
-  verdict.
-- `Deliverable:` what returns and the exact path, commit, or evidence locator where the full result
-  lands.
-- `Stop and report:` task-specific contradictory evidence, ambiguity that changes the result, a
-  capability gap, an out-of-scope finding, or a user-owned decision that must return to main rather
-  than be silently assumed, expanded, or worked around.
-
-Specialize only the task-specific content:
-
-- Planning and design (`planner`, `code-architect`) receive the binding goal or design question,
-  non-goals, constraints and invariants, and the permitted decision envelope; they return a plan or
-  blueprint without editing product files.
-- Investigation roles receive an exact question or claim, evidence surface, and authority or
-  measurement standard.
-- `tdd-guide` receives acceptance claims, the baseline, test custody, the production exclusion, and
-  the required RED evidence; `implementer` receives the intended behavior, production custody, the
-  test read-only boundary, acceptance evidence, and the appropriate verification expectation.
-- Repair, convergence, documentation, and optimization roles receive the concrete candidate,
-  failure, or input; permitted mutation boundary; preservation constraints; and the retest, docking,
-  or metric stop condition.
-- `code-reviewer` and `security-reviewer` receive the exact candidate, dispatched surface, and
-  acceptance; `adversarial-verifier` receives exactly one claim and one surface.
-
-Keep the packet sparse: include only task-specific facts, decisions, bounds, and evidence; do not
-repeat the role profile. This is handoff guidance, not a new workflow record or a machine-graded
-prompt schema. The mission list remains the recovery index: what went out, to whom, and where the
-result will land.
-<!-- /PIN -->
-
-## Agent Model Dispatch
-
-Use the installed role name as `subagent_type`. You MUST pass `model=` from that
-role's installed profile; never omit it. Never substitute a generic type. If the
-named role cannot be spawned, do the work inline and say so — that is tool
-unavailability.
-
-The reviewer carve-out below is the sole dispatch exception: for that bounded heavy
-re-dispatch, pass `model="fable"` instead of the installed reviewer `opus` model; reviewer
-resting dispatches and all other roles continue to pass their installed profile model.
-
-Reviewer-class roles retain their installed reasoning-tier (`opus`) profile as the resting profile.
-One carve-out: the orchestrator may re-dispatch a reviewer-class role at heavy when a reasoning-tier
-attempt failed to finish the review, or the surface is judged complex before dispatch.
-
-The bounded heavy re-dispatch uses the approved `fable` profile only.
-
+Before a delegated role starts, give it a self-sufficient natural-language brief: the result or
+question, the relevant evidence and authority or custody boundary, the exact worktree, commit, or
+evidence locator where its result lands, and the condition that ends the task. Keep the brief bounded
+and falsifiable; the installed role profile supplies universal behavior and inherited conversation
+is not required. The mission list remains the recovery index. A production result belongs in the
+actual worktree or commit when Git already records it; add a report only for evidence a successor
+cannot derive from those bytes.
 
 ## Step 1 — Pick the work
 
@@ -240,6 +186,10 @@ An H1 carrying the goal in one line, then one item per mission:
   result: <where the outcome landed — a path, or a few lines inline>
 ```
 
+Each completed item is immutable and its `result` is immutable; one dispatch has one result,
+including `FAIL`. Repair or re-review work must append a new mission rather than rewriting the
+closed item.
+
 | field | content | written |
 |---|---|---|
 | `item` | the mission — one line of prose, hints and facts | at creation |
@@ -264,15 +214,16 @@ Items may be added at any time. New work discovered mid-run is appended the same
 Read the list. The frontier is not computed — it is the list minus done minus in-flight, visible by
 reading. Pick from it.
 
-**Decide the shape then, not before.** When you reach an item, decide whether to dispatch subagents
-or do the work yourself, and at what width. Nothing inspects that decision: no disjointness proof,
-no evidence line, no cap, no approval. Independent work runs concurrently because that is faster;
-work that genuinely feeds other work runs in order because it has to. You can already tell the
-difference, and the frontier is in front of you.
+**Decide the shape then, not before.** When you reach an item, choose dispatch or inline per item.
+Dispatch when it materially reduces main-context residue, supplies independent judgment, or enables
+genuinely independent parallel work. Keep one production owner for a cohesive state machine,
+protocol, or integration when handoff and integration cost exceed that benefit. Both modes are
+first-class; width follows the true work frontier. No dispatch count, cap, disjointness proof,
+justification, approval, or fallback stigma attaches to the judgment.
 
-Subagents and worktrees are tools, offered and declinable. Delegating production is usually right —
-a handoff costs once, while everything you keep inline taxes every later decision — but a tool you
-cannot decline and still finish would be a gate wearing a tool's name, and there are none here.
+Subagents and worktrees are tools, offered and declinable. Use them when the judgment above says
+they improve the work; keep cohesive feed-forward work with one production owner when that is the
+more efficient shape.
 
 **Three write moments.** These are the whole discipline:
 
@@ -317,6 +268,12 @@ branch and worktree. Keep their commits separate — a commit spanning two folde
 one's diff attributable. Another session's folder is not yours: leave its branch, its worktree and
 its issues alone.
 
+## Delegation
+
+Delegation is available when the execution-economics judgment calls for it. Use the installed role
+profiles and runtime-native defaults; a task-sensitive model or reasoning-effort override, or
+omission where the runtime supplies a default, is valid. If the runtime cannot spawn a role agent,
+keep the work inline and say so.
 ## Required output
 
 Before continuing or stopping, print:

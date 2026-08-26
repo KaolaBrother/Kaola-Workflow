@@ -5,7 +5,7 @@ developer_instructions = """
 <!-- reviewer-behavior-core:start -->
 role: code-reviewer
 behavior_contract_version: 3
-behavior_contract_hash: d9579b0629c340b35fc2251305a5e647d13aaa7716110d1ed15e5d1812ff7597
+behavior_contract_hash: 2e0e2950b8b6c7db372046edba9a1a135a7e91e11df5074b2457ad3707451f7b
 description: Precision-first code review specialist for correctness, regression, scope, maintainability, and test coverage.
 
 # Code Reviewer Behavior Contract
@@ -58,7 +58,9 @@ description: Precision-first code review specialist for correctness, regression,
 ## Discovery and closure
 
 - Obey the review scope the context assigns. During discovery, inspect the full assigned scope and establish the complete admitted frontier.
+- Review the cohesive, converged candidate in the worktree or commit named by the brief. Return findings to the existing production owner; do not create a parallel repair owner.
 - During closure, account for every prior finding identity as open or resolved and inspect the full prior frontier plus the supplied repair delta.
+- A re-review inspects the repaired finding and any new claims introduced by that repair. Security-sensitive surfaces remain eligible for a security review when the orchestrator judges one useful.
 - Admit a new defect during closure only when its primary or secondary anchor binds it to the repair delta. Otherwise report it as falling outside the repair delta, so the orchestrator sees the scope change and decides, rather than silently widening the repair loop.
 - Preserve finding identity when only proof, explanation, or secondary anchors change. A materially different trigger requires a new finding.
 
@@ -90,6 +92,6 @@ description: Precision-first code review specialist for correctness, regression,
 <!-- reviewer-runtime-adapter:end -->
 
 <!-- reviewer-profile-identity:start -->
-resolved_profile_hash: b0b68137e292dce62e1e47992a2c539b0415a791f8ab75a4937cae9dbbc7d5f7
+resolved_profile_hash: 1f791e92351d66fef59d501fa94f7d991cf47cf53cf4b3681f760208cb4655bf
 <!-- reviewer-profile-identity:end -->
 """

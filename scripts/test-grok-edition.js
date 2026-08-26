@@ -2,7 +2,7 @@
 'use strict';
 // Child processes in this file are classified per site (ADR 0013). The ratchet
 // reads the spawn line or the line above it. Two classes appear here:
-//   environment    installer / --write materialize / TREE_ROOT git probe / hook payload
+//   environment    installer / --write materialize / TREE_ROOT git probe
 //   cli-contract   --check / --help / unknown --forge refuse / --print-tree-root
 
 // ---------------------------------------------------------------------------
@@ -16,7 +16,7 @@
 // install.sh / edition-sync.js / npm test. It is delivered the Grok-native
 // way: named agents under `.grok/agents/<role>.md` (spawn_subagent types),
 // flat commands under `.grok/commands/<name>.md`, and `.grok/hooks/`
-// (payload-adapted dispatch-log + generated hooks.json). THREE canonical model
+// (generated hooks.json with the compact-resume hook). THREE canonical model
 // classes: every subagent keeps model: inherit, while standard/reasoning/heavy
 // agents carry the native effort pins medium/high/xhigh respectively.
 //
@@ -31,7 +31,6 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const forgeLayout = require('./runtime-edition-forge.js');
 const reviewerGenerator = require('./generate-reviewer-profiles.js');
-const G = require('./test-git-fixture');
 
 const REPO = path.resolve(__dirname, '..');
 const SYNC_JS = path.join(REPO, 'scripts', 'sync-grok-edition.js');
@@ -582,9 +581,8 @@ for (const role of reviewerGenerator.ROLES) {
 }
 
 // ---------------------------------------------------------------------------
-// G5: hooks — generated hooks.json (or equivalent) registers SessionStart
-// compact + SubagentStart. Dispatch-log accepts Grok camelCase (agentType /
-// subagentType) as well as agent_type.
+// G5: hooks — generated hooks.json (or equivalent) registers the SessionStart
+// compact hook. The retired dispatch-log hook is deliberately absent.
 // ---------------------------------------------------------------------------
 {
   const hooksJsonRel = '.grok/hooks/hooks.json';
@@ -594,8 +592,8 @@ for (const role of reviewerGenerator.ROLES) {
   assert(parsed && parsed.hooks && typeof parsed.hooks === 'object',
     'G5: hooks.json parses with a hooks object');
   const events = parsed && parsed.hooks ? Object.keys(parsed.hooks).sort() : [];
-  assert(events.includes('SessionStart') && events.includes('SubagentStart'),
-    'G5: hooks.json registers SessionStart and SubagentStart — got ' + JSON.stringify(events));
+  assert(events.includes('SessionStart'),
+    'G5: hooks.json registers SessionStart — got ' + JSON.stringify(events));
   const session = parsed && parsed.hooks ? parsed.hooks.SessionStart : [];
   const sessionBlob = JSON.stringify(session || []);
   assert(/compact/i.test(sessionBlob),
@@ -603,51 +601,6 @@ for (const role of reviewerGenerator.ROLES) {
   assert(!/CLAUDE_PLUGIN_ROOT/.test(read(hooksJsonRel)),
     'G5: hooks.json carries no CLAUDE_PLUGIN_ROOT');
 
-  const hookRel = '.grok/hooks/kaola-workflow-subagent-dispatch-log.sh';
-  assert(exists(hookRel), 'G5: payload-adapted dispatch-log hook is generated');
-  const hookText = exists(hookRel) ? read(hookRel) : '';
-  assert(/agentType/.test(hookText) && /subagentType/.test(hookText),
-    'G5: dispatch-log source accepts Grok camelCase agentType / subagentType');
-  assert(/agent_type/.test(hookText),
-    'G5: dispatch-log source still accepts snake_case agent_type');
-}
-
-{
-  const hookPath = path.join(TREE_ROOT, '.grok', 'hooks', 'kaola-workflow-subagent-dispatch-log.sh');
-  assert(fs.existsSync(hookPath), 'G5-payload: adapted dispatch-log exists to drive');
-  const repo = fs.mkdtempSync(path.join(tmpBase(), 'grok-hook-'));
-  try {
-    G.init(repo);
-    const project = path.join(repo, 'kaola-workflow', 'hook-probe');
-    fs.mkdirSync(path.join(project, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(project, 'workflow-state.md'), 'status: active\n');
-    const logPath = path.join(project, '.cache', 'dispatch-log.jsonl');
-    const feed = payload => {
-      // spawn-class: environment
-      return spawnSync('bash', [hookPath], {
-        cwd: repo, input: JSON.stringify(payload), encoding: 'utf8',
-      });
-    };
-    const cases = [
-      { agent_type: 'tdd-guide', agent_id: 'snake-1', cwd: repo },
-      { agentType: 'implementer', agentId: 'camel-2', cwd: repo },
-      { subagentType: 'code-reviewer', agentId: 'camel-3', cwd: repo },
-    ];
-    for (const payload of cases) {
-      const r = feed(payload);
-      assert(r.status === 0,
-        'G5-payload: dispatch-log exits 0 on ' + JSON.stringify(payload) + ' (got ' + r.status + ')');
-    }
-    const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
-    assert(log.includes('tdd-guide'),
-      'G5-payload: snake_case agent_type still logs a line');
-    assert(log.includes('implementer'),
-      'G5-payload: camelCase agentType logs a line (Grok hook stdin)');
-    assert(log.includes('code-reviewer'),
-      'G5-payload: camelCase subagentType logs a line (Grok hook stdin)');
-  } finally {
-    try { fs.rmSync(repo, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -741,6 +694,23 @@ for (const role of reviewerGenerator.ROLES) {
   assert(fs.existsSync(INSTALLER),
     'G8: installer not present: install-grok.sh is required for the hermetic install contract');
   if (fs.existsSync(INSTALLER)) {
+    // Issue #1032: inspect the shipped source so the retired dispatch hook stays in the bounded
+    // list and both install/uninstall paths consume that list without touching a real home.
+    const installerSource = fs.readFileSync(INSTALLER, 'utf8');
+    const retiredHooks = installerSource.match(/\bRETIRED_HOOKS\s*=\s*\(([^)]*)\)/);
+    const hasRetiredHookCleanup = body => {
+      const loop = String(body).match(/^[ \t]*for[ \t]+retired[ \t]+in[^\n]*RETIRED_HOOKS[^\n]*;[ \t]*do[ \t]*\n([\s\S]*?)^[ \t]*done[ \t]*$/m);
+      return !!loop && /\brm\s+-f\b/.test(loop[1]) && /\$retired\b/.test(loop[1]) && /hooks/.test(loop[1]);
+    };
+    const installStart = installerSource.indexOf('install_support_scripts() {');
+    const uninstallStart = installerSource.indexOf('uninstall_edition() {');
+    assert(retiredHooks && /\bkaola-workflow-subagent-dispatch-log\.sh\b/.test(retiredHooks[1]),
+      'R1: RETIRED_HOOKS contains kaola-workflow-subagent-dispatch-log.sh');
+    assert(installStart >= 0 && uninstallStart > installStart
+      && hasRetiredHookCleanup(installerSource.slice(installStart, uninstallStart)),
+      'R2: install cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
+    assert(uninstallStart >= 0 && hasRetiredHookCleanup(installerSource.slice(uninstallStart)),
+      'R3: uninstall cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
     const firstLine = r => String(r.stderr || r.stdout || '').split('\n')[0];
     function runInstaller(extraArgs, opts) {
       opts = opts || {};

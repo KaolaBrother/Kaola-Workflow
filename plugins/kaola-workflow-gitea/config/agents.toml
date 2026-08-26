@@ -19,12 +19,12 @@ config_file = "./agents/kaola-workflow/code-architect.toml"
 nickname_candidates = ["Architect", "Blueprint", "Designer"]
 
 [agents.tdd-guide]
-description = "Kaola-Workflow for Codex test author: holds custody of the test artifact, authors the suite from the acceptance surface, and proves it fails on the baseline."
+description = "Kaola-Workflow for Codex test author: owns independent acceptance meaning and RED evidence, authors the suite from the acceptance surface, and proves it fails on the baseline."
 config_file = "./agents/kaola-workflow/tdd-guide.toml"
 nickname_candidates = ["TDD", "Test Author", "Oracle"]
 
 [agents.implementer]
-description = "Kaola-Workflow for Codex implementing role: writes production code for behavioral logic and for work with no natural failing test alike, reading and running the tests it is judged by but never writing them."
+description = "Kaola-Workflow for Codex implementing role: writes production code for behavioral logic and for work with no natural failing test alike, reading and running acceptance tests while preserving their meaning; may perform only mechanical test-path maintenance when explicitly needed."
 config_file = "./agents/kaola-workflow/implementer.toml"
 nickname_candidates = ["Implementer", "Builder", "Executor"]
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Mission List and workflow-state subtraction (#1032).** Mission items now keep an immutable
+  result, record one result for every dispatch including `FAIL`, and append repairs/re-reviews as
+  new missions. Fresh workflow state is claim, liveness, and sink data; closure relies on status
+  plus existing receipts and sink facts.
+- **Cohesive execution and review guidance (#1032).** Dispatch and inline execution are both
+  first-class choices based on independent parallelism, judgment, or meaningful context
+  compression versus feed-forward integration cost. Handoffs remain compact natural language,
+  and reviewers return findings to the existing owner for convergence and re-review.
+- **Acceptance custody and model policy (#1032).** Independent test authors retain acceptance
+  meaning and behavioral RED ownership while production owners may perform meaning-preserving
+  fixture, signature, manifest, adapter, and harness maintenance. Fixed per-spawn model pairs and
+  the seven-label handoff schema are retired; runtime-native defaults, task-sensitive overrides,
+  and compact self-sufficient prose remain valid.
+- **Dispatch-log retirement (#1032).** The active dispatch-log producer, registrations, schema and
+  telemetry consumption are retired across generated editions and installers; compaction resume,
+  claim safety, receipts, and historical evidence remain supported.
+
 ## [9.17.1] - 2026-08-25
 
 ### Changed

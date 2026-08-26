@@ -61,20 +61,6 @@ function deriveRunPosture(worktreePath) {
   return worktreePath ? 'worktree' : 'in-place';
 }
 
-// #2 (opencode runtime label): resolve the runtime stamped into workflow-state.md.
-// Precedence: explicit --runtime (args.runtime) wins; then KAOLA_RUNTIME; then INFER
-// 'opencode' when an opencode model env is present (the opencode edition exports
-// KAOLA_OPENCODE_INHERIT_MODEL / KAOLA_OPENCODE_STANDARD_MODEL); else default 'claude'.
-// Pure (env passed in) — every site that previously hard-defaulted to 'claude' now routes
-// through here so an opencode run is no longer mislabeled 'runtime: claude'.
-function resolveRuntime(args, env) {
-  args = args || {};
-  env = env || {};
-  return args.runtime
-    || env.KAOLA_RUNTIME
-    || ((env.KAOLA_OPENCODE_INHERIT_MODEL || env.KAOLA_OPENCODE_STANDARD_MODEL) ? 'opencode' : 'claude');
-}
-
 // #476: the closed allowlist of VALUE-taking flags (camelCase, as the generic branch stores them).
 // A `--flag value` whose name is NOT here is an UNRECOGNIZED flag — recorded for a typed unknown_flag
 // refusal in main() BEFORE any destructive side effect, never silently dropped. The boolean flags are
@@ -882,42 +868,12 @@ function writeState(root, data) {
   // failure before workflow-state.md is written; missing-schema compatibility
   // belongs exclusively to the verified legacy re-plan import path.
   const claimAnchors = buildClaimAnchors(root, data);
-  // issue #227/#770: adaptive is the ONLY workflow path — a fresh claim always scaffolds an
-  // adaptive run that resumes through the next-work command (the fast/full paths and the phaseN
-  // ladder were retired, and the path selector itself was retired by #770). A stale non-adaptive
-  // workflow_path is tolerated on read but never scaffolded here — this field is now a constant
-  // record, not a selection.
-  const workflowPath = data.workflow_path || adaptiveSchema.ADAPTIVE_PATH;
-  const adaptiveCommand = adaptiveSchema.NEXT_COMMAND + ' ' + data.project;
-  const adaptiveSkill = adaptiveSchema.NEXT_SKILL + ' ' + data.project;
   const lines = [
     '# Kaola-Workflow State',
     '',
     '## Project',
     'name: ' + data.project,
     'status: ' + (data.status || 'active'),
-    '',
-    '## Current Position',
-    'phase: adaptive',
-    'phase_name: Adaptive',
-    'workflow_path: ' + workflowPath,
-    'runtime: ' + (data.runtime || resolveRuntime({}, process.env)),
-    'step: ' + (data.step || 'start'),
-    'next_command: ' + (data.next_command || adaptiveCommand),
-    'next_skill: ' + (data.next_skill || adaptiveSkill),
-    'main_session_role: orchestrator',
-    'implementation_owner: N/A',
-    'fix_owner: N/A',
-    'inline_emergency_fallback_authorized: no',
-    '',
-    '## Last Evidence',
-    'phase_file: N/A',
-    'cache_file: N/A',
-    'last_command: startup',
-    'last_result: ' + (data.last_result || 'folder_claimed'),
-    '',
-    '## Last Updated',
-    new Date().toISOString(),
     '',
     '## Sink',
     'branch: ' + data.branch,
@@ -990,15 +946,30 @@ function postAdvisoryClaim(issueNumber, project) {
 }
 
 function removeLegacyStateBlocks(content) {
-  const retiredBlock = '## ' + 'Lease';
+  const retiredBlocks = ['## ' + 'Lease', '## Current Position', '## Last Evidence', '## Last Updated'];
   const retiredFields = [
     'sess' + 'ion_id',
     'owner_' + 'sess' + 'ion_id',
     'last_' + 'heart' + 'beat',
     'claim_comment_id',
-    'expires'
+    'expires',
+    'phase',
+    'phase_name',
+    'workflow_path',
+    'step',
+    'next_command',
+    'next_skill',
+    'main_session_role',
+    'implementation_owner',
+    'fix_owner',
+    'inline_emergency_fallback_authorized',
+    'runtime',
+    'phase_file',
+    'cache_file',
+    'last_command',
+    'last_result'
   ];
-  const blockPattern = new RegExp('\\n?' + retiredBlock + '\\s*\\n[\\s\\S]*?(?=\\n## |\\s*$)', 'g');
+  const blockPattern = new RegExp('\\n?(?:' + retiredBlocks.map(block => block.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')).join('|') + ')\\s*\\n[\\s\\S]*?(?=\\n## |\\s*$)', 'g');
   const fieldPattern = new RegExp('^(' + retiredFields.join('|') + '):.*$\\n?', 'gm');
   return String(content || '')
     .replace(blockPattern, '')
@@ -1343,13 +1314,6 @@ function claimProject(root, args) {
       worktree_path: worktreePath,
       worktree_error: worktreeError,
       base_branch: baseBranch,
-      // Adaptive is the ONLY workflow path, so this is a CONSTANT, never an echo of a request.
-      // The retired KAOLA_PATH env var and --workflow-path flag are warn-and-ignore shims: they
-      // cannot select, cannot refuse, and must leave no trace in durable state either. Keeping a
-      // diagnostic echo of a retired selector only invited it to be misread as a live switch.
-      // A legacy folder carrying a stale non-adaptive value is still tolerated on READ.
-      workflow_path: adaptiveSchema.ADAPTIVE_PATH,
-      runtime: resolveRuntime(args, process.env),
       // #603: thread the pre-validated Codex dispatch mode into durable state (undefined when the flag
       // was absent → writeState omits the field).
       codex_dispatch_mode: args.codexDispatchMode,
@@ -1793,8 +1757,6 @@ function claimBundle(root, opts) {
       worktree_path: worktreePath,
       worktree_error: worktreeError,
       base_branch: baseBranch,
-      workflow_path: 'adaptive',
-      runtime: resolveRuntime(opts, process.env),
       // #603: thread the pre-validated Codex dispatch mode (bundle path mirrors the scalar claim).
       codex_dispatch_mode: opts.codexDispatchMode,
       // The bundle lane is exactly the shape a no-target survey produces, so it
@@ -1986,7 +1948,6 @@ function claimExplicitBundle(root, args) {
     project,
     branch,
     sink: args.sink || process.env.KAOLA_SINK || 'merge',
-    runtime: resolveRuntime(args, process.env),
     selectionRecordDigest: args.selectionRecordDigest, // the selection record's durable anchor
     selectionRecordBytes: args.selectionRecordBytes    // ...and the bytes it is a digest OF
   });
@@ -2197,37 +2158,6 @@ function cmdPickNext() {
     reasoning: NO_TARGET_USAGE }, claimExitCode('no_target'));
 }
 
-function resumeFallbackCommand(root, folder) {
-  // issue #227: adaptive is the only workflow path — resume routes to the next-work command
-  // (the fast/full paths and the phaseN ladder were retired). reconcileNextCommand trusts a
-  // legacy project's persisted next_command first, so this fallback only fires when no command
-  // was persisted.
-  return adaptiveSchema.NEXT_COMMAND + ' ' + folder.project;
-}
-
-// #234 E1: reconcile the PERSISTED next_command against the project's true path before trusting it.
-// A present-but-stale value (e.g. a residual retired phaseN command, or a retired plan-run command
-// left by an older run) must NOT bypass the fallback: when the project is adaptive (workflow_path/
-// phase says so, or the run's record exists on disk) FORCE the next-work command and ignore the
-// stale one, matching the artifact-first stance (#44: never silently ride a retired command).
-// Adaptive is the only path now, but a legacy non-adaptive folder is still tolerated on read: it
-// keeps its pre-existing contract (trust the persisted command, else fall back via
-// resumeFallbackCommand). Path-agnostic: never reads path config — resume keys on the persisted
-// workflow_path and on the run's own record, which is the mission list; a legacy folder's frozen
-// workflow-plan.md still counts as that record, so an older run resumes rather than reading as
-// non-adaptive (#538).
-function reconcileNextCommand(root, folder) {
-  let content = '';
-  try {
-    content = fs.readFileSync(path.join(root, 'kaola-workflow', folder.project, 'workflow-state.md'), 'utf8');
-  } catch (_) {}
-  const recordExists = fs.existsSync(path.join(root, 'kaola-workflow', folder.project, adaptiveSchema.MISSION_LIST_FILE))
-    || fs.existsSync(path.join(root, 'kaola-workflow', folder.project, adaptiveSchema.PLAN_FILE));
-  const isAdaptive = /^(?:workflow_path|phase):\s*adaptive\s*$/m.test(content) || recordExists;
-  if (isAdaptive) return adaptiveSchema.NEXT_COMMAND + ' ' + folder.project;
-  return folder.next_command || resumeFallbackCommand(root, folder);
-}
-
 // Detect the crash state where archiveProjectDir ran but the implementation commit was
 // not made yet. Pure read — no mutations. Returns:
 //   { incomplete: true,  reason: 'archived_impl_uncommitted', locus, archive_dir }  — crash state, resumable
@@ -2327,7 +2257,6 @@ function cmdResume() {
             issue_numbers: folder.issue_numbers,
             bundle_id: folder.bundle_id,
             status: folder.status,
-            phase: folder.phase,
             branch: folder.branch,
             worktree_path: folder.worktree_path,
             session_marker: folder.session_marker,
@@ -2335,7 +2264,6 @@ function cmdResume() {
             lane_bucket: lane.bucket,
             lane_reasoning: lane.reasoning,
             state_file: folder.state_file,
-            next_command: reconcileNextCommand(root, folder),
             resume_with: 'resume --project ' + folder.project + ' --json'
           })),
           own_session_marker: ctx.ownSession,
@@ -2351,7 +2279,7 @@ function cmdResume() {
       const archiveCheck = detectFinalizeIncomplete(root, args.project);
       if (archiveCheck !== null) {
         if (archiveCheck.incomplete) {
-          output({ resumed: true, project: args.project, reason: 'finalize_incomplete', next_command: 'finalize --keep-worktree' });
+          output({ resumed: true, project: args.project, reason: 'finalize_incomplete' });
           return;
         } else {
           // Not a failure at all: the transaction is SETTLED and there is nothing left to
@@ -2382,33 +2310,16 @@ function cmdResume() {
     resumed: true,
     project: folder.project,
     issue: folder.issue_number,
-    phase: folder.phase,
-    next_command: reconcileNextCommand(root, folder)
   });
 }
 
 // #333: terminal-stamp the workflow-state CONTENT for an archive. Pure string transform.
-// statusValue: 'closed' | 'abandoned' (abandoned keeps mid-run state by design — #324).
+// statusValue: 'closed' | 'abandoned'.
 // opts.keepOpen: true on a keep-open partial-close archive (finalize --keep-open).
 // Idempotent (every transform is a line-anchored replace) — safe to re-apply on crash-resume.
 function stampTerminalState(content, statusValue, opts) {
   content = content.replace(/^status:\s*.*$/m, 'status: ' + statusValue);
   if (!/^status:/m.test(content)) content += '\nstatus: ' + statusValue + '\n';
-  content = content.replace(/^step:\s*.*$/m, 'step: complete');
-  if (!/^step:/m.test(content)) content += '\nstep: complete\n';
-  if (statusValue !== 'closed') return content;   // discard/release keeps mid-run state (#324)
-  // #324: normalize the pre-run evidence writeState seeded at claim time (last_command: startup /
-  // last_result: folder_claimed) so the archived state cannot read as self-contradictory terminal
-  // state. The `## Pending Gates` rewrite stood beside these; the block it normalized named the
-  // frozen plan, which no longer exists, so the claim no longer seeds it and nothing rewrites it.
-  content = content.replace(/^last_command:\s*.*$/m, 'last_command: finalize');
-  content = content.replace(/^last_result:\s*.*$/m,
-    'last_result: ' + (opts && opts.keepOpen ? 'closed_keep_open' : 'closed'));
-  // #333: an archived state must not advertise an active resume command.
-  content = content.replace(/^next_command:\s*.*$/m, 'next_command: none (archived)');
-  content = content.replace(/^next_skill:\s*.*$/m, 'next_skill: none (archived)');
-  // #333: refresh the ## Last Updated line to the archive timestamp.
-  content = content.replace(/(^## Last Updated\n)[^\n]*/m, '$1' + new Date().toISOString());
   return content;
 }
 
@@ -2601,7 +2512,7 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
   try {
     let content = fs.readFileSync(state, 'utf8');
     content = removeLegacyStateBlocks(content);
-    // #333: status/step/#324-normalization/next_command/Last Updated all in one helper.
+    // #333: status is the terminal state; receipts and sink facts remain the closure safety proof.
     content = stampTerminalState(content, statusValue, opts);
     // Atomic (the module's own crash-safe writer): this is the LAST stamp of the terminal state
     // before the folder is renamed into archive/, so a torn write here is unrecoverable — a torn
@@ -6156,8 +6067,7 @@ function cmdSinkFallback() {
     const archiveState = path.join(root, 'kaola-workflow', 'archive', args.project, 'workflow-state.md');
     if (fs.existsSync(archiveState)) {
       const updated = fs.readFileSync(archiveState, 'utf8')
-        .replace(/^sink:.*$/m, 'sink: pr')
-        .replace(/^last_result:.*$/m, 'last_result: sink_fallback: ' + reason);
+        .replace(/^sink:.*$/m, 'sink: pr');
       writeFile(archiveState, updated);
       output({ updated: true, archived: true, project: args.project, sink: 'pr', reason });
       return;
@@ -6166,8 +6076,7 @@ function cmdSinkFallback() {
     return;
   }
   updateState(root, args.project, content => content
-    .replace(/^sink:.*$/m, 'sink: pr')
-    .replace(/^last_result:.*$/m, 'last_result: sink_fallback: ' + reason));
+    .replace(/^sink:.*$/m, 'sink: pr'));
   output({ updated: true, project: args.project, sink: 'pr', reason });
 }
 

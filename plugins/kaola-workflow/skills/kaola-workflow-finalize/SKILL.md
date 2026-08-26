@@ -2,32 +2,11 @@
 name: kaola-workflow-finalize
 description: Use when Kaola-Workflow for Codex work, also called kaola-workflow, is finished and needs final validation, documentation docking, issue closure, archiving, and the sink.
 ---
-<!-- PIN: codex-dispatch-model-routing -->
-## Codex Per-Spawn Model Routing
-
-Keep every installed role's existing standard-tier, reasoning-tier, or heavy-tier classification, and set the
-model and reasoning effort explicitly on each spawn. Standard-tier roles dispatch with
-`model: "gpt-5.6-luna"` and `reasoning_effort: "max"`. Reasoning-tier roles dispatch with
-`model: "gpt-5.6-sol"` and `reasoning_effort: "medium"`. Heavy-tier roles dispatch with
-`model: "gpt-5.6-sol"` and `reasoning_effort: "high"`.
-
-Standard-tier roles: `code-explorer`, `investigator`, `knowledge-lookup`, `tdd-guide`,
-`implementer`, `doc-updater`, `metric-optimizer`.
-
-Reasoning-tier roles: `build-error-resolver`, `code-reviewer`, `security-reviewer`,
-`adversarial-verifier`, `synthesizer`.
-
-Heavy-tier roles: `planner`, `code-architect`.
-
-Those three lists are the complete live Codex PIN roster.
-
-These mappings are fixed for every spawn. Do not escalate, downgrade, or otherwise override a
-tier's model or reasoning effort based on task breadth, latency, prior results, risk, availability,
-or any other condition. The role classification remains unchanged. One carve-out: the orchestrator
-may re-dispatch a reviewer-class role at heavy when a reasoning-tier attempt failed to finish the
-review, or the surface is judged complex before dispatch.
-
-<!-- /PIN -->
+Choose dispatch or inline per item. Dispatch when it materially reduces main-context residue,
+supplies independent judgment, or enables genuinely independent parallel work. Keep one production
+owner for a cohesive state machine, protocol, or integration when handoff and integration cost
+exceed that benefit. Both modes are first-class; width follows the true work frontier. No dispatch
+count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
 
 # Kaola-Workflow Finalize
 
@@ -51,56 +30,17 @@ result, and you are the only party with enough context to be.
 
 Read `kaola-workflow/{project}/workflow-state.md` for what this run owns, and
 `kaola-workflow/{project}/mission-list.md` for what it set out to do.
+The mission list remains exactly an H1 plus `item`, `status`, `dispatched`, and `result`: a
+completed item and its result are immutable; one dispatch has one result including `FAIL`, and
+repair or re-review work must append a new mission.
 
-<!-- PIN: main-authored-handoff -->
-## Main-Authored Handoff
-
-Before each named-role spawn, main writes a compact task-specific brief that the role can execute
-from that brief, its installed profile, and the named repository evidence alone; inherited
-conversation is never required. The role profile remains authoritative for universal role behavior.
-Main retains product intent, value decisions, integration, acceptance of returned work, review
-consequences, and the final done verdict.
-
-Use these labels in this order:
-
-- `Mission:` one result to produce or one question to answer.
-- `Context:` the candidate/worktree and baseline identity, relevant measured facts, hypotheses
-  labeled as hypotheses, and only the upstream evidence this task needs.
-- `Authority:` decisions already settled, decisions the role may recommend but not make, and any
-  unresolved user-owned decision.
-- `Scope and custody:` the task's read/write boundary, explicit exclusions, test-versus-production
-  ownership, and co-active ownership relevant to avoiding collisions.
-- `Acceptance:` falsifiable conditions for this role's deliverable and its stopping boundary. State
-  the required result and proof, not an implementation method. This is not the workflow's final done
-  verdict.
-- `Deliverable:` what returns and the exact path, commit, or evidence locator where the full result
-  lands.
-- `Stop and report:` task-specific contradictory evidence, ambiguity that changes the result, a
-  capability gap, an out-of-scope finding, or a user-owned decision that must return to main rather
-  than be silently assumed, expanded, or worked around.
-
-Specialize only the task-specific content:
-
-- Planning and design (`planner`, `code-architect`) receive the binding goal or design question,
-  non-goals, constraints and invariants, and the permitted decision envelope; they return a plan or
-  blueprint without editing product files.
-- Investigation roles receive an exact question or claim, evidence surface, and authority or
-  measurement standard.
-- `tdd-guide` receives acceptance claims, the baseline, test custody, the production exclusion, and
-  the required RED evidence; `implementer` receives the intended behavior, production custody, the
-  test read-only boundary, acceptance evidence, and the appropriate verification expectation.
-- Repair, convergence, documentation, and optimization roles receive the concrete candidate,
-  failure, or input; permitted mutation boundary; preservation constraints; and the retest, docking,
-  or metric stop condition.
-- `code-reviewer` and `security-reviewer` receive the exact candidate, dispatched surface, and
-  acceptance; `adversarial-verifier` receives exactly one claim and one surface.
-
-Keep the packet sparse: include only task-specific facts, decisions, bounds, and evidence; do not
-repeat the role profile. This is handoff guidance, not a new workflow record or a machine-graded
-prompt schema. The mission list remains the recovery index: what went out, to whom, and where the
-result will land.
-<!-- /PIN -->
-
+Before a delegated role starts, give it a self-sufficient natural-language brief: the result or
+question, the relevant evidence and authority or custody boundary, the exact worktree, commit, or
+evidence locator where its result lands, and the condition that ends the task. Keep the brief bounded
+and falsifiable; the installed role profile supplies universal behavior and inherited conversation
+is not required. The mission list remains the recovery index. A production result belongs in the
+actual worktree or commit when Git already records it; add a report only for evidence a successor
+cannot derive from those bytes.
 
 ## Step 1 — Final validation
 
@@ -142,11 +82,30 @@ hashes the tree its own shell is in — so `record_path` is where to look for th
 record was written — the `verdict` field, not the exit code, carries whether your validation passed.
 
 On failure, **repair it however you judge best.** Fix it inline for a trivial correction, or
-dispatch it to whichever role fits — `tdd-guide` for a test defect, because it holds custody of the
-test artifact and no other role may write a test path; `build-error-resolver` for build, type, lint
+dispatch it to whichever role fits — `tdd-guide` for an acceptance or test-defect decision because
+it owns the test meaning; the implementer may make mechanical fixture/signature/manifest/adapter/
+harness maintenance when that meaning is unchanged; `build-error-resolver` for build, type, lint
 or tooling; the review gate for a review finding. There is no mandated mode, no justifier to write,
 and no approval attached to that choice. Write fix output to `.cache/final-validation-fix-{n}.md`
 and rerun the exact command that failed.
+
+Routed-fix dispatches, when you dispatch one:
+
+```text
+Agent(
+  subagent_type="tdd-guide",
+  description="Routed fix: {the failing command}",
+  prompt="the exact failure, the evidence path, and the working directory"
+)
+```
+
+```text
+Agent(
+  subagent_type="build-error-resolver",
+  description="Routed fix: {the failing command}",
+  prompt="the exact failure, the evidence path, and the working directory"
+)
+```
 
 Run each full relevant command once against the final candidate. Citing an earlier pass instead of
 rerunning is fine, but **state the actual reuse boundary rather than a false absolute**: say which
@@ -196,12 +155,18 @@ ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileS
 [ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"
 ```
 
-Delegate to the `doc-updater` role with the changed files, the checklist, and
-`Working directory: ${ACTIVE_WORKTREE_PATH}`. Follow the Codex Per-Spawn Model Routing contract above:
-pass both `model` and `reasoning_effort` explicitly on the spawn call as the pair selected for
-`doc-updater`'s existing tier. Per-task model or reasoning-effort exceptions are not allowed. Update docs
-only when behavior, API, setup, architecture, environment, or user-facing workflow changed;
-otherwise write the no-impact reason.
+Dispatch `doc-updater` with the changed files, the checklist, and the working directory.
+
+```text
+Agent(
+  subagent_type="doc-updater",
+  description="Update docs for {project}",
+  prompt="changed files, checklist, Working directory: ${ACTIVE_WORKTREE_PATH}"
+)
+```
+For the skill surface, delegate to the `doc-updater` role with the same context. Runtime-native
+defaults or a task-sensitive override are both valid; update docs only when behavior, API, setup,
+architecture, environment, or user-facing workflow changed, otherwise write the no-impact reason.
 
 Write the result to `.cache/doc-updater.md`. **Anti-fabrication, required:** instruct `doc-updater`
 to transcribe verified ground truth — real `--json` or `--help` output, real signatures, existing

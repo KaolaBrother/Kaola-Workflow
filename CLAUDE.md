@@ -63,9 +63,7 @@ The numbered axioms are tie-breakers, applied in priority order whenever a situa
 
 **Check the premise before it shapes the work:** an issue is a claim recorded earlier against a tree that has since moved, so establish what is true *now* at the place it points and let the measurement rather than the filed text decide what gets built. The usual outcome is neither *right* nor *wrong* but right-with-a-detail-that-misroutes — a stale locator, a miscounted set, a clause that breaks if executed literally — so carry the measurement forward, never a bare verdict. Where the two disagree the issue gets corrected, not quietly worked around. Nothing inspects that you did this.
 
-**Dispatch production; keep decisions:** the orchestrator's context is the run's scarcest resource — a handoff costs once, inline residue taxes every later decision — so delegating discretionary production is the default and only the deciding stays inline; weigh the economics per case by judgment, with no justifier, evidence line, or approval attached.
-
-**Parallel by default:** concurrency is the standing default for independent work, and work that genuinely feeds other work runs in order because it has to. Nothing inspects that choice — no proof, no evidence line, no cap: you can tell the difference, and the frontier is in front of you. Width stays sized to the true shape of the task rather than pushed as wide as it will go.
+**Choose dispatch or inline per item:** dispatch when it materially reduces main-context residue, supplies independent judgment, or enables genuinely independent parallel work. Keep one production owner for a cohesive state machine, protocol, or integration when handoff and integration cost exceed that benefit. Both modes are first-class; width follows the true work frontier. No dispatch count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
 
 ## Working Principles
 
@@ -114,10 +112,11 @@ and **a guard is evidence only once mutation-proven** — a green suite is not p
 
 ### Test custody
 
-Whoever implements a behaviour does not author its tests. `tdd-guide` holds the test artifact;
-`implementer` reads and runs tests but never writes them. **A test is deleted with its mechanism,
-never repaired ahead of it** — never rewrite a pin so it keeps passing against machinery that is
-gone, and never re-add a field to satisfy a test.
+`tdd-guide` independently authors acceptance meaning and proves the behavioral RED. An implementer
+may maintain fixture plumbing, compile-only signatures, generated manifests, test adapters, or the
+harness when that meaning is unchanged, but never weakens, deletes, skips, or changes what the test
+accepts. **A test is deleted with its mechanism, never repaired ahead of it** — never rewrite a pin
+so it keeps passing against machinery that is gone, and never re-add a field to satisfy a test.
 
 ## Key Scripts
 
@@ -168,7 +167,6 @@ architecture docs if structure changed · inline comments where public interface
 
 ## Validation Policy
 
-- Background hooks (subagent-dispatch-log) are advisory; do not re-run their checks redundantly.
 - Verify with the walkthrough suite before claiming workflow changes complete.
 - **Chain selection belongs to the producer.** `kaola-workflow-run-chains.js` diff-scopes it at finalize:
   a non-edition-touching diff runs the `claude` chain alone; an edition-touching diff, or an unresolved

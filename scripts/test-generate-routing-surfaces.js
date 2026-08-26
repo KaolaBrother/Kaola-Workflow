@@ -620,13 +620,11 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     { encoding: 'utf8' });
   try {
     // The JS the sandbox needs to start at all, DERIVED from the require graph the parent process
-    // already realized rather than hand-typed. `slots.js` requires the kernel to source the Codex
-    // per-spawn tier roster, so the kernel is a render input two edges deep — omit any transitive
-    // require and the spawned --check dies at MODULE LOAD before rendering a byte. A hand-typed
-    // enumeration went stale twice; `children` is a faithful require-edge list (a module already in
-    // the cache is still recorded on its requirer), so a new require anywhere under the generator
-    // is picked up with no line to add here. Repo-local only: node_modules and anything outside the
-    // tree is dropped, because the sandbox copies by relative path.
+    // already realized rather than hand-typed. A hand-typed enumeration went stale twice;
+    // `children` is a faithful require-edge list (a module already in the cache is still recorded
+    // on its requirer), so a new require anywhere under the generator is picked up with no line to
+    // add here. Repo-local only: node_modules and anything outside the tree is dropped, because the
+    // sandbox copies by relative path.
     const jsInputs = (() => {
       const entry = require.resolve('./generate-routing-surfaces.js');
       require(entry);
@@ -646,13 +644,9 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     // The derivation is anchored, not trusted. An empty list starves every spawn, and a starved
     // spawn exits 1 — the same code --check uses to signal detected drift, which is exactly how a
     // stale list left the RED assertions below passing against a process that rendered nothing.
-    // The kernel is the pinned member because it is the require that staled the hand-typed list and
-    // it sits two edges out, so reaching it proves the walk is transitive. The count is deliberately
-    // NOT pinned: growing is the correct response to a new require.
+    // The count is deliberately NOT pinned: growing is the correct response to a new require.
     assert(jsInputs.length > 0,
       'mutation proof: the derived sandbox copy list is non-empty (an empty list starves every spawn)');
-    assert(jsInputs.includes('scripts/kaola-workflow-adaptive-schema.js'),
-      `mutation proof: the derived copy list reaches the kernel two requires out — got [${jsInputs.join(', ')}]`);
     for (const rel of jsInputs) copy(rel);
     for (const skeleton of new Set(GENERATED_SURFACES.map(r => r.skeleton))) {
       copy(path.join('templates', 'routing', skeleton));

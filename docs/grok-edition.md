@@ -45,8 +45,8 @@ Everything under `.grok/` is **generated from canonical** by
 | ---------------- | ------------------- | ----- |
 | `agents/<name>.md` | `.grok/agents/<name>.md` | Grok agent frontmatter (`name`, `description`, `prompt_mode`, `model: inherit`, tier-derived `effort: medium|high|xhigh`, `permission_mode`, `agents_md`). The generator maps canonical `sonnet`/`standard` classes to `medium`, `opus`/`reasoning` classes to `high`, and `fable`/`heavy` classes to `xhigh`. Claude `tools:` (including MCP ids) are dropped so Grok will load the role. Descriptions that are not plain YAML scalars are JSON-quoted — an unquoted colon in `knowledge-lookup`'s description made Grok silently skip the file. Reviewer identity is a body comment block; `resolved_profile_hash` is re-stamped over the grok bytes. |
 | `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. `Agent(` dispatch cards become `spawn_subagent(`. Install-time `model="{...}"` lines are stripped. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
-| `hooks/<script>.sh` | `.grok/hooks/<script>.sh` | Dispatch-log is payload-adapted (`agent_type \|\| agentType \|\| subagentType`). |
-| `hooks/hooks.json` (mapping) | `.grok/hooks/hooks.json` | SessionStart `compact` + SubagentStart. Commands use `${GROK_HOME:-$HOME/.grok}` (Grok expands this). The installer copies the file to `${GROK_HOME:-$HOME/.grok}/hooks/kaola-workflow-hooks.json`, and on a project install also to `<project>/.grok/hooks/hooks.json`. |
+| `hooks/<script>.sh` | `.grok/hooks/<script>.sh` | No runtime-neutral dispatch hook is installed; the generator retains ownership of this directory for stale-artifact cleanup. |
+| `hooks/hooks.json` (mapping) | `.grok/hooks/hooks.json` | SessionStart `compact` only. Commands use `${GROK_HOME:-$HOME/.grok}` (Grok expands this). The installer copies the file to `${GROK_HOME:-$HOME/.grok}/hooks/kaola-workflow-hooks.json`, and on a project install also to `<project>/.grok/hooks/hooks.json`. |
 
 Generated agents are deliberately model-agnostic. Regenerating the tree never
 overwrites a user's `[subagents.models]` or `[subagents.roles.*]` in
@@ -92,10 +92,9 @@ recorded on #1008 and is not part of this edition's first close.
 
 ## Path selection
 
-On the grok edition, the router routes directly to the adaptive workflow. The
-canonical `## Agent Model Dispatch` section is substituted at generation time
-for the Grok runtime dispatch block above; canonical `commands/*.md` is never
-touched.
+On the grok edition, the router routes directly to the adaptive workflow. Generated commands adapt
+the dispatch call syntax and omit per-call model arguments; canonical `commands/*.md` is never
+touched. There is no canonical model-dispatch section to substitute.
 
 ## Installer
 
@@ -141,11 +140,9 @@ redeploys the edition.
 ## Hooks
 
 Grok's hook model is Claude-JSON compatible, with camelCase payloads and
-tool-name aliases. This edition ships the same runtime-neutral dispatch-log
-script plus a generated `hooks.json` that re-expresses the two canonical
-entries. The script is fail-open everywhere.
+tool-name aliases. This edition ships a generated `hooks.json` for the retained
+compact-resume entry. The hook is fail-open everywhere.
 
 | Event | Claude payload | Grok payload | Adaptation |
 | --- | --- | --- | --- |
-| `SubagentStart` | `agent_type` / `agent_id` | `agentType` / `subagentType` / `agentId` | dispatch-log accepts `agent_type \|\| agentType \|\| subagentType` and `agent_id \|\| agentId` |
 | `SessionStart` compact | `cwd` | `cwd` | none — compact-context stays as-is |

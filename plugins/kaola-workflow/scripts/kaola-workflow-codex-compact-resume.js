@@ -129,10 +129,12 @@ function main() {
     missionList = fs.readFileSync(missionListPath, 'utf8');
   }
 
-  // Parse state fields — workflow-state.md is the CLAIM record: which project, where to resume.
+  // Parse claim fields only — workflow-state.md identifies the project and its liveness posture;
+  // the mission list, not persisted commands, is the recovery index.
   const projectName = field(stateContent, 'name');
-  const nextCommand = field(stateContent, 'next_command');
-  const nextSkill = field(stateContent, 'next_skill');
+  const claimStatus = field(stateContent, 'status');
+  const branch = field(stateContent, 'branch');
+  const worktree = field(stateContent, 'worktree_path');
 
   const goal = parseGoal(missionList);
   const items = parseItems(missionList);
@@ -148,19 +150,21 @@ function main() {
     }
   }
 
-  // Build fixed-order deterministic packet (6 sections, no timestamps)
+  // Build fixed-order deterministic packet (7 sections, no timestamps)
   // Section 1: active project
-  // Section 2: the goal (the mission list's H1)
-  // Section 3: next skill/command
+  // Section 2: claim/liveness fields
+  // Section 3: the goal (the mission list's H1)
   // Section 4: in-flight items with their dispatched locators — the decision to make
   // Section 5: progress counts across the whole list
   const lines = [
     'Kaola-Workflow compact resume:',
     `active project: ${projectName}`,
+    `claim status: ${claimStatus}`,
+    `branch: ${branch}`,
+    `worktree: ${worktree}`,
     `goal: ${goal}`,
-    `next skill/command: ${nextSkill !== 'unknown' ? nextSkill : nextCommand}`,
     `in-flight: ${inFlight.length > 0 ? inFlight.join(' ; ') : 'none'}`,
-    `progress: done: ${counts.done}, in-flight: ${counts['in-flight']}, todo: ${counts.todo}`
+    `mission counts: done: ${counts.done}, in-flight: ${counts['in-flight']}, todo: ${counts.todo}`
   ];
 
   // SessionStart/compact context injection: emit the resume packet as PLAIN stdout.

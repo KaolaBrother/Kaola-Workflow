@@ -311,22 +311,14 @@ parity — always the main checkout's trees, and never creating one that is abse
 own suites (`test-opencode-edition.js`, `test-kimi-edition.js`, `test-grok-edition.js`, `test-cursor-edition.js`, `test-zcode-edition.js`). See
 `opencode-edition.md`, `kimi-edition.md`, `grok-edition.md`, `cursor-edition.md`, and `zcode-edition.md`.
 
-### Main-authored handoff routing
+### Natural-language handoff routing
 
-`SLOTS['main-authored-handoff']` in [`templates/routing/slots.js`](../templates/routing/slots.js)
-is the single canonical source. [`next.skeleton.md`](../templates/routing/next.skeleton.md) and
-[`finalize.skeleton.md`](../templates/routing/finalize.skeleton.md) each insert that slot once,
-unconditionally and outside `REGION` directives; no other routing topic receives it. The generator
-derives 42 consumers for this slot: 7 runtimes (Claude, Codex, opencode, Kimi, Grok, Cursor, and
-ZCode) × 3 forges × 2 topics (`next` and `finalize`) = 42 surfaces, comprising 12 tracked
-surfaces (six per topic) and 30 additive command-lane surfaces (15 per topic).
-
-The objective oracle is [`scripts/test-route-reachability.js`](../scripts/test-route-reachability.js):
-it derives that universe from the routing registry and additive renderers, compares the complete
-delimited block bytes with the canonical slot, checks the seven labels and main/profile authority,
-role-family, sparse-packet, and non-schema boundaries, and mutation-tests each target. The verified
-candidate run recorded 823 assertions and caught 126 target-only mutants across missing-block,
-reordered-label, and one-byte-drift mutations.
+Routing surfaces carry compact natural-language handoff guidance. A request sent to another role
+states the requested result or question, relevant evidence and authority/custody, the exact landing
+locator, and the stop condition. The existing owner receives findings, repairs them, and remains
+responsible for the converged candidate and final verdict. There is no seven-label slot, required
+block, ordering schema, parser, or linter; the routing generator propagates the skeleton prose to
+the command and skill surfaces.
 
 ### Runtime capability divergence
 
@@ -351,8 +343,8 @@ and forge editions are different axes; this table is indexed by runtime.
 |---|---|---|---|---|---|---|---|
 | **dispatch carrier** | full — `agents/`; § Agent profiles below | full — `plugins/kaola-workflow/config/agents.toml` (registry); `plugins/*/agents/*.toml` | full — `docs/opencode-edition.md` § What gets generated | substituted — `docs/kimi-edition.md` § Roles as Skills; enforced by `KIMI_RUNTIME_NATIVE` in `scripts/test-kimi-edition.js` | full — `docs/grok-edition.md` § What gets generated | full — `docs/cursor-edition.md` § What gets generated | full — `docs/zcode-edition.md` § What gets generated (user-scope discovery; installer syncs `~/.zcode/agents/`) |
 | **command / skill surface** | rendered — `scripts/generate-routing-surfaces.js` (`COMMAND_EDITIONS`); skeletons in `templates/routing/` | rendered — `scripts/generate-routing-surfaces.js` (`SKILL_EDITIONS`); skeletons in `templates/routing/` | rendered — `docs/opencode-edition.md` § Installer command set; consumes `commandSources()` via `scripts/sync-opencode-edition.js` | rendered — `docs/kimi-edition.md` § Installer command set; consumes `commandSources()` via `scripts/sync-kimi-edition.js` | rendered — `docs/grok-edition.md` § What gets generated; consumes `commandSources()` via `scripts/sync-grok-edition.js` | rendered — `docs/cursor-edition.md` § What gets generated; consumes `commandSources()` via `scripts/sync-cursor-edition.js` | rendered — `docs/zcode-edition.md` § What gets generated; consumes `commandSources()` via `scripts/sync-zcode-edition.js` |
-| **hooks** | full — `hooks/hooks.json`; merge at `install.sh` (`MERGE_SETTINGS`) | full — `plugins/*/config/hooks.json` (three trees, and unlike the other codex artifacts these differ per forge); merge at `plugins/*/scripts/install-codex-agent-profiles.js` | substituted — `docs/opencode-edition.md` § Hooks; `templates/opencode/plugins/kaola-workflow-hooks.js` | partial — `docs/kimi-edition.md` § Hooks; event mapping `docs/decisions/D-703-01.md` | full — `docs/grok-edition.md` § Hooks | partial — `docs/cursor-edition.md` § Hooks; `sessionStart` injection (`preCompact` cannot inject) | partial — `docs/zcode-edition.md` § Hooks; merged `config.json` (`hooks.enabled: true`, seven events, no `SubagentStart`) |
-| **model & tier handling** | full — `scripts/kaola-workflow-resolve-agent-model.js` (header comment); shipped rule at `commands/kaola-workflow-finalize.md` § Agent Model Dispatch, with the reviewer `opus` resting profile and one bounded `fable` escalation | full — `CODEX_PINNED_STANDARD_ROLES` / `CODEX_PINNED_REASONING_ROLES` / `CODEX_PINNED_HEAVY_ROLES` in `scripts/kaola-workflow-adaptive-schema.js`; every carrier copy and the guard binding them, `docs/conventions.md` § Bundle Lane | partial — `docs/opencode-edition.md` § Model and effort — inherited from the session; `fable` is classified as reasoning for the optional model pin | inherited — `docs/kimi-edition.md` § One model tier — every subagent inherits the session model, including the canonical heavy marker; enforced by `KIMI_RUNTIME_NATIVE` in `scripts/test-kimi-edition.js` | partial — `docs/grok-edition.md` § Three effort tiers | partial — `docs/cursor-edition.md` § Three-tier frontmatter pins and runtime limits | partial — `docs/zcode-edition.md` § Three-tier frontmatter pins (`GLM-5.3` + `thoughtLevel` high/max/max) |
+| **hooks** | full — `hooks/hooks.json`; merge at `install.sh` (`MERGE_SETTINGS`) | full — `plugins/*/config/hooks.json` (three trees); merge at `plugins/*/scripts/install-codex-agent-profiles.js` | substituted — `docs/opencode-edition.md` § Hooks; `templates/opencode/plugins/kaola-workflow-hooks.js` | partial — `docs/kimi-edition.md` § Hooks; event mapping `docs/decisions/D-703-01.md` | full — `docs/grok-edition.md` § Hooks | partial — `docs/cursor-edition.md` § Hooks; `sessionStart` injection (`preCompact` cannot inject) | partial — `docs/zcode-edition.md` § Hooks; merged `config.json` (`hooks.enabled: true`, seven events) |
+| **model & tier handling** | full — `scripts/kaola-workflow-resolve-agent-model.js`; role tiers remain metadata and runtime defaults may be overridden per task | full — tier/profile metadata in `kaola-workflow-adaptive-schema.js` and the three Codex profile registries; runtime selection is inherited or task-sensitive | partial — `docs/opencode-edition.md` § Model and effort — inherited from the session | inherited — `docs/kimi-edition.md` § One model tier — runtime-native session value | partial — `docs/grok-edition.md` § Three effort tiers | partial — `docs/cursor-edition.md` § Three-tier frontmatter metadata and runtime limits | partial — `docs/zcode-edition.md` § Three-tier frontmatter metadata |
 | **install path** | full — `install.sh` | partial — the split stated at `install-all.sh` (§ Codex marketplace-plugin convergence); profiles and hooks at `plugins/kaola-workflow/scripts/install-codex-agent-profiles.js` | substituted — `install-opencode.sh`; `docs/opencode-edition.md` § Deploy layout — project vs global (scope-dependent) | substituted — `install-kimi.sh`; `docs/kimi-edition.md` § Deploy layout — project vs global (scope-dependent) | substituted — `install-grok.sh`; `docs/grok-edition.md` § Installer | substituted — `install-cursor.sh`; `docs/cursor-edition.md` § Installer | substituted — `install-zcode.sh`; `docs/zcode-edition.md` § Installer |
 
 The label grades the capability, not the pointer. Two cells carry **two** pointers because one alone
@@ -363,18 +355,16 @@ dispatch mechanism itself, so the first pointer is the directory, and § Agent p
 only what the profiles contain. claude and codex have no per-edition doc, which is why their cells
 point at code where opencode's, kimi's, grok's, cursor's, and zcode's point at prose.
 
-**No `hooks.json` in any edition registers a `PreToolUse` or `PostToolUse` hook** — across all six
-they register `SessionStart` and `SubagentStart` only, and
-`docs/decisions/0011-oracle-test-and-kernel-extraction.md` establishes that absence. It is a statement
-about that file family, which is claude and codex; it does not generalize to the additive editions,
-and opencode's plugin does register a pre-tool event (`templates/opencode/plugins/kaola-workflow-hooks.js`).
+The shipped Claude and Codex hook configurations register only compaction resume. Additive runtime
+wrappers may adapt that same packet to their native session-start/compaction event; none provides an
+active spawn-log producer.
 
 ### Agent profiles
 
 Each role has a canonical `agents/<name>.md` (installed by `install.sh` for Claude) and a `.toml`
 triple across the three plugin editions. Every Codex profile omits top-level `model` and
-`model_reasoning_effort`; the dispatching workflow, rather than the profile, supplies the runtime
-pair for each spawn. All three `.toml` twins for a profile are byte-identical and forge-neutral — no
+`model_reasoning_effort`; runtime defaults or a task-sensitive dispatch may supply those values.
+All three `.toml` twins for a profile are byte-identical and forge-neutral — no
 CLI binaries, no forge brands.
 
 `code-reviewer`, `adversarial-verifier` and `security-reviewer` are **generated**, not hand-authored:
@@ -410,33 +400,15 @@ real path, each role's source frontmatter is held byte-equal to its `DEFAULT_AGE
 (asserted by `test-agent-model-resolver.js`), so a role resolves to the same tier from either
 directory.
 
-For Claude Code, commands carry an explicit `model="{...}"` placeholder on every dispatch, which the
-installer fills from the agent's own installed profile; the filled literal is what selects the model
-the dispatched role runs on — without it the role inherits the session's model. opencode applies its
-resolved tier dynamically.
+For Claude Code, a caller may supply a model; otherwise the installed profile and runtime default
+resolver apply. The routing workflow does not add a fixed per-spawn model placeholder or pair.
 
-Codex keeps the same role classification but maps it to a model / reasoning-effort pair at spawn
-time. Two different files own the two halves, and they are easy to confuse: **which roles take which
-tier** is declared once by `CODEX_PINNED_STANDARD_ROLES`, `CODEX_PINNED_REASONING_ROLES`, and `CODEX_PINNED_HEAVY_ROLES` in
-`kaola-workflow-adaptive-schema.js`, rendered from there into the Codex SKILL surfaces — see
-`conventions.md` § Bundle Lane for every carrier copy and the guard that binds the roster to those
-constants. **What each tier resolves to** is a separate fact in a separate place, and the schema holds
-no model or effort literal at all: the live pairs are authored as typed literals in the
-dispatch-routing pin of `templates/routing/next.skeleton.md` and `finalize.skeleton.md`, which is what
-ships to the SKILL surfaces. `test-route-reachability.js` independently states the complete expected
-pairs, asserts every shipped surface matches them, and mutation-proves that changing either half or
-adding an alternate route reds. `validate-kaola-workflow-contracts.js` separately asserts the live
-README pairs. The heavy roster is `planner` and `code-architect`. The live table is three-way:
-`standard` as `gpt-5.6-luna` / `max`, `reasoning` as `gpt-5.6-sol` / `medium`, `heavy` as
-`gpt-5.6-sol` / `high`. The `CODEX_STANDARD_*` and
-`CODEX_REASONING_*` constants in `kaola-workflow-codex-preflight.js` remain historical profile
-values used for stale-install migration, not live dispatch authority; the contract validator
-continues to bind those migration values to the installer's copies. Those live mappings are fixed,
-so a task never changes model or reasoning effort for task-specific reasons except the one
-reviewer-class heavy re-dispatch carve-out. The canonical next/finalize routing contract also
-requires every reviewer dispatch to state its surface and acceptance. Generated additive command
-surfaces preserve that scope packet but omit Claude's dynamic reviewer escalation, because those
-runtimes have no equivalent per-call override.
+Codex retains the role tier classifications and profile registries as metadata. A child may inherit
+runtime-native model/effort defaults or receive a task-sensitive override, and omission is valid.
+Next/finalize do not mandate reviewer escalation or a fixed pipeline: reviewers examine a converged
+candidate, return findings to the existing owner, and re-review repaired findings or new claims.
+The `CODEX_*` values retained by preflight are migration metadata for stale installs, not workflow
+policy.
 
 ## Testing
 

@@ -270,12 +270,10 @@ const LANE_STALENESS_MS = 86400000; // 24 hours in milliseconds
 // hard-coding the list. Byte-identical ×4 (the drift anchor).
 const SHARED_STATE_FIELDS = Object.freeze([
   'issue_number',
-  'phase',
   'issue_numbers',
   'status',
   'bundle_id',
   'closure_policy',
-  'next_command',
   'branch',
   'worktree_path',
   'sink',
@@ -592,14 +590,12 @@ function refuse(reason, extra) {
 // `scripts/test-outcome-recorder.js` asserts that over the whole set.
 // ===========================================================================
 const NODE_TIMINGS_LOG_NAME = 'node-timings.jsonl';
-const DISPATCH_LOG_NAME = 'dispatch-log.jsonl';
 const OUTCOME_LOG_NAME = 'outcome-log.jsonl';
 
 // Project-relative (`kaola-workflow/{project}/`-relative) paths, POSIX separators. ORDER IS NOT
 // SIGNIFICANT — this is a membership set, not a precedence list.
 const PARENT_OWNED_SIDECARS = Object.freeze([
   '.cache/' + NODE_TIMINGS_LOG_NAME,
-  '.cache/' + DISPATCH_LOG_NAME,
   '.cache/' + OUTCOME_LOG_NAME,
 ]);
 
@@ -768,16 +764,16 @@ function buildOutcomeRecord(input) {
 // `test-kernel-conformance.js` proves that mechanically: each literal row must classify to itself.
 // ===========================================================================
 const KERNEL_RULINGS = Object.freeze(['record', 'derivable', 'preference']);
-const KERNEL_RECORDS = Object.freeze(['plan', 'position', 'evidence', 'forge']);
+const KERNEL_RECORDS = Object.freeze(['plan', 'claim/sink', 'evidence', 'forge']);
 
 const KERNEL_ARTIFACT_REGISTRY = Object.freeze([
   // ---- Plan -------------------------------------------------------------------------------
   [MISSION_LIST_FILE, 'record', 'plan', 'agent',
     'the goal in its H1 and, per item, the mission / status / dispatched / result — decomposition and position in one file'],
 
-  // ---- Position ---------------------------------------------------------------------------
-  ['workflow-state.md', 'record', 'position', 'script',
-    'the resume pointer: status, phase, step, pending gates, sink mode, branch, worktree, claim lineage'],
+  // ---- Claim / sink -----------------------------------------------------------------------
+  ['workflow-state.md', 'record', 'claim/sink', 'script',
+    'issue and claim identity, status, branch/worktree, sink/run posture, liveness markers, and genuine closure facts'],
 
   // ---- Evidence ---------------------------------------------------------------------------
   ['.cache/chain-receipt.json', 'record', 'evidence', 'script',
@@ -810,8 +806,6 @@ const KERNEL_ARTIFACT_REGISTRY = Object.freeze([
   // ---- Preference -------------------------------------------------------------------------
   ['.cache/' + NODE_TIMINGS_LOG_NAME, 'preference', null, 'script',
     'best-effort telemetry, writer swallows every error; its only consumer reports a diagnostic, never a verdict'],
-  ['.cache/' + DISPATCH_LOG_NAME, 'preference', null, 'script',
-    'hook-written spawn log; a diagnostic record of who was dispatched, read by no gate and by no successor decision'],
   ['.cache/' + OUTCOME_LOG_NAME, 'preference', null, 'script',
     'the M2 refusal/outcome recorder: append-only economics telemetry whose writer swallows every error and which no gate, transition or successor decision reads — losing it costs a measurement, never a verdict. NOT derivable: which refusal fired, in which invocation, at what wall-clock is not recomputable from the four records once the process exits, and claiming a derivation there would be the more dangerous label'],
   ['.cache/wedged-attestation.json', 'preference', null, 'script',
@@ -1622,7 +1616,6 @@ module.exports = {
   // the ONE list both the sidecar writers and the leg capture sweep read; the builder is the one
   // record shape every edition emits.
   NODE_TIMINGS_LOG_NAME,
-  DISPATCH_LOG_NAME,
   OUTCOME_LOG_NAME,
   PARENT_OWNED_SIDECARS,
   isParentOwnedSidecar,

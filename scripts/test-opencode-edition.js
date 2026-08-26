@@ -809,191 +809,9 @@ for (const target of emittedCommandTargets) {
   // two files). Nothing to lock in; retired alongside its only carriers.
 }
 
-// ---------------------------------------------------------------------------
-// S2 (issue #537, narrowed by #609): neutral tier labels. Originally scoped to
-// generator string constants ONLY (OPENCODE_MODEL_DISPATCH_BLOCK's `mapTier` line, the
-// transformCommandBody "opus-tier"/"sonnet-tier" rewrite markers, and
-// opencodeAgentSuffix) and explicitly TOLERATED Claude "Opus"/"Sonnet" MODEL-name
-// prose surviving from canonical bodies (e.g. the workflow-planner "(Opus)" and
-// the "Opus-floor synthesizer"). #609 widened it to BODY-WIDE: the capitalized
-// proper-noun forms "Opus"/"Sonnet" are forbidden ANYWHERE in a generated agent or
-// command file, not just inside the substituted block or the rewrite-marker strings.
-//
-// NOTHING REWRITES ON THE WAY OUT ANY MORE. #609 bought that width with a
-// generation-time purge — a pure rewriteClaudeModelNouns() applied in renderAgent +
-// transformCommandBody. #812 DELETED that rewrite from both sync scripts and
-// neutralized the CANONICAL sources instead, on the rule that generated text must be
-// neutral at its source rather than laundered on the way out. So what makes this pass
-// today is that canonical prose carries no noun to find. That leaves the assertion
-// STRONGER than when it was written, not redundant: with no rewrite left to normalise
-// a reintroduced noun, a canonical reintroduction now reaches the generated surface
-// and reds this. Read it as the canonical-drift canary, never as a guard on a rewrite.
-// The check stays CASE-SENSITIVE and whole-word, so the B1 exemption — the closed
-// plan `model`-column tier tokens (the lowercase `` `opus` ``/`` `sonnet` ``
-// mentions in the workflow-planner's "Model assignment" guidance and the
-// frozen-plan example row) — is preserved automatically: the lowercase
-// {opus,sonnet} pair stays the cross-edition internal tier vocabulary
-// (untouched, and never capitalized).
-// ---------------------------------------------------------------------------
-{
-  // The heading the block ships under, as ONE literal — because this whole guard is scoped BY it.
-  // Renaming it is not cosmetic on this side: the locator below matches this exact string, so a
-  // rename with no matching change here leaves every content check ranging over `null` —
-  // assertions that evaluate vacuously and can never go red. Change the two together.
-  //
-  // It has moved twice, and both moves were caught HERE rather than shipped. "Effort Variant
-  // Resolution" named a mechanism (opencode `variant`s) that never reached a subagent at all.
-  // "Effort is configured, not passed" was true of the per-role tiers and became false the moment
-  // they were removed — a subagent runs the session's model and effort, configured nowhere. The
-  // current heading states what an agent actually gets.
-  const BLOCK_HEADING = 'Model and effort are inherited';
-  const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const BLOCK_HEADING_RE = new RegExp('^##\\s+' + escapeRe(BLOCK_HEADING) + '\\s*$');
-
-  // The mechanism word this surface must not carry, in either number. The leading `\b` is what
-  // keeps "invariant"/"invariants" out: the char before "variant" there is a word char, so there
-  // is no boundary to match.
-  const MECHANISM_WORD = /\bvariants?\b/i;
-
-  // Extract the effort block (heading line through the line before the next heading) — the
-  // Surface-1 locus. null when absent, and absence is ASSERTED ON below, never skipped past.
-  const blockSection = body => {
-    const lines = body.split('\n');
-    let start = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (BLOCK_HEADING_RE.test(lines[i])) { start = i; break; }
-    }
-    if (start < 0) return null;
-    const sec = [];
-    for (let i = start; i < lines.length; i++) {
-      if (i > start && /^#{1,6}\s/.test(lines[i])) break;
-      sec.push(lines[i]);
-    }
-    return sec.join('\n');
-  };
-
-  // WHICH generated commands must carry the block is DERIVED, never hand-listed: the generator
-  // substitutes it at the canonical `## Agent Model Dispatch` heading, so the canonical sources ARE
-  // the expectation. A hand-typed carrier list is a second place for that truth to live, and the
-  // copy that stops being true without saying so.
-  //
-  // The canonical heading is written here as a LITERAL, not read from the generator's exported
-  // MODEL_DISPATCH_HEADING. Sourcing the expectation from the subject's own constant would make
-  // this assertion agree with the generator by construction — it would still catch the section
-  // being deleted, but it could no longer witness the generator and canonical disagreeing, which
-  // is the other half of what it is for.
-  const canonCarriesSection = file =>
-    /^##\s+Agent Model Dispatch\s*$/m.test(fs.readFileSync(sync.canonCommandPath(file), 'utf8'));
-  const sectionCarriers = canonCommands.filter(canonCarriesSection);
-  assert(sectionCarriers.length > 0,
-    'S2: at least ONE canonical command carries `## Agent Model Dispatch` (found ' + sectionCarriers.length
-    + ' of ' + canonCommands.length + ') — with none, every per-file check below ranges over an empty '
-    + 'expectation and this guard reports green by having had nothing to read');
-
-  for (const file of canonCommands) {
-    const body = read('.opencode/command/' + file);
-    const sec = blockSection(body);
-    // (0) A BLOCK THAT CANNOT BE LOCATED IS A RED, NOT A SKIP. This used to be an
-    //     `if (sec !== null)` guard: when the heading moved, the locator matched nothing, the
-    //     content checks below never ran, and the suite stayed green over a surface nobody was
-    //     reading any more. Presence is now pinned in BOTH directions against the canonical
-    //     source, so neither a heading rename nor a dropped substitution can pass in silence.
-    if (canonCarriesSection(file)) {
-      assert(sec !== null,
-        'S2[' + file + ']: the effort block is LOCATABLE under the exact heading "## ' + BLOCK_HEADING
-        + '" — its canonical source carries `## Agent Model Dispatch`, so the generator substituted a '
-        + 'block into this file and every check below must be reading it. Found no such heading: the '
-        + 'checks would assert over nothing, which is a disarmed guard with no red. If the heading was '
-        + 'renamed deliberately, BLOCK_HEADING here moves in the same change.');
-    } else {
-      assert(sec === null,
-        'S2[' + file + ']: NO effort block — its canonical source carries no `## Agent Model Dispatch`, '
-        + 'so the generator had nothing to substitute here; a block present anyway is stale output');
-    }
-    if (sec !== null) {
-      // (a) The effort block names tiers by ROLE, never by the Claude nouns opus/sonnet (the
-      //     mapTier-line leak lived here).
-      assert(!/\bopus\b/i.test(sec) && !/\bsonnet\b/i.test(sec),
-        'S2[' + file + ']: effort block has no Claude-tier-name (opus/sonnet) leak');
-      // The companion assertion — that the block names the two tiers as `reasoning-tier` /
-      // `standard-tier` — is DELETED WITH ITS MECHANISM. It required the neutral VOCABULARY of a
-      // per-role tier split, and there is no split left to name: a dispatched subagent runs the
-      // session's effort. Requiring the words to survive the thing they described is exactly the
-      // pin-rewritten-ahead-of-its-mechanism failure. (a) above is not tier-specific — it forbids
-      // the Claude model nouns in this edition's prose whatever the block goes on to say.
-      // (a2) The block names no MECHANISM, heading included. The block's job is to state the
-      //      result — a role's effort is configured centrally, so there is no per-call `model=`
-      //      to pass — and `variant` was the machinery word that made it a claim about HOW,
-      //      one that was never true of a dispatched subagent. The heading line is inside `sec`
-      //      on purpose: the heading is where this word survived a rewrite of the body.
-      assert(!MECHANISM_WORD.test(sec),
-        'S2[' + file + ']: the effort block names NO `variant` anywhere, heading included — the block '
-        + 'states the result (effort is configured per role; never pass a per-call `model=`), and '
-        + 'naming the machinery is how it came to assert a mechanism that never applied');
-    }
-    // (b) "opus-tier"/"sonnet-tier" are unambiguous generator leak markers, and both of
-    //     their possible producers are now absent: canonical prose never produced them,
-    //     and no rewrite emits them either — the three transformCommandBody rewrites
-    //     that once did went with the rest of the model-noun rewriting. Having no
-    //     producer left is exactly what makes ANY occurrence here a reintroduced
-    //     rewrite rather than an ambiguity to triage.
-    assert(!/\bopus-tier\b/i.test(body) && !/\bsonnet-tier\b/i.test(body),
-      'S2[' + file + ']: no opus-tier/sonnet-tier leak in rewrite prose');
-  }
-  // (c) DELETED with its mechanism: the workflow-planner opencodeAgentSuffix addendum is
-  //     retired, the suffix is empty for every role (A13), and there is no suffix prose
-  //     left to assert neutrality over.
-
-  // (d) #609: body-wide B2 sweep — the narrowed exemption. Every generated agent
-  // and command file must carry ZERO capitalized "Opus"/"Sonnet" proper-noun
-  // mentions (case-sensitive, whole-word), not just inside the substituted block or
-  // the generator's own rewrite-marker strings. This is the check the ORIGINAL S2
-  // comment (above) used to explicitly tolerate failing on. What makes it pass now is
-  // that the CANONICAL sources carry no such noun (#812 took them to zero) — not a
-  // rewrite on the way out, which no longer exists anywhere. So this sweep reads
-  // canonical neutrality THROUGH the generated tree, and reds when a noun is
-  // reintroduced upstream.
-  const B2_MODEL_NOUN = /\b(Opus|Sonnet)\b/;
-  const ocAgentRels = fs.readdirSync(sync.OUT_AGENT_DIR).filter(f => f.endsWith('.md')).map(f => '.opencode/agent/' + f);
-  const ocCommandRels = fs.readdirSync(sync.OUT_COMMAND_DIR).filter(f => f.endsWith('.md')).map(f => '.opencode/command/' + f);
-  for (const rel of [...ocAgentRels, ...ocCommandRels]) {
-    const lines = read(rel).split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      const m = lines[i].match(B2_MODEL_NOUN);
-      if (m) {
-        assert(false,
-          'S2 (#609): ' + rel + ':' + (i + 1) + ': Claude model noun "' + m[0] +
-          '" leaked into generated opencode prose (B2 — use reasoning-tier/standard-tier vocabulary; B1 lowercase `opus`/`sonnet` tier tokens are exempt)');
-      }
-    }
-  }
-
-  // (e) Body-wide mechanism-word sweep. The (a2) check above is scoped to the effort block, and a
-  // scoped check is exactly what an anchor miss disarms — the failure this issue exists for was a
-  // heading that a block-scoped guard could not see because the guard found no block. This sweep
-  // has no anchor to lose: `variant` is not a word canonical prose produces (zero occurrences in
-  // commands/ and agents/), so ANY occurrence in the generated opencode tree is the generator
-  // presenting effort tiers as a `variant` mechanism — the claim this edition never delivered.
-  // Reported with file:line, so the site is named rather than merely counted.
-  const sweptFiles = [...ocAgentRels, ...ocCommandRels];
-  assert(sweptFiles.length > 0,
-    'S2 (#927): the mechanism-word sweep read at least one generated file (read ' + sweptFiles.length
-    + ') — a sweep over an empty file list reports clean without having opened anything');
-  for (const rel of sweptFiles) {
-    const lines = read(rel).split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      const m = lines[i].match(MECHANISM_WORD);
-      if (m) {
-        assert(false,
-          'S2 (#927): ' + rel + ':' + (i + 1) + ': mechanism word "' + m[0] + '" in generated opencode '
-          + 'prose — effort tiers were never applied to a dispatched subagent through opencode '
-          + '`variant`s, so naming them states a mechanism that does not happen. State the RESULT '
-          + "(the role's effort is configured centrally; never pass a per-call `model=`): " + lines[i].trim());
-      }
-    }
-  }
-}
-
+// S2 fixed model/effort-section assertions were deleted with the retired per-dispatch model
+// mechanism. The opencode edition now inherits the session model; claim facts and Mission List
+// resume context are exercised by A29 below.
 // ---------------------------------------------------------------------------
 // A22 (issue #539; strips retired by #962): opencode path-flip. opencode is
 // adaptive-only-default, and post-#538 canonical is too: no canonical command
@@ -1091,7 +909,7 @@ for (const script of sync.HOOK_SCRIPTS) {
 }
 
 // ---------------------------------------------------------------------------
-// A11: hooks adapter plugin — present and syntactically valid (opencode loads
+// A11: compact-resume plugin — present and syntactically valid (opencode loads
 // .opencode/plugins/*.js at startup; a syntax error would break the session).
 // ---------------------------------------------------------------------------
 const pluginRel = '.opencode/plugins/kaola-workflow-hooks.js';
@@ -1123,8 +941,8 @@ if (exists(pluginRel)) {
   for (const script of sync.HOOK_SCRIPTS) {
     assert(src.includes(script), 'A11: plugin references hook script ' + script);
   }
-  assert(src.includes('tool.execute.before') && src.includes('experimental.session.compacting'),
-    'A11: plugin registers tool.execute.before + compaction hooks');
+  assert(src.includes('experimental.session.compacting'),
+    'A11: plugin registers the surviving compaction hook');
 }
 
 // ---------------------------------------------------------------------------
@@ -1245,6 +1063,24 @@ if (exists(pluginRel)) {
   const os = require('os');
 
   const INSTALLER = path.join(REPO, 'install-opencode.sh');
+  // Issue #1032: the retired dispatch hook must remain in the installer's bounded list, and both
+  // cleanup paths must consume that list. Inspect the shipped source directly; no real home is
+  // needed and a hard-coded cleanup path cannot satisfy these assertions.
+  const installerSource = readFileSync(INSTALLER, 'utf8');
+  const retiredHooks = installerSource.match(/\bRETIRED_HOOKS\s*=\s*\(([^)]*)\)/);
+  const hasRetiredHookCleanup = body => {
+    const loop = String(body).match(/^[ \t]*for[ \t]+retired[ \t]+in[^\n]*RETIRED_HOOKS[^\n]*;[ \t]*do[ \t]*\n([\s\S]*?)^[ \t]*done[ \t]*$/m);
+    return !!loop && /\brm\s+-f\b/.test(loop[1]) && /\$retired\b/.test(loop[1]) && /hooks/.test(loop[1]);
+  };
+  const installStart = installerSource.indexOf('copy_tree() {');
+  const uninstallStart = installerSource.indexOf('uninstall_edition() {');
+  assert(retiredHooks && /\bkaola-workflow-subagent-dispatch-log\.sh\b/.test(retiredHooks[1]),
+    'R1: RETIRED_HOOKS contains kaola-workflow-subagent-dispatch-log.sh');
+  assert(installStart >= 0 && uninstallStart > installStart
+    && hasRetiredHookCleanup(installerSource.slice(installStart, uninstallStart)),
+    'R2: install cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
+  assert(uninstallStart >= 0 && hasRetiredHookCleanup(installerSource.slice(uninstallStart)),
+    'R3: uninstall cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
   // The three surviving command topics. `kaola-workflow-adapt` and `kaola-workflow-plan-run`
   // were the node executor's own surfaces and went with it.
   const ADAPTIVE_CORE = [
@@ -1912,52 +1748,6 @@ if (exists(pluginRel)) {
     clean(r1);
   }
 
-  // -------------------------------------------------------------------------
-  // H1 (#F3) — direct unit assertion of hookPath's GLOBAL resolution. An ESM
-  // harness reaches hookPath and proves that, for a project with NO
-  // .opencode/hooks and an EMPTY OPENCODE_CONFIG_DIR, hookPath still resolves a
-  // hook via the plugin-sibling `../hooks` candidate (SELF_DIR from
-  // import.meta.url) — the global-layout case findRoot never reaches — and
-  // returns null (fail-open) for a non-existent hook.
-  //
-  // ACCESS PATH, not mechanism: hookPath is reached as a PROPERTY OF THE DEFAULT
-  // EXPORT, never as a named export beside it. A named export here is not free —
-  // opencode's loader calls every exported value as a plugin factory, so
-  // `export { hookPath }` made the module throw on load and took every hook in it
-  // down. The candidate walk this block asserts is unchanged; only how a test
-  // reaches it is. A29 below is what holds that export shape to one value.
-  // -------------------------------------------------------------------------
-  {
-    const pluginPath = path.join(TREE_ROOT, '.opencode', 'plugins', 'kaola-workflow-hooks.js');
-    const fakeRoot = mkdtempSync(path.join(os.tmpdir(), 'opencode-h1-proj-'));   // exists, no .opencode/hooks
-    const emptyCfg = mkdtempSync(path.join(os.tmpdir(), 'opencode-h1-cfg-'));    // empty: no <cfg>/hooks
-    const harness = [
-      "import { pathToFileURL } from 'node:url';",
-      "const { default: plugin } = await import(pathToFileURL(process.env.KW_PLUGIN).href);",
-      "const hookPath = plugin.hookPath;",
-      "const resolved = hookPath(process.env.KW_FAKEROOT, process.env.KW_SCRIPT);",
-      "const missing = hookPath(process.env.KW_FAKEROOT, 'definitely-not-a-real-hook.sh');",
-      "process.stdout.write(JSON.stringify({ resolved, missing }));",
-    ].join('\n');
-    // spawn-class: environment
-    const h = spawnSync('node', ['--input-type=module', '-e', harness], {
-      env: Object.assign({}, process.env, {
-        OPENCODE_CONFIG_DIR: emptyCfg, KW_PLUGIN: pluginPath,
-        KW_SCRIPT: 'kaola-workflow-subagent-dispatch-log.sh', KW_FAKEROOT: fakeRoot,
-      }),
-      encoding: 'utf8',
-    });
-    assert(h.status === 0, 'H1: hookPath ESM harness runs (got ' + h.status + (h.stderr ? ' — ' + String(h.stderr).split('\n')[0] : '') + ')');
-    let out; try { out = JSON.parse(h.stdout); } catch (_) { out = {}; }
-    const resolvedNorm = (out.resolved || '').replace(/\\/g, '/');
-    assert(resolvedNorm.includes('.opencode/hooks/kaola-workflow-subagent-dispatch-log.sh'),
-      'H1 (#F3): hookPath resolves a hook via the plugin-sibling ../hooks candidate when the project + config dir have none — got ' + JSON.stringify(out.resolved));
-    assert(out.missing === null,
-      'H1 (#F3): hookPath returns null (fail-open) for a hook that exists nowhere');
-    try { rmSync(fakeRoot, { recursive: true, force: true }); } catch (_) {}
-    try { rmSync(emptyCfg, { recursive: true, force: true }); } catch (_) {}
-  }
-
   // A (folded #544) — ZERO Claude path leaks across the ENTIRE deployed .opencode/
   // tree. Today kaola_script()'s search path ships the Claude env var
   // ($CLAUDE_PLUGIN_ROOT) + the Claude home dir ($HOME/.claude/kaola-workflow)
@@ -2368,11 +2158,9 @@ if (exists(pluginRel)) {
 // path first argument means `path.resolve(<object>)` and a thrown TypeError. Either aborts
 // registration of the whole module — so one extra named export kills every hook in the file.
 //
-// That is measured, not hypothetical: this plugin shipped `export { hookPath, findRoot }` "for the
-// test suite only, inert for the runtime". They were not inert — they threw on every load, and the
-// hooks survived only because ESM namespace keys are sorted and `default` happened to be collected
-// before `findRoot` threw. One export name sorting ahead of `default` would have silently taken the
-// dispatch-log and compaction hooks down with it.
+// That is measured, not hypothetical: this plugin once shipped test-only named exports beside the
+// factory. They were not inert — opencode called them as factories and could abort registration of
+// the compaction hook. The shipped module must keep the single-factory shape.
 //
 // A11 greps the plugin SOURCE for the two hook names. A grep cannot tell a registered hook from a
 // mentioned one and is blind to the export shape entirely, and A26 — which was the only block that
@@ -2381,16 +2169,11 @@ if (exists(pluginRel)) {
 //   (a) the module's export list is exactly ["default"];
 //   (b) the loader walk yields exactly one hook table, with nothing thrown and no non-function
 //       export met on the way;
-//   (c) both surviving hooks are functions on that table, and neither throws when driven.
-//
-// WHAT IS DELIBERATELY NOT DRIVEN: `tool.execute.before` with `tool === "task"`. That branch runs
-// the DEPLOYED dispatch-log hook, which enumerates the repository's git worktrees and appends to
-// its run records — a test that writes into the tree it is testing. The branch is entered here with
-// a non-task tool, which proves registration and that the hook returns without touching the call.
+//   (c) the surviving compaction hook is a function on that table and does not throw when driven.
 // ---------------------------------------------------------------------------
 {
   const { spawnSync } = require('child_process');
-  const { mkdtempSync, copyFileSync, existsSync, rmSync } = require('fs');
+  const { mkdtempSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } = require('fs');
   const os = require('os');
 
   // The SHIPPED artifact, in place. Copied to .mjs only so `import()` treats it as ESM (the
@@ -2401,6 +2184,22 @@ if (exists(pluginRel)) {
   const projRoot = mkdtempSync(path.join(os.tmpdir(), 'oc-a29-proj-'));
   const homeDir = mkdtempSync(path.join(os.tmpdir(), 'oc-a29-home-'));
   const cfgDir = mkdtempSync(path.join(os.tmpdir(), 'oc-a29-cfg-'));
+  const projectDir = path.join(projRoot, 'kaola-workflow', 'issue-a29');
+  mkdirSync(projectDir, { recursive: true });
+  writeFileSync(path.join(projectDir, 'workflow-state.md'), [
+    '# Kaola-Workflow State', '',
+    '## Project', 'name: issue-a29', 'status: active', '',
+    '## Claim Identity', 'claim_repository_id: fixture-repo', 'claim_identity_digest: fixture-digest', '',
+    '## Sink', 'branch: workflow/issue-a29', 'sink: merge', 'session_marker: fixture-session',
+    'claim_ts: 2026-08-26T00:00:00Z', '',
+  ].join('\n'));
+  writeFileSync(path.join(projectDir, 'mission-list.md'), [
+    '# Resume fixture goal', '',
+    '- item: preserve the completed result',
+    '  status: done',
+    '  dispatched: inline',
+    '  result: fixture-result.md',
+  ].join('\n') + '\n');
 
   // The harness IS opencode's walk. It reports; it asserts nothing — a throw has to arrive here as
   // DATA, because "the loader threw" is the finding, not a crashed probe.
@@ -2422,19 +2221,12 @@ if (exists(pluginRel)) {
     "  const table = tables.find((t) => t && typeof t === 'object') || {};",
     "  const hookTypes = {};",
     "  for (const k of Object.keys(table)) hookTypes[k] = typeof table[k];",
-    // Drive both surviving hooks. Neither may throw; `Plugin.trigger` wraps hook invocation in a
-    // bare promise with no catch, unlike the load path around it, so a throw is fatal there.
+    // Drive the surviving compaction hook. Neither the loader nor the hook invocation may throw.
     "  const drove = {};",
-    "  const before = table['tool.execute.before'];",
-    "  if (typeof before === 'function') {",
-    "    const output = { args: { path: 'README.md' } };",
-    "    try { await before({ tool: 'read', sessionID: 'kw-a29' }, output); drove.before = { threw: null, args: output.args }; }",
-    "    catch (e) { drove.before = { threw: String((e && e.message) || e) }; }",
-    "  }",
     "  const compacting = table['experimental.session.compacting'];",
     "  if (typeof compacting === 'function') {",
     "    const output = { context: [] };",
-    "    try { await compacting({}, output); drove.compacting = { threw: null, contextLen: output.context.length }; }",
+    "    try { await compacting({}, output); drove.compacting = { threw: null, contextLen: output.context.length, context: output.context }; }",
     "    catch (e) { drove.compacting = { threw: String((e && e.message) || e) }; }",
     "  }",
     "  emit({ ok: true, exportNames, tableCount: tables.filter(Boolean).length, walkErrors, nonFunctions, hookTypes, drove });",
@@ -2483,31 +2275,27 @@ if (exists(pluginRel)) {
           'A29: the walk yields EXACTLY ONE hook table (got ' + out.tableCount + ') — more than one '
           + 'means a second exported function is being registered as a plugin in its own right');
 
-        // (c) Both surviving hooks are registered as FUNCTIONS, and neither throws when driven.
-        for (const hook of ['tool.execute.before', 'experimental.session.compacting']) {
-          assert(out.hookTypes[hook] === 'function',
-            'A29: the loaded plugin registers `' + hook + '` as a function — A11 greps the source, '
-            + 'which cannot tell a registered hook from a mentioned one. Table: '
-            + JSON.stringify(out.hookTypes));
-        }
-        assert(out.drove && out.drove.before && out.drove.before.threw === null,
-          'A29[tool.execute.before]: the hook returns without throwing — opencode does not catch a '
-          + 'throwing hook the way it catches a failing plugin load. Threw: '
-          + (out.drove && out.drove.before ? out.drove.before.threw : '<hook did not run>'));
-        assert(out.drove && out.drove.before
-          && JSON.stringify(out.drove.before.args) === JSON.stringify({ path: 'README.md' }),
-          'A29[tool.execute.before]: a non-task tool call passes through UNTOUCHED — this hook '
-          + 'observes dispatches, it does not rewrite the call. Got '
-          + JSON.stringify(out.drove && out.drove.before ? out.drove.before.args : undefined));
+        // (c) The surviving compaction hook is registered as a FUNCTION and does not throw.
+        assert(out.hookTypes['experimental.session.compacting'] === 'function',
+          'A29: the loaded plugin registers the surviving compaction hook as a function — A11 greps '
+          + 'the source, which cannot tell a registered hook from a mentioned one. Table: '
+          + JSON.stringify(out.hookTypes));
         assert(out.drove && out.drove.compacting && out.drove.compacting.threw === null,
           'A29[experimental.session.compacting]: the hook returns without throwing on a project with '
           + 'no workflow state. Threw: '
           + (out.drove && out.drove.compacting ? out.drove.compacting.threw : '<hook did not run>'));
-        assert(out.drove && out.drove.compacting && out.drove.compacting.contextLen === 0,
-          'A29[experimental.session.compacting]: with no kaola-workflow state under the root there is '
-          + 'nothing to preserve, so NOTHING is pushed into the compaction context — a hook that '
-          + 'always appends would put a fabricated resume summary in front of the model. Pushed '
-          + (out.drove && out.drove.compacting ? out.drove.compacting.contextLen : '?') + ' entr(ies)');
+        assert(out.drove && out.drove.compacting && out.drove.compacting.contextLen === 1,
+          'A29[experimental.session.compacting]: active claim state plus its Mission List contributes '
+          + 'one resume context entry (got ' + (out.drove && out.drove.compacting
+            ? out.drove.compacting.contextLen : '?') + ')');
+        const resume = out.drove && out.drove.compacting && out.drove.compacting.context
+          ? out.drove.compacting.context.join('\n') : '';
+        assert(resume.includes('project `issue-a29`: status active, branch workflow/issue-a29')
+          && resume.includes('sink merge') && resume.includes('Claim state:'),
+          'A29[experimental.session.compacting]: resume context retains active claim facts and state locator — got ' + resume);
+        assert(resume.includes('Mission List:') && resume.includes('# Resume fixture goal')
+          && resume.includes('result: fixture-result.md'),
+          'A29[experimental.session.compacting]: resume context carries the authored Mission List and result locator — got ' + resume);
       }
     }
   } finally {

@@ -130,11 +130,10 @@ if [[ "$REGENERATE" -eq 1 ]]; then
   exit 0
 fi
 
-# This edition has never shipped a prior command/agent/hook set, so there is nothing
-# to retire yet. Names added here are removed on install and uninstall by basename.
+# Names here are removed on install and uninstall by basename.
 RETIRED_AGENTS=()
 RETIRED_COMMANDS=()
-RETIRED_HOOKS=()
+RETIRED_HOOKS=(kaola-workflow-subagent-dispatch-log.sh)
 RETIRED_SUPPORT_SCRIPTS=()
 
 WORKFLOW_COMMANDS=(

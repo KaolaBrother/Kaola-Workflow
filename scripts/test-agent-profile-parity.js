@@ -35,19 +35,17 @@ const root = path.resolve(__dirname, '..');
 // loudly instead of quietly enforcing nothing. Deleting a pin whose mechanism is gone is the correct
 // repair; keeping a pin that matches nothing is not an option the guard leaves open.
 const ROLE_PINS = [
-  // Test custody. Two roles carry reciprocal halves of one rule — the implementer never writes a
-  // test, the test author never writes production code — so it is shared by exactly 2 of 11 profiles
-  // and no corpus consensus can reach it. These pins exist because the rule survives DELETION
-  // detection easily: an inversion keeps the surrounding paragraph, the vocabulary, and the token
-  // count intact, and "You may freely write, weaken, delete, or skip a test to make your change
-  // pass" reads like policy. Every pin below is therefore a sentence whose POLARITY is the rule —
-  // invert it and none of these words survive in that order.
-  { role: 'implementer', token: 'You do not hold custody of the tests.' },
-  { role: 'implementer', token: 'What you may never do is write, weaken, delete, or skip a test to make your change pass.' },
-  { role: 'implementer', token: 'Treat every test path as read-only.' },
-  { role: 'tdd-guide', token: 'you author the tests, and you never write production code' },
-  { role: 'tdd-guide', token: 'the implementing role reads and runs your tests but can never write them' },
-  { role: 'tdd-guide', token: 'Custody governs writing, not reading.' },
+  // Test custody. The current contract makes acceptance meaning and RED evidence independent of
+  // the implementation context, while explicitly allowing mechanical fixture/signature/manifest/
+  // adapter/harness maintenance when that meaning is unchanged. Pin those load-bearing facts, not
+  // the retired absolute "never touch a test path" wording.
+  { role: 'implementer', token: 'acceptance meaning' },
+  { role: 'implementer', token: 'mechanical fixture plumbing' },
+  { role: 'implementer', token: 'a test you cannot satisfy is a finding, not an obstacle' },
+  { role: 'tdd-guide', token: 'you never write production code' },
+  { role: 'tdd-guide', token: 'mechanical fixture, signature, manifest, adapter, or harness maintenance needs no exemption when that meaning is unchanged' },
+  { role: 'tdd-guide', token: 'Any edit that changes accepted behavior returns to the test author or main' },
+  { role: 'tdd-guide', token: 'never weakens, deletes, skips, or changes' },
   // The metric-optimizer's scoped-revert safety rule. Polarity is load-bearing on the second pin:
   // the rule is that scope binds the REVERT too, which is where an unscoped reset destroys work
   // belonging to other agents.

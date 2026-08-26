@@ -35,9 +35,7 @@ The numbered axioms are tie-breakers, applied in priority order whenever a situa
 
 **Check the premise before it shapes the work:** an issue is a claim recorded earlier against a tree that has since moved, so establish what is true *now* at the place it points and let the measurement rather than the filed text decide what gets built. The usual outcome is neither *right* nor *wrong* but right-with-a-detail-that-misroutes — a stale locator, a miscounted set, a clause that breaks if executed literally — so carry the measurement forward, never a bare verdict. Where the two disagree the issue gets corrected, not quietly worked around. Nothing inspects that you did this.
 
-**Dispatch production; keep decisions:** the orchestrator's context is the run's scarcest resource — a handoff costs once, inline residue taxes every later decision — so delegating discretionary production is the default and only the deciding stays inline; weigh the economics per case by judgment, with no justifier, evidence line, or approval attached.
-
-**Parallel by default:** concurrency is the standing default for independent work, and work that genuinely feeds other work runs in order because it has to. Nothing inspects that choice — no proof, no evidence line, no cap: you can tell the difference, and the frontier is in front of you. Width stays sized to the true shape of the task rather than pushed as wide as it will go.
+**Choose dispatch or inline per item:** dispatch when it materially reduces main-context residue, supplies independent judgment, or enables genuinely independent parallel work. Keep one production owner for a cohesive state machine, protocol, or integration when handoff and integration cost exceed that benefit. Both modes are first-class; width follows the true work frontier. No dispatch count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
 
 That block is not a paraphrase of the canonical one — it is a byte-identical copy, and so are the generated `workflow-init` surfaces this project ships and the root `CLAUDE.md` it runs on. The test suite holds that set to the same bytes (`testAxiomBlockByteIdentity` prints the count), which means the axioms you just read are themselves one of the guarded surfaces.
 
@@ -160,8 +158,8 @@ Claude Code's agents are vendored directly from this repository; the prompts are
 | `knowledge-lookup` | Read — external docs (when needed) | standard |
 | `planner` | Planning — plan authoring | heavy |
 | `code-architect` | Planning — design | heavy |
-| `tdd-guide` | Write — per-task TDD executor | standard |
-| `implementer` | Write — implementation without test-first ceremony; refactors, scaffolding, config, UI, migrations | standard |
+| `tdd-guide` | Write — independent acceptance author and behavioral RED custodian | standard |
+| `implementer` | Write — production plus meaning-preserving fixture, signature, manifest, adapter, or harness maintenance | standard |
 | `build-error-resolver` | Write — validation repair when needed | reasoning |
 | `code-reviewer` | Gate — review | reasoning |
 | `security-reviewer` | Gate — review (conditional) | reasoning |
@@ -190,20 +188,15 @@ governs exactly one case — an ad-hoc dispatch pointed at this repository's
 `test-agent-model-resolver.js`, so a role runs at the same tier whichever
 directory it was dispatched from.
 
-Codex keeps those role classifications unchanged but resolves them explicitly at each subagent
-spawn: `standard` dispatches as `gpt-5.6-luna` / `max`, `reasoning` dispatches as
-`gpt-5.6-sol` / `medium`, and `heavy` dispatches as `gpt-5.6-sol` / `high`. Those mappings are
-fixed: a role's tier pair never changes for an individual task, except the one reviewer-class
-heavy re-dispatch carve-out on the next/finalize routing pin. Other runtimes retain their
-edition-specific model routing.
+Codex keeps those role classifications as metadata. Profiles and runtime-native defaults remain
+available to the resolver, while a task-sensitive model or reasoning-effort override — or omission
+when the runtime supplies a default — is valid for any individual dispatch. The workflow does not
+turn a tier into a fixed per-spawn pair.
 
-Claude reviewer-class roles rest on their `opus` profile. The `/workflow-next` and
-`/kaola-workflow-finalize` command runtime permits one bounded re-dispatch at the approved
-`fable` profile when a reasoning-tier review fails to finish or the surface is judged complex
-before dispatch; every reviewer dispatch states the surface under review and what acceptance
-looks like. Generated additive-runtime command surfaces preserve the scope-and-acceptance packet
-but omit that dynamic reviewer escalation because those runtimes have no equivalent per-call
-override.
+Reviewer roles review a cohesive, converged candidate and return findings to the existing owner.
+That owner repairs the finding and presents the repaired finding or new claim for re-review; a
+security review remains available whenever the surface is security-sensitive. There is no fixed
+pipeline or escalation count.
 
 Three roles are locally authored rather than derived from ECC:
 
@@ -222,23 +215,20 @@ One rule about review is worth stating because it is judgment, not machinery: a 
 its own writer-context is no gate. If the same session did the work, take the finding to the user
 rather than self-issuing a pass.
 
-For Claude Code, when agents are installed, their frontmatter `model:` field is rewritten to
-`inherit`. Command files render each agent's concrete assigned model (e.g.,
-`model="sonnet"`) into the dispatched `Agent(...)` call via install-time
-substitution. That rendered literal is what puts the role on its assigned
-model: a dispatch that carries no `model=` runs on the session's own model
-instead.
+For Claude Code, installed agent frontmatter is rewritten to `model: inherit`. Role tiers remain
+resolver metadata and defaults; a caller may omit the model so the runtime inherits or supply a
+task-sensitive override. Routing commands do not render a fixed per-spawn model literal.
 
 ### Named-role handoffs
 
 When `/workflow-next` or `/kaola-workflow-finalize` dispatches a named role, main supplies a
 bounded, falsifiable brief that is self-sufficient from the brief, the installed role profile,
-and named repository evidence; inherited conversation is not required. The packet carries only
+and named repository evidence; inherited conversation is not required. The brief carries only
 task-specific facts, authority, scope, acceptance, a locator, and stop conditions. Universal
 behavior remains owned by the profile, while main keeps product intent, integration, and the final
-done verdict. The canonical wording lives in the [routing slot](templates/routing/slots.js) and is
-inserted by the [next](templates/routing/next.skeleton.md) and
-[finalize](templates/routing/finalize.skeleton.md) skeletons.
+done verdict. The canonical wording lives directly in the
+[next](templates/routing/next.skeleton.md) and [finalize](templates/routing/finalize.skeleton.md)
+skeletons; there is no handoff slot or field-order schema.
 
 ## Installation
 
@@ -720,11 +710,9 @@ The audit must keep these facts separate:
 - Runtime profile integrity comes from omission plus preflight: every generated
   role profile omits both runtime-strength keys, and the profile-freshness
   preflight migrates or refuses any profile that pins them. The unpinned profile
-  does not select the dispatch pair: each Codex spawn explicitly carries the
-  model and reasoning effort selected from its role classification. Standard is
-  Luna/max, reasoning is Sol/medium, and heavy is Sol/high. These mappings have
-  no per-task escalation, downgrade, or other model/reasoning exception, except
-  the one reviewer-class heavy re-dispatch carve-out on the next/finalize pin.
+  leaves model and reasoning-effort selection to the runtime defaults or a
+  task-sensitive dispatch override; the workflow policy does not impose a fixed
+  pair or reviewer escalation.
 
 Recommended posture when the user asks the agent to configure Codex for
 Kaola-Workflow:
@@ -878,25 +866,19 @@ against the running baseline until a stop condition fires.)
 The managed setup copies role configs into `~/.codex/agents/kaola-workflow/` (global
 default; a project-local override targets `<project>/.codex/agents/kaola-workflow/`
 instead) and maintains a `# BEGIN kaola-workflow agents` block in `~/.codex/config.toml`
-while preserving unrelated config. Codex workflows default to delegation
-(`delegation_policy: delegate`) without prompting: the orchestrator dispatches those roles for
-research, execution, repair, review, and documentation work.
-When the role profiles are absent the workflow auto-detects this, keeps the
-`delegate` policy, and records `local-fallback-tool-unavailable`. The current Codex session performs
-the work locally under `local-authorized` only when you explicitly disable delegation.
+while preserving unrelated config. Codex workflows treat dispatch and inline execution as
+first-class: choose dispatch for real independent parallelism, independent judgment, or meaningful
+context compression, and keep cohesive feed-forward work with one production owner when integration
+cost dominates. Missing role profiles are reported as an environment problem; they do not change the
+execution-economics judgment.
 
 Standalone role TOMLs include the same `description` and `nickname_candidates` metadata as the
 managed `config.toml` block and deliberately omit both runtime keys. Exact historical Sol/medium or
 Sol/xhigh profile pins are treated as stale managed profiles and migrated back to omission; partial
-or illegal pins are malformed. Those legacy migration forms are separate from live dispatch:
-Codex passes both `model` and `reasoning_effort` on each spawn from the role's three-tier
-classification, using Luna/max for standard, Sol/medium for reasoning, and Sol/high for heavy. The user-owned root
-`model_reasoning_effort` controls the parent session and is never rewritten by profile migration.
-
-Every standard-tier Codex spawn explicitly carries Luna/max, every reasoning-tier spawn carries
-Sol/medium, and every heavy-tier spawn carries Sol/high. The workflow does not select a different
-model or reasoning effort for a role based on task or runtime conditions, except the one bounded
-reviewer-class heavy re-dispatch.
+or illegal pins are malformed. Those legacy migration forms are separate from live dispatch. The
+user-owned root `model_reasoning_effort` controls the parent session and is never rewritten by profile
+migration; each child may inherit runtime-native defaults or receive a task-sensitive model or
+reasoning-effort override.
 
 **Say where the deliverable goes.** A role that can write (`Write`/`Edit` in its manifest) writes its
 full deliverable to a path the dispatch names and returns a compact summary; a read-only role returns
@@ -907,9 +889,8 @@ the mission list's `dispatched` field is what lets a successor go looking for th
 Codex preflight and doctor output report the dispatch identity mode. `v2-task-name`
 is the only mode — there is no v1/thread-id fallback. Once `features.multi_agent_v2.enabled = true`
 is set, dispatches pass a sanitized `task_name` with `fork_turns: "none"` and no
-conversation-history inheritance. They also pass explicit per-spawn `model` and
-`reasoning_effort` values selected by the Codex routing contract; the standalone
-profile remains runtime-unpinned.
+conversation-history inheritance. Child model and reasoning-effort values may be inherited from the
+runtime or supplied as task-sensitive overrides; the standalone profile remains runtime-unpinned.
 
 ## Usage
 
@@ -1122,7 +1103,7 @@ when developing locally. Drift between `scripts/` and
 
 Kaola-Workflow treats `kaola-workflow/{project}/workflow-state.md` plus the configured forge's issue and PR/MR state as the durable coordination contract. No lease/session layer remains.
 
-The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep generated root-memory files to compact invariants: the forge is the backlog — an issue's title, labels, and comments (which override the body) are what the work is, and there is no local mirror to keep current; `kaola-workflow/.roadmap/_rules.md` is the one optional local file that survives, for standing project-local rules read directly by the pick step; active work stays under `kaola-workflow/{project}/` until archive or discard, and active artifacts include `workflow-state.md`, `mission-list.md`, and the `.cache/` directory.
+The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep generated root-memory files to compact invariants: the forge is the backlog — an issue's title, labels, and comments (which override the body) are what the work is, and there is no local mirror to keep current; `kaola-workflow/.roadmap/_rules.md` is the one optional local file that survives, for standing project-local rules read directly by the pick step; active work stays under `kaola-workflow/{project}/` until archive or discard, and active artifacts include claim/sink/liveness `workflow-state.md`, `mission-list.md`, and the `.cache/` directory.
 
 **Environment Variables:**
 
@@ -1137,7 +1118,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE` | (unset) | DEV/TEST ONLY — force merge-impossible error in sink-merge fallback tests (GitHub, GitLab, and Gitea) |
 | `KAOLA_WORKTREE_NATIVE` | `1` (ON) | Provision a repo-local Git worktree at `<repo-root>/.kw/worktrees/<project>/` on every claim. Set to `0` for a repo-root run with no worktree. The worktree is a tool: decline it and the run still finishes |
 | `KAOLA_COTENANT` | (unset) | Set to `1` to declare that another session is active on this checkout, so lane classification treats every foreign active folder as `live` and leaves it alone |
-| `KAOLA_PATH` | (unset) | Retired, with no residue. There is one workflow; the claim silently ignores this variable (any value, or unset). The requested value is not recorded either — the persisted `workflow_path` state field is the constant `adaptive`, never an echo of the request. The `--workflow-path` flag is likewise accepted-but-ignored (a stderr notice, never a refusal) |
+| `KAOLA_PATH` | (unset) | Retired compatibility input. There is one workflow; the claim ignores this variable and the `--workflow-path` flag with a notice, and records no path-selection field in active state |
 | `KAOLA_RUNTIME` | (unset) | Explicit runtime override, read by `kaola-workflow-claim.js` when stamping `workflow-state.md`. Precedence: `--runtime` flag wins, then `KAOLA_RUNTIME`, then inference from an opencode model env var, else `claude` |
 | `KAOLA_TARGET_ISSUE` | (unset) | The issue number this run targets. Equivalent to `--target-issue N` |
 | `KAOLA_TARGET_ISSUES` | (unset) | Comma-separated list of issue numbers for an explicit bundle claim, e.g. `KAOLA_TARGET_ISSUES=42,47,53`. Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (answers `target_ambiguity` usage at exit 0, writing nothing) |
@@ -1148,7 +1129,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | Subcommand | Usage | Description |
 |------------|-------|-------------|
 | `startup` / `bootstrap` | `node scripts/kaola-workflow-claim.js startup --target-issue <N> [--runtime claude|codex] [--sink merge|pr]` | Validates and atomically creates or reuses the active folder for issue N |
-| `status` | `node scripts/kaola-workflow-claim.js status` | Lists active folders and their issue, branch, phase, sink, and worktree metadata |
+| `status` | `node scripts/kaola-workflow-claim.js status` | Lists active folders and their issue, branch, sink, run posture, and worktree metadata |
 | `release` / `discard` | `node scripts/kaola-workflow-claim.js release --project <name>` | Archives an active folder as abandoned and clears advisory forge labels when online |
 | `finalize` | `node scripts/kaola-workflow-claim.js finalize --project <name> [--keep-worktree] [--check] [--json] [--base <ref>]` | The one resumable finalize transaction: artifact mirror, archive + status close, roadmap staging, and the `chore: finalize <project>` commit gate. It also reports `validation`, `changed_paths` and `mission_list` on its envelope and durably in the summary. `--check` evaluates every precondition in one read-only pass, reporting all of them together with zero side effects. By default it removes the linked worktree; `--keep-worktree` preserves it for the final commit gate. `--base <ref>` (or `KAOLA_FINALIZE_BASE`) scopes the changed-paths report on a **shared/multi-issue branch** |
 | `sink-fallback` | `node scripts/kaola-workflow-claim.js sink-fallback --project <name> [--reason <text>]` | Records merge-impossible fallback; updates Sink block to sink: pr; writes .cache/sink-fallback.json |
@@ -1272,14 +1253,14 @@ The forge is the backlog; there is no local mirror to keep current. `kaola-workf
 
 The workflow also encourages context discipline: `CLAUDE.md` has a recommended size of under 200 lines — advisory, never enforced, so a longer file draws a notice and an offer to trim rather than a failure — and agent prompts should include only the relevant excerpts needed for the delegated task.
 
-Each active workflow maintains two files: `workflow-state.md`, which records what the run owns — issue, branch, worktree, sink, next command — and `mission-list.md`, which records what it is doing. After resume or compaction, read both before continuing.
+Each active workflow maintains two files: `workflow-state.md`, which records claim identity, liveness, branch/worktree, sink, run posture, and genuine closure facts, and `mission-list.md`, which records what it is doing. After resume or compaction, read both before continuing.
 
 Avoid redundant validation runs: an item that only touches implementation runs targeted affected checks, an item that only fixes review feedback validates just the fix or cites existing evidence, and Finalization runs each full final command once against the final candidate state. Small targeted commands may run in the main session, while expensive or noisy test/lint/type/build commands should be delegated and summarized from cache evidence.
 
 ## Hook policy
 
-Kaola-Workflow ships two Claude Code hooks via `install.sh`. They run
-silently in the background as background hygiene — they do not replace
+Kaola-Workflow ships one Claude Code hook via `install.sh`. It runs
+silently in the background as background hygiene — it does not replace
 workflow validation, and `/workflow-next` should not re-run a check the
 hook already performed unless the phase requires broader validation or
 the relevant files changed after the hook fired. Hook output counts as
@@ -1290,12 +1271,11 @@ evidence path.
 
 | Hook ID | Event (matcher) | Purpose | Script |
 |---------|-----------------|---------|--------|
-| `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Claude Code's `/compact`, injects a resume hint (active project, current phase, current step, next command, fallback authorization) read from the most recent `workflow-state.md` | `scripts/kaola-workflow-compact-context.js` |
-| `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn (`agent_type`, `agent_id`, `cwd`) as one JSON line to `kaola-workflow/{project}/.cache/dispatch-log.jsonl` — an advisory spawn record; no check consumes it. Fail-open | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
+| `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Claude Code's `/compact`, injects a resume hint from claim/liveness/sink facts and the mission list | `scripts/kaola-workflow-compact-context.js` |
 
 ### Codex lifecycle hooks
 
-Codex wires the same two hooks via `install-codex-agent-profiles.js` (run by the
+Codex wires the same compaction hook via `install-codex-agent-profiles.js` (run by the
 Codex `kaola-workflow-init` skill and re-run on every upgrade). Since #447, hooks
 install **globally** into `~/.codex/hooks.json`; their scripts land in the stable,
 version-less home `~/.codex/kaola-workflow/{hooks,scripts}`. The hooks are NOT in the
@@ -1308,8 +1288,7 @@ those paths.
 
 | Hook ID | Event (matcher) | Purpose | Script |
 |---------|-----------------|---------|--------|
-| `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Codex context compaction, injects a resume packet (active project, goal, next skill, in-flight items with their dispatched locators, progress counts) from `kaola-workflow-codex-compact-resume.js`. Also still invokable on demand via stdin. | `scripts/kaola-workflow-codex-compact-resume.js` |
-| `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn to `kaola-workflow/{project}/.cache/dispatch-log.jsonl` — an advisory spawn record; no check consumes it. Fires only with Codex `multi_agent` enabled | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
+| `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Codex context compaction, injects claim/liveness/sink facts and mission-list resume context from `kaola-workflow-codex-compact-resume.js`. Also still invokable on demand via stdin. | `scripts/kaola-workflow-codex-compact-resume.js` |
 
 **Caveats and preconditions:**
 
@@ -1318,12 +1297,6 @@ those paths.
   untrusted again), then exit and follow the post-trust installer + doctor sequence
   under *Trust the hooks* above. For automation use
   `codex exec --dangerously-bypass-hook-trust`.
-- **`multi_agent` precondition:** `SubagentStart` provenance requires Codex
-  `multi_agent` enabled. With it off the hook never fires and no spawn record is
-  written — non-fatal; the log is advisory.
-- **Matcher note:** the `PreToolUse`/`PostToolUse` matchers (`Bash`, `Write|Edit`)
-  follow Claude Code tool names; if a Codex build uses different tool-event names the
-  matcher string in `~/.codex/hooks.json` may need adjustment.
 - **Uninstall scope:** because hooks are global, `uninstall.sh` strips the managed
   `kaola-workflow:` entries from `~/.codex/hooks.json` (not from a project-local file).
   Agent profiles and the managed config block are removed from the project directory
@@ -1331,19 +1304,16 @@ those paths.
 
 ### Installation and verification
 
-- `install.sh` copies hook files to `~/.claude/kaola-workflow/hooks/`, support
-  scripts to `~/.claude/kaola-workflow/scripts/`, and auto-merges the two
-  managed hook entries into `~/.claude/settings.json`.
+- `install.sh` copies support scripts to `~/.claude/kaola-workflow/scripts/` and auto-merges the
+  managed compact-context hook entry into `~/.claude/settings.json`.
   The merge is idempotent and identifies managed entries by `id` prefix
   `kaola-workflow:` or a command path containing `kaola-workflow`. Prior
   settings are backed up under
   `~/.claude/backups/settings.json.kaola-workflow.<ts>.bak`.
-- Verify with `jq '.hooks' ~/.claude/settings.json` — expect the two ids
-  above, with scripts under `~/.claude/kaola-workflow/hooks/` or
-  `~/.claude/kaola-workflow/scripts/`.
-- Subagent model selection comes from slash-command dispatch, not from a
-  status-line override: the installer renders each installed agent's resolved
-  model into concrete `model="..."` lines in the slash commands.
+- Verify with `jq '.hooks' ~/.claude/settings.json` — expect the compact-context id above, with its
+  script under `~/.claude/kaola-workflow/scripts/`.
+- Routing commands leave per-dispatch model selection to runtime inheritance or a task-sensitive
+  caller override; the installer does not render a fixed model literal into them.
 - If hooks are missing, re-run `./install.sh --forge=github` (or
   `--forge=gitlab` or `--forge=gitea`). Do not edit `~/.claude/settings.json` directly —
   re-running the installer is the supported path.

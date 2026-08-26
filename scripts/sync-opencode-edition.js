@@ -25,7 +25,7 @@
 //
 //   --forge=<f>          github (default) | gitlab | gitea — which forge's command
 //                         surfaces to render from, and which tree to write.
-//   --write              regenerate .opencode/agent + .opencode/command from canonical;
+//   --write              regenerate .opencode/agent + .opencode/command + plugins from canonical;
 //                         seed opencode.json only if absent (use --write-config to force).
 //   --write-config       (re)write this repo's opencode.json from the template.
 //   --write-config-to P  write the template opencode.json to path P (installer use).
@@ -104,16 +104,14 @@ const OUT_AGENT_DIR = outDirs(DEFAULT_FORGE).agent;
 const OUT_COMMAND_DIR = outDirs(DEFAULT_FORGE).command;
 const OPENCODE_JSON = path.join(REPO, 'opencode.json');
 
-// Runtime-neutral hook scripts (byte-copied from canonical hooks/ into the
-// opencode edition). The .opencode/plugins/kaola-workflow-hooks.js adapter feeds
-// them Claude-style JSON payloads and honors their exit codes.
-const HOOK_SCRIPTS = [
-  'kaola-workflow-subagent-dispatch-log.sh',
-];
+// No runtime-neutral hook scripts are active in the opencode edition. The generator still owns
+// the hooks directory so --write can retire stale installed copies.
+const HOOK_SCRIPTS = [];
 
 // Opencode plugin scripts (byte-copied from tracked templates/opencode/plugins/ into the
-// opencode edition). The tracked template is the canonical source of truth; .opencode/plugins/
-// is the gitignored generated artifact. byte-copy (no rendering) mirrors writeHooks().
+// opencode edition). The tracked template is the canonical source of truth; the plugin's
+// compact-resume reader therefore ships from this copy, while .opencode/plugins/ remains the
+// gitignored generated artifact. Byte-copy (no rendering) mirrors writePlugin().
 const PLUGIN_SCRIPTS = [
   'kaola-workflow-hooks.js',
 ];

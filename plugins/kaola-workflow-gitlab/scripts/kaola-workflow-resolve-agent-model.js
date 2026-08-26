@@ -5,10 +5,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// WHAT THIS MAP ANSWERS FOR: each role's declarative tier, and the effective tier for the consumers
-// that read it — the dispatch-log hook's advisory `model_planned`, and, through the pins holding it
-// equal to the source frontmatter and to the kernel's Codex tier classes, the Codex per-spawn
-// reasoning effort and the opencode reasoning-role list.
+// WHAT THIS MAP ANSWERS FOR: each role's declarative tier, and the effective tier for consumers
+// that use it as metadata/defaults — the Codex tier classes and the opencode reasoning-role list.
 //
 // IT DOES NOT DECIDE A CLAUDE CODE `Agent(...)` DISPATCH. There the explicit `model=` argument wins,
 // and its absence means `inherit` — the spawning conversation's model. Nothing on that path consults
@@ -27,9 +25,7 @@ const DEFAULT_AGENT_MODELS = {
   // These defaults are each role's declarative tier, and that tier does reach the other runtimes —
   // transitively, through the pins above, never as a dispatch-time lookup. The Codex tier classes are
   // held in lockstep with this map and the opencode reasoning-role list derives from the frontmatter
-  // this map is held equal to, so re-tiering a role here re-tiers it there at the next sync; the
-  // dispatch-log hook, the one component reading this map directly at runtime, follows immediately.
-  // A Claude Code dispatch follows none of it.
+  // this map is held equal to, so re-tiering a role here re-tiers it there at the next sync.
   'code-architect': 'fable',
   'tdd-guide': 'sonnet',
   'implementer': 'sonnet',
@@ -50,8 +46,8 @@ const DEFAULT_AGENT_MODELS = {
   synthesizer: 'opus'
 };
 
-// The subagent-dispatch-log hook copies THIS resolver standalone (no schema sibling on disk), so
-// requiring the schema would break its isolated invocation; the resolver must stay dependency-free.
+// This resolver stays dependency-free so installed runtimes can use its metadata without a schema
+// sibling on disk.
 
 const CODEX_SESSION_SCAN_MAX_FILES = 2048;
 const CODEX_SESSION_SCAN_MAX_DEPTH = 8;

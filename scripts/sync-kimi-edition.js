@@ -99,13 +99,10 @@ function treeLabel(forge) {
 const REVIEWER_ROLES = new Set(reviewerGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
 
-// Runtime-neutral hook scripts (byte-copied from canonical hooks/ into the kimi
-// edition). hooks.json is Claude-shaped and is NOT copied — its entries are
-// re-expressed as the Kimi [[hooks]] TOML fragment below (renderKimiHooksToml).
-// Same allowlist discipline as the opencode generator's HOOK_SCRIPTS.
-const HOOK_SCRIPTS = [
-  'kaola-workflow-subagent-dispatch-log.sh',
-];
+// No runtime-neutral hook scripts are active in the kimi edition. The generator still owns the
+// hooks directory so --write can retire stale installed copies. The retained PostCompact rule is
+// rendered directly because it runs the edition's compact-resume script.
+const HOOK_SCRIPTS = [];
 
 // --- minimal frontmatter parser (only the flat key: value surface we need) ---
 function parseFrontmatter(text) {
@@ -547,25 +544,18 @@ function renderCommand(canonContent, commandName, forge) {
   return lines.join('\n') + '\n';
 }
 
-// The generated Kimi hooks fragment. Maps the two canonical hooks/hooks.json
-// entries to Kimi [[hooks]] rules: SubagentStart → dispatch-log (matcher
-// omitted), and the Claude SessionStart"compact" entry → PostCompact (Kimi's
-// semantic counterpart) running the compact-context script. `__KIMI_HOME__` is
+// The generated Kimi hooks fragment maps the retained Claude SessionStart"compact" entry to
+// PostCompact (Kimi's semantic counterpart) running the compact-context script. `__KIMI_HOME__` is
 // a placeholder token the installer substitutes with the real
 // ${KIMI_CODE_HOME:-$HOME/.kimi-code} path at install time; the >>> / <<<
 // marker comments delimit the managed block for idempotent merges.
 function renderKimiHooksToml(forge) {
   // The compact-context script is forge-RENAMED, so the managed block must name the
   // basename the selected forge actually deploys; a github-shaped command would point
-  // at a file a gitlab install never writes. Hook SCRIPTS are forge-neutral.
+  // at a file a gitlab install never writes.
   const compactJs = forgeLayout.scriptName('kaola-workflow-compact-context.js', forge || DEFAULT_FORGE);
   return [
     '# >>> kaola-workflow kimi hooks',
-    '[[hooks]]',
-    'event = "SubagentStart"',
-    'command = "bash __KIMI_HOME__/kaola-workflow/hooks/kaola-workflow-subagent-dispatch-log.sh"',
-    'timeout = 30',
-    '',
     '[[hooks]]',
     'event = "PostCompact"',
     'command = "node __KIMI_HOME__/kaola-workflow/scripts/' + compactJs + '"',
@@ -694,19 +684,8 @@ function writeCommands(forge) {
   return wrote;
 }
 
-// Kimi hook-payload adaptation. Canonical hooks are byte-copied EXCEPT where Kimi's
-// event payload uses different field names than Claude's (verified empirically against
-// kimi-code 0.26.0):
-//   - SubagentStart: Kimi names the sub-agent `agent_name` (Claude: `agent_type`).
-// Each adaptation is a single anchored string rewrite; a missing or ambiguous anchor
-// is a HARD ERROR so a canonical edit that drifts the anchor fails loudly here instead
-// of silently shipping an unadapted hook. PostCompact (cwd) is payload-compatible
-// and stays byte-identical.
-const HOOK_ADAPTATIONS = {
-  'kaola-workflow-subagent-dispatch-log.sh': [
-    ["p.agent_type||''", "(p.agent_type||p.agent_name||'')"],
-  ],
-};
+// Kimi hook-payload adaptations are empty: the retained PostCompact rule is payload-compatible.
+const HOOK_ADAPTATIONS = {};
 
 function adaptHookForKimi(script, content) {
   const rules = HOOK_ADAPTATIONS[script] || [];

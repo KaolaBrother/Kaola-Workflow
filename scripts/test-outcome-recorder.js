@@ -162,8 +162,6 @@ function partB() {
   // its mechanism rather than a bare integer going red somewhere else.
   ok(set.indexOf(OUTCOME_REL) >= 0, 'the outcome log is IN the set — the whole point of shipping it as a set');
   ok(set.indexOf('.cache/' + schema.NODE_TIMINGS_LOG_NAME) >= 0, 'the original hard-coded exclusion is still a member');
-  ok(set.indexOf('.cache/' + schema.DISPATCH_LOG_NAME) >= 0,
-    'the dispatch log is a member — its SubagentStart producer writes inside whichever leg the spawn ran in');
 
   // Not a member, and it must not become one by accident — a kernel record wrongly admitted here
   // is a record a sweep is told it may discard.
@@ -231,10 +229,9 @@ function partD() {
 // its own outcome record would corrupt the very log it reads (partFPurity).
 //
 // INPUTS. `kaola-workflow/{project}/.cache/` — `outcome-log.jsonl` (the ranked population),
-// plus `node-timings.jsonl` and `dispatch-log.jsonl` (re-dispatch evidence only). Each of the
-// three is INDEPENDENTLY optional: all three writers are error-swallowing best-effort sidecars,
-// so an absent one is the ordinary case and never an error (partFResults runs with neither
-// re-dispatch source present). The reporter PROJECTS what the recorder wrote and re-derives
+// plus `node-timings.jsonl` (recovery-work evidence only). Each is INDEPENDENTLY optional: the
+// writer is error-swallowing best-effort sidecar, so an absent one is the ordinary case and never
+// an error (partFResults runs with no recovery-work source present). The reporter PROJECTS what the recorder wrote and re-derives
 // nothing: `route` is read off the record, never re-resolved, so the report and the record can
 // never disagree.
 //
@@ -279,11 +276,10 @@ function partD() {
 // A window is MEASURED only when both instants parse and the delta is >= 0; a missing successor,
 // an unparseable instant, and a negative delta are all UNMEASURED — never a fabricated 0.
 //
-// RE-DISPATCH. A `dispatch-log.jsonl` entry or a `node-timings.jsonl` `opened` event whose `ts`
-// falls in (t0, t_end]. Strictly after the refusal (a spawn at the refusal instant cannot have
-// been caused by it) and at-or-before the resume (a spawn at the resume instant IS the resume).
-// An UNMEASURED refusal has no window and therefore contributes 0 — the instrument never
-// inflates by treating "end of log" as a window.
+// RECOVERY WORK. A `node-timings.jsonl` `opened` event whose `ts` falls in (t0, t_end]. Strictly
+// after the refusal (an open at the refusal instant cannot have been caused by it) and at-or-before
+// the resume (an open at the resume instant IS the resume). An UNMEASURED refusal has no window and
+// therefore contributes 0 — the instrument never inflates by treating "end of log" as a window.
 //
 // ORDER — a TOTAL order, because "the exact JSON" is flaky by construction without one:
 //   1. `total_triage_ms` DESC   — cost, not frequency. A cheap refusal that fires often ranks
@@ -354,12 +350,7 @@ function outcomeLine(o) {
 
 function timingLine(node_, event, ts) { return JSON.stringify({ node: node_, event: event, ts: ts }); }
 
-function dispatchLine(ts, agentType, agentId, cwd) {
-  return JSON.stringify({ ts: ts, agent_type: agentType, agent_id: agentId, cwd: cwd,
-    model: 'standard', model_planned: 'standard' });
-}
-
-// makeReportFixture — a real repository root carrying only the three `.cache/` sidecars. A log
+// makeReportFixture — a real repository root carrying the `.cache/` sidecars. A log
 // value of `null` means the file is DELIBERATELY ABSENT; a string is written verbatim (so a
 // blank-line-only file can be expressed); an array is joined and newline-terminated the way the
 // append-only writers leave it.
@@ -376,7 +367,6 @@ function makeReportFixture(logs) {
   };
   write(schema.OUTCOME_LOG_NAME, logs.outcome);
   write(schema.NODE_TIMINGS_LOG_NAME, logs.timings);
-  write(schema.DISPATCH_LOG_NAME, logs.dispatch);
   return { root, cacheDir };
 }
 
@@ -441,11 +431,9 @@ function partFExists() {
 // The acceptance bullet, literally. Everything in this fixture is load-bearing:
 //   * A MALFORMED line sits BETWEEN the first refusal and its resume, so an implementation that
 //     aborts on it — or that loses window pairing across it — produces a different report.
-//   * The first refusal's window carries BOTH re-dispatch signals (a dispatch-log entry AND a
-//     node-timings `opened`). `redispatch_count` is per-REFUSAL, so a signal-counting
-//     implementation reports 2 where the contract says 1.
+//   * The first refusal's window carries one node-timings `opened` signal. `redispatch_count` is
+//     per-REFUSAL, not a count of recovery processes.
 //   * A node-timings `closed` sits inside the second refusal's window: only `opened` counts.
-//   * A dispatch entry sits AFTER every window: out-of-window signals count nowhere.
 //   * `record-evidence` sits between the first refusal and its resume on the SAME node — a
 //     different `op`, so it does NOT close the window. The window is the whole stop-to-resume
 //     interval, recovery work included, which is the interruption cost being measured.
@@ -469,10 +457,6 @@ function partFHeadline() {
       timingLine('n2', 'opened', at(B, 30)),   // in window 1 — the SECOND signal for the same refusal
       timingLine('n5', 'closed', at(B, 57)),   // in window 2, but `closed` is not a re-dispatch
       timingLine('n9', 'opened', at(B, 95)),   // after every window
-    ],
-    dispatch: [
-      dispatchLine(at(B, 20), 'tdd-guide', 'd1', '/tmp/leg'),    // in window 1
-      dispatchLine(at(B, 90), 'implementer', 'd2', '/tmp/leg'),  // after every window
     ],
   });
   try {
@@ -606,9 +590,9 @@ function partFOrder() {
 //   instant_clear    successor in the SAME millisecond  -> median 0, measured 1 (a real zero)
 // `median_triage_ms: null` beside `median_triage_ms: 0` is the honesty pin: an unseen cost
 // reported as zero would rank a wedge at the bottom of the subtraction list.
-// A dispatch entry and a node-timings `opened` sit just after the unmeasured tail refusal: with
-// no window they belong to nothing, so an implementation that runs an open window to end-of-log
-// reports a re-dispatch the run never made.
+// A node-timings `opened` sits just after the unmeasured tail refusal: with no window it belongs to
+// nothing, so an implementation that runs an open window to end-of-log reports recovery work the
+// run never made.
 function partFUnmeasured() {
   const B = '2026-07-28T12:00:00.000Z';
   const fx = makeReportFixture({
@@ -623,7 +607,6 @@ function partFUnmeasured() {
       outcomeLine({ op: 'repair-node', node: 'n4', ts: at(B, 7), result: 'ok' }), // same instant
     ],
     timings: [timingLine('n1', 'opened', at(B, 4))],
-    dispatch: [dispatchLine(at(B, 3), 'tdd-guide', 'd1', '/tmp/leg')],
   });
   try {
     const { parsed } = reportOf(fx.root, 'unmeasured');
@@ -665,7 +648,6 @@ function partFWindowBoundary() {
       outcomeLine({ op: 'open-next', ts: at(B, 40), result: 'ok' }),
     ],
     timings: [timingLine('n1', 'opened', at(B, 10))],                        // AT the refusal instant
-    dispatch: [dispatchLine(at(B, 40), 'tdd-guide', 'd1', '/tmp/leg')],      // AT the resume instant
   });
   try {
     const { parsed } = reportOf(fx.root, 'window boundary');
@@ -673,7 +655,7 @@ function partFWindowBoundary() {
       result: 'ok', v: 1, project: PROJECT,
       totals: { events: 5, malformed_lines: 0, refusals: 2, unattributed_refusals: 0 },
       ranking: [
-        { reason: 'boundary_close', count: 1, redispatch_count: 1, median_triage_ms: 10000,
+        { reason: 'boundary_close', count: 1, redispatch_count: 0, median_triage_ms: 10000,
           total_triage_ms: 10000, measured_count: 1, routeless_count: 1 },
         { reason: 'boundary_open', count: 1, redispatch_count: 0, median_triage_ms: 10000,
           total_triage_ms: 10000, measured_count: 1, routeless_count: 1 },
@@ -736,7 +718,6 @@ function partFPurity() {
       outcomeLine({ op: 'close-node', node: 'n1', ts: at(B, 4), result: 'ok' }),
     ],
     timings: [timingLine('n1', 'opened', at(B, 2))],
-    dispatch: [dispatchLine(at(B, 3), 'tdd-guide', 'd1', '/tmp/leg')],
   });
   try {
     const before = snapshotTree(fx.root);
@@ -746,7 +727,7 @@ function partFPurity() {
       'THE INSTRUMENT DOES NOT MOVE THE NEEDLE: the reporter left the project tree byte-identical — '
       + 'no self-recorded outcome line, no created directory, no rewritten sidecar');
 
-    // Two re-dispatch signals, one refusal: the row reads 1.
+    // One recovery-work signal, one refusal: the row reads 1.
     exactJson(first.parsed, {
       result: 'ok', v: 1, project: PROJECT,
       totals: { events: 3, malformed_lines: 0, refusals: 1, unattributed_refusals: 0 },

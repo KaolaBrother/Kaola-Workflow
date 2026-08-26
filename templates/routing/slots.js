@@ -41,57 +41,6 @@ const SLOTS = {
   "fz-scripts-resolver": {"command":{"github":"kaola_script(){ _n=\"$1\"; _self=\"\"; [ -f \"./package.json\" ] && _self=\"$(node -e \"try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}\" 2>/dev/null)\"; if [ \"$_self\" = \"kaola-workflow\" ]; then for _p in \"./scripts/$_n\" \"${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}\" \"$HOME/.claude/kaola-workflow/scripts/$_n\"; do [ -f \"$_p\" ] && { printf '%s\\n' \"$_p\"; return; }; done; else for _p in \"${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}\" \"$HOME/.claude/kaola-workflow/scripts/$_n\" \"./scripts/$_n\"; do [ -f \"$_p\" ] && { printf '%s\\n' \"$_p\"; return; }; done; fi; return 1; }\nCLAIM_JS=\"$(kaola_script kaola-workflow-claim.js)\"; KAOLA_SCRIPTS=\"$(dirname \"$CLAIM_JS\")\"","gitlab":"kaola_script(){ _n=\"$1\"; _self=\"\"; [ -f \"./package.json\" ] && _self=\"$(node -e \"try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}\" 2>/dev/null)\"; if [ \"$_self\" = \"kaola-workflow\" ]; then for _p in \"./plugins/kaola-workflow-gitlab/scripts/$_n\" \"${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}\" \"$HOME/.claude/kaola-workflow-gitlab/scripts/$_n\"; do [ -f \"$_p\" ] && { printf '%s\\n' \"$_p\"; return; }; done; else for _p in \"${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}\" \"$HOME/.claude/kaola-workflow-gitlab/scripts/$_n\" \"./plugins/kaola-workflow-gitlab/scripts/$_n\"; do [ -f \"$_p\" ] && { printf '%s\\n' \"$_p\"; return; }; done; fi; return 1; }\nCLAIM_JS=\"$(kaola_script kaola-gitlab-workflow-claim.js)\"; KAOLA_SCRIPTS=\"$(dirname \"$CLAIM_JS\")\"","gitea":"kaola_script(){ _n=\"$1\"; _self=\"\"; [ -f \"./package.json\" ] && _self=\"$(node -e \"try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}\" 2>/dev/null)\"; if [ \"$_self\" = \"kaola-workflow\" ]; then for _p in \"./plugins/kaola-workflow-gitea/scripts/$_n\" \"${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}\" \"$HOME/.claude/kaola-workflow-gitea/scripts/$_n\"; do [ -f \"$_p\" ] && { printf '%s\\n' \"$_p\"; return; }; done; else for _p in \"${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}\" \"$HOME/.claude/kaola-workflow-gitea/scripts/$_n\" \"./plugins/kaola-workflow-gitea/scripts/$_n\"; do [ -f \"$_p\" ] && { printf '%s\\n' \"$_p\"; return; }; done; fi; return 1; }\nCLAIM_JS=\"$(kaola_script kaola-gitea-workflow-claim.js)\"; KAOLA_SCRIPTS=\"$(dirname \"$CLAIM_JS\")\""},"skill":{"github":"kaola_script(){ _n=\"$1\"; _p=\"plugins/kaola-workflow/scripts/$_n\"; [ -f \"$_p\" ] && { printf '%s\\n' \"$_p\"; return; }; _p=\"$(find \"$HOME/.codex/plugins/cache\" -path \"*/kaola-workflow/*/scripts/$_n\" -print -quit 2>/dev/null)\"; [ -n \"$_p\" ] && [ -f \"$_p\" ] && { printf '%s\\n' \"$_p\"; return; }; return 1; }\nCLAIM_JS=\"$(kaola_script kaola-workflow-claim.js)\"; KAOLA_SCRIPTS=\"$(dirname \"$CLAIM_JS\")\"","gitlab":"kaola_script(){ _n=\"$1\"; _p=\"plugins/kaola-workflow-gitlab/scripts/$_n\"; [ -f \"$_p\" ] && { printf '%s\\n' \"$_p\"; return; }; _p=\"$(find \"$HOME/.codex/plugins/cache\" -path \"*/kaola-workflow-gitlab/*/scripts/$_n\" -print -quit 2>/dev/null)\"; [ -n \"$_p\" ] && [ -f \"$_p\" ] && { printf '%s\\n' \"$_p\"; return; }; return 1; }\nCLAIM_JS=\"$(kaola_script kaola-gitlab-workflow-claim.js)\"; KAOLA_SCRIPTS=\"$(dirname \"$CLAIM_JS\")\"","gitea":"kaola_script(){ _n=\"$1\"; _p=\"plugins/kaola-workflow-gitea/scripts/$_n\"; [ -f \"$_p\" ] && { printf '%s\\n' \"$_p\"; return; }; _p=\"$(find \"$HOME/.codex/plugins/cache\" -path \"*/kaola-workflow-gitea/*/scripts/$_n\" -print -quit 2>/dev/null)\"; [ -n \"$_p\" ] && [ -f \"$_p\" ] && { printf '%s\\n' \"$_p\"; return; }; return 1; }\nCLAIM_JS=\"$(kaola_script kaola-gitea-workflow-claim.js)\"; KAOLA_SCRIPTS=\"$(dirname \"$CLAIM_JS\")\""}},
 };
 
-SLOTS['main-authored-handoff'] = [
-  "<!-- PIN: main-authored-handoff -->",
-  "## Main-Authored Handoff",
-  "",
-  "Before each named-role spawn, main writes a compact task-specific brief that the role can execute",
-  "from that brief, its installed profile, and the named repository evidence alone; inherited",
-  "conversation is never required. The role profile remains authoritative for universal role behavior.",
-  "Main retains product intent, value decisions, integration, acceptance of returned work, review",
-  "consequences, and the final done verdict.",
-  "",
-  "Use these labels in this order:",
-  "",
-  "- `Mission:` one result to produce or one question to answer.",
-  "- `Context:` the candidate/worktree and baseline identity, relevant measured facts, hypotheses",
-  "  labeled as hypotheses, and only the upstream evidence this task needs.",
-  "- `Authority:` decisions already settled, decisions the role may recommend but not make, and any",
-  "  unresolved user-owned decision.",
-  "- `Scope and custody:` the task's read/write boundary, explicit exclusions, test-versus-production",
-  "  ownership, and co-active ownership relevant to avoiding collisions.",
-  "- `Acceptance:` falsifiable conditions for this role's deliverable and its stopping boundary. State",
-  "  the required result and proof, not an implementation method. This is not the workflow's final done",
-  "  verdict.",
-  "- `Deliverable:` what returns and the exact path, commit, or evidence locator where the full result",
-  "  lands.",
-  "- `Stop and report:` task-specific contradictory evidence, ambiguity that changes the result, a",
-  "  capability gap, an out-of-scope finding, or a user-owned decision that must return to main rather",
-  "  than be silently assumed, expanded, or worked around.",
-  "",
-  "Specialize only the task-specific content:",
-  "",
-  "- Planning and design (`planner`, `code-architect`) receive the binding goal or design question,",
-  "  non-goals, constraints and invariants, and the permitted decision envelope; they return a plan or",
-  "  blueprint without editing product files.",
-  "- Investigation roles receive an exact question or claim, evidence surface, and authority or",
-  "  measurement standard.",
-  "- `tdd-guide` receives acceptance claims, the baseline, test custody, the production exclusion, and",
-  "  the required RED evidence; `implementer` receives the intended behavior, production custody, the",
-  "  test read-only boundary, acceptance evidence, and the appropriate verification expectation.",
-  "- Repair, convergence, documentation, and optimization roles receive the concrete candidate,",
-  "  failure, or input; permitted mutation boundary; preservation constraints; and the retest, docking,",
-  "  or metric stop condition.",
-  "- `code-reviewer` and `security-reviewer` receive the exact candidate, dispatched surface, and",
-  "  acceptance; `adversarial-verifier` receives exactly one claim and one surface.",
-  "",
-  "Keep the packet sparse: include only task-specific facts, decisions, bounds, and evidence; do not",
-  "repeat the role profile. This is handoff guidance, not a new workflow record or a machine-graded",
-  "prompt schema. The mission list remains the recovery index: what went out, to whom, and where the",
-  "result will land.",
-  "<!-- /PIN -->",
-].join('\n');
-
 // resolverFor — the init surfaces resolve a sibling script the SAME way the
 // next/finalize surfaces do, only into a different handle. The recipe is
 // DERIVED from `nx-scripts-resolver` rather than copied: the helper definition
@@ -115,50 +64,6 @@ SLOTS['in-claim-resolver'] = resolverFor('CLAIM_JS', {
   gitlab: 'kaola-gitlab-workflow-claim.js',
   gitea: 'kaola-gitea-workflow-claim.js',
 });
-
-// codex-tier-roster — the ONE slot with no topic prefix, because it is the same answer on two
-// topics: the Codex routing PIN ships on both the next and the finalize skill.
-//
-// That PIN orders every spawn at its role's existing standard-, reasoning-, or heavy-tier classification
-// and fixes the model and effort per tier — a question whose answer no prompt surface carried.
-// The membership is RENDERED here from the kernel's own registry rather than restated as prose:
-// a role added to any of the three pinned lists reaches all six dispatch surfaces on the next render, and
-// there is no second enumeration for the shipped instruction to drift away from.
-const {
-  CODEX_PINNED_STANDARD_ROLES,
-  CODEX_PINNED_REASONING_ROLES,
-  CODEX_PINNED_HEAVY_ROLES,
-} = require('../../scripts/kaola-workflow-adaptive-schema.js');
-
-// tierRoster — one tier's line(s), wrapped to the skeletons' prose column. The wrap is COMPUTED,
-// so a registry change re-flows instead of overrunning the column or leaving a stale hand-wrap.
-// Every continuation line carries role names only: the tier word stays on the label line, which
-// is what lets a reader (and the shipped-bytes pin) attribute each name to exactly one tier.
-const ROSTER_WIDTH = 100;
-function tierRoster(label, roles) {
-  const lines = [];
-  let line = label;
-  roles.forEach((role, i) => {
-    const token = `\`${role}\`${i === roles.length - 1 ? '.' : ','}`;
-    if (`${line} ${token}`.length > ROSTER_WIDTH) {
-      lines.push(line);
-      line = token;
-    } else {
-      line = `${line} ${token}`;
-    }
-  });
-  return [...lines, line].join('\n');
-}
-
-SLOTS['codex-tier-roster'] = [
-  tierRoster('Standard-tier roles:', CODEX_PINNED_STANDARD_ROLES),
-  '',
-  tierRoster('Reasoning-tier roles:', CODEX_PINNED_REASONING_ROLES),
-  '',
-  tierRoster('Heavy-tier roles:', CODEX_PINNED_HEAVY_ROLES),
-  '',
-  'Those three lists are the complete live Codex PIN roster.',
-].join('\n');
 
 const SPLICES = {
   // ---- next: forge nouns, route nouns, and the per-forge invocations. ----

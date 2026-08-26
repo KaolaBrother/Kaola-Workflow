@@ -70,12 +70,10 @@ const EDITIONS = [
 // asserted here in prose — the negative control below proves it per edition.
 const SENTINEL = {
   issue_number:   42,
-  phase:          3,
   issue_numbers:  [10, 20],
   status:         'active',
   bundle_id:      'bundle-sentinel-580',
   closure_policy: 'close-with-issue',
-  next_command:   '/sentinel-cmd-580',
   branch:         'workflow/sentinel-580',
   worktree_path:  '/sentinel/wt/580',
   sink:           'squash',
@@ -83,6 +81,27 @@ const SENTINEL = {
   session_marker: 's-sentinel-580',
   claim_ts:       '2024-01-01T00:00:00.000Z',
 };
+
+// Issue #1032 retires the progress snapshot from workflow-state.md. These are
+// deliberately named fields, rather than a count, so a legacy writer/parser
+// cannot survive by dropping one arbitrary member of the old shape.
+const RETIRED_ACTIVE_RUN_FIELDS = Object.freeze([
+  'phase',
+  'phase_name',
+  'workflow_path',
+  'step',
+  'next_command',
+  'next_skill',
+  'main_session_role',
+  'implementation_owner',
+  'fix_owner',
+  'inline_emergency_fallback_authorized',
+  'runtime',
+  'phase_file',
+  'cache_file',
+  'last_command',
+  'last_result',
+]);
 
 // ---- contract ↔ sentinel key-SET equality ------------------------------------
 // The defect this replaces: the per-key loop compared SENTINEL[key] to folder[key],
@@ -123,7 +142,8 @@ function makeProbeRoot(stateContent) {
 
 // ---- parity loop (guarded: only runs when the constant exists) ---------------
 if (Array.isArray(SHARED_STATE_FIELDS)) {
-  const stateContent = makeStateContent(SHARED_STATE_FIELDS, SENTINEL);
+  const stateContent = makeStateContent(SHARED_STATE_FIELDS, SENTINEL)
+    + RETIRED_ACTIVE_RUN_FIELDS.map(key => key + ': legacy-progress-sentinel').join('\n') + '\n';
 
   for (const ed of EDITIONS) {
     const populatedRoot = makeProbeRoot(stateContent);
@@ -152,6 +172,11 @@ if (Array.isArray(SHARED_STATE_FIELDS)) {
 
       const f = folders[0];
       const absent = absentFolders[0];
+
+      for (const key of RETIRED_ACTIVE_RUN_FIELDS) {
+        assert(!Object.prototype.hasOwnProperty.call(f, key),
+          ed.label + ': retired active-run field "' + key + '" must not be surfaced by readActiveFolders()');
+      }
 
       // Assert every SHARED_STATE_FIELDS key is surfaced with its sentinel value,
       // AND that the sentinel is distinguishable from the field's absent value.

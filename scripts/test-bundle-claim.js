@@ -296,7 +296,7 @@ function readState(tmpRoot, project) {
     assert(/^issue_numbers:\s*42,47,53\s*$/m.test(state), 'state has issue_numbers: 42,47,53');
     assert(/^bundle_id:\s*bundle-42-47-53\s*$/m.test(state), 'state has bundle_id: bundle-42-47-53');
     assert(/^closure_policy:\s*all_or_nothing\s*$/m.test(state), 'state has closure_policy: all_or_nothing');
-    assert(/^workflow_path:\s*adaptive\s*$/m.test(state), 'state has workflow_path: adaptive');
+    assert(!/^workflow_path:/m.test(state), 'state does not persist the retired workflow_path field');
 
     // #370: with KAOLA_WORKTREE_NATIVE=1 the bundle now provisions a worktree (parity with
     // single-issue claimProject; the prior "matches adaptive single-issue" suppression was false).
@@ -571,12 +571,8 @@ function readState(tmpRoot, project) {
     writeGhMockScript(binDir, { openIssues: [42, 47] });
 
     // #770: the bundle lane's own path-legality check (bundle_requires_adaptive) is retired along
-    // with the path SELECTOR — the bundle lane always runs adaptive now, so a stale/retired
-    // --workflow-path value (here the retired `full`) is silently ignored and the bundle ACQUIRES,
-    // same as `adaptive` would. Unlike the single-issue claim path (which echoes the raw requested
-    // value into the persisted `workflow_path` field as a diagnostic-only record), the bundle path
-    // has always hardcoded `workflow_path: adaptive` in state regardless of what was requested —
-    // that hardcode predates and is unaffected by #770, so it still reads `adaptive` here.
+    // with the path selector. A stale --workflow-path value (here `full`) is warned about and
+    // ignored, the bundle acquires, and the compact claim record persists no workflow_path field.
     const result = runClaim(
       ['startup', '--target-issues', '42,47', '--workflow-path', 'full'],
       tmpRoot, binDir
@@ -593,8 +589,8 @@ function readState(tmpRoot, project) {
 
     const state = readState(tmpRoot, 'bundle-42-47');
     assert(state !== null, 'state file was created at bundle-42-47/workflow-state.md');
-    assert(/^workflow_path:\s*adaptive\s*$/m.test(state),
-      'state has workflow_path: adaptive (the bundle path hardcodes this regardless of the requested value), got:\n' + state);
+    assert(!/^workflow_path:/m.test(state),
+      'state must not persist the retired workflow_path field, got:\n' + state);
 
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });

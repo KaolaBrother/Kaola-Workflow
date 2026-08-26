@@ -76,21 +76,6 @@ function assertConcept(file, concept, terms) {
     file + ' must document ' + concept + '; missing: ' + missing.join(', '));
 }
 
-function assertEveryDispatchHasModel(file) {
-  const lines = read(file).split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    if (!/^Agent\(\s*$/.test(lines[i])) continue;
-    let hasSubagent = false, hasModel = false;
-    for (let j = i + 1; j < lines.length; j++) {
-      if (/^\)\s*$/.test(lines[j])) break;
-      if (/subagent_type="[^"]+"/.test(lines[j])) hasSubagent = true;
-      if (/model="\{[A-Z_]+_MODEL\}"/.test(lines[j])) hasModel = true;
-    }
-    assert(!hasSubagent || hasModel,
-      file + ' has an Agent( dispatch block at line ' + (i+1) + ' missing a model="{..._MODEL}" line');
-  }
-}
-
 function extractClaudeTemplate(file) {
   const text = read(file);
   const START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
@@ -198,27 +183,6 @@ assert(exists(pluginRoot + '/config/agents.toml'), 'GitLab agents config missing
   assert(strayMaxFiles.length === 0, '#451 gl: retired -max profile file(s) must be removed: ' + strayMaxFiles.join(', '));
   const maxTables = (configText.match(/^\[agents\.[a-z0-9-]+-max\]/gm) || []);
   assert(maxTables.length === 0, '#451 gl: config/agents.toml must not register [agents.<role>-max] tables: ' + maxTables.join(', '));
-}
-
-for (const file of commandFiles.filter(file => path.basename(file).startsWith('kaola-workflow-'))) {
-  assertIncludes(file, '## Agent Model Dispatch');
-  assertIncludes(file, 'You MUST pass `model=');
-  assertIncludes(file, 'model="{');
-  assertEveryDispatchHasModel(file);
-  // The retired heading, in the SHORT form that subsumes the longer "… Contract" wording this
-  // used to pin. "Badge" named a cosmetic effect, not the mechanism; the pin follows the
-  // vocabulary it forbids, so a half-applied revert of the rename cannot ship one heading here
-  // and the other in the skeleton.
-  assertNotIncludes(file, 'Agent Model Badge');
-  assertNotIncludes(file, 'kaola_agent_model');
-}
-
-// #1014: command next is a separate pin — do not fold it into the kaola-workflow- basename loop.
-{
-  const nextCmd = pluginRoot + '/commands/workflow-next.md';
-  assertIncludes(nextCmd, '## Agent Model Dispatch');
-  assertIncludes(nextCmd, 'You MUST pass `model=');
-  assertNotIncludes(nextCmd, 'model="{');
 }
 
 // #372: the advisor-gate vocabulary is retired — ban it across command + skill files so the
@@ -374,10 +338,6 @@ assertConcept(pluginRoot + '/scripts/test-gitlab-workflow-scripts.js', 'GitLab s
   'dry_run'
 ]);
 
-// issue #203: Select-Project active-folder definition still lists fast-summary.md (the classifier's
-// tolerant read survives retirement, so the router recognizes a legacy fast-summary.md marker).
-const nextCmd203 = pluginRoot + '/commands/workflow-next.md';
-
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'path_not_installed');
 // The path SELECTOR (KAOLA_PATH / --workflow-path / path_not_installed) is retired; there is
 // nothing left to select, so its vocabulary is pinned ABSENT from the router surface too.
@@ -480,25 +440,6 @@ assert(gitlabInstaller.CODEX_REASONING_MODEL === 'gpt-5.6-sol'
     && gitlabPreflight.CODEX_REASONING_EFFORT === gitlabInstaller.CODEX_REASONING_EFFORT,
   'GitLab installer/preflight historical reasoning migration pair must be gpt-5.6-sol/xhigh');
 
-// #1018: live per-spawn Codex routing is three-way. Rendered next/finalize
-// skills must carry the standard/reasoning/heavy pairs (not the historical
-// installer/preflight migration constants above).
-for (const rel of [
-  pluginRoot + '/skills/kaola-workflow-next/SKILL.md',
-  pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md',
-]) {
-  const text = read(rel);
-  const n = norm(text);
-  assert(/standard-tier/i.test(n) && /gpt-5\.6-luna/.test(n) && /reasoning_effort:\s*"max"/.test(text),
-    rel + ' must render standard-tier as gpt-5.6-luna / max');
-  assert(/reasoning-tier/i.test(n) && /gpt-5\.6-sol/.test(n) && /reasoning_effort:\s*"medium"/.test(text),
-    rel + ' must render reasoning-tier resting as gpt-5.6-sol / medium');
-  assert(/heavy/i.test(n) && /gpt-5\.6-sol/.test(n) && /reasoning_effort:\s*"high"/.test(text),
-    rel + ' must render heavy-tier as gpt-5.6-sol / high');
-  assert(/do not escalate/i.test(n) && /re-dispatch/i.test(n) && /reviewer/i.test(n) && /failed to finish/i.test(n) && /complex/i.test(n),
-    rel + ' do-not-escalate pin must carry the one reviewer-class heavy re-dispatch carve-out');
-}
-
 assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', '.codex-plugin');
 assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', 'isCodexPluginScriptDir');
 
@@ -515,45 +456,6 @@ function assertByteParity(relPath) {
 assertByteParity('config/agents.toml');
 for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).filter(f => f.endsWith('.toml')).sort()) {
   assertByteParity(path.join('agents', tomlFile));
-}
-
-// #400: registry-driven route-reachability contract (the forge-codex dead zone). The schema emits
-// kaola-workflow-plan-run / kaola-workflow-adapt as resume/route targets and the forge claim.js
-// routes adaptive unconditionally — but the forge skills/ tree shipped neither SKILL, so the route
-// resolved to nothing. require() the schema route constants (no hand-listed drift) + the static
-// next_skill fallbacks gitlab claim.js prints, and assert each resolves to an installed
-// skills/<name>/SKILL.md. listSkillFiles() only enumerates what EXISTS (a blind spot for an absent
-// REQUIRED skill); this is the required-target registry that closes it.
-{
-  const schema = require('./kaola-workflow-adaptive-schema.js');
-  // #883: the retired plan-run / adapt / fast / research targets left this list EMPTY, so the loop
-  // below had nothing to iterate and the assertion could not run. The route survived the retirement:
-  // gitlab claim.js still builds `next_skill` from the schema constant, so that target is what the
-  // contract is derived from, and the list is fenced against going empty again.
-  const emittedSkillTargets = [schema.NEXT_SKILL];
-  // Vacuity fence — the failure this check actually suffered. An empty list, or an entry that is not
-  // a usable skill name (a deleted schema constant reads as `undefined`), makes the loop below assert
-  // nothing at all; that must red here rather than pass silently.
-  assert(emittedSkillTargets.length > 0 &&
-    emittedSkillTargets.every(t => typeof t === 'string' && t.length > 0),
-    '#883: the receipt-emitted skill target list must be non-empty and name only resolvable skills — ' +
-    'the route-reachability loop asserts nothing otherwise; got ' + JSON.stringify(emittedSkillTargets));
-  // The derivation above is only sound while claim.js emits next_skill FROM the schema constant; if
-  // it ever inlines a literal, this list becomes a parallel hand-kept one and stops tracking the route.
-  assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'adaptiveSchema.NEXT_SKILL');
-  assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js',
-    "'next_skill: ' + (data.next_skill || adaptiveSkill)");
-  const installedSkills = new Set(
-    fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })
-      .filter(e => e.isDirectory())
-      .map(e => e.name)
-      .filter(name => exists(pluginRoot + '/skills/' + name + '/SKILL.md'))
-  );
-  for (const target of emittedSkillTargets) {
-    assert(installedSkills.has(target),
-      '#400: route-reachability — receipt-emitted skill target "' + target + '" has no installed ' +
-      pluginRoot + '/skills/' + target + '/SKILL.md (broken route, the forge-codex #400 dead zone)');
-  }
 }
 
 // #422.3: the agent-profile md↔toml token-pin test must be wired into the claude chain.

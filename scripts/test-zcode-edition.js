@@ -916,6 +916,22 @@ for (const role of reviewerGenerator.ROLES) {
       'G8: usage names --target / --forge / --global / --regenerate / --uninstall / --no-scripts / --yes');
     assertReal(/user scope/i.test(src) && /\.zcode\/agents/i.test(src),
       'G8: header documents that ZCode discovers subagents only at user scope (~/.zcode/agents)');
+    // Issue #1032: inspect the shipped source so the retired dispatch hook stays in the bounded
+    // list and both install/uninstall paths consume that list without touching a real home.
+    const retiredHooks = src.match(/\bRETIRED_HOOKS\s*=\s*\(([^)]*)\)/);
+    const hasRetiredHookCleanup = body => {
+      const loop = String(body).match(/^[ \t]*for[ \t]+retired[ \t]+in[^\n]*RETIRED_HOOKS[^\n]*;[ \t]*do[ \t]*\n([\s\S]*?)^[ \t]*done[ \t]*$/m);
+      return !!loop && /\brm\s+-f\b/.test(loop[1]) && /\$retired\b/.test(loop[1]) && /hooks/.test(loop[1]);
+    };
+    const installStart = src.indexOf('install_support_scripts() {');
+    const uninstallStart = src.indexOf('uninstall_edition() {');
+    assertReal(retiredHooks && /\bkaola-workflow-subagent-dispatch-log\.sh\b/.test(retiredHooks[1]),
+      'R1: RETIRED_HOOKS contains kaola-workflow-subagent-dispatch-log.sh');
+    assertReal(installStart >= 0 && uninstallStart > installStart
+      && hasRetiredHookCleanup(src.slice(installStart, uninstallStart)),
+      'R2: install cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
+    assertReal(uninstallStart >= 0 && hasRetiredHookCleanup(src.slice(uninstallStart)),
+      'R3: uninstall cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
 
     const firstLine = r => String(r.stderr || r.stdout || '').split('\n')[0];
     function runInstaller(extraArgs, opts) {

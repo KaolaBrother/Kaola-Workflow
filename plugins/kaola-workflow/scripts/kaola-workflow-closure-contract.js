@@ -89,7 +89,7 @@ const CLOSURE_INVARIANTS = [
   // roadmap-residue-clean are retired — there is no local roadmap source or mirror left for a
   // closure to leave clean or preserved.
   { id: 'active-folder-absent', description: 'kaola-workflow/{project}/ is absent from active folders.' },
-  { id: 'archive-state-closed', description: 'kaola-workflow/archive/{project}/workflow-state.md exists with status: closed and step: complete when local archive is available.' },
+  { id: 'archive-state-closed', description: 'kaola-workflow/archive/{project}/workflow-state.md exists with status: closed when local archive is available; the existing sink receipt and closure facts carry publication safety.' },
   { id: 'remote-closed-after-publish', description: 'The remote issue is closed only after acceptance criteria pass and implementation is published.' },
   // #369 BUNDLE all-or-nothing: every member of issue_numbers must be closed (or already closed).
   // WARN-FIRST but VISIBLE — a member left in failed_issue_closures/open_issues while online flags
