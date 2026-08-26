@@ -30,7 +30,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const forgeLayout = require('./runtime-edition-forge.js');
-const reviewerGenerator = require('./generate-reviewer-profiles.js');
+const reviewerGenerator = require('./generate-agent-profiles.js');
 
 const REPO = path.resolve(__dirname, '..');
 const SYNC_JS = path.join(REPO, 'scripts', 'sync-grok-edition.js');
@@ -115,6 +115,16 @@ const trackedAgents = () => fs.readdirSync(path.join(REPO, 'agents'))
   .filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
 const commandNamesFor = forge => forgeLayout.commandSources(forge)
   .map(s => s.basename.replace(/\.md$/, '')).sort();
+const behaviorContracts = reviewerGenerator.loadBehaviorContracts(REPO).roles;
+
+function expectedNativeTools(role) {
+  const required = new Set(behaviorContracts[role].capability_requirements || []);
+  const tools = ['Read', 'Grep', 'Glob'];
+  if (required.has('scoped_write')) tools.splice(1, 0, 'Write', 'Edit');
+  if (required.has('command_execution')) tools.push('Bash');
+  if (required.has('external_research')) tools.push('WebSearch', 'WebFetch');
+  return tools;
+}
 
 function canonicalAgentClass(name) {
   const { fm } = parseFrontmatter(read('agents/' + name + '.md'));
@@ -148,26 +158,14 @@ const GROK_RUNTIME_NATIVE = Object.freeze({
 // The canonical model tokens are the existing portable class markers, not a
 // second role roster. Derive each expected Grok binding from agents/*.md so a
 // role addition or tier move is judged by the canonical frontmatter itself.
-const GROK_MODEL_CLASS_TIERS = Object.freeze({
-  sonnet: Object.freeze({ tier: 'standard', effort: 'medium' }),
-  opus: Object.freeze({ tier: 'reasoning', effort: 'high' }),
-  fable: Object.freeze({ tier: 'heavy', effort: 'xhigh' }),
-});
-
-// #1018: GROK_MODEL_EFFORTS is the production map (not exported). Assert the
-// fable key exists; the probe later binds xhigh or high. Do not accept a
-// missing key as "not yet measured".
 const GROK_SYNC_SRC = fs.readFileSync(path.join(REPO, 'scripts', 'sync-grok-edition.js'), 'utf8');
-const GROK_MODEL_EFFORTS_PIN = (() => {
-  const m = GROK_SYNC_SRC.match(/const GROK_MODEL_EFFORTS = Object\.freeze\(\{([\s\S]*?)\}\)/);
-  const out = {};
-  if (!m) return out;
-  for (const row of m[1].split('\n')) {
-    const mm = row.match(/^\s*([A-Za-z0-9_-]+)\s*:\s*'([^']+)'/);
-    if (mm) out[mm[1]] = mm[2];
-  }
-  return out;
-})();
+const GROK_ADAPTER_EFFORTS = reviewerGenerator.loadRuntimeAdapters(REPO)
+  .runtimes.grok.capabilities.intent_mapping;
+const GROK_MODEL_CLASS_TIERS = Object.freeze({
+  sonnet: Object.freeze({ tier: 'standard', effort: GROK_ADAPTER_EFFORTS.standard }),
+  opus: Object.freeze({ tier: 'reasoning', effort: GROK_ADAPTER_EFFORTS.reasoning }),
+  fable: Object.freeze({ tier: 'heavy', effort: GROK_ADAPTER_EFFORTS.heavy }),
+});
 
 // ---------------------------------------------------------------------------
 // Additive boundary — grok is a runtime, not a forge. Read the tree; do not
@@ -319,11 +317,12 @@ const canonRosters = canonicalRosters(canonAgents);
   assert(canonRosters.unknown.length === 0,
     'G0-roster: every canonical agent model belongs to the known sonnet/opus/fable classes — unknown='
     + JSON.stringify(canonRosters.unknown));
-  assert(Object.prototype.hasOwnProperty.call(GROK_MODEL_EFFORTS_PIN, 'fable'),
-    'G0-fable: GROK_MODEL_EFFORTS must include a fable entry (probe binds xhigh or high later)');
-  assert(GROK_MODEL_EFFORTS_PIN.fable === 'xhigh' || GROK_MODEL_EFFORTS_PIN.fable === 'high',
-    'G0-fable: GROK_MODEL_EFFORTS.fable must be xhigh or high — got '
-    + JSON.stringify(GROK_MODEL_EFFORTS_PIN.fable));
+  assert(GROK_ADAPTER_EFFORTS.heavy === 'xhigh' || GROK_ADAPTER_EFFORTS.heavy === 'high',
+    'G0-fable: runtime adapter heavy effort must be xhigh or high — got '
+    + JSON.stringify(GROK_ADAPTER_EFFORTS.heavy));
+  assert(!/const\s+GROK_MODEL_EFFORTS\b|function\s+effortForModelToken\b/.test(GROK_SYNC_SRC),
+    'G0-adapter: sync-grok-edition carries no executable hardcoded effort table; '
+    + 'runtime-capabilities.json is the sole runtime identifier authority');
   for (const name of canonAgents) {
     if (name === 'planner' || name === 'code-architect') continue;
     assert(canonicalAgentClass(name).model !== 'fable',
@@ -353,9 +352,8 @@ function commandRel(name, forge) {
 // present. Frontmatter: name, description, model: inherit, and effort derived
 // from the canonical model class (standard/sonnet → medium, reasoning/opus →
 // high, heavy/fable → xhigh). `reasoning_effort:` is not a Grok agent field. Frontmatter `tools:`
-// is absent or contains no Claude MCP tool ids (mcp__). Body examples may still
-// name those tools — Grok inspect dropped knowledge-lookup for an unquoted YAML
-// description, not for body mcp__.
+// is the enforced native allowlist derived from the role capability contract; prose-only
+// restrictions do not satisfy this contract. Body examples may still name MCP tool ids.
 // ---------------------------------------------------------------------------
 {
   const dir = path.join(TREE_ROOT, '.grok', 'agents');
@@ -376,12 +374,22 @@ function commandRel(name, forge) {
       'G1[' + name + ']: frontmatter has a non-empty description');
     assert(fm.model === 'inherit',
       'G1[' + name + ']: frontmatter model is inherit — got ' + JSON.stringify(fm.model));
+    assert(fm.promptMode === 'full',
+      'G1[' + name + ']: native camelCase promptMode is full — got ' + JSON.stringify(fm.promptMode));
+    const expectedPermissionMode = behaviorContracts[name].capability_requirements.includes('scoped_write')
+      ? 'default' : 'plan';
+    assert(fm.permissionMode === expectedPermissionMode,
+      'G1[' + name + ']: native camelCase permissionMode follows write capability — expected '
+      + JSON.stringify(expectedPermissionMode) + ' got ' + JSON.stringify(fm.permissionMode));
+    assert(fm.agentsMd === 'true',
+      'G1[' + name + ']: native camelCase agentsMd enables project instructions — got '
+      + JSON.stringify(fm.agentsMd));
+    assert(!/^(?:prompt_mode|permission_mode|agents_md)\s*:/m.test(raw),
+      'G1[' + name + ']: frontmatter contains no ignored snake_case spellings for Grok native fields');
     const canonical = canonicalAgentClass(name);
     assert(canonical.tier !== 'unknown',
       'G1[' + name + ']: canonical model class is known — got ' + JSON.stringify(canonical.model));
-    const expectedEffort = canonical.model === 'fable'
-      ? (GROK_MODEL_EFFORTS_PIN.fable || canonical.effort)
-      : canonical.effort;
+    const expectedEffort = canonical.effort;
     assert(fm.effort === expectedEffort,
       'G1[' + name + ']: effort is ' + JSON.stringify(expectedEffort) + ' for canonical '
       + canonical.tier + ' tier — got ' + JSON.stringify(fm.effort));
@@ -392,9 +400,18 @@ function commandRel(name, forge) {
     assert(!/\bmcp__/.test(raw),
       'G1[' + name + ']: frontmatter carries no Claude MCP tool id (mcp__) — a tools: list of those '
       + 'ids drops the agent on Grok inspect; body examples may still name them');
-    assert(!Object.prototype.hasOwnProperty.call(fm, 'tools') || !/\bmcp__/.test(String(fm.tools)),
-      'G1[' + name + ']: tools: is absent, or contains no mcp__ ids — got '
-      + JSON.stringify(fm.tools));
+    let tools = null;
+    try { tools = JSON.parse(fm.tools); } catch (_) { tools = null; }
+    const expectedTools = expectedNativeTools(name);
+    assert((raw.match(/^tools\s*:/gm) || []).length === 1 && Array.isArray(tools),
+      'G1[' + name + ']: frontmatter carries exactly one executable tools allowlist');
+    assert(Array.isArray(tools) && JSON.stringify(tools) === JSON.stringify(expectedTools),
+      'G1[' + name + ']: tools allowlist derives from behavior capabilities — expected '
+      + JSON.stringify(expectedTools) + ' got ' + JSON.stringify(tools));
+    if (!behaviorContracts[name].capability_requirements.includes('command_execution')) {
+      assert(Array.isArray(tools) && !tools.includes('Bash'),
+        'G1[' + name + ']: a no-shell role lacks Bash in its enforced tools allowlist');
+    }
   }
 }
 

@@ -86,6 +86,49 @@ function changedProfileKeys(before, after) {
   return sorted([...keys].filter(key => beforeMap.get(key) !== afterMap.get(key)));
 }
 
+function parseFrontmatter(content) {
+  const match = String(content || '').match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) return { fields: {}, raw: '' };
+  const fields = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const row = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+    if (row) fields[row[1]] = row[2].trim();
+  }
+  return { fields, raw: match[1] };
+}
+
+function expectedNativeTools(contract, runtime) {
+  const required = new Set(contract.capability_requirements || []);
+  const tools = ['Read', 'Grep', 'Glob'];
+  if (required.has('scoped_write')) tools.splice(1, 0, 'Write', 'Edit');
+  if (required.has('command_execution')) tools.push('Bash');
+  if (required.has('external_research')) {
+    tools.push('WebSearch', runtime === 'kimi' ? 'FetchURL' : 'WebFetch');
+  }
+  return tools;
+}
+
+function replaceExactScalar(value, needle, replacement, stats) {
+  if (Array.isArray(value)) {
+    return value.map(item => replaceExactScalar(item, needle, replacement, stats));
+  }
+  if (!value || typeof value !== 'object') {
+    if (typeof value === 'string' && value.includes(needle)) {
+      stats.replacements++;
+      return value.split(needle).join(replacement);
+    }
+    return value;
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    key,
+    replaceExactScalar(item, needle, replacement, stats),
+  ]));
+}
+
+function runtimeProfilesFor(sourceProfiles, runtime) {
+  return sourceProfiles.filter(profile => profile.runtime === runtime);
+}
+
 function runtimeForAdapter(name, adapter) {
   const declared = adapter && typeof adapter.runtime === 'string' ? adapter.runtime.toLowerCase() : '';
   if (RUNTIME_NAMES.includes(declared)) return declared;
@@ -575,6 +618,116 @@ if (generator && behavior && adapters && profiles.length > 0) {
       assert(deletionRejected,
         'A10: deleting a required cursor adapter capability makes focused generation fail');
     }
+  }
+}
+
+// A10-native-carriers — runtime-specific model and effort identifiers are adapter data. A
+// renderer may understand a carrier shape, but it must not know Cursor's model family or ZCode's
+// model name as a literal. Mutating either identifier must change every and only the target
+// runtime's profiles.
+if (generator && behavior && adapters && profiles.length > 0) {
+  const generatorSource = read(generatorPath) || '';
+  for (const runtime of ['cursor', 'zcode']) {
+    const entry = adapterView.entries.find(candidate => candidate.runtime === runtime);
+    const runtimeProfiles = runtimeProfilesFor(profiles, runtime);
+    const renderedModels = sorted(new Set(runtimeProfiles.map(profile => {
+      const { fields } = parseFrontmatter(profile.content);
+      return String(fields.model || '').replace(/\[effort=[^\]]+\]$/, '');
+    }).filter(Boolean)));
+    assert(!!entry, `A10-native[${runtime}]: target adapter exists`);
+    assert(renderedModels.length === 1,
+      `A10-native[${runtime}]: all target profiles use one adapter-owned model identifier — got `
+      + JSON.stringify(renderedModels));
+    if (!entry || renderedModels.length !== 1) continue;
+
+    const modelIdentifier = renderedModels[0];
+    assert(JSON.stringify(entry.adapter).includes(modelIdentifier),
+      `A10-native[${runtime}]: adapter data owns rendered model identifier `
+      + JSON.stringify(modelIdentifier));
+    assert(!generatorSource.includes(modelIdentifier),
+      `A10-native[${runtime}]: profile renderer contains no hardcoded model identifier `
+      + JSON.stringify(modelIdentifier));
+
+    const replacement = `kw-${runtime}-model-mutation-1033`;
+    const stats = { replacements: 0 };
+    const mutatedAdapters = replaceExactScalar(clone(adapters), modelIdentifier, replacement, stats);
+    assert(stats.replacements > 0,
+      `A10-native[${runtime}]: model mutation changed adapter data rather than renderer source`);
+    if (stats.replacements === 0) continue;
+    let mutatedProfiles = [];
+    try { mutatedProfiles = generator.renderProfiles(clone(behavior), mutatedAdapters); }
+    catch (error) {
+      assert(false, `A10-native[${runtime}]: adapter-owned model mutation renders — ${error.message}`);
+    }
+    const changed = changedProfileKeys(profiles, mutatedProfiles);
+    const expected = sorted(runtimeProfiles.map(profileKey));
+    assert(JSON.stringify(changed) === JSON.stringify(expected),
+      `A10-native[${runtime}]: model mutation changes every and only target profile — changed `
+      + JSON.stringify(changed));
+    const targetOutputs = runtimeProfilesFor(mutatedProfiles, runtime);
+    assert(targetOutputs.length === expected.length
+      && targetOutputs.every(profile => profile.content.includes(replacement)),
+    `A10-native[${runtime}]: mutated adapter model reaches all ${expected.length} native carriers`);
+
+    const intentMutation = clone(adapters);
+    const intentEntry = adapterEntries(intentMutation).entries.find(candidate => candidate.runtime === runtime);
+    intentEntry.adapter.capabilities.intent_mapping.standard = `kw-${runtime}-effort-mutation-1033`;
+    let intentProfiles = [];
+    try { intentProfiles = generator.renderProfiles(clone(behavior), intentMutation); }
+    catch (error) {
+      assert(false, `A10-native[${runtime}]: adapter-owned effort mutation renders — ${error.message}`);
+    }
+    const intentChanged = changedProfileKeys(profiles, intentProfiles);
+    assert(JSON.stringify(intentChanged) === JSON.stringify(expected),
+      `A10-native[${runtime}]: standard effort mutation changes every and only target runtime profiles — changed `
+      + JSON.stringify(intentChanged));
+    const mutatedStandard = intentProfiles.filter(profile => profile.runtime === runtime
+      && roleContracts[profile.role].intent_class === 'standard');
+    assert(mutatedStandard.length > 0 && mutatedStandard.every(profile =>
+      profile.content.includes(`kw-${runtime}-effort-mutation-1033`)),
+    `A10-native[${runtime}]: adapter-owned standard effort reaches every standard native carrier`);
+  }
+}
+
+// A10-native-tools — runtimes that declare profile_tools enforce the role capability contract in
+// native frontmatter. Prose restrictions cannot substitute for the carrier: the allowlist must be
+// present exactly once and roles without a capability must lack its native tools.
+if (generator && behavior && adapters && profiles.length > 0) {
+  const profileToolRuntimes = ['kimi', 'grok', 'zcode'];
+  for (const runtime of profileToolRuntimes) {
+    const entry = adapterView.entries.find(candidate => candidate.runtime === runtime);
+    assert(!!entry && capabilityObject(entry.adapter).tool_binding === 'profile_tools',
+      `A10-tools[${runtime}]: adapter declares profile_tools enforcement`);
+    for (const profile of runtimeProfilesFor(profiles, runtime)) {
+      const contract = roleContracts[profile.role];
+      const expected = expectedNativeTools(contract, runtime);
+      const { fields, raw } = parseFrontmatter(profile.content);
+      let actual = null;
+      try { actual = JSON.parse(fields.tools); } catch (_) { actual = null; }
+      assert((raw.match(/^tools\s*:/gm) || []).length === 1 && Array.isArray(actual),
+        `A10-tools[${runtime}/${profile.role}]: native frontmatter carries one executable tools allowlist`);
+      assert(Array.isArray(actual) && JSON.stringify(actual) === JSON.stringify(expected),
+        `A10-tools[${runtime}/${profile.role}]: tools derive exactly from behavior capabilities — expected `
+        + JSON.stringify(expected) + ' got ' + JSON.stringify(actual));
+    }
+  }
+
+  const reducedBehavior = clone(behavior);
+  reducedBehavior.roles.implementer.capability_requirements = ['repository_read'];
+  let reducedProfiles = [];
+  try { reducedProfiles = generator.renderProfiles(reducedBehavior, clone(adapters)); }
+  catch (error) { assert(false, 'A10-tools: reduced read-only capability mutation renders — ' + error.message); }
+  for (const runtime of profileToolRuntimes) {
+    const profile = reducedProfiles.find(candidate =>
+      candidate.runtime === runtime && candidate.role === 'implementer');
+    const { fields, raw } = parseFrontmatter(profile && profile.content);
+    let actual = null;
+    try { actual = JSON.parse(fields.tools); } catch (_) { actual = null; }
+    assert((raw.match(/^tools\s*:/gm) || []).length === 1
+      && JSON.stringify(actual) === JSON.stringify(['Read', 'Grep', 'Glob'])
+      && !/\b(?:Write|Edit|Bash)\b/.test(String(fields.tools || '')),
+    `A10-tools[${runtime}/mutation]: removing write and shell capabilities removes Write/Edit/Bash `
+      + 'from the enforced native allowlist');
   }
 }
 
