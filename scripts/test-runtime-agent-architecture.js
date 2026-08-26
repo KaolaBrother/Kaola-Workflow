@@ -671,7 +671,14 @@ if (generator && behavior && adapters && profiles.length > 0) {
 
     const intentMutation = clone(adapters);
     const intentEntry = adapterEntries(intentMutation).entries.find(candidate => candidate.runtime === runtime);
-    intentEntry.adapter.capabilities.intent_mapping.standard = `kw-${runtime}-effort-mutation-1033`;
+    const originalIntent = intentEntry.adapter.capabilities.intent_mapping.standard;
+    const replacementIntent = ['reasoning', 'heavy']
+      .map(intent => intentEntry.adapter.capabilities.intent_mapping[intent])
+      .find(value => value !== originalIntent);
+    assert(!!replacementIntent,
+      `A10-native[${runtime}]: adapter exposes a second valid effort value for mutation`);
+    if (!replacementIntent) continue;
+    intentEntry.adapter.capabilities.intent_mapping.standard = replacementIntent;
     let intentProfiles = [];
     try { intentProfiles = generator.renderProfiles(clone(behavior), intentMutation); }
     catch (error) {
@@ -683,8 +690,12 @@ if (generator && behavior && adapters && profiles.length > 0) {
       + JSON.stringify(intentChanged));
     const mutatedStandard = intentProfiles.filter(profile => profile.runtime === runtime
       && roleContracts[profile.role].intent_class === 'standard');
-    assert(mutatedStandard.length > 0 && mutatedStandard.every(profile =>
-      profile.content.includes(`kw-${runtime}-effort-mutation-1033`)),
+    assert(mutatedStandard.length > 0 && mutatedStandard.every(profile => {
+      const fields = parseFrontmatter(profile.content).fields;
+      return runtime === 'cursor'
+        ? String(fields.model || '').includes(`effort=${replacementIntent}`)
+        : fields.thoughtLevel === replacementIntent;
+    }),
     `A10-native[${runtime}]: adapter-owned standard effort reaches every standard native carrier`);
   }
 }
