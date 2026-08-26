@@ -376,11 +376,9 @@ function commandRel(name, forge) {
       'G1[' + name + ']: frontmatter model is inherit — got ' + JSON.stringify(fm.model));
     assert(fm.promptMode === 'full',
       'G1[' + name + ']: native camelCase promptMode is full — got ' + JSON.stringify(fm.promptMode));
-    const expectedPermissionMode = behaviorContracts[name].capability_requirements.includes('scoped_write')
-      ? 'default' : 'plan';
-    assert(fm.permissionMode === expectedPermissionMode,
-      'G1[' + name + ']: native camelCase permissionMode follows write capability — expected '
-      + JSON.stringify(expectedPermissionMode) + ' got ' + JSON.stringify(fm.permissionMode));
+    assert(!Object.prototype.hasOwnProperty.call(fm, 'permissionMode'),
+      'G1[' + name + ']: permissionMode is omitted; tool restrictions belong to tools/capabilityMode, '
+      + 'and the native enum does not accept plan — got ' + JSON.stringify(fm.permissionMode));
     assert(fm.agentsMd === 'true',
       'G1[' + name + ']: native camelCase agentsMd enables project instructions — got '
       + JSON.stringify(fm.agentsMd));
