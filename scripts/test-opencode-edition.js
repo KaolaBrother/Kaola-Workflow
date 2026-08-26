@@ -1064,8 +1064,10 @@ if (exists(pluginRel)) {
 
   const INSTALLER = path.join(REPO, 'install-opencode.sh');
   // Issue #1032: the retired dispatch hook must remain in the installer's bounded list, and both
-  // cleanup paths must consume that list. Inspect the shipped source directly; no real home is
-  // needed and a hard-coded cleanup path cannot satisfy these assertions.
+  // cleanup paths must consume that list. R1/R2 inspect the declaration and install path; R3 runs
+  // the real uninstall against an isolated OPENCODE_CONFIG_DIR and observes the retired hook's
+  // absence. The uninstall result is the contract — local variable names in the shell source are
+  // deliberately outside it (#1034).
   const installerSource = readFileSync(INSTALLER, 'utf8');
   const retiredHooks = installerSource.match(/\bRETIRED_HOOKS\s*=\s*\(([^)]*)\)/);
   const hasRetiredHookCleanup = body => {
@@ -1079,8 +1081,82 @@ if (exists(pluginRel)) {
   assert(installStart >= 0 && uninstallStart > installStart
     && hasRetiredHookCleanup(installerSource.slice(installStart, uninstallStart)),
     'R2: install cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
-  assert(uninstallStart >= 0 && hasRetiredHookCleanup(installerSource.slice(uninstallStart)),
-    'R3: uninstall cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
+  {
+    const retiredHook = 'kaola-workflow-subagent-dispatch-log.sh';
+    const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-r3-home-'));
+    const configDir = mkdtempSync(path.join(os.tmpdir(), 'opencode-r3-config-'));
+    const hookDir = path.join(configDir, 'hooks');
+    const plantedHook = path.join(hookDir, retiredHook);
+    try {
+      fs.mkdirSync(hookDir, { recursive: true });
+      fs.writeFileSync(plantedHook, '#!/usr/bin/env bash\n# shipped by an older release\n');
+      assert(!sync.HOOK_SCRIPTS.includes(retiredHook),
+        'R3 (#1034) anti-vacuity: the planted retired hook is absent from the current deploy set');
+      // spawn-class: environment
+      const r = spawnSync('bash', [INSTALLER, '--global', '--uninstall', '--yes'], {
+        env: Object.assign({}, process.env, { HOME: home, OPENCODE_CONFIG_DIR: configDir }),
+        encoding: 'utf8',
+      });
+      assert(r.status === 0,
+        'R3 (#1034): sandboxed --uninstall exits 0 (got ' + r.status
+        + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
+      assert(!existsSync(plantedHook),
+        'R3 (#1034): sandboxed --uninstall removes the retired hook planted at ' + plantedHook);
+    } finally {
+      try { rmSync(home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      try { rmSync(configDir, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
+  }
+
+  // Issue #1034: one red edition must not hide the other four. Exercise the package's REAL lane
+  // in a temp copy, replacing only the expensive child suites with witnesses that append their
+  // own filenames to a log. The orchestration remains the subject; the witnesses isolate each
+  // child suite's behavior. opencode fails first so `&&` short-circuiting is observable, and the
+  // aggregate must still fail after every suite was attempted (a `;` chain is an equally wrong
+  // near-miss because the final green child would erase the first failure).
+  {
+    const editionSuites = [
+      'test-opencode-edition.js',
+      'test-kimi-edition.js',
+      'test-grok-edition.js',
+      'test-cursor-edition.js',
+      'test-zcode-edition.js',
+    ];
+    const fixture = mkdtempSync(path.join(os.tmpdir(), 'opencode-editions-lane-'));
+    const attemptsLog = path.join(fixture, 'attempts.log');
+    try {
+      fs.copyFileSync(path.join(REPO, 'package.json'), path.join(fixture, 'package.json'));
+      fs.cpSync(path.join(REPO, 'scripts'), path.join(fixture, 'scripts'), { recursive: true });
+      const witness = [
+        "'use strict';",
+        "const fs = require('fs');",
+        "const path = require('path');",
+        "const suite = path.basename(__filename);",
+        "fs.appendFileSync(process.env.KW_EDITION_ATTEMPTS_LOG, suite + '\\n');",
+        "process.exit(suite === 'test-opencode-edition.js' ? 17 : 0);",
+        '',
+      ].join('\n');
+      for (const suite of editionSuites) {
+        fs.writeFileSync(path.join(fixture, 'scripts', suite), witness);
+      }
+      // spawn-class: environment
+      const lane = spawnSync('npm', ['run', 'test:kaola-workflow:editions'], {
+        cwd: fixture,
+        env: Object.assign({}, process.env, { KW_EDITION_ATTEMPTS_LOG: attemptsLog }),
+        encoding: 'utf8',
+      });
+      const attempts = existsSync(attemptsLog)
+        ? readFileSync(attemptsLog, 'utf8').split(/\r?\n/).filter(Boolean)
+        : [];
+      assert(lane.status !== 0,
+        'E0 (#1034): editions lane preserves a child-suite failure after attempting the full lane');
+      assert(JSON.stringify(attempts) === JSON.stringify(editionSuites),
+        'E0 (#1034): editions lane attempts all five suites even when opencode fails first — attempted '
+        + JSON.stringify(attempts));
+    } finally {
+      try { rmSync(fixture, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
+  }
   // The three surviving command topics. `kaola-workflow-adapt` and `kaola-workflow-plan-run`
   // were the node executor's own surfaces and went with it.
   const ADAPTIVE_CORE = [
