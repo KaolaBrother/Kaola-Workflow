@@ -35,7 +35,9 @@
 - **Workflow-init follows the single instruction authority it invokes (#1033).** All six generated
   init surfaces now report the `AGENTS.md` authority and runtime-native bridge outcomes produced by
   the project-instruction helper, never prescribe a second direct edit to either file, and keep every
-  scaffold step outside balanced Markdown code fences.
+  scaffold step outside balanced Markdown code fences. Mission-list and forge-backlog obligations
+  live once in the distribution consumer `AGENTS.md` template and remain mutation-checked through
+  the helper/module carrier instead of being copied into each runtime init surface.
 - **Native role carriers and capability fields converge on official runtime contracts (#1033).**
   Kimi roles moved from role-shaped Skills to 14 native custom-agent profiles while the three
   workflow commands remain Skills; direct named dispatch, native tool allowlists, and ownership-safe

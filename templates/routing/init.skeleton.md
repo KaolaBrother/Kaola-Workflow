@@ -222,15 +222,6 @@ proof is the doctor's `dispatch_posture` field, not the feature flags alone.
 Trust the hooks once with `/hooks` in Codex. If a project-local `.codex/hooks.json`
 already exists, remove it (or run `uninstall.sh`) to avoid double-firing.
 
-### How a run is coordinated
-
-One file per run, not one per issue. A run claims its set of issues — normally three to five,
-sometimes one — then writes `kaola-workflow/{project}/mission-list.md`. There is nothing to select
-or configure, and no script owns the file.
-
-A stale workflow-path request from an old session or script is silently ignored; there is only one
-way to run.
-
 6. Create only missing scaffold files:
 
 ```text

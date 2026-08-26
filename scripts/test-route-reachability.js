@@ -279,7 +279,11 @@ for (const ed of codexEditions) {
 // each block obligates is COMPUTED from topic + tags (never hand-typed), so
 // obligating 4-of-6 surfaces by omission is structurally impossible.
 // ===========================================================================
-const { REQUIRED_BLOCKS } = require('../templates/routing/required-blocks.js');
+const {
+  REQUIRED_BLOCKS,
+  UNIVERSAL_AGENTS_BLOCKS,
+} = require('../templates/routing/required-blocks.js');
+const CONSUMER_TEMPLATES = require('./kaola-workflow-project-instruction-templates.js');
 
 // THE SURFACE UNIVERSE IS TWELVE TREES, NOT SIX. Six are tracked (three claude
 // command dirs + three codex skills dirs); six are GENERATED and gitignored —
@@ -605,6 +609,34 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
     legacySurfaces.every(s => deriveObligated(b, editions, topicBasename).files.includes(s)));
 }
 
+// Universal obligations have a different authority and universe from routing
+// surface obligations: exactly one distribution-owned consumer AGENTS template.
+// Keeping this checker pure lets the mutation proofs exercise the same path as
+// the live template without mutating the repository.
+function checkUniversalAgents({ blocks, agentsTemplate }) {
+  const failures = [];
+  const seen = new Set();
+  const content = norm(agentsTemplate);
+  for (const block of blocks) {
+    if (!block || typeof block.block_id !== 'string' || !block.block_id) {
+      failures.push('malformed-block: universal AGENTS block needs a nonempty block_id');
+      continue;
+    }
+    if (seen.has(block.block_id)) failures.push(`duplicate-block: ${block.block_id}`);
+    seen.add(block.block_id);
+    if (!Array.isArray(block.content_tokens) || block.content_tokens.length === 0) {
+      failures.push(`empty-block: ${block.block_id}`);
+      continue;
+    }
+    for (const token of block.content_tokens) {
+      if (!content.includes(norm(token))) {
+        failures.push(`missing-token: block ${block.block_id} token ${JSON.stringify(token)} absent from consumer AGENTS template`);
+      }
+    }
+  }
+  return failures;
+}
+
 // --- REAL-RUN invocation: manifest presence over the live surface tree -------
 {
   const realResult = checkManifest({
@@ -617,6 +649,57 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
   for (const msg of realResult.failures) assert(false, `MANIFEST ${msg}`);
   assert(realResult.failures.length === 0,
     `MANIFEST: derived-universe presence check clean over ${realResult.obligatedCount} obligated file-checks`);
+}
+
+// --- SINGLE UNIVERSAL AUTHORITY + INIT CARRIER ------------------------------
+// The universal mission/backlog contract lives in AGENTS_TEMPLATE once. Init's
+// 21 runtime/forge surfaces reach it through the project-instruction helper and
+// distribution module, while remaining authoring surfaces only for runtime-
+// specific instructions. This is reachability, not restatement.
+{
+  const universalIds = UNIVERSAL_AGENTS_BLOCKS.map(b => b.block_id).sort();
+  assert(universalIds.join(',') === 'consumer-forge-is-the-backlog,consumer-mission-list',
+    'UNIVERSAL-AGENTS: the sole template must retain both mission-list and forge-backlog obligation blocks; got '
+    + JSON.stringify(universalIds));
+  const universalFailures = checkUniversalAgents({
+    blocks: UNIVERSAL_AGENTS_BLOCKS,
+    agentsTemplate: CONSUMER_TEMPLATES.AGENTS_TEMPLATE,
+  });
+  for (const msg of universalFailures) assert(false, `UNIVERSAL-AGENTS ${msg}`);
+  assert(universalFailures.length === 0,
+    `UNIVERSAL-AGENTS: all ${UNIVERSAL_AGENTS_BLOCKS.length} universal obligation blocks live in the sole consumer AGENTS template`);
+
+  const carrier = REQUIRED_BLOCKS.find(b => b.block_id === 'in-universal-instruction-carrier');
+  assert(!!carrier,
+    'INIT-CARRIER: manifest must carry in-universal-instruction-carrier so init cannot lose reachability while universal prose stays healthy');
+  if (carrier) {
+    const { error, files } = deriveObligated(carrier, MANIFEST_EDITIONS, TOPIC_BASENAME);
+    const everyTree = MANIFEST_EDITIONS.command.length + MANIFEST_EDITIONS.skill.length;
+    assert(!error && files.length === everyTree,
+      `INIT-CARRIER: carrier must reach all ${everyTree} init surfaces, got ${files.length}${error ? ' (' + error + ')' : ''}`);
+    assert(files.length === 21,
+      `INIT-CARRIER: expected 21 runtime/forge init surfaces; got ${files.length}. Verify every new surface before changing the literal`);
+
+    const duplicated = [];
+    for (const file of files) {
+      const body = readRealSurface(file);
+      if (body === null) continue;
+      const normalized = norm(body);
+      for (const block of UNIVERSAL_AGENTS_BLOCKS) {
+        for (const token of block.content_tokens) {
+          if (normalized.includes(norm(token))) duplicated.push(`${file} :: ${block.block_id} :: ${token}`);
+        }
+      }
+    }
+    assert(duplicated.length === 0,
+      'INIT-CARRIER: init surfaces must reach the universal contract, never duplicate its obligation wording; duplicates: '
+      + JSON.stringify(duplicated));
+  }
+
+  const helper = fs.readFileSync(path.join(REPO, 'scripts/kaola-workflow-project-instructions.js'), 'utf8');
+  assert(helper.includes("require('./kaola-workflow-project-instruction-templates.js')")
+      && helper.includes('Buffer.from(consumerTemplates.AGENTS_TEMPLATE)'),
+    'INIT-CARRIER: kaola-workflow-project-instructions.js must load AGENTS_TEMPLATE from the one distribution module');
 }
 
 // --- NON-VACUITY FLOOR (manifest-wide) — every marker-led block must carry at least ONE
@@ -695,7 +778,7 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
 }
 
 // --- AXIOM POINTER SANITY: the `next` surfaces reach the axiom layer by a short POINTER — the
-//     layer itself is embedded in the workflow-init CLAUDE.md template, and the pointer is what
+//     layer itself is embedded in the consumer AGENTS template, and the pointer is what
 //     tells a reader in a consumer repo that a tie-breaking order exists and where to read it.
 //     Its presence obligation is the manifest block below, and this band is what makes the BLOCK's
 //     own deletion loud.
@@ -1078,6 +1161,103 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
           `RED-PROOF axiom-pointer: removing the pointer paragraph from any ONE of the `
           + `${obligated.length} next surfaces must red naming THAT surface and no other; `
           + `unwitnessed: ${JSON.stringify(unwitnessed)}`);
+      }
+    }
+  }
+
+  // (11) SINGLE-AUTHORITY OBLIGATION MUTATION — remove each universal
+  // obligation token from the actual distribution template, one at a time.
+  // The live universal checker must name that block and token. This proves the
+  // authority move did not turn the old surface pin into an unguarded module.
+  {
+    const control = checkUniversalAgents({
+      blocks: UNIVERSAL_AGENTS_BLOCKS,
+      agentsTemplate: CONSUMER_TEMPLATES.AGENTS_TEMPLATE,
+    });
+    assert(control.length === 0,
+      'RED-PROOF universal-AGENTS (green control): the unmutated consumer template must satisfy every universal obligation; got '
+      + JSON.stringify(control));
+
+    if (control.length === 0) {
+      const escapeRe = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const whitespacePattern = token => token.trim().split(/\s+/).map(escapeRe).join('\\s+');
+      const unwitnessed = [];
+      for (const block of UNIVERSAL_AGENTS_BLOCKS) {
+        for (const token of block.content_tokens) {
+          const pattern = new RegExp(whitespacePattern(token), 'g');
+          if (!pattern.test(CONSUMER_TEMPLATES.AGENTS_TEMPLATE)) {
+            unwitnessed.push(`${block.block_id} :: ${token} — source span could not be located`);
+            continue;
+          }
+          pattern.lastIndex = 0;
+          const mutant = CONSUMER_TEMPLATES.AGENTS_TEMPLATE.replace(pattern, '');
+          const failures = checkUniversalAgents({
+            blocks: UNIVERSAL_AGENTS_BLOCKS,
+            agentsTemplate: mutant,
+          });
+          const expected = `missing-token: block ${block.block_id} token ${JSON.stringify(token)} absent from consumer AGENTS template`;
+          if (!failures.includes(expected)) {
+            unwitnessed.push(`${block.block_id} :: ${token} — mutation did not produce ${JSON.stringify(expected)}; got ${JSON.stringify(failures)}`);
+          }
+        }
+      }
+      assert(unwitnessed.length === 0,
+        'RED-PROOF universal-AGENTS: deleting any one obligation from the sole consumer template must red its exact block; unwitnessed: '
+        + JSON.stringify(unwitnessed));
+    }
+  }
+
+  // (12) INIT-CARRIER PER-SURFACE MUTATION — remove the executable helper
+  // lifecycle from one real init rendering at a time. The carrier block must
+  // red naming only that rendering, across all runtime/forge path shapes.
+  {
+    const block = REQUIRED_BLOCKS.find(b => b.block_id === 'in-universal-instruction-carrier');
+    assert(!!block,
+      'RED-PROOF init-carrier: in-universal-instruction-carrier must exist to mutate');
+    if (block) {
+      const obligated = deriveObligated(block, MANIFEST_EDITIONS, TOPIC_BASENAME).files;
+      const real = {};
+      for (const file of obligated) real[file] = readRealSurface(file);
+
+      const carrierFailures = surfaces => checkManifest({
+        blocks: [block],
+        readSurface: mapSurface(surfaces),
+        editions: MANIFEST_EDITIONS,
+        topicBasename: TOPIC_BASENAME,
+        foreignMarkers: FOREIGN_MARKERS,
+      }).failures.filter(message => message.startsWith(`missing-token: block ${block.block_id} `));
+      const control = carrierFailures(real);
+      assert(control.length === 0,
+        'RED-PROOF init-carrier (green control): the unmutated init tree must carry the helper lifecycle everywhere; got '
+        + JSON.stringify(control));
+
+      if (control.length === 0) {
+        const START = 'INSTRUCTIONS_JS="$(kaola_script kaola-workflow-project-instructions.js)"';
+        const END = 'node "$INSTRUCTIONS_JS" check --project-root "$PWD" --json';
+        const surfaceOf = message => message.slice(message.lastIndexOf(' absent from ') + ' absent from '.length);
+        const unwitnessed = [];
+        for (const target of obligated) {
+          const lines = String(real[target]).split('\n');
+          const start = lines.findIndex(line => line.includes(START));
+          const end = lines.findIndex((line, index) => index >= start && line.includes(END));
+          if (start < 0 || end < start) {
+            unwitnessed.push(`${target} — executable helper lifecycle could not be located`);
+            continue;
+          }
+          const mutant = lines.slice(0, start).concat(lines.slice(end + 1)).join('\n');
+          const named = new Set(carrierFailures(Object.assign({}, real, { [target]: mutant })).map(surfaceOf));
+          if (!named.has(target)) {
+            unwitnessed.push(`${target} — removing its helper lifecycle reddened no failure naming it`);
+            continue;
+          }
+          named.delete(target);
+          if (named.size > 0) {
+            unwitnessed.push(`${target} — removing its helper lifecycle also reddened ${[...named].join(', ')}`);
+          }
+        }
+        assert(unwitnessed.length === 0,
+          `RED-PROOF init-carrier: removing the helper lifecycle from any one of the ${obligated.length} init surfaces must red only that surface; unwitnessed: `
+          + JSON.stringify(unwitnessed));
       }
     }
   }

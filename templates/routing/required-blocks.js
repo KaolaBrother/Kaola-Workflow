@@ -1,7 +1,7 @@
 'use strict';
 
-// required-blocks.js — the single-source required-block MANIFEST for the six
-// routing surfaces per topic (3 Claude commands + 3 Codex SKILLs).
+// required-blocks.js — the single-source required-block manifests for shipped
+// routing surfaces and for the distribution-owned consumer AGENTS template.
 //
 // Layer 1 of the routing-surface generation seam: each required block is
 // DECLARED ONCE here, and a derived-universe presence checker
@@ -27,6 +27,36 @@
 // (<!-- PIN: … -->); the reverse orphan-sentinel matches surface markers back
 // to these first tokens. A token that is a bare SUBSTRING of its own marker is
 // vacuous against a marker-preserving interior gut — pin the actual rule.
+
+// Universal workflow obligations are authored once in the consumer AGENTS
+// template. Init surfaces route to the template through the project-instruction
+// helper; they must not become a second authoring surface for this wording.
+const UNIVERSAL_AGENTS_BLOCKS = [
+  {
+    block_id: 'consumer-mission-list',
+    content_tokens: [
+      'kaola-workflow/{project}/mission-list.md',
+      'Three write moments',
+      '**before the work goes out**',
+      'where the output was to land',
+      'the list minus done minus in-flight',
+      'mission, not a specification',
+      'completed item and its result are immutable',
+      'one dispatch has one result',
+      'append a new mission',
+    ],
+  },
+  {
+    block_id: 'consumer-forge-is-the-backlog',
+    content_tokens: [
+      '<!-- PIN: forge-is-the-backlog -->',
+      'is the one optional local file that survives',
+      'nothing else is generated or tracked under',
+      'there is no local mirror to refresh',
+      'Top-priority labels: declare in `kaola-workflow/config.json` (`priority_top_tier_labels`)',
+    ],
+  },
+];
 
 const REQUIRED_BLOCKS = [
   // ==== consent: the whole mechanism, on every surface of all three topics ===
@@ -67,31 +97,20 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    // The consumer's AGENTS.md is the universal artifact loaded directly or
-    // through the runtime-native bridge in every supported runtime session;
-    // the repo the workflow was installed into; the next surface loads only
-    // when the command is invoked, and its text is not addressable from a
-    // consumer repo at all — it lives in the installed command/skill tree, not
-    // in the repo. So the format is RESTATED here rather than pointed at.
-    //
-    // The restatement is a strict SUBSET of the next skeleton's wording: the
-    // mission-list guidance in the KW-AGENTS-TEMPLATE region is built only
-    // from whole sentences of `next.skeleton.md`, in that skeleton's own order,
-    // shortened by omission and never rephrased.
-    block_id: 'in-mission-list',
+    // The init surface is a carrier, not the universal contract's authoring
+    // surface. Every runtime/forge rendering must name the one distribution
+    // module and invoke the helper's complete plan/apply/check lifecycle.
+    block_id: 'in-universal-instruction-carrier',
     topic: 'init',
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
-      'kaola-workflow/{project}/mission-list.md',
-      'Three write moments',
-      '**before the work goes out**',
-      'where the output was to land',
-      'the list minus done minus in-flight',
-      'mission, not a specification',
-      'completed item and its result are immutable',
-      'one dispatch has one result',
-      'append a new mission',
+      '`kaola-workflow-project-instruction-templates.js` distribution module',
+      'Do not synthesize, paste, or independently restate that universal contract in this surface',
+      'INSTRUCTIONS_JS="$(kaola_script kaola-workflow-project-instructions.js)"',
+      'node "$INSTRUCTIONS_JS" plan --project-root "$PWD" --json',
+      'node "$INSTRUCTIONS_JS" apply --project-root "$PWD" --json',
+      'node "$INSTRUCTIONS_JS" check --project-root "$PWD" --json',
     ],
   },
 
@@ -393,24 +412,6 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    // Three independent spans inside the injected `## Kaola-Workflow` block this
-    // topic writes into a consumer's CLAUDE.md: the `_rules.md`-survives bullet,
-    // the roadmap-session-vs-workflow-run split, and the top-priority-labels
-    // override. One token per span (plus one extra in the first), so any single
-    // span gutted alone — marker and the other two spans intact — still reds.
-    block_id: 'in-forge-is-the-backlog',
-    topic: 'init',
-    runtime_tag: 'both',
-    surface_type_tag: 'both',
-    content_tokens: [
-      '<!-- PIN: forge-is-the-backlog -->',
-      'is the one optional local file that survives',
-      'nothing else is generated or tracked under',
-      'there is no local mirror to refresh',
-      'Top-priority labels: declare in `kaola-workflow/config.json` (`priority_top_tier_labels`)',
-    ],
-  },
-  {
     // One span at Step 7, carrying five independent rules: what to file, that what
     // is filed carries a priority tier, how the filed body is typed, that the filing
     // was verified to have landed, and what to do when the run's own findings correct
@@ -506,4 +507,4 @@ const REQUIRED_BLOCKS = [
 
 const TOPICS = ['next', 'init', 'finalize'];
 
-module.exports = { REQUIRED_BLOCKS, TOPICS };
+module.exports = { REQUIRED_BLOCKS, UNIVERSAL_AGENTS_BLOCKS, TOPICS };
