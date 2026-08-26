@@ -16,18 +16,15 @@
 // additive kimi surface). Run directly:
 //   node scripts/test-kimi-edition.js
 //
-// The kimi edition is delivered the Kimi-native way: directory-form Skills
-// under `.kimi/skills/<name>/SKILL.md` (one Skill per canonical command, plus
-// one `kaola-role-*` role-contract Skill per canonical agent — both counts are
-// derived from the canonical trees, never typed here) plus `.kimi/hooks/` (1 byte-copied shell hook + the
-// generated `kimi-hooks.toml` fragment the installer merges into the global
-// config.toml). ONE model tier: every subagent inherits the session model (the
-// Codex inherit precedent), so there is no variant/effort surface to assert —
-// instead this suite locks the dispatch rewrite (read-only roles ↔
-// subagent_type="explore", write roles ↔ "coder", each dispatch referencing
-// its kaola-role-<role> Skill), the zero-Claude-leak invariant, the reviewer
-// behavior-identity preservation, the hooks fragment, route reachability, and
-// the install-kimi.sh partition/idempotency/uninstall contract (hermetic:
+// The kimi edition is delivered through two distinct Kimi-native carriers:
+// directory-form command Skills under `.kimi/skills/<name>/SKILL.md`, and all
+// 14 custom agent profiles under `.kimi/agents/<role>.md`. Role contracts are
+// agents, never Skills. ONE model tier: every custom agent inherits the
+// session model, while Kimi's native `tools` allowlist enforces the role's
+// canonical capability boundary. This suite locks direct named dispatch
+// (`subagent_type="kaola-role-<role>"`), the zero-Claude-leak invariant, the
+// all-role behavior identity, the hooks fragment, route reachability, and the
+// install-kimi.sh project/global ownership, idempotency, and uninstall contract (hermetic:
 // every sub-case runs the REAL installer with its own temp HOME +
 // KIMI_CODE_HOME + --target under os.tmpdir()).
 //
@@ -42,7 +39,7 @@ const fs = require('fs');
 const path = require('path');
 const sync = require('./sync-kimi-edition.js');
 const schema = require('./kaola-workflow-adaptive-schema.js');
-const reviewerGenerator = require('./generate-reviewer-profiles.js');
+const reviewerGenerator = require('./generate-agent-profiles.js');
 
 const REPO = sync.REPO;
 
@@ -166,7 +163,7 @@ const treeWhere = TREE_ROOT === REPO ? '' : ' [tree root: ' + TREE_ROOT + ', not
 // ---------------------------------------------------------------------------
 // Self-provision: regenerate .kimi/ from tracked canonical sources before any
 // assertion that reads it. In a clean worktree .kimi/ is fully absent (it is
-// gitignored); sync --write populates skills + hooks. This makes the suite
+// gitignored); sync --write populates agents + command skills + hooks. This makes the suite
 // green from tracked sources alone with no manual seeding.
 // ---------------------------------------------------------------------------
 {
@@ -219,8 +216,37 @@ function generatedTreeFiles() {
 const canonCommands = sync.listCanonCommands();                    // ['kaola-workflow-finalize.md', ...]
 const canonCommandNames = canonCommands.map(f => f.slice(0, -3));  // command basenames
 const canonAgents = sync.listCanonAgents();                        // roles (top-level agents/*.md only)
-const roleDirNames = canonAgents.map(a => 'kaola-role-' + a);
 const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
+const agentRel = (role, forge) => sync.treeLabel(forge || sync.DEFAULT_FORGE) + '/agents/' + role + '.md';
+const agentFile = role => agentRel(role, sync.DEFAULT_FORGE);
+const MANAGED_AGENT_MARKER = 'kaola-workflow-managed-agent: true';
+
+function frontmatterText(content) {
+  const match = String(content).match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  return match ? match[1] : '';
+}
+
+// Kimi accepts either a YAML sequence or a comma-separated/inline YAML list.
+// Parse both so this acceptance pins the effective allowlist, not a formatting choice.
+function frontmatterList(content, key) {
+  const lines = frontmatterText(content).split(/\r?\n/);
+  const start = lines.findIndex(line => new RegExp('^' + key + '\\s*:').test(line));
+  if (start < 0) return null;
+  const tail = lines[start].replace(new RegExp('^' + key + '\\s*:\\s*'), '').trim();
+  if (tail) {
+    if (tail.startsWith('[')) {
+      try { return JSON.parse(tail); } catch (_) { return tail.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean); }
+    }
+    return tail.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  const out = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const match = lines[i].match(/^\s+-\s+(.+?)\s*$/);
+    if (!match) break;
+    out.push(match[1].replace(/^['"]|['"]$/g, ''));
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // K0 — THE SUBJECT UNDER TEST IS THE GENERATOR, NOT THE TREE.
@@ -234,11 +260,15 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
 // derived from the TRACKED canonical sources at run time so the expectation moves when they do.
 // ---------------------------------------------------------------------------
 {
-  const provisioned = fs.existsSync(path.join(TREE_ROOT, '.kimi', 'skills'));
-  assert(provisioned,
-    'K0: the generated .kimi/skills tree exists after sync --write — an ABSENT tree must fail loudly '
+  const skillsProvisioned = fs.existsSync(path.join(TREE_ROOT, '.kimi', 'skills'));
+  const agentsProvisioned = fs.existsSync(path.join(TREE_ROOT, '.kimi', 'agents'));
+  assert(skillsProvisioned,
+    'K0: the generated .kimi/skills command tree exists after sync --write — an ABSENT tree must fail loudly '
     + 'here rather than let every readdir-driven loop below iterate over nothing');
-  if (!provisioned) {
+  assert(agentsProvisioned,
+    'K0-native-agents: the generated .kimi/agents tree exists after sync --write — Kimi custom '
+    + 'agents are the role carrier; role-contract Skills are not an acceptable stand-in');
+  if (!skillsProvisioned) {
     // Stop here rather than let the first readdir throw: a stack trace is a worse report than one
     // line naming the cause, and every count after it would be meaningless.
     console.error('FATAL: sync --write reported success but produced no tree at '
@@ -265,21 +295,16 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
 }
 
 // ---------------------------------------------------------------------------
-// K0-body: every non-empty line of the canonical role contract survives into the generated
-// kaola-role-* Skill. The kimi render wraps canonical agent bodies, and the declared rewrites
-// (Claude script paths, --runtime) are substitutions, never deletions — measured: zero canonical
-// body lines fail to survive, so the exemption set is EMPTY and any miss is a real transform. This
-// is the assertion that a body-dropping generator cannot pass, and it reads only tracked bytes.
+// K0-body: every non-empty line of the canonical role contract survives into the generated native
+// agent profile. The assertion reads the tracked behavior authority, not renderAgent(), so a
+// body-dropping renderer cannot compare its own wrong output to itself and pass.
 // ---------------------------------------------------------------------------
 {
-  const bodyOf = text => {
-    const m = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
-    return m ? text.slice(m[0].length) : text;
-  };
   let checkedLines = 0;
   for (const role of canonAgents) {
-    const canonLines = bodyOf(read('agents/' + role + '.md')).split('\n').map(s => s.trim()).filter(Boolean);
-    const rel = skillDir('kaola-role-' + role);
+    const canonLines = reviewerGenerator.behaviorIdentityFromCore(read('agents/' + role + '.md'))
+      .core.split('\n').map(s => s.trim()).filter(Boolean);
+    const rel = agentFile(role);
     const generated = exists(rel) ? read(rel) : '';
     const missing = canonLines.filter(line => !generated.includes(line));
     checkedLines += canonLines.length;
@@ -287,7 +312,7 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
       'K0-body[' + role + ']: the canonical role contract has a non-empty body — an empty one would '
       + 'make the survival check below vacuous');
     assert(missing.length === 0,
-      'K0-body[' + role + ']: every canonical contract line survives into kaola-role-' + role
+      'K0-body[' + role + ']: every canonical contract line survives into the native Kimi agent profile'
       + ' — ' + missing.length + ' of ' + canonLines.length + ' missing, first: '
       + JSON.stringify(String(missing[0]).slice(0, 120)));
   }
@@ -296,24 +321,23 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
 }
 
 // ---------------------------------------------------------------------------
-// K1: count/structure parity — one command Skill dir per canonical command + one kaola-role-*
-// Skill dirs, set-equal to the canonical commands/*.md + top-level agents/*.md
-// inventories (the canonical agent tree is flat — one file per role). Every SKILL.md carries a
-// frontmatter `name` (the dir name, so Kimi registers the canonical slash
-// command) and a non-empty `description` (required by directory-form Skills).
+// K1: carrier separation and exact inventories. `.kimi/skills/` contains only the command Skills;
+// `.kimi/agents/` contains one Markdown custom-agent profile per canonical role. A role Skill is
+// not equivalent: Skills merely inject prompt text, while native profiles own dispatch identity
+// and enforced tool access.
 // ---------------------------------------------------------------------------
 {
   const entries = fs.readdirSync(path.join(TREE_ROOT, '.kimi', 'skills'), { withFileTypes: true });
   const dirNames = entries.filter(e => e.isDirectory()).map(e => e.name).sort();
-  const expected = [...canonCommandNames, ...roleDirNames].sort();
+  const expected = [...canonCommandNames].sort();
   assert(entries.length === expected.length && entries.every(e => e.isDirectory()),
     'K1: .kimi/skills/ holds exactly ' + expected.length + ' entries, all directories (no stray files)');
   assert(JSON.stringify(dirNames) === JSON.stringify(expected),
-    'K1: .kimi/skills/ dir set == ' + canonCommandNames.length + ' canonical commands + '
-    + roleDirNames.length + ' kaola-role-* roles — got ' + JSON.stringify(dirNames));
+    'K1: .kimi/skills/ dir set == the ' + canonCommandNames.length
+    + ' canonical commands and contains NO kaola-role-* role Skills — got ' + JSON.stringify(dirNames));
   const roleSet = dirNames.filter(d => d.startsWith('kaola-role-'));
-  assert(roleSet.length === canonAgents.length,
-    'K1: kaola-role-* skill count matches canonical agent count (' + canonAgents.length + ')');
+  assert(roleSet.length === 0,
+    'K1: kaola-role-* role Skill count is ZERO — roles ship as native .kimi/agents profiles');
   const cmdSet = dirNames.filter(d => !d.startsWith('kaola-role-'));
   assert(cmdSet.length === canonCommandNames.length,
     'K1: command skill count matches canonical command count (' + canonCommandNames.length + ')');
@@ -328,10 +352,27 @@ const skillDir = name => '.kimi/skills/' + name + '/SKILL.md';
     assert(typeof fm.description === 'string' && fm.description.trim().length > 0,
       'K1[' + name + ']: frontmatter has a non-empty description (required by directory-form Skills)');
   }
+  const agentsRoot = path.join(TREE_ROOT, '.kimi', 'agents');
+  const agentEntries = fs.existsSync(agentsRoot)
+    ? fs.readdirSync(agentsRoot, { withFileTypes: true }) : [];
+  const actualAgentFiles = agentEntries.filter(e => e.isFile()).map(e => e.name).sort();
+  const expectedAgentFiles = canonAgents.map(role => role + '.md').sort();
+  assert(agentEntries.length === expectedAgentFiles.length && agentEntries.every(e => e.isFile()),
+    'K1-native-agents: .kimi/agents holds exactly ' + expectedAgentFiles.length
+    + ' regular Markdown profiles (one per canonical role)');
+  assert(JSON.stringify(actualAgentFiles) === JSON.stringify(expectedAgentFiles),
+    'K1-native-agents: generated profile file set equals the canonical 14-role roster — got '
+    + JSON.stringify(actualAgentFiles));
   for (const role of canonAgents) {
-    const { fm } = sync.parseFrontmatter(read(skillDir('kaola-role-' + role)));
+    const rel = agentFile(role);
+    const profile = exists(rel) ? read(rel) : '';
+    const { fm } = sync.parseFrontmatter(profile);
     assert(fm.name === 'kaola-role-' + role,
-      'K1[kaola-role-' + role + ']: role skill named kaola-role-<role>');
+      'K1-native-agents[' + role + ']: frontmatter name is the directly dispatchable kaola-role-' + role);
+    assert(typeof fm.description === 'string' && fm.description.trim().length > 0,
+      'K1-native-agents[' + role + ']: profile carries the required non-empty description');
+    assert((profile.match(new RegExp(MANAGED_AGENT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length === 1,
+      'K1-native-agents[' + role + ']: profile carries exactly one Kaola managed-agent marker for ownership-safe lifecycle');
   }
 }
 
@@ -407,10 +448,9 @@ const KIMI_RUNTIME_NATIVE = Object.freeze({
   assert(/inherit/i.test(reason) && /session model/i.test(reason),
     'K2-declaration: the "' + KEY + '" reason must state that Kimi subagents inherit the session model');
 
-  // The declaration must describe the tree that actually ships: no generated Skill may carry a
-  // `model:` frontmatter field or a per-call `model=` override.
-  for (const name of [...canonCommandNames.map(n => n), ...roleDirNames]) {
-    const rel = skillDir(name);
+  // The declaration must describe both carriers that actually ship: neither a command Skill nor
+  // a native agent profile may carry a `model:` frontmatter field or per-call override.
+  for (const rel of [...canonCommandNames.map(skillDir), ...canonAgents.map(agentFile)]) {
     if (!exists(rel)) continue;
     const content = read(rel);
     const fm = content.match(/^---\n([\s\S]*?)\n---/);
@@ -512,154 +552,68 @@ const KIMI_RUNTIME_NATIVE = Object.freeze({
 }
 
 // ---------------------------------------------------------------------------
-// K5: dispatch-card rewrite — Kimi Code's Agent tool has no named custom
-// subagents, so every canonical dispatch card (Agent(subagent_type="<role>",
-// model="{...}", …)) is rewritten to the built-in type for the role's kind:
-// canonical frontmatter `tools:` lacking Write/Edit → "explore", everything
-// else → "coder" (roleKindMap is computed from canonical, never hand-listed),
-// and the prompt is prefixed with the instruction to invoke the matching
-// kaola-role-<role> Skill. Cards are compared PER COMMAND, IN ORDER, so a
-// dropped/mis-paired rewrite fails here. workflow-next dispatches no agent inline
-// (retired issue-scout survey folded into the workflow-planner's no-target mode,
-// dispatched by the separate adapt surface), so it carries no Agent() cards at all.
+// K5: native agent dispatch + enforced tool allowlists. Kimi discovers custom
+// profiles and dispatches them by their frontmatter name, so each canonical
+// `subagent_type="<role>"` becomes `subagent_type="kaola-role-<role>"` directly.
+// Falling back to coder/explore and asking it to invoke a role Skill is not the
+// same carrier: it drops native profile identity and runtime-enforced tools.
 // ---------------------------------------------------------------------------
 {
-  const kinds = sync.roleKindMap();
-  const CANON_CARD = /Agent\(\n\s+subagent_type="([^"]+)"/g;
-  const KIMI_CARD = /Agent\(\n\s+subagent_type="(coder|explore)",[\s\S]*?prompt="First invoke the `kaola-role-([^`]+)` Skill and follow its contract for the entire task\./g;
+  const CARD = /Agent\(\n\s+subagent_type="([^"]+)"/g;
   let totalCards = 0;
   for (const file of canonCommands) {
     const name = file.slice(0, -3);
-    const canonCards = [...read('commands/' + file).matchAll(CANON_CARD)]
-      .map(m => m[1]).filter(r => kinds[r]);
-    const kimiCards = [...read(skillDir(name)).matchAll(KIMI_CARD)]
-      .map(m => ({ kind: m[1], role: m[2] }));
+    const canonCards = [...read('commands/' + file).matchAll(CARD)]
+      .map(m => m[1]).filter(role => canonAgents.includes(role));
+    const generated = read(skillDir(name));
+    const kimiCards = [...generated.matchAll(CARD)].map(m => m[1]);
     totalCards += canonCards.length;
     assert(kimiCards.length === canonCards.length,
       'K5[' + name + ']: generated dispatch-card count matches canonical (' + canonCards.length + ') — got ' + kimiCards.length);
     const n = Math.min(canonCards.length, kimiCards.length);
     for (let i = 0; i < n; i++) {
-      assert(kimiCards[i].role === canonCards[i],
-        'K5[' + name + '#' + i + ']: dispatch prompt invokes the `kaola-role-' + canonCards[i] +
-        '` Skill (got `kaola-role-' + kimiCards[i].role + '`)');
-      assert(kimiCards[i].kind === kinds[canonCards[i]],
-        'K5[' + name + '#' + i + ']: ' + canonCards[i] + ' dispatched as subagent_type="' + kinds[canonCards[i]] +
-        '" (canonical tools ' + (kinds[canonCards[i]] === 'explore' ? 'lack Write/Edit → explore' : 'include Write/Edit → coder') +
-        '; got "' + kimiCards[i].kind + '")');
+      const expected = 'kaola-role-' + canonCards[i];
+      assert(kimiCards[i] === expected,
+        'K5[' + name + '#' + i + ']: canonical ' + canonCards[i]
+        + ' dispatches DIRECTLY as subagent_type="' + expected + '" — got "' + kimiCards[i] + '"');
     }
+    assert(!/subagent_type="(?:coder|explore)"/.test(generated),
+      'K5[' + name + ']: generated command does not downgrade a named Kaola role to coder/explore');
+    assert(!/First invoke the `kaola-role-[^`]+` Skill|invoke (?:the )?`?kaola-role-[a-z0-9-]+`? Skill/i.test(generated),
+      'K5[' + name + ']: generated dispatch prompt carries no role-Skill bootstrap prefix');
   }
   assert(totalCards > 0,
-    'K5: canonical commands carry at least one Agent() dispatch card (rewrite bite)');
-  // roleKindMap vs an INDEPENDENT reading of the canonical tool grants.
-  //
-  // The loop this replaces was `for (const role of sync.readOnlyRoles())` — and readOnlyRoles()
-  // returns [], so it iterated over nothing and asserted nothing while reading like coverage. Empty
-  // is the CORRECT answer for the current roster (all 14 roles grant Write), which is exactly why a
-  // silent skip is the wrong shape: a predicate that broke and started returning [] would look
-  // identical. So the domain is asserted, not iterated: the kind map is compared against the same
-  // partition recomputed here straight from the tracked frontmatter, with no generator function in
-  // the loop. Both directions are named, so the assertion says something whether the read-only set
-  // is empty or not, and it starts enforcing per-member the moment a read-only role exists.
-  {
-    const grantsWrite = role => {
-      const line = (read('agents/' + role + '.md').match(/^tools:\s*(.+)$/m) || [])[1] || '';
-      const tools = line.replace(/[[\]"']/g, ' ').split(/[,\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
-      return tools.includes('write') || tools.includes('edit');
-    };
-    const expectedExplore = canonAgents.filter(r => !grantsWrite(r)).sort();
-    const expectedCoder = canonAgents.filter(grantsWrite).sort();
-    assert(expectedCoder.length + expectedExplore.length === canonAgents.length
-      && canonAgents.length > 0,
-      'K5-kinds: the tool-grant partition covers every canonical role (' + canonAgents.length + ')');
-    assert(JSON.stringify([...sync.readOnlyRoles()].sort()) === JSON.stringify(expectedExplore),
-      'K5-kinds: readOnlyRoles() is EXACTLY the set of canonical roles granting neither Write nor '
-      + 'Edit — independently recomputed=' + JSON.stringify(expectedExplore)
-      + ', generator=' + JSON.stringify([...sync.readOnlyRoles()].sort())
-      + (expectedExplore.length === 0
-        ? ' (empty is the CORRECT answer for this roster and is asserted, not skipped)' : ''));
-    for (const role of expectedExplore) {
-      assert(kinds[role] === 'explore', 'K5-kinds: read-only role ' + role + ' dispatches as explore');
-    }
-    for (const role of expectedCoder) {
-      assert(kinds[role] === 'coder', 'K5-kinds: write-capable role ' + role + ' dispatches as coder');
+    'K5: canonical commands carry at least one Agent() dispatch card (native dispatch bite)');
+
+  const contracts = reviewerGenerator.loadBehaviorContracts().roles;
+  let restrictedProfiles = 0;
+  let bashProfiles = 0;
+  for (const role of canonAgents) {
+    const profile = exists(agentFile(role)) ? read(agentFile(role)) : '';
+    const requirements = new Set(contracts[role].capability_requirements);
+    const expectedTools = ['Read', 'Grep', 'Glob'];
+    if (requirements.has('scoped_write')) expectedTools.splice(1, 0, 'Write', 'Edit');
+    if (requirements.has('command_execution')) expectedTools.push('Bash');
+    if (requirements.has('external_research')) expectedTools.push('WebSearch', 'FetchURL');
+    const actualTools = frontmatterList(profile, 'tools');
+    assert(Array.isArray(actualTools),
+      'K5-tools[' + role + ']: native Kimi profile declares an explicit tools allowlist; omission would grant every tool');
+    assert(JSON.stringify([...(actualTools || [])].sort()) === JSON.stringify([...expectedTools].sort()),
+      'K5-tools[' + role + ']: tools allowlist exactly implements canonical capability requirements — expected '
+      + JSON.stringify(expectedTools) + ', got ' + JSON.stringify(actualTools));
+    if (!requirements.has('command_execution')) {
+      restrictedProfiles++;
+      assert(!(actualTools || []).includes('Bash'),
+        'K5-tools[' + role + ']: role without command_execution cannot receive Bash');
+    } else {
+      bashProfiles++;
+      assert((actualTools || []).includes('Bash'),
+        'K5-tools[' + role + ']: role with command_execution retains Bash');
     }
   }
+  assert(restrictedProfiles > 0 && bashProfiles > 0,
+    'K5-tools: acceptance exercises both Bash-withheld and Bash-granted native profiles');
 
-  // -------------------------------------------------------------------------
-  // K5-restriction: the LIVE tool-restriction axis, asserted in BOTH directions.
-  //
-  // On kimi this matters more than anywhere else, and the generator says why: a Skill is a prompt
-  // package, canonical `tools:` is DROPPED from the frontmatter, and every role is dispatched as
-  // `coder`. So the restriction can only be carried by the contract PROSE — absent that line a
-  // Bash-less canonical role silently gains shell access on this runtime. Nothing asserted it: this
-  // suite had no restriction assertion at all, so a regression in restrictionNote() shipped three
-  // roles with shell access and stayed green.
-  //
-  // BOTH directions, because a one-sided check passes a predicate that restricts everything, and
-  // deny-all is as wrong as deny-nothing. The partition is derived from the canonical frontmatter by
-  // the local parser above, so the generator's own parse cannot define the answer it is checked
-  // against, and a fourth restricted role is covered the day it is added.
-  //
-  // This block is also the CONSUMER of sync.restrictedRoles(), which shipped exported "for
-  // inspection" with none. An exported function nobody calls is indistinguishable from a broken one.
-  {
-    const grantsBash = role => {
-      const line = (read('agents/' + role + '.md').match(/^tools:\s*(.+)$/m) || [])[1] || '';
-      return line.replace(/[[\]"']/g, ' ').split(/[,\s]+/)
-        .map(s => s.trim().toLowerCase()).filter(Boolean).includes('bash');
-    };
-    const SHELL_CLAUSE = 'may not run shell commands';
-    const restricted = canonAgents.filter(r => !grantsBash(r)).sort();
-    const unrestricted = canonAgents.filter(grantsBash).sort();
-    const contractOf = role => read(skillDir('kaola-role-' + role));
-
-    // Non-vacuity on BOTH sides: with either partition empty this degrades to a one-directional
-    // check, which is the failure mode it exists to avoid.
-    assert(restricted.length > 0,
-      'K5-restriction: at least one canonical role withholds Bash — an empty restricted set makes '
-      + 'the restriction-present assertion vacuous and the guard one-directional');
-    assert(unrestricted.length > 0,
-      'K5-restriction: at least one canonical role grants Bash — an empty unrestricted set makes '
-      + 'the must-NOT-restrict assertion vacuous, which is what a restrict-everything predicate '
-      + 'needs to pass');
-
-    // restrictedRoles() gains a consumer: its key set must be the independently derived one. It
-    // covers the write/edit clause too, so it is compared as a SUPERSET-free exact set against the
-    // roles withholding either governed capability, not against the Bash partition alone.
-    const generatorRestricted = Object.keys(sync.restrictedRoles()).sort();
-    const anyWithheld = canonAgents.filter(r => {
-      const line = (read('agents/' + r + '.md').match(/^tools:\s*(.+)$/m) || [])[1] || '';
-      const t = line.replace(/[[\]"']/g, ' ').split(/[,\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
-      return !(t.includes('write') || t.includes('edit')) || !t.includes('bash');
-    }).sort();
-    assert(JSON.stringify(generatorRestricted) === JSON.stringify(anyWithheld),
-      'K5-restriction: restrictedRoles() names exactly the canonical roles withholding a governed '
-      + 'capability — generator=' + JSON.stringify(generatorRestricted)
-      + ', canonical=' + JSON.stringify(anyWithheld));
-
-    for (const role of restricted) {
-      assert(contractOf(role).includes(SHELL_CLAUSE),
-        'K5-restriction[' + role + ']: canonical withholds Bash, so the generated role contract MUST '
-        + 'carry "' + SHELL_CLAUSE + '" — a Skill drops canonical `tools:` and every role dispatches '
-        + 'as coder, so without this line the role has shell access on kimi');
-    }
-    for (const role of unrestricted) {
-      assert(!contractOf(role).includes(SHELL_CLAUSE),
-        'K5-restriction[' + role + ']: canonical GRANTS Bash, so the generated contract must NOT '
-        + 'forbid shell commands — a predicate restricting every role would satisfy the assertions '
-        + 'above and fail here');
-    }
-  }
-  // Every kaola-role-* reference inside a command skill resolves to a generated
-  // role skill dir (no dangling Skill reference).
-  const roleDirSet = new Set(roleDirNames);
-  for (const file of canonCommands) {
-    const name = file.slice(0, -3);
-    for (const m of read(skillDir(name)).matchAll(/kaola-role-([a-z0-9-]+)/g)) {
-      assert(roleDirSet.has('kaola-role-' + m[1]),
-        'K5[' + name + ']: kaola-role-' + m[1] + ' reference resolves to a generated role skill');
-    }
-  }
   // workflow-next no longer dispatches any agent inline (the retired issue-scout survey folded
   // into the workflow-planner's no-target mode, dispatched by the SEPARATE adapt surface), so no
   // {ISSUE_SCOUT_MODEL} placeholder or install-time-resolution prose should ever leak here.
@@ -671,8 +625,7 @@ const KIMI_RUNTIME_NATIVE = Object.freeze({
 }
 
 // ---------------------------------------------------------------------------
-// K6: reviewer behavior identity (mirror of the opencode A6-reviewer block) —
-// the three reviewer roles retain their deterministic normalized behavior
+// K6: all-role behavior identity — every Kimi native profile retains deterministic normalized behavior
 // identity through the kimi render (role / behavior_contract_version /
 // behavior_contract_hash / behavior-core bytes). Contract/profile assertion
 // only: foundation-model findings and prose remain stochastic and are never
@@ -680,21 +633,25 @@ const KIMI_RUNTIME_NATIVE = Object.freeze({
 // ---------------------------------------------------------------------------
 for (const role of reviewerGenerator.ROLES) {
   const canonical = reviewerGenerator.behaviorIdentityFromCore(read('agents/' + role + '.md'));
-  const kimiText = read(skillDir('kaola-role-' + role));
+  const kimiText = exists(agentFile(role)) ? read(agentFile(role)) : '';
+  if (!kimiText) {
+    assert(false, `K6-agent[${role}]: generated native profile exists before behavior identity is evaluated`);
+    continue;
+  }
   const kimi = reviewerGenerator.behaviorIdentityFromCore(kimiText);
   assert(kimi.role === canonical.role
     && kimi.behavior_contract_version === canonical.behavior_contract_version
     && kimi.behavior_contract_hash === canonical.behavior_contract_hash,
-  `K6-reviewer[${role}]: kimi role skill retains normalized reviewer behavior identity`);
+  `K6-agent[${role}]: kimi native profile retains normalized behavior identity`);
   assert(kimi.core === canonical.core,
-    `K6-reviewer[${role}]: kimi render preserves reviewer behavior-core bytes`);
+    `K6-agent[${role}]: kimi render preserves behavior-core bytes`);
   // The kimi render carries the schema-2 identity fields (a body HTML comment block) with
   // a FRESH resolved_profile_hash re-stamped over the kimi bytes — never the reused Claude hash.
   const kimiHash = (kimiText.match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
   assert(kimiHash && /^[0-9a-f]{64}$/.test(kimiHash),
-    `K6-reviewer[${role}]: kimi skill carries a resolved_profile_hash`);
+    `K6-agent[${role}]: kimi native profile carries a resolved_profile_hash`);
   assert((kimiText.match(/^resolved_profile_hash\s*:\s*[0-9a-f]{64}\s*$/gm) || []).length === 1,
-    `K6-reviewer[${role}]: kimi skill carries EXACTLY ONE resolved_profile_hash line`);
+    `K6-agent[${role}]: kimi native profile carries EXACTLY ONE resolved_profile_hash line`);
   let kimiHashVerifies = true;
   try { reviewerGenerator.verifyResolvedProfileHash(kimiText); } catch (_) { kimiHashVerifies = false; }
   assert(kimiHashVerifies,
@@ -822,8 +779,8 @@ for (const script of sync.HOOK_SCRIPTS) {
 }
 
 // ---------------------------------------------------------------------------
-// P1 / P4 / U1 / A1: install-kimi.sh contract — the install-time COMMAND-skill
-// deploy (every adaptive-core command, all kaola-role-* always), re-install idempotency
+// P1 / P4 / U1 / A1: install-kimi.sh contract — command Skills and native agent profiles,
+// project/global scope, collision ownership, re-install idempotency
 // (exactly ONE managed hooks block in config.toml), --uninstall zero-residue,
 // and zero Claude-path leaks across the deployed tree. HERMETIC per sub-case:
 // each run gets its OWN fresh temp HOME (seed_kaola_config writes only under
@@ -886,10 +843,12 @@ for (const script of sync.HOOK_SCRIPTS) {
 
   function runInstaller(extraArgs, opts) {
     opts = opts || {};
+    extraArgs = extraArgs || [];
     const home = opts.home || mkdtempSync(path.join(os.tmpdir(), 'kimi-i-home-'));
     const kimiHome = opts.kimiHome || mkdtempSync(path.join(os.tmpdir(), 'kimi-i-kh-'));
     const dest = opts.dest || mkdtempSync(path.join(os.tmpdir(), 'kimi-i-dest-'));
-    const args = ['--target', dest, '--yes'].concat(extraArgs || []);
+    const isGlobal = extraArgs.includes('--global');
+    const args = ['--target', dest, '--yes'].concat(extraArgs);
     // `opts.installer` runs a COPY of this checkout instead of this checkout (P5 below): the state
     // some cases need is a state of the SOURCE tree, and mutating this one is not on offer.
     // spawn-class: environment
@@ -904,11 +863,15 @@ for (const script of sync.HOOK_SCRIPTS) {
       stderr: r.stderr || '',
       home, kimiHome, dest,
       configPath: path.join(home, '.config', 'kaola-workflow', 'config.json'),
-      kimiConfig: path.join(kimiHome, 'config.toml'),
+      kimiConfig: path.join(kimiHome, 'config.toml'), isGlobal,
     };
   }
   const skillsDir = r => path.join(r.dest, '.kimi-code', 'skills');
-  const deployedSkills = r => existsSync(skillsDir(r)) ? readdirSync(skillsDir(r)).sort() : [];
+  const scopedSkillsDir = r => r.isGlobal ? path.join(r.kimiHome, 'skills') : skillsDir(r);
+  const agentsDir = r => r.isGlobal ? path.join(r.kimiHome, 'agents') : path.join(r.dest, '.kimi-code', 'agents');
+  const deployedSkills = r => existsSync(scopedSkillsDir(r)) ? readdirSync(scopedSkillsDir(r)).sort() : [];
+  const deployedAgents = r => existsSync(agentsDir(r))
+    ? readdirSync(agentsDir(r)).filter(name => name.endsWith('.md')).sort() : [];
   const managedBlockCount = p => existsSync(p)
     ? readFileSync(p, 'utf8').split('\n').filter(l => l.trim() === '# >>> kaola-workflow kimi hooks').length
     : 0;
@@ -918,14 +881,18 @@ for (const script of sync.HOOK_SCRIPTS) {
     }
   };
   const expectDeployed = (r, cmdNames, label) => {
-    const expected = [...cmdNames, ...roleDirNames].sort();
+    const expected = [...cmdNames].sort();
     assert(JSON.stringify(deployedSkills(r)) === JSON.stringify(expected),
-      label + ': deployed skill set == ' + cmdNames.length + ' command(s) + ' + roleDirNames.length
-      + ' kaola-role-* roles — got ' + JSON.stringify(deployedSkills(r)));
+      label + ': deployed skill set == exactly ' + cmdNames.length
+      + ' command Skill(s), with no kaola-role-* role Skills — got ' + JSON.stringify(deployedSkills(r)));
+    const expectedAgents = canonAgents.map(role => role + '.md').sort();
+    assert(JSON.stringify(deployedAgents(r)) === JSON.stringify(expectedAgents),
+      label + ': deployed native agent set == the canonical ' + expectedAgents.length
+      + ' profiles — got ' + JSON.stringify(deployedAgents(r)));
   };
   const firstStderrLine = r => String(r.stderr).split('\n')[0];
 
-  // P1 — install deploys adaptive-core commands + all role skills, lands support
+  // P1 — project install deploys adaptive-core command Skills + all native agents, lands support
   // scripts + hook scripts under the kimi home, merges EXACTLY ONE managed hooks
   // block into config.toml, and never touches the user-owned shared config.
   {
@@ -936,9 +903,14 @@ for (const script of sync.HOOK_SCRIPTS) {
       assert(existsSync(path.join(skillsDir(r), name, 'SKILL.md')),
         'P1[' + name + ']: default install deploys the adaptive-core command skill');
     }
-    for (const role of roleDirNames) {
-      assert(existsSync(path.join(skillsDir(r), role, 'SKILL.md')),
-        'P1[' + role + ']: default install deploys every role skill (roles always install)');
+    for (const role of canonAgents) {
+      const installed = path.join(agentsDir(r), role + '.md');
+      assert(existsSync(installed),
+        'P1[' + role + ']: default project install deploys every native agent profile');
+      if (existsSync(installed)) {
+        assert(readFileSync(installed, 'utf8').includes(MANAGED_AGENT_MARKER),
+          'P1[' + role + ']: installed native profile carries the ownership marker');
+      }
     }
     expectDeployed(r, ADAPTIVE_CORE, 'P1 (exact-set)');
     // Support scripts (manifest-driven) + hook scripts land under the kimi home.
@@ -964,6 +936,91 @@ for (const script of sync.HOOK_SCRIPTS) {
     assert(!existsSync(r.configPath),
       'P1: default install must not create ~/.config/kaola-workflow/config.json (user-owned; the\n      workflow has no install-time configuration)');
     clean(r);
+  }
+
+  // P1g — global scope uses Kimi's documented user agent directory while preserving the same
+  // command Skills and shared hook behavior.
+  {
+    const r = runInstaller(['--global']);
+    assert(r.ok,
+      'P1g: global install-kimi.sh exits 0 (got status ' + r.status
+      + (r.stderr ? ' — ' + firstStderrLine(r) : '') + ')');
+    expectDeployed(r, ADAPTIVE_CORE, 'P1g (global exact-set)');
+    assert(agentsDir(r) === path.join(r.kimiHome, 'agents'),
+      'P1g: global native agents resolve under $KIMI_CODE_HOME/agents');
+    assert(scopedSkillsDir(r) === path.join(r.kimiHome, 'skills'),
+      'P1g: global command Skills resolve under $KIMI_CODE_HOME/skills');
+    assert(managedBlockCount(r.kimiConfig) === 1,
+      'P1g: global install still carries exactly one managed hooks block');
+    const r2 = runInstaller(['--global'], { home: r.home, kimiHome: r.kimiHome, dest: r.dest });
+    assert(r2.ok, 'P1g: global reinstall exits 0');
+    expectDeployed(r2, ADAPTIVE_CORE, 'P1g (global reinstall exact-set)');
+    assert(managedBlockCount(r.kimiConfig) === 1,
+      'P1g: global reinstall remains idempotent with one managed hooks block');
+    // spawn-class: environment
+    const ru = spawnSync('bash', [INSTALLER, '--global', '--uninstall', '--yes'], {
+      env: Object.assign({}, process.env, { HOME: r.home, KIMI_CODE_HOME: r.kimiHome }), encoding: 'utf8',
+    });
+    assert(ru.status === 0, 'P1g: global uninstall exits 0 (got ' + ru.status + ')');
+    assert(!existsSync(path.join(r.kimiHome, 'skills')),
+      'P1g: global uninstall removes the managed command Skills directory after it becomes empty');
+    assert(!existsSync(path.join(r.kimiHome, 'agents')),
+      'P1g: global uninstall removes the managed native agent directory after it becomes empty');
+    assert(managedBlockCount(r.kimiConfig) === 0,
+      'P1g: global uninstall removes the managed hooks block');
+    clean(r);
+    clean(r2);
+  }
+
+  // P1o — collision ownership. A same-name custom profile without Kaola's marker is user-owned:
+  // install must fail rather than overwrite it, and uninstall must not delete it either.
+  {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'kimi-owner-home-'));
+    const kimiHome = mkdtempSync(path.join(os.tmpdir(), 'kimi-owner-kh-'));
+    const dest = mkdtempSync(path.join(os.tmpdir(), 'kimi-owner-dest-'));
+    const collisionDir = path.join(dest, '.kimi-code', 'agents');
+    const collision = path.join(collisionDir, canonAgents[0] + '.md');
+    const userBytes = Buffer.from('---\nname: ' + canonAgents[0] + '\ndescription: user owned\n---\n\nUSER BYTES\n');
+    fs.mkdirSync(collisionDir, { recursive: true });
+    fs.writeFileSync(collision, userBytes);
+    const r = runInstaller([], { home, kimiHome, dest });
+    assert(!r.ok,
+      'P1o: project install fails closed on an unmanaged same-name native agent collision');
+    assert(fs.readFileSync(collision).equals(userBytes),
+      'P1o: failed install preserves the unmanaged colliding agent byte-for-byte');
+    // spawn-class: environment
+    const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', dest, '--yes'], {
+      env: Object.assign({}, process.env, { HOME: home, KIMI_CODE_HOME: kimiHome }), encoding: 'utf8',
+    });
+    assert(ru.status === 0,
+      'P1o: uninstall exits 0 beside an unmanaged same-name agent (got ' + ru.status + ')');
+    assert(existsSync(collision) && fs.readFileSync(collision).equals(userBytes),
+      'P1o: uninstall preserves an unmanaged same-name native agent byte-for-byte');
+    clean({ home, kimiHome, dest });
+
+    const globalHome = mkdtempSync(path.join(os.tmpdir(), 'kimi-owner-global-home-'));
+    const globalKimiHome = mkdtempSync(path.join(os.tmpdir(), 'kimi-owner-global-kh-'));
+    const globalDest = mkdtempSync(path.join(os.tmpdir(), 'kimi-owner-global-dest-'));
+    const globalCollisionDir = path.join(globalKimiHome, 'agents');
+    const globalCollision = path.join(globalCollisionDir, canonAgents[0] + '.md');
+    fs.mkdirSync(globalCollisionDir, { recursive: true });
+    fs.writeFileSync(globalCollision, userBytes);
+    const rg = runInstaller(['--global'], {
+      home: globalHome, kimiHome: globalKimiHome, dest: globalDest,
+    });
+    assert(!rg.ok,
+      'P1o-global: global install fails closed on an unmanaged same-name native agent collision');
+    assert(fs.readFileSync(globalCollision).equals(userBytes),
+      'P1o-global: failed global install preserves the unmanaged colliding agent byte-for-byte');
+    // spawn-class: environment
+    const rug = spawnSync('bash', [INSTALLER, '--global', '--uninstall', '--yes'], {
+      env: Object.assign({}, process.env, { HOME: globalHome, KIMI_CODE_HOME: globalKimiHome }), encoding: 'utf8',
+    });
+    assert(rug.status === 0,
+      'P1o-global: global uninstall exits 0 beside an unmanaged same-name agent (got ' + rug.status + ')');
+    assert(existsSync(globalCollision) && fs.readFileSync(globalCollision).equals(userBytes),
+      'P1o-global: global uninstall preserves an unmanaged same-name agent byte-for-byte');
+    clean({ home: globalHome, kimiHome: globalKimiHome, dest: globalDest });
   }
 
   // P1b (#965) — INSTALLING PRUNES. P1 above asks only whether every manifest
@@ -1131,8 +1188,7 @@ for (const script of sync.HOOK_SCRIPTS) {
   //
   // P5a/P5b are the two reachable partial cases, both measured against a
   // destination holding the full deploy set:
-  //   P5a — canonical renders no role skills: 17 → 3, exit 0, "Installed
-  //         workflow skills →" printed, stderr empty.
+  //   P5a — the old role-Skill carrier retired with native `.kimi/agents` profiles.
   //   P5b — the rendered command skills fall outside the deploy allowlist:
   //         17 → 14, exit 0, three `warning:` lines on stderr.
   // NEITHER asserts an exit code. An install that refuses BEFORE pruning removes
@@ -1185,7 +1241,7 @@ for (const script of sync.HOOK_SCRIPTS) {
     }
     const dropSrc = dir => { try { rmSync(dir, { recursive: true, force: true }); } catch (_) { /* non-fatal */ } };
 
-    const DEPLOY_SET = [...ADAPTIVE_CORE, ...roleDirNames];
+    const DEPLOY_SET = [...ADAPTIVE_CORE];
     const plantedBody = name => 'PLANTED ' + name + ' — on disk BEFORE the install\n';
     // A destination in the state a working install leaves behind: one dir per deployed skill,
     // each holding a SKILL.md whose bytes say where it came from.
@@ -1203,45 +1259,9 @@ for (const script of sync.HOOK_SCRIPTS) {
     const treeSkillDirs = src => readdirSync(path.join(src, '.kimi', 'skills'), { withFileTypes: true })
       .filter(e => e.isDirectory()).map(e => e.name).sort();
 
-    // P5a — canonical renders NO role skills. The tree the installer deploys from is legitimately
-    // regenerated to hold the three command skills and nothing else; the destination holds all 17.
-    {
-      const src = sourceCopy('a');
-      const { dest, skills } = plantSkillDirs(DEPLOY_SET);
-      try {
-        for (const f of readdirSync(path.join(src, 'agents'))) {
-          if (f.endsWith('.md')) fs.unlinkSync(path.join(src, 'agents', f));
-        }
-        assert(readdirSync(skills).sort().join(',') === [...DEPLOY_SET].sort().join(','),
-          'P5a (fixture): the destination holds the FULL deploy set before the install — a destination '
-          + 'that was short to begin with cannot observe anything being removed');
-        const r = runInstaller([], { dest, installer: path.join(src, 'install-kimi.sh') });
-        // The mutation has to have reached the tree the installer deploys FROM, and it has to have
-        // reached only HALF of it: this is the PARTIAL case, and a source that renders nothing at
-        // all is a different case with a different (loud) outcome.
-        const rendered = treeSkillDirs(src);
-        assert(rendered.filter(n => n.startsWith('kaola-role-')).length === 0,
-          'P5a (fixture): the mutated source renders NO role skills — got ' + JSON.stringify(rendered));
-        assert(ADAPTIVE_CORE.every(n => rendered.includes(n)),
-          'P5a (fixture): the mutated source still renders every command skill, so the install has '
-          + 'something to deploy and this is the PARTIAL case — got ' + JSON.stringify(rendered));
-        const lost = roleDirNames.filter(n => !existsSync(path.join(skills, n, 'SKILL.md')));
-        assert(lost.length === 0,
-          'P5a (#973): a deployed role skill the install is NOT going to replace is still on disk '
-          + 'afterwards — ' + lost.length + ' of ' + roleDirNames.length + ' destroyed (' + lost.slice(0, 3).join(', ')
-          + (lost.length > 3 ? ', …' : '') + '), install exited ' + r.status);
-        const overwritten = roleDirNames.filter(n => existsSync(path.join(skills, n, 'SKILL.md'))
-          && readFileSync(path.join(skills, n, 'SKILL.md'), 'utf8') !== plantedBody(n));
-        assert(overwritten.length === 0,
-          'P5a (#973): the surviving role skills are the PLANTED ones, byte-intact — nothing in the '
-          + 'source could have replaced them, so a changed body means they were removed and recreated: '
-          + overwritten.slice(0, 3).join(', '));
-        clean(r);
-      } finally {
-        dropSrc(src);
-        try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-      }
-    }
+    // The pre-10.0.0 "zero role source files" leg retired with the generated agents/ authority.
+    // The v10 behavior source has a closed 14-role schema and generation fails before installation
+    // when a role is missing, so a successful partial role deploy is no longer a reachable state.
 
     // P5b — the rendered command skills fall OUTSIDE the installer's deploy allowlist. The
     // allowlist is hand-maintained and no generator feeds it, so a command basename that moves in
@@ -1266,9 +1286,9 @@ for (const script of sync.HOOK_SCRIPTS) {
         assert(ADAPTIVE_CORE.every(n => !rendered.includes(n)) && rendered.some(n => n.startsWith('zz-')),
           'P5b (fixture): the mutated source renders the command skills under names the deploy '
           + 'allowlist does not hold — got ' + JSON.stringify(rendered.filter(n => !n.startsWith('kaola-role-'))));
-        assert(roleDirNames.every(n => rendered.includes(n)),
-          'P5b (fixture): the mutated source still renders every role skill, so this is the PARTIAL '
-          + 'case rather than a source that renders nothing');
+        assert(canonAgents.every(role => existsSync(path.join(src, '.kimi', 'agents', role + '.md'))),
+          'P5b (fixture): the mutated source still renders every native role profile, so the source '
+          + 'is not empty while command Skill names fall outside their allowlist');
         const lost = ADAPTIVE_CORE.filter(n => !existsSync(path.join(skills, n, 'SKILL.md')));
         assert(lost.length === 0,
           'P5b (#973): a deployed command skill the install is NOT going to replace is still on disk '
@@ -1292,14 +1312,16 @@ for (const script of sync.HOOK_SCRIPTS) {
     // censused from the edition's own history and NOT from the installer's list — a probe that
     // reads the list under test agrees with it by construction and can never see a name missing
     // from it. The census is `git log --no-renames --diff-filter=D --name-only <edition-birth>..HEAD
-    // -- agents/ commands/`, because the generator produces exactly one `kaola-role-<agent>` per
-    // TOP-LEVEL `agents/*.md` and one `<command>` per `commands/*.md` (expectedSkillDirs in
-    // sync-kimi-edition.js), so a path deleted under either is a skill dir left stranded on every
+    // -- agents/ commands/`. Historical top-level agents rendered as `kaola-role-<agent>` Skills,
+    // while commands still render as `<command>` Skills, so a path deleted under either is a skill
+    // dir left stranded on every
     // machine that installed before the deletion. `--no-renames` is load-bearing: a retirement git
     // scores as a rename never reaches the D filter, and `.kimi/` is untracked, so nothing else on
     // disk records what the edition once deployed.
     {
       const RETIRED = [
+        // v10 migration — all 14 current roles moved from role Skills to native agent profiles.
+        ...canonAgents.map(role => 'kaola-role-' + role),
         // agents/ — issue-scout, contractor, workflow-planner (all three deleted after the edition shipped)
         'kaola-role-issue-scout', 'kaola-role-contractor', 'kaola-role-workflow-planner',
         // commands/ — the two node-executor surfaces and the six fast/full opt-in surfaces
@@ -1400,6 +1422,15 @@ for (const script of sync.HOOK_SCRIPTS) {
       'P4: config.toml still carries EXACTLY ONE managed hooks block after re-install (idempotent merge)');
     assert(JSON.stringify(deployedSkills(r1)) === JSON.stringify(deployedSkills(r2)),
       'P4: re-install leaves the deployed skill set unchanged');
+    assert(JSON.stringify(deployedAgents(r1)) === JSON.stringify(deployedAgents(r2)),
+      'P4: re-install leaves the deployed native agent set unchanged');
+    for (const role of canonAgents) {
+      const installed = path.join(agentsDir(r1), role + '.md');
+      const generated = path.join(TREE_ROOT, '.kimi', 'agents', role + '.md');
+      assert(existsSync(installed) && existsSync(generated)
+        && fs.readFileSync(installed).equals(fs.readFileSync(generated)),
+      'P4[' + role + ']: managed native profile converges byte-for-byte on reinstall');
+    }
     const hookBlockCount = readFileSync(r1.kimiConfig, 'utf8').match(/^\[\[hooks\]\]$/gm) || [];
     assert(hookBlockCount.length === 1,
       'P4: re-installed config.toml carries exactly the one surviving [[hooks]] rule (no duplication)');
@@ -1453,7 +1484,7 @@ for (const script of sync.HOOK_SCRIPTS) {
   }
 
   // U1 — --uninstall removes the ENTIRE kaola-deployed surface: the deployed
-  // skills (commands + roles), the support scripts + hook scripts under the
+  // command Skills + native agents, the support scripts + hook scripts under the
   // kimi home, and the managed hooks block in config.toml (the file itself is
   // preserved when it holds user content; here it held only the block so it is
   // removed). The shared kaola config is user-owned: neither install nor uninstall
@@ -1469,9 +1500,11 @@ for (const script of sync.HOOK_SCRIPTS) {
     // about the uninstall. Names are censused from the edition's history, not read from the
     // installer's own retired list. The hook plant also reds the no-residue pins below when
     // it is missed — same defect, one cause.
-    const RETIRED_SKILLS = ['kaola-workflow-fast', 'kaola-role-issue-scout'];
+    const RETIRED_SKILLS = [
+      'kaola-workflow-fast', 'kaola-role-issue-scout', 'kaola-role-' + canonAgents[0],
+    ];
     const RETIRED_HOOK = 'kaola-workflow-pre-commit.sh';
-    assert(RETIRED_SKILLS.every(n => ![...ADAPTIVE_CORE, ...roleDirNames].includes(n))
+    assert(RETIRED_SKILLS.every(n => !ADAPTIVE_CORE.includes(n))
       && !sync.HOOK_SCRIPTS.includes(RETIRED_HOOK),
       'U1 (#977): no planted name is in the deploy set — a name that is deployed is not '
       + 'evidence about retired-residue handling at all');
@@ -1487,9 +1520,13 @@ for (const script of sync.HOOK_SCRIPTS) {
       { env: Object.assign({}, process.env, { HOME: r1.home, KIMI_CODE_HOME: r1.kimiHome }), encoding: 'utf8' });
     assert(ru.status === 0,
       'U1: --uninstall exits 0 (got ' + ru.status + (ru.stderr ? ' — ' + String(ru.stderr).split('\n')[0] : '') + ')');
-    for (const name of [...ADAPTIVE_CORE, ...roleDirNames]) {
+    for (const name of ADAPTIVE_CORE) {
       assert(!existsSync(path.join(skillsDir(r1), name)),
         'U1[' + name + ']: skill removed by --uninstall');
+    }
+    for (const role of canonAgents) {
+      assert(!existsSync(path.join(agentsDir(r1), role + '.md')),
+        'U1[' + role + ']: managed native agent removed by --uninstall');
     }
     const leftSkills = RETIRED_SKILLS.filter(n => existsSync(path.join(skillsDir(r1), n)));
     assert(leftSkills.length === 0,
@@ -1537,6 +1574,7 @@ for (const script of sync.HOOK_SCRIPTS) {
       }
     };
     walkDeploy('skills', skillsDir(r));
+    walkDeploy('agents', agentsDir(r));
     walkDeploy('hooks', path.join(r.kimiHome, 'kaola-workflow', 'hooks'));
     scanFile('config.toml', r.kimiConfig);
     assert(leaks === 0,
@@ -1552,8 +1590,8 @@ for (const script of sync.HOOK_SCRIPTS) {
   // `review_profile_unavailable` rather than falling through silently. The resolver lived in the
   // node executor and went with it, along with the review receipts whose identity it bound.
   //
-  // WHAT IS NOW UNCOVERED: the reviewer SKILL.md is still generated and its re-stamped
-  // `resolved_profile_hash` is still verified against the bytes (earlier in this file), but the
+  // WHAT IS NOW COVERED EARLIER: every native agent profile is generated and its re-stamped
+  // `resolved_profile_hash` is verified against the bytes, but the
   // runtime-DETECTION half — that a kimi install reads as kimi and not as opencode — has no
   // consumer left and therefore no test. If a reviewer-identity resolver returns, that
   // no-swallow case is the one worth restoring first: it was a real defect, not a hypothetical.
@@ -1561,32 +1599,40 @@ for (const script of sync.HOOK_SCRIPTS) {
 
 // ---------------------------------------------------------------------------
 // K10-prune: --write is an idempotent MIRROR, not an append-only writer. A retired
-// skill dir (whose canonical source was deleted — e.g. the fast/full commands) must
-// be REMOVED, and --check must flag it (the generator previously wrote canonical
-// surfaces but never pruned, so --check reported parity while a stale dir lingered).
+// command-Skill dir and retired native agent profile must be REMOVED, and --check must flag both.
 // Crash-safe: the transient probe dir is removed in a finally block.
 // ---------------------------------------------------------------------------
 {
   const { spawnSync } = require('child_process');
   const probeDir = path.join(TREE_ROOT, '.kimi', 'skills', 'kaola-workflow-__kw_retired_probe');
+  const probeAgentDir = path.join(TREE_ROOT, '.kimi', 'agents');
+  const probeAgent = path.join(probeAgentDir, '__kw_retired_probe.md');
   // spawn-class: environment
   const runSync = (flag) => spawnSync(process.execPath,
     [path.join(REPO, 'scripts', 'sync-kimi-edition.js'), flag], { encoding: 'utf8' });
   try {
     fs.mkdirSync(probeDir, { recursive: true });
     fs.writeFileSync(path.join(probeDir, 'SKILL.md'), '# transient retired-surface probe — must not persist\n');
+    fs.mkdirSync(probeAgentDir, { recursive: true });
+    fs.writeFileSync(probeAgent, '---\nname: kw-retired-probe\ndescription: retired\n---\n');
     const chk = runSync('--check');
     assert(chk.status !== 0,
       'K10-prune(a): --check must exit NON-ZERO when a retired skill dir is present in .kimi/skills/');
     assert(((chk.stdout || '') + (chk.stderr || '')).includes('__kw_retired_probe'),
-      'K10-prune(a): --check output must name the retired skill dir');
+      'K10-prune(a): --check output must name the retired command Skill');
+    assert(((chk.stdout || '') + (chk.stderr || '')).includes('.kimi/agents/__kw_retired_probe.md'),
+      'K10-prune(a): --check output must name the retired native agent profile');
     runSync('--write');
     assert(!fs.existsSync(probeDir),
       'K10-prune(b): --write must REMOVE the retired skill dir (idempotent mirror)');
+    assert(!fs.existsSync(probeAgent),
+      'K10-prune(b): --write must REMOVE the retired native agent profile (idempotent mirror)');
     assert(runSync('--check').status === 0,
       'K10-prune(b): --check exits 0 after the retired skill dir is pruned');
   } finally {
     try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch (_) { /* best-effort cleanup */ }
+    try { fs.rmSync(probeAgent, { force: true }); } catch (_) { /* best-effort cleanup */ }
+    try { fs.rmdirSync(probeAgentDir); } catch (_) { /* generated profiles keep the dir non-empty */ }
   }
 }
 
@@ -1606,13 +1652,13 @@ for (const script of sync.HOOK_SCRIPTS) {
 // this is the kimi-edition home for the template ban + parity (regenerate via --write).
 // ---------------------------------------------------------------------------
 {
-  const TPL_START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
-  const TPL_END = '<!-- KW-CLAUDE-TEMPLATE-END -->';
+  const TPL_START = '<!-- KW-AGENTS-TEMPLATE-START -->';
+  const TPL_END = '<!-- KW-AGENTS-TEMPLATE-END -->';
   const extractTemplate = (text, label) => {
     const s = text.indexOf(TPL_START);
     const e = text.indexOf(TPL_END);
     assert(s !== -1 && e !== -1 && e > s,
-      'K11[' + label + ']: KW-CLAUDE-TEMPLATE-START/END markers present');
+      'K11[' + label + ']: KW-AGENTS-TEMPLATE-START/END markers present');
     return (s !== -1 && e > s) ? text.slice(s + TPL_START.length, e).trim() : '';
   };
   const kimiTpl = extractTemplate(read(skillDir('workflow-init')), 'kimi');
@@ -1719,11 +1765,19 @@ for (const script of sync.HOOK_SCRIPTS) {
     const expected = routing.commandSurfacesForForge(forge)
       .map(r => path.basename(r.path).slice(0, -3)).sort();
     const actual = fs.readdirSync(path.join(TREE_ROOT, tree, 'skills'), { withFileTypes: true })
-      .filter(e => e.isDirectory() && !e.name.startsWith('kaola-role-'))
+      .filter(e => e.isDirectory())
       .map(e => e.name).sort();
     assert(JSON.stringify(actual) === JSON.stringify(expected),
-      'FA6[' + forge + ']: ' + tree + '/skills command set is exactly the routing registry set for '
+      'FA6[' + forge + ']: ' + tree + '/skills exact set is the routing registry command set (no role Skills) for '
       + forge + ' (expected ' + JSON.stringify(expected) + ', got ' + JSON.stringify(actual) + ')');
+    const forgeAgentsDir = path.join(TREE_ROOT, tree, 'agents');
+    const actualAgents = fs.existsSync(forgeAgentsDir)
+      ? fs.readdirSync(forgeAgentsDir, { withFileTypes: true })
+        .filter(e => e.isFile()).map(e => e.name).sort() : [];
+    const expectedAgents = canonAgents.map(role => role + '.md').sort();
+    assert(JSON.stringify(actualAgents) === JSON.stringify(expectedAgents),
+      'FA6[' + forge + ']: ' + tree + '/agents exact set is the canonical 14 native profiles '
+      + '(expected ' + JSON.stringify(expectedAgents) + ', got ' + JSON.stringify(actualAgents) + ')');
 
     // F7: the managed hooks fragment names a script this forge's manifest ACTUALLY
     // installs. A forge-blind fragment would wire the hook to a basename that no
@@ -1806,6 +1860,13 @@ for (const script of sync.HOOK_SCRIPTS) {
       assert(skill.includes(claim), 'FA9[' + forge + ']: the deployed workflow-next skill resolves ' + claim);
       assert(deployed.includes(claim),
         'FA9[' + forge + ']: ' + claim + ' is among the installed support scripts');
+      const installedSkills = readdirSync(path.join(dest, '.kimi-code', 'skills')).sort();
+      assert(JSON.stringify(installedSkills) === JSON.stringify([...canonCommandNames].sort()),
+        'FA9[' + forge + ']: installed Skill set is exactly the three command Skills (no role Skills)');
+      const installedAgents = existsSync(path.join(dest, '.kimi-code', 'agents'))
+        ? readdirSync(path.join(dest, '.kimi-code', 'agents')).filter(name => name.endsWith('.md')).sort() : [];
+      assert(JSON.stringify(installedAgents) === JSON.stringify(canonAgents.map(role => role + '.md').sort()),
+        'FA9[' + forge + ']: installed native agent set is exactly the canonical 14 profiles');
     } finally {
       try { rmSync(home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
       try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
@@ -1865,18 +1926,22 @@ for (const script of sync.HOOK_SCRIPTS) {
       'K12: the scratch repo is GREEN before anything is planted — a fixture already red reports a '
       + 'mismatch set that is not the planted one, and the outcome check below would be about that');
 
-    // Two classes at once: a stale generated skill and a retired directory the mirror must prune.
+    // Two classes at once: a stale generated native profile and a retired command-Skill directory
+    // the mirror must prune.
     const skillsDir = path.join(scratch, '.kimi', 'skills');
-    const roleSkill = fs.readdirSync(skillsDir).filter(n => n.startsWith('kaola-role-')).sort()[0] || '';
-    assert(roleSkill !== '',
-      'K12: the regenerated fixture has a role skill to drift — with none there is no subject');
+    const agentsDir = path.join(scratch, '.kimi', 'agents');
+    const roleProfile = fs.existsSync(agentsDir)
+      ? fs.readdirSync(agentsDir).filter(n => n.endsWith('.md')).sort()[0] || '' : '';
+    assert(roleProfile !== '',
+      'K12: the regenerated fixture has a native agent profile to drift — with none there is no subject');
     const RETIRED = 'zzz-k12-retired';
-    if (roleSkill) fs.appendFileSync(path.join(skillsDir, roleSkill, 'SKILL.md'), '\n<!-- K12 planted drift -->\n');
+    if (roleProfile) fs.appendFileSync(path.join(agentsDir, roleProfile), '\n<!-- K12 planted drift -->\n');
     fs.mkdirSync(path.join(skillsDir, RETIRED), { recursive: true });
     fs.writeFileSync(path.join(skillsDir, RETIRED, 'SKILL.md'), '# K12 fixture\n');
 
     const c0 = check();
-    const planted = [sync.skillRel(roleSkill, 'github'), sync.treeLabel('github') + '/skills/' + RETIRED].sort();
+    const planted = [sync.treeLabel('github') + '/agents/' + roleProfile,
+      sync.treeLabel('github') + '/skills/' + RETIRED].sort();
     assert(c0.status === 1, 'K12: the planted tree fails --check (exit ' + c0.status + ')');
     assert(JSON.stringify(reported(c0.out)) === JSON.stringify(planted),
       'K12: --check reports EXACTLY the two planted mismatches — expected ' + JSON.stringify(planted)
@@ -2002,6 +2067,13 @@ for (const script of sync.HOOK_SCRIPTS) {
     return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
   };
   const readIf = p => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '');
+  const behaviorSource = root => path.join(root, 'templates', 'agents', 'behavior-contracts.json');
+  const plantBehaviorMarker = (root, role, marker) => {
+    const file = behaviorSource(root);
+    const source = JSON.parse(fs.readFileSync(file, 'utf8'));
+    source.roles[role].body += '\n' + marker + '\n';
+    fs.writeFileSync(file, JSON.stringify(source, null, 2) + '\n');
+  };
   const head = out => String(out).split('\n').filter(Boolean).slice(0, 4).join(' | ');
 
   // The forge axis, taken from the module rather than typed: one default tree, one non-default
@@ -2065,23 +2137,23 @@ for (const script of sync.HOOK_SCRIPTS) {
 
       const MAIN_MARK = 'K13-MARKER-PLANTED-IN-MAIN';
       const WT_MARK = 'K13-MARKER-PLANTED-IN-WORKTREE';
-      const renderedRel = sync.skillRel('kaola-role-' + agentFile.replace(/\.md$/, ''), DEF_FORGE);
+      const renderedRel = agentRel(agentFile.replace(/\.md$/, ''), DEF_FORGE);
 
       if (agentFile) {
         // Control: a canonical edit reaches the rendered surface AT ALL. Without it, the marker
         // assertions below could red forever against a correct implementation, and a marker that
         // never renders would make the "main's marker is gone" half true for the wrong reason.
-        fs.appendFileSync(path.join(mainRoot, 'agents', agentFile), '\n' + MAIN_MARK + '\n');
+        plantBehaviorMarker(mainRoot, agentFile.replace(/\.md$/, ''), MAIN_MARK);
         const w1 = runSync(mainRoot, mainRoot, ['--forge=' + DEF_FORGE, '--write']);
         assert(w1.status === 0,
           'K13: the fixture regenerates after the main-side plant — exit ' + w1.status + ': ' + head(w1.out));
         assert(readIf(path.join(mainRoot, renderedRel)).includes(MAIN_MARK),
-          'K13: control — an edit to a canonical agent reaches its rendered role Skill. It did not '
+          'K13: control — an edit to canonical role behavior reaches its rendered native Kimi profile. It did not '
           + 'reach ' + renderedRel + ', so this fixture cannot tell WHICH checkout\'s sources were '
           + 'rendered and both marker assertions below would be vacuous');
 
-        fs.appendFileSync(path.join(wtRoot, 'agents', agentFile), '\n' + WT_MARK + '\n');
-        assert(!readIf(path.join(wtRoot, 'agents', agentFile)).includes(MAIN_MARK),
+        plantBehaviorMarker(wtRoot, agentFile.replace(/\.md$/, ''), WT_MARK);
+        assert(!readIf(behaviorSource(wtRoot)).includes(MAIN_MARK),
           'K13: control — the worktree holds its own copy of the canonical sources. If it shared '
           + 'main\'s file, both markers would be in both checkouts and the discriminator would be gone');
 
@@ -2436,7 +2508,7 @@ for (const script of sync.HOOK_SCRIPTS) {
 
       if (k16Agent && fs.existsSync(path.join(mainRoot, 'agents', k16Agent))) {
         const k16Rendered = path.join(mainRoot,
-          sync.skillRel('kaola-role-' + k16Agent.replace(/\.md$/, ''), DEF_FORGE));
+          agentRel(k16Agent.replace(/\.md$/, ''), DEF_FORGE));
 
         // SETTLE FIRST. The in-parity leg needs a refresh that genuinely changes nothing, and what
         // K13 left is not that by construction: it wrote ONE forge with --write, while
@@ -2465,7 +2537,7 @@ for (const script of sync.HOOK_SCRIPTS) {
 
         // (b) FIRES on a real cross-checkout change, (c) NAMES the root, (d) on STDERR only.
         const WT_MARK_16 = 'K16-MARKER-FROM-THE-WORKTREE';
-        fs.appendFileSync(path.join(wtRoot, 'agents', k16Agent), '\n' + WT_MARK_16 + '\n');
+        plantBehaviorMarker(wtRoot, k16Agent.replace(/\.md$/, ''), WT_MARK_16);
         const r1 = runSync(wtRoot, wtRoot, ['--refresh-present']);
         assert(r1.status === 0,
           'K16: the changing refresh succeeds — exit ' + r1.status + ': ' + head(r1.out));
@@ -2493,7 +2565,7 @@ for (const script of sync.HOOK_SCRIPTS) {
 
         // (e) SILENT FROM THE CHECKOUT THAT OWNS THE TREE, THOUGH FILES ARE WRITTEN.
         const MAIN_MARK_16 = 'K16-MARKER-FROM-MAIN';
-        fs.appendFileSync(path.join(mainRoot, 'agents', k16Agent), '\n' + MAIN_MARK_16 + '\n');
+        plantBehaviorMarker(mainRoot, k16Agent.replace(/\.md$/, ''), MAIN_MARK_16);
         const r2 = runSync(mainRoot, mainRoot, ['--refresh-present']);
         assert(r2.status === 0,
           'K16: --refresh-present from the main checkout succeeds — exit ' + r2.status + ': '
