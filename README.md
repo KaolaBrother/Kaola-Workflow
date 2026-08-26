@@ -37,8 +37,10 @@ The numbered axioms are tie-breakers, applied in priority order whenever a situa
 
 **Choose dispatch or inline per item:** dispatch when it materially reduces main-context residue, supplies independent judgment, or enables genuinely independent parallel work. Keep one production owner for a cohesive state machine, protocol, or integration when handoff and integration cost exceed that benefit. Both modes are first-class; width follows the true work frontier. No dispatch count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
 
-That block is not a paraphrase of the canonical one — it is a byte-identical copy, and so are the
-generated `workflow-init` surfaces this project ships and the managed region in root `AGENTS.md`.
+That block is not a paraphrase of the canonical one — it is a byte-identical copy of the
+`templates/axioms.md` source, as is the copy in root `AGENTS.md`. Those two named authoring surfaces
+are mutation-checked. Generated `workflow-init` surfaces contain no second copy: they reach the one
+distribution-owned consumer `AGENTS.md` template through the project-instruction helper.
 `AGENTS.md` is the one runtime-neutral repository authority; runtime entrypoint files and role
 profiles only bridge or adapt it.
 

@@ -29,17 +29,22 @@ the `@AGENTS.md` Claude-only bridge/overlay. It never treats a native overlay as
 authority.
 
 - `plan` is read-only. It classifies both files, computes before/after SHA-256 values, and reports
-  `planned`, `converged`, `active_run_preserved`, or `decision_required`.
+  `planned`, `converged`, `active_run_preserved`, `producer_repository_preserved`, or
+  `decision_required`.
 - `check` is read-only. A safe but unapplied plan becomes `drift` and exits 3.
 - `apply` writes only a safe `planned` result, atomically and by exact path. It reports the files
   written and becomes a byte-identical no-op after convergence.
 
-Known legacy Kaola redirects and correctly formed managed regions are workflow-owned. Surrounding
-owner bytes remain byte-identical. Missing files may be created. Malformed markers, an unrecognized
-owner-only authority, or a split the helper cannot prove safe returns `decision_required`, exits 2,
-and writes nothing. Any active workflow state is fenced as `active_run_preserved`; old runs keep the
-instruction bytes they started with. The helper creates no symlinks and does not inspect or delete
-nested/local runtime instruction files.
+The exact released v9.17.2 whole-file pairs, known legacy Kaola redirects, and correctly formed
+current managed regions are workflow-owned. Surrounding owner bytes remain byte-identical when a
+current region or redirect is replaced. A released `KW-CLAUDE-MANAGED` marker is not sufficient
+ownership proof by itself: changed outer bytes make that legacy file owner-ambiguous, so the helper
+returns `decision_required` without writing. Missing files may be created. Malformed markers, an
+unrecognized owner-only authority, or any other split the helper cannot prove safe also returns
+`decision_required`, exits 2, and writes nothing. Any active workflow state is fenced as
+`active_run_preserved`; old runs keep the instruction bytes they started with. On this producer
+repository, `producer_repository_preserved` protects the richer project-specific contract. The
+helper creates no symlinks and does not inspect or delete nested/local runtime instruction files.
 
 The JSON envelope has `schema_version`, `mode`, `status`, `changed`, `files`, `writes`, and
 `reasons`. Each `files.agents` / `files.claude` record carries `classification`,

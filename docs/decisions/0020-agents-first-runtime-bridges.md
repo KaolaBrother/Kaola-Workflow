@@ -76,11 +76,12 @@ Known workflow-owned redirects and managed regions may be replaced. Bytes outsid
 preserved, including non-UTF-8 bytes and restrictive file modes. Distribution-owned consumer
 templates prevent this producer repository's richer `AGENTS.md` from leaking into other projects;
 one shipped module is the only consumer wording, and workflow-init surfaces do not restate it. The
-exact v9.17.2 redirect pair and released `KW-CLAUDE-MANAGED` envelope have one-time recognized
-migrations, while the producer itself is preserved. A second apply is a byte-identical no-op.
-Active older workflow runs are preserved under the contract they started with. Malformed markers,
-non-regular carriers, owner-only instruction authorities, or any ambiguous split return
-`decision_required` and write nothing.
+byte-exact v9.17.2 redirect/CLAUDE pair and byte-exact released consumer-template pair have
+one-time whole-file migrations, while the producer itself is preserved. A legacy
+`KW-CLAUDE-MANAGED` region with changed outer bytes is owner-ambiguous and remains untouched. A
+second apply is a byte-identical no-op. Active older workflow runs are preserved under the contract
+they started with. Malformed markers, non-regular carriers, owner-only instruction authorities, or
+any ambiguous split return `decision_required` and write nothing.
 
 No migration uses symlinks, deletes nested or local runtime files, or silently moves owner-authored
 instructions.

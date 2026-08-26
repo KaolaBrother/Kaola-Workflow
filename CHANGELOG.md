@@ -18,12 +18,12 @@
   authority are retired.
 - **Ownership-safe project instruction migration (#1033).** `workflow-init` now uses a standard-
   library `plan` / `check` / `apply` helper and one distribution-owned consumer-template module;
-  workflow-init surfaces no longer embed a second universal wording. It migrates both the exact
-  byte-exact v9.17.2 redirect and released consumer-template pair whole-file without copying this
-  producer repository's contract. A legacy `KW-CLAUDE-MANAGED` region with changed outer bytes is
-  owner-ambiguous and remains untouched. The helper preserves arbitrary owner bytes and file modes,
-  is byte-idempotent, fences active older runs, refuses non-regular topology, and returns
-  `decision_required` without writing when ownership is ambiguous.
+  workflow-init surfaces no longer embed a second universal wording. It migrates the byte-exact
+  v9.17.2 redirect/CLAUDE pair and the byte-exact released consumer-template pair whole-file without
+  copying this producer repository's contract. A legacy `KW-CLAUDE-MANAGED` region with changed
+  outer bytes is owner-ambiguous and remains untouched. The helper preserves arbitrary owner bytes
+  and file modes, is byte-idempotent, fences active older runs, refuses non-regular topology, and
+  returns `decision_required` without writing when ownership is ambiguous.
 
 ### Fixed
 
