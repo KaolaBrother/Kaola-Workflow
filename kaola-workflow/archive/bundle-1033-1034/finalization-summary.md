@@ -210,3 +210,12 @@ archived_paths:
 - kaola-workflow/archive/bundle-1033-1034/finalization-summary.md
 - kaola-workflow/archive/bundle-1033-1034/mission-list.md
 - kaola-workflow/archive/bundle-1033-1034/workflow-state.md
+
+## Post-Finalize Release
+
+- Release-only candidate: `96a4c11197bcae5c1232b4c261a28c8ea426752c`; exactly eight allowed release files changed from sink commit `35542e4b7baa118d37abedcf97eaee61156d0452`.
+- Pre-tag receipt: clean, exact-SHA, unwaived Claude/Codex/GitLab/Gitea chains, all exit 0 in one attempt; strict `--release-check` passed for the same SHA.
+- Tag transaction: `kaola-workflow--v10.0.0` created and raw tag-tree bytes verified; post-tag `npm test` passed all four chains.
+- Publication: origin `main` and `refs/tags/kaola-workflow--v10.0.0` both resolved to the candidate when published; GitHub release `https://github.com/KaolaBrother/Kaola-Workflow/releases/tag/kaola-workflow--v10.0.0` is Latest.
+- Closure: GitHub issues #1033 and #1034 are closed.
+- Installation convergence: `install-all.sh --global --yes --forge=github` reported PASS for Claude, OpenCode, Codex, Kimi, Grok, Cursor, and ZCode; Codex refreshed from 7.17.2 to 10.0.0, and the following dry-run check read the installed marketplace plugin at 10.0.0 with no refresh pending.

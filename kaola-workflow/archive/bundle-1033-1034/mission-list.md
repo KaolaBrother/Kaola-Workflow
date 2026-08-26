@@ -36,8 +36,9 @@
   result: Candidate a89a39f4 passes the 427-assertion architecture suite, 476 routing assertions, 170 authority-reachability assertions, the 179-scenario full walkthrough, all five additive edition suites, and an exact-SHA unwaived Claude/Codex/GitLab/Gitea receipt.
 
 - item: Adversarially review acceptance and close all findings, then finalize, sink, publish 10.0.0, and prove all-runtime install convergence.
-  status: in-flight
+  status: done
   dispatched: security-reviewer and code-reviewer independently inspect frozen candidate b128c2a0 against base a503edd8 and issues #1033/#1034; they are read-only over production and land reports at .cache/security-review-1033.md and .cache/adversarial-review-1033.md before self resolves every concrete finding and begins finalize/release.
+  result: All review findings were closed before sink; #1033 and #1034 closed after main published. Release-only SHA 96a4c11197bcae5c1232b4c261a28c8ea426752c passed an exact-SHA clean, unwaived Claude/Codex/GitLab/Gitea receipt plus strict release-check and post-tag npm test; remote main and kaola-workflow--v10.0.0 matched that SHA, GitHub published it as Latest, and install-all reported PASS for Claude, OpenCode, Codex, Kimi, Grok, Cursor, and ZCode with the Codex marketplace converged to 10.0.0.
 
 - item: Author independent #1033 architecture acceptance for AGENTS-first authority, 14-role semantic sources, seven native adapters, mutation reachability, deterministic renders, and provenance separation.
   status: done
