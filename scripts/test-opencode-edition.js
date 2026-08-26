@@ -26,7 +26,7 @@ const sync = require('./sync-opencode-edition.js');
 // The adaptive-schema require went with S1-contract and A26: its only consumers here were
 // `effortForProvider` / `contractForProvider` / `CONTRACT_EFFORT_TABLE`, all removed with per-role
 // effort tiering. An import kept "in case" is the same dead-configuration class as the mechanism.
-const reviewerGenerator = require('./generate-reviewer-profiles.js');
+const reviewerGenerator = require('./generate-agent-profiles.js');
 
 const REPO = sync.REPO;
 
@@ -58,13 +58,33 @@ const TREE_ROOT = (() => {
   // git owns. A33 below asserts that outcome on disk; this is the same statement, for the probe.
   return path.basename(abs) === '.git' ? path.dirname(abs) : REPO;
 })();
+// OpenCode's documented file-defined-agent discovery directory. Kept independent
+// of sync.OUT_AGENT_DIR so the test can disagree with a producer that chooses the
+// wrong native path.
+const OPENCODE_NATIVE_AGENT_DIR = path.join(TREE_ROOT, '.opencode', 'agents');
+const OPENCODE_NATIVE_COMMAND_DIR = path.join(TREE_ROOT, '.opencode', 'commands');
+// Existing non-path assertions still need to inspect the baseline's rendered bytes
+// when the native directory is absent, otherwise the first readdir would abort and
+// hide every N* path failure below. This lens never decides acceptance: N1-N3/N6
+// independently require the plural path and reject the singular fallback.
+const observedAgentDir = () => fs.existsSync(OPENCODE_NATIVE_AGENT_DIR)
+  ? OPENCODE_NATIVE_AGENT_DIR : sync.OUT_AGENT_DIR;
+const observedCommandDir = () => fs.existsSync(OPENCODE_NATIVE_COMMAND_DIR)
+  ? OPENCODE_NATIVE_COMMAND_DIR : sync.OUT_COMMAND_DIR;
+const observedRel = rel => {
+  const text = String(rel);
+  const agentAdjusted = fs.existsSync(OPENCODE_NATIVE_AGENT_DIR)
+    ? text : text.replace(/^(\.opencode(?:-[^/]+)?)\/agents\//, '$1/agent/');
+  return fs.existsSync(OPENCODE_NATIVE_COMMAND_DIR)
+    ? agentAdjusted : agentAdjusted.replace(/^(\.opencode(?:-[^/]+)?)\/commands\//, '$1/command/');
+};
 
 // The ONE expression that decides which root a repo-relative path belongs to. The labels come from
 // the module's own forge axis, so a forge added later is routed without a second registration here.
 const TREE_LABELS = new Set(sync.FORGES.map(f => sync.treeLabel(f)));
 const rootOf = rel => (TREE_LABELS.has(String(rel).split(/[\\/]/)[0]) ? TREE_ROOT : REPO);
-const read = rel => fs.readFileSync(path.join(rootOf(rel), rel), 'utf8');
-const exists = rel => fs.existsSync(path.join(rootOf(rel), rel));
+const read = rel => fs.readFileSync(path.join(rootOf(rel), observedRel(rel)), 'utf8');
+const exists = rel => fs.existsSync(path.join(rootOf(rel), observedRel(rel)));
 let passed = 0, failed = 0;
 function assert(cond, msg) {
   if (cond) { passed++; return; }
@@ -242,7 +262,7 @@ function parseFrontmatterKeys(content) {
 // that, never "parity with canonical", which is the claim they cannot support.
 // ---------------------------------------------------------------------------
 {
-  const provisioned = fs.existsSync(sync.OUT_AGENT_DIR) && fs.existsSync(sync.OUT_COMMAND_DIR);
+  const provisioned = fs.existsSync(observedAgentDir()) && fs.existsSync(observedCommandDir());
   assert(provisioned,
     'A0: the generated tree exists after sync --write — an ABSENT tree must fail loudly here rather '
     + 'than let every readdir-driven loop below iterate over nothing');
@@ -250,7 +270,7 @@ function parseFrontmatterKeys(content) {
     // Stop here rather than let the first readdir throw: a stack trace three assertions later is a
     // worse report than one line naming the cause, and every count after it would be meaningless.
     console.error('FATAL: sync --write reported success but produced no tree at '
-      + sync.OUT_AGENT_DIR + ' / ' + sync.OUT_COMMAND_DIR + ' — nothing below can be tested.');
+      + observedAgentDir() + ' / ' + observedCommandDir() + ' — nothing below can be tested.');
     process.exit(1);
   }
 }
@@ -260,9 +280,9 @@ function parseFrontmatterKeys(content) {
 // permission-mapped from its canonical tool set.
 // ---------------------------------------------------------------------------
 const canonAgents = sync.listCanonAgents();
-const genAgentFiles = fs.readdirSync(sync.OUT_AGENT_DIR).filter(f => f.endsWith('.md'));
+const genAgentFiles = fs.readdirSync(observedAgentDir()).filter(f => f.endsWith('.md'));
 assert(new Set(genAgentFiles.map(f => f.slice(0, -3))).size === canonAgents.length,
-  'A1: .opencode/agent/ count matches canonical agent count (' + canonAgents.length + ')');
+  'A1: .opencode/agents/ count matches canonical agent count (' + canonAgents.length + ')');
 // A1-roster: the count above compares a just-regenerated tree against the roster that generated
 // it, so it holds however wrong that roster is. The LIVE property is that the generator's roster
 // predicate sees the whole TRACKED canonical inventory — read here independently of the generator.
@@ -279,7 +299,7 @@ assert(new Set(genAgentFiles.map(f => f.slice(0, -3))).size === canonAgents.leng
 }
 
 for (const name of canonAgents) {
-  const rel = '.opencode/agent/' + name + '.md';
+  const rel = '.opencode/agents/' + name + '.md';
   assert(exists(rel), 'A2[' + name + ']: generated agent exists');
   const content = read(rel);
   const keys = parseFrontmatterKeys(content);
@@ -325,7 +345,7 @@ for (const name of canonAgents) {
     + (independentReadOnly.length === 0
       ? ' (empty is the CORRECT answer for this roster and is asserted, not skipped)' : ''));
   for (const name of independentReadOnly) {
-    const fmText = (read('.opencode/agent/' + name + '.md').match(/^---\r?\n([\s\S]*?)\r?\n---/) || [])[1] || '';
+    const fmText = (read('.opencode/agents/' + name + '.md').match(/^---\r?\n([\s\S]*?)\r?\n---/) || [])[1] || '';
     assert(/edit:\s*deny/.test(fmText),
       'A3-domain[' + name + ']: read-only role denies edit in its generated permission block');
   }
@@ -357,7 +377,7 @@ for (const name of canonAgents) {
       .map(s => s.trim().toLowerCase()).filter(Boolean).includes(tool);
   };
   const deniesBash = name => {
-    const fmText = (read('.opencode/agent/' + name + '.md').match(/^---\r?\n([\s\S]*?)\r?\n---/) || [])[1] || '';
+    const fmText = (read('.opencode/agents/' + name + '.md').match(/^---\r?\n([\s\S]*?)\r?\n---/) || [])[1] || '';
     return /^\s*bash:\s*deny\s*$/m.test(fmText);
   };
   const restricted = canonAgents.filter(n => !grants(n, 'bash')).sort();
@@ -401,9 +421,9 @@ for (const name of canonAgents) {
 // install-time model placeholders (models are centralized in opencode.json).
 // ---------------------------------------------------------------------------
 const canonCommands = sync.listCanonCommands();
-const genCommandFiles = fs.readdirSync(sync.OUT_COMMAND_DIR).filter(f => f.endsWith('.md'));
+const genCommandFiles = fs.readdirSync(observedCommandDir()).filter(f => f.endsWith('.md'));
 assert(new Set(genCommandFiles).size === canonCommands.length,
-  'A4: .opencode/command/ count matches canonical command count (' + canonCommands.length + ')');
+  'A4: .opencode/commands/ count matches canonical command count (' + canonCommands.length + ')');
 // A4-roster: the live property behind that count — the generator's command roster is EXACTLY the
 // tracked commands/*.md inventory, read here without the generator (see A1-roster).
 {
@@ -417,7 +437,7 @@ assert(new Set(genCommandFiles).size === canonCommands.length,
     + JSON.stringify(trackedCommands) + ' generator=' + JSON.stringify([...canonCommands].sort()));
 }
 for (const file of canonCommands) {
-  const rel = '.opencode/command/' + file;
+  const rel = '.opencode/commands/' + file;
   assert(exists(rel), 'A4[' + file + ']: generated command exists');
   const content = read(rel);
   assert(!/model="\{/.test(content),
@@ -437,7 +457,7 @@ for (const file of canonCommands) {
 // parameter" no longer appear in any canonical command, so both pinned a wording that is gone.
 // ---------------------------------------------------------------------------
 for (const file of canonCommands) {
-  const content = read('.opencode/command/' + file);
+  const content = read('.opencode/commands/' + file);
   assert(!/MUST pass `model=|do not omit\s+the `model=` line/.test(content),
     'A14[' + file + ']: no "MUST pass model=" / "do not omit the model= line" instruction');
   assert(!/,,/.test(content),
@@ -455,7 +475,7 @@ for (const file of canonCommands) {
 // ---------------------------------------------------------------------------
 for (const name of canonAgents) {
   const expected = sync.renderAgent(read('agents/' + name + '.md'), name);
-  assert(read('.opencode/agent/' + name + '.md') === expected,
+  assert(read('.opencode/agents/' + name + '.md') === expected,
     'A6[' + name + ']: renderAgent is deterministic across the --write subprocess and this process');
 }
 
@@ -472,8 +492,9 @@ for (const name of canonAgents) {
   };
   let checkedLines = 0;
   for (const name of canonAgents) {
-    const canonLines = bodyOf(read('agents/' + name + '.md')).split('\n').map(s => s.trim()).filter(Boolean);
-    const generated = read('.opencode/agent/' + name + '.md');
+    const canonLines = reviewerGenerator.behaviorIdentityFromCore(read('agents/' + name + '.md'))
+      .core.split('\n').map(s => s.trim()).filter(Boolean);
+    const generated = read('.opencode/agents/' + name + '.md');
     const missing = canonLines.filter(line => !generated.includes(line));
     checkedLines += canonLines.length;
     assert(canonLines.length > 0,
@@ -493,7 +514,7 @@ for (const name of canonAgents) {
 // stochastic and are never promised to match across runtimes.
 for (const role of reviewerGenerator.ROLES) {
   const canonical = reviewerGenerator.behaviorIdentityFromCore(read('agents/' + role + '.md'));
-  const opencodeText = read('.opencode/agent/' + role + '.md');
+  const opencodeText = read('.opencode/agents/' + role + '.md');
   // behaviorIdentityFromCore THROWS on a body whose behavior-core markers are gone. Measured: a
   // generator that drops the reviewer body aborts this file mid-run with a stack trace, so every
   // assertion after this point is never reached and the failure count is a lie. Catch it into a
@@ -550,7 +571,7 @@ for (const role of reviewerGenerator.ROLES) {
 // was not verbatim; the planner role is retired, so both the role and its suffix are gone and the
 // remaining claim is that EVERY agent body is now verbatim.
 for (const retired of ['contractor.md', 'workflow-planner.md']) {
-  assert(!fs.existsSync(path.join(TREE_ROOT, '.opencode', 'agent', retired)),
+  assert(!fs.existsSync(path.join(TREE_ROOT, '.opencode', 'agents', retired)),
     'A13: the retired role ' + retired + ' must not ship on the opencode edition');
 }
 assert(sync.opencodeAgentSuffix('implementer') === ''
@@ -564,7 +585,7 @@ assert(sync.opencodeAgentSuffix('implementer') === ''
 // template bytes and banned tokens directly against the generated files.
 for (const file of canonCommands) {
   const expected = sync.renderCommand(read('commands/' + file));
-  assert(read('.opencode/command/' + file) === expected,
+  assert(read('.opencode/commands/' + file) === expected,
     'A6[' + file + ']: renderCommand is deterministic across the --write subprocess and this process');
 }
 
@@ -579,16 +600,16 @@ for (const file of canonCommands) {
 // --write).
 // ---------------------------------------------------------------------------
 {
-  const TPL_START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
-  const TPL_END = '<!-- KW-CLAUDE-TEMPLATE-END -->';
+  const TPL_START = '<!-- KW-AGENTS-TEMPLATE-START -->';
+  const TPL_END = '<!-- KW-AGENTS-TEMPLATE-END -->';
   const extractTemplate = (text, label) => {
     const s = text.indexOf(TPL_START);
     const e = text.indexOf(TPL_END);
     assert(s !== -1 && e !== -1 && e > s,
-      'A24[' + label + ']: KW-CLAUDE-TEMPLATE-START/END markers present');
+      'A24[' + label + ']: KW-AGENTS-TEMPLATE-START/END markers present');
     return (s !== -1 && e > s) ? text.slice(s + TPL_START.length, e).trim() : '';
   };
-  const ocTpl = extractTemplate(read('.opencode/command/workflow-init.md'), 'opencode');
+  const ocTpl = extractTemplate(read('.opencode/commands/workflow-init.md'), 'opencode');
   // Phase-ban (mirror validate-kaola-workflow-contracts.js #572 AC4).
   assert(!/Phase\s+\d/.test(ocTpl),
     'A24 (#572): opencode workflow-init template must not teach a numbered Phase <n> model (adaptive is the unconditional default)');
@@ -606,8 +627,8 @@ for (const file of canonCommands) {
 }
 
 // ---------------------------------------------------------------------------
-// A25: PROVENANCE_BAN — opencode prompt mirrors (.opencode/agent/*.md,
-// .opencode/command/*.md) must not embed provenance tokens (#NNN issue refs,
+// A25: PROVENANCE_BAN — opencode prompt mirrors (.opencode/agents/*.md,
+// .opencode/commands/*.md) must not embed provenance tokens (#NNN issue refs,
 // D-NNN-NN decision IDs, bare INV-NN invariant tags, ADR citations, PR/MR/AC#
 // refs). Provenance belongs in CHANGELOG.md and docs/decisions/, never in
 // dispatch-time prompt text. Positive-behavior assertions (guard catches the
@@ -639,12 +660,12 @@ for (const file of canonCommands) {
   assert(!PROVENANCE_BAN.test('M4'),  'A25-neg: PROVENANCE_BAN must not flag grey-zone label M4');
 
   // Surface scan: generated opencode agent + command mirrors must be provenance-free.
-  const ocAgentFiles = fs.readdirSync(sync.OUT_AGENT_DIR)
+  const ocAgentFiles = fs.readdirSync(observedAgentDir())
     .filter(f => f.endsWith('.md'))
-    .map(f => '.opencode/agent/' + f);
-  const ocCommandFiles = fs.readdirSync(sync.OUT_COMMAND_DIR)
+    .map(f => '.opencode/agents/' + f);
+  const ocCommandFiles = fs.readdirSync(observedCommandDir())
     .filter(f => f.endsWith('.md'))
-    .map(f => '.opencode/command/' + f);
+    .map(f => '.opencode/commands/' + f);
   for (const rel of [...ocAgentFiles, ...ocCommandFiles]) {
     const lines = read(rel).split('\n');
     for (let i = 0; i < lines.length; i++) {
@@ -755,7 +776,7 @@ const emittedCommandTargets = Object.keys(ROUTING_TOPICS).sort()
 const installed = new Set(genCommandFiles.map(f => f.slice(0, -3)));
 for (const target of emittedCommandTargets) {
   assert(installed.has(target),
-    'A9: receipt-emitted command target "/' + target + '" resolves to .opencode/command/' + target + '.md');
+    'A9: receipt-emitted command target "/' + target + '" resolves to .opencode/commands/' + target + '.md');
 }
 
 // ---------------------------------------------------------------------------
@@ -766,13 +787,13 @@ for (const target of emittedCommandTargets) {
 // catches a present-but-hollow command. This block mirrors test-route-
 // reachability.js T5–T11 (which enforce the same contract on the 3 Claude
 // commands + 3 Codex SKILLs), scoped to the single opencode surface per command
-// under .opencode/command/. Each pair asserts BOTH the PIN/CARD marker AND the
+// under .opencode/commands/. Each pair asserts BOTH the PIN/CARD marker AND the
 // wiring literal — fail-closed, unconditional assert() per surface, NO self-
 // disarming anyHasPin gate (the T5 known-bug pattern from #505 ITEM 2 that we
 // explicitly do not replicate). GREEN on arrival — characterization/lock-in.
 // ---------------------------------------------------------------------------
 {
-  const cmdBody = name => read('.opencode/command/' + name + '.md');
+  const cmdBody = name => read('.opencode/commands/' + name + '.md');
   const has = (name, tok) => cmdBody(name).includes(tok);
 
   // A15, A17, A18, A19 — RETIRED WITH THEIR CARRIERS. All four pinned markers on
@@ -825,7 +846,7 @@ for (const target of emittedCommandTargets) {
 // longer lock a strip-transform; they red on canonical drift.
 // ---------------------------------------------------------------------------
 {
-  const wfNext = read('.opencode/command/workflow-next.md');
+  const wfNext = read('.opencode/commands/workflow-next.md');
   assert(!wfNext.includes('## Startup Step 0a-1 — Path Intent'),
     'A22: workflow-next has NO "## Startup Step 0a-1 — Path Intent" section (absent from canonical, and no generation-time strip remains — a hit means canonical reintroduced it and it flowed through untouched; fix canonical)');
   assert(!wfNext.includes('KAOLA_ENABLE_ADAPTIVE'),
@@ -887,7 +908,7 @@ for (const target of emittedCommandTargets) {
   {
     const fallback = /(?:downgrade to (?:fast\/full|full path)|fall back to (?:fast\/full|full path|full))/g;
     for (const file of genCommandFiles) {
-      const found = read('.opencode/command/' + file).match(fallback) || [];
+      const found = read('.opencode/commands/' + file).match(fallback) || [];
       assert(found.length === 0,
         'A22 (#F6): ' + file + ' carries NO fast/full downgrade/fallback wording (the paths are retired, #765) — found: ' + found.join(', '));
     }
@@ -998,7 +1019,7 @@ if (exists(pluginRel)) {
 
 // ---------------------------------------------------------------------------
 // A-prune: --write is an idempotent MIRROR, not an append-only writer. A retired
-// command/agent surface (a *.md whose canonical source was deleted — e.g. the
+// command/agents surface (a *.md whose canonical source was deleted — e.g. the
 // fast/full `kaola-workflow-fast` / `-phase{1..5}` commands) must be REMOVED, and
 // --check must flag it (the generator previously wrote canonical surfaces but never
 // pruned, so --check reported parity while a stale surface lingered in the tree).
@@ -1006,7 +1027,7 @@ if (exists(pluginRel)) {
 // ---------------------------------------------------------------------------
 {
   const { spawnSync } = require('child_process');
-  const probe = path.join(TREE_ROOT, '.opencode', 'command', 'kaola-workflow-__kw_retired_probe.md');
+  const probe = path.join(observedCommandDir(), 'kaola-workflow-__kw_retired_probe.md');
   // spawn-class: environment
   const runSync = (flag) => spawnSync(process.execPath,
     [path.join(REPO, 'scripts', 'sync-opencode-edition.js'), flag], { encoding: 'utf8' });
@@ -1015,7 +1036,7 @@ if (exists(pluginRel)) {
     // (a) --check flags the retired surface: non-zero exit, names the offender.
     const chk = runSync('--check');
     assert(chk.status !== 0,
-      'A-prune(a): --check must exit NON-ZERO when a retired *.md surface is present in .opencode/command/');
+      'A-prune(a): --check must exit NON-ZERO when a retired *.md surface is present in .opencode/commands/');
     assert(((chk.stdout || '') + (chk.stderr || '')).includes('__kw_retired_probe'),
       'A-prune(a): --check output must name the retired surface');
     // (b) --write prunes it: the file is gone and --check returns to 0.
@@ -1199,7 +1220,11 @@ if (exists(pluginRel)) {
       configPath: path.join(home, '.config', 'kaola-workflow', 'config.json'),
     };
   }
-  const cmdDir = dest => path.join(dest, '.opencode', 'command');
+  // Compatibility lens for pre-N* assertions on the unfixed baseline. The N* band
+  // below independently rejects the singular path; this only prevents an ENOENT
+  // from hiding those acceptance failures.
+  const cmdDir = dest => path.join(dest, '.opencode',
+    fs.existsSync(OPENCODE_NATIVE_COMMAND_DIR) ? 'commands' : 'command');
   const hasCmd = (dest, name) => existsSync(path.join(cmdDir(dest), name + '.md'));
   const clean = r => {
     try { rmSync(r.home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
@@ -1221,11 +1246,11 @@ if (exists(pluginRel)) {
     assert(JSON.stringify(deployed) === JSON.stringify([...ADAPTIVE_CORE].sort()),
       'P1 (#F5): default install deploys EXACTLY the adaptive-core set and nothing else — got ' + JSON.stringify(deployed));
     // P1 (#F9): the NON-command surfaces actually land at the project layout opencode resolves
-    // (<project>/.opencode/{agent,plugins,hooks}) — not just commands. A missing surface fails here
+    // (<project>/.opencode/{agents,plugins,hooks}) — not just commands. A missing surface fails here
     // instead of vacuously passing (the leak block below previously `continue`d on a missing dir).
     for (const a of sync.listCanonAgents()) {
-      assert(existsSync(path.join(r.dest, '.opencode', 'agent', a + '.md')),
-        'P1 (#F9): project install deploys agent ' + a + ' under .opencode/agent/');
+      assert(existsSync(path.join(r.dest, '.opencode', 'agents', a + '.md')),
+        'P1 (#F9): project install deploys agent ' + a + ' under .opencode/agents/');
     }
     assert(existsSync(path.join(r.dest, '.opencode', 'plugins', 'kaola-workflow-hooks.js')),
       'P1 (#F9): project install deploys the hooks plugin under .opencode/plugins/');
@@ -1320,7 +1345,7 @@ if (exists(pluginRel)) {
           'P7a (fixture): the destination holds the full deployed set before the install — a '
           + 'destination that was short to begin with cannot observe anything being removed');
         const r = runInstaller([], { dest, installer: path.join(src, 'install-opencode.sh') });
-        const rendered = readdirSync(path.join(src, '.opencode', 'command')).sort();
+        const rendered = readdirSync(cmdDir(src)).sort();
         assert(ADAPTIVE_CORE.every(n => !rendered.includes(n + '.md')) && rendered.some(n => n.startsWith('zz-')),
           'P7a (fixture): the mutated source renders the commands under names the deploy allowlist '
           + 'does not hold — got ' + JSON.stringify(rendered));
@@ -1386,7 +1411,7 @@ if (exists(pluginRel)) {
           + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
         const stale = ADAPTIVE_CORE.filter(n => {
           const live = path.join(cmdDir(dest), n + '.md');
-          const source = path.join(TREE_ROOT, '.opencode', 'command', n + '.md');
+          const source = path.join(observedCommandDir(), n + '.md');
           return !existsSync(live) || !fs.readFileSync(live).equals(fs.readFileSync(source));
         });
         assert(stale.length === 0,
@@ -1440,7 +1465,7 @@ if (exists(pluginRel)) {
 
   // -------------------------------------------------------------------------
   // G1 (#F1) — the --global install deploys DIRECTLY under the config root
-  // (${OPENCODE_CONFIG_DIR}/{agent,command,plugins,hooks}), NOT a nested
+  // (${OPENCODE_CONFIG_DIR}/{agents,command,plugins,hooks}), NOT a nested
   // .opencode/. opencode scans the config dir itself as its global ".opencode
   // equivalent"; the old nested ~/.config/opencode/.opencode/ was never scanned
   // → the entire global install was dead. Hermetic: own HOME + own
@@ -1461,17 +1486,465 @@ if (exists(pluginRel)) {
       home, cfg, configPath: path.join(home, '.config', 'kaola-workflow', 'config.json'),
     };
   }
+
+  // -------------------------------------------------------------------------
+  // NATIVE-AGENT-PATH (#1033) — OpenCode discovers file-defined agents from
+  // `.opencode/agents/` in a project and `<config>/agents/` globally.  The old
+  // singular `agent/` path is not a native discovery path.  Keep this contract
+  // independent of sync.OUT_AGENT_DIR and the installer's layout variables: a
+  // producer and its test sharing the same wrong constant is the exact defect
+  // this band must catch.
+  //
+  // The migration cases distinguish ownership by the previous deploy manifest:
+  // an unchanged hash proves Kaola wrote the file, while an absent row or hash
+  // mismatch means the file is user-owned and must survive.  A same-name file in
+  // the new plural directory with no ownership record is a collision, not stale
+  // output; installation must fail before overwriting or partially deploying.
+  // -------------------------------------------------------------------------
+  {
+    const crypto = require('crypto');
+    const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
+    const AGENT_MANIFEST = '.kaola-workflow-agent-manifest';
+    const expectedRoles = [
+      'adversarial-verifier', 'build-error-resolver', 'code-architect', 'code-explorer',
+      'code-reviewer', 'doc-updater', 'implementer', 'investigator', 'knowledge-lookup',
+      'metric-optimizer', 'planner', 'security-reviewer', 'synthesizer', 'tdd-guide',
+    ];
+    const expectedCommands = ['kaola-workflow-finalize', 'workflow-init', 'workflow-next'];
+    const mdNames = dir => existsSync(dir)
+      ? readdirSync(dir).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort()
+      : [];
+    const sameNames = (actual, expected) =>
+      JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
+    const treeFiles = root => {
+      const out = {};
+      const visit = abs => {
+        if (!existsSync(abs)) return;
+        if (fs.statSync(abs).isFile()) {
+          out[path.relative(root, abs)] = sha256(readFileSync(abs));
+          return;
+        }
+        for (const entry of readdirSync(abs)) visit(path.join(abs, entry));
+      };
+      visit(root);
+      return out;
+    };
+
+    const generatedPlural = path.join(TREE_ROOT, '.opencode', 'agents');
+    const generatedSingular = path.join(TREE_ROOT, '.opencode', 'agent');
+    const generatedCommandsPlural = path.join(TREE_ROOT, '.opencode', 'commands');
+    const generatedCommandsSingular = path.join(TREE_ROOT, '.opencode', 'command');
+    const canonicalRoles = fs.readdirSync(path.join(REPO, 'agents'))
+      .filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
+    assert(canonicalRoles.length === 14 && sameNames(canonicalRoles, expectedRoles),
+      'N0 (#1033): the acceptance roster is exactly the 14 canonical roles — got '
+      + JSON.stringify(canonicalRoles));
+    assert(path.resolve(sync.OUT_AGENT_DIR) === path.resolve(generatedPlural),
+      'N1 (#1033): sync.OUT_AGENT_DIR names the OpenCode-native plural path .opencode/agents/; got '
+      + sync.OUT_AGENT_DIR);
+    assert(sameNames(mdNames(generatedPlural), expectedRoles),
+      'N2 (#1033): sync --write generates EXACTLY 14 native profiles under .opencode/agents/ — got '
+      + JSON.stringify(mdNames(generatedPlural)));
+    assert(!existsSync(generatedSingular),
+      'N3 (#1033): sync --write retires the non-native generated .opencode/agent/ directory');
+    assert(path.resolve(sync.OUT_COMMAND_DIR) === path.resolve(generatedCommandsPlural),
+      'N1-command (#1033): sync.OUT_COMMAND_DIR names the OpenCode-native plural path .opencode/commands/; got '
+      + sync.OUT_COMMAND_DIR);
+    assert(sameNames(mdNames(generatedCommandsPlural), expectedCommands),
+      'N2-command (#1033): sync --write generates EXACTLY 3 workflow commands under .opencode/commands/ — got '
+      + JSON.stringify(mdNames(generatedCommandsPlural)));
+    assert(!existsSync(generatedCommandsSingular),
+      'N3-command (#1033): sync --write retires the non-native generated .opencode/command/ directory');
+
+    const generatedBefore = treeFiles(path.join(TREE_ROOT, '.opencode'));
+    // spawn-class: environment
+    const syncWriteAgain = spawnSync(process.execPath,
+      [path.join(REPO, 'scripts', 'sync-opencode-edition.js'), '--forge=github', '--write'],
+      { encoding: 'utf8' });
+    const generatedAfter = treeFiles(path.join(TREE_ROOT, '.opencode'));
+    // spawn-class: cli-contract
+    const syncCheck = spawnSync(process.execPath,
+      [path.join(REPO, 'scripts', 'sync-opencode-edition.js'), '--forge=github', '--check'],
+      { encoding: 'utf8' });
+    assert(syncWriteAgain.status === 0
+      && JSON.stringify(generatedAfter) === JSON.stringify(generatedBefore),
+      'N4 (#1033): a second sync --write is byte- and file-idempotent for the plural native tree');
+    assert(syncCheck.status === 0,
+      'N5 (#1033): sync --check accepts the converged plural native tree (exit '
+      + syncCheck.status + ')');
+    {
+      const retiredProbe = path.join(generatedSingular, '__kw-native-path-retired-probe.md');
+      const retiredCommandProbe = path.join(generatedCommandsSingular, '__kw-native-command-path-retired-probe.md');
+      fs.mkdirSync(generatedSingular, { recursive: true });
+      fs.mkdirSync(generatedCommandsSingular, { recursive: true });
+      fs.writeFileSync(retiredProbe, '# retired singular generated profile\n');
+      fs.writeFileSync(retiredCommandProbe, '# retired singular generated command\n');
+      // spawn-class: cli-contract
+      const red = spawnSync(process.execPath,
+        [path.join(REPO, 'scripts', 'sync-opencode-edition.js'), '--forge=github', '--check'],
+        { encoding: 'utf8' });
+      // spawn-class: environment
+      const repair = spawnSync(process.execPath,
+        [path.join(REPO, 'scripts', 'sync-opencode-edition.js'), '--forge=github', '--write'],
+        { encoding: 'utf8' });
+      assert(red.status !== 0
+        && ((red.stdout || '') + (red.stderr || '')).includes('__kw-native-path-retired-probe')
+        && ((red.stdout || '') + (red.stderr || '')).includes('__kw-native-command-path-retired-probe'),
+        'N5-retire (#1033): sync --check rejects and names retired singular generated profile and command paths');
+      assert(repair.status === 0
+        && !existsSync(generatedSingular)
+        && !existsSync(generatedCommandsSingular),
+        'N5-retire (#1033): sync --write removes both retired singular generated directories');
+    }
+
+    const assertPreservedSurfaces = (label, layoutRoot, configRoot) => {
+      const commands = mdNames(path.join(layoutRoot, 'commands'));
+      assert(sameNames(commands, ADAPTIVE_CORE),
+        label + ': commands deploy exactly at the native commands/ path — got '
+        + JSON.stringify(commands));
+      assert(existsSync(path.join(layoutRoot, 'plugins', 'kaola-workflow-hooks.js')),
+        label + ': the existing plugins/ surface remains deployed');
+      const hooks = existsSync(path.join(layoutRoot, 'hooks'))
+        ? readdirSync(path.join(layoutRoot, 'hooks')).filter(f => f.endsWith('.sh')).sort() : [];
+      assert(sameNames(hooks, sync.HOOK_SCRIPTS),
+        label + ': the existing hooks/ surface remains exactly the generated hook set');
+      assert(existsSync(path.join(configRoot, 'opencode.json')),
+        label + ': opencode.json remains at the existing project/config root');
+    };
+
+    // Fresh project install: plural discovery path, exact roster, no singular residue,
+    // and all non-agent surfaces remain where OpenCode already resolves them.
+    {
+      const r = runInstaller([]);
+      const plural = path.join(r.dest, '.opencode', 'agents');
+      assert(r.ok, 'N6-project (#1033): fresh project install exits 0 (got ' + r.status + ')');
+      assert(sameNames(mdNames(plural), expectedRoles),
+        'N6-project (#1033): project install deploys exactly 14 profiles to .opencode/agents/ — got '
+        + JSON.stringify(mdNames(plural)));
+      assert(!existsSync(path.join(r.dest, '.opencode', 'agent')),
+        'N6-project (#1033): fresh project install creates no singular .opencode/agent/ directory');
+      assert(!existsSync(path.join(r.dest, '.opencode', 'command')),
+        'N6-project (#1033): fresh project install creates no singular .opencode/command/ directory');
+      assertPreservedSurfaces('N6-project (#1033)', path.join(r.dest, '.opencode'), r.dest);
+
+      const first = treeFiles(path.join(r.dest, '.opencode'));
+      const r2 = runInstaller([], { home: r.home, dest: r.dest });
+      const second = treeFiles(path.join(r.dest, '.opencode'));
+      assert(r2.ok && JSON.stringify(second) === JSON.stringify(first),
+        'N7-project (#1033): reinstall is byte- and file-idempotent on the native project layout');
+      clean(r);
+    }
+
+    // Fresh global install: the config root itself is the layout root, but the
+    // native agent directory is still plural.
+    {
+      const r = runGlobalInstaller([]);
+      assert(r.ok, 'N6-global (#1033): fresh global install exits 0 (got ' + r.status + ')');
+      assert(sameNames(mdNames(path.join(r.cfg, 'agents')), expectedRoles),
+        'N6-global (#1033): global install deploys exactly 14 profiles to <config>/agents/ — got '
+        + JSON.stringify(mdNames(path.join(r.cfg, 'agents'))));
+      assert(!existsSync(path.join(r.cfg, 'agent')),
+        'N6-global (#1033): fresh global install creates no singular <config>/agent/ directory');
+      assert(!existsSync(path.join(r.cfg, 'command')),
+        'N6-global (#1033): fresh global install creates no singular <config>/command/ directory');
+      assertPreservedSurfaces('N6-global (#1033)', r.cfg, r.cfg);
+      try { rmSync(r.home, { recursive: true, force: true }); } catch (_) {}
+      try { rmSync(r.cfg, { recursive: true, force: true }); } catch (_) {}
+    }
+
+    const legacyBody = '# Kaola-owned legacy OpenCode agent\n';
+    const editedBody = '# Kaola-owned legacy OpenCode agent\n\nUser edit.\n';
+    const userBody = '# My unrelated OpenCode agent\n';
+    const plantLegacySingular = singular => {
+      fs.mkdirSync(singular, { recursive: true });
+      fs.writeFileSync(path.join(singular, 'code-explorer.md'), legacyBody);
+      fs.writeFileSync(path.join(singular, 'legacy-edited.md'), editedBody);
+      fs.writeFileSync(path.join(singular, 'my-own-helper.md'), userBody);
+      fs.writeFileSync(path.join(singular, AGENT_MANIFEST),
+        'code-explorer.md\t' + sha256(Buffer.from(legacyBody)) + '\n'
+        + 'legacy-edited.md\t' + sha256(Buffer.from('# Kaola-owned legacy OpenCode agent\n')) + '\n');
+    };
+    const legacyKnownCommands = [
+      'kaola-workflow-adapt.md', 'kaola-workflow-auto.md', 'kaola-workflow-fast.md',
+      'kaola-workflow-finalize.md', 'kaola-workflow-phase1.md', 'kaola-workflow-phase2.md',
+      'kaola-workflow-phase3.md', 'kaola-workflow-phase4.md', 'kaola-workflow-phase5.md',
+      'kaola-workflow-plan-run.md', 'workflow-init.md', 'workflow-next.md',
+    ];
+    const legacyCommandBody = name => '# Kaola legacy command: ' + name + '\n';
+    const plantLegacyCommands = singular => {
+      fs.mkdirSync(singular, { recursive: true });
+      for (const name of legacyKnownCommands) {
+        fs.writeFileSync(path.join(singular, name), legacyCommandBody(name));
+      }
+      fs.writeFileSync(path.join(singular, 'my-own-command.md'), '# My unrelated command\n');
+      fs.writeFileSync(path.join(singular, 'notes.txt'), 'keep this note\n');
+    };
+
+    // Project migration removes only hash-proven old ownership.  The singular
+    // directory remains solely because unrelated/user-edited files remain in it.
+    {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-migrate-home-'));
+      const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-migrate-dest-'));
+      const singular = path.join(dest, '.opencode', 'agent');
+      plantLegacySingular(singular);
+      const r = runInstaller([], { home, dest });
+      assert(r.ok, 'N8-project (#1033): install over a legacy singular project exits 0 (got '
+        + r.status + ')');
+      assert(!existsSync(path.join(singular, 'code-explorer.md')),
+        'N8-project (#1033): install retires an unchanged Kaola-owned singular profile');
+      assert(!existsSync(path.join(singular, AGENT_MANIFEST)),
+        'N8-project (#1033): install retires the old singular ownership manifest');
+      assert(readFileSync(path.join(singular, 'legacy-edited.md'), 'utf8') === editedBody,
+        'N8-project (#1033): install preserves a manifest-recorded singular profile whose bytes were user-edited');
+      assert(readFileSync(path.join(singular, 'my-own-helper.md'), 'utf8') === userBody,
+        'N8-project (#1033): install preserves an unrelated singular user profile byte-intact');
+      assert(sameNames(mdNames(path.join(dest, '.opencode', 'agents')), expectedRoles),
+        'N8-project (#1033): legacy cleanup still converges the plural native roster');
+      clean(r);
+    }
+
+    {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-command-migrate-home-'));
+      const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-command-migrate-dest-'));
+      const singular = path.join(dest, '.opencode', 'command');
+      plantLegacyCommands(singular);
+      const r = runInstaller([], { home, dest });
+      const knownLeft = legacyKnownCommands.filter(name => existsSync(path.join(singular, name)));
+      assert(r.ok && knownLeft.length === 0,
+        'N8-command-project (#1033): project install retires every Kaola current/retired command from singular command/ — left '
+        + JSON.stringify(knownLeft));
+      assert(readFileSync(path.join(singular, 'my-own-command.md'), 'utf8') === '# My unrelated command\n'
+        && readFileSync(path.join(singular, 'notes.txt'), 'utf8') === 'keep this note\n',
+        'N8-command-project (#1033): singular command migration preserves unknown user files byte-intact');
+      assert(sameNames(mdNames(path.join(dest, '.opencode', 'commands')), expectedCommands),
+        'N8-command-project (#1033): legacy cleanup still converges the 3-command plural roster');
+      clean(r);
+    }
+
+    // With no unrelated file left, the retired singular directory disappears.
+    {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-retire-home-'));
+      const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-retire-dest-'));
+      const singular = path.join(dest, '.opencode', 'agent');
+      fs.mkdirSync(singular, { recursive: true });
+      fs.writeFileSync(path.join(singular, 'code-explorer.md'), legacyBody);
+      fs.writeFileSync(path.join(singular, AGENT_MANIFEST),
+        'code-explorer.md\t' + sha256(Buffer.from(legacyBody)) + '\n');
+      const r = runInstaller([], { home, dest });
+      assert(r.ok && !existsSync(singular),
+        'N9-project (#1033): an ownership-only legacy .opencode/agent/ directory is removed after migration');
+      clean(r);
+    }
+
+    {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-command-retire-home-'));
+      const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-command-retire-dest-'));
+      const singular = path.join(dest, '.opencode', 'command');
+      fs.mkdirSync(singular, { recursive: true });
+      for (const name of legacyKnownCommands) {
+        fs.writeFileSync(path.join(singular, name), legacyCommandBody(name));
+      }
+      const r = runInstaller([], { home, dest });
+      assert(r.ok && !existsSync(singular),
+        'N9-command-project (#1033): an allowlist-only legacy .opencode/command/ directory is removed after migration');
+      clean(r);
+    }
+
+    // The same ownership migration applies to the global config root.
+    {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-global-migrate-home-'));
+      const cfg = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-global-migrate-cfg-'));
+      const singular = path.join(cfg, 'agent');
+      plantLegacySingular(singular);
+      const r = runGlobalInstaller([], { home, cfg });
+      assert(r.ok, 'N8-global (#1033): install over a legacy singular global layout exits 0 (got '
+        + r.status + ')');
+      assert(!existsSync(path.join(singular, 'code-explorer.md'))
+        && !existsSync(path.join(singular, AGENT_MANIFEST)),
+        'N8-global (#1033): global install retires hash-proven singular ownership and its old manifest');
+      assert(readFileSync(path.join(singular, 'legacy-edited.md'), 'utf8') === editedBody
+        && readFileSync(path.join(singular, 'my-own-helper.md'), 'utf8') === userBody,
+        'N8-global (#1033): global migration preserves edited and unrelated singular profiles byte-intact');
+      assert(sameNames(mdNames(path.join(cfg, 'agents')), expectedRoles),
+        'N8-global (#1033): legacy global cleanup still converges the plural native roster');
+      try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
+      try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
+    }
+
+
+    {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-global-command-migrate-home-'));
+      const cfg = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-global-command-migrate-cfg-'));
+      const singular = path.join(cfg, 'command');
+      plantLegacyCommands(singular);
+      const r = runGlobalInstaller([], { home, cfg });
+      const knownLeft = legacyKnownCommands.filter(name => existsSync(path.join(singular, name)));
+      assert(r.ok && knownLeft.length === 0,
+        'N8-command-global (#1033): global install retires every Kaola current/retired command from singular command/ — left '
+        + JSON.stringify(knownLeft));
+      assert(readFileSync(path.join(singular, 'my-own-command.md'), 'utf8') === '# My unrelated command\n'
+        && readFileSync(path.join(singular, 'notes.txt'), 'utf8') === 'keep this note\n',
+        'N8-command-global (#1033): global singular migration preserves unknown user files byte-intact');
+      assert(sameNames(mdNames(path.join(cfg, 'commands')), expectedCommands),
+        'N8-command-global (#1033): legacy global cleanup still converges the 3-command plural roster');
+      try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
+      try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
+    }
+
+    // An unmanaged same-name profile in the NEW native directory is not stale
+    // Kaola output.  Refuse before overwrite or partial deployment.
+    {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-collision-home-'));
+      const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-collision-dest-'));
+      const plural = path.join(dest, '.opencode', 'agents');
+      const collision = path.join(plural, 'code-explorer.md');
+      fs.mkdirSync(plural, { recursive: true });
+      fs.writeFileSync(collision, userBody);
+      const r = runInstaller([], { home, dest });
+      assert(!r.ok,
+        'N10-project (#1033): unmanaged same-name plural profile makes project install fail closed');
+      assert(readFileSync(collision, 'utf8') === userBody,
+        'N10-project (#1033): collision refusal preserves the unmanaged profile byte-intact');
+      assert(!existsSync(path.join(plural, AGENT_MANIFEST))
+        && mdNames(plural).length === 1,
+        'N10-project (#1033): collision refusal writes no manifest and deploys no other profiles');
+      try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
+      try { rmSync(dest, { recursive: true, force: true }); } catch (_) {}
+    }
+
+    {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-global-collision-home-'));
+      const cfg = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-global-collision-cfg-'));
+      const plural = path.join(cfg, 'agents');
+      const collision = path.join(plural, 'code-explorer.md');
+      fs.mkdirSync(plural, { recursive: true });
+      fs.writeFileSync(collision, userBody);
+      const r = runGlobalInstaller([], { home, cfg });
+      assert(!r.ok,
+        'N10-global (#1033): unmanaged same-name plural profile makes global install fail closed');
+      assert(readFileSync(collision, 'utf8') === userBody
+        && !existsSync(path.join(plural, AGENT_MANIFEST))
+        && mdNames(plural).length === 1,
+        'N10-global (#1033): global collision refusal preserves the file and deploys no other profiles');
+      try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
+      try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
+    }
+
+    // Uninstall removes every manifest-owned plural profile and the manifest,
+    // preserves an unrelated plural profile, and does not touch old singular user data.
+    {
+      const r = runInstaller([]);
+      const plural = path.join(r.dest, '.opencode', 'agents');
+      const singular = path.join(r.dest, '.opencode', 'agent');
+      const pluralCommands = path.join(r.dest, '.opencode', 'commands');
+      const singularCommands = path.join(r.dest, '.opencode', 'command');
+      assert(sameNames(mdNames(plural), expectedRoles),
+        'N11-project (#1033) anti-vacuity: seed install created the exact plural roster before uninstall');
+      assert(sameNames(mdNames(pluralCommands), expectedCommands),
+        'N11-command-project (#1033) anti-vacuity: seed install created the exact plural command roster before uninstall');
+      fs.mkdirSync(plural, { recursive: true });
+      fs.mkdirSync(singular, { recursive: true });
+      fs.mkdirSync(pluralCommands, { recursive: true });
+      fs.mkdirSync(singularCommands, { recursive: true });
+      fs.writeFileSync(path.join(plural, 'my-own-helper.md'), userBody);
+      fs.writeFileSync(path.join(singular, 'my-old-helper.md'), userBody);
+      fs.writeFileSync(path.join(pluralCommands, 'my-own-command.md'), '# My unrelated command\n');
+      fs.writeFileSync(path.join(singularCommands, 'workflow-next.md'), legacyCommandBody('workflow-next.md'));
+      fs.writeFileSync(path.join(singularCommands, 'my-old-command.md'), '# My old unrelated command\n');
+      // spawn-class: environment
+      const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r.dest, '--yes'],
+        { env: Object.assign({}, process.env, { HOME: r.home }), encoding: 'utf8' });
+      const canonicalLeft = expectedRoles.filter(role => existsSync(path.join(plural, role + '.md')));
+      assert(r.ok && ru.status === 0,
+        'N11-project (#1033): native project install then uninstall both exit 0');
+      assert(canonicalLeft.length === 0 && !existsSync(path.join(plural, AGENT_MANIFEST)),
+        'N11-project (#1033): uninstall removes all manifest-owned plural profiles and its manifest — left '
+        + JSON.stringify(canonicalLeft));
+      assert(readFileSync(path.join(plural, 'my-own-helper.md'), 'utf8') === userBody
+        && readFileSync(path.join(singular, 'my-old-helper.md'), 'utf8') === userBody,
+        'N11-project (#1033): uninstall preserves unrelated plural and singular user profiles byte-intact');
+      const currentCommandsLeft = expectedCommands
+        .filter(name => existsSync(path.join(pluralCommands, name + '.md')));
+      assert(currentCommandsLeft.length === 0
+        && !existsSync(path.join(singularCommands, 'workflow-next.md'))
+        && readFileSync(path.join(pluralCommands, 'my-own-command.md'), 'utf8') === '# My unrelated command\n'
+        && readFileSync(path.join(singularCommands, 'my-old-command.md'), 'utf8') === '# My old unrelated command\n',
+        'N11-command-project (#1033): uninstall removes Kaola plural/singular commands and preserves unknown user commands — left '
+        + JSON.stringify(currentCommandsLeft));
+      assert(!existsSync(path.join(r.dest, '.opencode', 'plugins', 'kaola-workflow-hooks.js'))
+        && existsSync(path.join(r.dest, 'opencode.json')),
+        'N11-project (#1033): uninstall keeps existing command/plugin removal and config preservation semantics');
+      clean(r);
+    }
+
+
+    {
+      const r = runGlobalInstaller([]);
+      const plural = path.join(r.cfg, 'agents');
+      const singular = path.join(r.cfg, 'agent');
+      const pluralCommands = path.join(r.cfg, 'commands');
+      const singularCommands = path.join(r.cfg, 'command');
+      assert(sameNames(mdNames(plural), expectedRoles),
+        'N11-global (#1033) anti-vacuity: seed install created the exact global plural roster before uninstall');
+      assert(sameNames(mdNames(pluralCommands), expectedCommands),
+        'N11-command-global (#1033) anti-vacuity: seed install created the exact global plural command roster before uninstall');
+      fs.mkdirSync(plural, { recursive: true });
+      fs.mkdirSync(singular, { recursive: true });
+      fs.mkdirSync(pluralCommands, { recursive: true });
+      fs.mkdirSync(singularCommands, { recursive: true });
+      fs.writeFileSync(path.join(plural, 'my-own-helper.md'), userBody);
+      fs.writeFileSync(path.join(singular, 'my-old-helper.md'), userBody);
+      fs.writeFileSync(path.join(pluralCommands, 'my-own-command.md'), '# My unrelated command\n');
+      fs.writeFileSync(path.join(singularCommands, 'workflow-next.md'), legacyCommandBody('workflow-next.md'));
+      fs.writeFileSync(path.join(singularCommands, 'my-old-command.md'), '# My old unrelated command\n');
+      // spawn-class: environment
+      const ru = spawnSync('bash', [INSTALLER, '--global', '--uninstall', '--yes'], {
+        env: Object.assign({}, process.env, { HOME: r.home, OPENCODE_CONFIG_DIR: r.cfg }),
+        encoding: 'utf8',
+      });
+      const canonicalLeft = expectedRoles.filter(role => existsSync(path.join(plural, role + '.md')));
+      assert(r.ok && ru.status === 0,
+        'N11-global (#1033): native global install then uninstall both exit 0');
+      assert(canonicalLeft.length === 0 && !existsSync(path.join(plural, AGENT_MANIFEST)),
+        'N11-global (#1033): uninstall removes all owned global plural profiles and its manifest — left '
+        + JSON.stringify(canonicalLeft));
+      assert(readFileSync(path.join(plural, 'my-own-helper.md'), 'utf8') === userBody
+        && readFileSync(path.join(singular, 'my-old-helper.md'), 'utf8') === userBody,
+        'N11-global (#1033): uninstall preserves unrelated global plural and singular profiles byte-intact');
+      const currentCommandsLeft = expectedCommands
+        .filter(name => existsSync(path.join(pluralCommands, name + '.md')));
+      assert(currentCommandsLeft.length === 0
+        && !existsSync(path.join(singularCommands, 'workflow-next.md'))
+        && readFileSync(path.join(pluralCommands, 'my-own-command.md'), 'utf8') === '# My unrelated command\n'
+        && readFileSync(path.join(singularCommands, 'my-old-command.md'), 'utf8') === '# My old unrelated command\n',
+        'N11-command-global (#1033): uninstall removes Kaola plural/singular commands and preserves unknown user commands — left '
+        + JSON.stringify(currentCommandsLeft));
+      assert(!existsSync(path.join(r.cfg, 'plugins', 'kaola-workflow-hooks.js'))
+        && existsSync(path.join(r.cfg, 'opencode.json')),
+        'N11-global (#1033): global uninstall preserves existing command/plugin removal and config semantics');
+      try { rmSync(r.home, { recursive: true, force: true }); } catch (_) {}
+      try { rmSync(r.cfg, { recursive: true, force: true }); } catch (_) {}
+    }
+    // On the unfixed baseline, stop cleanly after the complete native-path contract
+    // has run. The remainder of this legacy suite contains direct reads of the new
+    // directories and cannot add path evidence when those directories do not exist.
+    if (!existsSync(generatedPlural) || !existsSync(generatedCommandsPlural)) {
+      console.error('\nopencode-edition test FAILED: native plural layout absent after '
+        + failed + ' recorded failure(s), ' + passed + ' passed.' + driftVerdict);
+      process.exit(1);
+    }
+  }
   {
     const r = runGlobalInstaller([]);
     assert(r.ok, 'G1: --global install exits 0 (got status ' + r.status + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
     // Commands/agents/plugin/hooks land DIRECTLY under the config root.
     for (const name of ADAPTIVE_CORE) {
-      assert(existsSync(path.join(r.cfg, 'command', name + '.md')),
-        'G1[' + name + ']: --global deploys adaptive-core command at <config>/command/ (un-nested)');
+      assert(existsSync(path.join(r.cfg, 'commands', name + '.md')),
+        'G1[' + name + ']: --global deploys adaptive-core command at <config>/commands/ (un-nested)');
     }
     for (const a of sync.listCanonAgents()) {
-      assert(existsSync(path.join(r.cfg, 'agent', a + '.md')),
-        'G1: --global deploys agent ' + a + ' at <config>/agent/ (un-nested)');
+      assert(existsSync(path.join(r.cfg, 'agents', a + '.md')),
+        'G1: --global deploys agent ' + a + ' at <config>/agents/ (un-nested)');
     }
     assert(existsSync(path.join(r.cfg, 'plugins', 'kaola-workflow-hooks.js')),
       'G1: --global deploys the hooks plugin at <config>/plugins/ (opencode global plugin dir)');
@@ -1491,8 +1964,8 @@ if (exists(pluginRel)) {
     {
       let gleaks = 0; const gfiles = [];
       for (const [label, dir] of [
-        ['command', path.join(r.cfg, 'command')],
-        ['agent', path.join(r.cfg, 'agent')],
+        ['commands', path.join(r.cfg, 'commands')],
+        ['agents', path.join(r.cfg, 'agents')],
         ['plugins', path.join(r.cfg, 'plugins')],
         ['hooks', path.join(r.cfg, 'hooks')],
       ]) {
@@ -1715,7 +2188,7 @@ if (exists(pluginRel)) {
       assert(!hasCmd(r1.dest, name), 'U1[' + name + ']: command removed by --uninstall');
     }
     for (const a of sync.listCanonAgents()) {
-      assert(!existsSync(path.join(r1.dest, '.opencode', 'agent', a + '.md')),
+      assert(!existsSync(path.join(r1.dest, '.opencode', 'agents', a + '.md')),
         'U1: agent ' + a + ' removed by --uninstall');
     }
     assert(!existsSync(path.join(r1.dest, '.opencode', 'plugins', 'kaola-workflow-hooks.js')),
@@ -1829,7 +2302,7 @@ if (exists(pluginRel)) {
   // ($CLAUDE_PLUGIN_ROOT) + the Claude home dir ($HOME/.claude/kaola-workflow)
   // verbatim in EVERY command AND in the workflow-planner agent.
   // The opencode edition must resolve scripts via an opencode-native path (no
-  // Claude env vars, no .claude/ dir). This greps command/*.md + agent/*.md +
+  // Claude env vars, no .claude/ dir). This greps command/*.md + agents/*.md +
   // plugins/*.js + hooks/*.sh on a FRESHLY-installed hermetic tree (the same
   // surface install-opencode.sh deploys for every consumer) and asserts 0 matches.
   {
@@ -1837,8 +2310,8 @@ if (exists(pluginRel)) {
     let leaks = 0;
     const leakFiles = [];
     const roots = [
-      ['command', path.join(r.dest, '.opencode', 'command')],
-      ['agent',   path.join(r.dest, '.opencode', 'agent')],
+      ['commands', path.join(r.dest, '.opencode', 'commands')],
+      ['agents',  path.join(r.dest, '.opencode', 'agents')],
       ['plugins', path.join(r.dest, '.opencode', 'plugins')],
       ['hooks',   path.join(r.dest, '.opencode', 'hooks')],
     ];
@@ -1876,7 +2349,7 @@ if (exists(pluginRel)) {
 
     const r1 = runInstaller([]);
     assert(r1.ok, 'R1: seed install exits 0 (got ' + r1.status + ')');
-    const agentDir = path.join(r1.dest, '.opencode', 'agent');
+    const agentDir = path.join(r1.dest, '.opencode', 'agents');
     const manifestPath = path.join(agentDir, AGENT_MANIFEST);
     assert(existsSync(manifestPath), 'R1 (#795): the install records an agent deploy manifest');
 
@@ -1957,11 +2430,11 @@ if (exists(pluginRel)) {
   // A row carrying `../` (corruption, or a tampered manifest) must never reach a
   // delete outside that dir. Both destructive halves — the reinstall sweep and
   // `--uninstall` — therefore ENUMERATE the agent directory and intersect against
-  // the manifest instead of building `$layout_root/agent/<manifest name>`.
+  // the manifest instead of building `$layout_root/agents/<manifest name>`.
   //
   // Without the guard: the sweep row clears every fail-closed check it applies
   // (absent from the source tree, present on disk, sha256 matches) and deletes the
-  // outside file; and `--uninstall` deleted `$layout_root/agent/<name>` with NO
+  // outside file; and `--uninstall` deleted `$layout_root/agents/<name>` with NO
   // validation at all, so a bare `../../../x` removed a file three dirs above.
   // -------------------------------------------------------------------------
   {
@@ -1974,7 +2447,7 @@ if (exists(pluginRel)) {
 
     const r1 = runInstaller([]);
     assert(r1.ok, 'R4: seed install exits 0 (got ' + r1.status + ')');
-    const agentDir = path.join(r1.dest, '.opencode', 'agent');
+    const agentDir = path.join(r1.dest, '.opencode', 'agents');
     const manifestPath = path.join(agentDir, AGENT_MANIFEST);
 
     // Victims OUTSIDE the agent dir. `.opencode/VICTIM.txt` is one level up;
@@ -2134,7 +2607,7 @@ if (exists(pluginRel)) {
     // forge (generated, not a hand-maintained list).
     const expected = routing.commandSurfacesForForge(forge)
       .map(r => path.basename(r.path)).sort();
-    const actual = fs.readdirSync(path.join(TREE_ROOT, tree, 'command')).filter(f => f.endsWith('.md')).sort();
+    const actual = fs.readdirSync(path.join(TREE_ROOT, tree, 'commands')).filter(f => f.endsWith('.md')).sort();
     assert(JSON.stringify(actual) === JSON.stringify(expected),
       'FA6[' + forge + ']: ' + tree + '/command is exactly the routing registry command set for '
       + forge + ' (expected ' + JSON.stringify(expected) + ', got ' + JSON.stringify(actual) + ')');
@@ -2197,7 +2670,7 @@ if (exists(pluginRel)) {
       }
 
       // The deployed COMMANDS must resolve a claim script that was actually installed.
-      const cmd = fs.readFileSync(path.join(dest, '.opencode', 'command', 'workflow-next.md'), 'utf8');
+      const cmd = fs.readFileSync(path.join(dest, '.opencode', 'commands', 'workflow-next.md'), 'utf8');
       const claim = forgeLayout.scriptName('kaola-workflow-claim.js', forge);
       assert(cmd.includes(claim),
         'FA9[' + forge + ']: the deployed workflow-next resolves ' + claim);
@@ -3023,7 +3496,7 @@ if (exists(pluginRel)) {
     // every run by the maximal-flag leg below, and a wrong `write`/`write-config` half surfaces as a
     // contradiction between the never-blanket check and the sufficiency check, which cannot both
     // hold if the flag named here is not the one that clears it.
-    const agentDir = path.join(scratch, '.opencode', 'agent');
+    const agentDir = path.join(scratch, '.opencode', 'agents');
     const agentMd = (fs.existsSync(agentDir)
       ? fs.readdirSync(agentDir).filter(f => f.endsWith('.md')).sort() : [])[0] || '';
     assert(agentMd !== '',
@@ -3032,7 +3505,7 @@ if (exists(pluginRel)) {
     const ROGUE_PLUGIN = 'zzz-a30-unregistered.js';
     const CLASSES = {
       'stale generated agent': {
-        rel: '.opencode/agent/' + agentMd,
+        rel: '.opencode/agents/' + agentMd,
         clearedBy: 'write',
         // Guarded, not assumed: with no agent to drift the assertion above has already said so,
         // and a throw from here would replace that named failure with a stack trace.
@@ -3278,6 +3751,13 @@ if (exists(pluginRel)) {
     return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
   };
   const readIf = p => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '');
+  const behaviorSource = root => path.join(root, 'templates', 'agents', 'behavior-contracts.json');
+  const plantBehaviorMarker = (root, role, marker) => {
+    const file = behaviorSource(root);
+    const source = JSON.parse(fs.readFileSync(file, 'utf8'));
+    source.roles[role].body += '\n' + marker + '\n';
+    fs.writeFileSync(file, JSON.stringify(source, null, 2) + '\n');
+  };
   const head = out => String(out).split('\n').filter(Boolean).slice(0, 4).join(' | ');
 
   // The forge axis, taken from the module rather than typed: one default tree, one non-default
@@ -3341,13 +3821,13 @@ if (exists(pluginRel)) {
 
       const MAIN_MARK = 'A31-MARKER-PLANTED-IN-MAIN';
       const WT_MARK = 'A31-MARKER-PLANTED-IN-WORKTREE';
-      const renderedRel = path.join(sync.treeLabel(DEF_FORGE), 'agent', agentFile);
+      const renderedRel = path.join(sync.treeLabel(DEF_FORGE), 'agents', agentFile);
 
       if (agentFile) {
         // Control: a canonical edit reaches the rendered surface AT ALL. Without it, the marker
         // assertions below could red forever against a correct implementation, and a marker that
         // never renders would make the "main's marker is gone" half true for the wrong reason.
-        fs.appendFileSync(path.join(mainRoot, 'agents', agentFile), '\n' + MAIN_MARK + '\n');
+        plantBehaviorMarker(mainRoot, agentFile.slice(0, -3), MAIN_MARK);
         const w1 = runSync(mainRoot, mainRoot, ['--forge=' + DEF_FORGE, '--write']);
         assert(w1.status === 0,
           'A31: the fixture regenerates after the main-side plant — exit ' + w1.status + ': ' + head(w1.out));
@@ -3356,8 +3836,8 @@ if (exists(pluginRel)) {
           + 'reach ' + renderedRel + ', so this fixture cannot tell WHICH checkout\'s sources were '
           + 'rendered and both marker assertions below would be vacuous');
 
-        fs.appendFileSync(path.join(wtRoot, 'agents', agentFile), '\n' + WT_MARK + '\n');
-        assert(!readIf(path.join(wtRoot, 'agents', agentFile)).includes(MAIN_MARK),
+        plantBehaviorMarker(wtRoot, agentFile.slice(0, -3), WT_MARK);
+        assert(!readIf(behaviorSource(wtRoot)).includes(MAIN_MARK),
           'A31: control — the worktree holds its own copy of the canonical sources. If it shared '
           + 'main\'s file, both markers would be in both checkouts and the discriminator would be gone');
 
@@ -3411,7 +3891,7 @@ if (exists(pluginRel)) {
       'A31: sync --write succeeds in a directory that is not a git checkout — exit ' + w3.status
       + ': ' + head(w3.out) + '. An unpacked source tree has no main checkout to resolve, and a '
       + 'resolution that throws there breaks both installers');
-    assert(fs.existsSync(path.join(plainRoot, sync.treeLabel(DEF_FORGE), 'agent')),
+    assert(fs.existsSync(path.join(plainRoot, sync.treeLabel(DEF_FORGE), 'agents')),
       'A31: ...and writes the tree into the root the script itself lives in');
     assert(!fs.existsSync(path.join(neutralCwd, sync.treeLabel(DEF_FORGE))),
       'A31: ...and never into the process cwd — the tree landed in ' + neutralCwd + ', which owns '
@@ -3524,7 +4004,7 @@ if (exists(pluginRel)) {
         tag + ': the generated tree is NOT written inside the directory git uses for its own '
         + 'storage. It is at ' + inGitStorage + '. That directory belongs to git, which may rewrite '
         + 'or repack around it, and nobody looking for a generated tree looks there');
-      assert(fs.existsSync(path.join(beside, 'agent')),
+      assert(fs.existsSync(path.join(beside, 'agents')),
         tag + ': ...it is beside the script instead, at ' + beside + '. There is no main checkout in '
         + 'this posture — a bare repository has no working tree and a submodule\'s storage is not a '
         + 'checkout — so beside the script is the only place left that a reader owns. It landed at '
@@ -3613,9 +4093,9 @@ if (exists(pluginRel)) {
           + 'surface and stopped one hop short of the tree a runtime reads, which is the whole of '
           + 'what leaves an edition deploying a renamed flag');
       }
-      assert(readIf(path.join(regenRoot, sync.treeLabel(DEF_FORGE), 'command', 'workflow-next.md')).includes(SKEL_MARK),
+      assert(readIf(path.join(regenRoot, sync.treeLabel(DEF_FORGE), 'commands', 'workflow-next.md')).includes(SKEL_MARK),
         'A32: ...and the tree carries the edited prose itself, not merely a passing exit code — '
-        + sync.treeLabel(DEF_FORGE) + '/command/workflow-next.md does not contain the marker planted '
+        + sync.treeLabel(DEF_FORGE) + '/commands/workflow-next.md does not contain the marker planted '
         + 'in the skeleton');
 
       assert(!fs.existsSync(path.join(regenRoot, sync.treeLabel(ABSENT_FORGE))),
@@ -3632,7 +4112,7 @@ if (exists(pluginRel)) {
       // --check must not repair what it saw either: a checker that writes is how the drift that
       // started all this stayed invisible.
       // ---------------------------------------------------------------------
-      const planted = path.join(regenRoot, sync.treeLabel(DEF_FORGE), 'command', 'workflow-next.md');
+      const planted = path.join(regenRoot, sync.treeLabel(DEF_FORGE), 'commands', 'workflow-next.md');
       if (fs.existsSync(planted)) {
         const before = fs.readFileSync(planted, 'utf8');
         fs.writeFileSync(planted, before + '\n<!-- A32 planted tree drift -->\n');
@@ -3709,7 +4189,7 @@ if (exists(pluginRel)) {
         + 'refresh change anything, and the fires-leg below would be observing an empty refresh');
 
       if (a34Agent && fs.existsSync(path.join(mainRoot, 'agents', a34Agent))) {
-        const a34Rendered = path.join(a34MainTree, 'agent', a34Agent);
+        const a34Rendered = path.join(a34MainTree, 'agents', a34Agent);
 
         // SETTLE FIRST. The in-parity leg needs a refresh that genuinely changes nothing, and what
         // A31 left is not that by construction: it wrote ONE forge with --write, while
@@ -3738,7 +4218,7 @@ if (exists(pluginRel)) {
 
         // (b) FIRES on a real cross-checkout change, (c) NAMES the root, (d) on STDERR only.
         const WT_MARK_34 = 'A34-MARKER-FROM-THE-WORKTREE';
-        fs.appendFileSync(path.join(wtRoot, 'agents', a34Agent), '\n' + WT_MARK_34 + '\n');
+        plantBehaviorMarker(wtRoot, a34Agent.slice(0, -3), WT_MARK_34);
         const r1 = runSync(wtRoot, wtRoot, ['--refresh-present']);
         assert(r1.status === 0,
           'A34: the changing refresh succeeds — exit ' + r1.status + ': ' + head(r1.out));
@@ -3766,7 +4246,7 @@ if (exists(pluginRel)) {
 
         // (e) SILENT FROM THE CHECKOUT THAT OWNS THE TREE, THOUGH FILES ARE WRITTEN.
         const MAIN_MARK_34 = 'A34-MARKER-FROM-MAIN';
-        fs.appendFileSync(path.join(mainRoot, 'agents', a34Agent), '\n' + MAIN_MARK_34 + '\n');
+        plantBehaviorMarker(mainRoot, a34Agent.slice(0, -3), MAIN_MARK_34);
         const r2 = runSync(mainRoot, mainRoot, ['--refresh-present']);
         assert(r2.status === 0,
           'A34: --refresh-present from the main checkout succeeds — exit ' + r2.status + ': '
@@ -3788,7 +4268,7 @@ if (exists(pluginRel)) {
         // MAIN's tree and the refresh runs from the WORKTREE, whose sources the tree is otherwise
         // in parity with after the settle, so the prune is the only change there is.
         runSync(wtRoot, wtRoot, ['--refresh-present']);
-        const a34Stray = path.join(a34MainTree, 'agent', '__a34-retired-probe.md');
+        const a34Stray = path.join(a34MainTree, 'agents', '__a34-retired-probe.md');
         fs.writeFileSync(a34Stray, '# A34 retired-artifact probe\n');
         const r3 = runSync(wtRoot, wtRoot, ['--refresh-present']);
         assert(!fs.existsSync(a34Stray),
