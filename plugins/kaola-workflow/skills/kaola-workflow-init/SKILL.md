@@ -171,8 +171,6 @@ every owner byte outside those regions byte-for-byte. Unknown, malformed, duplic
 instruction authority returns `decision_required`: ask in conversation and make no write. A project
 claimed under an older installed version returns `active_run_preserved`. Successful reruns are
 idempotent and report `converged` with an empty write list.
-```
-
 ## Initial File Bodies
 
 ### `docs/README.md`
@@ -279,13 +277,13 @@ git grep -Iln -e 'ROADMAP\.md' -e '\.roadmap/issue-' -- . ':!kaola-workflow/'
 After edits:
 
 1. Run `git status --short --branch`.
-2. Run `wc -l CLAUDE.md` and report the count against the recommended 200 lines. If it is over, offer to trim it with the user — the count fails nothing.
+2. Run `wc -l AGENTS.md` and report the count against the recommended 200 lines. If it is over, offer to trim it with the user — the count fails nothing.
 3. Summarize:
    - whether Git is initialized
    - whether a GitHub remote exists
-   - whether `CLAUDE.md` was created or updated
+   - whether the runtime-native bridge was created, updated, preserved, or needs an owner decision
    - whether AGENTS.md was created, was already conforming, or was migrated
-   - which required `CLAUDE.md` sections are present
+   - the helper outcome for AGENTS.md and the runtime-native bridge
    - which docs files were created
    - whether a legacy backlog layer was found, and what was decided about it
    - whether GitHub issues were available for sync

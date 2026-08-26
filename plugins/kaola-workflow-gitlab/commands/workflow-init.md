@@ -89,7 +89,9 @@ Optional content belongs elsewhere unless it must be read in every session:
 
 ### Executable template authority
 
-Append equivalent missing sections only. Treat headings with the same meaning as equivalent; do not duplicate. Replace bracketed placeholders with detected values; do not leave placeholder text in `AGENTS.md`. Omit optional sections when there is no real content.
+Do not edit either instruction file independently of the helper's reported outcome. The adjacent
+distribution module supplies the complete consumer wording; `decision_required` and
+`active_run_preserved` both mean no instruction-file write.
 
 The executable consumer wording lives only in the adjacent
 `kaola-workflow-project-instruction-templates.js` distribution module. Do not synthesize, paste, or
@@ -104,9 +106,8 @@ independently restate that universal contract in this surface; the helper below 
 > available and requires no flag — and only then notes that agent teams is an experimental,
 > flag-gated alternative for a session that has explicitly opted in.
 
-Keep the working-principle bullets concise.
-
-If an existing `CLAUDE.md` is bloated or duplicates the sections above, do not silently replace it. Add a short `## Maintenance Note` with the proposed consolidation and ask before destructive rewriting.
+Keep the working-principle bullets concise. If the helper reports ambiguous owner authority, ask in
+conversation and leave both instruction files unchanged.
 
 ---
 
@@ -127,8 +128,6 @@ every owner byte outside those regions byte-for-byte. Unknown, malformed, duplic
 instruction authority returns `decision_required`: ask in conversation and make no write. A project
 claimed under an older installed version returns `active_run_preserved`. Successful reruns are
 idempotent and report `converged` with an empty write list.
-```
-
 ---
 
 ## Step 4 — Create Missing Workflow Structure
@@ -255,13 +254,13 @@ git grep -Iln -e 'ROADMAP\.md' -e '\.roadmap/issue-' -- . ':!kaola-workflow/'
 After edits:
 
 1. Run `git status --short --branch`.
-2. Run `wc -l CLAUDE.md` and report the count against the recommended 200 lines. If it is over, offer to trim it with the user — the count fails nothing.
+2. Run `wc -l AGENTS.md` and report the count against the recommended 200 lines. If it is over, offer to trim it with the user — the count fails nothing.
 3. Summarize:
    - whether Git is initialized
    - whether a GitLab remote exists
-   - whether `CLAUDE.md` was created or updated
+   - whether the runtime-native bridge was created, updated, preserved, or needs an owner decision
    - whether AGENTS.md was created, was already conforming, or was migrated
-   - which required `CLAUDE.md` sections are present
+   - the helper outcome for AGENTS.md and the runtime-native bridge
    - which docs files were created
    - whether a legacy backlog layer was found, and what was decided about it
    - whether GitLab issues were available for sync

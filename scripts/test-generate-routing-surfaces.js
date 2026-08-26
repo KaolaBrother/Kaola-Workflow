@@ -283,15 +283,16 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   const ir = { slots: SLOTS, splices: SPLICES };
   const requiredByTopic = {
     init: [
-      'KW-AGENTS-TEMPLATE',
-      'AGENTS.md',
-      'there is no local mirror to refresh',
-      'kaola-workflow/.roadmap/',
-      'workflow-state.md',
-      'mission-list.md',
-      'First Principles',
-      'Tie-breaker',
-      'doc-updater',
+      'The executable consumer wording lives only in the adjacent',
+      '`kaola-workflow-project-instruction-templates.js` distribution module',
+      'kaola-workflow-project-instructions.js',
+      'plan --project-root "$PWD" --json',
+      'apply --project-root "$PWD" --json',
+      'check --project-root "$PWD" --json',
+      'decision_required',
+      'active_run_preserved',
+      'converged',
+      'every owner byte outside those regions byte-for-byte',
     ],
     next: [
       '<!-- PIN: consent-in-conversation -->',
@@ -337,6 +338,181 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// workflow-init instruction-authority contract, all six surfaces.
+//
+// The executable consumer contract lives in the adjacent distribution module
+// and the project-instruction helper is its only writer. The routing surfaces
+// may explain that contract and invoke plan/apply/check; they must not grow a
+// second universal contract in CLAUDE.md, prescribe a direct maintenance edit
+// after the helper has made an ownership decision, or accidentally turn the
+// remaining initialization steps into code-block contents.
+//
+// These are PURE detectors so each claim is mutation-proved below. The real
+// assertions run against every rendered init surface; the byte-identity checks
+// above independently guarantee those are the bytes committed to ship.
+// ---------------------------------------------------------------------------
+{
+  const initRows = GENERATED_SURFACES.filter(row => row.topic === 'init');
+  eq(initRows.length, 6, 'init authority audit covers all six routing surfaces');
+
+  const sentences = text => text.replace(/\n+/g, ' ').split(/(?<=[.!?])\s+/).map(s => s.trim());
+  const universalSection = '(?:Project Snapshot|Commands|Non-Negotiable Rules|First Principles|Validation Policy|Kaola-Workflow|Documentation Map|Maintenance)';
+
+  // Detect prose which assigns universal sections to CLAUDE.md. Exact current
+  // wording is not the contract: the second expression also catches a plausible
+  // rewrite such as "verify CLAUDE.md contains Commands and First Principles".
+  const universalClaudeClaims = text => sentences(text).filter(sentence =>
+    /required\s+`?CLAUDE\.md`?\s+sections?/i.test(sentence)
+    || new RegExp('(?:ensure|require|verify|report|check)[^.]{0,160}`?CLAUDE\\.md`?[^.]{0,160}'
+      + universalSection, 'i').test(sentence)
+    || new RegExp('`?CLAUDE\\.md`?[^.]{0,160}(?:must|should|contains?|carries?)[^.]{0,160}'
+      + universalSection, 'i').test(sentence));
+
+  // A positive direct-edit instruction for either authority file bypasses the
+  // helper's decision_required/active_run_preserved verdict. Negative clauses
+  // ("do not replace", "never edit") are accepted, including when a later
+  // sentence on the same source line contains a separate positive action.
+  const maintenanceOverrides = text => sentences(text).filter(sentence => {
+    if (!/(?:`?(?:AGENTS|CLAUDE)\.md`?|Maintenance Note|instruction authority)/i.test(sentence)) return false;
+    if (/^(?:never|do not|don't|must not|should not|cannot|can't)\b/i.test(sentence)) return false;
+    const verb = /\b(?:add|append|insert|modify|edit|rewrite|replace|remove|delete|overwrite)\b/ig;
+    let match;
+    while ((match = verb.exec(sentence)) !== null) {
+      const prefix = sentence.slice(Math.max(0, match.index - 36), match.index);
+      if (!/(?:do not|don't|never|must not|should not|cannot|can't)\s+(?:silently\s+)?$/i.test(prefix)) {
+        return true;
+      }
+    }
+    return false;
+  });
+
+  // CommonMark-style fence audit. An info-string fence seen while another
+  // fence is open is not a close; it is the characteristic signature of a
+  // stray bare fence swallowing the next intended block. Required prose
+  // landmarks are also required to occur outside every fence.
+  const markdownStructureViolations = (text, surfaceType) => {
+    const requiredOutside = surfaceType === 'command'
+      ? [
+        'Prepare the current project for repeated `/workflow-next` implementation cycles.',
+        '## Step 1 — Scan Project State',
+        '## Step 3 — Create `AGENTS.md`',
+        '## Step 4 — Create Missing Workflow Structure',
+      ]
+      : [
+        'Bootstrap the current repo for repeated Kaola-Workflow for Codex cycles. Preserve existing project guidance and add only missing Codex-specific structure.',
+        '## Required Behavior',
+        '## Create `AGENTS.md`',
+        '## Initial File Bodies',
+      ];
+    const outside = new Set();
+    const violations = [];
+    let fence = null;
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const opener = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+      if (fence) {
+        const close = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
+        if (close && close[1][0] === fence.char && close[1].length >= fence.length) {
+          fence = null;
+          continue;
+        }
+        if (opener && opener[2].trim() !== '') {
+          violations.push(`line ${i + 1}: language-tagged fence opened inside an existing fence`);
+        }
+        if (requiredOutside.includes(line.trim())) {
+          violations.push(`line ${i + 1}: instruction landmark is inside a code fence: ${line.trim()}`);
+        }
+        continue;
+      }
+      if (opener) {
+        // Backtick info strings may not themselves contain a backtick.
+        if (opener[1][0] !== '`' || !opener[2].includes('`')) {
+          fence = { char: opener[1][0], length: opener[1].length, line: i + 1 };
+          continue;
+        }
+      }
+      if (requiredOutside.includes(line.trim())) outside.add(line.trim());
+    }
+    if (fence) violations.push(`line ${fence.line}: code fence is not closed`);
+    for (const landmark of requiredOutside) {
+      if (!outside.has(landmark)) violations.push(`instruction landmark is absent outside fences: ${landmark}`);
+    }
+    return violations;
+  };
+
+  const ir = { slots: SLOTS, splices: SPLICES };
+  for (const row of initRows) {
+    const rendered = renderSkeleton(loadSkeleton(row.skeleton, row.topic),
+      { surface_type: row.surface_type, forge: row.forge }, ir);
+    const id = `${row.surface_type}/${row.forge} (${row.path})`;
+    const authorityLandmarks = row.surface_type === 'command'
+      ? [
+        'Make `AGENTS.md` the universal project contract.',
+        'smallest bridge to `AGENTS.md` plus that runtime\'s genuine overlay',
+      ]
+      : [
+        'Reconcile `AGENTS.md` as the universal authority',
+        'Keep any runtime-native first-read instruction file as a thin bridge plus runtime-only overlay',
+      ];
+    for (const landmark of authorityLandmarks) {
+      assert(rendered.includes(landmark),
+        `init authority ${id}: current universal-authority/bridge landmark propagates — ${landmark}`);
+    }
+    const universal = universalClaudeClaims(rendered);
+    const overrides = maintenanceOverrides(rendered);
+    const structure = markdownStructureViolations(rendered, row.surface_type);
+    assert(universal.length === 0,
+      `init authority ${id}: CLAUDE.md carries no required universal section language — `
+      + universal.map(x => JSON.stringify(x)).join(', '));
+    assert(overrides.length === 0,
+      `init authority ${id}: no maintenance action bypasses the helper's ownership decision — `
+      + overrides.map(x => JSON.stringify(x)).join(', '));
+    assert(structure.length === 0,
+      `init structure ${id}: code fences are balanced and preamble/scaffold headings remain instructions — `
+      + structure.join('; '));
+  }
+
+  // MUTATION PROOF: each detector accepts a compliant boundary and rejects a
+  // believable near-miss without touching any production or generated file.
+  const authorityBoundary = [
+    'Make `AGENTS.md` the universal project contract.',
+    'Keep `CLAUDE.md` as a thin bridge to it.',
+    'If the helper reports `decision_required`, ask in conversation and write nothing.',
+    'Never edit or replace either instruction authority outside the helper decision.',
+  ].join('\n');
+  eq(universalClaudeClaims(authorityBoundary).length, 0,
+    'init authority mutation boundary: a thin CLAUDE bridge is not mistaken for universal CLAUDE sections');
+  eq(maintenanceOverrides(authorityBoundary).length, 0,
+    'init authority mutation boundary: negative no-edit language is accepted');
+  assert(universalClaudeClaims(authorityBoundary
+    + '\nVerify `CLAUDE.md` contains Commands and First Principles.').length > 0,
+  'init authority mutation RED: assigning universal sections to CLAUDE.md is detected');
+  assert(maintenanceOverrides(authorityBoundary
+    + '\nIf the helper reports `decision_required`, append a `## Maintenance Note` to `CLAUDE.md`.').length > 0,
+  'init authority mutation RED: a direct maintenance write after decision_required is detected');
+
+  const structureBoundary = [
+    'Prepare the current project for repeated `/workflow-next` implementation cycles.',
+    '## Step 1 — Scan Project State',
+    '```bash',
+    'pwd',
+    '```',
+    '## Step 3 — Create `AGENTS.md`',
+    '## Step 4 — Create Missing Workflow Structure',
+    '```text',
+    'docs/',
+    '```',
+  ].join('\n');
+  eq(markdownStructureViolations(structureBoundary, 'command').length, 0,
+    'init structure mutation boundary: balanced command fences keep every instruction landmark in prose');
+  const swallowed = structureBoundary.replace('## Step 4 — Create Missing Workflow Structure',
+    '```\n## Step 4 — Create Missing Workflow Structure');
+  assert(markdownStructureViolations(swallowed, 'command').length > 0,
+    'init structure mutation RED: a stray fence swallowing Step 4 is detected');
 }
 
 // ---------------------------------------------------------------------------

@@ -98,7 +98,9 @@ Optional content belongs elsewhere unless it must be read in every session:
 
 ### Executable template authority
 
-Append equivalent missing sections only. Treat headings with the same meaning as equivalent; do not duplicate. Replace bracketed placeholders with detected values; do not leave placeholder text in `AGENTS.md`. Omit optional sections when there is no real content.
+Do not edit either instruction file independently of the helper's reported outcome. The adjacent
+distribution module supplies the complete consumer wording; `decision_required` and
+`active_run_preserved` both mean no instruction-file write.
 <!-- /REGION -->
 <!-- REGION:skill — the counterpart placement: role profiles live in `.codex/agents/kaola-workflow/` and are wired by the managed block in `.codex/config.toml`, paths that exist only on this runtime -->
 ```
@@ -127,9 +129,8 @@ independently restate that universal contract in this surface; the helper below 
 > available and requires no flag — and only then notes that agent teams is an experimental,
 > flag-gated alternative for a session that has explicitly opted in.
 
-Keep the working-principle bullets concise.
-
-If an existing `CLAUDE.md` is bloated or duplicates the sections above, do not silently replace it. Add a short `## Maintenance Note` with the proposed consolidation and ask before destructive rewriting.
+Keep the working-principle bullets concise. If the helper reports ambiguous owner authority, ask in
+conversation and leave both instruction files unchanged.
 
 ---
 
@@ -265,8 +266,6 @@ instruction authority returns `decision_required`: ask in conversation and make 
 claimed under an older installed version returns `active_run_preserved`. Successful reruns are
 idempotent and report `converged` with an empty write list.
 <!-- REGION:command — KNOWN RESIDUAL, structural shape and NOT a capability difference: both surfaces carry this same scaffold tree, under a numbered Step heading here and as item 6 of a Required-Behavior list on the skill. Nothing about either runtime forces that. It is kept rather than collapsed because collapsing costs a real surface: either the command loses its Step 1 to 5 numbering, or it loses the tree itself. A damaged surface is a worse trade than a divergence that says out loud what it is. Collapse it the day the command's Step numbering is reworked for another reason. -->
-```
-
 ---
 
 ## Step 4 — Create Missing Workflow Structure
@@ -290,8 +289,6 @@ CHANGELOG.md
 Use these initial file bodies when a file is missing.
 <!-- /REGION -->
 <!-- REGION:skill — KNOWN RESIDUAL, the counterpart of the region above and the same admission: item 6 already stated the scaffold tree, so the file bodies open under a plain heading rather than a Step 4. Same content, different structural heading, no runtime capability behind it. These two are the only regions in these skeletons NOT justified by a capability difference; every other one names a path, tool or channel that exists on one runtime and not the other. -->
-```
-
 ## Initial File Bodies
 <!-- /REGION -->
 
@@ -398,13 +395,13 @@ git grep -Iln -e 'ROADMAP\.md' -e '\.roadmap/issue-' -- . ':!kaola-workflow/'
 After edits:
 
 1. Run `git status --short --branch`.
-2. Run `wc -l CLAUDE.md` and report the count against the recommended 200 lines. If it is over, offer to trim it with the user — the count fails nothing.
+2. Run `wc -l AGENTS.md` and report the count against the recommended 200 lines. If it is over, offer to trim it with the user — the count fails nothing.
 3. Summarize:
    - whether Git is initialized
 <!-- SPLICE:in-shared-010 -->
-   - whether `CLAUDE.md` was created or updated
+   - whether the runtime-native bridge was created, updated, preserved, or needs an owner decision
    - whether AGENTS.md was created, was already conforming, or was migrated
-   - which required `CLAUDE.md` sections are present
+   - the helper outcome for AGENTS.md and the runtime-native bridge
    - which docs files were created
    - whether a legacy backlog layer was found, and what was decided about it
 <!-- SPLICE:in-shared-011 -->

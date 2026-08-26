@@ -32,6 +32,10 @@
   and reports the attempted set. OpenCode's retired-hook uninstall assertion now observes the real
   sandboxed post-uninstall result and is mutation-proven instead of pinning a shell loop-variable
   spelling.
+- **Workflow-init follows the single instruction authority it invokes (#1033).** All six generated
+  init surfaces now report the `AGENTS.md` authority and runtime-native bridge outcomes produced by
+  the project-instruction helper, never prescribe a second direct edit to either file, and keep every
+  scaffold step outside balanced Markdown code fences.
 - **Native role carriers and capability fields converge on official runtime contracts (#1033).**
   Kimi roles moved from role-shaped Skills to 14 native custom-agent profiles while the three
   workflow commands remain Skills; direct named dispatch, native tool allowlists, and ownership-safe
