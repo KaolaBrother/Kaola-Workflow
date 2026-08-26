@@ -4,26 +4,31 @@
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const suites = Object.freeze([
-  'test-opencode-edition.js',
-  'test-kimi-edition.js',
-  'test-grok-edition.js',
-  'test-cursor-edition.js',
-  'test-zcode-edition.js',
-]);
+const repoRoot = path.resolve(__dirname, '..');
+const suites = Object.freeze(process.argv.slice(2).map(requested => {
+  const absolute = path.resolve(repoRoot, requested);
+  if (path.dirname(absolute) !== __dirname || !/^test-.*\.js$/.test(path.basename(absolute))) {
+    throw new Error('edition suite must be a scripts/test-*.js path: ' + requested);
+  }
+  return absolute;
+}));
+
+if (suites.length === 0) {
+  throw new Error('no edition suites declared');
+}
 
 const failures = [];
 
 for (const suite of suites) {
-  const result = spawnSync(process.execPath, [path.join(__dirname, suite)], {
-    cwd: path.resolve(__dirname, '..'),
+  const result = spawnSync(process.execPath, [suite], {
+    cwd: repoRoot,
     env: process.env,
     stdio: 'inherit',
   });
 
   if (result.status !== 0) {
     failures.push({
-      suite,
+      suite: path.relative(repoRoot, suite),
       status: result.status,
       signal: result.signal || null,
       error: result.error ? result.error.message : null,
