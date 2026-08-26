@@ -356,12 +356,14 @@ copy_tree() {
   # Native-agent ownership is the install transaction's admission wall. Refuse every unproven
   # topology or same-name collision before mkdir/cp changes any runtime surface (including the
   # plugin). A later refusal must never leave an otherwise failed install partially deployed.
-  if [[ -L "$layout_root/agents" || -L "$legacy_agent_dir" ]]; then
-    echo "Install error: refusing symbolic-link native agent directory under $layout_root" >&2
+  if [[ -L "$layout_root/agents" || ( -e "$layout_root/agents" && ! -d "$layout_root/agents" )
+        || -L "$legacy_agent_dir" || ( -e "$legacy_agent_dir" && ! -d "$legacy_agent_dir" ) ]]; then
+    echo "Install error: refusing non-directory native agent carrier under $layout_root" >&2
     exit 1
   fi
-  if [[ -L "$agent_manifest" || -L "$legacy_manifest" ]]; then
-    echo "Install error: refusing symbolic-link native agent manifest under $layout_root" >&2
+  if [[ -L "$agent_manifest" || ( -e "$agent_manifest" && ! -f "$agent_manifest" )
+        || -L "$legacy_manifest" || ( -e "$legacy_manifest" && ! -f "$legacy_manifest" ) ]]; then
+    echo "Install error: refusing non-regular native agent manifest under $layout_root" >&2
     exit 1
   fi
   local agent_file agent_base existing_hash recorded_hash source_hash
@@ -370,6 +372,10 @@ copy_tree() {
     agent_base="$(basename "$agent_file")"
     if [[ -L "$layout_root/agents/$agent_base" ]]; then
       echo "Install error: refusing symbolic-link native agent: $layout_root/agents/$agent_base" >&2
+      exit 1
+    fi
+    if [[ -e "$layout_root/agents/$agent_base" && ! -f "$layout_root/agents/$agent_base" ]]; then
+      echo "Install error: refusing non-regular native agent: $layout_root/agents/$agent_base" >&2
       exit 1
     fi
     [[ -f "$layout_root/agents/$agent_base" ]] || continue
@@ -432,7 +438,7 @@ copy_tree() {
     warn_unsafe_manifest_names "$legacy_manifest"
     local legacy_file legacy_base legacy_hash
     for legacy_file in "$legacy_agent_dir/"*.md; do
-      [[ -f "$legacy_file" ]] || continue
+      [[ -f "$legacy_file" && ! -L "$legacy_file" ]] || continue
       legacy_base="$(basename "$legacy_file")"
       legacy_hash="$(manifest_row_hash "$legacy_base" "$legacy_manifest" 2>/dev/null || true)"
       [[ -n "$legacy_hash" && "$(sha256_file "$legacy_file")" == "$legacy_hash" ]] || continue
@@ -508,8 +514,20 @@ uninstall_edition() {
   fi
   # Refuse unproven link topology before any uninstall mutation. A hash-equal target does not
   # turn a symlink into a profile this installer owns.
-  if [[ -L "$layout_root/agents" ]]; then
-    echo "Uninstall error: refusing symbolic-link native agent directory: $layout_root/agents" >&2
+  local preflight_legacy_agent_dir="$layout_root/agent"
+  local preflight_agent_manifest="$layout_root/agents/$AGENT_MANIFEST_NAME"
+  local preflight_legacy_manifest="$preflight_legacy_agent_dir/$AGENT_MANIFEST_NAME"
+  if [[ -L "$layout_root/agents" || ( -e "$layout_root/agents" && ! -d "$layout_root/agents" )
+        || -L "$preflight_legacy_agent_dir"
+        || ( -e "$preflight_legacy_agent_dir" && ! -d "$preflight_legacy_agent_dir" ) ]]; then
+    echo "Uninstall error: refusing non-directory native agent carrier under $layout_root" >&2
+    return 1
+  fi
+  if [[ -L "$preflight_agent_manifest"
+        || ( -e "$preflight_agent_manifest" && ! -f "$preflight_agent_manifest" )
+        || -L "$preflight_legacy_manifest"
+        || ( -e "$preflight_legacy_manifest" && ! -f "$preflight_legacy_manifest" ) ]]; then
+    echo "Uninstall error: refusing non-regular native agent manifest under $layout_root" >&2
     return 1
   fi
   local link_probe
@@ -517,6 +535,11 @@ uninstall_edition() {
     [[ -f "$link_probe" ]] || continue
     if [[ -L "$layout_root/agents/$(basename "$link_probe")" ]]; then
       echo "Uninstall error: refusing symbolic-link native agent: $layout_root/agents/$(basename "$link_probe")" >&2
+      return 1
+    fi
+    if [[ -e "$layout_root/agents/$(basename "$link_probe")"
+          && ! -f "$layout_root/agents/$(basename "$link_probe")" ]]; then
+      echo "Uninstall error: refusing non-regular native agent: $layout_root/agents/$(basename "$link_probe")" >&2
       return 1
     fi
   done
@@ -575,7 +598,7 @@ uninstall_edition() {
   local legacy_agent_dir="$layout_root/agent" legacy_manifest="$layout_root/agent/$AGENT_MANIFEST_NAME"
   if [[ -f "$legacy_manifest" ]]; then
     for dest in "$legacy_agent_dir/"*.md; do
-      [[ -f "$dest" ]] || continue
+      [[ -f "$dest" && ! -L "$dest" ]] || continue
       base="$(basename "$dest")"
       local legacy_owned_hash="$(manifest_row_hash "$base" "$legacy_manifest" 2>/dev/null || true)"
       [[ -n "$legacy_owned_hash" && "$(sha256_file "$dest")" == "$legacy_owned_hash" ]] && rm -f "$dest"

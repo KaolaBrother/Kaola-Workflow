@@ -855,12 +855,14 @@ for (const script of sync.HOOK_SCRIPTS) {
     const r = spawnSync('bash', [opts.installer || INSTALLER].concat(args), {
       env: Object.assign({}, process.env, { HOME: home, KIMI_CODE_HOME: kimiHome }),
       encoding: 'utf8',
+      timeout: opts.timeout,
     });
     return {
       ok: r.status === 0,
       status: r.status,
       stdout: r.stdout || '',
       stderr: r.stderr || '',
+      error: r.error || null,
       home, kimiHome, dest,
       configPath: path.join(home, '.config', 'kaola-workflow', 'config.json'),
       kimiConfig: path.join(kimiHome, 'config.toml'), isGlobal,
@@ -1059,6 +1061,38 @@ for (const script of sync.HOOK_SCRIPTS) {
         return { name: fields[0], hash: fields[1], fields: fields.length };
       });
     };
+    // Snapshot without following links or opening non-regular files.  In particular, an FIFO
+    // manifest is represented by topology + mode only; a test oracle that reads it would hang
+    // before the installer under test ever gets a verdict.
+    const carrierTreeFingerprint = root => {
+      const rows = [];
+      const visit = (abs, rel) => {
+        let stat;
+        try { stat = fs.lstatSync(abs); } catch (error) {
+          if (error && error.code === 'ENOENT') return;
+          throw error;
+        }
+        const mode = (stat.mode & 0o7777).toString(8);
+        if (stat.isSymbolicLink()) {
+          rows.push([rel, 'symlink', mode, fs.readlinkSync(abs)]);
+          return;
+        }
+        if (stat.isDirectory()) {
+          rows.push([rel, 'directory', mode]);
+          for (const name of readdirSync(abs).sort()) visit(path.join(abs, name), path.join(rel, name));
+          return;
+        }
+        if (stat.isFile()) {
+          rows.push([rel, 'file', mode, sha256(readFileSync(abs))]);
+          return;
+        }
+        rows.push([rel, stat.isFIFO() ? 'fifo' : 'other', mode]);
+      };
+      visit(root, '.');
+      return rows;
+    };
+    const carrierWorldFingerprint = roots => JSON.stringify(
+      roots.map(root => [root, carrierTreeFingerprint(root)]));
     const assertCurrentAgentManifest = (r, label) => {
       const dir = agentsDir(r);
       const manifest = path.join(dir, AGENT_MANIFEST);
@@ -1217,6 +1251,53 @@ for (const script of sync.HOOK_SCRIPTS) {
       assert(sameBytes(uninstallTarget, targetBytes),
         label + ': failed uninstall never follows or changes the symlink target');
       clean(uninstallRun);
+    }
+
+    // S2.7 (security re-review carrier topology) — ownership metadata and the profile names it
+    // protects must be regular files.  A directory or FIFO at the manifest path is not "no prior
+    // manifest", and a directory at a same-name profile path is not an absent profile.  Refusal is
+    // transactional: native agents are the admission wall, so no command Skill, support script,
+    // hooks config, or other runtime surface may be written first.  The FIFO leg is safe because
+    // the fingerprint above uses lstat only and each real installer process has a hard timeout.
+    for (const [scopeLabel, args] of [['project', []], ['global', ['--global']]]) {
+      for (const carrier of ['manifest-directory', 'manifest-fifo', 'profile-directory']) {
+        const home = mkdtempSync(path.join(os.tmpdir(), 'kimi-carrier-home-'));
+        const kimiHome = mkdtempSync(path.join(os.tmpdir(), 'kimi-carrier-kh-'));
+        const dest = mkdtempSync(path.join(os.tmpdir(), 'kimi-carrier-dest-'));
+        const fakeRun = { home, kimiHome, dest, isGlobal: args.includes('--global') };
+        const dir = agentsDir(fakeRun);
+        const manifest = path.join(dir, AGENT_MANIFEST);
+        const profile = path.join(dir, canonAgents[4] + '.md');
+        fs.mkdirSync(dir, { recursive: true });
+        if (carrier === 'manifest-directory') {
+          fs.mkdirSync(manifest);
+          fs.writeFileSync(path.join(manifest, 'OWNER_SENTINEL'), 'owner manifest directory\n');
+          assert(fs.lstatSync(manifest).isDirectory(),
+            'S2.7-' + scopeLabel + '-manifest-directory fixture: native manifest carrier is a directory');
+        } else if (carrier === 'manifest-fifo') {
+          // spawn-class: environment
+          const fifo = spawnSync('mkfifo', [manifest], { encoding: 'utf8', timeout: 5000 });
+          assert(fifo.status === 0 && fs.lstatSync(manifest).isFIFO(),
+            'S2.7-' + scopeLabel + '-manifest-fifo fixture: native manifest carrier is a FIFO');
+        } else {
+          fs.mkdirSync(profile);
+          fs.writeFileSync(path.join(profile, 'OWNER_SENTINEL'), 'owner profile directory\n');
+          assert(fs.lstatSync(profile).isDirectory(),
+            'S2.7-' + scopeLabel + '-profile-directory fixture: same-name native profile carrier is a directory');
+        }
+        const roots = [home, kimiHome, dest];
+        const before = carrierWorldFingerprint(roots);
+        const result = runInstaller(args, { home, kimiHome, dest, timeout: 10000 });
+        const after = carrierWorldFingerprint(roots);
+        const label = 'S2.7-' + scopeLabel + '-' + carrier;
+        assert(!result.error && !result.ok,
+          label + ': install refuses the non-regular native ownership carrier without blocking (status '
+          + result.status + ', error ' + (result.error && result.error.code) + ')');
+        assert(after === before,
+          label + ': refusal happens before any agent, Skill, hook, support-script, config, or runtime mutation');
+        clean(fakeRun);
+        clean(result);
+      }
     }
 
     // S2.6 — exact prior bytes, not a retired role name, decide legacy Skill ownership. Build the
@@ -1902,42 +1983,26 @@ for (const script of sync.HOOK_SCRIPTS) {
 }
 
 // ---------------------------------------------------------------------------
-// K11 (#812, the kimi twin of test-opencode-edition.js's A24): the generated kimi
-// workflow-init Skill carries the re-grounded adaptive ## Kaola-Workflow template —
-// phase-free (no retired numbered-phase model, no "phase file/artifact" framing) AND
-// BYTE-IDENTICAL to the canonical GitHub template. The template is runtime-neutral AT
-// THE SOURCE, so no template-region rewrite exists to except: parity is exact.
-//
-// This is TEMPLATE-CONTENT parity against the canonical source, which K3 structurally
-// cannot prove: this suite self-provisions .kimi/ via `sync --write`, so K3's
-// `sync --check` compares the generated tree against the tree it just wrote — that is
-// sync IDEMPOTENCY, never content parity. A template-mangling transform added to
-// sync-kimi-edition.js keeps K3 green (both sides mangled) and is caught only here.
-// .kimi/ is fully gitignored, so the four-chain contract validators must not read it —
-// this is the kimi-edition home for the template ban + parity (regenerate via --write).
+// K11 (#812/#1033, the Kimi twin of A24): workflow-init carries no second
+// universal template. Both runtime surfaces name the one distribution module and
+// writer, while the module's actual bytes retain the phase and vendor bans.
 // ---------------------------------------------------------------------------
 {
-  const TPL_START = '<!-- KW-AGENTS-TEMPLATE-START -->';
-  const TPL_END = '<!-- KW-AGENTS-TEMPLATE-END -->';
-  const extractTemplate = (text, label) => {
-    const s = text.indexOf(TPL_START);
-    const e = text.indexOf(TPL_END);
-    assert(s !== -1 && e !== -1 && e > s,
-      'K11[' + label + ']: KW-AGENTS-TEMPLATE-START/END markers present');
-    return (s !== -1 && e > s) ? text.slice(s + TPL_START.length, e).trim() : '';
-  };
-  const kimiTpl = extractTemplate(read(skillDir('workflow-init')), 'kimi');
-  // Phase-ban (mirror validate-kaola-workflow-contracts.js AC4).
-  assert(!/Phase\s+\d/.test(kimiTpl),
+  for (const [label, body] of [
+    ['kimi', read(skillDir('workflow-init'))],
+    ['canonical-github', read('commands/workflow-init.md')],
+  ]) {
+    assert(!/KW-AGENTS-TEMPLATE-(?:START|END)/.test(body)
+      && /kaola-workflow-project-instruction-templates\.js/.test(body)
+      && /kaola-workflow-project-instructions\.js/.test(body),
+    'K11[' + label + ']: workflow-init names the sole consumer template module and writer without embedding it');
+  }
+  const consumerTpl = require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE;
+  assert(!/Phase\s+\d/.test(consumerTpl),
     'K11: kimi workflow-init template must not teach a numbered Phase <n> model (adaptive is the unconditional default)');
-  assert(!/phase file|phase artifact/i.test(kimiTpl),
+  assert(!/phase file|phase artifact/i.test(consumerTpl),
     'K11: kimi workflow-init template must not use "phase file/artifact" durable-state framing');
-  // EXACT parity: transformCommandBody applies zero template-region rewrites (#812).
-  const canonTpl = extractTemplate(read('commands/workflow-init.md'), 'canonical-github');
-  assert(kimiTpl === canonTpl,
-    'K11 (#812): kimi workflow-init template is BYTE-IDENTICAL to the canonical GitHub template (no template-region rewrite exists)');
-  // Vendor/runtime leak ban at the injected-template level (the kimi twin of A24's).
-  assert(!/\bClaude\b|\bOpus\b|\bSonnet\b|\/workflow-next|\/goal|Stop-hook/.test(canonTpl),
+  assert(!/\bClaude\b|\bOpus\b|\bSonnet\b|\/workflow-next|\/goal|Stop-hook/.test(consumerTpl),
     'K11 (#812): the injected consumer template must name no vendor, model, or runtime-specific command');
 }
 

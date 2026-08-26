@@ -302,8 +302,10 @@ hash; modified, unlisted, and unrelated files survive byte-for-byte. A legacy cu
 removed only when its complete bytes equal the current generated source; retired-name and modified
 near-misses survive. Old ownership metadata and empty singular directories are removed after
 migration. The new native plural `agents/` directory uses its own filename-plus-SHA manifest. An
-unmanaged same-name collision, forged marker, modified managed profile, or symlink carrier makes the
-install fail closed before deploying any agent, plugin, or other runtime surface.
+unmanaged same-name collision, forged marker, modified managed profile, non-directory agent carrier,
+or non-regular profile/manifest carrier (including symlinks, directories, and FIFOs) makes the
+install fail closed before deploying any agent, plugin, or other runtime surface. Singular legacy
+cleanup considers only regular non-link profiles, so a hash-equal symlink remains owner topology.
 
 ## Uninstall
 

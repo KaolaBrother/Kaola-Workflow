@@ -77,14 +77,12 @@ function assertConcept(file, concept, terms) {
 
 function extractClaudeTemplate(file) {
   const text = read(file);
-  const START = '<!-- KW-AGENTS-TEMPLATE-START -->';
-  const END = '<!-- KW-AGENTS-TEMPLATE-END -->';
-  const startIdx = text.indexOf(START);
-  const endIdx = text.indexOf(END);
-  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {
-    throw new Error(file + ': missing KW-AGENTS-TEMPLATE-START/END markers');
-  }
-  return text.slice(startIdx + START.length, endIdx).trim();
+  assert(!/KW-AGENTS-TEMPLATE-(?:START|END)/.test(text),
+    file + ': workflow-init must not embed a second consumer AGENTS template');
+  assert(text.includes('kaola-workflow-project-instruction-templates.js')
+      && text.includes('kaola-workflow-project-instructions.js'),
+    file + ': workflow-init must name the sole distribution template module and its writer');
+  return require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE.trim();
 }
 
 // issue #341: standalone, count-independent forbidden-token check. A forge-touching

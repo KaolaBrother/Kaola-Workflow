@@ -9,6 +9,7 @@ const consumerTemplates = require('./kaola-workflow-project-instruction-template
 const SCHEMA_VERSION = 1;
 const AGENTS_MARKER = 'KW-AGENTS-MANAGED';
 const CLAUDE_MARKER = 'KW-CLAUDE-OVERLAY-MANAGED';
+const LEGACY_CLAUDE_MARKER = 'KW-CLAUDE-MANAGED';
 const V9_AGENTS_SHA256 = 'c4753d725488152d6dda74dd7ee0cfd490b62a81acddaa293886684abce0d67e';
 const V9_CLAUDE_SHA256 = 'a46566fc59e27d84e2f069baa45df014b53b88610d6138b8beb81c349f82e7a3';
 const LEGACY_REDIRECT = [
@@ -117,15 +118,25 @@ function sourceTemplates() {
   return { agents, claude };
 }
 
-function replaceManaged(existingBytes, templateBytes, marker) {
+function replaceManaged(existingBytes, templateBytes, marker, legacyMarkers = []) {
   const templateRegion = managedRegion(templateBytes, marker);
   const replacement = templateBytes.subarray(templateRegion.start, templateRegion.end);
-  const region = managedRegion(existingBytes, marker);
-  if (region.kind === 'malformed') return { classification: 'ambiguous_managed_region' };
-  if (region.kind !== 'managed') return { classification: 'owner_only' };
+  const candidates = [marker, ...legacyMarkers].map(candidate => ({
+    marker: candidate,
+    region: managedRegion(existingBytes, candidate),
+  }));
+  if (candidates.some(candidate => candidate.region.kind === 'malformed')) {
+    return { classification: 'ambiguous_managed_region' };
+  }
+  const owned = candidates.filter(candidate => candidate.region.kind === 'managed');
+  if (owned.length > 1) return { classification: 'ambiguous_managed_region' };
+  if (owned.length === 0) return { classification: 'owner_only' };
+  const selected = owned[0];
+  const region = selected.region;
   const after = Buffer.concat([region.prefix, replacement, region.suffix]);
   return {
-    classification: 'managed_region', after, outsideBytesPreserved: true,
+    classification: selected.marker === marker ? 'managed_region' : 'known_legacy_managed_region',
+    after, outsideBytesPreserved: true,
     changed: !after.equals(existingBytes),
   };
 }
@@ -156,7 +167,8 @@ function mergeClaude(existingBytes, templateBytes, allowExplicitOverlay) {
   if (existingBytes == null || existingBytes.length === 0) {
     return { classification: 'missing', after: templateBytes, outsideBytesPreserved: true, changed: true };
   }
-  const managed = replaceManaged(existingBytes, templateBytes, CLAUDE_MARKER);
+  const managed = replaceManaged(
+    existingBytes, templateBytes, CLAUDE_MARKER, [LEGACY_CLAUDE_MARKER]);
   if (managed.after != null || managed.classification === 'ambiguous_managed_region') return managed;
   if (allowExplicitOverlay && explicitClaudeOverlay(existingBytes)) {
     return {
@@ -305,7 +317,7 @@ function main(argv) {
 }
 
 module.exports = {
-  AGENTS_MARKER, CLAUDE_MARKER, LEGACY_REDIRECT,
+  AGENTS_MARKER, CLAUDE_MARKER, LEGACY_CLAUDE_MARKER, LEGACY_REDIRECT,
   V9_AGENTS_SHA256, V9_CLAUDE_SHA256,
   classifyProjectInstructions, execute,
 };

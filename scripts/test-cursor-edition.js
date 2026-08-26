@@ -1617,12 +1617,12 @@ function g10Rm(dir) {
   const initBody = exists(initRel) ? read(initRel) : '';
   assert(exists(initRel),
     'G11: generated ' + initRel + ' exists');
-  assert(/### Compact Template/.test(initBody)
-      && /KW-AGENTS-TEMPLATE-START/.test(initBody)
+  assert(!/KW-AGENTS-TEMPLATE-(?:START|END)/.test(initBody)
       && /## Step 2 — Reconcile project instructions/.test(initBody)
+      && /kaola-workflow-project-instruction-templates\.js/.test(initBody)
       && /kaola-workflow-project-instructions\.js/.test(initBody),
     'G11: generated workflow-init must carry the shared AGENTS.md authority migration job '
-    + '(canonical Compact Template fence, not Cursor-specific wording)');
+    + 'through the sole distribution module and writer, not an inline Cursor copy');
 }
 
 {

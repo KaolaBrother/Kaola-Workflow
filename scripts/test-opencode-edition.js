@@ -590,39 +590,26 @@ for (const file of canonCommands) {
 }
 
 // ---------------------------------------------------------------------------
-// A24 (#572, tightened by #812): the generated opencode workflow-init carries the
-// re-grounded adaptive ## Kaola-Workflow template — phase-free (no retired
-// numbered-phase model, no "phase file/artifact" framing) AND BYTE-IDENTICAL to the
-// canonical GitHub template. The template is runtime-neutral AT THE SOURCE, so there is
-// no longer any template-region rewrite to except: parity is exact, not modulo.
-// .opencode/ is fully gitignored, so the four-chain contract validators must not read
-// it — this is the opencode-edition home for the #572 ban + parity (regenerate via
-// --write).
+// A24 (#572/#812/#1033): workflow-init carries no second universal template. The
+// generated OpenCode and canonical surfaces both name the one distribution module and
+// executable writer; the module's actual bytes retain the phase and vendor bans.
 // ---------------------------------------------------------------------------
 {
-  const TPL_START = '<!-- KW-AGENTS-TEMPLATE-START -->';
-  const TPL_END = '<!-- KW-AGENTS-TEMPLATE-END -->';
-  const extractTemplate = (text, label) => {
-    const s = text.indexOf(TPL_START);
-    const e = text.indexOf(TPL_END);
-    assert(s !== -1 && e !== -1 && e > s,
-      'A24[' + label + ']: KW-AGENTS-TEMPLATE-START/END markers present');
-    return (s !== -1 && e > s) ? text.slice(s + TPL_START.length, e).trim() : '';
-  };
-  const ocTpl = extractTemplate(read('.opencode/commands/workflow-init.md'), 'opencode');
-  // Phase-ban (mirror validate-kaola-workflow-contracts.js #572 AC4).
-  assert(!/Phase\s+\d/.test(ocTpl),
+  for (const [label, body] of [
+    ['opencode', read('.opencode/commands/workflow-init.md')],
+    ['canonical-github', read('commands/workflow-init.md')],
+  ]) {
+    assert(!/KW-AGENTS-TEMPLATE-(?:START|END)/.test(body)
+      && /kaola-workflow-project-instruction-templates\.js/.test(body)
+      && /kaola-workflow-project-instructions\.js/.test(body),
+    'A24[' + label + ']: workflow-init names the sole consumer template module and writer without embedding it');
+  }
+  const consumerTpl = require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE;
+  assert(!/Phase\s+\d/.test(consumerTpl),
     'A24 (#572): opencode workflow-init template must not teach a numbered Phase <n> model (adaptive is the unconditional default)');
-  assert(!/phase file|phase artifact/i.test(ocTpl),
+  assert(!/phase file|phase artifact/i.test(consumerTpl),
     'A24 (#572): opencode workflow-init template must not use "phase file/artifact" durable-state framing');
-  // EXACT parity: transformCommandBody applies zero template-region rewrites (#812).
-  const canonTpl = extractTemplate(read('commands/workflow-init.md'), 'canonical-github');
-  assert(ocTpl === canonTpl,
-    'A24 (#812): opencode workflow-init template is BYTE-IDENTICAL to the canonical GitHub template (no template-region rewrite exists)');
-  // Vendor/runtime leak ban at the injected-template level: the block is written into a
-  // CONSUMER repo and read by every runtime, so it names no vendor, no model, and no
-  // command that does not resolve on the reader's runtime.
-  assert(!/\bClaude\b|\bOpus\b|\bSonnet\b|\/workflow-next|\/goal|Stop-hook/.test(canonTpl),
+  assert(!/\bClaude\b|\bOpus\b|\bSonnet\b|\/workflow-next|\/goal|Stop-hook/.test(consumerTpl),
     'A24 (#812): the injected consumer template must name no vendor, model, or runtime-specific command');
 }
 
@@ -1266,12 +1253,14 @@ if (exists(pluginRel)) {
     const r = spawnSync('bash', [opts.installer || INSTALLER].concat(args), {
       env: Object.assign({}, process.env, { HOME: home }),
       encoding: 'utf8',
+      timeout: opts.timeout,
     });
     return {
       ok: r.status === 0,
       status: r.status,
       stdout: r.stdout || '',
       stderr: r.stderr || '',
+      error: r.error || null,
       home, dest,
       configPath: path.join(home, '.config', 'kaola-workflow', 'config.json'),
     };
@@ -1536,9 +1525,11 @@ if (exists(pluginRel)) {
     const r = spawnSync('bash', [INSTALLER].concat(args), {
       env: Object.assign({}, process.env, { HOME: home, OPENCODE_CONFIG_DIR: cfg }),
       encoding: 'utf8',
+      timeout: opts.timeout,
     });
     return {
       ok: r.status === 0, status: r.status, stdout: r.stdout || '', stderr: r.stderr || '',
+      error: r.error || null,
       home, cfg, configPath: path.join(home, '.config', 'kaola-workflow', 'config.json'),
     };
   }
@@ -1574,6 +1565,10 @@ if (exists(pluginRel)) {
       existsSync(file) && readFileSync(file, 'utf8') === expected;
     const bytesEqual = (file, expected) =>
       existsSync(file) && readFileSync(file).equals(expected);
+    const sameSymlink = (file, expectedTarget) => {
+      try { return fs.lstatSync(file).isSymbolicLink() && fs.readlinkSync(file) === expectedTarget; }
+      catch (_) { return false; }
+    };
     const sameNames = (actual, expected) =>
       JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
     const treeFiles = root => {
@@ -1589,6 +1584,38 @@ if (exists(pluginRel)) {
       visit(root);
       return out;
     };
+    // Filesystem carrier snapshot that never follows symlinks and never opens non-regular files.
+    // That makes the FIFO manifest cases below safe and lets the assertion cover partial plugin,
+    // command, hook, config, and agent writes with one exact before/after comparison.
+    const carrierTreeFingerprint = root => {
+      const rows = [];
+      const visit = (abs, rel) => {
+        let stat;
+        try { stat = fs.lstatSync(abs); } catch (error) {
+          if (error && error.code === 'ENOENT') return;
+          throw error;
+        }
+        const mode = (stat.mode & 0o7777).toString(8);
+        if (stat.isSymbolicLink()) {
+          rows.push([rel, 'symlink', mode, fs.readlinkSync(abs)]);
+          return;
+        }
+        if (stat.isDirectory()) {
+          rows.push([rel, 'directory', mode]);
+          for (const name of readdirSync(abs).sort()) visit(path.join(abs, name), path.join(rel, name));
+          return;
+        }
+        if (stat.isFile()) {
+          rows.push([rel, 'file', mode, sha256(readFileSync(abs))]);
+          return;
+        }
+        rows.push([rel, stat.isFIFO() ? 'fifo' : 'other', mode]);
+      };
+      visit(root, '.');
+      return rows;
+    };
+    const carrierWorldFingerprint = roots => JSON.stringify(
+      roots.map(root => [root, carrierTreeFingerprint(root)]));
 
     const generatedPlural = path.join(TREE_ROOT, '.opencode', 'agents');
     const generatedSingular = path.join(TREE_ROOT, '.opencode', 'agent');
@@ -1754,6 +1781,109 @@ if (exists(pluginRel)) {
       fs.writeFileSync(path.join(singular, 'my-own-command.md'), '# My unrelated command\n');
       fs.writeFileSync(path.join(singular, 'notes.txt'), 'keep this note\n');
     };
+
+    // Native ownership admission must classify topology before any deployment mutation. A
+    // directory or FIFO at the manifest name is not an absent manifest; a directory at a
+    // same-name profile is not an absent profile. Exercise both project and global roots and
+    // fingerprint every scoped tree so copying the plugin (or any other runtime surface) before
+    // refusal cannot masquerade as a safe failure. FIFO processes carry a hard timeout, while the
+    // oracle uses lstat only and therefore never opens the pipe.
+    for (const scope of ['project', 'global']) {
+      for (const carrier of ['manifest-directory', 'manifest-fifo', 'profile-directory']) {
+        const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-carrier-home-'));
+        const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-carrier-dest-'));
+        const cfg = mkdtempSync(path.join(os.tmpdir(), 'opencode-carrier-cfg-'));
+        const layout = scope === 'global' ? cfg : path.join(dest, '.opencode');
+        const plural = path.join(layout, 'agents');
+        const manifest = path.join(plural, AGENT_MANIFEST);
+        const profile = path.join(plural, 'code-explorer.md');
+        fs.mkdirSync(plural, { recursive: true });
+        if (carrier === 'manifest-directory') {
+          fs.mkdirSync(manifest);
+          fs.writeFileSync(path.join(manifest, 'OWNER_SENTINEL'), 'owner manifest directory\n');
+          assert(fs.lstatSync(manifest).isDirectory(),
+            'N10-carrier-' + scope + '-manifest-directory fixture: native manifest carrier is a directory');
+        } else if (carrier === 'manifest-fifo') {
+          // spawn-class: environment
+          const fifo = spawnSync('mkfifo', [manifest], { encoding: 'utf8', timeout: 5000 });
+          assert(fifo.status === 0 && fs.lstatSync(manifest).isFIFO(),
+            'N10-carrier-' + scope + '-manifest-fifo fixture: native manifest carrier is a FIFO');
+        } else {
+          fs.mkdirSync(profile);
+          fs.writeFileSync(path.join(profile, 'OWNER_SENTINEL'), 'owner profile directory\n');
+          assert(fs.lstatSync(profile).isDirectory(),
+            'N10-carrier-' + scope + '-profile-directory fixture: same-name native profile carrier is a directory');
+        }
+        const roots = scope === 'global' ? [home, cfg] : [home, dest, cfg];
+        const before = carrierWorldFingerprint(roots);
+        const result = scope === 'global'
+          ? runGlobalInstaller([], { home, cfg, timeout: 10000 })
+          : runInstaller([], { home, dest, timeout: 10000 });
+        const after = carrierWorldFingerprint(roots);
+        const label = 'N10-carrier-' + scope + '-' + carrier;
+        assert(!result.error && !result.ok,
+          label + ' (#1033/R2): install refuses the non-regular native ownership carrier without blocking (status '
+          + result.status + ', error ' + (result.error && result.error.code) + ')');
+        assert(after === before,
+          label + ' (#1033/R2): refusal happens before any agent, plugin, command, hook, config, or runtime mutation');
+        try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
+        try { rmSync(dest, { recursive: true, force: true }); } catch (_) {}
+        try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
+      }
+    }
+
+    // A hash-equal target does not turn a singular legacy profile symlink into a Kaola-owned
+    // regular file. Cover both migration entry points: install and uninstall may retire the old
+    // manifest, but neither may follow/delete the profile link or change its external target.
+    for (const scope of ['project', 'global']) {
+      for (const operation of ['install', 'uninstall']) {
+        const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-legacy-link-home-'));
+        const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-legacy-link-dest-'));
+        const cfg = mkdtempSync(path.join(os.tmpdir(), 'opencode-legacy-link-cfg-'));
+        const outside = mkdtempSync(path.join(os.tmpdir(), 'opencode-legacy-link-outside-'));
+        const layout = scope === 'global' ? cfg : path.join(dest, '.opencode');
+        const singular = path.join(layout, 'agent');
+        const profile = path.join(singular, 'code-explorer.md');
+        const target = path.join(outside, 'owner-profile.md');
+        const targetBytes = Buffer.from(legacyBody);
+        fs.mkdirSync(singular, { recursive: true });
+        fs.writeFileSync(target, targetBytes);
+        fs.symlinkSync(target, profile);
+        fs.writeFileSync(path.join(singular, AGENT_MANIFEST),
+          'code-explorer.md\t' + sha256(targetBytes) + '\n');
+        assert(fs.lstatSync(profile).isSymbolicLink()
+          && readFileSync(profile).equals(targetBytes)
+          && readFileSync(path.join(singular, AGENT_MANIFEST), 'utf8').includes(sha256(targetBytes)),
+        'N10-legacy-symlink-' + scope + '-' + operation
+          + ' fixture: singular profile is a symlink whose followed target exactly matches its prior manifest hash');
+        let result;
+        if (operation === 'install') {
+          result = scope === 'global'
+            ? runGlobalInstaller([], { home, cfg })
+            : runInstaller([], { home, dest });
+        } else {
+          const args = scope === 'global'
+            ? ['--global', '--uninstall', '--yes']
+            : ['--uninstall', '--target', dest, '--yes'];
+          // spawn-class: environment
+          result = spawnSync('bash', [INSTALLER].concat(args), {
+            env: Object.assign({}, process.env, { HOME: home, OPENCODE_CONFIG_DIR: cfg }),
+            encoding: 'utf8',
+          });
+        }
+        const label = 'N10-legacy-symlink-' + scope + '-' + operation;
+        assert(result.status === 0,
+          label + ' (#1033/R2): migration completes while treating the singular profile symlink as owner topology');
+        assert(sameSymlink(profile, target),
+          label + ' (#1033/R2): migration never deletes or replaces the singular profile symlink');
+        assert(readFileSync(target).equals(targetBytes),
+          label + ' (#1033/R2): migration never changes the hash-equal external symlink target');
+        try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
+        try { rmSync(dest, { recursive: true, force: true }); } catch (_) {}
+        try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
+        try { rmSync(outside, { recursive: true, force: true }); } catch (_) {}
+      }
+    }
 
     // Project migration removes only hash-proven old ownership.  The singular
     // directory remains solely because unrelated/user-edited files remain in it.

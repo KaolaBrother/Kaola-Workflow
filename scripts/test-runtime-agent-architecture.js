@@ -227,7 +227,10 @@ for (const [label, pattern] of [
 ]) {
   assert(pattern.test(initSource), `A3: workflow-init carries the ${label} migration outcome`);
 }
-const markerRows = [...initSource.matchAll(/<!--\s*(KW-[A-Z0-9-]+)-(START|END)\s*-->/g)]
+// The executable distribution module is now the sole consumer-template authoring surface;
+// workflow-init describes and invokes it without embedding a second copy.
+const consumerTemplateSource = read('scripts/kaola-workflow-project-instruction-templates.js') || '';
+const markerRows = [...consumerTemplateSource.matchAll(/<!--\s*(KW-[A-Z0-9-]+)-(START|END)\s*-->/g)]
   .map(match => ({ name: match[1], edge: match[2] }));
 const neutralMarkerNames = [...new Set(markerRows.map(row => row.name)
   .filter(name => !name.includes('CLAUDE')))];
@@ -235,7 +238,7 @@ const pairedNeutralMarker = neutralMarkerNames.find(name =>
   markerRows.some(row => row.name === name && row.edge === 'START')
   && markerRows.some(row => row.name === name && row.edge === 'END'));
 assert(!!pairedNeutralMarker,
-  'A3: workflow-init declares a paired runtime-neutral managed region for universal project bytes');
+  'A3: the distribution consumer template declares a paired runtime-neutral managed region');
 assert(!/KW-CLAUDE-(?:TEMPLATE|MANAGED)/.test(initSource),
   'A3: universal workflow-init regions no longer use retired KW-CLAUDE naming');
 
@@ -339,6 +342,26 @@ if (migrationModule) {
 
   function bufferEndsWith(bytes, suffix) {
     return bytes.length >= suffix.length && bytes.subarray(bytes.length - suffix.length).equals(suffix);
+  }
+
+  function exactManagedSlice(bytes, marker) {
+    const startToken = Buffer.from(`<!-- ${marker}-START -->`);
+    const endToken = Buffer.from(`<!-- ${marker}-END -->`);
+    const start = bytes.indexOf(startToken);
+    const endStart = bytes.indexOf(endToken);
+    if (start < 0 || endStart < start) return null;
+    return bytes.subarray(start, endStart + endToken.length);
+  }
+
+  function releasedConsumerTemplate() {
+    const source = gitBlob('a503edd8:templates/routing/init.skeleton.md');
+    if (!source) return null;
+    const startToken = Buffer.from('<!-- KW-CLAUDE-TEMPLATE-START -->\n```markdown\n');
+    const endToken = Buffer.from('\n```\n<!-- KW-CLAUDE-TEMPLATE-END -->');
+    const start = source.indexOf(startToken);
+    const end = source.indexOf(endToken, start + startToken.length);
+    if (start < 0 || end < 0) return null;
+    return source.subarray(start + startToken.length, end);
   }
 
   const ownerAgents = '\nOWNER_AGENTS_SENTINEL=preserve-this-byte-for-byte\n';
@@ -471,8 +494,117 @@ if (migrationModule) {
       assert(!hasRepositorySpecificContract(agentsAfter || Buffer.alloc(0))
         && !hasRepositorySpecificContract(claudeAfter || Buffer.alloc(0)),
       `A3[installed/${distribution.label}]: a new consumer receives no Kaola-Workflow repository-specific contract`);
+
+      const canonicalTemplates = require(path.join(ROOT, 'scripts',
+        'kaola-workflow-project-instruction-templates.js'));
+      const expectedManaged = exactManagedSlice(
+        Buffer.from(canonicalTemplates.AGENTS_TEMPLATE), migrationModule.AGENTS_MARKER);
+      const installedManaged = agentsAfter
+        ? exactManagedSlice(agentsAfter, migrationModule.AGENTS_MARKER) : null;
+      assert(!!expectedManaged && !!installedManaged && installedManaged.equals(expectedManaged),
+        `A3[installed/${distribution.label}]: workflow-init installs the consumer AGENTS managed block `
+          + 'byte-equal to the distribution-owned template module');
     } finally {
       try { fs.rmSync(isolatedRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
+  }
+
+  // A distribution can accidentally inline today's identical bytes and still satisfy a snapshot
+  // comparison. Mutate only an isolated installed template module and require the real helper to
+  // consume that changed authority; this proves the module remains the live source, not a mirror.
+  const sourceProbeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-template-source-probe-'));
+  try {
+    const installedRoot = path.join(sourceProbeRoot, 'installed-plugin');
+    const consumerRoot = path.join(sourceProbeRoot, 'consumer-project');
+    fs.cpSync(path.join(ROOT, 'plugins/kaola-workflow'), installedRoot, { recursive: true });
+    const templatePath = path.join(installedRoot, 'scripts',
+      'kaola-workflow-project-instruction-templates.js');
+    const templateSource = fs.readFileSync(templatePath, 'utf8');
+    const exportLine = 'module.exports = { AGENTS_TEMPLATE, CLAUDE_TEMPLATE };';
+    const probeLine = [
+      "const PROBED_AGENTS_TEMPLATE = AGENTS_TEMPLATE.replace(",
+      "  '<!-- KW-AGENTS-MANAGED-START -->',",
+      "  '<!-- KW-AGENTS-MANAGED-START -->\\nKW_TEMPLATE_SOURCE_PROBE=isolated-distribution');",
+      'module.exports = { AGENTS_TEMPLATE: PROBED_AGENTS_TEMPLATE, CLAUDE_TEMPLATE };',
+    ].join('\n');
+    assert(templateSource.includes(exportLine),
+      'A3[single-source/mutation]: isolated distribution template exposes the expected export seam');
+    fs.writeFileSync(templatePath, templateSource.replace(exportLine, probeLine));
+    fs.mkdirSync(consumerRoot, { recursive: true });
+    const helperPath = path.join(installedRoot, 'scripts',
+      'kaola-workflow-project-instructions.js');
+    const applied = runMigrationHelper(helperPath, 'apply', consumerRoot);
+    const agentsAfter = readOptionalFixture(path.join(consumerRoot, 'AGENTS.md'));
+    const managedAfter = agentsAfter
+      ? exactManagedSlice(agentsAfter, migrationModule.AGENTS_MARKER) : null;
+    assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied'
+      && !!managedAfter
+      && managedAfter.includes(Buffer.from('KW_TEMPLATE_SOURCE_PROBE=isolated-distribution')),
+    'A3[single-source/mutation]: workflow-init consumes its adjacent template module as the live '
+      + 'consumer AGENTS source');
+  } finally {
+    try { fs.rmSync(sourceProbeRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
+
+  // A3-released-region — v9.17.2 emitted a consumer CLAUDE.md whose workflow-owned bytes used the
+  // retired KW-CLAUDE-MANAGED marker, while project-specific content around that envelope remained
+  // owner-authored. Migrating a known AGENTS redirect must replace exactly that old owned region
+  // with the thin bridge. Refusing the released shape or prepending a whole new file both strand a
+  // supported consumer on the old authority direction.
+  const releasedClaude = releasedConsumerTemplate();
+  assert(Buffer.isBuffer(releasedClaude),
+    'A3[released-region]: the exact v9.17.2 workflow-init consumer template loads from a503edd8');
+  if (releasedClaude) {
+    const oldMarker = 'KW-CLAUDE-MANAGED';
+    const oldManaged = exactManagedSlice(releasedClaude, oldMarker);
+    const oldStart = oldManaged ? releasedClaude.indexOf(oldManaged) : -1;
+    const ownerPrefix = oldStart >= 0 ? releasedClaude.subarray(0, oldStart) : Buffer.alloc(0);
+    const ownerSuffix = oldStart >= 0
+      ? releasedClaude.subarray(oldStart + oldManaged.length) : Buffer.alloc(0);
+    assert(!!oldManaged && ownerPrefix.length > 0 && ownerSuffix.length > 0,
+      'A3[released-region]: released fixture has a bounded old managed region and real owner prefix/suffix');
+
+    const releasedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-released-region-'));
+    try {
+      writeInstructionFixture(releasedRoot, Buffer.from(legacyRedirect), releasedClaude);
+      const applied = runMigration('apply', releasedRoot);
+      const agentsAfter = fs.readFileSync(path.join(releasedRoot, 'AGENTS.md'));
+      const claudeAfter = fs.readFileSync(path.join(releasedRoot, 'CLAUDE.md'));
+      const canonicalTemplates = require(path.join(ROOT, 'scripts',
+        'kaola-workflow-project-instruction-templates.js'));
+      const expectedAgents = Buffer.from(canonicalTemplates.AGENTS_TEMPLATE);
+      const expectedClaudeManaged = exactManagedSlice(
+        Buffer.from(canonicalTemplates.CLAUDE_TEMPLATE), migrationModule.CLAUDE_MARKER);
+      const expectedClaude = oldManaged && expectedClaudeManaged
+        ? Buffer.concat([ownerPrefix, expectedClaudeManaged, ownerSuffix]) : null;
+
+      assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied'
+        && applied.envelope.changed === true,
+      'A3[released-region]: a released legacy redirect plus old managed Claude region migrates automatically');
+      assert(agentsAfter.equals(expectedAgents),
+        'A3[released-region]: the legacy AGENTS redirect becomes the canonical consumer authority');
+      assert(!!expectedClaude && claudeAfter.equals(expectedClaude),
+        'A3[released-region]: migration replaces only the old owned Claude region and preserves '
+          + 'the exact owner prefix/suffix bytes');
+      assert(exactLineCount(claudeAfter, '@AGENTS.md') === 1
+        && !claudeAfter.includes(Buffer.from('<!-- KW-CLAUDE-MANAGED-START -->'))
+        && !!exactManagedSlice(claudeAfter, migrationModule.CLAUDE_MARKER),
+      'A3[released-region]: migrated Claude region is one thin canonical @AGENTS.md overlay');
+      assert(applied.envelope && applied.envelope.files
+        && applied.envelope.files.claude.outside_bytes_preserved === true,
+      'A3[released-region]: apply attests preservation outside the retired Claude managed envelope');
+
+      const firstAgents = Buffer.from(agentsAfter);
+      const firstClaude = Buffer.from(claudeAfter);
+      const rerun = runMigration('apply', releasedRoot);
+      assert(rerun.status === 0 && rerun.envelope && rerun.envelope.status === 'converged'
+        && rerun.envelope.changed === false && rerun.envelope.writes.length === 0,
+      'A3[released-region]: migrated released consumer converges on its second apply');
+      assert(fs.readFileSync(path.join(releasedRoot, 'AGENTS.md')).equals(firstAgents)
+        && fs.readFileSync(path.join(releasedRoot, 'CLAUDE.md')).equals(firstClaude),
+      'A3[released-region]: converged rerun leaves both migrated files byte-identical');
+    } finally {
+      try { fs.rmSync(releasedRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
     }
   }
 
@@ -652,6 +784,31 @@ if (migrationModule) {
       try { fs.rmSync(symlinkRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
     }
   }
+}
+
+// A3-single-source — workflow-init may describe the helper-owned reconciliation contract, but it
+// must not remain a second authoring surface for the universal AGENTS template. Otherwise the prose
+// template and the distribution module can drift while every generated runtime surface still agrees
+// with the wrong copy. The actual installed-byte assertion above pins the one allowed source.
+for (const relativePath of [
+  'templates/routing/init.skeleton.md',
+  'templates/routing/required-blocks.js',
+  'templates/routing/slots.js',
+]) {
+  const text = read(relativePath) || '';
+  const embedsUniversalTemplate = [
+    '## Project Snapshot',
+    '## Commands',
+    '## Non-Negotiable Rules',
+    '## First Principles',
+    '## Kaola-Workflow',
+  ].every(heading => text.includes(heading));
+  assert(!/KW-AGENTS-TEMPLATE-(?:START|END)/.test(text),
+    `A3[single-source/${relativePath}]: workflow-init authoring surfaces carry no independent `
+      + 'universal AGENTS template envelope');
+  assert(!embedsUniversalTemplate,
+    `A3[single-source/${relativePath}]: workflow-init authoring surfaces do not duplicate the `
+      + 'canonical universal heading set');
 }
 
 for (const relativePath of ['templates/routing/next.skeleton.md', 'templates/routing/finalize.skeleton.md']) {

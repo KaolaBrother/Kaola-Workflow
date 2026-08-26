@@ -116,8 +116,9 @@ cases.
 
 Every generated native agent is recorded in a filename-plus-SHA manifest; the visible marker alone
 is never ownership proof. Install refuses an unmanaged or owner-modified same-name agent and any
-agent-directory, profile, or manifest symlink before writing. Reinstall updates only hash-proven
-managed profiles and is idempotent. The migration removes an older `kaola-role-*` Skill directory
+non-directory agent carrier or non-regular profile/manifest carrier—including symlinks, directories,
+and FIFOs—before writing. Reinstall updates only hash-proven managed profiles and is idempotent. The
+migration removes an older `kaola-role-*` Skill directory
 only when its complete one-file bytes match an exact profile shipped by v9.17.2; modified and
 unknown role-shaped Skills remain. Uninstall removes only manifest/exact-byte-proven agents, the
 three reserved Kaola command Skills, managed hook/support files, and the managed config block. It

@@ -329,12 +329,13 @@ Code enters through a thin root `CLAUDE.md` containing `@AGENTS.md` plus Claude-
 Runtime-specific files never duplicate the universal managed region.
 
 `workflow-init` delegates migration to `kaola-workflow-project-instructions.js`. Its `plan`,
-`check`, and `apply` modes load distribution-owned consumer templates, classify ownership, preserve
-arbitrary bytes and modes outside managed markers, leave active older runs untouched, and return
-`decision_required` without writing when ownership or symlink topology is ambiguous. The exact
-v9.17.2 redirect pair migrates once into the consumer contract and thin bridge; this producer
-repository's richer root contract is explicitly preserved. A successful second apply writes
-nothing and preserves identical hashes.
+`check`, and `apply` modes load the one distribution-owned consumer-template module, classify
+ownership, preserve arbitrary bytes and modes outside managed markers, leave active older runs
+untouched, and return `decision_required` without writing when ownership or non-regular topology is
+ambiguous. The exact v9.17.2 redirect pair and its released `KW-CLAUDE-MANAGED` consumer envelope
+migrate once into the contract and thin bridge; this producer repository's richer root contract is
+explicitly preserved. Workflow-init authoring surfaces name this module and writer but contain no
+second universal template. A successful second apply writes nothing and preserves identical hashes.
 
 ### Runtime capability divergence
 

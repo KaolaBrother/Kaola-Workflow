@@ -210,14 +210,12 @@ assertConcept('docs/api.md', 'closure contract invariants and receipt schema', [
 ]);
 function extractAgentsTemplate(file) {
   const text = read(file);
-  const START = '<!-- KW-AGENTS-TEMPLATE-START -->';
-  const END = '<!-- KW-AGENTS-TEMPLATE-END -->';
-  const startIdx = text.indexOf(START);
-  const endIdx = text.indexOf(END);
-  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {
-    throw new Error(file + ': missing KW-AGENTS-TEMPLATE-START/END markers');
-  }
-  return text.slice(startIdx + START.length, endIdx).trim();
+  assert(!/KW-AGENTS-TEMPLATE-(?:START|END)/.test(text),
+    file + ': workflow-init must not embed a second consumer AGENTS template');
+  assert(text.includes('kaola-workflow-project-instruction-templates.js')
+      && text.includes('kaola-workflow-project-instructions.js'),
+    file + ': workflow-init must name the sole distribution template module and its writer');
+  return require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE.trim();
 }
 
 const initFiles = [
@@ -312,10 +310,9 @@ for (const file of shippedManifests) {
 // role-routing bullets. Live sessions were authoring "planner (Opus)" into consumer CLAUDE.md
 // files; a consumer block is read by EVERY runtime (Codex reads CLAUDE.md too), so a Claude model
 // noun there is a first-class cross-runtime leak. The generated section must stay runtime-neutral
-// (tier vocabulary), so the constraint sentence is pinned on all six workflow-init surfaces.
-for (const file of initFiles) {
-  assertIncludes(file, 'never by a vendor model name');
-}
+// (tier vocabulary), so the constraint sentence is pinned on the sole executable template source.
+assertIncludes('scripts/kaola-workflow-project-instruction-templates.js',
+  'never by a vendor model name');
 
 // #606: the Claude dispatch-posture config-audit line must be present in all three workflow-init
 // COMMAND surfaces (root + gitlab + gitea) — outside the KW-AGENTS-TEMPLATE region, so this check
@@ -497,11 +494,11 @@ for (const rel of routingSkels) {
     rel + ' must not pin a workflow-owned per-spawn model placeholder');
 }
 {
-  const initText = read('templates/routing/init.skeleton.md');
-  assert(initText.includes('`planner (heavy-reasoning tier)`'),
-    '#1018 AC-11: init.skeleton.md consumer example must be planner (heavy-reasoning tier)');
-  assert(!initText.includes('`planner (reasoning tier)`'),
-    '#1018 AC-11: init.skeleton.md must not keep planner (reasoning tier) as the example');
+  const consumerTemplate = read('scripts/kaola-workflow-project-instruction-templates.js');
+  assert(consumerTemplate.includes('`planner (heavy-reasoning tier)`'),
+    '#1018 AC-11: consumer template example must be planner (heavy-reasoning tier)');
+  assert(!consumerTemplate.includes('`planner (reasoning tier)`'),
+    '#1018 AC-11: consumer template must not keep planner (reasoning tier) as the example');
 }
 
 

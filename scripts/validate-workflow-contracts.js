@@ -352,7 +352,7 @@ assertConcept('AGENTS.md', 'compact durable state contract', [
   'workflow-state.md',
   'mission-list.md'
 ]);
-assertConcept('commands/workflow-init.md', 'generated AGENTS durable state contract', [
+assertConcept('scripts/kaola-workflow-project-instruction-templates.js', 'generated AGENTS durable state contract', [
   'kaola-workflow/.roadmap/_rules.md',
   'is the one optional local file that survives',
   'kaola-workflow/{project}/',
@@ -429,7 +429,7 @@ assertNotIncludes('AGENTS.md', 'READ CLAUDE.md BEFORE ANY ACTION');
 assertIncludes('CLAUDE.md', '@AGENTS.md');
 assertIncludes('CLAUDE.md', '<!-- KW-CLAUDE-OVERLAY-MANAGED-START -->');
 assertNotIncludes('CLAUDE.md', '## The mission list');
-assertIncludes('commands/workflow-init.md', '<!-- KW-AGENTS-MANAGED-START -->');
+assertIncludes('scripts/kaola-workflow-project-instruction-templates.js', '<!-- KW-AGENTS-MANAGED-START -->');
 assertIncludes('commands/workflow-init.md', 'kaola-workflow-project-instructions.js');
 assertIncludes('commands/workflow-init.md', 'decision_required');
 
@@ -441,59 +441,46 @@ assertIncludes('commands/workflow-init.md', 'claude_dispatch_posture: teams | cl
 // role-routing bullets. Live sessions were authoring "planner (Opus)" into consumer CLAUDE.md; the
 // generated section must stay runtime-neutral (tier vocabulary), never a Claude model noun. Pin the
 // constraint sentence on the root Claude workflow-init surface (the codex validator pins all six).
-assertIncludes('commands/workflow-init.md', 'never by a vendor model name');
+assertIncludes('scripts/kaola-workflow-project-instruction-templates.js', 'never by a vendor model name');
 
-// The injected consumer AGENTS.md template is the only place this repo teaches a downstream project
-// how the workflow runs, and it lives exclusively inside the KW-AGENTS-TEMPLATE region of the init
-// surfaces. Every retired-vocabulary ban here ran over the next and finalize surfaces, which do not
-// carry the template — so rewriting that region to teach the retired DAG executor passed everything.
-// Ban the SAME list inside the region, and assert the mission-list vocabulary POSITIVELY: absence of
-// retired vocabulary is not presence of correct design, and a blanked region satisfies every ban.
-// Scoped to the region, not the whole surface — the surrounding command prose may legitimately name
-// a retired mechanism while describing its removal.
+// The distribution module is the sole executable consumer AGENTS template. Workflow-init surfaces
+// must invoke its helper without embedding a second authoring copy. Run the same positive mission-
+// list and retired-vocabulary checks over the module's actual exported bytes.
 {
-  const TEMPLATE_START = '<!-- KW-AGENTS-TEMPLATE-START -->';
-  const TEMPLATE_END = '<!-- KW-AGENTS-TEMPLATE-END -->';
   // The rule the template must teach, in the region's own words. Every needle is load-bearing: the
   // record's name, its four fields, the write discipline, and the uncomputed frontier.
   const missionListVocabulary = ['mission-list.md', '`item`', '`status`', '`dispatched`', '`result`',
     'Three write moments', 'the list minus done minus in-flight'];
-  // The rendered root surface AND the skeleton it is generated from, so the defect is red at the
-  // source and not only after a regenerate (same reason the next skeleton is swept above).
+  const template = norm(require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE);
+  assert(template.trim().length > 0,
+    'the distribution-owned consumer AGENTS template is empty — the bans below would pass vacuously');
   for (const file of ['commands/workflow-init.md', 'templates/routing/init.skeleton.md']) {
     const content = read(file);
-    const from = content.indexOf(TEMPLATE_START);
-    const to = content.indexOf(TEMPLATE_END);
-    assert(from !== -1 && to !== -1 && to > from,
-      file + ': KW-AGENTS-TEMPLATE-START/END markers missing or inverted — every assertion below ' +
-      'would inspect nothing');
-    const template = norm(content.slice(from + TEMPLATE_START.length, to));
-    assert(template.trim().length > 0,
-      file + ': the KW-AGENTS-TEMPLATE region is empty — the bans below would pass vacuously');
-
-    for (const gone of retiredExecutor) {
-      assert(!template.includes(norm(gone)),
-        file + ': the injected consumer AGENTS.md template must not teach the retired DAG executor — ' +
-        'found "' + gone + '" inside the KW-AGENTS-TEMPLATE region');
-    }
-    for (const taught of missionListVocabulary) {
-      assert(template.includes(norm(taught)),
-        file + ': the injected consumer AGENTS.md template must teach the mission list — the ' +
-        'KW-AGENTS-TEMPLATE region is missing "' + taught + '"');
-    }
-    assert(!template.includes(norm('configured model')),
-      file + ': the KW-AGENTS-TEMPLATE overlay must not contain "configured model"');
-    assert(!template.includes(norm('ships its model in its installed profile')),
-      file + ': the KW-AGENTS-TEMPLATE overlay must not contain "ships its model in its installed profile"');
-    assert(template.includes(norm(
-      'Use the vendored agent role names exactly as installed; prefer short names like `planner`. '
-      + 'Spawn the type this runtime\'s installed workflow-next / finalize instructions name for that role. '
-      + 'Follow those instructions for whether the spawn call carries a model argument. '
-      + 'Do not substitute a generic built-in type unless those same instructions explicitly map the role onto one.'
-    )),
-      file + ': the KW-AGENTS-TEMPLATE overlay must teach spawn-the-installed-next/finalize-type '
-      + '(not pass-the-configured-model)');
+    assert(!/KW-AGENTS-TEMPLATE-(?:START|END)/.test(content),
+      file + ': workflow-init must not embed a second consumer AGENTS template');
+    assert(content.includes('kaola-workflow-project-instruction-templates.js')
+        && content.includes('kaola-workflow-project-instructions.js'),
+      file + ': workflow-init must name the sole template module and its executable writer');
   }
+  for (const gone of retiredExecutor) {
+    assert(!template.includes(norm(gone)),
+      'the consumer AGENTS template must not teach the retired DAG executor — found "' + gone + '"');
+  }
+  for (const taught of missionListVocabulary) {
+    assert(template.includes(norm(taught)),
+      'the consumer AGENTS template must teach the mission list — missing "' + taught + '"');
+  }
+  assert(!template.includes(norm('configured model')),
+    'the consumer AGENTS template must not contain "configured model"');
+  assert(!template.includes(norm('ships its model in its installed profile')),
+    'the consumer AGENTS template must not contain "ships its model in its installed profile"');
+  assert(template.includes(norm(
+    'Use the vendored agent role names exactly as installed; prefer short names like `planner`. '
+    + 'Spawn the type this runtime\'s installed workflow-next / finalize instructions name for that role. '
+    + 'Follow those instructions for whether the spawn call carries a model argument. '
+    + 'Do not substitute a generic built-in type unless those same instructions explicitly map the role onto one.'
+  )),
+    'the consumer AGENTS template must teach spawn-the-installed-next/finalize-type');
 }
 
 // issue #283: kaola-workflow-phase6.md hard-removed; kaola-workflow-finalize.md is the
