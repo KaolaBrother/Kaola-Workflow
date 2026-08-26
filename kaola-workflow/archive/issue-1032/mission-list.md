@@ -176,5 +176,6 @@
   result: check ok=true（reasons=[]，dirty_paths=[]，chains_green）；transaction status closed，archive invariant ok，claim label removed，issue close-pending，worktree/branch 保留给 sink
 
 - item: 执行 merge sink、关闭 Issue #1032 并完成 closure audit
-  status: in-flight
+  status: done
   dispatched: main orchestrator 使用已捕获 branch=workflow/issue-1032、issue=1032、sink=merge 运行 resumable --sink transaction；成功后运行 closure audit
+  result: sink status sinked，main 推送到 6b00da36，Issue #1032 远端 verified CLOSED，workflow branch 删除且 journal disposed；scoped closure audit current_project_clean=true、五类 drift 均 0，四项 repository 外部旧 citation drift 未触碰
