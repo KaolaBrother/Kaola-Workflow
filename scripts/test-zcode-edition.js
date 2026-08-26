@@ -1030,6 +1030,17 @@ for (const role of reviewerGenerator.ROLES) {
           + (executed.error && executed.error.code || 'none'));
       }
     }
+    function jsonBytes(value) {
+      return JSON.stringify(value, null, 2) + '\n';
+    }
+    function configMode(file) {
+      return fs.statSync(file).mode & 0o777;
+    }
+    function hasExactEntry(config, event, expected) {
+      const entries = config && config.hooks && config.hooks[event];
+      return Array.isArray(entries)
+        && entries.some(entry => JSON.stringify(entry) === JSON.stringify(expected));
+    }
 
     // Project deploy: commands remain project-local, while agents and the executable hook mapping
     // use ZCode's documented user authorities. The ignored project config and legacy home config
@@ -1301,6 +1312,241 @@ for (const role of reviewerGenerator.ROLES) {
       assertReal(kaolaHookCommands(after).length === 0,
         'G8-uninstall: every Kaola hook entry is stripped from live ${ZCODE_HOME}/cli/config.json');
       clean(r);
+    }
+
+    // Security R3 (#1033): the live ZCode hook carrier is shared by every
+    // project using the same ZCODE_HOME. Installing Kaola must not turn dormant
+    // foreign commands on merely because Kaola itself needs hooks enabled.
+    {
+      const foreignStop = { command: 'sh /opt/foreign/dormant-stop.sh', timeout: 17 };
+      const original = {
+        theme: 'foreign-disabled-theme',
+        hooks: {
+          enabled: false,
+          Stop: [foreignStop],
+        },
+      };
+      const originalBytes = jsonBytes(original);
+      const r = runInstaller([], { beforeRun: fixture => {
+        const live = liveConfigPath(fixture);
+        fs.mkdirSync(path.dirname(live), { recursive: true });
+        fs.writeFileSync(live, originalBytes, { mode: 0o600 });
+      } });
+      const live = liveConfigPath(r);
+      let after = null;
+      try { after = JSON.parse(fs.readFileSync(live, 'utf8')); } catch (_) { after = null; }
+      assertReal(!!after && after.hooks && after.hooks.enabled === false,
+        'R3-disabled-foreign: project install never silently activates a dormant foreign '
+        + 'global hook when hooks.enabled started false (status=' + r.status + ')');
+      assertReal(hasExactEntry(after, 'Stop', foreignStop),
+        'R3-disabled-foreign: the dormant foreign Stop entry survives byte-for-byte in meaning');
+      clean(r);
+    }
+
+    // A path substring is not an ownership identity. These two commands are
+    // deliberately plausible false positives for the old broad regex: one
+    // contains kaola-workflow/hooks and one contains kaola-workflow/scripts.
+    // A real install followed by uninstall must preserve both while removing
+    // only the entries that this install actually added.
+    {
+      const foreignHookPath = {
+        command: 'sh /opt/customer/kaola-workflow/hooks/user-session-start.sh',
+        timeout: 23,
+        owner: 'foreign-hook-fixture',
+      };
+      const foreignScriptPath = {
+        command: 'node /opt/customer/kaola-workflow/scripts/user-pre-tool.js',
+        timeout: 29,
+        owner: 'foreign-script-fixture',
+      };
+      const seed = {
+        hooks: {
+          enabled: true,
+          SessionStart: [foreignHookPath],
+          PreToolUse: [foreignScriptPath],
+        },
+      };
+      const r = runInstaller([], { beforeRun: fixture => {
+        const live = liveConfigPath(fixture);
+        fs.mkdirSync(path.dirname(live), { recursive: true });
+        fs.writeFileSync(live, jsonBytes(seed), { mode: 0o600 });
+      } });
+      assertReal(r.status === 0,
+        'R3-exact-ownership: seed install exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
+      const live = liveConfigPath(r);
+      let installed = null;
+      try { installed = JSON.parse(fs.readFileSync(live, 'utf8')); } catch (_) { installed = null; }
+      assertReal(hasExactEntry(installed, 'SessionStart', foreignHookPath),
+        'R3-exact-ownership: a foreign command merely containing kaola-workflow/hooks survives install');
+      assertReal(hasExactEntry(installed, 'PreToolUse', foreignScriptPath),
+        'R3-exact-ownership: a foreign command merely containing kaola-workflow/scripts survives install');
+      const installedRows = Object.entries(installed && installed.hooks || {}).flatMap(([event, entries]) =>
+        event === 'enabled' || !Array.isArray(entries)
+          ? []
+          : entries.map(entry => ({ event, entry })))
+        .filter(row => !hasExactEntry(seed, row.event, row.entry));
+      assertReal(installedRows.length > 0,
+        'R3-exact-ownership: the install adds at least one exact Kaola hook entry before uninstall');
+      // spawn-class: environment
+      const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r.dest, '--yes'], {
+        env: Object.assign({}, process.env, { HOME: r.home, ZCODE_HOME: r.zcodeHome }),
+        encoding: 'utf8',
+      });
+      assertReal(ru.status === 0,
+        'R3-exact-ownership: uninstall exits 0 (got ' + ru.status + ' — ' + firstLine(ru) + ')');
+      let uninstalled = null;
+      try { uninstalled = JSON.parse(fs.readFileSync(live, 'utf8')); } catch (_) { uninstalled = null; }
+      assertReal(hasExactEntry(uninstalled, 'SessionStart', foreignHookPath)
+        && hasExactEntry(uninstalled, 'PreToolUse', foreignScriptPath),
+        'R3-exact-ownership: uninstall preserves every foreign path-lookalike entry');
+      assertReal(installedRows.every(row => !hasExactEntry(uninstalled, row.event, row.entry)),
+        'R3-exact-ownership: uninstall removes every exact entry added by this install receipt');
+      clean(r);
+    }
+
+    // When no foreign command is waiting behind the shared flag, Kaola can
+    // enable its own hook. Uninstall must restore the prior false value rather
+    // than leaving a global state change behind.
+    {
+      const seed = { hooks: { enabled: false } };
+      const r = runInstaller([], { beforeRun: fixture => {
+        const live = liveConfigPath(fixture);
+        fs.mkdirSync(path.dirname(live), { recursive: true });
+        fs.writeFileSync(live, jsonBytes(seed), { mode: 0o600 });
+      } });
+      assertReal(r.status === 0,
+        'R3-enabled-restore: install into an otherwise empty disabled hook carrier exits 0');
+      const live = liveConfigPath(r);
+      const installed = JSON.parse(fs.readFileSync(live, 'utf8'));
+      assertReal(installed.hooks.enabled === true,
+        'R3-enabled-restore: Kaola can enable its own hook when no foreign command would be activated');
+      // spawn-class: environment
+      const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r.dest, '--yes'], {
+        env: Object.assign({}, process.env, { HOME: r.home, ZCODE_HOME: r.zcodeHome }),
+        encoding: 'utf8',
+      });
+      const after = JSON.parse(fs.readFileSync(live, 'utf8'));
+      assertReal(ru.status === 0 && after.hooks.enabled === false,
+        'R3-enabled-restore: uninstall restores the exact prior hooks.enabled=false state');
+      clean(r);
+    }
+
+    // Project .zcode/config.json and the legacy ZCODE_HOME/config.json are
+    // ignored by current ZCode. Without an exact receipt identifying them as a
+    // former Kaola carrier, uninstall must not normalize or strip their bytes.
+    {
+      const legacyEntry = {
+        command: 'sh /srv/archive/kaola-workflow/hooks/user-owned-legacy.sh',
+        owner: 'foreign-legacy-fixture',
+      };
+      const projectBytes = '{\n  "project": "spacing-is-user-owned",\n  "hooks": {"enabled": false, "Stop": '
+        + JSON.stringify([legacyEntry]) + '}\n}\n';
+      const homeBytes = '{"home":"legacy-user-owned","hooks":{"enabled":true,"PreToolUse":'
+        + JSON.stringify([legacyEntry]) + '}}\n';
+      const r = runInstaller(['--uninstall'], { beforeRun: fixture => {
+        fs.mkdirSync(path.dirname(projectConfigPath(fixture)), { recursive: true });
+        fs.writeFileSync(projectConfigPath(fixture), projectBytes, { mode: 0o600 });
+        fs.writeFileSync(legacyHomeConfigPath(fixture), homeBytes, { mode: 0o600 });
+      } });
+      assertReal(r.status === 0,
+        'R3-ignored-configs: uninstall with no ownership receipt exits 0');
+      assertReal(fs.readFileSync(projectConfigPath(r), 'utf8') === projectBytes,
+        'R3-ignored-configs: unreceipted project .zcode/config.json remains byte-identical');
+      assertReal(fs.readFileSync(legacyHomeConfigPath(r), 'utf8') === homeBytes,
+        'R3-ignored-configs: unreceipted legacy ZCODE_HOME/config.json remains byte-identical');
+      clean(r);
+    }
+
+    // Never follow a config.json symlink during either half of the lifecycle.
+    // The external target is user-owned and must remain byte-identical; refusing
+    // the operation is the fail-closed result.
+    for (const operation of ['install', 'uninstall']) {
+      const externalBytes = jsonBytes({
+        hooks: {
+          enabled: true,
+          SessionStart: [{ command: 'echo external-user-owned' }],
+        },
+      });
+      const r = runInstaller(operation === 'uninstall' ? ['--uninstall'] : [], {
+        beforeRun: fixture => {
+          const live = liveConfigPath(fixture);
+          const external = path.join(fixture.home, 'external-config-' + operation + '.json');
+          fs.mkdirSync(path.dirname(live), { recursive: true });
+          fs.writeFileSync(external, externalBytes, { mode: 0o600 });
+          fs.symlinkSync(external, live);
+        },
+      });
+      const external = path.join(r.home, 'external-config-' + operation + '.json');
+      assertReal(r.status !== 0,
+        'R3-config-symlink[' + operation + ']: installer fails closed on live config.json symlink '
+        + '(got status ' + r.status + ')');
+      assertReal(fs.lstatSync(liveConfigPath(r)).isSymbolicLink(),
+        'R3-config-symlink[' + operation + ']: live config path remains a symlink, never replaced or followed');
+      assertReal(fs.readFileSync(external, 'utf8') === externalBytes,
+        'R3-config-symlink[' + operation + ']: external symlink target remains byte-identical');
+      clean(r);
+    }
+
+    // Atomic replacement must preserve a user's restrictive mode on both
+    // merge and uninstall, even though a fresh inode is published.
+    {
+      const r = runInstaller([], { beforeRun: fixture => {
+        const live = liveConfigPath(fixture);
+        fs.mkdirSync(path.dirname(live), { recursive: true });
+        fs.writeFileSync(live, jsonBytes(userConfigSeed()), { mode: 0o600 });
+        fs.chmodSync(live, 0o600);
+      } });
+      const live = liveConfigPath(r);
+      assertReal(r.status === 0 && configMode(live) === 0o600,
+        'R3-config-mode: install preserves an existing live config mode of 0600');
+      // spawn-class: environment
+      const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r.dest, '--yes'], {
+        env: Object.assign({}, process.env, { HOME: r.home, ZCODE_HOME: r.zcodeHome }),
+        encoding: 'utf8',
+      });
+      assertReal(ru.status === 0 && configMode(live) === 0o600,
+        'R3-config-mode: uninstall preserves an existing live config mode of 0600');
+      clean(r);
+    }
+
+    // A same-directory atomic publisher needs directory write permission to
+    // create and rename its temporary sibling. With that publication step
+    // denied, merge and strip must fail and retain the complete original bytes.
+    for (const operation of ['merge', 'strip']) {
+      const dir = fs.mkdtempSync(path.join(tmpBase(), 'zcode-r3-atomic-'));
+      const dest = path.join(dir, 'config.json');
+      let originalBytes = jsonBytes({
+        sentinel: operation + '-original-bytes',
+        hooks: {
+          enabled: true,
+          Stop: [{ command: 'echo foreign-atomic-fixture' }],
+        },
+      });
+      try {
+        fs.writeFileSync(dest, originalBytes, { mode: 0o600 });
+        if (operation === 'strip') {
+          const seeded = runGenerator(['--merge-hooks', '--dest=' + dest, '--global']);
+          assertReal(seeded.status === 0,
+            'R3-atomic[strip]: precondition merge creates an exact Kaola entry');
+          originalBytes = fs.readFileSync(dest, 'utf8');
+        }
+        fs.chmodSync(dir, 0o500);
+        const attempted = runGeneratorCli([
+          operation === 'merge' ? '--merge-hooks' : '--strip-hooks',
+          '--dest=' + dest,
+          '--global',
+        ]);
+        assertReal(attempted.status !== 0,
+          'R3-atomic[' + operation + ']: denied same-directory publication exits non-zero '
+          + '(got ' + attempted.status + ')');
+        assertReal(fs.readFileSync(dest, 'utf8') === originalBytes,
+          'R3-atomic[' + operation + ']: publication failure leaves the original config bytes intact');
+        assertReal(configMode(dest) === 0o600,
+          'R3-atomic[' + operation + ']: publication failure leaves the original 0600 mode intact');
+      } finally {
+        try { fs.chmodSync(dir, 0o700); } catch (_) { /* cleanup only */ }
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
     }
   }
 }

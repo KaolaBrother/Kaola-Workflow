@@ -1,8 +1,8 @@
 # Claude runtime overlay
 
+<!-- KW-CLAUDE-OVERLAY-MANAGED-START -->
 @AGENTS.md
 
-<!-- KW-CLAUDE-OVERLAY-MANAGED-START -->
 Claude must import and follow the repository contract above before any action in this repository.
 
 - Project instruction discovery is bridged through this file because this runtime does not load the

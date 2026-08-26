@@ -711,29 +711,85 @@ assert(def.model === undefined, 'A8: default config pins NO top-level "model" (i
 assert(def.agent === undefined, 'A8: default config pins NO "agent" overrides (reasoning inherits user default)');
 
 // A8 (opt-in pin): pinning both tiers yields a provider/model string + an agent
-// block covering EXACTLY the canonical opus roles.
+// block covering EXACTLY the runtime-neutral reasoning/heavy intent roles.  The
+// OpenCode config is a consumer of behavior intent, never of Claude's rendered
+// model token: a valid Claude-only adapter evolution must not move this roster.
 const reasoning = sync.reasoningRoles();
+const behaviorContracts = reviewerGenerator.loadBehaviorContracts(REPO);
+const behaviorReasoning = Object.entries(behaviorContracts.roles)
+  .filter(([, contract]) => contract.intent_class === 'reasoning' || contract.intent_class === 'heavy')
+  .map(([role]) => role)
+  .sort();
+assert(JSON.stringify(reasoning) === JSON.stringify(behaviorReasoning),
+  'A8-intent (#1033/R4): reasoningRoles() derives exactly from behavior-contract intent_class — expected ['
+  + behaviorReasoning.join(', ') + '], got [' + reasoning.join(', ') + ']');
 const pinned = parseRendered({ standardModel: 'test/std', reasoningModel: 'test/reas' });
 assert(pinned.model === 'test/std', 'A8: pinned standard tier carries the given provider/model');
 const pinnedReasoning = Object.keys(pinned.agent || {}).sort();
 assert(JSON.stringify(pinnedReasoning) === JSON.stringify(reasoning),
-  'A8: pinned reasoning overrides cover EXACTLY the canonical opus roles (' + reasoning.join(', ') + '); got [' + pinnedReasoning.join(', ') + ']');
+  'A8: pinned reasoning overrides cover EXACTLY the behavior-contract reasoning roles (' + reasoning.join(', ') + '); got [' + pinnedReasoning.join(', ') + ']');
 for (const role of reasoning) {
   assert(pinned.agent[role].model === 'test/reas',
     'A8[' + role + ']: pinned reasoning tier carries the given provider/model');
 }
 
-// #1018 / ADR 0019: fable classifies as reasoning so planner/code-architect stay
-// on the per-role override list after they re-tier from opus to fable. The
-// live roleTier('opus')-only branch would silently drop them to standard.
-assert(sync.roleTier('fable') === 'reasoning',
-  'A8-fable: roleTier(fable) classifies as reasoning, not standard');
-assert(sync.roleTier('opus') === 'reasoning',
-  'A8-fable: roleTier(opus) remains reasoning');
-assert(sync.roleTier('sonnet') === 'standard',
-  'A8-fable: roleTier(sonnet) remains standard');
-assert(reasoning.includes('planner') && reasoning.includes('code-architect'),
-  'A8-fable: planner and code-architect stay on the per-role override list — got [' + reasoning.join(' , ') + ']');
+// Adapter-isolation mutation.  This is a VALID Claude-only change: the
+// runtime-neutral `standard` intent is remapped to a Claude token that the
+// adapter schema already accepts.  Generate the resulting Claude profiles,
+// expose those bytes to the real OpenCode subject through its filesystem input,
+// and require both reasoningRoles() and renderNeutralConfig() to stay unchanged.
+// The subject is never mocked; only its isolated canonical-file environment is.
+{
+  const adapters = reviewerGenerator.loadRuntimeAdapters(REPO);
+  const mutatedAdapters = JSON.parse(JSON.stringify(adapters));
+  mutatedAdapters.runtimes.claude.capabilities.intent_mapping.standard = 'opus';
+  reviewerGenerator.validateRuntimeAdapters(mutatedAdapters);
+  const mutatedClaudeProfiles = new Map(reviewerGenerator
+    .renderProfiles(behaviorContracts, mutatedAdapters)
+    .filter(profile => profile.variant === 'claude')
+    .map(profile => [path.basename(profile.path), profile.content]));
+  const baselineClaudeProfiles = new Map(reviewerGenerator
+    .renderProfiles(behaviorContracts, adapters)
+    .filter(profile => profile.variant === 'claude')
+    .map(profile => [path.basename(profile.path), profile.content]));
+  const changedClaudeRoles = [...mutatedClaudeProfiles]
+    .filter(([name, content]) => baselineClaudeProfiles.get(name) !== content)
+    .map(([name]) => name);
+  assert(changedClaudeRoles.length > 0,
+    'A8-adapter-isolation (#1033/R4) anti-vacuity: valid Claude-only mutation changes rendered Claude profiles');
+
+  const originalReadFileSync = fs.readFileSync;
+  let mutatedReasoning;
+  let mutatedConfig;
+  try {
+    fs.readFileSync = function isolatedClaudeProfileRead(file, options) {
+      const absolute = typeof file === 'string' ? path.resolve(file) : '';
+      const name = path.basename(absolute);
+      if (path.dirname(absolute) === path.resolve(sync.CANON_AGENTS_DIR)
+          && mutatedClaudeProfiles.has(name)) {
+        const content = mutatedClaudeProfiles.get(name);
+        return typeof options === 'string' || (options && options.encoding)
+          ? content : Buffer.from(content);
+      }
+      return originalReadFileSync.apply(fs, arguments);
+    };
+    mutatedReasoning = sync.reasoningRoles();
+    mutatedConfig = sync.renderNeutralConfig({
+      standardModel: 'test/std',
+      reasoningModel: 'test/reas',
+    });
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
+  assert(JSON.stringify(mutatedReasoning) === JSON.stringify(behaviorReasoning),
+    'A8-adapter-isolation (#1033/R4): valid Claude-only adapter mutation cannot change OpenCode reasoningRoles() — expected ['
+    + behaviorReasoning.join(', ') + '], got [' + mutatedReasoning.join(', ') + ']');
+  assert(mutatedConfig === sync.renderNeutralConfig({
+    standardModel: 'test/std',
+    reasoningModel: 'test/reas',
+  }),
+  'A8-adapter-isolation (#1033/R4): renderNeutralConfig() is byte-invariant under a valid Claude-only adapter mutation');
+}
 
 // A12 / S1-contract / A12-options — DELETED WITH THEIR MECHANISM. Per-role effort tiering is
 // removed, so every subject these three bands read is gone:
@@ -1514,6 +1570,10 @@ if (exists(pluginRel)) {
     const mdNames = dir => existsSync(dir)
       ? readdirSync(dir).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort()
       : [];
+    const textEquals = (file, expected) =>
+      existsSync(file) && readFileSync(file, 'utf8') === expected;
+    const bytesEqual = (file, expected) =>
+      existsSync(file) && readFileSync(file).equals(expected);
     const sameNames = (actual, expected) =>
       JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
     const treeFiles = root => {
@@ -1655,6 +1715,13 @@ if (exists(pluginRel)) {
     const legacyBody = '# Kaola-owned legacy OpenCode agent\n';
     const editedBody = '# Kaola-owned legacy OpenCode agent\n\nUser edit.\n';
     const userBody = '# My unrelated OpenCode agent\n';
+    const forgedManagedBody = [
+      '---',
+      'kaola-workflow-managed-agent: true',
+      '---',
+      '# User-owned profile carrying a forged marker',
+      '',
+    ].join('\n');
     const plantLegacySingular = singular => {
       fs.mkdirSync(singular, { recursive: true });
       fs.writeFileSync(path.join(singular, 'code-explorer.md'), legacyBody);
@@ -1664,17 +1731,25 @@ if (exists(pluginRel)) {
         'code-explorer.md\t' + sha256(Buffer.from(legacyBody)) + '\n'
         + 'legacy-edited.md\t' + sha256(Buffer.from('# Kaola-owned legacy OpenCode agent\n')) + '\n');
     };
-    const legacyKnownCommands = [
+    const legacyCurrentCommands = expectedCommands.map(name => name + '.md');
+    const legacyRetiredCommands = [
       'kaola-workflow-adapt.md', 'kaola-workflow-auto.md', 'kaola-workflow-fast.md',
-      'kaola-workflow-finalize.md', 'kaola-workflow-phase1.md', 'kaola-workflow-phase2.md',
+      'kaola-workflow-phase1.md', 'kaola-workflow-phase2.md',
       'kaola-workflow-phase3.md', 'kaola-workflow-phase4.md', 'kaola-workflow-phase5.md',
-      'kaola-workflow-plan-run.md', 'workflow-init.md', 'workflow-next.md',
+      'kaola-workflow-plan-run.md',
     ];
-    const legacyCommandBody = name => '# Kaola legacy command: ' + name + '\n';
+    const unprovenLegacyCommandBody = name => '# User-owned same-name legacy command: ' + name + '\n';
     const plantLegacyCommands = singular => {
       fs.mkdirSync(singular, { recursive: true });
-      for (const name of legacyKnownCommands) {
-        fs.writeFileSync(path.join(singular, name), legacyCommandBody(name));
+      // Current command bytes are a concrete known Kaola blob and may be retired
+      // from the singular carrier.  A known historical NAME with arbitrary bytes
+      // is not ownership proof, so every retired-name near miss below must stay.
+      for (const name of legacyCurrentCommands) {
+        fs.writeFileSync(path.join(singular, name),
+          fs.readFileSync(path.join(generatedCommandsPlural, name)));
+      }
+      for (const name of legacyRetiredCommands) {
+        fs.writeFileSync(path.join(singular, name), unprovenLegacyCommandBody(name));
       }
       fs.writeFileSync(path.join(singular, 'my-own-command.md'), '# My unrelated command\n');
       fs.writeFileSync(path.join(singular, 'notes.txt'), 'keep this note\n');
@@ -1709,15 +1784,37 @@ if (exists(pluginRel)) {
       const singular = path.join(dest, '.opencode', 'command');
       plantLegacyCommands(singular);
       const r = runInstaller([], { home, dest });
-      const knownLeft = legacyKnownCommands.filter(name => existsSync(path.join(singular, name)));
-      assert(r.ok && knownLeft.length === 0,
-        'N8-command-project (#1033): project install retires every Kaola current/retired command from singular command/ — left '
-        + JSON.stringify(knownLeft));
-      assert(readFileSync(path.join(singular, 'my-own-command.md'), 'utf8') === '# My unrelated command\n'
+      const currentLeft = legacyCurrentCommands.filter(name => existsSync(path.join(singular, name)));
+      const retiredPreserved = legacyRetiredCommands.every(name =>
+        textEquals(path.join(singular, name), unprovenLegacyCommandBody(name)));
+      assert(r.ok && currentLeft.length === 0,
+        'N8-command-project (#1033/R2): project install retires exact known current Kaola bytes from singular command/ — left '
+        + JSON.stringify(currentLeft));
+      assert(retiredPreserved
+        && readFileSync(path.join(singular, 'my-own-command.md'), 'utf8') === '# My unrelated command\n'
         && readFileSync(path.join(singular, 'notes.txt'), 'utf8') === 'keep this note\n',
-        'N8-command-project (#1033): singular command migration preserves unknown user files byte-intact');
+        'N8-command-project (#1033/R2): singular command migration preserves arbitrary bytes under retired Kaola names and unknown user files byte-intact');
       assert(sameNames(mdNames(path.join(dest, '.opencode', 'commands')), expectedCommands),
         'N8-command-project (#1033): legacy cleanup still converges the 3-command plural roster');
+      clean(r);
+    }
+
+    // A current Kaola command plus owner bytes is no longer an exact known blob.
+    // Its familiar name and prefix cannot authorize deletion from the retired
+    // singular carrier.
+    {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-command-edited-home-'));
+      const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-command-edited-dest-'));
+      const singular = path.join(dest, '.opencode', 'command');
+      const editedCommand = Buffer.concat([
+        fs.readFileSync(path.join(generatedCommandsPlural, 'workflow-next.md')),
+        Buffer.from('\nUSER_EDIT_SENTINEL\n'),
+      ]);
+      fs.mkdirSync(singular, { recursive: true });
+      fs.writeFileSync(path.join(singular, 'workflow-next.md'), editedCommand);
+      const r = runInstaller([], { home, dest });
+      assert(r.ok && bytesEqual(path.join(singular, 'workflow-next.md'), editedCommand),
+        'N8-command-edited-project (#1033/R2): singular current-name command with user-modified bytes survives install byte-intact');
       clean(r);
     }
 
@@ -1741,12 +1838,13 @@ if (exists(pluginRel)) {
       const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-command-retire-dest-'));
       const singular = path.join(dest, '.opencode', 'command');
       fs.mkdirSync(singular, { recursive: true });
-      for (const name of legacyKnownCommands) {
-        fs.writeFileSync(path.join(singular, name), legacyCommandBody(name));
+      for (const name of legacyCurrentCommands) {
+        fs.writeFileSync(path.join(singular, name),
+          fs.readFileSync(path.join(generatedCommandsPlural, name)));
       }
       const r = runInstaller([], { home, dest });
       assert(r.ok && !existsSync(singular),
-        'N9-command-project (#1033): an allowlist-only legacy .opencode/command/ directory is removed after migration');
+        'N9-command-project (#1033/R2): an exact-known-byte legacy .opencode/command/ directory is removed after migration');
       clean(r);
     }
 
@@ -1778,13 +1876,16 @@ if (exists(pluginRel)) {
       const singular = path.join(cfg, 'command');
       plantLegacyCommands(singular);
       const r = runGlobalInstaller([], { home, cfg });
-      const knownLeft = legacyKnownCommands.filter(name => existsSync(path.join(singular, name)));
-      assert(r.ok && knownLeft.length === 0,
-        'N8-command-global (#1033): global install retires every Kaola current/retired command from singular command/ — left '
-        + JSON.stringify(knownLeft));
-      assert(readFileSync(path.join(singular, 'my-own-command.md'), 'utf8') === '# My unrelated command\n'
+      const currentLeft = legacyCurrentCommands.filter(name => existsSync(path.join(singular, name)));
+      const retiredPreserved = legacyRetiredCommands.every(name =>
+        textEquals(path.join(singular, name), unprovenLegacyCommandBody(name)));
+      assert(r.ok && currentLeft.length === 0,
+        'N8-command-global (#1033/R2): global install retires exact known current Kaola bytes from singular command/ — left '
+        + JSON.stringify(currentLeft));
+      assert(retiredPreserved
+        && readFileSync(path.join(singular, 'my-own-command.md'), 'utf8') === '# My unrelated command\n'
         && readFileSync(path.join(singular, 'notes.txt'), 'utf8') === 'keep this note\n',
-        'N8-command-global (#1033): global singular migration preserves unknown user files byte-intact');
+        'N8-command-global (#1033/R2): global singular migration preserves arbitrary bytes under retired Kaola names and unknown user files byte-intact');
       assert(sameNames(mdNames(path.join(cfg, 'commands')), expectedCommands),
         'N8-command-global (#1033): legacy global cleanup still converges the 3-command plural roster');
       try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
@@ -1799,12 +1900,12 @@ if (exists(pluginRel)) {
       const plural = path.join(dest, '.opencode', 'agents');
       const collision = path.join(plural, 'code-explorer.md');
       fs.mkdirSync(plural, { recursive: true });
-      fs.writeFileSync(collision, userBody);
+      fs.writeFileSync(collision, forgedManagedBody);
       const r = runInstaller([], { home, dest });
       assert(!r.ok,
-        'N10-project (#1033): unmanaged same-name plural profile makes project install fail closed');
-      assert(readFileSync(collision, 'utf8') === userBody,
-        'N10-project (#1033): collision refusal preserves the unmanaged profile byte-intact');
+        'N10-project (#1033/R2): unmanaged same-name plural profile makes project install fail closed even when it forges the managed marker');
+      assert(readFileSync(collision, 'utf8') === forgedManagedBody,
+        'N10-project (#1033/R2): collision refusal preserves the marker-forging unmanaged profile byte-intact');
       assert(!existsSync(path.join(plural, AGENT_MANIFEST))
         && mdNames(plural).length === 1,
         'N10-project (#1033): collision refusal writes no manifest and deploys no other profiles');
@@ -1818,20 +1919,117 @@ if (exists(pluginRel)) {
       const plural = path.join(cfg, 'agents');
       const collision = path.join(plural, 'code-explorer.md');
       fs.mkdirSync(plural, { recursive: true });
-      fs.writeFileSync(collision, userBody);
+      fs.writeFileSync(collision, forgedManagedBody);
       const r = runGlobalInstaller([], { home, cfg });
       assert(!r.ok,
-        'N10-global (#1033): unmanaged same-name plural profile makes global install fail closed');
-      assert(readFileSync(collision, 'utf8') === userBody
+        'N10-global (#1033/R2): unmanaged same-name plural profile makes global install fail closed even when it forges the managed marker');
+      assert(readFileSync(collision, 'utf8') === forgedManagedBody
         && !existsSync(path.join(plural, AGENT_MANIFEST))
         && mdNames(plural).length === 1,
-        'N10-global (#1033): global collision refusal preserves the file and deploys no other profiles');
+        'N10-global (#1033/R2): global collision refusal preserves the marker-forging file and deploys no other profiles');
       try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
       try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
     }
 
-    // Uninstall removes every manifest-owned plural profile and the manifest,
-    // preserves an unrelated plural profile, and does not touch old singular user data.
+    // A symlink is owner-selected topology, not a same-name file Kaola may
+    // adopt because its target currently happens to equal generated bytes.
+    // Exercise the hash-equal near miss: a name/hash-only implementation accepts
+    // it, while an lstat ownership boundary refuses before deploying anything.
+    {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-symlink-home-'));
+      const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-symlink-dest-'));
+      const outside = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-symlink-target-'));
+      const plural = path.join(dest, '.opencode', 'agents');
+      const collision = path.join(plural, 'code-explorer.md');
+      const target = path.join(outside, 'owner-profile.md');
+      const targetBytes = fs.readFileSync(path.join(generatedPlural, 'code-explorer.md'));
+      fs.mkdirSync(plural, { recursive: true });
+      fs.writeFileSync(target, targetBytes);
+      fs.symlinkSync(target, collision);
+      const r = runInstaller([], { home, dest });
+      assert(!r.ok,
+        'N10-symlink-project (#1033/R2): same-name plural profile symlink fails closed even when its target bytes equal generated output');
+      assert(existsSync(collision) && fs.lstatSync(collision).isSymbolicLink()
+        && fs.readFileSync(target).equals(targetBytes)
+        && !existsSync(path.join(plural, AGENT_MANIFEST))
+        && mdNames(plural).length === 1,
+        'N10-symlink-project (#1033/R2): refusal preserves symlink topology and external target bytes and deploys no other profiles');
+      try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
+      try { rmSync(dest, { recursive: true, force: true }); } catch (_) {}
+      try { rmSync(outside, { recursive: true, force: true }); } catch (_) {}
+    }
+
+    {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-global-symlink-home-'));
+      const cfg = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-global-symlink-cfg-'));
+      const outside = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-global-symlink-target-'));
+      const plural = path.join(cfg, 'agents');
+      const collision = path.join(plural, 'code-explorer.md');
+      const target = path.join(outside, 'owner-profile.md');
+      const targetBytes = fs.readFileSync(path.join(generatedPlural, 'code-explorer.md'));
+      fs.mkdirSync(plural, { recursive: true });
+      fs.writeFileSync(target, targetBytes);
+      fs.symlinkSync(target, collision);
+      const r = runGlobalInstaller([], { home, cfg });
+      assert(!r.ok,
+        'N10-symlink-global (#1033/R2): global same-name profile symlink fails closed even when its target bytes equal generated output');
+      assert(existsSync(collision) && fs.lstatSync(collision).isSymbolicLink()
+        && fs.readFileSync(target).equals(targetBytes)
+        && !existsSync(path.join(plural, AGENT_MANIFEST))
+        && mdNames(plural).length === 1,
+        'N10-symlink-global (#1033/R2): global refusal preserves symlink topology and external target bytes and deploys no other profiles');
+      try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
+      try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
+      try { rmSync(outside, { recursive: true, force: true }); } catch (_) {}
+    }
+
+    // Manifest ownership is conditional on the recorded hash still matching.
+    // A user edit leaves the generated marker in place, so this catches a
+    // marker-only fallback that undoes the manifest check during uninstall.
+    {
+      const r = runInstaller([]);
+      const plural = path.join(r.dest, '.opencode', 'agents');
+      const profile = path.join(plural, 'code-reviewer.md');
+      const edited = readFileSync(profile, 'utf8') + '\nUSER_EDIT_SENTINEL\n';
+      assert(edited.includes('kaola-workflow-managed-agent: true'),
+        'N10-modified-project (#1033/R2) anti-vacuity: edited current profile retains the managed marker');
+      fs.writeFileSync(profile, edited);
+      const reinstall = runInstaller([], { home: r.home, dest: r.dest });
+      assert(!reinstall.ok && readFileSync(profile, 'utf8') === edited,
+        'N10-modified-project (#1033/R2): reinstall fails closed and preserves a hash-mismatched current plural profile byte-intact');
+      // spawn-class: environment
+      const uninstall = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r.dest, '--yes'],
+        { env: Object.assign({}, process.env, { HOME: r.home }), encoding: 'utf8' });
+      assert(existsSync(profile) && readFileSync(profile, 'utf8') === edited,
+        'N10-modified-project (#1033/R2): uninstall preserves a hash-mismatched current plural profile despite its managed marker (exit '
+        + uninstall.status + ')');
+      clean(r);
+    }
+
+    {
+      const r = runGlobalInstaller([]);
+      const plural = path.join(r.cfg, 'agents');
+      const profile = path.join(plural, 'code-reviewer.md');
+      const edited = readFileSync(profile, 'utf8') + '\nUSER_EDIT_SENTINEL\n';
+      fs.writeFileSync(profile, edited);
+      const reinstall = runGlobalInstaller([], { home: r.home, cfg: r.cfg });
+      assert(!reinstall.ok && readFileSync(profile, 'utf8') === edited,
+        'N10-modified-global (#1033/R2): global reinstall fails closed and preserves a hash-mismatched current plural profile byte-intact');
+      // spawn-class: environment
+      const uninstall = spawnSync('bash', [INSTALLER, '--global', '--uninstall', '--yes'], {
+        env: Object.assign({}, process.env, { HOME: r.home, OPENCODE_CONFIG_DIR: r.cfg }),
+        encoding: 'utf8',
+      });
+      assert(existsSync(profile) && readFileSync(profile, 'utf8') === edited,
+        'N10-modified-global (#1033/R2): global uninstall preserves a hash-mismatched current plural profile despite its managed marker (exit '
+        + uninstall.status + ')');
+      try { rmSync(r.home, { recursive: true, force: true }); } catch (_) {}
+      try { rmSync(r.cfg, { recursive: true, force: true }); } catch (_) {}
+    }
+
+    // Uninstall removes every hash-proven plural profile and exact current
+    // command blob, preserves unrelated profiles, and treats familiar names in
+    // retired singular carriers as user data unless their bytes prove ownership.
     {
       const r = runInstaller([]);
       const plural = path.join(r.dest, '.opencode', 'agents');
@@ -1849,7 +2047,8 @@ if (exists(pluginRel)) {
       fs.writeFileSync(path.join(plural, 'my-own-helper.md'), userBody);
       fs.writeFileSync(path.join(singular, 'my-old-helper.md'), userBody);
       fs.writeFileSync(path.join(pluralCommands, 'my-own-command.md'), '# My unrelated command\n');
-      fs.writeFileSync(path.join(singularCommands, 'workflow-next.md'), legacyCommandBody('workflow-next.md'));
+      fs.writeFileSync(path.join(singularCommands, 'workflow-next.md'),
+        unprovenLegacyCommandBody('workflow-next.md'));
       fs.writeFileSync(path.join(singularCommands, 'my-old-command.md'), '# My old unrelated command\n');
       // spawn-class: environment
       const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r.dest, '--yes'],
@@ -1866,10 +2065,11 @@ if (exists(pluginRel)) {
       const currentCommandsLeft = expectedCommands
         .filter(name => existsSync(path.join(pluralCommands, name + '.md')));
       assert(currentCommandsLeft.length === 0
-        && !existsSync(path.join(singularCommands, 'workflow-next.md'))
+        && textEquals(path.join(singularCommands, 'workflow-next.md'),
+          unprovenLegacyCommandBody('workflow-next.md'))
         && readFileSync(path.join(pluralCommands, 'my-own-command.md'), 'utf8') === '# My unrelated command\n'
         && readFileSync(path.join(singularCommands, 'my-old-command.md'), 'utf8') === '# My old unrelated command\n',
-        'N11-command-project (#1033): uninstall removes Kaola plural/singular commands and preserves unknown user commands — left '
+        'N11-command-project (#1033/R2): uninstall removes deployed plural commands but preserves unproven same-name singular and unknown user commands — left '
         + JSON.stringify(currentCommandsLeft));
       assert(!existsSync(path.join(r.dest, '.opencode', 'plugins', 'kaola-workflow-hooks.js'))
         && existsSync(path.join(r.dest, 'opencode.json')),
@@ -1895,7 +2095,8 @@ if (exists(pluginRel)) {
       fs.writeFileSync(path.join(plural, 'my-own-helper.md'), userBody);
       fs.writeFileSync(path.join(singular, 'my-old-helper.md'), userBody);
       fs.writeFileSync(path.join(pluralCommands, 'my-own-command.md'), '# My unrelated command\n');
-      fs.writeFileSync(path.join(singularCommands, 'workflow-next.md'), legacyCommandBody('workflow-next.md'));
+      fs.writeFileSync(path.join(singularCommands, 'workflow-next.md'),
+        unprovenLegacyCommandBody('workflow-next.md'));
       fs.writeFileSync(path.join(singularCommands, 'my-old-command.md'), '# My old unrelated command\n');
       // spawn-class: environment
       const ru = spawnSync('bash', [INSTALLER, '--global', '--uninstall', '--yes'], {
@@ -1914,10 +2115,11 @@ if (exists(pluginRel)) {
       const currentCommandsLeft = expectedCommands
         .filter(name => existsSync(path.join(pluralCommands, name + '.md')));
       assert(currentCommandsLeft.length === 0
-        && !existsSync(path.join(singularCommands, 'workflow-next.md'))
+        && textEquals(path.join(singularCommands, 'workflow-next.md'),
+          unprovenLegacyCommandBody('workflow-next.md'))
         && readFileSync(path.join(pluralCommands, 'my-own-command.md'), 'utf8') === '# My unrelated command\n'
         && readFileSync(path.join(singularCommands, 'my-old-command.md'), 'utf8') === '# My old unrelated command\n',
-        'N11-command-global (#1033): uninstall removes Kaola plural/singular commands and preserves unknown user commands — left '
+        'N11-command-global (#1033/R2): global uninstall removes deployed plural commands but preserves unproven same-name singular and unknown user commands — left '
         + JSON.stringify(currentCommandsLeft));
       assert(!existsSync(path.join(r.cfg, 'plugins', 'kaola-workflow-hooks.js'))
         && existsSync(path.join(r.cfg, 'opencode.json')),

@@ -114,13 +114,15 @@ Project installs write command Skills and agents below `<project>/.kimi-code/`. 
 write them directly below `$KIMI_CODE_HOME`. Support scripts and hooks remain user-scoped in both
 cases.
 
-Every generated native agent carries exactly one Kaola ownership marker. Install refuses an
-unmanaged same-name agent instead of overwriting it, and uninstall preserves such a file
-byte-for-byte. Reinstall updates managed profiles and is idempotent. The migration also removes the
-bounded `kaola-role-*` Skill directories shipped by older Kaola releases; unrelated Skills remain.
-Uninstall removes only managed agents, the three Kaola command Skills, managed hook/support files,
-and the managed config block. It preserves the user's other agents, Skills, config content, and the
-shared `~/.config/kaola-workflow/config.json`.
+Every generated native agent is recorded in a filename-plus-SHA manifest; the visible marker alone
+is never ownership proof. Install refuses an unmanaged or owner-modified same-name agent and any
+agent-directory, profile, or manifest symlink before writing. Reinstall updates only hash-proven
+managed profiles and is idempotent. The migration removes an older `kaola-role-*` Skill directory
+only when its complete one-file bytes match an exact profile shipped by v9.17.2; modified and
+unknown role-shaped Skills remain. Uninstall removes only manifest/exact-byte-proven agents, the
+three reserved Kaola command Skills, managed hook/support files, and the managed config block. It
+preserves the user's other agents, Skills, config content, and the shared
+`~/.config/kaola-workflow/config.json`.
 
 ## Develop and verify
 

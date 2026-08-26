@@ -301,6 +301,46 @@ if (migrationModule) {
     return { ...result, envelope };
   }
 
+  function runMigrationHelper(helperPath, mode, projectRoot) {
+    // spawn-class: environment
+    const result = spawnSync(process.execPath,
+      [helperPath, mode, '--project-root', projectRoot, '--json'], { encoding: 'utf8' });
+    let envelope = null;
+    try { envelope = JSON.parse(String(result.stdout || '').trim()); } catch (_) { /* asserted below */ }
+    return { ...result, envelope };
+  }
+
+  function exactLineCount(bytes, line) {
+    return String(bytes).split(/\r?\n/).filter(candidate => candidate === line).length;
+  }
+
+  function hasRepositorySpecificContract(bytes) {
+    return [
+      /Kaola-Workflow Repository Instructions/,
+      /Kaola-Workflow is a loop-engineering system/,
+      /scripts\/kaola-workflow-claim\.js/,
+      /simulate-workflow-walkthrough\.js/,
+      /npm run test:kaola-workflow:claude/,
+      /docs\/decisions\/0017-the-mission-list\.md/,
+    ].some(pattern => pattern.test(String(bytes)));
+  }
+
+  function injectManagedDrift(bytes, marker) {
+    const token = Buffer.from(`<!-- ${marker}-START -->`);
+    const at = bytes.indexOf(token);
+    if (at < 0) return bytes;
+    const insertion = at + token.length;
+    return Buffer.concat([
+      bytes.subarray(0, insertion),
+      Buffer.from('\nKW_ACCEPTANCE_DRIFT'),
+      bytes.subarray(insertion),
+    ]);
+  }
+
+  function bufferEndsWith(bytes, suffix) {
+    return bytes.length >= suffix.length && bytes.subarray(bytes.length - suffix.length).equals(suffix);
+  }
+
   const ownerAgents = '\nOWNER_AGENTS_SENTINEL=preserve-this-byte-for-byte\n';
   const ownerClaude = '# Claude owner overlay\n\nOWNER_CLAUDE_SENTINEL=preserve-this-byte-for-byte\n';
   const mixedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-mixed-'));
@@ -392,6 +432,225 @@ if (migrationModule) {
     'A3[active]: active-run preservation leaves both files byte-identical');
   } finally {
     try { fs.rmSync(activeRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
+
+  // A3-installed — workflow-init runs from the distribution that actually ships. Copy each plugin
+  // root away from this repository so an implementation cannot accidentally borrow root-only
+  // AGENTS.md/CLAUDE.md bytes. A successful apply therefore proves that the consumer templates are
+  // owned by, and reachable from, that installed distribution.
+  for (const distribution of [
+    { label: 'github', root: 'plugins/kaola-workflow' },
+    { label: 'gitlab', root: 'plugins/kaola-workflow-gitlab' },
+    { label: 'gitea', root: 'plugins/kaola-workflow-gitea' },
+  ]) {
+    const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), `kw-1033-${distribution.label}-dist-`));
+    try {
+      const installedRoot = path.join(isolatedRoot, 'installed-plugin');
+      const consumerRoot = path.join(isolatedRoot, 'consumer-project');
+      fs.cpSync(path.join(ROOT, distribution.root), installedRoot, { recursive: true });
+      fs.mkdirSync(consumerRoot, { recursive: true });
+      const helperPath = path.join(installedRoot, 'scripts',
+        'kaola-workflow-project-instructions.js');
+      const plan = runMigrationHelper(helperPath, 'plan', consumerRoot);
+      const applied = runMigrationHelper(helperPath, 'apply', consumerRoot);
+      const agentsPath = path.join(consumerRoot, 'AGENTS.md');
+      const claudePath = path.join(consumerRoot, 'CLAUDE.md');
+      const agentsAfter = readOptionalFixture(agentsPath);
+      const claudeAfter = readOptionalFixture(claudePath);
+
+      assert(plan.status === 0 && plan.envelope && plan.envelope.status === 'planned'
+        && applied.status === 0 && applied.envelope && applied.envelope.status === 'applied',
+      `A3[installed/${distribution.label}]: the isolated vendored helper can plan and apply using `
+        + 'distribution-owned consumer templates');
+      assert(!!agentsAfter && !!claudeAfter
+        && /<!--\s*KW-AGENTS-MANAGED-START\s*-->/.test(String(agentsAfter))
+        && /<!--\s*KW-CLAUDE-OVERLAY-MANAGED-START\s*-->/.test(String(claudeAfter))
+        && exactLineCount(claudeAfter, '@AGENTS.md') === 1,
+      `A3[installed/${distribution.label}]: installed templates create one universal AGENTS authority `
+        + 'and one load-bearing Claude bridge');
+      assert(!hasRepositorySpecificContract(agentsAfter || Buffer.alloc(0))
+        && !hasRepositorySpecificContract(claudeAfter || Buffer.alloc(0)),
+      `A3[installed/${distribution.label}]: a new consumer receives no Kaola-Workflow repository-specific contract`);
+    } finally {
+      try { fs.rmSync(isolatedRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
+  }
+
+  // A3-v9 — use the exact supported pre-migration files, not a friendly synthetic owner overlay.
+  function gitBlob(revisionPath) {
+    // spawn-class: environment
+    const result = spawnSync('git', ['show', revisionPath], { cwd: ROOT, encoding: null });
+    return result.status === 0 ? result.stdout : null;
+  }
+
+  function readOptionalFixture(file) {
+    try { return fs.readFileSync(file); } catch (_) { return null; }
+  }
+
+  const v9Agents = gitBlob('a503edd8:AGENTS.md');
+  const v9Claude = gitBlob('a503edd8:CLAUDE.md');
+  assert(Buffer.isBuffer(v9Agents) && Buffer.isBuffer(v9Claude),
+    'A3[v9-exact]: exact a503edd8 AGENTS.md and CLAUDE.md fixtures load from the baseline commit');
+  if (v9Agents && v9Claude) {
+    const v9Root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-v9-exact-'));
+    try {
+      writeInstructionFixture(v9Root, v9Agents, v9Claude);
+      const applied = runMigration('apply', v9Root);
+      const agentsAfter = fs.readFileSync(path.join(v9Root, 'AGENTS.md'));
+      const claudeAfter = fs.readFileSync(path.join(v9Root, 'CLAUDE.md'));
+      assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied',
+        'A3[v9-exact]: the exact a503edd8 instruction pair has a deterministic migration');
+      const universalHeadings = [
+        'Project Overview', 'The mission list', 'Durable State Contract', 'First Principles',
+        'Non-Negotiable Rules',
+      ];
+      const duplicated = universalHeadings.filter(heading => {
+        const pattern = new RegExp('^##\\s+' + heading.replace(/ /g, '\\s+'), 'mi');
+        return pattern.test(String(agentsAfter)) && pattern.test(String(claudeAfter));
+      });
+      assert(duplicated.length === 0 && exactLineCount(claudeAfter, '@AGENTS.md') === 1,
+        'A3[v9-exact]: migration leaves exactly one universal authority and one Claude bridge — duplicated '
+        + JSON.stringify(duplicated));
+      assert(!hasRepositorySpecificContract(agentsAfter) && !hasRepositorySpecificContract(claudeAfter),
+        'A3[v9-exact]: migration does not install Kaola-Workflow repository-specific instructions into a consumer');
+      assert(!/# Kaola-Workflow — Claude Code Instructions/.test(String(claudeAfter))
+        && !/READ CLAUDE\.md|only to direct you there/i.test(String(agentsAfter)),
+      'A3[v9-exact]: retired v9 universal Claude authority and AGENTS redirect are both removed');
+    } finally {
+      try { fs.rmSync(v9Root, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
+
+    const unknownClaudeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-unknown-claude-'));
+    try {
+      const unknownClaude = Buffer.from([
+        '# Existing project instructions',
+        '',
+        '## Build and release',
+        '',
+        'OWNER_CLAUDE_AUTHORITY=unclassified',
+        '',
+      ].join('\n'));
+      writeInstructionFixture(unknownClaudeRoot, v9Agents, unknownClaude);
+      const result = runMigration('apply', unknownClaudeRoot);
+      assert(result.status === 2 && result.envelope
+        && result.envelope.status === 'decision_required'
+        && result.envelope.changed === false && result.envelope.writes.length === 0,
+      'A3[unknown-claude]: a known legacy AGENTS redirect does not make unknown CLAUDE authority safe');
+      assert(fs.readFileSync(path.join(unknownClaudeRoot, 'AGENTS.md')).equals(v9Agents)
+        && fs.readFileSync(path.join(unknownClaudeRoot, 'CLAUDE.md')).equals(unknownClaude),
+      'A3[unknown-claude]: decision-required preserves both instruction files byte-for-byte');
+    } finally {
+      try { fs.rmSync(unknownClaudeRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
+  }
+
+  // A3-bridge — the Claude import is load-bearing state, not decorative bytes outside convergence.
+  const bridgeOwnerBytes = Buffer.from('\nOWNER_BRIDGE_SUFFIX=preserve-byte-for-byte\n');
+  for (const mutation of [
+    { label: 'deleted', apply: text => text.replace(/^@AGENTS\.md\r?\n/m, '') },
+    { label: 'duplicated', apply: text => text.replace(/^@AGENTS\.md$/m, '@AGENTS.md\n@AGENTS.md') },
+    { label: 'altered', apply: text => text.replace(/^@AGENTS\.md$/m, '@README.md') },
+  ]) {
+    const bridgeRoot = fs.mkdtempSync(path.join(os.tmpdir(), `kw-1033-bridge-${mutation.label}-`));
+    try {
+      const agentsBytes = Buffer.concat([Buffer.from(agentsRoot), bridgeOwnerBytes]);
+      const claudeBytes = Buffer.concat([Buffer.from(mutation.apply(claudeRoot)), bridgeOwnerBytes]);
+      writeInstructionFixture(bridgeRoot, agentsBytes, claudeBytes);
+      const beforeCheck = fs.readFileSync(path.join(bridgeRoot, 'CLAUDE.md'));
+      const checked = runMigration('check', bridgeRoot);
+      assert(checked.status === 3 && checked.envelope && checked.envelope.status === 'drift'
+        && checked.envelope.writes.length === 0,
+      `A3[bridge/${mutation.label}]: check rejects Claude bridge ${mutation.label} drift without writing`);
+      assert(fs.readFileSync(path.join(bridgeRoot, 'CLAUDE.md')).equals(beforeCheck),
+        `A3[bridge/${mutation.label}]: check leaves owner and drift bytes untouched`);
+      const applied = runMigration('apply', bridgeRoot);
+      const claudeAfter = fs.readFileSync(path.join(bridgeRoot, 'CLAUDE.md'));
+      assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied'
+        && exactLineCount(claudeAfter, '@AGENTS.md') === 1
+        && !/^@README\.md$/m.test(String(claudeAfter)),
+      `A3[bridge/${mutation.label}]: apply restores exactly one canonical @AGENTS.md bridge`);
+      assert(bufferEndsWith(claudeAfter, bridgeOwnerBytes),
+        `A3[bridge/${mutation.label}]: bridge repair preserves owner bytes outside the managed envelope`);
+    } finally {
+      try { fs.rmSync(bridgeRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
+  }
+
+  // A3-byte-safety — migration owns only its byte envelope. Non-UTF-8 owner bytes, restrictive
+  // permissions, and symlink topology are not valid collateral for a text-template update.
+  const invalidOwnerBytes = Buffer.from([0xff, 0xfe, 0x41, 0x0a]);
+  const byteRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-invalid-bytes-'));
+  try {
+    const agentsBefore = Buffer.concat([
+      injectManagedDrift(Buffer.from(agentsRoot), migrationModule.AGENTS_MARKER), invalidOwnerBytes,
+    ]);
+    const claudeBefore = Buffer.concat([
+      injectManagedDrift(Buffer.from(claudeRoot), migrationModule.CLAUDE_MARKER), invalidOwnerBytes,
+    ]);
+    writeInstructionFixture(byteRoot, agentsBefore, claudeBefore);
+    const applied = runMigration('apply', byteRoot);
+    const agentsAfter = fs.readFileSync(path.join(byteRoot, 'AGENTS.md'));
+    const claudeAfter = fs.readFileSync(path.join(byteRoot, 'CLAUDE.md'));
+    assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied',
+      'A3[invalid-utf8]: managed drift remains safely repairable around non-UTF-8 owner bytes');
+    assert(bufferEndsWith(agentsAfter, invalidOwnerBytes)
+      && applied.envelope.files.agents.outside_bytes_preserved === true,
+    'A3[invalid-utf8]: AGENTS owner bytes outside the managed region remain byte-identical');
+    assert(bufferEndsWith(claudeAfter, invalidOwnerBytes)
+      && applied.envelope.files.claude.outside_bytes_preserved === true,
+    'A3[invalid-utf8]: CLAUDE owner bytes outside the managed region remain byte-identical');
+  } finally {
+    try { fs.rmSync(byteRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
+
+  const modeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-mode-'));
+  try {
+    writeInstructionFixture(modeRoot,
+      injectManagedDrift(Buffer.from(agentsRoot), migrationModule.AGENTS_MARKER),
+      injectManagedDrift(Buffer.from(claudeRoot), migrationModule.CLAUDE_MARKER));
+    fs.chmodSync(path.join(modeRoot, 'AGENTS.md'), 0o600);
+    fs.chmodSync(path.join(modeRoot, 'CLAUDE.md'), 0o600);
+    const applied = runMigration('apply', modeRoot);
+    const agentsMode = fs.statSync(path.join(modeRoot, 'AGENTS.md')).mode & 0o777;
+    const claudeMode = fs.statSync(path.join(modeRoot, 'CLAUDE.md')).mode & 0o777;
+    assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied',
+      'A3[mode]: managed instruction drift remains repairable for restrictive owner files');
+    assert(agentsMode === 0o600 && claudeMode === 0o600,
+      'A3[mode]: atomic replacement preserves 0600 on both instruction files — got '
+      + agentsMode.toString(8) + '/' + claudeMode.toString(8));
+  } finally {
+    try { fs.rmSync(modeRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
+
+  for (const symlinkName of ['AGENTS.md', 'CLAUDE.md']) {
+    const symlinkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-symlink-'));
+    try {
+      const agentsBytes = Buffer.from(agentsRoot);
+      const claudeBytes = Buffer.from(claudeRoot);
+      writeInstructionFixture(symlinkRoot, agentsBytes, claudeBytes);
+      const marker = symlinkName === 'AGENTS.md'
+        ? migrationModule.AGENTS_MARKER : migrationModule.CLAUDE_MARKER;
+      const targetPath = path.join(symlinkRoot, 'owner-shared-instructions.md');
+      const targetBefore = injectManagedDrift(
+        symlinkName === 'AGENTS.md' ? agentsBytes : claudeBytes, marker);
+      fs.writeFileSync(targetPath, targetBefore);
+      const linkPath = path.join(symlinkRoot, symlinkName);
+      fs.unlinkSync(linkPath);
+      fs.symlinkSync(targetPath, linkPath);
+      const otherName = symlinkName === 'AGENTS.md' ? 'CLAUDE.md' : 'AGENTS.md';
+      const otherBefore = fs.readFileSync(path.join(symlinkRoot, otherName));
+      const result = runMigration('apply', symlinkRoot);
+      assert(result.status === 2 && result.envelope
+        && result.envelope.status === 'decision_required'
+        && result.envelope.changed === false && result.envelope.writes.length === 0,
+      `A3[symlink/${symlinkName}]: an instruction symlink requires an owner decision and is not written`);
+      assert(fs.lstatSync(linkPath).isSymbolicLink()
+        && fs.readFileSync(targetPath).equals(targetBefore)
+        && fs.readFileSync(path.join(symlinkRoot, otherName)).equals(otherBefore),
+      `A3[symlink/${symlinkName}]: refusal preserves link topology, target bytes, and peer instructions`);
+    } finally {
+      try { fs.rmSync(symlinkRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    }
   }
 }
 

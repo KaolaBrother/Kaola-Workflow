@@ -317,7 +317,8 @@ merge_config() {
   # Current ZCode executes user hooks only from <home>/cli/config.json. Project
   # .zcode/config.json and the legacy <home>/config.json are ignored carriers.
   local dest_json="$(zcode_home)/cli/config.json"
-  local merge_args=(--merge-hooks "--dest=$dest_json" "--forge=$FORGE" --global)
+  local receipt="$(zcode_home)/kaola-workflow/zcode-hooks-state.json"
+  local merge_args=(--merge-hooks "--dest=$dest_json" "--receipt=$receipt" "--forge=$FORGE" --global)
   if ! node "$SYNC_JS" "${merge_args[@]}"; then
     echo "Install error: failed to merge $dest_json" >&2
     exit 1
@@ -382,13 +383,16 @@ uninstall_edition() {
       done
     fi
   fi
-  # Strip both the live carrier and the two legacy/ignored locations so an upgrade cleans only
-  # Kaola-owned hook rows without adopting those files as authorities.
+  # Only the live carrier is mutable, and only with the exact receipt created by
+  # this installer. Project and legacy configs are ignored ZCode locations and
+  # remain byte-identical unless a future migration supplies their own proof.
   local live_config="$home/cli/config.json"
-  [[ -f "$live_config" ]] && node "$SYNC_JS" --strip-hooks "--dest=$live_config" "--forge=$FORGE" || true
-  [[ -f "$layout/config.json" ]] && node "$SYNC_JS" --strip-hooks "--dest=$layout/config.json" "--forge=$FORGE" || true
-  if [[ "$layout/config.json" != "$home/config.json" && -f "$home/config.json" ]]; then
-    node "$SYNC_JS" --strip-hooks "--dest=$home/config.json" "--forge=$FORGE" || true
+  local hook_receipt="$home/kaola-workflow/zcode-hooks-state.json"
+  if [[ -e "$live_config" || -L "$live_config" ]]; then
+    if ! node "$SYNC_JS" --strip-hooks "--dest=$live_config" "--receipt=$hook_receipt" "--forge=$FORGE"; then
+      echo "Uninstall error: failed to strip receipt-owned hooks from $live_config" >&2
+      return 1
+    fi
   fi
   rmdir "$layout/kaola-workflow/hooks" 2>/dev/null || true
   rmdir "$layout/kaola-workflow/scripts" 2>/dev/null || true

@@ -372,7 +372,7 @@ function frontmatterList(content, key) {
     assert(typeof fm.description === 'string' && fm.description.trim().length > 0,
       'K1-native-agents[' + role + ']: profile carries the required non-empty description');
     assert((profile.match(new RegExp(MANAGED_AGENT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length === 1,
-      'K1-native-agents[' + role + ']: profile carries exactly one Kaola managed-agent marker for ownership-safe lifecycle');
+      'K1-native-agents[' + role + ']: profile carries exactly one Kaola generation marker (identity hint, never ownership proof)');
   }
 }
 
@@ -972,8 +972,9 @@ for (const script of sync.HOOK_SCRIPTS) {
     clean(r2);
   }
 
-  // P1o — collision ownership. A same-name custom profile without Kaola's marker is user-owned:
-  // install must fail rather than overwrite it, and uninstall must not delete it either.
+  // P1o — collision ownership. A same-name custom profile without a deploy-manifest record is
+  // user-owned: install must fail rather than overwrite it, and uninstall must not delete it.
+  // This first leg omits the generation marker; S2 below proves forging the marker changes nothing.
   {
     const home = mkdtempSync(path.join(os.tmpdir(), 'kimi-owner-home-'));
     const kimiHome = mkdtempSync(path.join(os.tmpdir(), 'kimi-owner-kh-'));
@@ -1021,6 +1022,276 @@ for (const script of sync.HOOK_SCRIPTS) {
     assert(existsSync(globalCollision) && fs.readFileSync(globalCollision).equals(userBytes),
       'P1o-global: global uninstall preserves an unmanaged same-name agent byte-for-byte');
     clean({ home: globalHome, kimiHome: globalKimiHome, dest: globalDest });
+  }
+
+  // -------------------------------------------------------------------------
+  // S2 (security review R2, #1033) — Kimi profile/legacy-carrier ownership.
+  //
+  // A marker embedded in the candidate file is self-asserted data, not evidence that Kaola wrote
+  // the destination. Current native agents therefore use the same independent ownership contract
+  // at project and global scope: `<agents>/.kaola-workflow-agent-manifest` records one plain
+  // filename + SHA-256 row per deployed profile. Reinstall and uninstall may replace/delete a file
+  // only while its bytes still match that record. A user edit (which naturally leaves the generated
+  // marker in place) turns the file into owner-controlled data and must survive byte-for-byte.
+  //
+  // The retired v9 role-Skill carrier predates that manifest. Its narrow migration proof is exact
+  // known shipped bytes: a byte-identical v9.17.2 role Skill may be removed, while a same-name dir
+  // with even one owner edit must remain. The fixture is rendered by the actual tagged v9.17.2
+  // generator, independently of the current installer's retired-name tables. Symlink cases use a
+  // marker-bearing target deliberately: following grep/cp/rm semantics is the believable near-miss
+  // these checks must falsify.
+  // -------------------------------------------------------------------------
+  {
+    const crypto = require('crypto');
+    const AGENT_MANIFEST = '.kaola-workflow-agent-manifest';
+    const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
+    const sameBytes = (file, expected) => {
+      try { return readFileSync(file).equals(expected); } catch (_) { return false; }
+    };
+    const sameSymlink = (file, expectedTarget) => {
+      try { return fs.lstatSync(file).isSymbolicLink() && fs.readlinkSync(file) === expectedTarget; }
+      catch (_) { return false; }
+    };
+    const manifestRows = manifestPath => {
+      if (!existsSync(manifestPath)) return [];
+      return readFileSync(manifestPath, 'utf8').split('\n').filter(Boolean).map(line => {
+        const fields = line.split('\t');
+        return { name: fields[0], hash: fields[1], fields: fields.length };
+      });
+    };
+    const assertCurrentAgentManifest = (r, label) => {
+      const dir = agentsDir(r);
+      const manifest = path.join(dir, AGENT_MANIFEST);
+      assert(existsSync(manifest),
+        label + ': install records a filename + SHA-256 ownership manifest beside native agents');
+      if (!existsSync(manifest)) return;
+      const rows = manifestRows(manifest);
+      const expected = canonAgents.map(role => role + '.md').sort();
+      const names = rows.map(row => row.name).sort();
+      assert(rows.every(row => row.fields === 2 && /^[a-f0-9]{64}$/.test(row.hash)),
+        label + ': every ownership row is exactly <plain filename> TAB <64-char lowercase SHA-256>');
+      assert(JSON.stringify(names) === JSON.stringify(expected),
+        label + ': ownership manifest names exactly the canonical native-agent roster — got '
+        + JSON.stringify(names));
+      const drift = rows.filter(row => !/^[^/\\]+\.md$/.test(row.name)
+        || !existsSync(path.join(dir, row.name))
+        || sha256(readFileSync(path.join(dir, row.name))) !== row.hash).map(row => row.name);
+      assert(drift.length === 0,
+        label + ': every manifest hash binds the deployed bytes and every name is a plain Markdown basename — drifted '
+        + JSON.stringify(drift));
+    };
+
+    // S2.1 — both supported scopes publish the independent ownership record.
+    for (const [label, args] of [['S2.1-project', []], ['S2.1-global', ['--global']]]) {
+      const r = runInstaller(args);
+      assert(r.ok, label + ': seed install exits 0 before manifest inspection');
+      if (r.ok) assertCurrentAgentManifest(r, label);
+      clean(r);
+    }
+
+    // S2.2 — reinstall never adopts or overwrites a profile whose recorded bytes changed.
+    for (const [label, args] of [['S2.2-project', []], ['S2.2-global', ['--global']]]) {
+      const r1 = runInstaller(args);
+      assert(r1.ok, label + ': seed install exits 0');
+      if (!r1.ok) { clean(r1); continue; }
+      const profile = path.join(agentsDir(r1), canonAgents[0] + '.md');
+      const original = readFileSync(profile);
+      const ownerBytes = Buffer.concat([original, Buffer.from('\nUSER_EDIT_SENTINEL\n')]);
+      fs.writeFileSync(profile, ownerBytes);
+      const r2 = runInstaller(args, { home: r1.home, kimiHome: r1.kimiHome, dest: r1.dest });
+      assert(existsSync(profile) && readFileSync(profile).equals(ownerBytes),
+        label + ': reinstall preserves a user-modified manifest-recorded profile byte-for-byte even though its marker remains');
+      const rows = manifestRows(path.join(agentsDir(r1), AGENT_MANIFEST));
+      const row = rows.find(candidate => candidate.name === path.basename(profile));
+      assert(!row || row.hash !== sha256(ownerBytes),
+        label + ': reinstall never adopts the user-modified bytes into its ownership manifest (status '
+        + r2.status + ')');
+      clean(r1);
+      clean(r2);
+    }
+
+    // S2.3 — uninstall has the same hash fence; project and global owner edits survive.
+    for (const [label, args] of [['S2.3-project', []], ['S2.3-global', ['--global']]]) {
+      const r = runInstaller(args);
+      assert(r.ok, label + ': seed install exits 0');
+      if (!r.ok) { clean(r); continue; }
+      const profile = path.join(agentsDir(r), canonAgents[1] + '.md');
+      const ownerBytes = Buffer.concat([readFileSync(profile), Buffer.from('\nUSER_EDIT_BEFORE_UNINSTALL\n')]);
+      fs.writeFileSync(profile, ownerBytes);
+      const uninstallArgs = args.includes('--global')
+        ? ['--global', '--uninstall', '--yes']
+        : ['--uninstall', '--target', r.dest, '--yes'];
+      // spawn-class: environment
+      const ru = spawnSync('bash', [INSTALLER].concat(uninstallArgs), {
+        env: Object.assign({}, process.env, { HOME: r.home, KIMI_CODE_HOME: r.kimiHome }),
+        encoding: 'utf8',
+      });
+      assert(existsSync(profile) && readFileSync(profile).equals(ownerBytes),
+        label + ': uninstall preserves a user-modified manifest-recorded profile byte-for-byte (status '
+        + ru.status + ')');
+      clean(r);
+    }
+
+    // S2.4 — copying the generated marker into an unmanaged regular file cannot manufacture
+    // ownership for either install or uninstall.
+    for (const [label, args] of [['S2.4-project', []], ['S2.4-global', ['--global']]]) {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'kimi-marker-home-'));
+      const kimiHome = mkdtempSync(path.join(os.tmpdir(), 'kimi-marker-kh-'));
+      const dest = mkdtempSync(path.join(os.tmpdir(), 'kimi-marker-dest-'));
+      const fakeRun = { home, kimiHome, dest, isGlobal: args.includes('--global') };
+      const dir = agentsDir(fakeRun);
+      const profile = path.join(dir, canonAgents[2] + '.md');
+      const forged = Buffer.from('---\nname: user-owned\n---\n\n# ' + MANAGED_AGENT_MARKER + '\nOWNER BYTES\n');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(profile, forged);
+      const install = runInstaller(args, { home, kimiHome, dest });
+      assert(!install.ok,
+        label + ': install fails closed on a marker-forged same-name profile with no manifest ownership');
+      assert(existsSync(profile) && readFileSync(profile).equals(forged),
+        label + ': failed install preserves the marker-forged user profile byte-for-byte');
+      const uninstallArgs = args.includes('--global')
+        ? ['--global', '--uninstall', '--yes']
+        : ['--uninstall', '--target', dest, '--yes'];
+      // spawn-class: environment
+      const uninstall = spawnSync('bash', [INSTALLER].concat(uninstallArgs), {
+        env: Object.assign({}, process.env, { HOME: home, KIMI_CODE_HOME: kimiHome }),
+        encoding: 'utf8',
+      });
+      assert(existsSync(profile) && readFileSync(profile).equals(forged),
+        label + ': uninstall cannot delete a marker-forged profile without matching manifest proof (status '
+        + uninstall.status + ')');
+      clean(fakeRun);
+      clean(install);
+    }
+
+    // S2.5 — a destination symlink is never a profile. Marker-bearing targets make following the
+    // link look owned to the retired marker-only implementation; install and uninstall must instead
+    // fail closed while preserving link topology and target bytes.
+    for (const [label, args] of [['S2.5-project', []], ['S2.5-global', ['--global']]]) {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'kimi-link-home-'));
+      const kimiHome = mkdtempSync(path.join(os.tmpdir(), 'kimi-link-kh-'));
+      const dest = mkdtempSync(path.join(os.tmpdir(), 'kimi-link-dest-'));
+      const fakeRun = { home, kimiHome, dest, isGlobal: args.includes('--global') };
+      const dir = agentsDir(fakeRun);
+      const profile = path.join(dir, canonAgents[3] + '.md');
+      const target = path.join(home, 'outside-user-profile.md');
+      const targetBytes = Buffer.from('# ' + MANAGED_AGENT_MARKER + '\nOUTSIDE TARGET BYTES\n');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(target, targetBytes);
+      fs.symlinkSync(target, profile);
+      const install = runInstaller(args, { home, kimiHome, dest });
+      assert(!install.ok,
+        label + ': install fails closed on a same-name native-agent symlink');
+      assert(sameSymlink(profile, target),
+        label + ': failed install preserves the destination symlink itself');
+      assert(sameBytes(target, targetBytes),
+        label + ': failed install never follows or changes the symlink target');
+      clean(fakeRun);
+      clean(install);
+
+      const uninstallHome = mkdtempSync(path.join(os.tmpdir(), 'kimi-link-u-home-'));
+      const uninstallKimiHome = mkdtempSync(path.join(os.tmpdir(), 'kimi-link-u-kh-'));
+      const uninstallDest = mkdtempSync(path.join(os.tmpdir(), 'kimi-link-u-dest-'));
+      const uninstallRun = {
+        home: uninstallHome, kimiHome: uninstallKimiHome, dest: uninstallDest,
+        isGlobal: args.includes('--global'),
+      };
+      const uninstallDir = agentsDir(uninstallRun);
+      const uninstallProfile = path.join(uninstallDir, canonAgents[3] + '.md');
+      const uninstallTarget = path.join(uninstallHome, 'outside-user-profile.md');
+      fs.mkdirSync(uninstallDir, { recursive: true });
+      fs.writeFileSync(uninstallTarget, targetBytes);
+      fs.symlinkSync(uninstallTarget, uninstallProfile);
+      const uninstallArgs = args.includes('--global')
+        ? ['--global', '--uninstall', '--yes']
+        : ['--uninstall', '--target', uninstallDest, '--yes'];
+      // spawn-class: environment
+      const uninstall = spawnSync('bash', [INSTALLER].concat(uninstallArgs), {
+        env: Object.assign({}, process.env, { HOME: uninstallHome, KIMI_CODE_HOME: uninstallKimiHome }),
+        encoding: 'utf8',
+      });
+      assert(uninstall.status !== 0,
+        label + ': uninstall fails closed on a same-name native-agent symlink');
+      assert(sameSymlink(uninstallProfile, uninstallTarget),
+        label + ': failed uninstall preserves the destination symlink itself');
+      assert(sameBytes(uninstallTarget, targetBytes),
+        label + ': failed uninstall never follows or changes the symlink target');
+      clean(uninstallRun);
+    }
+
+    // S2.6 — exact prior bytes, not a retired role name, decide legacy Skill ownership. Build the
+    // previous carrier with the actual released generator so the installer cannot agree with a
+    // fixture copied from its own current allowlist by construction.
+    const oldRoot = mkdtempSync(path.join(os.tmpdir(), 'kimi-v9172-source-'));
+    // spawn-class: environment
+    const archive = spawnSync('git', ['archive', '--format=tar', 'kaola-workflow--v9.17.2'], {
+      cwd: REPO, encoding: null, maxBuffer: 64 * 1024 * 1024,
+    });
+    assert(archive.status === 0 && archive.stdout.length > 0,
+      'S2.6 fixture: tagged v9.17.2 source archive is available');
+    let oldTreeReady = false;
+    if (archive.status === 0 && archive.stdout.length > 0) {
+      // spawn-class: environment
+      const extract = spawnSync('tar', ['-x', '-C', oldRoot], {
+        input: archive.stdout, encoding: null, maxBuffer: 64 * 1024 * 1024,
+      });
+      // spawn-class: environment
+      const generate = spawnSync(process.execPath,
+        [path.join(oldRoot, 'scripts', 'sync-kimi-edition.js'), '--forge=github', '--write'],
+        { encoding: 'utf8' });
+      oldTreeReady = extract.status === 0 && generate.status === 0;
+      assert(oldTreeReady,
+        'S2.6 fixture: released v9.17.2 generator materializes the retired role-Skill carrier');
+    }
+    if (oldTreeReady) {
+      const oldSkills = path.join(oldRoot, '.kimi', 'skills');
+      const exactRole = canonAgents[0];
+      const editedRole = canonAgents[1];
+      const exactName = 'kaola-role-' + exactRole;
+      const editedName = 'kaola-role-' + editedRole;
+      const oldExact = path.join(oldSkills, exactName);
+      const oldEdited = path.join(oldSkills, editedName);
+      assert(existsSync(path.join(oldExact, 'SKILL.md')) && existsSync(path.join(oldEdited, 'SKILL.md')),
+        'S2.6 fixture: released tree contains both selected historical role Skills');
+
+      for (const [label, args, operation] of [
+        ['S2.6-project-reinstall', [], 'install'],
+        ['S2.6-global-uninstall', ['--global'], 'uninstall'],
+      ]) {
+        const home = mkdtempSync(path.join(os.tmpdir(), 'kimi-oldskill-home-'));
+        const kimiHome = mkdtempSync(path.join(os.tmpdir(), 'kimi-oldskill-kh-'));
+        const dest = mkdtempSync(path.join(os.tmpdir(), 'kimi-oldskill-dest-'));
+        const fakeRun = { home, kimiHome, dest, isGlobal: args.includes('--global') };
+        const liveSkills = scopedSkillsDir(fakeRun);
+        const exactDest = path.join(liveSkills, exactName);
+        const editedDest = path.join(liveSkills, editedName);
+        fs.mkdirSync(liveSkills, { recursive: true });
+        fs.cpSync(oldExact, exactDest, { recursive: true });
+        fs.cpSync(oldEdited, editedDest, { recursive: true });
+        fs.appendFileSync(path.join(editedDest, 'SKILL.md'), '\nOWNER_EDIT_SENTINEL\n');
+        const editedBytes = readFileSync(path.join(editedDest, 'SKILL.md'));
+        let result;
+        if (operation === 'install') {
+          result = runInstaller(args, { home, kimiHome, dest });
+        } else {
+          const uninstallArgs = ['--global', '--uninstall', '--yes'];
+          // spawn-class: environment
+          result = spawnSync('bash', [INSTALLER].concat(uninstallArgs), {
+            env: Object.assign({}, process.env, { HOME: home, KIMI_CODE_HOME: kimiHome }),
+            encoding: 'utf8',
+          });
+        }
+        assert(!existsSync(exactDest),
+          label + ': exact byte-identical v9.17.2 role Skill is removed as proven Kaola output');
+        assert(existsSync(path.join(editedDest, 'SKILL.md'))
+          && readFileSync(path.join(editedDest, 'SKILL.md')).equals(editedBytes),
+          label + ': same-name retired role Skill with owner-modified bytes remains byte-for-byte (status '
+          + result.status + ')');
+        clean(fakeRun);
+        if (operation === 'install') clean(result);
+      }
+    }
+    try { rmSync(oldRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   }
 
   // P1b (#965) — INSTALLING PRUNES. P1 above asks only whether every manifest
@@ -1301,35 +1572,28 @@ for (const script of sync.HOOK_SCRIPTS) {
       }
     }
 
-    // P5c — WHAT THE NAMESPACE PRUNE IS FOR, and the half a narrowing repair loses. A skill dir
-    // retired in an earlier release is cleared from a LIVE install by this prune and by nothing
-    // else on the install path (RETIRED_ROLE_SKILLS is read by the uninstall; the generator's own
-    // prune converges the tree, never a destination). The scope is pinned WITH the sweep, because
-    // a prune that reaches further is the worse defect and the sweep half cannot see it: the skills
-    // dir is SHARED with whatever the user put there.
+    // P5c — WHAT THE RETIRED COMMAND-SKILL PRUNE IS FOR, and the half a narrowing repair loses.
+    // Command Skills occupy Kaola's reserved workflow command namespace. Retired role Skills do
+    // not: their bare role identity shares the directory with owner-authored Skills, so S2.6 pins
+    // their stricter exact-byte ownership rule separately. The scope is pinned WITH the sweep,
+    // because a prune that reaches further is the worse defect: the skills dir is shared with
+    // whatever the user put there.
     //
-    // RETIRED below is the WHOLE set of skill dirs this edition ever shipped and no longer ships,
-    // censused from the edition's own history and NOT from the installer's list — a probe that
-    // reads the list under test agrees with it by construction and can never see a name missing
-    // from it. The census is `git log --no-renames --diff-filter=D --name-only <edition-birth>..HEAD
-    // -- agents/ commands/`. Historical top-level agents rendered as `kaola-role-<agent>` Skills,
-    // while commands still render as `<command>` Skills, so a path deleted under either is a skill
-    // dir left stranded on every
-    // machine that installed before the deletion. `--no-renames` is load-bearing: a retirement git
-    // scores as a rename never reaches the D filter, and `.kimi/` is untracked, so nothing else on
-    // disk records what the edition once deployed.
+    // RETIRED below is the complete retired COMMAND set censused from the edition's history and
+    // not from the installer's list — a probe that reads the list under test agrees with it by
+    // construction. UNKNOWN_ROLE_DIRS are the negative control: names that Kaola used for the old
+    // role carrier but whose planted bytes do not match a known release must remain owner data.
     {
       const RETIRED = [
-        // v10 migration — all 14 current roles moved from role Skills to native agent profiles.
-        ...canonAgents.map(role => 'kaola-role-' + role),
-        // agents/ — issue-scout, contractor, workflow-planner (all three deleted after the edition shipped)
-        'kaola-role-issue-scout', 'kaola-role-contractor', 'kaola-role-workflow-planner',
         // commands/ — the two node-executor surfaces and the six fast/full opt-in surfaces
         'kaola-workflow-adapt', 'kaola-workflow-plan-run',
         'kaola-workflow-fast', 'kaola-workflow-phase1', 'kaola-workflow-phase2',
         'kaola-workflow-phase3', 'kaola-workflow-phase4', 'kaola-workflow-phase5',
       ];
-      const KEPT_DIRS = ['workflow-goal', 'kaola-something-else', 'my-own-skill'];
+      const UNKNOWN_ROLE_DIRS = [
+        'kaola-role-' + canonAgents[0], 'kaola-role-issue-scout',
+      ];
+      const KEPT_DIRS = [...UNKNOWN_ROLE_DIRS, 'workflow-goal', 'kaola-something-else', 'my-own-skill'];
       const KEPT_FILE = 'kaola-role-notadir.md';
       const { dest, skills } = plantSkillDirs([...DEPLOY_SET, ...RETIRED, ...KEPT_DIRS], [KEPT_FILE]);
       try {
@@ -1349,7 +1613,7 @@ for (const script of sync.HOOK_SCRIPTS) {
         for (const n of KEPT_DIRS) {
           assert(existsSync(path.join(skills, n, 'SKILL.md'))
             && readFileSync(path.join(skills, n, 'SKILL.md'), 'utf8') === plantedBody(n),
-            'P5c: the sweep is SCOPED — ' + n + ', which this edition neither ships nor ever shipped, '
+            'P5c: the sweep is SCOPED — ' + n + ', whose planted bytes have no Kaola ownership proof, '
             + 'survives byte-intact in the shared skills dir');
         }
         assert(existsSync(path.join(skills, KEPT_FILE))
@@ -1500,9 +1764,10 @@ for (const script of sync.HOOK_SCRIPTS) {
     // about the uninstall. Names are censused from the edition's history, not read from the
     // installer's own retired list. The hook plant also reds the no-residue pins below when
     // it is missed — same defect, one cause.
-    const RETIRED_SKILLS = [
-      'kaola-workflow-fast', 'kaola-role-issue-scout', 'kaola-role-' + canonAgents[0],
-    ];
+    // Command Skills use the reserved workflow command namespace. Retired role-Skill cleanup is
+    // exercised separately in S2.6 with real historical bytes; planting arbitrary same-name role
+    // bytes here and expecting deletion would reintroduce the security R2 defect.
+    const RETIRED_SKILLS = ['kaola-workflow-fast'];
     const RETIRED_HOOK = 'kaola-workflow-pre-commit.sh';
     assert(RETIRED_SKILLS.every(n => !ADAPTIVE_CORE.includes(n))
       && !sync.HOOK_SCRIPTS.includes(RETIRED_HOOK),

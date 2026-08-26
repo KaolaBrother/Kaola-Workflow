@@ -60,6 +60,8 @@ function treeLabel(forge) {
 
 const MANAGED_ROLES = new Set(agentGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
+const HOOK_RECEIPT_SCHEMA = 'kaola-workflow-zcode-hooks-v1';
+let atomicSequence = 0;
 
 // No runtime-neutral hook shells are active in the ZCode edition. The generator retains ownership
 // of the hook directory so --write can prune stale dispatch artifacts.
@@ -232,9 +234,78 @@ function rewriteConfigJsonForGlobal(json, forge) {
   return JSON.stringify(parsed, null, 2) + '\n';
 }
 
-function isKaolaHookEntry(entry) {
-  return /(?:^|[\s"'])\.?(?:\.zcode[^\/]*|\.)(?:\/kaola-workflow\/)/.test(String((entry && entry.command) || ''))
-    || /kaola-workflow\/(?:hooks|scripts)\//.test(String((entry && entry.command) || ''));
+function sameJsonValue(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function assertRegularOrMissing(file, label) {
+  let stat;
+  try { stat = fs.lstatSync(file); }
+  catch (e) {
+    if (e && e.code === 'ENOENT') return null;
+    throw e;
+  }
+  if (stat.isSymbolicLink()) {
+    throw new Error((label || file) + ' is a symbolic link; refusing to follow or replace it');
+  }
+  if (!stat.isFile()) throw new Error((label || file) + ' is not a regular file');
+  return stat;
+}
+
+function atomicWriteFile(file, bytes, mode) {
+  ensureDir(path.dirname(file));
+  const existing = assertRegularOrMissing(file, file);
+  const publishMode = mode == null
+    ? (existing ? existing.mode & 0o777 : 0o600)
+    : mode & 0o777;
+  const temp = path.join(path.dirname(file), '.' + path.basename(file) + '.kw-'
+    + process.pid + '-' + Date.now() + '-' + (++atomicSequence) + '.tmp');
+  let fd = null;
+  try {
+    fd = fs.openSync(temp, 'wx', publishMode);
+    fs.writeFileSync(fd, bytes);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+    fs.chmodSync(temp, publishMode);
+    fs.renameSync(temp, file);
+  } catch (e) {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch (_) { /* best-effort temp cleanup */ }
+    }
+    try { fs.unlinkSync(temp); } catch (_) { /* best-effort temp cleanup */ }
+    throw e;
+  }
+}
+
+function readJsonFile(file, label) {
+  assertRegularOrMissing(file, label || file);
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (e) { throw new Error((label || file) + ' is not JSON: ' + e.message); }
+}
+
+function defaultReceiptPath(destPath) {
+  return destPath + '.kaola-workflow-hooks-state.json';
+}
+
+function hookRows(hooks) {
+  return Object.entries(hooks || {}).flatMap(([event, entries]) =>
+    event === 'enabled' || !Array.isArray(entries)
+      ? []
+      : entries.map(entry => ({ event, entry })));
+}
+
+function readReceipt(receiptPath, destPath) {
+  const stat = assertRegularOrMissing(receiptPath, 'ZCode hook receipt at ' + receiptPath);
+  if (!stat) return null;
+  const receipt = readJsonFile(receiptPath, 'ZCode hook receipt at ' + receiptPath);
+  if (!receipt || receipt.schema !== HOOK_RECEIPT_SCHEMA
+      || receipt.destination !== path.resolve(destPath)
+      || !Array.isArray(receipt.added)
+      || !receipt.priorEnabled || typeof receipt.priorEnabled.present !== 'boolean') {
+    throw new Error('ZCode hook receipt at ' + receiptPath + ' is not a recognized exact ownership receipt');
+  }
+  return receipt;
 }
 
 function incomingHooksMapping(opts) {
@@ -245,35 +316,86 @@ function incomingHooksMapping(opts) {
 }
 
 function mergeDestHooks(destPath, opts) {
+  opts = opts || {};
   const incoming = incomingHooksMapping(opts);
+  const receiptPath = opts.receipt || defaultReceiptPath(destPath);
+  const destStat = assertRegularOrMissing(destPath, 'config.json at ' + destPath);
+  assertRegularOrMissing(receiptPath, 'ZCode hook receipt at ' + receiptPath);
   let dest = {};
-  if (fs.existsSync(destPath)) {
-    try { dest = JSON.parse(fs.readFileSync(destPath, 'utf8')); }
-    catch (e) { throw new Error('config.json at ' + destPath + ' is not JSON: ' + e.message); }
-  }
+  if (destStat) dest = readJsonFile(destPath, 'config.json at ' + destPath);
   dest.hooks = dest.hooks || {};
-  dest.hooks.enabled = true; // ZCode requires "enabled": true for hooks to run at all.
+  if (!dest.hooks || typeof dest.hooks !== 'object' || Array.isArray(dest.hooks)) {
+    throw new Error('config.json at ' + destPath + ' has a non-object hooks value');
+  }
+  let receipt = readReceipt(receiptPath, destPath);
+  const foreignRows = hookRows(dest.hooks).filter(row =>
+    !receipt || !receipt.added.some(owned =>
+      owned.event === row.event && sameJsonValue(owned.entry, row.entry)));
+  if (dest.hooks.enabled === false && foreignRows.length > 0) {
+    throw new Error('refusing to enable ZCode hooks: hooks.enabled is false and '
+      + foreignRows.length + ' foreign hook entr' + (foreignRows.length === 1 ? 'y is' : 'ies are')
+      + ' dormant in the shared user config');
+  }
+  if (!receipt) {
+    receipt = {
+      schema: HOOK_RECEIPT_SCHEMA,
+      destination: path.resolve(destPath),
+      priorEnabled: {
+        present: Object.prototype.hasOwnProperty.call(dest.hooks, 'enabled'),
+        value: dest.hooks.enabled,
+      },
+      added: [],
+    };
+  }
+  dest.hooks.enabled = true; // Safe here: no dormant foreign hook is activated.
   for (const [event, entries] of Object.entries(incoming)) {
     if (event === 'enabled') continue;
     const existing = Array.isArray(dest.hooks[event]) ? dest.hooks[event] : [];
-    dest.hooks[event] = existing.filter(e => !isKaolaHookEntry(e)).concat(entries);
+    dest.hooks[event] = existing.slice();
+    for (const entry of entries) {
+      if (dest.hooks[event].some(candidate => sameJsonValue(candidate, entry))) continue;
+      dest.hooks[event].push(entry);
+      receipt.added.push({ event, entry });
+    }
   }
-  ensureDir(path.dirname(destPath));
-  fs.writeFileSync(destPath, JSON.stringify(dest, null, 2) + '\n');
+  const originalBytes = destStat ? fs.readFileSync(destPath) : null;
+  const originalMode = destStat ? destStat.mode & 0o777 : null;
+  atomicWriteFile(destPath, JSON.stringify(dest, null, 2) + '\n', originalMode);
+  try {
+    atomicWriteFile(receiptPath, JSON.stringify(receipt, null, 2) + '\n', 0o600);
+  } catch (e) {
+    try {
+      if (originalBytes === null) fs.unlinkSync(destPath);
+      else atomicWriteFile(destPath, originalBytes, originalMode);
+    } catch (rollbackError) {
+      e.message += '; config rollback also failed: ' + rollbackError.message;
+    }
+    throw e;
+  }
 }
 
-function stripDestHooks(destPath) {
-  if (!fs.existsSync(destPath)) return;
-  let dest;
-  try { dest = JSON.parse(fs.readFileSync(destPath, 'utf8')); }
-  catch { return; }
+function stripDestHooks(destPath, opts) {
+  opts = opts || {};
+  const receiptPath = opts.receipt || defaultReceiptPath(destPath);
+  const destStat = assertRegularOrMissing(destPath, 'config.json at ' + destPath);
+  assertRegularOrMissing(receiptPath, 'ZCode hook receipt at ' + receiptPath);
+  if (!destStat) return;
+  const receipt = readReceipt(receiptPath, destPath);
+  if (!receipt) return; // No exact proof means no ownership and therefore no mutation.
+  const dest = readJsonFile(destPath, 'config.json at ' + destPath);
   dest.hooks = dest.hooks || {};
-  for (const event of Object.keys(dest.hooks)) {
-    if (!Array.isArray(dest.hooks[event])) continue;
-    dest.hooks[event] = dest.hooks[event].filter(e => !isKaolaHookEntry(e));
-    if (dest.hooks[event].length === 0) delete dest.hooks[event];
+  for (const owned of receipt.added) {
+    const entries = dest.hooks[owned.event];
+    if (!Array.isArray(entries)) continue;
+    dest.hooks[owned.event] = entries.filter(entry => !sameJsonValue(entry, owned.entry));
+    if (dest.hooks[owned.event].length === 0) delete dest.hooks[owned.event];
   }
-  fs.writeFileSync(destPath, JSON.stringify(dest, null, 2) + '\n');
+  if (dest.hooks.enabled === true) {
+    if (receipt.priorEnabled.present) dest.hooks.enabled = receipt.priorEnabled.value;
+    else delete dest.hooks.enabled;
+  }
+  atomicWriteFile(destPath, JSON.stringify(dest, null, 2) + '\n', destStat.mode & 0o777);
+  fs.unlinkSync(receiptPath);
 }
 
 // ---------------------------------------------------------------------------
@@ -673,8 +795,8 @@ function usage() {
     + '  --refresh-present  regenerate every forge tree that already exists; create none (ignores --forge)\n'
     + '  --check   assert the generated tree is in byte-parity with a fresh render\n'
     + '  --print-tree-root  print the directory the generated trees land in; write nothing\n'
-    + '  --merge-hooks --dest=PATH [--global]  merge kaola entries into a live config.json\n'
-    + '  --strip-hooks --dest=PATH             remove kaola entries from a live config.json\n'
+    + '  --merge-hooks --dest=PATH [--receipt=PATH] [--global]  merge with an exact receipt\n'
+    + '  --strip-hooks --dest=PATH [--receipt=PATH]             remove receipt-owned entries\n'
   );
 }
 
@@ -703,9 +825,11 @@ function main() {
       return;
     }
     const dest = destArg.slice('--dest='.length);
+    const receiptArg = flags.find(a => a.startsWith('--receipt='));
+    const receipt = receiptArg ? receiptArg.slice('--receipt='.length) : undefined;
     try {
-      if (arg === '--merge-hooks') mergeDestHooks(dest, { forge, global: flags.includes('--global') });
-      else stripDestHooks(dest);
+      if (arg === '--merge-hooks') mergeDestHooks(dest, { forge, global: flags.includes('--global'), receipt });
+      else stripDestHooks(dest, { forge, receipt });
     } catch (e) {
       console.error('sync-zcode-edition: ' + e.message);
       process.exitCode = 1;
@@ -727,6 +851,7 @@ module.exports = {
   treeLabel, agentRel, commandRel, configRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   ZCODE_HOOK_EVENTS,
+  HOOK_RECEIPT_SCHEMA, defaultReceiptPath, atomicWriteFile,
   expectedHookFiles, retiredHookFiles: retiredEditionFiles, retiredAgentFiles, retiredCommandFiles,
   parseFrontmatter, yamlScalar,
   listCanonAgents, listCanonCommands,

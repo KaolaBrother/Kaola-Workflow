@@ -298,11 +298,12 @@ install asserts the un-nested layout and that no nested `.opencode/` is created)
 Older Kaola releases wrote profiles and commands to the non-native singular `agent/` and `command/`
 directories. On install, those directories are migration inputs, not ownership shortcuts. A legacy
 profile is removed only when the previous singular-directory manifest records the same current
-hash; modified, unlisted, and unrelated files survive byte-for-byte. A legacy command is removed
-only when its basename is in Kaola's bounded current-or-retired command set; unrelated commands
-survive. Old ownership metadata and empty singular directories are removed after migration. The
-new native plural `agents/` directory uses its own manifest, and an unmanaged same-name collision
-there makes the install fail closed before deploying any profile.
+hash; modified, unlisted, and unrelated files survive byte-for-byte. A legacy current command is
+removed only when its complete bytes equal the current generated source; retired-name and modified
+near-misses survive. Old ownership metadata and empty singular directories are removed after
+migration. The new native plural `agents/` directory uses its own filename-plus-SHA manifest. An
+unmanaged same-name collision, forged marker, modified managed profile, or symlink carrier makes the
+install fail closed before deploying any agent, plugin, or other runtime surface.
 
 ## Uninstall
 
@@ -313,8 +314,9 @@ there makes the install fail closed before deploying any profile.
 ```
 
 `--uninstall` removes **only** kaola-deployed artifacts from the resolved scope. Native profiles are
-removed through the plural-directory ownership manifest; unrelated plural profiles and all
-unowned or modified singular-directory files survive. Commands and hooks are removed by
+removed through the plural-directory ownership manifest or exact current-source bytes; unrelated,
+modified, and symlinked plural profiles and all unowned or modified singular-directory files
+survive. Commands and hooks are removed by
 source-tree filename plus the names the edition retired on purpose (`RETIRED_WORKFLOW_COMMANDS`,
 `RETIRED_HOOKS`, `RETIRED_SUPPORT_SCRIPTS` — a retired name is absent from the source tree and from
 the install manifest, so without those lists it would linger forever; never a blind `rm` of a dir you

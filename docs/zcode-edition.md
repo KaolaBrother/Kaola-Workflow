@@ -115,8 +115,12 @@ states that workspace/project hook configuration is ignored. Both install scopes
 - `SessionStart` → `kaola-workflow-compact-context.sh` (resume-context wrapper around the
   compact-context support script).
 
-`--merge-hooks --dest=<file>` merges kaola entries into a `config.json` (foreign keys and foreign
-hook entries preserved, `hooks.enabled` forced true); `--strip-hooks --dest=<file>` removes only
-kaola-owned entries. Both are what the installer and `--uninstall` call. This proves managed
-filesystem bytes only. The installer invokes it only for the documented user CLI carrier; a
+`--merge-hooks --dest=<file> --receipt=<file>` records the exact Kaola hook identity and the prior
+`hooks.enabled` state before atomically merging it into `config.json`. Foreign keys and foreign hook
+entries are preserved; a disabled configuration that already contains foreign hooks is an informed
+refusal instead of being silently activated. `--strip-hooks --dest=<file> --receipt=<file>` removes
+only the receipt-proven exact entry and restores the preceding enabled state. Config and receipt
+symlinks are refused, restrictive modes are preserved, and receipt-publication failure rolls the
+config back. Both modes are what the installer and `--uninstall` call. This proves managed
+filesystem bytes only. The installer invokes them only for the documented user CLI carrier; a
 generated project template does not override ZCode's documented project-hook execution limit.

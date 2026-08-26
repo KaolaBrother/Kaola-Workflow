@@ -349,12 +349,48 @@ copy_tree() {
   # layout_root: the dir that DIRECTLY holds agents/commands/plugins/hooks. Project → $dest_root/.opencode;
   # Global → $dest_root (the config root itself; opencode never scans a nested .opencode/ there).
   local layout_root="${2:-$dest_root/.opencode}"
+  local agent_manifest="$layout_root/agents/$AGENT_MANIFEST_NAME"
+  local legacy_agent_dir="$layout_root/agent"
+  local legacy_manifest="$legacy_agent_dir/$AGENT_MANIFEST_NAME"
+
+  # Native-agent ownership is the install transaction's admission wall. Refuse every unproven
+  # topology or same-name collision before mkdir/cp changes any runtime surface (including the
+  # plugin). A later refusal must never leave an otherwise failed install partially deployed.
+  if [[ -L "$layout_root/agents" || -L "$legacy_agent_dir" ]]; then
+    echo "Install error: refusing symbolic-link native agent directory under $layout_root" >&2
+    exit 1
+  fi
+  if [[ -L "$agent_manifest" || -L "$legacy_manifest" ]]; then
+    echo "Install error: refusing symbolic-link native agent manifest under $layout_root" >&2
+    exit 1
+  fi
+  local agent_file agent_base existing_hash recorded_hash source_hash
+  for agent_file in "$SOURCE_AGENT_DIR/"*.md; do
+    [[ -f "$agent_file" ]] || continue
+    agent_base="$(basename "$agent_file")"
+    if [[ -L "$layout_root/agents/$agent_base" ]]; then
+      echo "Install error: refusing symbolic-link native agent: $layout_root/agents/$agent_base" >&2
+      exit 1
+    fi
+    [[ -f "$layout_root/agents/$agent_base" ]] || continue
+    existing_hash="$(sha256_file "$layout_root/agents/$agent_base")"
+    source_hash="$(sha256_file "$agent_file")"
+    recorded_hash=""
+    if [[ -f "$agent_manifest" ]]; then
+      recorded_hash="$(manifest_row_hash "$agent_base" "$agent_manifest" 2>/dev/null || true)"
+    fi
+    if [[ "$existing_hash" != "$source_hash" && "$existing_hash" != "$recorded_hash" ]]; then
+      echo "Install error: refusing to overwrite unmanaged native agent: $layout_root/agents/$agent_base" >&2
+      exit 1
+    fi
+  done
+
   mkdir -p "$layout_root/agents" "$layout_root/commands" \
            "$layout_root/plugins" "$layout_root/hooks"
   # Deploy the hooks adapter plugin from the TRACKED template source (templates/opencode/plugins/).
   # This is NOT the self-referential .opencode/plugins/ copy — the tracked template is the canonical
   # source and is always present. A missing plugin is a LOUD install error (no 2>/dev/null || true).
-  # Run BEFORE the self-dev guard because even in self-dev mode the destination
+  # Run after admission but before the self-dev guard because even in self-dev mode the destination
   # ($layout_root/plugins/) is distinct from the source (templates/opencode/plugins/).
   cp "$SCRIPT_DIR/templates/opencode/plugins/"*.js "$layout_root/plugins/"
   # Self-dev guard: deploying the edition into its OWN source repo means the canonical .opencode and
@@ -366,31 +402,11 @@ copy_tree() {
   fi
   # Agents: snapshot the previous deploy manifest, re-copy the current source set, record the new
   # manifest, then sweep whatever the previous manifest owned that the tree has since retired.
-  local agent_manifest prev_manifest manifest_tmp agent_file agent_base agent_count
-  agent_manifest="$layout_root/agents/$AGENT_MANIFEST_NAME"
+  local prev_manifest manifest_tmp agent_count
   prev_manifest="$(mktemp "$KW_TMPDIR/kaola-opencode-manifest-prev.XXXXXX")"
   if [[ -f "$agent_manifest" ]]; then
     cp "$agent_manifest" "$prev_manifest"
   fi
-  # Fail closed before writing the roster when a same-name native profile is not proven to be
-  # ours by the previous manifest (or already byte-identical to the generated source).
-  local existing_hash recorded_hash source_hash
-  for agent_file in "$SOURCE_AGENT_DIR/"*.md; do
-    [[ -f "$agent_file" ]] || continue
-    agent_base="$(basename "$agent_file")"
-    [[ -f "$layout_root/agents/$agent_base" ]] || continue
-    existing_hash="$(sha256_file "$layout_root/agents/$agent_base")"
-    source_hash="$(sha256_file "$agent_file")"
-    recorded_hash=""
-    if [[ -f "$agent_manifest" ]]; then
-      recorded_hash="$(manifest_row_hash "$agent_base" "$agent_manifest" 2>/dev/null || true)"
-    fi
-    if [[ "$existing_hash" != "$source_hash" && "$existing_hash" != "$recorded_hash" ]]; then
-      rm -f "$prev_manifest"
-      echo "Install error: refusing to overwrite unmanaged native agent: $layout_root/agents/$agent_base" >&2
-      exit 1
-    fi
-  done
   manifest_tmp="$(mktemp "$KW_TMPDIR/kaola-opencode-manifest.XXXXXX")"
   agent_count=0
   for agent_file in "$SOURCE_AGENT_DIR/"*.md; do
@@ -412,8 +428,6 @@ copy_tree() {
   rm -f "$prev_manifest"
   # Migrate the retired singular agent carrier using its own manifest proof. Modified or
   # unrecorded files are preserved byte-for-byte; the obsolete manifest itself is retired.
-  local legacy_agent_dir="$layout_root/agent"
-  local legacy_manifest="$legacy_agent_dir/$AGENT_MANIFEST_NAME"
   if [[ -f "$legacy_manifest" ]]; then
     warn_unsafe_manifest_names "$legacy_manifest"
     local legacy_file legacy_base legacy_hash
@@ -456,9 +470,13 @@ copy_tree() {
     rm -f "$layout_root/commands/$base"
     cp "$command_file" "$layout_root/commands/$base"
   done
-  # Retire only the exact current/retired Kaola command allowlist from the old singular carrier.
+  # A singular command name is not ownership proof. Retire only a current command whose complete
+  # bytes still equal the generated source; retired-name and owner-modified near misses survive.
   local legacy_command_dir="$layout_root/command"
-  for base in "${WORKFLOW_COMMANDS[@]}" "${RETIRED_WORKFLOW_COMMANDS[@]}"; do
+  for base in "${WORKFLOW_COMMANDS[@]}"; do
+    [[ -f "$legacy_command_dir/$base" && ! -L "$legacy_command_dir/$base" ]] || continue
+    [[ -f "$SOURCE_COMMAND_DIR/$base" ]] || continue
+    [[ "$(sha256_file "$legacy_command_dir/$base")" == "$(sha256_file "$SOURCE_COMMAND_DIR/$base")" ]] || continue
     rm -f "$legacy_command_dir/$base"
   done
   rmdir "$legacy_command_dir" 2>/dev/null || true
@@ -488,6 +506,20 @@ uninstall_edition() {
     echo "Refusing to uninstall the edition's OWN source tree ($layout_root). No-op." >&2
     return
   fi
+  # Refuse unproven link topology before any uninstall mutation. A hash-equal target does not
+  # turn a symlink into a profile this installer owns.
+  if [[ -L "$layout_root/agents" ]]; then
+    echo "Uninstall error: refusing symbolic-link native agent directory: $layout_root/agents" >&2
+    return 1
+  fi
+  local link_probe
+  for link_probe in "$SOURCE_AGENT_DIR/"*.md; do
+    [[ -f "$link_probe" ]] || continue
+    if [[ -L "$layout_root/agents/$(basename "$link_probe")" ]]; then
+      echo "Uninstall error: refusing symbolic-link native agent: $layout_root/agents/$(basename "$link_probe")" >&2
+      return 1
+    fi
+  done
   local f base sub
   # Agents: remove the UNION of what the deploy manifest records this installer wrote — which
   # includes agents RETIRED since that install and therefore absent from the current source tree —
@@ -499,10 +531,14 @@ uninstall_edition() {
   # path, so a row holding `../…` or an absolute path cannot delete anything outside the dir.
   local agent_manifest dest
   agent_manifest="$layout_root/agents/$AGENT_MANIFEST_NAME"
+  if [[ -L "$agent_manifest" ]]; then
+    echo "Uninstall error: refusing symbolic-link agent manifest: $agent_manifest" >&2
+    return 1
+  fi
   if [[ -f "$agent_manifest" ]]; then
     warn_unsafe_manifest_names "$agent_manifest"
     for dest in "$layout_root/agents/"*.md; do
-      [[ -f "$dest" ]] || continue
+      [[ -f "$dest" && ! -L "$dest" ]] || continue
       base="$(basename "$dest")"
       local owned_hash="$(manifest_row_hash "$base" "$agent_manifest" 2>/dev/null || true)"
       if [[ -n "$owned_hash" && "$(sha256_file "$dest")" == "$owned_hash" ]]; then rm -f "$dest"; fi
@@ -512,10 +548,15 @@ uninstall_edition() {
   for f in "$SOURCE_AGENT_DIR/"*.md; do
     [[ -f "$f" ]] || continue
     dest="$layout_root/agents/$(basename "$f")"
-    [[ -f "$dest" ]] || continue
-    grep -qF 'kaola-workflow-managed-agent: true' "$dest" && rm -f "$dest"
+    [[ -f "$dest" && ! -L "$dest" ]] || continue
+    [[ "$(sha256_file "$dest")" == "$(sha256_file "$f")" ]] && rm -f "$dest"
   done
-  for f in "$SOURCE_COMMAND_DIR/"*.md;                       do [[ -f "$f" ]] || continue; rm -f "$layout_root/commands/$(basename "$f")"; done
+  for f in "$SOURCE_COMMAND_DIR/"*.md; do
+    [[ -f "$f" ]] || continue
+    dest="$layout_root/commands/$(basename "$f")"
+    [[ -f "$dest" && ! -L "$dest" ]] || continue
+    [[ "$(sha256_file "$dest")" == "$(sha256_file "$f")" ]] && rm -f "$dest"
+  done
   for f in "$SCRIPT_DIR/templates/opencode/plugins/"*.js;    do [[ -f "$f" ]] || continue; rm -f "$layout_root/plugins/$(basename "$f")"; done
   for f in "$SOURCE_TREE/hooks/"*.sh;                        do [[ -f "$f" ]] || continue; rm -f "$layout_root/hooks/$(basename "$f")"; done
   # A command or hook RETIRED since the deployed install is absent from the source tree, so the
@@ -541,8 +582,10 @@ uninstall_edition() {
     done
     rm -f "$legacy_manifest"
   fi
-  for base in "${WORKFLOW_COMMANDS[@]}" "${RETIRED_WORKFLOW_COMMANDS[@]}"; do
-    rm -f "$layout_root/command/$base"
+  for base in "${WORKFLOW_COMMANDS[@]}"; do
+    dest="$layout_root/command/$base"
+    [[ -f "$dest" && ! -L "$dest" && -f "$SOURCE_COMMAND_DIR/$base" ]] || continue
+    [[ "$(sha256_file "$dest")" == "$(sha256_file "$SOURCE_COMMAND_DIR/$base")" ]] && rm -f "$dest"
   done
   for sub in commands agents command agent plugins hooks; do rmdir "$layout_root/$sub" 2>/dev/null || true; done
   [[ "$GLOBAL" -eq 1 ]] || rmdir "$layout_root" 2>/dev/null || true

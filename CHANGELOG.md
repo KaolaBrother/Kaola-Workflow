@@ -17,9 +17,11 @@
   the reviewer-only generator, reviewer templates, prose-parity test, and Claude-shaped rewrite
   authority are retired.
 - **Ownership-safe project instruction migration (#1033).** `workflow-init` now uses a standard-
-  library `plan` / `check` / `apply` helper. It updates only Kaola-owned regions, preserves owner
-  bytes outside them, is byte-idempotent, fences active older runs, and returns
-  `decision_required` without writing when ownership is ambiguous.
+  library `plan` / `check` / `apply` helper and distribution-owned consumer templates. It migrates
+  the exact v9.17.2 redirect pair without copying this producer repository's contract, updates only
+  Kaola-owned regions, preserves arbitrary owner bytes and file modes, is byte-idempotent, fences
+  active older runs, refuses symlink topology, and returns `decision_required` without writing when
+  ownership is ambiguous.
 
 ### Fixed
 
@@ -33,12 +35,15 @@
   workflow commands remain Skills; direct named dispatch, native tool allowlists, and ownership-safe
   collision/retirement behavior are covered by the edition suite. OpenCode agents and commands now
   use the official plural project/global directories; the installer migrates singular legacy agents
-  only with manifest-plus-hash ownership proof and removes only bounded Kaola command names. Grok
+  only with manifest-plus-hash ownership proof and removes current singular commands only on exact
+  generated-byte proof. Kimi and OpenCode fail closed on unproved same-name profiles, forged
+  markers, modified managed bytes, and symlink carriers. Grok
   profiles use camelCase `promptMode` / `agentsMd`, explicit tools, and omit the unsupported
   `permissionMode: plan`. Kimi, Grok, and ZCode tool carriers and Cursor/ZCode model identifiers come
   from their adapters. ZCode executable hooks merge only into
-  `${ZCODE_HOME:-$HOME/.zcode}/cli/config.json`; ignored project and legacy user config files remain
-  untouched.
+  `${ZCODE_HOME:-$HOME/.zcode}/cli/config.json` under an exact state receipt, refuse activation over
+  dormant foreign hooks, and restore the preceding `hooks.enabled` state on uninstall; ignored
+  project and legacy user config files remain untouched.
 
 ### Documentation
 
