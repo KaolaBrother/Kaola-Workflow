@@ -48,7 +48,7 @@ Everything under `.opencode/` is **generated from canonical** by
 | Canonical source        | opencode edition output       | Notes |
 | ----------------------- | ----------------------------- | ----- |
 | `templates/agents/behavior-contracts.json` + opencode adapter | `.opencode/agents/<name>.md` | one native render for each of the 14 roles; `mode: subagent`, capability-derived permission denials, session-inherited model, shared behavior hash, and render-specific hash |
-| `commands/<file>.md`    | `.opencode/commands/<file>.md` | Claude install-time `model="{...}"` placeholders + all "pass `model=`" instructions rewritten to opencode's inheritance (the `task` tool has no model or effort parameter). The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
+| `commands/<file>.md`    | `.opencode/commands/<file>.md` | The marked next/finalize capability block is replaced with OpenCode-native lookup, `task`, tier-inheritance, route, and limit guidance; any concrete Claude dispatch cards become OpenCode calls. The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
 | `templates/opencode/plugins/*.js` | `.opencode/plugins/kaola-workflow-hooks.js` | Hook adapter plugin; byte-copied from the tracked canonical source by `sync-opencode-edition.js --write` (verified by `--check`; see [Hooks](#hooks)). |
 
 One file is **authored** (not generated) and verified present by the test:
@@ -124,6 +124,22 @@ Generated command surfaces preserve the reviewer scope-and-acceptance packet but
 omit Claude's one-bounded reviewer heavy re-dispatch. opencode's `task` tool has
 no per-call model or effort parameter; reviewers follow the session and any
 user-owned model pin that applies to their classified role.
+
+## Runtime-native orchestration guidance
+
+`workflow-next` and `kaola-workflow-finalize` receive an OpenCode adapter block rather than Claude
+spawn prose. It tells the orchestrator to inspect project `.opencode/agents/`, user config agents,
+and `opencode.json`, then dispatch a named role with `task` and `subagent_type` or direct `@name`.
+It also exposes the broad `general`, read-only local `explore`, and read-only external-research `scout` routes,
+`task_id` resume, experimental background work, effective permissions, and the default one-child
+depth. These are OpenCode capabilities, not Kaola mandates; user configuration may change or hide
+them.
+
+An absent exact role is resolved for the current item. A built-in may be used when its actual
+capability meets the task, custody, evidence, and stop boundaries, but remains that built-in rather
+than impersonating the missing role. Inline is the item-local fallback only when no adequate route
+exists. The generated block repeats all three tier outcomes—session inheritance, with the existing
+optional standard/reasoning model pins—and never invents per-call model or effort fields.
 
 > `opencode.json` is **user-owned**: `--write` regenerates agents/commands but
 > **preserves** this file. Use `--write-config` to reset it from the template.

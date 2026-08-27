@@ -56,8 +56,27 @@ The JSON envelope has `schema_version`, `mode`, `status`, `changed`, `files`, `w
 When work is sent to another role, the request names the requested result or question, relevant
 evidence and authority/custody, the exact landing locator, and the stop condition. The receiving
 role's profile remains authoritative for universal behavior; the existing owner keeps product intent
-and the final verdict. There is no handoff slot schema, required block, ordering rule, parser, or
-linter, and no model/effort pair is selected by this prose.
+and the final verdict. There is no handoff field schema, ordering rule, parser, or linter.
+
+The separate, marked `KW-RUNTIME-DELEGATION` region is generated adapter data. It exposes native
+profile discovery, the dispatch carrier, all three default tier bindings, tool boundary, honest
+named/built-in alternatives, and runtime availability/limits. The common fallback remains per-item:
+an absent exact role triggers a search of other adequate native child routes; a generic route keeps
+its real identity; inline applies only to that item when no route fits.
+
+`generate-agent-profiles.js` exports the routing interface:
+
+| Export | Contract |
+| --- | --- |
+| `renderRuntimeDelegationGuidance(adapter)` | render one complete marked block from a validated adapter |
+| `runtimeAdapter(runtime, forge, root)` | resolve one of the nine closed adapter variants; Codex is forge-keyed |
+| `renderRuntimeDelegationGuidanceForRuntime(runtime, forge, root)` | resolve then render the block |
+| `replaceRuntimeDelegationGuidance(content, runtime, forge, root)` | replace exactly one balanced marker region; missing or duplicate markers fail loudly |
+
+Commands render Claude and skills render forge-matched Codex through the routing slot. Additive
+edition sync scripts replace only this marker in next/finalize; workflow-init is outside the
+interface. Cursor and ZCode call fields not published by those runtimes are not serialized here:
+their guidance defers to the active session's live schema.
 
 ## Emit and refusal envelopes
 
@@ -1532,13 +1551,13 @@ The `--release-check` step is the gate documented above. `--prepare` bumps the v
 
 | Script | Contract |
 |---|---|
-| `generate-agent-profiles.js --check\|--write\|--print-manifest` | validates the complete 14-role behavior, runtime-capability, and provenance authorities; composes seven runtime families through nine adapter variants; writes/checks the 14 Claude profiles, 42 Codex profiles, three Codex registries, and the 126-render manifest; and exposes logical renders to the five additive edition generators. `--check` exits non-zero on any tracked output drift. Generated prompts exclude provenance. |
+| `generate-agent-profiles.js --check\|--write\|--print-manifest` | validates the complete 14-role behavior, runtime-capability, and provenance authorities; composes seven runtime families through nine adapter variants; writes/checks the 14 Claude profiles, 42 Codex profiles, three Codex registries, and the 126-render manifest; exposes logical profile renders to the five additive edition generators; and renders/replaces runtime-native next/finalize guidance through the API above. `delegation_guidance` is routing-only and excluded from the native-profile adapter hash, so its change does not churn unchanged profile hashes. `--check` exits non-zero on tracked output drift. Generated prompts exclude provenance. |
 | `kaola-workflow-project-instructions.js plan\|check\|apply --project-root <path> --json` | ownership-safe AGENTS-first project migration described above. The installed GitHub, GitLab, and Gitea copies are identical. |
 | `run-edition-tests.js <scripts/test-*.js>...` | executes every explicitly declared additive edition suite, even after a prior failure; prints child output, retains every failed suite in the final summary, and exits non-zero after all attempts when any child failed. The package script declares opencode, Kimi, Grok, Cursor, and ZCode explicitly so suite registration can see the full lane. |
 | `kaola-workflow-install-manifest.js --forge=<github\|gitlab\|gitea> (--scripts\|--hooks)` | the single source of the support-file list an installer copies. Prints one name per line. Exits 2 on an unknown argument, a missing flag, or an **empty** list — an empty manifest would copy zero support files, so it refuses rather than silently installing nothing. Exports `SUPPORT_SCRIPTS`, `SUPPORT_HOOKS`, `FORGES`, `supportScripts`, `supportHooks`, `renameIfPorted` |
 | `edition-sync.js (--check \| --write \| --materialize-kernel)` | materializes the rename-normalized edition copies from the canonical tree and the byte-identical kernel into each edition. `--check` is the read-only verdict |
 | `validate-script-sync.js` | enforces cross-edition parity, including `BYTE_IDENTICAL_GROUPS`, which auto-expands when a new `.toml` is added to the codex tree |
-| `sync-opencode-edition.js` / `sync-kimi-edition.js` / `sync-grok-edition.js` / `sync-cursor-edition.js` / `sync-zcode-edition.js` | additive runtime editions outside `npm test` and the forge chains. Each requests native role bytes from `generate-agent-profiles.js`; none parses Claude role prose as semantic input. `--refresh-present` regenerates every edition tree already on the machine and creates none — it is what the routing generator's `--write` calls, so a routing-prose change leaves no present tree stale. `--print-tree-root` prints the single absolute generated-tree root and writes nothing. Each installer resolves its source from that answer, including from a linked worktree. A cross-checkout refresh reports changed trees and the editions check on stderr without contaminating stdout. |
+| `sync-opencode-edition.js` / `sync-kimi-edition.js` / `sync-grok-edition.js` / `sync-cursor-edition.js` / `sync-zcode-edition.js` | additive runtime editions outside `npm test` and the forge chains. Each requests native role bytes and its marked next/finalize guidance from `generate-agent-profiles.js`; none parses Claude role prose as semantic input. `workflow-init` has no runtime dispatch block and is not replaced. `--refresh-present` regenerates every edition tree already on the machine and creates none — it is what the routing generator's `--write` calls, so a routing-prose change leaves no present tree stale. `--print-tree-root` prints the single absolute generated-tree root and writes nothing. Each installer resolves its source from that answer, including from a linked worktree. A cross-checkout refresh reports changed trees and the editions check on stderr without contaminating stdout. |
 | `install-zcode.sh` | the additive ZCode runtime installer (project `--target` / `--global`, `--forge=github\|gitlab\|gitea`, `--regenerate`, `--uninstall`, `--no-scripts`, `--yes`); project installs stage agents/commands under `<target>/.zcode/` with generated hook/script launchers under `<target>/.zcode/kaola-workflow/`, global installs place agents/commands directly under `${ZCODE_HOME:-~/.zcode}/{agents,commands}`, and both scopes merge hooks only into the executable user carrier `${ZCODE_HOME:-~/.zcode}/cli/config.json`. Project `.zcode/config.json` and legacy `${ZCODE_HOME:-~/.zcode}/config.json` are ignored carriers and remain untouched. Generated launchers stage first and real manifest support scripts land last, so real scripts win wherever the edition layout and `${ZCODE_HOME:-~/.zcode}` coincide; with distinct paths, project launchers remain under the project edition directory and real scripts remain under the shared home path. Consumer-cwd resolution therefore selects the real scripts rather than recursing through a generated launcher. Project installs also sync agents to `${ZCODE_HOME:-~/.zcode}/agents/` because ZCode discovers subagents only at user scope. |
 | `kaola-workflow-ensure-cursor-catalog.js` | Cursor-only catalog materialize. No flags. Source `${CURSOR_HOME:-$HOME/.cursor}/agents`; dest `<cwd>/.cursor/agents`; copies only the 14 canonical role names. Isolated (does not `require` `sync-cursor-edition.js`; does not prefer git toplevel). Exports `ensureCursorCatalog({ cwd, cursorHome })`, `listCanonAgents`, `CANON_AGENT_NAMES`. CLI prints one status token then a newline: `already-present` or `copied` (exit 0), `missing-source` (exit 1). `install-cursor.sh` deploys and uninstalls the file as an extra support script; it is not in `kaola-workflow-install-manifest.js` |
 | `install-codex-agent-profiles.js` | authoritative Codex install/upgrade transaction; validates source profiles and targets, writes and prunes the managed set, records the manifest, installs hooks, and verifies the result before success |
@@ -1579,17 +1598,20 @@ retired `parallel_mode`) is ignored, never rewritten.
 `standard`, `reasoning`, or `heavy`. It contains no vendor or model identifier. The selected entry in
 `templates/agents/runtime-capabilities.json` maps that intent to a native carrier or inheritance:
 
-- Claude profile `model` values are adapter data;
-- Codex omits a fixed profile model and inherits runtime/task policy;
+- Claude defaults are `sonnet` / `opus` / `fable` with runtime-default effort; installed profiles
+  inherit and the dispatch guidance carries the default selection;
+- Codex profiles omit a fixed model under host policy, while dispatch defaults are
+  `gpt-5.6-luna`/max, `gpt-5.6-sol`/medium, and `gpt-5.6-sol`/high;
 - opencode and Kimi inherit the session model/effort under the documented adapter boundary;
 - Grok carries native effort while inheriting the session model;
 - Cursor carries the native model/effort parameter;
 - ZCode carries an explicit model plus camelCase `thoughtLevel`.
 
-The exact current mappings are machine data and are summarized in `runtime-capabilities.md`. No
-mission-list field, routing command, or handoff prose fixes a per-spawn model pair. A missing required
-native capability yields `capability_gap`; it is not emulated by granting wider tools or silently
-dropping the restriction.
+The exact current mappings are machine data and are summarized in `runtime-capabilities.md`.
+Next/finalize expose them as default dispatch bindings, not as mission-list state, a fixed pipeline,
+or a ban on runtime-supported task-sensitive choices. A missing required native capability yields a
+specific per-item `capability_gap`; it is not emulated by granting wider tools, impersonating a
+named role, silently dropping the restriction, or declaring the rest of the run inline.
 
 ## Environment Variables
 

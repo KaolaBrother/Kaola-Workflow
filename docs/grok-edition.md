@@ -49,7 +49,7 @@ Everything under `.grok/` is **generated from canonical** by
 | Canonical source | grok edition output | Notes |
 | ---------------- | ------------------- | ----- |
 | `templates/agents/behavior-contracts.json` + Grok adapter | `.grok/agents/<name>.md` | 14 native profiles with `name`, `description`, native camelCase `promptMode` / `agentsMd`, `model: inherit`, intent-derived `effort: medium\|high\|xhigh`, an explicit capability-derived `tools` allowlist, shared behavior identity, and render-specific hash. Kaola does not emit `permissionMode: plan`: `plan` is not a legal value of the official enum and permission mode is not the tool-boundary carrier. |
-| `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. `Agent(` dispatch cards become `spawn_subagent(`. Install-time `model="{...}"` lines are stripped. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
+| `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. The marked next/finalize block becomes Grok-native profile, `spawn_subagent`, tier, route, and limit guidance; any concrete Claude dispatch cards are adapted. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
 | `hooks/<script>.sh` | `.grok/hooks/<script>.sh` | No runtime-neutral dispatch hook is installed; the generator retains ownership of this directory for stale-artifact cleanup. |
 | `hooks/hooks.json` (mapping) | `.grok/hooks/hooks.json` | SessionStart `compact` only. Commands use `${GROK_HOME:-$HOME/.grok}` (Grok expands this). The installer copies the file to `${GROK_HOME:-$HOME/.grok}/hooks/kaola-workflow-hooks.json`, and on a project install also to `<project>/.grok/hooks/hooks.json`. |
 
@@ -101,6 +101,20 @@ The frontmatter spelling and capability boundary come from xAI's first-party
 [`AgentDefinition`](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-agent/src/config.rs),
 which serializes agent keys in camelCase and accepts native `model`, `effort`, `tools`, and
 `disallowedTools`. Unknown snake_case spellings are not adapter aliases.
+
+## Runtime-native orchestration guidance
+
+`workflow-next` and `kaola-workflow-finalize` expose project/user profile lookup and
+`spawn_subagent` with named `subagent_type`. They also preserve Grok's background, isolation,
+resume, cwd, and optional per-call model choices; per-call effort is omitted because the profile
+carries it. Full `general-purpose` and read/shell `explore` and `plan` are honest item-local
+alternatives. Children cannot spawn descendants, but Kaola adds no restriction to root-level native
+routes.
+
+One absent exact role does not make the rest of the run inline. The orchestrator tests the other
+native routes against that item's task, custody, evidence, and stop boundaries, uses them under
+their real identity when adequate, and inlines only that item otherwise. The next item starts with a
+fresh routing decision.
 
 ## Path selection
 

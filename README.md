@@ -35,7 +35,14 @@ The numbered axioms are tie-breakers, applied in priority order whenever a situa
 
 **Check the premise before it shapes the work:** an issue is a claim recorded earlier against a tree that has since moved, so establish what is true *now* at the place it points and let the measurement rather than the filed text decide what gets built. The usual outcome is neither *right* nor *wrong* but right-with-a-detail-that-misroutes — a stale locator, a miscounted set, a clause that breaks if executed literally — so carry the measurement forward, never a bare verdict. Where the two disagree the issue gets corrected, not quietly worked around. Nothing inspects that you did this.
 
-**Choose dispatch or inline per item:** dispatch when it materially reduces main-context residue, supplies independent judgment, or enables genuinely independent parallel work. Keep one production owner for a cohesive state machine, protocol, or integration when handoff and integration cost exceed that benefit. Both modes are first-class; width follows the true work frontier. No dispatch count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+**Choose dispatch or inline per item:** re-evaluate the choice for every mission item; one item's
+choice never establishes a run-wide default. The absence of an exact named role is not proof that
+all native subagent dispatch is unavailable. Keep one owner for the current cohesive production
+surface when handoff and integration cost exceed the benefit, but that scope does not absorb
+independent research, test authorship, documentation, or review items. Dispatch when it materially
+reduces main-context residue, supplies independent judgment, or enables genuinely independent
+parallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,
+cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
 
 That block is not a paraphrase of the canonical one — it is a byte-identical copy of the
 `templates/axioms.md` source, as is the copy in root `AGENTS.md`. Those two named authoring surfaces
@@ -188,22 +195,20 @@ call. There is no planning agent and no bookkeeping agent — the orchestrator w
 and runs the finalize transaction itself.
 
 The **Tier** column is the runtime-neutral `intent_class`: `standard`, `reasoning`, or `heavy`.
-Only adapters map that intent to native model or effort settings. It is not a fixed per-spawn model
-contract, and a runtime may legitimately inherit the session value instead.
+Only adapters map that intent to a native model/effort carrier or truthful session inheritance.
+`workflow-next` and `kaola-workflow-finalize` expose the selected runtime's three **default dispatch
+bindings**, profile lookup, native carrier, real built-in/generic routes, and known limits. A default
+is not a scheduler: task-sensitive model, effort, service-tier, automatic, background, parallel,
+resume, history, and nesting choices remain available wherever that runtime genuinely supports
+them. The exact matrix and evidence are in
+[Runtime Capabilities](docs/runtime-capabilities.md#default-tier-bindings).
 
-For an **installed Claude Code** agent the tier above is the only thing that decides: install
-rewrites each installed agent's frontmatter to `model: inherit`, so the resolver's
-frontmatter step never fires and the chain is `dispatch → DEFAULT_AGENT_MODELS
-→ inherit`. Each role's *source* frontmatter carries the identical value and
-governs exactly one case — an ad-hoc dispatch pointed at this repository's
-`agents/` directory rather than the installed one. The two are kept byte-equal by
-`test-agent-model-resolver.js`, so a role runs at the same tier whichever
-directory it was dispatched from.
-
-Codex keeps those role classifications as metadata. Profiles and runtime-native defaults remain
-available to the resolver, while a task-sensitive model or reasoning-effort override — or omission
-when the runtime supplies a default — is valid for any individual dispatch. The workflow does not
-turn a tier into a fixed per-spawn pair.
+For Claude Code, installed profiles use `model: inherit`; the runtime-native next/finalize block
+therefore tells the caller to pass the role tier's `sonnet` / `opus` / `fable` model when preserving
+the default binding. Codex profiles keep model and tools under host policy, while its dispatch block
+exposes the owner-approved defaults (`gpt-5.6-luna`/max, `gpt-5.6-sol`/medium,
+`gpt-5.6-sol`/high) and still permits the task-sensitive choices its live `spawn_agent` schema
+offers. OpenCode and ordinary Kimi profiles inherit instead of fabricating a per-call control.
 
 Reviewer roles review a cohesive, converged candidate and return findings to the existing owner.
 That owner repairs the finding and presents the repaired finding or new claim for re-review; a
@@ -228,10 +233,6 @@ One rule about review is worth stating because it is judgment, not machinery: a 
 its own writer-context is no gate. If the same session did the work, take the finding to the user
 rather than self-issuing a pass.
 
-For Claude Code, installed agent frontmatter is rewritten to `model: inherit`. Role tiers remain
-resolver metadata and defaults; a caller may omit the model so the runtime inherits or supply a
-task-sensitive override. Routing commands do not render a fixed per-spawn model literal.
-
 ### Named-role handoffs
 
 When `/workflow-next` or `/kaola-workflow-finalize` dispatches a named role, main supplies a
@@ -242,6 +243,13 @@ behavior remains owned by the profile, while main keeps product intent, integrat
 done verdict. The canonical wording lives directly in the
 [next](templates/routing/next.skeleton.md) and [finalize](templates/routing/finalize.skeleton.md)
 skeletons; there is no handoff slot or field-order schema.
+
+If the exact role is unavailable, inspect the active runtime's built-in, generic, and other native
+child routes for **that item**. Use a route only under its honest identity and actual task, custody,
+evidence, and stop boundaries; a generic worker does not become a missing `tdd-guide` or reviewer
+because its prompt restates that custody. Inline only the current item when no adequate route exists,
+record the specific `capability_gap`, and decide again for the next item. One role miss never turns
+the whole run inline.
 
 ## Installation
 
@@ -282,7 +290,7 @@ Claude Code and Codex share the forge editions — pick one forge at a time; all
 
 **Grok CLI** is likewise an **additive** runtime (not a git forge): `./install-grok.sh` touches none of the existing edition machinery, resolves its support scripts under `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.grok/agents/*.md` (`spawn_subagent` types); the three commands ship as `.grok/commands/*.md`. Every subagent inherits the session model; standard/reasoning/heavy roles carry `medium`/`high`/`xhigh` effort, with heavy verified live. It takes the same generated `--forge` axis. See [docs/grok-edition.md](docs/grok-edition.md).
 
-**Cursor** is likewise an **additive** runtime (not a git forge): `./install-cursor.sh` touches none of the existing edition machinery, resolves its support scripts under `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.cursor/agents/*.md` (`Task` types); the three commands ship as `.cursor/commands/*.md`. Cursor officially supports both project `.cursor/agents/` and user `~/.cursor/agents/`, with project profiles taking precedence. A global install uses the user carrier and, when cwd is a git work tree, also materializes a project-local mirror. Runtime-neutral intent maps to native model bracket parameters in profile frontmatter; Task cards omit per-call model. It takes the same generated `--forge` axis. See [docs/cursor-edition.md](docs/cursor-edition.md).
+**Cursor** is likewise an **additive** runtime (not a git forge): `./install-cursor.sh` touches none of the existing edition machinery, resolves its support scripts under `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.cursor/agents/*.md`; the three commands ship as `.cursor/commands/*.md`. Cursor documents project and user agent paths, but the supported CLI 2026.08.11 probe exposed Kaola roles from the project catalog while a user file alone was not visible. A global install therefore also materializes a project-local mirror when cwd is a git work tree. Runtime-neutral intent maps to native model bracket parameters in profile frontmatter; dispatch omits a per-call model and uses the live Task schema and catalog. It takes the same generated `--forge` axis. See [docs/cursor-edition.md](docs/cursor-edition.md).
 
 **ZCode** is likewise an **additive** runtime (not a git forge): `./install-zcode.sh` touches none of the existing edition machinery, resolves support scripts under the selected Kaola ZCode home, and never touches `~/.claude/`. ZCode officially discovers custom subagents only from user `~/.zcode/agents/`, so a project install stages its generated tree and syncs the role roster to user scope. The three commands ship as `.zcode/commands/*.md`. Official documentation currently says project hook blocks are ignored; both project and global installs therefore merge Kaola hooks only into the executable user carrier `${ZCODE_HOME:-$HOME/.zcode}/cli/config.json`, leaving project `.zcode/config.json` and legacy user `config.json` untouched. Generated profiles use native `model`, `thoughtLevel`, and `tools` fields; exact 3.9.1 behavior and `ZCODE_HOME` relocation remain unknown. See [docs/zcode-edition.md](docs/zcode-edition.md).
 
@@ -295,9 +303,10 @@ Being additive is about *edition machinery*, not about forge support: these runt
 Claude Code installs use `install.sh` only. Do not install Kaola-Workflow through
 the Claude Code plugin marketplace; `install.sh` copies the slash commands,
 support scripts, optional hook config, and vendored agents into `~/.claude/`.
-During install, slash commands render each installed Kaola agent's frontmatter
-model into concrete `Agent(..., model="...")` examples so each spawned subagent
-runs on its assigned model.
+The generated `workflow-next` and `kaola-workflow-finalize` commands expose Claude's native profile
+lookup, Agent carrier, tier defaults, built-ins, and current availability boundary. Installed role
+profiles remain `model: inherit`; the command guidance tells the caller how to select the default
+tier without restricting other native task-sensitive choices.
 If an older Claude Code plugin install is present, the installer refuses to run
 until the plugin is removed:
 
@@ -340,10 +349,10 @@ cd Kaola-Workflow
 
 #### Agent model tiers
 
-There is **no install-time model axis**. Every install ships one model assignment
-per role (the **Tier** column under [Workflow roles](#workflow-roles)), and passing
-a different `model=` on a single dispatch is the way to right-size one piece of work
-up or down. The retired install-time model-profile flag
+There is **no install-time model axis**. Every install ships one default role tier (the **Tier**
+column under [Workflow roles](#workflow-roles)); Claude maps it to `sonnet`, `opus`, or `fable` at
+dispatch while leaving effort at the runtime default. A supported task-sensitive override remains
+a runtime choice. The retired install-time model-profile flag
 is now an unknown argument and fails loudly at the terminal — by design.
 
 ```bash
@@ -415,8 +424,9 @@ Kimi Code is an additive runtime — installed by its own script, not `--forge`.
 are directory-form Skills, while all 14 roles are native Kimi custom-agent profiles under
 `.kimi-code/agents/` or `$KIMI_CODE_HOME/agents/`. Commands dispatch each profile directly by its
 `kaola-role-<role>` name; role contracts are not Skills and are not routed through the built-in
-`coder`/`explore` types. Native `tools` allowlists enforce role capability boundaries. Every child
-inherits the session model and thinking configuration. From a local clone:
+`coder`/`explore` types. Native `tools` allowlists enforce role capability boundaries. Every normal
+profile inherits the session model and thinking configuration; Kaola does not silently opt the user
+into Kimi's experimental secondary-model pool. From a local clone:
 
 ```bash
 ./install-kimi.sh --global --yes   # agents + command Skills under ${KIMI_CODE_HOME:-~/.kimi-code}
@@ -438,7 +448,7 @@ Hooks install as `${GROK_HOME:-~/.grok}/hooks/kaola-workflow-hooks.json` — glo
 
 ### cursor
 
-Cursor is an additive runtime — installed by its own script, not `--forge`. The three commands are flat `.cursor/commands/*.md` slash commands and every role is a named native profile. Cursor discovers project `.cursor/agents/` and user `~/.cursor/agents/`; the project definition wins on conflict. The generated profiles carry intent-derived native model parameters and `readonly`, while Task dispatch omits a per-call model. From a local clone:
+Cursor is an additive runtime — installed by its own script, not `--forge`. The three commands are flat `.cursor/commands/*.md` slash commands and every role is a named native profile. The generated profiles carry intent-derived native model parameters and `readonly`, while dispatch omits a per-call model. Next/finalize use the live Task schema and catalog: IDE documentation describes scoped `Explore`/`Bash`/`Browser`, while the supported CLI 2026.08.11 probe instead exposed writable `generalPurpose`, specialist built-ins, and project custom types. The same probe proved medium/high/xhigh tier resolution, one descendant dispatch generation, and new-process/same-chat catalog refresh. From a local clone:
 
 ```bash
 ./install-cursor.sh --global --yes   # ${CURSOR_HOME:-~/.cursor} plus project .cursor/ when cwd is a git tree
@@ -449,7 +459,7 @@ Hooks merge into `.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (globa
 
 ### zcode
 
-ZCode is an additive runtime — installed by its own script, not `--forge`. The zcode edition delivers the workflow the ZCode-native way: the three commands become flat `.zcode/commands/*.md` slash commands and each canonical role ships as a named `.zcode/agents/<role>.md` (`Agent` type). ZCode officially discovers subagents **only at user scope**, so the installer also syncs the roster to `${ZCODE_HOME:-~/.zcode}/agents/`; the public install page exposed 3.8.1 during the 2026-08-27 research, no local binary was present, and exact 3.9.1 plus `ZCODE_HOME` relocation behavior remain unknown. Workspace hook configuration is ignored, so the installer leaves project `.zcode/config.json` and legacy `${ZCODE_HOME:-~/.zcode}/config.json` untouched and merges Kaola hooks only into `${ZCODE_HOME:-~/.zcode}/cli/config.json`. Canonical standard/reasoning/heavy classes render `model: GLM-5.3`, a camelCase `thoughtLevel` pin (`high` / `max` / `max`), and an explicit native `tools` allowlist. Dispatch cards omit per-call model overrides. From a local clone:
+ZCode is an additive runtime — installed by its own script, not `--forge`. The zcode edition delivers the workflow the ZCode-native way: the three commands become flat `.zcode/commands/*.md` slash commands and each canonical role ships as a named `.zcode/agents/<role>.md`. ZCode officially discovers subagents **only at user scope**, so the installer stages the project tree and syncs the live roster to `${ZCODE_HOME:-~/.zcode}/agents/`; it becomes available in a new session. The public install page exposed 3.8.1 during the 2026-08-27 research, no local binary was present, and exact 3.9.1 plus `ZCODE_HOME` relocation behavior remain unknown. Workspace hook configuration is ignored, so the installer leaves project `.zcode/config.json` and legacy `${ZCODE_HOME:-~/.zcode}/config.json` untouched and merges Kaola hooks only into `${ZCODE_HOME:-~/.zcode}/cli/config.json`. Canonical standard/reasoning/heavy classes render `model: GLM-5.3`, a camelCase `thoughtLevel` pin (`high` / `max` / `max`), and an explicit native `tools` allowlist. Runtime guidance exposes automatic selection and native `@role`; an Agent call uses only the live schema when one is exposed. From a local clone:
 
 ```bash
 ./install-zcode.sh --global --yes   # ${ZCODE_HOME:-~/.zcode} (agents+commands un-nested)

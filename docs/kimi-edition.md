@@ -28,8 +28,9 @@ The command Skills keep their canonical basenames, so `/workflow-init`, `/workfl
 `/kaola-workflow-finalize` remain the three entrypoints. Roles are **not Skills**. Each role is a
 native Markdown/YAML custom-agent profile whose frontmatter name is
 `kaola-role-<role>`. A generated command dispatches it directly with
-`subagent_type="kaola-role-<role>"`; it does not substitute Kimi's built-in `coder` or `explore`
-agent and does not ask a built-in agent to load a role-contract Skill.
+`subagent_type="kaola-role-<role>"` when that exact profile is available; it does not ask a built-in
+agent to load or impersonate a role-contract Skill. Built-ins remain honest item-local fallback
+routes under the runtime-native guidance below.
 
 This matches Kimi's documented custom-agent surface:
 [Custom agents](https://moonshotai.github.io/kimi-code/en/customization/agents.html). The documented
@@ -65,7 +66,22 @@ named Kaola child inherits them. The runtime-neutral `standard`, `reasoning`, an
 classes remain in the behavior source, but the Kimi adapter maps all three to session inheritance.
 
 Kimi documents an experimental secondary-model pool for subagents. Kaola does not enable, seed, or
-rewrite that user-owned experiment.
+rewrite that user-owned experiment. Only a user who explicitly opts in may select its pool aliases
+for newly spawned children; the normal Kaola default remains session model/thinking inheritance for
+all three intent classes.
+
+## Runtime-native orchestration guidance
+
+The two execution commands expose Kimi's full relevant native surface: project and user custom-agent
+paths, direct `Agent` dispatch, `AgentSwarm` parallel lists up to 128 items, resume/background
+options, and the writable `coder`, read-only `explore`, and non-shell `plan` built-ins. Built-ins are leaves;
+custom profiles may allowlist deeper agents. Kaola neither disables those routes nor silently
+enables the experimental secondary-model pool.
+
+If `kaola-role-<role>` is absent, the orchestrator evaluates these routes for the current item. A
+built-in remains honestly identified and must satisfy the actual task, custody, evidence, and stop
+boundaries; it is not renamed into the missing role. Inline applies only when no adequate route
+exists, and the next mission item is reconsidered independently.
 
 ## Forge axis
 

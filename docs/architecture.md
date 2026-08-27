@@ -321,6 +321,26 @@ responsible for the converged candidate and final verdict. There is no seven-lab
 block, ordering schema, parser, or linter; the routing generator propagates the skeleton prose to
 the command and skill surfaces.
 
+That common brief is separate from a generated runtime capability block. Both `workflow-next` and
+`kaola-workflow-finalize` contain one marked `runtime-delegation` slot. The slot renders Claude's
+native block for commands and the forge-matched Codex block for skills; each additive edition
+replaces the same marked region with its own adapter render. The block exposes profile lookup,
+native dispatch carrier, three default tier bindings, tool boundary, honest named/built-in routes,
+and relevant availability/session limits. `workflow-init` has no dispatch teaching.
+
+The flow is one directional authority chain:
+
+```text
+templates/agents/runtime-capabilities.json
+    → generate-agent-profiles.js routing guidance renderer
+    → templates/routing/slots.js: runtime-delegation
+    → next/finalize skeletons
+    → Claude commands + Codex skills
+    → additive edition marker replacement
+```
+
+No additive transform searches for Claude prose headings or invents a second runtime policy.
+
 ### Project instruction authority
 
 One Kaola-formatted repository has one universal instruction surface: root `AGENTS.md`. Codex,
@@ -344,6 +364,9 @@ identical hashes.
 The machine authority is `templates/agents/runtime-capabilities.json`; the cited human map is
 [`runtime-capabilities.md`](runtime-capabilities.md). It distinguishes direct loading from a bridge,
 records profile/dispatch/model/tool/hook/install carriers, and keeps unproved facts as `unknown`.
+Its routing-only guidance additionally exposes built-in/generic routes and native background,
+parallel, resume, nesting, history, or cold-start boundaries where evidence establishes them. It
+does not impose a Kaola concurrency cap or lowest-common-denominator runtime.
 
 Runtimes and forges remain independent axes. The closed role inventory has seven runtime families
 and nine adapter variants: one Claude, three Codex forge variants, and one each for opencode, Kimi,
@@ -367,6 +390,11 @@ Every render carries a shared `behavior_contract_hash` and a render-specific
 adapter mutation must stay inside one runtime family. Byte identity remains required for true
 forge-neutral twins, but cross-runtime sentence equality is not the oracle.
 
+`delegation_guidance` is routing-only adapter data and is deliberately excluded from the adapter
+hash used by native profiles. A wording or capability-exposure correction regenerates the marked
+next/finalize blocks without churning 126 `resolved_profile_hash` values for unchanged profile
+bytes. Runtime-guidance reachability has its own structural and mutation checks.
+
 Provenance is a separate axis in `templates/agents/provenance.json` and
 [`agents-source.md`](agents-source.md). It is validated and durable but excluded from prompt bodies
 and behavior/render hashes.
@@ -378,9 +406,17 @@ is an explicit diagnostic. Live next/finalize surfaces do not turn it into an en
 ### Model intent
 
 Role intent is only `standard`, `reasoning`, or `heavy`. The selected adapter maps that intent to a
-native model/effort value or session inheritance. No mission-list field or routing command fixes a
-per-spawn model pair. Current mappings and limitations are documented in
+native default model/effort value or session inheritance, and next/finalize exposes that binding at
+the point of dispatch. It remains a default rather than scheduler state or a prohibition on native
+task-sensitive choices. No mission-list field records a model pair, and Kaola does not add runtime
+limits on automatic, background, parallel, resume, nesting, history, or service-tier behavior.
+Current mappings and limitations are documented in
 [`runtime-capabilities.md`](runtime-capabilities.md) and each additive edition guide.
+
+Execution choice is equally local: one missing exact role causes a search of the active runtime's
+other adequate native routes for that mission item. A built-in or generic child keeps its real
+identity; a custody brief does not make it impersonate the missing role. Inline execution is the
+fallback for that item only when no adequate route exists, after which the next item is re-evaluated.
 
 ## Testing
 

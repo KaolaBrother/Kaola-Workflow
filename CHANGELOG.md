@@ -1,5 +1,33 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Runtime-native next/finalize routing is restored without narrowing the runtime (#1035).** Both
+  workflow commands now receive an adapter-rendered capability block that exposes native profile
+  discovery, dispatch carrier, all three default tier bindings, tool boundary, honest named and
+  built-in routes, and relevant session/nesting/resume limits for Claude Code, Codex, OpenCode,
+  Kimi Code, Grok, Cursor, and ZCode. A missing exact role is handled for the current mission item:
+  the orchestrator inspects other adequate native routes, preserves their real identity and custody
+  boundary, and inlines only that item when none exists. It never converts one miss into a run-wide
+  inline policy.
+- **Tier defaults and native freedom are both explicit (#1035).** The owner-approved
+  standard/reasoning/heavy matrix is again visible at dispatch time, including Codex
+  Luna/max–Sol/medium–Sol/high and Claude sonnet/opus/fable. The bindings are defaults, not hard
+  scheduler restrictions: native task-sensitive model, service-tier, automatic, background,
+  parallel, resume, history, and nesting options remain available where the active runtime supports
+  them. Kimi keeps normal session inheritance unless the user explicitly opts into its experimental
+  secondary-model pool; Cursor and ZCode use the live runtime schema instead of invented call fields.
+  The supported Cursor CLI probe exposes writable `generalPurpose`, specialist built-ins, exact
+  project roles, live medium/high/xhigh tiers, and one descendant generation; IDE-documented scoped
+  built-ins remain a different host catalog rather than a universal restriction.
+
+### Documentation
+
+- Added ADR 0021 and reconciled architecture, API, conventions, capability, and runtime-edition
+  documentation with the generated runtime-guidance authority and its profile-hash boundary.
+
 ## [10.0.0] - 2026-08-26
 
 ### Changed

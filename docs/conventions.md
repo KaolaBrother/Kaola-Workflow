@@ -18,19 +18,23 @@ to a schedule.
 directions: a re-introduced bookkeeping-role dispatch on any finalize surface fails the contract
 gate, and so does a dropped one-call transaction.
 
-**Execution mode is orchestrator judgment.** Dispatch-vs-inline is a per-item economic call: dispatch
-when it materially reduces main-context residue, supplies independent judgment, or enables genuine
-parallelism; keep cohesive feed-forward work with one production owner when handoff and integration
-cost dominate. Both modes are first-class. Nothing attaches to that choice — no justifier, evidence
-line, approval, checker, count, cap, or serial stigma — and no missing tool creates a fallback policy.
+**Execution mode is orchestrator judgment.** Dispatch-vs-inline is reconsidered for every mission
+item: dispatch when it materially reduces main-context residue, supplies independent judgment, or
+enables genuine parallelism; keep a cohesive production surface with one owner when handoff and
+integration cost dominate. That production scope does not absorb independent research, acceptance
+authorship, documentation, or review. Both modes are first-class. Nothing attaches to the choice —
+no justifier, evidence line, approval, checker, count, cap, or serial stigma. One missing exact role
+is a routing fact for the current item, never a run-wide fallback policy.
 
 ## Codex subagent dispatch
 
 Codex subagent dispatch uses a native role-dispatch packet, not Claude call syntax. When the main
 Codex session invokes a role, it names the installed role, supplies the task prompt and working
-directory, and may omit model/effort so the runtime chooses its native default or provide a
-task-sensitive override. Tier classifications, role profiles, and the resolver remain metadata and
-defaults; no next/finalize policy fixes a per-spawn pair or reviewer escalation.
+directory, and follows the `spawn_agent` schema exposed by that host. The runtime block exposes the
+default bindings — Luna/max for standard, Sol/medium for reasoning, and Sol/high for heavy — while a
+host-supported task-sensitive model, effort, service-tier, or history-fork choice remains valid.
+Profile omission keeps host policy authoritative; the defaults do not become scheduler state or a
+fixed reviewer pipeline.
 
 Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 
@@ -65,6 +69,14 @@ review findings go back to that owner, and repaired findings or new claims may b
 role profile supplies universal behavior. There is no fixed label order, handoff schema, required
 block, parser, linter, grader, score, or approval gate. The Mission List remains the recovery index:
 one H1 plus `item`, `status`, `dispatched`, and `result` for each item.
+
+Next/finalize also carry a generated runtime-native capability block. Read it before deciding that a
+role is unavailable: inspect the live named, built-in, and generic routes for this item, including
+their true write, shell, web, background, resume, nesting, and session limits. A generic route may
+receive an exact custody brief but remains generic; do not present it as the missing named role.
+Inline only the current item when no adequate route can meet task, custody, evidence, and stop
+boundaries, record the specific `capability_gap`, then reconsider the next item. Do not add Kaola
+caps to runtime-owned automatic, parallel, background, resume, nesting, or task-sensitive choices.
 
 ## Joining a dispatch
 

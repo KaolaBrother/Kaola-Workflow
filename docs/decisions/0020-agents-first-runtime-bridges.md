@@ -1,6 +1,7 @@
 # ADR 0020 — AGENTS-first runtime bridges
 
-Status: Accepted · Date: 2026-08-27 · Issues: #1033, #1034
+Status: Accepted; orchestration and model-routing clauses refined by ADR 0021 · Date: 2026-08-27
+· Issues: #1033, #1034
 
 ## Context
 
@@ -113,9 +114,11 @@ role Markdown as the cross-runtime semantic source, maintained Markdown-to-TOML 
 gave only reviewer roles a generated source. Historical changelog, investigation, and ADR text may
 retain those facts as history.
 
-ADR 0019's runtime-neutral intent classes remain, but its Claude-shaped source/mapping details are
-superseded here. ADR 0017's mission-list architecture and ADR 0018's forge-as-backlog decision remain
-unchanged.
+ADR 0019's runtime-neutral intent classes remain, but its Claude-shaped source details are
+superseded here. ADR 0021 retains ADR 0019's owner-approved runtime binding matrix as default
+dispatch policy and supersedes this ADR's statements that routing surfaces select no model/effort
+pair or must reject all runtime-native default routing. ADR 0017's mission-list architecture and
+ADR 0018's forge-as-backlog decision remain unchanged.
 
 ## Rejected alternatives
 

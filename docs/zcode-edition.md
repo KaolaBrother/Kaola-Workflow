@@ -32,8 +32,9 @@ than from `install.sh`:
   an explicit capability-derived `tools` allowlist, shared behavior identity, and render-specific
   hash (see the tier pins below).
 - `.zcode/commands/<name>.md` — exactly the routing-registry `commandSources(forge)` set
-  (`workflow-init`, `workflow-next`, `kaola-workflow-finalize`), keeping the canonical
-  `Agent(` dispatch wording and stamping claim/startup invocations `--runtime zcode`.
+  (`workflow-init`, `workflow-next`, `kaola-workflow-finalize`), stamping claim/startup invocations
+  `--runtime zcode`, and replacing the marked next/finalize capability block with ZCode-native
+  profile lookup and dispatch guidance.
 - `.zcode/config.json` — a deterministic generated hook-mapping template; ZCode does not execute
   this workspace carrier, and the installer does not merge it into a consumer project (see
   [Hooks](#hooks)).
@@ -69,6 +70,20 @@ the ZCode render bytes. `sync-zcode-edition.js` requests these renders from
 `generate-agent-profiles.js`; it does not parse a Claude role file. Reviewer roles have no separate
 source or transform.
 
+## Runtime-native orchestration guidance
+
+The generated execution commands expose automatic selection and native `@<role>` dispatch. If the
+current session exposes an Agent call with named types, its live schema is authoritative; ZCode's
+public documentation does not publish one complete JSON call schema, so Kaola does not invent call
+fields. The generated profile carries `model` and `thoughtLevel`, and the call omits a per-call
+model.
+
+Full `general-purpose` and read-only `Explore` remain honest item-local alternatives. Foreground and
+background choice stays runtime-owned. Children cannot spawn descendants, but Kaola does not narrow
+the root runtime's other routes. If an exact Kaola profile is absent, use another route only when
+its actual task, custody, evidence, and stop boundaries fit; never prompt it to impersonate the
+missing role. Inline only that item when nothing adequate exists, then reconsider the next one.
+
 ## Path selection
 
 ZCode discovers **subagents only at user scope**: `~/.zcode/agents/<name>.md`
@@ -76,6 +91,8 @@ ZCode discovers **subagents only at user scope**: `~/.zcode/agents/<name>.md`
 under `<project>/.zcode/agents/` **and** syncs the same files to
 `${ZCODE_HOME:-~/.zcode}/agents/` — the user scope is the one ZCode reads. Commands remain workspace
 surfaces under `<project>/.zcode/`; executable hooks come only from the user CLI configuration.
+The project agent tree is installer staging, not a live project-profile carrier, and the synced
+user profiles become available in a new session.
 
 ## Installer
 

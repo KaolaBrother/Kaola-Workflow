@@ -17,15 +17,54 @@ Cursor, and ZCode have documented direct `AGENTS.md` support.
 
 ## Capability map
 
-| Runtime | Project instruction loading | Role carrier and dispatch | Model / effort boundary | Scope and limits |
-| --- | --- | --- | --- | --- |
-| Claude Code | Native `CLAUDE.md`; Kaola bridges with `@AGENTS.md` | Markdown/YAML profiles in `.claude/agents/` or `~/.claude/agents/`; Agent/Task dispatch | Profile model or inheritance; subagents inherit extended thinking | Ancestor guidance and lazy subdirectory loading; imports recurse four levels; under 200 lines is advisory |
-| Codex | Direct `AGENTS.md`, layered from repository root toward cwd | Generated TOML custom-agent profiles; named dispatch | Inherit by omission; host policy owns tools and task-sensitive overrides | Three forge adapters render byte-identical role behavior for GitHub, GitLab, and Gitea |
-| opencode | Direct project `AGENTS.md`; global `~/.config/opencode/AGENTS.md` | Markdown profiles under `.opencode/agents/` or user config; named subagents | Profile model or session inheritance; provider options may carry effort | Startup uses the first local instruction file found while walking upward; extra/nested files use configured instruction globs; size limit unknown |
-| Kimi Code | Direct global and project `AGENTS.md` discovery | Native Markdown/YAML profiles under project `.kimi-code/agents/` or `.agents/agents/`, or user `$KIMI_CODE_HOME/agents/` / `~/.agents/agents/`; Agent/AgentSwarm dispatch | Current profile `model` field is ignored; session model/thinking normally carries | Project discovery concatenates the git-root-to-cwd chain; 32 KiB is warning-only, not truncation |
-| Grok Build | Direct global rules, then repository-root-to-cwd project rules | Markdown agents under `.grok/agents/` or `~/.grok/agents/`; `spawn_subagent`; native camelCase profile fields plus `model`, `effort`, and `tools` | Role/persona/parent resolution; Kaola profiles inherit model and carry native effort | Deeper rules win; official docs state files load in full without a size limit; child nesting depth is one |
-| Cursor | Direct root and nested `AGENTS.md` | Markdown/YAML under `.cursor/agents/` or `~/.cursor/agents/`; Task/automatic/explicit dispatch | Exact profile model with bracketed effort parameters or inheritance | Nested rules combine with parent guidance and more specific rules win; general guidance is under 500 lines; two child levels |
-| ZCode | Direct user-global `~/.zcode/AGENTS.md`, then workspace-root `AGENTS.md` | Beta user-scope Markdown/YAML profiles under `~/.zcode/agents/`; Agent or `@` dispatch | Profile `model` plus `thoughtLevel`; both inherit unless a model is explicit | Exactly the two AGENTS sources; no ancestor/child/import scan; subagents cannot spawn; hooks execute from user `${ZCODE_HOME:-~/.zcode}/cli/config.json`, not workspace config; AGENTS size and `ZCODE_HOME` relocation are unknown |
+| Runtime | Profile lookup and native dispatch | Honest native alternatives | Native limits that affect routing |
+| --- | --- | --- | --- |
+| Claude Code | Project `.claude/agents/`, user `~/.claude/agents/`, plugin `agents/`, managed/session definitions; `Agent` with named `subagent_type` | Full `general-purpose`; read-only `Explore` and `Plan`; catch-all `claude`; background, isolation, and agent-team options | Effective precedence and the live Agent/Task catalog decide availability; recursive depth remains runtime/configuration owned |
+| Codex | Project or user `.codex/agents/kaola-workflow/*.toml` registered by `agents.toml`; the current host's `spawn_agent` schema with named `agent_type` | General `default`, implementation-owning `worker`, read-heavy `explorer`, and other types reported by the host | V1/V2 fields, history forking, service tier, nesting, and concurrency are host/version gated; Kaola invents none |
+| OpenCode | Project `.opencode/agents/`, user `~/.config/opencode/agents/`, or `opencode.json`; `task` with named `subagent_type`, or direct `@name` | Broad `general`, read-only local `explore`, read-only external-research `scout`; `task_id` resume and experimental background | Default child depth is one unless user configuration raises it; task permissions and effective merged config may hide a route |
+| Kimi Code | Project `.kimi-code/agents/` or `.agents/agents/`, user `$KIMI_CODE_HOME/agents/` or `~/.agents/agents/`; `Agent`/`AgentSwarm` with `kaola-role-<role>` | Writable `coder`, read-only `explore`, non-shell `plan`; custom agents and AgentSwarm lists up to 128 items | Built-ins are leaves; custom profiles may allowlist deeper agents. Resume/background remain native options |
+| Grok Build | Project `.grok/agents/` or user `~/.grok/agents/`; `spawn_subagent` with named `subagent_type` | Full `general-purpose`; read/shell `explore` and `plan`; background, isolation, resume, cwd, and optional per-call model | Children cannot spawn descendants; the root runtime's other choices remain available |
+| Cursor | Documented project/user `.cursor/agents/` plus compatibility paths; explicit `/role`, natural-language routing, or the live Task schema. Supported CLI measurement found project profiles reachable while a user file alone was not | Host-dependent: IDE docs describe `Explore`, `Bash`, and `Browser`; supported CLI exposed writable `generalPurpose`, `cursor-guide`, `bugbot`, `security-review`, `best-of-n-runner`, and project custom types | The current Task catalog is the authority. Supported CLI proved parallel Tasks, main/direct-child dispatch, a leaf grandchild, and new-process/same-chat profile refresh; explicit/automatic selection and resume by ID remain runtime-owned |
+| ZCode | Runtime-loaded user `${ZCODE_HOME:-~/.zcode}/agents/`; project `.zcode/agents/` is installer staging; automatic selection, native `@role`, or the live Agent schema | Full `general-purpose` and read-only `Explore`; foreground/background stays native | Profiles load in a new session and children cannot spawn. The staged project tree is not runtime profile discovery |
+
+Cursor and ZCode do not publish one complete Task/Agent call schema. Their generated guidance names
+the verified routes, then tells the orchestrator to use the current session's exposed schema and
+catalog. Cursor's IDE documentation and supported CLI demonstrably expose different built-ins, so
+neither list is treated as universal. The guidance does not manufacture portable fields from another
+runtime.
+
+## Default tier bindings
+
+The shared role contract supplies only `standard`, `reasoning`, or `heavy`. The runtime adapter
+exposes the following **default dispatch binding** in both `workflow-next` and
+`kaola-workflow-finalize`:
+
+| Intent | Claude | Codex | OpenCode | Kimi | Grok | Cursor | ZCode |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| standard | `sonnet`; runtime effort | `gpt-5.6-luna` / `max` | session; optional standard model pin | session model/thinking | inherited model + profile `medium` | profile `grok-4.6[effort=medium]` | profile `GLM-5.3` / `thoughtLevel: high` |
+| reasoning | `opus`; runtime effort | `gpt-5.6-sol` / `medium` | optional reasoning-role model pin, otherwise session | session model/thinking | inherited model + profile `high` | profile `grok-4.6[effort=high]` | profile `GLM-5.3` / `thoughtLevel: max` |
+| heavy | `fable`; runtime effort | `gpt-5.6-sol` / `high` | classifies with reasoning for the optional pin, otherwise session | session model/thinking | inherited model + profile `xhigh` | profile `grok-4.6[effort=xhigh]` | profile `GLM-5.3` / `thoughtLevel: max` |
+
+This is not a Kaola scheduler or a blanket prohibition on task-sensitive runtime choices. Claude
+and Codex may carry a selected default on the native call when their live schema permits it;
+OpenCode has no per-call model/effort field; normal Kimi profiles inherit. Kimi's experimental
+secondary-model pool is used only when the user explicitly opts into it. Grok effort and the
+Cursor/ZCode tier pairs live in the named profile. Native automatic, background, parallel, resume,
+nesting, history, service-tier, and model choices stay available wherever the runtime actually
+supports them.
+
+## Per-item fallback principle
+
+Dispatch-vs-inline is decided again for every mission item. One absent exact role does not prove all
+native child routes are absent and never creates a run-wide inline policy. Inspect the active
+runtime's named, built-in, and generic routes. Use one only if its real task, custody, evidence, and
+stop boundaries fit the item.
+
+A brief can assign custody to a generic worker, but the worker remains that generic worker; it does
+not impersonate a missing `tdd-guide`, reviewer, or other named role. If no adequate native route
+exists, inline that item, record the specific `capability_gap`, and reconsider the next item. A
+cohesive production owner owns only that production surface; independent research, test authorship,
+documentation, and review remain separately dispatchable.
 
 ## Adapter inventory
 
@@ -39,6 +78,13 @@ With 14 roles, that produces 126 deterministic renders. `behavior_contract_hash`
 runtime-neutral role contract; `resolved_profile_hash` identifies one native render. A shared
 behavior mutation must reach every variant for that role. An adapter mutation must affect only its
 runtime family. Equal behavior hashes do not promise equal natural-language outputs.
+
+The same capability adapter also owns a routing-only `delegation_guidance` block. The profile
+generator renders it into the `runtime-delegation` slot in both next/finalize skeletons: commands
+receive Claude guidance, forge-matched skills receive Codex guidance, and each additive edition
+replaces the marked block with its own runtime render. `workflow-init` intentionally has no dispatch
+block. Routing-only guidance is excluded from the adapter hash, so explaining an already-supported
+route does not churn `resolved_profile_hash` or all 126 role profiles.
 
 ## First-party evidence
 
@@ -55,6 +101,8 @@ runtime family. Equal behavior hashes do not promise equal natural-language outp
 
 - [AGENTS.md discovery](https://learn.chatgpt.com/docs/agent-configuration/agents-md) documents
   direct root-to-cwd instruction loading.
+- [Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents) documents project/user
+  profiles, built-ins, profile model/effort behavior, and native multi-agent dispatch.
 
 ### opencode
 
@@ -77,6 +125,8 @@ runtime family. Equal behavior hashes do not promise equal natural-language outp
   [configuration files](https://moonshotai.github.io/kimi-code/en/configuration/config-files.html),
   and [hooks](https://moonshotai.github.io/kimi-code/en/customization/hooks.html) document the
   remaining scope and event behavior.
+- [Configuration files](https://www.kimi.com/code/docs/en/kimi-code-cli/configuration/config-files.html)
+  documents the optional experimental secondary-model pool. Kaola does not enable it.
 
 ### Grok Build
 
@@ -93,10 +143,22 @@ runtime family. Equal behavior hashes do not promise equal natural-language outp
 ### Cursor
 
 - [Rules](https://cursor.com/docs/rules) documents direct root/nested AGENTS support and precedence.
-- [Subagents](https://cursor.com/docs/subagents) documents profile paths, dispatch, nesting, and
-  model bracket parameters.
+- [Subagents](https://prod.cursor.com/docs/subagents) documents profile paths, dispatch, nesting, and
+  model bracket parameters. Its IDE catalog describes scoped `Explore`, `Bash`, and `Browser` routes;
+  it does not publish one portable Task call schema.
+- [ACP task notifications](https://prod.cursor.com/docs/cli/acp) document observability events; their
+  fields are not treated as proof of the model-call input schema.
 - [Hooks](https://cursor.com/docs/hooks) and [CLI usage](https://cursor.com/docs/cli/using)
   document events and CLI instruction loading.
+
+**Supported CLI measurement (runtime evidence, 2026-08-27).** Cursor CLI
+`2026.08.11-e8db854` exposed writable `generalPurpose` as `subagentType.unspecified`, five specialist
+types, and all 14 candidate project profiles. It did not expose the IDE-documented
+`Explore`/`Bash`/`Browser` catalog. Exact custom dispatch succeeded; standard/reasoning/heavy
+resolved to medium/high/xhigh, and parallel Tasks succeeded. A direct child dispatched once more,
+while the grandchild lacked Task. A user `~/.cursor/agents/tdd-guide.md` file alone was invisible in an empty project; the
+project mirror was reachable. Reopening the CLI process with the same chat after adding a project
+profile made it visible, so a new chat is not required; same-process hot load remains unknown.
 
 ### ZCode
 
@@ -111,9 +173,12 @@ runtime family. Equal behavior hashes do not promise equal natural-language outp
 
 - opencode's hard or advisory AGENTS size limit;
 - ZCode's AGENTS size limit and `ZCODE_HOME` relocation semantics;
-- the exact Cursor version installed in this workspace (no local binary was present);
+- Cursor same-process profile hot load and catalog behavior on IDE, cloud, or CLI versions other
+  than the measured `2026.08.11-e8db854`;
 - exact ZCode 3.9.1 behavior. The public install page exposed 3.8.1 during this research, so this
   documentation does not present 3.9.1 as locally or publicly verified;
 - any precedence or conflict behavior not stated by the evidence above.
+- Cursor's and ZCode's unpublished Task/Agent JSON call fields; the live runtime schema is the
+  authority when present.
 
 An unknown stays `unknown`; it is not converted into support by a generated file existing on disk.
