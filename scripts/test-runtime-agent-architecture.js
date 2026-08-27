@@ -184,6 +184,187 @@ function deleteCapability(source, entry, key) {
   }
 }
 
+function normalizedProse(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function choiceContract(text) {
+  const match = String(text || '').match(
+    /(?:\*\*)?Choose dispatch or inline per item(?::(?:\*\*)?|\.)[\s\S]*?(?=\n\n|$)/);
+  return normalizedProse(match ? match[0].replace(/\*\*/g, '') : '')
+    .replace(/^Choose dispatch or inline per item\./, 'Choose dispatch or inline per item:');
+}
+
+function commonDelegationGaps(text) {
+  const prose = normalizedProse(text).toLowerCase();
+  const gaps = [];
+  if (!(prose.includes('re-evaluat') && /(?:each|every) mission(?:-list)? item/.test(prose)
+      && /no run-wide (?:default|posture)|never (?:becomes|establishes) (?:a )?run-wide/.test(prose))) {
+    gaps.push('per-item-reset');
+  }
+  if (!(/exact named role/.test(prose) && /not (?:proof|evidence)/.test(prose)
+      && /all (?:native )?(?:subagent|child) dispatch/.test(prose) && /unavailable/.test(prose))) {
+    gaps.push('exact-role-is-not-no-dispatch');
+  }
+  if (!(prose.includes('cohesive production surface')
+      && prose.includes('research') && prose.includes('test authorship')
+      && prose.includes('documentation') && prose.includes('review'))) {
+    gaps.push('production-owner-scope');
+  }
+  return gaps;
+}
+
+function stringLeaves(value, prefix = [], out = []) {
+  if (typeof value === 'string') {
+    out.push({ path: prefix, value });
+    return out;
+  }
+  if (!value || typeof value !== 'object') return out;
+  for (const [key, item] of Object.entries(value)) stringLeaves(item, prefix.concat(key), out);
+  return out;
+}
+
+function replaceAtPath(value, targetPath, replacement, prefix = []) {
+  if (prefix.length === targetPath.length) return replacement;
+  if (Array.isArray(value)) {
+    return value.map((item, index) => targetPath[prefix.length] === String(index)
+      ? replaceAtPath(item, targetPath, replacement, prefix.concat(String(index)))
+      : item);
+  }
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    key,
+    targetPath[prefix.length] === key
+      ? replaceAtPath(item, targetPath, replacement, prefix.concat(key))
+      : item,
+  ]));
+}
+
+function runtimeDelegationGaps(runtime, text) {
+  const prose = normalizedProse(text).toLowerCase();
+  const gaps = [];
+  const needs = (name, alternatives) => {
+    if (!alternatives.some(pattern => pattern.test(prose))) gaps.push(name);
+  };
+
+  // Every runtime must describe the honest item-local fallback. A generic/native child is valid
+  // only as itself: its brief carries the missing profile's task/custody/evidence/stop contract,
+  // and absence of every adequate route inlines this item with a concrete capability_gap.
+  needs('exact-role-fallback', [/exact named role/, /exact role name/]);
+  needs('native-alternative', [/built-in/, /generic/, /native child/]);
+  needs('honest-mechanism', [/actual mechanism/, /name(?:s|d)? the .*mechanism/, /as itself/]);
+  needs('no-impersonation', [/not (?:pretend|present|claim).*named role/, /never .*named role/,
+    /no impersonation/, /does not impersonate/]);
+  for (const boundary of ['task', 'custody', 'evidence', 'stop']) {
+    if (!prose.includes(boundary)) gaps.push('brief-' + boundary);
+  }
+  needs('current-item-only', [/current item only/, /only (?:the )?current item/, /inline this item/]);
+  needs('all-adequate-routes-exhausted', [/no adequate .*route/, /every adequate .*unavailable/,
+    /only when no .*adequate/]);
+  if (!(prose.includes('capability_gap') && prose.includes('specific'))) gaps.push('specific-capability-gap');
+
+  // Lookup scope, dispatch carrier, and the three tier bindings are runtime facts. ADR 0019 is the
+  // oracle for the tier cells; these tokens deliberately specify results, not sentence wording.
+  const runtimeNeeds = {
+    claude: [
+      ['lookup', [/\.claude\/agents\//]],
+      ['carrier', [/\bagent\b.*subagent_type|subagent_type.*\bagent\b/]],
+      ['standard-tier', [/standard.*sonnet|sonnet.*standard/]],
+      ['reasoning-tier', [/reasoning.*opus|opus.*reasoning/]],
+      ['heavy-tier', [/heavy.*fable|fable.*heavy/]],
+      ['effort-boundary', [/runtime(?:'s)? default effort|effort.*not pinned|no .*effort pin/]],
+    ],
+    codex: [
+      ['lookup', [/agents\.toml/, /installed .*profile/]],
+      ['carrier', [/spawn_agent.*agent_type|agent_type.*spawn_agent/]],
+      ['standard-tier', [/standard.*gpt-5\.6-luna.*max|gpt-5\.6-luna.*max.*standard/]],
+      ['reasoning-tier', [/reasoning.*gpt-5\.6-sol.*medium|gpt-5\.6-sol.*medium.*reasoning/]],
+      ['heavy-tier', [/heavy.*gpt-5\.6-sol.*high|gpt-5\.6-sol.*high.*heavy/]],
+    ],
+    opencode: [
+      ['lookup', [/\.opencode\/agents\//]],
+      ['carrier', [/\btask\b.*subagent_type|subagent_type.*\btask\b/]],
+      ['standard-tier', [/standard.*session model|session model.*standard/]],
+      ['reasoning-tier', [/reasoning.*per-role override|per-role override.*reasoning/]],
+      ['heavy-tier', [/heavy.*classif(?:y|ies|ied).*reasoning|reasoning.*heavy/]],
+    ],
+    kimi: [
+      ['lookup', [/\.kimi-code\/agents\//, /kimi_code_home.*agents/]],
+      ['carrier', [/\bagent(?:swarm)?\b.*subagent_type|subagent_type.*\bagent(?:swarm)?\b/]],
+      ['standard-tier', [/standard.*session inherit|session inherit.*standard/]],
+      ['reasoning-tier', [/reasoning.*session inherit|session inherit.*reasoning/]],
+      ['heavy-tier', [/heavy.*session inherit|session inherit.*heavy/]],
+    ],
+    grok: [
+      ['lookup', [/\.grok\/agents\//]],
+      ['carrier', [/spawn_subagent.*subagent_type|subagent_type.*spawn_subagent/]],
+      ['standard-tier', [/standard.*inherit.*medium|medium.*inherit.*standard/]],
+      ['reasoning-tier', [/reasoning.*inherit.*high|high.*inherit.*reasoning/]],
+      ['heavy-tier', [/heavy.*inherit.*xhigh|xhigh.*inherit.*heavy/]],
+    ],
+    cursor: [
+      ['lookup', [/\.cursor\/agents\//]],
+      ['carrier', [/\btask\b.*subagent_type|subagent_type.*\btask\b/]],
+      ['standard-tier', [/standard.*grok-4\.6.*medium|grok-4\.6.*medium.*standard/]],
+      ['reasoning-tier', [/reasoning.*grok-4\.6.*high|grok-4\.6.*high.*reasoning/]],
+      ['heavy-tier', [/heavy.*grok-4\.6.*xhigh|grok-4\.6.*xhigh.*heavy/]],
+      // Cursor reports its live Task enum. The contract names the route classes, not one eternal
+      // enum spelling; generalPurpose/Explore/Bash/Browser may be examples, never the oracle.
+      ['custom-route', [/custom.*task|task.*custom/]],
+      ['reported-built-in-route', [/built-in.*task|task.*built-in/]],
+      ['reported-general-route', [/general.*task|task.*general/]],
+      ['runtime-reported-route', [/runtime.report/, /live task enum/, /current task enum/]],
+    ],
+    zcode: [
+      ['lookup', [/(?:~\/|\$\{?zcode_home[^ ]*).*\.zcode\/agents\//,
+        /zcode_home.*agents\//, /user.scope.*\.zcode\/agents\//]],
+      ['carrier', [/\bagent\b.*subagent_type|subagent_type.*\bagent\b/, /\bagent\b.*@.*dispatch/]],
+      ['standard-tier', [/standard.*glm-5\.3.*thoughtlevel.*high|glm-5\.3.*high.*standard/]],
+      ['reasoning-tier', [/reasoning.*glm-5\.3.*thoughtlevel.*max|glm-5\.3.*max.*reasoning/]],
+      ['heavy-tier', [/heavy.*glm-5\.3.*thoughtlevel.*max|glm-5\.3.*max.*heavy/]],
+    ],
+  };
+  for (const [name, alternatives] of runtimeNeeds[runtime] || []) needs(name, alternatives);
+  return gaps;
+}
+
+function freshRoutingCarriers(topic) {
+  const routing = require('./generate-routing-surfaces.js');
+  const { SLOTS, SPLICES } = require('../templates/routing/slots.js');
+  const additive = {
+    opencode: require('./sync-opencode-edition.js'),
+    kimi: require('./sync-kimi-edition.js'),
+    grok: require('./sync-grok-edition.js'),
+    cursor: require('./sync-cursor-edition.js'),
+    zcode: require('./sync-zcode-edition.js'),
+  };
+  const carriers = [];
+  for (const row of routing.GENERATED_SURFACES.filter(candidate => candidate.topic === topic)) {
+    const skeleton = routing.loadSkeleton(row.skeleton, row.topic);
+    const content = routing.renderSkeleton(
+      skeleton, { surface_type: row.surface_type, forge: row.forge }, { slots: SLOTS, splices: SPLICES });
+    if (row.surface_type === 'skill') {
+      carriers.push({ runtime: 'codex', forge: row.forge, topic, label: row.path, content });
+      continue;
+    }
+    carriers.push({ runtime: 'claude', forge: row.forge, topic, label: row.path, content });
+    const basename = routing.TOPICS[topic].command_basename;
+    for (const [runtime, edition] of Object.entries(additive)) {
+      const rendered = runtime === 'opencode'
+        ? edition.renderCommand(content, row.forge, `${runtime}/${row.forge}/${basename}`)
+        : edition.renderCommand(content, basename, row.forge);
+      carriers.push({
+        runtime,
+        forge: row.forge,
+        topic,
+        label: `${runtime}/${row.forge}/${basename}`,
+        content: rendered,
+      });
+    }
+  }
+  return carriers;
+}
+
 // A1 — root project instruction authority is inverted, not duplicated.
 const agentsRoot = read('AGENTS.md') || '';
 const claudeRoot = read('CLAUDE.md') || '';
@@ -1188,6 +1369,122 @@ if (generator && behavior && adapters && profiles.length > 0) {
       && !/\b(?:Write|Edit|Bash)\b/.test(String(fields.tools || '')),
     `A10-tools[${runtime}/mutation]: removing write and shell capabilities removes Write/Edit/Bash `
       + 'from the enforced native allowlist');
+  }
+}
+
+// A10-delegation-routing — #1035. The observed Cursor run turned two item-local facts into a
+// run-wide inline posture. Acceptance has two deliberately separate layers:
+//
+//   (1) one runtime-neutral decision contract, shared byte-for-byte from the AGENTS axiom through
+//       workflow-next, finalize, and every fresh runtime render; and
+//   (2) runtime-native execution guidance rendered from that runtime's adapter, because a generic
+//       sentence cannot tell Cursor, Codex, Kimi, or any other host which child route it actually
+//       exposes or where it discovers the named profile.
+//
+// Full native paragraphs are NOT required to match across runtimes. Only the common invariant does.
+// The adapter field layout is also not an oracle: the production API receives an adapter object,
+// and the mutation below proves some adapter-owned scalar reaches the rendered guidance.
+{
+  const axioms = read('templates/axioms.md') || '';
+  const common = choiceContract(axioms);
+  const commonGaps = commonDelegationGaps(common);
+  assert(common.length > 0,
+    'A10-delegation/common: templates/axioms.md owns the dispatch-vs-inline decision contract');
+  assert(!commonGaps.includes('per-item-reset'),
+    'A10-delegation/common: dispatch-vs-inline is re-evaluated for every mission item and one item establishes no run-wide default');
+  assert(!commonGaps.includes('exact-role-is-not-no-dispatch'),
+    'A10-delegation/common: exact named-role absence is explicitly not proof that all native subagent dispatch is unavailable');
+  assert(!commonGaps.includes('production-owner-scope'),
+    'A10-delegation/common: a cohesive production owner is scoped to that production surface and does not absorb research/test/docs/review items');
+
+  for (const skeletonPath of [
+    'templates/routing/next.skeleton.md',
+    'templates/routing/finalize.skeleton.md',
+  ]) {
+    assert(choiceContract(read(skeletonPath) || '') === common,
+      `A10-delegation/common-source: ${skeletonPath} carries the one AGENTS decision wording exactly`);
+  }
+
+  let carriers = [];
+  try {
+    carriers = [...freshRoutingCarriers('next'), ...freshRoutingCarriers('finalize')];
+  } catch (error) {
+    assert(false, 'A10-delegation/render: fresh next+finalize runtime carriers render — ' + error.message);
+  }
+  assert(carriers.length === 42,
+    'A10-delegation/render: next+finalize cover 7 runtimes x 3 forges — got ' + carriers.length);
+
+  const renderGuidance = generator && generator.renderRuntimeDelegationGuidance;
+  assert(typeof renderGuidance === 'function',
+    'A10-delegation/adapter-api: profile generator exposes renderRuntimeDelegationGuidance(adapter)');
+
+  const guidanceByAdapter = new Map();
+  if (typeof renderGuidance === 'function') {
+    for (const entry of adapterView.entries) {
+      let guidance = '';
+      try { guidance = String(renderGuidance(entry.adapter) || ''); }
+      catch (error) {
+        assert(false, `A10-delegation/adapter[${entry.name}]: native guidance renders — ${error.message}`);
+      }
+      guidanceByAdapter.set(entry.name, guidance);
+      const gaps = runtimeDelegationGaps(entry.runtime, guidance);
+      assert(guidance.length > 0 && gaps.length === 0,
+        `A10-delegation/adapter[${entry.name}]: guidance names lookup scope, native carrier, ADR 0019 tiers, honest fallback, custody brief, and item-local capability gap — missing ${JSON.stringify(gaps)}`);
+
+      // Mutation reachability without freezing the adapter's field names. Find the longest
+      // adapter-owned string that the production guidance actually consumes, replace that scalar
+      // in memory, and require the production renderer to expose the changed bytes.
+      const consumed = stringLeaves(entry.adapter)
+        .filter(leaf => leaf.value.length >= 8 && guidance.includes(leaf.value))
+        .sort((a, b) => b.value.length - a.value.length)[0];
+      assert(!!consumed,
+        `A10-delegation/adapter-mutation[${entry.name}]: rendered guidance consumes an adapter-owned scalar`);
+      if (consumed) {
+        const marker = `kw-dispatch-mutation-${entry.name}-1035`;
+        const mutated = replaceAtPath(clone(entry.adapter), consumed.path, marker);
+        let mutatedGuidance = '';
+        try { mutatedGuidance = String(renderGuidance(mutated) || ''); }
+        catch (error) {
+          assert(false, `A10-delegation/adapter-mutation[${entry.name}]: mutated adapter renders — ${error.message}`);
+        }
+        assert(mutatedGuidance !== guidance && mutatedGuidance.includes(marker),
+          `A10-delegation/adapter-mutation[${entry.name}]: adapter mutation reaches its native guidance bytes`);
+      }
+    }
+  }
+
+  function adapterForCarrier(carrier) {
+    if (carrier.runtime === 'codex') {
+      return adapterView.entries.find(entry => entry.name === 'codex-' + carrier.forge);
+    }
+    return adapterView.entries.find(entry => entry.runtime === carrier.runtime);
+  }
+
+  for (const carrier of carriers) {
+    const gaps = runtimeDelegationGaps(carrier.runtime, carrier.content);
+    assert(choiceContract(carrier.content) === common,
+      `A10-delegation/carrier[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: fresh render carries the one common item-local decision contract`);
+    assert(gaps.length === 0,
+      `A10-delegation/carrier[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: ${carrier.label} states native lookup/carrier/tier/fallback semantics — missing ${JSON.stringify(gaps)}`);
+    if (typeof renderGuidance === 'function') {
+      const entry = adapterForCarrier(carrier);
+      const guidance = entry ? guidanceByAdapter.get(entry.name) : '';
+      assert(!!entry && guidance.length > 0
+        && normalizedProse(carrier.content).includes(normalizedProse(guidance)),
+      `A10-delegation/carrier-source[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: fresh carrier includes its exact adapter-rendered native guidance`);
+    }
+  }
+
+  // Subject-byte mutations: remove the two observed distinctions from an otherwise-correct common
+  // contract and prove the acceptance classifier notices each believable near miss independently.
+  if (commonGaps.length === 0) {
+    const noPerItemReset = common.replace(/[^.]*re-evaluat[^.]*\./i, '');
+    assert(commonDelegationGaps(noPerItemReset).includes('per-item-reset'),
+      'A10-delegation/mutation: removing the per-item reset makes the common contract fail');
+    const conflatedRoleAbsence = common.replace(/[^.]*exact named role[^.]*\./i,
+      'Failure to reach an exact named role makes every subagent route unavailable for the run.');
+    assert(commonDelegationGaps(conflatedRoleAbsence).includes('exact-role-is-not-no-dispatch'),
+      'A10-delegation/mutation: conflating exact-role absence with no dispatch makes the common contract fail');
   }
 }
 
