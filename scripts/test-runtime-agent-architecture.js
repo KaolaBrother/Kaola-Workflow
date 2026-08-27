@@ -248,6 +248,30 @@ function concreteDispatchBlocks(runtime, text) {
   return [...String(text || '').matchAll(pattern)].map(match => match[0]);
 }
 
+function quotedCallField(block, field) {
+  const match = String(block || '').match(new RegExp(`\\b${field}\\s*=\\s*["']([^"']*)["']`));
+  return match ? match[1] : null;
+}
+
+function codexV2FieldHits(text) {
+  return String(text || '').split(/\r?\n/)
+    .filter(line => /^\s*(?:task_name|agent_type|message|reasoning_effort|fork_turns)\s*=/.test(line));
+}
+
+function mutateConcreteDispatchBlock(runtime, text, role, mutate) {
+  let changed = false;
+  const call = runtime === 'claude' ? 'Agent' : runtime === 'codex' ? 'spawn_agent' : null;
+  if (!call) return { changed, output: String(text || '') };
+  const pattern = new RegExp(`^${call}\\(\\n[\\s\\S]*?^\\)`, 'gm');
+  const output = String(text || '').replace(pattern, block => {
+    const roleField = runtime === 'codex' ? 'agent_type' : 'subagent_type';
+    if (changed || quotedCallField(block, roleField) !== role) return block;
+    changed = true;
+    return mutate(block);
+  });
+  return { changed, output };
+}
+
 function dispatchDefaultGaps(runtime, text, roleContracts) {
   if (runtime !== 'claude' && runtime !== 'codex') return [];
   const expected = {
@@ -279,6 +303,21 @@ function dispatchDefaultGaps(runtime, text, roleContracts) {
     if (runtime === 'codex'
         && !new RegExp(`\\breasoning_effort\\s*=\\s*["']${binding && binding.effort}["']`).test(block)) {
       gaps.push(`${role}-default-effort`);
+    }
+    if (runtime === 'codex') {
+      if (quotedCallField(block, 'agent_type') !== role) gaps.push(`${role}-agent-type`);
+      const taskName = quotedCallField(block, 'task_name');
+      const sanitizedRole = role.replace(/-/g, '_');
+      if (taskName === null || taskName.length === 0) {
+        gaps.push(`${role}-task-name-required`);
+      } else {
+        if (!/^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(taskName)) {
+          gaps.push(`${role}-task-name-sanitize`);
+        }
+        if (!taskName.includes(sanitizedRole)) gaps.push(`${role}-task-name-role`);
+      }
+      if (!quotedCallField(block, 'message')) gaps.push(`${role}-message`);
+      if (quotedCallField(block, 'fork_turns') !== 'none') gaps.push(`${role}-fork-turns`);
     }
   }
   const prose = normalizedProse(text).toLowerCase();
@@ -1518,6 +1557,8 @@ if (generator && behavior && adapters && profiles.length > 0) {
     'A10-delegation/common: exact named-role absence is explicitly not proof that all native subagent dispatch is unavailable');
   assert(!commonGaps.includes('production-owner-scope'),
     'A10-delegation/common: a cohesive production owner is scoped to that production surface and does not absorb research/test/docs/review items');
+  assert(codexV2FieldHits(axioms).length === 0,
+    'A10-delegation/common: universal axioms carry no Codex V2 task_name/agent_type/message/reasoning_effort/fork_turns call fields');
 
   for (const skeletonPath of [
     'templates/routing/next.skeleton.md',
@@ -1648,6 +1689,10 @@ if (generator && behavior && adapters && profiles.length > 0) {
       assert(defaultGaps.length === 0,
         `A10-delegation/finalize-defaults[${carrier.runtime}/${carrier.forge}]: concrete tdd/build/docs calls apply their behavior-derived default model${carrier.runtime === 'codex' ? '+effort' : ''} while preserving task-sensitive overrides — missing ${JSON.stringify(defaultGaps)}`);
     }
+    if (carrier.runtime !== 'codex') {
+      assert(codexV2FieldHits(carrier.content).length === 0,
+        `A10-delegation/codex-v2-scope[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: Codex V2 call fields do not leak into universal or another runtime's render`);
+    }
     if (typeof renderGuidance === 'function') {
       const entry = adapterForCarrier(carrier);
       const guidance = entry ? guidanceByAdapter.get(entry.name) : '';
@@ -1655,6 +1700,29 @@ if (generator && behavior && adapters && profiles.length > 0) {
         && normalizedProse(carrier.content).includes(normalizedProse(guidance)),
       `A10-delegation/carrier-source[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: fresh carrier includes its exact adapter-rendered native guidance`);
     }
+  }
+
+  const codexFinalize = carriers.find(carrier => carrier.runtime === 'codex'
+    && carrier.forge === 'github' && carrier.topic === 'finalize');
+  if (codexFinalize) {
+    let armed = codexFinalize.content;
+    for (const role of ['tdd-guide', 'build-error-resolver', 'doc-updater']) {
+      const safeName = `finalize_${role.replace(/-/g, '_')}`;
+      const ensured = mutateConcreteDispatchBlock('codex', armed, role, block =>
+        quotedCallField(block, 'task_name') !== null
+          ? block
+          : block.replace(/(^\s*agent_type\s*=.*$)/m, `$1\n  task_name="${safeName}",`));
+      assert(ensured.changed,
+        `A10-delegation/codex-task-name-mutation[${role}]: real finalize render contains the role's concrete spawn_agent example`);
+      armed = ensured.output;
+    }
+    assert(dispatchDefaultGaps('codex', armed, roleContracts).length === 0,
+      'A10-delegation/codex-task-name-mutation: completing only the missing safe role task names makes the current concrete examples structurally valid');
+    const deleted = mutateConcreteDispatchBlock('codex', armed, 'tdd-guide', block =>
+      block.replace(/^\s*task_name\s*=.*\n/m, ''));
+    const deletedGaps = dispatchDefaultGaps('codex', deleted.output, roleContracts);
+    assert(deleted.changed && deletedGaps.includes('tdd-guide-task-name-required'),
+      'A10-delegation/codex-task-name-mutation RED: deleting task_name from an otherwise valid concrete V2 call is detected');
   }
 
   // Concrete-call mutation bites are conditional on the subject becoming compliant: corrupt one
@@ -1692,6 +1760,9 @@ if (generator && behavior && adapters && profiles.length > 0) {
   assert(RETIRED_RUN_WIDE_INLINE.test(cleanItemLocal
     + ' If the runtime cannot spawn a role agent, keep the work inline and say so.'),
   'A10-delegation/next-whole-surface-mutation: appending the retired broad fallback anywhere in the render is detected');
+  assert(codexV2FieldHits(common).length === 0
+    && codexV2FieldHits(common + '\n  task_name="universal_tdd_guide",').length === 1,
+  'A10-delegation/codex-v2-scope-mutation: injecting task_name into the universal decision contract is detected');
 }
 
 // A11 — old Claude-first paraphrase and prose-rewrite machinery is deleted with its mechanism.
