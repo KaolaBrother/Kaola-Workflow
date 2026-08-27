@@ -50,9 +50,9 @@ The finalize transaction appends its exact changed-path inventory here.
 
 ## Mission List
 
-Every implementation, acceptance, live-measurement, documentation, and review mission is complete.
-The owner-authorized 10.0.1 publication and installed-runtime/consumer convergence is the serial
-post-finalize release transaction and will be recorded back into this archive after it completes.
+Every implementation, acceptance, live-measurement, documentation, review, publication, and global
+runtime-install mission is complete. Consumer repositories remain owner-scoped and run workflow
+initialization independently, as directed by the owner.
 
 ## Documentation Docking
 
@@ -64,9 +64,8 @@ documents Codex V2 task-name dispatch. No #1035 documentation blocker remains.
 
 ## Follow-Up Items
 
-None. Issue #1035 is complete; version/tag/publication, global installation, and consumer
-workflow-init convergence are the explicitly authorized post-finalize release transaction, not a
-deferred issue.
+None. Issue #1035, version/tag publication, and global runtime installation are complete. Consumer
+workflow initialization is performed by each consumer and is outside this run by owner direction.
 
 ## Status: ARCHIVED AFTER FINAL GIT GATE
 
@@ -82,3 +81,13 @@ archived_paths:
 - kaola-workflow/archive/issue-1035/finalization-summary.md
 - kaola-workflow/archive/issue-1035/mission-list.md
 - kaola-workflow/archive/issue-1035/workflow-state.md
+
+## Post-Finalize Release
+
+- Release-only candidate: `92fbcee41713448f9506b405c5a9d410343bea04`; exactly eight allowed release files changed from sink/archive commit `9fd55eeabd722dacbfd08ffda540bfa48d3cac25`.
+- Pre-tag receipt: clean, exact-SHA, unwaived Claude/Codex/GitLab/Gitea chains, all exit 0 in one attempt; strict `--release-check` passed for the same SHA.
+- Tag transaction: `kaola-workflow--v10.0.1` created and raw tag-tree bytes verified; tag-present `npm test` passed all four chains.
+- Publication: origin `main` and `refs/tags/kaola-workflow--v10.0.1` both resolved to the candidate; GitHub published `https://github.com/KaolaBrother/Kaola-Workflow/releases/tag/kaola-workflow--v10.0.1` as a non-draft, non-prerelease Latest release.
+- Closure: GitHub issue #1035 is closed and the temporary workflow branch is deleted.
+- Installation convergence: `install-all.sh --global --yes --forge=github` reported PASS for Claude, OpenCode, Codex, Kimi, Grok, Cursor, and ZCode; the following dry-run check read the installed Codex marketplace plugin at 10.0.1 with no refresh pending.
+- Consumer boundary: no consumer repository was modified; each consumer runs workflow initialization itself by owner direction.
