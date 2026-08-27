@@ -29,8 +29,8 @@ the `@AGENTS.md` Claude-only bridge/overlay. It never treats a native overlay as
 authority.
 
 - `plan` is read-only. It classifies both files, computes before/after SHA-256 values, and reports
-  `planned`, `converged`, `active_run_preserved`, `producer_repository_preserved`, or
-  `decision_required`.
+  `planned`, `converged`, `applied`, `drift`, `active_run_preserved`,
+  `producer_repository_preserved`, or `decision_required`.
 - `check` is read-only. A safe but unapplied plan becomes `drift` and exits 3.
 - `apply` writes only a safe `planned` result, atomically and by exact path. It reports the files
   written and becomes a byte-identical no-op after convergence.
@@ -41,14 +41,29 @@ current region or redirect is replaced. A released `KW-CLAUDE-MANAGED` marker is
 ownership proof by itself: changed outer bytes make that legacy file owner-ambiguous, so the helper
 returns `decision_required` without writing. Missing files may be created. Malformed markers, an
 unrecognized owner-only authority, or any other split the helper cannot prove safe also returns
-`decision_required`, exits 2, and writes nothing. Any active workflow state is fenced as
-`active_run_preserved`; old runs keep the instruction bytes they started with. On this producer
-repository, `producer_repository_preserved` protects the richer project-specific contract. The
-helper creates no symlinks and does not inspect or delete nested/local runtime instruction files.
+`decision_required`, exits 2, and writes nothing.
+
+Classification is per managed change, not one repository-wide boolean. Each file reports one of:
+
+| class | active-run behavior |
+| --- | --- |
+| `authority_layout_equivalent` | Canonicalize `AGENTS.md` and necessary thin first-read bridges. May apply while a run is active. Claim, Mission List, worktree, done results, and live locators stay byte-identical. |
+| `execution_default_change` | Show exact old/new hashes; apply only after explicit conversation consent. No durable approval field is stored. |
+| `state_schema_incompatible` | Preserve the old contract or run an explicit tested migration; never rewrite automatically. Top-level status is `active_run_preserved` when this is the only pending write. |
+| `unknown_or_mixed` | Return `decision_required` with the ambiguity and make no write. |
+
+A compatible authority-layout migration is not frozen merely because an unrelated state schema is
+incompatible, and `workflow-state.md` / `mission-list.md` are never helper writes. After a
+compatible active-run layout apply, the helper may write `.cache/instruction-adoption.json` under
+each active run as recovery evidence (old/new hashes, classifications, and
+`fresh_session_requirement: not_inspected_by_init`). It does not inspect or mutate the installed
+runtime adapter. On this producer repository, `producer_repository_preserved` protects the richer
+project-specific contract. The helper creates no symlinks and does not inspect or delete
+nested/local runtime instruction files.
 
 The JSON envelope has `schema_version`, `mode`, `status`, `changed`, `files`, `writes`, and
 `reasons`. Each `files.agents` / `files.claude` record carries `classification`,
-`before_sha256`, `after_sha256`, and `outside_bytes_preserved`.
+`compatibility`, `before_sha256`, `after_sha256`, and `outside_bytes_preserved`.
 
 ## Routing-surface handoff interface
 

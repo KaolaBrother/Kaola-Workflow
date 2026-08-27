@@ -19,6 +19,18 @@
   `prior_probe_not_re-run_here`. `workflow-init` does not install runtime catalogs. The
   sessionStart `kaola-workflow-ensure-cursor-catalog.js` hook stays a CLI derived catalog-ensure,
   not installer dual-write.
+- **Active runs adopt a compatible repository layout; missions stay outcome-level (#1037).**
+  The project-instruction helper classifies each managed change as
+  `authority_layout_equivalent`, `execution_default_change`, `state_schema_incompatible`, or
+  `unknown_or_mixed` instead of freezing every instruction file whenever any run is active. A
+  compatible AGENTS-canonical / thin-bridge layout may apply during an active run; claim,
+  Mission List, worktree, and locators are not helper writes. An execution-default change still
+  asks in conversation. Generated next/finalize guidance separates acceptance custody from
+  execution carrier, defines typed `BLOCKED` as an ownership boundary, and sequences focused
+  acceptance → affected frontier → candidate freeze → review batch without adding Mission List
+  fields, a parser, or a phase machine. Review PASS evidence is invalid once the reviewed bytes
+  change. Runtime installers remain the owner of native catalogs and next/finalize carriers;
+  `workflow-init` stays a portable repository operation.
 
 ### Fixed
 

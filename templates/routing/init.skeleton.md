@@ -68,8 +68,10 @@ the smallest bridge to `AGENTS.md` plus that runtime's genuine overlay. Preserve
 byte-for-byte outside managed regions; never replace an owner-only file on inference.
 
 Resolve and run the installed `kaola-workflow-project-instructions.js` helper in `plan` mode first.
-If it reports `decision_required`, ask in conversation and write nothing. If an active run was claimed
-under an older installed version, preserve both instruction files unchanged. `apply` is atomic and
+If it reports `decision_required`, ask in conversation and write nothing. A compatible
+`authority_layout_equivalent` change may apply during an active run; `execution_default_change`
+and `state_schema_incompatible` (`active_run_preserved`) write nothing until consent or an explicit
+migration. `apply` is atomic and
 idempotent: a second apply must be a no-op, while `check` verifies convergence without writing.
 
 Recommended universal size: under 200 lines. This is a recommendation, not a limit. Move long detail
@@ -99,8 +101,11 @@ Optional content belongs elsewhere unless it must be read in every session:
 ### Executable template authority
 
 Do not edit either instruction file independently of the helper's reported outcome. The adjacent
-distribution module supplies the complete consumer wording; `decision_required` and
-`active_run_preserved` both mean no instruction-file write.
+distribution module supplies the complete consumer wording. `decision_required`,
+`execution_default_change` (ask in conversation; no durable approval), and
+`state_schema_incompatible` (`active_run_preserved`) mean no instruction-file write for those
+changes. `authority_layout_equivalent` may apply during an active run without rewriting claim,
+Mission List, worktree, or locators.
 <!-- /REGION -->
 <!-- REGION:skill — the counterpart placement: role profiles live in `.codex/agents/kaola-workflow/` and are wired by the managed block in `.codex/config.toml`, paths that exist only on this runtime -->
 ```
@@ -253,8 +258,11 @@ node "$INSTRUCTIONS_JS" check --project-root "$PWD" --json
 The helper owns only `<!-- KW-AGENTS-MANAGED-START -->` through its matching END and the runtime
 overlay's own managed region. Known legacy managed redirects may be migrated; mixed files preserve
 every owner byte outside those regions byte-for-byte. Unknown, malformed, duplicate, or owner-only
-instruction authority returns `decision_required`: ask in conversation and make no write. A project
-claimed under an older installed version returns `active_run_preserved`. Successful reruns are
+instruction authority returns `decision_required`: ask in conversation and make no write. Per managed
+change the helper reports `authority_layout_equivalent`, `execution_default_change`,
+`state_schema_incompatible`, or `unknown_or_mixed`. A compatible authority-layout migration may apply
+during an active run; an execution-default change asks in conversation and writes nothing; a
+state/schema-incompatible change returns `active_run_preserved`. Successful reruns are
 idempotent and report `converged` with an empty write list.
 <!-- REGION:command — KNOWN RESIDUAL, structural shape and NOT a capability difference: both surfaces carry this same scaffold tree, under a numbered Step heading here and as item 6 of a Required-Behavior list on the skill. Nothing about either runtime forces that. It is kept rather than collapsed because collapsing costs a real surface: either the command loses its Step 1 to 5 numbering, or it loses the tree itself. A damaged surface is a worse trade than a divergence that says out loud what it is. Collapse it the day the command's Step numbering is reworked for another reason. -->
 ---

@@ -354,14 +354,18 @@ Runtime-specific files never duplicate the universal managed region.
 
 `workflow-init` delegates migration to `kaola-workflow-project-instructions.js`. Its `plan`,
 `check`, and `apply` modes load the one distribution-owned consumer-template module, classify
-ownership, preserve arbitrary bytes and modes outside managed markers, leave active older runs
-untouched, and return `decision_required` without writing when ownership or non-regular topology is
-ambiguous. The byte-exact v9.17.2 redirect and released consumer-template pair migrates whole-file
-once into the contract and thin bridge; a legacy `KW-CLAUDE-MANAGED` region with any changed outer
-bytes instead requires an owner decision and is not written. This producer repository's richer root
-contract is explicitly preserved. Workflow-init authoring surfaces name this module and writer but
-contain no second universal template. A successful second apply writes nothing and preserves
-identical hashes.
+ownership, preserve arbitrary bytes and modes outside managed markers, and return one compatibility
+class per managed change: `authority_layout_equivalent` may apply during an active run without
+rewriting claim, Mission List, worktree, or locators; `execution_default_change` asks in
+conversation and writes nothing until that consent; `state_schema_incompatible` keeps the old
+contract (`active_run_preserved`) or follows an explicit tested migration; `unknown_or_mixed`
+returns `decision_required` without writing. A blanket freeze of every instruction file merely
+because any run is active is retired. The byte-exact v9.17.2 redirect and released consumer-template
+pair migrates whole-file once into the contract and thin bridge; a legacy `KW-CLAUDE-MANAGED` region
+with any changed outer bytes instead requires an owner decision and is not written. This producer
+repository's richer root contract is explicitly preserved. Workflow-init authoring surfaces name this
+module and writer but contain no second universal template. A successful second apply writes nothing
+and preserves identical hashes.
 
 Runtime installation is a separate owner from that portable repository result. `workflow-init`
 does not install, refresh, or choose runtime catalogs, commands, skills, hooks, or adapters; the

@@ -44,6 +44,11 @@ const UNIVERSAL_AGENTS_BLOCKS = [
       'completed item and its result are immutable',
       'one dispatch has one result',
       'append a new mission',
+      'recoverable outcome',
+      'not by itself a mission',
+      '`BLOCKED` means the current owner cannot safely continue',
+      'Custody (who decides meaning) is independent of carrier',
+      'failure frontier',
     ],
   },
   {
@@ -164,6 +169,13 @@ const REQUIRED_BLOCKS = [
       'completed item is immutable',
       'one dispatch has one result',
       'append a new mission',
+      'recoverable outcome',
+      'not by itself a mission',
+      '`BLOCKED` means the current owner cannot safely',
+      'Do not return `BLOCKED` merely',
+      'Custody answers who may decide meaning',
+      'Failure frontier, then freeze',
+      'invalidates prior PASS evidence',
     ],
   },
   {
@@ -300,6 +312,16 @@ const REQUIRED_BLOCKS = [
     surface_type_tag: 'both',
     content_tokens: [
       '`## Validation`, `## Changed Paths` and `## Mission List` are where the finalize transaction\'s own findings land',
+    ],
+  },
+  {
+    block_id: 'fn-outcome-candidate',
+    topic: 'finalize',
+    runtime_tag: 'both',
+    surface_type_tag: 'both',
+    content_tokens: [
+      'A mission is outcome-level',
+      'invalidates prior PASS evidence for changed bytes',
     ],
   },
   {

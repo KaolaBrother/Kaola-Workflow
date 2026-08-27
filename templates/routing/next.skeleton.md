@@ -184,8 +184,14 @@ An H1 carrying the goal in one line, then one item per mission:
 ```
 
 Each completed item is immutable and its `result` is immutable; one dispatch has one result,
-including `FAIL`. Repair or re-review work must append a new mission rather than rewriting the
-closed item.
+including `FAIL` or `BLOCKED`. Repair or re-review work must append a new mission rather than
+rewriting the closed item. A mission names a recoverable outcome or a newly discovered independent
+causal class. One selector, assertion, command, review round, or mechanical oracle is not by itself
+a mission. Keep working within the dispatched outcome through failures the current owner is
+authorized and able to reconcile. Do not return `BLOCKED` merely because the next command exposed
+more work in the same custody and causal boundary. `BLOCKED` means the current owner cannot safely
+or legitimately continue: for example a test author found a production defect, a production owner
+found a product-contract contradiction, or a runtime capability/consent prerequisite is missing.
 
 | field | content | written |
 |---|---|---|
@@ -212,11 +218,26 @@ Read the list. The frontier is not computed — it is the list minus done minus 
 reading. Pick from it.
 
 **Decide the shape then, not before.** When you reach an item, choose dispatch or inline per item.
-Dispatch when it materially reduces main-context residue, supplies independent judgment, or enables
-genuinely independent parallel work. Keep one production owner for a cohesive state machine,
-protocol, or integration when handoff and integration cost exceed that benefit. Both modes are
-first-class; width follows the true work frontier. No dispatch count, cap, disjointness proof,
-justification, approval, or fallback stigma attaches to the judgment.
+Custody answers who may decide meaning; dispatch answers where this item is most economically
+executed on this runtime. They are independent. Dispatch when it materially reduces main-context
+residue, supplies independent judgment, or enables genuinely independent parallel work. Keep one
+production owner for a cohesive state machine, protocol, or integration when handoff and
+integration cost exceed that benefit. Both modes are first-class; width follows the true work
+frontier. No dispatch count, cap, disjointness proof, justification, approval, or fallback stigma
+attaches to the judgment.
+
+An independent test author owns new or changed behavioral acceptance and proves meaningful RED. An
+implementer may not delete, weaken, or reinterpret that acceptance to pass. Mechanical fixture,
+signature, harness, and equivalent test-path maintenance may stay with the cohesive production
+owner when acceptance meaning is unchanged. None of the above mandates a subagent.
+
+**Failure frontier, then freeze.** Use this sequence as judgment, not persisted phase state:
+focused acceptance → affected frontier inventory → causal repair batches by shared custody →
+candidate freeze → review batch against that exact candidate → re-freeze once mutated. Do not
+append one mission per stale oracle. Collect the complete finding set before repairing a review
+batch. Any mutation creates a new candidate hash and invalidates prior PASS evidence for changed
+bytes. When a repaired causal boundary produces the same class of authority/custody violation
+again, stop adding another timing-specific patch and re-establish a single structural authority.
 
 Subagents and worktrees are tools, offered and declinable. Use them when the judgment above says
 they improve the work; keep cohesive feed-forward work with one production owner when that is the

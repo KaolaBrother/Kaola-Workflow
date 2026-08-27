@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 
+// Ownership-safe AGENTS-first project migration. plan|check|apply classify each managed
+// change as authority_layout_equivalent, execution_default_change, state_schema_incompatible,
+// or unknown_or_mixed. An active run no longer freezes every instruction file. The helper
+// never writes workflow-state.md or mission-list.md.
+
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -87,15 +92,29 @@ function managedRegion(bytes, marker) {
   };
 }
 
-function hasActiveRun(projectRoot) {
+function listActiveRunDirs(projectRoot) {
   const runRoot = path.join(projectRoot, 'kaola-workflow');
-  if (!fs.existsSync(runRoot)) return false;
+  if (!fs.existsSync(runRoot)) return [];
+  const dirs = [];
   for (const entry of fs.readdirSync(runRoot, { withFileTypes: true })) {
     if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-    const state = inspectOptional(path.join(runRoot, entry.name, 'workflow-state.md'));
-    if (state.bytes && /^status:\s*active\s*$/mi.test(state.bytes.toString('utf8'))) return true;
+    const dir = path.join(runRoot, entry.name);
+    const state = inspectOptional(path.join(dir, 'workflow-state.md'));
+    if (state.bytes && /^status:\s*active\s*$/mi.test(state.bytes.toString('utf8'))) dirs.push(dir);
   }
-  return false;
+  return dirs;
+}
+
+function hasActiveRun(projectRoot) {
+  return listActiveRunDirs(projectRoot).length > 0;
+}
+
+function writeAdoptionReceipts(projectRoot, payload) {
+  const body = Buffer.from(JSON.stringify(payload, null, 2) + '\n');
+  for (const runDir of listActiveRunDirs(projectRoot)) {
+    const receiptPath = path.join(runDir, '.cache', 'instruction-adoption.json');
+    atomicWrite(receiptPath, body, inspectOptional(receiptPath).stat);
+  }
 }
 
 function isProducerRepository(projectRoot) {
@@ -182,33 +201,71 @@ function mergeClaude(existingBytes, templateBytes, allowExplicitOverlay) {
   return managed;
 }
 
-function classifyProjectInstructions({ agentsBytes, claudeBytes, activeWorkflowStates = false }) {
-  if (activeWorkflowStates) {
-    return {
-      status: 'active_run_preserved', changed: false,
-      agents: { classification: 'active_run_preserved' },
-      claude: { classification: 'active_run_preserved' },
-    };
+const COMPATIBILITY = Object.freeze({
+  AUTHORITY_LAYOUT_EQUIVALENT: 'authority_layout_equivalent',
+  EXECUTION_DEFAULT_CHANGE: 'execution_default_change',
+  STATE_SCHEMA_INCOMPATIBLE: 'state_schema_incompatible',
+  UNKNOWN_OR_MIXED: 'unknown_or_mixed',
+});
+
+const LAYOUT_EQUIVALENT_CLASSES = new Set([
+  'known_v9_consumer_template',
+  'known_v9_universal_authority',
+  'known_legacy_redirect',
+  'known_legacy_plus_owner_bytes',
+  'missing',
+  'known_legacy_managed_region',
+  'owner_overlay_preserved',
+]);
+
+function compatibilityFor(fileKind, classification) {
+  const name = classification && classification.classification;
+  if (!name) return COMPATIBILITY.UNKNOWN_OR_MIXED;
+  if (['ambiguous_managed_region', 'owner_only', 'symbolic_link', 'non_regular'].includes(name)) {
+    return COMPATIBILITY.UNKNOWN_OR_MIXED;
   }
+  if (name === 'producer_repository_preserved') return COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT;
+  if (name === 'state_schema_incompatible' || name === 'active_run_preserved') {
+    return COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE;
+  }
+  if (LAYOUT_EQUIVALENT_CLASSES.has(name)) return COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT;
+  if (name === 'managed_region') {
+    return fileKind === 'claude'
+      ? COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT
+      : COMPATIBILITY.EXECUTION_DEFAULT_CHANGE;
+  }
+  if (classification.changed === false) return COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT;
+  return COMPATIBILITY.UNKNOWN_OR_MIXED;
+}
+
+function annotateCompatibility(agents, claude) {
+  agents.compatibility = compatibilityFor('agents', agents);
+  claude.compatibility = compatibilityFor('claude', claude);
+  return { agents, claude };
+}
+
+function classifyProjectInstructions({ agentsBytes, claudeBytes, activeWorkflowStates = false }) {
+  // activeWorkflowStates is kept for callers; freeze-all is retired. execute() decides
+  // per-file writes from compatibility classes when a run is active.
+  void activeWorkflowStates;
   const templates = sourceTemplates();
   if (sha256(agentsBytes) === V9_AGENTS_SHA256
       && sha256(claudeBytes) === V9_CONSUMER_CLAUDE_SHA256) {
-    return {
-      status: 'planned', changed: true,
-      agents: { classification: 'known_v9_consumer_template', after: templates.agents, changed: true },
-      claude: { classification: 'known_v9_consumer_template', after: templates.claude, changed: true },
-    };
+    const agents = { classification: 'known_v9_consumer_template', after: templates.agents, changed: true };
+    const claude = { classification: 'known_v9_consumer_template', after: templates.claude, changed: true };
+    annotateCompatibility(agents, claude);
+    return { status: 'planned', changed: true, agents, claude };
   }
   if (sha256(agentsBytes) === V9_AGENTS_SHA256 && sha256(claudeBytes) === V9_CLAUDE_SHA256) {
-    return {
-      status: 'planned', changed: true,
-      agents: { classification: 'known_v9_universal_authority', after: templates.agents, changed: true },
-      claude: { classification: 'known_v9_universal_authority', after: templates.claude, changed: true },
-    };
+    const agents = { classification: 'known_v9_universal_authority', after: templates.agents, changed: true };
+    const claude = { classification: 'known_v9_universal_authority', after: templates.claude, changed: true };
+    annotateCompatibility(agents, claude);
+    return { status: 'planned', changed: true, agents, claude };
   }
   const agents = mergeAgents(agentsBytes, templates.agents);
   const agentsSafe = agents.after != null;
   const claude = mergeClaude(claudeBytes, templates.claude, agentsSafe);
+  annotateCompatibility(agents, claude);
   if (!agentsSafe || claude.after == null) {
     return { status: 'decision_required', changed: false, agents, claude };
   }
@@ -222,6 +279,7 @@ function fileEnvelope(classification, beforeBytes, afterBytes) {
   const after = afterBytes == null ? beforeBytes : afterBytes;
   return {
     classification: classification.classification,
+    compatibility: classification.compatibility || compatibilityFor(null, classification),
     before_sha256: sha256(beforeBytes), after_sha256: sha256(after),
     outside_bytes_preserved: classification.outsideBytesPreserved === true,
   };
@@ -251,6 +309,7 @@ function decisionForTopology(mode, agentsFile, claudeFile) {
   if (!bad) return null;
   const agents = { classification: agentsFile.topology };
   const claude = { classification: claudeFile.topology };
+  annotateCompatibility(agents, claude);
   return {
     schema_version: SCHEMA_VERSION, mode, status: 'decision_required', changed: false,
     files: {
@@ -273,6 +332,7 @@ function execute(mode, projectRoot) {
   if (isProducerRepository(projectRoot)) {
     const agents = { classification: 'producer_repository_preserved' };
     const claude = { classification: 'producer_repository_preserved' };
+    annotateCompatibility(agents, claude);
     return {
       schema_version: SCHEMA_VERSION, mode, status: 'producer_repository_preserved', changed: false,
       files: {
@@ -284,31 +344,72 @@ function execute(mode, projectRoot) {
   }
   const agentsBytes = agentsFile.bytes;
   const claudeBytes = claudeFile.bytes;
+  const activeRun = hasActiveRun(projectRoot);
   const classification = classifyProjectInstructions({
-    agentsBytes, claudeBytes, activeWorkflowStates: hasActiveRun(projectRoot),
+    agentsBytes, claudeBytes, activeWorkflowStates: activeRun,
   });
   let status = classification.status;
   const writes = [];
-  if (status === 'planned' && mode === 'check') status = 'drift';
-  if (classification.status === 'planned' && mode === 'apply') {
-    if (classification.agents.changed) {
+  const agentsCompat = classification.agents.compatibility;
+  const claudeCompat = classification.claude.compatibility;
+  const unknown = agentsCompat === COMPATIBILITY.UNKNOWN_OR_MIXED
+    || claudeCompat === COMPATIBILITY.UNKNOWN_OR_MIXED;
+  const stateSchema = agentsCompat === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE
+    || claudeCompat === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE;
+  const allowWrite = (compat, changed) => {
+    if (!changed) return false;
+    if (unknown) return false;
+    if (stateSchema && compat === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE) return false;
+    if (!activeRun) return true;
+    return compat === COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT;
+  };
+  const agentsWrite = allowWrite(agentsCompat, classification.agents.changed);
+  const claudeWrite = allowWrite(claudeCompat, classification.claude.changed);
+  if (classification.status === 'decision_required' || unknown) {
+    status = 'decision_required';
+  } else if (stateSchema && !agentsWrite && !claudeWrite && classification.changed) {
+    status = 'active_run_preserved';
+  } else if (activeRun && classification.status === 'planned' && !agentsWrite && !claudeWrite) {
+    status = 'decision_required';
+  } else if (classification.status === 'planned' && mode === 'check') {
+    status = (agentsWrite || claudeWrite) ? 'drift' : status;
+  }
+  if (mode === 'apply' && (agentsWrite || claudeWrite)) {
+    if (agentsWrite) {
       atomicWrite(agentsPath, classification.agents.after, agentsFile.stat);
       writes.push('AGENTS.md');
     }
-    if (classification.claude.changed) {
+    if (claudeWrite) {
       atomicWrite(claudePath, classification.claude.after, claudeFile.stat);
       writes.push('CLAUDE.md');
     }
     status = 'applied';
   }
-  return {
+  const envelope = {
     schema_version: SCHEMA_VERSION, mode, status, changed: status === 'applied',
     files: {
       agents: fileEnvelope(classification.agents, agentsBytes, classification.agents.after),
       claude: fileEnvelope(classification.claude, claudeBytes, classification.claude.after),
     },
-    writes, reasons: [classification.agents.classification, classification.claude.classification],
+    writes,
+    reasons: [
+      classification.agents.classification, classification.claude.classification,
+      agentsCompat, claudeCompat,
+    ],
   };
+  // Recovery evidence only. Init does not inspect or mutate the installed runtime adapter;
+  // a restart remains a carrier change owned by that adapter.
+  if (mode === 'apply' && status === 'applied' && activeRun) {
+    writeAdoptionReceipts(projectRoot, {
+      schema_version: 1,
+      kind: 'instruction_adoption',
+      files: envelope.files,
+      writes: envelope.writes,
+      reasons: envelope.reasons,
+      fresh_session_requirement: 'not_inspected_by_init',
+    });
+  }
+  return envelope;
 }
 
 function main(argv) {
@@ -330,7 +431,7 @@ function main(argv) {
 module.exports = {
   AGENTS_MARKER, CLAUDE_MARKER, LEGACY_CLAUDE_MARKER, LEGACY_REDIRECT,
   V9_AGENTS_SHA256, V9_CLAUDE_SHA256, V9_CONSUMER_CLAUDE_SHA256,
-  classifyProjectInstructions, execute,
+  COMPATIBILITY, compatibilityFor, classifyProjectInstructions, execute,
 };
 
 if (require.main === module) main(process.argv);

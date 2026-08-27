@@ -36,8 +36,10 @@ moments.
 ## Decisions
 
 [`decisions/`](decisions/) holds the full catalog. ADR 0020 records the AGENTS-first repository and
-role-authority architecture; ADR 0021 adds the runtime-native next/finalize guidance boundary. Most
-older records describe the node/DAG executor that
+role-authority architecture; ADR 0021 adds the runtime-native next/finalize guidance boundary. ADR
+0017 remains the Mission List design of record; #1037 refines outcome-level missions, custody vs
+carrier, and active-run layout adoption without adding fields. Most older records describe the
+node/DAG executor that
 ADR 0017 retired or the Claude-first role generation that ADR 0020 supersedes.
 
 - **[0021 — Runtime-native orchestration guidance](decisions/0021-runtime-native-orchestration-guidance.md)**

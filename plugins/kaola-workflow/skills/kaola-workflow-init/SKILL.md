@@ -159,8 +159,11 @@ node "$INSTRUCTIONS_JS" check --project-root "$PWD" --json
 The helper owns only `<!-- KW-AGENTS-MANAGED-START -->` through its matching END and the runtime
 overlay's own managed region. Known legacy managed redirects may be migrated; mixed files preserve
 every owner byte outside those regions byte-for-byte. Unknown, malformed, duplicate, or owner-only
-instruction authority returns `decision_required`: ask in conversation and make no write. A project
-claimed under an older installed version returns `active_run_preserved`. Successful reruns are
+instruction authority returns `decision_required`: ask in conversation and make no write. Per managed
+change the helper reports `authority_layout_equivalent`, `execution_default_change`,
+`state_schema_incompatible`, or `unknown_or_mixed`. A compatible authority-layout migration may apply
+during an active run; an execution-default change asks in conversation and writes nothing; a
+state/schema-incompatible change returns `active_run_preserved`. Successful reruns are
 idempotent and report `converged` with an empty write list.
 ## Initial File Bodies
 

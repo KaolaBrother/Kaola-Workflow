@@ -25,7 +25,17 @@ carries an H1 with the goal and one entry per item:
 
 `dispatched` is written before work goes out. No script owns this file; the orchestrator writes it.
 An item is a mission, not a specification: it carries no role, write set, dependency edge, model, or
-cardinality. Decide how to execute it only when reaching it.
+cardinality. Decide how to execute it only when reaching it. A mission names a recoverable outcome
+or a newly discovered independent causal class; one selector, assertion, command, review round, or
+mechanical oracle is not by itself a mission. Keep working through failures in the same custody and
+causal boundary; `BLOCKED` means the current owner cannot safely or legitimately continue.
+
+**Custody vs carrier.** Custody answers who may decide meaning. Dispatch answers where this item is
+most economically executed. Neither inline nor dispatch is a run-wide default.
+
+**Failure frontier.** Establish focused acceptance, inventory the affected class, repair by shared
+custody, freeze the candidate, then review that exact candidate as a batch. Mutation invalidates
+prior PASS evidence for changed bytes.
 
 When resuming, `done` items and their `result` are known; `in-flight` items with a `dispatched`
 locator are decisions to reconcile. Look for the work, not the worker: if the promised output landed,

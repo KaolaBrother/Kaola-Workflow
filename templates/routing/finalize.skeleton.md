@@ -33,8 +33,11 @@ result, and you are the only party with enough context to be.
 Read `kaola-workflow/{project}/workflow-state.md` for what this run owns, and
 `kaola-workflow/{project}/mission-list.md` for what it set out to do.
 The mission list remains exactly an H1 plus `item`, `status`, `dispatched`, and `result`: a
-completed item and its result are immutable; one dispatch has one result including `FAIL`, and
-repair or re-review work must append a new mission.
+completed item and its result are immutable; one dispatch has one result including `FAIL` or
+`BLOCKED`, and repair or re-review work must append a new mission. A mission is outcome-level: one
+selector, assertion, command, or review round is not by itself a mission. `BLOCKED` means the
+current owner cannot safely continue. Review the exact frozen candidate as a batch; any mutation
+creates a new candidate hash and invalidates prior PASS evidence for changed bytes.
 
 Before a delegated role starts, give it a self-sufficient natural-language brief: the result or
 question, the relevant evidence and authority or custody boundary, the exact worktree, commit, or

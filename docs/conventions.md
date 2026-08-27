@@ -18,13 +18,16 @@ to a schedule.
 directions: a re-introduced bookkeeping-role dispatch on any finalize surface fails the contract
 gate, and so does a dropped one-call transaction.
 
-**Execution mode is orchestrator judgment.** Dispatch-vs-inline is reconsidered for every mission
-item: dispatch when it materially reduces main-context residue, supplies independent judgment, or
-enables genuine parallelism; keep a cohesive production surface with one owner when handoff and
-integration cost dominate. That production scope does not absorb independent research, acceptance
-authorship, documentation, or review. Both modes are first-class. Nothing attaches to the choice —
-no justifier, evidence line, approval, checker, count, cap, or serial stigma. One missing exact role
-is a routing fact for the current item, never a run-wide fallback policy.
+**Execution mode is orchestrator judgment.** Custody answers who may decide meaning; dispatch
+answers where this item is most economically executed. They are independent. Dispatch-vs-inline is
+reconsidered for every mission item: dispatch when it materially reduces main-context residue,
+supplies independent judgment, or enables genuine parallelism; keep a cohesive production surface
+with one owner when handoff and integration cost dominate. That production scope does not absorb
+independent research, acceptance authorship, documentation, or review. Both modes are first-class.
+Nothing attaches to the choice — no justifier, evidence line, approval, checker, count, cap, or
+serial stigma. One missing exact role is a routing fact for the current item, never a run-wide
+fallback policy. A mission names a recoverable outcome; one selector is not a mission. Converge the
+affected failure frontier before freezing a candidate and reviewing that exact hash as a batch.
 
 ## Codex subagent dispatch
 

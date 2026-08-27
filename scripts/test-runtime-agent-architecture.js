@@ -577,7 +577,10 @@ for (const [label, pattern] of [
   ['byte preservation', /byte-for-byte/i],
   ['idempotent reruns', /idempotent/i],
   ['conflict escalation', /ask in conversation/i],
-  ['version-fenced active work', /older installed version|claimed under[^\n]*version/i],
+  ['authority-layout class', /authority_layout_equivalent/],
+  ['execution-default consent', /execution_default_change/],
+  ['state-schema fence', /state_schema_incompatible/],
+  ['unknown-or-mixed class', /unknown_or_mixed/],
 ]) {
   assert(pattern.test(initSource), `A3: workflow-init carries the ${label} migration outcome`);
 }
@@ -595,6 +598,40 @@ assert(!!pairedNeutralMarker,
   'A3: the distribution consumer template declares a paired runtime-neutral managed region');
 assert(!/KW-CLAUDE-(?:TEMPLATE|MANAGED)/.test(initSource),
   'A3: universal workflow-init regions no longer use retired KW-CLAUDE naming');
+
+{
+  const nextSource = read('templates/routing/next.skeleton.md') || '';
+  const finalizeSource = read('templates/routing/finalize.skeleton.md') || '';
+  const consumerSource = read('scripts/kaola-workflow-project-instruction-templates.js') || '';
+  const surfaces = [nextSource, finalizeSource, consumerSource];
+  const norm = text => String(text).replace(/\s+/g, ' ');
+  const teachesSelectorAsMission = text => {
+    const n = norm(text);
+    return /is itself a mission/i.test(n) && !/not by itself a mission/i.test(n);
+  };
+  const teachesImmediateBlocked = text => {
+    const n = norm(text);
+    return /return `BLOCKED` merely because/i.test(n)
+      && !/Do not return `BLOCKED` merely because/i.test(n);
+  };
+  const teachesTestOwnerRepair = text =>
+    /(?:implementer|test author) may delete, weaken, or reinterpret that acceptance to pass/i.test(norm(text));
+  assert(surfaces.every(text => !teachesSelectorAsMission(text)),
+    'A3[mission-granularity]: shipped guidance does not teach one selector as a mission');
+  assert(!teachesImmediateBlocked(nextSource),
+    'A3[mission-granularity]: next does not require an immediate BLOCKED on same-custody work');
+  assert(surfaces.every(text => !teachesTestOwnerRepair(text)),
+    'A3[mission-granularity]: shipped guidance does not let the test owner silently repair production');
+  assert(teachesSelectorAsMission(norm(nextSource).replace(/not by itself a mission/g, 'is itself a mission')),
+    'A3[mission-granularity] mutation RED: teaching one selector as a mission is detected');
+  assert(teachesImmediateBlocked(norm(nextSource).replace(/Do not return `BLOCKED` merely because/g,
+    'return `BLOCKED` merely because')),
+  'A3[mission-granularity] mutation RED: requiring immediate BLOCKED on same-custody work is detected');
+  assert(teachesTestOwnerRepair(norm(nextSource).replace(
+    /An implementer may not delete, weaken, or reinterpret that acceptance to pass\./,
+    'An implementer may delete, weaken, or reinterpret that acceptance to pass.')),
+  'A3[mission-granularity] mutation RED: silent production repair by the test/implementer owner is detected');
+}
 
 // The shipped workflow-init text is necessary but cannot prove that owner bytes survive a real
 // migration. Discover the production migration seam by capability, then exercise its public CLI on
@@ -799,17 +836,99 @@ if (migrationModule) {
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(path.join(stateDir, 'workflow-state.md'),
       '# Kaola-Workflow State\n\n## Project\nname: active-run\nstatus: active\n');
+    const missionList = [
+      '# goal',
+      '',
+      '- item: keep extra fields',
+      '  status: done',
+      '  dispatched: self',
+      '  result: already landed',
+      '  role: implementer',
+      '  depends_on: none',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(stateDir, 'mission-list.md'), missionList);
     const active = runMigration('apply', activeRoot);
     assert(active.status === 0 && active.envelope
-      && active.envelope.status === 'active_run_preserved'
-      && active.envelope.changed === false && active.envelope.writes.length === 0,
-    'A3[active]: an older active run is version-fenced from instruction migration');
-    assert(fs.readFileSync(path.join(activeRoot, 'AGENTS.md'), 'utf8') === legacyRedirect
-      && fs.readFileSync(path.join(activeRoot, 'CLAUDE.md'), 'utf8') === ownerClaude,
-    'A3[active]: active-run preservation leaves both files byte-identical');
+      && active.envelope.status === 'applied'
+      && active.envelope.changed === true
+      && active.envelope.files.agents.compatibility === 'authority_layout_equivalent'
+      && active.envelope.files.claude.compatibility === 'authority_layout_equivalent',
+    'A3[active]: a compatible authority-layout migration applies during an active run');
+    const stateAfter = fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8');
+    assert(stateAfter.includes('status: active'),
+      'A3[active]: layout adoption does not rewrite claim/worktree status');
+    assert(fs.readFileSync(path.join(stateDir, 'mission-list.md'), 'utf8') === missionList,
+      'A3[active]: Mission List bytes including extra fields stay untouched');
+    const receiptPath = path.join(stateDir, '.cache', 'instruction-adoption.json');
+    assert(fs.existsSync(receiptPath),
+      'A3[active]: layout adoption writes a recovery receipt under the active run .cache');
+    const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+    assert(receipt.kind === 'instruction_adoption'
+      && receipt.fresh_session_requirement === 'not_inspected_by_init'
+      && receipt.files.agents.before_sha256
+      && receipt.files.agents.after_sha256
+      && receipt.files.agents.before_sha256 !== receipt.files.agents.after_sha256,
+    'A3[active]: receipt carries old/new hashes and does not inspect the adapter');
+    assert(/<!--\s*KW-AGENTS-MANAGED-START\s*-->/.test(fs.readFileSync(path.join(activeRoot, 'AGENTS.md'), 'utf8'))
+      && exactLineCount(fs.readFileSync(path.join(activeRoot, 'CLAUDE.md')), '@AGENTS.md') === 1,
+    'A3[active]: active-run layout adoption reaches AGENTS-canonical plus a thin Claude bridge');
   } finally {
     try { fs.rmSync(activeRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   }
+
+  const execRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1037-exec-default-'));
+  try {
+    const canonicalTemplates = require(path.join(ROOT, 'scripts',
+      'kaola-workflow-project-instruction-templates.js'));
+    const driftedAgents = injectManagedDrift(
+      Buffer.from(canonicalTemplates.AGENTS_TEMPLATE), migrationModule.AGENTS_MARKER);
+    writeInstructionFixture(execRoot, driftedAgents, Buffer.from(canonicalTemplates.CLAUDE_TEMPLATE));
+    const stateDir = path.join(execRoot, 'kaola-workflow', 'active-run');
+    fs.mkdirSync(stateDir, { recursive: true });
+    const stateBytes = '# Kaola-Workflow State\n\n## Project\nname: active-run\nstatus: active\n';
+    fs.writeFileSync(path.join(stateDir, 'workflow-state.md'), stateBytes);
+    const planned = runMigration('plan', execRoot);
+    assert(planned.envelope && planned.envelope.files.agents.compatibility === 'execution_default_change',
+      'A3[active-execution]: drifted AGENTS managed region is execution_default_change');
+    const applied = runMigration('apply', execRoot);
+    assert(applied.status === 2 && applied.envelope
+      && applied.envelope.status === 'decision_required'
+      && applied.envelope.changed === false && applied.envelope.writes.length === 0,
+    'A3[active-execution]: execution-default change during an active run does not write');
+    assert(fs.readFileSync(path.join(execRoot, 'AGENTS.md')).equals(driftedAgents),
+      'A3[active-execution]: AGENTS bytes stay until conversation consent');
+    assert(fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8') === stateBytes,
+      'A3[active-execution]: workflow-state is never a write target');
+    assert(planned.envelope.files.agents.before_sha256
+      !== planned.envelope.files.agents.after_sha256,
+    'A3[active-execution]: plan still shows exact old/new hashes for consent');
+    assert(!fs.existsSync(path.join(stateDir, '.cache', 'instruction-adoption.json')),
+      'A3[active-execution]: refused execution-default writes leave no adoption receipt');
+  } finally {
+    try { fs.rmSync(execRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
+
+  assert(migrationModule.COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT === 'authority_layout_equivalent'
+    && migrationModule.COMPATIBILITY.EXECUTION_DEFAULT_CHANGE === 'execution_default_change'
+    && migrationModule.COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE === 'state_schema_incompatible'
+    && migrationModule.COMPATIBILITY.UNKNOWN_OR_MIXED === 'unknown_or_mixed',
+  'A3[compat]: helper exports the four repository compatibility classes');
+  assert(migrationModule.compatibilityFor('agents', { classification: 'known_legacy_redirect' })
+    === 'authority_layout_equivalent',
+  'A3[compat]: known legacy redirect is authority-layout equivalent');
+  assert(migrationModule.compatibilityFor('agents', { classification: 'managed_region', changed: true })
+    === 'execution_default_change',
+  'A3[compat]: AGENTS managed-region drift is an execution-default change');
+  assert(migrationModule.compatibilityFor('claude', { classification: 'managed_region', changed: true })
+    === 'authority_layout_equivalent',
+  'A3[compat]: Claude overlay managed-region rewrite stays layout-equivalent');
+  assert(migrationModule.compatibilityFor('agents', { classification: 'state_schema_incompatible' })
+    === 'state_schema_incompatible',
+  'A3[compat]: a state-schema classification stays non-layout');
+  assert(migrationModule.compatibilityFor('agents', { classification: 'owner_only' })
+    === 'unknown_or_mixed',
+  'A3[compat]: owner-only authority is unknown_or_mixed');
 
   // A3-installed — workflow-init runs from the distribution that actually ships. Copy each plugin
   // root away from this repository so an implementation cannot accidentally borrow root-only
@@ -1035,6 +1154,28 @@ if (migrationModule) {
       assert(!/# Kaola-Workflow — Claude Code Instructions/.test(String(claudeAfter))
         && !/READ CLAUDE\.md|only to direct you there/i.test(String(agentsAfter)),
       'A3[v9-exact]: retired v9 universal Claude authority and AGENTS redirect are both removed');
+
+      const v9ActiveRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1037-v9-active-'));
+      try {
+        writeInstructionFixture(v9ActiveRoot, v9Agents, v9Claude);
+        const stateDir = path.join(v9ActiveRoot, 'kaola-workflow', 'active-run');
+        fs.mkdirSync(stateDir, { recursive: true });
+        fs.writeFileSync(path.join(stateDir, 'workflow-state.md'),
+          '# Kaola-Workflow State\n\n## Project\nname: active-run\nstatus: active\n');
+        fs.writeFileSync(path.join(stateDir, 'mission-list.md'),
+          '# goal\n\n- item: keep me\n  status: done\n  dispatched: self\n  result: already landed\n');
+        const appliedActive = runMigration('apply', v9ActiveRoot);
+        assert(appliedActive.status === 0 && appliedActive.envelope
+          && appliedActive.envelope.status === 'applied'
+          && appliedActive.envelope.files.agents.compatibility === 'authority_layout_equivalent',
+        'A3[v9-active]: exact v9 pair adopts AGENTS-canonical layout during an active run');
+    assert(fs.readFileSync(path.join(stateDir, 'mission-list.md'), 'utf8').includes('keep me'),
+      'A3[v9-active]: Mission List bytes are unchanged');
+    assert(fs.existsSync(path.join(stateDir, '.cache', 'instruction-adoption.json')),
+      'A3[v9-active]: compatible layout adoption leaves a recovery receipt');
+      } finally {
+        try { fs.rmSync(v9ActiveRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
     } finally {
       try { fs.rmSync(v9Root, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
     }

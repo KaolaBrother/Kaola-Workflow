@@ -82,6 +82,14 @@ An item carries no role, no write set, no dependency edge, no model, no cardinal
 the orchestrator reaches an item it decides **then** whether to dispatch subagents or do the work
 itself, and at what width.
 
+A later dogfood measurement (#1037) showed that “one dispatch has one result; repair appends” was
+being read as “each selector, assertion, or review round is a mission.” The four fields and three
+write moments are unchanged. A mission names a recoverable outcome or a newly discovered independent
+causal class. `BLOCKED` means the current owner cannot safely continue; it is not a command-failure
+token. Custody (who may decide meaning) is independent of carrier (inline vs a native child).
+Converge the observed failure frontier before freezing a candidate and reviewing that exact
+candidate as a batch; mutation invalidates prior PASS evidence for changed bytes.
+
 This is the existing control boundary applied one level up. The planner brief already refuses a
 pre-authored `## Nodes` or an `AUTHOR EXACTLY` because *briefs carry evidence, never prescriptions*.
 When author and dispatcher are the same agent, that boundary is not violated — it is moot, and the

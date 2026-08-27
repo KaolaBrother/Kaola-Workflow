@@ -53,7 +53,7 @@ profiles only bridge or adapt it.
 
 A few beliefs follow from that order.
 
-**An item is a mission, not a specification.** It carries no role, no file list, no dependency edge, no model, no width. Carrying evidence is the point — *"investigate whether X still holds; the claim is at `foo.js:120`"* is an item; a schedule is not. The orchestrator decides how to run an item **when it reaches it**, with everything it has learned by then.
+**An item is a mission, not a specification.** It carries no role, no file list, no dependency edge, no model, no width. Carrying evidence is the point — *"investigate whether X still holds; the claim is at `foo.js:120`"* is an item; a schedule is not. The orchestrator decides how to run an item **when it reaches it**, with everything it has learned by then. A mission names a recoverable outcome or a newly discovered independent causal class — one selector, assertion, command, or review round is not by itself a mission. `BLOCKED` means the current owner cannot safely continue. Custody answers who may decide meaning; dispatch answers where the item is executed. Neither inline nor dispatch is a run-wide default. Converge the observed failure frontier before freezing a candidate and reviewing that exact candidate as a batch.
 
 **Concurrency carries no machinery at all.** There is no disjointness proof and no serializer taxonomy. The frontier is not computed — it is the list minus done minus in-flight, visible by reading.
 
@@ -937,6 +937,10 @@ Initialize each project once:
 ```
 
 This plans and applies an ownership-safe instruction migration plus the baseline documentation map.
+Runtime catalogs, commands, skills, hooks, and adapters are installer-owned: `workflow-init` does
+not install or refresh them, and the same managed repository bytes result from every runtime.
+While a run is active, a compatible AGENTS-canonical / thin-bridge layout may still apply; an
+execution-default change asks in conversation first.
 `AGENTS.md` becomes the one universal repository contract. `CLAUDE.md` contains `@AGENTS.md` and only
 Claude-specific overlay content. Known workflow-owned regions are replaced, surrounding owner bytes
 are preserved, active older runs are left untouched, and ambiguous owner-only authority returns
