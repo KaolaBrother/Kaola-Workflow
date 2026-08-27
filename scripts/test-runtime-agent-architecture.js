@@ -308,12 +308,18 @@ function runtimeDelegationGaps(runtime, text) {
       ['standard-tier', [/standard.*grok-4\.6.*medium|grok-4\.6.*medium.*standard/]],
       ['reasoning-tier', [/reasoning.*grok-4\.6.*high|grok-4\.6.*high.*reasoning/]],
       ['heavy-tier', [/heavy.*grok-4\.6.*xhigh|grok-4\.6.*xhigh.*heavy/]],
-      // Cursor reports its live Task enum. The contract names the route classes, not one eternal
-      // enum spelling; generalPurpose/Explore/Bash/Browser may be examples, never the oracle.
+      // Cursor reports its live Task catalog. Primary-source evidence establishes three scoped
+      // built-ins, not a full writable generic child: Explore for read-only research, Bash for
+      // command series, and Browser for browser work. The catalog is live authority; no current
+      // enum spelling is promoted into a permanent schema constant.
       ['custom-route', [/custom.*task|task.*custom/]],
-      ['reported-built-in-route', [/built-in.*task|task.*built-in/]],
-      ['reported-general-route', [/general.*task|task.*general/]],
-      ['runtime-reported-route', [/runtime.report/, /live task enum/, /current task enum/]],
+      ['explore-boundary', [/explore.*read-only|read-only.*explore/]],
+      ['bash-boundary', [/bash.*command|command.*bash/]],
+      ['browser-boundary', [/browser.*(?:web|page|browser)|(?:web|page).*browser/]],
+      ['no-full-writable-generic', [/no documented .*full writable generic/,
+        /full writable generic .*not documented/, /does not document .*full writable generic/]],
+      ['current-task-catalog', [/live task (?:catalog|enum)/, /current task (?:catalog|enum)/,
+        /runtime.report.*task (?:catalog|enum)/]],
     ],
     zcode: [
       ['lookup', [/(?:~\/|\$\{?zcode_home[^ ]*).*\.zcode\/agents\//,
@@ -325,6 +331,10 @@ function runtimeDelegationGaps(runtime, text) {
     ],
   };
   for (const [name, alternatives] of runtimeNeeds[runtime] || []) needs(name, alternatives);
+  if (runtime === 'cursor'
+      && /(?:use|inspect|dispatch|choose)[^.]{0,140}(?:general|generic)[^.]{0,100}(?:task|child|route)/.test(prose)) {
+    gaps.push('invented-general-task-route');
+  }
   return gaps;
 }
 
