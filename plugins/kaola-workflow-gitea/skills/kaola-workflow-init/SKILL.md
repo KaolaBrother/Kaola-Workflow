@@ -44,27 +44,17 @@ The executable consumer wording lives only in the adjacent
 `kaola-workflow-project-instruction-templates.js` distribution module. Do not synthesize, paste, or
 independently restate that universal contract in this surface; the helper below is its only writer.
 
-5. Agent role profiles are a one-time GLOBAL install — `workflow-init` does NOT install them per repo.
-
-Profiles install once into `~/.codex` and are available in every repo (parity with Claude global agents). `workflow-init` only scaffolds the project. If not yet installed (or after upgrade), run the one-time global install:
-
-```bash
-plugin_root="plugins/kaola-workflow-gitea"
-if [ ! -f "$plugin_root/scripts/install-codex-agent-profiles.js" ]; then
-  script_path="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitea/*/scripts/install-codex-agent-profiles.js' -print -quit 2>/dev/null)"
-  plugin_root="$(dirname "$(dirname "$script_path")")"
-fi
-test -f "$plugin_root/scripts/install-codex-agent-profiles.js"
-node "$plugin_root/scripts/install-codex-agent-profiles.js" --global
-```
-
-Writes `~/.codex/agents/kaola-workflow/*.toml` + the managed block in `~/.codex/config.toml`, refreshes global hooks — one install, all repos. The preflight gate accepts the global scope. (To pin to one repo instead, pass the repo path positionally — `… "$PWD"` — optional override.)
+5. Runtime/global installation is outside `workflow-init`. Do not install or update global agent
+profiles, runtime configuration, or hooks here. Inspect their current state read-only and report any
+separate installation or upgrade remediation without executing it; project initialization must leave
+all runtime/global bytes unchanged.
 
 Run an agent-guided Codex config audit before claiming role dispatch readiness:
 
 ```bash
 codex features list | grep 'multi_agent_v2' || true
-node "$plugin_root/scripts/kaola-workflow-codex-preflight.js" --doctor --project-root "$PWD" --json
+PREFLIGHT_JS="$(kaola_script kaola-workflow-codex-preflight.js)"
+node "$PREFLIGHT_JS" --doctor --project-root "$PWD" --json
 ```
 
 Read the doctor JSON's `codex_version` field first — it gates everything else.
@@ -162,9 +152,10 @@ every owner byte outside those regions byte-for-byte. Unknown, malformed, duplic
 instruction authority returns `decision_required`: ask in conversation and make no write. Per managed
 change the helper reports `authority_layout_equivalent`, `execution_default_change`,
 `state_schema_incompatible`, or `unknown_or_mixed`. A compatible authority-layout migration may apply
-during an active run; an execution-default change asks in conversation and writes nothing; a
-state/schema-incompatible change returns `active_run_preserved`. Successful reruns are
-idempotent and report `converged` with an empty write list.
+during an active run; an execution-default change asks in conversation, leaves bare `apply`
+non-mutating, and may apply only with the unchanged plan's exact ephemeral `consent.apply_args`; a
+state/schema-incompatible change returns `active_run_preserved` with no consent bypass. Successful
+reruns are idempotent and report `converged` with an empty write list.
 ## Initial File Bodies
 
 ### `docs/README.md`

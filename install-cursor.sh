@@ -13,17 +13,16 @@
 # github renders .cursor/, a forge renders .cursor-<forge>/.
 #
 # Usage:
-#   ./install-cursor.sh                         # deploy into the current directory
 #   ./install-cursor.sh --target /path/to/repo  # deploy into a specific project
-#   ./install-cursor.sh --forge=gitlab          # deploy the GitLab-shaped edition
+#   ./install-cursor.sh --target /repo --forge=gitlab
 #   ./install-cursor.sh --global                # deploy agents+commands to ${CURSOR_HOME:-~/.cursor}
 #   ./install-cursor.sh --regenerate            # refresh the generated tree from canonical here
 #   ./install-cursor.sh --doctor --json         # report surface facts; does not install
 #
 # DEPLOY LAYOUT (scope-dependent):
-#   - PROJECT (--target/$PWD): agents and commands land under <project>/.cursor/{agents,commands}.
-#     This is the explicit project materialization. It is never selected from ambient cwd of a
-#     --global command.
+#   - PROJECT (--target): agents and commands land under <project>/.cursor/{agents,commands}.
+#     The target is mandatory, derives from the receipt-verified global authority, and is never
+#     selected from ambient cwd.
 #   - GLOBAL (--global): they land DIRECTLY under ${CURSOR_HOME:-$HOME/.cursor}/{agents,commands}
 #     with no nested .cursor/ under CURSOR_HOME. Running --global inside a Git work tree does
 #     not create or refresh that repository's .cursor/ tree. Project catalogs that already
@@ -66,7 +65,7 @@ usage() {
 Usage: ./install-cursor.sh [--target DIR] [--forge=github|gitlab|gitea] [--global]
                          [--regenerate] [--uninstall] [--no-scripts] [--yes]
                          [--doctor] [--json] [--product cli|app] [--host local|cloud]
-  --target DIR     deploy agents+commands into DIR/.cursor (default: current directory)
+  --target DIR     explicitly materialize agents+commands into DIR/.cursor
   --forge F        github (default), gitlab, or gitea — which forge's workflow prose
                    and support scripts to deploy
   --global         deploy agents+commands into ${CURSOR_HOME:-~/.cursor} (all projects);
@@ -88,9 +87,9 @@ scripts/kaola-workflow-install-manifest.js); hook scripts land in the live
 hooks.json. Support-script copies also land under
 ${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/{scripts,hooks}.
 
-UNINSTALL: --uninstall removes ONLY kaola-deployed artifacts from the resolved
-scope: the deployed agents and commands (by source-tree filename), the support
-scripts + hook scripts, and kaola entries in hooks.json (other hook entries stay).
+UNINSTALL: --uninstall removes ONLY receipt-proven, byte-unchanged Kaola artifacts
+from the resolved scope. Modified, unmanaged, symlink, and nonregular paths remain;
+only receipt-recorded Kaola entries are removed from hooks.json.
 The SHARED ~/.config/kaola-workflow/config.json is kept for any co-installed
 Claude/Codex/opencode/kimi/grok edition.
 EOF
@@ -117,12 +116,6 @@ done
 
 cursor_home() { printf '%s\n' "${CURSOR_HOME:-$HOME/.cursor}"; }
 
-if [[ "$DOCTOR" -eq 1 ]]; then
-  doctor_args=(--product "$DOCTOR_PRODUCT" --host "$DOCTOR_HOST")
-  [[ "$DOCTOR_JSON" -eq 1 ]] && doctor_args+=(--json)
-  exec node "$SCRIPT_DIR/scripts/kaola-workflow-cursor-surface.js" "${doctor_args[@]}"
-fi
-
 FORGE_HELPER="$SCRIPT_DIR/scripts/runtime-edition-forge.js"
 if [[ ! -f "$FORGE_HELPER" ]]; then
   echo "Install error: forge layout helper missing: $FORGE_HELPER" >&2
@@ -135,6 +128,18 @@ fi
 if ! FORGE_SCRIPTS_DIR="$(node "$FORGE_HELPER" --forge="$FORGE" --scripts-dir)"; then
   echo "Install error: cannot resolve the support-script dir for forge $FORGE" >&2
   exit 1
+fi
+
+if [[ "$GLOBAL" -eq 1 && -n "$TARGET" ]]; then
+  echo "Install error: --global and --target are mutually exclusive." >&2
+  exit 2
+fi
+
+if [[ "$DOCTOR" -eq 1 ]]; then
+  doctor_args=(--doctor --product "$DOCTOR_PRODUCT" --host "$DOCTOR_HOST" --forge "$FORGE")
+  [[ -n "$TARGET" ]] && doctor_args+=(--target "$TARGET")
+  [[ "$DOCTOR_JSON" -eq 1 ]] && doctor_args+=(--json)
+  exec node "$SCRIPT_DIR/scripts/kaola-workflow-cursor-surface.js" "${doctor_args[@]}"
 fi
 if ! TREE_ROOT="$(node "$SCRIPT_DIR/scripts/sync-cursor-edition.js" --print-tree-root)"; then
   echo "Install error: cannot resolve where the generated cursor tree lands" >&2
@@ -153,293 +158,6 @@ if [[ "$REGENERATE" -eq 1 ]]; then
   exit 0
 fi
 
-# Names here are removed on install and uninstall by basename.
-RETIRED_AGENTS=()
-RETIRED_COMMANDS=()
-RETIRED_HOOKS=(kaola-workflow-subagent-dispatch-log.sh)
-RETIRED_SUPPORT_SCRIPTS=()
-
-WORKFLOW_COMMANDS=(
-  kaola-workflow-finalize workflow-init workflow-next
-)
-in_array() { local needle="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done; return 1; }
-
-is_plain_basename() {
-  local n="${1-}"
-  [[ -n "$n" ]] || return 1
-  case "$n" in
-    */*|*\\*|.|..) return 1 ;;
-  esac
-  return 0
-}
-
-remove_retired_support_scripts() {
-  local dir="$1"
-  [[ -d "$dir" ]] || return 0
-  local base name
-  for base in "${RETIRED_SUPPORT_SCRIPTS[@]+"${RETIRED_SUPPORT_SCRIPTS[@]}"}"; do
-    for name in "$base" \
-      "${base/#kaola-workflow-/kaola-gitlab-workflow-}" \
-      "${base/#kaola-workflow-/kaola-gitea-workflow-}"; do
-      is_plain_basename "$name" || continue
-      [[ -f "$dir/$name" ]] || continue
-      rm -f "$dir/$name"
-      echo "Removed retired support script: $dir/$name"
-    done
-  done
-}
-
-copy_agents() {
-  local dest="$1"
-  mkdir -p "$dest"
-  if [[ "$SOURCE_TREE/agents" -ef "$dest" ]]; then
-    echo "Self-dev deploy (source $SOURCE_TREE/agents is already the live tree) → copy skipped."
-    return
-  fi
-  local retired
-  for retired in "${RETIRED_AGENTS[@]+"${RETIRED_AGENTS[@]}"}"; do
-    [[ -f "$dest/$retired.md" ]] || continue
-    rm -f "$dest/$retired.md"
-  done
-  local src base count=0
-  for src in "$SOURCE_TREE/agents/"*.md; do
-    [[ -f "$src" ]] || continue
-    base="$(basename "$src")"
-    cp "$src" "$dest/$base"
-    count=$((count + 1))
-  done
-  if [[ "$count" -eq 0 ]]; then
-    echo "Install error: no agent sources found in $SOURCE_TREE/agents" >&2
-    exit 1
-  fi
-  echo "Installed workflow agents → $dest/ ($count)"
-}
-
-copy_commands() {
-  local dest="$1"
-  mkdir -p "$dest"
-  if [[ "$SOURCE_TREE/commands" -ef "$dest" ]]; then
-    echo "Self-dev deploy (source $SOURCE_TREE/commands is already the live tree) → copy skipped."
-    return
-  fi
-  local retired
-  for retired in "${RETIRED_COMMANDS[@]+"${RETIRED_COMMANDS[@]}"}"; do
-    [[ -f "$dest/$retired.md" ]] || continue
-    rm -f "$dest/$retired.md"
-  done
-  local src base count=0 skipped=0
-  for src in "$SOURCE_TREE/commands/"*.md; do
-    [[ -f "$src" ]] || continue
-    base="$(basename "$src" .md)"
-    if ! in_array "$base" "${WORKFLOW_COMMANDS[@]}"; then
-      echo "warning: skipping unrecognized command not in the workflow set: $base" >&2
-      skipped=$((skipped + 1))
-      continue
-    fi
-    cp "$src" "$dest/$base.md"
-    count=$((count + 1))
-  done
-  if [[ "$count" -eq 0 ]]; then
-    if [[ "$skipped" -gt 0 ]]; then
-      echo "Install error: all $skipped command source(s) in $SOURCE_TREE/commands fall outside the workflow set" >&2
-    else
-      echo "Install error: no command sources found in $SOURCE_TREE/commands" >&2
-    fi
-    exit 1
-  fi
-  echo "Installed workflow commands → $dest/"
-}
-
-install_support_scripts() {
-  if [[ "$NO_SCRIPTS" -eq 1 ]]; then
-    echo "Support scripts skipped (--no-scripts)."
-    return
-  fi
-  local home; home="$(cursor_home)"
-  local manifest="$SCRIPT_DIR/scripts/kaola-workflow-install-manifest.js"
-  [[ -f "$manifest" ]] || { echo "warning: install manifest not found; skipping support scripts." >&2; return; }
-  local dest="$home/kaola-workflow/scripts"
-  mkdir -p "$dest"
-  local name src extra_ensure extra_ensure_src
-  local deployed=()
-  while IFS= read -r name || [[ -n "$name" ]]; do
-    [[ -n "$name" ]] || continue
-    src="$FORGE_SCRIPTS_DIR/$name"
-    [[ -f "$src" ]] || src="$SCRIPT_DIR/scripts/$name"
-    if [[ ! -f "$src" ]]; then
-      echo "Install error: allowlisted support script missing from source for forge $FORGE: $name" >&2
-      exit 1
-    fi
-    cp "$src" "$dest/$name"
-    chmod +x "$dest/$name"
-    deployed+=("$name")
-  done < <(node "$manifest" --forge="$FORGE" --scripts 2>/dev/null)
-  # Cursor-only extra: catalog ensure. Not in the github supportScripts manifest.
-  extra_ensure="kaola-workflow-ensure-cursor-catalog.js"
-  extra_ensure_src="$SCRIPT_DIR/scripts/$extra_ensure"
-  if [[ -f "$extra_ensure_src" ]]; then
-    cp "$extra_ensure_src" "$dest/$extra_ensure"
-    chmod +x "$dest/$extra_ensure"
-    deployed+=("$extra_ensure")
-  fi
-  if [[ ${#deployed[@]} -gt 0 ]]; then
-    local stale_file stale_name is_current
-    for stale_file in "$dest"/*.js; do
-      [[ -f "$stale_file" ]] || continue
-      stale_name="$(basename "$stale_file")"
-      is_current=0
-      for name in "${deployed[@]}"; do
-        [[ "$name" == "$stale_name" ]] && is_current=1 && break
-      done
-      if [[ "$is_current" -eq 0 ]]; then
-        rm -f "$stale_file"
-        echo "Removed stale script: $stale_file"
-      fi
-    done
-  fi
-  echo "Installed support scripts → $dest (forge $FORGE)"
-  local hooks_dest="$home/kaola-workflow/hooks"
-  mkdir -p "$hooks_dest"
-  local retired
-  for retired in "${RETIRED_HOOKS[@]+"${RETIRED_HOOKS[@]}"}"; do
-    [[ -f "$hooks_dest/$retired" ]] || continue
-    rm -f "$hooks_dest/$retired"
-    echo "Removed retired hook script: $hooks_dest/$retired"
-  done
-  local hook hook_base
-  for hook in "$SOURCE_TREE/hooks/"*.sh; do
-    [[ -f "$hook" ]] || continue
-    hook_base="$(basename "$hook")"
-    cp "$hook" "$hooks_dest/$hook_base"
-    chmod 755 "$hooks_dest/$hook_base"
-  done
-  echo "Installed hook scripts → $hooks_dest"
-}
-
-install_hooks_json() {
-  if [[ "$NO_SCRIPTS" -eq 1 ]]; then
-    echo "Hooks JSON skipped (--no-scripts)."
-    return
-  fi
-  local src="$SOURCE_TREE/hooks.json"
-  [[ -f "$src" ]] || { echo "Install error: generated hooks.json missing: $src" >&2; exit 1; }
-  local dest_hooks="$LAYOUT_DEST/hooks"
-  if [[ ! "$SOURCE_TREE/hooks" -ef "$dest_hooks" ]]; then
-    mkdir -p "$dest_hooks"
-    local retired
-    for retired in "${RETIRED_HOOKS[@]+"${RETIRED_HOOKS[@]}"}"; do
-      [[ -f "$dest_hooks/$retired" ]] || continue
-      rm -f "$dest_hooks/$retired"
-      echo "Removed retired hook script: $dest_hooks/$retired"
-    done
-    local hook
-    for hook in "$SOURCE_TREE/hooks/"*.sh; do
-      [[ -f "$hook" ]] || continue
-      cp "$hook" "$dest_hooks/$(basename "$hook")"
-      chmod 755 "$dest_hooks/$(basename "$hook")"
-    done
-    echo "Installed hook scripts → $dest_hooks"
-  fi
-  local dest_json="$LAYOUT_DEST/hooks.json"
-  local merge_args=(--merge-hooks "--dest=$dest_json")
-  if [[ "$GLOBAL" -eq 1 ]]; then
-    merge_args+=(--global)
-  fi
-  if ! node "$SCRIPT_DIR/scripts/sync-cursor-edition.js" "${merge_args[@]}"; then
-    echo "Install error: failed to merge $dest_json" >&2
-    exit 1
-  fi
-  echo "Merged hooks JSON → $dest_json"
-}
-
-uninstall_edition() {
-  local home layout
-  home="$(cursor_home)"
-  if [[ "$GLOBAL" -eq 1 ]]; then
-    layout="$home"
-  else
-    layout="${TARGET:-$PWD}/.cursor"
-  fi
-  echo "Uninstalling Kaola-Workflow · cursor edition ($FORGE) from → $layout"
-  if [[ -d "$layout" && "$SOURCE_TREE" -ef "$layout" ]]; then
-    echo "Refusing to uninstall the edition's OWN source tree ($layout). No-op." >&2
-    return
-  fi
-  local f
-  if [[ -d "$SOURCE_TREE/agents" && -d "$layout/agents" ]]; then
-    for f in "$SOURCE_TREE/agents/"*.md; do
-      [[ -f "$f" ]] || continue
-      rm -f "$layout/agents/$(basename "$f")"
-    done
-  fi
-  local retired
-  for retired in "${RETIRED_AGENTS[@]+"${RETIRED_AGENTS[@]}"}"; do
-    [[ -f "$layout/agents/$retired.md" ]] || continue
-    rm -f "$layout/agents/$retired.md"
-  done
-  if [[ -d "$SOURCE_TREE/commands" && -d "$layout/commands" ]]; then
-    for f in "$SOURCE_TREE/commands/"*.md; do
-      [[ -f "$f" ]] || continue
-      rm -f "$layout/commands/$(basename "$f")"
-    done
-  fi
-  for retired in "${RETIRED_COMMANDS[@]+"${RETIRED_COMMANDS[@]}"}"; do
-    [[ -f "$layout/commands/$retired.md" ]] || continue
-    rm -f "$layout/commands/$retired.md"
-  done
-  if [[ -d "$layout/hooks" ]]; then
-    local hook
-    for hook in "$SOURCE_TREE/hooks/"*.sh; do
-      [[ -f "$hook" ]] || continue
-      rm -f "$layout/hooks/$(basename "$hook")"
-    done
-    for retired in "${RETIRED_HOOKS[@]+"${RETIRED_HOOKS[@]}"}"; do
-      [[ -f "$layout/hooks/$retired" ]] || continue
-      rm -f "$layout/hooks/$retired"
-    done
-  fi
-  if [[ -f "$layout/hooks.json" ]]; then
-    node "$SCRIPT_DIR/scripts/sync-cursor-edition.js" --strip-hooks "--dest=$layout/hooks.json" || true
-  fi
-  rmdir "$layout/agents" 2>/dev/null || true
-  rmdir "$layout/commands" 2>/dev/null || true
-  rmdir "$layout/hooks" 2>/dev/null || true
-  if [[ "$GLOBAL" -ne 1 ]]; then rmdir "$layout" 2>/dev/null || true; fi
-  echo "Removed deployed agents + commands."
-  local scripts_dir="$home/kaola-workflow/scripts"
-  local hooks_dir="$home/kaola-workflow/hooks"
-  local manifest="$SCRIPT_DIR/scripts/kaola-workflow-install-manifest.js"
-  if [[ -f "$manifest" && -d "$scripts_dir" ]]; then
-    local name
-    while IFS= read -r name || [[ -n "$name" ]]; do
-      [[ -n "$name" ]] || continue
-      if ! is_plain_basename "$name"; then
-        echo "warning: ignoring support-script manifest entry that is not a plain file name: $name" >&2
-        continue
-      fi
-      rm -f "$scripts_dir/$name"
-    done < <(node "$manifest" --forge="$FORGE" --scripts 2>/dev/null)
-  fi
-  rm -f "$scripts_dir/kaola-workflow-ensure-cursor-catalog.js"
-  remove_retired_support_scripts "$scripts_dir"
-  if [[ -d "$hooks_dir" ]]; then
-    local hook
-    for hook in "$SOURCE_TREE/hooks/"*.sh; do
-      [[ -f "$hook" ]] || continue
-      rm -f "$hooks_dir/$(basename "$hook")"
-    done
-    for retired in "${RETIRED_HOOKS[@]+"${RETIRED_HOOKS[@]}"}"; do
-      [[ -f "$hooks_dir/$retired" ]] || continue
-      rm -f "$hooks_dir/$retired"
-    done
-  fi
-  rmdir "$scripts_dir" 2>/dev/null || true
-  rmdir "$hooks_dir" 2>/dev/null || true
-  rmdir "$home/kaola-workflow" 2>/dev/null || true
-  echo "Removed deployed support scripts + hook scripts; stripped kaola entries from hooks.json."
-  echo "Uninstall complete. A fresh ./install-cursor.sh now deploys the workflow edition."
-}
-
 confirm_install() {
   if [[ "$YES" -eq 1 ]]; then return 0; fi
   if [[ ! -t 0 ]]; then return 0; fi
@@ -457,29 +175,45 @@ EOF
   esac
 }
 
-if [[ "$UNINSTALL" -eq 1 ]]; then
-  uninstall_edition
-  exit 0
-fi
-
 if [[ "$GLOBAL" -eq 1 ]]; then
   DEST_ROOT="$(cursor_home)"
   LAYOUT_DEST="$DEST_ROOT"
   echo "Deploying globally ($FORGE) → $DEST_ROOT"
 else
-  DEST_ROOT="${TARGET:-$PWD}"
+  if [[ -z "$TARGET" ]]; then
+    echo "Install error: project materialization requires explicit --target DIR." >&2
+    exit 2
+  fi
+  DEST_ROOT="$TARGET"
   LAYOUT_DEST="$DEST_ROOT/.cursor"
   echo "Deploying into project ($FORGE) → $DEST_ROOT"
 fi
 
-confirm_install
-copy_agents "$LAYOUT_DEST/agents"
-copy_commands "$LAYOUT_DEST/commands"
+transaction_args=(--forge "$FORGE")
 if [[ "$GLOBAL" -eq 1 ]]; then
-  echo "Global install writes only ${DEST_ROOT}/{agents,commands}. Project catalogs need explicit --target DIR."
+  transaction_args+=(--scope global)
+else
+  transaction_args+=(--scope project --target "$DEST_ROOT")
 fi
-install_support_scripts
-install_hooks_json
+[[ "$NO_SCRIPTS" -eq 1 ]] && transaction_args+=(--no-scripts)
+
+if [[ "$UNINSTALL" -eq 1 ]]; then
+  node "$SCRIPT_DIR/scripts/kaola-workflow-cursor-surface.js" --uninstall "${transaction_args[@]}"
+  echo "Uninstall complete; only receipt-proven unchanged bytes were removed."
+  exit 0
+fi
+
+confirm_install
+node "$SCRIPT_DIR/scripts/kaola-workflow-cursor-surface.js" --install \
+  "${transaction_args[@]}" \
+  --source-tree "$SOURCE_TREE" \
+  --support-source "$FORGE_SCRIPTS_DIR"
+
+if [[ "$GLOBAL" -eq 1 ]]; then
+  echo "Global authority installed under $DEST_ROOT; no ambient project was materialized."
+else
+  echo "Project materialized from the receipt-verified global authority → $LAYOUT_DEST"
+fi
 
 echo ""
 echo "Next: open the project in Cursor and run a workflow command, e.g.:"

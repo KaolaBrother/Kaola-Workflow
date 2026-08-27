@@ -30,6 +30,29 @@ function assertNotIncludes(file, needle) {
   assert(!read(file).includes(needle), file + ' must not include: ' + needle);
 }
 
+function executableRuntimeInstalls(text) {
+  return String(text || '').split(/\r?\n/).filter(line =>
+    !/^\s*#/.test(line) && (
+      /^\s*(?:node|bash|sh|zsh)\s+[^\n]*(?:install(?:-all|-\w+)?[^\s"']*|install-[^\s"']+)[^\n]*--global\b/i.test(line)
+      || /^\s*\.\/install-all\.sh\b/.test(line)
+    ));
+}
+
+function assertPortableInit(file, requireDeclaration = true) {
+  const text = read(file);
+  const invocations = executableRuntimeInstalls(text);
+  assert(invocations.length === 0,
+    file + ': workflow-init must not execute a runtime/global installer; got '
+      + JSON.stringify(invocations));
+  assert(!requireDeclaration || (/Runtime\/global installation is outside `workflow-init`/.test(text)
+      && /runtime\/global bytes unchanged/.test(text)),
+    file + ': workflow-init must state the portable repository/runtime-install boundary');
+  const injected = executableRuntimeInstalls(text
+    + '\nnode "$plugin_root/scripts/install-codex-agent-profiles.js" --global\n');
+  assert(injected.length === 1,
+    file + ': portable-init detector must reject an injected global installer invocation');
+}
+
 function assertConcept(file, concept, terms) {
   const content = norm(read(file).toLowerCase());
   const missing = terms.filter(term => !content.includes(norm(term.toLowerCase())));
@@ -109,13 +132,11 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'decision_re
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, '<!-- KW-AGENTS-MANAGED-START -->');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'READ CLAUDE.md BEFORE ANY ACTION');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Do not create or edit CLAUDE.md');
-// #571: global-default regression locks — pin primary install is --global; forbid retired per-repo mandate.
+// #1039: workflow-init is a portable repository operation. Runtime installation
+// remains installer-owned and cannot execute from either init consumer.
 const initSkill = `${pluginRoot}/skills/kaola-workflow-init/SKILL.md`;
-assertIncludes(initSkill, 'install-codex-agent-profiles.js" --global');
-assert(
-  !/install-codex-agent-profiles\.js"?\s+"\$PWD"/.test(read(initSkill)),
-  initSkill + ' must not mandate a per-repo "$PWD" agent install (#571)'
-);
+assertPortableInit(initSkill);
+assertPortableInit('commands/workflow-init.md', false);
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'Documentation Docking');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--keep-worktree');
 // #336: keep-open partial-close sink lane (codex SKILL.md is the finalize seam — no command file).

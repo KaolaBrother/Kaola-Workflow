@@ -374,8 +374,15 @@ commands or skills, agent catalogs, hooks, support scripts, and adapter/capabili
 `install-cursor.sh --global` writes only `${CURSOR_HOME:-~/.cursor}/{agents,commands}` and does not
 mutate an ambient Git repository; `install-all.sh --global` inherits that Cursor behavior and is
 not permission to update every consumer repo. Project `.cursor` catalogs require explicit
-`--target` (or a non-global project install). A sessionStart catalog-ensure hook is not installer
-dual-write.
+`--target`. Global authority and project materialization are
+receipt-bound and preflight every managed path before writing. The first receipt-owning upgrade may
+adopt published 10.0.1 global bytes under exact per-forge
+hashes; a modified or unknown byte remains a collision, and only exact retired ambient-helper bytes
+are removed. On the measured standalone CLI only,
+workflow-next/finalize may invoke the installed helper with explicit `$PWD` immediately before a
+named dispatch; App local and Cloud keep separate live catalogs. Cloud uses the same global
+installer inside its dashboard-managed remote user home, then requires a manual environment save,
+completed snapshot, and fresh parent. `sessionStart` performs compact resume only.
 
 ### Runtime capability divergence
 

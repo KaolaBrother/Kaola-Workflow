@@ -272,7 +272,7 @@ Kaola-Workflow installs along two independent axes:
 | **opencode** | `./install-opencode.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 | **Kimi Code** | `./install-kimi.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 | **Grok CLI** | `./install-grok.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
-| **Cursor** | `./install-cursor.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
+| **Cursor** | `./install-cursor.sh (--global\|--target DIR) [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 | **ZCode** | `./install-zcode.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
 
 Every supported repository keeps universal project guidance in root `AGENTS.md`. Codex, opencode,
@@ -295,7 +295,27 @@ Claude Code and Codex share the forge editions — pick one forge at a time; all
 
 **Grok CLI** is likewise an **additive** runtime (not a git forge): `./install-grok.sh` touches none of the existing edition machinery, resolves its support scripts under `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.grok/agents/*.md` (`spawn_subagent` types); the three commands ship as `.grok/commands/*.md`. Every subagent inherits the session model; standard/reasoning/heavy roles carry `medium`/`high`/`xhigh` effort, with heavy verified live. It takes the same generated `--forge` axis. See [docs/grok-edition.md](docs/grok-edition.md).
 
-**Cursor** is likewise an **additive** runtime (not a git forge): `./install-cursor.sh` touches none of the existing edition machinery, resolves its support scripts under `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`, and never touches `~/.claude/`. Named roles ship as `.cursor/agents/*.md`; the three commands ship as `.cursor/commands/*.md`. Cursor has two product surfaces — CLI and App — and App local IDE vs App-started/remote Cloud are different execution hosts; do not infer one from the other or infer App from a CLI binary. Family `named_roles: true` is a CLI compatibility summary, not host-universal. `./install-cursor.sh --global` writes only `${CURSOR_HOME:-~/.cursor}/{agents,commands}` (un-nested) and does **not** write the invoking Git repository; existing project `.cursor` files are left untouched, and `--global` from a non-git cwd does not invent project `.cursor`. Project catalogs require explicit `--target DIR` (or a non-global project install), never the ambient cwd of a global command. A `sessionStart` `kaola-workflow-ensure-cursor-catalog.js` hook can still copy the 14 canon roles into `<cwd>/.cursor/agents`; that is a CLI derived catalog-ensure, not installer dual-write, and `--global` does not do that hook's job. Prior CLI evidence (`prior_probe_not_re-run_here`) reached project custom types after catalog materialization while a user file alone was not catalog-visible; local App/IDE remains `unknown`/`unprobed`. Runtime-neutral intent maps to native model bracket parameters in profile frontmatter. Dispatch inspects the live Task enum: omit a per-call model when that enum contains the Kaola name; on a measured Cloud catalog-miss host use live built-ins as themselves. Files already present plus a still-built-in-only enum is a `capability_gap`, not an install miss. Cloud boot-load remains unclaimed. It takes the same generated `--forge` axis. See [docs/cursor-edition.md](docs/cursor-edition.md).
+**Cursor** is likewise an **additive** runtime (not a git forge):
+`./install-cursor.sh` resolves support scripts under
+`${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`, never touches `~/.claude/`, and ships
+named profiles in `.cursor/agents/*.md` plus three flat commands. Cursor CLI and App are separate
+product surfaces; App local IDE and App-started Cloud are separate hosts. Authenticated standalone
+CLI reached an explicitly materialized project `implementer`; Cursor App local IDE separately
+exposed all 14 project types and dispatched `implementer`; Cursor Cloud did the same after the
+global installer ran inside a dashboard-managed remote environment, the user saved its snapshot,
+and a fresh Cloud parent started from that build. Project profiles committed before Cloud boot were
+a negative control, not the Cloud carrier. `--global` writes only the selected host's user carrier
+and a hash-bound authority receipt, never the invoking Git repository. Project materialization is
+explicit, receipt-owned, collision/symlink-safe, and uninstall-safe. On the measured standalone CLI
+only, workflow-next/finalize may safely ensure explicit `$PWD` immediately before a named
+dispatch; App local and Cloud never inherit that CLI rule. Cloud instead installs globally inside
+its saved remote environment. `sessionStart` performs compact resume only. It takes the same
+generated `--forge` axis. See
+[docs/cursor-edition.md](docs/cursor-edition.md).
+
+The first receipt-owning global refresh can adopt an existing 10.0.1 Cursor edition only when its
+changed and retired files byte-match the published per-forge hashes. Modified or unknown bytes are
+still refused; the migration removes the retired ambient catalog helper and stale hook entries.
 
 **ZCode** is likewise an **additive** runtime (not a git forge): `./install-zcode.sh` touches none of the existing edition machinery, resolves support scripts under the selected Kaola ZCode home, and never touches `~/.claude/`. ZCode officially discovers custom subagents only from user `~/.zcode/agents/`, so a project install stages its generated tree and syncs the role roster to user scope. The three commands ship as `.zcode/commands/*.md`. Official documentation currently says project hook blocks are ignored; both project and global installs therefore merge Kaola hooks only into the executable user carrier `${ZCODE_HOME:-$HOME/.zcode}/cli/config.json`, leaving project `.zcode/config.json` and legacy user `config.json` untouched. Generated profiles use native `model`, `thoughtLevel`, and `tools` fields; exact 3.9.1 behavior and `ZCODE_HOME` relocation remain unknown. See [docs/zcode-edition.md](docs/zcode-edition.md).
 
@@ -453,15 +473,25 @@ Hooks install as `${GROK_HOME:-~/.grok}/hooks/kaola-workflow-hooks.json` — glo
 
 ### cursor
 
-Cursor is an additive runtime — installed by its own script, not `--forge`. The three commands are flat `.cursor/commands/*.md` slash commands and every role is a named native profile. The generated profiles carry intent-derived native model parameters and `readonly`. Next/finalize inspect the live Task schema and catalog: omit a per-call model when the enum contains the Kaola name so the profile pin can fire; on a Cloud catalog-miss host use live built-ins as themselves (`generalPurpose`, `explore` when reported) and treat already-present files plus a built-in-only enum as a capability_gap. CLI and App are separate product surfaces; App local IDE vs App-started Cloud are different hosts. IDE documentation describes scoped `Explore`/`Bash`/`Browser`, while prior supported-CLI evidence (`prior_probe_not_re-run_here`, not re-run here) instead exposed writable `generalPurpose`, specialist built-ins, and project custom types, plus medium/high/xhigh tier resolution, one descendant dispatch generation, and new-process/same-chat catalog refresh. Local App/IDE remains unprobed. From a local clone:
+Cursor is an additive runtime — installed by its own script, not `--forge`. The three commands are
+flat `.cursor/commands/*.md` slash commands and every role is a named native profile. Next/finalize
+inspect the live Task schema: omit a per-call model when the enum contains the Kaola name; a
+built-in-only catalog first distinguishes a missing host install/save from a capability gap. The
+authenticated `2026.08.25-3e8eec8` CLI resolved exact
+`implementer` to `cursor-grok-4.6-medium`; Cursor App `3.17.21` local IDE independently
+dispatched exact `implementer`; a fresh Cloud parent loaded all 14 roles and dispatched exact
+`implementer` after its dashboard-managed remote environment installed globally and was saved.
+From a local clone:
 
 ```bash
 ./install-cursor.sh --global --yes         # ${CURSOR_HOME:-~/.cursor} only; does not write ambient git
 ./install-cursor.sh --target DIR --yes     # explicit project catalog (.cursor/{agents,commands})
-./install-cursor.sh --yes                  # deploy into the current project (not selected by --global)
 ```
 
-Hooks merge into `.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (global). Compact resume injects via `sessionStart` `additional_context`; a second `sessionStart` ensure hook prints `{}`. `preCompact` cannot inject. Full detail: [docs/cursor-edition.md](docs/cursor-edition.md).
+Hooks merge into `.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (global). Compact
+resume injects via `sessionStart` `additional_context`; `preCompact` cannot inject. Catalog
+materialization is an explicit safe CLI point-of-use transaction, not a hook. Full detail:
+[docs/cursor-edition.md](docs/cursor-edition.md).
 
 ### zcode
 
@@ -573,12 +603,14 @@ Run workflow-init for Kaola-Workflow Gitea for Codex.
 
 #### Trust the hooks (required — they stay inert until you do)
 
-`install-codex-agent-profiles.js` (run by the Codex `kaola-workflow-init` skill and
-re-run on every upgrade) installs the lifecycle hooks **globally** into
+`install-codex-agent-profiles.js` (run explicitly or through `install-all.sh` during runtime
+installation/upgrade) installs the lifecycle hooks **globally** into
 `~/.codex/hooks.json` and copies their scripts into `~/.codex/kaola-workflow/{hooks,scripts}`.
 Because hooks land in `~/.codex` — not in a project-local `.codex/hooks.json` — a
 single install covers all projects on the machine and a plugin upgrade refreshes the
 global copy automatically; no per-repository re-init is needed to pick up hook changes.
+`workflow-init` writes only portable repository guidance and runs a read-only readiness
+diagnostic; it never installs or upgrades runtime-global assets.
 
 Agent profiles and the managed `.codex/config.toml` block install **globally** into
 `~/.codex` by default (one install, all repos — parity with Claude global agents).
@@ -844,9 +876,9 @@ Codex >=0.138 silently ignores) or a stale profile left behind by an older insta
 is only repaired by re-running `install-codex-agent-profiles.js`, which validates,
 prunes, and re-writes the managed manifest.
 
-To verify a project was initialized for Codex, check that `.codex/config.toml`
-contains a `# BEGIN kaola-workflow agents` managed block, that
-`.codex/agents/kaola-workflow/` contains the role profile files, and that
+To verify the Codex runtime installation is ready, check that the effective global or optional
+project `.codex/config.toml` contains a `# BEGIN kaola-workflow agents` managed block, that the
+corresponding `.codex/agents/kaola-workflow/` contains the role profile files, and that
 the global hook home `~/.codex/hooks.json` plus `~/.codex/kaola-workflow/{hooks,scripts}`
 exist — then trust the hooks via `/hooks` (see *Trust the hooks* above).
 
@@ -873,8 +905,9 @@ kaola-workflow-finalize
 Each Codex pack provides the same workflow as the Claude commands — the mission list,
 review, documentation docking, archive, and the sink. They depend on no
 external agent packages. Instead,
-`kaola-workflow-init` automatically installs Codex-native role profiles that
-mirror the Claude workflow roles:
+the explicit Codex runtime installer installs Codex-native role profiles that mirror the Claude workflow
+roles. `kaola-workflow-init` only verifies readiness and tells the operator which separate install
+command to run when they are missing:
 
 ```text
 code-explorer
@@ -1321,13 +1354,13 @@ evidence path.
 
 ### Codex lifecycle hooks
 
-Codex wires the same compaction hook via `install-codex-agent-profiles.js` (run by the
-Codex `kaola-workflow-init` skill and re-run on every upgrade). Since #447, hooks
+Codex wires the same compaction hook via `install-codex-agent-profiles.js` (run explicitly or
+through `install-all.sh` at runtime install/upgrade). Since #447, hooks
 install **globally** into `~/.codex/hooks.json`; their scripts land in the stable,
 version-less home `~/.codex/kaola-workflow/{hooks,scripts}`. The hooks are NOT in the
 Codex plugin manifest (`plugin.json`) — they are separate from the plugin bundle.
 Installing into `~/.codex` means one install covers all projects on the machine and
-a plugin upgrade force-refreshes the global copy; no per-repository re-init is needed
+a runtime installer upgrade refreshes the global copy; no per-repository re-init is needed
 to pick up hook changes. The stable scripts home (`#409`) ensures hook commands
 survive plugin GC or a worktree purge — `codex plugin add` / upgrade never overwrites
 those paths.

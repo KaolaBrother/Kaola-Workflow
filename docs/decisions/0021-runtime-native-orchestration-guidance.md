@@ -59,7 +59,8 @@ choice. The carrier is runtime-native: Claude and Codex may select the default o
 has no per-call model/effort field; ordinary Kimi profiles inherit unless the user explicitly opts
 into its experimental secondary-model pool; Grok effort and Cursor/ZCode tiers live in profiles when
 those profiles are in the active catalog. On a Cursor catalog-miss host there is no profile pin:
-omit-model follows the parent, and a resolver-listed live-schema model slug is the effort lever.
+omit-model follows the parent, and a resolver-listed live-schema model slug is the effort lever;
+the orchestrator must still distinguish a missing host carrier from a capability gap.
 Kaola does not silently enable a user-owned experimental feature or overwrite a runtime choice.
 
 ### Honest fallback
@@ -72,15 +73,16 @@ role. If no adequate route exists, execute that item inline, record the specific
 and re-evaluate the next item.
 
 Cursor demonstrates why the live catalog wins. Its IDE documentation describes scoped `Explore`,
-`Bash`, and `Browser` routes, while the supported Cursor CLI 2026.08.11 live probe exposed writable
+`Bash`, and `Browser` routes, while the supported Cursor CLI 2026.08.25 live probe exposed writable
 `generalPurpose`, specialist built-ins, and project custom types—but not those three scoped types.
-Measured Cloud Agent catalogs on 2026-08-27 (#1036) stayed built-in-only for Kaola names and did
-expose `explore`. The adapter exposes these as host-dependent facts and never hardcodes one catalog
-as universal. `named_roles` is not host-universal. Omit-model is the named-profile carrier only
-when the live enum contains the Kaola name; on a catalog-miss host, live members are used as
-themselves and files already present plus a built-in-only enum is a `capability_gap`, not an
-install miss. `generalPurpose` remains `subagentType.unspecified`; a custody brief does not rename
-it.
+A Cloud negative control with committed project profiles stayed built-in-only and exposed
+`explore`; the corrected dashboard environment installed globally, was saved and snapshotted, and
+a fresh Cloud parent then exposed all 14 Kaola names plus exact `implementer`. The adapter exposes
+these as host-dependent facts and never hardcodes one catalog as universal. Omit-model is the
+named-profile carrier only when the live enum contains the Kaola name. On a catalog-miss host, live
+members are used as themselves while the orchestrator establishes whether that host's real carrier
+was installed and reloaded. `generalPurpose` remains `subagentType.unspecified`; a custody brief
+does not rename it.
 
 ### Generated authority
 

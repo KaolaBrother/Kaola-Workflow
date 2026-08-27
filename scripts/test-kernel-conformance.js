@@ -384,6 +384,18 @@ const NON_ATOMIC_EXEMPT = [
     why: 'the archive move renames the project DIRECTORY, which is atomic on the filesystem and is not a file write at all',
   },
   {
+    file: 'kaola-workflow-cursor-surface.js', api: 'openSync', klass: 'atomic-helper-internal',
+    why: 'the receipt-owned Cursor installer creates a random same-directory temp file with O_EXCL before publishing it atomically',
+  },
+  {
+    file: 'kaola-workflow-cursor-surface.js', api: 'writeFileSync', klass: 'atomic-helper-internal',
+    why: 'the receipt-owned Cursor installer fills only its own exclusive temp fd; managed carriers and receipts are never written in place',
+  },
+  {
+    file: 'kaola-workflow-cursor-surface.js', api: 'renameSync', klass: 'atomic-helper-internal',
+    why: 'the receipt-owned Cursor installer publishes a complete fsynced temp file by same-directory atomic rename',
+  },
+  {
     file: 'kaola-workflow-project-instructions.js', api: 'writeFileSync', klass: 'atomic-helper-internal',
     why: 'the ownership-safe instruction migration fills a random same-directory temp file; it never writes AGENTS.md or CLAUDE.md in place',
   },
@@ -394,10 +406,6 @@ const NON_ATOMIC_EXEMPT = [
   {
     file: 'kaola-workflow-sink-merge.js', api: 'copyFileSync', klass: 'mirror-copy',
     why: 'the sink-staged union copies only into paths that do not exist yet, from a staged worktree copy that outlives the step',
-  },
-  {
-    file: 'kaola-workflow-ensure-cursor-catalog.js', api: 'copyFileSync', klass: 'mirror-copy',
-    why: 'copies the 14 canonical agent files into <cwd>/.cursor/agents, a consumer workspace catalog rather than a kernel record; a torn dest is re-derived by re-running the idempotent copy',
   },
   {
     file: 'kaola-workflow-sink-merge.js', api: 'writeFileSync', klass: 'outside-project-space',

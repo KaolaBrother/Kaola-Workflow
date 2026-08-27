@@ -5,43 +5,48 @@
 ### Changed
 
 - **Cursor `--global` writes only the user carrier; CLI and App are separate surfaces (#1039).**
-  `install-cursor.sh --global` writes only `${CURSOR_HOME:-~/.cursor}/{agents,commands}`
-  (un-nested) and does not write the invoking Git repository. Existing project `.cursor` files
-  stay untouched; `--global` from a non-git cwd does not invent project `.cursor`. Project
-  catalogs require explicit `--target DIR` (or a non-global project install), never the ambient
-  cwd of a global command. `install-all.sh --global` inherits that Cursor behavior and is not
-  permission to update every consumer repo. Cursor CLI and App are independently versioned
-  product surfaces; App local IDE and App-started/remote Cloud are different execution hosts
-  and must not be inferred from each other or from a sibling binary. Family `named_roles: true`
-  remains a CLI compatibility summary, not host-universal. Disk `.cursor/agents/` plus a
-  still-built-in-only live Task enum is a `capability_gap`, not an install miss. Cloud boot-load
-  remains unclaimed. Local App/IDE remains `unknown`/`unprobed`. Prior CLI evidence is kept as
-  `prior_probe_not_re-run_here`. `workflow-init` does not install runtime catalogs. The
-  sessionStart `kaola-workflow-ensure-cursor-catalog.js` hook stays a CLI derived catalog-ensure,
-  not installer dual-write.
+  `install-cursor.sh --global` writes only `${CURSOR_HOME:-~/.cursor}`, never the invoking
+  repository, and records a version/forge/file/hash authority receipt. Explicit project
+  materialization derives from that installed authority, preflights every carrier, managed name,
+  receipt, and hooks path, and records target/authority/per-file hashes. Unmanaged collisions,
+  symlinks, non-regular paths, modified owned bytes, invalid receipts, stale authority, or
+  wrong-target receipts fail before mutation; uninstall removes only receipt-proven unchanged
+  bytes and exact recorded hook entries. `--doctor` reports effective scope, receipt hashes,
+  expected/actual file hashes, freshness, collisions, restart, discovery, and honest unknowns.
+  Receipt-less 10.0.1 global installs are adopted only when every changed or retired path matches
+  its published per-forge hash; all three forge migrations are live-proved, while a one-byte
+  mutation remains an unmanaged collision.
+  On the measured standalone CLI only, generated next/finalize safely ensure explicit `$PWD`
+  immediately before a named dispatch. App local and Cloud keep independent live catalogs. Cloud
+  uses the same global installer inside its dashboard-managed remote environment, followed by the
+  user saving the environment and starting a fresh parent; it never inherits the CLI project
+  materializer. `sessionStart` performs compact resume only.
 - **Active runs adopt a compatible repository layout; missions stay outcome-level (#1037).**
   The project-instruction helper classifies each managed change as
   `authority_layout_equivalent`, `execution_default_change`, `state_schema_incompatible`, or
   `unknown_or_mixed` instead of freezing every instruction file whenever any run is active. A
-  compatible AGENTS-canonical / thin-bridge layout may apply during an active run; claim,
-  Mission List, worktree, and locators are not helper writes. An execution-default change still
-  asks in conversation. Generated next/finalize guidance separates acceptance custody from
-  execution carrier, defines typed `BLOCKED` as an ownership boundary, and sequences focused
-  acceptance → affected frontier → candidate freeze → review batch without adding Mission List
-  fields, a parser, or a phase machine. Review PASS evidence is invalid once the reviewed bytes
-  change. Runtime installers remain the owner of native catalogs and next/finalize carriers;
-  `workflow-init` stays a portable repository operation.
+  compatible AGENTS-canonical / thin-bridge layout may apply during an active run. The production
+  path inspects each active `workflow-state.md` schema and fences only state-coupled writes when
+  an explicit version is unsupported, allowing an independent layout-equivalent bridge to land.
+  Execution-default changes require an ephemeral conversation-consent token bound to the exact
+  unchanged plan; bare/stale consent is non-mutating and no approval is stored. Claim, Mission
+  List, worktree, and locators are never helper writes. Generated next/finalize guidance separates
+  acceptance custody from execution carrier and uses the #1037 convergence sequence: focused
+  acceptance → affected frontier → candidate freeze → one complete review batch. `workflow-init`
+  stays a portable repository operation and performs no runtime/global installation.
 
 ### Fixed
 
-- **Cursor `named_roles` is host-split, not family-universal (#1036).** Next/finalize inspect the
-  live Task enum first. On the supported CLI with a project catalog, Kaola names dispatch with
-  omit-model so the generated profile pin is the carrier. On measured Cursor Cloud hosts the enum
-  stayed built-in-only even when `.cursor/agents/` files were already on disk: use those members as
-  themselves (`generalPurpose`, `explore` when reported), never impersonate a custody-bearing Kaola
-  role, and treat already-present plus built-in-only as a `capability_gap` rather than an install
-  miss. Resolver-listed live-schema model slugs are a catalog-miss effort lever; CLI profile slugs
-  are not. Cloud boot-load of project profiles remains unclaimed.
+- **Cursor named roles are proven independently on CLI, local App, and saved Cloud hosts (#1036/#1039).** Next/finalize inspect the
+  live Task enum first. Authenticated standalone CLI `2026.08.25-3e8eec8` dispatched exact
+  project `implementer` and its raw Task carrier resolved `cursor-grok-4.6-medium` when the
+  parent omitted a model override. Cursor App `3.17.21` local IDE independently exposed all 14
+  project types and dispatched exact `implementer`, while leaving its child model/profile source
+  unobservable. A Cloud negative control proved committed project profiles are not its carrier. The
+  corrected dashboard environment installed all 14 profiles globally under its remote user home,
+  was manually saved and snapshotted, and a fresh Cloud parent then exposed all 14 custom names and
+  dispatched exact `implementer` with no substitute or per-call model override. Cloud child
+  model/profile source remains unobservable.
 
 ## [10.0.1] - 2026-08-27
 

@@ -24,7 +24,7 @@ Cursor, and ZCode have documented direct `AGENTS.md` support.
 | OpenCode | Project `.opencode/agents/`, user `~/.config/opencode/agents/`, or `opencode.json`; `task` with named `subagent_type`, or direct `@name` | Broad `general`, read-only local `explore`, read-only external-research `scout`; `task_id` resume and experimental background | Default child depth is one unless user configuration raises it; task permissions and effective merged config may hide a route |
 | Kimi Code | Project `.kimi-code/agents/` or `.agents/agents/`, user `$KIMI_CODE_HOME/agents/` or `~/.agents/agents/`; `Agent`/`AgentSwarm` with `kaola-role-<role>` | Writable `coder`, read-only `explore`, non-shell `plan`; custom agents and AgentSwarm lists up to 128 items | Built-ins are leaves; custom profiles may allowlist deeper agents. Resume/background remain native options |
 | Grok Build | Project `.grok/agents/` or user `~/.grok/agents/`; `spawn_subagent` with named `subagent_type` | Full `general-purpose`; read/shell `explore` and `plan`; background, isolation, resume, cwd, and optional per-call model | Children cannot spawn descendants; the root runtime's other choices remain available |
-| Cursor | Documented project/user `.cursor/agents/` plus compatibility paths; explicit `/role`, natural-language routing, or the live Task schema. CLI and App are separate product surfaces; App local vs Cloud are different hosts. `named_roles` is a CLI compatibility summary, not host-universal: prior CLI evidence (`prior_probe_not_re-run_here`) reached project custom types after catalog materialization; measured Cloud hosts stayed built-in-only for Kaola names even when those files were already on disk; local App/IDE is unprobed | Host-dependent: IDE docs describe `Explore`, `Bash`, and `Browser`; prior CLI exposed writable `generalPurpose`, specialist built-ins, and project custom types; measured Cloud catalog-miss exposed `explore` plus `generalPurpose` and specialists, not Kaola names | The current Task catalog is the authority. Omit-model is the named-profile carrier only when the live enum contains the Kaola name. A catalog-miss host uses live members as themselves; files already present plus a built-in-only enum is a capability_gap, not an install miss. `--global` does not write ambient git. Cloud boot-load is unclaimed |
+| Cursor | Documented project/user `.cursor/agents/` plus compatibility paths; explicit `/role`, natural-language routing, or the live Task schema. CLI and App are separate product surfaces; App local vs Cloud are different hosts. Standalone CLI reached an explicit project `implementer`; local App and a fresh Cloud parent from a saved remote environment each exposed all 14 Kaola types and dispatched exact `implementer` | Host-dependent: local App, CLI, and correctly saved Cloud environments expose different native routes beside the Kaola catalog; an unsaved Cloud negative control exposed only native routes | The current Task catalog is authoritative. CLI uses explicit safe project materialization. Cloud uses a global install inside its dashboard-managed remote user home, followed by manual save/snapshot and a fresh parent. Committed project profiles are not the Cloud carrier. `--global` does not write ambient git |
 | ZCode | Runtime-loaded user `${ZCODE_HOME:-~/.zcode}/agents/`; project `.zcode/agents/` is installer staging; automatic selection, native `@role`, or the live Agent schema | Full `general-purpose` and read-only `Explore`; foreground/background stays native | Profiles load in a new session and children cannot spawn. The staged project tree is not runtime profile discovery |
 
 Cursor and ZCode do not publish one complete Task/Agent call schema. Their generated guidance names
@@ -40,7 +40,7 @@ fields whose names or shapes remain unverified are not emitted.
 Global-first is an observable install-scope contract, not a family slogan. `--global` writes the
 runtime's user/global root when that root is the installer's global target; it does not mutate an
 ambient Git repository and is not permission to refresh every consumer repo. Project catalogs are
-an explicit `--target` (or a non-global project install). `workflow-init` does not install runtime
+an explicit `--target`. `workflow-init` does not install runtime
 catalogs. Unknown stays `unknown`; a documented path is not a live named-role PASS.
 
 | Runtime / surface | Global install root | Ambient git write from `--global` | Required project materialization | Named-catalog evidence |
@@ -48,17 +48,20 @@ catalogs. Unknown stays `unknown`; a documented path is not a live named-role PA
 | Claude Code | user/plugin (`~/.claude/`) | no | no | documented global profiles |
 | Codex | user/project `.codex` plus plugin; global profiles are the install authority | no | no | documented; existing end-to-end global convergence |
 | OpenCode | `${OPENCODE_CONFIG_DIR:-~/.config/opencode}` | no | no | documented user config root |
-| Kimi Code | `${KIMI_CODE_HOME:-~/.kimi-code}` | no | no | documented; live lookup `documented_live_unverified` |
+| Kimi Code | `${KIMI_CODE_HOME:-~/.kimi-code}` | no | no | live `kaola-role-implementer` lookup from two unrelated empty repositories |
 | Grok CLI | `${GROK_HOME:-~/.grok}` | no | no | documented user `~/.grok/agents/` |
 | ZCode | `${ZCODE_HOME:-~/.zcode}` (project tree is staging; runtime loads user agents) | no | no (staging only) | documented user-scope discovery |
-| Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/{agents,commands}` (un-nested) | **no** | yes (explicit `--target`; prior CLI user-only miss) | prior CLI project catalog (`prior_probe_not_re-run_here`; not re-run here) |
-| Cursor App / local IDE | same user carrier; App is not inferred from a CLI binary | **no** | `unknown` | `unknown` / `unprobed` |
-| Cursor App / Cloud host | local user home is not available remotely | **no** | `unknown` (project/remote route only if proved) | built-in-only (`capability_gap`, not an install miss); Cloud boot-load unclaimed |
+| Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/{agents,commands}` (un-nested) | **no** | yes (explicit `--target`; workflow-next/finalize may safely ensure explicit `$PWD` immediately before named dispatch) | live project `implementer`; raw Task carrier resolved `cursor-grok-4.6-medium` |
+| Cursor App / local IDE | same documented user carrier; App is not inferred from a CLI binary | **no** | `unknown` | live project catalog with all 14 Kaola types; exact `implementer` succeeded |
+| Cursor App / Cloud host | saved remote user home managed by the Cursor dashboard | **no** | no; install globally in the remote environment, save/snapshot, then start a fresh parent | live 23-type catalog with all 14 Kaola names; exact `implementer` succeeded |
 
-Cursor family `named_roles: true` remains a CLI compatibility summary, not host-universal. Disk
-`.cursor/agents/` plus a still-built-in-only live Task enum is a `capability_gap`. The sessionStart
-`kaola-workflow-ensure-cursor-catalog.js` hook is a CLI derived catalog-ensure, not installer
-dual-write; `--global` does not do that hook's job.
+Cursor family `named_roles: true` is now live-proven on three independently measured surfaces. On
+the measured standalone CLI only, next/finalize may run the installed safe materializer with explicit `$PWD`
+immediately before a named dispatch. It derives bytes from the receipt-verified global authority,
+is a no-op when current, and fails before writing on missing/stale authority, collision, symlink,
+or modified ownership. Cursor App local and Cloud do not inherit that rule. Cloud instead installs
+globally inside its saved remote environment and requires a fresh parent after save. `sessionStart`
+performs compact resume only.
 
 ## Default tier bindings
 
@@ -164,6 +167,12 @@ route does not churn `resolved_profile_hash` or all 126 role profiles.
   remaining scope and event behavior.
 - [Configuration files](https://www.kimi.com/code/docs/en/kimi-code-cli/configuration/config-files.html)
   documents the optional experimental secondary-model pool. Kaola does not enable it.
+- **Live global lookup (2026-08-27).** Kimi Code `0.38.0` selected
+  `kaola-role-implementer` from the user-global carrier in two unrelated empty Git repositories
+  with no project `.kimi-code` or `.agents` catalog. Both prompt-mode calls returned the exact
+  read-only probe token and left the repositories empty. This closes the prior
+  `documented_live_unverified` status for global named-profile lookup; project precedence and
+  deeper Agent/AgentSwarm behavior retain their separately documented boundaries.
 
 ### Grok Build
 
@@ -188,26 +197,30 @@ route does not churn `resolved_profile_hash` or all 126 role profiles.
 - [Hooks](https://cursor.com/docs/hooks) and [CLI usage](https://cursor.com/docs/cli/using)
   document events and CLI instruction loading.
 
-**Supported CLI measurement (runtime evidence, 2026-08-27, `prior_probe_not_re-run_here`).** Cursor CLI
-`2026.08.11-e8db854` exposed writable `generalPurpose` as `subagentType.unspecified`, five specialist
-types, and all 14 candidate project profiles. It did not expose the IDE-documented
-`Explore`/`Bash`/`Browser` catalog. Exact custom dispatch succeeded; standard/reasoning/heavy
-resolved to medium/high/xhigh, and parallel Tasks succeeded. A direct child dispatched once more,
-while the grandchild lacked Task. A user `~/.cursor/agents/tdd-guide.md` file alone was invisible in an empty project; the
-project catalog was reachable. Reopening the CLI process with the same chat after adding a project
-profile made it visible, so a new chat is not required; same-process hot load remains unknown.
-This CLI probe is **not re-run here**; it is not App local IDE evidence and is not inferred from
-the presence of `Cursor.app`.
+**Supported CLI measurement (runtime evidence, 2026-08-27).** Authenticated standalone Cursor CLI
+`2026.08.25-3e8eec8` was re-run against an isolated user carrier and an explicit disposable
+project materialized by the current candidate. Its live catalog contained exact `implementer`.
+The parent omitted a model override; the raw Task carrier recorded
+`subagentType.custom.name = implementer`, resolved `cursor-grok-4.6-medium`, and returned the
+requested read-only token successfully without repository mutation. This proves the candidate's
+explicit project carrier and standard-tier profile binding on that CLI host. It is not App
+local-IDE or Cloud evidence.
 
-A separate local Cursor CLI `2026.08.25-3e8eec8` run at candidate
-`0501f2527e04c1ecd896df418e50c97b279aa568` confirmed the named-profile path: `implementer`,
-`code-reviewer`, and `planner` resolved to `cursor-grok-4.6-medium`,
-`cursor-grok-4.6-high`, and `cursor-grok-4.6-xhigh`, respectively. All three calls exited
-successfully without repository mutation. This CLI evidence is prior
-(`prior_probe_not_re-run_here`), separate from the Cloud catalog measurement, and does not
-establish Cloud boot-load or local App/IDE behavior.
+Earlier same-day CLI probes remain useful for the wider runtime boundary: writable
+`generalPurpose` appeared as `subagentType.unspecified`; specialist and all 14 project roles were
+present; medium/high/xhigh tiers, parallel Tasks, and one descendant dispatch generation worked.
+A user-only profile was invisible in an empty project, while the project catalog was reachable.
+Reopening the CLI process with the same chat discovered a newly added project profile; same-process
+hot load remains unknown.
 
-**Cloud Agent measurement (runtime evidence, 2026-08-27, #1036).** Two Cloud parents, both
+**Cursor App local-IDE measurement (runtime evidence, 2026-08-27).** Cursor App `3.17.21`
+(`8f2a112cb2845a97b75fd932ea5c470579ca4060`) started a local `This Mac` Agent with project
+profiles already present. The live catalog exposed the built-ins plus all 14 Kaola types and exact
+`implementer` returned the requested read-only token without a per-call model override or tracked
+repository mutation. The App result exposed neither child model/effort nor profile source, so App
+global discovery, required materialization, reload, and profile-model observability remain unknown.
+
+**Cloud Agent measurement (runtime evidence, 2026-08-27, #1036/#1039).** Two earlier Cloud parents, both
 `originalModelName: cursor-grok-4.6-xhigh`, exposed a built-in-only Task enum with **no** Kaola
 custom types and **no** parent-authored `subagentType.custom.name` field. This is App-started
 remote Cloud evidence, not local App/IDE proof:
@@ -222,12 +235,24 @@ remote Cloud evidence, not local App/IDE proof:
   built-in-only shape, plus `explore`, `computerUse`, and `videoReview`. No project `.cursor/agents/`
   is git-tracked in this producer.
 
-`named_roles: true` remains the CLI-with-project-catalog fact (profiles are still generated). It is
-not host-universal. Files already present plus a still-built-in-only enum is a `capability_gap`, not
-an install miss. Cloud boot-load of project profiles is **unclaimed**; this measurement does not
-separate same-process hot-load from boot-load on a consumer that already had the 14 files before
-the session started. Local App/IDE remains `unknown`/`unprobed`. `--global` does not write an
-ambient Git repository; project catalogs require explicit `--target`.
+A final fresh App-started Cloud probe selected
+`probe/cursor-cloud-1041-20260827a` at
+`ead40c2741f4cae7e0a0cb473bba8a8a4a80c7a6` before send. That commit already tracked all 14
+project profiles. The new Cloud parent still exposed exactly `generalPurpose`, `explore`,
+`computerUse`, `videoReview`, `cursor-guide`, `bugbot`, `security-review`, and
+`best-of-n-runner`; exact `implementer` was absent, so no substitute was dispatched. Thus
+pre-boot project files are measured as insufficient on this Cloud host. This is the negative
+control proving project files are not the Cloud carrier; it is not a runtime capability verdict.
+
+The positive control configured dashboard environment
+`9116f5fb-a1f4-11f1-b532-320a589b8025` to run
+`./install-cursor.sh --global --yes --forge=github`, then saved it manually. Config-change build
+`bld-20260827-aaac14bf-e980-4d1a-9600-e8b3fb2e031e` installed all 14 profiles under the remote
+`/home/ubuntu/.cursor/agents`, snapshotted, and warmed. Fresh parent
+`bc-f2f0f15f-31d9-416a-9952-35243def5561` exposed all 14 Kaola names in its 23-type Task catalog;
+exact `implementer` child `bc-63c79c19-f9fb-5892-970e-bb1606ad1a3b` returned
+`PROBE_OK_CURSOR_CLOUD_SAVED_ENV_IMPLEMENTER` with no substitute or per-call model override. The
+selected child model and profile source remained unobservable.
 
 ### ZCode
 
@@ -242,11 +267,9 @@ ambient Git repository; project catalogs require explicit `--target`.
 
 - opencode's hard or advisory AGENTS size limit;
 - ZCode's AGENTS size limit and `ZCODE_HOME` relocation semantics;
-- Cursor same-process profile hot load, Cloud boot-load of project `.cursor/agents/` into the Task
-  enum, local App/IDE Agent named-catalog behavior (`unknown`/`unprobed`), and catalog behavior
-  beyond the prior `2026.08.11-e8db854` full CLI probe and the `2026.08.25-3e8eec8` named-profile
-  CLI probe (`prior_probe_not_re-run_here`; Cloud catalog-miss on the 2026-08-27 hosts above
-  is measured, not unknown);
+- Cursor CLI same-process profile hot load; App local-IDE global discovery, materialization
+  necessity, reload, and child model/profile-source observability; Cloud child model/profile-source
+  observability and catalog behavior beyond the saved-environment lifecycle measured above;
 - exact ZCode 3.9.1 behavior. The public install page exposed 3.8.1 during this research, so this
   documentation does not present 3.9.1 as locally or publicly verified;
 - any precedence or conflict behavior not stated by the evidence above.

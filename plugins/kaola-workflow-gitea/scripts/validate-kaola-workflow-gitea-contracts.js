@@ -68,6 +68,29 @@ function assertNotIncludes(file, needle) {
   assert(!read(file).includes(needle), file + ' must not include: ' + needle);
 }
 
+function executableRuntimeInstalls(text) {
+  return String(text || '').split(/\r?\n/).filter(line =>
+    !/^\s*#/.test(line) && (
+      /^\s*(?:node|bash|sh|zsh)\s+[^\n]*(?:install(?:-all|-\w+)?[^\s"']*|install-[^\s"']+)[^\n]*--global\b/i.test(line)
+      || /^\s*\.\/install-all\.sh\b/.test(line)
+    ));
+}
+
+function assertPortableInit(file, requireDeclaration = true) {
+  const text = read(file);
+  const invocations = executableRuntimeInstalls(text);
+  assert(invocations.length === 0,
+    file + ': workflow-init must not execute a runtime/global installer; got '
+      + JSON.stringify(invocations));
+  assert(!requireDeclaration || (/Runtime\/global installation is outside `workflow-init`/.test(text)
+      && /runtime\/global bytes unchanged/.test(text)),
+    file + ': workflow-init must state the portable repository/runtime-install boundary');
+  const injected = executableRuntimeInstalls(text
+    + '\nnode "$plugin_root/scripts/install-codex-agent-profiles.js" --global\n');
+  assert(injected.length === 1,
+    file + ': portable-init detector must reject an injected global installer invocation');
+}
+
 function assertConcept(file, concept, terms) {
   const content = norm(read(file).toLowerCase());
   const missing = terms.filter(term => !content.includes(norm(term.toLowerCase())));
@@ -293,22 +316,10 @@ assertNotIncludes(giteaInitSkill, 'Do not create or edit CLAUDE.md');
 assertIncludes(giteaInitSkill, 'kaola-workflow-project-instructions.js');
 assertIncludes(giteaInitSkill, 'decision_required');
 assertNotIncludes(giteaInitSkill, 'READ CLAUDE.md BEFORE ANY ACTION');
-assertIncludes(giteaInitSkill, 'plugin_root="plugins/kaola-workflow-gitea"');
-assert(
-  !/plugin_root="plugins\/kaola-workflow"(?!-)/.test(read(giteaInitSkill)),
-  giteaInitSkill + ' must not contain bare plugin_root="plugins/kaola-workflow" (without -gitea suffix)'
-);
-assertIncludes(giteaInitSkill, "*/kaola-workflow-gitea/*/scripts/install-codex-agent-profiles.js");
-assert(
-  !/\*\/kaola-workflow\/\*\/scripts\/install-codex-agent-profiles\.js/.test(read(giteaInitSkill)),
-  giteaInitSkill + ' must not contain bare */kaola-workflow/* find path (without -gitea suffix)'
-);
-// #571: global-default regression locks — pin primary install is --global; forbid retired per-repo mandate.
-assertIncludes(giteaInitSkill, 'install-codex-agent-profiles.js" --global');
-assert(
-  !/install-codex-agent-profiles\.js"?\s+"\$PWD"/.test(read(giteaInitSkill)),
-  giteaInitSkill + ' must not mandate a per-repo "$PWD" agent install (#571)'
-);
+// #1039: runtime installation is outside workflow-init; both native consumers
+// must remain portable and mutation-armed against an executable installer.
+assertPortableInit(giteaInitSkill);
+assertPortableInit(`${pluginRoot}/commands/workflow-init.md`, false);
 // #401 Part 1: the forge plan-validator refusal-matrix anchor must remain wired into the suite.
 
 // Gitea forge pair CLAUDE.md template must be byte-identical

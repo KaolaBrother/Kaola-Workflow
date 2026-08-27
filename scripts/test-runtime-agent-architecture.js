@@ -209,6 +209,7 @@ function roleNamesIn(text) {
 // from behavior-contracts.json. Keep the unit bounded before the next tier-roster marker so nearby
 // runtime-specific model bindings cannot make a wrong membership look complete.
 function tierRosterGaps(text, expected) {
+  const lines = String(text || '').split(/\r?\n/).map(line => normalizedProse(line).toLowerCase());
   const prose = normalizedProse(text).toLowerCase();
   const markers = {};
   for (const tier of Object.keys(expected)) {
@@ -229,6 +230,12 @@ function tierRosterGaps(text, expected) {
     .sort((a, b) => a.index - b.index);
   const gaps = [];
   for (const tier of Object.keys(expected)) {
+    const exactLine = lines.some(line => {
+      const labelsTier = new RegExp(`\\b${tier}\\b.{0,48}\\broles?\\b|\\broles?\\b.{0,48}\\b${tier}\\b`).test(line);
+      return labelsTier
+        && JSON.stringify(roleNamesIn(line).sort()) === JSON.stringify(expected[tier]);
+    });
+    if (exactLine) continue;
     const found = markers[tier].some(index => {
       const next = allMarkers.find(marker => marker.index > index);
       const segment = prose.slice(index, next ? next.index : Math.min(prose.length, index + 1200));
@@ -471,18 +478,22 @@ function runtimeDelegationGaps(runtime, text) {
         /runtime.report.*task (?:catalog|enum)/]],
       ['host-catalog-variation', CURSOR_HOST_CATALOG_VARIATION],
       ['reported-route-only', CURSOR_REPORTED_ROUTE_ONLY],
-      // #1036: named_roles and omit-model are CLI-with-project-catalog facts, not a Cursor-family
-      // universal. A Cloud catalog-miss host uses live built-ins as themselves; files already
-      // present plus a built-in-only enum is a capability_gap, not an install miss.
-      ['named-roles-not-host-universal', [/named_roles is not host-universal/,
-        /named roles is not host-universal/]],
+      // #1036/#1039: a Cloud project-only catalog miss is a negative control, not the support
+      // verdict. The real Cloud carrier is its dashboard-managed remote user home after global
+      // install, manual save/snapshot, and a fresh parent.
+      ['cloud-project-negative-control', [/committed project profiles alone are a negative control/,
+        /project profiles alone were not the cloud carrier/]],
+      ['cloud-save-before-gap', [/install globally inside the dashboard-managed remote environment.*save.*fresh parent.*capability gap/,
+        /global installer ran inside a dashboard-managed remote environment.*saved and snapshotted.*fresh cloud parent/]],
       ['omit-model-when-named', [/omit a requested per-call model only when/,
         /omit that per-call model only when/]],
-      ['catalog-miss-capability-gap', [/capability_gap, not an install miss/]],
       ['catalog-miss-model-lever', [/resolver-listed model slug/]],
-      ['cloud-explore-route', [/cloud catalog-miss host exposed [`']?explore/]],
+      ['cloud-negative-control-route', [/cloud negative control exposed [`']?explore/]],
+      ['cloud-saved-named-catalog', [/corrected saved environment exposed all 14 kaola types/,
+        /cursor cloud separately proved all 14 kaola names/]],
       ['global-install-no-ambient-repo', [/does not write an ambient git repository/]],
-      ['cursor-app-cli-distinct', [/product surfaces are cli and app/]],
+      ['cursor-app-cli-distinct', [/product surfaces and app local\/cloud hosts remain independent/,
+        /standalone cli.*cursor app.*different execution hosts/]],
       ['app-cloud-not-local-ide', [/app local ide and app-started cloud/]],
     ],
     zcode: [
@@ -584,6 +595,46 @@ for (const [label, pattern] of [
 ]) {
   assert(pattern.test(initSource), `A3: workflow-init carries the ${label} migration outcome`);
 }
+
+// #1037/#1039: workflow-init owns portable repository instructions only. It may
+// explain that installers own native capabilities, but no executable block may
+// invoke a runtime/global installer. Inspect the canonical source and every
+// tracked rendered init consumer; generated agreement with the wrong command is
+// not evidence. The in-memory injected command proves the detector is armed.
+function runtimeInstallInvocations(text) {
+  const matches = [];
+  for (const [index, line] of String(text || '').split(/\r?\n/).entries()) {
+    if (/^\s*#/.test(line)) continue;
+    if (/^\s*(?:node|bash|sh|zsh)\s+[^\n]*(?:install(?:-all|-\w+)?[^\s"']*|install-[^\s"']+)[^\n]*--global\b/i.test(line)
+        || /^\s*\.\/install-all\.sh\b/.test(line)) {
+      matches.push({ line: index + 1, text: line.trim() });
+    }
+  }
+  return matches;
+}
+
+const initConsumers = [
+  'templates/routing/init.skeleton.md',
+  'commands/workflow-init.md',
+  'plugins/kaola-workflow-gitlab/commands/workflow-init.md',
+  'plugins/kaola-workflow-gitea/commands/workflow-init.md',
+  'plugins/kaola-workflow/skills/kaola-workflow-init/SKILL.md',
+  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md',
+  'plugins/kaola-workflow-gitea/skills/kaola-workflow-init/SKILL.md',
+];
+for (const relativePath of initConsumers) {
+  const text = read(relativePath);
+  assert(typeof text === 'string', `A3[init-install-boundary/${relativePath}]: tracked init surface exists`);
+  const invocations = runtimeInstallInvocations(text || '');
+  assert(invocations.length === 0,
+    `A3[init-install-boundary/${relativePath}]: workflow-init invokes no runtime/global installer — got `
+      + JSON.stringify(invocations));
+}
+const cleanInitConsumer = read('commands/workflow-init.md') || '';
+assert(runtimeInstallInvocations(cleanInitConsumer + [
+  '', '```bash', 'node "$plugin_root/scripts/install-codex-agent-profiles.js" --global', '```', '',
+].join('\n')).length === 1,
+'A3[init-install-boundary] mutation RED: an injected global runtime installer invocation is detected');
 // The executable distribution module is now the sole consumer-template authoring surface;
 // workflow-init describes and invokes it without embedding a second copy.
 const consumerTemplateSource = read('scripts/kaola-workflow-project-instruction-templates.js') || '';
@@ -686,19 +737,23 @@ if (migrationModule) {
     fs.writeFileSync(path.join(root, 'CLAUDE.md'), claudeBytes);
   }
 
-  function runMigration(mode, projectRoot) {
+  function runMigration(mode, projectRoot, extraArgs, envOverrides) {
     // spawn-class: environment
     const result = spawnSync(process.execPath,
-      [migrationPath, mode, '--project-root', projectRoot, '--json'], { encoding: 'utf8' });
+      [migrationPath, mode, '--project-root', projectRoot, '--json'].concat(extraArgs || []), {
+        encoding: 'utf8', env: Object.assign({}, process.env, envOverrides || {}),
+      });
     let envelope = null;
     try { envelope = JSON.parse(String(result.stdout || '').trim()); } catch (_) { /* asserted below */ }
     return { ...result, envelope };
   }
 
-  function runMigrationHelper(helperPath, mode, projectRoot) {
+  function runMigrationHelper(helperPath, mode, projectRoot, extraArgs, envOverrides) {
     // spawn-class: environment
     const result = spawnSync(process.execPath,
-      [helperPath, mode, '--project-root', projectRoot, '--json'], { encoding: 'utf8' });
+      [helperPath, mode, '--project-root', projectRoot, '--json'].concat(extraArgs || []), {
+        encoding: 'utf8', env: Object.assign({}, process.env, envOverrides || {}),
+      });
     let envelope = null;
     try { envelope = JSON.parse(String(result.stdout || '').trim()); } catch (_) { /* asserted below */ }
     return { ...result, envelope };
@@ -706,6 +761,29 @@ if (migrationModule) {
 
   function exactLineCount(bytes, line) {
     return String(bytes).split(/\r?\n/).filter(candidate => candidate === line).length;
+  }
+
+  function treeSnapshot(root) {
+    const rows = [];
+    function visit(dir, prefix) {
+      if (!fs.existsSync(dir)) return;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const rel = prefix ? prefix + '/' + entry.name : entry.name;
+        const file = path.join(dir, entry.name);
+        if (entry.isDirectory()) visit(file, rel);
+        else if (entry.isFile()) rows.push(rel + ':' + fs.readFileSync(file).toString('hex'));
+        else if (entry.isSymbolicLink()) rows.push(rel + ':symlink:' + fs.readlinkSync(file));
+      }
+    }
+    visit(root, '');
+    return rows.sort();
+  }
+
+  function consentApplyArgs(envelope) {
+    const consent = envelope && envelope.consent;
+    return consent && consent.kind === 'execution_default_change'
+      && consent.ephemeral === true && Array.isArray(consent.apply_args)
+      ? consent.apply_args.map(String) : [];
   }
 
   function hasRepositorySpecificContract(bytes) {
@@ -905,8 +983,133 @@ if (migrationModule) {
     'A3[active-execution]: plan still shows exact old/new hashes for consent');
     assert(!fs.existsSync(path.join(stateDir, '.cache', 'instruction-adoption.json')),
       'A3[active-execution]: refused execution-default writes leave no adoption receipt');
+
+    const consentArgs = consentApplyArgs(planned.envelope);
+    assert(consentArgs.length > 0,
+      'A3[active-execution-consent]: plan exposes explicit ephemeral apply args bound to the '
+      + 'execution-default old/new evidence — got '
+      + JSON.stringify(planned.envelope && planned.envelope.consent));
+    const consented = consentArgs.length > 0
+      ? runMigration('apply', execRoot, consentArgs) : null;
+    assert(!!consented && consented.status === 0 && consented.envelope
+      && consented.envelope.status === 'applied'
+      && consented.envelope.files.agents.compatibility === 'execution_default_change'
+      && consented.envelope.writes.includes('AGENTS.md'),
+    'A3[active-execution-consent]: the real helper applies the execution-default change only '
+      + 'through the explicit post-conversation consent leg');
+    assert(consented && !fs.readFileSync(path.join(execRoot, 'AGENTS.md')).equals(driftedAgents)
+      && fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8') === stateBytes,
+    'A3[active-execution-consent]: consent changes only the planned instruction bytes and preserves '
+      + 'the active claim state');
+    const durableConsent = treeSnapshot(stateDir).filter(row => /(?:approval|consent)/i.test(row));
+    assert(durableConsent.length === 0,
+      'A3[active-execution-consent]: conversation consent leaves no durable approval state — got '
+      + JSON.stringify(durableConsent));
   } finally {
     try { fs.rmSync(execRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
+
+  // A production-path schema incompatibility must be emitted by the real
+  // classifier from active run bytes, not by directly feeding a synthetic
+  // classification into compatibilityFor(). It fences instruction writes and
+  // preserves the complete unknown state/Mission List bytes.
+  const incompatibleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1037-state-schema-'));
+  try {
+    writeInstructionFixture(incompatibleRoot, legacyRedirect, ownerClaude);
+    const stateDir = path.join(incompatibleRoot, 'kaola-workflow', 'active-run');
+    fs.mkdirSync(stateDir, { recursive: true });
+    const stateBytes = [
+      '# Kaola-Workflow State', '', 'schema_version: 999', '', '## Project',
+      'name: active-run', 'status: active', 'unknown_required_state: preserve', '',
+    ].join('\n');
+    const missionBytes = [
+      '# preserve incompatible run', '', '- item: keep live locator', '  status: in-flight',
+      '  dispatched: native-child task-17 -> .cache/result.md', '  result:',
+      '  unknown_required_item: preserve', '',
+    ].join('\n');
+    fs.writeFileSync(path.join(stateDir, 'workflow-state.md'), stateBytes);
+    fs.writeFileSync(path.join(stateDir, 'mission-list.md'), missionBytes);
+    const agentsBefore = fs.readFileSync(path.join(incompatibleRoot, 'AGENTS.md'));
+    const claudeBefore = fs.readFileSync(path.join(incompatibleRoot, 'CLAUDE.md'));
+    const planned = runMigration('plan', incompatibleRoot);
+    const applied = runMigration('apply', incompatibleRoot);
+    assert(planned.envelope && JSON.stringify(planned.envelope).includes('state_schema_incompatible'),
+      'A3[active-state-schema]: production plan classifies unsupported active state bytes as '
+      + 'state_schema_incompatible');
+    assert(applied.status === 0 && applied.envelope
+      && ['active_run_preserved', 'decision_required'].includes(applied.envelope.status)
+      && applied.envelope.changed === false && applied.envelope.writes.length === 0
+      && JSON.stringify(applied.envelope).includes('state_schema_incompatible'),
+    'A3[active-state-schema]: production apply fences an incompatible active run without writes');
+    assert(fs.readFileSync(path.join(incompatibleRoot, 'AGENTS.md')).equals(agentsBefore)
+      && fs.readFileSync(path.join(incompatibleRoot, 'CLAUDE.md')).equals(claudeBefore)
+      && fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8') === stateBytes
+      && fs.readFileSync(path.join(stateDir, 'mission-list.md'), 'utf8') === missionBytes,
+    'A3[active-state-schema]: schema fence preserves instructions, claim, Mission List, and unknown fields byte-for-byte');
+    assert(!fs.existsSync(path.join(stateDir, '.cache', 'instruction-adoption.json')),
+      'A3[active-state-schema]: fenced state writes no adoption receipt');
+  } finally {
+    try { fs.rmSync(incompatibleRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
+
+  // Mixed active-run compatibility is per managed change, not a repository-wide
+  // freeze bit. An incompatible state fences the execution-default AGENTS drift,
+  // while the independent thin Claude bridge remains safe to adopt. Drive both
+  // pending changes through the real CLI and require a receipt that records only
+  // the applied layout-equivalent write.
+  const mixedSchemaRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1037-mixed-schema-'));
+  try {
+    const canonicalTemplates = require(path.join(ROOT, 'scripts',
+      'kaola-workflow-project-instruction-templates.js'));
+    const driftedAgents = injectManagedDrift(
+      Buffer.from(canonicalTemplates.AGENTS_TEMPLATE), migrationModule.AGENTS_MARKER);
+    writeInstructionFixture(mixedSchemaRoot, driftedAgents, Buffer.alloc(0));
+    const stateDir = path.join(mixedSchemaRoot, 'kaola-workflow', 'active-run');
+    fs.mkdirSync(stateDir, { recursive: true });
+    const stateBytes = [
+      '# Kaola-Workflow State', '', 'schema_version: 999', '', '## Project',
+      'name: active-run', 'status: active', 'unknown_required_state: preserve', '',
+    ].join('\n');
+    const missionBytes = [
+      '# preserve mixed run', '', '- item: keep live dispatch', '  status: in-flight',
+      '  dispatched: native-child task-23 -> .cache/result.md', '  result:',
+      '  unknown_required_item: preserve', '',
+    ].join('\n');
+    fs.writeFileSync(path.join(stateDir, 'workflow-state.md'), stateBytes);
+    fs.writeFileSync(path.join(stateDir, 'mission-list.md'), missionBytes);
+    const planned = runMigration('plan', mixedSchemaRoot);
+    const applied = runMigration('apply', mixedSchemaRoot);
+    assert(planned.envelope
+      && planned.envelope.files.agents.compatibility === 'execution_default_change'
+      && planned.envelope.files.claude.compatibility === 'authority_layout_equivalent'
+      && JSON.stringify(planned.envelope).includes('state_schema_incompatible'),
+    'A3[active-state-schema-mixed]: production plan independently classifies fenced AGENTS, '
+      + 'layout-equivalent Claude, and incompatible active state');
+    assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied'
+      && applied.envelope.changed === true
+      && JSON.stringify(applied.envelope.writes) === JSON.stringify(['CLAUDE.md'])
+      && JSON.stringify(applied.envelope).includes('state_schema_incompatible')
+      && !Object.prototype.hasOwnProperty.call(applied.envelope, 'consent'),
+    'A3[active-state-schema-mixed]: incompatible state fences only AGENTS while apply writes the '
+      + 'independent thin Claude bridge without consent');
+    assert(fs.readFileSync(path.join(mixedSchemaRoot, 'AGENTS.md')).equals(driftedAgents)
+      && fs.readFileSync(path.join(mixedSchemaRoot, 'CLAUDE.md')).equals(
+        Buffer.from(canonicalTemplates.CLAUDE_TEMPLATE))
+      && fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8') === stateBytes
+      && fs.readFileSync(path.join(stateDir, 'mission-list.md'), 'utf8') === missionBytes,
+    'A3[active-state-schema-mixed]: partial adoption preserves fenced instruction, incompatible '
+      + 'state, Mission List, and unknown fields byte-for-byte');
+    const receiptPath = path.join(stateDir, '.cache', 'instruction-adoption.json');
+    const receipt = fs.existsSync(receiptPath)
+      ? JSON.parse(fs.readFileSync(receiptPath, 'utf8')) : null;
+    assert(receipt && receipt.kind === 'instruction_adoption'
+      && JSON.stringify(receipt.writes) === JSON.stringify(['CLAUDE.md'])
+      && !Object.prototype.hasOwnProperty.call(receipt, 'consent')
+      && !Object.prototype.hasOwnProperty.call(receipt, 'approval'),
+    'A3[active-state-schema-mixed]: recovery evidence records only the applied layout-equivalent '
+      + 'write and does not approve the fenced AGENTS change');
+  } finally {
+    try { fs.rmSync(mixedSchemaRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   }
 
   assert(migrationModule.COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT === 'authority_layout_equivalent'
@@ -943,12 +1146,29 @@ if (migrationModule) {
     try {
       const installedRoot = path.join(isolatedRoot, 'installed-plugin');
       const consumerRoot = path.join(isolatedRoot, 'consumer-project');
+      const runtimeHome = path.join(isolatedRoot, 'runtime-home');
       fs.cpSync(path.join(ROOT, distribution.root), installedRoot, { recursive: true });
       fs.mkdirSync(consumerRoot, { recursive: true });
+      fs.mkdirSync(path.join(runtimeHome, 'agents'), { recursive: true });
+      fs.mkdirSync(path.join(runtimeHome, 'hooks'), { recursive: true });
+      fs.writeFileSync(path.join(runtimeHome, 'agents', 'OWNER_PROFILE.toml'),
+        'OWNER_RUNTIME_PROFILE=byte-identical\n');
+      fs.writeFileSync(path.join(runtimeHome, 'hooks', 'OWNER_HOOK.sh'),
+        'OWNER_RUNTIME_HOOK=byte-identical\n');
+      const runtimeBefore = treeSnapshot(runtimeHome);
+      const isolatedEnv = {
+        HOME: runtimeHome,
+        CODEX_HOME: runtimeHome,
+        CURSOR_HOME: path.join(runtimeHome, 'cursor'),
+        OPENCODE_HOME: path.join(runtimeHome, 'opencode'),
+        KIMI_HOME: path.join(runtimeHome, 'kimi'),
+        GROK_HOME: path.join(runtimeHome, 'grok'),
+        ZCODE_HOME: path.join(runtimeHome, 'zcode'),
+      };
       const helperPath = path.join(installedRoot, 'scripts',
         'kaola-workflow-project-instructions.js');
-      const plan = runMigrationHelper(helperPath, 'plan', consumerRoot);
-      const applied = runMigrationHelper(helperPath, 'apply', consumerRoot);
+      const plan = runMigrationHelper(helperPath, 'plan', consumerRoot, [], isolatedEnv);
+      const applied = runMigrationHelper(helperPath, 'apply', consumerRoot, [], isolatedEnv);
       const agentsPath = path.join(consumerRoot, 'AGENTS.md');
       const claudePath = path.join(consumerRoot, 'CLAUDE.md');
       const agentsAfter = readOptionalFixture(agentsPath);
@@ -977,6 +1197,9 @@ if (migrationModule) {
       assert(!!expectedManaged && !!installedManaged && installedManaged.equals(expectedManaged),
         `A3[installed/${distribution.label}]: workflow-init installs the consumer AGENTS managed block `
           + 'byte-equal to the distribution-owned template module');
+      assert(JSON.stringify(treeSnapshot(runtimeHome)) === JSON.stringify(runtimeBefore),
+        `A3[installed/${distribution.label}]: workflow-init leaves installed runtime profiles, `
+          + 'commands, skills, hooks, adapters, and config bytes unchanged');
     } finally {
       try { fs.rmSync(isolatedRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
     }
@@ -1431,7 +1654,11 @@ for (const runtime of RUNTIME_NAMES) {
       && entry.adapter.surfaces.app.execution_hosts.local
       && entry.adapter.surfaces.app.execution_hosts.local.global_discovery === 'unknown'
       && entry.adapter.surfaces.app.execution_hosts.cloud
-      && entry.adapter.surfaces.app.execution_hosts.cloud.named_catalog === 'built_in_only'
+      && entry.adapter.surfaces.app.execution_hosts.cloud.global_discovery === 'supported_in_saved_remote_environment'
+      && entry.adapter.surfaces.app.execution_hosts.cloud.required_project_materialization === 'no'
+      && entry.adapter.surfaces.app.execution_hosts.cloud.remote_injection === 'dashboard_environment_install_and_save'
+      && entry.adapter.surfaces.app.execution_hosts.cloud.named_catalog === 'user_global_when_environment_saved'
+      && entry.adapter.surfaces.app.execution_hosts.cloud.reload === 'new_cloud_parent_after_environment_save'
       && entry.adapter.surfaces.cli.execution_hosts
       && entry.adapter.surfaces.cli.execution_hosts.local
       && entry.adapter.surfaces.cli.execution_hosts.local.required_project_materialization === 'yes'),
@@ -1817,13 +2044,26 @@ if (generator && behavior && adapters && profiles.length > 0) {
           && frozenGaps.includes('reported-route-only'),
         'A10-delegation/cursor-host-mutation: universalizing one measured Cursor enum fails host-scoped acceptance');
       }
-      const catalogMiss = /capability_gap, not an install miss/;
-      assert(catalogMiss.test(subject),
-        'A10-delegation/cursor-catalog-miss-mutation: rendered Cursor guidance names already-present plus built-in-only as capability_gap, not an install miss');
-      const strippedMiss = subject.replace(catalogMiss, 'proceed with named omit-model dispatch');
-      const missGaps = runtimeDelegationGaps('cursor', strippedMiss);
-      assert(strippedMiss !== subject && missGaps.includes('catalog-miss-capability-gap'),
-        'A10-delegation/cursor-catalog-miss-mutation: restoring already-present → named omit-model fails catalog-miss acceptance');
+      const cloudNegative = /committed project profiles alone are a negative control/;
+      assert(cloudNegative.test(subject),
+        'A10-delegation/cursor-cloud-carrier-mutation: rendered Cursor guidance treats project-only Cloud files as a negative control');
+      const strippedNegative = subject.replaceAll('committed project profiles alone are a negative control',
+        'committed project profiles are the complete cloud carrier')
+        .replaceAll('project profiles alone were not the cloud carrier',
+          'project profiles alone were the cloud carrier');
+      const negativeGaps = runtimeDelegationGaps('cursor', strippedNegative);
+      assert(strippedNegative !== subject && negativeGaps.includes('cloud-project-negative-control'),
+        'A10-delegation/cursor-cloud-carrier-mutation: promoting project files to the Cloud carrier fails acceptance');
+      const cloudLifecycle = /install globally inside the dashboard-managed remote environment, save it, and open a fresh parent before treating a still-missing name as a capability gap/;
+      assert(cloudLifecycle.test(subject),
+        'A10-delegation/cursor-cloud-lifecycle-mutation: rendered Cursor guidance requires remote global install, save, and a fresh parent before a gap verdict');
+      const strippedLifecycle = subject.replace(cloudLifecycle,
+        'treat the first project-only catalog miss as a capability gap')
+        .replaceAll('global installer ran inside a dashboard-managed remote environment, the user saved and snapshotted it, and a fresh cloud parent started from that build',
+          'cloud support appeared without an installation or reload lifecycle');
+      const lifecycleGaps = runtimeDelegationGaps('cursor', strippedLifecycle);
+      assert(strippedLifecycle !== subject && lifecycleGaps.includes('cloud-save-before-gap'),
+        'A10-delegation/cursor-cloud-lifecycle-mutation: deleting the saved-environment lifecycle fails acceptance');
       assert(subject.includes('does not write an ambient git repository'),
         'A10-delegation/cursor-global-first-mutation: rendered Cursor guidance forbids ambient Git writes from --global');
       const strippedAmbient = subject.replaceAll('does not write an ambient git repository',
@@ -1831,10 +2071,12 @@ if (generator && behavior && adapters && profiles.length > 0) {
       const ambientGaps = runtimeDelegationGaps('cursor', strippedAmbient);
       assert(strippedAmbient !== subject && ambientGaps.includes('global-install-no-ambient-repo'),
         'A10-delegation/cursor-global-first-mutation: restoring ambient dual-write fails global-first acceptance');
-      assert(subject.includes('product surfaces are cli and app'),
+      assert(subject.includes('product surfaces and app local/cloud hosts remain independent'),
         'A10-delegation/cursor-app-cli-mutation: rendered Cursor guidance names CLI and App as distinct product surfaces');
-      const strippedAppCli = subject.replaceAll('product surfaces are cli and app',
-        'one cursor product surface');
+      const strippedAppCli = subject.replaceAll('product surfaces and app local/cloud hosts remain independent',
+        'one cursor product surface')
+        .replaceAll('cursor app local ide and app-started cloud are different execution hosts',
+          'cursor app is the same host as the standalone cli');
       const appCliGaps = runtimeDelegationGaps('cursor', strippedAppCli);
       assert(strippedAppCli !== subject && appCliGaps.includes('cursor-app-cli-distinct'),
         'A10-delegation/cursor-app-cli-mutation: collapsing App into CLI fails surface acceptance');

@@ -58,7 +58,6 @@ const ZERO_HASH = '0'.repeat(64);
 // of the hooks directory so --write can prune stale dispatch artifacts.
 const HOOK_SCRIPTS = [];
 const COMPACT_WRAPPER = 'kaola-workflow-compact-context.sh';
-const ENSURE_WRAPPER = 'kaola-workflow-ensure-cursor-catalog.sh';
 
 function parseFrontmatter(text) {
   const m = String(text).match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
@@ -151,54 +150,6 @@ const CURSOR_MODEL_DISPATCH_GUIDANCE =
   + 'only when that name is in the enum; omit per-call model then. A built-in-only enum uses those '
   + 'members as themselves. Do not claim IDE children display distinct effort.';
 
-const CURSOR_MODEL_DISPATCH_BLOCK = [
-  '## Generated agent tier pins',
-  '',
-  'Named Cursor agents carry generated frontmatter that pins their canonical standard, reasoning,',
-  'or fable/heavy tier at medium, high, or xhigh effort. The fable / heavy pin is',
-  '`grok-4.6[effort=xhigh]`. Those pins fire only when the live Task enum contains the Kaola name.',
-  '',
-  'Inspect the live Task enum before dispatch. When it contains a Kaola role name, dispatch',
-  '`subagent_type: "<role>"` and omit per-call model so the profile pin is the carrier. Do not',
-  'invent `subagentType.custom.name` as a parent-authored field.',
-  '',
-  'When the enum is built-in-only, use only those members as themselves. Never prompt a child to',
-  'impersonate `implementer`, `tdd-guide`, or another custody-bearing Kaola role. Writable',
-  '`generalPurpose` stays generic production/docs/tests the parent may delegate; `explore` is',
-  'read-heavy search when this host reports it; `cursor-guide` is Cursor product questions.',
-  'Gated `bugbot` / `security-review` stay behind this host\'s explicit-ask rule. A custody-bearing',
-  'miss inlines that item with a specific capability_gap; do not convert one miss into a run-wide',
-  'inline policy.',
-  '',
-  'On a catalog-miss host, omit-model uses the parent and is not a profile pin. A resolver-listed',
-  'model slug from the live Task schema is an effort lever. Do not pass CLI profile slugs as',
-  'Task.model.',
-  '',
-  'Honor the status token `already-present` | `copied` | `missing-source`:',
-  '- `already-present` plus a still-built-in-only live enum is a capability_gap, not an install miss.',
-  '  Use live built-ins as themselves or inline that item. Do not proceed as if named omit-model',
-  '  Task types exist.',
-  '- `already-present` plus Kaola names in the live enum: proceed with named omit-model Task.',
-  '- `copied`: stop named dispatch. Cold start. Start a new chat in the workspace that now contains',
-  '  `.cursor/agents`, then re-run `/workflow-next`. Mid-session copy did not refresh a Cloud parent.',
-  '- `missing-source`: print `./install-cursor.sh --target "$PWD"` (or the global install path) and',
-  '  do not name a Kaola Task type. That is the CLI empty-catalog case, not Cloud catalog-miss.',
-  '',
-  'Before named dispatch, run `kaola-workflow-ensure-cursor-catalog.js` via the same `kaola_script`',
-  'resolver this card already uses for claim.js: `$CURSOR_HOME/kaola-workflow/scripts/`',
-  '(self-dev `./scripts/` when `package.json` name is `kaola-workflow`). The catalog source of truth is',
-  '`${CURSOR_HOME:-$HOME/.cursor}/agents`. Dest is always `<cwd>/.cursor/agents`. Copy only the',
-  'canonical Kaola role names (not every `*.md`). Sentinel path: `.cursor/agents/implementer.md`.',
-  '',
-  'Keep the Cursor workspace at the repo root that holds `.cursor/agents`. A worktree is a cwd.',
-  'Do not reopen `agent --workspace` inside `.kw/worktrees/` unless that directory already has',
-  'the 14 agent files before the session starts.',
-  '',
-  'On `Invalid enum value` … `received \'<role>\'`: inspect the live built-ins as themselves, or',
-  'inline that item and record capability_gap. Do not costume `generalPurpose` as the missing role.',
-  '',
-].join('\n');
-
 const CURSOR_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _gh="${CURSOR_HOME:-$HOME/.cursor}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_gh/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_gh/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
 
@@ -228,6 +179,35 @@ function cursorNativeDispatchProse(card) {
     + 'record capability_gap, or dispatch a live built-in only as itself when its real boundary fits.\n';
 }
 
+function cursorCliMaterializationProse(forge) {
+  return [
+    '## Cursor standalone CLI pre-dispatch materialization',
+    '',
+    'Apply this check only when the current execution product is the standalone Cursor CLI on the',
+    'local host. Do not enter this branch merely because a sibling CLI binary exists. Cursor App',
+    'local IDE Agent and App-started Cloud are separate hosts: inspect their live Task catalog and',
+    'do not apply or infer this CLI materialization rule for either App host.',
+    '',
+    'Immediately before the first named Kaola child dispatch, run the installed transaction with',
+    'the current workspace as an explicit target:',
+    '',
+    '```sh',
+    'CURSOR_MATERIALIZER="${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts/kaola-workflow-cursor-surface.js"',
+    '[ -f "$CURSOR_MATERIALIZER" ] || { echo "capability_gap: Cursor global authority/helper missing; run ./install-cursor.sh --global --yes"; exit 1; }',
+    'node "$CURSOR_MATERIALIZER" --ensure-target "$PWD" --forge=' + forge + ' --json',
+    '```',
+    '',
+    'A `status: current` result is a no-op; continue by inspecting the live Task enum. A',
+    '`status: materialized` result means safe project bytes or their receipt changed: stop named',
+    'dispatch, start a new Cursor CLI process with the same chat at this workspace, and re-run the',
+    'command before dispatch. The measured reload boundary is a new process, not same-process hot',
+    'load. Missing or stale global authority, an unmanaged canonical-name collision, a symlink or',
+    'nonregular carrier, invalid/copied receipt, or modified receipt-owned bytes fails closed before',
+    'project mutation. Report the exact diagnostic and the explicit global-install or owner-file',
+    'repair; never substitute an ambient cwd copier or a sessionStart materializer.',
+  ].join('\n');
+}
+
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   const lines = body.split(/\r?\n/);
@@ -246,6 +226,10 @@ function transformCommandBody(body, forge, label) {
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime cursor');
   text = rewriteClaudeScriptPaths(text, forge);
+  const basename = path.posix.basename(label || '');
+  if (basename === 'workflow-next.md' || basename === 'kaola-workflow-finalize.md') {
+    text = text.trimEnd() + '\n\n' + cursorCliMaterializationProse(forge) + '\n';
+  }
   return text;
 }
 
@@ -272,10 +256,6 @@ function renderCursorHooksJson() {
       sessionStart: [
         {
           command: '.cursor/hooks/' + COMPACT_WRAPPER,
-          timeout: 5,
-        },
-        {
-          command: '.cursor/hooks/' + ENSURE_WRAPPER,
           timeout: 5,
         },
       ],
@@ -363,37 +343,6 @@ function renderCompactWrapper(forge) {
   ].join('\n');
 }
 
-function renderEnsureWrapper(forge) {
-  forge = forge || DEFAULT_FORGE;
-  const ensureJs = 'kaola-workflow-ensure-cursor-catalog.js';
-  const selfDev = forgeLayout.selfDevScriptsDir(forge);
-  return [
-    '#!/bin/sh',
-    '# cursor-edition: materialize <cwd>/.cursor/agents from $CURSOR_HOME/agents.',
-    '# Generated by scripts/sync-cursor-edition.js; do not hand-edit.',
-    '# Catalog copy is a different job from compact resume. Discard JS stdout and print {}',
-    '# so sessionStart does not emit additional_context and does not clobber compact-resume.',
-    '',
-    '_n="' + ensureJs + '"',
-    '_self=""',
-    '[ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"',
-    '_ch="${CURSOR_HOME:-$HOME/.cursor}"',
-    'ENSURE=""',
-    'if [ "$_self" = "kaola-workflow" ]; then',
-    '  for _p in "' + selfDev + '/$_n" "$_ch/kaola-workflow/scripts/$_n"; do',
-    '    [ -f "$_p" ] && { ENSURE="$_p"; break; }',
-    '  done',
-    'else',
-    '  for _p in "$_ch/kaola-workflow/scripts/$_n" "' + selfDev + '/$_n"; do',
-    '    [ -f "$_p" ] && { ENSURE="$_p"; break; }',
-    '  done',
-    'fi',
-    '[ -n "$ENSURE" ] && node "$ENSURE" >/dev/null 2>&1 || true',
-    'printf \'%s\\n\' \'{}\'',
-    '',
-  ].join('\n');
-}
-
 const HOOK_ADAPTATIONS = {};
 
 function adaptHookForCursor(script, content) {
@@ -452,7 +401,7 @@ function expectedCommandFiles(forge) {
   return listCanonCommands(forge).map(f => f.slice(0, -3));
 }
 function expectedHookFiles() {
-  return HOOK_SCRIPTS.concat([COMPACT_WRAPPER, ENSURE_WRAPPER]);
+  return HOOK_SCRIPTS.concat([COMPACT_WRAPPER]);
 }
 
 function retiredAgentFiles(forge) {
@@ -563,14 +512,6 @@ function writeHooks(forge) {
     console.log('generated  ' + treeLabel(forge) + '/hooks/' + COMPACT_WRAPPER);
     wrote++;
   }
-  const ensureDest = path.join(outDir, ENSURE_WRAPPER);
-  const ensureWrapper = renderEnsureWrapper(forge);
-  if (!fs.existsSync(ensureDest) || fs.readFileSync(ensureDest, 'utf8') !== ensureWrapper) {
-    fs.writeFileSync(ensureDest, ensureWrapper);
-    fs.chmodSync(ensureDest, 0o755);
-    console.log('generated  ' + treeLabel(forge) + '/hooks/' + ENSURE_WRAPPER);
-    wrote++;
-  }
   const json = renderCursorHooksJson();
   const jsonDest = treePath(mappingRel(forge));
   if (!fs.existsSync(jsonDest) || fs.readFileSync(jsonDest, 'utf8') !== json) {
@@ -656,14 +597,6 @@ function runCheck(forge) {
     if (!fs.existsSync(treePath(rel))) {
       mismatches.push({ rel, reason: 'missing generated compact wrapper' });
     } else if (readTree(rel) !== renderCompactWrapper(forge)) {
-      mismatches.push({ rel, reason: 'stale — regenerate' });
-    }
-  }
-  {
-    const rel = tree + '/hooks/' + ENSURE_WRAPPER;
-    if (!fs.existsSync(treePath(rel))) {
-      mismatches.push({ rel, reason: 'missing generated catalog-ensure wrapper' });
-    } else if (readTree(rel) !== renderEnsureWrapper(forge)) {
       mismatches.push({ rel, reason: 'stale — regenerate' });
     }
   }
@@ -754,9 +687,10 @@ if (require.main === module) main();
 module.exports = {
   renderAgent, renderCommand, transformCommandBody,
   rewriteClaudeScriptPaths, CURSOR_KAOLA_SCRIPT, cursorKaolaScript,
-  CURSOR_MODEL_DISPATCH_GUIDANCE, CURSOR_MODEL_DISPATCH_BLOCK,
+  CURSOR_MODEL_DISPATCH_GUIDANCE,
+  cursorCliMaterializationProse,
   renderCursorHooksJson, rewriteHooksJsonForGlobal, mergeDestHooks, stripDestHooks,
-  renderCompactWrapper, COMPACT_WRAPPER, renderEnsureWrapper, ENSURE_WRAPPER, mappingRel,
+  renderCompactWrapper, COMPACT_WRAPPER, mappingRel,
   treeLabel, agentRel, commandRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   adaptHookForCursor, HOOK_ADAPTATIONS,

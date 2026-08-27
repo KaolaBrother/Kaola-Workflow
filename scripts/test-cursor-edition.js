@@ -28,6 +28,7 @@
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
+const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
@@ -35,6 +36,7 @@ const forgeLayout = require('./runtime-edition-forge.js');
 const reviewerGenerator = require('./generate-agent-profiles.js');
 const G = require('./test-git-fixture');
 const syncMod = require('./sync-cursor-edition.js');
+const cursorSurface = require('./kaola-workflow-cursor-surface.js');
 
 const REPO = path.resolve(__dirname, '..');
 const SYNC_JS = path.join(REPO, 'scripts', 'sync-cursor-edition.js');
@@ -111,6 +113,10 @@ function walkFiles(absDir, relDir) {
   return out;
 }
 
+function sha256File(file) {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
 function generatedTreeFiles(label) {
   return walkFiles(path.join(TREE_ROOT, label), label);
 }
@@ -163,6 +169,79 @@ function inspectPathBConsumers(root) {
     }
   }
   return { ok: errors.length === 0, errors, relations };
+}
+
+// The measured standalone CLI needs project profiles before it can expose the
+// named Task catalog. That exception is a pre-dispatch transaction, not an
+// ambient hook and not a fact that may be inferred onto either Cursor App
+// host. Judge the generated consumer bytes so a renderer that drops, moves,
+// or broadens the rule cannot hide behind a correct adapter source.
+const CURSOR_CLI_MATERIALIZATION_COMMANDS = Object.freeze([
+  'workflow-next',
+  'kaola-workflow-finalize',
+]);
+
+function cursorCliMaterializationVerdict(text, forge) {
+  const errors = [];
+  const source = String(text || '');
+  const heading = '## Cursor standalone CLI pre-dispatch materialization';
+  const start = source.indexOf(heading);
+  const end = start < 0 ? -1 : source.indexOf('\n## ', start + heading.length);
+  const block = start < 0 ? '' : source.slice(start, end < 0 ? source.length : end);
+  const ensureCalls = block.split(/\r?\n/)
+    .filter(line => /\bnode\b/.test(line) && /--ensure-target\b/.test(line));
+
+  if (start < 0) errors.push('missing standalone CLI pre-dispatch materialization section');
+  if (ensureCalls.length !== 1) {
+    errors.push('expected one installed-helper --ensure-target call, found ' + ensureCalls.length);
+  } else {
+    const call = ensureCalls[0];
+    if (!/--ensure-target\s+"\$PWD"(?:\s|$)/.test(call)) {
+      errors.push('helper target is not the exact explicit "$PWD" workspace');
+    }
+    if (!call.includes('--forge=' + forge)) {
+      errors.push('helper call does not carry the generated forge --forge=' + forge);
+    }
+    if (!/node\s+"\$CURSOR_MATERIALIZER"/.test(call)) {
+      errors.push('helper call does not execute the installed materializer binding');
+    }
+  }
+  if (!/CURSOR_MATERIALIZER=.*\$\{CURSOR_HOME:-\$HOME\/\.cursor\}\/kaola-workflow\/scripts\/kaola-workflow-cursor-surface\.js/.test(block)) {
+    errors.push('materializer is not resolved from the installed global Cursor authority');
+  }
+  if (!/only when[^.]*standalone Cursor CLI[^.]*local host/i.test(block)) {
+    errors.push('materialization branch is not limited to standalone Cursor CLI local');
+  }
+  if (!/Cursor App[\s\S]{0,180}App-started Cloud[\s\S]{0,220}(?:do not|never) apply or infer[^.]*CLI materialization rule[^.]*App host/i.test(block)) {
+    errors.push('App local and App-started Cloud do not retain a shared negative CLI-rule boundary');
+  }
+  if (!/Cursor App[\s\S]{0,180}App-started Cloud[^.]*separate hosts[^.]*inspect their live Task catalog/i.test(block)) {
+    errors.push('App local and App-started Cloud are not separate live-catalog decisions');
+  }
+  if (!/Immediately before the first named Kaola child dispatch/i.test(block)) {
+    errors.push('installed helper is not required immediately before named dispatch');
+  }
+  const flatBlock = block.replace(/\s+/g, ' ');
+  const currentAt = flatBlock.indexOf('status: current');
+  const noOpAt = flatBlock.indexOf('no-op', currentAt);
+  const materializedAt = flatBlock.indexOf('status: materialized');
+  const stopAt = flatBlock.indexOf('stop named dispatch', materializedAt);
+  const restartAt = flatBlock.indexOf('new Cursor CLI process', stopAt);
+  if (!(currentAt >= 0 && noOpAt > currentAt && materializedAt > noOpAt
+      && stopAt > materializedAt && restartAt > stopAt)) {
+    errors.push('current/materialized outcomes do not preserve no-op versus restart behavior');
+  }
+  const missingAt = flatBlock.indexOf('Missing or stale global authority');
+  const collisionAt = flatBlock.indexOf('collision', missingAt);
+  const symlinkAt = flatBlock.indexOf('symlink', collisionAt);
+  const closedAt = flatBlock.indexOf('fails closed before project mutation', symlinkAt);
+  if (!(missingAt >= 0 && collisionAt > missingAt && symlinkAt > collisionAt && closedAt > symlinkAt)) {
+    errors.push('authority/collision/symlink failures are not specified as fail-closed');
+  }
+  if (!/never substitute an ambient cwd copier or a sessionStart materializer/i.test(block)) {
+    errors.push('ambient and sessionStart materialization are not explicitly excluded');
+  }
+  return { ok: errors.length === 0, errors, block, ensureCalls };
 }
 
 // A child mode lets the mutation fixture exercise this same generated-byte
@@ -593,14 +672,18 @@ function commandRel(name, forge) {
 
   for (const name of ['workflow-next', 'kaola-workflow-finalize']) {
     const content = exists(commandRel(name)) ? read(commandRel(name)) : '';
-    assert(/named_roles is not host-universal/i.test(content),
-      'G2[' + name + ']: Cursor host-split teaching says named_roles is not host-universal');
-    assert(/capability_gap, not an install miss/i.test(content),
-      'G2[' + name + ']: already-present plus built-in-only enum is a capability_gap, not an install miss');
+    assert(/product surfaces and App local\/Cloud hosts remain independent/i.test(content),
+      'G2[' + name + ']: Cursor CLI, App local, and App Cloud remain distinct surfaces/hosts');
+    assert(/committed project profiles alone are a negative control/i.test(content),
+      'G2[' + name + ']: committed project profiles are a Cloud negative control, not its carrier');
+    assert(/install globally inside the dashboard-managed remote environment, save it, and open a fresh parent before treating a still-missing name as a capability gap/i.test(content),
+      'G2[' + name + ']: Cloud gap verdict follows remote global install, save, and fresh-parent reload');
     assert(/omit a requested per-call model only when/i.test(content),
       'G2[' + name + ']: omit-model is the named-profile carrier, not a catalog-miss substitute');
-    assert(/cloud catalog-miss host exposed [`']?explore/i.test(content),
-      'G2[' + name + ']: Cloud catalog-miss exposes explore as itself');
+    assert(/Cloud negative control exposed [`']?explore/i.test(content),
+      'G2[' + name + ']: Cloud negative control exposes explore as itself');
+    assert(/corrected saved environment exposed all 14 Kaola types/i.test(content),
+      'G2[' + name + ']: saved Cloud environment exposes all 14 Kaola types');
     assert(/resolver-listed model slug/i.test(content),
       'G2[' + name + ']: catalog-miss listed model slugs are a live-schema effort lever');
   }
@@ -617,6 +700,49 @@ function commandRel(name, forge) {
     + '\nTask(\n  subagent_type="tdd-guide",\n  description="Routed fix"\n)';
   assert(lineStartCall(inventedCard) && staticDispatchFields(inventedCard).length === 2,
     'G2-mutation RED: appending a static Task(subagent_type, description) card is detected');
+}
+
+// ---------------------------------------------------------------------------
+// G2-cli-materialization — both generated dispatch consumers preserve the
+// standalone-CLI-only safe materialization transaction. Mutate the generated
+// subject itself to prove the oracle rejects an omitted/ambient target and an
+// App/Cloud scope inversion.
+// ---------------------------------------------------------------------------
+{
+  for (const name of CURSOR_CLI_MATERIALIZATION_COMMANDS) {
+    const rel = commandRel(name);
+    const content = exists(rel) ? read(rel) : '';
+    const verdict = cursorCliMaterializationVerdict(content, DEFAULT_FORGE);
+    assert(verdict.ok,
+      'G2-cli-materialization[' + name + ']: generated consumer runs the installed safe helper '
+      + 'with explicit "$PWD" only for standalone CLI before named dispatch — '
+      + verdict.errors.join(' | '));
+
+    if (verdict.block) {
+      const omitted = content.replace('--ensure-target "$PWD"', '--ensure-target');
+      const omittedVerdict = cursorCliMaterializationVerdict(omitted, DEFAULT_FORGE);
+      assert(omitted !== content && !omittedVerdict.ok
+        && omittedVerdict.errors.some(error => /exact explicit/.test(error)),
+      'G2-cli-materialization-mutation[' + name + ']: removing the explicit target is rejected — '
+        + omittedVerdict.errors.join(' | '));
+
+      const ambient = content.replace('--ensure-target "$PWD"', '--ensure-target "."');
+      const ambientVerdict = cursorCliMaterializationVerdict(ambient, DEFAULT_FORGE);
+      assert(ambient !== content && !ambientVerdict.ok
+        && ambientVerdict.errors.some(error => /exact explicit/.test(error)),
+      'G2-cli-materialization-mutation[' + name + ']: ambientizing the target to cwd shorthand is rejected — '
+        + ambientVerdict.errors.join(' | '));
+
+      const appScoped = content.replace(
+        'do not apply or infer this CLI materialization rule for either App host',
+        'apply this CLI materialization rule for both App hosts');
+      const appVerdict = cursorCliMaterializationVerdict(appScoped, DEFAULT_FORGE);
+      assert(appScoped !== content && !appVerdict.ok
+        && appVerdict.errors.some(error => /negative CLI-rule boundary/.test(error)),
+      'G2-cli-materialization-mutation[' + name + ']: applying the CLI rule to App local/Cloud is rejected — '
+        + appVerdict.errors.join(' | '));
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1075,6 +1201,14 @@ for (const role of reviewerGenerator.ROLES) {
       : [];
     assert(JSON.stringify(agents) === JSON.stringify(canonAgents),
       'G7[' + forge + ']: agent set is the canonical roster, including knowledge-lookup');
+    for (const name of CURSOR_CLI_MATERIALIZATION_COMMANDS) {
+      const rel = commandRel(name, forge);
+      const verdict = cursorCliMaterializationVerdict(exists(rel) ? read(rel) : '', forge);
+      assert(verdict.ok,
+        'G7[' + forge + '][' + name + ']: generated CLI materializer keeps explicit "$PWD" and exact '
+        + '--forge=' + forge + ' without applying the rule to App local/Cloud — '
+        + verdict.errors.join(' | '));
+    }
     const c = runGeneratorCli(['--forge=' + forge, '--check']);
     assert(c.status === 0,
       'G7[' + forge + ']: --check is green after --write (got ' + c.status + ')');
@@ -1096,23 +1230,20 @@ for (const role of reviewerGenerator.ROLES) {
       + String(syntax.stderr || syntax.stdout).split('\n')[0] + ')');
   }
   if (fs.existsSync(INSTALLER)) {
-    // Issue #1032: inspect the shipped source so the retired dispatch hook stays in the bounded
-    // list and both install/uninstall paths consume that list without touching a real home.
+    // Issue #1032/#1039: the active receipt transaction—not dormant shell cleanup—owns the
+    // retired dispatch hook. Install strips that exact Kaola namespace entry while uninstall
+    // removes only entries recorded in the receipt.
     const installerSource = fs.readFileSync(INSTALLER, 'utf8');
-    const retiredHooks = installerSource.match(/\bRETIRED_HOOKS\s*=\s*\(([^)]*)\)/);
-    const hasRetiredHookCleanup = body => {
-      const loop = String(body).match(/^[ \t]*for[ \t]+retired[ \t]+in[^\n]*RETIRED_HOOKS[^\n]*;[ \t]*do[ \t]*\n([\s\S]*?)^[ \t]*done[ \t]*$/m);
-      return !!loop && /\brm\s+-f\b/.test(loop[1]) && /\$retired\b/.test(loop[1]) && /hooks/.test(loop[1]);
-    };
-    const installStart = installerSource.indexOf('install_support_scripts() {');
-    const uninstallStart = installerSource.indexOf('uninstall_edition() {');
-    assert(retiredHooks && /\bkaola-workflow-subagent-dispatch-log\.sh\b/.test(retiredHooks[1]),
-      'R1: RETIRED_HOOKS contains kaola-workflow-subagent-dispatch-log.sh');
-    assert(installStart >= 0 && uninstallStart > installStart
-      && hasRetiredHookCleanup(installerSource.slice(installStart, uninstallStart)),
-      'R2: install cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
-    assert(uninstallStart >= 0 && hasRetiredHookCleanup(installerSource.slice(uninstallStart)),
-      'R3: uninstall cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
+    const cursorSurfaceSource = fs.readFileSync(path.join(REPO, 'scripts',
+      'kaola-workflow-cursor-surface.js'), 'utf8');
+    assert(/compact-context\|ensure-cursor-catalog\|subagent-dispatch-log/.test(cursorSurfaceSource),
+      'R1: the active hook classifier contains the retired subagent-dispatch-log name');
+    assert(/filter\(entry => !isKaolaHookEntry\(entry\)\)\.concat\(entries\)/.test(cursorSurfaceSource),
+      'R2: install hook merge strips bounded retired Kaola entries before adding the current mapping');
+    assert(/removeRecordedHooks\(hooksFile, info\.receipt\.hook_entries \|\| \{\}\)/.test(cursorSurfaceSource),
+      'R3: uninstall removes only exact receipt-recorded hook entries');
+    assert(!/install_support_scripts\(\) \{|uninstall_edition\(\) \{/.test(installerSource),
+      'R4: installer carries no dormant legacy cleanup implementation beside the active transaction');
     assert(!/also deploying agents\+commands/.test(installerSource),
       'G8-source: --global no longer dual-writes the invoking Git repository');
     assert(!/git rev-parse --show-toplevel/.test(installerSource),
@@ -1226,6 +1357,325 @@ for (const role of reviewerGenerator.ROLES) {
       }
     }
 
+    // #1039: installing global sessionStart hooks must not reintroduce an ambient
+    // project materializer. Drive every installed sessionStart hook from a real
+    // consumer cwd and compare the whole project catalog before/after. The
+    // canonical-name owner file makes the former ensure hook's overwrite visible.
+    {
+      const gitRepo = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-session-'));
+      try {
+        G.init(gitRepo);
+        const ownerFile = path.join(gitRepo, '.cursor', 'agents', 'implementer.md');
+        fs.mkdirSync(path.dirname(ownerFile), { recursive: true });
+        fs.writeFileSync(ownerFile, 'OWNER_SESSION_START_BYTES\n');
+        const r = runInstaller(['--global'], { skipTarget: true, cwd: gitRepo });
+        const mapping = r.status === 0 && fs.existsSync(path.join(r.cursorHome, 'hooks.json'))
+          ? JSON.parse(fs.readFileSync(path.join(r.cursorHome, 'hooks.json'), 'utf8')) : null;
+        const session = mapping && mapping.hooks && Array.isArray(mapping.hooks.sessionStart)
+          ? mapping.hooks.sessionStart : [];
+        const beforeFiles = walkFiles(path.join(gitRepo, '.cursor'), '')
+          .map(rel => rel + ':' + sha256File(path.join(gitRepo, '.cursor', rel))).sort();
+        const statuses = [];
+        for (const entry of session) {
+          const command = String((entry && entry.command) || '');
+          const match = command.match(/^\.\/hooks\/([A-Za-z0-9._-]+)$/);
+          if (!match) { statuses.push('unresolved:' + command); continue; }
+          // Cursor resolves a global hook relative to CURSOR_HOME while the hook's
+          // process cwd remains the consumer repository.
+          const hook = path.join(r.cursorHome, 'hooks', match[1]);
+          // spawn-class: environment
+          const driven = spawnSync('bash', [hook], {
+            cwd: gitRepo,
+            env: Object.assign({}, process.env, { HOME: r.home, CURSOR_HOME: r.cursorHome }),
+            encoding: 'utf8',
+          });
+          statuses.push(driven.status);
+        }
+        const afterFiles = walkFiles(path.join(gitRepo, '.cursor'), '')
+          .map(rel => rel + ':' + sha256File(path.join(gitRepo, '.cursor', rel))).sort();
+        assert(r.status === 0 && session.length >= 1 && statuses.every(status => status === 0),
+          'G8-sessionStart: installed global sessionStart hooks are runnable from a consumer cwd — got '
+          + JSON.stringify(statuses));
+        assert(session.every(entry => !/ensure|catalog|materializ/i.test(String(entry && entry.command))),
+          'G8-sessionStart: global sessionStart contains no implicit project catalog materializer — got '
+          + JSON.stringify(session));
+        assert(JSON.stringify(afterFiles) === JSON.stringify(beforeFiles)
+          && fs.readFileSync(ownerFile, 'utf8') === 'OWNER_SESSION_START_BYTES\n',
+        'G8-sessionStart: running every global sessionStart hook leaves the ambient project catalog '
+          + 'byte-identical — before ' + JSON.stringify(beforeFiles) + ' after ' + JSON.stringify(afterFiles));
+        clean(r);
+      } finally {
+        try { fs.rmSync(gitRepo, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
+
+    // Standalone CLI pre-dispatch drives the helper installed by --global, not
+    // the repository installer and not a blind cwd copier. Exercise that
+    // installed artifact in isolation: its first explicit target transaction
+    // materializes authority bytes, its second is a byte/mtime no-op, and every
+    // unproved or stale ownership shape fails before mutation.
+    {
+      const global = runInstaller(['--global'], { skipTarget: true });
+      const targets = [];
+      const makeTarget = label => {
+        const dir = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-helper-' + label + '-'));
+        targets.push(dir);
+        return dir;
+      };
+      const helper = path.join(global.cursorHome, 'kaola-workflow', 'scripts',
+        'kaola-workflow-cursor-surface.js');
+      const authorityReceipt = path.join(global.cursorHome, 'kaola-workflow', 'cursor-authority.json');
+      const snapshot = root => walkFiles(root, '').sort().map(rel => {
+        const file = path.join(root, rel);
+        const stat = fs.lstatSync(file, { bigint: true });
+        if (stat.isSymbolicLink()) return rel + ':symlink:' + fs.readlinkSync(file);
+        return rel + ':regular:' + (stat.mode & 0o777n).toString(8) + ':'
+          + stat.mtimeNs.toString() + ':' + sha256File(file);
+      });
+      const runHelper = (args, cwd) => {
+        // spawn-class: environment
+        return spawnSync(process.execPath, [helper].concat(args || []), {
+          cwd: cwd || REPO,
+          env: Object.assign({}, process.env, { HOME: global.home, CURSOR_HOME: global.cursorHome }),
+          encoding: 'utf8',
+        });
+      };
+      try {
+        const receipt = global.status === 0 && fs.existsSync(authorityReceipt)
+          ? JSON.parse(fs.readFileSync(authorityReceipt, 'utf8')) : null;
+        const helperReady = global.status === 0 && fs.existsSync(helper)
+          && receipt && receipt.files
+          && receipt.files['kaola-workflow/scripts/kaola-workflow-cursor-surface.js'];
+        assert(helperReady,
+        'G8-installed-helper: --global installs and receipts the safe Cursor materialization helper');
+
+        if (helperReady) {
+          const fresh = makeTarget('fresh');
+          const first = runHelper(['--ensure-target', fresh, '--forge=github', '--json'], fresh);
+          let firstBody = null;
+          try { firstBody = JSON.parse(first.stdout); } catch (_) { /* asserted below */ }
+          const globalAgent = path.join(global.cursorHome, 'agents', 'implementer.md');
+          const targetAgent = path.join(fresh, '.cursor', 'agents', 'implementer.md');
+          assert(first.status === 0 && firstBody && firstBody.status === 'materialized'
+            && fs.existsSync(targetAgent) && fs.readFileSync(targetAgent).equals(fs.readFileSync(globalAgent)),
+          'G8-installed-helper-materialized: first explicit target call materializes bytes from installed global authority — '
+            + firstLine(first));
+          const beforeCurrent = snapshot(path.join(fresh, '.cursor'));
+          const second = runHelper(['--ensure-target', fresh, '--forge=github', '--json'], fresh);
+          let secondBody = null;
+          try { secondBody = JSON.parse(second.stdout); } catch (_) { /* asserted below */ }
+          const afterCurrent = snapshot(path.join(fresh, '.cursor'));
+          assert(second.status === 0 && secondBody && secondBody.status === 'current'
+            && JSON.stringify(afterCurrent) === JSON.stringify(beforeCurrent),
+          'G8-installed-helper-current: a fresh/current second call is a byte-and-mtime no-op — before '
+            + JSON.stringify(beforeCurrent) + ' after ' + JSON.stringify(afterCurrent));
+
+          fs.writeFileSync(targetAgent, 'OWNER_MODIFIED_RECEIPT_BYTES\n');
+          const beforeModified = snapshot(path.join(fresh, '.cursor'));
+          const modified = runHelper(['--ensure-target', fresh, '--forge=github', '--json'], fresh);
+          const afterModified = snapshot(path.join(fresh, '.cursor'));
+          assert(modified.status !== 0 && JSON.stringify(afterModified) === JSON.stringify(beforeModified)
+            && fs.readFileSync(targetAgent, 'utf8') === 'OWNER_MODIFIED_RECEIPT_BYTES\n',
+          'G8-installed-helper-modified: modified receipt-owned bytes fail closed without target mutation — '
+            + firstLine(modified));
+
+          const collision = makeTarget('collision');
+          const collisionFile = path.join(collision, '.cursor', 'agents', 'implementer.md');
+          fs.mkdirSync(path.dirname(collisionFile), { recursive: true });
+          fs.writeFileSync(collisionFile, 'UNPROVED_OWNER_BYTES\n');
+          const beforeCollision = snapshot(path.join(collision, '.cursor'));
+          const collided = runHelper(['--ensure-target', collision, '--forge=github', '--json'], collision);
+          const afterCollision = snapshot(path.join(collision, '.cursor'));
+          assert(collided.status !== 0 && JSON.stringify(afterCollision) === JSON.stringify(beforeCollision)
+            && fs.readFileSync(collisionFile, 'utf8') === 'UNPROVED_OWNER_BYTES\n',
+          'G8-installed-helper-collision: unproved canonical-name bytes fail closed without overwrite — '
+            + firstLine(collided));
+
+          const symlink = makeTarget('symlink');
+          const symlinkOwner = path.join(symlink, 'outside-owner.md');
+          const symlinkFile = path.join(symlink, '.cursor', 'agents', 'implementer.md');
+          fs.writeFileSync(symlinkOwner, 'SYMLINK_OWNER_BYTES\n');
+          fs.mkdirSync(path.dirname(symlinkFile), { recursive: true });
+          fs.symlinkSync(symlinkOwner, symlinkFile);
+          const symlinked = runHelper(['--ensure-target', symlink, '--forge=github', '--json'], symlink);
+          assert(symlinked.status !== 0 && fs.lstatSync(symlinkFile).isSymbolicLink()
+            && fs.readFileSync(symlinkOwner, 'utf8') === 'SYMLINK_OWNER_BYTES\n',
+          'G8-installed-helper-symlink: a managed-basename symlink fails closed without following it — '
+            + firstLine(symlinked));
+
+          const ambient = makeTarget('ambient');
+          const untargeted = runHelper(['--ensure-target'], ambient);
+          assert(untargeted.status !== 0 && !fs.existsSync(path.join(ambient, '.cursor')),
+            'G8-installed-helper-no-target: missing explicit target fails without ambient cwd materialization — '
+            + firstLine(untargeted));
+
+          const stale = makeTarget('stale-authority');
+          const globalAgentBytes = fs.readFileSync(globalAgent);
+          fs.writeFileSync(globalAgent, 'STALE_GLOBAL_AUTHORITY_BYTES\n');
+          const staleResult = runHelper(['--ensure-target', stale, '--forge=github', '--json'], stale);
+          assert(staleResult.status !== 0 && !fs.existsSync(path.join(stale, '.cursor')),
+            'G8-installed-helper-stale-authority: hash-stale global authority fails before target mutation — '
+            + firstLine(staleResult));
+
+          fs.writeFileSync(globalAgent, globalAgentBytes);
+          fs.rmSync(authorityReceipt, { force: true });
+          const missing = makeTarget('missing-authority');
+          const missingResult = runHelper(['--ensure-target', missing, '--forge=github', '--json'], missing);
+          assert(missingResult.status !== 0 && !fs.existsSync(path.join(missing, '.cursor')),
+            'G8-installed-helper-missing-authority: missing global receipt fails before target mutation — '
+            + firstLine(missingResult));
+        }
+      } finally {
+        clean(global);
+        for (const dir of targets) {
+          try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+        }
+      }
+    }
+
+    // #1039: a project exception is explicit and ownership-safe. A canonical-name
+    // regular-file collision must be diagnosed and refused; uninstall must not
+    // turn a refused install into deletion by basename.
+    {
+      const dest = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-collision-'));
+      const global = runInstaller(['--global'], { skipTarget: true });
+      try {
+        const ownerAgent = path.join(dest, '.cursor', 'agents', 'implementer.md');
+        const ownerCommand = path.join(dest, '.cursor', 'commands', 'workflow-next.md');
+        fs.mkdirSync(path.dirname(ownerAgent), { recursive: true });
+        fs.mkdirSync(path.dirname(ownerCommand), { recursive: true });
+        fs.writeFileSync(ownerAgent, 'OWNER_AGENT_COLLISION\n');
+        fs.writeFileSync(ownerCommand, 'OWNER_COMMAND_COLLISION\n');
+        const doctor = spawnSync('bash', [INSTALLER, '--doctor', '--json', '--target', dest,
+          '--product', 'cli', '--host', 'local'], {
+          env: Object.assign({}, process.env, { HOME: global.home, CURSOR_HOME: global.cursorHome }),
+          encoding: 'utf8',
+        });
+        const doctorText = String(doctor.stdout || '') + String(doctor.stderr || '');
+        const installed = runInstaller(['--target', dest, '--no-scripts'], {
+          skipTarget: true, dest, home: global.home, cursorHome: global.cursorHome,
+        });
+        assert(/collision|unmanaged/i.test(doctorText),
+          'G8-collision-doctor: doctor identifies canonical-name unmanaged collisions — got '
+          + JSON.stringify(doctorText.slice(0, 500)));
+        assert(installed.status !== 0,
+          'G8-collision: explicit target refuses unmanaged canonical-name files (got '
+          + installed.status + ' — ' + firstLine(installed) + ')');
+        assert(fs.readFileSync(ownerAgent, 'utf8') === 'OWNER_AGENT_COLLISION\n'
+          && fs.readFileSync(ownerCommand, 'utf8') === 'OWNER_COMMAND_COLLISION\n',
+        'G8-collision: refused install preserves both agent and command owner bytes');
+        // spawn-class: environment
+        const uninstalled = spawnSync('bash', [INSTALLER, '--uninstall', '--target', dest, '--yes'], {
+          env: Object.assign({}, process.env, { HOME: global.home, CURSOR_HOME: global.cursorHome }),
+          encoding: 'utf8',
+        });
+        assert(uninstalled.status === 0 && fs.existsSync(ownerAgent) && fs.existsSync(ownerCommand)
+          && fs.readFileSync(ownerAgent, 'utf8') === 'OWNER_AGENT_COLLISION\n'
+          && fs.readFileSync(ownerCommand, 'utf8') === 'OWNER_COMMAND_COLLISION\n',
+        'G8-collision-uninstall: uninstall preserves files that were never recorded as managed');
+      } finally {
+        clean(global);
+        try { fs.rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
+
+    // A symlink at a managed basename is ownership, not a writable destination.
+    // Neither install nor uninstall may follow it or remove it.
+    {
+      const dest = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-symlink-'));
+      const outside = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-symlink-owner-'));
+      const global = runInstaller(['--global'], { skipTarget: true });
+      try {
+        const ownerTarget = path.join(outside, 'owner-implementer.md');
+        const link = path.join(dest, '.cursor', 'agents', 'implementer.md');
+        fs.writeFileSync(ownerTarget, 'OWNER_SYMLINK_TARGET\n');
+        fs.mkdirSync(path.dirname(link), { recursive: true });
+        fs.symlinkSync(ownerTarget, link);
+        const installed = runInstaller(['--target', dest, '--no-scripts'], {
+          skipTarget: true, dest, home: global.home, cursorHome: global.cursorHome,
+        });
+        assert(installed.status !== 0 && fs.existsSync(link) && fs.lstatSync(link).isSymbolicLink()
+          && fs.readFileSync(ownerTarget, 'utf8') === 'OWNER_SYMLINK_TARGET\n',
+        'G8-symlink: explicit target refuses a managed-basename symlink without following it');
+        // spawn-class: environment
+        const uninstalled = spawnSync('bash', [INSTALLER, '--uninstall', '--target', dest, '--yes'], {
+          env: Object.assign({}, process.env, { HOME: global.home, CURSOR_HOME: global.cursorHome }),
+          encoding: 'utf8',
+        });
+        assert(uninstalled.status === 0 && fs.existsSync(link) && fs.lstatSync(link).isSymbolicLink()
+          && fs.readFileSync(ownerTarget, 'utf8') === 'OWNER_SYMLINK_TARGET\n',
+        'G8-symlink-uninstall: uninstall preserves an unmanaged symlink and its outside target');
+      } finally {
+        clean(global);
+        try { fs.rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+        try { fs.rmSync(outside, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
+
+    // Fresh materialization must be derived from the installed global authority,
+    // and doctor must expose target identity plus the exact materialized hash. A
+    // missing global authority may not silently fall back to repository sources.
+    {
+      const dest = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-fresh-'));
+      const secondDest = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-authority-'));
+      const global = runInstaller(['--global'], { skipTarget: true });
+      try {
+        const installed = runInstaller(['--target', dest, '--no-scripts'], {
+          skipTarget: true, dest, home: global.home, cursorHome: global.cursorHome,
+        });
+        const globalAgent = path.join(global.cursorHome, 'agents', 'implementer.md');
+        const targetAgent = path.join(dest, '.cursor', 'agents', 'implementer.md');
+        assert(installed.status === 0 && fs.existsSync(globalAgent) && fs.existsSync(targetAgent)
+          && fs.readFileSync(targetAgent).equals(fs.readFileSync(globalAgent)),
+        'G8-freshness: explicit target bytes equal the installed global authority');
+        const targetHash = fs.existsSync(targetAgent) ? sha256File(targetAgent) : '';
+        const doctor = spawnSync('bash', [INSTALLER, '--doctor', '--json', '--target', dest,
+          '--product', 'cli', '--host', 'local'], {
+          env: Object.assign({}, process.env, { HOME: global.home, CURSOR_HOME: global.cursorHome }),
+          encoding: 'utf8',
+        });
+        const doctorText = String(doctor.stdout || '');
+        assert(doctor.status === 0 && doctorText.includes(path.resolve(dest)),
+          'G8-freshness-doctor: doctor reports the exact explicit project target');
+        assert(!!targetHash && doctorText.includes(targetHash),
+          'G8-freshness-doctor: doctor reports the exact materialized content hash ' + targetHash);
+        assert(/fresh|current/i.test(doctorText) && /scope/i.test(doctorText),
+          'G8-freshness-doctor: doctor reports effective scope and current/fresh state — got '
+          + JSON.stringify(doctorText.slice(0, 800)));
+
+        fs.writeFileSync(targetAgent, 'OWNER_CHANGED_AFTER_MATERIALIZATION\n');
+        const staleDoctor = spawnSync('bash', [INSTALLER, '--doctor', '--json', '--target', dest,
+          '--product', 'cli', '--host', 'local'], {
+          env: Object.assign({}, process.env, { HOME: global.home, CURSOR_HOME: global.cursorHome }),
+          encoding: 'utf8',
+        });
+        const staleText = String(staleDoctor.stdout || '') + String(staleDoctor.stderr || '');
+        assert(/stale|collision|modified|mismatch/i.test(staleText),
+          'G8-freshness-doctor: doctor detects a post-materialization byte mismatch');
+        // spawn-class: environment
+        const uninstalled = spawnSync('bash', [INSTALLER, '--uninstall', '--target', dest, '--yes'], {
+          env: Object.assign({}, process.env, { HOME: global.home, CURSOR_HOME: global.cursorHome }),
+          encoding: 'utf8',
+        });
+        assert(uninstalled.status === 0 && fs.existsSync(targetAgent)
+          && fs.readFileSync(targetAgent, 'utf8') === 'OWNER_CHANGED_AFTER_MATERIALIZATION\n',
+        'G8-freshness-uninstall: uninstall preserves a managed file whose bytes no longer match its manifest');
+
+        fs.rmSync(globalAgent, { force: true });
+        const missingAuthority = runInstaller(['--target', secondDest, '--no-scripts'], {
+          skipTarget: true, dest: secondDest, home: global.home, cursorHome: global.cursorHome,
+        });
+        assert(missingAuthority.status !== 0
+          && !fs.existsSync(path.join(secondDest, '.cursor', 'agents', 'implementer.md')),
+        'G8-authority: explicit target refuses a missing/stale installed global authority instead of '
+          + 'falling back to repository source bytes');
+      } finally {
+        clean(global);
+        try { fs.rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+        try { fs.rmSync(secondDest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
+    }
+
     // #1014: --global from a directory with no git toplevel must not invent cwd/.cursor/.
     {
       const plain = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-nongit-'));
@@ -1261,15 +1711,74 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-doctor: ambient_repository_write is false');
       assert(doc.surfaces.app.execution_hosts.local.global_discovery === 'unknown',
         'G8-doctor: App local global_discovery stays unknown, not false');
-      assert(doc.surfaces.app.execution_hosts.cloud.named_catalog === 'built_in_only',
-        'G8-doctor: App Cloud named_catalog is built_in_only');
+      assert(doc.surfaces.app.execution_hosts.cloud.global_discovery === 'supported_in_saved_remote_environment',
+        'G8-doctor: App Cloud global discovery is scoped to a saved remote environment');
+      assert(doc.surfaces.app.execution_hosts.cloud.required_project_materialization === 'no',
+        'G8-doctor: App Cloud does not use project materialization');
+      assert(doc.surfaces.app.execution_hosts.cloud.remote_injection === 'dashboard_environment_install_and_save',
+        'G8-doctor: App Cloud names the dashboard install-and-save carrier');
+      assert(doc.surfaces.app.execution_hosts.cloud.named_catalog === 'user_global_when_environment_saved',
+        'G8-doctor: App Cloud named catalog comes from the saved remote user carrier');
+      assert(doc.surfaces.app.execution_hosts.cloud.reload === 'new_cloud_parent_after_environment_save',
+        'G8-doctor: App Cloud requires a fresh parent after environment save');
       assert(doc.surfaces.cli.execution_hosts.local.required_project_materialization === 'yes',
         'G8-doctor: CLI requires explicit project materialization');
-      assert(doc.named_catalog === 'built_in_only',
-        'G8-doctor: selected App/Cloud named_catalog is flattened without guessing');
+      assert(doc.named_catalog === 'user_global_when_environment_saved',
+        'G8-doctor: selected App/Cloud named_catalog is flattened from the measured host surface');
       assert(typeof doc.kaola_workflow_version === 'string'
         && doc.kaola_workflow_version.length > 0,
         'G8-doctor: reports Kaola-Workflow version');
+    }
+
+    // #1039 release migration: receipt-less 10.0.1 global installs may be adopted only when the
+    // published legacy hash proves ownership. A one-byte mutation must return to collision-safe
+    // refusal, and retired ambient materializer bytes are removed only under the same proof.
+    {
+      const root = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-legacy-adoption-'));
+      const rel = 'commands/workflow-next.md';
+      const file = path.join(root, 'commands', 'workflow-next.md');
+      const oldBytes = Buffer.from('published-legacy-command\n');
+      const newBytes = Buffer.from('current-command\n');
+      const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+      const desired = { [rel]: { bytes: newBytes, sha256: digest(newBytes), mode: 0o644 } };
+      const receiptMissing = { status: 'missing', path: path.join(root, 'missing-receipt.json') };
+      const allowed = { [rel]: digest(oldBytes) };
+      const retiredRel = 'hooks/kaola-workflow-ensure-cursor-catalog.sh';
+      const retiredFile = path.join(root, ...retiredRel.split('/'));
+      const retiredBytes = Buffer.from('published-retired-hook\n');
+      const retired = { [retiredRel]: digest(retiredBytes) };
+      try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, oldBytes);
+        assert(cursorSurface.validateManagedPreflight(root, desired, receiptMissing, allowed).length === 0,
+          'G8-legacy-adoption: an exact published legacy hash is adoptable without weakening current ownership');
+        fs.writeFileSync(file, Buffer.concat([oldBytes, Buffer.from('mutation')]));
+        assert(cursorSurface.validateManagedPreflight(root, desired, receiptMissing, allowed)
+          .some(item => item.reason === 'unmanaged_collision'),
+        'G8-legacy-adoption-mutation: one changed legacy byte restores unmanaged-collision refusal');
+
+        fs.mkdirSync(path.dirname(retiredFile), { recursive: true });
+        fs.writeFileSync(retiredFile, retiredBytes);
+        assert(cursorSurface.validateLegacyRetired(root, receiptMissing, retired).length === 0,
+          'G8-legacy-retired: exact published retired bytes pass preflight');
+        assert(cursorSurface.removeLegacyRetired(root, receiptMissing, retired).includes(retiredRel)
+          && !fs.existsSync(retiredFile),
+        'G8-legacy-retired: exact published retired ambient materializer is removed');
+        fs.mkdirSync(path.dirname(retiredFile), { recursive: true });
+        fs.writeFileSync(retiredFile, Buffer.concat([retiredBytes, Buffer.from('mutation')]));
+        assert(cursorSurface.validateLegacyRetired(root, receiptMissing, retired)
+          .some(item => item.reason === 'legacy_retired_file_modified'),
+        'G8-legacy-retired-mutation: modified retired bytes fail closed');
+        assert(cursorSurface.removeLegacyRetired(root, receiptMissing, retired).length === 0
+          && fs.existsSync(retiredFile),
+        'G8-legacy-retired-mutation: modified retired bytes are preserved');
+
+        assert(cursorSurface.LEGACY_10_0_1_GLOBAL_HASHES.github[rel]
+          === '79e9bd53c1146fc7af9557f4757f6c38de610f2d7ae2cde06c930f3e8ef3aa6c',
+        'G8-legacy-adoption: production pins the published 10.0.1 github workflow-next hash');
+      } finally {
+        try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+      }
     }
 
     // --forge=gitlab renders `.cursor-gitlab/` as the generator SOURCE tree, then
@@ -1447,11 +1956,10 @@ for (const role of reviewerGenerator.ROLES) {
 }
 
 // ---------------------------------------------------------------------------
-// G10 (#1016): catalog ensure CLI + card routing + Cursor-only install extra
-// + sessionStart hook. Plan of record 5383907624, Layer 1–2 overridden by
-// amendment 5383958037 (global `$cursorHome/agents` is source of truth;
-// already-present = all listCanonAgents() names byte-identical to global).
-// Do not pin git-toplevel-as-preferred-source.
+// G10 (#1016 retired by #1039): the former ambient catalog ensure mechanism
+// remains driven only while its production file still exists, so the new RED
+// can prove exactly what is being removed. The durable acceptance is below:
+// project materialization is explicit and sessionStart is non-materializing.
 // ---------------------------------------------------------------------------
 const G10_ENSURE_JS = 'kaola-workflow-ensure-cursor-catalog.js';
 const G10_ENSURE_PATH = path.join(REPO, 'scripts', G10_ENSURE_JS);
@@ -1500,7 +2008,7 @@ function g10Rm(dir) {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
 }
 
-{
+if (fs.existsSync(G10_ENSURE_PATH)) {
   const loaded = g10LoadEnsure();
   const destOf = cwd => path.join(cwd, '.cursor', 'agents');
 
@@ -1686,7 +2194,7 @@ function g10Rm(dir) {
   }
 }
 
-{
+if (fs.existsSync(G10_ENSURE_PATH)) {
   assert(fs.existsSync(G10_ENSURE_PATH),
     'G10-cli: scripts/' + G10_ENSURE_JS + ' exists');
 
@@ -1853,7 +2361,7 @@ function g10Rm(dir) {
   const githubScripts = manifest.supportScripts('github');
   assert(Array.isArray(githubScripts) && !githubScripts.includes(G10_ENSURE_JS),
     'G10-install: supportScripts(\'github\') does not include ' + G10_ENSURE_JS
-    + ' (Cursor-only extra script)');
+    + ' (ambient project materialization is retired)');
 
   const firstLine = r => String(r.stderr || r.stdout || '').split('\n')[0];
   function runInstaller(extraArgs, opts) {
@@ -1875,31 +2383,16 @@ function g10Rm(dir) {
     for (const d of [r.home, r.cursorHome, r.dest]) g10Rm(d);
   };
 
-  const deployedRel = ch => path.join(ch, 'kaola-workflow', 'scripts', G10_ENSURE_JS);
-
   {
     const r = runInstaller(['--global'], { skipTarget: true });
     assert(r.status === 0,
       'G10-install: install-cursor.sh --global exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
-    const deployed = fs.existsSync(deployedRel(r.cursorHome));
-    assert(deployed,
-      'G10-install: --global deploys ' + G10_ENSURE_JS + ' to $CURSOR_HOME/kaola-workflow/scripts/');
-
-    const r2 = runInstaller(['--global'], {
-      skipTarget: true, home: r.home, cursorHome: r.cursorHome, dest: r.dest,
-    });
-    assert(r2.status === 0,
-      'G10-install: re-running --global exits 0 (stale-clean pass)');
-    assert(deployed && fs.existsSync(deployedRel(r.cursorHome)),
-      'G10-install: extra-script is in the deployed set so post-manifest stale cleanup does not delete it');
-
-    const ru = runInstaller(['--uninstall', '--global'], {
-      skipTarget: true, home: r.home, cursorHome: r.cursorHome, dest: r.dest,
-    });
-    assert(ru.status === 0,
-      'G10-install: --uninstall --global exits 0 (got ' + ru.status + ' — ' + firstLine(ru) + ')');
-    assert(deployed && !fs.existsSync(deployedRel(r.cursorHome)),
-      'G10-install: --uninstall --global removes ' + G10_ENSURE_JS);
+    assert(!fs.existsSync(path.join(r.cursorHome, 'kaola-workflow', 'scripts', G10_ENSURE_JS))
+      && !fs.existsSync(path.join(r.cursorHome, 'hooks',
+        'kaola-workflow-ensure-cursor-catalog.sh')),
+    'G10-install: --global deploys no ambient project-catalog ensure script or hook');
+    assert(!fs.existsSync(G10_ENSURE_PATH),
+      'G10-install: the retired ambient catalog materializer is absent from the shipped source');
     clean(r);
   }
 }
@@ -1930,74 +2423,24 @@ function g10Rm(dir) {
   try { parsed = JSON.parse(mappingText); } catch (_) { parsed = null; }
   const session = parsed && parsed.hooks && Array.isArray(parsed.hooks.sessionStart)
     ? parsed.hooks.sessionStart : [];
-  assert(session.length >= 2,
-    'G10-hook: sessionStart includes a second command for ensure (not folded into the compact wrapper) — got '
-    + JSON.stringify(session));
   const sessionBlob = JSON.stringify(session);
-  assert(/compact/i.test(sessionBlob),
-    'G10-hook: compact wrapper remains as a sessionStart command');
+  const hasAmbientMaterializer = entries => entries.some(entry =>
+    /ensure|catalog|materializ/i.test(String(entry && entry.command)));
+  assert(session.length >= 1 && /compact/i.test(sessionBlob),
+    'G10-hook: compact wrapper remains as a non-materializing sessionStart command');
   const ensureEntries = session.filter(e => /ensure|catalog/i.test(String((e && e.command) || '')));
-  assert(ensureEntries.length >= 1,
-    'G10-hook: sessionStart has an ensure-catalog command distinct from compact-context.sh');
-  const compactEntries = session.filter(e => /compact/i.test(String((e && e.command) || '')));
-  assert(compactEntries.length >= 1 && ensureEntries.every(e => compactEntries.indexOf(e) === -1),
-    'G10-hook: ensure is not folded into compact-context.sh');
+  assert(ensureEntries.length === 0,
+    'G10-hook: sessionStart contains no ambient ensure/catalog materializer — got '
+    + JSON.stringify(ensureEntries));
   for (const e of session) {
     const t = e && e.timeout;
     assert(t === 5 || t === undefined || t <= 5,
       'G10-hook: sessionStart timeout stays 5s-compatible — got ' + JSON.stringify(t));
   }
-
-  const ensureCmd = String((ensureEntries[0] && ensureEntries[0].command) || '');
-  const ensureBase = path.basename(ensureCmd);
-  const hookRel = ensureCmd.indexOf('.cursor/hooks/') === 0
-    ? ensureCmd
-    : (ensureBase ? '.cursor/hooks/' + ensureBase : '');
-  assert(!!ensureBase && exists(hookRel),
-    'G10-hook: ensure hook script exists under .cursor/hooks/ — looked for ' + JSON.stringify(hookRel));
-
-  const hookAbs = hookRel ? path.join(TREE_ROOT, hookRel) : '';
-  if (!hookAbs || !fs.existsSync(hookAbs)) {
-    assert(false, 'G10-hook: driving the ensure hook on a missing catalog (hook script missing)');
-  } else {
-    const cwd = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-hook-cwd-'));
-    const cursorHome = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g10-hook-home-'));
-    try {
-      g10WriteCanonAgents(path.join(cursorHome, 'agents'), n => '# hook-home ' + n + '\n');
-      if (fs.existsSync(G10_ENSURE_PATH)) {
-        const scriptsDir = path.join(cursorHome, 'kaola-workflow', 'scripts');
-        fs.mkdirSync(scriptsDir, { recursive: true });
-        fs.copyFileSync(G10_ENSURE_PATH, path.join(scriptsDir, G10_ENSURE_JS));
-      }
-      // spawn-class: environment
-      const r = spawnSync('bash', [hookAbs], {
-        cwd: cwd,
-        env: Object.assign({}, process.env, { CURSOR_HOME: cursorHome, HOME: cursorHome }),
-        input: '{}',
-        encoding: 'utf8',
-      });
-      const out = String(r.stdout || '').trim();
-      let noClobber = out === '' || out === '{}';
-      if (!noClobber) {
-        try {
-          const j = JSON.parse(out);
-          noClobber = !j.additional_context;
-        } catch (_) { noClobber = false; }
-      }
-      assert(noClobber,
-        'G10-hook: stdout on a missing catalog is {} (or empty additional_context) so it does not '
-        + 'clobber compact-resume — got ' + JSON.stringify(out.slice(0, 200)));
-      assert(fs.existsSync(path.join(cwd, '.cursor', 'agents', 'implementer.md')),
-        'G10-hook: after the hook, dest has implementer.md when $CURSOR_HOME/agents can supply it');
-      for (const name of canonAgents) {
-        assert(fs.existsSync(path.join(cwd, '.cursor', 'agents', name + '.md')),
-          'G10-hook: after the hook, dest has every canonAgents name including ' + name
-          + '.md (not only implementer.md)');
-      }
-    } finally {
-      g10Rm(cwd); g10Rm(cursorHome);
-    }
-  }
+  assert(hasAmbientMaterializer(session.concat({
+    command: '.cursor/hooks/kaola-workflow-ensure-cursor-catalog.sh', timeout: 5,
+  })),
+  'G10-hook mutation RED: an injected ambient project-catalog sessionStart command is detected');
 }
 
 if (failed) {

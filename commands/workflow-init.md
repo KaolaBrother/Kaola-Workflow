@@ -61,8 +61,10 @@ byte-for-byte outside managed regions; never replace an owner-only file on infer
 Resolve and run the installed `kaola-workflow-project-instructions.js` helper in `plan` mode first.
 If it reports `decision_required`, ask in conversation and write nothing. A compatible
 `authority_layout_equivalent` change may apply during an active run; `execution_default_change`
-and `state_schema_incompatible` (`active_run_preserved`) write nothing until consent or an explicit
-migration. `apply` is atomic and
+keeps bare `apply` non-mutating and exposes ephemeral `consent.apply_args` bound to the exact old/new
+plan. After conversation consent, pass those exact arguments to `apply`; no approval is stored.
+`state_schema_incompatible` (`active_run_preserved`) writes nothing and has no consent bypass.
+`apply` is atomic and
 idempotent: a second apply must be a no-op, while `check` verifies convergence without writing.
 
 Recommended universal size: under 200 lines. This is a recommendation, not a limit. Move long detail
@@ -93,10 +95,10 @@ Optional content belongs elsewhere unless it must be read in every session:
 
 Do not edit either instruction file independently of the helper's reported outcome. The adjacent
 distribution module supplies the complete consumer wording. `decision_required`,
-`execution_default_change` (ask in conversation; no durable approval), and
-`state_schema_incompatible` (`active_run_preserved`) mean no instruction-file write for those
-changes. `authority_layout_equivalent` may apply during an active run without rewriting claim,
-Mission List, worktree, or locators.
+`execution_default_change` (ask in conversation, then use the plan's ephemeral apply arguments), and
+`state_schema_incompatible` (`active_run_preserved`, no bypass) mean no bare instruction-file write
+for those changes. `authority_layout_equivalent` may apply during an active run without rewriting
+claim, Mission List, worktree, or locators.
 
 The executable consumer wording lives only in the adjacent
 `kaola-workflow-project-instruction-templates.js` distribution module. Do not synthesize, paste, or
@@ -133,9 +135,10 @@ every owner byte outside those regions byte-for-byte. Unknown, malformed, duplic
 instruction authority returns `decision_required`: ask in conversation and make no write. Per managed
 change the helper reports `authority_layout_equivalent`, `execution_default_change`,
 `state_schema_incompatible`, or `unknown_or_mixed`. A compatible authority-layout migration may apply
-during an active run; an execution-default change asks in conversation and writes nothing; a
-state/schema-incompatible change returns `active_run_preserved`. Successful reruns are
-idempotent and report `converged` with an empty write list.
+during an active run; an execution-default change asks in conversation, leaves bare `apply`
+non-mutating, and may apply only with the unchanged plan's exact ephemeral `consent.apply_args`; a
+state/schema-incompatible change returns `active_run_preserved` with no consent bypass. Successful
+reruns are idempotent and report `converged` with an empty write list.
 ---
 
 ## Step 4 — Create Missing Workflow Structure

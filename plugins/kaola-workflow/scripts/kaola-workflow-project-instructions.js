@@ -12,6 +12,7 @@ const path = require('path');
 const consumerTemplates = require('./kaola-workflow-project-instruction-templates.js');
 
 const SCHEMA_VERSION = 1;
+const ACTIVE_STATE_SCHEMA_VERSION = 1;
 const AGENTS_MARKER = 'KW-AGENTS-MANAGED';
 const CLAUDE_MARKER = 'KW-CLAUDE-OVERLAY-MANAGED';
 const LEGACY_CLAUDE_MARKER = 'KW-CLAUDE-MANAGED';
@@ -92,21 +93,38 @@ function managedRegion(bytes, marker) {
   };
 }
 
-function listActiveRunDirs(projectRoot) {
+function inspectActiveRuns(projectRoot) {
   const runRoot = path.join(projectRoot, 'kaola-workflow');
   if (!fs.existsSync(runRoot)) return [];
-  const dirs = [];
+  const runs = [];
   for (const entry of fs.readdirSync(runRoot, { withFileTypes: true })) {
     if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
     const dir = path.join(runRoot, entry.name);
     const state = inspectOptional(path.join(dir, 'workflow-state.md'));
-    if (state.bytes && /^status:\s*active\s*$/mi.test(state.bytes.toString('utf8'))) dirs.push(dir);
+    if (!state.bytes || !/^status:\s*active\s*$/mi.test(state.bytes.toString('utf8'))) continue;
+    const text = state.bytes.toString('utf8');
+    const declared = [...text.matchAll(/^schema_version:\s*(.*?)\s*$/gmi)]
+      .map(match => match[1].trim().replace(/^(["'])(.*)\1$/, '$2'));
+    const schemaCompatible = declared.length === 0
+      || (declared.length === 1 && declared[0] === String(ACTIVE_STATE_SCHEMA_VERSION));
+    const mission = inspectOptional(path.join(dir, 'mission-list.md'));
+    runs.push({
+      dir,
+      name: entry.name,
+      compatibility: schemaCompatible
+        ? COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT
+        : COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE,
+      schema_version: declared.length === 0 ? null : declared.join(','),
+      state_sha256: sha256(state.bytes),
+      mission_sha256: sha256(mission.bytes),
+      mission_topology: mission.topology,
+    });
   }
-  return dirs;
+  return runs;
 }
 
-function hasActiveRun(projectRoot) {
-  return listActiveRunDirs(projectRoot).length > 0;
+function listActiveRunDirs(projectRoot) {
+  return inspectActiveRuns(projectRoot).map(run => run.dir);
 }
 
 function writeAdoptionReceipts(projectRoot, payload) {
@@ -115,6 +133,27 @@ function writeAdoptionReceipts(projectRoot, payload) {
     const receiptPath = path.join(runDir, '.cache', 'instruction-adoption.json');
     atomicWrite(receiptPath, body, inspectOptional(receiptPath).stat);
   }
+}
+
+function activeRunEnvelope(projectRoot, run) {
+  return {
+    path: path.relative(projectRoot, run.dir),
+    schema_version: run.schema_version,
+    compatibility: run.compatibility,
+    state_sha256: run.state_sha256,
+    mission_sha256: run.mission_sha256,
+    mission_topology: run.mission_topology,
+  };
+}
+
+function consentPlanDigest(projectRoot, files, activeRuns) {
+  return sha256(Buffer.from(JSON.stringify({
+    schema_version: SCHEMA_VERSION,
+    kind: COMPATIBILITY.EXECUTION_DEFAULT_CHANGE,
+    project_root: path.resolve(projectRoot),
+    files,
+    active_runs: activeRuns.map(run => activeRunEnvelope(projectRoot, run)),
+  })));
 }
 
 function isProducerRepository(projectRoot) {
@@ -229,12 +268,12 @@ function compatibilityFor(fileKind, classification) {
     return COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE;
   }
   if (LAYOUT_EQUIVALENT_CLASSES.has(name)) return COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT;
+  if (classification.changed === false) return COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT;
   if (name === 'managed_region') {
     return fileKind === 'claude'
       ? COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT
       : COMPATIBILITY.EXECUTION_DEFAULT_CHANGE;
   }
-  if (classification.changed === false) return COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT;
   return COMPATIBILITY.UNKNOWN_OR_MIXED;
 }
 
@@ -245,9 +284,6 @@ function annotateCompatibility(agents, claude) {
 }
 
 function classifyProjectInstructions({ agentsBytes, claudeBytes, activeWorkflowStates = false }) {
-  // activeWorkflowStates is kept for callers; freeze-all is retired. execute() decides
-  // per-file writes from compatibility classes when a run is active.
-  void activeWorkflowStates;
   const templates = sourceTemplates();
   if (sha256(agentsBytes) === V9_AGENTS_SHA256
       && sha256(claudeBytes) === V9_CONSUMER_CLAUDE_SHA256) {
@@ -266,6 +302,12 @@ function classifyProjectInstructions({ agentsBytes, claudeBytes, activeWorkflowS
   const agentsSafe = agents.after != null;
   const claude = mergeClaude(claudeBytes, templates.claude, agentsSafe);
   annotateCompatibility(agents, claude);
+  // Creating the universal first-read authority changes execution defaults for a live run. An
+  // active repository with no AGENTS.md therefore needs the same conversation consent as changing
+  // an existing managed AGENTS region; outside an active run the missing-file bootstrap is safe.
+  if (activeWorkflowStates && agents.classification === 'missing') {
+    agents.compatibility = COMPATIBILITY.EXECUTION_DEFAULT_CHANGE;
+  }
   if (!agentsSafe || claude.after == null) {
     return { status: 'decision_required', changed: false, agents, claude };
   }
@@ -320,7 +362,7 @@ function decisionForTopology(mode, agentsFile, claudeFile) {
   };
 }
 
-function execute(mode, projectRoot) {
+function execute(mode, projectRoot, options = {}) {
   const agentsPath = path.join(projectRoot, 'AGENTS.md');
   const claudePath = path.join(projectRoot, 'CLAUDE.md');
   const agentsFile = inspectOptional(agentsPath);
@@ -344,7 +386,8 @@ function execute(mode, projectRoot) {
   }
   const agentsBytes = agentsFile.bytes;
   const claudeBytes = claudeFile.bytes;
-  const activeRun = hasActiveRun(projectRoot);
+  const activeRuns = inspectActiveRuns(projectRoot);
+  const activeRun = activeRuns.length > 0;
   const classification = classifyProjectInstructions({
     agentsBytes, claudeBytes, activeWorkflowStates: activeRun,
   });
@@ -352,24 +395,49 @@ function execute(mode, projectRoot) {
   const writes = [];
   const agentsCompat = classification.agents.compatibility;
   const claudeCompat = classification.claude.compatibility;
+  const activeStateSchema = activeRuns.some(run =>
+    run.compatibility === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE);
   const unknown = agentsCompat === COMPATIBILITY.UNKNOWN_OR_MIXED
     || claudeCompat === COMPATIBILITY.UNKNOWN_OR_MIXED;
-  const stateSchema = agentsCompat === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE
+  const stateSchema = activeStateSchema
+    || agentsCompat === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE
     || claudeCompat === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE;
-  const allowWrite = (compat, changed) => {
+  const executionDefault = agentsCompat === COMPATIBILITY.EXECUTION_DEFAULT_CHANGE
+    || claudeCompat === COMPATIBILITY.EXECUTION_DEFAULT_CHANGE;
+  const files = {
+    agents: fileEnvelope(classification.agents, agentsBytes, classification.agents.after),
+    claude: fileEnvelope(classification.claude, claudeBytes, classification.claude.after),
+  };
+  const planDigest = consentPlanDigest(projectRoot, files, activeRuns);
+  const suppliedConsent = options.executionDefaultConsent || null;
+  const consentAuthorized = mode === 'apply' && activeRun && executionDefault
+    && suppliedConsent === planDigest && !unknown && !stateSchema;
+  const consentMismatch = suppliedConsent != null && !consentAuthorized;
+  const agentsAuthorityAlreadyPresent = managedRegion(agentsBytes, AGENTS_MARKER).kind === 'managed';
+  const allowWrite = (fileKind, compat, changed) => {
     if (!changed) return false;
-    if (unknown) return false;
-    if (stateSchema && compat === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE) return false;
+    if (unknown || consentMismatch || compat === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE) return false;
+    // An unknown active state fences AGENTS execution authority, but it is not a repository-wide
+    // freeze bit. A thin Claude bridge is independent when the current AGENTS authority already
+    // exists; if AGENTS itself still needs layout migration, the bridge depends on that blocked
+    // change and must remain untouched with it.
+    if (activeStateSchema) {
+      return fileKind === 'claude'
+        && compat === COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT
+        && agentsAuthorityAlreadyPresent;
+    }
     if (!activeRun) return true;
+    if (executionDefault && !consentAuthorized) return false;
+    if (compat === COMPATIBILITY.EXECUTION_DEFAULT_CHANGE) return consentAuthorized;
     return compat === COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT;
   };
-  const agentsWrite = allowWrite(agentsCompat, classification.agents.changed);
-  const claudeWrite = allowWrite(claudeCompat, classification.claude.changed);
-  if (classification.status === 'decision_required' || unknown) {
+  const agentsWrite = allowWrite('agents', agentsCompat, classification.agents.changed);
+  const claudeWrite = allowWrite('claude', claudeCompat, classification.claude.changed);
+  if (classification.status === 'decision_required' || unknown || consentMismatch) {
     status = 'decision_required';
-  } else if (stateSchema && !agentsWrite && !claudeWrite && classification.changed) {
+  } else if (stateSchema && !agentsWrite && !claudeWrite) {
     status = 'active_run_preserved';
-  } else if (activeRun && classification.status === 'planned' && !agentsWrite && !claudeWrite) {
+  } else if (activeRun && executionDefault && !consentAuthorized) {
     status = 'decision_required';
   } else if (classification.status === 'planned' && mode === 'check') {
     status = (agentsWrite || claudeWrite) ? 'drift' : status;
@@ -387,19 +455,27 @@ function execute(mode, projectRoot) {
   }
   const envelope = {
     schema_version: SCHEMA_VERSION, mode, status, changed: status === 'applied',
-    files: {
-      agents: fileEnvelope(classification.agents, agentsBytes, classification.agents.after),
-      claude: fileEnvelope(classification.claude, claudeBytes, classification.claude.after),
-    },
+    files,
+    active_runs: activeRuns.map(run => activeRunEnvelope(projectRoot, run)),
     writes,
     reasons: [
       classification.agents.classification, classification.claude.classification,
       agentsCompat, claudeCompat,
+      ...activeRuns.map(run => run.compatibility),
+      ...(consentMismatch ? ['consent_plan_mismatch'] : []),
     ],
   };
+  if (mode === 'plan' && activeRun && executionDefault && !unknown && !stateSchema) {
+    envelope.consent = {
+      kind: COMPATIBILITY.EXECUTION_DEFAULT_CHANGE,
+      ephemeral: true,
+      plan_sha256: planDigest,
+      apply_args: ['--consent-execution-default-change', planDigest],
+    };
+  }
   // Recovery evidence only. Init does not inspect or mutate the installed runtime adapter;
   // a restart remains a carrier change owned by that adapter.
-  if (mode === 'apply' && status === 'applied' && activeRun) {
+  if (mode === 'apply' && status === 'applied' && activeRun && !consentAuthorized) {
     writeAdoptionReceipts(projectRoot, {
       schema_version: 1,
       kind: 'instruction_adoption',
@@ -416,12 +492,26 @@ function main(argv) {
   const mode = argv[2];
   const rootIndex = argv.indexOf('--project-root');
   const json = argv.includes('--json');
-  if (!['plan', 'check', 'apply'].includes(mode) || rootIndex < 0 || !argv[rootIndex + 1] || !json) {
-    console.error('usage: node kaola-workflow-project-instructions.js plan|check|apply --project-root <path> --json');
+  const consentIndexes = argv.reduce((out, value, index) => {
+    if (value === '--consent-execution-default-change') out.push(index);
+    return out;
+  }, []);
+  const consentValid = consentIndexes.length <= 1
+    && (consentIndexes.length === 0 || (
+      argv[consentIndexes[0] + 1]
+      && !argv[consentIndexes[0] + 1].startsWith('--')
+    ));
+  if (!['plan', 'check', 'apply'].includes(mode) || rootIndex < 0 || !argv[rootIndex + 1] || !json
+      || !consentValid) {
+    console.error('usage: node kaola-workflow-project-instructions.js plan|check|apply --project-root <path> --json [--consent-execution-default-change <plan-sha256>]');
     process.exit(3);
   }
   let envelope;
-  try { envelope = execute(mode, path.resolve(argv[rootIndex + 1])); }
+  try {
+    envelope = execute(mode, path.resolve(argv[rootIndex + 1]), {
+      executionDefaultConsent: consentIndexes.length === 1 ? argv[consentIndexes[0] + 1] : null,
+    });
+  }
   catch (error) { console.error(error.message); process.exit(3); }
   process.stdout.write(JSON.stringify(envelope) + '\n');
   if (envelope.status === 'decision_required') process.exit(2);
