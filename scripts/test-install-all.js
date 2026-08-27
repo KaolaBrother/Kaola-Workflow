@@ -127,6 +127,17 @@ function missingFromWrapper(installers, wrapperSrc) {
 assert(fs.existsSync(INSTALL_ALL), 'install-all.sh exists at repo root');
 const wrapperSrc = fs.readFileSync(INSTALL_ALL, 'utf8');
 
+// Cursor Cloud is a separate saved-environment lifecycle. This wrapper owns only
+// the machine where it executes: it must expose no Cloud deployment flag or forward
+// one to the Cursor installer. A confirmed Cloud environment-setup Agent invokes
+// install-cursor.sh directly for its remote machine and selected repository.
+assert(/never installs or updates a Cursor Cloud environment/.test(wrapperSrc),
+  'guard: install-all declares its current-machine-only Cursor Cloud boundary');
+assert(!/^\s*--cloud\)/m.test(wrapperSrc),
+  'guard: install-all has no --cloud argument branch');
+assert(!/install-cursor\.sh[^\n]*--cloud/.test(wrapperSrc),
+  'guard: install-all never forwards a Cloud deployment mode to Cursor');
+
 for (const i of KNOWN_INSTALLERS) {
   assert(fs.existsSync(path.join(REPO, i.file)), `installer file exists in tree: ${i.file}`);
   assert(wrapperSrc.includes(i.ref), `install-all.sh references ${i.runtime} installer (${i.ref})`);
@@ -602,8 +613,15 @@ function runWrapper(rootOrStub, args, extraEnv) {
 {
   const bogus = runWrapper(freshRoot(), ['--nope']);
   assert(bogus.status === 2, 'F: unknown argument exits 2');
+  const cloudStub = stubRoot();
+  const cloud = runWrapper(cloudStub, ['--cloud']);
+  assert(cloud.status === 2, 'F: --cloud is refused because install-all is current-machine-only');
+  assert(Object.values(cloudStub.markers).every(marker => !fs.existsSync(marker)),
+    'F: refused --cloud performs no runtime install');
   const help = runWrapper(freshRoot(), ['--help']);
   assert(help.status === 0 && help.out.includes('Usage: ./install-all.sh'), 'F: --help exits 0 with usage');
+  assert(help.out.includes('never installs or updates a Cursor Cloud environment'),
+    'F: --help names the local-only Cloud boundary');
 }
 
 // Test G — an EMPTY --skip= value must not crash (bash 3.2 empty-array-under-set-u trap).

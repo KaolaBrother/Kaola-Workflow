@@ -19,12 +19,12 @@
   its published per-forge hash; all three forge migrations are live-proved, while a one-byte
   mutation remains an unmanaged collision.
   On the measured standalone CLI only, generated next/finalize safely ensure explicit `$PWD`
-  immediately before a named dispatch. App local and Cloud keep independent live catalogs. Cloud
-  uses the same global installer inside its dashboard-managed remote environment, followed by the
-  setup agent reporting the tested Build ID, the user clicking Save, and a fresh parent whose
-  visible Build link matches that ID; a generic repository launch may resolve another personal
-  environment. Cloud never inherits the CLI project materializer. `sessionStart` performs compact
-  resume only.
+  immediately before a named dispatch. App local and Cloud keep independent live catalogs.
+  `install-all.sh` installs only the computer where it runs and never deploys Cloud. Only after an
+  Agent confirms it is in Cursor Cloud environment setup does that Agent install the Workflow for
+  the remote machine and selected repository, test the Build, ask the user to Save, and open a new
+  top-level Agent in the same repository. Cloud never inherits the CLI point-of-use materializer.
+  `sessionStart` performs compact resume only.
 - **Active runs adopt a compatible repository layout; missions stay outcome-level (#1037).**
   The project-instruction helper classifies each managed change as
   `authority_layout_equivalent`, `execution_default_change`, `state_schema_incompatible`, or
@@ -46,11 +46,12 @@
   project `implementer` and its raw Task carrier resolved `cursor-grok-4.6-medium` when the
   parent omitted a model override. Cursor App `3.17.21` local IDE independently exposed all 14
   project types and dispatched exact `implementer`, while leaving its child model/profile source
-  unobservable. A Cloud negative control proved committed project profiles are not its carrier. The
-  corrected dashboard environment installed all 14 profiles globally under its remote user home,
-  was manually saved and snapshotted, and a fresh Cloud parent then exposed all 14 custom names and
-  dispatched exact `implementer` with no substitute or per-call model override. Cloud child
-  model/profile source remains unobservable.
+  unobservable. Cloud negative controls stayed built-in-only for a checked-in catalog and a saved
+  user-global-only Build. The corrected environment-setup Build installed the remote authority and
+  explicitly materialized the selected repository before snapshot; after manual Save, a new
+  top-level same-repository parent exposed all 14 custom names and dispatched exact `implementer`
+  with no substitute or per-call model override. Cloud child model/profile source remains
+  unobservable.
 
 ## [10.0.1] - 2026-08-27
 

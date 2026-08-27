@@ -373,20 +373,19 @@ same init outcome is produced regardless of which runtime invoked it. Runtime in
 commands or skills, agent catalogs, hooks, support scripts, and adapter/capability facts.
 `install-cursor.sh --global` renders canonical bytes in transaction-scoped temporary staging,
 writes only `${CURSOR_HOME:-~/.cursor}/{agents,commands}`, and does not mutate an ambient Git
-repository; `install-all.sh --global` inherits that Cursor behavior and is
-not permission to update every consumer repo. Project `.cursor` catalogs require explicit
+repository; `install-all.sh --global` inherits that Cursor behavior, installs only the current
+machine, and never deploys a Cursor Cloud environment. Project `.cursor` catalogs require explicit
 `--target`. Global authority and project materialization are
 receipt-bound and preflight every managed path before writing. The first receipt-owning upgrade may
 adopt published 10.0.1 global bytes under exact per-forge
 hashes; a modified or unknown byte remains a collision, and only exact retired ambient-helper bytes
 are removed. On the measured standalone CLI only,
 workflow-next/finalize may invoke the installed helper with explicit `$PWD` immediately before a
-named dispatch; App local and Cloud keep separate live catalogs. Cloud uses the same global
-installer inside its dashboard-managed remote user home, then requires a manual environment save,
-completed snapshot, and fresh parent. The setup agent reports the tested Build ID and asks the user
-to click Save; the fresh Agent's visible Build link must match before that catalog is trusted,
-because a generic repository-level launch may resolve another personal environment. `sessionStart`
-performs compact resume only.
+named dispatch; App local and Cloud keep separate live catalogs. Only after an Agent establishes it
+is in Cursor Cloud environment setup may it install the remote authority plus selected repository,
+test the Build, and ask the user to click Save. The user then opens a new top-level Agent in that
+same repository; its visible Build link and live catalog must match before the install is trusted.
+`sessionStart` performs compact resume only.
 
 ### Runtime capability divergence
 

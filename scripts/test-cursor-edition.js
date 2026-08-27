@@ -674,18 +674,20 @@ function commandRel(name, forge) {
     const content = exists(commandRel(name)) ? read(commandRel(name)) : '';
     assert(/product surfaces and App local\/Cloud hosts remain independent/i.test(content),
       'G2[' + name + ']: Cursor CLI, App local, and App Cloud remain distinct surfaces/hosts');
-    assert(/committed project profiles alone are a negative control/i.test(content),
-      'G2[' + name + ']: committed project profiles are a Cloud negative control, not its carrier');
-    assert(/install globally inside the dashboard-managed remote environment, have the user save it, and open a fresh parent whose visible Build identity matches the tested Build before treating a still-missing name as a capability gap/i.test(content),
-      'G2[' + name + ']: Cloud gap verdict follows remote global install, user Save, and exact-Build fresh-parent reload');
-    assert(/generic New Agent entry may resolve another personal environment for the repository/i.test(content),
-      'G2[' + name + ']: Cloud setup guidance rejects ambiguous same-repository environment resolution');
+    assert(/catalog merely committed on the selected branch and a saved user-global-only Build are negative controls/i.test(content),
+      'G2[' + name + ']: checked-in-only and user-global-only Cloud catalogs are negative controls');
+    assert(/after the host is confirmed as Cursor Cloud, use its environment setup to install the remote machine authority plus the selected repository before snapshot, have the user Save, and open a new top-level Agent in that same repository before treating a still-missing name as a capability gap/i.test(content),
+      'G2[' + name + ']: Cloud gap verdict follows confirmed setup, machine-plus-repository install, Save, and same-repository new parent');
+    assert(/open a new top-level Cloud Agent in the same repository from that saved environment and inspect its live catalog/i.test(content),
+      'G2[' + name + ']: Cloud setup guidance requires the saved environment in a new same-repository parent');
+    assert(/install-all\.sh`? installs only the machine where it runs and never deploys a Cursor Cloud environment/i.test(content),
+      'G2[' + name + ']: install-all remains current-machine-only and never deploys Cloud');
     assert(/omit a requested per-call model only when/i.test(content),
       'G2[' + name + ']: omit-model is the named-profile carrier, not a catalog-miss substitute');
-    assert(/Cloud negative control exposed [`']?explore/i.test(content),
-      'G2[' + name + ']: Cloud negative control exposes explore as itself');
-    assert(/corrected saved environment exposed all 14 Kaola types/i.test(content),
-      'G2[' + name + ']: saved Cloud environment exposes all 14 Kaola types');
+    assert(/Cloud negative controls stayed built-in-only/i.test(content),
+      'G2[' + name + ']: Cloud negative controls remain typed as built-in-only');
+    assert(/corrected environment-setup Build installed the selected repository before snapshot and its new top-level same-repository Agent exposed all 14 Kaola types/i.test(content),
+      'G2[' + name + ']: saved Cloud environment exposes all 14 Kaola types through its project catalog');
     assert(/resolver-listed model slug/i.test(content),
       'G2[' + name + ']: catalog-miss listed model slugs are a live-schema effort lever');
   }
@@ -1746,19 +1748,19 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-doctor: ambient_repository_write is false');
       assert(doc.surfaces.app.execution_hosts.local.global_discovery === 'unknown',
         'G8-doctor: App local global_discovery stays unknown, not false');
-      assert(doc.surfaces.app.execution_hosts.cloud.global_discovery === 'supported_in_saved_remote_environment',
-        'G8-doctor: App Cloud global discovery is scoped to a saved remote environment');
-      assert(doc.surfaces.app.execution_hosts.cloud.required_project_materialization === 'no',
-        'G8-doctor: App Cloud does not use project materialization');
-      assert(doc.surfaces.app.execution_hosts.cloud.remote_injection === 'dashboard_environment_install_and_save',
-        'G8-doctor: App Cloud names the dashboard install-and-save carrier');
-      assert(doc.surfaces.app.execution_hosts.cloud.named_catalog === 'user_global_when_environment_saved',
-        'G8-doctor: App Cloud named catalog comes from the saved remote user carrier');
-      assert(doc.surfaces.app.execution_hosts.cloud.reload === 'new_cloud_parent_after_environment_save',
-        'G8-doctor: App Cloud requires a fresh parent after environment save');
+      assert(doc.surfaces.app.execution_hosts.cloud.global_discovery === 'unsupported',
+        'G8-doctor: App Cloud does not claim user-global discovery');
+      assert(doc.surfaces.app.execution_hosts.cloud.required_project_materialization === 'yes',
+        'G8-doctor: App Cloud requires environment-Build project materialization');
+      assert(doc.surfaces.app.execution_hosts.cloud.remote_injection === 'agent_confirmed_cloud_environment_setup_install_and_save',
+        'G8-doctor: App Cloud names the Agent-confirmed setup/install/save carrier');
+      assert(doc.surfaces.app.execution_hosts.cloud.named_catalog === 'project_custom_from_saved_environment_build',
+        'G8-doctor: App Cloud named catalog comes from the saved Build project carrier');
+      assert(doc.surfaces.app.execution_hosts.cloud.reload === 'new_same_repository_cloud_parent_after_environment_save',
+        'G8-doctor: App Cloud requires a new same-repository parent after environment save');
       assert(doc.surfaces.cli.execution_hosts.local.required_project_materialization === 'yes',
         'G8-doctor: CLI requires explicit project materialization');
-      assert(doc.named_catalog === 'user_global_when_environment_saved',
+      assert(doc.named_catalog === 'project_custom_from_saved_environment_build',
         'G8-doctor: selected App/Cloud named_catalog is flattened from the measured host surface');
       assert(typeof doc.kaola_workflow_version === 'string'
         && doc.kaola_workflow_version.length > 0,

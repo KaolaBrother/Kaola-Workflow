@@ -65,13 +65,19 @@
       "kind": "runtime_probe",
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/pull/1041",
       "observed_at": "2026-08-27T00:00:00Z",
-      "claim": "Negative control: a brand-new App-started Cloud chat selected branch probe/cursor-cloud-1041-20260827a at commit ead40c2741f4cae7e0a0cb473bba8a8a4a80c7a6, where all 14 project Cursor profiles were committed before boot. Its live Task enum remained built-in-only: generalPurpose, explore, computerUse, videoReview, cursor-guide, bugbot, security-review, and best-of-n-runner; exact implementer was absent and no substitute was dispatched. This proves project files are not the Cloud carrier, not that Cloud lacks named roles."
+      "claim": "Negative control: a brand-new App-started Cloud chat selected branch probe/cursor-cloud-1041-20260827a at commit ead40c2741f4cae7e0a0cb473bba8a8a4a80c7a6, where all 14 project Cursor profiles were committed before the Agent launch but were not installed by the Cloud environment Build. Its live Task enum remained built-in-only: generalPurpose, explore, computerUse, videoReview, cursor-guide, bugbot, security-review, and best-of-n-runner; exact implementer was absent and no substitute was dispatched. A checked-in catalog alone is not equivalent to installing the selected Cloud environment before snapshot."
     },
     "cursor_cloud_saved_environment_20260827": {
       "kind": "runtime_probe",
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/pull/1041",
       "observed_at": "2026-08-27T00:00:00Z",
-      "claim": "Positive control: Cursor dashboard environment 9116f5fb-a1f4-11f1-b532-320a589b8025 saved the remote install script ./install-cursor.sh --global --yes --forge=github. Build bld-20260827-aaac14bf-e980-4d1a-9600-e8b3fb2e031e installed all 14 profiles under /home/ubuntu/.cursor/agents, snapshotted, and warmed. Fresh Cloud parent bc-f2f0f15f-31d9-416a-9952-35243def5561 then exposed all 14 Kaola names in its 23-type live Task catalog; exact implementer child bc-63c79c19-f9fb-5892-970e-bb1606ad1a3b returned PROBE_OK_CURSOR_CLOUD_SAVED_ENV_IMPLEMENTER with no substitute or per-call model override. Child model and profile-source carriers remained unobservable."
+      "claim": "Historical positive control: Cursor dashboard Build bld-20260827-aaac14bf-e980-4d1a-9600-e8b3fb2e031e exposed all 14 Kaola names and exact implementer, but its released-10.0.1 global installer also wrote an ambient project catalog. Clean Build bld-20260827-1fd163c3-a8f2-475d-9603-7da988673ee3 later falsified user-global discovery alone: the live Task enum stayed built-in-only despite 14 current user files. These controls require the final environment-setup Build to install both its remote machine authority and its selected repository before snapshot."
+    },
+    "cursor_cloud_environment_setup_20260828": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/pull/1041",
+      "observed_at": "2026-08-28T00:00:00Z",
+      "claim": "Cursor Cloud environment setup confirmed candidate 101250f293a5439ed73e8ee2127c7501fba9e883, installed the remote machine authority and explicitly materialized the selected repository, and passed current receipt, authority-binding, 14-agent, collision, and byte-idempotence checks. The user manually saved exact Build bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2. New top-level same-repository parent bc-3e6bd3bd-f310-47cd-a9cb-358cf802f16d visibly used that Build, exposed nine native plus all 14 Kaola Task types, and exact implementer child bc-7d00ddad-23f3-5e69-8f9a-1c326b051a49 returned PROBE_OK_CURSOR_CLOUD_FINAL_SAVED_REPO_IMPLEMENTER with no substitute or per-call model override. Child model and profile-source carriers remained unobservable."
     },
     "zcode_instructions": {
       "kind": "official_docs",
@@ -370,7 +376,8 @@
         "cursor_cli_named_profile_20260827",
         "cursor_app_local_named_profile_20260827",
         "cursor_cloud_preboot_catalog_20260827",
-        "cursor_cloud_saved_environment_20260827"
+        "cursor_cloud_saved_environment_20260827",
+        "cursor_cloud_environment_setup_20260828"
       ],
       "capabilities": {
         "named_roles": true,
@@ -389,17 +396,17 @@
           "heavy": "xhigh"
         },
         "delegation_guidance": {
-          "profile_lookup": "Find custom profiles in project `.cursor/agents/` or user `~/.cursor/agents/`; a generated file at a documented path is not discovery proof. `--global` writes only the selected host's user carrier and does not write an ambient Git repository. Project materialization is explicit `--target DIR`. The standalone CLI requires project materialization on the measured local host; workflow-next/finalize may call the installed safe helper with explicit `$PWD` immediately before a CLI/local named dispatch. The helper derives only from the receipt-verified global authority and fails closed on missing/stale authority, collision, symlink, or modified ownership. Cursor App local IDE and App-started Cloud are different execution hosts and never inherit that CLI materialization rule. Cloud uses its own dashboard-managed remote user home. During agent-led setup, configure the same `--global` installer there, test a Build, report its exact ID and assertions, and ask the user to click Save; a draft Build is not persisted. Start from that Build's details page or verify the fresh Agent's visible Build link matches before continuing, because a generic New Agent entry may resolve another personal environment for the repository.",
-          "dispatch_carrier": "Select a custom agent explicitly as `/<role>` or by natural-language routing and use the live `Task` schema. Inspect that schema's type enum first. When it contains a Kaola role name, dispatch that name and omit a requested per-call model only when the named profile can resolve its tier pin. The supported CLI stream materialized a named call as `subagentType.custom.name` and `generalPurpose` as `subagentType.unspecified`; do not invent unpublished request fields. When the live enum is built-in-only, omit-model is the parent, not a profile pin, and a resolver-listed model slug from the live schema is an effort lever. On Cloud, committed project profiles alone are a negative control; install globally inside the dashboard-managed remote environment, have the user save it, and open a fresh parent whose visible Build identity matches the tested Build before treating a still-missing name as a capability gap.",
+          "profile_lookup": "Find custom profiles in project `.cursor/agents/` or user `~/.cursor/agents/`; a generated file at a documented path is not discovery proof. `--global` writes only the selected host's user carrier and does not write an ambient Git repository. Project materialization is explicit `--target DIR`. The standalone CLI requires project materialization on the measured local host; workflow-next/finalize may call the installed safe helper with explicit `$PWD` immediately before a CLI/local named dispatch. The helper derives only from the receipt-verified global authority and fails closed on missing/stale authority, collision, symlink, or modified ownership. Cursor App local IDE and App-started Cloud are different execution hosts and never inherit that CLI materialization rule. `install-all.sh` installs only the machine where it runs and never deploys a Cursor Cloud environment. Only after the agent has established that it is operating in Cursor Cloud environment setup may it install the Workflow for that remote machine and selected repository, test the Build, report its exact ID, and ask the user to click Save. After Save, open a new top-level Cloud Agent in the same repository from that saved environment and inspect its live catalog.",
+          "dispatch_carrier": "Select a custom agent explicitly as `/<role>` or by natural-language routing and use the live `Task` schema. Inspect that schema's type enum first. When it contains a Kaola role name, dispatch that name and omit a requested per-call model only when the named profile can resolve its tier pin. The supported CLI stream materialized a named call as `subagentType.custom.name` and `generalPurpose` as `subagentType.unspecified`; do not invent unpublished request fields. When the live enum is built-in-only, omit-model is the parent, not a profile pin, and a resolver-listed model slug from the live schema is an effort lever. On Cloud, a catalog merely committed on the selected branch and a saved user-global-only Build are negative controls. After the host is confirmed as Cursor Cloud, use its environment setup to install the remote machine authority plus the selected repository before snapshot, have the user Save, and open a new top-level Agent in that same repository before treating a still-missing name as a capability gap.",
           "tiers": {
             "standard": "standard → profile `grok-4.6[effort=medium]`",
             "reasoning": "reasoning → profile `grok-4.6[effort=high]`",
             "heavy": "heavy → profile `grok-4.6[effort=xhigh]`"
           },
           "tool_boundary": "The named profile's native `readonly` flag carries its write boundary.",
-          "native_routes": "Inspect the live Task catalog. The supported CLI exposed writable `generalPurpose` plus `cursor-guide`, `bugbot`, `security-review`, and `best-of-n-runner`; other Cursor hosts document scoped `Explore`, `Bash`, and `Browser`. A Cloud negative control exposed `explore` and stayed built-in-only before the remote environment was installed and saved; the corrected saved environment exposed all 14 Kaola types. Use only a route this host actually reports and under its real capability and identity.",
+          "native_routes": "Inspect the live Task catalog. The supported CLI exposed writable `generalPurpose` plus `cursor-guide`, `bugbot`, `security-review`, and `best-of-n-runner`; other Cursor hosts document scoped `Explore`, `Bash`, and `Browser`. Cloud negative controls stayed built-in-only for a checked-in catalog and for a saved user-global-only Build; the corrected environment-setup Build installed the selected repository before snapshot and its new top-level same-repository Agent exposed all 14 Kaola types. Use only a route this host actually reports and under its real capability and identity.",
           "fallback_search": "If the exact named role is unavailable, inspect the currently reported `generalPurpose`, built-in, and other native child routes for the current item and use each only as itself. First distinguish an uninstalled or unsaved host carrier from a runtime capability gap. A custody-bearing miss after the correct host installation inlines that item with a specific capability_gap; do not convert one miss into a run-wide inline policy.",
-          "availability": "The current Task catalog is authoritative. Authenticated standalone CLI build 2026.08.25-3e8eec8 proved explicit project custom implementer dispatch and the raw Task carrier resolved cursor-grok-4.6-medium when the parent omitted a model override. Cursor App 3.17.21 local IDE separately proved all 14 project Kaola types plus exact implementer dispatch, but did not expose the child model/profile carrier. Cursor Cloud separately proved all 14 Kaola names plus exact implementer after the same global installer ran inside a dashboard-managed remote environment, the user saved and snapshotted it, and a fresh Cloud parent started from that build; committed project profiles alone were not the Cloud carrier. Cloud child model/profile source remained unobservable. Explicit or automatic selection and resume by agent ID remain runtime-owned options. Reopening the CLI process with the same chat discovered an added project profile, while same-process hot load remains unknown. Product surfaces and App local/Cloud hosts remain independent. `--global` does not write an ambient Git repository."
+          "availability": "The current Task catalog is authoritative. Authenticated standalone CLI build 2026.08.25-3e8eec8 proved explicit project custom implementer dispatch and the raw Task carrier resolved cursor-grok-4.6-medium when the parent omitted a model override. Cursor App 3.17.21 local IDE separately proved all 14 project Kaola types plus exact implementer dispatch, but did not expose the child model/profile carrier. Cursor Cloud separately proved all 14 Kaola names plus exact implementer only after an agent-confirmed Cloud environment setup installed both the remote machine authority and selected repository, the user manually saved the tested Build, and a new top-level Agent opened in that same repository. A checked-in catalog alone and a saved user-global-only Build were built-in-only negative controls. Cloud child model/profile source remained unobservable. Explicit or automatic selection and resume by agent ID remain runtime-owned options. Reopening the CLI process with the same chat discovered an added project profile, while same-process hot load remains unknown. Product surfaces and App local/Cloud hosts remain independent. `--global` does not write an ambient Git repository, and local `install-all.sh` never installs Cloud."
         }
       },
       "surfaces": {
@@ -446,21 +453,22 @@
               }
             },
             "cloud": {
-              "global_discovery": "supported_in_saved_remote_environment",
-              "required_project_materialization": "no",
-              "remote_injection": "dashboard_environment_install_and_save",
-              "named_catalog": "user_global_when_environment_saved",
-              "reload": "new_cloud_parent_after_environment_save",
+              "global_discovery": "unsupported",
+              "required_project_materialization": "yes",
+              "remote_injection": "agent_confirmed_cloud_environment_setup_install_and_save",
+              "named_catalog": "project_custom_from_saved_environment_build",
+              "reload": "new_same_repository_cloud_parent_after_environment_save",
               "evidence": [
                 "cursor_cloud_task_catalog",
                 "cursor_cloud_preboot_catalog_20260827",
-                "cursor_cloud_saved_environment_20260827"
+                "cursor_cloud_saved_environment_20260827",
+                "cursor_cloud_environment_setup_20260828"
               ],
               "stamp": {
-                "runtime_build": "bld-20260827-aaac14bf-e980-4d1a-9600-e8b3fb2e031e",
+                "runtime_build": "bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2",
                 "host_type": "app_started_cloud_vm",
-                "observed_at": "2026-08-27",
-                "status": "live_saved_environment_named_dispatch"
+                "observed_at": "2026-08-28",
+                "status": "live_saved_environment_project_named_dispatch"
               }
             }
           }

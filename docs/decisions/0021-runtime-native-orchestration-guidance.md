@@ -75,9 +75,11 @@ and re-evaluate the next item.
 Cursor demonstrates why the live catalog wins. Its IDE documentation describes scoped `Explore`,
 `Bash`, and `Browser` routes, while the supported Cursor CLI 2026.08.25 live probe exposed writable
 `generalPurpose`, specialist built-ins, and project custom types—but not those three scoped types.
-A Cloud negative control with committed project profiles stayed built-in-only and exposed
-`explore`; the corrected dashboard environment installed globally, was saved and snapshotted, and
-a fresh Cloud parent then exposed all 14 Kaola names plus exact `implementer`. The adapter exposes
+A Cloud negative control whose branch catalog was not installed by the environment Build stayed
+built-in-only and exposed `explore`; a saved user-global-only Build did too. The corrected,
+Agent-confirmed environment setup installed the remote authority plus selected repository before
+manual Save, and a new top-level same-repository parent then exposed all 14 Kaola names plus exact
+`implementer`. The adapter exposes
 these as host-dependent facts and never hardcodes one catalog as universal. Omit-model is the
 named-profile carrier only when the live enum contains the Kaola name. On a catalog-miss host, live
 members are used as themselves while the orchestrator establishes whether that host's real carrier

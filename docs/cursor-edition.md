@@ -15,31 +15,33 @@ That gap is declared, not papered over; durable resume stays `mission-list.md`.
 Cursor CLI and Cursor App are separate product surfaces; App local IDE and App-started Cloud are
 different execution hosts and must not be inferred from each other or from a CLI binary.
 Authenticated standalone CLI, local App/IDE, and Cloud saved-environment named dispatch were each
-measured separately. Cloud does not use committed project profiles as its carrier: run the same
-global installer inside the dashboard-managed remote environment, save and snapshot it, then start
-a fresh Cloud parent. See
+measured separately. Cloud required the selected repository to be materialized by its environment
+setup Build; a checked-in catalog and a saved user-global-only Build were both negative controls.
+See
 [runtime capabilities](runtime-capabilities.md#cursor).
 
 ## Agent-led Cloud installation
 
 Cursor Cloud installation is a saved-environment workflow, not a command run once inside an
-arbitrary task VM:
+arbitrary task VM. `install-all.sh` installs only the computer where it runs and never deploys a
+Cloud environment:
 
-1. Open the target repository's environment setup in the Cursor Cloud Agents dashboard and ask the
-   setup agent to configure `./install-cursor.sh --global --yes --forge=github` as the remote
-   install command.
-2. Have the setup agent run a test Build. It must verify the exact candidate, exit code, absence of
-   an ambient repository `.cursor`, the user-global authority receipt, and the expected agent
-   catalog; it then reports the exact Build ID.
+1. Open the target repository's environment setup in Cursor Cloud and ask that setup Agent to
+   install Kaola-Workflow for the Cloud machine and the selected repository. Only after the Agent
+   has established that it is in Cursor Cloud environment setup may it take this path.
+2. The setup Agent installs the remote authority with `./install-cursor.sh --global --yes
+   --forge=github`, explicitly materializes the selected repository with
+   `./install-cursor.sh --target "$PWD" --yes --forge=github`, and runs a test Build. It verifies
+   the exact candidate, both receipts, the authority binding, collision safety, idempotence, and
+   the expected 14-agent project catalog, then reports the exact Build ID.
 3. The setup agent asks the user to click **Save** in Cursor. A green setup VM, snapshot, or draft
    Build is not a persisted production environment until that user action succeeds.
-4. Start the working Cloud Agent from the saved Build's details page, or verify the new Agent page's
-   **View build details** link equals the reported Build ID. Only then inspect the fresh parent's
-   live catalog and continue work.
+4. Select the saved environment and open a new top-level Cloud Agent in the same repository. Verify
+   its **View build details** link equals the reported Build ID, then inspect the fresh parent's live
+   catalog and continue work.
 
-Do not assume the generic New Agent entry selected the environment that was just saved. More than
-one personal environment can match the same repository, and the repository resolver may choose a
-different active Build. The exact Build identity is the proof. This follows Cursor's documented
+The saved environment, same-repository launch, visible Build identity, and live catalog together
+prove that the intended environment loaded. This follows Cursor's documented
 [environment resolution](https://cursor.com/docs/cloud-agent/setup) and
 [Build lifecycle](https://cursor.com/docs/cloud-agent/builds).
 
@@ -109,9 +111,9 @@ product questions. Never prompt a child to impersonate `implementer`, `tdd-guide
 custody-bearing role. A resolver-listed live-schema model slug is then an effort lever, not a
 violation of unpublished-field discipline; omit-model follows the parent and is not a profile pin.
 Missing standalone-CLI project agents want `install-cursor.sh --target` then a new CLI session.
-Missing Cloud names want the dashboard environment's global install, manual save/snapshot, then a
-fresh Cloud parent whose visible Build link matches the saved Build ID before a capability gap can
-be concluded.
+Missing Cloud names require a confirmed Cloud environment-setup Agent to install both the remote
+authority and selected repository, followed by manual Save and a new top-level Agent in the same
+repository whose visible Build link matches before a capability gap can be concluded.
 
 If the current session exposes a Task call and named catalog, that live schema is the authority;
 public documentation does not establish one portable JSON call schema, so Kaola does not invent
@@ -120,8 +122,9 @@ fields such as parent-authored `subagentType.custom.name`.
 The same guidance exposes Cursor's host-dependent native alternatives rather than assuming one role
 miss ends all dispatch. IDE documentation describes scoped `Explore`, `Bash`, and `Browser`. The
 supported Cursor CLI probe below instead exposed writable `generalPurpose` plus specialist and
-project custom types, and did not expose those scoped types. An unsaved Cloud negative control
-exposed `explore` without Kaola names; the saved-environment positive control exposed all 14. The
+project custom types, and did not expose those scoped types. Cloud negative controls exposed
+`explore` without Kaola names; the saved environment whose Build materialized the selected
+repository exposed all 14. The
 live catalog wins. A generic or
 specialist child remains itself and is never prompted to impersonate `implementer`, `tdd-guide`, or
 another custody-bearing role. Explicit, automatic, parallel, and resume-by-agent-ID paths remain
@@ -175,19 +178,24 @@ The fresh App-started Cloud negative control selected
 profiles. The new Cloud Task enum still contained only `generalPurpose`, `explore`,
 `computerUse`, `videoReview`, `cursor-guide`, `bugbot`, `security-review`, and
 `best-of-n-runner`. Exact `implementer` was absent, so the probe dispatched no substitute and
-made no repository change. This proves committed project profiles are not the Cloud carrier; it
-does not prove a runtime capability gap.
+made no repository change. This proves that a catalog present in the branch but not installed by
+the environment Build is insufficient; it does not prove a runtime capability gap.
 
-The positive control configured personal dashboard environment
-`9116f5fb-a1f4-11f1-b532-320a589b8025` with
-`./install-cursor.sh --global --yes --forge=github`, then manually saved it. Config-change build
-`bld-20260827-aaac14bf-e980-4d1a-9600-e8b3fb2e031e` installed all 14 profiles under
-`/home/ubuntu/.cursor/agents`, snapshotted, and warmed. Fresh Cloud parent
-`bc-f2f0f15f-31d9-416a-9952-35243def5561` started from that saved build and exposed all 14 Kaola
-names in its 23-type live Task catalog. It dispatched exact `implementer` once with no model or
-other override; child `bc-63c79c19-f9fb-5892-970e-bb1606ad1a3b` returned exactly
-`PROBE_OK_CURSOR_CLOUD_SAVED_ENV_IMPLEMENTER`. The Cloud child model/profile source remains
-unobservable.
+A historical saved Build exposed all 14 Kaola names, but its released-10.0.1 installer also wrote
+an ambient project catalog and therefore did not isolate user-global discovery. Clean candidate
+Build `bld-20260827-1fd163c3-a8f2-475d-9603-7da988673ee3` then installed 14 current user-global
+profiles without a project catalog; its exact-Build parent stayed built-in-only. User-global Cloud
+discovery alone is therefore unsupported on this measured host.
+
+The final environment-setup run installed candidate
+`101250f293a5439ed73e8ee2127c7501fba9e883` for the remote machine and explicitly materialized the
+selected repository. The user manually saved Build
+`bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2`. New top-level same-repository parent
+`bc-3e6bd3bd-f310-47cd-a9cb-358cf802f16d` visibly used that Build, exposed all 14 Kaola names in
+its 23-type live Task catalog, and exact `implementer` child
+`bc-7d00ddad-23f3-5e69-8f9a-1c326b051a49` returned exactly
+`PROBE_OK_CURSOR_CLOUD_FINAL_SAVED_REPO_IMPLEMENTER` with no substitute or per-call model override.
+The Cloud child model/profile source remains unobservable.
 
 All 14 role bodies come from `templates/agents/behavior-contracts.json` through
 `generate-agent-profiles.js`; `sync-cursor-edition.js` requests Cursor renders and owns only edition
@@ -202,16 +210,18 @@ does not invent project `.cursor`. A normal install renders the generated source
 temporary staging root and removes it after the transaction; only explicit `--regenerate` writes
 the in-repository generated tree. Project catalogs are never selected from the ambient cwd of a
 `--global` command. Authenticated CLI evidence reached project profiles and did not reach a user
-file alone; that CLI fact is not App or Cloud proof. Cloud instead uses the user-global carrier in
-its own saved remote environment. Project files alone are insufficient there.
+file alone; that CLI fact is not App or Cloud proof. Cloud user-global discovery alone is
+unsupported; the measured Cloud carrier is a receipt-owned project catalog installed by its
+confirmed environment-setup Agent before the Build is saved.
 
 For the measured standalone CLI/local host only, generated workflow-next/finalize guidance invokes
 the installed safe helper with `--ensure-target "$PWD"` immediately before a named dispatch. It
 derives project bytes only from the receipt-verified global authority, returns `current` without
 writing when already fresh, returns `materialized` and requires a new process when it safely
 writes, and fails before mutation on missing/stale authority, collision, symlink, invalid receipt,
-or modified ownership. Cursor App local IDE and App-started Cloud do not inherit that CLI rule.
-Cloud uses the dashboard environment install/save/new-parent lifecycle above. `sessionStart`
+or modified ownership. Cursor App local IDE and App-started Cloud do not inherit that CLI
+point-of-use rule. Cloud uses the confirmed environment-setup
+machine-plus-repository/install/save/same-repository-new-parent lifecycle above. `sessionStart`
 performs compact resume only.
 
 The official model contract is likewise bounded: `model` is either `inherit` or an exact model ID,
@@ -239,12 +249,14 @@ substitute.
 does not run through `install.sh --forge`.
 
 > The Cursor runtime is also covered by the top-level **`./install-all.sh`**
-> ("install/refresh every runtime" — see [README](../README.md#installation)),
+> ("install/refresh every runtime on this computer" — see [README](../README.md#installation)),
 > which invokes this installer unchanged (`--global` by default) as the sixth
 > leg of its seven-runtime sequence, with a per-runtime PASS/FAIL summary.
 > `--global` inherits this installer's user-home-only Cursor layout: it is not
 > permission to update every consumer repository. Project `.cursor` catalogs
-> need an explicit `--target` or `install-all.sh --project`. It stays a thin
+> need an explicit `--target` or `install-all.sh --project`. It never installs or
+> updates Cursor Cloud; that path begins only inside a confirmed Cursor Cloud
+> environment-setup Agent and uses the installer directly. It stays a thin
 > orchestrator — it does **not** fold Cursor into
 > `install.sh`/`edition-sync.js`/`npm test`.
 

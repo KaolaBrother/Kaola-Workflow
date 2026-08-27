@@ -87,7 +87,8 @@ Inline only the current item when no adequate route can meet task, custody, evid
 boundaries, record the specific `capability_gap`, then reconsider the next item. On Cursor, the
 live Task enum is the authority: omit-model is the named-profile carrier only when that enum
 contains the Kaola name; a catalog-miss host uses live built-ins as themselves while establishing
-whether the correct local-project or saved-Cloud-environment carrier was installed and reloaded.
+whether the correct local-project or Agent-confirmed saved-Cloud project carrier was installed and
+reloaded.
 Only a miss after the correct host lifecycle is a capability gap. Do not add Kaola
 caps to runtime-owned automatic, parallel, background, resume, nesting, or task-sensitive choices.
 

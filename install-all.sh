@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # install-all.sh — one entrypoint that reinstalls/refreshes every runtime
-# edition in sequence, with a per-runtime PASS/FAIL summary.
+# edition on the current machine, with a per-runtime PASS/FAIL summary.
+# It has no Cursor Cloud deployment mode. Cloud installation is performed only
+# by an Agent that has established it is inside Cursor Cloud environment setup.
 #
 # This is a THIN ORCHESTRATOR, not a coupling: it CALLS each installer unchanged
 # and never folds the additive editions (opencode/kimi/grok/cursor) into install.sh,
@@ -97,7 +99,7 @@ usage() {
   cat <<'EOF'
 Usage: ./install-all.sh [options]
 
-Reinstall/refresh every Kaola-Workflow runtime edition in sequence:
+Reinstall/refresh every Kaola-Workflow runtime edition on this machine in sequence:
   1. claude    Claude Code   (install.sh)
   2. opencode  opencode      (install-opencode.sh)
   3. codex     Codex         (install-codex-agent-profiles.js)
@@ -118,6 +120,10 @@ Options:
   --check                       Dry run: print HEAD + the command each runtime would run,
                                 and report a pending Codex plugin upgrade or refresh; no changes
   -h, --help                    Show this help
+
+This command never installs or updates a Cursor Cloud environment. In Cursor
+Cloud, an environment-setup Agent uses the Cursor installer directly for that
+remote machine and selected repository, then asks the user to Save the Build.
 
 The Claude installer (install.sh) has no global/project concept — it installs
 its plugin regardless of scope; --global/--project apply to the other five.

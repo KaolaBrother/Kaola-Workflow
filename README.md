@@ -281,7 +281,7 @@ Claude Code's native entrypoint is `CLAUDE.md`, so Kaola keeps it as the smalles
 `@AGENTS.md` followed only by Claude-specific overlay content. See
 [runtime capabilities](docs/runtime-capabilities.md) for the evidence, precedence, and known limits.
 
-**Install/refresh every runtime at once — `./install-all.sh`.** To reinstall every runtime from the current checkout in one step, run `./install-all.sh --yes` (defaults: `--forge=github`, `--global`). It is a thin orchestrator: it runs each per-runtime installer above unchanged, prints the short SHA being installed, and ends with a per-runtime **PASS/FAIL summary table** — exiting non-zero if any runtime fails (continue-through by default; `--strict` aborts at the first failure). Skip one with `--skip=<runtime[,...]>` (logged, never silent) and preview without changes via `--check`. `--global` is location-independent: it is not permission to scan or refresh every consumer repository. Cursor inherits that rule — `install-cursor.sh --global` writes only the user carrier and never mutates an ambient Git work tree; project `.cursor` catalogs need `--target` or `install-all.sh --project`. This entrypoint never folds the additive editions into `install.sh`/`npm test`/`edition-sync` — the per-runtime installers remain the individual path. The individual installers below are still fully supported.
+**Install/refresh every runtime on this computer — `./install-all.sh`.** To reinstall every local runtime from the current checkout in one step, run `./install-all.sh --yes` (defaults: `--forge=github`, `--global`). It is a thin orchestrator: it runs each per-runtime installer above unchanged, prints the short SHA being installed, and ends with a per-runtime **PASS/FAIL summary table** — exiting non-zero if any runtime fails (continue-through by default; `--strict` aborts at the first failure). Skip one with `--skip=<runtime[,...]>` (logged, never silent) and preview without changes via `--check`. `--global` is location-independent: it is not permission to scan or refresh every consumer repository. Cursor inherits that rule — `install-cursor.sh --global` writes only the current machine's user carrier and never mutates an ambient Git work tree; local project `.cursor` catalogs need `--target` or `install-all.sh --project`. `install-all.sh` never installs or updates a Cursor Cloud environment. This entrypoint never folds the additive editions into `install.sh`/`npm test`/`edition-sync` — the per-runtime installers remain the individual path. The individual installers below are still fully supported.
 
 Forge editions:
 
@@ -301,27 +301,28 @@ Claude Code and Codex share the forge editions — pick one forge at a time; all
 named profiles in `.cursor/agents/*.md` plus three flat commands. Cursor CLI and App are separate
 product surfaces; App local IDE and App-started Cloud are separate hosts. Authenticated standalone
 CLI reached an explicitly materialized project `implementer`; Cursor App local IDE separately
-exposed all 14 project types and dispatched `implementer`; Cursor Cloud did the same after the
-global installer ran inside a dashboard-managed remote environment, the user saved its snapshot,
-and a fresh Cloud parent started from that build. Project profiles committed before Cloud boot were
-a negative control, not the Cloud carrier. `--global` renders its source in a temporary staging
+exposed all 14 project types and dispatched `implementer`; Cursor Cloud did the same after its
+environment setup Agent installed the Workflow for the remote machine and selected repository, the
+user saved the tested Build, and a new top-level Cloud Agent opened in that same repository. A
+checked-in catalog alone and a saved user-global-only Build were negative controls. `--global`
+renders its source in a temporary staging
 root, then writes only the selected host's user carrier and a hash-bound authority receipt, never
 the invoking Git repository. Project materialization is
 explicit, receipt-owned, collision/symlink-safe, and uninstall-safe. On the measured standalone CLI
 only, workflow-next/finalize may safely ensure explicit `$PWD` immediately before a named
-dispatch; App local and Cloud never inherit that CLI rule. Cloud instead installs globally inside
-its saved remote environment. `sessionStart` performs compact resume only. It takes the same
+dispatch; App local and Cloud never inherit that CLI rule. Local `install-all.sh` never installs
+Cloud. A Cloud install begins only after an Agent has confirmed it is operating in Cursor Cloud
+environment setup. `sessionStart` performs compact resume only. It takes the same
 generated `--forge` axis. See
 [docs/cursor-edition.md](docs/cursor-edition.md).
 
-For an agent-led Cursor Cloud installation, open the repository's environment setup in the Cloud
-Agents dashboard and have that setup agent configure
-`./install-cursor.sh --global --yes --forge=github` as the remote install command. The agent must
-run and inspect a test Build first, report its exact Build ID and installation assertions, and then
-ask the user to click **Save** in Cursor; a successful setup VM or draft Build is not a saved
-environment. After Save, start the working Cloud Agent from that exact Build's details page (or
-verify the Agent page's **View build details** link matches the reported ID) before trusting its
-catalog. A generic New Agent entry may resolve another personal environment for the same repository.
+For an agent-led Cursor Cloud installation, open this repository's environment setup in Cursor
+Cloud and ask that setup Agent to install Kaola-Workflow for the Cloud machine and this repository.
+Only an Agent that has established it is running in Cursor Cloud setup may take this path;
+`install-all.sh` on a local computer never does it. The setup Agent runs and inspects a test Build,
+reports its Build ID, and asks the user to click **Save**. After Save, select that saved environment
+and open a new top-level Cloud Agent in the same repository. The new Agent verifies its visible
+Build and live catalog before continuing.
 See [Cursor's environment setup](https://cursor.com/docs/cloud-agent/setup) and
 [Build lifecycle](https://cursor.com/docs/cloud-agent/builds).
 
@@ -491,10 +492,11 @@ inspect the live Task schema: omit a per-call model when the enum contains the K
 built-in-only catalog first distinguishes a missing host install/save from a capability gap. The
 authenticated `2026.08.25-3e8eec8` CLI resolved exact
 `implementer` to `cursor-grok-4.6-medium`; Cursor App `3.17.21` local IDE independently
-dispatched exact `implementer`; a fresh Cloud parent loaded all 14 roles and dispatched exact
-`implementer` after its dashboard-managed remote environment installed globally and was saved.
-The setup agent must report the successful Build ID and ask the user to click Save; the follow-up
-Agent must show that same Build ID before its catalog is counted.
+dispatched exact `implementer`; a new same-repository Cloud parent loaded all 14 roles and
+dispatched exact `implementer` after its environment-setup Agent installed the Cloud machine plus
+selected repository and the user saved the Build. Local `install-all.sh` never performs that Cloud
+install. The setup Agent must report the successful Build ID and ask the user to click Save; the
+new top-level Agent in the same repository must show that Build before its catalog is counted.
 From a local clone:
 
 ```bash

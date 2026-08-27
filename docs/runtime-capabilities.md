@@ -2,7 +2,7 @@
 
 This document describes the capability boundary behind Kaola-Workflow's runtime adapters. The
 machine-readable authority is `templates/agents/runtime-capabilities.json`; this page explains its
-operational consequences and records the first-party evidence used on 2026-08-27.
+operational consequences and records the first-party evidence used through 2026-08-28.
 
 ## One repository authority
 
@@ -24,7 +24,7 @@ Cursor, and ZCode have documented direct `AGENTS.md` support.
 | OpenCode | Project `.opencode/agents/`, user `~/.config/opencode/agents/`, or `opencode.json`; `task` with named `subagent_type`, or direct `@name` | Broad `general`, read-only local `explore`, read-only external-research `scout`; `task_id` resume and experimental background | Default child depth is one unless user configuration raises it; task permissions and effective merged config may hide a route |
 | Kimi Code | Project `.kimi-code/agents/` or `.agents/agents/`, user `$KIMI_CODE_HOME/agents/` or `~/.agents/agents/`; `Agent`/`AgentSwarm` with `kaola-role-<role>` | Writable `coder`, read-only `explore`, non-shell `plan`; custom agents and AgentSwarm lists up to 128 items | Built-ins are leaves; custom profiles may allowlist deeper agents. Resume/background remain native options |
 | Grok Build | Project `.grok/agents/` or user `~/.grok/agents/`; `spawn_subagent` with named `subagent_type` | Full `general-purpose`; read/shell `explore` and `plan`; background, isolation, resume, cwd, and optional per-call model | Children cannot spawn descendants; the root runtime's other choices remain available |
-| Cursor | Documented project/user `.cursor/agents/` plus compatibility paths; explicit `/role`, natural-language routing, or the live Task schema. CLI and App are separate product surfaces; App local vs Cloud are different hosts. Standalone CLI reached an explicit project `implementer`; local App and a fresh Cloud parent from a saved remote environment each exposed all 14 Kaola types and dispatched exact `implementer` | Host-dependent: local App, CLI, and correctly saved Cloud environments expose different native routes beside the Kaola catalog; an unsaved Cloud negative control exposed only native routes | The current Task catalog is authoritative. CLI uses explicit safe project materialization. Cloud uses a global install inside its dashboard-managed remote user home, followed by manual save/snapshot and a fresh parent. Committed project profiles are not the Cloud carrier. `--global` does not write ambient git |
+| Cursor | Documented project/user `.cursor/agents/` plus compatibility paths; explicit `/role`, natural-language routing, or the live Task schema. CLI and App are separate product surfaces; App local vs Cloud are different hosts. Standalone CLI reached an explicit project `implementer`; local App and a new same-repository Cloud parent from a saved environment each exposed all 14 Kaola types and dispatched exact `implementer` | Host-dependent: local App, CLI, and correctly saved Cloud environments expose different native routes beside the Kaola catalog; checked-in-only and saved-user-global-only Cloud negative controls exposed native routes only | The current Task catalog is authoritative. CLI uses explicit safe project materialization. Cloud requires an Agent-confirmed environment setup to install its remote authority plus selected repository, followed by manual Save and a new same-repository parent. `install-all.sh` is local-only and never deploys Cloud |
 | ZCode | Runtime-loaded user `${ZCODE_HOME:-~/.zcode}/agents/`; project `.zcode/agents/` is installer staging; automatic selection, native `@role`, or the live Agent schema | Full `general-purpose` and read-only `Explore`; foreground/background stays native | Profiles load in a new session and children cannot spawn. The staged project tree is not runtime profile discovery |
 
 Cursor and ZCode do not publish one complete Task/Agent call schema. Their generated guidance names
@@ -53,16 +53,17 @@ catalogs. Unknown stays `unknown`; a documented path is not a live named-role PA
 | ZCode | `${ZCODE_HOME:-~/.zcode}` (project tree is staging; runtime loads user agents) | no | no (staging only) | documented user-scope discovery |
 | Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/{agents,commands}` (un-nested) | **no** | yes (explicit `--target`; workflow-next/finalize may safely ensure explicit `$PWD` immediately before named dispatch) | live project `implementer`; raw Task carrier resolved `cursor-grok-4.6-medium` |
 | Cursor App / local IDE | same documented user carrier; App is not inferred from a CLI binary | **no** | `unknown` | live project catalog with all 14 Kaola types; exact `implementer` succeeded |
-| Cursor App / Cloud host | saved remote user home managed by the Cursor dashboard | **no** | no; install globally in the remote environment, save/snapshot, then start a fresh parent from the exact saved Build | live 23-type catalog with all 14 Kaola names; exact `implementer` succeeded |
+| Cursor App / Cloud host | saved remote environment managed by Cursor | **no** | yes; a confirmed environment-setup Agent materializes the selected repository before Save | live exact-Build 23-type catalog with all 14 Kaola names; exact `implementer` succeeded from a new same-repository parent |
 
 Cursor family `named_roles: true` is now live-proven on three independently measured surfaces. On
 the measured standalone CLI only, next/finalize may run the installed safe materializer with explicit `$PWD`
 immediately before a named dispatch. It derives bytes from the receipt-verified global authority,
 is a no-op when current, and fails before writing on missing/stale authority, collision, symlink,
-or modified ownership. Cursor App local and Cloud do not inherit that rule. Cloud instead installs
-globally inside its saved remote environment. The setup agent reports the successful Build ID and
-asks the user to click Save; the fresh parent's visible Build link must match that ID. A generic
-repository-level New Agent entry is insufficient when multiple personal environments match.
+or modified ownership. Cursor App local and Cloud do not inherit that point-of-use rule.
+`install-all.sh` installs only its current machine. Only an Agent that has established it is in
+Cursor Cloud environment setup may install the remote authority and selected repository, report
+the successful Build ID, and ask the user to click Save. A new top-level Agent in that same
+repository must visibly match the Build before its catalog is trusted.
 `sessionStart` performs compact resume only.
 
 ## Default tier bindings
@@ -242,19 +243,20 @@ A final fresh App-started Cloud probe selected
 `ead40c2741f4cae7e0a0cb473bba8a8a4a80c7a6` before send. That commit already tracked all 14
 project profiles. The new Cloud parent still exposed exactly `generalPurpose`, `explore`,
 `computerUse`, `videoReview`, `cursor-guide`, `bugbot`, `security-review`, and
-`best-of-n-runner`; exact `implementer` was absent, so no substitute was dispatched. Thus
-pre-boot project files are measured as insufficient on this Cloud host. This is the negative
-control proving project files are not the Cloud carrier; it is not a runtime capability verdict.
+`best-of-n-runner`; exact `implementer` was absent, so no substitute was dispatched. Thus branch
+files not installed by the environment Build are measured as insufficient on this Cloud host; this
+is not a runtime capability verdict. A clean saved Build with 14 current user-global profiles and
+no project catalog also remained built-in-only, so user-global discovery alone is unsupported.
 
-The positive control configured dashboard environment
-`9116f5fb-a1f4-11f1-b532-320a589b8025` to run
-`./install-cursor.sh --global --yes --forge=github`, then saved it manually. Config-change build
-`bld-20260827-aaac14bf-e980-4d1a-9600-e8b3fb2e031e` installed all 14 profiles under the remote
-`/home/ubuntu/.cursor/agents`, snapshotted, and warmed. Fresh parent
-`bc-f2f0f15f-31d9-416a-9952-35243def5561` exposed all 14 Kaola names in its 23-type Task catalog;
-exact `implementer` child `bc-63c79c19-f9fb-5892-970e-bb1606ad1a3b` returned
-`PROBE_OK_CURSOR_CLOUD_SAVED_ENV_IMPLEMENTER` with no substitute or per-call model override. The
-selected child model and profile source remained unobservable.
+The final environment-setup Build
+`bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2` installed exact candidate
+`101250f293a5439ed73e8ee2127c7501fba9e883` for the remote machine and explicitly materialized the
+selected repository before the user manually saved it. New same-repository parent
+`bc-3e6bd3bd-f310-47cd-a9cb-358cf802f16d` visibly used that Build and exposed all 14 Kaola names
+in its 23-type Task catalog. Exact `implementer` child
+`bc-7d00ddad-23f3-5e69-8f9a-1c326b051a49` returned
+`PROBE_OK_CURSOR_CLOUD_FINAL_SAVED_REPO_IMPLEMENTER` with no substitute or per-call model override.
+The selected child model and profile source remained unobservable.
 
 ### ZCode
 

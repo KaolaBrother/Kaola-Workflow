@@ -478,21 +478,22 @@ function runtimeDelegationGaps(runtime, text) {
         /runtime.report.*task (?:catalog|enum)/]],
       ['host-catalog-variation', CURSOR_HOST_CATALOG_VARIATION],
       ['reported-route-only', CURSOR_REPORTED_ROUTE_ONLY],
-      // #1036/#1039: a Cloud project-only catalog miss is a negative control, not the support
-      // verdict. The real Cloud carrier is its dashboard-managed remote user home after global
-      // install, manual save/snapshot, and a fresh parent bound to the tested Build.
-      ['cloud-project-negative-control', [/committed project profiles alone are a negative control/,
-        /project profiles alone were not the cloud carrier/]],
-      ['cloud-save-before-gap', [/install globally inside the dashboard-managed remote environment.*user save.*fresh parent.*build.*capability gap/,
-        /global installer ran inside a dashboard-managed remote environment.*saved and snapshotted.*fresh cloud parent/]],
-      ['cloud-build-identity', [/generic new agent entry may resolve another personal environment/,
-        /fresh agent.*visible build link must match/]],
+      // #1036/#1039: checked-in-only and user-global-only Cloud catalogs are negative controls.
+      // The measured carrier is installed for the selected repository by a confirmed Cloud
+      // environment-setup Agent before manual Save and a new same-repository top-level parent.
+      ['cloud-project-negative-control', [/catalog merely committed.*saved user-global-only build are negative controls/,
+        /checked-in catalog.*saved user-global-only build.*negative controls/]],
+      ['cloud-save-before-gap', [/host is confirmed as cursor cloud.*environment setup.*remote machine authority plus the selected repository.*user save.*new top-level agent.*same repository/,
+        /established.*cursor cloud environment setup.*remote machine and selected repository.*click save.*new top-level cloud agent.*same repository/]],
+      ['cloud-build-identity', [/new top-level.*same repository.*inspect its live catalog/,
+        /same-repository.*visible build.*live catalog/]],
+      ['install-all-local-only', [/install-all\.sh`? installs only the machine where it runs and never deploys a cursor cloud environment/]],
       ['omit-model-when-named', [/omit a requested per-call model only when/,
         /omit that per-call model only when/]],
       ['catalog-miss-model-lever', [/resolver-listed model slug/]],
-      ['cloud-negative-control-route', [/cloud negative control exposed [`']?explore/]],
-      ['cloud-saved-named-catalog', [/corrected saved environment exposed all 14 kaola types/,
-        /cursor cloud separately proved all 14 kaola names/]],
+      ['cloud-negative-control-route', [/cloud negative controls stayed built-in-only/]],
+      ['cloud-saved-named-catalog', [/corrected environment-setup build.*selected repository before snapshot.*new top-level same-repository agent exposed all 14 kaola types/,
+        /environment-setup build.*selected repository.*all 14 kaola names/]],
       ['global-install-no-ambient-repo', [/does not write an ambient git repository/]],
       ['cursor-app-cli-distinct', [/product surfaces and app local\/cloud hosts remain independent/,
         /standalone cli.*cursor app.*different execution hosts/]],
@@ -1656,11 +1657,11 @@ for (const runtime of RUNTIME_NAMES) {
       && entry.adapter.surfaces.app.execution_hosts.local
       && entry.adapter.surfaces.app.execution_hosts.local.global_discovery === 'unknown'
       && entry.adapter.surfaces.app.execution_hosts.cloud
-      && entry.adapter.surfaces.app.execution_hosts.cloud.global_discovery === 'supported_in_saved_remote_environment'
-      && entry.adapter.surfaces.app.execution_hosts.cloud.required_project_materialization === 'no'
-      && entry.adapter.surfaces.app.execution_hosts.cloud.remote_injection === 'dashboard_environment_install_and_save'
-      && entry.adapter.surfaces.app.execution_hosts.cloud.named_catalog === 'user_global_when_environment_saved'
-      && entry.adapter.surfaces.app.execution_hosts.cloud.reload === 'new_cloud_parent_after_environment_save'
+      && entry.adapter.surfaces.app.execution_hosts.cloud.global_discovery === 'unsupported'
+      && entry.adapter.surfaces.app.execution_hosts.cloud.required_project_materialization === 'yes'
+      && entry.adapter.surfaces.app.execution_hosts.cloud.remote_injection === 'agent_confirmed_cloud_environment_setup_install_and_save'
+      && entry.adapter.surfaces.app.execution_hosts.cloud.named_catalog === 'project_custom_from_saved_environment_build'
+      && entry.adapter.surfaces.app.execution_hosts.cloud.reload === 'new_same_repository_cloud_parent_after_environment_save'
       && entry.adapter.surfaces.cli.execution_hosts
       && entry.adapter.surfaces.cli.execution_hosts.local
       && entry.adapter.surfaces.cli.execution_hosts.local.required_project_materialization === 'yes'),
@@ -2046,34 +2047,44 @@ if (generator && behavior && adapters && profiles.length > 0) {
           && frozenGaps.includes('reported-route-only'),
         'A10-delegation/cursor-host-mutation: universalizing one measured Cursor enum fails host-scoped acceptance');
       }
-      const cloudNegative = /committed project profiles alone are a negative control/;
+      const cloudNegative = /a catalog merely committed on the selected branch and a saved user-global-only build are negative controls/;
       assert(cloudNegative.test(subject),
         'A10-delegation/cursor-cloud-carrier-mutation: rendered Cursor guidance treats project-only Cloud files as a negative control');
-      const strippedNegative = subject.replaceAll('committed project profiles alone are a negative control',
-        'committed project profiles are the complete cloud carrier')
-        .replaceAll('project profiles alone were not the cloud carrier',
-          'project profiles alone were the cloud carrier');
+      const strippedNegative = subject.replace(cloudNegative,
+        'a checked-in catalog or user-global-only build is the complete cloud carrier')
+        .replace(/cloud negative controls stayed built-in-only for a checked-in catalog and for a saved user-global-only build/g,
+          'cloud installs are always visible')
+        .replace(/a checked-in catalog alone and a saved user-global-only build were built-in-only negative controls/g,
+          'all cloud catalogs are visible');
       const negativeGaps = runtimeDelegationGaps('cursor', strippedNegative);
       assert(strippedNegative !== subject && negativeGaps.includes('cloud-project-negative-control'),
         'A10-delegation/cursor-cloud-carrier-mutation: promoting project files to the Cloud carrier fails acceptance');
-      const cloudLifecycle = /install globally inside the dashboard-managed remote environment, have the user save it, and open a fresh parent whose visible build identity matches the tested build before treating a still-missing name as a capability gap/;
+      const cloudLifecycle = /after the host is confirmed as cursor cloud, use its environment setup to install the remote machine authority plus the selected repository before snapshot, have the user save, and open a new top-level agent in that same repository before treating a still-missing name as a capability gap/;
       assert(cloudLifecycle.test(subject),
-        'A10-delegation/cursor-cloud-lifecycle-mutation: rendered Cursor guidance requires remote global install, user Save, and an exact-Build fresh parent before a gap verdict');
+        'A10-delegation/cursor-cloud-lifecycle-mutation: rendered Cursor guidance requires a confirmed Cloud host, machine-plus-repository Build, user Save, and a same-repository new parent');
       const strippedLifecycle = subject.replace(cloudLifecycle,
         'treat the first project-only catalog miss as a capability gap')
-        .replaceAll('global installer ran inside a dashboard-managed remote environment, the user saved and snapshotted it, and a fresh cloud parent started from that build',
-          'cloud support appeared without an installation or reload lifecycle');
+        .replaceAll('only after the agent has established that it is operating in cursor cloud environment setup may it install the workflow for that remote machine and selected repository',
+          'any local agent may deploy cloud');
       const lifecycleGaps = runtimeDelegationGaps('cursor', strippedLifecycle);
       assert(strippedLifecycle !== subject && lifecycleGaps.includes('cloud-save-before-gap'),
         'A10-delegation/cursor-cloud-lifecycle-mutation: deleting the saved-environment lifecycle fails acceptance');
-      const cloudBuildIdentity = /a generic new agent entry may resolve another personal environment for the repository/;
+      const cloudBuildIdentity = /open a new top-level cloud agent in the same repository from that saved environment and inspect its live catalog/;
       assert(cloudBuildIdentity.test(subject),
-        'A10-delegation/cursor-cloud-build-identity: guidance warns that repository-level launch may resolve another personal environment');
+        'A10-delegation/cursor-cloud-build-identity: guidance requires a same-repository top-level Agent from the saved environment');
       const strippedBuildIdentity = subject.replace(cloudBuildIdentity,
-        'a generic New Agent entry always selects the newly saved environment');
+        'open any unrelated cloud task and assume the catalog loaded');
       const buildIdentityGaps = runtimeDelegationGaps('cursor', strippedBuildIdentity);
       assert(strippedBuildIdentity !== subject && buildIdentityGaps.includes('cloud-build-identity'),
-        'A10-delegation/cursor-cloud-build-identity: removing exact-Build disambiguation fails acceptance');
+        'A10-delegation/cursor-cloud-build-identity: removing the same-repository saved-environment handoff fails acceptance');
+      const installAllBoundary = /install-all\.sh`? installs only the machine where it runs and never deploys a cursor cloud environment/;
+      assert(installAllBoundary.test(subject),
+        'A10-delegation/cursor-install-all-cloud-boundary: install-all is current-machine-only');
+      const strippedInstallAll = subject.replace(installAllBoundary,
+        'install-all.sh also deploys Cursor Cloud');
+      const installAllGaps = runtimeDelegationGaps('cursor', strippedInstallAll);
+      assert(strippedInstallAll !== subject && installAllGaps.includes('install-all-local-only'),
+        'A10-delegation/cursor-install-all-cloud-boundary: allowing install-all Cloud deployment fails acceptance');
       assert(subject.includes('does not write an ambient git repository'),
         'A10-delegation/cursor-global-first-mutation: rendered Cursor guidance forbids ambient Git writes from --global');
       const strippedAmbient = subject.replaceAll('does not write an ambient git repository',
