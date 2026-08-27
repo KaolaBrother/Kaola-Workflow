@@ -314,6 +314,17 @@ its saved remote environment. `sessionStart` performs compact resume only. It ta
 generated `--forge` axis. See
 [docs/cursor-edition.md](docs/cursor-edition.md).
 
+For an agent-led Cursor Cloud installation, open the repository's environment setup in the Cloud
+Agents dashboard and have that setup agent configure
+`./install-cursor.sh --global --yes --forge=github` as the remote install command. The agent must
+run and inspect a test Build first, report its exact Build ID and installation assertions, and then
+ask the user to click **Save** in Cursor; a successful setup VM or draft Build is not a saved
+environment. After Save, start the working Cloud Agent from that exact Build's details page (or
+verify the Agent page's **View build details** link matches the reported ID) before trusting its
+catalog. A generic New Agent entry may resolve another personal environment for the same repository.
+See [Cursor's environment setup](https://cursor.com/docs/cloud-agent/setup) and
+[Build lifecycle](https://cursor.com/docs/cloud-agent/builds).
+
 The first receipt-owning global refresh can adopt an existing 10.0.1 Cursor edition only when its
 changed and retired files byte-match the published per-forge hashes. Modified or unknown bytes are
 still refused; the migration removes the retired ambient catalog helper and stale hook entries.
@@ -482,6 +493,8 @@ authenticated `2026.08.25-3e8eec8` CLI resolved exact
 `implementer` to `cursor-grok-4.6-medium`; Cursor App `3.17.21` local IDE independently
 dispatched exact `implementer`; a fresh Cloud parent loaded all 14 roles and dispatched exact
 `implementer` after its dashboard-managed remote environment installed globally and was saved.
+The setup agent must report the successful Build ID and ask the user to click Save; the follow-up
+Agent must show that same Build ID before its catalog is counted.
 From a local clone:
 
 ```bash

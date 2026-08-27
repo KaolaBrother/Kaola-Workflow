@@ -383,7 +383,10 @@ are removed. On the measured standalone CLI only,
 workflow-next/finalize may invoke the installed helper with explicit `$PWD` immediately before a
 named dispatch; App local and Cloud keep separate live catalogs. Cloud uses the same global
 installer inside its dashboard-managed remote user home, then requires a manual environment save,
-completed snapshot, and fresh parent. `sessionStart` performs compact resume only.
+completed snapshot, and fresh parent. The setup agent reports the tested Build ID and asks the user
+to click Save; the fresh Agent's visible Build link must match before that catalog is trusted,
+because a generic repository-level launch may resolve another personal environment. `sessionStart`
+performs compact resume only.
 
 ### Runtime capability divergence
 

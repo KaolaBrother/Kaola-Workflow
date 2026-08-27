@@ -53,15 +53,17 @@ catalogs. Unknown stays `unknown`; a documented path is not a live named-role PA
 | ZCode | `${ZCODE_HOME:-~/.zcode}` (project tree is staging; runtime loads user agents) | no | no (staging only) | documented user-scope discovery |
 | Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/{agents,commands}` (un-nested) | **no** | yes (explicit `--target`; workflow-next/finalize may safely ensure explicit `$PWD` immediately before named dispatch) | live project `implementer`; raw Task carrier resolved `cursor-grok-4.6-medium` |
 | Cursor App / local IDE | same documented user carrier; App is not inferred from a CLI binary | **no** | `unknown` | live project catalog with all 14 Kaola types; exact `implementer` succeeded |
-| Cursor App / Cloud host | saved remote user home managed by the Cursor dashboard | **no** | no; install globally in the remote environment, save/snapshot, then start a fresh parent | live 23-type catalog with all 14 Kaola names; exact `implementer` succeeded |
+| Cursor App / Cloud host | saved remote user home managed by the Cursor dashboard | **no** | no; install globally in the remote environment, save/snapshot, then start a fresh parent from the exact saved Build | live 23-type catalog with all 14 Kaola names; exact `implementer` succeeded |
 
 Cursor family `named_roles: true` is now live-proven on three independently measured surfaces. On
 the measured standalone CLI only, next/finalize may run the installed safe materializer with explicit `$PWD`
 immediately before a named dispatch. It derives bytes from the receipt-verified global authority,
 is a no-op when current, and fails before writing on missing/stale authority, collision, symlink,
 or modified ownership. Cursor App local and Cloud do not inherit that rule. Cloud instead installs
-globally inside its saved remote environment and requires a fresh parent after save. `sessionStart`
-performs compact resume only.
+globally inside its saved remote environment. The setup agent reports the successful Build ID and
+asks the user to click Save; the fresh parent's visible Build link must match that ID. A generic
+repository-level New Agent entry is insufficient when multiple personal environments match.
+`sessionStart` performs compact resume only.
 
 ## Default tier bindings
 

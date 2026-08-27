@@ -20,6 +20,29 @@ global installer inside the dashboard-managed remote environment, save and snaps
 a fresh Cloud parent. See
 [runtime capabilities](runtime-capabilities.md#cursor).
 
+## Agent-led Cloud installation
+
+Cursor Cloud installation is a saved-environment workflow, not a command run once inside an
+arbitrary task VM:
+
+1. Open the target repository's environment setup in the Cursor Cloud Agents dashboard and ask the
+   setup agent to configure `./install-cursor.sh --global --yes --forge=github` as the remote
+   install command.
+2. Have the setup agent run a test Build. It must verify the exact candidate, exit code, absence of
+   an ambient repository `.cursor`, the user-global authority receipt, and the expected agent
+   catalog; it then reports the exact Build ID.
+3. The setup agent asks the user to click **Save** in Cursor. A green setup VM, snapshot, or draft
+   Build is not a persisted production environment until that user action succeeds.
+4. Start the working Cloud Agent from the saved Build's details page, or verify the new Agent page's
+   **View build details** link equals the reported Build ID. Only then inspect the fresh parent's
+   live catalog and continue work.
+
+Do not assume the generic New Agent entry selected the environment that was just saved. More than
+one personal environment can match the same repository, and the repository resolver may choose a
+different active Build. The exact Build identity is the proof. This follows Cursor's documented
+[environment resolution](https://cursor.com/docs/cloud-agent/setup) and
+[Build lifecycle](https://cursor.com/docs/cloud-agent/builds).
+
 Cursor reads root and nested `AGENTS.md` directly, combining parent guidance with more-specific
 instructions. Kaola installs no project-instruction bridge for Cursor. Generated agent frontmatter,
 workspace catalog rules, and hooks are Cursor adapter data, not a copy of the universal contract.
@@ -87,7 +110,8 @@ custody-bearing role. A resolver-listed live-schema model slug is then an effort
 violation of unpublished-field discipline; omit-model follows the parent and is not a profile pin.
 Missing standalone-CLI project agents want `install-cursor.sh --target` then a new CLI session.
 Missing Cloud names want the dashboard environment's global install, manual save/snapshot, then a
-fresh Cloud parent before a capability gap can be concluded.
+fresh Cloud parent whose visible Build link matches the saved Build ID before a capability gap can
+be concluded.
 
 If the current session exposes a Task call and named catalog, that live schema is the authority;
 public documentation does not establish one portable JSON call schema, so Kaola does not invent

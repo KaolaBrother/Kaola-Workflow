@@ -21,8 +21,10 @@
   On the measured standalone CLI only, generated next/finalize safely ensure explicit `$PWD`
   immediately before a named dispatch. App local and Cloud keep independent live catalogs. Cloud
   uses the same global installer inside its dashboard-managed remote environment, followed by the
-  user saving the environment and starting a fresh parent; it never inherits the CLI project
-  materializer. `sessionStart` performs compact resume only.
+  setup agent reporting the tested Build ID, the user clicking Save, and a fresh parent whose
+  visible Build link matches that ID; a generic repository launch may resolve another personal
+  environment. Cloud never inherits the CLI project materializer. `sessionStart` performs compact
+  resume only.
 - **Active runs adopt a compatible repository layout; missions stay outcome-level (#1037).**
   The project-instruction helper classifies each managed change as
   `authority_layout_equivalent`, `execution_default_change`, `state_schema_incompatible`, or

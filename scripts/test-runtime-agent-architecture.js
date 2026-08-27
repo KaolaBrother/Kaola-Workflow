@@ -480,11 +480,13 @@ function runtimeDelegationGaps(runtime, text) {
       ['reported-route-only', CURSOR_REPORTED_ROUTE_ONLY],
       // #1036/#1039: a Cloud project-only catalog miss is a negative control, not the support
       // verdict. The real Cloud carrier is its dashboard-managed remote user home after global
-      // install, manual save/snapshot, and a fresh parent.
+      // install, manual save/snapshot, and a fresh parent bound to the tested Build.
       ['cloud-project-negative-control', [/committed project profiles alone are a negative control/,
         /project profiles alone were not the cloud carrier/]],
-      ['cloud-save-before-gap', [/install globally inside the dashboard-managed remote environment.*save.*fresh parent.*capability gap/,
+      ['cloud-save-before-gap', [/install globally inside the dashboard-managed remote environment.*user save.*fresh parent.*build.*capability gap/,
         /global installer ran inside a dashboard-managed remote environment.*saved and snapshotted.*fresh cloud parent/]],
+      ['cloud-build-identity', [/generic new agent entry may resolve another personal environment/,
+        /fresh agent.*visible build link must match/]],
       ['omit-model-when-named', [/omit a requested per-call model only when/,
         /omit that per-call model only when/]],
       ['catalog-miss-model-lever', [/resolver-listed model slug/]],
@@ -2054,9 +2056,9 @@ if (generator && behavior && adapters && profiles.length > 0) {
       const negativeGaps = runtimeDelegationGaps('cursor', strippedNegative);
       assert(strippedNegative !== subject && negativeGaps.includes('cloud-project-negative-control'),
         'A10-delegation/cursor-cloud-carrier-mutation: promoting project files to the Cloud carrier fails acceptance');
-      const cloudLifecycle = /install globally inside the dashboard-managed remote environment, save it, and open a fresh parent before treating a still-missing name as a capability gap/;
+      const cloudLifecycle = /install globally inside the dashboard-managed remote environment, have the user save it, and open a fresh parent whose visible build identity matches the tested build before treating a still-missing name as a capability gap/;
       assert(cloudLifecycle.test(subject),
-        'A10-delegation/cursor-cloud-lifecycle-mutation: rendered Cursor guidance requires remote global install, save, and a fresh parent before a gap verdict');
+        'A10-delegation/cursor-cloud-lifecycle-mutation: rendered Cursor guidance requires remote global install, user Save, and an exact-Build fresh parent before a gap verdict');
       const strippedLifecycle = subject.replace(cloudLifecycle,
         'treat the first project-only catalog miss as a capability gap')
         .replaceAll('global installer ran inside a dashboard-managed remote environment, the user saved and snapshotted it, and a fresh cloud parent started from that build',
@@ -2064,6 +2066,14 @@ if (generator && behavior && adapters && profiles.length > 0) {
       const lifecycleGaps = runtimeDelegationGaps('cursor', strippedLifecycle);
       assert(strippedLifecycle !== subject && lifecycleGaps.includes('cloud-save-before-gap'),
         'A10-delegation/cursor-cloud-lifecycle-mutation: deleting the saved-environment lifecycle fails acceptance');
+      const cloudBuildIdentity = /a generic new agent entry may resolve another personal environment for the repository/;
+      assert(cloudBuildIdentity.test(subject),
+        'A10-delegation/cursor-cloud-build-identity: guidance warns that repository-level launch may resolve another personal environment');
+      const strippedBuildIdentity = subject.replace(cloudBuildIdentity,
+        'a generic New Agent entry always selects the newly saved environment');
+      const buildIdentityGaps = runtimeDelegationGaps('cursor', strippedBuildIdentity);
+      assert(strippedBuildIdentity !== subject && buildIdentityGaps.includes('cloud-build-identity'),
+        'A10-delegation/cursor-cloud-build-identity: removing exact-Build disambiguation fails acceptance');
       assert(subject.includes('does not write an ambient git repository'),
         'A10-delegation/cursor-global-first-mutation: rendered Cursor guidance forbids ambient Git writes from --global');
       const strippedAmbient = subject.replaceAll('does not write an ambient git repository',

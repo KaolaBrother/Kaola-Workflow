@@ -676,8 +676,10 @@ function commandRel(name, forge) {
       'G2[' + name + ']: Cursor CLI, App local, and App Cloud remain distinct surfaces/hosts');
     assert(/committed project profiles alone are a negative control/i.test(content),
       'G2[' + name + ']: committed project profiles are a Cloud negative control, not its carrier');
-    assert(/install globally inside the dashboard-managed remote environment, save it, and open a fresh parent before treating a still-missing name as a capability gap/i.test(content),
-      'G2[' + name + ']: Cloud gap verdict follows remote global install, save, and fresh-parent reload');
+    assert(/install globally inside the dashboard-managed remote environment, have the user save it, and open a fresh parent whose visible Build identity matches the tested Build before treating a still-missing name as a capability gap/i.test(content),
+      'G2[' + name + ']: Cloud gap verdict follows remote global install, user Save, and exact-Build fresh-parent reload');
+    assert(/generic New Agent entry may resolve another personal environment for the repository/i.test(content),
+      'G2[' + name + ']: Cloud setup guidance rejects ambiguous same-repository environment resolution');
     assert(/omit a requested per-call model only when/i.test(content),
       'G2[' + name + ']: omit-model is the named-profile carrier, not a catalog-miss substitute');
     assert(/Cloud negative control exposed [`']?explore/i.test(content),
