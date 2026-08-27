@@ -507,8 +507,9 @@ From a local clone:
 `--no-scripts` skips writing scripts/hooks without forgetting any unchanged receipt-owned assets
 that remain on disk; uninstall still removes those proven bytes and exact hook entries. A later
 ordinary project install promotes a partial no-scripts authority before installing its default
-scripts/hooks. Doctor keeps current Build/live-catalog identity `unknown` unless the active runtime
-observes it; historical measurements remain separately typed as evidence.
+scripts/hooks without retiring an independently active receipt-owned global live hook. Doctor keeps
+current Build/live-catalog identity `unknown` unless the active runtime observes it; historical
+measurements remain separately typed as evidence.
 
 Hooks merge into `.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (global). Compact
 resume injects via `sessionStart` `additional_context`; `preCompact` cannot inject. Catalog

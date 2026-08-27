@@ -18,7 +18,7 @@
   historical Build/catalog evidence is never flattened into unobserved current identity.
   `--no-scripts` transitions preserve ownership of skipped receipt-proven bytes and hook entries,
   while a later default project install promotes a partial authority before claiming its default
-  scripts/hooks are present.
+  scripts/hooks are present, without retiring an independently active receipt-owned global live hook.
   Receipt-less 10.0.1 global installs are adopted only when every changed or retired path matches
   its published per-forge hash; all three forge migrations are live-proved, while a one-byte
   mutation remains an unmanaged collision.

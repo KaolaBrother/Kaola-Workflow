@@ -273,7 +273,8 @@ Add `--yes` for non-interactive use. `--no-scripts` skips writing support script
 and the hooks JSON merge. It retains receipt ownership for any skipped managed assets that remain
 on disk, so later uninstall still removes unchanged bytes and exact hook entries. A fresh
 no-scripts authority is deliberately partial; a later default project install promotes it before
-materializing default scripts/hooks. Normal install creates a transaction-scoped staging root and
+materializing default scripts/hooks without retiring an independently active receipt-owned global
+live hook. Normal install creates a transaction-scoped staging root and
 invokes `sync-cursor-edition.js --write --tree-root=<absolute empty staging path>`; the cleanup trap
 removes that source after success or failure. `--regenerate` alone resolves and refreshes the
 main-checkout generated tree.

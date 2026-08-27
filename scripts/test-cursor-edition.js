@@ -1965,6 +1965,38 @@ for (const role of reviewerGenerator.ROLES) {
       clean(promoted);
     }
 
+    // Promotion fills an incomplete authority set; it must not retire a separate still-active
+    // global live hook that an earlier full install owns and hooks.json still registers.
+    {
+      const full = runInstaller(['--global'], { skipTarget: true });
+      const authorityHook = path.join(full.cursorHome, 'kaola-workflow', 'hooks',
+        'kaola-workflow-compact-context.sh');
+      const liveHook = path.join(full.cursorHome, 'hooks', 'kaola-workflow-compact-context.sh');
+      const authorityReceipt = path.join(full.cursorHome, 'kaola-workflow', 'cursor-authority.json');
+      fs.unlinkSync(authorityHook);
+      const skipped = runInstaller(['--global', '--no-scripts'], {
+        skipTarget: true, home: full.home, cursorHome: full.cursorHome, dest: full.dest,
+      });
+      const partialReceipt = JSON.parse(fs.readFileSync(authorityReceipt, 'utf8'));
+      assert(skipped.status === 0 && !fs.existsSync(authorityHook) && fs.existsSync(liveHook)
+        && partialReceipt.files['hooks/kaola-workflow-compact-context.sh'],
+      'G8-noscripts-live-hook-promotion: partial authority still owns the active global live hook');
+      const promoted = runInstaller([], {
+        home: full.home, cursorHome: full.cursorHome, dest: full.dest,
+      });
+      const promotedReceipt = JSON.parse(fs.readFileSync(authorityReceipt, 'utf8'));
+      const globalHooks = JSON.parse(fs.readFileSync(path.join(full.cursorHome, 'hooks.json'), 'utf8'));
+      const projectHook = path.join(full.dest, '.cursor', 'hooks',
+        'kaola-workflow-compact-context.sh');
+      assert(promoted.status === 0 && fs.existsSync(authorityHook) && fs.existsSync(projectHook),
+        'G8-noscripts-live-hook-promotion: ordinary project install restores authority and project hook bytes');
+      assert(fs.existsSync(liveHook)
+        && promotedReceipt.files['hooks/kaola-workflow-compact-context.sh']
+        && Array.isArray(globalHooks.hooks && globalHooks.hooks.sessionStart),
+      'G8-noscripts-live-hook-promotion: authority-only promotion preserves the active global live hook, receipt ownership, and registration');
+      clean(promoted);
+    }
+
     // Merge preserves user hook entries; uninstall strips kaola entries only.
     {
       const dest = fs.mkdtempSync(path.join(tmpBase(), 'cursor-i-dest-'));

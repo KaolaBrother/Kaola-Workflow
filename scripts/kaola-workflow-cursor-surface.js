@@ -464,14 +464,13 @@ function installGlobal(opts) {
   applyManaged(home, built.desired);
   if (mergedHooks) atomicWrite(hooksFile, mergedHooks, 0o644);
   const adoptedLegacyRetired = removeLegacyRetired(home, receiptInfo, retiredHashes);
-  removeRetiredManaged(home, built.desired, receiptInfo, opts.noScripts
-    ? ['kaola-workflow/scripts/', 'kaola-workflow/hooks/', 'hooks/'] : []);
+  const preservedPrefixes = opts.noScripts
+    ? ['kaola-workflow/scripts/', 'kaola-workflow/hooks/', 'hooks/']
+    : (opts.authorityOnly ? ['hooks/'] : []);
+  removeRetiredManaged(home, built.desired, receiptInfo, preservedPrefixes);
   verifyDesired(home, built.desired);
   const receiptFiles = recordsFor(built.desired);
-  if (opts.noScripts) {
-    carryForwardSkippedRecords(home, receiptInfo, receiptFiles,
-      ['kaola-workflow/scripts/', 'kaola-workflow/hooks/', 'hooks/']);
-  }
+  carryForwardSkippedRecords(home, receiptInfo, receiptFiles, preservedPrefixes);
   const receipt = {
     schema_version: RECEIPT_SCHEMA,
     kind: 'cursor_global_authority',
