@@ -36,6 +36,12 @@ host-supported task-sensitive model, effort, service-tier, or history-fork choic
 Profile omission keeps host policy authoritative; the defaults do not become scheduler state or a
 fixed reviewer pipeline.
 
+Resolve role registration from the effective project or user `.codex/config.toml`: its managed
+`[agents.<role>]` entry points to `.codex/agents/kaola-workflow/<role>.toml`. Bundled `agents.toml`
+is installer input, not an installed lookup path. Finalize's Codex examples pass the default model
+and `reasoning_effort` on `spawn_agent`; they remain examples, not a ban on task-sensitive or
+supported inherited choices.
+
 Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 
 **Codex readiness boundary:** `install-codex-agent-profiles.js` owns installation and upgrade proof.

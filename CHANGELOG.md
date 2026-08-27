@@ -22,6 +22,16 @@
   The supported Cursor CLI probe exposes writable `generalPurpose`, specialist built-ins, exact
   project roles, live medium/high/xhigh tiers, and one descendant generation; IDE-documented scoped
   built-ins remain a different host catalog rather than a universal restriction.
+- **Generated tier membership and installed Codex lookup now have one stated authority (#1035).**
+  The common behavior contract generates the standard/reasoning/heavy role roster; adapters only
+  select each runtime's native carrier and default binding. Finalize's Claude examples pass the
+  default tier model with runtime-default effort and its Codex examples pass the default model plus
+  `reasoning_effort`, while task-sensitive and supported inherited choices remain valid. Codex role
+  discovery starts at the effective project or user `.codex/config.toml` managed
+  `[agents.<role>]` registration, which references `.codex/agents/kaola-workflow/<role>.toml`;
+  bundled `agents.toml` is installer source rather than an installed lookup path. Cursor/ZCode
+  guidance continues to defer to the live schema and emits no static request fields whose names or
+  shapes remain unverified.
 
 ### Documentation
 

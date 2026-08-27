@@ -322,16 +322,20 @@ block, ordering schema, parser, or linter; the routing generator propagates the 
 the command and skill surfaces.
 
 That common brief is separate from a generated runtime capability block. Both `workflow-next` and
-`kaola-workflow-finalize` contain one marked `runtime-delegation` slot. The slot renders Claude's
-native block for commands and the forge-matched Codex block for skills; each additive edition
-replaces the same marked region with its own adapter render. The block exposes profile lookup,
-native dispatch carrier, three default tier bindings, tool boundary, honest named/built-in routes,
-and relevant availability/session limits. `workflow-init` has no dispatch teaching.
+`kaola-workflow-finalize` contain one marked `runtime-delegation` slot. The generator derives the
+standard/reasoning/heavy role-membership roster from the common behavior-contract authority; the
+runtime adapter supplies only the native carrier and default binding for each tier. The slot renders
+Claude's native block for commands and the forge-matched Codex block for skills; each additive
+edition replaces the same marked region with its own adapter render. The block exposes profile
+lookup, native dispatch carrier, the generated roster and three default tier bindings, tool
+boundary, honest named/built-in routes, and relevant availability/session limits. `workflow-init`
+has no dispatch teaching.
 
 The flow is one directional authority chain:
 
 ```text
-templates/agents/runtime-capabilities.json
+templates/agents/behavior-contracts.json → role intent roster
+templates/agents/runtime-capabilities.json → native carrier/default bindings
     → generate-agent-profiles.js routing guidance renderer
     → templates/routing/slots.js: runtime-delegation
     → next/finalize skeletons
@@ -402,6 +406,9 @@ and behavior/render hashes.
 Codex profile readiness remains an install-time boundary. The profile installer verifies source,
 manifest, writes, pruning, hooks, and installed bytes; `kaola-workflow-codex-preflight.js --doctor`
 is an explicit diagnostic. Live next/finalize surfaces do not turn it into an entry gate.
+The effective project or user `.codex/config.toml` is the installed registration authority: its
+managed `[agents.<role>]` blocks point to `.codex/agents/kaola-workflow/<role>.toml`. Bundled
+`agents.toml` remains installer source and is not an installed profile-discovery path.
 
 ### Model intent
 
@@ -410,6 +417,9 @@ native default model/effort value or session inheritance, and next/finalize expo
 the point of dispatch. It remains a default rather than scheduler state or a prohibition on native
 task-sensitive choices. No mission-list field records a model pair, and Kaola does not add runtime
 limits on automatic, background, parallel, resume, nesting, history, or service-tier behavior.
+Finalize's operational examples pass the Claude tier model while retaining runtime-default effort,
+or the Codex tier model plus `reasoning_effort`; a task-sensitive override, supported inheritance,
+and other runtime-owned choices remain valid.
 Current mappings and limitations are documented in
 [`runtime-capabilities.md`](runtime-capabilities.md) and each additive edition guide.
 

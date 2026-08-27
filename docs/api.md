@@ -64,6 +64,11 @@ named/built-in alternatives, and runtime availability/limits. The common fallbac
 an absent exact role triggers a search of other adequate native child routes; a generic route keeps
 its real identity; inline applies only to that item when no route fits.
 
+`rolesByIntent()` derives the standard/reasoning/heavy role-membership roster from
+`templates/agents/behavior-contracts.json`; `renderRuntimeDelegationGuidance()` places that roster
+beside the runtime adapter's carrier-specific defaults. The adapter therefore cannot silently
+reclassify a role by maintaining a second list.
+
 `generate-agent-profiles.js` exports the routing interface:
 
 | Export | Contract |
@@ -76,7 +81,8 @@ its real identity; inline applies only to that item when no route fits.
 Commands render Claude and skills render forge-matched Codex through the routing slot. Additive
 edition sync scripts replace only this marker in next/finalize; workflow-init is outside the
 interface. Cursor and ZCode call fields not published by those runtimes are not serialized here:
-their guidance defers to the active session's live schema.
+their guidance defers to the active session's live schema, and static fields whose names or shapes
+remain unverified are not emitted.
 
 ## Emit and refusal envelopes
 
@@ -1612,6 +1618,13 @@ Next/finalize expose them as default dispatch bindings, not as mission-list stat
 or a ban on runtime-supported task-sensitive choices. A missing required native capability yields a
 specific per-item `capability_gap`; it is not emulated by granting wider tools, impersonating a
 named role, silently dropping the restriction, or declaring the rest of the run inline.
+
+Finalize carries executable-shaped defaults for its validation and documentation handoffs: Claude
+examples pass the tier model and retain runtime-default effort; Codex examples pass the tier model
+and `reasoning_effort`. A task-sensitive override or supported inherited pair remains valid. Codex
+lookup starts at the effective project or user `.codex/config.toml`: its managed
+`[agents.<role>]` registration references `.codex/agents/kaola-workflow/<role>.toml`, while bundled
+`agents.toml` is only installer source.
 
 ## Environment Variables
 

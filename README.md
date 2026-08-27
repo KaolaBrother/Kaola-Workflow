@@ -195,7 +195,8 @@ call. There is no planning agent and no bookkeeping agent — the orchestrator w
 and runs the finalize transaction itself.
 
 The **Tier** column is the runtime-neutral `intent_class`: `standard`, `reasoning`, or `heavy`.
-Only adapters map that intent to a native model/effort carrier or truthful session inheritance.
+The routing generator derives each tier's role roster from the common behavior-contract authority;
+only adapters map that intent to a native model/effort carrier or truthful session inheritance.
 `workflow-next` and `kaola-workflow-finalize` expose the selected runtime's three **default dispatch
 bindings**, profile lookup, native carrier, real built-in/generic routes, and known limits. A default
 is not a scheduler: task-sensitive model, effort, service-tier, automatic, background, parallel,
@@ -205,10 +206,14 @@ them. The exact matrix and evidence are in
 
 For Claude Code, installed profiles use `model: inherit`; the runtime-native next/finalize block
 therefore tells the caller to pass the role tier's `sonnet` / `opus` / `fable` model when preserving
-the default binding. Codex profiles keep model and tools under host policy, while its dispatch block
-exposes the owner-approved defaults (`gpt-5.6-luna`/max, `gpt-5.6-sol`/medium,
-`gpt-5.6-sol`/high) and still permits the task-sensitive choices its live `spawn_agent` schema
-offers. OpenCode and ordinary Kimi profiles inherit instead of fabricating a per-call control.
+the default binding. For Codex, the effective project or user `.codex/config.toml` owns the managed
+`[agents.<role>]` registration that points to `.codex/agents/kaola-workflow/<role>.toml`;
+`agents.toml` is installer source only. Codex profiles keep model and tools under host policy, while
+its dispatch block exposes the owner-approved defaults (`gpt-5.6-luna`/max,
+`gpt-5.6-sol`/medium, `gpt-5.6-sol`/high) and still permits the task-sensitive choices its live
+`spawn_agent` schema offers. Finalize's native examples operationally pass the Claude tier model or
+the Codex model plus `reasoning_effort`; task-sensitive and supported inherited choices remain
+valid. OpenCode and ordinary Kimi profiles inherit instead of fabricating a per-call control.
 
 Reviewer roles review a cohesive, converged candidate and return findings to the existing owner.
 That owner repairs the finding and presents the repaired finding or new claim for re-review; a

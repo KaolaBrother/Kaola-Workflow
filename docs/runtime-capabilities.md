@@ -20,7 +20,7 @@ Cursor, and ZCode have documented direct `AGENTS.md` support.
 | Runtime | Profile lookup and native dispatch | Honest native alternatives | Native limits that affect routing |
 | --- | --- | --- | --- |
 | Claude Code | Project `.claude/agents/`, user `~/.claude/agents/`, plugin `agents/`, managed/session definitions; `Agent` with named `subagent_type` | Full `general-purpose`; read-only `Explore` and `Plan`; catch-all `claude`; background, isolation, and agent-team options | Effective precedence and the live Agent/Task catalog decide availability; recursive depth remains runtime/configuration owned |
-| Codex | Project or user `.codex/agents/kaola-workflow/*.toml` registered by `agents.toml`; the current host's `spawn_agent` schema with named `agent_type` | General `default`, implementation-owning `worker`, read-heavy `explorer`, and other types reported by the host | V1/V2 fields, history forking, service tier, nesting, and concurrency are host/version gated; Kaola invents none |
+| Codex | The effective project or user `.codex/config.toml` owns managed `[agents.<role>]` registration and points to `.codex/agents/kaola-workflow/<role>.toml`; the current host's `spawn_agent` schema supplies named `agent_type`. Bundled `agents.toml` is installer source, not an installed lookup path | General `default`, implementation-owning `worker`, read-heavy `explorer`, and other types reported by the host | V1/V2 fields, history forking, service tier, nesting, and concurrency are host/version gated; Kaola invents none |
 | OpenCode | Project `.opencode/agents/`, user `~/.config/opencode/agents/`, or `opencode.json`; `task` with named `subagent_type`, or direct `@name` | Broad `general`, read-only local `explore`, read-only external-research `scout`; `task_id` resume and experimental background | Default child depth is one unless user configuration raises it; task permissions and effective merged config may hide a route |
 | Kimi Code | Project `.kimi-code/agents/` or `.agents/agents/`, user `$KIMI_CODE_HOME/agents/` or `~/.agents/agents/`; `Agent`/`AgentSwarm` with `kaola-role-<role>` | Writable `coder`, read-only `explore`, non-shell `plan`; custom agents and AgentSwarm lists up to 128 items | Built-ins are leaves; custom profiles may allowlist deeper agents. Resume/background remain native options |
 | Grok Build | Project `.grok/agents/` or user `~/.grok/agents/`; `spawn_subagent` with named `subagent_type` | Full `general-purpose`; read/shell `explore` and `plan`; background, isolation, resume, cwd, and optional per-call model | Children cannot spawn descendants; the root runtime's other choices remain available |
@@ -30,14 +30,16 @@ Cursor, and ZCode have documented direct `AGENTS.md` support.
 Cursor and ZCode do not publish one complete Task/Agent call schema. Their generated guidance names
 the verified routes, then tells the orchestrator to use the current session's exposed schema and
 catalog. Cursor's IDE documentation and supported CLI demonstrably expose different built-ins, so
-neither list is treated as universal. The guidance does not manufacture portable fields from another
-runtime.
+neither list is treated as universal. Static request fields whose names or shapes remain unverified
+are not emitted; the guidance does not manufacture portable fields from another runtime.
 
 ## Default tier bindings
 
-The shared role contract supplies only `standard`, `reasoning`, or `heavy`. The runtime adapter
-exposes the following **default dispatch binding** in both `workflow-next` and
-`kaola-workflow-finalize`:
+The shared role contract supplies only `standard`, `reasoning`, or `heavy`. The generator derives
+each tier's role-membership roster directly from `templates/agents/behavior-contracts.json` and
+renders that roster beside the adapter's carrier-specific defaults; adapters do not maintain a
+second membership list. The runtime adapter exposes the following **default dispatch binding** in
+both `workflow-next` and `kaola-workflow-finalize`:
 
 | Intent | Claude | Codex | OpenCode | Kimi | Grok | Cursor | ZCode |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -52,6 +54,12 @@ secondary-model pool is used only when the user explicitly opts into it. Grok ef
 Cursor/ZCode tier pairs live in the named profile. Native automatic, background, parallel, resume,
 nesting, history, service-tier, and model choices stay available wherever the runtime actually
 supports them.
+
+The finalize surface makes the defaults operational rather than leaving them as a lookup table:
+its Claude `Agent(...)` examples pass the tier model and retain runtime-default effort, while its
+Codex `spawn_agent(...)` examples pass both the tier model and `reasoning_effort`. Those examples do
+not outlaw a task-sensitive override, a supported inherited pair, or another native choice exposed
+by the active runtime.
 
 ## Per-item fallback principle
 
