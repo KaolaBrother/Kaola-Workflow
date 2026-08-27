@@ -57,7 +57,9 @@ ADR 0019's owner-approved matrix remains the default dispatch binding:
 These are defaults and capability facts, not a hard ban on a runtime-supported task-sensitive
 choice. The carrier is runtime-native: Claude and Codex may select the default on a call; OpenCode
 has no per-call model/effort field; ordinary Kimi profiles inherit unless the user explicitly opts
-into its experimental secondary-model pool; Grok effort and Cursor/ZCode tiers live in profiles.
+into its experimental secondary-model pool; Grok effort and Cursor/ZCode tiers live in profiles when
+those profiles are in the active catalog. On a Cursor catalog-miss host there is no profile pin:
+omit-model follows the parent, and a resolver-listed live-schema model slug is the effort lever.
 Kaola does not silently enable a user-owned experimental feature or overwrite a runtime choice.
 
 ### Honest fallback

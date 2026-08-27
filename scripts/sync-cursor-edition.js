@@ -15,9 +15,10 @@
 // Canonical model classes drive the generated agent tier pins: sonnet/standard
 // render the raw `model: grok-4.6[effort=medium]` line, opus/reasoning
 // render `model: grok-4.6[effort=high]`, and fable/heavy render
-// `model: grok-4.6[effort=xhigh]`. Task cards still omit per-dispatch
-// model overrides. The allowlist stays within one model family so only the
-// canonical class selects the generated effort tier.
+// `model: grok-4.6[effort=xhigh]`. Named-profile Task cards omit per-dispatch model overrides so
+// the profile carries its tier. A built-in-only catalog-miss path uses live members as themselves
+// and may use only a resolver-listed live model slug as an effort lever; the one-family allowlist
+// applies to generated profile pins, not that live-schema fallback.
 //
 // FORGE AXIS (--forge=github|gitlab|gitea, default github). github writes `.cursor/`;
 // a forge writes `.cursor-<forge>/`. Command sources come from the routing-surface

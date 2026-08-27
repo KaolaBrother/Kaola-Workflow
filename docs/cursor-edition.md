@@ -67,7 +67,7 @@ Generated agents carry a model-and-effort pin derived from the runtime-neutral i
 them to the raw, unquoted `grok-4.6[effort=medium]`, `grok-4.6[effort=high]`, and
 `grok-4.6[effort=xhigh]` frontmatter values.
 
-## Three-tier frontmatter pins — model-free native dispatch
+## Three-tier frontmatter pins — host-split native dispatch
 
 The behavior source's `standard` roles receive the unquoted
 `model: grok-4.6[effort=medium]` line, `reasoning` roles receive
@@ -124,6 +124,13 @@ Cursor host:
 - After adding a project profile, reopening the CLI process with the **same chat ID** exposed it.
   Same-process hot load remains unknown; a new chat is not required by this measurement.
 
+A separate local Cursor CLI `2026.08.25-3e8eec8` run at candidate
+`0501f2527e04c1ecd896df418e50c97b279aa568` confirmed the same Path A carrier: named
+`implementer`, `code-reviewer`, and `planner` resolved to
+`cursor-grok-4.6-medium`, `cursor-grok-4.6-high`, and `cursor-grok-4.6-xhigh`, respectively.
+All three calls exited successfully without repository mutation. This is CLI named-profile
+evidence only; it does not establish the Cloud catalog.
+
 ### Cloud catalog-miss live probe
 
 On 2026-08-27 two Cursor Cloud parents (`cursor-grok-4.6-xhigh`) were measured. Neither catalog
@@ -146,8 +153,10 @@ and did not reach a user file alone. The catalog-ensure hook and
 
 The official model contract is likewise bounded: `model` is either `inherit` or an exact model ID,
 and bracket parameters carry options such as effort. Team policy, legacy-plan settings, or plan
-availability may force a compatible fallback. Generated dispatch guidance therefore omits a
-per-call model; the profile remains the one model/effort carrier.
+availability may force a compatible fallback. On Path A, where the live enum contains the named
+profile, generated dispatch guidance omits a per-call model and that profile is the model/effort
+carrier. On Path B, a built-in-only enum has no profile pin: omit-model follows the parent, while a
+resolver-listed live-schema model slug is the effort lever.
 
 Compact resume and catalog synchronization remain edition hook behavior. Durable recovery never
 depends on either hook: `mission-list.md` is the authority after a new local, CLI, or cloud session.
@@ -155,8 +164,10 @@ depends on either hook: `mission-list.md` is the authority after a new local, CL
 ## Path selection
 
 On the cursor edition, the router routes directly to the adaptive workflow. Generated commands
-adapt the dispatch call syntax and omit per-call model arguments; canonical `commands/*.md` is
-never touched. There is no canonical model-dispatch section to substitute.
+adapt the dispatch call syntax; Path A named-profile dispatch omits per-call model arguments so the
+profile pin carries its tier, while Path B may use only a resolver-listed live-schema model slug.
+Canonical `commands/*.md` is never touched. There is no canonical model-dispatch section to
+substitute.
 
 ## Installer
 

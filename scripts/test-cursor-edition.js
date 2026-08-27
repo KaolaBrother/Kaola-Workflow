@@ -17,10 +17,10 @@
 // flat commands under `.cursor/commands/<name>.md`, hook scripts under
 // `.cursor/hooks/`, and `.cursor/hooks.json` (sessionStart compact-resume inject).
 // Three canonical model classes: standard/reasoning/heavy
-// agents carry unquoted Grok 4.6 frontmatter pins with medium/high/xhigh effort. Command
-// cards carry no per-dispatch model override. Compact resume after a session compact is a declared
-// divergence: preCompact cannot inject; sessionStart additional_context can,
-// on a new session only.
+// agents carry unquoted Grok 4.6 frontmatter pins with medium/high/xhigh effort. Named-profile
+// command cards carry no static per-dispatch model override; a built-in-only catalog-miss path may
+// use only a resolver-listed live model slug. Compact resume after a session compact is a declared
+// divergence: preCompact cannot inject; sessionStart additional_context can, on a new session only.
 //
 // Outside `npm test`, the forge chains, and the fast gate: an additive
 // runtime edition is not a forge. The script exists so the suite is

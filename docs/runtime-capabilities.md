@@ -172,6 +172,13 @@ while the grandchild lacked Task. A user `~/.cursor/agents/tdd-guide.md` file al
 project mirror was reachable. Reopening the CLI process with the same chat after adding a project
 profile made it visible, so a new chat is not required; same-process hot load remains unknown.
 
+A separate local Cursor CLI `2026.08.25-3e8eec8` run at candidate
+`0501f2527e04c1ecd896df418e50c97b279aa568` confirmed the named-profile path: `implementer`,
+`code-reviewer`, and `planner` resolved to `cursor-grok-4.6-medium`,
+`cursor-grok-4.6-high`, and `cursor-grok-4.6-xhigh`, respectively. All three calls exited
+successfully without repository mutation. This CLI evidence is separate from the Cloud catalog
+measurement and does not establish Cloud boot-load.
+
 **Cloud Agent measurement (runtime evidence, 2026-08-27, #1036).** Two Cloud parents, both
 `originalModelName: cursor-grok-4.6-xhigh`, exposed a built-in-only Task enum with **no** Kaola
 custom types and **no** parent-authored `subagentType.custom.name` field:
@@ -206,8 +213,9 @@ the session started.
 - opencode's hard or advisory AGENTS size limit;
 - ZCode's AGENTS size limit and `ZCODE_HOME` relocation semantics;
 - Cursor same-process profile hot load, Cloud boot-load of project `.cursor/agents/` into the Task
-  enum, and catalog behavior on IDE or CLI versions other than the measured `2026.08.11-e8db854`
-  (Cloud catalog-miss on the 2026-08-27 hosts above is measured, not unknown);
+  enum, and catalog behavior beyond the measured `2026.08.11-e8db854` full CLI probe and the
+  `2026.08.25-3e8eec8` named-profile CLI probe (Cloud catalog-miss on the 2026-08-27 hosts above
+  is measured, not unknown);
 - exact ZCode 3.9.1 behavior. The public install page exposed 3.8.1 during this research, so this
   documentation does not present 3.9.1 as locally or publicly verified;
 - any precedence or conflict behavior not stated by the evidence above.
