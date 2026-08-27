@@ -64,9 +64,9 @@ carrying an outcome while their status is not `done`: 0
 
 - None. Cursor Cloud boot-load remains explicitly unclaimed rather than being converted into an unsupported acceptance claim.
 
-## Status: ARCHIVED AFTER FINAL GIT GATE
+## Status: MERGED, CLOSED, AND ARCHIVED
 
-Candidate `90cccd9b1793dba80b4bd5cf01a100147bbad7fe` has a clean exact-SHA four-chain receipt with SHA-256 `b873944797c6825e131715b3892b58c1f321655e2823943fe8a06b231b6cd9d6` and code-tree hash `3605f207337c22f7f8b745aa6b35456a4a4fa059ba60fb59d86bd1147b6a16b9`. The remaining mission is the authorized workflow finalization, sink, forge closure, archive, and scoped closure audit.
+Candidate `90cccd9b1793dba80b4bd5cf01a100147bbad7fe` has a clean exact-SHA four-chain receipt with SHA-256 `b873944797c6825e131715b3892b58c1f321655e2823943fe8a06b231b6cd9d6` and code-tree hash `3605f207337c22f7f8b745aa6b35456a4a4fa059ba60fb59d86bd1147b6a16b9`. The sink published it to main, GitHub records PR #1038 merged and Issue #1036 closed, the temporary branch and linked worktree are gone, and the scoped closure audit reports `current_project_clean: true` with zero issue-1036 drift.
 
 ## Sink Findings
 

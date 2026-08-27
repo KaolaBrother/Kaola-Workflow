@@ -21,8 +21,9 @@
   result: doc-updater fixed unqualified profile-carrier prose in three documentation authorities plus explanatory comments; .cache/doc-docking.md records every changed surface and verdict DOCKED at 90cccd9b.
 
 - item: Sink the reviewed branch to main, verify PR #1038 and Issue #1036 closure, archive the run, and pass the scoped closure audit.
-  status: in-flight
+  status: done
   dispatched: self; run the non-destructive finalize precheck, execute the workflow-owned finalize and merge sink, then reconcile the archived mission item against fresh PR, Issue, main, and closure-audit evidence.
+  result: Sink published candidate 90cccd9b to main, GitHub records PR #1038 MERGED and Issue #1036 CLOSED, main and origin/main converged at archive commit 6ac3d5a0, the remote branch and linked worktree were removed, and the scoped closure audit reported current_project_clean true with zero issue-1036 drift.
 
 - item: Add a generated-consumer mutation oracle that rejects the opposite Cursor Path B omit-model parent/profile meaning while preserving the current correct candidate.
   status: done
