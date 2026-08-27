@@ -42,6 +42,7 @@ const TREE_ROOT = (() => {
   const coord = schema.getCoordRoot(REPO);
   return path.basename(coord) === '.git' ? schema.mainRootFromCoord(coord) : REPO;
 })();
+let ACTIVE_TREE_ROOT = TREE_ROOT;
 
 const DEFAULT_FORGE = 'github';
 const CANON_AGENTS_DIR = path.join(REPO, 'agents');
@@ -374,7 +375,7 @@ function read(rel) {
   return fs.readFileSync(path.join(REPO, rel), 'utf8');
 }
 function treePath(rel) {
-  return path.join(TREE_ROOT, rel);
+  return path.join(ACTIVE_TREE_ROOT, rel);
 }
 function readTree(rel) {
   return fs.readFileSync(treePath(rel), 'utf8');
@@ -523,15 +524,21 @@ function writeHooks(forge) {
   return wrote;
 }
 
-function runWrite(forge) {
+function runWrite(forge, outputRoot) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
-  const a = writeAgents(forge);
-  const c = writeCommands(forge);
-  const h = writeHooks(forge);
-  const p = pruneTree(forge);
-  const total = a + c + h + p;
-  console.log('sync-cursor-edition[' + forge + ']: write complete (' + total + ' file(s) updated'
-    + (total === 0 ? ' — tree already in sync' : '') + ').');
+  const previousRoot = ACTIVE_TREE_ROOT;
+  if (outputRoot) ACTIVE_TREE_ROOT = path.resolve(outputRoot);
+  try {
+    const a = writeAgents(forge);
+    const c = writeCommands(forge);
+    const h = writeHooks(forge);
+    const p = pruneTree(forge);
+    const total = a + c + h + p;
+    console.log('sync-cursor-edition[' + forge + ']: write complete (' + total + ' file(s) updated'
+      + (total === 0 ? ' — tree already in sync' : '') + ').');
+  } finally {
+    ACTIVE_TREE_ROOT = previousRoot;
+  }
 }
 
 function runRefreshPresent() {
@@ -637,6 +644,7 @@ function usage() {
     + '  --forge=<f>  which forge to render (default github). github writes .cursor/;\n'
     + '               gitlab/gitea write .cursor-<forge>/\n'
     + '  --write   regenerate the forge tree agents + commands + hooks from canonical\n'
+    + '  --tree-root=PATH  with --write, render under an explicit staging root\n'
     + '  --refresh-present  regenerate every forge tree that already exists; create none (ignores --forge)\n'
     + '  --check   assert the generated tree is in byte-parity with a fresh render\n'
     + '  --print-tree-root  print the directory the generated trees land in; write nothing\n'
@@ -658,7 +666,31 @@ function main() {
   }
   const flags = argv.filter(a => !a.startsWith('--forge='));
   const arg = flags[0];
-  if (arg === '--write') return runWrite(forge);
+  const treeRootArg = flags.find(a => a.startsWith('--tree-root='));
+  if (treeRootArg && arg !== '--write') {
+    console.error('sync-cursor-edition: --tree-root is valid only with --write');
+    process.exitCode = 2;
+    return;
+  }
+  let outputRoot = '';
+  if (treeRootArg) {
+    outputRoot = treeRootArg.slice('--tree-root='.length);
+    if (!outputRoot || !path.isAbsolute(outputRoot)) {
+      console.error('sync-cursor-edition: --tree-root requires an absolute path');
+      process.exitCode = 2;
+      return;
+    }
+    let state;
+    try { state = fs.lstatSync(outputRoot); }
+    catch (_) { state = null; }
+    if (!state || !state.isDirectory() || state.isSymbolicLink()
+        || fs.readdirSync(outputRoot).length !== 0) {
+      console.error('sync-cursor-edition: --tree-root must name an existing empty real directory');
+      process.exitCode = 2;
+      return;
+    }
+  }
+  if (arg === '--write') return runWrite(forge, outputRoot);
   if (arg === '--refresh-present') return runRefreshPresent();
   if (arg === '--check') return runCheck(forge);
   if (arg === '--print-tree-root') { process.stdout.write(TREE_ROOT + '\n'); return; }

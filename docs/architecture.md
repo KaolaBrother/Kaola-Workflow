@@ -371,8 +371,9 @@ Runtime installation is a separate owner from that portable repository result. `
 does not install, refresh, or choose runtime catalogs, commands, skills, hooks, or adapters; the
 same init outcome is produced regardless of which runtime invoked it. Runtime installers own native
 commands or skills, agent catalogs, hooks, support scripts, and adapter/capability facts.
-`install-cursor.sh --global` writes only `${CURSOR_HOME:-~/.cursor}/{agents,commands}` and does not
-mutate an ambient Git repository; `install-all.sh --global` inherits that Cursor behavior and is
+`install-cursor.sh --global` renders canonical bytes in transaction-scoped temporary staging,
+writes only `${CURSOR_HOME:-~/.cursor}/{agents,commands}`, and does not mutate an ambient Git
+repository; `install-all.sh --global` inherits that Cursor behavior and is
 not permission to update every consumer repo. Project `.cursor` catalogs require explicit
 `--target`. Global authority and project materialization are
 receipt-bound and preflight every managed path before writing. The first receipt-owning upgrade may

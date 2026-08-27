@@ -141,21 +141,35 @@ if [[ "$DOCTOR" -eq 1 ]]; then
   [[ "$DOCTOR_JSON" -eq 1 ]] && doctor_args+=(--json)
   exec node "$SCRIPT_DIR/scripts/kaola-workflow-cursor-surface.js" "${doctor_args[@]}"
 fi
-if ! TREE_ROOT="$(node "$SCRIPT_DIR/scripts/sync-cursor-edition.js" --print-tree-root)"; then
-  echo "Install error: cannot resolve where the generated cursor tree lands" >&2
-  exit 1
-fi
-SOURCE_TREE="$TREE_ROOT/.cursor$FORGE_SUFFIX"
-
-if [[ "$UNINSTALL" -ne 1 ]]; then
-  echo "Kaola-Workflow · cursor edition ($FORGE) — refreshing generated tree..."
-  node "$SCRIPT_DIR/scripts/sync-cursor-edition.js" --forge="$FORGE" --check >/dev/null 2>&1 \
-    || node "$SCRIPT_DIR/scripts/sync-cursor-edition.js" --forge="$FORGE" --write >/dev/null
-fi
-
 if [[ "$REGENERATE" -eq 1 ]]; then
+  if ! TREE_ROOT="$(node "$SCRIPT_DIR/scripts/sync-cursor-edition.js" --print-tree-root)"; then
+    echo "Install error: cannot resolve where the generated cursor tree lands" >&2
+    exit 1
+  fi
+  SOURCE_TREE="$TREE_ROOT/.cursor$FORGE_SUFFIX"
+  node "$SCRIPT_DIR/scripts/sync-cursor-edition.js" --forge="$FORGE" --write >/dev/null
   echo "Regenerated $SOURCE_TREE from canonical. Done."
   exit 0
+fi
+
+SOURCE_TREE=""
+STAGING_ROOT=""
+cleanup_staging() {
+  if [[ -n "$STAGING_ROOT" && -d "$STAGING_ROOT" ]]; then
+    rm -rf -- "$STAGING_ROOT"
+  fi
+}
+trap cleanup_staging EXIT
+
+if [[ "$UNINSTALL" -ne 1 ]]; then
+  if ! STAGING_ROOT="$(mktemp -d "$KW_TMPDIR/kaola-cursor-staging.XXXXXX")"; then
+    echo "Install error: cannot create an isolated Cursor render staging directory" >&2
+    exit 1
+  fi
+  echo "Kaola-Workflow · cursor edition ($FORGE) — rendering isolated install source..."
+  node "$SCRIPT_DIR/scripts/sync-cursor-edition.js" --forge="$FORGE" --write \
+    --tree-root="$STAGING_ROOT" >/dev/null
+  SOURCE_TREE="$STAGING_ROOT/.cursor$FORGE_SUFFIX"
 fi
 
 confirm_install() {

@@ -174,7 +174,9 @@ project definitions winning a conflict. Kaola's project install requires `--targ
 that project location. `--global` writes only
 `${CURSOR_HOME:-$HOME/.cursor}/{agents,commands}` (un-nested) and does **not** write an ambient Git
 repository; existing project `.cursor` files are left untouched, and `--global` from a non-git cwd
-does not invent project `.cursor`. Project catalogs are never selected from the ambient cwd of a
+does not invent project `.cursor`. A normal install renders the generated source into an isolated
+temporary staging root and removes it after the transaction; only explicit `--regenerate` writes
+the in-repository generated tree. Project catalogs are never selected from the ambient cwd of a
 `--global` command. Authenticated CLI evidence reached project profiles and did not reach a user
 file alone; that CLI fact is not App or Cloud proof. Cloud instead uses the user-global carrier in
 its own saved remote environment. Project files alone are insufficient there.
@@ -224,7 +226,7 @@ does not run through `install.sh --forge`.
 
 ```bash
 ./install-cursor.sh --target /path/to/repo  # deploy into a specific project
-./install-cursor.sh --global                # agents+commands → ${CURSOR_HOME:-~/.cursor} only; no ambient git write
+./install-cursor.sh --global                # isolated render → ${CURSOR_HOME:-~/.cursor}; no ambient git write
 ./install-cursor.sh --doctor --json         # report product/host surface facts; does not install
 ./install-cursor.sh --regenerate            # refresh in-repo .cursor/ from canonical, then exit
 ./install-cursor.sh --global --uninstall    # remove the receipt-proven global edition
@@ -232,9 +234,10 @@ does not run through `install.sh --forge`.
 ```
 
 Add `--yes` for non-interactive use. `--no-scripts` skips support scripts, hook
-scripts, and the hooks JSON merge. The installer resolves the generated source
-tree via `node scripts/sync-cursor-edition.js --print-tree-root` (a worktree
-install still finds the main-checkout trees).
+scripts, and the hooks JSON merge. Normal install creates a transaction-scoped staging root and
+invokes `sync-cursor-edition.js --write --tree-root=<absolute empty staging path>`; the cleanup trap
+removes that source after success or failure. `--regenerate` alone resolves and refreshes the
+main-checkout generated tree.
 
 A receipt-less 10.0.1 global installation has a bounded migration path. Only exact published
 per-forge hashes may be adopted; the three old command renders, two changed support scripts, and

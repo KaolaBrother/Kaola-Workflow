@@ -304,8 +304,9 @@ CLI reached an explicitly materialized project `implementer`; Cursor App local I
 exposed all 14 project types and dispatched `implementer`; Cursor Cloud did the same after the
 global installer ran inside a dashboard-managed remote environment, the user saved its snapshot,
 and a fresh Cloud parent started from that build. Project profiles committed before Cloud boot were
-a negative control, not the Cloud carrier. `--global` writes only the selected host's user carrier
-and a hash-bound authority receipt, never the invoking Git repository. Project materialization is
+a negative control, not the Cloud carrier. `--global` renders its source in a temporary staging
+root, then writes only the selected host's user carrier and a hash-bound authority receipt, never
+the invoking Git repository. Project materialization is
 explicit, receipt-owned, collision/symlink-safe, and uninstall-safe. On the measured standalone CLI
 only, workflow-next/finalize may safely ensure explicit `$PWD` immediately before a named
 dispatch; App local and Cloud never inherit that CLI rule. Cloud instead installs globally inside
@@ -484,7 +485,7 @@ dispatched exact `implementer`; a fresh Cloud parent loaded all 14 roles and dis
 From a local clone:
 
 ```bash
-./install-cursor.sh --global --yes         # ${CURSOR_HOME:-~/.cursor} only; does not write ambient git
+./install-cursor.sh --global --yes         # isolated staging → ${CURSOR_HOME:-~/.cursor}; no ambient git write
 ./install-cursor.sh --target DIR --yes     # explicit project catalog (.cursor/{agents,commands})
 ```
 

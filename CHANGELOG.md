@@ -6,7 +6,9 @@
 
 - **Cursor `--global` writes only the user carrier; CLI and App are separate surfaces (#1039).**
   `install-cursor.sh --global` writes only `${CURSOR_HOME:-~/.cursor}`, never the invoking
-  repository, and records a version/forge/file/hash authority receipt. Explicit project
+  repository, and records a version/forge/file/hash authority receipt. Normal installs render the
+  generated edition into a transaction-scoped temporary staging root and remove it afterward;
+  only explicit `--regenerate` writes the in-repository generated tree. Explicit project
   materialization derives from that installed authority, preflights every carrier, managed name,
   receipt, and hooks path, and records target/authority/per-file hashes. Unmanaged collisions,
   symlinks, non-regular paths, modified owned bytes, invalid receipts, stale authority, or

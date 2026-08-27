@@ -1213,6 +1213,25 @@ for (const role of reviewerGenerator.ROLES) {
     assert(c.status === 0,
       'G7[' + forge + ']: --check is green after --write (got ' + c.status + ')');
   }
+  const isolatedRoot = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g7-isolated-root-'));
+  try {
+    const staged = runGenerator(['--forge=github', '--write', '--tree-root=' + isolatedRoot]);
+    assert(staged.status === 0
+      && fs.existsSync(path.join(isolatedRoot, '.cursor', 'agents', 'implementer.md'))
+      && fs.existsSync(path.join(isolatedRoot, '.cursor', 'commands', 'workflow-next.md')),
+    'G7[isolated]: --tree-root renders a complete github source under the explicit staging root');
+    const relative = runGeneratorCli(['--write', '--tree-root=relative-staging']);
+    assert(relative.status === 2,
+      'G7[isolated]: --tree-root refuses a relative path (got ' + relative.status + ')');
+    const occupiedRoot = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g7-occupied-root-'));
+    fs.writeFileSync(path.join(occupiedRoot, 'owner.txt'), 'OWNER\n');
+    const occupied = runGeneratorCli(['--write', '--tree-root=' + occupiedRoot]);
+    assert(occupied.status === 2 && fs.readFileSync(path.join(occupiedRoot, 'owner.txt'), 'utf8') === 'OWNER\n',
+      'G7[isolated]: --tree-root refuses an occupied directory without touching owner bytes');
+    fs.rmSync(occupiedRoot, { recursive: true, force: true });
+  } finally {
+    try { fs.rmSync(isolatedRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1248,6 +1267,9 @@ for (const role of reviewerGenerator.ROLES) {
       'G8-source: --global no longer dual-writes the invoking Git repository');
     assert(!/git rev-parse --show-toplevel/.test(installerSource),
       'G8-source: --global does not resolve an ambient git toplevel to copy into');
+    assert(/mktemp -d "\$KW_TMPDIR\/kaola-cursor-staging\.XXXXXX"/.test(installerSource)
+      && /--tree-root="\$STAGING_ROOT"/.test(installerSource),
+    'G8-source: normal installs render canonical Cursor bytes only in an isolated staging root');
     const firstLine = r => String(r.stderr || r.stdout || '').split('\n')[0];
     function runInstaller(extraArgs, opts) {
       opts = opts || {};
@@ -1256,7 +1278,7 @@ for (const role of reviewerGenerator.ROLES) {
       const dest = opts.dest || fs.mkdtempSync(path.join(tmpBase(), 'cursor-i-dest-'));
       const args = ['--yes'].concat(opts.skipTarget ? [] : ['--target', dest]).concat(extraArgs || []);
       const spawnOpts = {
-        env: Object.assign({}, process.env, { HOME: home, CURSOR_HOME: cursorHome }),
+        env: Object.assign({}, process.env, { HOME: home, CURSOR_HOME: cursorHome }, opts.env || {}),
         encoding: 'utf8',
       };
       if (opts.cwd) spawnOpts.cwd = opts.cwd;
@@ -1301,7 +1323,11 @@ for (const role of reviewerGenerator.ROLES) {
 
     // --global: agents/commands land under CURSOR_HOME (the ~/.cursor equivalent), un-nested.
     {
-      const r = runInstaller(['--global'], { skipTarget: true });
+      const stagingParent = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-staging-parent-'));
+      const r = runInstaller(['--global'], {
+        skipTarget: true,
+        env: { TMPDIR: stagingParent },
+      });
       assert(r.status === 0,
         'G8-global: install-cursor.sh --global exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
       assert(fs.existsSync(path.join(r.cursorHome, 'agents', 'knowledge-lookup.md')),
@@ -1319,7 +1345,10 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-global: mapping commands are rewritten to ./hooks/');
       assert(!/\.cursor\/hooks\//.test(globalMapping),
         'G8-global: mapping commands do not keep the project-shaped .cursor/hooks/ prefix');
+      assert(fs.readdirSync(stagingParent).length === 0,
+        'G8-global: isolated generated source is removed after the install transaction');
       clean(r);
+      try { fs.rmSync(stagingParent, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
     }
 
     // #1039: --global from a git work tree must NOT write the invoking repository.
