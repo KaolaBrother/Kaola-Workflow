@@ -22,9 +22,58 @@ const codexProfileInstaller = require('../plugins/kaola-workflow/scripts/install
 const codexPreflight = require('./kaola-workflow-codex-preflight');
 const agentGenerator = require('./generate-agent-profiles');
 const REVIEWER_ROLES = Object.freeze(['code-reviewer', 'adversarial-verifier', 'security-reviewer']);
+const behaviorContracts = agentGenerator.loadBehaviorContracts(root);
+const runtimeAdapters = agentGenerator.loadRuntimeAdapters(root);
+const claudeIntentMapping = runtimeAdapters.runtimes.claude.capabilities.intent_mapping;
 // Loaded for its ROLE REGISTRY ONLY (see EXPECTED_ROLE_MODELS): the tiers this file asserts are
 // resolved by SPAWNING the resolver against an installed tree, never by calling it in-process.
 const resolver = require('./kaola-workflow-resolve-agent-model.js');
+
+const VENDOR_MODEL_LITERAL = /\b(?:haiku|sonnet|opus|fable|gpt-[a-z0-9.-]+|grok-[a-z0-9.-]+|glm-[a-z0-9.-]+)\b/ig;
+
+function vendorModelLiterals(text) {
+  return [...String(text || '').matchAll(VENDOR_MODEL_LITERAL)].map(match => match[0].toLowerCase());
+}
+
+function agentCallBlocks(text) {
+  return [...String(text || '').matchAll(/^Agent\(\n[\s\S]*?^\)/gm)].map(match => match[0]);
+}
+
+function claudeFinalizeDefaultGaps(text) {
+  const blocks = agentCallBlocks(text);
+  const gaps = [];
+  for (const role of ['tdd-guide', 'build-error-resolver', 'doc-updater']) {
+    const contract = behaviorContracts.roles[role];
+    const tier = contract && contract.intent_class;
+    const expectedModel = claudeIntentMapping[tier];
+    const block = blocks.find(candidate =>
+      new RegExp(`\\bsubagent_type\\s*=\\s*["']${role}["']`).test(candidate));
+    if (!block) {
+      gaps.push(`${role}-call`);
+      continue;
+    }
+    if (!expectedModel
+        || !new RegExp(`^\\s*model\\s*=\\s*["']${expectedModel}["']\\s*,?\\s*$`, 'm').test(block)) {
+      gaps.push(`${role}-default-model`);
+    }
+    if (/^\s*(?:reasoning_)?effort\s*=/m.test(block)) gaps.push(`${role}-claude-effort-pin`);
+  }
+  const prose = String(text || '').replace(/\s+/g, ' ').toLowerCase();
+  if (!(prose.includes('task-sensitive') && prose.includes('override'))) {
+    gaps.push('task-sensitive-override');
+  }
+  return gaps;
+}
+
+function mutateAgentCall(text, role, mutate) {
+  let changed = false;
+  const output = String(text || '').replace(/^Agent\(\n[\s\S]*?^\)/gm, block => {
+    if (changed || !new RegExp(`\\bsubagent_type\\s*=\\s*["']${role}["']`).test(block)) return block;
+    changed = true;
+    return mutate(block);
+  });
+  return { changed, output };
+}
 
 // #1018 / ADR 0019: three-tier axis pins that do not need an install. Source
 // frontmatter, resolver map, routing skeletons, and reviewer bodies are the
@@ -32,6 +81,7 @@ const resolver = require('./kaola-workflow-resolve-agent-model.js');
 // implementer lands the recorded decision.
 {
   const initSkel = fs.readFileSync(path.join(root, 'templates/routing/init.skeleton.md'), 'utf8');
+  const universalAxioms = fs.readFileSync(path.join(root, 'templates/axioms.md'), 'utf8');
   const consumerTemplate = require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE;
   assert(consumerTemplate.includes('`planner (heavy-reasoning tier)`'),
     '#1018 AC-11: consumer AGENTS template example must be planner (heavy-reasoning tier)');
@@ -39,6 +89,17 @@ const resolver = require('./kaola-workflow-resolve-agent-model.js');
     '#1018 AC-11: consumer AGENTS template must not keep the pre-re-tier example planner (reasoning tier)');
   assert(/Name roles by function and reasoning tier, never by a vendor model name/.test(consumerTemplate),
     '#1018 AC-11: the naming-rule sentence itself is unchanged word for word');
+  for (const [label, universal] of [
+    ['consumer AGENTS template', consumerTemplate],
+    ['universal axioms', universalAxioms],
+  ]) {
+    assert.deepStrictEqual(vendorModelLiterals(universal), [],
+      label + ' must remain runtime-neutral and carry no vendor model literal');
+  }
+  const vendorLeakMutation = consumerTemplate
+    + '\nUse gpt-5.6-luna as the universal default for every standard role.\n';
+  assert(vendorModelLiterals(vendorLeakMutation).includes('gpt-5.6-luna'),
+    '#1035 mutation: a vendor model hardcoded into the universal consumer contract is detected');
   assert(/model_reasoning_effort\s*=\s*"ultra"/.test(initSkel),
     '#1018 AC-11: init.skeleton.md session-posture model_reasoning_effort = "ultra" stays untouched');
 
@@ -3006,17 +3067,35 @@ try {
 
   const finalize = readInstalledCommand('kaola-workflow-finalize.md');
 
-  // The finalize command carries the routed-fix pair (tdd-guide / build-error-resolver) without a
-  // per-spawn model choice. Runtime role defaults and resolver behavior are proven per role below;
-  // this surface must not prescribe a model for doc-updater or any routed repair.
+  // Installed Claude profiles deliberately use `model: inherit`, so every concrete finalize call
+  // must carry the default selected by that role's behavior-contract intent tier. ADR 0019 leaves
+  // Claude effort unpinned and keeps task-sensitive native overrides available.
   assert(
     // Anchor on a heading the surface actually carries; `## Steps` was the anchor until the
     // finalize command was rewritten. The subject — blank-line preservation — is unchanged.
     finalize.includes('\n\n## Step 1 — Final validation\n\n'),
     'installer rendering should preserve blank markdown lines'
   );
-  assert(!/subagent_type="(?:build-error-resolver|tdd-guide|doc-updater)",\n\s+model=/.test(finalize),
-    'finalize routed repairs and doc-updater dispatch must not carry per-spawn model choices');
+  assert.deepStrictEqual(claudeFinalizeDefaultGaps(finalize), [],
+    'installed Claude finalize calls must apply behavior-derived role defaults, omit Claude effort pins, and preserve task-sensitive overrides');
+
+  const missingDefault = mutateAgentCall(finalize, 'tdd-guide', block =>
+    block.replace(/^\s*model\s*=.*\n/m, ''));
+  assert(missingDefault.changed
+    && claudeFinalizeDefaultGaps(missingDefault.output).includes('tdd-guide-default-model'),
+  '#1035 mutation: removing a concrete standard-role default from finalize is detected');
+
+  const wrongTier = mutateAgentCall(finalize, 'build-error-resolver', block =>
+    block.replace(/^\s*model\s*=.*$/m, '  model="sonnet",'));
+  assert(wrongTier.changed
+    && claudeFinalizeDefaultGaps(wrongTier.output).includes('build-error-resolver-default-model'),
+  '#1035 mutation: routing a reasoning role with the standard model is detected');
+
+  const pinnedEffort = mutateAgentCall(finalize, 'doc-updater', block =>
+    block.replace(/(^\s*model\s*=.*$)/m, '$1\n  effort="high",'));
+  assert(pinnedEffort.changed
+    && claudeFinalizeDefaultGaps(pinnedEffort.output).includes('doc-updater-claude-effort-pin'),
+  '#1035 mutation: adding an ADR-forbidden Claude effort pin is detected');
 
   const allCommands = fs.readdirSync(path.join(tmp, '.claude', 'commands'))
     .filter(name => name.endsWith('.md'))
