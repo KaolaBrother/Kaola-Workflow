@@ -474,13 +474,34 @@ assertIncludes('scripts/kaola-workflow-project-instruction-templates.js', 'never
     'the consumer AGENTS template must not contain "configured model"');
   assert(!template.includes(norm('ships its model in its installed profile')),
     'the consumer AGENTS template must not contain "ships its model in its installed profile"');
-  assert(template.includes(norm(
-    'Use the vendored agent role names exactly as installed; prefer short names like `planner`. '
-    + 'Spawn the type this runtime\'s installed workflow-next / finalize instructions name for that role. '
-    + 'Follow those instructions for whether the spawn call carries a model argument. '
-    + 'Do not substitute a generic built-in type unless those same instructions explicitly map the role onto one.'
-  )),
-    'the consumer AGENTS template must teach spawn-the-installed-next/finalize-type');
+  const runtimeRoutingVocabulary = [
+    'Prefer the installed named role',
+    'workflow-next / finalize capability guide',
+    'lookup, dispatch carrier, default tier binding, and available native routes',
+    'A built-in or generic child may take an item only as its real mechanism',
+    'task, custody, evidence, and stop boundaries',
+    'never present it as a missing named role',
+    'Inline only that item when no adequate route exists',
+  ];
+  for (const taught of runtimeRoutingVocabulary) {
+    assert(template.includes(norm(taught)),
+      'the consumer AGENTS template must teach runtime-guided, honest item-local routing — missing "'
+      + taught + '"');
+  }
+  const noImpersonation = 'never present it as a missing named role';
+  const impersonatingMutation = template.replace(norm(noImpersonation), '');
+  assert(!impersonatingMutation.includes(norm(noImpersonation)),
+    'the consumer routing guard mutation removes no-impersonation before testing the oracle');
+  assert(runtimeRoutingVocabulary.some(taught => !impersonatingMutation.includes(norm(taught))),
+    'the consumer routing guard must reject a generic child that can impersonate a missing named role');
+  const runtimeBrandOf = content => String(content).match(
+    /\b(?:Claude|Codex|OpenCode|Kimi|Grok|Cursor|ZCode)\b/i);
+  const runtimeBrand = runtimeBrandOf(template);
+  assert(!runtimeBrand,
+    'the universal consumer AGENTS routing contract must stay vendor-neutral'
+    + (runtimeBrand ? ' — found "' + runtimeBrand[0] + '"' : ''));
+  assert(!!runtimeBrandOf(template + ' Cursor'),
+    'the consumer routing guard mutation proves a vendor name would trip the neutral-authority oracle');
 }
 
 // issue #283: kaola-workflow-phase6.md hard-removed; kaola-workflow-finalize.md is the
