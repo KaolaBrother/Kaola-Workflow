@@ -29,6 +29,12 @@ const claudeIntentMapping = runtimeAdapters.runtimes.claude.capabilities.intent_
 // resolved by SPAWNING the resolver against an installed tree, never by calling it in-process.
 const resolver = require('./kaola-workflow-resolve-agent-model.js');
 
+// #775: this sandbox has no `codex` binary on PATH. Preflight's version floor is
+// non-optional; without an override every spawn returns `codex_version_unsupported`
+// and never reaches the property under test. A spawn may still pass a flag or a
+// child env to exercise below-floor / source-precedence cases — those outrank this.
+if (!process.env.KAOLA_CODEX_VERSION) process.env.KAOLA_CODEX_VERSION = '0.145.0';
+
 const VENDOR_MODEL_LITERAL = /\b(?:haiku|sonnet|opus|fable|gpt-[a-z0-9.-]+|grok-[a-z0-9.-]+|glm-[a-z0-9.-]+)\b/ig;
 
 function vendorModelLiterals(text) {
