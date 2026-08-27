@@ -521,10 +521,44 @@ function commandRel(name, forge) {
     'G2: generated Task( count equals canonical Agent( count');
 }
 
-// G2-leak forbids dispatching with a vendor slug on command/hook cards.
+// G2-leak forbids vendor model slugs on command/hook cards except for the
+// explicit tier bindings inside the runtime-delegation block on next/finalize.
 {
   const B2_MODEL_NOUN = /\b(Opus|Sonnet)\b/;
   const VENDOR_SLUG = /\bgrok-4\.\d\b|\bgrok-build\b/;
+  const DELEGATION_START = '<!-- KW-RUNTIME-DELEGATION-START -->';
+  const DELEGATION_END = '<!-- KW-RUNTIME-DELEGATION-END -->';
+  const TIER_GUIDANCE_COMMANDS = new Set([
+    commandRel('workflow-next'),
+    commandRel('kaola-workflow-finalize'),
+  ]);
+
+  function vendorSlugScope(rel, content) {
+    if (!TIER_GUIDANCE_COMMANDS.has(rel)) {
+      return VENDOR_SLUG.test(content)
+        ? { ok: false, reason: 'vendor model slug outside an allowed command' }
+        : { ok: true, reason: '' };
+    }
+
+    const startCount = content.split(DELEGATION_START).length - 1;
+    const endCount = content.split(DELEGATION_END).length - 1;
+    const start = content.indexOf(DELEGATION_START);
+    const end = content.indexOf(DELEGATION_END);
+    if (startCount !== 1 || endCount !== 1 || start < 0 || end < start) {
+      return { ok: false, reason: 'runtime-delegation block is not unique and ordered' };
+    }
+
+    const inside = content.slice(start + DELEGATION_START.length, end);
+    const outside = content.slice(0, start) + content.slice(end + DELEGATION_END.length);
+    if (!VENDOR_SLUG.test(inside)) {
+      return { ok: false, reason: 'runtime-delegation block has no tier model slug' };
+    }
+    if (VENDOR_SLUG.test(outside)) {
+      return { ok: false, reason: 'vendor model slug escaped the runtime-delegation block' };
+    }
+    return { ok: true, reason: '' };
+  }
+
   let runtimeCursor = 0;
   for (const rel of generatedTreeFiles('.cursor')) {
     const content = read(rel);
@@ -540,8 +574,10 @@ function commandRel(name, forge) {
     assert(!/\bmodel="/.test(content),
       'G2-leak: ' + rel + ': no per-call model=" override in generated dispatch surfaces');
     if (!/\/agents\//.test(rel)) {
-      assert(!VENDOR_SLUG.test(content),
-        'G2-leak: ' + rel + ': no vendor model slug in command/hook surfaces');
+      const scope = vendorSlugScope(rel, content);
+      assert(scope.ok,
+        'G2-leak: ' + rel + ': vendor model slugs are confined to the unique runtime-delegation tier block on next/finalize — '
+        + scope.reason);
     }
     const lines = content.split('\n');
     for (let i = 0; i < lines.length; i++) {
@@ -560,6 +596,15 @@ function commandRel(name, forge) {
     'G2[workflow-next]: claim invocation stamps --runtime cursor');
   assert(/CURSOR_HOME/.test(read(commandRel('workflow-next'))),
     'G2[workflow-next]: script resolver names CURSOR_HOME');
+
+  // Mutation bite: an allowed command path is not itself a blanket exemption.
+  // The same scope check must reject a tier slug copied past the closing marker.
+  for (const rel of TIER_GUIDANCE_COMMANDS) {
+    const mutated = read(rel) + '\nOutside-block mutation: grok-4.6\n';
+    const scope = vendorSlugScope(rel, mutated);
+    assert(!scope.ok && scope.reason === 'vendor model slug escaped the runtime-delegation block',
+      'G2-leak-mutation: ' + rel + ': vendor slug outside the marked block still fails');
+  }
 }
 
 // ---------------------------------------------------------------------------
