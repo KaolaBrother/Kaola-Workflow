@@ -24,7 +24,7 @@ Cursor, and ZCode have documented direct `AGENTS.md` support.
 | OpenCode | Project `.opencode/agents/`, user `~/.config/opencode/agents/`, or `opencode.json`; `task` with named `subagent_type`, or direct `@name` | Broad `general`, read-only local `explore`, read-only external-research `scout`; `task_id` resume and experimental background | Default child depth is one unless user configuration raises it; task permissions and effective merged config may hide a route |
 | Kimi Code | Project `.kimi-code/agents/` or `.agents/agents/`, user `$KIMI_CODE_HOME/agents/` or `~/.agents/agents/`; `Agent`/`AgentSwarm` with `kaola-role-<role>` | Writable `coder`, read-only `explore`, non-shell `plan`; custom agents and AgentSwarm lists up to 128 items | Built-ins are leaves; custom profiles may allowlist deeper agents. Resume/background remain native options |
 | Grok Build | Project `.grok/agents/` or user `~/.grok/agents/`; `spawn_subagent` with named `subagent_type` | Full `general-purpose`; read/shell `explore` and `plan`; background, isolation, resume, cwd, and optional per-call model | Children cannot spawn descendants; the root runtime's other choices remain available |
-| Cursor | Documented project/user `.cursor/agents/` plus compatibility paths; explicit `/role`, natural-language routing, or the live Task schema. `named_roles` is not host-universal: the supported CLI reached project custom types after catalog materialization; measured Cloud hosts stayed built-in-only for Kaola names even when those files were already on disk | Host-dependent: IDE docs describe `Explore`, `Bash`, and `Browser`; supported CLI exposed writable `generalPurpose`, specialist built-ins, and project custom types; measured Cloud catalog-miss exposed `explore` plus `generalPurpose` and specialists, not Kaola names | The current Task catalog is the authority. Omit-model is the named-profile carrier only when the live enum contains the Kaola name. A catalog-miss host uses live members as themselves; files already present plus a built-in-only enum is a capability_gap, not an install miss. CLI proved parallel Tasks and new-process/same-chat refresh; Cloud boot-load is unclaimed |
+| Cursor | Documented project/user `.cursor/agents/` plus compatibility paths; explicit `/role`, natural-language routing, or the live Task schema. CLI and App are separate product surfaces; App local vs Cloud are different hosts. `named_roles` is a CLI compatibility summary, not host-universal: prior CLI evidence (`prior_probe_not_re-run_here`) reached project custom types after catalog materialization; measured Cloud hosts stayed built-in-only for Kaola names even when those files were already on disk; local App/IDE is unprobed | Host-dependent: IDE docs describe `Explore`, `Bash`, and `Browser`; prior CLI exposed writable `generalPurpose`, specialist built-ins, and project custom types; measured Cloud catalog-miss exposed `explore` plus `generalPurpose` and specialists, not Kaola names | The current Task catalog is the authority. Omit-model is the named-profile carrier only when the live enum contains the Kaola name. A catalog-miss host uses live members as themselves; files already present plus a built-in-only enum is a capability_gap, not an install miss. `--global` does not write ambient git. Cloud boot-load is unclaimed |
 | ZCode | Runtime-loaded user `${ZCODE_HOME:-~/.zcode}/agents/`; project `.zcode/agents/` is installer staging; automatic selection, native `@role`, or the live Agent schema | Full `general-purpose` and read-only `Explore`; foreground/background stays native | Profiles load in a new session and children cannot spawn. The staged project tree is not runtime profile discovery |
 
 Cursor and ZCode do not publish one complete Task/Agent call schema. Their generated guidance names
@@ -34,6 +34,31 @@ expose different built-ins, so no one list is treated as universal. Omit-model i
 carrier on a host whose live enum contains Kaola names; on a catalog-miss host a resolver-listed
 model slug from that live schema is an effort lever, not an unpublished field. Static request
 fields whose names or shapes remain unverified are not emitted.
+
+## Runtime/surface install matrix
+
+Global-first is an observable install-scope contract, not a family slogan. `--global` writes the
+runtime's user/global root when that root is the installer's global target; it does not mutate an
+ambient Git repository and is not permission to refresh every consumer repo. Project catalogs are
+an explicit `--target` (or a non-global project install). `workflow-init` does not install runtime
+catalogs. Unknown stays `unknown`; a documented path is not a live named-role PASS.
+
+| Runtime / surface | Global install root | Ambient git write from `--global` | Required project materialization | Named-catalog evidence |
+| --- | --- | --- | --- | --- |
+| Claude Code | user/plugin (`~/.claude/`) | no | no | documented global profiles |
+| Codex | user/project `.codex` plus plugin; global profiles are the install authority | no | no | documented; existing end-to-end global convergence |
+| OpenCode | `${OPENCODE_CONFIG_DIR:-~/.config/opencode}` | no | no | documented user config root |
+| Kimi Code | `${KIMI_CODE_HOME:-~/.kimi-code}` | no | no | documented; live lookup `documented_live_unverified` |
+| Grok CLI | `${GROK_HOME:-~/.grok}` | no | no | documented user `~/.grok/agents/` |
+| ZCode | `${ZCODE_HOME:-~/.zcode}` (project tree is staging; runtime loads user agents) | no | no (staging only) | documented user-scope discovery |
+| Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/{agents,commands}` (un-nested) | **no** | yes (explicit `--target`; prior CLI user-only miss) | prior CLI project catalog (`prior_probe_not_re-run_here`; not re-run here) |
+| Cursor App / local IDE | same user carrier; App is not inferred from a CLI binary | **no** | `unknown` | `unknown` / `unprobed` |
+| Cursor App / Cloud host | local user home is not available remotely | **no** | `unknown` (project/remote route only if proved) | built-in-only (`capability_gap`, not an install miss); Cloud boot-load unclaimed |
+
+Cursor family `named_roles: true` remains a CLI compatibility summary, not host-universal. Disk
+`.cursor/agents/` plus a still-built-in-only live Task enum is a `capability_gap`. The sessionStart
+`kaola-workflow-ensure-cursor-catalog.js` hook is a CLI derived catalog-ensure, not installer
+dual-write; `--global` does not do that hook's job.
 
 ## Default tier bindings
 
@@ -163,25 +188,29 @@ route does not churn `resolved_profile_hash` or all 126 role profiles.
 - [Hooks](https://cursor.com/docs/hooks) and [CLI usage](https://cursor.com/docs/cli/using)
   document events and CLI instruction loading.
 
-**Supported CLI measurement (runtime evidence, 2026-08-27).** Cursor CLI
+**Supported CLI measurement (runtime evidence, 2026-08-27, `prior_probe_not_re-run_here`).** Cursor CLI
 `2026.08.11-e8db854` exposed writable `generalPurpose` as `subagentType.unspecified`, five specialist
 types, and all 14 candidate project profiles. It did not expose the IDE-documented
 `Explore`/`Bash`/`Browser` catalog. Exact custom dispatch succeeded; standard/reasoning/heavy
 resolved to medium/high/xhigh, and parallel Tasks succeeded. A direct child dispatched once more,
 while the grandchild lacked Task. A user `~/.cursor/agents/tdd-guide.md` file alone was invisible in an empty project; the
-project mirror was reachable. Reopening the CLI process with the same chat after adding a project
+project catalog was reachable. Reopening the CLI process with the same chat after adding a project
 profile made it visible, so a new chat is not required; same-process hot load remains unknown.
+This CLI probe is **not re-run here**; it is not App local IDE evidence and is not inferred from
+the presence of `Cursor.app`.
 
 A separate local Cursor CLI `2026.08.25-3e8eec8` run at candidate
 `0501f2527e04c1ecd896df418e50c97b279aa568` confirmed the named-profile path: `implementer`,
 `code-reviewer`, and `planner` resolved to `cursor-grok-4.6-medium`,
 `cursor-grok-4.6-high`, and `cursor-grok-4.6-xhigh`, respectively. All three calls exited
-successfully without repository mutation. This CLI evidence is separate from the Cloud catalog
-measurement and does not establish Cloud boot-load.
+successfully without repository mutation. This CLI evidence is prior
+(`prior_probe_not_re-run_here`), separate from the Cloud catalog measurement, and does not
+establish Cloud boot-load or local App/IDE behavior.
 
 **Cloud Agent measurement (runtime evidence, 2026-08-27, #1036).** Two Cloud parents, both
 `originalModelName: cursor-grok-4.6-xhigh`, exposed a built-in-only Task enum with **no** Kaola
-custom types and **no** parent-authored `subagentType.custom.name` field:
+custom types and **no** parent-authored `subagentType.custom.name` field. This is App-started
+remote Cloud evidence, not local App/IDE proof:
 
 - Consumer `financial-agent` after 14 git-tracked project `.cursor/agents/` files existed
   (`bc-58906f62-9bc3-4b87-b546-3ff8f77ae3b6`): `generalPurpose`, `explore`, `cursor-guide`,
@@ -197,7 +226,8 @@ custom types and **no** parent-authored `subagentType.custom.name` field:
 not host-universal. Files already present plus a still-built-in-only enum is a `capability_gap`, not
 an install miss. Cloud boot-load of project profiles is **unclaimed**; this measurement does not
 separate same-process hot-load from boot-load on a consumer that already had the 14 files before
-the session started.
+the session started. Local App/IDE remains `unknown`/`unprobed`. `--global` does not write an
+ambient Git repository; project catalogs require explicit `--target`.
 
 ### ZCode
 
@@ -213,8 +243,9 @@ the session started.
 - opencode's hard or advisory AGENTS size limit;
 - ZCode's AGENTS size limit and `ZCODE_HOME` relocation semantics;
 - Cursor same-process profile hot load, Cloud boot-load of project `.cursor/agents/` into the Task
-  enum, and catalog behavior beyond the measured `2026.08.11-e8db854` full CLI probe and the
-  `2026.08.25-3e8eec8` named-profile CLI probe (Cloud catalog-miss on the 2026-08-27 hosts above
+  enum, local App/IDE Agent named-catalog behavior (`unknown`/`unprobed`), and catalog behavior
+  beyond the prior `2026.08.11-e8db854` full CLI probe and the `2026.08.25-3e8eec8` named-profile
+  CLI probe (`prior_probe_not_re-run_here`; Cloud catalog-miss on the 2026-08-27 hosts above
   is measured, not unknown);
 - exact ZCode 3.9.1 behavior. The public install page exposed 3.8.1 during this research, so this
   documentation does not present 3.9.1 as locally or publicly verified;

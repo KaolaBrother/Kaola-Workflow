@@ -14,7 +14,10 @@ Cursor Cloud Agents may not fire `sessionStart` and may not load project hooks.
 That gap is declared, not papered over; durable resume stays `mission-list.md`.
 Measured Cloud Task catalogs on 2026-08-27 stayed built-in-only for Kaola custom types even when
 project `.cursor/agents/` files were already on disk; that is a `capability_gap`, not an install
-miss. See [runtime capabilities](runtime-capabilities.md#cursor).
+miss. Cursor CLI and Cursor App are separate product surfaces; App local IDE and App-started Cloud
+are different execution hosts and must not be inferred from each other or from a CLI binary.
+Family `named_roles: true` is a CLI compatibility summary, not host-universal. Local App/IDE
+remains `unknown`/`unprobed`. See [runtime capabilities](runtime-capabilities.md#cursor).
 
 Cursor reads root and nested `AGENTS.md` directly, combining parent guidance with more-specific
 instructions. Kaola installs no project-instruction bridge for Cursor. Generated agent frontmatter,
@@ -105,8 +108,9 @@ production owner does not absorb independent research, test authorship, document
 ### Supported CLI live probe
 
 On 2026-08-27, the locally authenticated Cursor CLI `2026.08.11-e8db854` was exercised against a
-disposable project install. This is runtime evidence for the supported CLI, not a claim about every
-Cursor host:
+disposable project install. This is prior runtime evidence for the supported CLI
+(`prior_probe_not_re-run_here`); it is not a claim about App local IDE, App-started Cloud, or
+every Cursor host, and it was not re-run for #1039:
 
 - The Task catalog exposed `generalPurpose`, `cursor-guide`, `bugbot`, `security-review`,
   `best-of-n-runner`, and all 14 project Kaola roles. It did not expose
@@ -128,8 +132,9 @@ A separate local Cursor CLI `2026.08.25-3e8eec8` run at candidate
 `0501f2527e04c1ecd896df418e50c97b279aa568` confirmed the same Path A carrier: named
 `implementer`, `code-reviewer`, and `planner` resolved to
 `cursor-grok-4.6-medium`, `cursor-grok-4.6-high`, and `cursor-grok-4.6-xhigh`, respectively.
-All three calls exited successfully without repository mutation. This is CLI named-profile
-evidence only; it does not establish the Cloud catalog.
+All three calls exited successfully without repository mutation. This is prior CLI named-profile
+evidence only (`prior_probe_not_re-run_here`); it does not establish App local IDE or the Cloud
+catalog.
 
 ### Cloud catalog-miss live probe
 
@@ -144,12 +149,19 @@ All 14 role bodies come from `templates/agents/behavior-contracts.json` through
 layout, commands, hooks, and install packaging. Reviewer roles have no separate source or transform.
 
 Cursor documents custom profiles at project `.cursor/agents/` and user `~/.cursor/agents/`, with
-project definitions winning a conflict. Kaola's project install writes the project location and
-`--global` writes `${CURSOR_HOME:-$HOME/.cursor}/agents/` directly. A global install made while the
-current directory is inside a git work tree also mirrors the roster to that project. The mirror is
-not merely optional compatibility for the supported CLI: the live probe reached project profiles
-and did not reach a user file alone. The catalog-ensure hook and
-`kaola-workflow-ensure-cursor-catalog.js` keep the project catalog byte-aligned.
+project definitions winning a conflict. Kaola's project install (`--target DIR` or a non-global
+project install) writes the project location. `--global` writes only
+`${CURSOR_HOME:-$HOME/.cursor}/{agents,commands}` (un-nested) and does **not** write an ambient Git
+repository; existing project `.cursor` files are left untouched, and `--global` from a non-git cwd
+does not invent project `.cursor`. Project catalogs are never selected from the ambient cwd of a
+`--global` command. Prior supported-CLI evidence (`prior_probe_not_re-run_here`, not re-run here)
+reached project profiles and did not reach a user file alone; that CLI fact is not App or Cloud
+proof. Local App/IDE remains `unknown`/`unprobed`. Disk `.cursor/agents/` plus a still-built-in-only
+live Task enum is a `capability_gap`, not an install miss. Cloud boot-load remains unclaimed.
+
+The `sessionStart` hook `kaola-workflow-ensure-cursor-catalog.js` is a CLI derived catalog-ensure:
+it copies the 14 canon roles from `$CURSOR_HOME/agents` into `<cwd>/.cursor/agents`. It is not
+installer dual-write, and `--global` does not do that hook's job.
 
 The official model contract is likewise bounded: `model` is either `inherit` or an exact model ID,
 and bracket parameters carry options such as effort. Team policy, legacy-plan settings, or plan
@@ -177,16 +189,18 @@ does not run through `install.sh --forge`.
 > The Cursor runtime is also covered by the top-level **`./install-all.sh`**
 > ("install/refresh every runtime" — see [README](../README.md#installation)),
 > which invokes this installer unchanged (`--global` by default) as the sixth
-> leg of its seven-runtime sequence, with a per-runtime PASS/FAIL summary. The installer writes the
-> documented user scope and, when cwd is a git work tree, materializes
-> `<toplevel>/.cursor/agents` as the precedence-winning, live-proven CLI catalog. It stays a thin
+> leg of its seven-runtime sequence, with a per-runtime PASS/FAIL summary.
+> `--global` inherits this installer's user-home-only Cursor layout: it is not
+> permission to update every consumer repository. Project `.cursor` catalogs
+> need an explicit `--target` or `install-all.sh --project`. It stays a thin
 > orchestrator — it does **not** fold Cursor into
 > `install.sh`/`edition-sync.js`/`npm test`.
 
 ```bash
 ./install-cursor.sh                         # deploy into the current project (.cursor/{agents,commands})
 ./install-cursor.sh --target /path/to/repo  # deploy into a specific project
-./install-cursor.sh --global                # agents+commands → ${CURSOR_HOME:-~/.cursor}
+./install-cursor.sh --global                # agents+commands → ${CURSOR_HOME:-~/.cursor} only; no ambient git write
+./install-cursor.sh --doctor --json         # report product/host surface facts; does not install
 ./install-cursor.sh --regenerate            # refresh in-repo .cursor/ from canonical, then exit
 ./install-cursor.sh --uninstall             # remove the kaola-deployed edition
 ```
@@ -196,25 +210,29 @@ scripts, and the hooks JSON merge. The installer resolves the generated source
 tree via `node scripts/sync-cursor-edition.js --print-tree-root` (a worktree
 install still finds the main-checkout trees).
 
-- **PROJECT** (`--target` / `$PWD`): agents and commands land under
+- **PROJECT** (`--target` / `$PWD` without `--global`): agents and commands land under
   `<project>/.cursor/{agents,commands}`. Hook scripts land under
   `<project>/.cursor/hooks/` and mapping is **merged** into
   `<project>/.cursor/hooks.json` (other events, e.g. `beforeShellExecution`, stay).
   A project install does **not** merge into `~/.cursor/hooks.json` — Cursor has
-  project-scoped hooks.
+  project-scoped hooks. This is the explicit project materialization. It is never
+  selected from ambient cwd of a `--global` command.
 - **GLOBAL** (`--global`): they land under `${CURSOR_HOME:-$HOME/.cursor}/{agents,commands}`
   with **no** nested `.cursor/` directory. Mapping is merged into
   `${CURSOR_HOME:-$HOME/.cursor}/hooks.json` with command paths rewritten to `./hooks/`.
-  If the installer cwd is inside a git work tree, the same agents and commands are
-  also written to `$(git rev-parse --show-toplevel)/.cursor/{agents,commands}`
-  as a project-local mirror. `--global` from a directory with no git toplevel does not invent a
-  project `.cursor/` tree; the documented user carrier is still written, but its files alone were
-  not catalog-visible in the measured supported CLI.
+  Running `--global` inside a Git work tree does **not** create or refresh that
+  repository's `.cursor/` tree. Project catalogs that already exist are left untouched.
+  `--global` from a directory with no git toplevel does not invent a project `.cursor/`
+  tree. The documented user carrier is still written; prior CLI evidence
+  (`prior_probe_not_re-run_here`) found those user files alone were not catalog-visible.
+  `--doctor` reports product (`cli`/`app`/`unknown`) and host (`local`/`cloud`/`unknown`)
+  facts without installing and never infers one surface from a sibling binary.
 - Support scripts always land under
   `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/{scripts,hooks}`.
   `kaola-workflow-ensure-cursor-catalog.js` is a Cursor-only extra: the installer
   copies and `--uninstall` removes it by name. It is **not** listed in
-  `kaola-workflow-install-manifest.js`.
+  `kaola-workflow-install-manifest.js`. It is a CLI derived catalog-ensure hook, not
+  a second write performed by `--global`.
 
 `--uninstall` removes only kaola-deployed names and strips kaola entries from
 `hooks.json`. It never deletes the user's `hooks.json` file. A subsequent bare

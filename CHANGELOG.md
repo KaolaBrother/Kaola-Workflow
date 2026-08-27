@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Changed
+
+- **Cursor `--global` writes only the user carrier; CLI and App are separate surfaces (#1039).**
+  `install-cursor.sh --global` writes only `${CURSOR_HOME:-~/.cursor}/{agents,commands}`
+  (un-nested) and does not write the invoking Git repository. Existing project `.cursor` files
+  stay untouched; `--global` from a non-git cwd does not invent project `.cursor`. Project
+  catalogs require explicit `--target DIR` (or a non-global project install), never the ambient
+  cwd of a global command. `install-all.sh --global` inherits that Cursor behavior and is not
+  permission to update every consumer repo. Cursor CLI and App are independently versioned
+  product surfaces; App local IDE and App-started/remote Cloud are different execution hosts
+  and must not be inferred from each other or from a sibling binary. Family `named_roles: true`
+  remains a CLI compatibility summary, not host-universal. Disk `.cursor/agents/` plus a
+  still-built-in-only live Task enum is a `capability_gap`, not an install miss. Cloud boot-load
+  remains unclaimed. Local App/IDE remains `unknown`/`unprobed`. Prior CLI evidence is kept as
+  `prior_probe_not_re-run_here`. `workflow-init` does not install runtime catalogs. The
+  sessionStart `kaola-workflow-ensure-cursor-catalog.js` hook stays a CLI derived catalog-ensure,
+  not installer dual-write.
+
 ### Fixed
 
 - **Cursor `named_roles` is host-split, not family-universal (#1036).** Next/finalize inspect the

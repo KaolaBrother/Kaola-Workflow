@@ -363,6 +363,16 @@ contract is explicitly preserved. Workflow-init authoring surfaces name this mod
 contain no second universal template. A successful second apply writes nothing and preserves
 identical hashes.
 
+Runtime installation is a separate owner from that portable repository result. `workflow-init`
+does not install, refresh, or choose runtime catalogs, commands, skills, hooks, or adapters; the
+same init outcome is produced regardless of which runtime invoked it. Runtime installers own native
+commands or skills, agent catalogs, hooks, support scripts, and adapter/capability facts.
+`install-cursor.sh --global` writes only `${CURSOR_HOME:-~/.cursor}/{agents,commands}` and does not
+mutate an ambient Git repository; `install-all.sh --global` inherits that Cursor behavior and is
+not permission to update every consumer repo. Project `.cursor` catalogs require explicit
+`--target` (or a non-global project install). A sessionStart catalog-ensure hook is not installer
+dual-write.
+
 ### Runtime capability divergence
 
 The machine authority is `templates/agents/runtime-capabilities.json`; the cited human map is

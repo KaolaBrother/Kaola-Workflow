@@ -28,7 +28,8 @@ moments.
 - [Grok Edition](grok-edition.md) — direct root-to-cwd `AGENTS.md`, generated named agents,
   session-inherited model with native effort pins, and hooks.
 - [Cursor Edition](cursor-edition.md) — direct root/nested `AGENTS.md`, generated named agents,
-  live-enum host split (CLI omit-model vs Cloud catalog-miss), and hooks.
+  CLI vs App product surfaces (App local IDE vs Cloud hosts), live-enum routing (CLI omit-model vs
+  Cloud catalog-miss), and hooks.
 - [ZCode Edition](zcode-edition.md) — direct user-plus-workspace `AGENTS.md`, user-scope generated
   agents, `thoughtLevel`, known hook limits, and explicit version/relocation unknowns.
 
