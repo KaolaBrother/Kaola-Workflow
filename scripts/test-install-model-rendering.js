@@ -18,6 +18,7 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-models-'));
+const initialCodexVersion = process.env.KAOLA_CODEX_VERSION;
 const codexProfileInstaller = require('../plugins/kaola-workflow/scripts/install-codex-agent-profiles');
 const codexPreflight = require('./kaola-workflow-codex-preflight');
 const agentGenerator = require('./generate-agent-profiles');
@@ -29,11 +30,16 @@ const claudeIntentMapping = runtimeAdapters.runtimes.claude.capabilities.intent_
 // resolved by SPAWNING the resolver against an installed tree, never by calling it in-process.
 const resolver = require('./kaola-workflow-resolve-agent-model.js');
 
-// #775: this sandbox has no `codex` binary on PATH. Preflight's version floor is
-// non-optional; without an override every spawn returns `codex_version_unsupported`
-// and never reaches the property under test. A spawn may still pass a flag or a
-// child env to exercise below-floor / source-precedence cases — those outrank this.
-if (!process.env.KAOLA_CODEX_VERSION) process.env.KAOLA_CODEX_VERSION = '0.145.0';
+const CODEX_FLOOR_ATTESTATION = '0.145.0';
+function withCodexVersionAttestation(env = process.env) {
+  return { ...env, KAOLA_CODEX_VERSION: CODEX_FLOOR_ATTESTATION };
+}
+
+// #1036 R1: this suite must leave the parent environment untouched. Individual child preflight
+// invocations that assert properties beyond the version gate opt into the floor attestation via
+// withCodexVersionAttestation(); the no-override fixture below deliberately removes it.
+assert.strictEqual(process.env.KAOLA_CODEX_VERSION, initialCodexVersion,
+  '#1036 R1: the suite must not mutate process.env.KAOLA_CODEX_VERSION globally');
 
 const VENDOR_MODEL_LITERAL = /\b(?:haiku|sonnet|opus|fable|gpt-[a-z0-9.-]+|grok-[a-z0-9.-]+|glm-[a-z0-9.-]+)\b/ig;
 
@@ -1302,7 +1308,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     const refused = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.notStrictEqual(refused.status, 0,
       'fresh global profiles must not mask a stale higher-precedence project override');
     const refusal = JSON.parse(refused.stdout);
@@ -1315,7 +1321,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     const repaired = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(repaired.status, 0,
       'normal preflight may repair the active project override before dispatch: '
       + repaired.stderr + repaired.stdout);
@@ -1445,14 +1451,14 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     let unrelated = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(unrelated.status, 0,
       'an unrelated project role outside canonical managed markers remains allowed: '
       + unrelated.stderr + unrelated.stdout);
     // spawn-class: environment
     unrelated = spawnSync(process.execPath,
       [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(unrelated.status, 0,
       'doctor stays green for an unrelated project role outside canonical managed markers: '
       + unrelated.stderr + unrelated.stdout);
@@ -1467,7 +1473,7 @@ function enableMultiAgentV2(homeRoot) {
       // spawn-class: environment
       const normal = spawnSync(process.execPath,
         [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-        { cwd: pluginRoot, encoding: 'utf8' });
+        { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
       assert.notStrictEqual(normal.status, 0,
         fixture.label + ': normal preflight must refuse managed config drift');
       const normalJson = JSON.parse(normal.stdout);
@@ -1483,7 +1489,7 @@ function enableMultiAgentV2(homeRoot) {
       // spawn-class: environment
       const doctor = spawnSync(process.execPath,
         [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
-        { cwd: pluginRoot, encoding: 'utf8' });
+        { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
       assert.notStrictEqual(doctor.status, 0, fixture.label + ': doctor must report stale');
       const doctorJson = JSON.parse(doctor.stdout);
       const projectScope = doctorJson.scopes.find(scope => scope.scope === 'project');
@@ -1502,7 +1508,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     const nestedAgentsKey = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(nestedAgentsKey.status, 0,
       'an `agents` key inside a non-agent TOML table is not a top-level override: '
       + nestedAgentsKey.stderr + nestedAgentsKey.stdout);
@@ -1517,7 +1523,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     const decoyPreflight = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.notStrictEqual(decoyPreflight.status, 0,
       'a canonical-looking managed block inside multiline prose is not an active block');
     assert.notStrictEqual(JSON.parse(decoyPreflight.stdout).status, 'ok',
@@ -1533,7 +1539,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     const prosePreflight = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(prosePreflight.status, 0,
       'table-looking lines inside TOML multiline strings must not create false conflicts or unsafe transport: '
       + prosePreflight.stderr + prosePreflight.stdout);
@@ -1557,7 +1563,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     const quotedFeaturesPreflight = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(quotedFeaturesPreflight.status, 0,
       'preflight derives the same managed-body grammar for quoted external features: '
       + quotedFeaturesPreflight.stderr + quotedFeaturesPreflight.stdout);
@@ -1600,7 +1606,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     let result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.notStrictEqual(result.status, 0,
       'one-role project override must not be masked by fresh global profiles');
     assert.strictEqual(JSON.parse(result.stdout).status, 'autofix_unsafe',
@@ -1611,7 +1617,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.notStrictEqual(result.status, 0,
       'a nested table below a managed Kaola role must not be masked by global profiles');
     assert.strictEqual(JSON.parse(result.stdout).status, 'autofix_unsafe',
@@ -1627,7 +1633,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(result.status, 0,
       'an unrelated valid project role must coexist with fresh global Kaola profiles: '
       + result.stderr + result.stdout);
@@ -1641,7 +1647,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.notStrictEqual(result.status, 0,
       'a duplicate managed Kaola role outside the global managed markers must fail closed');
     assert.strictEqual(JSON.parse(result.stdout).status, 'autofix_unsafe',
@@ -1649,7 +1655,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     let doctor = spawnSync(process.execPath,
       [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.notStrictEqual(doctor.status, 0,
       'doctor must mark an outside duplicate global managed role stale');
     let doctorJson = JSON.parse(doctor.stdout);
@@ -1669,14 +1675,14 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(result.status, 0,
       'an unrelated global user role must coexist with managed Kaola roles: '
       + result.stderr + result.stdout);
     // spawn-class: environment
     doctor = spawnSync(process.execPath,
       [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(doctor.status, 0,
       'doctor stays green for an unrelated global user role: '
       + doctor.stderr + doctor.stdout);
@@ -1690,14 +1696,14 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(JSON.parse(result.stdout).multi_agent_v2_enabled, true,
       "an absent project-layer [agents] table never resets the global layer's enabled=true");
     fs.writeFileSync(projectConfig, '[features.multi_agent_v2]\nenabled = false\n');
     // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(result.status, 7,
       "an explicit project-layer enabled=false overrides the global layer's enabled=true");
     assert.strictEqual(JSON.parse(result.stdout).status, 'codex_multi_agent_v2_required',
@@ -1711,7 +1717,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(result.status, 0, 'combined per-field bounds overlay must not refuse: ' + result.stderr + result.stdout);
     const combinedJson = JSON.parse(result.stdout);
     assert.strictEqual(combinedJson.max_concurrent_threads_per_session, 6,
@@ -1734,7 +1740,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', nested, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.notStrictEqual(result.status, 0,
       'nested cwd must refuse stale repository-root managed config');
     assert.strictEqual(JSON.parse(result.stdout).status, 'config_stale',
@@ -1742,7 +1748,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     doctor = spawnSync(process.execPath,
       [preflightPath, '--doctor', '--project-root', nested, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.notStrictEqual(doctor.status, 0,
       'doctor from nested cwd must refuse the same stale repository-root layer');
     doctorJson = JSON.parse(doctor.stdout);
@@ -1789,7 +1795,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     let result = spawnSync(process.execPath,
       [preflightPath, '--project-root', nestedRoot, '--home', homeRoot, '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.notStrictEqual(result.status, 0,
       'two stale trusted layers refuse before autofix');
     assert.strictEqual(JSON.parse(result.stdout).status, 'profiles_missing',
@@ -1798,7 +1804,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', nestedRoot, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(result.status, 0,
       'autofix repairs every stale trusted layer: ' + result.stderr + result.stdout);
     assert.strictEqual(JSON.parse(result.stdout).autofixed, true,
@@ -1816,7 +1822,7 @@ function enableMultiAgentV2(homeRoot) {
     // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', nestedRoot, '--home', homeRoot, '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
     assert.strictEqual(result.status, 0,
       'autofix repairs malformed profiles in every trusted layer: ' + result.stderr + result.stdout);
     for (const managedDir of managedDirs) {
@@ -1838,6 +1844,7 @@ function enableMultiAgentV2(homeRoot) {
       scriptDir: path.join(pluginRoot, 'scripts'),
       planPath: null,
       noAutofix: false,
+      codexVersion: CODEX_FLOOR_ATTESTATION,
     });
     assert.strictEqual(result.exitCode, 6,
       'autofix must preflight every stale target before mutating the first one');
@@ -1855,6 +1862,7 @@ function enableMultiAgentV2(homeRoot) {
       scriptDir: path.join(pluginRoot, 'scripts'),
       planPath: null,
       noAutofix: false,
+      codexVersion: CODEX_FLOOR_ATTESTATION,
     });
     assert.strictEqual(result.exitCode, 4,
       'autofix must preflight a later ambiguous marker range before all writes');
@@ -1897,6 +1905,7 @@ function enableMultiAgentV2(homeRoot) {
       scriptDir: path.join(pluginRoot, 'scripts'),
       planPath: null,
       noAutofix: false,
+      codexVersion: CODEX_FLOOR_ATTESTATION,
     });
     assert.strictEqual(result.exitCode, 0,
       'global autofix honors the explicitly selected home: ' + JSON.stringify(result.result));
@@ -1945,6 +1954,7 @@ function enableMultiAgentV2(homeRoot) {
       scriptDir: liveCachedSource
         ? path.join(fixture.versionRoot, 'scripts')
         : path.join(pluginRoot, 'scripts'),
+      codexVersion: CODEX_FLOOR_ATTESTATION,
     });
   }
 
@@ -2268,6 +2278,7 @@ function enableMultiAgentV2(homeRoot) {
         scriptDir: path.join(fixture.versionRoot, 'scripts'),
         planPath: null,
         noAutofix: true,
+        codexVersion: CODEX_FLOOR_ATTESTATION,
       });
       assert.strictEqual(result.exitCode, 2,
         'normal preflight rejects ' + sourceCase.label + ' before dispatch');
@@ -2311,7 +2322,7 @@ function enableMultiAgentV2(homeRoot) {
     const invoke = () => spawnSync(process.execPath,
       [preflightPath, '--project-root', projectRoot, '--home', homeRoot,
         '--no-autofix', '--json'],
-      { cwd: pluginRoot, encoding: 'utf8' });
+      { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
 
     fs.writeFileSync(globalConfig,
       'project_root_markers = [\n'
@@ -2365,7 +2376,7 @@ function enableMultiAgentV2(homeRoot) {
   const invoke = (projectRoot, homeRoot, doctor = false) => spawnSync(process.execPath,
     [preflightPath, ...(doctor ? ['--doctor'] : []), '--project-root', projectRoot,
       '--home', homeRoot, '--no-autofix', '--json'],
-    { cwd: pluginRoot, encoding: 'utf8' });
+    { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
 
   for (const trustLevel of ['unknown', 'untrusted']) {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), `kaola-trust-${trustLevel}-project-`));
@@ -2652,7 +2663,7 @@ function enableMultiAgentV2(homeRoot) {
       // spawn-class: environment
       const result = spawnSync(process.execPath,
         [preflightPath, '--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json'],
-        { cwd: pluginRoot, encoding: 'utf8' });
+        { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
       assert.notStrictEqual(result.status, 0, fixture.label + ': normal gate must refuse');
       assert.doesNotThrow(() => JSON.parse(result.stdout),
         fixture.label + ': refusal must remain machine-readable JSON: ' + result.stdout + result.stderr);
@@ -2746,7 +2757,7 @@ function enableMultiAgentV2(homeRoot) {
       const normal = spawnSync(process.execPath,
         [preflightPath, '--project-root', projectRoot, '--home', homeRoot,
           '--no-autofix', '--json'],
-        { cwd: pluginRoot, encoding: 'utf8' });
+        { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
       assert.notStrictEqual(normal.status, 0,
         fixture.label + ': normal preflight must reject redirected authority');
       const normalJson = JSON.parse(normal.stdout);
@@ -2757,7 +2768,7 @@ function enableMultiAgentV2(homeRoot) {
       // spawn-class: environment
       const doctor = spawnSync(process.execPath,
         [preflightPath, '--doctor', '--project-root', projectRoot, '--home', homeRoot, '--json'],
-        { cwd: pluginRoot, encoding: 'utf8' });
+        { cwd: pluginRoot, encoding: 'utf8', env: withCodexVersionAttestation() });
       assert.notStrictEqual(doctor.status, 0,
         fixture.label + ': doctor must reject the same redirected authority');
       const doctorJson = JSON.parse(doctor.stdout);
@@ -3433,7 +3444,7 @@ try {
         return spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
           cwd: path.join(root, 'plugins', 'kaola-workflow'),
           encoding: 'utf8',
-          env: { ...process.env, KAOLA_CODEX_VERSION: '0.145.0' },
+          env: withCodexVersionAttestation(),
         });
       }
 
@@ -3469,6 +3480,46 @@ try {
         cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8'
       });
       assert.notStrictEqual(JSON.parse(aboveFloor.stdout).status, 'codex_version_unsupported', '#775: a version above the floor passes the version check');
+
+      // #1036 R1: a hermetic no-override child must reach the live `codex --version` probe.
+      // The fake binary exits successfully but emits no version triplet, so the final fallback
+      // classification is the typed `unavailable` source rather than a suite-global env source.
+      const fakeCodexDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-fake-codex-'));
+      const fakeCodexPath = path.join(fakeCodexDir, 'codex');
+      const probeMarker = path.join(fakeCodexDir, 'probe.marker');
+      fs.writeFileSync(fakeCodexPath,
+        '#!/bin/sh\n'
+        + 'printf \'probed\\n\' > "$KAOLA_TEST_CODEX_PROBE_MARKER"\n'
+        + 'printf \'codex development build\\n\'\n');
+      fs.chmodSync(fakeCodexPath, 0o755);
+      try {
+        const noOverrideEnv = {
+          ...process.env,
+          HOME: chome,
+          PATH: fakeCodexDir + path.delimiter + '/usr/bin:/bin',
+          KAOLA_TEST_CODEX_PROBE_MARKER: probeMarker,
+        };
+        delete noOverrideEnv.KAOLA_CODEX_VERSION;
+        assert.strictEqual(noOverrideEnv.KAOLA_CODEX_VERSION, undefined,
+          '#1036 R1: no-override probe fixture must remove KAOLA_CODEX_VERSION from the child');
+        // spawn-class: environment
+        const noOverride = spawnSync(process.execPath,
+          [codexPreflightPath, '--project-root', cproj, '--home', chome,
+            '--no-autofix', '--json'],
+          { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8', env: noOverrideEnv });
+        assert.strictEqual(noOverride.status, 7,
+          '#1036 R1: no-override probe fixture must stop at the unsupported-version gate: '
+          + noOverride.stderr + noOverride.stdout);
+        const noOverrideJson = JSON.parse(noOverride.stdout);
+        assert.strictEqual(noOverrideJson.detected_version, null,
+          '#1036 R1: unparsable fake codex output reports no detected version');
+        assert.strictEqual(noOverrideJson.detected_version_source, 'unavailable',
+          '#1036 R1: no-env fallback reports the unavailable source after probing codex');
+        assert.strictEqual(fs.readFileSync(probeMarker, 'utf8'), 'probed\n',
+          '#1036 R1: no-env fallback actually invokes the hermetic codex binary');
+      } finally {
+        fs.rmSync(fakeCodexDir, { recursive: true, force: true });
+      }
 
       // --- #775: codex_multi_agent_v2_required (owner decision D2: Kaola never writes the flag
       //     for the user — the refusal must carry the exact minimal paste-able diff). ---
@@ -3511,7 +3562,7 @@ try {
       // spawn-class: environment
       const reviewerDrift = spawnSync(process.execPath,
         [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'],
-        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8' });
+        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8', env: withCodexVersionAttestation() });
       assert.notStrictEqual(reviewerDrift.status, 0,
         '#reviewer-contract: modified installed project profile must fail preflight');
       const reviewerDriftJson = JSON.parse(reviewerDrift.stdout);
@@ -3522,7 +3573,7 @@ try {
       // spawn-class: environment
       const repairedReviewer = spawnSync(process.execPath,
         [codexPreflightPath, '--project-root', cproj, '--home', chome, '--json'],
-        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8' });
+        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8', env: withCodexVersionAttestation() });
       assert.strictEqual(repairedReviewer.status, 0,
         '#reviewer-contract: project drift autofix must reinstall exact source bytes: ' + repairedReviewer.stderr);
       assert(fs.readFileSync(reviewerProfilePath).equals(
@@ -3536,7 +3587,7 @@ try {
       // spawn-class: environment
       const staleLegacy = spawnSync(process.execPath,
         [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'],
-        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8' });
+        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8', env: withCodexVersionAttestation() });
       assert.notStrictEqual(staleLegacy.status, 0, 'legacy pinned project profile must not satisfy preflight');
       const staleLegacyJson = JSON.parse(staleLegacy.stdout);
       assert.strictEqual(staleLegacyJson.status, 'profiles_stale', 'legacy full pin has the stale migration status');
@@ -3545,7 +3596,7 @@ try {
       // spawn-class: environment
       const migratedLegacy = spawnSync(process.execPath,
         [codexPreflightPath, '--project-root', cproj, '--home', chome, '--json'],
-        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8' });
+        { cwd: path.join(root, 'plugins', 'kaola-workflow'), encoding: 'utf8', env: withCodexVersionAttestation() });
       assert.strictEqual(migratedLegacy.status, 0, 'default project preflight migrates a legacy full pin: ' + migratedLegacy.stderr);
       assert.strictEqual(JSON.parse(migratedLegacy.stdout).autofixed, true, 'legacy migration reports autofixed');
       const migratedProfile = fs.readFileSync(legacyProfilePath, 'utf8');

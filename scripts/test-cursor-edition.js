@@ -115,6 +115,68 @@ function generatedTreeFiles(label) {
   return walkFiles(path.join(TREE_ROOT, label), label);
 }
 
+// Path B is a semantic relation, not a bag of nearby words. The live Cursor
+// enum's built-in-only case carries the omitted model on the parent; it does
+// not resolve a generated profile pin. Keep this oracle on the generated
+// command bytes because those are what workflow-next and finalize ship.
+const PATH_B_COMMANDS = Object.freeze(['workflow-next', 'kaola-workflow-finalize']);
+
+function normalizePathBTerm(value) {
+  return String(value || '').replace(/[\`'"]/g, '').replace(/\s+/g, ' ').trim().toLowerCase()
+    .replace(/^(?:a|an|the)\s+/, '');
+}
+
+function pathBRelations(text) {
+  return String(text || '').split(/\r?\n/).map((line, index) => {
+    if (!/\bbuilt-in-only\b/i.test(line) || !/\bomit-model\b/i.test(line)) return null;
+    const m = line.match(/\bomit-model\s+is\s+the\s+([^,.;]+?)\s*,\s*not\s+(?:a\s+)?([^,.;]+)/i);
+    return {
+      lineNumber: index + 1,
+      line,
+      positive: m ? normalizePathBTerm(m[1]) : null,
+      negative: m ? normalizePathBTerm(m[2]) : null,
+    };
+  }).filter(Boolean);
+}
+
+function inspectPathBConsumers(root) {
+  const errors = [];
+  const relations = {};
+  for (const name of PATH_B_COMMANDS) {
+    const rel = path.join('.cursor', 'commands', name + '.md');
+    const absolute = path.join(root, rel);
+    if (!fs.existsSync(absolute)) {
+      errors.push(name + ': missing generated consumer ' + rel);
+      continue;
+    }
+    const found = pathBRelations(fs.readFileSync(absolute, 'utf8'));
+    relations[name] = found;
+    if (found.length !== 1) {
+      errors.push(name + ': expected exactly one built-in-only omit-model relation, found ' + found.length);
+      continue;
+    }
+    const relation = found[0];
+    if (relation.positive !== 'parent' || relation.negative !== 'profile pin') {
+      errors.push(name + ':' + relation.lineNumber + ': expected omit-model → parent and not → profile pin; '
+        + 'got omit-model → ' + JSON.stringify(relation.positive) + ' and not → '
+        + JSON.stringify(relation.negative));
+    }
+  }
+  return { ok: errors.length === 0, errors, relations };
+}
+
+// A child mode lets the mutation fixture exercise this same generated-byte
+// oracle without recursively running the full edition suite.
+if (process.argv.includes('--path-b-oracle')) {
+  const verdict = inspectPathBConsumers(TREE_ROOT);
+  if (!verdict.ok) {
+    for (const error of verdict.errors) console.error('PATH-B-ORACLE RED: ' + error);
+    process.exit(1);
+  }
+  console.log('PATH-B-ORACLE GREEN: built-in-only omit-model carries the parent, not a profile pin');
+  process.exit(0);
+}
+
 const trackedAgents = () => fs.readdirSync(path.join(REPO, 'agents'))
   .filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
 const commandNamesFor = forge => forgeLayout.commandSources(forge)
@@ -542,13 +604,11 @@ function commandRel(name, forge) {
     assert(/resolver-listed model slug/i.test(content),
       'G2[' + name + ']: catalog-miss listed model slugs are a live-schema effort lever');
   }
-  const dispatchBlock = String(syncMod.CURSOR_MODEL_DISPATCH_BLOCK || '');
-  assert(dispatchBlock.length > 0,
-    'G2-catalog-miss: CURSOR_MODEL_DISPATCH_BLOCK remains exported so residue cannot silently vanish');
-  assert(!/Do not retry as `generalPurpose`/.test(dispatchBlock),
-    'G2-catalog-miss: CURSOR_MODEL_DISPATCH_BLOCK no longer fail-closes Invalid-enum to inline-only without built-ins as themselves');
-  assert(/capability_gap, not an install miss/i.test(dispatchBlock),
-    'G2-catalog-miss: CURSOR_MODEL_DISPATCH_BLOCK treats already-present plus built-in-only as capability_gap');
+
+  const pathBVerdict = inspectPathBConsumers(TREE_ROOT);
+  assert(pathBVerdict.ok,
+    'G2-path-b: generated workflow-next and finalize carry the built-in-only omit-model relation '
+    + '(parent, not profile pin)' + (pathBVerdict.ok ? '' : ' — ' + pathBVerdict.errors.join(' | ')));
 
   const nativeBoundary = 'Use the live Task schema for tdd-guide with task, custody, evidence, and stop boundaries.';
   assert(!lineStartCall(nativeBoundary) && staticDispatchFields(nativeBoundary).length === 0,
@@ -557,6 +617,115 @@ function commandRel(name, forge) {
     + '\nTask(\n  subagent_type="tdd-guide",\n  description="Routed fix"\n)';
   assert(lineStartCall(inventedCard) && staticDispatchFields(inventedCard).length === 2,
     'G2-mutation RED: appending a static Task(subagent_type, description) card is detected');
+}
+
+// ---------------------------------------------------------------------------
+// G2-path-b-mutation — mutate the actual Cursor adapter authority in a
+// throwaway source tree, regenerate both shipped consumers, and require the
+// semantic oracle above to go RED. A phrase-presence check or the exported
+// CURSOR_MODEL_DISPATCH_BLOCK residue would not observe this path.
+// ---------------------------------------------------------------------------
+{
+  const SOURCE_TREES = ['scripts', 'agents', 'commands', 'hooks', 'templates'];
+  const scratch = fs.realpathSync(fs.mkdtempSync(path.join(tmpBase(), 'cursor-g2-path-b-')));
+  try {
+    const missing = SOURCE_TREES.filter(name => !fs.existsSync(path.join(REPO, name)));
+    assert(missing.length === 0,
+      'G2-path-b-mutation: fixture source trees exist — missing ' + JSON.stringify(missing));
+    if (missing.length === 0) {
+      for (const name of SOURCE_TREES) {
+        fs.cpSync(path.join(REPO, name), path.join(scratch, name), { recursive: true });
+      }
+
+      const adapterPath = path.join(scratch, 'templates', 'agents', 'runtime-capabilities.json');
+      const adapterText = fs.readFileSync(adapterPath, 'utf8');
+      let authority = null;
+      try { authority = JSON.parse(adapterText); } catch (e) {
+        assert(false, 'G2-path-b-mutation: runtime-capabilities.json parses — ' + e.message);
+      }
+
+      const carrier = authority && authority.runtimes && authority.runtimes.cursor
+        && authority.runtimes.cursor.capabilities
+        && authority.runtimes.cursor.capabilities.delegation_guidance
+        && authority.runtimes.cursor.capabilities.delegation_guidance.dispatch_carrier;
+      const authorityRelation = pathBRelations(carrier);
+      const relationReady = typeof carrier === 'string'
+        && authorityRelation.length === 1
+        && authorityRelation[0].positive === 'parent'
+        && authorityRelation[0].negative === 'profile pin';
+      assert(relationReady,
+        'G2-path-b-mutation: Cursor adapter dispatch_carrier has the parent/not-profile Path B relation');
+
+      if (relationReady) {
+        const parentRelation = /\bomit-model\s+is\s+the\s+parent\s*,\s*not\s+(?:a\s+)?profile\s+pin\b/i;
+        const mutatedCarrier = carrier.replace(parentRelation,
+          'omit-model is the profile pin, not the parent');
+        const carrierCount = adapterText.split(carrier).length - 1;
+        const mutationReady = mutatedCarrier !== carrier && carrierCount === 1;
+        assert(mutationReady,
+          'G2-path-b-mutation: the actual Cursor dispatch_carrier has one reversible Path B predicate '
+          + '(occurrences=' + carrierCount + ')');
+
+        if (mutationReady) {
+          fs.writeFileSync(adapterPath, adapterText.replace(carrier, mutatedCarrier));
+
+          const syncPath = path.join(scratch, 'scripts', 'sync-cursor-edition.js');
+          // spawn-class: environment
+          const rootProbe = spawnSync(process.execPath, [syncPath, '--print-tree-root'], {
+            cwd: scratch, encoding: 'utf8',
+          });
+          const printedRoot = String(rootProbe.stdout || '').trim();
+          const rootReady = rootProbe.status === 0 && printedRoot === scratch;
+          assert(rootReady,
+            'G2-path-b-mutation: scratch generator writes its own tree — status ' + rootProbe.status
+            + ', root ' + JSON.stringify(printedRoot) + ', expected ' + JSON.stringify(scratch));
+
+          if (rootReady) {
+            // spawn-class: environment
+            const generated = spawnSync(process.execPath, [syncPath, '--write'], {
+              cwd: scratch, encoding: 'utf8',
+            });
+            const generatedOutput = String(generated.stdout || '') + String(generated.stderr || '');
+            assert(generated.status === 0,
+              'G2-path-b-mutation: reversed adapter regenerates Cursor consumers — exit '
+              + generated.status + ' — ' + generatedOutput.split('\n').slice(0, 3).join(' | '));
+
+            if (generated.status === 0) {
+              const mutatedVerdict = inspectPathBConsumers(scratch);
+              const oppositeReached = PATH_B_COMMANDS.every(name => {
+                const rows = mutatedVerdict.relations[name] || [];
+                return rows.length === 1
+                  && rows[0].positive === 'profile pin'
+                  && rows[0].negative === 'parent';
+              });
+              assert(oppositeReached,
+                'G2-path-b-mutation: adapter reversal reaches both generated consumers with the '
+                + 'opposite profile-pin/not-parent relation — ' + JSON.stringify(mutatedVerdict.relations));
+              assert(!mutatedVerdict.ok && mutatedVerdict.errors.length === PATH_B_COMMANDS.length,
+                'G2-path-b-mutation: generated semantic reversal is rejected for both consumers — '
+                + mutatedVerdict.errors.join(' | '));
+
+              // spawn-class: environment
+              const probe = spawnSync(process.execPath,
+                [path.join(scratch, 'scripts', 'test-cursor-edition.js'), '--path-b-oracle'], {
+                  cwd: scratch, encoding: 'utf8',
+                });
+              const probeOutput = String(probe.stdout || '') + String(probe.stderr || '');
+              assert(probe.status !== 0,
+                'G2-path-b-mutation RED: the focused generated-consumer oracle exits non-zero on the '
+                + 'reversed adapter relation (got ' + probe.status + ')');
+              assert(/PATH-B-ORACLE RED: workflow-next:/.test(probeOutput)
+                && /PATH-B-ORACLE RED: kaola-workflow-finalize:/.test(probeOutput),
+              'G2-path-b-mutation RED: oracle names both contradictory generated consumers — '
+                + JSON.stringify(probeOutput.trim()));
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
 }
 
 // G2-leak forbids vendor model slugs on command/hook cards except for the
