@@ -414,6 +414,27 @@ function recordsFor(desired) {
   return records;
 }
 
+function carryForwardSkippedRecords(root, receiptInfo, records, prefixes) {
+  if (receiptInfo.status !== 'valid') return records;
+  for (const [rel, record] of Object.entries(receiptInfo.receipt.files)) {
+    if (Object.prototype.hasOwnProperty.call(records, rel)
+        || !prefixes.some(prefix => rel.startsWith(prefix))) continue;
+    // Missing skipped assets are no longer active ownership. Every other carrier remains in the
+    // receipt under its prior hash: uninstall removes it only if unchanged, while doctor reports
+    // a modified/non-regular carrier stale instead of silently forgetting it.
+    if (inspectPath(path.join(root, ...rel.split('/'))).status !== 'missing') records[rel] = record;
+  }
+  return records;
+}
+
+function receiptCoversDesired(receipt, desired) {
+  const files = receipt && receipt.files;
+  return !!files && Object.entries(desired).every(([rel, wanted]) => {
+    const record = files[rel];
+    return record && record.sha256 === wanted.sha256 && record.mode === wanted.mode;
+  });
+}
+
 function verifyDesired(root, desired) {
   for (const [rel, wanted] of Object.entries(desired)) {
     const state = inspectPath(path.join(root, ...rel.split('/')));
@@ -446,16 +467,22 @@ function installGlobal(opts) {
   removeRetiredManaged(home, built.desired, receiptInfo, opts.noScripts
     ? ['kaola-workflow/scripts/', 'kaola-workflow/hooks/', 'hooks/'] : []);
   verifyDesired(home, built.desired);
+  const receiptFiles = recordsFor(built.desired);
+  if (opts.noScripts) {
+    carryForwardSkippedRecords(home, receiptInfo, receiptFiles,
+      ['kaola-workflow/scripts/', 'kaola-workflow/hooks/', 'hooks/']);
+  }
   const receipt = {
     schema_version: RECEIPT_SCHEMA,
     kind: 'cursor_global_authority',
     kaola_workflow_version: loadVersion(),
     forge: opts.forge,
-    files: recordsFor(built.desired),
-    hook_entries: built.hooks,
+    files: receiptFiles,
+    hook_entries: opts.noScripts && receiptInfo.status === 'valid'
+      ? receiptInfo.receipt.hook_entries || {} : built.hooks,
   };
   atomicWrite(receiptPath, stableJson(receipt), 0o644);
-  return { scope: 'global', root: home, receipt: receiptPath, files: Object.keys(built.desired).length,
+  return { scope: 'global', root: home, receipt: receiptPath, files: Object.keys(receiptFiles).length,
     adopted_legacy_release: receiptInfo.status === 'missing' ? '10.0.1-if-byte-matched' : null,
     removed_legacy_files: adoptedLegacyRetired };
 }
@@ -521,6 +548,20 @@ function installProject(opts) {
   }
   if (authority.info.status !== 'valid' || authority.result.freshness !== 'current') {
     fail('installed global Cursor authority is missing or stale (' + authority.result.freshness + ')');
+  }
+  if (!opts.noScripts && !opts.installedHelper) {
+    const completeAuthority = buildGlobalDesired(Object.assign({}, opts, {
+      noScripts: false,
+      authorityOnly: true,
+    }));
+    if (!receiptCoversDesired(authority.info.receipt, completeAuthority.desired)) {
+      installGlobal(Object.assign({}, opts, { noScripts: false, authorityOnly: true }));
+      authority = inspectAuthority(opts.forge);
+      if (authority.info.status !== 'valid' || authority.result.freshness !== 'current'
+          || !receiptCoversDesired(authority.info.receipt, completeAuthority.desired)) {
+        fail('installed global Cursor authority could not be promoted for default project assets');
+      }
+    }
   }
   const layout = path.join(target, '.cursor');
   const receiptPath = path.join(layout, PROJECT_RECEIPT_REL);
@@ -687,20 +728,20 @@ function report(opts) {
   return {
     runtime: 'cursor', product_surface: opts.product, execution_host: opts.host,
     kaola_workflow_version: loadVersion(),
-    runtime_build: selected && selected.stamp ? selected.stamp.runtime_build || 'unknown' : 'unknown',
+    runtime_build: 'unknown',
     inferred_from_sibling_binary: false, ambient_repository_write: false,
     project_materialization: 'explicit --target DIR', project_target: project ? project.target : null,
     global_root: authority.result.root,
     global_discovery: selected ? selected.global_discovery : 'unknown',
     required_project_materialization: selected ? selected.required_project_materialization : 'unknown',
-    named_catalog: selected ? selected.named_catalog : 'unknown', reload: selected ? selected.reload : 'unknown',
+    named_catalog: 'unknown', reload: selected ? selected.reload : 'unknown',
     restart_boundary: selected ? selected.reload : 'unknown', effective_profile_scope: effectiveScope,
     freshness: project ? project.freshness : authority.result.freshness,
     collisions: project ? project.collisions : [], authority: authority.result,
     materialization_receipt: project, evidence_stamp: selected && selected.stamp ? selected.stamp : null,
-    capability_gap: selected && selected.named_catalog === 'built_in_only' ? 'catalog_miss' : null,
+    capability_gap: null,
     surfaces, selected_host: selected,
-    note: 'Product and host are explicit inputs. Unknown stays unknown; sibling surfaces are never inferred.',
+    note: 'Product and host are explicit inputs. Current runtime_build and named_catalog stay unknown without live observation; selected_host and evidence_stamp are historical adapter evidence. Sibling surfaces are never inferred.',
   };
 }
 

@@ -77,7 +77,8 @@ Usage: ./install-cursor.sh [--target DIR] [--forge=github|gitlab|gitea] [--globa
   --regenerate     refresh the in-repo .cursor/ tree from canonical, then exit
   --uninstall      remove the kaola-deployed cursor edition from the resolved scope
                    (honors --target/--global), then exit
-  --no-scripts     skip support scripts, hook scripts, and the hooks JSON copy
+  --no-scripts     skip writing support scripts, hook scripts, and hooks JSON;
+                   existing receipt-owned skipped assets remain owned
   --yes            non-interactive (skip the confirmation prompt)
 
 SUPPORT SCRIPTS + HOOKS: workflow commands resolve support scripts via

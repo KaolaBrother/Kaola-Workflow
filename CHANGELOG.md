@@ -14,7 +14,11 @@
   symlinks, non-regular paths, modified owned bytes, invalid receipts, stale authority, or
   wrong-target receipts fail before mutation; uninstall removes only receipt-proven unchanged
   bytes and exact recorded hook entries. `--doctor` reports effective scope, receipt hashes,
-  expected/actual file hashes, freshness, collisions, restart, discovery, and honest unknowns.
+  expected/actual file hashes, freshness, collisions, restart, discovery, and honest unknowns;
+  historical Build/catalog evidence is never flattened into unobserved current identity.
+  `--no-scripts` transitions preserve ownership of skipped receipt-proven bytes and hook entries,
+  while a later default project install promotes a partial authority before claiming its default
+  scripts/hooks are present.
   Receipt-less 10.0.1 global installs are adopted only when every changed or retired path matches
   its published per-forge hash; all three forge migrations are live-proved, while a one-byte
   mutation remains an unmanaged collision.

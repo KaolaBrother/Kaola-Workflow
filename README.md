@@ -504,6 +504,12 @@ From a local clone:
 ./install-cursor.sh --target DIR --yes     # explicit project catalog (.cursor/{agents,commands})
 ```
 
+`--no-scripts` skips writing scripts/hooks without forgetting any unchanged receipt-owned assets
+that remain on disk; uninstall still removes those proven bytes and exact hook entries. A later
+ordinary project install promotes a partial no-scripts authority before installing its default
+scripts/hooks. Doctor keeps current Build/live-catalog identity `unknown` unless the active runtime
+observes it; historical measurements remain separately typed as evidence.
+
 Hooks merge into `.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (global). Compact
 resume injects via `sessionStart` `additional_context`; `preCompact` cannot inject. Catalog
 materialization is an explicit safe CLI point-of-use transaction, not a hook. Full detail:

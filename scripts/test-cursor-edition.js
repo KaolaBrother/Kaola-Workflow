@@ -1760,8 +1760,25 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-doctor: App Cloud requires a new same-repository parent after environment save');
       assert(doc.surfaces.cli.execution_hosts.local.required_project_materialization === 'yes',
         'G8-doctor: CLI requires explicit project materialization');
-      assert(doc.named_catalog === 'project_custom_from_saved_environment_build',
-        'G8-doctor: selected App/Cloud named_catalog is flattened from the measured host surface');
+      assert(doc.runtime_build === 'unknown' && doc.named_catalog === 'unknown',
+        'G8-doctor: current Build and live catalog stay unknown without a current observation');
+      assert(doc.evidence_stamp
+        && doc.evidence_stamp.runtime_build === 'bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2'
+        && doc.selected_host.named_catalog === 'project_custom_from_saved_environment_build',
+      'G8-doctor: historical Build/catalog remain typed under evidence_stamp/selected_host');
+      const currentIdentityGaps = report => [
+        report.runtime_build !== 'unknown' ? 'current-build-inferred' : null,
+        report.named_catalog !== 'unknown' ? 'live-catalog-inferred' : null,
+      ].filter(Boolean);
+      assert(currentIdentityGaps(doc).length === 0,
+        'G8-doctor-current-identity: empty host has no inferred current identity');
+      const flattenedHistoricalEvidence = Object.assign({}, doc, {
+        runtime_build: doc.evidence_stamp.runtime_build,
+        named_catalog: doc.selected_host.named_catalog,
+      });
+      assert(JSON.stringify(currentIdentityGaps(flattenedHistoricalEvidence))
+        === JSON.stringify(['current-build-inferred', 'live-catalog-inferred']),
+      'G8-doctor-current-identity mutation RED: flattening historical evidence is detected');
       assert(typeof doc.kaola_workflow_version === 'string'
         && doc.kaola_workflow_version.length > 0,
         'G8-doctor: reports Kaola-Workflow version');
@@ -1888,6 +1905,64 @@ for (const role of reviewerGenerator.ROLES) {
       assert(hookFiles.length === 0,
         'G8-noscripts: skips hooks — found ' + hookFiles.join(', '));
       clean(r);
+    }
+
+    // A no-scripts transition skips writes but must not forget receipt-proven assets that remain
+    // active on disk. Uninstall still owns those unchanged bytes and exact hook entries.
+    {
+      const full = runInstaller(['--global'], { skipTarget: true });
+      const support = path.join(full.cursorHome, 'kaola-workflow', 'scripts',
+        'kaola-workflow-cursor-surface.js');
+      const hookScript = path.join(full.cursorHome, 'hooks', 'kaola-workflow-compact-context.sh');
+      const authorityReceipt = path.join(full.cursorHome, 'kaola-workflow', 'cursor-authority.json');
+      assert(full.status === 0 && fs.existsSync(support) && fs.existsSync(hookScript),
+        'G8-noscripts-transition: full global seed owns support and live hook bytes');
+      const skipped = runInstaller(['--global', '--no-scripts'], {
+        skipTarget: true, home: full.home, cursorHome: full.cursorHome, dest: full.dest,
+      });
+      const skippedReceipt = JSON.parse(fs.readFileSync(authorityReceipt, 'utf8'));
+      assert(skipped.status === 0 && fs.existsSync(support) && fs.existsSync(hookScript),
+        'G8-noscripts-transition: no-scripts preserves existing managed bytes');
+      assert(skippedReceipt.files['kaola-workflow/scripts/kaola-workflow-cursor-surface.js']
+        && skippedReceipt.files['hooks/kaola-workflow-compact-context.sh']
+        && Array.isArray(skippedReceipt.hook_entries.sessionStart),
+      'G8-noscripts-transition: receipt preserves ownership and hook entries for skipped assets');
+      // spawn-class: environment
+      const uninstalled = spawnSync('bash', [INSTALLER, '--global', '--uninstall', '--yes'], {
+        env: Object.assign({}, process.env, { HOME: full.home, CURSOR_HOME: full.cursorHome }),
+        encoding: 'utf8',
+      });
+      const hooksFile = path.join(full.cursorHome, 'hooks.json');
+      const hooksAfter = fs.existsSync(hooksFile)
+        ? JSON.parse(fs.readFileSync(hooksFile, 'utf8')) : { hooks: {} };
+      assert(uninstalled.status === 0 && !fs.existsSync(support) && !fs.existsSync(hookScript),
+        'G8-noscripts-transition: uninstall removes all unchanged receipt-owned skipped bytes');
+      assert(!hooksAfter.hooks || !hooksAfter.hooks.sessionStart,
+        'G8-noscripts-transition: uninstall removes the preserved exact sessionStart entry');
+      clean(skipped);
+    }
+
+    // A fresh partial authority created for --no-scripts is legitimate, but a later ordinary
+    // project install must promote it before claiming default scripts/hooks are installed.
+    {
+      const partial = runInstaller(['--no-scripts']);
+      const support = path.join(partial.cursorHome, 'kaola-workflow', 'scripts',
+        'kaola-workflow-cursor-surface.js');
+      const projectHook = path.join(partial.dest, '.cursor', 'hooks',
+        'kaola-workflow-compact-context.sh');
+      assert(partial.status === 0 && !fs.existsSync(support) && !fs.existsSync(projectHook),
+        'G8-noscripts-promotion: fresh no-scripts install is intentionally partial');
+      const promoted = runInstaller([], {
+        home: partial.home, cursorHome: partial.cursorHome, dest: partial.dest,
+      });
+      const projectHooksFile = path.join(partial.dest, '.cursor', 'hooks.json');
+      const projectHooks = fs.existsSync(projectHooksFile)
+        ? JSON.parse(fs.readFileSync(projectHooksFile, 'utf8')) : { hooks: {} };
+      assert(promoted.status === 0 && fs.existsSync(support) && fs.existsSync(projectHook),
+        'G8-noscripts-promotion: later default install promotes authority and project hook bytes');
+      assert(Array.isArray(projectHooks.hooks && projectHooks.hooks.sessionStart),
+        'G8-noscripts-promotion: later default install restores the project sessionStart entry');
+      clean(promoted);
     }
 
     // Merge preserves user hook entries; uninstall strips kaola entries only.

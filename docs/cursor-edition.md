@@ -269,8 +269,11 @@ does not run through `install.sh --forge`.
 ./install-cursor.sh --target DIR --uninstall # remove a receipt-proven project materialization
 ```
 
-Add `--yes` for non-interactive use. `--no-scripts` skips support scripts, hook
-scripts, and the hooks JSON merge. Normal install creates a transaction-scoped staging root and
+Add `--yes` for non-interactive use. `--no-scripts` skips writing support scripts, hook scripts,
+and the hooks JSON merge. It retains receipt ownership for any skipped managed assets that remain
+on disk, so later uninstall still removes unchanged bytes and exact hook entries. A fresh
+no-scripts authority is deliberately partial; a later default project install promotes it before
+materializing default scripts/hooks. Normal install creates a transaction-scoped staging root and
 invokes `sync-cursor-edition.js --write --tree-root=<absolute empty staging path>`; the cleanup trap
 removes that source after success or failure. `--regenerate` alone resolves and refreshes the
 main-checkout generated tree.
@@ -303,10 +306,12 @@ probes passed for all three forges.
   files, modes, hashes, forge, and Kaola-Workflow version. Live CLI evidence found those user files
   alone were not catalog-visible.
   `--doctor` reports product (`cli`/`app`/`unknown`) and host (`local`/`cloud`/`unknown`)
-  facts without installing and never infers one surface from a sibling binary.
-- Support scripts always land under
+  facts without installing and never infers one surface from a sibling binary. Its unqualified
+  current `runtime_build` and `named_catalog` stay `unknown` without live observation; measured
+  historical facts remain under `evidence_stamp` and `selected_host`.
+- By default, support scripts land under
   `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/{scripts,hooks}`.
-  `kaola-workflow-cursor-surface.js` is both the effective-state doctor and the explicit
+  `kaola-workflow-cursor-surface.js` is both the filesystem/evidence doctor and the explicit
   authority/materialization transaction. Its installed `--ensure-target DIR` mode is the only
   automatic pre-dispatch materializer and has no ambient-target default.
 
