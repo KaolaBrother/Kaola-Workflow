@@ -1546,6 +1546,7 @@ for (const role of reviewerGenerator.ROLES) {
         fs.mkdirSync(path.dirname(ownerCommand), { recursive: true });
         fs.writeFileSync(ownerAgent, 'OWNER_AGENT_COLLISION\n');
         fs.writeFileSync(ownerCommand, 'OWNER_COMMAND_COLLISION\n');
+        // spawn-class: environment
         const doctor = spawnSync('bash', [INSTALLER, '--doctor', '--json', '--target', dest,
           '--product', 'cli', '--host', 'local'], {
           env: Object.assign({}, process.env, { HOME: global.home, CURSOR_HOME: global.cursorHome }),
@@ -1629,6 +1630,7 @@ for (const role of reviewerGenerator.ROLES) {
           && fs.readFileSync(targetAgent).equals(fs.readFileSync(globalAgent)),
         'G8-freshness: explicit target bytes equal the installed global authority');
         const targetHash = fs.existsSync(targetAgent) ? sha256File(targetAgent) : '';
+        // spawn-class: environment
         const doctor = spawnSync('bash', [INSTALLER, '--doctor', '--json', '--target', dest,
           '--product', 'cli', '--host', 'local'], {
           env: Object.assign({}, process.env, { HOME: global.home, CURSOR_HOME: global.cursorHome }),
@@ -1644,6 +1646,7 @@ for (const role of reviewerGenerator.ROLES) {
           + JSON.stringify(doctorText.slice(0, 800)));
 
         fs.writeFileSync(targetAgent, 'OWNER_CHANGED_AFTER_MATERIALIZATION\n');
+        // spawn-class: environment
         const staleDoctor = spawnSync('bash', [INSTALLER, '--doctor', '--json', '--target', dest,
           '--product', 'cli', '--host', 'local'], {
           env: Object.assign({}, process.env, { HOME: global.home, CURSOR_HOME: global.cursorHome }),
@@ -1696,6 +1699,7 @@ for (const role of reviewerGenerator.ROLES) {
 
     // #1039: doctor reports surfaces without inferring App from CLI or local from Cloud.
     {
+      // spawn-class: environment
       const r = spawnSync('bash', [INSTALLER, '--doctor', '--json', '--product', 'app', '--host', 'cloud'], {
         encoding: 'utf8',
         env: process.env,
