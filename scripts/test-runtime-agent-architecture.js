@@ -240,6 +240,14 @@ function replaceAtPath(value, targetPath, replacement, prefix = []) {
   ]));
 }
 
+const CURSOR_HOST_CATALOG_VARIATION = Object.freeze([
+  /other cursor hosts/, /host-dependent.*catalog/, /catalog.*var(?:y|ies).*host/,
+  /different cursor hosts/,
+]);
+const CURSOR_REPORTED_ROUTE_ONLY = Object.freeze([
+  /use only .*this host.*report/, /only .*currently reported/, /route.*when .*host.*reports/,
+]);
+
 function runtimeDelegationGaps(runtime, text) {
   const prose = normalizedProse(text).toLowerCase();
   const gaps = [];
@@ -304,22 +312,27 @@ function runtimeDelegationGaps(runtime, text) {
     ],
     cursor: [
       ['lookup', [/\.cursor\/agents\//]],
-      ['carrier', [/\btask\b.*subagent_type|subagent_type.*\btask\b/]],
+      ['project-catalog-reachability', [/project.catalog materializ/, /project.*\.cursor\/agents\/.*catalog/,
+        /catalog.*project.*\.cursor\/agents\//]],
+      ['user-file-is-not-catalog-proof', [/user (?:equivalents|scope|files?).*(?:but|not|insufficient).*project.catalog/,
+        /user.*(?:alone|only).*not.*catalog.*project/]],
+      ['carrier', [/live [`]?task[`]? schema/]],
       ['standard-tier', [/standard.*grok-4\.6.*medium|grok-4\.6.*medium.*standard/]],
       ['reasoning-tier', [/reasoning.*grok-4\.6.*high|grok-4\.6.*high.*reasoning/]],
       ['heavy-tier', [/heavy.*grok-4\.6.*xhigh|grok-4\.6.*xhigh.*heavy/]],
-      // Cursor reports its live Task catalog. Primary-source evidence establishes three scoped
-      // built-ins, not a full writable generic child: Explore for read-only research, Bash for
-      // command series, and Browser for browser work. The catalog is live authority; no current
-      // enum spelling is promoted into a permanent schema constant.
-      ['custom-route', [/custom.*task|task.*custom/]],
-      ['explore-boundary', [/explore.*read-only|read-only.*explore/]],
-      ['bash-boundary', [/bash.*command|command.*bash/]],
-      ['browser-boundary', [/browser.*(?:web|page|browser)|(?:web|page).*browser/]],
-      ['no-full-writable-generic', [/no documented .*full writable generic/,
-        /full writable generic .*not documented/, /does not document .*full writable generic/]],
+      // Cursor catalogs vary by host. The measured supported CLI exposed a writable
+      // generalPurpose route (stream identity: unspecified) and project custom profiles; another
+      // host may expose scoped Explore/Bash/Browser instead. Guidance must therefore name the
+      // measured generic honestly while making the live host catalog—not one frozen enum—the rule.
+      ['custom-route', [/custom.*(?:task|subagenttype)|(?:task|subagenttype).*custom/]],
+      ['measured-writable-generic', [/(?:supported|measured) cli.*writable.*generalpurpose/,
+        /generalpurpose.*writable.*(?:supported|measured) cli/]],
+      ['generic-stream-identity', [/generalpurpose.*subagenttype\.unspecified/,
+        /subagenttype\.unspecified.*generalpurpose/]],
       ['current-task-catalog', [/live task (?:catalog|enum)/, /current task (?:catalog|enum)/,
         /runtime.report.*task (?:catalog|enum)/]],
+      ['host-catalog-variation', CURSOR_HOST_CATALOG_VARIATION],
+      ['reported-route-only', CURSOR_REPORTED_ROUTE_ONLY],
     ],
     zcode: [
       ['lookup', [/(?:~\/|\$\{?zcode_home[^ ]*).*\.zcode\/agents\//,
@@ -331,10 +344,6 @@ function runtimeDelegationGaps(runtime, text) {
     ],
   };
   for (const [name, alternatives] of runtimeNeeds[runtime] || []) needs(name, alternatives);
-  if (runtime === 'cursor'
-      && /(?:use|inspect|dispatch|choose)[^.]{0,140}(?:general|generic)[^.]{0,100}(?:task|child|route)/.test(prose)) {
-    gaps.push('invented-general-task-route');
-  }
   return gaps;
 }
 
@@ -1459,6 +1468,30 @@ if (generator && behavior && adapters && profiles.length > 0) {
         }
         assert(mutatedGuidance !== guidance && mutatedGuidance.includes(marker),
           `A10-delegation/adapter-mutation[${entry.name}]: adapter mutation reaches its native guidance bytes`);
+      }
+    }
+
+    // Cursor mutation bite: the measured CLI enum is evidence for that host, not a schema to
+    // promote across every Cursor surface. Remove both host-variation and current-host-only
+    // qualifiers from the real rendered guidance; the classifier must reject that frozen-enum
+    // near miss while leaving generalPurpose itself available as an honest measured fallback.
+    const cursorEntry = adapterView.entries.find(entry => entry.runtime === 'cursor');
+    const cursorGuidance = cursorEntry ? guidanceByAdapter.get(cursorEntry.name) : '';
+    if (cursorGuidance) {
+      const subject = normalizedProse(cursorGuidance).toLowerCase();
+      const variation = CURSOR_HOST_CATALOG_VARIATION.find(pattern => pattern.test(subject));
+      const currentHostOnly = CURSOR_REPORTED_ROUTE_ONLY.find(pattern => pattern.test(subject));
+      assert(!!variation && !!currentHostOnly,
+        'A10-delegation/cursor-host-mutation: rendered Cursor guidance exposes both catalog-variation and current-host-only seams');
+      if (variation && currentHostOnly) {
+        const frozenEnum = subject
+          .replace(variation, 'one cursor catalog')
+          .replace(currentHostOnly, 'always use that fixed catalog');
+        const frozenGaps = runtimeDelegationGaps('cursor', frozenEnum);
+        assert(frozenEnum !== subject
+          && frozenGaps.includes('host-catalog-variation')
+          && frozenGaps.includes('reported-route-only'),
+        'A10-delegation/cursor-host-mutation: universalizing one measured Cursor enum fails host-scoped acceptance');
       }
     }
   }
