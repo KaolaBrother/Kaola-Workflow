@@ -529,6 +529,27 @@ function commandRel(name, forge) {
   assert(canonicalFinalizeRoles.length > 0,
     'G2: canonical finalize carries named-role dispatch meaning for the Cursor renderer to preserve');
 
+  for (const name of ['workflow-next', 'kaola-workflow-finalize']) {
+    const content = exists(commandRel(name)) ? read(commandRel(name)) : '';
+    assert(/named_roles is not host-universal/i.test(content),
+      'G2[' + name + ']: Cursor host-split teaching says named_roles is not host-universal');
+    assert(/capability_gap, not an install miss/i.test(content),
+      'G2[' + name + ']: already-present plus built-in-only enum is a capability_gap, not an install miss');
+    assert(/omit a requested per-call model only when/i.test(content),
+      'G2[' + name + ']: omit-model is the named-profile carrier, not a catalog-miss substitute');
+    assert(/cloud catalog-miss host exposed [`']?explore/i.test(content),
+      'G2[' + name + ']: Cloud catalog-miss exposes explore as itself');
+    assert(/resolver-listed model slug/i.test(content),
+      'G2[' + name + ']: catalog-miss listed model slugs are a live-schema effort lever');
+  }
+  const dispatchBlock = String(syncMod.CURSOR_MODEL_DISPATCH_BLOCK || '');
+  assert(dispatchBlock.length > 0,
+    'G2-catalog-miss: CURSOR_MODEL_DISPATCH_BLOCK remains exported so residue cannot silently vanish');
+  assert(!/Do not retry as `generalPurpose`/.test(dispatchBlock),
+    'G2-catalog-miss: CURSOR_MODEL_DISPATCH_BLOCK no longer fail-closes Invalid-enum to inline-only without built-ins as themselves');
+  assert(/capability_gap, not an install miss/i.test(dispatchBlock),
+    'G2-catalog-miss: CURSOR_MODEL_DISPATCH_BLOCK treats already-present plus built-in-only as capability_gap');
+
   const nativeBoundary = 'Use the live Task schema for tdd-guide with task, custody, evidence, and stop boundaries.';
   assert(!lineStartCall(nativeBoundary) && staticDispatchFields(nativeBoundary).length === 0,
     'G2-mutation: honest live-schema prose has no portable static dispatch fields');

@@ -37,6 +37,12 @@
       "observed_at": "2026-08-27T00:00:00Z",
       "claim": "Root and nested AGENTS.md files are supported directly."
     },
+    "cursor_cloud_task_catalog": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1036",
+      "observed_at": "2026-08-27T00:00:00Z",
+      "claim": "Cursor Cloud Agent Task catalogs stayed built-in-only for Kaola custom types. A consumer with 14 git-tracked project profiles still exposed generalPurpose, explore, cursor-guide, bugbot, security-review, and best-of-n-runner; omit-model and inherit generalPurpose succeeded; cursor-grok-4.6-high was resolver-rejected. A later producer Cloud parent also lacked Kaola names and additionally exposed explore, computerUse, and videoReview."
+    },
     "zcode_instructions": {
       "kind": "official_docs",
       "locator": "https://zcode.z.ai/en/docs/agents",
@@ -286,7 +292,8 @@
     "cursor": {
       "runtime": "cursor",
       "evidence": [
-        "cursor_instructions"
+        "cursor_instructions",
+        "cursor_cloud_task_catalog"
       ],
       "capabilities": {
         "named_roles": true,
@@ -306,16 +313,16 @@
         },
         "delegation_guidance": {
           "profile_lookup": "Find custom profiles in project `.cursor/agents/`, with project `.claude/agents/` and `.codex/agents/` as compatibility locations. Cursor documents user equivalents, but the supported CLI measurement exposed Kaola types only after project-catalog materialization, so the installer mirrors profiles into each consumer repository.",
-          "dispatch_carrier": "Select a custom agent explicitly as `/<role>` or by natural-language routing and use the live `Task` schema. The supported CLI stream materialized a named call as `subagentType.custom.name` and `generalPurpose` as `subagentType.unspecified`; do not invent unpublished request fields, and omit a requested per-call model because the profile resolves its tier pin.",
+          "dispatch_carrier": "Select a custom agent explicitly as `/<role>` or by natural-language routing and use the live `Task` schema. Inspect that schema's type enum first. When it contains a Kaola role name, dispatch that name and omit a requested per-call model only when the named profile can resolve its tier pin. The supported CLI stream materialized a named call as `subagentType.custom.name` and `generalPurpose` as `subagentType.unspecified`; do not invent unpublished request fields. When the live enum is built-in-only, omit-model is the parent, not a profile pin, and a resolver-listed model slug from the live schema is an effort lever. Project `.cursor/agents/` already present plus a still-built-in-only enum is a capability_gap, not an install miss.",
           "tiers": {
             "standard": "standard → profile `grok-4.6[effort=medium]`",
             "reasoning": "reasoning → profile `grok-4.6[effort=high]`",
             "heavy": "heavy → profile `grok-4.6[effort=xhigh]`"
           },
           "tool_boundary": "The named profile's native `readonly` flag carries its write boundary.",
-          "native_routes": "Inspect the live Task catalog. The supported CLI exposed writable `generalPurpose` plus `cursor-guide`, `bugbot`, `security-review`, and `best-of-n-runner`; other Cursor hosts document scoped `Explore`, `Bash`, and `Browser`. Use only a route this host actually reports and under its real capability and identity.",
-          "fallback_search": "If the exact named role is unavailable, inspect the currently reported `generalPurpose`, built-in, and other native child routes for the current item.",
-          "availability": "The current Task catalog is authoritative. The supported CLI proved project custom roles, medium/high/xhigh profile resolution, parallel Tasks, and main-plus-direct-child dispatch; grandchildren had no Task. Explicit or automatic selection and resume by agent ID remain runtime-owned options. Reopening the CLI process with the same chat discovered an added project profile, while same-process hot load remains unknown."
+          "native_routes": "Inspect the live Task catalog. The supported CLI exposed writable `generalPurpose` plus `cursor-guide`, `bugbot`, `security-review`, and `best-of-n-runner`; other Cursor hosts document scoped `Explore`, `Bash`, and `Browser`. A measured Cloud catalog-miss host exposed `explore` and stayed built-in-only for Kaola names. Use only a route this host actually reports and under its real capability and identity.",
+          "fallback_search": "If the exact named role is unavailable, inspect the currently reported `generalPurpose`, built-in, and other native child routes for the current item and use each only as itself. A custody-bearing miss inlines that item with a specific capability_gap; do not convert one miss into a run-wide inline policy and do not fail-closed asking for an install that already ran.",
+          "availability": "The current Task catalog is authoritative. Cursor named_roles is not host-universal: the supported CLI proved project custom roles, medium/high/xhigh profile resolution, parallel Tasks, and main-plus-direct-child dispatch; grandchildren had no Task. Measured Cloud hosts stayed built-in-only for Kaola custom types, including a consumer with project `.cursor/agents/` already on disk and a new producer Cloud chat. Explicit or automatic selection and resume by agent ID remain runtime-owned options. Reopening the CLI process with the same chat discovered an added project profile, while same-process hot load remains unknown. Do not claim Cloud boot-load from this measurement."
         }
       }
     },

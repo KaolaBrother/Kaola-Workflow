@@ -24,14 +24,16 @@ Cursor, and ZCode have documented direct `AGENTS.md` support.
 | OpenCode | Project `.opencode/agents/`, user `~/.config/opencode/agents/`, or `opencode.json`; `task` with named `subagent_type`, or direct `@name` | Broad `general`, read-only local `explore`, read-only external-research `scout`; `task_id` resume and experimental background | Default child depth is one unless user configuration raises it; task permissions and effective merged config may hide a route |
 | Kimi Code | Project `.kimi-code/agents/` or `.agents/agents/`, user `$KIMI_CODE_HOME/agents/` or `~/.agents/agents/`; `Agent`/`AgentSwarm` with `kaola-role-<role>` | Writable `coder`, read-only `explore`, non-shell `plan`; custom agents and AgentSwarm lists up to 128 items | Built-ins are leaves; custom profiles may allowlist deeper agents. Resume/background remain native options |
 | Grok Build | Project `.grok/agents/` or user `~/.grok/agents/`; `spawn_subagent` with named `subagent_type` | Full `general-purpose`; read/shell `explore` and `plan`; background, isolation, resume, cwd, and optional per-call model | Children cannot spawn descendants; the root runtime's other choices remain available |
-| Cursor | Documented project/user `.cursor/agents/` plus compatibility paths; explicit `/role`, natural-language routing, or the live Task schema. Supported CLI measurement found project profiles reachable while a user file alone was not | Host-dependent: IDE docs describe `Explore`, `Bash`, and `Browser`; supported CLI exposed writable `generalPurpose`, `cursor-guide`, `bugbot`, `security-review`, `best-of-n-runner`, and project custom types | The current Task catalog is the authority. Supported CLI proved parallel Tasks, main/direct-child dispatch, a leaf grandchild, and new-process/same-chat profile refresh; explicit/automatic selection and resume by ID remain runtime-owned |
+| Cursor | Documented project/user `.cursor/agents/` plus compatibility paths; explicit `/role`, natural-language routing, or the live Task schema. `named_roles` is not host-universal: the supported CLI reached project custom types after catalog materialization; measured Cloud hosts stayed built-in-only for Kaola names even when those files were already on disk | Host-dependent: IDE docs describe `Explore`, `Bash`, and `Browser`; supported CLI exposed writable `generalPurpose`, specialist built-ins, and project custom types; measured Cloud catalog-miss exposed `explore` plus `generalPurpose` and specialists, not Kaola names | The current Task catalog is the authority. Omit-model is the named-profile carrier only when the live enum contains the Kaola name. A catalog-miss host uses live members as themselves; files already present plus a built-in-only enum is a capability_gap, not an install miss. CLI proved parallel Tasks and new-process/same-chat refresh; Cloud boot-load is unclaimed |
 | ZCode | Runtime-loaded user `${ZCODE_HOME:-~/.zcode}/agents/`; project `.zcode/agents/` is installer staging; automatic selection, native `@role`, or the live Agent schema | Full `general-purpose` and read-only `Explore`; foreground/background stays native | Profiles load in a new session and children cannot spawn. The staged project tree is not runtime profile discovery |
 
 Cursor and ZCode do not publish one complete Task/Agent call schema. Their generated guidance names
 the verified routes, then tells the orchestrator to use the current session's exposed schema and
-catalog. Cursor's IDE documentation and supported CLI demonstrably expose different built-ins, so
-neither list is treated as universal. Static request fields whose names or shapes remain unverified
-are not emitted; the guidance does not manufacture portable fields from another runtime.
+catalog. Cursor's IDE documentation, supported CLI, and measured Cloud Agent catalogs demonstrably
+expose different built-ins, so no one list is treated as universal. Omit-model is the custom-profile
+carrier on a host whose live enum contains Kaola names; on a catalog-miss host a resolver-listed
+model slug from that live schema is an effort lever, not an unpublished field. Static request
+fields whose names or shapes remain unverified are not emitted.
 
 ## Default tier bindings
 
@@ -51,7 +53,9 @@ This is not a Kaola scheduler or a blanket prohibition on task-sensitive runtime
 and Codex may carry a selected default on the native call when their live schema permits it;
 OpenCode has no per-call model/effort field; normal Kimi profiles inherit. Kimi's experimental
 secondary-model pool is used only when the user explicitly opts into it. Grok effort and the
-Cursor/ZCode tier pairs live in the named profile. Native automatic, background, parallel, resume,
+Cursor/ZCode tier pairs live in the named profile when that profile is actually in the live catalog.
+On a Cursor catalog-miss host there is no profile pin; omit-model follows the parent. Native
+automatic, background, parallel, resume,
 nesting, history, service-tier, and model choices stay available wherever the runtime actually
 supports them.
 
@@ -168,6 +172,26 @@ while the grandchild lacked Task. A user `~/.cursor/agents/tdd-guide.md` file al
 project mirror was reachable. Reopening the CLI process with the same chat after adding a project
 profile made it visible, so a new chat is not required; same-process hot load remains unknown.
 
+**Cloud Agent measurement (runtime evidence, 2026-08-27, #1036).** Two Cloud parents, both
+`originalModelName: cursor-grok-4.6-xhigh`, exposed a built-in-only Task enum with **no** Kaola
+custom types and **no** parent-authored `subagentType.custom.name` field:
+
+- Consumer `financial-agent` after 14 git-tracked project `.cursor/agents/` files existed
+  (`bc-58906f62-9bc3-4b87-b546-3ff8f77ae3b6`): `generalPurpose`, `explore`, `cursor-guide`,
+  `bugbot`, `security-review`, `best-of-n-runner`. `generalPurpose` succeeded with omit-model,
+  `inherit`, and resolver-listed `cursor-grok-4.6-high-fast`. `cursor-grok-4.6-high` was
+  resolver-rejected. CLI profile slugs `cursor-grok-4.6-medium` / `xhigh` were absent from that
+  resolver list. Mid-session catalog install in the same process did not refresh the enum.
+- Producer `Kaola-Workflow` new Cloud chat (`bc-01a0426b-3f61-7e04-b801-b9b913c09401`): the same
+  built-in-only shape, plus `explore`, `computerUse`, and `videoReview`. No project `.cursor/agents/`
+  is git-tracked in this producer.
+
+`named_roles: true` remains the CLI-with-project-catalog fact (profiles are still generated). It is
+not host-universal. Files already present plus a still-built-in-only enum is a `capability_gap`, not
+an install miss. Cloud boot-load of project profiles is **unclaimed**; this measurement does not
+separate same-process hot-load from boot-load on a consumer that already had the 14 files before
+the session started.
+
 ### ZCode
 
 - [Agents](https://zcode.z.ai/en/docs/agents) documents the exact two-source AGENTS merge and
@@ -181,8 +205,9 @@ profile made it visible, so a new chat is not required; same-process hot load re
 
 - opencode's hard or advisory AGENTS size limit;
 - ZCode's AGENTS size limit and `ZCODE_HOME` relocation semantics;
-- Cursor same-process profile hot load and catalog behavior on IDE, cloud, or CLI versions other
-  than the measured `2026.08.11-e8db854`;
+- Cursor same-process profile hot load, Cloud boot-load of project `.cursor/agents/` into the Task
+  enum, and catalog behavior on IDE or CLI versions other than the measured `2026.08.11-e8db854`
+  (Cloud catalog-miss on the 2026-08-27 hosts above is measured, not unknown);
 - exact ZCode 3.9.1 behavior. The public install page exposed 3.8.1 during this research, so this
   documentation does not present 3.9.1 as locally or publicly verified;
 - any precedence or conflict behavior not stated by the evidence above.

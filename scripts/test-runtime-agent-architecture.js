@@ -471,6 +471,16 @@ function runtimeDelegationGaps(runtime, text) {
         /runtime.report.*task (?:catalog|enum)/]],
       ['host-catalog-variation', CURSOR_HOST_CATALOG_VARIATION],
       ['reported-route-only', CURSOR_REPORTED_ROUTE_ONLY],
+      // #1036: named_roles and omit-model are CLI-with-project-catalog facts, not a Cursor-family
+      // universal. A Cloud catalog-miss host uses live built-ins as themselves; files already
+      // present plus a built-in-only enum is a capability_gap, not an install miss.
+      ['named-roles-not-host-universal', [/named_roles is not host-universal/,
+        /named roles is not host-universal/]],
+      ['omit-model-when-named', [/omit a requested per-call model only when/,
+        /omit that per-call model only when/]],
+      ['catalog-miss-capability-gap', [/capability_gap, not an install miss/]],
+      ['catalog-miss-model-lever', [/resolver-listed model slug/]],
+      ['cloud-explore-route', [/cloud catalog-miss host exposed [`']?explore/]],
     ],
     zcode: [
       ['lookup', [/(?:~\/|\$\{?zcode_home[^ ]*).*\.zcode\/agents\//,
@@ -1640,6 +1650,13 @@ if (generator && behavior && adapters && profiles.length > 0) {
           && frozenGaps.includes('reported-route-only'),
         'A10-delegation/cursor-host-mutation: universalizing one measured Cursor enum fails host-scoped acceptance');
       }
+      const catalogMiss = /capability_gap, not an install miss/;
+      assert(catalogMiss.test(subject),
+        'A10-delegation/cursor-catalog-miss-mutation: rendered Cursor guidance names already-present plus built-in-only as capability_gap, not an install miss');
+      const strippedMiss = subject.replace(catalogMiss, 'proceed with named omit-model dispatch');
+      const missGaps = runtimeDelegationGaps('cursor', strippedMiss);
+      assert(strippedMiss !== subject && missGaps.includes('catalog-miss-capability-gap'),
+        'A10-delegation/cursor-catalog-miss-mutation: restoring already-present → named omit-model fails catalog-miss acceptance');
     }
 
     const codexEntry = adapterView.entries.find(entry => entry.runtime === 'codex');

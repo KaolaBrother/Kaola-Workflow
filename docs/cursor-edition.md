@@ -12,6 +12,9 @@ machinery.
 
 Cursor Cloud Agents may not fire `sessionStart` and may not load project hooks.
 That gap is declared, not papered over; durable resume stays `mission-list.md`.
+Measured Cloud Task catalogs on 2026-08-27 stayed built-in-only for Kaola custom types even when
+project `.cursor/agents/` files were already on disk; that is a `capability_gap`, not an install
+miss. See [runtime capabilities](runtime-capabilities.md#cursor).
 
 Cursor reads root and nested `AGENTS.md` directly, combining parent guidance with more-specific
 instructions. Kaola installs no project-instruction bridge for Cursor. Generated agent frontmatter,
@@ -70,20 +73,26 @@ The behavior source's `standard` roles receive the unquoted
 `model: grok-4.6[effort=medium]` line, `reasoning` roles receive
 `model: grok-4.6[effort=high]`, and `heavy` roles receive the raw, unquoted
 `model: grok-4.6[effort=xhigh]`. Unknown intent tokens fail closed; the generator does not invent a
-fallback roster. Generated dispatch guidance omits a per-call model, leaving the named profile as
-the model/effort carrier rather than guessing at an unpublished portable Task request schema.
+fallback roster. Generated dispatch guidance inspects the live Task enum first. When that enum contains a Kaola
+role name (supported CLI with a project catalog), omit a per-call model and leave the named profile
+as the model/effort carrier. When the enum is built-in-only (measured Cloud hosts), use only those
+members as themselves: writable `generalPurpose` for generic production/docs/tests the parent may
+delegate, `explore` when this host reports it for read-heavy search, `cursor-guide` for Cursor
+product questions. Never prompt a child to impersonate `implementer`, `tdd-guide`, or another
+custody-bearing role. A resolver-listed live-schema model slug is then an effort lever, not a
+violation of unpublished-field discipline; omit-model follows the parent and is not a profile pin.
+Files already present plus a still-built-in-only enum is a capability_gap, not an install miss.
+Missing project agents still want `install-cursor.sh --target` then a new CLI session.
 
-Runtime-native dispatch guidance is embedded only in `/workflow-next` and
-`/kaola-workflow-finalize`; `/workflow-init` remains the shared bootstrapper. A custom profile may
-be selected explicitly as `/<role>` or through Cursor's natural-language routing. If the current
-session exposes a Task call and named catalog, that live schema is the authority; public
-documentation does not establish one portable JSON call schema, so Kaola does not invent fields.
-The profile remains the model/effort carrier and the call omits a per-call model.
+If the current session exposes a Task call and named catalog, that live schema is the authority;
+public documentation does not establish one portable JSON call schema, so Kaola does not invent
+fields such as parent-authored `subagentType.custom.name`.
 
 The same guidance exposes Cursor's host-dependent native alternatives rather than assuming one role
 miss ends all dispatch. IDE documentation describes scoped `Explore`, `Bash`, and `Browser`. The
 supported Cursor CLI probe below instead exposed writable `generalPurpose` plus specialist and
-project custom types, and did not expose those scoped types. The live catalog wins. A generic or
+project custom types, and did not expose those scoped types. Measured Cloud hosts exposed `explore`
+and stayed built-in-only for Kaola names. The live catalog wins. A generic or
 specialist child remains itself and is never prompted to impersonate `implementer`, `tdd-guide`, or
 another custody-bearing role. Explicit, automatic, parallel, and resume-by-agent-ID paths remain
 runtime-owned options.
@@ -114,6 +123,14 @@ Cursor host:
   `.cursor/agents/` materialization was the measured reachable carrier.
 - After adding a project profile, reopening the CLI process with the **same chat ID** exposed it.
   Same-process hot load remains unknown; a new chat is not required by this measurement.
+
+### Cloud catalog-miss live probe
+
+On 2026-08-27 two Cursor Cloud parents (`cursor-grok-4.6-xhigh`) were measured. Neither catalog
+included Kaola role names. The consumer already had 14 git-tracked project profiles; the producer
+new chat had none. Both used live built-ins as themselves: `generalPurpose` (omit-model, `inherit`,
+and resolver-listed `cursor-grok-4.6-high-fast`) and `explore`. `cursor-grok-4.6-high` was
+resolver-rejected. Cloud boot-load of project profiles remains unclaimed.
 
 All 14 role bodies come from `templates/agents/behavior-contracts.json` through
 `generate-agent-profiles.js`; `sync-cursor-edition.js` requests Cursor renders and owns only edition

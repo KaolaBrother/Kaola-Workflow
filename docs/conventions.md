@@ -81,7 +81,10 @@ role is unavailable: inspect the live named, built-in, and generic routes for th
 their true write, shell, web, background, resume, nesting, and session limits. A generic route may
 receive an exact custody brief but remains generic; do not present it as the missing named role.
 Inline only the current item when no adequate route can meet task, custody, evidence, and stop
-boundaries, record the specific `capability_gap`, then reconsider the next item. Do not add Kaola
+boundaries, record the specific `capability_gap`, then reconsider the next item. On Cursor, the
+live Task enum is the authority: omit-model is the named-profile carrier only when that enum
+contains the Kaola name; a catalog-miss host uses live built-ins as themselves, and files already
+present plus a built-in-only enum is a capability_gap rather than an install miss. Do not add Kaola
 caps to runtime-owned automatic, parallel, background, resume, nesting, or task-sensitive choices.
 
 ## Joining a dispatch

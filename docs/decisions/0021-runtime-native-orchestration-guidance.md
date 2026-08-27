@@ -72,8 +72,13 @@ and re-evaluate the next item.
 Cursor demonstrates why the live catalog wins. Its IDE documentation describes scoped `Explore`,
 `Bash`, and `Browser` routes, while the supported Cursor CLI 2026.08.11 live probe exposed writable
 `generalPurpose`, specialist built-ins, and project custom types—but not those three scoped types.
-The adapter exposes both as host-dependent facts and never hardcodes either catalog as universal.
-`generalPurpose` remains `subagentType.unspecified`; a custody brief does not rename it.
+Measured Cloud Agent catalogs on 2026-08-27 (#1036) stayed built-in-only for Kaola names and did
+expose `explore`. The adapter exposes these as host-dependent facts and never hardcodes one catalog
+as universal. `named_roles` is not host-universal. Omit-model is the named-profile carrier only
+when the live enum contains the Kaola name; on a catalog-miss host, live members are used as
+themselves and files already present plus a built-in-only enum is a `capability_gap`, not an
+install miss. `generalPurpose` remains `subagentType.unspecified`; a custody brief does not rename
+it.
 
 ### Generated authority
 

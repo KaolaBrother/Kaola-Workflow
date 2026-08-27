@@ -145,36 +145,43 @@ function renderAgent(canonContent, agentName, forge) {
 }
 
 const CURSOR_MODEL_DISPATCH_GUIDANCE =
-  'Use the named Cursor agent; generated frontmatter pins its canonical standard, reasoning, or '
-  + 'fable/heavy tier to the approved model family at medium, high, or xhigh effort '
-  + '(fable pins grok-4.6[effort=xhigh]). Omit per-call model; do not claim IDE '
-  + 'children display distinct effort. The one-family allowlist keeps dispatch cards portable while '
-  + 'tier selection stays in generated agent metadata.';
+  'Inspect the live Task enum first. Named Cursor agents carry generated frontmatter that pins '
+  + 'standard, reasoning, or fable/heavy at medium, high, or xhigh (fable is grok-4.6[effort=xhigh]) '
+  + 'only when that name is in the enum; omit per-call model then. A built-in-only enum uses those '
+  + 'members as themselves. Do not claim IDE children display distinct effort.';
 
 const CURSOR_MODEL_DISPATCH_BLOCK = [
   '## Generated agent tier pins',
   '',
   'Named Cursor agents carry generated frontmatter that pins their canonical standard, reasoning,',
   'or fable/heavy tier at medium, high, or xhigh effort. The fable / heavy pin is',
-  '`grok-4.6[effort=xhigh]`. The one-family allowlist keeps the dispatch surface portable',
-  'while the canonical class selects the generated tier pin.',
+  '`grok-4.6[effort=xhigh]`. Those pins fire only when the live Task enum contains the Kaola name.',
   '',
-  'Dispatch a role with `Task` using `subagent_type: "<role>"` only. Do not substitute',
-  '`generalPurpose` (or any other built-in) plus a prompt costume; impersonation is the bug.',
-  'The Task prompt is the mission and locator; do not paste the role contract onto a named type.',
+  'Inspect the live Task enum before dispatch. When it contains a Kaola role name, dispatch',
+  '`subagent_type: "<role>"` and omit per-call model so the profile pin is the carrier. Do not',
+  'invent `subagentType.custom.name` as a parent-authored field.',
   '',
-  'Omit per-call model on `Task`, including `inherit`. Do not pass inherit. The IDE Task schema',
-  'lists inherit as the default; that default is for built-ins. For named Kaola types, omit anyway;',
-  'do not pass inherit to satisfy the schema. `grok-4.6[effort=xhigh]` is the fable / heavy pin',
-  'on generated agent frontmatter; xhigh is allowed when it is that fable pin, not a Task override.',
+  'When the enum is built-in-only, use only those members as themselves. Never prompt a child to',
+  'impersonate `implementer`, `tdd-guide`, or another custody-bearing Kaola role. Writable',
+  '`generalPurpose` stays generic production/docs/tests the parent may delegate; `explore` is',
+  'read-heavy search when this host reports it; `cursor-guide` is Cursor product questions.',
+  'Gated `bugbot` / `security-review` stay behind this host\'s explicit-ask rule. A custody-bearing',
+  'miss inlines that item with a specific capability_gap; do not convert one miss into a run-wide',
+  'inline policy.',
   '',
-  'Never resume a Kaola subagent; fresh dispatch only. Resume drops frontmatter effort.',
+  'On a catalog-miss host, omit-model uses the parent and is not a profile pin. A resolver-listed',
+  'model slug from the live Task schema is an effort lever. Do not pass CLI profile slugs as',
+  'Task.model.',
   '',
-  'Two guarantees, not one measurement. (A) Role dispatch is the workspace catalog plus the',
-  'named type. (B) Effort pins: the CLI stream envelope is the oracle (`cursor-grok-4.6-medium` vs',
-  '`cursor-grok-4.6-high`). The IDE picker clamp (selected session Grok 4.6 / selectedModels) is a',
-  'typed deferral; it forbids a `Task(model=)` workaround. Do not claim IDE children display',
-  'distinct effort.',
+  'Honor the status token `already-present` | `copied` | `missing-source`:',
+  '- `already-present` plus a still-built-in-only live enum is a capability_gap, not an install miss.',
+  '  Use live built-ins as themselves or inline that item. Do not proceed as if named omit-model',
+  '  Task types exist.',
+  '- `already-present` plus Kaola names in the live enum: proceed with named omit-model Task.',
+  '- `copied`: stop named dispatch. Cold start. Start a new chat in the workspace that now contains',
+  '  `.cursor/agents`, then re-run `/workflow-next`. Mid-session copy did not refresh a Cloud parent.',
+  '- `missing-source`: print `./install-cursor.sh --target "$PWD"` (or the global install path) and',
+  '  do not name a Kaola Task type. That is the CLI empty-catalog case, not Cloud catalog-miss.',
   '',
   'Before named dispatch, run `kaola-workflow-ensure-cursor-catalog.js` via the same `kaola_script`',
   'resolver this card already uses for claim.js: `$CURSOR_HOME/kaola-workflow/scripts/`',
@@ -182,23 +189,12 @@ const CURSOR_MODEL_DISPATCH_BLOCK = [
   '`${CURSOR_HOME:-$HOME/.cursor}/agents`. Dest is always `<cwd>/.cursor/agents`. Copy only the',
   'canonical Kaola role names (not every `*.md`). Sentinel path: `.cursor/agents/implementer.md`.',
   '',
-  'Honor the status token `already-present` | `copied` | `missing-source`:',
-  '- `already-present`: dest is in-sync with global (all 14 byte-identical). Proceed with a named',
-  '  omit-model `Task`. Do not pass inherit.',
-  '- `copied`: stop named dispatch. Cold start. Start a new chat in the workspace that now contains',
-  '  `.cursor/agents`, then re-run `/workflow-next`.',
-  '- `missing-source`: print `./install-cursor.sh --target "$PWD"` (or the global install path) and',
-  '  do not name a Task type.',
-  '',
-  'A dest already in-sync with global proceeds. New role files or a prompt-byte refresh still require',
-  'a new chat before trusting children. If this session just copied files: stop named dispatch.',
-  '',
   'Keep the Cursor workspace at the repo root that holds `.cursor/agents`. A worktree is a cwd.',
   'Do not reopen `agent --workspace` inside `.kw/worktrees/` unless that directory already has',
   'the 14 agent files before the session starts.',
   '',
-  'On `Invalid enum value` … `received \'<role>\'`: do the work inline and record tool-unavailable.',
-  'Do not retry as `generalPurpose` / `inherit`.',
+  'On `Invalid enum value` … `received \'<role>\'`: inspect the live built-ins as themselves, or',
+  'inline that item and record capability_gap. Do not costume `generalPurpose` as the missing role.',
   '',
 ].join('\n');
 
@@ -217,14 +213,18 @@ function rewriteClaudeScriptPaths(text, forge) {
 
 function cursorNativeDispatchProse(card) {
   if (card.includes('doc-updater')) {
-    return 'Use exact `doc-updater` from the current Task catalog through the live Task schema. '
-      + 'Put the changed files, checklist, working directory, and custody boundary in its brief; '
-      + 'let the named profile carry its model tier.\n';
+    return 'Use exact `doc-updater` from the current Task catalog through the live Task schema '
+      + 'when that name is present. Put the changed files, checklist, working directory, and custody '
+      + 'boundary in its brief; omit model so the named profile carries its tier. If the live enum '
+      + 'is built-in-only, do not impersonate `doc-updater`: dispatch `generalPurpose` only as itself '
+      + 'for generic docs, or inline that item and record capability_gap.\n';
   }
   const role = card.includes('build-error-resolver') ? 'build-error-resolver' : 'tdd-guide';
-  return 'Use exact `' + role + '` from the current Task catalog through the live Task schema. '
-    + 'Put the failure command, evidence path, working directory, and custody boundary in its brief; '
-    + 'let the named profile carry its model tier.\n';
+  return 'Use exact `' + role + '` from the current Task catalog through the live Task schema '
+    + 'when that name is present. Put the failure command, evidence path, working directory, and '
+    + 'custody boundary in its brief; omit model so the named profile carries its tier. If the live '
+    + 'enum is built-in-only, do not impersonate `' + role + '`: inline custody-bearing work and '
+    + 'record capability_gap, or dispatch a live built-in only as itself when its real boundary fits.\n';
 }
 
 function transformCommandBody(body, forge, label) {
@@ -232,7 +232,6 @@ function transformCommandBody(body, forge, label) {
   const lines = body.split(/\r?\n/);
   const out = [];
   let i = 0;
-  const block = CURSOR_MODEL_DISPATCH_BLOCK.replace(/\s+$/, '');
   while (i < lines.length) {
     const line = lines[i];
     out.push(line);

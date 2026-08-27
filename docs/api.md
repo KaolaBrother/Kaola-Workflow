@@ -82,7 +82,8 @@ Commands render Claude and skills render forge-matched Codex through the routing
 edition sync scripts replace only this marker in next/finalize; workflow-init is outside the
 interface. Cursor and ZCode call fields not published by those runtimes are not serialized here:
 their guidance defers to the active session's live schema, and static fields whose names or shapes
-remain unverified are not emitted.
+remain unverified are not emitted. Cursor omit-model is the named-profile carrier only when the
+live enum contains the Kaola name; a catalog-miss host uses live built-ins as themselves.
 
 ## Emit and refusal envelopes
 
@@ -1610,7 +1611,8 @@ retired `parallel_mode`) is ignored, never rewritten.
   `gpt-5.6-luna`/max, `gpt-5.6-sol`/medium, and `gpt-5.6-sol`/high;
 - opencode and Kimi inherit the session model/effort under the documented adapter boundary;
 - Grok carries native effort while inheriting the session model;
-- Cursor carries the native model/effort parameter;
+- Cursor carries the native model/effort parameter in generated profile frontmatter; omit-model
+  dispatch is the named-catalog carrier, not a Cloud catalog-miss substitute;
 - ZCode carries an explicit model plus camelCase `thoughtLevel`.
 
 The exact current mappings are machine data and are summarized in `runtime-capabilities.md`.

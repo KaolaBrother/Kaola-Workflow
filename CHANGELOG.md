@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Cursor `named_roles` is host-split, not family-universal (#1036).** Next/finalize inspect the
+  live Task enum first. On the supported CLI with a project catalog, Kaola names dispatch with
+  omit-model so the generated profile pin is the carrier. On measured Cursor Cloud hosts the enum
+  stayed built-in-only even when `.cursor/agents/` files were already on disk: use those members as
+  themselves (`generalPurpose`, `explore` when reported), never impersonate a custody-bearing Kaola
+  role, and treat already-present plus built-in-only as a `capability_gap` rather than an install
+  miss. Resolver-listed live-schema model slugs are a catalog-miss effort lever; CLI profile slugs
+  are not. Cloud boot-load of project profiles remains unclaimed.
+
 ## [10.0.1] - 2026-08-27
 
 ### Fixed
