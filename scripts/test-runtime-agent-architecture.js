@@ -481,6 +481,9 @@ function runtimeDelegationGaps(runtime, text) {
       ['catalog-miss-capability-gap', [/capability_gap, not an install miss/]],
       ['catalog-miss-model-lever', [/resolver-listed model slug/]],
       ['cloud-explore-route', [/cloud catalog-miss host exposed [`']?explore/]],
+      ['global-install-no-ambient-repo', [/does not write an ambient git repository/]],
+      ['cursor-app-cli-distinct', [/product surfaces are cli and app/]],
+      ['app-cloud-not-local-ide', [/app local ide and app-started cloud/]],
     ],
     zcode: [
       ['lookup', [/(?:~\/|\$\{?zcode_home[^ ]*).*\.zcode\/agents\//,
@@ -1279,6 +1282,29 @@ for (const runtime of RUNTIME_NAMES) {
     const capabilities = capabilityObject(entry.adapter);
     return capabilities && Object.keys(capabilities).length > 0;
   }), `A6[${runtime}]: adapter declares non-empty native capabilities`);
+  if (runtime === 'cursor') {
+    assert(entries.every(entry => entry.adapter && entry.adapter.surfaces
+      && entry.adapter.surfaces.cli && entry.adapter.surfaces.app
+      && !entry.adapter.install_scope
+      && entry.adapter.surfaces.app.execution_hosts
+      && entry.adapter.surfaces.app.execution_hosts.local
+      && entry.adapter.surfaces.app.execution_hosts.local.global_discovery === 'unknown'
+      && entry.adapter.surfaces.app.execution_hosts.cloud
+      && entry.adapter.surfaces.app.execution_hosts.cloud.named_catalog === 'built_in_only'
+      && entry.adapter.surfaces.cli.execution_hosts
+      && entry.adapter.surfaces.cli.execution_hosts.local
+      && entry.adapter.surfaces.cli.execution_hosts.local.required_project_materialization === 'yes'),
+      'A6[cursor]: surfaces split CLI from App and keep App-local discovery unknown');
+  } else {
+    assert(entries.every(entry => {
+      const scope = entry.adapter && entry.adapter.install_scope;
+      return scope && scope.global_discovery === 'supported'
+        && scope.required_project_materialization === 'no'
+        && scope.ambient_repository_write === false
+        && typeof scope.evidence_status === 'string'
+        && !entry.adapter.surfaces;
+    }), `A6[${runtime}]: adapter declares global-first install_scope with no ambient repo write`);
+  }
 }
 
 assert(Array.isArray(profiles), 'A6: generator returns a profile list');
@@ -1657,6 +1683,26 @@ if (generator && behavior && adapters && profiles.length > 0) {
       const missGaps = runtimeDelegationGaps('cursor', strippedMiss);
       assert(strippedMiss !== subject && missGaps.includes('catalog-miss-capability-gap'),
         'A10-delegation/cursor-catalog-miss-mutation: restoring already-present → named omit-model fails catalog-miss acceptance');
+      assert(subject.includes('does not write an ambient git repository'),
+        'A10-delegation/cursor-global-first-mutation: rendered Cursor guidance forbids ambient Git writes from --global');
+      const strippedAmbient = subject.replaceAll('does not write an ambient git repository',
+        'also mirrors into the invoking git work tree');
+      const ambientGaps = runtimeDelegationGaps('cursor', strippedAmbient);
+      assert(strippedAmbient !== subject && ambientGaps.includes('global-install-no-ambient-repo'),
+        'A10-delegation/cursor-global-first-mutation: restoring ambient dual-write fails global-first acceptance');
+      assert(subject.includes('product surfaces are cli and app'),
+        'A10-delegation/cursor-app-cli-mutation: rendered Cursor guidance names CLI and App as distinct product surfaces');
+      const strippedAppCli = subject.replaceAll('product surfaces are cli and app',
+        'one cursor product surface');
+      const appCliGaps = runtimeDelegationGaps('cursor', strippedAppCli);
+      assert(strippedAppCli !== subject && appCliGaps.includes('cursor-app-cli-distinct'),
+        'A10-delegation/cursor-app-cli-mutation: collapsing App into CLI fails surface acceptance');
+      assert(subject.includes('app local ide and app-started cloud'),
+        'A10-delegation/cursor-app-host-mutation: rendered Cursor guidance separates App local IDE from App-started Cloud');
+      const strippedHosts = subject.replaceAll('app local ide and app-started cloud', 'the app host');
+      const hostGaps = runtimeDelegationGaps('cursor', strippedHosts);
+      assert(strippedHosts !== subject && hostGaps.includes('app-cloud-not-local-ide'),
+        'A10-delegation/cursor-app-host-mutation: collapsing Cloud into local IDE fails host acceptance');
     }
 
     const codexEntry = adapterView.entries.find(entry => entry.runtime === 'codex');

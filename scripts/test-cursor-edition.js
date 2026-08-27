@@ -1113,6 +1113,10 @@ for (const role of reviewerGenerator.ROLES) {
       'R2: install cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
     assert(uninstallStart >= 0 && hasRetiredHookCleanup(installerSource.slice(uninstallStart)),
       'R3: uninstall cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
+    assert(!/also deploying agents\+commands/.test(installerSource),
+      'G8-source: --global no longer dual-writes the invoking Git repository');
+    assert(!/git rev-parse --show-toplevel/.test(installerSource),
+      'G8-source: --global does not resolve an ambient git toplevel to copy into');
     const firstLine = r => String(r.stderr || r.stdout || '').split('\n')[0];
     function runInstaller(extraArgs, opts) {
       opts = opts || {};
@@ -1187,22 +1191,35 @@ for (const role of reviewerGenerator.ROLES) {
       clean(r);
     }
 
-    // #1014: --global from a git work tree dual-writes the Task catalog at
-    // <toplevel>/.cursor/agents (do NOT spawn --global with cwd = this repo).
+    // #1039: --global from a git work tree must NOT write the invoking repository.
+    // Explicit --target remains the project materialization. Do NOT spawn --global
+    // with cwd = this repo.
     {
       const gitRepo = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-git-'));
       try {
         G.init(gitRepo);
+        fs.mkdirSync(path.join(gitRepo, '.cursor', 'agents'), { recursive: true });
+        fs.writeFileSync(path.join(gitRepo, '.cursor', 'agents', 'user-owned.md'), 'keep\n');
         const r = runInstaller(['--global'], { skipTarget: true, cwd: gitRepo });
         assert(r.status === 0,
           'G8-global-git: install-cursor.sh --global from a git-fixture cwd exits 0 (got '
           + r.status + ' — ' + firstLine(r) + ')');
-        assert(fs.existsSync(path.join(gitRepo, '.cursor', 'agents', 'implementer.md')),
-          'G8-global-git: --global from a git-fixture cwd writes <toplevel>/.cursor/agents/implementer.md');
+        assert(!fs.existsSync(path.join(gitRepo, '.cursor', 'agents', 'implementer.md')),
+          'G8-global-git: --global from a git-fixture cwd does not write <toplevel>/.cursor/agents/implementer.md');
+        assert(fs.readFileSync(path.join(gitRepo, '.cursor', 'agents', 'user-owned.md'), 'utf8') === 'keep\n',
+          'G8-global-git: --global leaves an existing unmanaged project file untouched');
+        assert(!/also deploying/i.test(r.stdout + r.stderr),
+          'G8-global-git: --global does not announce an ambient project deploy');
         assert(!fs.existsSync(path.join(r.cursorHome, '.cursor')),
           'G8-global-git: still creates NO nested .cursor/ under CURSOR_HOME');
         assert(fs.existsSync(path.join(r.cursorHome, 'agents', 'knowledge-lookup.md')),
           'G8-global-git: still deploys un-nested agents under $CURSOR_HOME/agents/');
+        const targeted = runInstaller(['--target', gitRepo], { skipTarget: true, cwd: gitRepo, home: r.home, cursorHome: r.cursorHome });
+        assert(targeted.status === 0,
+          'G8-explicit-target: --target DIR still materializes project .cursor/ (got '
+          + targeted.status + ' — ' + firstLine(targeted) + ')');
+        assert(fs.existsSync(path.join(gitRepo, '.cursor', 'agents', 'implementer.md')),
+          'G8-explicit-target: --target DIR writes <dir>/.cursor/agents/implementer.md');
         clean(r);
       } finally {
         try { fs.rmSync(gitRepo, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
@@ -1225,6 +1242,34 @@ for (const role of reviewerGenerator.ROLES) {
       } finally {
         try { fs.rmSync(plain, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
       }
+    }
+
+    // #1039: doctor reports surfaces without inferring App from CLI or local from Cloud.
+    {
+      const r = spawnSync('bash', [INSTALLER, '--doctor', '--json', '--product', 'app', '--host', 'cloud'], {
+        encoding: 'utf8',
+        env: process.env,
+      });
+      assert(r.status === 0, 'G8-doctor: --doctor --json exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
+      const doc = JSON.parse(r.stdout);
+      assert(doc.runtime === 'cursor', 'G8-doctor: runtime is cursor');
+      assert(doc.product_surface === 'app', 'G8-doctor: product_surface is app');
+      assert(doc.execution_host === 'cloud', 'G8-doctor: execution_host is cloud');
+      assert(doc.inferred_from_sibling_binary === false,
+        'G8-doctor: does not infer from sibling binaries');
+      assert(doc.ambient_repository_write === false,
+        'G8-doctor: ambient_repository_write is false');
+      assert(doc.surfaces.app.execution_hosts.local.global_discovery === 'unknown',
+        'G8-doctor: App local global_discovery stays unknown, not false');
+      assert(doc.surfaces.app.execution_hosts.cloud.named_catalog === 'built_in_only',
+        'G8-doctor: App Cloud named_catalog is built_in_only');
+      assert(doc.surfaces.cli.execution_hosts.local.required_project_materialization === 'yes',
+        'G8-doctor: CLI requires explicit project materialization');
+      assert(doc.named_catalog === 'built_in_only',
+        'G8-doctor: selected App/Cloud named_catalog is flattened without guessing');
+      assert(typeof doc.kaola_workflow_version === 'string'
+        && doc.kaola_workflow_version.length > 0,
+        'G8-doctor: reports Kaola-Workflow version');
     }
 
     // --forge=gitlab renders `.cursor-gitlab/` as the generator SOURCE tree, then

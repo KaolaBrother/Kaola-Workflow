@@ -83,6 +83,12 @@
           "native_routes": "Native alternatives include the full `general-purpose` agent, read-only `Explore` and `Plan`, catch-all `claude`, background or isolated children, and optional agent teams; use only the route whose real capability fits the current item.",
           "availability": "Inspect the current Agent/Task type catalog and effective precedence. Claude currently permits recursive subagents to its native depth limit, which can be configured by the host; do not infer total child unavailability from one missing custom name."
         }
+      },
+      "install_scope": {
+        "global_discovery": "supported",
+        "required_project_materialization": "no",
+        "ambient_repository_write": false,
+        "evidence_status": "documented"
       }
     },
     "codex-github": {
@@ -117,6 +123,12 @@
           "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
           "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
         }
+      },
+      "install_scope": {
+        "global_discovery": "supported",
+        "required_project_materialization": "no",
+        "ambient_repository_write": false,
+        "evidence_status": "documented"
       }
     },
     "codex-gitlab": {
@@ -151,6 +163,12 @@
           "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
           "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
         }
+      },
+      "install_scope": {
+        "global_discovery": "supported",
+        "required_project_materialization": "no",
+        "ambient_repository_write": false,
+        "evidence_status": "documented"
       }
     },
     "codex-gitea": {
@@ -185,6 +203,12 @@
           "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
           "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
         }
+      },
+      "install_scope": {
+        "global_discovery": "supported",
+        "required_project_materialization": "no",
+        "ambient_repository_write": false,
+        "evidence_status": "documented"
       }
     },
     "opencode": {
@@ -219,6 +243,12 @@
           "native_routes": "Native alternatives include broad `general`, read-only local `explore`, and read-only external-research `scout`; direct `@name` invocation, `task_id` resume, and experimental background work remain runtime-owned options.",
           "availability": "Read the current task type catalog, permissions, and user configuration. OpenCode defaults to one child depth unless the user raises it; inherited session settings and optional pins remain user-owned capabilities."
         }
+      },
+      "install_scope": {
+        "global_discovery": "supported",
+        "required_project_materialization": "no",
+        "ambient_repository_write": false,
+        "evidence_status": "documented"
       }
     },
     "kimi": {
@@ -253,6 +283,12 @@
           "native_routes": "Native alternatives are full writable `coder`, read-only `explore`, and non-shell `plan`, plus custom Agent or AgentSwarm routes; use each under its actual boundary.",
           "availability": "Honor native project/user precedence and the current Agent catalog. Ordinary profiles ignore model fields and inherit session model plus effort; the optional experimental secondary-model pool is user-owned. Built-ins are leaves, while custom profiles may allowlist deeper subagents."
         }
+      },
+      "install_scope": {
+        "global_discovery": "supported",
+        "required_project_materialization": "no",
+        "ambient_repository_write": false,
+        "evidence_status": "documented_live_unverified"
       }
     },
     "grok": {
@@ -287,6 +323,12 @@
           "native_routes": "Native alternatives include full `general-purpose`, read/shell `explore`, and read/shell `plan`, plus background and isolated children; use the closest truthful contract.",
           "availability": "Respect the current `spawn_subagent` catalog and its native options. Grok children cannot spawn descendants, but Kaola does not narrow the root runtime's capabilities."
         }
+      },
+      "install_scope": {
+        "global_discovery": "supported",
+        "required_project_materialization": "no",
+        "ambient_repository_write": false,
+        "evidence_status": "documented"
       }
     },
     "cursor": {
@@ -312,7 +354,7 @@
           "heavy": "xhigh"
         },
         "delegation_guidance": {
-          "profile_lookup": "Find custom profiles in project `.cursor/agents/`, with project `.claude/agents/` and `.codex/agents/` as compatibility locations. Cursor documents user equivalents, but the supported CLI measurement exposed Kaola types only after project-catalog materialization, so the installer mirrors profiles into each consumer repository.",
+          "profile_lookup": "Find custom profiles in project `.cursor/agents/` or user `~/.cursor/agents/`; a generated file at a documented path is not discovery proof. `--global` writes only the user carrier and does not write an ambient Git repository. Project materialization is explicit `--target DIR`. Cursor documents user equivalents, but a user file alone was not catalog-visible on the measured CLI; project `.cursor/agents/` catalog materialization was the reachable carrier. That CLI probe is not re-run here. Product surfaces are CLI and App; App local IDE and App-started Cloud are different execution hosts and must not be inferred from each other.",
           "dispatch_carrier": "Select a custom agent explicitly as `/<role>` or by natural-language routing and use the live `Task` schema. Inspect that schema's type enum first. When it contains a Kaola role name, dispatch that name and omit a requested per-call model only when the named profile can resolve its tier pin. The supported CLI stream materialized a named call as `subagentType.custom.name` and `generalPurpose` as `subagentType.unspecified`; do not invent unpublished request fields. When the live enum is built-in-only, omit-model is the parent, not a profile pin, and a resolver-listed model slug from the live schema is an effort lever. Project `.cursor/agents/` already present plus a still-built-in-only enum is a capability_gap, not an install miss.",
           "tiers": {
             "standard": "standard → profile `grok-4.6[effort=medium]`",
@@ -322,7 +364,67 @@
           "tool_boundary": "The named profile's native `readonly` flag carries its write boundary.",
           "native_routes": "Inspect the live Task catalog. The supported CLI exposed writable `generalPurpose` plus `cursor-guide`, `bugbot`, `security-review`, and `best-of-n-runner`; other Cursor hosts document scoped `Explore`, `Bash`, and `Browser`. A measured Cloud catalog-miss host exposed `explore` and stayed built-in-only for Kaola names. Use only a route this host actually reports and under its real capability and identity.",
           "fallback_search": "If the exact named role is unavailable, inspect the currently reported `generalPurpose`, built-in, and other native child routes for the current item and use each only as itself. A custody-bearing miss inlines that item with a specific capability_gap; do not convert one miss into a run-wide inline policy and do not fail-closed asking for an install that already ran.",
-          "availability": "The current Task catalog is authoritative. Cursor named_roles is not host-universal: the supported CLI proved project custom roles, medium/high/xhigh profile resolution, parallel Tasks, and main-plus-direct-child dispatch; grandchildren had no Task. Measured Cloud hosts stayed built-in-only for Kaola custom types, including a consumer with project `.cursor/agents/` already on disk and a new producer Cloud chat. Explicit or automatic selection and resume by agent ID remain runtime-owned options. Reopening the CLI process with the same chat discovered an added project profile, while same-process hot load remains unknown. Do not claim Cloud boot-load from this measurement."
+          "availability": "The current Task catalog is authoritative. Cursor named_roles is not host-universal: the supported CLI proved project custom roles, medium/high/xhigh profile resolution, parallel Tasks, and main-plus-direct-child dispatch; grandchildren had no Task. Measured Cloud hosts stayed built-in-only for Kaola custom types, including a consumer with project `.cursor/agents/` already on disk and a new producer Cloud chat. Explicit or automatic selection and resume by agent ID remain runtime-owned options. Reopening the CLI process with the same chat discovered an added project profile, while same-process hot load remains unknown. Do not claim Cloud boot-load from this measurement. Product surfaces are CLI and App; App local IDE and App-started Cloud are different execution hosts. `--global` does not write an ambient Git repository."
+        }
+      },
+      "surfaces": {
+        "cli": {
+          "product": "cli",
+          "execution_hosts": {
+            "local": {
+              "global_discovery": "unsupported",
+              "required_project_materialization": "yes",
+              "remote_injection": "unsupported",
+              "named_catalog": "project_custom_when_present",
+              "reload": "new_process_same_chat",
+              "evidence": [
+                "cursor_instructions"
+              ],
+              "stamp": {
+                "runtime_build": "2026.08.25-3e8eec8",
+                "host_type": "standalone_agent_cli",
+                "observed_at": "2026-08-27",
+                "status": "prior_probe_not_re-run_here"
+              }
+            }
+          }
+        },
+        "app": {
+          "product": "app",
+          "execution_hosts": {
+            "local": {
+              "global_discovery": "unknown",
+              "required_project_materialization": "unknown",
+              "remote_injection": "unsupported",
+              "named_catalog": "unknown",
+              "reload": "unknown",
+              "evidence": [
+                "cursor_instructions"
+              ],
+              "stamp": {
+                "runtime_build": "unknown",
+                "host_type": "local_ide_agent",
+                "observed_at": null,
+                "status": "unprobed"
+              }
+            },
+            "cloud": {
+              "global_discovery": "unsupported",
+              "required_project_materialization": "unknown",
+              "remote_injection": "unknown",
+              "named_catalog": "built_in_only",
+              "reload": "unknown",
+              "evidence": [
+                "cursor_cloud_task_catalog"
+              ],
+              "stamp": {
+                "runtime_build": "cursor-grok-4.6-xhigh",
+                "host_type": "app_started_cloud_vm",
+                "observed_at": "2026-08-27",
+                "status": "live"
+              }
+            }
+          }
         }
       }
     },
@@ -359,6 +461,12 @@
           "native_routes": "Native alternatives include full `general-purpose` and read-only `Explore`, reached through automatic selection or `@`; foreground/background choice remains runtime-owned.",
           "availability": "Profiles are user-scope and load on the next session; project `.zcode/agents/` is only installer staging. Subagents cannot spawn children, but the root runtime's other native routes remain available."
         }
+      },
+      "install_scope": {
+        "global_discovery": "supported",
+        "required_project_materialization": "no",
+        "ambient_repository_write": false,
+        "evidence_status": "documented"
       }
     }
   }

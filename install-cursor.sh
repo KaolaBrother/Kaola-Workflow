@@ -18,14 +18,17 @@
 #   ./install-cursor.sh --forge=gitlab          # deploy the GitLab-shaped edition
 #   ./install-cursor.sh --global                # deploy agents+commands to ${CURSOR_HOME:-~/.cursor}
 #   ./install-cursor.sh --regenerate            # refresh the generated tree from canonical here
+#   ./install-cursor.sh --doctor --json         # report surface facts; does not install
 #
 # DEPLOY LAYOUT (scope-dependent):
 #   - PROJECT (--target/$PWD): agents and commands land under <project>/.cursor/{agents,commands}.
+#     This is the explicit project materialization. It is never selected from ambient cwd of a
+#     --global command.
 #   - GLOBAL (--global): they land DIRECTLY under ${CURSOR_HOME:-$HOME/.cursor}/{agents,commands}
-#     with no nested .cursor/ under CURSOR_HOME. When the installer process cwd is inside a git
-#     work tree, the same 14 agents + 3 commands are also written to
-#     $(git rev-parse --show-toplevel)/.cursor/{agents,commands} (Task types are workspace-scoped).
-#     --global from a directory with no git toplevel does not invent a project .cursor/ tree.
+#     with no nested .cursor/ under CURSOR_HOME. Running --global inside a Git work tree does
+#     not create or refresh that repository's .cursor/ tree. Project catalogs that already
+#     exist are left untouched. --global from a directory with no git toplevel does not invent
+#     a project .cursor/ tree.
 #   - Support scripts ALWAYS land under the Cursor home (user-level):
 #     ${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/{scripts,hooks}.
 #   - Project installs merge mapping into <project>/.cursor/hooks.json and copy hook
@@ -52,16 +55,26 @@ REGENERATE=0
 UNINSTALL=0
 YES=0
 NO_SCRIPTS=0
+DOCTOR=0
+DOCTOR_JSON=0
+DOCTOR_PRODUCT="unknown"
+DOCTOR_HOST="unknown"
 FORGE="github"
 
 usage() {
   cat <<'EOF'
 Usage: ./install-cursor.sh [--target DIR] [--forge=github|gitlab|gitea] [--global]
                          [--regenerate] [--uninstall] [--no-scripts] [--yes]
+                         [--doctor] [--json] [--product cli|app] [--host local|cloud]
   --target DIR     deploy agents+commands into DIR/.cursor (default: current directory)
   --forge F        github (default), gitlab, or gitea — which forge's workflow prose
                    and support scripts to deploy
-  --global         deploy agents+commands into ${CURSOR_HOME:-~/.cursor} (all projects)
+  --global         deploy agents+commands into ${CURSOR_HOME:-~/.cursor} (all projects);
+                   does not write the invoking Git repository
+  --doctor         report Cursor product/host surface facts and exit (no install)
+  --json           with --doctor, emit JSON
+  --product S      with --doctor, cli|app|unknown (default unknown; never inferred)
+  --host S         with --doctor, local|cloud|unknown (default unknown; never inferred)
   --regenerate     refresh the in-repo .cursor/ tree from canonical, then exit
   --uninstall      remove the kaola-deployed cursor edition from the resolved scope
                    (honors --target/--global), then exit
@@ -89,6 +102,10 @@ while [[ "$#" -gt 0 ]]; do
     --forge=*) FORGE="${1#--forge=}"; shift ;;
     --forge) FORGE="${2:?--forge requires github, gitlab, or gitea}"; shift 2 ;;
     --global) GLOBAL=1; shift ;;
+    --doctor) DOCTOR=1; shift ;;
+    --json) DOCTOR_JSON=1; shift ;;
+    --product) DOCTOR_PRODUCT="${2:?--product requires cli, app, or unknown}"; shift 2 ;;
+    --host) DOCTOR_HOST="${2:?--host requires local, cloud, or unknown}"; shift 2 ;;
     --regenerate) REGENERATE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --no-scripts) NO_SCRIPTS=1; shift ;;
@@ -99,6 +116,12 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 cursor_home() { printf '%s\n' "${CURSOR_HOME:-$HOME/.cursor}"; }
+
+if [[ "$DOCTOR" -eq 1 ]]; then
+  doctor_args=(--product "$DOCTOR_PRODUCT" --host "$DOCTOR_HOST")
+  [[ "$DOCTOR_JSON" -eq 1 ]] && doctor_args+=(--json)
+  exec node "$SCRIPT_DIR/scripts/kaola-workflow-cursor-surface.js" "${doctor_args[@]}"
+fi
 
 FORGE_HELPER="$SCRIPT_DIR/scripts/runtime-edition-forge.js"
 if [[ ! -f "$FORGE_HELPER" ]]; then
@@ -453,15 +476,7 @@ confirm_install
 copy_agents "$LAYOUT_DEST/agents"
 copy_commands "$LAYOUT_DEST/commands"
 if [[ "$GLOBAL" -eq 1 ]]; then
-  git_toplevel="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-  if [[ -n "$git_toplevel" ]]; then
-    project_layout="$git_toplevel/.cursor"
-    if [[ "$project_layout" != "$LAYOUT_DEST" && "$git_toplevel" != "$DEST_ROOT" ]]; then
-      echo "Task types are workspace-scoped; also deploying agents+commands → $project_layout"
-      copy_agents "$project_layout/agents"
-      copy_commands "$project_layout/commands"
-    fi
-  fi
+  echo "Global install writes only ${DEST_ROOT}/{agents,commands}. Project catalogs need explicit --target DIR."
 fi
 install_support_scripts
 install_hooks_json
