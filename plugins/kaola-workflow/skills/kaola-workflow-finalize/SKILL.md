@@ -134,6 +134,7 @@ runtime and item call for it:
 ```text
 spawn_agent(
   agent_type="tdd-guide",
+  task_name="finalize_tdd_guide",
   model="gpt-5.6-luna",
   reasoning_effort="max",
   fork_turns="none",
@@ -144,6 +145,7 @@ spawn_agent(
 ```text
 spawn_agent(
   agent_type="build-error-resolver",
+  task_name="finalize_build_error_resolver",
   model="gpt-5.6-sol",
   reasoning_effort="medium",
   fork_turns="none",
@@ -202,6 +204,7 @@ ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileS
 ```text
 spawn_agent(
   agent_type="doc-updater",
+  task_name="finalize_doc_updater",
   model="gpt-5.6-luna",
   reasoning_effort="max",
   fork_turns="none",
