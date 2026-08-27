@@ -2,11 +2,40 @@
 description: Workflow Next. Claims the work, writes the run's mission list, and runs it. Resumable from that one file.
 argument-hint: (optional project name, issue number, or task description)
 ---
-Choose dispatch or inline per item. Dispatch when it materially reduces main-context residue,
-supplies independent judgment, or enables genuinely independent parallel work. Keep one production
-owner for a cohesive state machine, protocol, or integration when handoff and integration cost
-exceed that benefit. Both modes are first-class; width follows the true work frontier. No dispatch
-count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+**Choose dispatch or inline per item:** re-evaluate the choice for every mission item; one item's
+choice never establishes a run-wide default. The absence of an exact named role is not proof that
+all native subagent dispatch is unavailable. Keep one owner for the current cohesive production
+surface when handoff and integration cost exceed the benefit, but that scope does not absorb
+independent research, test authorship, documentation, or review items. Dispatch when it materially
+reduces main-context residue, supplies independent judgment, or enables genuinely independent
+parallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,
+cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+
+<!-- KW-RUNTIME-DELEGATION-START -->
+## Runtime-native agent capabilities
+
+Find named profiles in project `.claude/agents/`, user `~/.claude/agents/`, plugin `agents/`, managed settings, or the current session's `--agents`; managed/session/project/user/plugin precedence remains Claude-owned, and the Kaola installer uses the user directory by default.
+Dispatch with `Agent` and `subagent_type: "<role>"`; installed Kaola profiles use `model: inherit`, so pass the role tier's model on the call when preserving its default tier.
+
+**Default tier bindings.** The universal role intent is `standard`, `reasoning`, or `heavy`;
+this runtime maps those defaults as follows while retaining any native, task-sensitive choice
+the runtime genuinely supports:
+
+- standard → `sonnet`; effort is not pinned and uses the runtime's default effort.
+- reasoning → `opus`; effort is not pinned and uses the runtime's default effort.
+- heavy → `fable`; effort is not pinned and uses the runtime's default effort.
+
+The named profile's native `tools` allowlist carries the role tool boundary.
+Native alternatives include the full `general-purpose` agent, read-only `Explore` and `Plan`, catch-all `claude`, background or isolated children, and optional agent teams; use only the route whose real capability fits the current item.
+Inspect the current Agent/Task type catalog and effective precedence. Claude currently permits recursive subagents to its native depth limit, which can be configured by the host; do not infer total child unavailability from one missing custom name.
+
+If the exact named role is unavailable, inspect the built-in, generic, and other native child routes for the current item.
+A native child is adequate only when its actual mechanism can
+satisfy the task, custody, evidence, and stop boundaries; use it as itself and never present it
+as the missing named role. Inline the current item only when no adequate native route exists,
+then record the specific `capability_gap`; re-evaluate the next item instead of creating a
+run-wide posture.
+<!-- KW-RUNTIME-DELEGATION-END -->
 
 # Workflow Next
 

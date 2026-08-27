@@ -150,6 +150,9 @@ function transformCommandBody(body, forge, label) {
     i++;
   }
   let text = out.join('\n');
+  if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
+    text = agentGen.replaceRuntimeDelegationGuidance(text, 'grok', forge);
+  }
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'spawn_subagent(\n$1');
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime grok');

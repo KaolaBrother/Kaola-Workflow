@@ -47,7 +47,10 @@ const REQUIRED_CAPABILITIES = Object.freeze([
   'tool_binding',
   'hook_scope',
   'intent_mapping',
+  'delegation_guidance',
 ]);
+const DELEGATION_GUIDANCE_START = '<!-- KW-RUNTIME-DELEGATION-START -->';
+const DELEGATION_GUIDANCE_END = '<!-- KW-RUNTIME-DELEGATION-END -->';
 const RETIRED_VOCABULARY_BAN = /\bnode-id\b|\bgate_effect\b|\bgate_mode\b|\bgate_aggregation\b|\bchange_gate\b|\breplicated_majority\b|\bpartitioned_all\b|\bexecution_status\b|\bclaim_outcome\b|\breview_scope_expanded\b|\bdomain_outcome:/;
 
 function sha256(value) {
@@ -134,6 +137,17 @@ function validateRuntimeAdapters(source) {
     if (!mapping || ['standard', 'reasoning', 'heavy'].some(intent => !mapping[intent])) {
       throw new Error('runtime-capabilities: incomplete intent mapping for ' + name);
     }
+    const guidance = adapter.capabilities.delegation_guidance;
+    if (!guidance || typeof guidance.profile_lookup !== 'string'
+        || typeof guidance.dispatch_carrier !== 'string'
+        || typeof guidance.tool_boundary !== 'string'
+        || typeof guidance.native_routes !== 'string'
+        || typeof guidance.availability !== 'string'
+        || !guidance.tiers
+        || ['standard', 'reasoning', 'heavy'].some(intent =>
+          typeof guidance.tiers[intent] !== 'string' || !guidance.tiers[intent].trim())) {
+      throw new Error('runtime-capabilities: incomplete delegation guidance for ' + name);
+    }
     if (['cursor', 'zcode'].includes(adapter.runtime)
         && (typeof adapter.capabilities.model !== 'string' || !adapter.capabilities.model.trim())) {
       throw new Error('runtime-capabilities: model carrier missing for ' + name);
@@ -169,10 +183,74 @@ function behaviorHash(contract) {
 }
 
 function adapterHash(adapter) {
+  const { delegation_guidance: _routingOnly, ...profileCapabilities } = adapter.capabilities;
   return sha256(JSON.stringify(canonical({
     runtime: adapter.runtime,
-    capabilities: adapter.capabilities,
+    capabilities: profileCapabilities,
   })));
+}
+
+function renderRuntimeDelegationGuidance(adapter) {
+  if (!adapter || !adapter.runtime || !adapter.capabilities) {
+    throw new Error('runtime delegation guidance requires one runtime adapter');
+  }
+  const guidance = adapter.capabilities.delegation_guidance;
+  if (!guidance) throw new Error('runtime delegation guidance missing for ' + adapter.runtime);
+  return [
+    DELEGATION_GUIDANCE_START,
+    '## Runtime-native agent capabilities',
+    '',
+    guidance.profile_lookup,
+    guidance.dispatch_carrier,
+    '',
+    '**Default tier bindings.** The universal role intent is `standard`, `reasoning`, or `heavy`;',
+    'this runtime maps those defaults as follows while retaining any native, task-sensitive choice',
+    'the runtime genuinely supports:',
+    '',
+    '- ' + guidance.tiers.standard + '.',
+    '- ' + guidance.tiers.reasoning + '.',
+    '- ' + guidance.tiers.heavy + '.',
+    '',
+    guidance.tool_boundary,
+    guidance.native_routes,
+    guidance.availability,
+    '',
+    guidance.fallback_search
+      || 'If the exact named role is unavailable, inspect the built-in, generic, and other native child routes for the current item.',
+    'A native child is adequate only when its actual mechanism can',
+    'satisfy the task, custody, evidence, and stop boundaries; use it as itself and never present it',
+    'as the missing named role. Inline the current item only when no adequate native route exists,',
+    'then record the specific `capability_gap`; re-evaluate the next item instead of creating a',
+    'run-wide posture.',
+    DELEGATION_GUIDANCE_END,
+  ].join('\n');
+}
+
+function runtimeAdapter(runtime, forge = 'github', root = ROOT) {
+  const adapters = loadRuntimeAdapters(root);
+  const name = runtime === 'codex' ? 'codex-' + forge : runtime;
+  const adapter = adapters.runtimes[name];
+  if (!adapter || adapter.runtime !== runtime) {
+    throw new Error('runtime-capabilities: adapter not found for ' + runtime + '/' + forge);
+  }
+  return adapter;
+}
+
+function renderRuntimeDelegationGuidanceForRuntime(runtime, forge = 'github', root = ROOT) {
+  return renderRuntimeDelegationGuidance(runtimeAdapter(runtime, forge, root));
+}
+
+function replaceRuntimeDelegationGuidance(content, runtime, forge = 'github', root = ROOT) {
+  const text = String(content);
+  const start = text.indexOf(DELEGATION_GUIDANCE_START);
+  const end = text.indexOf(DELEGATION_GUIDANCE_END);
+  if (start < 0 || end < start
+      || text.indexOf(DELEGATION_GUIDANCE_START, start + 1) >= 0
+      || text.indexOf(DELEGATION_GUIDANCE_END, end + 1) >= 0) {
+    throw new Error('runtime delegation guidance marker missing or duplicated for ' + runtime + '/' + forge);
+  }
+  const rendered = renderRuntimeDelegationGuidanceForRuntime(runtime, forge, root);
+  return text.slice(0, start) + rendered + text.slice(end + DELEGATION_GUIDANCE_END.length);
 }
 
 function yamlScalar(value) {
@@ -486,6 +564,7 @@ function main(argv) {
 }
 
 module.exports = {
+  ADAPTER_SOURCE,
   ROLES,
   RUNTIMES,
   ZERO_HASH,
@@ -499,6 +578,12 @@ module.exports = {
   loadProvenance,
   renderProfiles,
   renderRuntimeRole,
+  renderRuntimeDelegationGuidance,
+  renderRuntimeDelegationGuidanceForRuntime,
+  replaceRuntimeDelegationGuidance,
+  runtimeAdapter,
+  DELEGATION_GUIDANCE_START,
+  DELEGATION_GUIDANCE_END,
   checkGeneratedProfiles,
   writeGeneratedProfiles,
   validateBehaviorContracts,

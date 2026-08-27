@@ -1,9 +1,14 @@
 <!-- SLOT:nx-frontmatter -->
-Choose dispatch or inline per item. Dispatch when it materially reduces main-context residue,
-supplies independent judgment, or enables genuinely independent parallel work. Keep one production
-owner for a cohesive state machine, protocol, or integration when handoff and integration cost
-exceed that benefit. Both modes are first-class; width follows the true work frontier. No dispatch
-count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+**Choose dispatch or inline per item:** re-evaluate the choice for every mission item; one item's
+choice never establishes a run-wide default. The absence of an exact named role is not proof that
+all native subagent dispatch is unavailable. Keep one owner for the current cohesive production
+surface when handoff and integration cost exceed the benefit, but that scope does not absorb
+independent research, test authorship, documentation, or review items. Dispatch when it materially
+reduces main-context residue, supplies independent judgment, or enables genuinely independent
+parallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,
+cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+
+<!-- SLOT:runtime-delegation -->
 
 <!-- SLOT:nx-h1 -->
 

@@ -301,6 +301,9 @@ function transformCommandBody(body, forge, label) {
   // A canonical rename that walked out from under the anchor above reports itself here rather than
   // silently dropping the block.
   let text = out.join('\n');
+  if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
+    text = agentGen.replaceRuntimeDelegationGuidance(text, 'opencode', forge);
+  }
   // Dispatch-card `Agent(` openings → the opencode `task` form. Scoped to the literal opening
   // (a line that is exactly `Agent(` immediately followed by an indented `subagent_type=` line)
   // so it rewrites ONLY the dispatch invocation and never prose mentions of the word "agent"

@@ -227,6 +227,9 @@ function transformCommandBody(body, forge, label) {
     i++;
   }
   let text = out.join('\n');
+  if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
+    text = agentGen.replaceRuntimeDelegationGuidance(text, 'cursor', forge);
+  }
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'Task(\n$1');
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime cursor');

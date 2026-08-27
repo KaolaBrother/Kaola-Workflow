@@ -1,9 +1,14 @@
 <!-- SLOT:fz-frontmatter -->
-Choose dispatch or inline per item. Dispatch when it materially reduces main-context residue,
-supplies independent judgment, or enables genuinely independent parallel work. Keep one production
-owner for a cohesive state machine, protocol, or integration when handoff and integration cost
-exceed that benefit. Both modes are first-class; width follows the true work frontier. No dispatch
-count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+**Choose dispatch or inline per item:** re-evaluate the choice for every mission item; one item's
+choice never establishes a run-wide default. The absence of an exact named role is not proof that
+all native subagent dispatch is unavailable. Keep one owner for the current cohesive production
+surface when handoff and integration cost exceed the benefit, but that scope does not absorb
+independent research, test authorship, documentation, or review items. Dispatch when it materially
+reduces main-context residue, supplies independent judgment, or enables genuinely independent
+parallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,
+cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+
+<!-- SLOT:runtime-delegation -->
 
 <!-- SLOT:fz-h1 -->
 
@@ -84,6 +89,7 @@ or tooling; the review gate for a review finding. There is no mandated mode, no 
 and no approval attached to that choice. Write fix output to `.cache/final-validation-fix-{n}.md`
 and rerun the exact command that failed.
 
+<!-- REGION:command — concrete Agent call cards use the command runtime's native carrier; skill and additive runtimes must follow their adapter-rendered carrier instead -->
 Routed-fix dispatches, when you dispatch one:
 
 ```text
@@ -101,6 +107,12 @@ Agent(
   prompt="the exact failure, the evidence path, and the working directory"
 )
 ```
+<!-- /REGION -->
+
+<!-- REGION:skill — the skill runtime dispatches through spawn_agent and cannot execute the command runtime's Agent call cards -->
+When dispatching a routed fix, use the runtime-native carrier and tier binding above, with the same
+failure command, evidence path, working directory, and custody boundary in the brief.
+<!-- /REGION -->
 
 Run each full relevant command once against the final candidate. Citing an earlier pass instead of
 rerunning is fine, but **state the actual reuse boundary rather than a false absolute**: say which
@@ -150,6 +162,7 @@ ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileS
 [ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"
 ```
 
+<!-- REGION:command — the concrete Agent card is executable only on the command runtime -->
 Dispatch `doc-updater` with the changed files, the checklist, and the working directory.
 
 ```text
@@ -159,7 +172,12 @@ Agent(
   prompt="changed files, checklist, Working directory: ${ACTIVE_WORKTREE_PATH}"
 )
 ```
-For the skill surface, delegate to the `doc-updater` role with the same context. Runtime-native
+<!-- /REGION -->
+<!-- REGION:skill — the skill runtime uses spawn_agent through the adapter-rendered carrier -->
+Delegate to the `doc-updater` role with the changed files, checklist, and working directory through
+the runtime-native carrier above.
+<!-- /REGION -->
+Runtime-native
 defaults or a task-sensitive override are both valid; update docs only when behavior, API, setup,
 architecture, environment, or user-facing workflow changed, otherwise write the no-impact reason.
 

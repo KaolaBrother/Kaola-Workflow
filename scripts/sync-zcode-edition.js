@@ -172,6 +172,9 @@ function transformCommandBody(body, forge, label) {
     i++;
   }
   let text = out.join('\n');
+  if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
+    text = agentGen.replaceRuntimeDelegationGuidance(text, 'zcode', forge);
+  }
   // ZCode's dispatch tool is also Agent( — the canonical Agent( cards stay verbatim.
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime zcode');

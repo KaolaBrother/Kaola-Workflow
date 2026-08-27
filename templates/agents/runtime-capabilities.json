@@ -64,6 +64,18 @@
           "standard": "sonnet",
           "reasoning": "opus",
           "heavy": "fable"
+        },
+        "delegation_guidance": {
+          "profile_lookup": "Find named profiles in project `.claude/agents/`, user `~/.claude/agents/`, plugin `agents/`, managed settings, or the current session's `--agents`; managed/session/project/user/plugin precedence remains Claude-owned, and the Kaola installer uses the user directory by default.",
+          "dispatch_carrier": "Dispatch with `Agent` and `subagent_type: \"<role>\"`; installed Kaola profiles use `model: inherit`, so pass the role tier's model on the call when preserving its default tier.",
+          "tiers": {
+            "standard": "standard → `sonnet`; effort is not pinned and uses the runtime's default effort",
+            "reasoning": "reasoning → `opus`; effort is not pinned and uses the runtime's default effort",
+            "heavy": "heavy → `fable`; effort is not pinned and uses the runtime's default effort"
+          },
+          "tool_boundary": "The named profile's native `tools` allowlist carries the role tool boundary.",
+          "native_routes": "Native alternatives include the full `general-purpose` agent, read-only `Explore` and `Plan`, catch-all `claude`, background or isolated children, and optional agent teams; use only the route whose real capability fits the current item.",
+          "availability": "Inspect the current Agent/Task type catalog and effective precedence. Claude currently permits recursive subagents to its native depth limit, which can be configured by the host; do not infer total child unavailability from one missing custom name."
         }
       }
     },
@@ -86,6 +98,18 @@
           "standard": "inherit",
           "reasoning": "inherit",
           "heavy": "inherit"
+        },
+        "delegation_guidance": {
+          "profile_lookup": "Find the installed `agents.toml` registration and its project or user `.codex/agents/kaola-workflow/<role>.toml` profile.",
+          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; on hosts that expose them, supply `model` and `reasoning_effort` when selecting the role's default tier, while preserving supported `fork_turns` and service-tier choices.",
+          "tiers": {
+            "standard": "standard → `gpt-5.6-luna` with reasoning effort `max`",
+            "reasoning": "reasoning → `gpt-5.6-sol` with reasoning effort `medium`",
+            "heavy": "heavy → `gpt-5.6-sol` with reasoning effort `high`"
+          },
+          "tool_boundary": "The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.",
+          "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
+          "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
         }
       }
     },
@@ -108,6 +132,18 @@
           "standard": "inherit",
           "reasoning": "inherit",
           "heavy": "inherit"
+        },
+        "delegation_guidance": {
+          "profile_lookup": "Find the installed `agents.toml` registration and its project or user `.codex/agents/kaola-workflow/<role>.toml` profile.",
+          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; on hosts that expose them, supply `model` and `reasoning_effort` when selecting the role's default tier, while preserving supported `fork_turns` and service-tier choices.",
+          "tiers": {
+            "standard": "standard → `gpt-5.6-luna` with reasoning effort `max`",
+            "reasoning": "reasoning → `gpt-5.6-sol` with reasoning effort `medium`",
+            "heavy": "heavy → `gpt-5.6-sol` with reasoning effort `high`"
+          },
+          "tool_boundary": "The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.",
+          "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
+          "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
         }
       }
     },
@@ -130,6 +166,18 @@
           "standard": "inherit",
           "reasoning": "inherit",
           "heavy": "inherit"
+        },
+        "delegation_guidance": {
+          "profile_lookup": "Find the installed `agents.toml` registration and its project or user `.codex/agents/kaola-workflow/<role>.toml` profile.",
+          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; on hosts that expose them, supply `model` and `reasoning_effort` when selecting the role's default tier, while preserving supported `fork_turns` and service-tier choices.",
+          "tiers": {
+            "standard": "standard → `gpt-5.6-luna` with reasoning effort `max`",
+            "reasoning": "reasoning → `gpt-5.6-sol` with reasoning effort `medium`",
+            "heavy": "heavy → `gpt-5.6-sol` with reasoning effort `high`"
+          },
+          "tool_boundary": "The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.",
+          "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
+          "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
         }
       }
     },
@@ -152,6 +200,18 @@
           "standard": "inherit",
           "reasoning": "inherit",
           "heavy": "inherit"
+        },
+        "delegation_guidance": {
+          "profile_lookup": "Find named profiles in project `.opencode/agents/`, user `~/.config/opencode/agents/`, or `opencode.json`; use the runtime's effective merged configuration rather than assuming a same-name Markdown collision rule.",
+          "dispatch_carrier": "Dispatch with the `task` tool and `subagent_type: \"<role>\"`; the task call has no per-call model or effort field.",
+          "tiers": {
+            "standard": "standard → session model and session effort, unless the user configured the optional standard model pin",
+            "reasoning": "reasoning → the per-role override list when configured, otherwise session model and session effort",
+            "heavy": "heavy → classifies as reasoning for that optional per-role override, otherwise session model and session effort"
+          },
+          "tool_boundary": "Native profile permission denials carry the role's edit, shell, and web capability boundary.",
+          "native_routes": "Native alternatives include broad `general`, read-only local `explore`, and read-only external-research `scout`; direct `@name` invocation, `task_id` resume, and experimental background work remain runtime-owned options.",
+          "availability": "Read the current task type catalog, permissions, and user configuration. OpenCode defaults to one child depth unless the user raises it; inherited session settings and optional pins remain user-owned capabilities."
         }
       }
     },
@@ -174,6 +234,18 @@
           "standard": "inherit",
           "reasoning": "inherit",
           "heavy": "inherit"
+        },
+        "delegation_guidance": {
+          "profile_lookup": "Find native profiles in project `.kimi-code/agents/` or `.agents/agents/`, or in `$KIMI_CODE_HOME/agents/` / `~/.agents/agents/`; Kaola role names use `kaola-role-<role>`.",
+          "dispatch_carrier": "Dispatch with `Agent` or `AgentSwarm` and `subagent_type: \"kaola-role-<role>\"`; Agent supports resume/background, while AgentSwarm exposes up to 128 parallel items.",
+          "tiers": {
+            "standard": "standard → session inherit for model and thinking",
+            "reasoning": "reasoning → session inherit for model and thinking",
+            "heavy": "heavy → session inherit for model and thinking"
+          },
+          "tool_boundary": "The named profile's native `tools` allowlist carries the role tool boundary.",
+          "native_routes": "Native alternatives are full writable `coder`, read-only `explore`, and non-shell `plan`, plus custom Agent or AgentSwarm routes; use each under its actual boundary.",
+          "availability": "Honor native project/user precedence and the current Agent catalog. Ordinary profiles ignore model fields and inherit session model plus effort; the optional experimental secondary-model pool is user-owned. Built-ins are leaves, while custom profiles may allowlist deeper subagents."
         }
       }
     },
@@ -196,6 +268,18 @@
           "standard": "medium",
           "reasoning": "high",
           "heavy": "xhigh"
+        },
+        "delegation_guidance": {
+          "profile_lookup": "Find named profiles in the project `.grok/agents/` directory or the user `~/.grok/agents/` directory.",
+          "dispatch_carrier": "Dispatch with `spawn_subagent` and `subagent_type: \"<role>\"`; preserve native background, isolation, resume, cwd, and optional per-call model choices, but omit per-call effort because the profile carries it.",
+          "tiers": {
+            "standard": "standard → inherit the session model with profile effort `medium`",
+            "reasoning": "reasoning → inherit the session model with profile effort `high`",
+            "heavy": "heavy → inherit the session model with profile effort `xhigh`"
+          },
+          "tool_boundary": "The named profile's native `tools` allowlist carries the role tool boundary.",
+          "native_routes": "Native alternatives include full `general-purpose`, read/shell `explore`, and read/shell `plan`, plus background and isolated children; use the closest truthful contract.",
+          "availability": "Respect the current `spawn_subagent` catalog and its native options. Grok children cannot spawn descendants, but Kaola does not narrow the root runtime's capabilities."
         }
       }
     },
@@ -219,6 +303,19 @@
           "standard": "medium",
           "reasoning": "high",
           "heavy": "xhigh"
+        },
+        "delegation_guidance": {
+          "profile_lookup": "Find custom profiles in project `.cursor/agents/`, with project `.claude/agents/` and `.codex/agents/` as compatibility locations. Cursor documents user equivalents, but the supported CLI measurement exposed Kaola types only after project-catalog materialization, so the installer mirrors profiles into each consumer repository.",
+          "dispatch_carrier": "Select a custom agent explicitly as `/<role>` or by natural-language routing and use the live `Task` schema. The supported CLI stream materialized a named call as `subagentType.custom.name` and `generalPurpose` as `subagentType.unspecified`; do not invent unpublished request fields, and omit a requested per-call model because the profile resolves its tier pin.",
+          "tiers": {
+            "standard": "standard → profile `grok-4.6[effort=medium]`",
+            "reasoning": "reasoning → profile `grok-4.6[effort=high]`",
+            "heavy": "heavy → profile `grok-4.6[effort=xhigh]`"
+          },
+          "tool_boundary": "The named profile's native `readonly` flag carries its write boundary.",
+          "native_routes": "Inspect the live Task catalog. The supported CLI exposed writable `generalPurpose` plus `cursor-guide`, `bugbot`, `security-review`, and `best-of-n-runner`; other Cursor hosts document scoped `Explore`, `Bash`, and `Browser`. Use only a route this host actually reports and under its real capability and identity.",
+          "fallback_search": "If the exact named role is unavailable, inspect the currently reported `generalPurpose`, built-in, and other native child routes for the current item.",
+          "availability": "The current Task catalog is authoritative. The supported CLI proved project custom roles, medium/high/xhigh profile resolution, parallel Tasks, and main-plus-direct-child dispatch; grandchildren had no Task. Explicit or automatic selection and resume by agent ID remain runtime-owned options. Reopening the CLI process with the same chat discovered an added project profile, while same-process hot load remains unknown."
         }
       }
     },
@@ -242,6 +339,18 @@
           "standard": "high",
           "reasoning": "max",
           "heavy": "max"
+        },
+        "delegation_guidance": {
+          "profile_lookup": "Find the runtime-loaded user-scope profile in `${ZCODE_HOME:-~/.zcode}/agents/`; project `.zcode/agents/` is staging that the installer syncs to user scope.",
+          "dispatch_carrier": "Use automatic selection or native `@<role>` dispatch; if this session exposes an `Agent` call with `subagent_type`, follow that live schema rather than inventing unpublished fields, and omit a per-call model because the profile carries it.",
+          "tiers": {
+            "standard": "standard → profile `model: GLM-5.3` with `thoughtLevel: high`",
+            "reasoning": "reasoning → profile `model: GLM-5.3` with `thoughtLevel: max`",
+            "heavy": "heavy → profile `model: GLM-5.3` with `thoughtLevel: max`"
+          },
+          "tool_boundary": "The named profile's native `tools` allowlist carries the role tool boundary.",
+          "native_routes": "Native alternatives include full `general-purpose` and read-only `Explore`, reached through automatic selection or `@`; foreground/background choice remains runtime-owned.",
+          "availability": "Profiles are user-scope and load on the next session; project `.zcode/agents/` is only installer staging. Subagents cannot spawn children, but the root runtime's other native routes remain available."
         }
       }
     }

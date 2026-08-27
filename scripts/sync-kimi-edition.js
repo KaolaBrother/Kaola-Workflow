@@ -207,6 +207,9 @@ function transformCommandBody(body, forge, label) {
   // A canonical rename that walked out from under the anchor above reports itself here rather than
   // silently leaving the section in place.
   let text = out.join('\n');
+  if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
+    text = agentGen.replaceRuntimeDelegationGuidance(text, 'kimi', forge);
+  }
   // Dispatch-card rewrite (kimi-specific). Canonical dispatch cards name a kaola ROLE
   // in subagent_type plus an install-time model= placeholder:
   //   Agent(

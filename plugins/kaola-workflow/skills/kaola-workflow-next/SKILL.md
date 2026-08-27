@@ -2,11 +2,40 @@
 name: kaola-workflow-next
 description: Use when starting, resuming, or running Kaola-Workflow for Codex work, also called kaola-workflow — claims the issue, writes the run's mission list, and runs it from that one file.
 ---
-Choose dispatch or inline per item. Dispatch when it materially reduces main-context residue,
-supplies independent judgment, or enables genuinely independent parallel work. Keep one production
-owner for a cohesive state machine, protocol, or integration when handoff and integration cost
-exceed that benefit. Both modes are first-class; width follows the true work frontier. No dispatch
-count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+**Choose dispatch or inline per item:** re-evaluate the choice for every mission item; one item's
+choice never establishes a run-wide default. The absence of an exact named role is not proof that
+all native subagent dispatch is unavailable. Keep one owner for the current cohesive production
+surface when handoff and integration cost exceed the benefit, but that scope does not absorb
+independent research, test authorship, documentation, or review items. Dispatch when it materially
+reduces main-context residue, supplies independent judgment, or enables genuinely independent
+parallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,
+cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+
+<!-- KW-RUNTIME-DELEGATION-START -->
+## Runtime-native agent capabilities
+
+Find the installed `agents.toml` registration and its project or user `.codex/agents/kaola-workflow/<role>.toml` profile.
+Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: "<role>"`; on hosts that expose them, supply `model` and `reasoning_effort` when selecting the role's default tier, while preserving supported `fork_turns` and service-tier choices.
+
+**Default tier bindings.** The universal role intent is `standard`, `reasoning`, or `heavy`;
+this runtime maps those defaults as follows while retaining any native, task-sensitive choice
+the runtime genuinely supports:
+
+- standard → `gpt-5.6-luna` with reasoning effort `max`.
+- reasoning → `gpt-5.6-sol` with reasoning effort `medium`.
+- heavy → `gpt-5.6-sol` with reasoning effort `high`.
+
+The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.
+Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.
+Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes.
+
+If the exact named role is unavailable, inspect the built-in, generic, and other native child routes for the current item.
+A native child is adequate only when its actual mechanism can
+satisfy the task, custody, evidence, and stop boundaries; use it as itself and never present it
+as the missing named role. Inline the current item only when no adequate native route exists,
+then record the specific `capability_gap`; re-evaluate the next item instead of creating a
+run-wide posture.
+<!-- KW-RUNTIME-DELEGATION-END -->
 
 # Kaola-Workflow Next
 

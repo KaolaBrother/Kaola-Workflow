@@ -56,7 +56,14 @@ The numbered axioms are tie-breakers, applied in priority order whenever a situa
 
 **Check the premise before it shapes the work:** an issue is a claim recorded earlier against a tree that has since moved, so establish what is true *now* at the place it points and let the measurement rather than the filed text decide what gets built. The usual outcome is neither *right* nor *wrong* but right-with-a-detail-that-misroutes — a stale locator, a miscounted set, a clause that breaks if executed literally — so carry the measurement forward, never a bare verdict. Where the two disagree the issue gets corrected, not quietly worked around. Nothing inspects that you did this.
 
-**Choose dispatch or inline per item:** dispatch when it materially reduces main-context residue, supplies independent judgment, or enables genuinely independent parallel work. Keep one production owner for a cohesive state machine, protocol, or integration when handoff and integration cost exceed that benefit. Both modes are first-class; width follows the true work frontier. No dispatch count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+**Choose dispatch or inline per item:** re-evaluate the choice for every mission item; one item's
+choice never establishes a run-wide default. The absence of an exact named role is not proof that
+all native subagent dispatch is unavailable. Keep one owner for the current cohesive production
+surface when handoff and integration cost exceed the benefit, but that scope does not absorb
+independent research, test authorship, documentation, or review items. Dispatch when it materially
+reduces main-context residue, supplies independent judgment, or enables genuinely independent
+parallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,
+cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
 
 ## Working Principles
 
@@ -90,6 +97,16 @@ A universal rule or generated template has one wording. A runtime is a rendering
 authoring surface. Divergence is allowed only for measured capability differences declared in the
 runtime adapter. Consumer-facing universal artifacts name no vendor, model, native tool, or private
 configuration path. A prompt guard counts as evidence only after mutation proves it is armed.
+
+**New runtime adapter standard:** measure before declaring. Expose the runtime's real profile
+discovery and precedence, dispatch carrier and verified call fields, all three tier defaults and
+their model/effort/thought carrier or inheritance, tool and custody boundary, truthful named and
+built-in routes, and native background, parallel, resume, nesting, and reload constraints. Put those
+facts in the adapter-rendered `workflow-next` and finalize guidance; keep the universal decision rule
+vendor-neutral. Unknown fields stay unknown and the live tool schema wins. A default binding guides
+selection; it never disables automatic routing, task-sensitive overrides, or another capability the
+runtime actually exposes. A generic route is used under its real identity and cannot impersonate a
+custody-bearing named role.
 
 ### Test custody
 
