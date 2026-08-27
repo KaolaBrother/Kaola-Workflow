@@ -557,8 +557,8 @@ function commandRel(name, forge) {
 
 // ---------------------------------------------------------------------------
 // G2: commands — exact set = routing-registry commandSources() for the forge,
-// not a hand list. ZCode's dispatch tool is ALSO Agent(, so the canonical
-// Agent( cards are kept verbatim (NO Task( / spawn_subagent( rewrite).
+// not a hand list. Finalize uses automatic selection, native @role, or the exact live Agent schema;
+// it must not publish a static Agent field list that the adapter explicitly treats as host-reported.
 // --runtime zcode stamp present. Leak scans.
 // ---------------------------------------------------------------------------
 {
@@ -568,9 +568,10 @@ function commandRel(name, forge) {
     'G2: .zcode/commands set == routing-registry commandSources(github) — expected '
     + JSON.stringify(canonCommandNames) + ' got ' + JSON.stringify(gen));
 
-  const CANON_CARD = /^Agent\(/m;
-  let canonCards = 0;
-  let zcodeCards = 0;
+  const staticDispatchFields = text => String(text || '').split(/\r?\n/)
+    .filter(line => /^\s*(?:subagent_type|description)\s*=/.test(line));
+  const lineStartCall = text => /^(?:Agent|Task)\(/m.test(String(text || ''));
+  let canonicalFinalizeRoles = [];
   for (const name of canonCommandNames) {
     const src = forgeLayout.commandSources(DEFAULT_FORGE).find(s => s.basename === name + '.md');
     assertReal(!!src, 'G2[' + name + ']: commandSources() names this surface');
@@ -583,24 +584,31 @@ function commandRel(name, forge) {
     assertReal(fm.name === name, 'G2[' + name + ']: frontmatter name matches the command — got ' + JSON.stringify(fm.name));
     assertReal(typeof fm.description === 'string' && fm.description.trim().length > 0,
       'G2[' + name + ']: frontmatter has a non-empty description');
-    assertReal(CANON_CARD.test(content),
-      'G2[' + name + ']: keeps the line-start Agent( dispatch card (ZCode dispatches via Agent too — no rewrite)');
     assertReal(!/^Task\(/m.test(content) && !/spawn_subagent\(/.test(content),
-      'G2[' + name + ']: no Task( / spawn_subagent( rewrite of the Agent( dispatch card');
+      'G2[' + name + ']: no sibling-runtime Task( / spawn_subagent( dispatch wording');
     assertReal(!/\bmodel\s*=\s*["']/.test(content),
-      'G2[' + name + ']: generated cards stay free of per-call model dispatch');
+      'G2[' + name + ']: generated command stays free of per-call model dispatch');
     const canonHits = [...canon.matchAll(/^Agent\(\n\s+subagent_type="([^"]+)"/gm)].map(m => m[1]);
-    const zcodeHits = [...content.matchAll(/^Agent\(\n\s+subagent_type="([^"]+)"/gm)].map(m => m[1]);
-    canonCards += canonHits.length;
-    zcodeCards += zcodeHits.length;
-    assertReal(zcodeHits.length === canonHits.length,
-      'G2[' + name + ']: Agent( card count matches canonical (' + canonHits.length
-      + ') — got ' + zcodeHits.length);
-    const n = Math.min(canonHits.length, zcodeHits.length);
-    for (let i = 0; i < n; i++) {
-      assertReal(zcodeHits[i] === canonHits[i],
-        'G2[' + name + '#' + i + ']: Agent keeps the canonical role "' + canonHits[i]
-        + '" as a named type (got "' + zcodeHits[i] + '")');
+    if (name === 'kaola-workflow-finalize') {
+      canonicalFinalizeRoles = canonHits;
+      assertReal(!lineStartCall(content),
+        'G2[kaola-workflow-finalize]: native ZCode guidance has no static Agent( or Task( call card');
+      assertReal(staticDispatchFields(content).length === 0,
+        'G2[kaola-workflow-finalize]: no invented static subagent_type= or description= fields escape into the ZCode render');
+      for (const role of canonHits) {
+        assertReal(content.includes(role),
+          'G2[kaola-workflow-finalize]: native prose preserves the canonical dispatch role ' + role);
+      }
+      for (const boundary of [
+        'failure command', 'evidence path', 'working directory', 'custody boundary',
+        'changed files', 'checklist',
+      ]) {
+        assertReal(content.toLowerCase().includes(boundary),
+          'G2[kaola-workflow-finalize]: native prose preserves the ' + boundary + ' brief boundary');
+      }
+      assertReal(/automatic selection/i.test(content) && /@<role>|@.*role/i.test(content)
+        && /live schema/i.test(content),
+      'G2[kaola-workflow-finalize]: native prose keeps automatic/@role routing and defers optional Agent fields to the live schema');
     }
     if (name === 'workflow-init') {
       assertReal(typeof fm['argument-hint'] === 'string' && fm['argument-hint'].length > 0,
@@ -609,10 +617,16 @@ function commandRel(name, forge) {
         'G2[workflow-init]: preserves $ARGUMENTS');
     }
   }
-  assertReal(canonCards > 0,
-    'G2: canonical command surfaces carry at least one line-start Agent( card (parity bite)');
-  assertReal(zcodeCards === canonCards,
-    'G2: generated Agent( count equals canonical Agent( count');
+  assertReal(canonicalFinalizeRoles.length > 0,
+    'G2: canonical finalize carries named-role dispatch meaning for the ZCode renderer to preserve');
+
+  const nativeBoundary = 'Use native @tdd-guide selection with task, custody, evidence, and stop boundaries.';
+  assertReal(!lineStartCall(nativeBoundary) && staticDispatchFields(nativeBoundary).length === 0,
+    'G2-mutation: honest @role prose has no portable static dispatch fields');
+  const inventedCard = nativeBoundary
+    + '\nAgent(\n  subagent_type="tdd-guide",\n  description="Routed fix"\n)';
+  assertReal(lineStartCall(inventedCard) && staticDispatchFields(inventedCard).length === 2,
+    'G2-mutation RED: appending a static Agent(subagent_type, description) card is detected');
 }
 
 // G2-leak: no Claude plugin env, no ~/.claude paths, no --runtime claude, no

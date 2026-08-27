@@ -48,6 +48,43 @@ function eq(actual, expected, msg) {
   assert(actual === expected, `${msg}\n    expected: ${JSON.stringify(expected)}\n    actual:   ${JSON.stringify(actual)}`);
 }
 
+const behaviorContracts = JSON.parse(fs.readFileSync(
+  path.join(__dirname, '..', 'templates', 'agents', 'behavior-contracts.json'), 'utf8'));
+const intentRosters = Object.freeze(['standard', 'reasoning', 'heavy'].reduce((out, tier) => {
+  out[tier] = Object.entries(behaviorContracts.roles)
+    .filter(([, contract]) => contract.intent_class === tier)
+    .map(([role]) => role)
+    .sort();
+  return out;
+}, {}));
+const allRoles = Object.keys(behaviorContracts.roles);
+const normalizeProse = text => String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+const roleMentions = text => allRoles.filter(role =>
+  new RegExp(`(?:^|[^a-z0-9-])${role}(?:$|[^a-z0-9-])`).test(String(text || '').toLowerCase()));
+const retiredRunWideInline = text =>
+  /if\s+the\s+runtime\s+cannot\s+spawn\s+(?:an?\s+)?role\s+agent[\s\S]{0,100}?keep\s+the\s+work\s+inline/i.test(text);
+
+function tierRosterGaps(text) {
+  const prose = normalizeProse(text);
+  const markers = [];
+  for (const tier of Object.keys(intentRosters)) {
+    for (const pattern of [
+      new RegExp(`\\b${tier}\\b.{0,48}\\broles?\\b`, 'g'),
+      new RegExp(`\\broles?\\b.{0,48}\\b${tier}\\b`, 'g'),
+    ]) {
+      let match;
+      while ((match = pattern.exec(prose)) !== null) markers.push({ tier, index: match.index });
+    }
+  }
+  markers.sort((a, b) => a.index - b.index);
+  return Object.keys(intentRosters).filter(tier => !markers.some(marker => {
+    if (marker.tier !== tier) return false;
+    const next = markers.find(candidate => candidate.index > marker.index);
+    const segment = prose.slice(marker.index, next ? next.index : Math.min(prose.length, marker.index + 1200));
+    return JSON.stringify(roleMentions(segment).sort()) === JSON.stringify(intentRosters[tier]);
+  })).map(tier => `${tier}-role-roster`);
+}
+
 const ctx = (surface_type, forge) => ({ surface_type, forge });
 
 // ---------------------------------------------------------------------------
@@ -336,8 +373,24 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
       for (const token of required) {
         assert(rendered.includes(token), `real ${topic} token ${token} propagates to ${row.path}`);
       }
+      if (topic === 'next' || topic === 'finalize') {
+        const rosterGaps = tierRosterGaps(rendered);
+        assert(rosterGaps.length === 0,
+          `real ${topic} behavior-authority role roster propagates to ${row.path} — missing ${JSON.stringify(rosterGaps)}`);
+      }
+      if (topic === 'next') {
+        assert(!retiredRunWideInline(rendered),
+          `real next whole-surface fallback rejects the retired run-wide inline wording in ${row.path}`);
+      }
     }
   }
+
+  const itemLocalBoundary = 'Inline the current item only when no adequate native route exists; re-evaluate the next item.';
+  assert(!retiredRunWideInline(itemLocalBoundary),
+    'real next fallback mutation boundary accepts current-item inline after adequate routes are exhausted');
+  assert(retiredRunWideInline(itemLocalBoundary
+    + ' If the runtime cannot spawn a role agent, keep the work inline and say so.'),
+  'real next fallback mutation RED detects the retired broad sentence appended below valid item-local guidance');
 }
 
 // ---------------------------------------------------------------------------

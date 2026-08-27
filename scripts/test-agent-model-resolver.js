@@ -9,6 +9,24 @@ const path = require('path');
 const resolver = require('./kaola-workflow-resolve-agent-model.js');
 const codexResolver = require('../plugins/kaola-workflow/scripts/kaola-workflow-resolve-agent-model.js');
 const schema = require('./kaola-workflow-adaptive-schema.js');
+const behavior = require('../templates/agents/behavior-contracts.json');
+
+// The behavior authority, not a resolver-local hand list, owns role membership. Runtime bindings
+// may differ, but every profile/routing surface must start from this one standard/reasoning/heavy
+// classification.
+const BEHAVIOR_ROLES_BY_TIER = Object.freeze(['standard', 'reasoning', 'heavy'].reduce((out, tier) => {
+  out[tier] = Object.entries(behavior.roles)
+    .filter(([, contract]) => contract.intent_class === tier)
+    .map(([role]) => role)
+    .sort();
+  return out;
+}, {}));
+assert.deepStrictEqual(
+  [...BEHAVIOR_ROLES_BY_TIER.standard, ...BEHAVIOR_ROLES_BY_TIER.reasoning,
+    ...BEHAVIOR_ROLES_BY_TIER.heavy].sort(),
+  Object.keys(behavior.roles).sort(),
+  'behavior authority assigns every supported role to exactly one declared intent tier'
+);
 
 assert.strictEqual(resolver.isCodexPluginScriptDir(), false, 'root resolver is not inside a Codex plugin');
 assert.strictEqual(codexResolver.isCodexPluginScriptDir(), true, 'plugin resolver detects .codex-plugin in source/cache shape');
@@ -27,6 +45,12 @@ try {
 assert.ok(Array.isArray(schema.CODEX_PINNED_HEAVY_ROLES) && schema.CODEX_PINNED_HEAVY_ROLES.length > 0,
   'Codex profile coverage is standard ∪ reasoning ∪ heavy; production must export CODEX_PINNED_HEAVY_ROLES');
 const heavyRoles = schema.CODEX_PINNED_HEAVY_ROLES;
+assert.deepStrictEqual([...schema.CODEX_PINNED_STANDARD_ROLES].sort(), BEHAVIOR_ROLES_BY_TIER.standard,
+  'schema standard roster is derived from behavior-contract intent_class membership');
+assert.deepStrictEqual([...schema.CODEX_PINNED_REASONING_ROLES].sort(), BEHAVIOR_ROLES_BY_TIER.reasoning,
+  'schema reasoning roster is derived from behavior-contract intent_class membership');
+assert.deepStrictEqual([...heavyRoles].sort(), BEHAVIOR_ROLES_BY_TIER.heavy,
+  'schema heavy roster is derived from behavior-contract intent_class membership');
 assert.deepStrictEqual(
   [...schema.CODEX_PINNED_STANDARD_ROLES, ...schema.CODEX_PINNED_REASONING_ROLES, ...heavyRoles].sort(),
   Object.keys(resolver.DEFAULT_AGENT_MODELS).sort(),
@@ -45,15 +69,8 @@ assert.deepStrictEqual(
 // On Codex the same planner-class is the HEAVY roster (sol/high), not the reasoning roster
 // (sol/medium). A re-tiering on either side alone fails here.
 const PLANNER_CLASS = new Set(['planner', 'code-architect']);
-const EXPECTED_REASONING_ROLES = [
-  'build-error-resolver',
-  'code-reviewer',
-  'security-reviewer',
-  'adversarial-verifier',
-  'synthesizer',
-];
-assert.deepStrictEqual([...schema.CODEX_PINNED_REASONING_ROLES].sort(), [...EXPECTED_REASONING_ROLES].sort(),
-  'remaining Codex reasoning roster is reviewer-class + build-error-resolver + synthesizer');
+assert.deepStrictEqual([...schema.CODEX_PINNED_REASONING_ROLES].sort(), BEHAVIOR_ROLES_BY_TIER.reasoning,
+  'Codex reasoning membership stays reachable from the common behavior authority');
 for (const role of PLANNER_CLASS) {
   assert.ok(heavyRoles.includes(role),
     `${role} is planner-class and must be on CODEX_PINNED_HEAVY_ROLES`);

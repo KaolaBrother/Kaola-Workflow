@@ -188,6 +188,104 @@ function normalizedProse(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function rolesByIntent(roleContracts) {
+  const rosters = { standard: [], reasoning: [], heavy: [] };
+  for (const [role, contract] of Object.entries(roleContracts || {})) {
+    if (Object.prototype.hasOwnProperty.call(rosters, contract && contract.intent_class)) {
+      rosters[contract.intent_class].push(role);
+    }
+  }
+  for (const tier of Object.keys(rosters)) rosters[tier].sort();
+  return rosters;
+}
+
+function roleNamesIn(text) {
+  const prose = String(text || '').toLowerCase();
+  return ROLE_NAMES.filter(role => new RegExp(`(?:^|[^a-z0-9-])${role}(?:$|[^a-z0-9-])`).test(prose));
+}
+
+// A roster may be a bullet, table row, or sentence. Its serialization is not the contract; the
+// observable contract is that a tier-labelled role-membership unit names exactly the roles derived
+// from behavior-contracts.json. Keep the unit bounded before the next tier-roster marker so nearby
+// runtime-specific model bindings cannot make a wrong membership look complete.
+function tierRosterGaps(text, expected) {
+  const prose = normalizedProse(text).toLowerCase();
+  const markers = {};
+  for (const tier of Object.keys(expected)) {
+    const patterns = [
+      new RegExp(`\\b${tier}\\b.{0,48}\\broles?\\b`, 'g'),
+      new RegExp(`\\broles?\\b.{0,48}\\b${tier}\\b`, 'g'),
+    ];
+    markers[tier] = [];
+    for (const pattern of patterns) {
+      let match;
+      while ((match = pattern.exec(prose)) !== null) markers[tier].push(match.index);
+    }
+    markers[tier] = [...new Set(markers[tier])].sort((a, b) => a - b);
+  }
+
+  const allMarkers = Object.entries(markers)
+    .flatMap(([tier, indices]) => indices.map(index => ({ tier, index })))
+    .sort((a, b) => a.index - b.index);
+  const gaps = [];
+  for (const tier of Object.keys(expected)) {
+    const found = markers[tier].some(index => {
+      const next = allMarkers.find(marker => marker.index > index);
+      const segment = prose.slice(index, next ? next.index : Math.min(prose.length, index + 1200));
+      return JSON.stringify(roleNamesIn(segment).sort()) === JSON.stringify(expected[tier]);
+    });
+    if (!found) gaps.push(`${tier}-role-roster`);
+  }
+  return gaps;
+}
+
+const RETIRED_RUN_WIDE_INLINE = /if\s+the\s+runtime\s+cannot\s+spawn\s+(?:an?\s+)?role\s+agent[\s\S]{0,100}?keep\s+the\s+work\s+inline/i;
+
+function concreteDispatchBlocks(runtime, text) {
+  const call = runtime === 'claude' ? 'Agent' : runtime === 'codex' ? 'spawn_agent' : null;
+  if (!call) return [];
+  const pattern = new RegExp(`^${call}\\(\\n[\\s\\S]*?^\\)`, 'gm');
+  return [...String(text || '').matchAll(pattern)].map(match => match[0]);
+}
+
+function dispatchDefaultGaps(runtime, text, roleContracts) {
+  if (runtime !== 'claude' && runtime !== 'codex') return [];
+  const expected = {
+    claude: {
+      standard: { model: 'sonnet' },
+      reasoning: { model: 'opus' },
+      heavy: { model: 'fable' },
+    },
+    codex: {
+      standard: { model: 'gpt-5.6-luna', effort: 'max' },
+      reasoning: { model: 'gpt-5.6-sol', effort: 'medium' },
+      heavy: { model: 'gpt-5.6-sol', effort: 'high' },
+    },
+  }[runtime];
+  const blocks = concreteDispatchBlocks(runtime, text);
+  const gaps = [];
+  const requiredRoles = ['tdd-guide', 'build-error-resolver', 'doc-updater'];
+  for (const role of requiredRoles) {
+    const block = blocks.find(candidate => roleNamesIn(candidate).includes(role));
+    if (!block) {
+      gaps.push(`${role}-concrete-call`);
+      continue;
+    }
+    const tier = roleContracts[role] && roleContracts[role].intent_class;
+    const binding = expected[tier];
+    if (!binding || !new RegExp(`\\bmodel\\s*=\\s*["']${binding.model.replace(/\./g, '\\.') }["']`).test(block)) {
+      gaps.push(`${role}-default-model`);
+    }
+    if (runtime === 'codex'
+        && !new RegExp(`\\breasoning_effort\\s*=\\s*["']${binding && binding.effort}["']`).test(block)) {
+      gaps.push(`${role}-default-effort`);
+    }
+  }
+  const prose = normalizedProse(text).toLowerCase();
+  if (!(prose.includes('task-sensitive') && prose.includes('override'))) gaps.push('task-sensitive-override');
+  return gaps;
+}
+
 function choiceContract(text) {
   const match = String(text || '').match(
     /(?:\*\*)?Choose dispatch or inline per item(?::(?:\*\*)?|\.)[\s\S]*?(?=\n\n|$)/);
@@ -283,7 +381,8 @@ function runtimeDelegationGaps(runtime, text) {
       ['effort-boundary', [/runtime(?:'s)? default effort|effort.*not pinned|no .*effort pin/]],
     ],
     codex: [
-      ['lookup', [/agents\.toml/, /installed .*profile/]],
+      ['registration-lookup', [/\.codex\/config\.toml/]],
+      ['profile-lookup', [/\.codex\/agents\/kaola-workflow\/<role>\.toml/]],
       ['carrier', [/spawn_agent.*agent_type|agent_type.*spawn_agent/]],
       ['standard-tier', [/standard.*gpt-5\.6-luna.*max|gpt-5\.6-luna.*max.*standard/]],
       ['reasoning-tier', [/reasoning.*gpt-5\.6-sol.*medium|gpt-5\.6-sol.*medium.*reasoning/]],
@@ -344,6 +443,9 @@ function runtimeDelegationGaps(runtime, text) {
     ],
   };
   for (const [name, alternatives] of runtimeNeeds[runtime] || []) needs(name, alternatives);
+  if (runtime === 'codex' && /installed\s+`?agents\.toml`?|find[^.]{0,120}\bagents\.toml\b/.test(prose)) {
+    gaps.push('retired-agents-toml-lookup');
+  }
   return gaps;
 }
 
@@ -1086,6 +1188,7 @@ if (generator) {
 
 const roleContracts = behavior && behavior.roles && typeof behavior.roles === 'object'
   ? behavior.roles : {};
+const intentRosters = rolesByIntent(roleContracts);
 assert(JSON.stringify(sorted(Object.keys(roleContracts))) === JSON.stringify(ROLE_NAMES),
   'A5: exactly the 14 supported roles have one behavior authority — got '
   + JSON.stringify(sorted(Object.keys(roleContracts))));
@@ -1447,8 +1550,11 @@ if (generator && behavior && adapters && profiles.length > 0) {
       }
       guidanceByAdapter.set(entry.name, guidance);
       const gaps = runtimeDelegationGaps(entry.runtime, guidance);
+      const rosterGaps = tierRosterGaps(guidance, intentRosters);
       assert(guidance.length > 0 && gaps.length === 0,
         `A10-delegation/adapter[${entry.name}]: guidance names lookup scope, native carrier, ADR 0019 tiers, honest fallback, custody brief, and item-local capability gap — missing ${JSON.stringify(gaps)}`);
+      assert(rosterGaps.length === 0,
+        `A10-delegation/adapter-roster[${entry.name}]: guidance exposes behavior-authority role membership for standard/reasoning/heavy — missing ${JSON.stringify(rosterGaps)}`);
 
       // Mutation reachability without freezing the adapter's field names. Find the longest
       // adapter-owned string that the production guidance actually consumes, replace that scalar
@@ -1494,6 +1600,27 @@ if (generator && behavior && adapters && profiles.length > 0) {
         'A10-delegation/cursor-host-mutation: universalizing one measured Cursor enum fails host-scoped acceptance');
       }
     }
+
+    const codexEntry = adapterView.entries.find(entry => entry.runtime === 'codex');
+    const codexGuidance = codexEntry ? guidanceByAdapter.get(codexEntry.name) : '';
+    if (codexGuidance) {
+      const wrongRegistration = codexGuidance
+        .replace(/\.codex\/config\.toml/g, 'agents.toml')
+        .replace(/\.codex\/agents\/kaola-workflow\/<role>\.toml/g, 'agents.toml');
+      const registrationGaps = runtimeDelegationGaps('codex', wrongRegistration);
+      assert(registrationGaps.includes('registration-lookup')
+        && registrationGaps.includes('profile-lookup')
+        && registrationGaps.includes('retired-agents-toml-lookup'),
+      'A10-delegation/codex-lookup-mutation: replacing effective config/profile locators with source-only agents.toml fails discovery acceptance');
+    }
+
+    const rosterWitness = guidanceByAdapter.values().next().value || '';
+    if (tierRosterGaps(rosterWitness, intentRosters).length === 0) {
+      const missingStandardRole = intentRosters.standard[0];
+      const mutatedRoster = rosterWitness.replaceAll(missingStandardRole, 'missing-standard-role');
+      assert(tierRosterGaps(mutatedRoster, intentRosters).includes('standard-role-roster'),
+        'A10-delegation/roster-mutation: deleting one behavior-authority member from its rendered tier makes the roster fail');
+    }
   }
 
   function adapterForCarrier(carrier) {
@@ -1505,10 +1632,22 @@ if (generator && behavior && adapters && profiles.length > 0) {
 
   for (const carrier of carriers) {
     const gaps = runtimeDelegationGaps(carrier.runtime, carrier.content);
+    const rosterGaps = tierRosterGaps(carrier.content, intentRosters);
     assert(choiceContract(carrier.content) === common,
       `A10-delegation/carrier[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: fresh render carries the one common item-local decision contract`);
     assert(gaps.length === 0,
       `A10-delegation/carrier[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: ${carrier.label} states native lookup/carrier/tier/fallback semantics — missing ${JSON.stringify(gaps)}`);
+    assert(rosterGaps.length === 0,
+      `A10-delegation/carrier-roster[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: ${carrier.label} exposes the behavior-authority standard/reasoning/heavy role roster — missing ${JSON.stringify(rosterGaps)}`);
+    if (carrier.topic === 'next') {
+      assert(!RETIRED_RUN_WIDE_INLINE.test(carrier.content),
+        `A10-delegation/next-whole-surface[${carrier.runtime}/${carrier.forge}]: ${carrier.label} rejects the retired run-wide "cannot spawn a role agent -> inline" fallback anywhere in the render`);
+    }
+    if (carrier.topic === 'finalize' && (carrier.runtime === 'claude' || carrier.runtime === 'codex')) {
+      const defaultGaps = dispatchDefaultGaps(carrier.runtime, carrier.content, roleContracts);
+      assert(defaultGaps.length === 0,
+        `A10-delegation/finalize-defaults[${carrier.runtime}/${carrier.forge}]: concrete tdd/build/docs calls apply their behavior-derived default model${carrier.runtime === 'codex' ? '+effort' : ''} while preserving task-sensitive overrides — missing ${JSON.stringify(defaultGaps)}`);
+    }
     if (typeof renderGuidance === 'function') {
       const entry = adapterForCarrier(carrier);
       const guidance = entry ? guidanceByAdapter.get(entry.name) : '';
@@ -1516,6 +1655,24 @@ if (generator && behavior && adapters && profiles.length > 0) {
         && normalizedProse(carrier.content).includes(normalizedProse(guidance)),
       `A10-delegation/carrier-source[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: fresh carrier includes its exact adapter-rendered native guidance`);
     }
+  }
+
+  // Concrete-call mutation bites are conditional on the subject becoming compliant: corrupt one
+  // role's call-carried default while leaving the tier table and prose untouched. This catches the
+  // review's believable near miss where guidance describes the right default but the executable
+  // call still inherits or selects the wrong child configuration.
+  for (const runtime of ['claude', 'codex']) {
+    const subject = carriers.find(carrier => carrier.runtime === runtime
+      && carrier.forge === 'github' && carrier.topic === 'finalize');
+    if (!subject || dispatchDefaultGaps(runtime, subject.content, roleContracts).length !== 0) continue;
+    const corrupted = runtime === 'claude'
+      ? subject.content.replace(/model\s*=\s*["']sonnet["']/, 'model="opus"')
+      : subject.content.replace(/reasoning_effort\s*=\s*["']max["']/, 'reasoning_effort="low"');
+    const corruptedGaps = dispatchDefaultGaps(runtime, corrupted, roleContracts);
+    assert(corrupted !== subject.content
+      && corruptedGaps.includes(runtime === 'claude'
+        ? 'tdd-guide-default-model' : 'tdd-guide-default-effort'),
+    `A10-delegation/finalize-default-mutation[${runtime}]: corrupting a concrete standard-tier call fails even when the surrounding tier table remains correct`);
   }
 
   // Subject-byte mutations: remove the two observed distinctions from an otherwise-correct common
@@ -1529,6 +1686,12 @@ if (generator && behavior && adapters && profiles.length > 0) {
     assert(commonDelegationGaps(conflatedRoleAbsence).includes('exact-role-is-not-no-dispatch'),
       'A10-delegation/mutation: conflating exact-role absence with no dispatch makes the common contract fail');
   }
+  const cleanItemLocal = 'Inline the current item only when no adequate native route exists; re-evaluate the next item.';
+  assert(!RETIRED_RUN_WIDE_INLINE.test(cleanItemLocal),
+    'A10-delegation/next-whole-surface-mutation: an item-local exhausted-route fallback is accepted');
+  assert(RETIRED_RUN_WIDE_INLINE.test(cleanItemLocal
+    + ' If the runtime cannot spawn a role agent, keep the work inline and say so.'),
+  'A10-delegation/next-whole-surface-mutation: appending the retired broad fallback anywhere in the render is detected');
 }
 
 // A11 — old Claude-first paraphrase and prose-rewrite machinery is deleted with its mechanism.

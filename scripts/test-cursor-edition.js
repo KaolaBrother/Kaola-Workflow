@@ -464,7 +464,8 @@ function commandRel(name, forge) {
 
 // ---------------------------------------------------------------------------
 // G2: commands — exact set = routing-registry commandSources() for the forge,
-// not a hand list. No line-start Agent( cards (rewrite target is Task().
+// not a hand list. Finalize follows the live Cursor Task schema/current catalog; it must not
+// mechanically translate portable Agent cards into an invented static Task field list.
 // No CLAUDE_PLUGIN_ROOT, no ~/.claude/kaola-workflow. --runtime cursor present
 // (not --runtime claude). No model="{...}" placeholders, no per-call model="
 // overrides, and no vendor model dispatch in command cards.
@@ -476,9 +477,10 @@ function commandRel(name, forge) {
     'G2: .cursor/commands set == routing-registry commandSources(github) — expected '
     + JSON.stringify(canonCommandNames) + ' got ' + JSON.stringify(gen));
 
-  const CANON_CARD = /^Agent\(/m;
-  let canonCards = 0;
-  let cursorCards = 0;
+  const staticDispatchFields = text => String(text || '').split(/\r?\n/)
+    .filter(line => /^\s*(?:subagent_type|description)\s*=/.test(line));
+  const lineStartCall = text => /^(?:Agent|Task)\(/m.test(String(text || ''));
+  let canonicalFinalizeRoles = [];
   for (const name of canonCommandNames) {
     const src = forgeLayout.commandSources(DEFAULT_FORGE).find(s => s.basename === name + '.md');
     assert(!!src, 'G2[' + name + ']: commandSources() names this surface');
@@ -491,22 +493,31 @@ function commandRel(name, forge) {
     assert(fm.name === name, 'G2[' + name + ']: frontmatter name matches the command — got ' + JSON.stringify(fm.name));
     assert(typeof fm.description === 'string' && fm.description.trim().length > 0,
       'G2[' + name + ']: frontmatter has a non-empty description');
-    assert(!CANON_CARD.test(content),
-      'G2[' + name + ']: no line-start Agent( dispatch card (rewrite target is Task()');
+    assert(!/^Agent\(/m.test(content),
+      'G2[' + name + ']: no line-start Claude Agent( dispatch card');
     assert(!/\bmodel\s*=\s*["']/.test(content),
-      'G2[' + name + ']: generated Task cards stay free of per-call model dispatch');
+      'G2[' + name + ']: generated command stays free of per-call model dispatch');
     const canonHits = [...canon.matchAll(/^Agent\(\n\s+subagent_type="([^"]+)"/gm)].map(m => m[1]);
-    const cursorHits = [...content.matchAll(/^Task\(\n\s+subagent_type="([^"]+)"/gm)].map(m => m[1]);
-    canonCards += canonHits.length;
-    cursorCards += cursorHits.length;
-    assert(cursorHits.length === canonHits.length,
-      'G2[' + name + ']: Task( card count matches canonical Agent( count ('
-      + canonHits.length + ') — got ' + cursorHits.length);
-    const n = Math.min(canonHits.length, cursorHits.length);
-    for (let i = 0; i < n; i++) {
-      assert(cursorHits[i] === canonHits[i],
-        'G2[' + name + '#' + i + ']: Task keeps the canonical role "' + canonHits[i]
-        + '" as a named type (got "' + cursorHits[i] + '") — Cursor hosts named custom agents');
+    if (name === 'kaola-workflow-finalize') {
+      canonicalFinalizeRoles = canonHits;
+      assert(!lineStartCall(content),
+        'G2[kaola-workflow-finalize]: live-schema Cursor guidance has no static Agent( or Task( call card');
+      assert(staticDispatchFields(content).length === 0,
+        'G2[kaola-workflow-finalize]: no invented static subagent_type= or description= fields escape into the Cursor render');
+      for (const role of canonHits) {
+        assert(content.includes(role),
+          'G2[kaola-workflow-finalize]: native prose preserves the canonical dispatch role ' + role);
+      }
+      for (const boundary of [
+        'failure command', 'evidence path', 'working directory', 'custody boundary',
+        'changed files', 'checklist',
+      ]) {
+        assert(content.toLowerCase().includes(boundary),
+          'G2[kaola-workflow-finalize]: native prose preserves the ' + boundary + ' brief boundary');
+      }
+      assert(/live [`]?task[`]? schema/i.test(content)
+        && /(?:current|live|runtime.reported) task (?:catalog|enum)/i.test(content),
+      'G2[kaola-workflow-finalize]: native prose routes through the live Task schema and current host catalog');
     }
     if (name === 'workflow-init') {
       assert(typeof fm['argument-hint'] === 'string' && fm['argument-hint'].length > 0,
@@ -515,10 +526,16 @@ function commandRel(name, forge) {
         'G2[workflow-init]: preserves $ARGUMENTS');
     }
   }
-  assert(canonCards > 0,
-    'G2: canonical command surfaces carry at least one line-start Agent( card (rewrite bite)');
-  assert(cursorCards === canonCards,
-    'G2: generated Task( count equals canonical Agent( count');
+  assert(canonicalFinalizeRoles.length > 0,
+    'G2: canonical finalize carries named-role dispatch meaning for the Cursor renderer to preserve');
+
+  const nativeBoundary = 'Use the live Task schema for tdd-guide with task, custody, evidence, and stop boundaries.';
+  assert(!lineStartCall(nativeBoundary) && staticDispatchFields(nativeBoundary).length === 0,
+    'G2-mutation: honest live-schema prose has no portable static dispatch fields');
+  const inventedCard = nativeBoundary
+    + '\nTask(\n  subagent_type="tdd-guide",\n  description="Routed fix"\n)';
+  assert(lineStartCall(inventedCard) && staticDispatchFields(inventedCard).length === 2,
+    'G2-mutation RED: appending a static Task(subagent_type, description) card is detected');
 }
 
 // G2-leak forbids vendor model slugs on command/hook cards except for the
