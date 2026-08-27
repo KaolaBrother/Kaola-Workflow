@@ -160,6 +160,18 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + zcodeKaolaScript(forge));
 }
 
+function zcodeNativeDispatchProse(card) {
+  if (card.includes('doc-updater')) {
+    return 'Use automatic selection or native `@doc-updater` for documentation work. Put the '
+      + 'changed files, checklist, working directory, and custody boundary in the brief; if this '
+      + 'session exposes an Agent tool, follow only its live schema.\n';
+  }
+  const role = card.includes('build-error-resolver') ? 'build-error-resolver' : 'tdd-guide';
+  return 'Use automatic selection or native `@' + role + '` for this routed fix. Put the failure '
+    + 'command, evidence path, working directory, and custody boundary in the brief; if this '
+    + 'session exposes an Agent tool, follow only its live schema.\n';
+}
+
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   const lines = body.split(/\r?\n/);
@@ -175,18 +187,10 @@ function transformCommandBody(body, forge, label) {
   if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
     text = agentGen.replaceRuntimeDelegationGuidance(text, 'zcode', forge);
   }
-  // ZCode's dispatch tool is also Agent( — the canonical Agent( cards stay verbatim.
+  text = text.replace(/^Agent\(\n[\s\S]*?^\)\n?/gm, zcodeNativeDispatchProse);
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime zcode');
   text = rewriteClaudeScriptPaths(text, forge);
-  // A command with no dispatch section of its own (workflow-init) still names
-  // the card shape, so every generated command carries a line-start Agent(
-  // reference while card-for-card parity with canonical is preserved.
-  if (!/^Agent\(/m.test(text)) {
-    text = text.replace(/\s+$/, '') + '\n\n'
-      + 'Named dispatch uses the `Agent(` card with the named role as `subagent_type`:\n\n'
-      + 'Agent(\n  prompt="<the mission and locator>",\n  subagent_type="<role>"\n)\n';
-  }
   return text;
 }
 

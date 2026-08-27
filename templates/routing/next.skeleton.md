@@ -267,8 +267,10 @@ its issues alone.
 
 Delegation is available when the execution-economics judgment calls for it. Use the installed role
 profiles and runtime-native defaults; a task-sensitive model or reasoning-effort override, or
-omission where the runtime supplies a default, is valid. If the runtime cannot spawn a role agent,
-keep the work inline and say so.
+omission where the runtime supplies a default, is valid. Follow the runtime-native capability guide
+above: inspect every adequate named, built-in, generic, or other native child route for the current
+item, use a real route only under its actual identity and boundary, and inline the current item only
+when none is adequate. Record that specific capability gap and re-evaluate the next item.
 ## Required output
 
 Before continuing or stopping, print:

@@ -190,12 +190,22 @@ function adapterHash(adapter) {
   })));
 }
 
-function renderRuntimeDelegationGuidance(adapter) {
+function rolesByIntent(behaviorSource = loadBehaviorContracts()) {
+  const rosters = { standard: [], reasoning: [], heavy: [] };
+  for (const [role, contract] of Object.entries(behaviorSource.roles)) {
+    rosters[contract.intent_class].push(role);
+  }
+  for (const tier of Object.keys(rosters)) rosters[tier].sort();
+  return rosters;
+}
+
+function renderRuntimeDelegationGuidance(adapter, behaviorSource = loadBehaviorContracts()) {
   if (!adapter || !adapter.runtime || !adapter.capabilities) {
     throw new Error('runtime delegation guidance requires one runtime adapter');
   }
   const guidance = adapter.capabilities.delegation_guidance;
   if (!guidance) throw new Error('runtime delegation guidance missing for ' + adapter.runtime);
+  const rosters = rolesByIntent(behaviorSource);
   return [
     DELEGATION_GUIDANCE_START,
     '## Runtime-native agent capabilities',
@@ -210,6 +220,13 @@ function renderRuntimeDelegationGuidance(adapter) {
     '- ' + guidance.tiers.standard + '.',
     '- ' + guidance.tiers.reasoning + '.',
     '- ' + guidance.tiers.heavy + '.',
+    '',
+    '**Role intent roster.** Membership comes from the universal behavior-contract authority; the',
+    'runtime adapter selects only how each tier is carried:',
+    '',
+    '- Standard roles: ' + rosters.standard.map(role => '`' + role + '`').join(', ') + '.',
+    '- Reasoning roles: ' + rosters.reasoning.map(role => '`' + role + '`').join(', ') + '.',
+    '- Heavy roles: ' + rosters.heavy.map(role => '`' + role + '`').join(', ') + '.',
     '',
     guidance.tool_boundary,
     guidance.native_routes,
@@ -237,7 +254,8 @@ function runtimeAdapter(runtime, forge = 'github', root = ROOT) {
 }
 
 function renderRuntimeDelegationGuidanceForRuntime(runtime, forge = 'github', root = ROOT) {
-  return renderRuntimeDelegationGuidance(runtimeAdapter(runtime, forge, root));
+  return renderRuntimeDelegationGuidance(
+    runtimeAdapter(runtime, forge, root), loadBehaviorContracts(root));
 }
 
 function replaceRuntimeDelegationGuidance(content, runtime, forge = 'github', root = ROOT) {
@@ -565,6 +583,7 @@ function main(argv) {
 
 module.exports = {
   ADAPTER_SOURCE,
+  BEHAVIOR_SOURCE,
   ROLES,
   RUNTIMES,
   ZERO_HASH,
@@ -578,6 +597,7 @@ module.exports = {
   loadProvenance,
   renderProfiles,
   renderRuntimeRole,
+  rolesByIntent,
   renderRuntimeDelegationGuidance,
   renderRuntimeDelegationGuidanceForRuntime,
   replaceRuntimeDelegationGuidance,

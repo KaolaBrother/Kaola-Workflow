@@ -233,6 +233,7 @@ function transformCommandBody(body, forge, label) {
       return 'Agent(\n' + indent + 'subagent_type="kaola-role-' + role + '",' + mid + 'prompt="';
     }
   );
+  text = text.replace(/^\s+model="[^"]+",?\n/gm, '');
   // Card placeholder lines. The prose forms are already restated by rewriteModelDispatchInstructions
   // above, so this only ever sees a card.
   // Tidy trailing whitespace left behind on affected lines.

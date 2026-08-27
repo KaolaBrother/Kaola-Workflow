@@ -215,6 +215,18 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + cursorKaolaScript(forge));
 }
 
+function cursorNativeDispatchProse(card) {
+  if (card.includes('doc-updater')) {
+    return 'Use exact `doc-updater` from the current Task catalog through the live Task schema. '
+      + 'Put the changed files, checklist, working directory, and custody boundary in its brief; '
+      + 'let the named profile carry its model tier.\n';
+  }
+  const role = card.includes('build-error-resolver') ? 'build-error-resolver' : 'tdd-guide';
+  return 'Use exact `' + role + '` from the current Task catalog through the live Task schema. '
+    + 'Put the failure command, evidence path, working directory, and custody boundary in its brief; '
+    + 'let the named profile carry its model tier.\n';
+}
+
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   const lines = body.split(/\r?\n/);
@@ -230,7 +242,7 @@ function transformCommandBody(body, forge, label) {
   if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
     text = agentGen.replaceRuntimeDelegationGuidance(text, 'cursor', forge);
   }
-  text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'Task(\n$1');
+  text = text.replace(/^Agent\(\n[\s\S]*?^\)\n?/gm, cursorNativeDispatchProse);
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime cursor');
   text = rewriteClaudeScriptPaths(text, forge);

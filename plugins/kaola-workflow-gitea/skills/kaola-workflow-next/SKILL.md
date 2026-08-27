@@ -14,7 +14,7 @@ cap, disjointness proof, justification, approval, or fallback stigma attaches to
 <!-- KW-RUNTIME-DELEGATION-START -->
 ## Runtime-native agent capabilities
 
-Find the installed `agents.toml` registration and its project or user `.codex/agents/kaola-workflow/<role>.toml` profile.
+Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.
 Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: "<role>"`; on hosts that expose them, supply `model` and `reasoning_effort` when selecting the role's default tier, while preserving supported `fork_turns` and service-tier choices.
 
 **Default tier bindings.** The universal role intent is `standard`, `reasoning`, or `heavy`;
@@ -24,6 +24,13 @@ the runtime genuinely supports:
 - standard → `gpt-5.6-luna` with reasoning effort `max`.
 - reasoning → `gpt-5.6-sol` with reasoning effort `medium`.
 - heavy → `gpt-5.6-sol` with reasoning effort `high`.
+
+**Role intent roster.** Membership comes from the universal behavior-contract authority; the
+runtime adapter selects only how each tier is carried:
+
+- Standard roles: `code-explorer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `metric-optimizer`, `tdd-guide`.
+- Reasoning roles: `adversarial-verifier`, `build-error-resolver`, `code-reviewer`, `security-reviewer`, `synthesizer`.
+- Heavy roles: `code-architect`, `planner`.
 
 The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.
 Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.
@@ -301,8 +308,10 @@ its issues alone.
 
 Delegation is available when the execution-economics judgment calls for it. Use the installed role
 profiles and runtime-native defaults; a task-sensitive model or reasoning-effort override, or
-omission where the runtime supplies a default, is valid. If the runtime cannot spawn a role agent,
-keep the work inline and say so.
+omission where the runtime supplies a default, is valid. Follow the runtime-native capability guide
+above: inspect every adequate named, built-in, generic, or other native child route for the current
+item, use a real route only under its actual identity and boundary, and inline the current item only
+when none is adequate. Record that specific capability gap and re-evaluate the next item.
 ## Required output
 
 Before continuing or stopping, print:

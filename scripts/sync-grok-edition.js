@@ -154,6 +154,7 @@ function transformCommandBody(body, forge, label) {
     text = agentGen.replaceRuntimeDelegationGuidance(text, 'grok', forge);
   }
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'spawn_subagent(\n$1');
+  text = text.replace(/^\s+model="[^"]+",?\n/gm, '');
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime grok');
   text = rewriteClaudeScriptPaths(text, forge);

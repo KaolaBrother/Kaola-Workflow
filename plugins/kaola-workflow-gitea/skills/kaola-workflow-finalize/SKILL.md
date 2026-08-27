@@ -14,7 +14,7 @@ cap, disjointness proof, justification, approval, or fallback stigma attaches to
 <!-- KW-RUNTIME-DELEGATION-START -->
 ## Runtime-native agent capabilities
 
-Find the installed `agents.toml` registration and its project or user `.codex/agents/kaola-workflow/<role>.toml` profile.
+Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.
 Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: "<role>"`; on hosts that expose them, supply `model` and `reasoning_effort` when selecting the role's default tier, while preserving supported `fork_turns` and service-tier choices.
 
 **Default tier bindings.** The universal role intent is `standard`, `reasoning`, or `heavy`;
@@ -24,6 +24,13 @@ the runtime genuinely supports:
 - standard → `gpt-5.6-luna` with reasoning effort `max`.
 - reasoning → `gpt-5.6-sol` with reasoning effort `medium`.
 - heavy → `gpt-5.6-sol` with reasoning effort `high`.
+
+**Role intent roster.** Membership comes from the universal behavior-contract authority; the
+runtime adapter selects only how each tier is carried:
+
+- Standard roles: `code-explorer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `metric-optimizer`, `tdd-guide`.
+- Reasoning roles: `adversarial-verifier`, `build-error-resolver`, `code-reviewer`, `security-reviewer`, `synthesizer`.
+- Heavy roles: `code-architect`, `planner`.
 
 The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.
 Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.
@@ -119,8 +126,30 @@ and no approval attached to that choice. Write fix output to `.cache/final-valid
 and rerun the exact command that failed.
 
 
-When dispatching a routed fix, use the runtime-native carrier and tier binding above, with the same
-failure command, evidence path, working directory, and custody boundary in the brief.
+Codex routed-fix defaults use the behavior-derived role tier on the native carrier. These examples
+use a self-sufficient brief and `fork_turns="none"` so the host may accept explicit model and effort;
+a task-sensitive override, supported recent-turn fork, or inherited pair remains valid when the
+runtime and item call for it:
+
+```text
+spawn_agent(
+  agent_type="tdd-guide",
+  model="gpt-5.6-luna",
+  reasoning_effort="max",
+  fork_turns="none",
+  message="the exact failure command, evidence path, working directory, and custody boundary"
+)
+```
+
+```text
+spawn_agent(
+  agent_type="build-error-resolver",
+  model="gpt-5.6-sol",
+  reasoning_effort="medium",
+  fork_turns="none",
+  message="the exact failure command, evidence path, working directory, and custody boundary"
+)
+```
 
 Run each full relevant command once against the final candidate. Citing an earlier pass instead of
 rerunning is fine, but **state the actual reuse boundary rather than a false absolute**: say which
@@ -170,8 +199,18 @@ ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileS
 [ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"
 ```
 
-Delegate to the `doc-updater` role with the changed files, checklist, and working directory through
-the runtime-native carrier above.
+```text
+spawn_agent(
+  agent_type="doc-updater",
+  model="gpt-5.6-luna",
+  reasoning_effort="max",
+  fork_turns="none",
+  message="the changed files, checklist, working directory, and custody boundary"
+)
+```
+
+Use the runtime-native carrier above; a task-sensitive override or supported inherited pair remains
+valid.
 Runtime-native
 defaults or a task-sensitive override are both valid; update docs only when behavior, API, setup,
 architecture, environment, or user-facing workflow changed, otherwise write the no-impact reason.

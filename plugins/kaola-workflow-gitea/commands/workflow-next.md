@@ -25,6 +25,13 @@ the runtime genuinely supports:
 - reasoning → `opus`; effort is not pinned and uses the runtime's default effort.
 - heavy → `fable`; effort is not pinned and uses the runtime's default effort.
 
+**Role intent roster.** Membership comes from the universal behavior-contract authority; the
+runtime adapter selects only how each tier is carried:
+
+- Standard roles: `code-explorer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `metric-optimizer`, `tdd-guide`.
+- Reasoning roles: `adversarial-verifier`, `build-error-resolver`, `code-reviewer`, `security-reviewer`, `synthesizer`.
+- Heavy roles: `code-architect`, `planner`.
+
 The named profile's native `tools` allowlist carries the role tool boundary.
 Native alternatives include the full `general-purpose` agent, read-only `Explore` and `Plan`, catch-all `claude`, background or isolated children, and optional agent teams; use only the route whose real capability fits the current item.
 Inspect the current Agent/Task type catalog and effective precedence. Claude currently permits recursive subagents to its native depth limit, which can be configured by the host; do not infer total child unavailability from one missing custom name.
@@ -301,8 +308,10 @@ its issues alone.
 
 Delegation is available when the execution-economics judgment calls for it. Use the installed role
 profiles and runtime-native defaults; a task-sensitive model or reasoning-effort override, or
-omission where the runtime supplies a default, is valid. If the runtime cannot spawn a role agent,
-keep the work inline and say so.
+omission where the runtime supplies a default, is valid. Follow the runtime-native capability guide
+above: inspect every adequate named, built-in, generic, or other native child route for the current
+item, use a real route only under its actual identity and boundary, and inline the current item only
+when none is adequate. Record that specific capability gap and re-evaluate the next item.
 ## Required output
 
 Before continuing or stopping, print:

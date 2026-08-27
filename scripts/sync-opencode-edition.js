@@ -309,6 +309,7 @@ function transformCommandBody(body, forge, label) {
   // so it rewrites ONLY the dispatch invocation and never prose mentions of the word "agent"
   // or inline `Agent(...)` code spans.
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'task(\n$1');
+  text = text.replace(/^\s+model="[^"]+",?\n/gm, '');
   // Card placeholder lines. The prose forms are already restated by rewriteModelDispatchInstructions
   // above, so this only ever sees a card.
   // Tidy trailing whitespace left behind on affected lines.

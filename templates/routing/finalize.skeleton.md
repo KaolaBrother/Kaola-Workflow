@@ -95,6 +95,7 @@ Routed-fix dispatches, when you dispatch one:
 ```text
 Agent(
   subagent_type="tdd-guide",
+  model="sonnet",
   description="Routed fix: {the failing command}",
   prompt="the exact failure, the evidence path, and the working directory"
 )
@@ -103,6 +104,7 @@ Agent(
 ```text
 Agent(
   subagent_type="build-error-resolver",
+  model="opus",
   description="Routed fix: {the failing command}",
   prompt="the exact failure, the evidence path, and the working directory"
 )
@@ -110,8 +112,30 @@ Agent(
 <!-- /REGION -->
 
 <!-- REGION:skill — the skill runtime dispatches through spawn_agent and cannot execute the command runtime's Agent call cards -->
-When dispatching a routed fix, use the runtime-native carrier and tier binding above, with the same
-failure command, evidence path, working directory, and custody boundary in the brief.
+Codex routed-fix defaults use the behavior-derived role tier on the native carrier. These examples
+use a self-sufficient brief and `fork_turns="none"` so the host may accept explicit model and effort;
+a task-sensitive override, supported recent-turn fork, or inherited pair remains valid when the
+runtime and item call for it:
+
+```text
+spawn_agent(
+  agent_type="tdd-guide",
+  model="gpt-5.6-luna",
+  reasoning_effort="max",
+  fork_turns="none",
+  message="the exact failure command, evidence path, working directory, and custody boundary"
+)
+```
+
+```text
+spawn_agent(
+  agent_type="build-error-resolver",
+  model="gpt-5.6-sol",
+  reasoning_effort="medium",
+  fork_turns="none",
+  message="the exact failure command, evidence path, working directory, and custody boundary"
+)
+```
 <!-- /REGION -->
 
 Run each full relevant command once against the final candidate. Citing an earlier pass instead of
@@ -168,14 +192,25 @@ Dispatch `doc-updater` with the changed files, the checklist, and the working di
 ```text
 Agent(
   subagent_type="doc-updater",
+  model="sonnet",
   description="Update docs for {project}",
   prompt="changed files, checklist, Working directory: ${ACTIVE_WORKTREE_PATH}"
 )
 ```
 <!-- /REGION -->
 <!-- REGION:skill — the skill runtime uses spawn_agent through the adapter-rendered carrier -->
-Delegate to the `doc-updater` role with the changed files, checklist, and working directory through
-the runtime-native carrier above.
+```text
+spawn_agent(
+  agent_type="doc-updater",
+  model="gpt-5.6-luna",
+  reasoning_effort="max",
+  fork_turns="none",
+  message="the changed files, checklist, working directory, and custody boundary"
+)
+```
+
+Use the runtime-native carrier above; a task-sensitive override or supported inherited pair remains
+valid.
 <!-- /REGION -->
 Runtime-native
 defaults or a task-sensitive override are both valid; update docs only when behavior, API, setup,

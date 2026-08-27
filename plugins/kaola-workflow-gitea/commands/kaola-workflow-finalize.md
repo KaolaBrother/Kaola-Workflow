@@ -25,6 +25,13 @@ the runtime genuinely supports:
 - reasoning → `opus`; effort is not pinned and uses the runtime's default effort.
 - heavy → `fable`; effort is not pinned and uses the runtime's default effort.
 
+**Role intent roster.** Membership comes from the universal behavior-contract authority; the
+runtime adapter selects only how each tier is carried:
+
+- Standard roles: `code-explorer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `metric-optimizer`, `tdd-guide`.
+- Reasoning roles: `adversarial-verifier`, `build-error-resolver`, `code-reviewer`, `security-reviewer`, `synthesizer`.
+- Heavy roles: `code-architect`, `planner`.
+
 The named profile's native `tools` allowlist carries the role tool boundary.
 Native alternatives include the full `general-purpose` agent, read-only `Explore` and `Plan`, catch-all `claude`, background or isolated children, and optional agent teams; use only the route whose real capability fits the current item.
 Inspect the current Agent/Task type catalog and effective precedence. Claude currently permits recursive subagents to its native depth limit, which can be configured by the host; do not infer total child unavailability from one missing custom name.
@@ -123,6 +130,7 @@ Routed-fix dispatches, when you dispatch one:
 ```text
 Agent(
   subagent_type="tdd-guide",
+  model="sonnet",
   description="Routed fix: {the failing command}",
   prompt="the exact failure, the evidence path, and the working directory"
 )
@@ -131,6 +139,7 @@ Agent(
 ```text
 Agent(
   subagent_type="build-error-resolver",
+  model="opus",
   description="Routed fix: {the failing command}",
   prompt="the exact failure, the evidence path, and the working directory"
 )
@@ -190,6 +199,7 @@ Dispatch `doc-updater` with the changed files, the checklist, and the working di
 ```text
 Agent(
   subagent_type="doc-updater",
+  model="sonnet",
   description="Update docs for {project}",
   prompt="changed files, checklist, Working directory: ${ACTIVE_WORKTREE_PATH}"
 )

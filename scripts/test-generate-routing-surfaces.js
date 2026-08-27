@@ -19,7 +19,7 @@ const { renderSkeleton, condMatches, resolveKeyed } = require('./generate-routin
 const { GENERATED_SURFACES, loadSkeleton, reportTypedFailure } = require('./generate-routing-surfaces.js');
 // ONE list, two consumers: the all-role generator owns the retired-vocabulary ban and the routing
 // surfaces are held to the same bytes rather than to a second copy that could drift from it.
-const { ADAPTER_SOURCE, RETIRED_VOCABULARY_BAN } = require('./generate-agent-profiles.js');
+const { ADAPTER_SOURCE, BEHAVIOR_SOURCE, RETIRED_VOCABULARY_BAN } = require('./generate-agent-profiles.js');
 const { applyRenames } = require('../templates/routing/rename-table.js');
 const { SLOTS, SPLICES } = require('../templates/routing/slots.js');
 const fs = require('fs');
@@ -880,6 +880,7 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     // slots.js now renders runtime-native next/finalize guidance from this declared data source.
     // It is not visible in Node's require graph, so copy the path exported by its owning module.
     copy(ADAPTER_SOURCE);
+    copy(BEHAVIOR_SOURCE);
     for (const skeleton of new Set(GENERATED_SURFACES.map(r => r.skeleton))) {
       copy(path.join('templates', 'routing', skeleton));
     }
