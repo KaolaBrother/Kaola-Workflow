@@ -27,11 +27,37 @@
 
 ## Validation
 
-Pending finalize transaction measurement.
+chains_green: four producer chains passed over the finalized tree (`claude`, `codex`, `gitlab`,
+and `gitea`), each with exit code 0 and no accepted RED.
 
 ## Changed Paths
 
-Pending finalize transaction measurement.
+- AGENTS.md
+- commands/kaola-workflow-finalize.md
+- commands/workflow-next.md
+- plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md
+- plugins/kaola-workflow-gitea/commands/workflow-next.md
+- plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-compact-context.js
+- plugins/kaola-workflow-gitea/scripts/kaola-workflow-project-instruction-templates.js
+- plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md
+- plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md
+- plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md
+- plugins/kaola-workflow-gitlab/commands/workflow-next.md
+- plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-compact-context.js
+- plugins/kaola-workflow-gitlab/scripts/kaola-workflow-project-instruction-templates.js
+- plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md
+- plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md
+- plugins/kaola-workflow/scripts/kaola-workflow-compact-context.js
+- plugins/kaola-workflow/scripts/kaola-workflow-project-instruction-templates.js
+- plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md
+- plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md
+- scripts/kaola-workflow-compact-context.js
+- scripts/kaola-workflow-project-instruction-templates.js
+- scripts/test-runtime-agent-architecture.js
+- templates/opencode/plugins/kaola-workflow-hooks.js
+- templates/routing/finalize.skeleton.md
+- templates/routing/next.skeleton.md
+- templates/routing/required-blocks.js
 
 ## Mission List
 
