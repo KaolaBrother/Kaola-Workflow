@@ -71,7 +71,9 @@ function buildResumeContext(root) {
         `  Claim state: ${stateRel}`,
         `  Mission List: ${missionRel}`,
         ...missionLines,
-        "  Mission List discipline: a completed item and its result are immutable; one dispatch has one result including FAIL; repair or re-review work appends a new mission."
+        "  Mission List discipline: a completed item and its result are immutable; one dispatch has one result including FAIL. A failed command, intermediate finding, repair attempt, or review round does not by itself create a mission. Keep working within the current promised outcome while custody and causal boundary remain unchanged.",
+        "  Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class.",
+        "  Finalization, Issue closure, archive, and sink are not Mission List items. The last run mission establishes readiness for finalization. The finalization summary, closure evidence, archive state, and sink receipt own the transaction's truth."
       );
     } catch {
       // skip unreadable project

@@ -1082,6 +1082,15 @@ successor needs. It is written immediately after the claim, before any work goes
 Items are identified by their order in the file; nothing depends on a stable ID, and items may be
 added at any time.
 
+A failed command, intermediate finding, repair attempt, or review round does not by itself create a
+mission. Keep working within the current promised outcome while custody and causal boundary remain
+unchanged. Append a mission only for a new recoverable outcome that changes custody or for a newly
+discovered independent causal class.
+
+Finalization, Issue closure, archive, and sink are not Mission List items. The last run mission
+establishes readiness for finalization. The finalization summary, closure evidence, archive state,
+and sink receipt own the transaction's truth.
+
 ### 4. Run it
 
 Read the list. The frontier is the list minus done minus in-flight — visible by reading, never

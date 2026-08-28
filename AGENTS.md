@@ -30,6 +30,10 @@ or a newly discovered independent causal class; one selector, assertion, command
 mechanical oracle is not by itself a mission. Keep working through failures in the same custody and
 causal boundary; `BLOCKED` means the current owner cannot safely or legitimately continue.
 
+Finalization, Issue closure, archive, and sink are not Mission List items. The last run mission
+establishes readiness for finalization. The finalization summary, closure evidence, archive state,
+and sink receipt own the transaction's truth.
+
 **Custody vs carrier.** Custody answers who may decide meaning. Dispatch answers where this item is
 most economically executed. Neither inline nor dispatch is a run-wide default.
 

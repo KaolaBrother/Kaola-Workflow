@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Mission Lists record outcomes, not finalization or attempts (#1042).** Finalization, Issue
+  closure, archive, and sink remain owned by their existing evidence surfaces rather than a Mission
+  List item. Same-custody failures stay within the current promised outcome; a new mission is
+  appended only for a custody-changing recoverable outcome or an independent causal class. No field,
+  parser, gate, phase, counter, or cap was added.
+
 ## [10.1.0] - 2026-08-27
 
 ### Changed

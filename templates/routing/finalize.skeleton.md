@@ -32,12 +32,21 @@ result, and you are the only party with enough context to be.
 
 Read `kaola-workflow/{project}/workflow-state.md` for what this run owns, and
 `kaola-workflow/{project}/mission-list.md` for what it set out to do.
-The mission list remains exactly an H1 plus `item`, `status`, `dispatched`, and `result`: a
-completed item and its result are immutable; one dispatch has one result including `FAIL` or
-`BLOCKED`, and repair or re-review work must append a new mission. A mission is outcome-level: one
-selector, assertion, command, or review round is not by itself a mission. `BLOCKED` means the
-current owner cannot safely continue. Review the exact frozen candidate as a batch; any mutation
-creates a new candidate hash and invalidates prior PASS evidence for changed bytes.
+The mission list remains exactly an H1 plus `item`, `status`, `dispatched`, and `result`; a completed
+item and its result are immutable, and one dispatch has one result including `FAIL` or `BLOCKED`.
+A failed command, intermediate finding, repair attempt, or review round does not by itself create a
+mission. Keep working within the current promised outcome while custody and causal boundary remain
+unchanged. Close it when its recoverable outcome lands, including a complete typed finding batch,
+or when its owner is genuinely blocked. Append a mission only for a new recoverable outcome that
+changes custody or for a newly discovered independent causal class. One selector, assertion,
+command, or review round is not by itself a mission. `BLOCKED` means the current owner cannot safely
+continue. Do not return `BLOCKED` merely because the next command exposed more work in the same
+custody and causal boundary. Review the exact frozen candidate as a batch; any mutation creates a
+new candidate hash and invalidates prior PASS evidence for changed bytes.
+
+Finalization, Issue closure, archive, and sink are not Mission List items. The last run mission
+establishes readiness for finalization. The finalization summary, closure evidence, archive state,
+and sink receipt own the transaction's truth.
 
 Before a delegated role starts, give it a self-sufficient natural-language brief: the result or
 question, the relevant evidence and authority or custody boundary, the exact worktree, commit, or

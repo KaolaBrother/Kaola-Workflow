@@ -82,13 +82,20 @@ An item carries no role, no write set, no dependency edge, no model, no cardinal
 the orchestrator reaches an item it decides **then** whether to dispatch subagents or do the work
 itself, and at what width.
 
-A later dogfood measurement (#1037) showed that “one dispatch has one result; repair appends” was
+Dogfood measurements #1037 and #1042 showed that “one dispatch has one result; repair appends” was
 being read as “each selector, assertion, or review round is a mission.” The four fields and three
-write moments are unchanged. A mission names a recoverable outcome or a newly discovered independent
-causal class. `BLOCKED` means the current owner cannot safely continue; it is not a command-failure
-token. Custody (who may decide meaning) is independent of carrier (inline vs a native child).
-Converge the observed failure frontier before freezing a candidate and reviewing that exact
-candidate as a batch; mutation invalidates prior PASS evidence for changed bytes.
+write moments are unchanged. A failed command, intermediate finding, repair attempt, or review round
+does not by itself create a mission. Keep working within the current promised outcome while custody
+and causal boundary remain unchanged. Append a mission only for a new recoverable outcome that
+changes custody or for a newly discovered independent causal class. `BLOCKED` means the current owner
+cannot safely continue; it is not a command-failure token. Custody (who may decide meaning) is
+independent of carrier (inline vs a native child). Converge the observed failure frontier before
+freezing a candidate and reviewing that exact candidate as a batch; mutation invalidates prior PASS
+evidence for changed bytes.
+
+Finalization, Issue closure, archive, and sink are not Mission List items. The last run mission
+establishes readiness for finalization. The finalization summary, closure evidence, archive state,
+and sink receipt own the transaction's truth.
 
 This is the existing control boundary applied one level up. The planner brief already refuses a
 pre-authored `## Nodes` or an `AUTHOR EXACTLY` because *briefs carry evidence, never prescriptions*.

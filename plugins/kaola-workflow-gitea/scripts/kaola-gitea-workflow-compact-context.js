@@ -98,8 +98,9 @@ function main() {
     `- Branch: ${branch}`,
     `- Worktree: ${worktree}`,
     `- Sink: ${sink}`,
-    '- In mission-list.md the H1 is the goal; each item keeps its status, dispatched record, and result. A completed result is immutable, and a repair or re-review is a new mission.',
-    '- One dispatch has one result, including FAIL. A dispatch or validation failure is a result: close that item and append a new repair mission when more work is needed.',
+    '- In mission-list.md the H1 is the goal; each item keeps its status, dispatched record, and result. A completed item and its result are immutable. A failed command, intermediate finding, repair attempt, or review round does not by itself create a mission. Keep working within the current promised outcome while custody and causal boundary remain unchanged.',
+    '- One dispatch has one result, including FAIL. Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class.',
+    '- Finalization, Issue closure, archive, and sink are not Mission List items. The last run mission establishes readiness for finalization. The finalization summary, closure evidence, archive state, and sink receipt own the transaction\'s truth.',
     '- If state and the mission list disagree, reconcile from what is on disk before dispatching anything further.'
   ];
 

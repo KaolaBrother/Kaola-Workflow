@@ -656,9 +656,11 @@ assert(!/KW-CLAUDE-(?:TEMPLATE|MANAGED)/.test(initSource),
 {
   const nextSource = read('templates/routing/next.skeleton.md') || '';
   const finalizeSource = read('templates/routing/finalize.skeleton.md') || '';
+  const openCodeHookSource = read('templates/opencode/plugins/kaola-workflow-hooks.js') || '';
+  const compactContextSource = read('scripts/kaola-workflow-compact-context.js') || '';
   const consumerSource = read('scripts/kaola-workflow-project-instruction-templates.js') || '';
   const surfaces = [nextSource, finalizeSource, consumerSource];
-  const norm = text => String(text).replace(/\s+/g, ' ');
+  const norm = text => String(text).replace(/\s+/g, ' ').replace(/\\'/g, "'");
   const teachesSelectorAsMission = text => {
     const n = norm(text);
     return /is itself a mission/i.test(n) && !/not by itself a mission/i.test(n);
@@ -685,6 +687,45 @@ assert(!/KW-CLAUDE-(?:TEMPLATE|MANAGED)/.test(initSource),
     /An implementer may not delete, weaken, or reinterpret that acceptance to pass\./,
     'An implementer may delete, weaken, or reinterpret that acceptance to pass.')),
   'A3[mission-granularity] mutation RED: silent production repair by the test/implementer owner is detected');
+
+  const retired = /Repair or re-review work (?:must append|appends) (?:a )?new mission(?: rather than rewriting the closed item)?\./i;
+  const keepsFinalizationOutsideList = text => {
+    const n = norm(text);
+    return /Finalization, Issue closure, archive, and sink are not Mission List items\./i.test(n)
+      && /The last run mission establishes readiness for finalization\./i.test(n)
+      && /The finalization summary, closure evidence, archive state, and sink receipt own the transaction's truth\./i.test(n);
+  };
+  const keepsAttemptsInsideOutcome = text => {
+    const n = norm(text);
+    return !retired.test(n)
+      && /A failed command, intermediate finding, repair attempt, or review round does not by itself create a mission\./i.test(n)
+      && /Keep working within the current promised outcome while custody and causal boundary remain unchanged\./i.test(n)
+      && /Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class\./i.test(n);
+  };
+  const issue1042Sources = [nextSource, finalizeSource, openCodeHookSource, compactContextSource];
+  assert(issue1042Sources.every(keepsFinalizationOutsideList),
+    'A3[issue-1042]: next/finalize/OpenCode hook/compact-context keep finalization, closure, archive, and sink outside Mission List with readiness and evidence truth');
+  assert(issue1042Sources.every(text => !retired.test(norm(text))),
+    'A3[issue-1042]: next/finalize/OpenCode hook/compact-context reject the old absolute repair/re-review append rule');
+  assert(issue1042Sources.every(keepsAttemptsInsideOutcome),
+    'A3[issue-1042]: next/finalize/OpenCode hook/compact-context keep attempts inside the current outcome and append only new custody outcomes or causal classes');
+  const compactSurfaceNorms = [openCodeHookSource, compactContextSource].map(norm);
+  assert(compactSurfaceNorms.every(text => /a completed item and its result are immutable/i.test(text)
+    && /one dispatch has one result,? including FAIL/i.test(text)),
+    'A3[issue-1042]: OpenCode hook and compact-context retain compact-resume immutability and one-dispatch/one-result invariants');
+  const fixture = 'Finalization, Issue closure, archive, and sink are not Mission List items. The last run mission establishes readiness for finalization. The finalization summary, closure evidence, archive state, and sink receipt own the transaction\'s truth. A failed command, intermediate finding, repair attempt, or review round does not by itself create a mission. Keep working within the current promised outcome while custody and causal boundary remain unchanged. Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class.';
+  assert(keepsFinalizationOutsideList(fixture) && keepsAttemptsInsideOutcome(fixture),
+    'A3[issue-1042] mutation setup: canonical boundary fixture is accepted');
+  assert(!keepsFinalizationOutsideList(fixture.replace('are not', 'are')),
+    'A3[issue-1042] mutation RED: finalization inside Mission List is rejected');
+  assert(!keepsAttemptsInsideOutcome(fixture.replace('does not by itself', 'must')),
+    'A3[issue-1042] mutation RED: one mission per repair/re-review attempt is rejected');
+  assert(!keepsAttemptsInsideOutcome(compactContextSource.replace(
+    'does not by itself create a mission', 'creates a mission')),
+    'A3[issue-1042] compact-context mutation RED: attempt-level mission teaching is rejected');
+  assert(!keepsFinalizationOutsideList(compactContextSource.replace(
+    'are not Mission List items', 'are Mission List items')),
+    'A3[issue-1042] compact-context mutation RED: finalization inside Mission List is rejected');
 }
 
 // The shipped workflow-init text is necessary but cannot prove that owner bytes survive a real

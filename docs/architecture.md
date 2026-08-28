@@ -44,6 +44,15 @@ entry per mission with four fields:
 No script writes it; the orchestrator does, at three moments. Work the orchestrator does itself is
 still an item, with `dispatched: self`.
 
+A failed command, intermediate finding, repair attempt, or review round does not by itself create a
+mission. Keep working within the current promised outcome while custody and causal boundary remain
+unchanged. Append a mission only for a new recoverable outcome that changes custody or for a newly
+discovered independent causal class.
+
+Finalization, Issue closure, archive, and sink are not Mission List items. The last run mission
+establishes readiness for finalization. The finalization summary, closure evidence, archive state,
+and sink receipt own the transaction's truth.
+
 The frontier is not computed — it is the list minus done minus in-flight, visible by reading. An
 item carries no role, no write set, no dependency edge, no model, no cardinality and no shape,
 because all of that is decided when the item is reached, with everything learned by then.
