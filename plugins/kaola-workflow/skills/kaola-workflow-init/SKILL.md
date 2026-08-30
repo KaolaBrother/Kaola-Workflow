@@ -31,18 +31,19 @@ test -d kaola-workflow && find kaola-workflow -maxdepth 3 -type f | sort
 find docs -maxdepth 3 -type f 2>/dev/null | sort
 ```
 
-3. Reconcile `AGENTS.md` as the universal authority and preserve user-authored bytes outside the
-   managed region.
+3. Reconcile `AGENTS.md` as a project-only contract after the helper verifies the compatible
+   machine-global receipt; preserve user-authored bytes outside the managed region.
 4. Keep any runtime-native first-read instruction file as a thin bridge plus runtime-only overlay;
-   never duplicate the universal sections there.
+   never duplicate the machine-global contract there.
 
    Active folder lifecycle: `kaola-workflow-claim.js` manages claim/startup (atomic folder create), status, release/discard, watch-pr, and finalize/archive. No legacy coordination layer is used.
 
    Kaola-Workflow agent profiles live in `.codex/agents/kaola-workflow/` and are wired by the managed block in `.codex/config.toml`.
 
-The executable consumer wording lives only in the adjacent
+The executable project wording lives only in the adjacent
 `kaola-workflow-project-instruction-templates.js` distribution module. Do not synthesize, paste, or
-independently restate that universal contract in this surface; the helper below is its only writer.
+independently restate the global contract in this surface; the helper below is the project carrier's
+only writer.
 
 5. Runtime/global installation is outside `workflow-init`. Do not install or update global agent
 profiles, runtime configuration, or hooks here. Inspect their current state read-only and report any
@@ -147,15 +148,11 @@ node "$INSTRUCTIONS_JS" check --project-root "$PWD" --json
 ```
 
 The helper owns only `<!-- KW-AGENTS-MANAGED-START -->` through its matching END and the runtime
-overlay's own managed region. Known legacy managed redirects may be migrated; mixed files preserve
-every owner byte outside those regions byte-for-byte. Unknown, malformed, duplicate, or owner-only
-instruction authority returns `decision_required`: ask in conversation and make no write. Per managed
-change the helper reports `authority_layout_equivalent`, `execution_default_change`,
-`state_schema_incompatible`, or `unknown_or_mixed`. A compatible authority-layout migration may apply
-during an active run; an execution-default change asks in conversation, leaves bare `apply`
-non-mutating, and may apply only with the unchanged plan's exact ephemeral `consent.apply_args`; a
-state/schema-incompatible change returns `active_run_preserved` with no consent bypass. Successful
-reruns are idempotent and report `converged` with an empty write list.
+overlay's own managed region. It writes only after a compatible machine-global receipt is present.
+The exact released full-template prefix may migrate to the project-only layout while preserving a
+suffix of owner bytes; mixed legacy, unknown, malformed, duplicate, or owner-only authority returns
+`decision_required` and writes nothing. Any active run returns `active_run_preserved` with no bypass.
+Successful inactive reruns are idempotent and report `converged` with an empty write list.
 ## Initial File Bodies
 
 ### `docs/README.md`

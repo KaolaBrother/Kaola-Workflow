@@ -123,8 +123,8 @@
       "compact_protocol": {
         "events": ["SessionStart"],
         "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
-        "session": "The direct prompt tells the agent to read the durable Mission List and continue Workflow Next or Finalization; no private prompt/session binding exists.",
-        "reload": "SessionStart(source=compact) directly outputs the generated runtime prompt before the next model turn.",
+        "session": "The V2 static prompt contains the global contract, operation reload route, mandatory dispatch contract, and Claude adapter; no private prompt/session binding exists.",
+        "reload": "SessionStart(source=compact) outputs V2 before the next model turn, which completely reloads Workflow Next or Finalization from its native carrier.",
         "tool": "No PreToolUse or PostToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
         "stop": "No Stop prompt-lifecycle hook is installed."
       },
@@ -171,8 +171,8 @@
       "compact_protocol": {
         "events": ["SessionStart"],
         "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
-        "session": "The direct prompt tells the agent to read the durable Mission List and continue Workflow Next or Finalization; no private prompt/session binding exists.",
-        "reload": "SessionStart(source=compact) directly outputs the generated runtime prompt before the next model turn.",
+        "session": "The V2 static prompt contains the global contract, operation reload route, mandatory dispatch contract, and Codex adapter; no private prompt/session binding exists.",
+        "reload": "SessionStart(source=compact) outputs V2 before the next model turn, which completely reloads Workflow Next or Finalization from its native carrier.",
         "tool": "No PreToolUse or PostToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
         "stop": "No Stop prompt-lifecycle hook is installed."
       },
@@ -219,8 +219,8 @@
       "compact_protocol": {
         "events": ["SessionStart"],
         "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
-        "session": "The direct prompt tells the agent to read the durable Mission List and continue Workflow Next or Finalization; no private prompt/session binding exists.",
-        "reload": "SessionStart(source=compact) directly outputs the generated runtime prompt before the next model turn.",
+        "session": "The V2 static prompt contains the global contract, operation reload route, mandatory dispatch contract, and Codex adapter; no private prompt/session binding exists.",
+        "reload": "SessionStart(source=compact) outputs V2 before the next model turn, which completely reloads Workflow Next or Finalization from its native carrier.",
         "tool": "No PreToolUse or PostToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
         "stop": "No Stop prompt-lifecycle hook is installed."
       },
@@ -267,8 +267,8 @@
       "compact_protocol": {
         "events": ["SessionStart"],
         "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
-        "session": "The direct prompt tells the agent to read the durable Mission List and continue Workflow Next or Finalization; no private prompt/session binding exists.",
-        "reload": "SessionStart(source=compact) directly outputs the generated runtime prompt before the next model turn.",
+        "session": "The V2 static prompt contains the global contract, operation reload route, mandatory dispatch contract, and Codex adapter; no private prompt/session binding exists.",
+        "reload": "SessionStart(source=compact) outputs V2 before the next model turn, which completely reloads Workflow Next or Finalization from its native carrier.",
         "tool": "No PreToolUse or PostToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
         "stop": "No Stop prompt-lifecycle hook is installed."
       },
@@ -410,10 +410,10 @@
         }
       },
       "compact_protocol": {
-        "events": ["always-loaded native rule"],
+        "events": ["machine-global always-loaded rule"],
         "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
-        "session": "The direct prompt tells the agent to read the durable Mission List and continue Workflow Next or Finalization; no private prompt/session binding exists.",
-        "reload": "Grok passive hook stdout is ignored. Its documented project/user Rules are model context for every interaction, so the generated complete runtime prompt is installed as one .grok/rules or GROK_HOME/rules file instead of a compact hook.",
+        "session": "One machine-global V2 Rule contains the global contract, operation reload route, mandatory dispatch contract, and Grok adapter.",
+        "reload": "Grok passive hook stdout is ignored. Its documented user Rules enter every interaction, so V2 is installed once under GROK_HOME/rules and completely reloads Workflow Next or Finalization after compact.",
         "tool": "No PreToolUse or PostToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
         "stop": "No Stop prompt-lifecycle hook is installed."
       },
@@ -539,10 +539,10 @@
         }
       },
       "compact_protocol": {
-        "events": ["alwaysApply project rule"],
-        "pending": "none — Cursor recovery is a persistent system-level project rule, not a hook state machine.",
-        "session": "The same generated rule is project-materialized for standalone CLI, App local, and App Cloud; no host-specific prompt identity is stored.",
-        "reload": "Cursor includes an always-applied project rule at the start of every model context. That common carrier survives compaction on CLI, App local, and Cloud even though Cloud lacks sessionStart and preCompact cannot inject context.",
+        "events": ["machine-global alwaysApply rule"],
+        "pending": "none — Cursor recovery is one persistent Rule, not a hook state machine.",
+        "session": "One V2 Rule contains the global contract, operation reload route, mandatory dispatch contract, and Cursor adapter; local installs use the user carrier while Cloud materializes the same bytes in the selected project.",
+        "reload": "Cursor includes alwaysApply Rules in every model context. V2 therefore completely reloads Workflow Next or Finalization after compact on CLI, App local, and Cloud even though Cloud lacks sessionStart and preCompact cannot inject context.",
         "tool": "No preToolUse or postToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
         "stop": "No stop prompt-lifecycle hook is installed.",
         "fast": "Fast is prohibited for named Kaola dispatch and cannot override the canonical model/effort mapping.",

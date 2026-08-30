@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
-// Ownership-safe AGENTS-first project migration. plan|check|apply classify each managed
-// change as authority_layout_equivalent, execution_default_change, state_schema_incompatible,
-// or unknown_or_mixed. An active run no longer freezes every instruction file. The helper
-// never writes workflow-state.md or mission-list.md.
+// Ownership-safe AGENTS-first project migration. A compatible machine-global
+// workflow contract is a prerequisite. Any active run freezes both project
+// instruction carriers; this helper never writes run state or adoption receipts.
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -19,6 +18,13 @@ const LEGACY_CLAUDE_MARKER = 'KW-CLAUDE-MANAGED';
 const V9_AGENTS_SHA256 = 'c4753d725488152d6dda74dd7ee0cfd490b62a81acddaa293886684abce0d67e';
 const V9_CLAUDE_SHA256 = 'a46566fc59e27d84e2f069baa45df014b53b88610d6138b8beb81c349f82e7a3';
 const V9_CONSUMER_CLAUDE_SHA256 = 'bc87e84955366368ea91947606df92fc99805716a1ca676aa12b5bbcdd7d1023';
+// Exact released 10.1.1 consumer bytes. Its AGENTS marker enclosed only the
+// workflow section, so a mixed copy cannot be subtracted safely by marker alone.
+// An exact prefix may be replaced while its suffix remains owner content.
+const V10_FULL_AGENTS_LENGTH = 5404;
+const V10_FULL_AGENTS_SHA256 = '0965bb1427d7606b0869f6c19642658c9599e1be4f9ec8c9562f9cb3bfaec941';
+const V10_FULL_CLAUDE_LENGTH = 374;
+const V10_FULL_CLAUDE_SHA256 = '3da90dd25f035da7a25db42927337bb65a321d48e0ae889e53838165c7f5f4fc';
 const LEGACY_REDIRECT = [
   '# AGENTS.md',
   '',
@@ -57,6 +63,47 @@ function inspectOptional(file) {
   if (stat.isSymbolicLink()) return { bytes: null, stat, topology: 'symbolic_link' };
   if (!stat.isFile()) return { bytes: null, stat, topology: 'non_regular' };
   return { bytes: fs.readFileSync(file), stat, topology: 'regular' };
+}
+
+function knownPrefix(bytes, length, digest) {
+  return Buffer.isBuffer(bytes) && bytes.length >= length
+    && sha256(bytes.subarray(0, length)) === digest;
+}
+
+function globalContractReceiptPath(env = process.env) {
+  if (env.KAOLA_GLOBAL_CONTRACT_RECEIPT) return path.resolve(env.KAOLA_GLOBAL_CONTRACT_RECEIPT);
+  if (!env.HOME || !path.isAbsolute(env.HOME)) return null;
+  return path.join(env.HOME, '.config', 'kaola-workflow', 'global-contract-receipt.json');
+}
+
+function inspectGlobalContractReceipt(env = process.env) {
+  const file = globalContractReceiptPath(env);
+  if (!file) return { compatible: false, reason: 'global_contract_home_unknown', path: null };
+  const state = inspectOptional(file);
+  if (state.topology !== 'regular') {
+    return { compatible: false, reason: 'global_contract_receipt_' + state.topology, path: file };
+  }
+  let receipt;
+  try { receipt = JSON.parse(state.bytes.toString('utf8')); }
+  catch (_) {
+    return { compatible: false, reason: 'global_contract_receipt_invalid_json', path: file,
+      receipt_sha256: sha256(state.bytes) };
+  }
+  const currentRows = Array.isArray(receipt.targets)
+    ? receipt.targets.filter(row => row && ['INSTALLED', 'CURRENT'].includes(row.status)) : [];
+  const compatible = receipt.schema_version === 1
+    && receipt.contract_schema_version === 1
+    && receipt.status === 'CURRENT'
+    && currentRows.length > 0
+    && typeof receipt.source_sha256 === 'string' && /^[0-9a-f]{64}$/.test(receipt.source_sha256);
+  return {
+    compatible,
+    reason: compatible ? 'compatible' : 'global_contract_receipt_incompatible',
+    path: file,
+    receipt_sha256: sha256(state.bytes),
+    contract_schema_version: receipt.contract_schema_version,
+    installed_target_count: currentRows.length,
+  };
 }
 
 function markerTokens(marker) {
@@ -123,18 +170,6 @@ function inspectActiveRuns(projectRoot) {
   return runs;
 }
 
-function listActiveRunDirs(projectRoot) {
-  return inspectActiveRuns(projectRoot).map(run => run.dir);
-}
-
-function writeAdoptionReceipts(projectRoot, payload) {
-  const body = Buffer.from(JSON.stringify(payload, null, 2) + '\n');
-  for (const runDir of listActiveRunDirs(projectRoot)) {
-    const receiptPath = path.join(runDir, '.cache', 'instruction-adoption.json');
-    atomicWrite(receiptPath, body, inspectOptional(receiptPath).stat);
-  }
-}
-
 function activeRunEnvelope(projectRoot, run) {
   return {
     path: path.relative(projectRoot, run.dir),
@@ -144,16 +179,6 @@ function activeRunEnvelope(projectRoot, run) {
     mission_sha256: run.mission_sha256,
     mission_topology: run.mission_topology,
   };
-}
-
-function consentPlanDigest(projectRoot, files, activeRuns) {
-  return sha256(Buffer.from(JSON.stringify({
-    schema_version: SCHEMA_VERSION,
-    kind: COMPATIBILITY.EXECUTION_DEFAULT_CHANGE,
-    project_root: path.resolve(projectRoot),
-    files,
-    active_runs: activeRuns.map(run => activeRunEnvelope(projectRoot, run)),
-  })));
 }
 
 function isProducerRepository(projectRoot) {
@@ -203,6 +228,16 @@ function replaceManaged(existingBytes, templateBytes, marker, legacyMarkers = []
 function mergeAgents(existingBytes, templateBytes) {
   if (existingBytes == null || existingBytes.length === 0) {
     return { classification: 'missing', after: templateBytes, outsideBytesPreserved: true, changed: true };
+  }
+  // The 10.1.1 layout left universal sections outside its narrow managed
+  // marker. Only the exact released prefix is migrated below. A mixed copy must
+  // remain owner-visible instead of silently retaining half of the old contract.
+  const oldRegion = managedRegion(existingBytes, AGENTS_MARKER);
+  if (oldRegion.kind === 'managed') {
+    const outside = Buffer.concat([oldRegion.prefix, oldRegion.suffix]).toString('utf8');
+    if (/## First Principles|## Non-Negotiable Rules|## Kaola-Workflow/.test(outside)) {
+      return { classification: 'mixed_legacy_universal_bytes' };
+    }
   }
   const managed = replaceManaged(existingBytes, templateBytes, AGENTS_MARKER);
   if (managed.after != null || managed.classification === 'ambiguous_managed_region') return managed;
@@ -255,6 +290,8 @@ const LAYOUT_EQUIVALENT_CLASSES = new Set([
   'missing',
   'known_legacy_managed_region',
   'owner_overlay_preserved',
+  'known_v10_full_template',
+  'known_v10_full_template_plus_owner_bytes',
 ]);
 
 function compatibilityFor(fileKind, classification) {
@@ -285,6 +322,26 @@ function annotateCompatibility(agents, claude) {
 
 function classifyProjectInstructions({ agentsBytes, claudeBytes, activeWorkflowStates = false }) {
   const templates = sourceTemplates();
+  const exactV10Agents = knownPrefix(agentsBytes, V10_FULL_AGENTS_LENGTH, V10_FULL_AGENTS_SHA256);
+  const exactV10Claude = knownPrefix(claudeBytes, V10_FULL_CLAUDE_LENGTH, V10_FULL_CLAUDE_SHA256);
+  if (exactV10Agents && exactV10Claude) {
+    const agentsSuffix = agentsBytes.subarray(V10_FULL_AGENTS_LENGTH);
+    const claudeSuffix = claudeBytes.subarray(V10_FULL_CLAUDE_LENGTH);
+    const agentsAfter = Buffer.concat([templates.agents, agentsSuffix]);
+    const claudeAfter = Buffer.concat([templates.claude, claudeSuffix]);
+    const agents = {
+      classification: agentsSuffix.length === 0
+        ? 'known_v10_full_template' : 'known_v10_full_template_plus_owner_bytes',
+      after: agentsAfter, outsideBytesPreserved: true, changed: !agentsAfter.equals(agentsBytes),
+    };
+    const claude = {
+      classification: claudeSuffix.length === 0
+        ? 'known_v10_full_template' : 'known_v10_full_template_plus_owner_bytes',
+      after: claudeAfter, outsideBytesPreserved: true, changed: !claudeAfter.equals(claudeBytes),
+    };
+    annotateCompatibility(agents, claude);
+    return { status: 'planned', changed: true, agents, claude };
+  }
   if (sha256(agentsBytes) === V9_AGENTS_SHA256
       && sha256(claudeBytes) === V9_CONSUMER_CLAUDE_SHA256) {
     const agents = { classification: 'known_v9_consumer_template', after: templates.agents, changed: true };
@@ -302,9 +359,8 @@ function classifyProjectInstructions({ agentsBytes, claudeBytes, activeWorkflowS
   const agentsSafe = agents.after != null;
   const claude = mergeClaude(claudeBytes, templates.claude, agentsSafe);
   annotateCompatibility(agents, claude);
-  // Creating the universal first-read authority changes execution defaults for a live run. An
-  // active repository with no AGENTS.md therefore needs the same conversation consent as changing
-  // an existing managed AGENTS region; outside an active run the missing-file bootstrap is safe.
+  // Direct callers may still classify a hypothetical active state, but execute()
+  // returns before classification whenever a real active run exists.
   if (activeWorkflowStates && agents.classification === 'missing') {
     agents.compatibility = COMPATIBILITY.EXECUTION_DEFAULT_CHANGE;
   }
@@ -386,8 +442,41 @@ function execute(mode, projectRoot, options = {}) {
   }
   const agentsBytes = agentsFile.bytes;
   const claudeBytes = claudeFile.bytes;
+  const globalContract = inspectGlobalContractReceipt(options.env || process.env);
+  if (!globalContract.compatible) {
+    const agents = { classification: 'global_contract_incompatible' };
+    const claude = { classification: 'global_contract_incompatible' };
+    annotateCompatibility(agents, claude);
+    return {
+      schema_version: SCHEMA_VERSION, mode, status: 'decision_required', changed: false,
+      global_contract: globalContract,
+      files: {
+        agents: fileEnvelope(agents, agentsBytes, null),
+        claude: fileEnvelope(claude, claudeBytes, null),
+      },
+      writes: [], reasons: [globalContract.reason],
+    };
+  }
   const activeRuns = inspectActiveRuns(projectRoot);
   const activeRun = activeRuns.length > 0;
+  // A run keeps the instruction bytes it started with. The global contract may
+  // be refreshed independently at machine scope, but workflow-init never changes
+  // a project carrier while any local run is active.
+  if (activeRun) {
+    const agents = { classification: 'active_run_preserved' };
+    const claude = { classification: 'active_run_preserved' };
+    annotateCompatibility(agents, claude);
+    return {
+      schema_version: SCHEMA_VERSION, mode, status: 'active_run_preserved', changed: false,
+      global_contract: globalContract,
+      files: {
+        agents: fileEnvelope(agents, agentsBytes, null),
+        claude: fileEnvelope(claude, claudeBytes, null),
+      },
+      active_runs: activeRuns.map(run => activeRunEnvelope(projectRoot, run)),
+      writes: [], reasons: ['active_run_preserved'],
+    };
+  }
   const classification = classifyProjectInstructions({
     agentsBytes, claudeBytes, activeWorkflowStates: activeRun,
   });
@@ -395,49 +484,21 @@ function execute(mode, projectRoot, options = {}) {
   const writes = [];
   const agentsCompat = classification.agents.compatibility;
   const claudeCompat = classification.claude.compatibility;
-  const activeStateSchema = activeRuns.some(run =>
-    run.compatibility === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE);
   const unknown = agentsCompat === COMPATIBILITY.UNKNOWN_OR_MIXED
     || claudeCompat === COMPATIBILITY.UNKNOWN_OR_MIXED;
-  const stateSchema = activeStateSchema
-    || agentsCompat === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE
+  const stateSchema = agentsCompat === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE
     || claudeCompat === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE;
-  const executionDefault = agentsCompat === COMPATIBILITY.EXECUTION_DEFAULT_CHANGE
-    || claudeCompat === COMPATIBILITY.EXECUTION_DEFAULT_CHANGE;
   const files = {
     agents: fileEnvelope(classification.agents, agentsBytes, classification.agents.after),
     claude: fileEnvelope(classification.claude, claudeBytes, classification.claude.after),
   };
-  const planDigest = consentPlanDigest(projectRoot, files, activeRuns);
-  const suppliedConsent = options.executionDefaultConsent || null;
-  const consentAuthorized = mode === 'apply' && activeRun && executionDefault
-    && suppliedConsent === planDigest && !unknown && !stateSchema;
-  const consentMismatch = suppliedConsent != null && !consentAuthorized;
-  const agentsAuthorityAlreadyPresent = managedRegion(agentsBytes, AGENTS_MARKER).kind === 'managed';
-  const allowWrite = (fileKind, compat, changed) => {
+  const allowWrite = (compat, changed) => {
     if (!changed) return false;
-    if (unknown || consentMismatch || compat === COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE) return false;
-    // An unknown active state fences AGENTS execution authority, but it is not a repository-wide
-    // freeze bit. A thin Claude bridge is independent when the current AGENTS authority already
-    // exists; if AGENTS itself still needs layout migration, the bridge depends on that blocked
-    // change and must remain untouched with it.
-    if (activeStateSchema) {
-      return fileKind === 'claude'
-        && compat === COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT
-        && agentsAuthorityAlreadyPresent;
-    }
-    if (!activeRun) return true;
-    if (executionDefault && !consentAuthorized) return false;
-    if (compat === COMPATIBILITY.EXECUTION_DEFAULT_CHANGE) return consentAuthorized;
-    return compat === COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT;
+    return !unknown && compat !== COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE;
   };
-  const agentsWrite = allowWrite('agents', agentsCompat, classification.agents.changed);
-  const claudeWrite = allowWrite('claude', claudeCompat, classification.claude.changed);
-  if (classification.status === 'decision_required' || unknown || consentMismatch) {
-    status = 'decision_required';
-  } else if (stateSchema && !agentsWrite && !claudeWrite) {
-    status = 'active_run_preserved';
-  } else if (activeRun && executionDefault && !consentAuthorized) {
+  const agentsWrite = allowWrite(agentsCompat, classification.agents.changed);
+  const claudeWrite = allowWrite(claudeCompat, classification.claude.changed);
+  if (classification.status === 'decision_required' || unknown || stateSchema) {
     status = 'decision_required';
   } else if (classification.status === 'planned' && mode === 'check') {
     status = (agentsWrite || claudeWrite) ? 'drift' : status;
@@ -455,36 +516,15 @@ function execute(mode, projectRoot, options = {}) {
   }
   const envelope = {
     schema_version: SCHEMA_VERSION, mode, status, changed: status === 'applied',
+    global_contract: globalContract,
     files,
     active_runs: activeRuns.map(run => activeRunEnvelope(projectRoot, run)),
     writes,
     reasons: [
       classification.agents.classification, classification.claude.classification,
       agentsCompat, claudeCompat,
-      ...activeRuns.map(run => run.compatibility),
-      ...(consentMismatch ? ['consent_plan_mismatch'] : []),
     ],
   };
-  if (mode === 'plan' && activeRun && executionDefault && !unknown && !stateSchema) {
-    envelope.consent = {
-      kind: COMPATIBILITY.EXECUTION_DEFAULT_CHANGE,
-      ephemeral: true,
-      plan_sha256: planDigest,
-      apply_args: ['--consent-execution-default-change', planDigest],
-    };
-  }
-  // Recovery evidence only. Init does not inspect or mutate the installed runtime adapter;
-  // a restart remains a carrier change owned by that adapter.
-  if (mode === 'apply' && status === 'applied' && activeRun && !consentAuthorized) {
-    writeAdoptionReceipts(projectRoot, {
-      schema_version: 1,
-      kind: 'instruction_adoption',
-      files: envelope.files,
-      writes: envelope.writes,
-      reasons: envelope.reasons,
-      fresh_session_requirement: 'not_inspected_by_init',
-    });
-  }
   return envelope;
 }
 
@@ -492,25 +532,13 @@ function main(argv) {
   const mode = argv[2];
   const rootIndex = argv.indexOf('--project-root');
   const json = argv.includes('--json');
-  const consentIndexes = argv.reduce((out, value, index) => {
-    if (value === '--consent-execution-default-change') out.push(index);
-    return out;
-  }, []);
-  const consentValid = consentIndexes.length <= 1
-    && (consentIndexes.length === 0 || (
-      argv[consentIndexes[0] + 1]
-      && !argv[consentIndexes[0] + 1].startsWith('--')
-    ));
-  if (!['plan', 'check', 'apply'].includes(mode) || rootIndex < 0 || !argv[rootIndex + 1] || !json
-      || !consentValid) {
-    console.error('usage: node kaola-workflow-project-instructions.js plan|check|apply --project-root <path> --json [--consent-execution-default-change <plan-sha256>]');
+  if (!['plan', 'check', 'apply'].includes(mode) || rootIndex < 0 || !argv[rootIndex + 1] || !json) {
+    console.error('usage: node kaola-workflow-project-instructions.js plan|check|apply --project-root <path> --json');
     process.exit(3);
   }
   let envelope;
   try {
-    envelope = execute(mode, path.resolve(argv[rootIndex + 1]), {
-      executionDefaultConsent: consentIndexes.length === 1 ? argv[consentIndexes[0] + 1] : null,
-    });
+    envelope = execute(mode, path.resolve(argv[rootIndex + 1]));
   }
   catch (error) { console.error(error.message); process.exit(3); }
   process.stdout.write(JSON.stringify(envelope) + '\n');

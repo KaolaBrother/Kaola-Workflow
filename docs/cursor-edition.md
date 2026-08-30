@@ -4,17 +4,18 @@ The cursor edition makes Kaola-Workflow runnable from
 [Cursor](https://cursor.com), the same way the Grok edition makes it runnable
 from Grok CLI. Cursor is a coding-agent **runtime** (like Codex, opencode, Kimi,
 and Grok), not a git forge, so this edition is delivered the Cursor-native way —
-named **agents** under a generated `.cursor/agents/` tree, flat
-slash **commands** under `.cursor/commands/`, one persistent Rule under `.cursor/rules/`,
-and an empty Kaola hook mapping in `.cursor/hooks.json` — and is fully **additive**: it touches none of
+named **agents** under a generated `.cursor/agents/` tree, flat slash **commands** under
+`.cursor/commands/`, and an empty Kaola hook mapping in `.cursor/hooks.json`. The separate global
+transaction owns the one persistent Rule. The edition is fully **additive**: it touches none of
 the existing `claude`/`codex`/`gitlab`/`gitea`/`opencode`/`kimi`/`grok` edition
 machinery.
 
 Cursor's official hook contract cannot supply one universal post-compact injection: Cloud does not
 support `sessionStart`, and `preCompact` cannot modify the model context. Official project Rules are
 system-level prompt context, and repository Rules apply to Cloud Agents using that repository. The
-edition therefore materializes one `alwaysApply` Rule for all three hosts and installs no Kaola
-prompt-lifecycle hook.
+global transaction therefore renders one V2 `alwaysApply` Rule: local CLI/App share the user Rule;
+Cloud setup explicitly materializes identical bytes in the selected repository. No Kaola
+prompt-lifecycle hook is installed.
 Cursor CLI and Cursor App are separate product surfaces; App local IDE and App-started Cloud are
 different execution hosts and must not be inferred from each other or from a CLI binary.
 Authenticated standalone CLI, local App/IDE, and Cloud saved-environment named dispatch were each
@@ -34,7 +35,9 @@ Cloud environment:
    has established that it is in Cursor Cloud environment setup may it take this path.
 2. The setup Agent installs the remote authority with `./install-cursor.sh --global --yes
    --forge=github`, explicitly materializes the selected repository with
-   `./install-cursor.sh --target "$PWD" --yes --forge=github`, and runs a test Build. It verifies
+   `./install-cursor.sh --target "$PWD" --yes --forge=github`, runs
+   `node scripts/kaola-workflow-global-contract.js install-cloud --target "$PWD" --json`, and runs a
+   test Build. It verifies
    the exact candidate, both receipts, the authority binding, collision safety, idempotence, and
    the expected 14-agent project catalog, then reports the exact Build ID.
 3. The setup agent asks the user to click **Save** in Cursor. A green setup VM, snapshot, or draft
@@ -91,7 +94,7 @@ Everything under `.cursor/` is **generated from canonical** by
 | ---------------- | --------------------- | ----- |
 | `templates/agents/behavior-contracts.json` + Cursor adapter | `.cursor/agents/<name>.md` | 14 native profiles with `name`, `description`, intent-mapped `model: grok-4.6[effort=…]`, capability-derived `readonly`, shared behavior identity, and render-specific hash |
 | `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). The marked next/finalize block becomes Cursor-native profile, live-schema/catalog, tier, route, and limit guidance; any concrete Claude dispatch cards are adapted. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
-| marked next/finalize recovery blocks + Cursor adapter | `.cursor/rules/kaola-workflow-compact-recovery.mdc` | One `alwaysApply: true` Rule contains both complete compressed operation prompts and one shared dispatch/adapter block. The same file is materialized for standalone CLI, App local, and Cloud. |
+| global contract + compact skeleton + Cursor adapter | local `$CURSOR_HOME/rules/kaola-workflow-global.mdc`; Cloud `.cursor/rules/kaola-workflow-global.mdc` | One `alwaysApply: true` V2 Rule contains the universal contract, complete operation reload route, mandatory dispatch contract, and Cursor adapter. The global transaction owns it; the edition emits no duplicate Rule. |
 | mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). Kaola emits an empty mapping and removes receipt-owned legacy prompt hooks; foreign hook entries survive merge. |
 
 Generated agents carry a model-and-effort pin derived from the runtime-neutral intent class.
@@ -230,8 +233,9 @@ writing when already fresh, returns `materialized` and requires a new process wh
 writes, and fails before mutation on missing/stale authority, collision, symlink, invalid receipt,
 or modified ownership. Cursor App local IDE and App-started Cloud do not inherit that CLI
 point-of-use rule. Cloud uses the confirmed environment-setup
-machine-plus-repository/install/save/same-repository-new-parent lifecycle above. The same explicit
-project materialization writes the `alwaysApply` recovery Rule on CLI, App local, and Cloud.
+machine-plus-repository/install/save/same-repository-new-parent lifecycle above. Recovery is owned
+separately: the global transaction writes the local CLI/App Rule and explicitly materializes the
+Cloud selected-repository Rule.
 
 The official model contract is likewise bounded: `model` is either `inherit` or an exact model ID,
 and bracket parameters carry options such as effort. Team policy, legacy-plan settings, or plan
@@ -279,7 +283,7 @@ does not run through `install.sh --forge`.
 ```
 
 Add `--yes` for non-interactive use. `--no-scripts` skips writing support scripts and the hooks JSON
-merge; the persistent Rule is still project content. It retains receipt ownership for any skipped
+merge; the edition owns no persistent Rule. It retains receipt ownership for any skipped
 managed assets that remain on disk, so later uninstall still removes unchanged bytes and exact hook
 entries. A fresh
 no-scripts authority is deliberately partial; a later default project install promotes it before
@@ -296,8 +300,8 @@ published hashes prove ownership, and writes the first authority receipt. Any mo
 symlink, non-regular carrier, or unknown path remains an unmanaged collision. Isolated live upgrade
 probes passed for all three forges.
 
-- **PROJECT** (`--target DIR`): agents, commands, and the recovery Rule land under
-  `<project>/.cursor/{agents,commands,rules}` from the installed global authority. The empty Kaola
+- **PROJECT** (`--target DIR`): agents and commands land under
+  `<project>/.cursor/{agents,commands}` from the installed global authority. The empty Kaola
   mapping is **merged** into `<project>/.cursor/hooks.json`; this retires old Kaola prompt hooks while
   other events, e.g. `beforeShellExecution`, stay.
   A project install does **not** merge into `~/.cursor/hooks.json` — Cursor has
@@ -305,7 +309,7 @@ probes passed for all three forges.
   selected from ambient cwd of a `--global` command. The receipt
   `.cursor/kaola-workflow-materialization.json` binds target, forge/version, authority hash, and
   every managed file hash.
-- **GLOBAL** (`--global`): they land under `${CURSOR_HOME:-$HOME/.cursor}/{agents,commands,rules}`
+- **GLOBAL** (`--global`): they land under `${CURSOR_HOME:-$HOME/.cursor}/{agents,commands}`
   with **no** nested `.cursor/` directory. The empty Kaola mapping is merged into
   `${CURSOR_HOME:-$HOME/.cursor}/hooks.json`, preserving foreign entries.
   Running `--global` inside a Git work tree does **not** create or refresh that
@@ -335,20 +339,18 @@ probes passed for all three forges.
 receipt-recorded Kaola entries from `hooks.json`. Modified, unmanaged, symlink, non-regular, and
 invalid-receipt paths are preserved. It never deletes the user's `hooks.json` file.
 
-## Persistent recovery Rule and empty hooks
+## Machine-global recovery Rule and empty hooks
 
-Cursor project Rules are system-level prompt context. The generated
-`.cursor/rules/kaola-workflow-compact-recovery.mdc` has `alwaysApply: true` and contains:
+Cursor Rules are system-level prompt context. The global transaction's V2 Rule has
+`alwaysApply: true` and contains the vendor-neutral contract, the durable-state operation reloader,
+the mandatory dispatch contract, the Cursor adapter, and `KW-COMPACT-RECOVERY-V2`. It completely
+reloads the installed Workflow Next or Finalization prompt after rereading the durable run files.
 
-- the Workflow Next resume rule;
-- the Finalization resume rule;
-- one shared runtime dispatch contract and Cursor adapter tail;
-- the stable `KW-COMPACT-RECOVERY-V1` probe marker.
-
-This is the only carrier that matches all three required hosts. Standalone Cursor CLI and Cursor
-App local load project Rules; Cursor's Cloud guidance says repository `.cursor/rules/*.mdc` rules
-apply to all Agents using the repository. By contrast, Cloud does not support `sessionStart`, and
-`preCompact` can report compaction but cannot inject or alter the compacted context.
+Local Cursor CLI and App share `$CURSOR_HOME/rules/kaola-workflow-global.mdc`; Cloud cannot inherit
+that machine, so setup explicitly writes identical bytes to the selected repository's
+`.cursor/rules/kaola-workflow-global.mdc`. Cloud does not support `sessionStart`, and `preCompact`
+can report compaction but cannot inject or alter context. The edition installer safely retires the
+old `kaola-workflow-compact-recovery.mdc` instead of maintaining a second Rule.
 
 The generated `.cursor/hooks.json` is therefore `{ "version": 1, "hooks": {} }`. Install merges
 that absence by removing only recognized legacy Kaola prompt-hook entries; it preserves every

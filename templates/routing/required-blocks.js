@@ -1,7 +1,7 @@
 'use strict';
 
 // required-blocks.js — the single-source required-block manifests for shipped
-// routing surfaces and for the distribution-owned consumer AGENTS template.
+// routing surfaces and for the machine-global workflow contract.
 //
 // Layer 1 of the routing-surface generation seam: each required block is
 // DECLARED ONCE here, and a derived-universe presence checker
@@ -28,37 +28,38 @@
 // to these first tokens. A token that is a bare SUBSTRING of its own marker is
 // vacuous against a marker-preserving interior gut — pin the actual rule.
 
-// Universal workflow obligations are authored once in the consumer AGENTS
-// template. Init surfaces route to the template through the project-instruction
-// helper; they must not become a second authoring surface for this wording.
-const UNIVERSAL_AGENTS_BLOCKS = [
+// Universal workflow obligations are authored once in the machine-global
+// contract. Init surfaces install project facts through the project-instruction
+// helper; neither the project template nor an operation surface may become a
+// second authoring surface for this wording.
+const GLOBAL_CONTRACT_BLOCKS = [
   {
-    block_id: 'consumer-mission-list',
+    block_id: 'global-mission-list',
     content_tokens: [
       'kaola-workflow/{project}/mission-list.md',
-      'Three write moments',
-      '**before the work goes out**',
-      'where the output was to land',
-      'the list minus done minus in-flight',
-      'mission, not a specification',
+      'three write moments',
+      'before the work goes out',
+      'where the output will land',
       'completed item and its result are immutable',
-      'One dispatch has one result, including `FAIL` or `BLOCKED`.',
-      'Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class.',
+      'One dispatch has one result, including `FAIL` or `BLOCKED`',
+      'mission is a recoverable outcome, not a specification',
+      'A failed command, intermediate finding, repair attempt, or review round does not create another mission',
+      'Append a mission only for a new recoverable outcome with new custody or a newly discovered independent causal class',
+      '`BLOCKED` means the current owner cannot safely or legitimately continue',
       'recoverable outcome',
-      'A failed command, intermediate finding, repair attempt, or review round does not by itself create a mission.',
-      '`BLOCKED` means the current owner cannot safely continue',
-      'Custody (who decides meaning) is independent of carrier',
+      'the list minus done minus in-flight',
+      'Custody decides who may judge meaning; carrier decides where work runs',
       'failure frontier',
     ],
   },
   {
-    block_id: 'consumer-forge-is-the-backlog',
+    block_id: 'global-forge-is-the-backlog',
     content_tokens: [
-      '<!-- PIN: forge-is-the-backlog -->',
-      'is the one optional local file that survives',
-      'nothing else is generated or tracked under',
-      'there is no local mirror to refresh',
-      'Top-priority labels: declare in `kaola-workflow/config.json` (`priority_top_tier_labels`)',
+      "The forge's open issue list is backlog truth",
+      '`kaola-workflow/.roadmap/_rules.md` is the one optional local roadmap file that survives',
+      'Nothing else is generated or tracked under `.roadmap/`',
+      'there is no local backlog mirror to refresh',
+      'Declare top-priority labels in `kaola-workflow/config.json` under `priority_top_tier_labels`',
     ],
   },
 ];
@@ -102,16 +103,17 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    // The init surface is a carrier, not the universal contract's authoring
-    // surface. Every runtime/forge rendering must name the one distribution
-    // module and invoke the helper's complete plan/apply/check lifecycle.
+    // The init surface is not the global contract's authoring surface. Every
+    // runtime/forge rendering must name the one project-template module, require
+    // the compatible receipt, and invoke plan/apply/check.
     block_id: 'in-universal-instruction-carrier',
     topic: 'init',
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
       '`kaola-workflow-project-instruction-templates.js` distribution module',
-      'Do not synthesize, paste, or independently restate that universal contract in this surface',
+      'independently restate the global contract in this surface',
+      'compatible machine-global receipt',
       'INSTRUCTIONS_JS="$(kaola_script kaola-workflow-project-instructions.js)"',
       'node "$INSTRUCTIONS_JS" plan --project-root "$PWD" --json',
       'node "$INSTRUCTIONS_JS" apply --project-root "$PWD" --json',
@@ -260,8 +262,9 @@ const REQUIRED_BLOCKS = [
     surface_type_tag: 'both',
     content_tokens: [
       'When nothing already settles a situation',
-      '`## First Principles` block',
-      'workflow-init `AGENTS.md`',
+      'numbered First Principles',
+      'loaded machine-global workflow contract',
+      'Project `AGENTS.md` adds only local facts',
       'applied in priority order',
       'useful and never required',
     ],
@@ -529,4 +532,4 @@ const REQUIRED_BLOCKS = [
 
 const TOPICS = ['next', 'init', 'finalize'];
 
-module.exports = { REQUIRED_BLOCKS, UNIVERSAL_AGENTS_BLOCKS, TOPICS };
+module.exports = { REQUIRED_BLOCKS, GLOBAL_CONTRACT_BLOCKS, TOPICS };

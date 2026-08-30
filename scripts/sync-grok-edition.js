@@ -7,9 +7,9 @@
 // Grok CLI is a coding-agent RUNTIME (like Codex/opencode/Kimi), not a git forge,
 // and it does NOT ride the install.sh --forge= machinery. It is delivered the
 // Grok-native way: named agents under `.grok/agents/<role>.md` (spawn_subagent
-// types), flat slash commands under `.grok/commands/<name>.md`, and
-// `.grok/rules/` (the complete compact-safe workflow rule). Deterministic, idempotent, and
-// parity-checked by test-grok-edition.js.
+// types), flat slash commands under `.grok/commands/<name>.md`, with no duplicate Rule or hook.
+// The global-contract transaction owns the complete compact-safe Rule. Deterministic,
+// idempotent, and parity-checked by test-grok-edition.js.
 //
 // The session supplies the model, while each generated agent carries an effort
 // derived from its canonical model class: sonnet/standard → medium,
@@ -23,7 +23,7 @@
 // `edition-sync.js`, `install.sh`, and the routing-surface --check contract.
 //
 //   --forge=<f>  github (default) | gitlab | gitea.
-//   --write   regenerate <tree>/agents + commands + the native Rule from canonical.
+//   --write   regenerate <tree>/agents + commands and prune retired duplicate Rules.
 //   --check   assert the generated tree is in byte-parity with a fresh render.
 // ---------------------------------------------------------------------------
 
@@ -31,7 +31,6 @@ const fs = require('fs');
 const path = require('path');
 const agentGen = require('./generate-agent-profiles');
 const forgeLayout = require('./runtime-edition-forge');
-const routing = require('./generate-routing-surfaces');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -227,7 +226,7 @@ function expectedHookFiles() {
   return HOOK_SCRIPTS.slice();
 }
 function expectedRuleFiles() {
-  return ['kaola-workflow-compact-recovery.md'];
+  return [];
 }
 
 function retiredAgentFiles(forge) {
@@ -345,15 +344,6 @@ function writeRuntimeCarrier(forge) {
       wrote++;
     }
   }
-  const rulesDir = treePath(path.join(treeLabel(forge), 'rules'));
-  ensureDir(rulesDir);
-  const prompt = routing.renderCompactRecoveryPrompt('grok', forge);
-  const promptDest = path.join(rulesDir, 'kaola-workflow-compact-recovery.md');
-  if (!fs.existsSync(promptDest) || fs.readFileSync(promptDest, 'utf8') !== prompt) {
-    fs.writeFileSync(promptDest, prompt);
-    console.log('generated  ' + treeLabel(forge) + '/rules/kaola-workflow-compact-recovery.md');
-    wrote++;
-  }
   return wrote;
 }
 
@@ -424,14 +414,6 @@ function runCheck(forge) {
     }
     if (readTree(rel) !== adaptHookForGrok(script, read('hooks/' + script))) {
       mismatches.push({ rel, reason: 'drifted from canonical hooks/ (post-adaptation)' });
-    }
-  }
-  {
-    const rel = tree + '/rules/kaola-workflow-compact-recovery.md';
-    if (!fs.existsSync(treePath(rel))) {
-      mismatches.push({ rel, reason: 'missing generated compact-recovery prompt' });
-    } else if (readTree(rel) !== routing.renderCompactRecoveryPrompt('grok', forge)) {
-      mismatches.push({ rel, reason: 'stale compact-recovery prompt — regenerate' });
     }
   }
   for (const f of retiredAgentFiles(forge)) {

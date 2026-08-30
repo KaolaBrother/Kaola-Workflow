@@ -41,6 +41,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Test seam ONLY (scripts/test-install-all.js points it at stub installers);
 # production always resolves to this script's own directory.
 ROOT="${KAOLA_INSTALL_ALL_ROOT:-$SCRIPT_DIR}"
+# One batch transaction owns the universal machine-global contract. The test seam
+# points at a hermetic stub beside the runtime-installer stubs; production resolves
+# from the same release tree as every installer below.
+GLOBAL_CONTRACT_CLI="${KAOLA_GLOBAL_CONTRACT_CLI:-$ROOT/scripts/kaola-workflow-global-contract.js}"
 
 # The temp base every mktemp below writes under. `${TMPDIR:-/tmp}` guards an EMPTY
 # TMPDIR and NOT a relative one, and a bare `mktemp` / `mktemp -d` reads TMPDIR the
@@ -117,8 +121,9 @@ Options:
   --yes                         Non-interactive; forward -y to every interactive installer
   --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi,grok,cursor,zcode) — logged loudly
   --strict                      Fail-fast: stop at the first failing runtime
-  --check                       Dry run: print HEAD + the command each runtime would run,
-                                and report a pending Codex plugin upgrade or refresh; no changes
+  --check                       Read-only verification: require the installed global contract to
+                                be CURRENT, print each runtime command, and report pending Codex
+                                plugin convergence; no changes
   -h, --help                    Show this help
 
 This command never installs or updates a Cursor Cloud environment. In Cursor
@@ -634,6 +639,27 @@ converge_codex_plugin() {
 
 echo "install-all: reinstalling Kaola-Workflow runtimes from $HEAD_SHA"
 echo "install-all: root=$ROOT scope=$SCOPE forge=$FORGE$( [[ "$YES" == "1" ]] && echo ' yes' )$( [[ "$CHECK" == "1" ]] && echo ' (dry-run)' )"
+
+# The global contract is a whole-batch precondition. Its transaction discovers the
+# installed runtime surfaces from the registry, preflights every physical carrier,
+# and writes nothing when any owner, symlink, duplicate, or future-schema conflict
+# exists. Run it before the first edition installer so a blocked contract can never
+# leave an arbitrarily half-updated runtime set.
+if [[ ! -f "$GLOBAL_CONTRACT_CLI" ]]; then
+  echo "install-all: global contract transaction missing: $GLOBAL_CONTRACT_CLI" >&2
+  exit 1
+fi
+GLOBAL_CONTRACT_MODE="install"
+[[ "$CHECK" == "1" ]] && GLOBAL_CONTRACT_MODE="check"
+echo ""
+echo ">>> [global-contract] node $GLOBAL_CONTRACT_CLI $GLOBAL_CONTRACT_MODE --json"
+GLOBAL_CONTRACT_OUTPUT="$(node "$GLOBAL_CONTRACT_CLI" "$GLOBAL_CONTRACT_MODE" --json 2>&1)"
+GLOBAL_CONTRACT_RC=$?
+printf '%s\n' "$GLOBAL_CONTRACT_OUTPUT"
+if [[ "$GLOBAL_CONTRACT_RC" -ne 0 ]]; then
+  echo "install-all: global contract $GLOBAL_CONTRACT_MODE failed before runtime installation (exit $GLOBAL_CONTRACT_RC)" >&2
+  exit 1
+fi
 
 # Per-runtime scope flags for the additive runtimes (install.sh has no
 # global/project concept, so it never receives them).

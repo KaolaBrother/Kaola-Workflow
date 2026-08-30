@@ -7,8 +7,9 @@
 // Cursor is a coding-agent RUNTIME (like Codex/opencode/Kimi/Grok), not a git forge,
 // and it does NOT ride the install.sh --forge= machinery. It is delivered the
 // Cursor-native way: named agents under `.cursor/agents/<role>.md` (Task
-// types), flat slash commands under `.cursor/commands/<name>.md`, hook scripts
-// plus one always-applied project rule that survives Cursor CLI, App local, and Cloud compaction.
+// types), flat slash commands under `.cursor/commands/<name>.md`, and an empty hook mapping.
+// The global-contract transaction owns the one alwaysApply Rule; this generator prunes its retired
+// project-level predecessor.
 // Deterministic, idempotent, and parity-checked
 // by test-cursor-edition.js.
 //
@@ -26,7 +27,7 @@
 // `edition-sync.js`, `install.sh`, and the routing-surface --check contract.
 //
 //   --forge=<f>  github (default) | gitlab | gitea.
-//   --write   regenerate <tree>/agents + commands + hooks from canonical.
+//   --write   regenerate <tree>/agents + commands + empty hook mapping from canonical.
 //   --check   assert the generated tree is in byte-parity with a fresh render.
 // ---------------------------------------------------------------------------
 
@@ -34,7 +35,6 @@ const fs = require('fs');
 const path = require('path');
 const agentGen = require('./generate-agent-profiles');
 const forgeLayout = require('./runtime-edition-forge');
-const routing = require('./generate-routing-surfaces');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -360,10 +360,6 @@ function mappingRel(forge) {
   return treeLabel(forge) + '/hooks.json';
 }
 
-function ruleRel(forge) {
-  return treeLabel(forge) + '/rules/' + RECOVERY_RULE;
-}
-
 function expectedAgentFiles(forge) {
   return listCanonAgents();
 }
@@ -372,37 +368,6 @@ function expectedCommandFiles(forge) {
 }
 function expectedHookFiles() {
   return [];
-}
-
-function compactRecoveryBlock(content) {
-  const start = String(content).indexOf(RECOVERY_START);
-  const end = String(content).indexOf(RECOVERY_END);
-  if (start < 0 || end <= start
-      || String(content).indexOf(RECOVERY_START, start + RECOVERY_START.length) >= 0
-      || String(content).indexOf(RECOVERY_END, end + RECOVERY_END.length) >= 0) {
-    throw new Error('compact recovery markers missing or duplicated');
-  }
-  return String(content).slice(start + RECOVERY_START.length, end).trim();
-}
-
-function renderCursorRecoveryRule(forge) {
-  forge = forge || DEFAULT_FORGE;
-  const prompt = routing.renderCompactRecoveryPrompt('cursor', forge).trim();
-  return [
-    '---',
-    'description: "Keep Kaola-Workflow Next, Finalization, and dispatch rules in every Cursor model context"',
-    'alwaysApply: true',
-    '---',
-    '',
-    '# Kaola-Workflow persistent recovery rule',
-    '',
-    'Cursor includes this project rule in standalone CLI, App local, and Cloud model contexts.',
-    'The generated prompt below is the same direct recovery carrier on all three hosts; no Cursor',
-    'hook or tool-use lifecycle is involved.',
-    '',
-    prompt,
-    '',
-  ].join('\n');
 }
 
 function retiredAgentFiles(forge) {
@@ -436,6 +401,11 @@ function retiredHookFiles(forge) {
     .sort();
 }
 
+function retiredRuleFiles(forge) {
+  const file = treePath(path.join(treeLabel(forge), 'rules', RECOVERY_RULE));
+  return fs.existsSync(file) ? [RECOVERY_RULE] : [];
+}
+
 function pruneTree(forge) {
   let removed = 0;
   for (const f of retiredAgentFiles(forge)) {
@@ -451,6 +421,11 @@ function pruneTree(forge) {
   for (const f of retiredHookFiles(forge)) {
     fs.rmSync(treePath(path.join(treeLabel(forge), 'hooks', f)), { force: true });
     console.log('pruned     ' + treeLabel(forge) + '/hooks/' + f + ' (retired artifact)');
+    removed++;
+  }
+  for (const f of retiredRuleFiles(forge)) {
+    fs.rmSync(treePath(path.join(treeLabel(forge), 'rules', f)), { force: true });
+    console.log('pruned     ' + treeLabel(forge) + '/rules/' + f + ' (global contract owns recovery)');
     removed++;
   }
   return removed;
@@ -516,17 +491,6 @@ function writeHooks(forge) {
   return wrote;
 }
 
-function writeRules(forge) {
-  const rel = ruleRel(forge);
-  const dest = treePath(rel);
-  const content = renderCursorRecoveryRule(forge);
-  if (fs.existsSync(dest) && fs.readFileSync(dest, 'utf8') === content) return 0;
-  ensureDir(path.dirname(dest));
-  fs.writeFileSync(dest, content);
-  console.log('generated  ' + rel);
-  return 1;
-}
-
 function runWrite(forge, outputRoot) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
   const previousRoot = ACTIVE_TREE_ROOT;
@@ -535,9 +499,8 @@ function runWrite(forge, outputRoot) {
     const a = writeAgents(forge);
     const c = writeCommands(forge);
     const h = writeHooks(forge);
-    const r = writeRules(forge);
     const p = pruneTree(forge);
-    const total = a + c + h + r + p;
+    const total = a + c + h + p;
     console.log('sync-cursor-edition[' + forge + ']: write complete (' + total + ' file(s) updated'
       + (total === 0 ? ' — tree already in sync' : '') + ').');
   } finally {
@@ -553,7 +516,6 @@ function runRefreshPresent() {
     changed += writeAgents(forge);
     changed += writeCommands(forge);
     changed += writeHooks(forge);
-    changed += writeRules(forge);
     changed += pruneTree(forge);
     refreshed.push(treeLabel(forge));
   }
@@ -612,14 +574,6 @@ function runCheck(forge) {
       mismatches.push({ rel, reason: 'stale — regenerate' });
     }
   }
-  {
-    const rel = ruleRel(forge);
-    if (!fs.existsSync(treePath(rel))) {
-      mismatches.push({ rel, reason: 'missing generated persistent recovery rule' });
-    } else if (readTree(rel) !== renderCursorRecoveryRule(forge)) {
-      mismatches.push({ rel, reason: 'stale — regenerate' });
-    }
-  }
   for (const f of retiredAgentFiles(forge)) {
     mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
   }
@@ -628,6 +582,9 @@ function runCheck(forge) {
   }
   for (const f of retiredHookFiles(forge)) {
     mismatches.push({ rel: tree + '/hooks/' + f, reason: 'retired artifact no longer emitted — prune (--write removes it)' });
+  }
+  for (const f of retiredRuleFiles(forge)) {
+    mismatches.push({ rel: tree + '/rules/' + f, reason: 'retired duplicate recovery rule — prune' });
   }
   if (mismatches.length) {
     console.error('sync-cursor-edition[' + forge + ']: PARITY FAILED (' + mismatches.length + ' file(s)):');
@@ -727,11 +684,11 @@ module.exports = {
   CURSOR_MODEL_DISPATCH_GUIDANCE,
   cursorCliMaterializationProse,
   renderCursorHooksJson, rewriteHooksJsonForGlobal, mergeDestHooks, stripDestHooks, mappingRel,
-  renderCursorRecoveryRule, compactRecoveryBlock, RECOVERY_RULE, ruleRel, DISPATCH_START, DISPATCH_END,
+  RECOVERY_RULE, RECOVERY_START, RECOVERY_END, DISPATCH_START, DISPATCH_END,
   treeLabel, agentRel, commandRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   adaptHookForCursor, HOOK_ADAPTATIONS,
-  expectedHookFiles, retiredHookFiles, retiredAgentFiles, retiredCommandFiles,
+  expectedHookFiles, retiredHookFiles, retiredRuleFiles, retiredAgentFiles, retiredCommandFiles,
   parseFrontmatter, parseTools, isReadOnlyRole, yamlScalar,
   listCanonAgents, copyListCanonAgents, listCanonCommands,
   CANON_AGENTS_DIR, CANON_HOOKS_DIR,

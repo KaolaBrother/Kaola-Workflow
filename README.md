@@ -284,7 +284,18 @@ Claude Code's native entrypoint is `CLAUDE.md`, so Kaola keeps it as the smalles
 `@AGENTS.md` followed only by Claude-specific overlay content. See
 [runtime capabilities](docs/runtime-capabilities.md) for the evidence, precedence, and known limits.
 
-**Install/refresh every runtime on this computer — `./install-all.sh`.** To reinstall every local runtime from the current checkout in one step, run `./install-all.sh --yes` (defaults: `--forge=github`, `--global`). It is a thin orchestrator: it runs each per-runtime installer above unchanged, prints the short SHA being installed, and ends with a per-runtime **PASS/FAIL summary table** — exiting non-zero if any runtime fails (continue-through by default; `--strict` aborts at the first failure). Skip one with `--skip=<runtime[,...]>` (logged, never silent) and preview without changes via `--check`. `--global` is location-independent: it is not permission to scan or refresh every consumer repository. Cursor inherits that rule — `install-cursor.sh --global` writes only the current machine's user carrier and never mutates an ambient Git work tree; local project `.cursor` catalogs need `--target` or `install-all.sh --project`. `install-all.sh` never installs or updates a Cursor Cloud environment. This entrypoint never folds the additive editions into `install.sh`/`npm test`/`edition-sync` — the per-runtime installers remain the individual path. The individual installers below are still fully supported.
+**Install/refresh every runtime on this computer — `./install-all.sh`.** To reinstall every local
+runtime from the current checkout in one step, run `./install-all.sh --yes` (defaults:
+`--forge=github`, `--global`). Before the first edition write, it runs one registry-derived global
+contract transaction across every installed local host; any owner/symlink/schema conflict blocks
+the whole batch. It then runs each per-runtime installer, prints the short SHA, and ends with a
+per-runtime **PASS/FAIL summary table**. Skip one with `--skip=<runtime[,...]>` (logged, never silent)
+and verify installed receipt/carriers without changes via `--check`. `--global` is
+location-independent: it is not permission to scan or refresh every consumer repository. Cursor
+local project catalogs still need `--target` or `install-all.sh --project`, and `install-all.sh`
+never installs Cursor Cloud. This entrypoint does not fold additive editions into
+`install.sh`/`npm test`/`edition-sync`; individual installers remain supported, but they do not
+impersonate the global-contract transaction.
 
 Forge editions:
 
@@ -315,8 +326,9 @@ explicit, receipt-owned, collision/symlink-safe, and uninstall-safe. On the meas
 only, workflow-next/finalize may safely ensure explicit `$PWD` immediately before a named
 dispatch; App local and Cloud never inherit that CLI rule. Local `install-all.sh` never installs
 Cloud. A Cloud install begins only after an Agent has confirmed it is operating in Cursor Cloud
-environment setup. One project `alwaysApply` rule carries Workflow Next, Finalization, and dispatch
-recovery on standalone CLI, App local, and Cloud; Cursor hooks stay empty. It takes the same
+environment setup. One V2 `alwaysApply` Rule carries the global contract, operation reload route,
+and dispatch adapter: the local machine-global carrier serves CLI/App, while Cloud explicitly
+materializes identical bytes in its selected repository. Cursor hooks stay empty. It takes the same
 generated `--forge` axis. See
 [docs/cursor-edition.md](docs/cursor-edition.md).
 
@@ -338,7 +350,18 @@ still refused; the migration removes the retired ambient catalog helper and stal
 
 Being additive is about *edition machinery*, not about forge support: these runtimes remain outside `install.sh`, `edition-sync.js`, `npm test`, and the routing-surface contract, and each keeps its own suite (`node scripts/test-opencode-edition.js`, `node scripts/test-kimi-edition.js`, `node scripts/test-grok-edition.js`, `node scripts/test-cursor-edition.js`, `node scripts/test-zcode-edition.js`).
 
-**The same workflow runs everywhere** — Claude Code, Codex, opencode, Kimi Code, Grok CLI, Cursor, and ZCode. No installer writes the shared `~/.config/kaola-workflow/config.json`: there is no workflow path to select and no install-time configuration to seed. See [opencode](docs/opencode-edition.md) / [Kimi Code](docs/kimi-edition.md) / [Grok CLI](docs/grok-edition.md) / [Cursor](docs/cursor-edition.md) / [ZCode](docs/zcode-edition.md) for each additive runtime.
+**The same workflow runs everywhere** — Claude Code, Codex, opencode, Kimi Code, Grok CLI, Cursor,
+and ZCode. `install-all.sh` first installs one machine-global workflow contract from
+`templates/global/kaola-workflow-global.md`, rendered through the nine-host adapter registry into
+each runtime's native user carrier. The transaction preflights the whole local set, preserves owner
+bytes, deduplicates Cursor CLI/App's physical Rule, and receipts source/render/install hashes before
+edition installers run. Cursor Cloud remains an explicit selected-repository materialization in its
+own environment. A compatible receipt lets `workflow-init` keep project `AGENTS.md` subtractive:
+project facts, commands, constraints, validation, documentation, and local overrides only. No
+installer writes the shared `~/.config/kaola-workflow/config.json`: there is no workflow path to
+select and no install-time configuration to seed. See [opencode](docs/opencode-edition.md) /
+[Kimi Code](docs/kimi-edition.md) / [Grok CLI](docs/grok-edition.md) /
+[Cursor](docs/cursor-edition.md) / [ZCode](docs/zcode-edition.md) for each additive runtime.
 
 ### Claude Code
 
@@ -486,10 +509,11 @@ Grok CLI is an additive runtime — installed by its own script, not `--forge`. 
 ./install-grok.sh --yes            # deploy into the current project (.grok/{agents,commands})
 ```
 
-Grok passive hook stdout is not model context, so this edition installs no compact hook. A project
-install puts one complete Rule under `<project>/.grok/rules/`; a global install puts the same Rule
-under `${GROK_HOME:-~/.grok}/rules/`. Grok's native Rule carrier remains present across model
-interactions and compaction without starting a subprocess. Full detail:
+Grok passive hook stdout is not model context, so this edition installs no compact hook. The
+machine-global transaction puts one complete V2 Rule under `${GROK_HOME:-~/.grok}/rules/`; project
+and global edition installs contribute no duplicate Rule and safely retire the old exact-known one.
+The native Rule remains present across interactions and compaction without starting a subprocess.
+Full detail:
 [docs/grok-edition.md](docs/grok-edition.md).
 
 ### cursor
@@ -525,11 +549,12 @@ source-checkout dependency. Doctor keeps
 current Build/live-catalog identity `unknown` unless the active runtime observes it; historical
 measurements remain separately typed as evidence.
 
-The installer writes an empty Cursor hook mapping and one project
-`.cursor/rules/kaola-workflow-compact-recovery.mdc` rule with `alwaysApply: true`. Cursor loads that
-system-level context for standalone CLI, App local, and Cloud, including after compact; official
-Cloud lacks `sessionStart`, and `preCompact` cannot inject context. Catalog materialization remains
-an explicit safe CLI point-of-use transaction, not a hook. Full detail:
+The edition installer writes an empty Cursor hook mapping and no recovery Rule. The machine-global
+transaction owns one `rules/kaola-workflow-global.mdc` with `alwaysApply: true` for local CLI/App;
+Cloud setup explicitly materializes the same bytes at
+`.cursor/rules/kaola-workflow-global.mdc` in the selected repository. This covers context after
+compact without `sessionStart`, `preCompact`, or a tool-use hook. Catalog materialization remains a
+separate explicit safe transaction. Full detail:
 [docs/cursor-edition.md](docs/cursor-edition.md).
 
 ### zcode
@@ -1007,15 +1032,13 @@ Initialize each project once:
 /workflow-init
 ```
 
-This plans and applies an ownership-safe instruction migration plus the baseline documentation map.
-Runtime catalogs, commands, skills, hooks, and adapters are installer-owned: `workflow-init` does
-not install or refresh them, and the same managed repository bytes result from every runtime.
-While a run is active, a compatible AGENTS-canonical / thin-bridge layout may still apply; an
-execution-default change asks in conversation first.
-`AGENTS.md` becomes the one universal repository contract. `CLAUDE.md` contains `@AGENTS.md` and only
-Claude-specific overlay content. Known workflow-owned regions are replaced, surrounding owner bytes
-are preserved, active older runs are left untouched, and ambiguous owner-only authority returns
-`decision_required` instead of being rewritten. Re-running the migration is byte-idempotent.
+This verifies the installed global-contract receipt, then plans and applies an ownership-safe
+minimal project instruction migration plus the documentation map. Runtime catalogs, commands,
+skills, hooks, adapters, and universal behavior remain installer-owned. Project `AGENTS.md` keeps
+only local facts, commands, constraints, validation, docs, and overrides; `CLAUDE.md` is the thin
+`@AGENTS.md` bridge. Exact known workflow templates migrate while surrounding owner bytes survive.
+Any active run is preserved completely, and ambiguous owner-only/mixed bytes return
+`decision_required`. Re-running the migration is byte-idempotent.
 
 In any Claude Code session, run:
 

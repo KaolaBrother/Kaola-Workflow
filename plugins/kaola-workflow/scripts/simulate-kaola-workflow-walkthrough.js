@@ -497,11 +497,11 @@ function testAC2StaticCompactPrompt() {
   const prompt = fs.readFileSync(promptPath, 'utf8');
   assert(prompt === routing.renderCompactRecoveryPrompt('codex', 'github'),
     'AC2: installed Codex prompt must equal the generation-time runtime rendering');
-  assert(prompt.includes('Recovery marker: `KW-COMPACT-RECOVERY-V1`.')
+  assert(prompt.includes('Recovery marker: `KW-COMPACT-RECOVERY-V2`.')
     && prompt.includes('**Runtime dispatch contract (always loaded).**')
-    && prompt.includes('Workflow Next')
-    && prompt.includes('Finalization'),
-    'AC2: prompt must carry compact continuation plus the dispatch contract');
+    && /completely reload the installed Workflow\s+Next prompt/.test(prompt)
+    && /completely\s+reload the installed Kaola-Workflow Finalization prompt/.test(prompt),
+    'AC2: V2 prompt must carry complete operation reload plus the dispatch contract');
   assert(!/\bnode\b|\.js\b|PreToolUse|PostToolUse/.test(prompt),
     'AC2: prompt must not require compact-time JS or tool-use injection');
   console.log('testAC2StaticCompactPrompt (#1044 AC2): PASSED');

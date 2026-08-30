@@ -101,19 +101,20 @@ execution-shape decision. Author universal dispatch wording once in
 differences, and generation produces the complete per-runtime prompt. Edit sources, never rendered
 surfaces.
 
-The only shared invariant is model-visible: after a compact and before the next inference, restore
-the complete continuation prompt, including Workflow Next/Finalization routing and dispatch. Do not
-translate that into PreToolUse, PostToolUse, or Stop gates. A compact carrier makes the generated
-artifact model-visible directly; it does not derive the active operation, run a prompt parser, or add private
-session identity, token, generation, or acknowledgement fields to durable state.
+The shared invariant is model-visible: after compact and before the next inference, V2 restores the
+machine-global contract and mandatory dispatch contract, rereads durable state, then completely
+reloads installed Workflow Next or Finalization. Do not translate that into PreToolUse, PostToolUse,
+or Stop gates. A compact carrier makes pre-rendered static text visible directly; it does not derive
+the active operation, run a prompt parser, or add private session identity, token, generation, or
+acknowledgement fields to durable state.
 
-Use a direct compact injection only where the runtime exposes one. Grok and Cursor are measured
-Rule-carrier exceptions: Grok passive hook stdout is ignored, while Cursor's one project
-`alwaysApply` rule is the shared carrier for CLI, App local, and Cloud because Cloud
-lacks `sessionStart` and `preCompact` cannot inject. If a runtime has neither a measured compact
-risk nor a valid post-compact injection surface, record that boundary instead of building a tool
-gate. Compress by single-source wording and measured byte budgets, never by making dispatch
-optional or erasing a runtime capability difference.
+Use direct compact injection only where measured. Grok and Cursor are Rule-carrier exceptions:
+Grok passive hook stdout is ignored; local Cursor CLI/App share one user `alwaysApply` Rule; Cloud
+explicitly materializes identical bytes in its selected project because it cannot inherit the local
+machine and lacks `sessionStart`. Edition installers emit no second recovery Rule. If a runtime has
+neither measured compact risk nor a valid injection surface, record that boundary instead of
+building a tool gate. Compress by one global source and measured byte budgets, never by making
+dispatch optional or erasing a runtime capability difference.
 
 ## Joining a dispatch
 

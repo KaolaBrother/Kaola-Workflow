@@ -327,13 +327,13 @@ for (const file of shippedManifests) {
   assertConcept(file, 'the adaptive mission-list model', ['adaptive', 'mission list']);
 }
 
-// #609: the injected ## Kaola-Workflow template must FORBID vendor-model embellishment of the
-// role-routing bullets. Live sessions were authoring "planner (Opus)" into consumer CLAUDE.md
-// files; a consumer block is read by EVERY runtime (Codex reads CLAUDE.md too), so a Claude model
-// noun there is a first-class cross-runtime leak. The generated section must stay runtime-neutral
-// (tier vocabulary), so the constraint sentence is pinned on the sole executable template source.
-assertIncludes('scripts/kaola-workflow-project-instruction-templates.js',
-  'never by a vendor model name');
+// #609/#1046: the project-only template must contain no vendor-model dispatch guidance at all.
+// Runtime-neutral behavior lives in the global source; tier bindings live only in adapters.
+assert(!/\b(?:Opus|Sonnet|Haiku|gpt-[\w.-]+|grok-[\w.-]+)\b/i.test(
+  read('scripts/kaola-workflow-project-instruction-templates.js')),
+'scripts/kaola-workflow-project-instruction-templates.js must contain no vendor model literal');
+assertNotIncludes('scripts/kaola-workflow-project-instruction-templates.js',
+  'Name roles by function and reasoning tier');
 
 // #606: the Claude dispatch-posture config-audit line must be present in all three workflow-init
 // COMMAND surfaces (root + gitlab + gitea) — outside the KW-AGENTS-TEMPLATE region, so this check
@@ -511,7 +511,8 @@ const dispatchContract = read('templates/routing/dispatch-contract.md');
 const normalizedDispatchContract = norm(dispatchContract);
 assert(/dispatch when it materially reduces main-context residue/i.test(normalizedDispatchContract),
   'shared dispatch contract must carry the execution-economics judgment');
-assert(/runtime-native defaults/i.test(normalizedDispatchContract) || /task-sensitive model/i.test(normalizedDispatchContract),
+assert(/runtime-native defaults/i.test(normalizedDispatchContract)
+    || /default tier[\s\S]*task-sensitive override/i.test(normalizedDispatchContract),
   'shared dispatch contract must leave model/effort selection to runtime metadata or task context');
 for (const rel of routingSkels) {
   const text = read(rel);
@@ -526,15 +527,14 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
   const rendered = norm(read(rel));
   assert(/dispatch when it materially reduces main-context residue/i.test(rendered),
     rel + ' must render the shared execution-economics judgment');
-  assert(/runtime-native defaults/i.test(rendered) || /task-sensitive model/i.test(rendered),
+  assert(/runtime-native defaults/i.test(rendered)
+      || /default tier[\s\S]*task-sensitive override/i.test(rendered),
     rel + ' must render the shared model-selection rule');
 }
 {
   const consumerTemplate = read('scripts/kaola-workflow-project-instruction-templates.js');
-  assert(consumerTemplate.includes('`planner (heavy-reasoning tier)`'),
-    '#1018 AC-11: consumer template example must be planner (heavy-reasoning tier)');
-  assert(!consumerTemplate.includes('`planner (reasoning tier)`'),
-    '#1018 AC-11: consumer template must not keep planner (reasoning tier) as the example');
+  assert(!/planner \((?:heavy-)?reasoning tier\)/.test(consumerTemplate),
+    '#1046: project-only consumer template must not duplicate a universal planner-tier example');
 }
 
 

@@ -311,7 +311,7 @@ function renderSurface(row, ir) {
   return renderSkeleton(skeletonText, { surface_type: row.surface_type, forge: row.forge }, ir);
 }
 
-function renderCompactRecoveryPrompt(runtime, forge = 'github') {
+function renderCompactRecoveryPrompt(runtime, forge = 'github', options = {}) {
   if (!['claude', 'codex', 'grok', 'cursor'].includes(runtime)) {
     throw new Error('compact recovery prompt is not enabled for runtime ' + runtime);
   }
@@ -319,6 +319,9 @@ function renderCompactRecoveryPrompt(runtime, forge = 'github') {
   const slots = Object.assign({}, SLOTS, {
     'runtime-delegation': agentProfiles.renderRuntimeDelegationGuidanceForRuntime(runtime, forge),
   });
+  if (Object.prototype.hasOwnProperty.call(options, 'globalContract')) {
+    slots['global-workflow-contract'] = String(options.globalContract).trimEnd();
+  }
   return renderSkeleton(
     loadSkeleton('compact-recovery.skeleton.md', 'compact-recovery'),
     { surface_type: runtime === 'codex' ? 'skill' : 'command', forge },

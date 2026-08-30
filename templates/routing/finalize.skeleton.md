@@ -4,23 +4,12 @@
 <!-- SLOT:fz-intro -->
 
 <!-- KW-COMPACT-RECOVERY-START -->
-## Compact recovery contract
+## Finalization operation authority
 
-This whole block is part of the initial Finalization prompt. A compact-capable runtime re-injects it
-once, after compact and before the next model turn. It is never injected by a tool-use hook.
-Recovery marker: `KW-COMPACT-RECOVERY-V1`.
-
-Read project-root `AGENTS.md` before acting; it is the universal project-rule source.
-Resume Finalization from `workflow-state.md`, `mission-list.md`, and any existing finalization
-receipts. A completed item and its result are immutable; one dispatch has one result, including
-FAIL/BLOCKED. Freeze the candidate before review; a mutation
-invalidates PASS evidence for changed bytes. Finalization, Issue closure, archive, and sink are not
-Mission List items. The last run mission establishes readiness for finalization. The finalization
-summary, closure evidence, archive state, and sink receipt own the transaction's truth.
-A failed command, intermediate finding, repair attempt, or review round does not by itself create a
-mission. Keep working within the current promised outcome while custody and causal boundary remain
-unchanged. Append a mission only for a new recoverable outcome that changes custody or for a newly
-discovered independent causal class.
+Recovery marker: `KW-COMPACT-RECOVERY-V2`. This complete prompt owns Finalization procedure. After
+compact, the native V2 carrier restores global contract and dispatch, rereads durable state, then
+completely reloads this prompt; no tool-use hook injects it. Read project `AGENTS.md` for local facts
+and stricter constraints, then resume from existing finalization receipts.
 
 <!-- KW-RUNTIME-DISPATCH-START -->
 <!-- SLOT:runtime-dispatch-common -->

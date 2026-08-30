@@ -281,9 +281,11 @@ for (const ed of codexEditions) {
 // ===========================================================================
 const {
   REQUIRED_BLOCKS,
-  UNIVERSAL_AGENTS_BLOCKS,
+  GLOBAL_CONTRACT_BLOCKS,
 } = require('../templates/routing/required-blocks.js');
 const CONSUMER_TEMPLATES = require('./kaola-workflow-project-instruction-templates.js');
+const GLOBAL_CONTRACT = fs.readFileSync(
+  path.join(REPO, 'templates/global/kaola-workflow-global.md'), 'utf8');
 
 // THE SURFACE UNIVERSE IS TWELVE TREES, NOT SIX. Six are tracked (three claude
 // command dirs + three codex skills dirs); six are GENERATED and gitignored —
@@ -610,16 +612,16 @@ function foldsGeneric(token, legacySurfaces, blocks, allowlist, editions, topicB
 }
 
 // Universal obligations have a different authority and universe from routing
-// surface obligations: exactly one distribution-owned consumer AGENTS template.
+// surface obligations: exactly one machine-global workflow contract.
 // Keeping this checker pure lets the mutation proofs exercise the same path as
-// the live template without mutating the repository.
-function checkUniversalAgents({ blocks, agentsTemplate }) {
+// the live source without mutating the repository.
+function checkGlobalContract({ blocks, globalContract }) {
   const failures = [];
   const seen = new Set();
-  const content = norm(agentsTemplate);
+  const content = norm(globalContract);
   for (const block of blocks) {
     if (!block || typeof block.block_id !== 'string' || !block.block_id) {
-      failures.push('malformed-block: universal AGENTS block needs a nonempty block_id');
+      failures.push('malformed-block: global-contract block needs a nonempty block_id');
       continue;
     }
     if (seen.has(block.block_id)) failures.push(`duplicate-block: ${block.block_id}`);
@@ -630,7 +632,7 @@ function checkUniversalAgents({ blocks, agentsTemplate }) {
     }
     for (const token of block.content_tokens) {
       if (!content.includes(norm(token))) {
-        failures.push(`missing-token: block ${block.block_id} token ${JSON.stringify(token)} absent from consumer AGENTS template`);
+        failures.push(`missing-token: block ${block.block_id} token ${JSON.stringify(token)} absent from machine-global contract`);
       }
     }
   }
@@ -651,23 +653,22 @@ function checkUniversalAgents({ blocks, agentsTemplate }) {
     `MANIFEST: derived-universe presence check clean over ${realResult.obligatedCount} obligated file-checks`);
 }
 
-// --- SINGLE UNIVERSAL AUTHORITY + INIT CARRIER ------------------------------
-// The universal mission/backlog contract lives in AGENTS_TEMPLATE once. Init's
-// 21 runtime/forge surfaces reach it through the project-instruction helper and
-// distribution module, while remaining authoring surfaces only for runtime-
-// specific instructions. This is reachability, not restatement.
+// --- SINGLE GLOBAL AUTHORITY + INIT CARRIER ---------------------------------
+// The universal mission/backlog contract lives in the machine-global source
+// once. Init's 21 runtime/forge surfaces require a compatible installed receipt
+// and write only project-local facts. This is composition, not restatement.
 {
-  const universalIds = UNIVERSAL_AGENTS_BLOCKS.map(b => b.block_id).sort();
-  assert(universalIds.join(',') === 'consumer-forge-is-the-backlog,consumer-mission-list',
-    'UNIVERSAL-AGENTS: the sole template must retain both mission-list and forge-backlog obligation blocks; got '
-    + JSON.stringify(universalIds));
-  const universalFailures = checkUniversalAgents({
-    blocks: UNIVERSAL_AGENTS_BLOCKS,
-    agentsTemplate: CONSUMER_TEMPLATES.AGENTS_TEMPLATE,
+  const globalIds = GLOBAL_CONTRACT_BLOCKS.map(b => b.block_id).sort();
+  assert(globalIds.join(',') === 'global-forge-is-the-backlog,global-mission-list',
+    'GLOBAL-CONTRACT: the sole source must retain both mission-list and forge-backlog obligation blocks; got '
+    + JSON.stringify(globalIds));
+  const globalFailures = checkGlobalContract({
+    blocks: GLOBAL_CONTRACT_BLOCKS,
+    globalContract: GLOBAL_CONTRACT,
   });
-  for (const msg of universalFailures) assert(false, `UNIVERSAL-AGENTS ${msg}`);
-  assert(universalFailures.length === 0,
-    `UNIVERSAL-AGENTS: all ${UNIVERSAL_AGENTS_BLOCKS.length} universal obligation blocks live in the sole consumer AGENTS template`);
+  for (const msg of globalFailures) assert(false, `GLOBAL-CONTRACT ${msg}`);
+  assert(globalFailures.length === 0,
+    `GLOBAL-CONTRACT: all ${GLOBAL_CONTRACT_BLOCKS.length} universal obligation blocks live in the sole machine-global source`);
 
   const carrier = REQUIRED_BLOCKS.find(b => b.block_id === 'in-universal-instruction-carrier');
   assert(!!carrier,
@@ -685,7 +686,7 @@ function checkUniversalAgents({ blocks, agentsTemplate }) {
       const body = readRealSurface(file);
       if (body === null) continue;
       const normalized = norm(body);
-      for (const block of UNIVERSAL_AGENTS_BLOCKS) {
+      for (const block of GLOBAL_CONTRACT_BLOCKS) {
         for (const token of block.content_tokens) {
           if (normalized.includes(norm(token))) duplicated.push(`${file} :: ${block.block_id} :: ${token}`);
         }
@@ -695,6 +696,14 @@ function checkUniversalAgents({ blocks, agentsTemplate }) {
       'INIT-CARRIER: init surfaces must reach the universal contract, never duplicate its obligation wording; duplicates: '
       + JSON.stringify(duplicated));
   }
+
+  const projectTemplate = norm(CONSUMER_TEMPLATES.AGENTS_TEMPLATE);
+  const projectDuplicates = GLOBAL_CONTRACT_BLOCKS.flatMap(block => block.content_tokens
+    .filter(token => projectTemplate.includes(norm(token)))
+    .map(token => `${block.block_id} :: ${token}`));
+  assert(projectDuplicates.length === 0,
+    'PROJECT-TEMPLATE: project AGENTS must contain local facts only and must not duplicate the global contract; duplicates: '
+    + JSON.stringify(projectDuplicates));
 
   const helper = fs.readFileSync(path.join(REPO, 'scripts/kaola-workflow-project-instructions.js'), 'utf8');
   assert(helper.includes("require('./kaola-workflow-project-instruction-templates.js')")
@@ -1166,43 +1175,43 @@ function checkUniversalAgents({ blocks, agentsTemplate }) {
   }
 
   // (11) SINGLE-AUTHORITY OBLIGATION MUTATION — remove each universal
-  // obligation token from the actual distribution template, one at a time.
+  // obligation token from the actual machine-global source, one at a time.
   // The live universal checker must name that block and token. This proves the
   // authority move did not turn the old surface pin into an unguarded module.
   {
-    const control = checkUniversalAgents({
-      blocks: UNIVERSAL_AGENTS_BLOCKS,
-      agentsTemplate: CONSUMER_TEMPLATES.AGENTS_TEMPLATE,
+    const control = checkGlobalContract({
+      blocks: GLOBAL_CONTRACT_BLOCKS,
+      globalContract: GLOBAL_CONTRACT,
     });
     assert(control.length === 0,
-      'RED-PROOF universal-AGENTS (green control): the unmutated consumer template must satisfy every universal obligation; got '
+      'RED-PROOF global-contract (green control): the unmutated global source must satisfy every universal obligation; got '
       + JSON.stringify(control));
 
     if (control.length === 0) {
       const escapeRe = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const whitespacePattern = token => token.trim().split(/\s+/).map(escapeRe).join('\\s+');
       const unwitnessed = [];
-      for (const block of UNIVERSAL_AGENTS_BLOCKS) {
+      for (const block of GLOBAL_CONTRACT_BLOCKS) {
         for (const token of block.content_tokens) {
           const pattern = new RegExp(whitespacePattern(token), 'g');
-          if (!pattern.test(CONSUMER_TEMPLATES.AGENTS_TEMPLATE)) {
+          if (!pattern.test(GLOBAL_CONTRACT)) {
             unwitnessed.push(`${block.block_id} :: ${token} — source span could not be located`);
             continue;
           }
           pattern.lastIndex = 0;
-          const mutant = CONSUMER_TEMPLATES.AGENTS_TEMPLATE.replace(pattern, '');
-          const failures = checkUniversalAgents({
-            blocks: UNIVERSAL_AGENTS_BLOCKS,
-            agentsTemplate: mutant,
+          const mutant = GLOBAL_CONTRACT.replace(pattern, '');
+          const failures = checkGlobalContract({
+            blocks: GLOBAL_CONTRACT_BLOCKS,
+            globalContract: mutant,
           });
-          const expected = `missing-token: block ${block.block_id} token ${JSON.stringify(token)} absent from consumer AGENTS template`;
+          const expected = `missing-token: block ${block.block_id} token ${JSON.stringify(token)} absent from machine-global contract`;
           if (!failures.includes(expected)) {
             unwitnessed.push(`${block.block_id} :: ${token} — mutation did not produce ${JSON.stringify(expected)}; got ${JSON.stringify(failures)}`);
           }
         }
       }
       assert(unwitnessed.length === 0,
-        'RED-PROOF universal-AGENTS: deleting any one obligation from the sole consumer template must red its exact block; unwitnessed: '
+        'RED-PROOF global-contract: deleting any one obligation from the sole global source must red its exact block; unwitnessed: '
         + JSON.stringify(unwitnessed));
     }
   }

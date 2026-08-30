@@ -13,8 +13,9 @@ claim ──► write the mission list ──► run it ──► finalize ─�
 (script)   (agent, one file)          (agent)    (script tx)  (script tx)
 ```
 
-- **`/workflow-init`** — bootstraps a repository: universal `AGENTS.md`, the smallest native
-  entrypoint bridge, docs structure, and issue conventions. Run once per project. It also
+- **`/workflow-init`** — bootstraps project-local `AGENTS.md`, the smallest native entrypoint bridge,
+  docs structure, and issue conventions after verifying the machine-global contract receipt. Run
+  once per project. It also
   reconciles: a repository still carrying the retired
   local backlog layer (`ROADMAP.md`, `.roadmap/issue-*.md`) is diagnosed and reported, and migrated
   only on the owner's answer — never as a side effect of installing or upgrading.
@@ -28,6 +29,36 @@ what to dispatch, at what width, and in what order, with the frontier in front o
 inspects that decision. There is no plan grammar, no freeze, no gate, no disjointness proof, no
 fan-out cap, and no refusal in the run design. See `decisions/0017-the-mission-list.md` for the
 derivation.
+
+## Global behavior, local facts
+
+Universal workflow behavior has one authoring source:
+`templates/global/kaola-workflow-global.md`. A nine-row registry declares the real discovery,
+carrier, precedence, reload, and compatibility reads for Claude, Codex, OpenCode, Kimi, Grok,
+Cursor CLI, Cursor App, Cursor Cloud, and ZCode. Runtime adapters render native carriers; they are
+not secondary behavior authorities.
+
+`install-all.sh` runs `kaola-workflow-global-contract.js` before any edition installer. The
+transaction discovers the local set, deduplicates shared physical carriers, preflights every path,
+symlink, owner region, and receipt schema, then atomically installs or rolls back the batch. Managed
+`AGENTS.md` carriers retain owner bytes; dedicated Rules refuse foreign bytes. The receipt binds the
+source, registry, rendered bytes, installed bytes, target set, and candidate commit. Uninstall
+re-derives every target path from the current registry rather than trusting receipt paths.
+
+Cursor Cloud is the one remote row. A local transaction reports it as `REMOTE_REQUIRED`; a
+confirmed Cloud setup explicitly materializes the same V2 Rule in the selected Git repository and
+stores a repository receipt. No local installer infers or mutates a Cloud environment.
+
+Once the receipt is compatible, project `AGENTS.md` contains only project snapshot, commands,
+constraints, validation, documentation, and local overrides. Exact known Kaola templates migrate;
+unknown/mixed owner bytes do not. An active run freezes all instruction bytes, so changing the
+global architecture never rewrites the run under its feet.
+
+Compact recovery is also subtractive. Claude/Codex directly inject one pre-rendered V2 artifact at
+`SessionStart(source=compact)`; Grok/Cursor keep that same artifact in one persistent Rule. V2
+contains the global contract, a thin durable-state router that completely reloads Workflow Next or
+Finalization, the mandatory dispatch contract, and the measured runtime adapter. Inference runs no
+prompt-composition script, and ordinary tool use injects nothing.
 
 ## The mission list
 
@@ -362,15 +393,14 @@ that same slot. At generation time the compact skeleton combines its common cont
 that dispatch contract, and one runtime adapter into a complete runtime artifact. Runtime-specific
 files are render targets, not authoring surfaces.
 
-The recovery invariant is: after a real compact and before the next model inference, the complete
-continuation prompt is present. It tells the model to reread durable state and continue Workflow
-Next or Finalization, and always includes dispatch. It does not require context before or after
-every tool. Claude and Codex meet it with one `SessionStart(compact)` command that directly prints
-the already-generated prompt; no JS derives, selects, or composes anything at compact time. Grok
-and Cursor use native Rules because their passive compact hooks cannot inject model context. Grok
-installs one complete project or global Rule; Cursor installs one project `alwaysApply` Rule because
-Rules are system-level context, Cloud
-has no `sessionStart`, and `preCompact` cannot inject model context.
+The recovery invariant is: after real compact and before the next inference, V2 restores the global
+contract, rereads durable state, and completely reloads Workflow Next or Finalization, with dispatch
+always present. It requires no context before or after every tool. Claude/Codex use one
+`SessionStart(compact)` static `cat`; no JS derives or composes at compact time. Grok/Cursor use
+native Rules because passive hooks cannot inject context. The global transaction installs one Grok
+user Rule and one shared local Cursor CLI/App Rule; Cursor Cloud explicitly materializes identical
+bytes in its selected project because it cannot inherit the local machine and has no
+`sessionStart`. Edition installers emit no second Rule; `preCompact` remains observational.
 
 OpenCode, Kimi, and ZCode keep their initial command as prompt authority in this measured scope.
 Kimi's previously managed PostCompact hint is retired and removed on upgrade. ZCode's

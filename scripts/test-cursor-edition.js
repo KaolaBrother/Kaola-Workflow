@@ -14,14 +14,14 @@
 // Cursor is a coding-agent RUNTIME, not a forge, and it does not ride
 // install.sh / edition-sync.js / npm test. It is delivered the Cursor-native
 // way: named agents under `.cursor/agents/<role>.md` (Task types),
-// flat commands under `.cursor/commands/<name>.md`, and one always-applied
-// project recovery rule under `.cursor/rules/`. Cursor has no Kaola hook
-// declaration or hook subprocess in this edition.
+// flat commands under `.cursor/commands/<name>.md`. The machine-global contract
+// transaction owns the one always-applied Rule; this edition owns no duplicate
+// project Rule, hook declaration, or hook subprocess.
 // Three canonical model classes: standard/reasoning/heavy
 // agents carry unquoted Grok 4.6 frontmatter pins with medium/high/xhigh effort. Named-profile
 // command cards carry no static per-dispatch model override; a built-in-only catalog-miss path may
-// use only a resolver-listed live model slug. Compact recovery is carried by the same project rule
-// on standalone CLI, App local, and App-started Cloud; ordinary tool use has no Kaola injection.
+// use only a resolver-listed live model slug. Compact recovery is carried by the global transaction
+// for standalone CLI, App local, and Cloud materialization; ordinary tool use has no Kaola injection.
 //
 // Outside `npm test`, the forge chains, and the fast gate: an additive
 // runtime edition is not a forge. The script exists so the suite is
@@ -38,6 +38,7 @@ const reviewerGenerator = require('./generate-agent-profiles.js');
 const G = require('./test-git-fixture');
 const syncMod = require('./sync-cursor-edition.js');
 const cursorSurface = require('./kaola-workflow-cursor-surface.js');
+const globalContract = require('./kaola-workflow-global-contract.js');
 
 const REPO = path.resolve(__dirname, '..');
 const SYNC_JS = path.join(REPO, 'scripts', 'sync-cursor-edition.js');
@@ -123,6 +124,7 @@ function generatedTreeFiles(label) {
 }
 
 const CURSOR_RECOVERY_RULE = syncRecoveryRuleName();
+const CURSOR_GLOBAL_RULE = 'kaola-workflow-global.mdc';
 
 function syncRecoveryRuleName() {
   // Keep the acceptance file independent of a hand-written production path while still
@@ -146,8 +148,13 @@ function kaolaHookRows(mapping) {
     JSON.stringify(row || {})));
 }
 
-function recoveryRulePath(root, forge) {
-  return path.join(root, treeLabel(forge || DEFAULT_FORGE), 'rules', CURSOR_RECOVERY_RULE);
+function renderedGlobalRule() {
+  const registry = JSON.parse(fs.readFileSync(path.join(REPO,
+    'templates', 'global', 'runtime-contract-adapters.json'), 'utf8'));
+  const target = registry.targets.find(row => row.id === 'cursor-cli-local');
+  const source = fs.readFileSync(path.join(REPO,
+    'templates', 'global', 'kaola-workflow-global.md'), 'utf8');
+  return globalContract.renderContract({ source, target }).toString('utf8');
 }
 
 function recoveryRuleVerdict(text) {
@@ -155,23 +162,23 @@ function recoveryRuleVerdict(text) {
   const frontmatter = parseFrontmatter(source).fm;
   const errors = [];
   if (frontmatter.alwaysApply !== 'true') errors.push('frontmatter alwaysApply: true is missing');
-  if (!/KW-COMPACT-RECOVERY-V1/.test(source)) {
+  if (!/KW-COMPACT-RECOVERY-V2/.test(source)) {
     errors.push('shared compact-recovery sentinel is missing');
   }
-  if (!/Workflow Next/i.test(source)) errors.push('Workflow Next recovery root is missing');
+  if (!/Workflow\s+Next/i.test(source)) errors.push('Workflow Next recovery root is missing');
   if (!/Finalization/i.test(source)) errors.push('Finalization recovery root is missing');
   if (!/Runtime dispatch contract \(always loaded\)/i.test(source)) {
     errors.push('always-loaded dispatch contract is missing');
   }
-  for (const term of ['outcome', 'evidence', 'worktree/commit', 'custody', 'stop condition']) {
+  for (const term of ['outcome', 'evidence', 'worktree or commit', 'custody', 'stop condition']) {
     if (!new RegExp(term, 'i').test(source)) {
       errors.push('always-loaded dispatch contract is missing its ' + term + ' boundary');
     }
   }
-  if (!/standalone (?:Cursor )?CLI[\s\S]*App local[\s\S]*Cloud/i.test(source)) {
-    errors.push('the same project-rule carrier is not named for CLI, App local, and Cloud');
+  if (!/CLI, App local, and App Cloud are separate hosts/i.test(source)) {
+    errors.push('the runtime adapter does not keep CLI, App local, and Cloud distinct');
   }
-  if (!/no\s+(?:Cursor\s+)?(?:hook\s+or\s+)?tool-use\s+(?:hook|lifecycle)/i.test(source)) {
+  if (!/(?:no|without)[^\n.]{0,80}tool-use\s+(?:hook|lifecycle)/i.test(source)) {
     errors.push('rule does not exclude tool-use hooks');
   }
   return { ok: errors.length === 0, errors, frontmatter };
@@ -358,8 +365,8 @@ function canonicalRosters(names) {
 const CURSOR_RUNTIME_NATIVE = Object.freeze({
   frontmatter_tier_pin:
     'Cursor generated agent frontmatter pins canonical standard/reasoning/heavy model classes to unquoted grok-4.6[effort=medium/high/xhigh]; command cards omit per-call model dispatch.',
-  project_recovery_rule:
-    'Cursor standalone CLI, App local, and App-started Cloud discover the same .cursor/rules recovery rule with alwaysApply: true; no tool-use hook or Kaola hook subprocess is installed, so ordinary tool use adds zero context.',
+  machine_global_recovery_rule:
+    'Cursor standalone CLI, App local, and App-started Cloud receive one machine-global alwaysApply Rule; no tool-use hook or Kaola hook subprocess is installed, so ordinary tool use adds zero context.',
 });
 
 // The canonical model tokens are the existing portable class markers, not a
@@ -677,7 +684,7 @@ function commandRel(name, forge) {
 // G2: commands — exact set = routing-registry commandSources() for the forge,
 // not a hand list. Finalize follows the live Cursor Task schema/current catalog; it must not
 // mechanically translate portable Agent cards into an invented static Task field list.
-// Compact recovery is carried by the always-applied project rule, not by a command hook or
+// Compact recovery is carried by the global transaction's always-applied Rule, not by a command hook or
 // a runtime stamp in generated command prose. No CLAUDE_PLUGIN_ROOT, no ~/.claude/kaola-workflow.
 // No model="{...}" placeholders, no per-call model=" overrides, and no vendor model dispatch
 // in command cards.
@@ -714,11 +721,13 @@ function commandRel(name, forge) {
       assert(staticDispatchFields(content).length === 0,
         'G2[kaola-workflow-finalize]: no invented static subagent_type= or description= fields escape into the Cursor render');
       const recoveryRel = '.cursor/rules/' + CURSOR_RECOVERY_RULE;
-      const recovery = exists(recoveryRel) ? read(recoveryRel) : '';
+      const recovery = renderedGlobalRule();
       const recoveryVerdict = recoveryRuleVerdict(recovery);
       assert(recoveryVerdict.ok,
-        'G2[kaola-workflow-finalize]: compressed recovery and dispatch contract remain in the always-applied project rule — '
+        'G2[kaola-workflow-finalize]: global transaction render carries compressed recovery and dispatch — '
         + recoveryVerdict.errors.join(' | '));
+      assert(!exists(recoveryRel),
+        'G2[kaola-workflow-finalize]: generated edition does not duplicate the retired project recovery Rule');
     }
     if (name === 'workflow-init') {
       assert(typeof fm['argument-hint'] === 'string' && fm['argument-hint'].length > 0,
@@ -908,8 +917,7 @@ function commandRel(name, forge) {
 }
 
 // G2-leak forbids vendor model slugs on command/rule cards except for the
-// explicit tier bindings inside the runtime-delegation block on next/finalize
-// and the always-applied Cursor recovery rule.
+// explicit tier bindings inside the runtime-delegation block on next/finalize.
 {
   const B2_MODEL_NOUN = /\b(Opus|Sonnet)\b/;
   const VENDOR_SLUG = /\bgrok-4\.\d\b|\bgrok-build\b/;
@@ -918,7 +926,6 @@ function commandRel(name, forge) {
   const TIER_GUIDANCE_COMMANDS = new Set([
     commandRel('workflow-next'),
     commandRel('kaola-workflow-finalize'),
-    '.cursor/rules/' + CURSOR_RECOVERY_RULE,
   ]);
 
   function vendorSlugScope(rel, content) {
@@ -979,11 +986,13 @@ function commandRel(name, forge) {
     }
   }
   const recoveryRel = '.cursor/rules/' + CURSOR_RECOVERY_RULE;
-  const recovery = exists(recoveryRel) ? read(recoveryRel) : '';
+  const recovery = renderedGlobalRule();
   const recoveryVerdict = recoveryRuleVerdict(recovery);
   assert(recoveryVerdict.ok,
-    'G2: compact recovery and always-loaded dispatch contract are carried by the project rule — '
+    'G2: compact recovery and always-loaded dispatch contract are carried by the global transaction render — '
     + recoveryVerdict.errors.join(' | '));
+  assert(!exists(recoveryRel),
+    'G2: generated edition contains no duplicate compact-recovery Rule');
 
   // Mutation bite: an allowed command path is not itself a blanket exemption.
   // The same scope check must reject a tier slug copied past the closing marker.
@@ -1011,7 +1020,7 @@ function commandRel(name, forge) {
   assert(/frontmatter/i.test(reason) && /standard/i.test(reason) && /reasoning/i.test(reason)
     && /medium/i.test(reason) && /high/i.test(reason) && /unquoted/i.test(reason) && /heavy|xhigh/i.test(reason),
     'G2-declaration: the "' + KEY + '" reason must state unquoted standard/reasoning/heavy medium/high/xhigh frontmatter pins');
-  const resumeKey = 'project_recovery_rule';
+  const resumeKey = 'machine_global_recovery_rule';
   const resumeReason = CURSOR_RUNTIME_NATIVE[resumeKey];
   assert(typeof resumeReason === 'string' && resumeReason.trim().length >= 20,
     'G2-declaration: CURSOR_RUNTIME_NATIVE must declare "' + resumeKey + '" with a one-line reason');
@@ -1099,10 +1108,10 @@ for (const role of reviewerGenerator.ROLES) {
 }
 
 // ---------------------------------------------------------------------------
-// G5: Cursor compact recovery is a project rule, not a hook. The generated
+// G5: Cursor compact recovery is a machine-global Rule, not a hook. The generated
 // hooks mapping remains valid JSON with an empty `hooks` object so ordinary
-// tool use has no Kaola injection or subprocess. The same always-applied rule
-// is discovered by standalone CLI, App local, and App-started Cloud.
+// tool use has no Kaola injection or subprocess. The global transaction renders
+// the same always-applied contract for standalone CLI, App local, and Cloud.
 // ---------------------------------------------------------------------------
 {
   const hooksJsonRel = '.cursor/hooks.json';
@@ -1116,33 +1125,32 @@ for (const role of reviewerGenerator.ROLES) {
     'G5: generated project has no executable hook files — found ' + JSON.stringify(generatedHookFiles));
 
   const ruleRel = '.cursor/rules/' + CURSOR_RECOVERY_RULE;
-  assert(exists(ruleRel), 'G5: generated project rule exists at ' + ruleRel);
-  const rule = exists(ruleRel) ? read(ruleRel) : '';
+  assert(!exists(ruleRel), 'G5: generated edition retires the duplicate project rule at ' + ruleRel);
+  const rule = renderedGlobalRule();
   const verdict = recoveryRuleVerdict(rule);
   assert(verdict.ok,
-    'G5-rule: one always-applied recovery rule carries both roots, dispatch, and all three Cursor hosts — '
+    'G5-rule: one global-transaction Rule carries both roots, dispatch, and all three Cursor hosts — '
     + verdict.errors.join(' | '));
-  const renderRule = typeof syncMod.renderCursorRecoveryRule === 'function'
-    ? syncMod.renderCursorRecoveryRule(DEFAULT_FORGE) : null;
-  assert(typeof syncMod.renderCursorRecoveryRule === 'function',
-    'G5-rule: sync-cursor-edition exports renderCursorRecoveryRule(forge)');
-  assert(renderRule !== null && rule === renderRule,
-    'G5-rule: generated rule is byte-identical to the renderer output');
+  assert(typeof syncMod.renderCursorRecoveryRule !== 'function',
+    'G5-rule: edition renderer no longer exports a second recovery-Rule renderer');
   assert(syncMod.expectedHookFiles().length === 0,
     'G5: Cursor renderer declares zero hook files');
 
   // The Rule embeds one complete generated continuation prompt, not duplicate
   // copies of the full Workflow Next and Finalization documents.
   const routing = require('./generate-routing-surfaces.js');
-  const expectedPrompt = routing.renderCompactRecoveryPrompt('cursor', DEFAULT_FORGE).trim();
+  const expectedPrompt = routing.renderCompactRecoveryPrompt('cursor', DEFAULT_FORGE, {
+    globalContract: fs.readFileSync(path.join(REPO,
+      'templates', 'global', 'kaola-workflow-global.md'), 'utf8').trim(),
+  }).trim();
   const dispatchSource = fs.readFileSync(
     path.join(REPO, 'templates', 'routing', 'dispatch-contract.md'), 'utf8').trim();
   assert(rule.includes(expectedPrompt),
-    'G5-block: alwaysApply rule embeds the exact generated Cursor continuation prompt');
-  assert((rule.match(/KW-COMPACT-RECOVERY-V1/g) || []).length === 1
-    && /If any mission is todo or in-flight, continue Workflow Next/.test(rule)
-    && /If every mission is\s+done, continue Kaola-Workflow Finalization/.test(rule),
-  'G5-block: one direct prompt covers both durable operation states');
+    'G5-block: global Rule embeds the exact generated Cursor continuation prompt');
+  assert((rule.match(/KW-COMPACT-RECOVERY-V2/g) || []).length === 1
+    && /completely reload the installed Workflow Next prompt/.test(rule)
+    && /completely\s+reload the installed Kaola-Workflow Finalization prompt/.test(rule),
+  'G5-block: one direct prompt reloads the complete operation prompt for either durable state');
   assert(rule.includes(dispatchSource)
     && (rule.match(/Runtime dispatch contract \(always loaded\)/g) || []).length === 1,
   'G5-block: Rule carries the exact shared dispatch source once');
@@ -1371,13 +1379,11 @@ for (const role of reviewerGenerator.ROLES) {
       assert(!fs.existsSync(path.join(r.cursorHome, 'hooks.json')),
         'G8-project: no user-global hooks.json is created by project install');
       const projectRule = path.join(r.dest, '.cursor', 'rules', CURSOR_RECOVERY_RULE);
-      const projectRuleBytes = fs.existsSync(projectRule) ? fs.readFileSync(projectRule, 'utf8') : '';
-      assert(fs.existsSync(projectRule),
-        'G8-project: always-applied recovery rule lands at <target>/.cursor/rules/');
-      const projectRuleVerdict = recoveryRuleVerdict(projectRuleBytes);
-      assert(projectRuleVerdict.ok,
-        'G8-project: installed recovery rule is valid for every Cursor host — '
-        + projectRuleVerdict.errors.join(' | '));
+      const projectGlobalRule = path.join(r.dest, '.cursor', 'rules', CURSOR_GLOBAL_RULE);
+      assert(!fs.existsSync(projectRule),
+        'G8-project: edition install retires rather than duplicates the old project recovery Rule');
+      assert(!fs.existsSync(projectGlobalRule),
+        'G8-project: standalone edition install leaves the global Rule to the explicit global transaction');
       clean(r);
     }
 
@@ -1404,13 +1410,11 @@ for (const role of reviewerGenerator.ROLES) {
       assert(!fs.existsSync(path.join(r.cursorHome, 'hooks')),
         'G8-global: installs no user-global executable hook directory');
       const globalRule = path.join(r.cursorHome, 'rules', CURSOR_RECOVERY_RULE);
-      assert(fs.existsSync(globalRule),
-        'G8-global: global authority carries the same always-applied project recovery rule');
-      const globalRuleVerdict = recoveryRuleVerdict(fs.existsSync(globalRule)
-        ? fs.readFileSync(globalRule, 'utf8') : '');
-      assert(globalRuleVerdict.ok,
-        'G8-global: authority rule is valid for standalone CLI, App local, and Cloud — '
-        + globalRuleVerdict.errors.join(' | '));
+      const transactionRule = path.join(r.cursorHome, 'rules', CURSOR_GLOBAL_RULE);
+      assert(!fs.existsSync(globalRule),
+        'G8-global: edition installer retires the old recovery Rule');
+      assert(!fs.existsSync(transactionRule),
+        'G8-global: edition installer does not impersonate the install-all global transaction');
       assert(fs.readdirSync(stagingParent).length === 0,
         'G8-global: isolated generated source is removed after the install transaction');
       clean(r);
@@ -1452,8 +1456,9 @@ for (const role of reviewerGenerator.ROLES) {
       }
     }
 
-    // The same project rule must be discoverable on every Cursor host. The installer
-    // has one project carrier; host-specific hook declarations are intentionally absent.
+    // The edition installer must remain free of duplicate Rules on every Cursor host.
+    // The explicit global transaction is exercised independently by issue-1046 acceptance;
+    // host-specific hook declarations are intentionally absent here.
     // These are independent hermetic targets, each exercised through the real installer,
     // rather than a fabricated host-internal trust or hook API.
     for (const host of [
@@ -1464,22 +1469,16 @@ for (const role of reviewerGenerator.ROLES) {
       const r = runInstaller([]);
       const hooksPath = path.join(r.dest, '.cursor', 'hooks.json');
       const rulePath = path.join(r.dest, '.cursor', 'rules', CURSOR_RECOVERY_RULE);
+      const transactionRulePath = path.join(r.dest, '.cursor', 'rules', CURSOR_GLOBAL_RULE);
       const mapping = fs.existsSync(hooksPath)
         ? parseCursorHooksJson(fs.readFileSync(hooksPath, 'utf8')) : null;
-      const rule = fs.existsSync(rulePath) ? fs.readFileSync(rulePath, 'utf8') : '';
-      const ruleVerdict = recoveryRuleVerdict(rule);
       assert(r.status === 0,
         'G8-rule[' + host.id + ']: project install exits 0 for ' + host.product + '/' + host.host);
       noKaolaCursorHooks(mapping, 'G8-rule[' + host.id + ']');
       assert(!fs.existsSync(path.join(r.dest, '.cursor', 'hooks')),
         'G8-rule[' + host.id + ']: no host-specific executable hook carrier is installed');
-      assert(ruleVerdict.ok,
-        'G8-rule[' + host.id + ']: alwaysApply project rule is valid — '
-        + ruleVerdict.errors.join(' | '));
-      const renderedHostRule = typeof syncMod.renderCursorRecoveryRule === 'function'
-        ? syncMod.renderCursorRecoveryRule(DEFAULT_FORGE) : null;
-      assert(renderedHostRule !== null && rule === renderedHostRule,
-        'G8-rule[' + host.id + ']: same project rule bytes are installed on every host');
+      assert(!fs.existsSync(rulePath) && !fs.existsSync(transactionRulePath),
+        'G8-rule[' + host.id + ']: edition contributes no duplicate recovery/global Rule');
       clean(r);
     }
 
@@ -1924,8 +1923,8 @@ for (const role of reviewerGenerator.ROLES) {
       clean(r);
     }
 
-    // --no-scripts skips support scripts; agents/commands and the project recovery
-    // rule still deploy. No install mode may reintroduce a Cursor hook carrier.
+    // --no-scripts skips support scripts; agents/commands still deploy. No edition
+    // install mode may reintroduce a duplicate Rule or Cursor hook carrier.
     {
       const withScripts = runInstaller([]);
       const scriptsDir = path.join(withScripts.cursorHome, 'kaola-workflow', 'scripts');
@@ -1933,8 +1932,8 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-noscripts: default install deploys support scripts (the --no-scripts contrast)');
       assert(!fs.existsSync(path.join(withScripts.dest, '.cursor', 'hooks')),
         'G8-noscripts: default install still deploys no executable hooks');
-      assert(fs.existsSync(path.join(withScripts.dest, '.cursor', 'rules', CURSOR_RECOVERY_RULE)),
-        'G8-noscripts: default install deploys the alwaysApply recovery rule');
+      assert(!fs.existsSync(path.join(withScripts.dest, '.cursor', 'rules', CURSOR_RECOVERY_RULE)),
+        'G8-noscripts: default edition install does not deploy the retired recovery Rule');
       clean(withScripts);
 
       const r = runInstaller(['--no-scripts']);
@@ -1942,8 +1941,8 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-noscripts: --no-scripts exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
       assert(fs.existsSync(path.join(r.dest, '.cursor', 'agents', 'knowledge-lookup.md')),
         'G8-noscripts: agents still deploy');
-      assert(fs.existsSync(path.join(r.dest, '.cursor', 'rules', CURSOR_RECOVERY_RULE)),
-        'G8-noscripts: recovery rule remains project-scoped');
+      assert(!fs.existsSync(path.join(r.dest, '.cursor', 'rules', CURSOR_RECOVERY_RULE)),
+        'G8-noscripts: no-scripts mode also leaves the retired recovery Rule absent');
       assert(!fs.existsSync(path.join(r.cursorHome, 'kaola-workflow', 'scripts')),
         'G8-noscripts: skips $CURSOR_HOME/kaola-workflow/scripts');
       const hooksDir = path.join(r.dest, '.cursor', 'hooks');
@@ -1994,7 +1993,7 @@ for (const role of reviewerGenerator.ROLES) {
     }
 
     // A fresh partial authority created for --no-scripts is legitimate, but a later ordinary
-    // project install must promote support/rule bytes without creating a hook declaration.
+    // project install must promote support bytes without creating a Rule or hook declaration.
     {
       const partial = runInstaller(['--no-scripts']);
       const support = path.join(partial.cursorHome, 'kaola-workflow', 'scripts',
@@ -2012,8 +2011,8 @@ for (const role of reviewerGenerator.ROLES) {
         && !fs.existsSync(path.join(partial.dest, '.cursor', 'hooks')),
         'G8-noscripts-promotion: later default install promotes support without hook bytes');
       noKaolaCursorHooks(projectHooks, 'G8-noscripts-promotion');
-      assert(fs.existsSync(path.join(partial.dest, '.cursor', 'rules', CURSOR_RECOVERY_RULE)),
-        'G8-noscripts-promotion: later default install retains the project recovery rule');
+      assert(!fs.existsSync(path.join(partial.dest, '.cursor', 'rules', CURSOR_RECOVERY_RULE)),
+        'G8-noscripts-promotion: later default install keeps the retired recovery Rule absent');
       clean(promoted);
     }
 
@@ -2183,7 +2182,7 @@ for (const role of reviewerGenerator.ROLES) {
 
 // G10 — every ordinary Cursor tool-use path is hook-free. The generated mapping
 // and source hook inventory are the subject; no host-internal event runner is
-// fabricated here. Compact recovery is the alwaysApply project rule in G5.
+// fabricated here. Compact recovery is the machine-global alwaysApply Rule in G5.
 {
   const mappingText = typeof syncMod.renderCursorHooksJson === 'function'
     ? syncMod.renderCursorHooksJson()

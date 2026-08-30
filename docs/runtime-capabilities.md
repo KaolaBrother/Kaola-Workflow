@@ -64,8 +64,10 @@ or modified ownership. Cursor App local and Cloud do not inherit that point-of-u
 Cursor Cloud environment setup may install the remote authority and selected repository, report
 the successful Build ID, and ask the user to click Save. A new top-level Agent in that same
 repository must visibly match the Build before its catalog is trusted.
-The same project materialization installs one `alwaysApply` recovery rule for CLI, App local, and
-Cloud. It is separate from named-agent catalog discovery and installs no Cursor hook.
+The global-contract transaction installs one local user `alwaysApply` Rule shared by CLI and App.
+Cloud setup explicitly materializes identical bytes in the selected repository because the remote
+host cannot inherit a local user carrier. This is separate from named-agent discovery and installs
+no Cursor hook.
 
 ## Compact recovery carriers
 
@@ -75,17 +77,17 @@ contract. No runtime needs Kaola context before or after every tool.
 
 | Family | Measured compact-recovery carrier |
 | --- | --- |
-| Claude / Codex | One `SessionStart(source=compact)` command directly prints the generated complete runtime prompt. No compact-time JS and no tool/Stop recovery hooks. |
-| Grok | One native Rule under project `.grok/rules/` or `$GROK_HOME/rules/`. Official docs say Rules enter model context for every interaction, while passive hook stdout is ignored and compact uses distinct `PreCompact`/`PostCompact` events. No compact/tool/Stop recovery hooks. |
-| Cursor CLI / App local / App Cloud | One generated project Rule with `alwaysApply: true`; Rules are system-level prompt context. Cloud does not support `sessionStart`, and `preCompact` cannot inject. Cursor hooks stay empty. |
+| Claude / Codex | One `SessionStart(source=compact)` command directly prints static V2: global contract, operation reload route, mandatory dispatch contract, and runtime adapter. No compact-time JS or tool/Stop recovery hooks. |
+| Grok | One machine-global native Rule at `$GROK_HOME/rules/kaola-workflow-global.md`. Rules enter every interaction while passive hook stdout is ignored. Edition installs emit no duplicate Rule or compact/tool/Stop hook. |
+| Cursor CLI / App local / App Cloud | One V2 `alwaysApply` Rule: local CLI/App share the user carrier; Cloud explicitly materializes identical bytes in the selected repository. Cloud has no `sessionStart`, and `preCompact` cannot inject. Cursor hooks stay empty. |
 | OpenCode | No new Issue #1044 prompt lifecycle; the initial command remains authority and the existing compact-state behavior is unchanged. |
 | Kimi | No Kaola prompt lifecycle; upgrade removes the retired managed PostCompact block. |
 | ZCode | No prompt lifecycle; the measured 1,000,000-token session and a live PreToolUse self-lock argue against a speculative compact gate. |
 
 Across all families, ordinary tool use adds 0 Kaola recovery bytes and starts 0 Kaola recovery
-subprocesses. Recovery-enabled runtimes receive an already-generated artifact and decide Workflow
-Next versus Finalization after rereading durable state. There is no compact-time JS, native session
-token, sidecar, chunk bitmap, or acknowledgement state.
+subprocesses. Recovery-enabled runtimes receive an already-generated artifact, reread durable state,
+then completely reload the installed Workflow Next or Finalization prompt. There is no compact-time
+JS, native session token, sidecar, chunk bitmap, or acknowledgement state.
 
 ## Default tier bindings
 
@@ -234,11 +236,12 @@ route does not churn `resolved_profile_hash` or all 126 role profiles.
   says repository `.cursor/rules/*.mdc` rules apply to every Cloud Agent using the repository.
   [CLI usage](https://cursor.com/docs/cli/using) documents CLI instruction loading.
 
-Together these official contracts establish one cross-host compact carrier: project
-`.cursor/rules/kaola-workflow-compact-recovery.mdc` with `alwaysApply: true`. The installer
-materializes the same file for standalone CLI, App local, and the selected Cloud repository. Its
-hook mapping is deliberately empty; neither a local-only `sessionStart` nor non-injecting
-`preCompact` is used as a false universal mechanism.
+Together these official contracts establish the cross-host carrier shape: an `alwaysApply` Rule.
+The global transaction writes local `~/.cursor/rules/kaola-workflow-global.mdc` once for CLI/App;
+Cloud setup writes identical bytes to the selected repository's
+`.cursor/rules/kaola-workflow-global.mdc`. The edition installer owns neither copy and removes its
+retired duplicate. Its hook mapping is deliberately empty; neither a local-only `sessionStart` nor
+non-injecting `preCompact` is used as a false universal mechanism.
 
 **Supported CLI measurement (runtime evidence, 2026-08-27).** Authenticated standalone Cursor CLI
 `2026.08.25-3e8eec8` was re-run against an isolated user carrier and an explicit disposable

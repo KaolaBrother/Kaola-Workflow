@@ -22,7 +22,7 @@ const ALL_GENERATED_SURFACES = [...GENERATED_SURFACES, ...RUNTIME_RECOVERY_SURFA
 // surfaces are held to the same bytes rather than to a second copy that could drift from it.
 const { ADAPTER_SOURCE, BEHAVIOR_SOURCE, RETIRED_VOCABULARY_BAN } = require('./generate-agent-profiles.js');
 const { applyRenames } = require('../templates/routing/rename-table.js');
-const { SLOTS, SPLICES } = require('../templates/routing/slots.js');
+const { SLOTS, SPLICES, GLOBAL_WORKFLOW_CONTRACT_SOURCE } = require('../templates/routing/slots.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -317,20 +317,17 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   const ir = { slots: SLOTS, splices: SPLICES };
   const requiredByTopic = {
     init: [
-      'The executable consumer wording lives only in the adjacent',
+      'The executable project wording lives only in the adjacent',
       '`kaola-workflow-project-instruction-templates.js` distribution module',
       'kaola-workflow-project-instructions.js',
+      'compatible machine-global receipt',
       'plan --project-root "$PWD" --json',
       'apply --project-root "$PWD" --json',
       'check --project-root "$PWD" --json',
       'decision_required',
       'active_run_preserved',
-      'authority_layout_equivalent',
-      'execution_default_change',
-      'state_schema_incompatible',
-      'unknown_or_mixed',
       'converged',
-      'every owner byte outside those regions byte-for-byte',
+      'suffix of owner bytes',
     ],
     next: [
       '<!-- PIN: consent-in-conversation -->',
@@ -505,11 +502,11 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     const id = `${row.surface_type}/${row.forge} (${row.path})`;
     const authorityLandmarks = row.surface_type === 'command'
       ? [
-        'Make `AGENTS.md` the universal project contract.',
-        'smallest bridge to `AGENTS.md` plus that runtime\'s genuine overlay',
+        'Keep `AGENTS.md` as the project contract',
+        'Universal workflow behavior belongs to',
       ]
       : [
-        'Reconcile `AGENTS.md` as the universal authority',
+        'Reconcile `AGENTS.md` as a project-only contract',
         'Keep any runtime-native first-read instruction file as a thin bridge plus runtime-only overlay',
       ];
     for (const landmark of authorityLandmarks) {
@@ -533,8 +530,9 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   // MUTATION PROOF: each detector accepts a compliant boundary and rejects a
   // believable near-miss without touching any production or generated file.
   const authorityBoundary = [
-    'Make `AGENTS.md` the universal project contract.',
-    'Keep `CLAUDE.md` as a thin bridge to it.',
+    'Keep `AGENTS.md` as the project-only contract.',
+    'The machine-global contract carries universal behavior.',
+    'Keep `CLAUDE.md` as a thin bridge to project instructions.',
     'If the helper reports `decision_required`, ask in conversation and write nothing.',
     'Never edit or replace either instruction authority outside the helper decision.',
   ].join('\n');
@@ -882,6 +880,7 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     // It is not visible in Node's require graph, so copy the path exported by its owning module.
     copy(ADAPTER_SOURCE);
     copy(BEHAVIOR_SOURCE);
+    copy(path.relative(repo, GLOBAL_WORKFLOW_CONTRACT_SOURCE));
     copy(path.join('templates', 'routing', 'dispatch-contract.md'));
     for (const skeleton of new Set(ALL_GENERATED_SURFACES.map(r => r.skeleton))) {
       copy(path.join('templates', 'routing', skeleton));

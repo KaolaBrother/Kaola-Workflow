@@ -3565,9 +3565,10 @@ function testGiteaCompactResume266() {
   const prompt = fs.readFileSync(promptPath, 'utf8');
   assert.strictEqual(prompt, routing.renderCompactRecoveryPrompt('codex', 'gitea'),
     '#1044 gt case4: installed prompt must equal its generation-time runtime rendering');
-  assert.ok(prompt.includes('Recovery marker: `KW-COMPACT-RECOVERY-V1`.')
+  assert.ok(prompt.includes('Recovery marker: `KW-COMPACT-RECOVERY-V2`.')
     && prompt.includes('**Runtime dispatch contract (always loaded).**')
-    && prompt.includes('Workflow Next') && prompt.includes('Finalization'),
+    && /completely reload the installed Workflow\s+Next prompt/.test(prompt)
+    && /completely\s+reload the installed Kaola-Workflow Finalization prompt/.test(prompt),
     '#1044 gt case4: static prompt must carry continuation and dispatch roots');
   assert.ok(!/\bnode\b|\.js\b|PreToolUse|PostToolUse/.test(prompt),
     '#1044 gt case4: compact recovery must not execute JS or inject around tool use');

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
-// Issue #1044 acceptance: each runtime uses its measured native carrier. Claude,
-// Codex, and Grok read one generated prompt at compact; Cursor uses one project
-// Rule across CLI/App/Cloud; OpenCode/Kimi/ZCode add no compact lifecycle.
+// Issue #1044/#1046 acceptance: Claude and Codex inject one static prompt after
+// compact. Grok and Cursor keep the same prompt in the single global contract
+// Rule; their edition installers emit no second recovery Rule.
 
 const fs = require('fs');
 const path = require('path');
@@ -14,9 +14,10 @@ const grok = require('./sync-grok-edition.js');
 const kimi = require('./sync-kimi-edition.js');
 const opencode = require('./sync-opencode-edition.js');
 const zcode = require('./sync-zcode-edition.js');
+const globalContract = require('./kaola-workflow-global-contract.js');
 
 const REPO = path.resolve(__dirname, '..');
-const MARKER = 'KW-COMPACT-RECOVERY-V1';
+const MARKER = 'KW-COMPACT-RECOVERY-V2';
 let passed = 0;
 let failed = 0;
 function assert(condition, message) {
@@ -58,18 +59,23 @@ for (const [label, rel] of [
   ['Codex Gitea', 'plugins/kaola-workflow-gitea/config/hooks.json'],
 ]) assertStaticCompactHook(json(rel), `A1[${label}]`);
 
+const registry = json('templates/global/runtime-contract-adapters.json');
+const source = read('templates/global/kaola-workflow-global.md');
+const grokTarget = registry.targets.find(target => target.id === 'grok-local');
+const cursorTarget = registry.targets.find(target => target.id === 'cursor-cli-local');
+const grokRule = globalContract.renderContract({ source, target: grokTarget });
 assert(JSON.stringify(grok.expectedHookFiles()) === '[]'
-  && grok.expectedRuleFiles().includes('kaola-workflow-compact-recovery.md')
-  && routing.renderCompactRecoveryPrompt('grok', 'github').includes(MARKER),
-  'A2[Grok]: adapter emits one native Rule and no compact hook');
+  && JSON.stringify(grok.expectedRuleFiles()) === '[]'
+  && grokRule.includes(Buffer.from(MARKER)),
+  'A2[Grok]: global transaction renders one native Rule; edition emits no hook or duplicate Rule');
 
 const cursorHooks = JSON.parse(cursor.renderCursorHooksJson());
-const cursorRule = cursor.renderCursorRecoveryRule('github');
+const cursorRule = globalContract.renderContract({ source, target: cursorTarget }).toString('utf8');
 assert(cursorHooks.hooks && Object.keys(cursorHooks.hooks).length === 0,
   'B1[Cursor]: generated hooks mapping is empty');
 assert(/^---\n[\s\S]*^alwaysApply:\s*true$/m.test(cursorRule),
   'B1[Cursor]: recovery carrier is an always-applied project Rule');
-assert(/standalone CLI[\s\S]*App local[\s\S]*Cloud/i.test(cursorRule),
+assert(/\bCLI[\s\S]*App local[\s\S]*App Cloud/i.test(cursorRule),
   'B1[Cursor]: one Rule explicitly covers CLI, App local, and Cloud');
 assert(cursorRule.includes(routing.renderCompactRecoveryPrompt('cursor', 'github').trim()),
   'B2[Cursor]: Rule embeds the complete generated Cursor prompt');
@@ -95,8 +101,9 @@ for (const forge of manifest.FORGES) {
     `D1[${forge}]: forge install emits no compact JavaScript`);
 }
 assert(read('install.sh').includes('kaola-workflow-compact-recovery.md')
-  && read('install-grok.sh').includes('kaola-workflow-compact-recovery.md'),
-  'D2: Claude and Grok installers deploy the generated prompt artifact');
+  && read('scripts/kaola-workflow-global-contract.js').includes('renderCompactRecoveryPrompt')
+  && read('install-grok.sh').includes('kaola-workflow-global.md'),
+  'D2: Claude injects the static prompt; global transaction owns the Grok/Cursor persistent render');
 assert(/hookReferencedRelPaths/.test(read('plugins/kaola-workflow/scripts/install-codex-agent-profiles.js')),
   'D2: Codex installer resolves the prompt referenced by its trusted hook mapping');
 
@@ -106,8 +113,8 @@ const expectedEvents = {
   'codex-github': ['SessionStart'],
   'codex-gitlab': ['SessionStart'],
   'codex-gitea': ['SessionStart'],
-  grok: ['always-loaded native rule'],
-  cursor: ['alwaysApply project rule'],
+  grok: ['machine-global always-loaded rule'],
+  cursor: ['machine-global alwaysApply rule'],
   opencode: [],
   kimi: [],
   zcode: [],

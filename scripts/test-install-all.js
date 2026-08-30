@@ -380,6 +380,20 @@ function stubRoot(opts) {
     cursor:   writeStub(root, 'install-cursor.sh',     'bash', codes.cursor ?? 0, '.ran-cursor'),
     zcode:     writeStub(root, 'install-zcode.sh',       'bash', codes.zcode ?? 0, '.ran-zcode'),
   };
+  // #1046: install-all now gates every runtime installer behind one read-only
+  // preflight / atomic global-contract transaction. This stub keeps the wrapper
+  // suite hermetic; the focused global-contract suite owns the real filesystem
+  // behavior, while this suite proves ordering and no runtime call on failure.
+  const globalContract = path.join(root, 'scripts', 'kaola-workflow-global-contract.js');
+  fs.mkdirSync(path.dirname(globalContract), { recursive: true });
+  fs.writeFileSync(globalContract, [
+    '#!/usr/bin/env node',
+    "const mode = process.argv[2];",
+    "process.stdout.write(JSON.stringify({schema_version:1,status:mode==='check'?'CURRENT':'INSTALLED',targets:[]})+'\\n');",
+    `process.exit(${codes.globalContract ?? 0});`,
+    '',
+  ].join('\n'));
+  fs.chmodSync(globalContract, 0o755);
   const treeVersion = opts.treeVersion || '5.0.0';
   // opts.pluginDir / opts.pluginName let a case build a FORGE edition manifest
   // (plugins/kaola-workflow-gitlab/... declaring name kaola-workflow-gitlab).

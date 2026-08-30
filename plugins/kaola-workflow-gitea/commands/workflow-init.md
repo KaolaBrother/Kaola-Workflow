@@ -54,21 +54,20 @@ If there is no Gitea remote, or if `tea` is unavailable or unauthenticated, skip
 
 ## Step 2 — Reconcile project instructions
 
-Make `AGENTS.md` the universal project contract. A runtime-native instruction file may exist only as
-the smallest bridge to `AGENTS.md` plus that runtime's genuine overlay. Preserve user-authored content
-byte-for-byte outside managed regions; never replace an owner-only file on inference.
+Keep `AGENTS.md` as the project contract: verified project facts, commands, constraints, validation,
+documentation pointers, gotchas, and local overrides only. Universal workflow behavior belongs to
+the compatible machine-global contract already loaded by the active runtime. A runtime-native
+project instruction file may exist only as the smallest bridge to `AGENTS.md` plus a genuine local
+overlay. Preserve user-authored content byte-for-byte outside managed regions; never replace an
+owner-only file on inference.
 
 Resolve and run the installed `kaola-workflow-project-instructions.js` helper in `plan` mode first.
-If it reports `decision_required`, ask in conversation and write nothing. A compatible
-`authority_layout_equivalent` change may apply during an active run; `execution_default_change`
-keeps bare `apply` non-mutating and exposes ephemeral `consent.apply_args` bound to the exact old/new
-plan. After conversation consent, pass those exact arguments to `apply`; no approval is stored.
-`state_schema_incompatible` (`active_run_preserved`) writes nothing and has no consent bypass.
-`apply` is atomic and
-idempotent: a second apply must be a no-op, while `check` verifies convergence without writing.
-
-Recommended universal size: under 200 lines. This is a recommendation, not a limit. Move long detail
-to documentation or runtime-specific overlays rather than duplicating the universal contract.
+It verifies the machine-global receipt before proposing project bytes. An absent, stale, malformed,
+or incompatible receipt returns `decision_required`: run the release's `install-all.sh`, start a fresh
+runtime session, and retry init. `workflow-init` never installs global bytes itself. Any active run
+returns `active_run_preserved` and writes nothing; finish or archive that run before changing project
+instructions. A safe inactive migration is atomic and idempotent, while `check` verifies convergence
+without writing.
 
 Use this policy:
 
@@ -76,13 +75,10 @@ Use this policy:
 |---------|----------|---------|
 | Project Snapshot | yes | What this project is, stack, and main architecture in 2-5 bullets |
 | Commands | yes | Install, test, lint/typecheck/build, dev server commands; use `unknown` when not detected |
-| Non-Negotiable Rules | yes | Stable constraints agents must follow every session |
-| Validation Policy | yes | Treat background hooks as advisory and avoid duplicate validation |
-| Kaola-Workflow | yes | Orchestrator, backlog, compliance, and archive rules in concise form |
-| Project Conventions | optional | Only real detected or user-provided conventions |
-| Known Gotchas | optional | Only repeated hazards that would waste time |
+| Project Constraints | yes | Security, public-contract, compatibility, or generated-file constraints unique to this repository |
+| Validation Policy | yes | Focused, integration, environment, and service acceptance specific to this project |
 | Documentation Map | yes | Pointers to docs, not embedded docs |
-| Maintenance | yes | Rules for keeping universal guidance concise |
+| Local Overrides | yes | Real project-only precedence, exceptions, or repeated gotchas; use `none` or `unknown` honestly |
 
 Optional content belongs elsewhere unless it must be read in every session:
 - Put path-specific rules in `.claude/rules/*.md`.
@@ -94,15 +90,15 @@ Optional content belongs elsewhere unless it must be read in every session:
 ### Executable template authority
 
 Do not edit either instruction file independently of the helper's reported outcome. The adjacent
-distribution module supplies the complete consumer wording. `decision_required`,
-`execution_default_change` (ask in conversation, then use the plan's ephemeral apply arguments), and
-`state_schema_incompatible` (`active_run_preserved`, no bypass) mean no bare instruction-file write
-for those changes. `authority_layout_equivalent` may apply during an active run without rewriting
-claim, Mission List, worktree, or locators.
+distribution module supplies the complete project wording. `decision_required` means the global
+receipt or project ownership boundary is not safe, so no instruction file is written.
+`active_run_preserved` means the project bytes stay frozen until the run closes. There is no consent
+or schema bypass for either result.
 
-The executable consumer wording lives only in the adjacent
+The executable project wording lives only in the adjacent
 `kaola-workflow-project-instruction-templates.js` distribution module. Do not synthesize, paste, or
-independently restate that universal contract in this surface; the helper below is its only writer.
+independently restate the global contract in this surface; the helper below is the project carrier's
+only writer.
 
 > **Claude dispatch posture note:** Audit dispatch posture for this session before claiming
 > role-dispatch readiness: probe the `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` environment variable
@@ -130,15 +126,11 @@ node "$INSTRUCTIONS_JS" check --project-root "$PWD" --json
 ```
 
 The helper owns only `<!-- KW-AGENTS-MANAGED-START -->` through its matching END and the runtime
-overlay's own managed region. Known legacy managed redirects may be migrated; mixed files preserve
-every owner byte outside those regions byte-for-byte. Unknown, malformed, duplicate, or owner-only
-instruction authority returns `decision_required`: ask in conversation and make no write. Per managed
-change the helper reports `authority_layout_equivalent`, `execution_default_change`,
-`state_schema_incompatible`, or `unknown_or_mixed`. A compatible authority-layout migration may apply
-during an active run; an execution-default change asks in conversation, leaves bare `apply`
-non-mutating, and may apply only with the unchanged plan's exact ephemeral `consent.apply_args`; a
-state/schema-incompatible change returns `active_run_preserved` with no consent bypass. Successful
-reruns are idempotent and report `converged` with an empty write list.
+overlay's own managed region. It writes only after a compatible machine-global receipt is present.
+The exact released full-template prefix may migrate to the project-only layout while preserving a
+suffix of owner bytes; mixed legacy, unknown, malformed, duplicate, or owner-only authority returns
+`decision_required` and writes nothing. Any active run returns `active_run_preserved` with no bypass.
+Successful inactive reruns are idempotent and report `converged` with an empty write list.
 ---
 
 ## Step 4 — Create Missing Workflow Structure

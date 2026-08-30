@@ -343,9 +343,8 @@ if (agentsMdLines > 200) {
   process.stderr.write('notice: AGENTS.md is ' + agentsMdLines + ' lines, above the recommended 200. '
     + 'Nothing fails on this. Move detail to docs/ or skills, and offer the user help trimming it.\n');
 }
-// Kept in step with the injected block below — they are the same contract, one authored and one
-// generated. `.cache/` stood here for the per-node evidence files; an item's outcome now lives in
-// the mission list's own `result` field, so the record to pin is the list.
+// The producer AGENTS remains rich. Consumer projects now split universal run behavior into the
+// machine-global contract and compact route; their project template intentionally omits it.
 assertConcept('AGENTS.md', 'compact durable state contract', [
   'kaola-workflow/.roadmap/_rules.md',
   'is the one optional local file that survives',
@@ -353,16 +352,20 @@ assertConcept('AGENTS.md', 'compact durable state contract', [
   'workflow-state.md',
   'mission-list.md'
 ]);
-assertConcept('scripts/kaola-workflow-project-instruction-templates.js', 'generated AGENTS durable state contract', [
-  'kaola-workflow/.roadmap/_rules.md',
-  'is the one optional local file that survives',
-  'kaola-workflow/{project}/',
-  'workflow-state.md',
-  // The injected block grounds durable state on the run's mission list — the one coordination
-  // record a zero-context successor reads.
-  'mission-list.md',
+assertConcept('templates/global/kaola-workflow-global.md', 'machine-global Mission List contract', [
+  'Mission List',
+  'item',
+  'status',
   'dispatched',
-  'in-flight'
+  'result',
+  'in-flight',
+]);
+assertConcept('templates/routing/compact-recovery.skeleton.md', 'compact durable-state route', [
+  'AGENTS.md',
+  'workflow-state.md',
+  'mission-list.md',
+  'Workflow Next',
+  'Finalization',
 ]);
 assertConcept('docs/workflow-state-contract.md', 'durable sources', [
   'durable sources',
@@ -438,21 +441,23 @@ assertIncludes('commands/workflow-init.md', 'decision_required');
 // command, outside the KW-AGENTS-TEMPLATE region (in the Codex-hooks-note area).
 assertIncludes('commands/workflow-init.md', 'claude_dispatch_posture: teams | classic');
 
-// #609: the injected ## Kaola-Workflow template must forbid vendor-model embellishment of the
-// role-routing bullets. Live sessions were authoring "planner (Opus)" into consumer CLAUDE.md; the
-// generated section must stay runtime-neutral (tier vocabulary), never a Claude model noun. Pin the
-// constraint sentence on the root Claude workflow-init surface (the codex validator pins all six).
-assertIncludes('scripts/kaola-workflow-project-instruction-templates.js', 'never by a vendor model name');
+// #609/#1046: project-only instructions contain no vendor-model dispatch guidance; the global
+// contract stays vendor-neutral and runtime tier bindings remain adapter data.
+assert(!/\b(?:Opus|Sonnet|Haiku|gpt-[\w.-]+|grok-[\w.-]+)\b/i.test(
+  read('scripts/kaola-workflow-project-instruction-templates.js')),
+'scripts/kaola-workflow-project-instruction-templates.js must contain no vendor model literal');
+assertNotIncludes('scripts/kaola-workflow-project-instruction-templates.js',
+  'Name roles by function and reasoning tier');
 
-// The distribution module is the sole executable consumer AGENTS template. Workflow-init surfaces
-// must invoke its helper without embedding a second authoring copy. Run the same positive mission-
-// list and retired-vocabulary checks over the module's actual exported bytes.
+// The distribution module is the sole executable project-only AGENTS template. Workflow-init must
+// invoke it without embedding a second copy. Universal mission and routing behavior is intentionally
+// absent here and remains load-bearing in the global/dispatch sources.
 {
-  // The rule the template must teach, in the region's own words. Every needle is load-bearing: the
-  // record's name, its four fields, the write discipline, and the uncomputed frontier.
   const missionListVocabulary = ['mission-list.md', '`item`', '`status`', '`dispatched`', '`result`',
     'Three write moments', 'the list minus done minus in-flight'];
   const template = norm(require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE);
+  const globalContract = norm(read('templates/global/kaola-workflow-global.md'));
+  const dispatchContract = norm(read('templates/routing/dispatch-contract.md'));
   assert(template.trim().length > 0,
     'the distribution-owned consumer AGENTS template is empty — the bans below would pass vacuously');
   for (const file of ['commands/workflow-init.md', 'templates/routing/init.skeleton.md']) {
@@ -468,41 +473,44 @@ assertIncludes('scripts/kaola-workflow-project-instruction-templates.js', 'never
       'the consumer AGENTS template must not teach the retired DAG executor — found "' + gone + '"');
   }
   for (const taught of missionListVocabulary) {
-    assert(template.includes(norm(taught)),
-      'the consumer AGENTS template must teach the mission list — missing "' + taught + '"');
+    assert(!template.includes(norm(taught)),
+      'the project-only AGENTS template must omit universal mission wording — found "' + taught + '"');
+  }
+  for (const taught of ['Mission List', '`item`', '`status`', '`dispatched`', '`result`',
+    'three write moments']) {
+    assert(globalContract.includes(norm(taught)),
+      'the machine-global contract must teach mission behavior — missing "' + taught + '"');
   }
   assert(!template.includes(norm('configured model')),
     'the consumer AGENTS template must not contain "configured model"');
   assert(!template.includes(norm('ships its model in its installed profile')),
     'the consumer AGENTS template must not contain "ships its model in its installed profile"');
-  const runtimeRoutingVocabulary = [
-    'Prefer the installed named role',
-    'workflow-next / finalize capability guide',
-    'lookup, dispatch carrier, default tier binding, and available native routes',
-    'A built-in or generic child may take an item only as its real mechanism',
-    'task, custody, evidence, and stop boundaries',
-    'never present it as a missing named role',
-    'Inline only that item when no adequate route exists',
-  ];
+  const runtimeRoutingVocabulary = ['Runtime dispatch contract (always loaded)',
+    'named, built-in, and generic routes only under their real identities',
+    'custody, evidence, and stop boundaries',
+    'Never let a generic route impersonate a custody-bearing named role',
+    'record the specific `capability_gap`'];
   for (const taught of runtimeRoutingVocabulary) {
-    assert(template.includes(norm(taught)),
-      'the consumer AGENTS template must teach runtime-guided, honest item-local routing — missing "'
+    assert(dispatchContract.includes(norm(taught)),
+      'the always-loaded dispatch source must teach honest item-local routing — missing "'
       + taught + '"');
   }
-  const noImpersonation = 'never present it as a missing named role';
-  const impersonatingMutation = template.replace(norm(noImpersonation), '');
+  assert(!/Runtime dispatch contract|capability_gap|named role/i.test(template),
+    'the project-only AGENTS template must not duplicate universal dispatch behavior');
+  const noImpersonation = 'Never let a generic route impersonate a custody-bearing named role';
+  const impersonatingMutation = dispatchContract.replace(norm(noImpersonation), '');
   assert(!impersonatingMutation.includes(norm(noImpersonation)),
     'the consumer routing guard mutation removes no-impersonation before testing the oracle');
   assert(runtimeRoutingVocabulary.some(taught => !impersonatingMutation.includes(norm(taught))),
     'the consumer routing guard must reject a generic child that can impersonate a missing named role');
   const runtimeBrandOf = content => String(content).match(
     /\b(?:Claude|Codex|OpenCode|Kimi|Grok|Cursor|ZCode)\b/i);
-  const runtimeBrand = runtimeBrandOf(template);
+  const runtimeBrand = runtimeBrandOf(globalContract + ' ' + dispatchContract);
   assert(!runtimeBrand,
-    'the universal consumer AGENTS routing contract must stay vendor-neutral'
+    'the global and dispatch contracts must stay vendor-neutral'
     + (runtimeBrand ? ' — found "' + runtimeBrand[0] + '"' : ''));
-  assert(!!runtimeBrandOf(template + ' Cursor'),
-    'the consumer routing guard mutation proves a vendor name would trip the neutral-authority oracle');
+  assert(!!runtimeBrandOf(globalContract + ' Cursor'),
+    'the global routing guard mutation proves a vendor name would trip the neutral-authority oracle');
 }
 
 // issue #283: kaola-workflow-phase6.md hard-removed; kaola-workflow-finalize.md is the

@@ -625,10 +625,14 @@ function commandRel(name, forge) {
         assertReal(content.includes(role),
           'G2[kaola-workflow-finalize]: native prose preserves the canonical dispatch role ' + role);
       }
-      for (const boundary of [
-        'outcome', 'evidence', 'worktree/commit', 'custody', 'stop condition',
+      for (const [boundary, pattern] of [
+        ['outcome', /outcome/i],
+        ['evidence', /evidence/i],
+        ['worktree/commit', /worktree\s+(?:or|\/)\s*commit/i],
+        ['custody', /custody/i],
+        ['stop condition', /stop condition/i],
       ]) {
-        assertReal(content.toLowerCase().includes(boundary),
+        assertReal(pattern.test(content),
           'G2[kaola-workflow-finalize]: native prose preserves the ' + boundary + ' brief boundary');
       }
       assertReal(/automatic selection/i.test(content) && /@<role>|@.*role/i.test(content)

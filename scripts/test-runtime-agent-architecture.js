@@ -545,17 +545,17 @@ assert(duplicatedUniversalSections.length === 0,
 assert(Buffer.byteLength(claudeRoot) < Buffer.byteLength(agentsRoot),
   'A2: CLAUDE.md is a thin overlay, smaller than the universal AGENTS.md contract');
 
-// A3 — workflow-init states all ownership cases and uses runtime-neutral universal markers.
+// A3 — workflow-init is a project-only consumer of a compatible global contract.
 const initSource = read('templates/routing/init.skeleton.md') || '';
 for (const [label, pattern] of [
   ['user ownership', /user-authored/i],
   ['byte preservation', /byte-for-byte/i],
   ['idempotent reruns', /idempotent/i],
-  ['conflict escalation', /ask in conversation/i],
-  ['authority-layout class', /authority_layout_equivalent/],
-  ['execution-default consent', /execution_default_change/],
-  ['state-schema fence', /state_schema_incompatible/],
-  ['unknown-or-mixed class', /unknown_or_mixed/],
+  ['global receipt prerequisite', /compatible machine-global receipt/i],
+  ['project-only contract', /project contract: verified project facts/i],
+  ['active-run freeze', /active_run_preserved/],
+  ['no active-run bypass', /no consent\s+or schema bypass/i],
+  ['runtime-install boundary', /never installs global bytes|global installation is outside/i],
 ]) {
   assert(pattern.test(initSource), `A3: workflow-init carries the ${label} migration outcome`);
 }
@@ -665,16 +665,36 @@ assert(!/KW-CLAUDE-(?:TEMPLATE|MANAGED)/.test(initSource),
       && /Keep working within the current promised outcome while custody and causal boundary remain unchanged\./i.test(n)
       && /Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class\./i.test(n);
   };
-  const issue1042Sources = [nextSource, finalizeSource, ...compactRecoverySources];
-  assert(issue1042Sources.every(keepsFinalizationOutsideList),
-    'A3[issue-1042]: next/finalize/generated compact prompts keep finalization, closure, archive, and sink outside Mission List with readiness and evidence truth');
-  assert(issue1042Sources.every(text => !retired.test(norm(text))),
-    'A3[issue-1042]: next/finalize/generated compact prompts reject the old absolute repair/re-review append rule');
-  assert(issue1042Sources.every(keepsAttemptsInsideOutcome),
-    'A3[issue-1042]: next/finalize/generated compact prompts keep attempts inside the current outcome and append only new custody outcomes or causal classes');
+  const issue1042OperationSources = [nextSource, finalizeSource];
+  const globalContract = read('templates/global/kaola-workflow-global.md') || '';
+  const globalLifecycleBoundary = text => {
+    const n = norm(text);
+    return /Finalization, issue closure, archive, and sink are not Mission List items/i.test(n)
+      && /last mission[^.]*readiness/i.test(n)
+      && /lifecycle records[^.]*final truth/i.test(n);
+  };
+  const globalAttemptBoundary = text => {
+    const n = norm(text);
+    return /A mission is a recoverable outcome, not a specification, selector/i.test(n)
+      && /A failed command, intermediate finding, repair attempt, or review round does not create another mission/i.test(n)
+      && /Append a mission only for a new recoverable outcome with new custody or a newly discovered independent causal class/i.test(n);
+  };
+  assert(globalLifecycleBoundary(globalContract)
+      && issue1042OperationSources.every(text => !/Finalization[^.]*are Mission List items/i.test(norm(text))),
+    'A3[issue-1042]: global authority keeps lifecycle work outside Mission List and operations do not contradict it');
+  assert(issue1042OperationSources.every(text => !retired.test(norm(text))),
+    'A3[issue-1042]: next/finalize reject the old absolute repair/re-review append rule');
+  assert(globalAttemptBoundary(globalContract)
+      && issue1042OperationSources.every(text => !/repair or re-review work must append/i.test(norm(text))),
+    'A3[issue-1042]: global authority keeps attempts inside the causal class and operations do not restore attempt missions');
+  assert(compactRecoverySources.every(text => text.split(globalContract.trim()).length - 1 === 1),
+    'A3[issue-1042]: every compact prompt reloads the exact global contract once');
+  assert(compactRecoverySources.every(text => globalAttemptBoundary(text)
+    && globalLifecycleBoundary(text)),
+    'A3[issue-1042]: compact recovery retains mission granularity and lifecycle boundary through the global source');
   const compactSurfaceNorms = compactRecoverySources.map(norm);
-  assert(compactSurfaceNorms.every(text => /a completed item and its result are immutable/i.test(text)
-    && /one dispatch has one result,? including FAIL/i.test(text)),
+  assert(compactSurfaceNorms.every(text => /a completed item and (?:its )?result are immutable/i.test(text)
+    && /one dispatch has one result/i.test(text)),
     'A3[issue-1042]: generated compact prompts retain immutability and one-dispatch/one-result invariants');
   const fixture = 'Finalization, Issue closure, archive, and sink are not Mission List items. The last run mission establishes readiness for finalization. The finalization summary, closure evidence, archive state, and sink receipt own the transaction\'s truth. A failed command, intermediate finding, repair attempt, or review round does not by itself create a mission. Keep working within the current promised outcome while custody and causal boundary remain unchanged. Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class.';
   assert(keepsFinalizationOutsideList(fixture) && keepsAttemptsInsideOutcome(fixture),
@@ -684,12 +704,12 @@ assert(!/KW-CLAUDE-(?:TEMPLATE|MANAGED)/.test(initSource),
   assert(!keepsAttemptsInsideOutcome(fixture.replace('does not by itself', 'must')),
     'A3[issue-1042] mutation RED: one mission per repair/re-review attempt is rejected');
   const compactRecoveryMutationSubject = compactRecoverySources[0] || '';
-  assert(!keepsAttemptsInsideOutcome(compactRecoveryMutationSubject.replace(
-    'does not by itself create a mission', 'creates a mission')),
-    'A3[issue-1042] compact-prompt mutation RED: attempt-level mission teaching is rejected');
-  assert(!keepsFinalizationOutsideList(compactRecoveryMutationSubject.replace(
-    'are not Mission List items', 'are Mission List items')),
-    'A3[issue-1042] compact-prompt mutation RED: finalization inside Mission List is rejected');
+  assert(!globalAttemptBoundary(compactRecoveryMutationSubject.replace(
+    'not a specification, selector', 'a specification and selector')),
+  'A3[issue-1042] compact-prompt mutation RED: selector-level mission teaching is rejected');
+  assert(!/Finalization, issue closure, archive, and sink are not Mission List items/i.test(
+    compactRecoveryMutationSubject.replace('are not Mission List items', 'are Mission List items')),
+  'A3[issue-1042] compact-prompt mutation RED: finalization inside Mission List is rejected');
 }
 
 // The shipped workflow-init text is necessary but cannot prove that owner bytes survive a real
@@ -745,11 +765,28 @@ if (migrationModule) {
     fs.writeFileSync(path.join(root, 'CLAUDE.md'), claudeBytes);
   }
 
+  function compatibleReceiptEnv(projectRoot, envOverrides) {
+    const overrides = Object.assign({}, envOverrides || {});
+    if (!Object.prototype.hasOwnProperty.call(overrides, 'KAOLA_GLOBAL_CONTRACT_RECEIPT')) {
+      const receiptPath = path.join(path.dirname(projectRoot),
+        '.' + path.basename(projectRoot) + '-global-contract-receipt.json');
+      fs.writeFileSync(receiptPath, JSON.stringify({
+        schema_version: 1,
+        contract_schema_version: 1,
+        status: 'CURRENT',
+        source_sha256: 'a'.repeat(64),
+        targets: [{ id: 'codex-local', status: 'INSTALLED' }],
+      }) + '\n');
+      overrides.KAOLA_GLOBAL_CONTRACT_RECEIPT = receiptPath;
+    }
+    return Object.assign({}, process.env, overrides);
+  }
+
   function runMigration(mode, projectRoot, extraArgs, envOverrides) {
     // spawn-class: environment
     const result = spawnSync(process.execPath,
       [migrationPath, mode, '--project-root', projectRoot, '--json'].concat(extraArgs || []), {
-        encoding: 'utf8', env: Object.assign({}, process.env, envOverrides || {}),
+        encoding: 'utf8', env: compatibleReceiptEnv(projectRoot, envOverrides),
       });
     let envelope = null;
     try { envelope = JSON.parse(String(result.stdout || '').trim()); } catch (_) { /* asserted below */ }
@@ -760,7 +797,7 @@ if (migrationModule) {
     // spawn-class: environment
     const result = spawnSync(process.execPath,
       [helperPath, mode, '--project-root', projectRoot, '--json'].concat(extraArgs || []), {
-        encoding: 'utf8', env: Object.assign({}, process.env, envOverrides || {}),
+        encoding: 'utf8', env: compatibleReceiptEnv(projectRoot, envOverrides),
       });
     let envelope = null;
     try { envelope = JSON.parse(String(result.stdout || '').trim()); } catch (_) { /* asserted below */ }
@@ -785,13 +822,6 @@ if (migrationModule) {
     }
     visit(root, '');
     return rows.sort();
-  }
-
-  function consentApplyArgs(envelope) {
-    const consent = envelope && envelope.consent;
-    return consent && consent.kind === 'execution_default_change'
-      && consent.ephemeral === true && Array.isArray(consent.apply_args)
-      ? consent.apply_args.map(String) : [];
   }
 
   function hasRepositorySpecificContract(bytes) {
@@ -915,6 +945,24 @@ if (migrationModule) {
     try { fs.rmSync(conflictRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   }
 
+  const noReceiptRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1046-no-global-receipt-'));
+  try {
+    const missingReceipt = path.join(noReceiptRoot, 'absent-global-receipt.json');
+    const result = runMigration('apply', noReceiptRoot, [], {
+      KAOLA_GLOBAL_CONTRACT_RECEIPT: missingReceipt,
+    });
+    assert(result.status === 2 && result.envelope
+      && result.envelope.status === 'decision_required'
+      && result.envelope.changed === false && result.envelope.writes.length === 0
+      && JSON.stringify(result.envelope).includes('global_contract_receipt_missing'),
+    'A3[global-contract]: missing machine-global receipt is a zero-write decision_required result');
+    assert(!fs.existsSync(path.join(noReceiptRoot, 'AGENTS.md'))
+      && !fs.existsSync(path.join(noReceiptRoot, 'CLAUDE.md')),
+    'A3[global-contract]: receipt failure creates no project instruction carrier');
+  } finally {
+    try { fs.rmSync(noReceiptRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
+
   const activeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-active-'));
   try {
     writeInstructionFixture(activeRoot, legacyRedirect, ownerClaude);
@@ -934,31 +982,24 @@ if (migrationModule) {
       '',
     ].join('\n');
     fs.writeFileSync(path.join(stateDir, 'mission-list.md'), missionList);
+    const agentsBefore = fs.readFileSync(path.join(activeRoot, 'AGENTS.md'));
+    const claudeBefore = fs.readFileSync(path.join(activeRoot, 'CLAUDE.md'));
     const active = runMigration('apply', activeRoot);
     assert(active.status === 0 && active.envelope
-      && active.envelope.status === 'applied'
-      && active.envelope.changed === true
-      && active.envelope.files.agents.compatibility === 'authority_layout_equivalent'
-      && active.envelope.files.claude.compatibility === 'authority_layout_equivalent',
-    'A3[active]: a compatible authority-layout migration applies during an active run');
+      && active.envelope.status === 'active_run_preserved'
+      && active.envelope.changed === false
+      && active.envelope.writes.length === 0,
+    'A3[active]: any active run freezes both project instruction carriers');
     const stateAfter = fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8');
     assert(stateAfter.includes('status: active'),
       'A3[active]: layout adoption does not rewrite claim/worktree status');
     assert(fs.readFileSync(path.join(stateDir, 'mission-list.md'), 'utf8') === missionList,
       'A3[active]: Mission List bytes including extra fields stay untouched');
-    const receiptPath = path.join(stateDir, '.cache', 'instruction-adoption.json');
-    assert(fs.existsSync(receiptPath),
-      'A3[active]: layout adoption writes a recovery receipt under the active run .cache');
-    const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
-    assert(receipt.kind === 'instruction_adoption'
-      && receipt.fresh_session_requirement === 'not_inspected_by_init'
-      && receipt.files.agents.before_sha256
-      && receipt.files.agents.after_sha256
-      && receipt.files.agents.before_sha256 !== receipt.files.agents.after_sha256,
-    'A3[active]: receipt carries old/new hashes and does not inspect the adapter');
-    assert(/<!--\s*KW-AGENTS-MANAGED-START\s*-->/.test(fs.readFileSync(path.join(activeRoot, 'AGENTS.md'), 'utf8'))
-      && exactLineCount(fs.readFileSync(path.join(activeRoot, 'CLAUDE.md')), '@AGENTS.md') === 1,
-    'A3[active]: active-run layout adoption reaches AGENTS-canonical plus a thin Claude bridge');
+    assert(fs.readFileSync(path.join(activeRoot, 'AGENTS.md')).equals(agentsBefore)
+      && fs.readFileSync(path.join(activeRoot, 'CLAUDE.md')).equals(claudeBefore),
+    'A3[active]: active-run preservation leaves both instruction files byte-identical');
+    assert(!fs.existsSync(path.join(stateDir, '.cache', 'instruction-adoption.json')),
+      'A3[active]: frozen active-run migration writes no adoption receipt');
   } finally {
     try { fs.rmSync(activeRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   }
@@ -975,44 +1016,20 @@ if (migrationModule) {
     const stateBytes = '# Kaola-Workflow State\n\n## Project\nname: active-run\nstatus: active\n';
     fs.writeFileSync(path.join(stateDir, 'workflow-state.md'), stateBytes);
     const planned = runMigration('plan', execRoot);
-    assert(planned.envelope && planned.envelope.files.agents.compatibility === 'execution_default_change',
-      'A3[active-execution]: drifted AGENTS managed region is execution_default_change');
+    assert(planned.status === 0 && planned.envelope
+      && planned.envelope.status === 'active_run_preserved',
+    'A3[active-execution]: plan freezes drifted project instructions during an active run');
     const applied = runMigration('apply', execRoot);
-    assert(applied.status === 2 && applied.envelope
-      && applied.envelope.status === 'decision_required'
+    assert(applied.status === 0 && applied.envelope
+      && applied.envelope.status === 'active_run_preserved'
       && applied.envelope.changed === false && applied.envelope.writes.length === 0,
-    'A3[active-execution]: execution-default change during an active run does not write');
+    'A3[active-execution]: apply cannot bypass the active-run freeze');
     assert(fs.readFileSync(path.join(execRoot, 'AGENTS.md')).equals(driftedAgents),
-      'A3[active-execution]: AGENTS bytes stay until conversation consent');
+      'A3[active-execution]: AGENTS bytes stay until the run closes');
     assert(fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8') === stateBytes,
       'A3[active-execution]: workflow-state is never a write target');
-    assert(planned.envelope.files.agents.before_sha256
-      !== planned.envelope.files.agents.after_sha256,
-    'A3[active-execution]: plan still shows exact old/new hashes for consent');
     assert(!fs.existsSync(path.join(stateDir, '.cache', 'instruction-adoption.json')),
-      'A3[active-execution]: refused execution-default writes leave no adoption receipt');
-
-    const consentArgs = consentApplyArgs(planned.envelope);
-    assert(consentArgs.length > 0,
-      'A3[active-execution-consent]: plan exposes explicit ephemeral apply args bound to the '
-      + 'execution-default old/new evidence — got '
-      + JSON.stringify(planned.envelope && planned.envelope.consent));
-    const consented = consentArgs.length > 0
-      ? runMigration('apply', execRoot, consentArgs) : null;
-    assert(!!consented && consented.status === 0 && consented.envelope
-      && consented.envelope.status === 'applied'
-      && consented.envelope.files.agents.compatibility === 'execution_default_change'
-      && consented.envelope.writes.includes('AGENTS.md'),
-    'A3[active-execution-consent]: the real helper applies the execution-default change only '
-      + 'through the explicit post-conversation consent leg');
-    assert(consented && !fs.readFileSync(path.join(execRoot, 'AGENTS.md')).equals(driftedAgents)
-      && fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8') === stateBytes,
-    'A3[active-execution-consent]: consent changes only the planned instruction bytes and preserves '
-      + 'the active claim state');
-    const durableConsent = treeSnapshot(stateDir).filter(row => /(?:approval|consent)/i.test(row));
-    assert(durableConsent.length === 0,
-      'A3[active-execution-consent]: conversation consent leaves no durable approval state — got '
-      + JSON.stringify(durableConsent));
+      'A3[active-execution]: active-run freeze writes no adoption receipt');
   } finally {
     try { fs.rmSync(execRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   }
@@ -1041,11 +1058,10 @@ if (migrationModule) {
     const claudeBefore = fs.readFileSync(path.join(incompatibleRoot, 'CLAUDE.md'));
     const planned = runMigration('plan', incompatibleRoot);
     const applied = runMigration('apply', incompatibleRoot);
-    assert(planned.envelope && JSON.stringify(planned.envelope).includes('state_schema_incompatible'),
-      'A3[active-state-schema]: production plan classifies unsupported active state bytes as '
-      + 'state_schema_incompatible');
+    assert(planned.envelope && planned.envelope.status === 'active_run_preserved',
+      'A3[active-state-schema]: unsupported active state is preserved without migration');
     assert(applied.status === 0 && applied.envelope
-      && ['active_run_preserved', 'decision_required'].includes(applied.envelope.status)
+      && applied.envelope.status === 'active_run_preserved'
       && applied.envelope.changed === false && applied.envelope.writes.length === 0
       && JSON.stringify(applied.envelope).includes('state_schema_incompatible'),
     'A3[active-state-schema]: production apply fences an incompatible active run without writes');
@@ -1060,11 +1076,8 @@ if (migrationModule) {
     try { fs.rmSync(incompatibleRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   }
 
-  // Mixed active-run compatibility is per managed change, not a repository-wide
-  // freeze bit. An incompatible state fences the execution-default AGENTS drift,
-  // while the independent thin Claude bridge remains safe to adopt. Drive both
-  // pending changes through the real CLI and require a receipt that records only
-  // the applied layout-equivalent write.
+  // Active-run preservation is repository-wide: neither a managed AGENTS drift nor
+  // an absent thin Claude bridge may be repaired while any run is active.
   const mixedSchemaRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1037-mixed-schema-'));
   try {
     const canonicalTemplates = require(path.join(ROOT, 'scripts',
@@ -1087,35 +1100,24 @@ if (migrationModule) {
     fs.writeFileSync(path.join(stateDir, 'mission-list.md'), missionBytes);
     const planned = runMigration('plan', mixedSchemaRoot);
     const applied = runMigration('apply', mixedSchemaRoot);
-    assert(planned.envelope
-      && planned.envelope.files.agents.compatibility === 'execution_default_change'
-      && planned.envelope.files.claude.compatibility === 'authority_layout_equivalent'
+    assert(planned.envelope && planned.envelope.status === 'active_run_preserved'
       && JSON.stringify(planned.envelope).includes('state_schema_incompatible'),
-    'A3[active-state-schema-mixed]: production plan independently classifies fenced AGENTS, '
-      + 'layout-equivalent Claude, and incompatible active state');
-    assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied'
-      && applied.envelope.changed === true
-      && JSON.stringify(applied.envelope.writes) === JSON.stringify(['CLAUDE.md'])
+    'A3[active-state-schema-mixed]: plan preserves the complete active project surface');
+    assert(applied.status === 0 && applied.envelope
+      && applied.envelope.status === 'active_run_preserved'
+      && applied.envelope.changed === false
+      && applied.envelope.writes.length === 0
       && JSON.stringify(applied.envelope).includes('state_schema_incompatible')
       && !Object.prototype.hasOwnProperty.call(applied.envelope, 'consent'),
-    'A3[active-state-schema-mixed]: incompatible state fences only AGENTS while apply writes the '
-      + 'independent thin Claude bridge without consent');
+    'A3[active-state-schema-mixed]: apply changes neither carrier and exposes no bypass');
     assert(fs.readFileSync(path.join(mixedSchemaRoot, 'AGENTS.md')).equals(driftedAgents)
-      && fs.readFileSync(path.join(mixedSchemaRoot, 'CLAUDE.md')).equals(
-        Buffer.from(canonicalTemplates.CLAUDE_TEMPLATE))
+      && fs.readFileSync(path.join(mixedSchemaRoot, 'CLAUDE.md')).equals(Buffer.alloc(0))
       && fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8') === stateBytes
       && fs.readFileSync(path.join(stateDir, 'mission-list.md'), 'utf8') === missionBytes,
-    'A3[active-state-schema-mixed]: partial adoption preserves fenced instruction, incompatible '
-      + 'state, Mission List, and unknown fields byte-for-byte');
+    'A3[active-state-schema-mixed]: freeze preserves instructions, state, Mission List, and unknown fields');
     const receiptPath = path.join(stateDir, '.cache', 'instruction-adoption.json');
-    const receipt = fs.existsSync(receiptPath)
-      ? JSON.parse(fs.readFileSync(receiptPath, 'utf8')) : null;
-    assert(receipt && receipt.kind === 'instruction_adoption'
-      && JSON.stringify(receipt.writes) === JSON.stringify(['CLAUDE.md'])
-      && !Object.prototype.hasOwnProperty.call(receipt, 'consent')
-      && !Object.prototype.hasOwnProperty.call(receipt, 'approval'),
-    'A3[active-state-schema-mixed]: recovery evidence records only the applied layout-equivalent '
-      + 'write and does not approve the fenced AGENTS change');
+    assert(!fs.existsSync(receiptPath),
+      'A3[active-state-schema-mixed]: freeze writes no adoption receipt');
   } finally {
     try { fs.rmSync(mixedSchemaRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   }
@@ -1395,15 +1397,20 @@ if (migrationModule) {
           '# Kaola-Workflow State\n\n## Project\nname: active-run\nstatus: active\n');
         fs.writeFileSync(path.join(stateDir, 'mission-list.md'),
           '# goal\n\n- item: keep me\n  status: done\n  dispatched: self\n  result: already landed\n');
+        const agentsBefore = fs.readFileSync(path.join(v9ActiveRoot, 'AGENTS.md'));
+        const claudeBefore = fs.readFileSync(path.join(v9ActiveRoot, 'CLAUDE.md'));
         const appliedActive = runMigration('apply', v9ActiveRoot);
         assert(appliedActive.status === 0 && appliedActive.envelope
-          && appliedActive.envelope.status === 'applied'
-          && appliedActive.envelope.files.agents.compatibility === 'authority_layout_equivalent',
-        'A3[v9-active]: exact v9 pair adopts AGENTS-canonical layout during an active run');
-    assert(fs.readFileSync(path.join(stateDir, 'mission-list.md'), 'utf8').includes('keep me'),
-      'A3[v9-active]: Mission List bytes are unchanged');
-    assert(fs.existsSync(path.join(stateDir, '.cache', 'instruction-adoption.json')),
-      'A3[v9-active]: compatible layout adoption leaves a recovery receipt');
+          && appliedActive.envelope.status === 'active_run_preserved'
+          && appliedActive.envelope.changed === false
+          && appliedActive.envelope.writes.length === 0,
+        'A3[v9-active]: exact v9 pair remains frozen during an active run');
+        assert(fs.readFileSync(path.join(v9ActiveRoot, 'AGENTS.md')).equals(agentsBefore)
+          && fs.readFileSync(path.join(v9ActiveRoot, 'CLAUDE.md')).equals(claudeBefore)
+          && fs.readFileSync(path.join(stateDir, 'mission-list.md'), 'utf8').includes('keep me'),
+        'A3[v9-active]: both instruction carriers and Mission List bytes are unchanged');
+        assert(!fs.existsSync(path.join(stateDir, '.cache', 'instruction-adoption.json')),
+          'A3[v9-active]: active-run freeze leaves no adoption receipt');
       } finally {
         try { fs.rmSync(v9ActiveRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
       }

@@ -36,7 +36,8 @@ moments.
 ## Decisions
 
 [`decisions/`](decisions/) holds the full catalog. ADR 0020 records the AGENTS-first repository and
-role-authority architecture; ADR 0021 adds the runtime-native next/finalize guidance boundary. ADR
+role-authority architecture; ADR 0021 adds runtime-native next/finalize guidance; ADR 0022 moves
+universal workflow behavior to one machine-global contract and compact-safe native carriers. ADR
 0017 remains the Mission List design of record; #1037 refines outcome-level missions, custody vs
 carrier, and active-run layout adoption without adding fields. Most older records describe the
 node/DAG executor that
@@ -45,6 +46,11 @@ ADR 0017 retired or the Claude-first role generation that ADR 0020 supersedes.
 - **[0021 — Runtime-native orchestration guidance](decisions/0021-runtime-native-orchestration-guidance.md)**
   — common per-item judgment, honest fallback, adapter-rendered native capability exposure, and
   owner-approved default tier bindings without a Kaola scheduler or invented runtime limits.
+
+- **[0022 — Machine-global workflow contract](decisions/0022-machine-global-workflow-contract.md)**
+  — one universal source, nine measured host adapters, batch-safe installation, subtractive project
+  instructions, and V2 compact recovery that reloads the complete active operation without tool
+  hooks or inference-time JavaScript.
 
 - **[0020 — AGENTS-first runtime bridges](decisions/0020-agents-first-runtime-bridges.md)** — one
   universal repository authority, one behavioral source for all 14 roles, evidence-backed native

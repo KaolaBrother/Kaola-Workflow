@@ -31,6 +31,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const forgeLayout = require('./runtime-edition-forge.js');
 const reviewerGenerator = require('./generate-agent-profiles.js');
+const globalContract = require('./kaola-workflow-global-contract.js');
 
 const REPO = path.resolve(__dirname, '..');
 const SYNC_JS = path.join(REPO, 'scripts', 'sync-grok-edition.js');
@@ -595,19 +596,24 @@ for (const role of reviewerGenerator.ROLES) {
 }
 
 // ---------------------------------------------------------------------------
-// G5: native Rule — Grok passive-hook stdout is ignored, so the complete
-// recovery prompt rides the documented Rule carrier and no compact hook ships.
+// G5: the edition emits no second Rule. The machine-global transaction renders
+// the complete persistent Grok Rule from the one contract source.
 // ---------------------------------------------------------------------------
 {
-  const ruleRel = '.grok/rules/kaola-workflow-compact-recovery.md';
-  assert(exists(ruleRel), 'G5: generated Grok recovery Rule exists');
-  const rule = exists(ruleRel) ? read(ruleRel) : '';
-  assert(/KW-COMPACT-RECOVERY-V1/.test(rule),
-    'G5: Grok Rule carries the compact-recovery marker');
-  assert(/Runtime dispatch contract \(always loaded\)/.test(rule),
-    'G5: Grok Rule always carries the dispatch contract');
+  const retiredRel = '.grok/rules/kaola-workflow-compact-recovery.md';
+  assert(!exists(retiredRel), 'G5: generated edition has no duplicate compact recovery Rule');
+  const registry = JSON.parse(read('templates/global/runtime-contract-adapters.json'));
+  const target = registry.targets.find(row => row.id === 'grok-local');
+  const rule = globalContract.renderContract({
+    source: read('templates/global/kaola-workflow-global.md'), target,
+  }).toString('utf8');
+  assert(/KW-COMPACT-RECOVERY-V2/.test(rule)
+    && /Runtime dispatch contract \(always loaded\)/.test(rule),
+  'G5: global transaction renders complete V2 recovery and dispatch into the Grok Rule');
   assert(JSON.stringify(require('./sync-grok-edition.js').expectedHookFiles()) === '[]',
     'G5: Grok edition emits no compact hook files');
+  assert(JSON.stringify(require('./sync-grok-edition.js').expectedRuleFiles()) === '[]',
+    'G5: Grok edition emits no second persistent Rule');
 }
 
 // ---------------------------------------------------------------------------
@@ -759,9 +765,8 @@ for (const role of reviewerGenerator.ROLES) {
       assert(fs.existsSync(scriptsDir),
         'G8-project: support scripts land at $GROK_HOME/kaola-workflow/scripts');
       const projectRulePath = path.join(r.dest, '.grok', 'rules', 'kaola-workflow-compact-recovery.md');
-      assert(fs.existsSync(projectRulePath)
-        && /KW-COMPACT-RECOVERY-V1/.test(fs.readFileSync(projectRulePath, 'utf8')),
-        'G8-project: complete recovery Rule lands under <target>/.grok/rules/');
+      assert(!fs.existsSync(projectRulePath),
+        'G8-project: edition install does not duplicate the install-all-owned global Rule');
       assert(!fs.existsSync(path.join(r.grokHome, 'hooks', 'kaola-workflow-hooks.json')),
         'G8-project: project install creates no global compact hook');
       clean(r);
@@ -781,9 +786,8 @@ for (const role of reviewerGenerator.ROLES) {
       assert(!fs.existsSync(path.join(r.grokHome, '.grok')),
         'G8-global: creates NO nested .grok/ under GROK_HOME (Grok scans GROK_HOME itself)');
       const globalRulePath = path.join(r.grokHome, 'rules', 'kaola-workflow-compact-recovery.md');
-      assert(fs.existsSync(globalRulePath)
-        && /KW-COMPACT-RECOVERY-V1/.test(fs.readFileSync(globalRulePath, 'utf8')),
-        'G8-global: complete recovery Rule lands under GROK_HOME/rules/');
+      assert(!fs.existsSync(globalRulePath),
+        'G8-global: edition install leaves the global-contract carrier to install-all');
       assert(!fs.existsSync(path.join(r.grokHome, 'hooks', 'kaola-workflow-hooks.json')),
         'G8-global: global install emits no compact hook mapping');
       clean(r);
@@ -837,15 +841,15 @@ for (const role of reviewerGenerator.ROLES) {
       clean(r);
     }
 
-    // --no-scripts skips executable support; agents/commands/the native Rule still deploy.
+    // --no-scripts skips executable support; neither mode emits a duplicate Rule.
     {
       const withScripts = runInstaller([]);
       const scriptsDir = path.join(withScripts.grokHome, 'kaola-workflow', 'scripts');
       assert(fs.existsSync(scriptsDir) && fs.readdirSync(scriptsDir).length > 0,
         'G8-noscripts: default install deploys support scripts (the --no-scripts contrast)');
-      assert(fs.existsSync(path.join(withScripts.dest, '.grok', 'rules',
+      assert(!fs.existsSync(path.join(withScripts.dest, '.grok', 'rules',
         'kaola-workflow-compact-recovery.md')),
-      'G8-noscripts: default install deploys the native recovery Rule');
+      'G8-noscripts: default edition install emits no duplicate recovery Rule');
       clean(withScripts);
 
       const r = runInstaller(['--no-scripts']);
@@ -855,9 +859,9 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-noscripts: agents still deploy');
       assert(!fs.existsSync(path.join(r.grokHome, 'kaola-workflow', 'scripts')),
         'G8-noscripts: skips $GROK_HOME/kaola-workflow/scripts');
-      assert(fs.existsSync(path.join(r.dest, '.grok', 'rules',
+      assert(!fs.existsSync(path.join(r.dest, '.grok', 'rules',
         'kaola-workflow-compact-recovery.md')),
-      'G8-noscripts: recovery Rule still deploys because it starts no process');
+      'G8-noscripts: no-scripts edition install also emits no duplicate recovery Rule');
       const hooksDir = path.join(r.dest, '.grok', 'hooks');
       const hookFiles = fs.existsSync(hooksDir) ? fs.readdirSync(hooksDir) : [];
       assert(hookFiles.length === 0,

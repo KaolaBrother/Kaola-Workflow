@@ -396,6 +396,14 @@ const NON_ATOMIC_EXEMPT = [
     why: 'the receipt-owned Cursor installer publishes a complete fsynced temp file by same-directory atomic rename',
   },
   {
+    file: 'kaola-workflow-global-contract.js', api: 'writeFileSync', klass: 'atomic-helper-internal',
+    why: 'the global-contract transaction fills only a random same-directory temp file; carrier and receipt paths are never written in place',
+  },
+  {
+    file: 'kaola-workflow-global-contract.js', api: 'renameSync', klass: 'atomic-helper-internal',
+    why: 'the global-contract transaction publishes each complete temp file by same-directory atomic rename and rolls the batch back on any later write failure',
+  },
+  {
     file: 'kaola-workflow-project-instructions.js', api: 'writeFileSync', klass: 'atomic-helper-internal',
     why: 'the ownership-safe instruction migration fills a random same-directory temp file; it never writes AGENTS.md or CLAUDE.md in place',
   },

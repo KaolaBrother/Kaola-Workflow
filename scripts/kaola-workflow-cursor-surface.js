@@ -48,16 +48,19 @@ const LEGACY_10_0_1_GLOBAL_HASHES = Object.freeze({
 });
 const LEGACY_10_0_1_RETIRED_HASHES = Object.freeze({
   github: Object.freeze({
+    'rules/kaola-workflow-compact-recovery.mdc': '658211282d061d5024c5738e34664a02cfe721d39432d1323b4cdd601f15f27d',
     'kaola-workflow/scripts/kaola-workflow-ensure-cursor-catalog.js': '5fcf7a62de5704b5fa3cbd61bd920315ee7d15b53ced1584d6a460cb5659a9cf',
     'kaola-workflow/hooks/kaola-workflow-ensure-cursor-catalog.sh': '0270c37d2327fe078d5cf99e38f467ad1d4a0fb6c95911919c534444855b5dbb',
     'hooks/kaola-workflow-ensure-cursor-catalog.sh': '0270c37d2327fe078d5cf99e38f467ad1d4a0fb6c95911919c534444855b5dbb',
   }),
   gitlab: Object.freeze({
+    'rules/kaola-workflow-compact-recovery.mdc': '658211282d061d5024c5738e34664a02cfe721d39432d1323b4cdd601f15f27d',
     'kaola-workflow/scripts/kaola-workflow-ensure-cursor-catalog.js': '5fcf7a62de5704b5fa3cbd61bd920315ee7d15b53ced1584d6a460cb5659a9cf',
     'kaola-workflow/hooks/kaola-workflow-ensure-cursor-catalog.sh': 'fc7c05c1b69d07fd26c957366868dc62c18b230e82e6befe46290d94086c2f02',
     'hooks/kaola-workflow-ensure-cursor-catalog.sh': 'fc7c05c1b69d07fd26c957366868dc62c18b230e82e6befe46290d94086c2f02',
   }),
   gitea: Object.freeze({
+    'rules/kaola-workflow-compact-recovery.mdc': '658211282d061d5024c5738e34664a02cfe721d39432d1323b4cdd601f15f27d',
     'kaola-workflow/scripts/kaola-workflow-ensure-cursor-catalog.js': '5fcf7a62de5704b5fa3cbd61bd920315ee7d15b53ced1584d6a460cb5659a9cf',
     'kaola-workflow/hooks/kaola-workflow-ensure-cursor-catalog.sh': '8dc2ae61aa594e5f83fbc93867f4f0a740ffac70a94e65f99915454fa6e91047',
     'hooks/kaola-workflow-ensure-cursor-catalog.sh': '8dc2ae61aa594e5f83fbc93867f4f0a740ffac70a94e65f99915454fa6e91047',
@@ -322,9 +325,6 @@ function buildGlobalDesired(opts) {
     const rel = 'commands/' + file;
     desired[rel] = desiredRecord(sourceRegular(path.join(opts.sourceTree, rel), 'command authority'), 0o644);
   }
-  const recoveryRuleRel = 'rules/' + sync.RECOVERY_RULE;
-  desired[recoveryRuleRel] = desiredRecord(
-    sourceRegular(path.join(opts.sourceTree, recoveryRuleRel), 'Cursor persistent recovery rule'), 0o644);
   desired[INSTALLED_ADAPTER_REL] = desiredRecord(
     sourceRegular(path.join(ROOT, 'templates', 'agents', 'runtime-capabilities.json'),
       'Cursor doctor capability authority'), 0o644);
@@ -462,7 +462,9 @@ function installGlobal(opts) {
   const receiptInfo = parseReceipt(receiptPath, 'cursor_global_authority');
   const built = buildGlobalDesired(opts);
   const legacyHashes = LEGACY_10_0_1_GLOBAL_HASHES[opts.forge] || {};
-  const retiredHashes = opts.noScripts ? {} : (LEGACY_10_0_1_RETIRED_HASHES[opts.forge] || {});
+  const allRetiredHashes = LEGACY_10_0_1_RETIRED_HASHES[opts.forge] || {};
+  const retiredHashes = Object.fromEntries(Object.entries(allRetiredHashes).filter(([rel]) =>
+    !opts.noScripts || rel === 'rules/kaola-workflow-compact-recovery.mdc'));
   const collisions = validateManagedPreflight(home, built.desired, receiptInfo, legacyHashes)
     .concat(validateLegacyRetired(home, receiptInfo, retiredHashes));
   const hooksFile = path.join(home, 'hooks.json');
@@ -591,7 +593,12 @@ function installProject(opts) {
     }
   }
   const desired = projectDesiredFromAuthority(authority.info.receipt, opts.noScripts);
-  const collisions = validateManagedPreflight(layout, desired, receiptInfo);
+  const retiredHashes = {
+    'rules/kaola-workflow-compact-recovery.mdc':
+      '658211282d061d5024c5738e34664a02cfe721d39432d1323b4cdd601f15f27d',
+  };
+  const collisions = validateManagedPreflight(layout, desired, receiptInfo)
+    .concat(validateLegacyRetired(layout, receiptInfo, retiredHashes));
   let projectHooks = null;
   let mergedHooks = null;
   const hooksFile = path.join(layout, 'hooks.json');
@@ -613,6 +620,7 @@ function installProject(opts) {
   }
   applyManaged(layout, desired);
   if (mergedHooks) atomicWrite(hooksFile, mergedHooks, 0o644);
+  removeLegacyRetired(layout, receiptInfo, retiredHashes);
   removeRetiredManaged(layout, desired, receiptInfo, opts.noScripts ? ['hooks/'] : []);
   verifyDesired(layout, desired);
   const receiptFiles = recordsFor(desired);

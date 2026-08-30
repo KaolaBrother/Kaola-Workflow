@@ -96,21 +96,22 @@ function mutateAgentCall(text, role, mutate) {
 {
   const initSkel = fs.readFileSync(path.join(root, 'templates/routing/init.skeleton.md'), 'utf8');
   const universalAxioms = fs.readFileSync(path.join(root, 'templates/axioms.md'), 'utf8');
+  const globalContract = fs.readFileSync(
+    path.join(root, 'templates/global/kaola-workflow-global.md'), 'utf8');
   const consumerTemplate = require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE;
-  assert(consumerTemplate.includes('`planner (heavy-reasoning tier)`'),
-    '#1018 AC-11: consumer AGENTS template example must be planner (heavy-reasoning tier)');
-  assert(!consumerTemplate.includes('`planner (reasoning tier)`'),
-    '#1018 AC-11: consumer AGENTS template must not keep the pre-re-tier example planner (reasoning tier)');
-  assert(/Name roles by function and reasoning tier, never by a vendor model name/.test(consumerTemplate),
-    '#1018 AC-11: the naming-rule sentence itself is unchanged word for word');
+  assert(!/planner \((?:heavy-)?reasoning tier\)/.test(consumerTemplate),
+    '#1046: project-only AGENTS template carries no universal planner-tier example');
+  assert(!/Name roles by function and reasoning tier/.test(consumerTemplate),
+    '#1046: project-only AGENTS template carries no universal dispatch naming rule');
   for (const [label, universal] of [
     ['consumer AGENTS template', consumerTemplate],
+    ['machine-global contract', globalContract],
     ['universal axioms', universalAxioms],
   ]) {
     assert.deepStrictEqual(vendorModelLiterals(universal), [],
       label + ' must remain runtime-neutral and carry no vendor model literal');
   }
-  const vendorLeakMutation = consumerTemplate
+  const vendorLeakMutation = globalContract
     + '\nUse gpt-5.6-luna as the universal default for every standard role.\n';
   assert(vendorModelLiterals(vendorLeakMutation).includes('gpt-5.6-luna'),
     '#1035 mutation: a vendor model hardcoded into the universal consumer contract is detected');

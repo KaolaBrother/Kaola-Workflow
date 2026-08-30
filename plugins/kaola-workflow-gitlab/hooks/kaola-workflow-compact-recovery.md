@@ -1,57 +1,101 @@
 <!-- KW-COMPACT-RECOVERY-START -->
 # Kaola-Workflow compact recovery
 
-Recovery marker: `KW-COMPACT-RECOVERY-V1`.
+Recovery marker: `KW-COMPACT-RECOVERY-V2`.
 
-This is the complete post-compact continuation prompt for this runtime. It is generated before
-installation from one common core plus the measured runtime adapter; compact does not run a prompt
-parser, binder, state machine, or tool-use hook.
+# Global Workflow Contract
 
-Read project-root `AGENTS.md`, then the active run's `workflow-state.md` and `mission-list.md`.
-Resume the recorded work instead of restarting intake or claim. Done results are known; reconcile
-in-flight locators; todo items are the frontier. A completed item and its result are immutable, and one
-dispatch has one result including FAIL/BLOCKED. A failed command, intermediate finding, repair
-attempt, or review round does not by itself create a mission. Keep working within the current
-promised outcome while custody and causal boundary remain unchanged. Append a mission only for a
-new recoverable outcome that changes custody or for a newly discovered independent causal class.
+Universal contract. Project instructions add only verified local facts and stricter constraints.
 
-If any mission is todo or in-flight, continue Workflow Next from that frontier. If every mission is
-done, continue Kaola-Workflow Finalization from its existing receipts: freeze the candidate, treat
-mutation as invalidating PASS evidence for changed bytes, validate and dock documentation, then ask
-before irreversible or value-laden closure/sink choices. Finalization, Issue closure, archive, and
-sink are not Mission List items. The last run mission establishes readiness for finalization. The
-finalization summary, closure evidence, archive state, and sink receipt own the transaction's truth.
+## First Principles
+
+1. Correct first; never trade correctness for speed or cost.
+2. Then save human time without weakening correctness.
+3. Then spend as little as possible.
+4. Machines decide facts; humans decide values. Escalate irreversible or value-laden choices.
+5. Own your own verdicts. Local evidence, not an external system, decides done.
+
+## Premise and evidence
+
+- Measure current truth before an earlier claim shapes work; carry corrections forward.
+- Read the target before writing. Verify behavior from documentation, source, or a real run; name
+  unknowns honestly.
+- Keep changes surgical. Add only what an observed failure demands; build no speculative gates.
+
+## Backlog and durable state
+
+- The forge's open issue list is backlog truth; later comments override earlier issue text.
+- `kaola-workflow/.roadmap/_rules.md` is the one optional local roadmap file that survives. Nothing
+  else is generated or tracked under `.roadmap/`; there is no local backlog mirror to refresh.
+- Declare top-priority labels in `kaola-workflow/config.json` under `priority_top_tier_labels`.
+- `workflow-state.md` records the claim; `kaola-workflow/{project}/mission-list.md` records the run.
+
+## Mission List
+
+- One run has one Mission List with `item`, `status`, `dispatched`, and `result`.
+- Use three write moments: create; write `dispatched` before the work goes out, including where the
+  output will land; then write `result`. A completed item and its result are immutable. One dispatch
+  has one result, including `FAIL` or `BLOCKED`.
+- A mission is a recoverable outcome, not a specification, selector, assertion, command, review
+  round, role, model, dependency edge, or write set. A failed command, intermediate finding, repair
+  attempt, or review round does not create another mission.
+- Append a mission only for a new recoverable outcome with new custody or a newly discovered
+  independent causal class. `BLOCKED` means the current owner cannot safely or legitimately continue.
+- Resume by trusting done results, reconciling in-flight locators, and continuing the frontier: the
+  list minus done minus in-flight.
+
+## Custody, carrier, and failure frontier
+
+- Custody decides who may judge meaning; carrier decides where work runs. Re-evaluate per mission.
+- Dispatch to save context, add independent judgment, or open an independent frontier; keep one
+  owner when cohesive production and integration cost require it.
+- Establish focused acceptance, inventory the causal class, repair under shared custody, freeze,
+  then review and validate those exact bytes. Mutation invalidates affected PASS evidence.
+
+## Test custody and completion
+
+- Independent test custody owns acceptance meaning; production custody may maintain only mechanical
+  fixtures or harness plumbing that preserves it.
+- Define verifiable success, run focused proof then required integration, and record outcomes.
+- Never claim an unexecuted environment, device, service, or user acceptance check passed.
+- Finalization, issue closure, archive, and sink are not Mission List items. The last mission only
+  establishes readiness; lifecycle records own the transaction's final truth.
+
+## Resume the active operation
+
+Read project `AGENTS.md`, active `workflow-state.md`, and `mission-list.md`. With open work,
+completely reload the installed Workflow Next prompt and resume its frontier without intake or
+claim. When all missions are done,
+completely reload the installed Kaola-Workflow Finalization prompt and continue from its receipts.
 
 <!-- KW-RUNTIME-DISPATCH-START -->
 ## Delegation
 
 **Runtime dispatch contract (always loaded).**
 
-Choose dispatch or inline per item: re-evaluate the choice for every mission item; one item's choice
-never establishes a run-wide default. The absence of an exact named role is not proof that all
-native subagent dispatch is unavailable. Keep one owner for the current cohesive production surface
-when handoff and integration cost exceed the benefit, but that scope does not absorb independent
-research, test authorship, documentation, or review items. Dispatch when it materially reduces
-main-context residue, supplies independent judgment, or enables genuinely independent parallel
-work. Both modes are first-class; width follows the true work frontier. No dispatch count, cap,
-disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+Choose dispatch or inline per item: re-evaluate the choice for every mission item; one item's
+choice never establishes a run-wide default. The absence of an exact named role is not proof that
+all native subagent dispatch is unavailable. Keep one owner for the current cohesive production
+surface when handoff and integration cost exceed the benefit, but that scope does not absorb
+independent research, test authorship, documentation, or review items. Dispatch when it materially
+reduces main-context residue, supplies independent judgment, or enables genuinely independent
+parallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,
+cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
 
-Use the active runtime adapter as fact authority. Inspect its effective profile discovery and
-precedence, live dispatch schema and verified call fields, standard/reasoning/heavy tier defaults,
-model/effort/thought carrier or inheritance, tool boundary, and custody boundary. Preserve the
-runtime's real background, parallel, resume, nesting, reload, and session limits; unknown fields
-stay unknown and the live schema wins.
+Treat the active runtime adapter below as fact authority. Inspect its effective profile discovery
+and precedence, live call schema and verified fields, standard/reasoning/heavy defaults,
+model/effort/thought carrier or inheritance, tool and custody boundaries, and native background,
+parallel, resume, nesting, reload, and session limits. Unknown fields stay unknown; live schema wins.
 
 Use named, built-in, and generic routes only under their real identities. A default tier guides
-selection; it never disables a task-sensitive model/effort/thought override exposed by the live
-schema. If the exact named role is absent, inspect every adequate native route. Use one only when it
-satisfies the mission's custody, evidence, and stop boundary; otherwise work inline, record the
-specific `capability_gap`, and re-evaluate on the next item. Never let a generic route impersonate a
-custody-bearing named role.
+selection but never disables a task-sensitive override the host actually exposes. If an exact role
+is absent, inspect adequate native routes; use one only when it satisfies custody, evidence, and
+stop boundaries. Otherwise work inline, record the specific `capability_gap`, and re-evaluate the
+next item. Never let a generic route impersonate a custody-bearing named role.
 
-Before dispatch, write the mission's `dispatched` locator and send a bounded, self-sufficient brief
-naming the outcome, evidence, worktree/commit, custody, and stop condition. Reconcile the promised
-output, not the worker. Runtime-native dispatch facts end here.
+Before dispatch, write the mission's `dispatched` locator. Send a bounded, self-sufficient brief
+naming the outcome, evidence, worktree or commit, custody, and stop condition. Reconcile the
+promised output, not the worker.
 
 <!-- KW-RUNTIME-DELEGATION-START -->
 ## Runtime adapter facts

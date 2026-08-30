@@ -13,7 +13,7 @@ Three commands ship. Everything below is invoked by them or by hand.
 
 | Command | Owns |
 |---|---|
-| `/workflow-init` | bootstrap a repository: universal `AGENTS.md`, a thin native entrypoint bridge, backlog guidance, docs structure, and issue conventions; migrate only recognized Kaola-owned instruction bytes, and diagnose owner decisions without writing |
+| `/workflow-init` | bootstrap project-local facts: minimal `AGENTS.md`, thin native bridge, commands, constraints, validation, docs, and local overrides; requires a compatible installed global-contract receipt and migrates only recognized Kaola-owned bytes |
 | `/workflow-next` | select, claim, write the mission list, run it |
 | `/kaola-workflow-finalize` | validate, dock docs, summarize, close, archive, commit, sink |
 
@@ -21,58 +21,31 @@ Three commands ship. Everything below is invoked by them or by hand.
 
 ```text
 node scripts/kaola-workflow-project-instructions.js plan|check|apply \
-  --project-root <path> --json \
-  [--consent-execution-default-change <plan-sha256>]
+  --project-root <path> --json
 ```
 
-The helper makes root `AGENTS.md` the one universal project contract and keeps root `CLAUDE.md` as
-the `@AGENTS.md` Claude-only bridge/overlay. It never treats a native overlay as a second universal
-authority.
+The helper writes only project-specific guidance. Universal workflow behavior comes from the
+installed machine-global contract; root `CLAUDE.md` remains the thin `@AGENTS.md` bridge.
 
-- `plan` is read-only. It classifies both files, computes before/after SHA-256 values, and reports
-  `planned`, `converged`, `applied`, `drift`, `active_run_preserved`,
-  `producer_repository_preserved`, or `decision_required`. When an active-run
-  `execution_default_change` needs a user value judgment, the result includes an ephemeral
-  `consent.plan_sha256` plus exact `consent.apply_args`.
+- `plan` is read-only. It verifies the global receipt, classifies both files, computes hashes, and
+  reports `planned`, `converged`, `active_run_preserved`, `producer_repository_preserved`, or
+  `decision_required`.
 - `check` is read-only. A safe but unapplied plan becomes `drift` and exits 3.
-- `apply` writes only a safe `planned` result, atomically and by exact path. An active-run
-  execution-default change requires the exact unchanged plan token from the preceding conversation
-  consent; a bare, duplicated, malformed, or stale token is non-mutating. Consent is never stored.
-  The command reports the files written and becomes a byte-identical no-op after convergence.
+- `apply` writes only a safe `planned` result, atomically and by exact path. It becomes a
+  byte-identical no-op after convergence.
 
-The exact released v9.17.2 whole-file pairs, known legacy Kaola redirects, and correctly formed
-current managed regions are workflow-owned. Surrounding owner bytes remain byte-identical when a
-current region or redirect is replaced. A released `KW-CLAUDE-MANAGED` marker is not sufficient
-ownership proof by itself: changed outer bytes make that legacy file owner-ambiguous, so the helper
-returns `decision_required` without writing. Missing files may be created. Malformed markers, an
-unrecognized owner-only authority, or any other split the helper cannot prove safe also returns
-`decision_required`, exits 2, and writes nothing.
+The exact current and known released whole-file templates plus recognized Kaola redirects are
+workflow-owned. Surrounding owner bytes remain byte-identical. Missing files may be created;
+malformed markers, owner-only files, and unknown/mixed shapes return `decision_required` without a
+write. Any active run returns `active_run_preserved` before instruction mutation: `AGENTS.md`,
+`CLAUDE.md`, `workflow-state.md`, and `mission-list.md` all remain untouched, with no consent or
+adoption bypass. The producer repository remains protected. The JSON envelope carries
+`schema_version`, `mode`, `status`, `changed`, `files`, `writes`, and `reasons`, including
+before/after hashes and owner-boundary facts.
 
-Classification is per managed change, not one repository-wide boolean. Each file reports one of:
-
-| class | active-run behavior |
-| --- | --- |
-| `authority_layout_equivalent` | Canonicalize `AGENTS.md` and necessary thin first-read bridges. May apply while a run is active. Claim, Mission List, worktree, done results, and live locators stay byte-identical. |
-| `execution_default_change` | Show exact old/new hashes; apply only after explicit conversation consent. No durable approval field is stored. |
-| `state_schema_incompatible` | Preserve the old contract or run an explicit tested migration; never rewrite automatically. Top-level status is `active_run_preserved` when this is the only pending write. |
-| `unknown_or_mixed` | Return `decision_required` with the ambiguity and make no write. |
-
-A compatible authority-layout migration is not frozen merely because an unrelated state schema is
-incompatible. Each active `workflow-state.md` is inspected on the production path: absent
-`schema_version` and version 1 are compatible; another explicit version fences only the
-state-coupled change while an independent layout-equivalent bridge may still apply.
-`workflow-state.md` / `mission-list.md` are never helper writes. After a
-compatible active-run layout apply, the helper may write `.cache/instruction-adoption.json` under
-each active run as recovery evidence (old/new hashes, classifications, and
-`fresh_session_requirement: not_inspected_by_init`). It does not inspect or mutate the installed
-runtime adapter. On this producer repository, `producer_repository_preserved` protects the richer
-project-specific contract. The helper creates no symlinks and does not inspect or delete
-nested/local runtime instruction files.
-
-The JSON envelope has `schema_version`, `mode`, `status`, `changed`, `files`, `writes`, and
-`reasons`, plus an ephemeral `consent` object when conversation authorization is required. Each
-`files.agents` / `files.claude` record carries `classification`,
-`compatibility`, `before_sha256`, `after_sha256`, and `outside_bytes_preserved`.
+The installed local receipt must be `CURRENT`, contract schema 1, and hash-compatible with the
+shipped global source. Without it, the helper returns `decision_required` rather than writing a
+project file that would silently omit universal behavior.
 
 ## Routing-surface handoff interface
 
@@ -118,17 +91,17 @@ carrier was loaded.
 
 ### Compact recovery — generated direct prompt
 
-The generated prompt tells the runtime to reread root `AGENTS.md`, `workflow-state.md`, and
-`mission-list.md`, then continue Workflow Next while any mission remains or Finalization when all
-missions are done. It carries the shared dispatch contract and the runtime's measured adapter in the
-same artifact. Selection happens in the model after the prompt is present; compact time performs no
-state parsing, operation binding, or prompt composition.
+The generated V2 prompt contains the exact global contract once, tells the runtime to reread root
+`AGENTS.md`, `workflow-state.md`, and `mission-list.md`, then completely reloads installed Workflow
+Next while work remains or Finalization when all missions are done. It also carries the mandatory
+dispatch contract and measured adapter. Compact time performs no state parsing, operation binding,
+or prompt composition.
 
-Claude and Codex hooks execute only `cat` on their installed generated prompt. Grok calls no hook:
-one generated native Rule under the matching project or global rules directory carries the same
-content because passive hook stdout is ignored. Cursor likewise calls no hook: one generated `alwaysApply` project Rule carries the
-same recovery content for standalone CLI, App local, and Cloud. OpenCode, Kimi, and ZCode install no
-Kaola compact prompt lifecycle in this measured scope.
+Claude and Codex hooks execute only `cat` on their installed V2 prompt. Grok calls no hook: the
+machine-global transaction installs one native Rule because passive hook stdout is ignored. Cursor
+also calls no hook: local CLI/App share one user `alwaysApply` Rule, while Cloud explicitly
+materializes identical bytes in its selected repository. Edition installers emit no duplicate Rule.
+OpenCode, Kimi, and ZCode install no Kaola compact prompt lifecycle in this measured scope.
 
 No runtime registers Kaola PreToolUse, PostToolUse, or Stop prompt injection. Ordinary tool calls
 therefore add zero Kaola recovery bytes and start zero Kaola recovery subprocesses. There is no
@@ -1608,17 +1581,19 @@ The `--release-check` step is the gate documented above. `--prepare` bumps the v
 | Script | Contract |
 |---|---|
 | `generate-agent-profiles.js --check\|--write\|--print-manifest` | validates the complete 14-role behavior, runtime-capability, and provenance authorities; composes seven runtime families through nine adapter variants; writes/checks the 14 Claude profiles, 42 Codex profiles, three Codex registries, and the 126-render manifest; exposes logical profile renders to the five additive edition generators; and renders/replaces runtime-native next/finalize guidance through the API above. `delegation_guidance` is routing-only and excluded from the native-profile adapter hash, so its change does not churn unchanged profile hashes. `--check` exits non-zero on tracked output drift. Generated prompts exclude provenance. |
-| `kaola-workflow-project-instructions.js plan\|check\|apply --project-root <path> --json [--consent-execution-default-change <plan-sha256>]` | ownership-safe AGENTS-first project migration described above, including per-file active-state schema fencing and ephemeral unchanged-plan consent. The installed GitHub, GitLab, and Gitea copies are identical. |
+| `kaola-workflow-project-instructions.js plan\|check\|apply --project-root <path> --json` | receipt-gated, ownership-safe minimal project-instruction migration described above. Active runs and unknown/mixed owner bytes are non-mutating. The installed GitHub, GitLab, and Gitea copies are identical. |
+| `kaola-workflow-global-contract.js install\|check\|uninstall --json [--nonce VALUE]` | registry-derived local batch transaction. It discovers the eight local surfaces, deduplicates shared physical carriers, preflights every path/owner/schema before the first write, preserves managed owner bytes, atomically writes or rolls back, and receipts source/render/install hashes plus all nine rows (Cursor Cloud reports `REMOTE_REQUIRED`). `check` exits 3 on drift. Uninstall re-derives every receipt target from the current registry before removing unchanged owned bytes. |
+| `kaola-workflow-global-contract.js install-cloud\|check-cloud\|uninstall-cloud --target REPO --json [--nonce VALUE]` | explicit Cursor Cloud selected-repository transaction. Requires an initialized Git repository, writes the one `.cursor/rules/kaola-workflow-global.mdc` plus a project receipt, and never runs as a side effect of local install-all. |
 | `run-edition-tests.js <scripts/test-*.js>...` | executes every explicitly declared additive edition suite, even after a prior failure; prints child output, retains every failed suite in the final summary, and exits non-zero after all attempts when any child failed. The package script declares opencode, Kimi, Grok, Cursor, and ZCode explicitly so suite registration can see the full lane. |
 | `kaola-workflow-install-manifest.js --forge=<github\|gitlab\|gitea> (--scripts\|--hooks)` | the single source of the support-file list an installer copies. Prints one name per line. Exits 2 on an unknown argument, a missing flag, or an **empty** list — an empty manifest would copy zero support files, so it refuses rather than silently installing nothing. Exports `SUPPORT_SCRIPTS`, `SUPPORT_HOOKS`, `FORGES`, `supportScripts`, `supportHooks`, `renameIfPorted` |
 | `edition-sync.js (--check \| --write \| --materialize-kernel)` | materializes the rename-normalized edition copies from the canonical tree and the byte-identical kernel into each edition. `--check` is the read-only verdict |
 | `validate-script-sync.js` | enforces cross-edition parity, including `BYTE_IDENTICAL_GROUPS`, which auto-expands when a new `.toml` is added to the codex tree |
 | `sync-opencode-edition.js` / `sync-kimi-edition.js` / `sync-grok-edition.js` / `sync-cursor-edition.js` / `sync-zcode-edition.js` | additive runtime editions outside `npm test` and the forge chains. Each requests native role bytes and its marked next/finalize guidance from `generate-agent-profiles.js`; none parses Claude role prose as semantic input. `workflow-init` has no runtime dispatch block and is not replaced. `--refresh-present` regenerates every edition tree already on the machine and creates none — it is what the routing generator's `--write` calls, so a routing-prose change leaves no present tree stale. `--print-tree-root` prints the single absolute generated-tree root and writes nothing. Cursor additionally accepts `--write --tree-root=<absolute empty real directory>` for installer-owned isolated staging and refuses relative, missing, symlink, or occupied roots; its normal installer never regenerates the repository tree. Other installers resolve their source from `--print-tree-root`, including from a linked worktree. A cross-checkout refresh reports changed trees and the editions check on stderr without contaminating stdout. |
 | `install-zcode.sh` | additive ZCode installer (project `--target` / `--global`, forge axis, regenerate/uninstall/no-scripts/yes). Project installs stage agents/commands and sync profiles to user scope; global installs write the user carrier. Issue #1044 installs no prompt-lifecycle hooks or prompt components. Upgrade/uninstall remove only receipt-owned legacy project/user Kaola declarations and preserve foreign config. |
-| `install-all.sh` | thin current-machine-only runtime orchestrator. It invokes each local runtime installer and has no Cursor Cloud deployment mode. Cursor Cloud setup uses `install-cursor.sh` directly only after the Agent establishes it is in that remote environment setup. |
-| `install-cursor.sh` | additive Cursor installer (`--target DIR` / `--global`, forge axis, regenerate/uninstall/no-scripts/yes/doctor). It renders in isolated staging, writes receipt-owned agents/commands plus one `alwaysApply` Rule and the doctor capability registry, and merges an empty Kaola hook mapping that retires only known legacy entries. Explicit project materialization provides the same Rule to standalone CLI, App local, and Cloud. Receipts, collisions, symlinks, authority freshness, uninstall, and doctor remain fail-closed/evidence-bound. |
+| `install-all.sh` | current-machine orchestrator. Before any edition installer writes, it runs the whole local global-contract transaction; a blocked carrier prevents a partial runtime batch. It has no Cursor Cloud deployment mode. |
+| `install-cursor.sh` | additive Cursor edition installer (`--target DIR` / `--global`, forge axis, regenerate/uninstall/no-scripts/yes/doctor). It writes receipt-owned agents/commands and the doctor capability registry, merges an empty hook mapping, and retires the old duplicate recovery Rule. The separate global-contract transaction owns the local/Cloud Rule. |
 | `kaola-workflow-cursor-surface.js --doctor [--json] [--target DIR] [--product cli\|app\|unknown] [--host local\|cloud\|unknown] [--forge=...]` | Cursor filesystem/evidence reporter; reads the receipt-owned adapter registry and receipt state without a source checkout or sibling-host inference. Unqualified current `runtime_build` and `named_catalog` remain `unknown` absent live observation; `evidence_stamp` and `selected_host` carry historical measured facts. `dispatch_contract` reports the flat `subagent_type` call shape, per-call model omission, exact-tier post-resolution boundary, generic-enum scope, and `providerOptions.cursor.modelName` evidence carrier. |
-| `kaola-workflow-cursor-surface.js --install --scope global\|project [--target DIR] --source-tree DIR [--support-source DIR] [--no-scripts] [--authority-only] [--forge=...]` | receipt-owned global authority or explicit project transaction used by `install-cursor.sh`; copies the generated recovery Rule and strips legacy Kaola prompt hooks while preserving foreign entries. |
+| `kaola-workflow-cursor-surface.js --install --scope global\|project [--target DIR] --source-tree DIR [--support-source DIR] [--no-scripts] [--authority-only] [--forge=...]` | receipt-owned agent/command authority or explicit project transaction used by `install-cursor.sh`; strips legacy duplicate Rules and Kaola prompt hooks while preserving foreign entries. |
 | `kaola-workflow-cursor-surface.js --ensure-target DIR [--forge=...]` | installed standalone-CLI pre-dispatch materializer. It has no ambient target, never bootstraps or repairs authority, returns `current` or `materialized`, and fails closed before target mutation on every authority/ownership fault. Generated Cursor next/finalize invoke it only for CLI/local immediately before named dispatch; App local and Cloud are excluded. Cloud environment setup instead invokes the installer directly for its remote machine and selected repository after the Agent confirms that host. |
 | `kaola-workflow-cursor-surface.js --uninstall --scope global\|project [--target DIR]` | removes only receipt-recorded files whose current hashes still match and only exact recorded Kaola hook entries; preserves modified or unproved bytes. |
 | `install-codex-agent-profiles.js` | authoritative Codex install/upgrade transaction; validates source profiles and targets, writes and prunes the managed set, records the manifest, installs hooks, and verifies the result before success |

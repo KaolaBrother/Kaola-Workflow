@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "contract_schema_version": 1,
+  "targets": [
+    {
+      "id": "claude-local",
+      "runtime": "claude",
+      "host": "local",
+      "discovery": { "kind": "command", "commands": ["claude"] },
+      "carrier_group": "claude-user-rule",
+      "carrier": { "kind": "dedicated", "format": "markdown", "root_env": "CLAUDE_CONFIG_DIR", "default_root": ".claude", "relative_path": "rules/kaola-workflow-global.md" },
+      "precedence": "User rules load before project instructions; closer project instructions may add stricter local rules.",
+      "reload": "A new session loads the user rule; SessionStart(source=compact) directly reprints static V2 before the next model turn.",
+      "compatibility_reads": ["project CLAUDE.md", "project @AGENTS.md bridge"]
+    },
+    {
+      "id": "codex-local",
+      "runtime": "codex",
+      "host": "local",
+      "discovery": { "kind": "command", "commands": ["codex"] },
+      "carrier_group": "codex-global-agents",
+      "carrier": { "kind": "managed_region", "format": "markdown", "root_env": "CODEX_HOME", "default_root": ".codex", "relative_path": "AGENTS.md" },
+      "precedence": "Global guidance loads first; project root-to-cwd instructions appear later and may override it.",
+      "reload": "A new run discovers global instructions; SessionStart(source=compact) directly reprints static V2 before the next model turn.",
+      "compatibility_reads": ["project AGENTS.override.md", "project AGENTS.md"]
+    },
+    {
+      "id": "opencode-local",
+      "runtime": "opencode",
+      "host": "local",
+      "discovery": { "kind": "command", "commands": ["opencode"] },
+      "carrier_group": "opencode-global-agents",
+      "carrier": { "kind": "managed_region", "format": "markdown", "root_env": "OPENCODE_CONFIG_DIR", "default_root": ".config/opencode", "relative_path": "AGENTS.md" },
+      "precedence": "Project and global categories are combined; native global AGENTS wins over the Claude compatibility fallback.",
+      "reload": "A fresh session re-runs global and project rule discovery.",
+      "compatibility_reads": ["project AGENTS.md", "global Claude compatibility fallback"]
+    },
+    {
+      "id": "kimi-local",
+      "runtime": "kimi",
+      "host": "local",
+      "discovery": { "kind": "command", "commands": ["kimi"] },
+      "carrier_group": "kimi-global-agents",
+      "carrier": { "kind": "managed_region", "format": "markdown", "root_env": "KIMI_CODE_HOME", "default_root": ".kimi-code", "relative_path": "AGENTS.md" },
+      "precedence": "The Kimi-specific global file is merged before project instruction files.",
+      "reload": "A new session rebuilds the merged instruction context.",
+      "compatibility_reads": ["generic user AGENTS.md", "project AGENTS.md", "project Kimi AGENTS.md"]
+    },
+    {
+      "id": "grok-local",
+      "runtime": "grok",
+      "host": "local",
+      "discovery": { "kind": "command", "commands": ["grok"] },
+      "carrier_group": "grok-user-rule",
+      "carrier": { "kind": "dedicated", "format": "markdown", "root_env": "GROK_HOME", "default_root": ".grok", "relative_path": "rules/kaola-workflow-global.md" },
+      "precedence": "The user Rule is persistent context; repository AGENTS instructions add project-local facts.",
+      "reload": "Rules enter every interaction, including the first inference after compact.",
+      "compatibility_reads": ["project AGENTS.md", "Claude-compatible instruction files"]
+    },
+    {
+      "id": "cursor-cli-local",
+      "runtime": "cursor",
+      "host": "cli-local",
+      "discovery": { "kind": "command", "commands": ["agent", "cursor-agent"] },
+      "carrier_group": "cursor-local-user-rule",
+      "carrier": { "kind": "dedicated", "format": "mdc", "root_env": "CURSOR_HOME", "default_root": ".cursor", "relative_path": "rules/kaola-workflow-global.mdc" },
+      "precedence": "Applicable Rules are merged; project rules have higher precedence than user rules.",
+      "reload": "A new CLI session reloads the user Rule; alwaysApply carries it into each model context.",
+      "compatibility_reads": ["project AGENTS.md", "project Cursor Rules"]
+    },
+    {
+      "id": "cursor-app-local",
+      "runtime": "cursor",
+      "host": "app-local",
+      "discovery": { "kind": "application", "app_env": "KAOLA_CURSOR_APP_PATH", "paths": ["/Applications/Cursor.app"] },
+      "carrier_group": "cursor-local-user-rule",
+      "carrier": { "kind": "dedicated", "format": "mdc", "root_env": "CURSOR_HOME", "default_root": ".cursor", "relative_path": "rules/kaola-workflow-global.mdc" },
+      "precedence": "Applicable Rules are merged; project rules have higher precedence than user rules.",
+      "reload": "A new App Agent session reloads the user Rule; alwaysApply carries it into each model context.",
+      "compatibility_reads": ["project AGENTS.md", "project Cursor Rules"]
+    },
+    {
+      "id": "cursor-cloud",
+      "runtime": "cursor",
+      "host": "cloud",
+      "discovery": { "kind": "remote_explicit" },
+      "carrier_group": "cursor-cloud-project-rule",
+      "carrier": { "kind": "cloud_project_rule", "format": "mdc", "relative_path": ".cursor/rules/kaola-workflow-global.mdc" },
+      "precedence": "The selected repository Rule is merged as project context and takes precedence over user rules.",
+      "reload": "Save the Environment Build, then start a new top-level Agent in the same repository.",
+      "compatibility_reads": ["workspace AGENTS.md", "other project Cursor Rules"]
+    },
+    {
+      "id": "zcode-local",
+      "runtime": "zcode",
+      "host": "local",
+      "discovery": { "kind": "command_or_application", "commands": ["zcode"], "app_env": "KAOLA_ZCODE_APP_PATH", "paths": ["/Applications/ZCode.app"] },
+      "carrier_group": "zcode-global-agents",
+      "carrier": { "kind": "managed_region", "format": "markdown", "root_env": "ZCODE_HOME", "default_root": ".zcode", "relative_path": "AGENTS.md" },
+      "precedence": "User global instructions are appended first and workspace instructions are the primary project source.",
+      "reload": "A new task reads the user and current workspace instruction files.",
+      "compatibility_reads": ["workspace AGENTS.md"]
+    }
+  ]
+}

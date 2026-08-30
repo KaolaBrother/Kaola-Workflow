@@ -50,7 +50,7 @@ Everything under `.grok/` is **generated from canonical** by
 | ---------------- | ------------------- | ----- |
 | `templates/agents/behavior-contracts.json` + Grok adapter | `.grok/agents/<name>.md` | 14 native profiles with `name`, `description`, native camelCase `promptMode` / `agentsMd`, `model: inherit`, intent-derived `effort: medium\|high\|xhigh`, an explicit capability-derived `tools` allowlist, shared behavior identity, and render-specific hash. Kaola does not emit `permissionMode: plan`: `plan` is not a legal value of the official enum and permission mode is not the tool-boundary carrier. |
 | `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. The marked next/finalize block becomes Grok-native profile, `spawn_subagent`, tier, route, and limit guidance; any concrete Claude dispatch cards are adapted. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
-| `compact-recovery.skeleton.md` + Grok adapter | `.grok/rules/kaola-workflow-compact-recovery.md` | One complete native Rule carries durable-state recovery, Workflow Next/Finalization choice, the shared dispatch contract, and the Grok adapter. No Grok compact hook is emitted because passive-hook stdout is ignored. |
+| global contract + compact skeleton + Grok adapter | `$GROK_HOME/rules/kaola-workflow-global.md` | The global transaction renders one V2 native Rule carrying the universal contract, complete operation reload route, mandatory dispatch contract, and Grok adapter. The edition emits no second Rule or compact hook. |
 
 Generated agents are deliberately model-agnostic. Regenerating the tree never
 overwrites a user's `[subagents.models]` or `[subagents.roles.*]` in
@@ -142,20 +142,19 @@ does not run through `install.sh --forge`.
 ```
 
 Add `--yes` for non-interactive use. `--no-scripts` skips executable support
-scripts; the native recovery Rule still installs because it starts no process. The installer resolves the generated source
+scripts; the edition still installs no Rule. The installer resolves the generated source
 tree via `node scripts/sync-grok-edition.js --print-tree-root` (a worktree
 install still finds the main-checkout trees).
 
 - **PROJECT** (`--target` / `$PWD`): agents and commands land under
-  `<project>/.grok/{agents,commands}`. The complete generated Rule lands under
-  `<project>/.grok/rules/`.
+  `<project>/.grok/{agents,commands}`. No duplicate project Rule is emitted.
 - **GLOBAL** (`--global`): agents and commands land under
-  `${GROK_HOME:-$HOME/.grok}/{agents,commands}`. The complete generated Rule lands under
-  `${GROK_HOME:-$HOME/.grok}/rules/`.
+  `${GROK_HOME:-$HOME/.grok}/{agents,commands}`. `install-all.sh` has already installed the single
+  `${GROK_HOME:-$HOME/.grok}/rules/kaola-workflow-global.md` through the global transaction.
 - Support scripts and hook scripts always land under
   `${GROK_HOME:-$HOME/.grok}/kaola-workflow/{scripts,hooks}`.
 
-The Rule is a runtime-native prompt carrier, not an executable hook. It is model context for every
+The global Rule is a runtime-native prompt carrier, not an executable hook. It is model context for every
 interaction in scope, so compaction cannot remove it. It starts no subprocess and does not append a
 new copy on each tool call. There is no path selector, JS process, or prompt composition.
 
@@ -171,7 +170,6 @@ stdout is ignored. Two live Grok 1.0.13 `/compact` probes confirmed that a `cat`
 the marker, dispatch title, or operation rules even after its file target was repaired. The
 installer therefore removes the byte-known historical mapping and installs no compact hook.
 
-Grok's official Rules contract is the measured replacement: `.grok/rules/*.md` and
-`$GROK_HOME/rules/*.md` enter model context for every interaction. This keeps recovery prompt
-maintenance in the same common-core + runtime-overlay framework without inventing executable
-machinery.
+Grok's official Rules contract is the measured replacement: `$GROK_HOME/rules/*.md` enters model
+context for every interaction. The install-time renderer composes the common contract and Grok
+overlay once; inference runs no executable prompt machinery.

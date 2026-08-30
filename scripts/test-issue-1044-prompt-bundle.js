@@ -14,7 +14,7 @@ const START = '<!-- KW-COMPACT-RECOVERY-START -->';
 const END = '<!-- KW-COMPACT-RECOVERY-END -->';
 const DISPATCH_START = '<!-- KW-RUNTIME-DISPATCH-START -->';
 const DISPATCH_END = '<!-- KW-RUNTIME-DISPATCH-END -->';
-const MARKER = 'KW-COMPACT-RECOVERY-V1';
+const MARKER = 'KW-COMPACT-RECOVERY-V2';
 const RUNTIMES = ['claude', 'codex', 'grok', 'cursor'];
 const FORGES = ['github', 'gitlab', 'gitea'];
 
@@ -31,6 +31,9 @@ function bytes(text) { return Buffer.byteLength(String(text), 'utf8'); }
 
 const skeleton = read('templates/routing/compact-recovery.skeleton.md');
 const dispatch = read('templates/routing/dispatch-contract.md').trim();
+const globalContract = read('templates/global/kaola-workflow-global.md').trim();
+assert(count(skeleton, '<!-- SLOT:global-workflow-contract -->') === 1,
+  'A1: compact skeleton names the machine-global contract slot once');
 assert(count(skeleton, '<!-- SLOT:runtime-dispatch-common -->') === 1,
   'A1: compact skeleton names the shared dispatch slot once');
 assert(count(skeleton, '<!-- SLOT:runtime-delegation -->') === 1,
@@ -52,18 +55,20 @@ for (const forge of FORGES) {
     assert(prompt.includes(MARKER), `B1[${runtime}/${forge}]: recovery marker is present`);
     assert(prompt.includes(dispatch),
       `B2[${runtime}/${forge}]: exact shared dispatch wording is embedded`);
+    assert(count(prompt, globalContract) === 1,
+      `B2[${runtime}/${forge}]: exact machine-global contract is reloaded once`);
     assert(!prompt.includes('<!-- SLOT:'),
       `B2[${runtime}/${forge}]: all generation slots are resolved`);
-    assert(/If any mission is todo or in-flight, continue Workflow Next/.test(prompt)
-      && /If every mission is\s+done, continue Kaola-Workflow Finalization/.test(prompt),
-      `B3[${runtime}/${forge}]: one direct prompt covers both durable operation states`);
-    assert(/Read project-root `AGENTS\.md`/.test(prompt)
+    assert(/completely reload the installed Workflow\s+Next prompt/.test(prompt)
+      && /completely\s+reload the installed Kaola-Workflow Finalization prompt/.test(prompt),
+      `B3[${runtime}/${forge}]: compact recovery reloads the complete active operation prompt`);
+    assert(/Read project `AGENTS\.md`/.test(prompt)
       && /workflow-state\.md/.test(prompt) && /mission-list\.md/.test(prompt),
       `B3[${runtime}/${forge}]: prompt resumes from durable files`);
     assert(!/node\s|\.js\b|PreToolUse|PostToolUse|sidecar|opaque token|chunk bitmap/i.test(prompt),
       `B4[${runtime}/${forge}]: runtime prompt contains no executable prompt machinery`);
-    assert(bytes(prompt) >= 4500 && bytes(prompt) <= 7500,
-      `B5[${runtime}/${forge}]: direct prompt stays within measured 4.5–7.5 KB budget (got ${bytes(prompt)} B)`);
+    assert(bytes(prompt) >= 6500 && bytes(prompt) <= 8500,
+      `B5[${runtime}/${forge}]: complete static prompt stays within measured 6.5–8.5 KB budget (got ${bytes(prompt)} B)`);
   }
 }
 

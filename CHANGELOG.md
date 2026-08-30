@@ -4,16 +4,29 @@
 
 ### Changed
 
+- **One machine-global workflow contract now serves every measured runtime surface (#1046).**
+  `templates/global/kaola-workflow-global.md` is the sole vendor-neutral source; the nine-row
+  adapter registry declares discovery, carrier, precedence, reload, and compatibility reads for
+  Claude, Codex, OpenCode, Kimi, Grok, Cursor CLI, Cursor App, Cursor Cloud, and ZCode. Before any
+  edition installer writes, `install-all.sh` runs one batch-preflighted transaction that preserves
+  owner bytes, deduplicates shared physical carriers, atomically installs/checks/uninstalls the
+  selected local set, and receipts source/render/install hashes. Cursor Cloud remains an explicit
+  selected-repository transaction rather than a local side effect.
+- **Project initialization is subtractive after a compatible global receipt (#1046).** New project
+  `AGENTS.md` files retain only project snapshot, commands, constraints, validation, documentation,
+  and local overrides. Exact known Kaola templates migrate ownership-safely; unknown or mixed owner
+  bytes are preserved, and any active run is left completely unchanged. The former consent/adoption
+  state machine is removed because runtime-global behavior no longer belongs in every repository.
 - **Next/finalize and compact recovery now share one subtractive prompt framework (#1044).** The
   dispatch contract is authored once; operation and recovery skeletons consume it; runtime adapters
   add only measured differences; generation emits each complete runtime prompt. No rendered runtime
   file is an authoring surface, and the required dispatch contract is never optional.
 - **Compact recovery follows each runtime's measured carrier (#1044).** Claude and Codex use one
   `SessionStart(compact)` static `cat` of an already-generated prompt; Grok and Cursor each
-  materialize one native always-loaded Rule because their passive compact hooks cannot inject model
-  context. Cursor's project rule is shared by
-  standalone CLI, App local, and Cloud because Cloud lacks `sessionStart` and `preCompact` cannot
-  inject. OpenCode, Kimi, and ZCode gain no speculative prompt-lifecycle protocol; Kimi upgrades
+  receive one machine-global native Rule because their passive compact hooks cannot inject model
+  context. Cursor local uses one user Rule for CLI/App; Cloud explicitly materializes the same bytes
+  in the selected repository because it cannot inherit a local machine. OpenCode, Kimi, and ZCode
+  gain no speculative prompt-lifecycle protocol; Kimi upgrades
   remove the retired managed `PostCompact` block. All ordinary
   tool calls add 0 Kaola recovery bytes and start 0 Kaola recovery subprocesses.
 - **ZCode retires the interim hook gate (#1044).** A live `/workflow-next` run proved that its
@@ -22,9 +35,9 @@
 - **Grok uses its native Rule carrier rather than a compact hook (#1044).** Two real compact probes
   returned `NO / NO / NO`: first when a project hook pointed at a missing global prompt, and again
   after the command target was repaired. Official Grok documentation resolves the second failure:
-  `SessionStart` does not mean post-compact, and passive-hook stdout is ignored. Project installs now
-  place the generated prompt in `.grok/rules/`; global installs use `$GROK_HOME/rules/`; both retire
-  only byte-known historical mappings and install no compact hook.
+  `SessionStart` does not mean post-compact, and passive-hook stdout is ignored. The global contract
+  transaction installs one `$GROK_HOME/rules/kaola-workflow-global.md`; edition installs retire only
+  byte-known historical mappings and the old duplicate Rule, and install no compact hook.
 
 ### Fixed
 
@@ -40,8 +53,9 @@
   machine-readable call-shape/evidence boundary while preserving unknown live host identity.
 - **Compact no longer silently clears Workflow Next, Finalization, or dispatch rules on measured
   compact-risk runtimes (#1044).** The direct recovery prompt tells the model to reread durable state
-  and continue the correct operation; compact time does not parse state, select a prompt, or run JS.
-  Cursor keeps the same continuation and dispatch rules in every model context. No session sidecar,
+  and completely reload the installed operation prompt; compact time does not parse state, select a
+  prompt, or run JS. Cursor keeps the same continuation and dispatch rules in every model context.
+  No session sidecar,
   chunk acknowledgement, or tool-use gate is required.
 
 ## [10.1.1] - 2026-08-28

@@ -31,6 +31,8 @@
 const fs = require('fs');
 const path = require('path');
 const agentProfiles = require('../../scripts/generate-agent-profiles.js');
+const GLOBAL_WORKFLOW_CONTRACT_SOURCE = path.join(
+  __dirname, '..', 'global', 'kaola-workflow-global.md');
 
 const SLOTS = {
   "nx-frontmatter": {"command":"---\ndescription: Workflow Next. Claims the work, writes the run's mission list, and runs it. Resumable from that one file.\nargument-hint: (optional project name, issue number, or task description)\n---","skill":"---\nname: kaola-workflow-next\ndescription: Use when starting, resuming, or running Kaola-Workflow for Codex work, also called kaola-workflow — claims the issue, writes the run's mission list, and runs it from that one file.\n---"},
@@ -59,6 +61,13 @@ SLOTS['runtime-delegation'] = {
 // guidance remains adapter-owned below it.
 SLOTS['runtime-dispatch-common'] = fs.readFileSync(
   path.join(__dirname, 'dispatch-contract.md'), 'utf8').trimEnd();
+
+// Compact-capable runtimes receive the exact machine-global source again after
+// compaction. This slot is the same authoring source the installation
+// transaction renders at session start; the compact skeleton adds only route
+// recovery and the measured dispatch adapter.
+SLOTS['global-workflow-contract'] = fs.readFileSync(
+  GLOBAL_WORKFLOW_CONTRACT_SOURCE, 'utf8').trimEnd();
 
 // resolverFor — the init surfaces resolve a sibling script the SAME way the
 // next/finalize surfaces do, only into a different handle. The recipe is
@@ -139,4 +148,4 @@ const SPLICES = {
   "fz-closure-audit-run": {"github":"node \"$KAOLA_SCRIPTS/kaola-workflow-closure-audit.js\" --project {project}            # scoped verdict, dry-run (default)\n# node \"$KAOLA_SCRIPTS/kaola-workflow-closure-audit.js\" --project {project} --execute  # repair safe local drift, scoped","gitlab":"node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-closure-audit.js\" --project {project}            # scoped verdict, dry-run (default)\n# node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-closure-audit.js\" --project {project} --execute  # repair safe local drift, scoped","gitea":"node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-closure-audit.js\" --project {project}            # scoped verdict, dry-run (default)\n# node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-closure-audit.js\" --project {project} --execute  # repair safe local drift, scoped"},
 };
 
-module.exports = { SLOTS, SPLICES };
+module.exports = { SLOTS, SPLICES, GLOBAL_WORKFLOW_CONTRACT_SOURCE };

@@ -4,19 +4,13 @@
 <!-- SLOT:nx-intro -->
 
 <!-- KW-COMPACT-RECOVERY-START -->
-## Compact recovery contract
+## Workflow Next operation authority
 
-This whole block is part of the initial Workflow Next prompt. A compact-capable runtime re-injects
-it once, after compact and before the next model turn. It is never injected by a tool-use hook.
-Recovery marker: `KW-COMPACT-RECOVERY-V1`.
-
-Read project-root `AGENTS.md` before acting; it is the universal project-rule source.
-Resume from `workflow-state.md` and `mission-list.md`. Done results are known; reconcile in-flight
-locators; todo items are the frontier. Keep failures inside the current custody and causal boundary.
-Finalization, Issue closure, archive, and sink are not Mission List items. The last run mission
-establishes readiness for finalization. The finalization summary, closure evidence, archive state,
-and sink receipt own the transaction's truth. When every mission is done, transition explicitly to
-Kaola-Workflow Finalization.
+Recovery marker: `KW-COMPACT-RECOVERY-V2`. This complete prompt owns Workflow Next procedure.
+After compact, the native V2 carrier restores global contract and dispatch, rereads durable state,
+then completely reloads this prompt; no tool-use hook injects it. Read project `AGENTS.md` for local
+facts and stricter constraints, resume the recorded frontier, and transition to Kaola-Workflow
+Finalization only when every mission is done.
 
 <!-- KW-RUNTIME-DISPATCH-START -->
 <!-- SLOT:runtime-dispatch-common -->
@@ -25,9 +19,10 @@ Kaola-Workflow Finalization.
 
 <!-- KW-RUNTIME-DISPATCH-END -->
 
-**First Principles.** When nothing already settles a situation, break the tie by the First
-Principles axioms (the `## First Principles` block in workflow-init `AGENTS.md`), applied in
-priority order. Recording a derivation is useful and never required.
+**First Principles.** When nothing already settles a situation, break the tie by the numbered First
+Principles in the loaded machine-global workflow contract, applied in priority order. Project
+`AGENTS.md` adds only local facts and stricter constraints. Recording a derivation is useful and
+never required.
 
 <!-- PIN: consent-in-conversation -->
 **Consent.** Irreversible and value-laden calls belong to the user — ask, in conversation, before
