@@ -422,6 +422,13 @@ same repository; its visible Build link and live catalog must match before the i
 That project materialization also installs the shared Cursor `alwaysApply` recovery Rule; no Cursor
 prompt-lifecycle hook is installed.
 
+The Cursor global transaction also receipt-owns the exact capability registry at
+`${CURSOR_HOME:-~/.cursor}/kaola-workflow/templates/agents/runtime-capabilities.json`. Installed
+doctor and project-materialization helpers read that managed authority instead of reaching back into
+a producer checkout. The registry remains a single source for render, install, and doctor; project
+catalogs do not copy it, and `--no-scripts` still installs this non-executable authority while
+skipping executable helpers and hooks.
+
 ### Runtime capability divergence
 
 The machine authority is `templates/agents/runtime-capabilities.json`; the cited human map is

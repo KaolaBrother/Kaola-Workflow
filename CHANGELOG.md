@@ -28,6 +28,16 @@
 
 ### Fixed
 
+- **Cursor exact-tier policy can no longer rewrite a named profile into the generic Task model
+  field (#1045).** The one schema-parameterized dispatch rule now requires the live flat
+  `subagent_type` call shape and omits per-call `model` whenever the exact Kaola name and a valid
+  materialization receipt are present. Exact-tier requirements are post-resolution assertions;
+  missing medium/high values in the generic model enum do not establish a named-route gap, and
+  `providerOptions.cursor.modelName` is kept as provider evidence rather than a controller field.
+- **The installed Cursor doctor carries its adapter authority (#1045).** Global installation now
+  receipts the single `runtime-capabilities.json` source under the installed Kaola support root, so
+  `--doctor --json` and `--ensure-target` both work without a source checkout. Doctor exposes the
+  machine-readable call-shape/evidence boundary while preserving unknown live host identity.
 - **Compact no longer silently clears Workflow Next, Finalization, or dispatch rules on measured
   compact-risk runtimes (#1044).** The direct recovery prompt tells the model to reread durable state
   and continue the correct operation; compact time does not parse state, select a prompt, or run JS.

@@ -444,19 +444,20 @@ function runtimeDelegationGaps(runtime, text) {
     ],
     cursor: [
       ['lookup', [/\.cursor\/agents\//]],
-      ['carrier', [/live [`]?task[`]? schema/]],
+      ['carrier', [/task.*flat [`]?subagent_type|flat [`]?subagent_type.*task/]],
       ['standard-tier', [/standard.*grok-4\.6.*medium|grok-4\.6.*medium.*standard/]],
       ['reasoning-tier', [/reasoning.*grok-4\.6.*high|grok-4\.6.*high.*reasoning/]],
       ['heavy-tier', [/heavy.*grok-4\.6.*xhigh|grok-4\.6.*xhigh.*heavy/]],
-      ['custom-route', [/subagenttype\.custom\.name/]],
-      ['generic-stream-identity', [/generalpurpose.*subagenttype\.unspecified/,
-        /subagenttype\.unspecified.*generalpurpose/]],
+      ['exact-tier-post-resolution', [/exact-tier requirement.*post-resolution assertion/]],
+      ['generic-model-not-gap', [/generic task model enum.*not a named-profile capability gap/]],
+      ['provider-evidence', [/provideroptions\.cursor\.modelname.*provider evidence/]],
+      ['provider-not-call-shape', [/subagenttype\.custom\.name.*provider encoding.*not controller call shape/]],
       ['current-task-catalog', [/live task (?:catalog|enum)/, /live catalog/]],
       ['host-catalog-variation', [/cli, app local, and app cloud are separate hosts/]],
       ['reported-route-only', CURSOR_REPORTED_ROUTE_ONLY],
       ['cloud-save-before-gap', [/cloud requires installation in its environment setup.*user-saved build.*new top-level agent.*same repository/]],
-      ['omit-model-when-named', [/omit a per-call model only if the named profile resolves its tier/]],
-      ['no-invented-fields', [/invent no fields/]],
+      ['omit-model-when-named', [/must omit the per-call [`]?model/]],
+      ['no-invented-fields', [/send only fields it exposes/]],
       ['named-catalog-evidence', [/app 3\.17\.21.*saved cloud build.*all 14 names.*implementer/]],
     ],
     zcode: [
@@ -2049,7 +2050,8 @@ if (generator && behavior && adapters && profiles.length > 0) {
       const lifecycleGaps = runtimeDelegationGaps('cursor', strippedLifecycle);
       assert(strippedLifecycle !== subject && lifecycleGaps.includes('cloud-save-before-gap'),
         'A10-delegation/cursor-cloud-lifecycle-mutation: deleting the saved lifecycle fails acceptance');
-      const inventedFields = subject.replace('invent no fields', 'invent unpublished request fields');
+      const inventedFields = subject.replace('send only fields it exposes',
+        'invent unpublished request fields');
       assert(runtimeDelegationGaps('cursor', inventedFields).includes('no-invented-fields'),
         'A10-delegation/cursor-schema-mutation: permitting invented Task fields fails acceptance');
     }

@@ -496,7 +496,10 @@ interactions and compaction without starting a subprocess. Full detail:
 
 Cursor is an additive runtime — installed by its own script, not `--forge`. The three commands are
 flat `.cursor/commands/*.md` slash commands and every role is a named native profile. Next/finalize
-inspect the live Task schema: omit a per-call model when the enum contains the Kaola name; a
+inspect the live Task schema: an exact named type with a valid materialization receipt uses the flat
+`subagent_type` field and omits per-call `model`, even under an exact-tier requirement. The named
+profile resolves medium/high/xhigh; the generic model enum cannot disprove that pin, and
+`providerOptions.cursor.modelName` is post-dispatch provider evidence rather than a call field. A
 built-in-only catalog first distinguishes a missing host install/save from a capability gap. The
 authenticated `2026.08.25-3e8eec8` CLI resolved exact
 `implementer` to `cursor-grok-4.6-medium`; Cursor App `3.17.21` local IDE independently
@@ -512,10 +515,13 @@ From a local clone:
 ./install-cursor.sh --target DIR --yes     # explicit project catalog (.cursor/{agents,commands})
 ```
 
-`--no-scripts` skips support scripts and the hooks.json migration without forgetting unchanged
+`--no-scripts` skips executable support scripts and the hooks.json migration without forgetting unchanged
 receipt-owned assets that remain on disk; uninstall still removes those proven bytes and exact hook
-entries. A later ordinary project install promotes a partial no-scripts authority before installing
-its default scripts and removing only retired Kaola hook entries. Doctor keeps
+entries. The non-executable, receipt-owned `runtime-capabilities.json` remains part of the global
+authority, so an already-installed doctor never drifts away from its adapter. A later ordinary
+project install promotes a partial no-scripts authority before installing its default scripts and
+only then removes retired Kaola hook entries. The installed doctor therefore has no
+source-checkout dependency. Doctor keeps
 current Build/live-catalog identity `unknown` unless the active runtime observes it; historical
 measurements remain separately typed as evidence.
 

@@ -152,6 +152,18 @@ function validateRuntimeAdapters(source) {
         && (typeof adapter.capabilities.model !== 'string' || !adapter.capabilities.model.trim())) {
       throw new Error('runtime-capabilities: model carrier missing for ' + name);
     }
+    if (adapter.runtime === 'cursor') {
+      const conformance = adapter.capabilities.dispatch_conformance;
+      if (!conformance
+          || conformance.call_shape !== 'Task with flat subagent_type'
+          || conformance.named_model_field !== 'omit'
+          || conformance.exact_tier !== 'post_resolution_assertion'
+          || conformance.generic_model_enum !== 'not_named_profile_capability'
+          || conformance.provider_model_evidence !== 'providerOptions.cursor.modelName'
+          || conformance.tui_child_transcript !== 'insufficient') {
+        throw new Error('runtime-capabilities: incomplete Cursor dispatch conformance');
+      }
+    }
   }
   if (JSON.stringify([...runtimeSet].sort()) !== JSON.stringify([...RUNTIMES].sort())) {
     throw new Error('runtime-capabilities: expected all seven runtime families');
@@ -183,7 +195,11 @@ function behaviorHash(contract) {
 }
 
 function adapterHash(adapter) {
-  const { delegation_guidance: _routingOnly, ...profileCapabilities } = adapter.capabilities;
+  const {
+    delegation_guidance: _routingOnly,
+    dispatch_conformance: _dispatchOnly,
+    ...profileCapabilities
+  } = adapter.capabilities;
   return sha256(JSON.stringify(canonical({
     runtime: adapter.runtime,
     capabilities: profileCapabilities,

@@ -1003,9 +1003,14 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
 {
   const { spawnSync } = require('child_process');
   const canonPluginsDir = sync.CANON_PLUGINS_DIR;
+  const canonRuntimeDir = path.dirname(canonPluginsDir);
+  const pluginsDirExisted = fs.existsSync(canonPluginsDir);
+  const runtimeDirExisted = fs.existsSync(canonRuntimeDir);
 
-  // (a) Positive: the current on-disk set equals PLUGIN_SCRIPTS exactly.
-  const onDiskJs = fs.readdirSync(canonPluginsDir).filter(f => f.endsWith('.js')).sort();
+  // (a) Positive: a retired directory is the empty set, and otherwise the
+  // current on-disk set equals PLUGIN_SCRIPTS exactly.
+  const onDiskJs = (pluginsDirExisted ? fs.readdirSync(canonPluginsDir) : [])
+    .filter(f => f.endsWith('.js')).sort();
   const registeredJs = [...sync.PLUGIN_SCRIPTS].sort();
   assert(JSON.stringify(onDiskJs) === JSON.stringify(registeredJs),
     'A11-allowlist(a): templates/opencode/plugins/ contains EXACTLY the PLUGIN_SCRIPTS set (' +
@@ -1015,6 +1020,7 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
   // and names the offending file and references PLUGIN_SCRIPTS in its output.
   const probeFile = path.join(canonPluginsDir, '__kw_probe_unregistered.js');
   try {
+    fs.mkdirSync(canonPluginsDir, { recursive: true });
     fs.writeFileSync(probeFile, '// transient probe — must not persist\n');
     // spawn-class: environment
     const r = spawnSync(process.execPath,
@@ -1027,6 +1033,12 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       'A11-allowlist(b): --check output must name the unregistered plugin and reference PLUGIN_SCRIPTS — got: ' + combined.slice(0, 400));
   } finally {
     try { fs.unlinkSync(probeFile); } catch (_) { /* best-effort cleanup */ }
+    if (!pluginsDirExisted) {
+      try { fs.rmdirSync(canonPluginsDir); } catch (_) { /* preserve non-empty concurrent state */ }
+    }
+    if (!runtimeDirExisted) {
+      try { fs.rmdirSync(canonRuntimeDir); } catch (_) { /* preserve non-empty concurrent state */ }
+    }
   }
 }
 

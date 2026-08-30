@@ -733,11 +733,12 @@ function commandRel(name, forge) {
       'G2[' + name + ']: Cursor CLI, App local, and App Cloud remain distinct surfaces/hosts');
     assert(/Cloud requires installation in its environment setup, a tested and user-saved Build, then a new top-level Agent in the same repository/i.test(content),
       'G2[' + name + ']: Cloud gap verdict follows confirmed setup, machine-plus-repository install, Save, and same-repository new parent');
-    assert(/omit a per-call model only if the named profile resolves its tier/i.test(content),
-      'G2[' + name + ']: omit-model is the named-profile carrier, not a catalog-miss substitute');
+    assert(/MUST omit the per-call `model`/i.test(content)
+      && /exact-tier requirement is a post-resolution assertion/i.test(content),
+      'G2[' + name + ']: named-profile tier owns model resolution even under exact-tier policy');
     assert(/App 3\.17\.21 and the saved Cloud Build each proved all 14 names plus exact `implementer`/i.test(content),
       'G2[' + name + ']: saved Cloud environment exposes all 14 Kaola types through its project catalog');
-    assert(/invent no fields/i.test(content),
+    assert(/send only fields it exposes/i.test(content),
       'G2[' + name + ']: live Task schema forbids invented dispatch fields');
   }
 
@@ -839,14 +840,13 @@ function commandRel(name, forge) {
         const parentRelation = /\bomit-model\s+is\s+the\s+parent\s*,\s*not\s+(?:a\s+)?profile\s+pin\b/i;
         const mutatedCarrier = carrier.replace(parentRelation,
           'omit-model is the profile pin, not the parent');
-        const carrierCount = adapterText.split(carrier).length - 1;
-        const mutationReady = mutatedCarrier !== carrier && carrierCount === 1;
+        const mutationReady = mutatedCarrier !== carrier;
         assert(mutationReady,
-          'G2-path-b-mutation: the actual Cursor dispatch_carrier has one reversible Path B predicate '
-          + '(occurrences=' + carrierCount + ')');
+          'G2-path-b-mutation: the actual Cursor dispatch_carrier has one reversible Path B predicate');
 
         if (mutationReady) {
-          fs.writeFileSync(adapterPath, adapterText.replace(carrier, mutatedCarrier));
+          authority.runtimes.cursor.capabilities.delegation_guidance.dispatch_carrier = mutatedCarrier;
+          fs.writeFileSync(adapterPath, JSON.stringify(authority, null, 2) + '\n');
 
           const syncPath = path.join(scratch, 'scripts', 'sync-cursor-edition.js');
           // spawn-class: environment

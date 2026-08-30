@@ -451,9 +451,17 @@
           "reasoning": "high",
           "heavy": "xhigh"
         },
+        "dispatch_conformance": {
+          "call_shape": "Task with flat subagent_type",
+          "named_model_field": "omit",
+          "exact_tier": "post_resolution_assertion",
+          "generic_model_enum": "not_named_profile_capability",
+          "provider_model_evidence": "providerOptions.cursor.modelName",
+          "tui_child_transcript": "insufficient"
+        },
         "delegation_guidance": {
           "profile_lookup": "Find custom profiles in project `.cursor/agents/` or user `~/.cursor/agents/`; a file on disk is not discovery proof, so inspect the live catalog. CLI, App local, and App Cloud are separate hosts. Materialize the selected project explicitly. Cloud requires installation in its environment setup, a tested and user-saved Build, then a new top-level Agent in the same repository; local install never deploys Cloud.",
-          "dispatch_carrier": "Select `/<role>` or route by natural language through the live `Task` schema. Inspect its type enum first; when it contains the exact Kaola role, dispatch that name and omit a per-call model only if the named profile resolves its tier. The measured CLI encoded a named call as `subagentType.custom.name` and generic as `subagentType.unspecified`; invent no fields. In a built-in-only enum, omit-model is the parent, not a profile pin.",
+          "dispatch_carrier": "Inspect the current `Task` schema and send only fields it exposes. If the exact Kaola role is present and its materialized profile receipt is valid, call `Task` with the live flat `subagent_type: \"<role>\"` field and MUST omit the per-call `model`; an exact-tier requirement is a post-resolution assertion, never authorization to populate that field. Absence of medium/high from the generic Task model enum is not a named-profile capability gap. Verify an exact tier from `providerOptions.cursor.modelName` provider evidence when the host exposes it; a TUI child transcript alone is insufficient. Internal `subagentType.custom.name` is provider encoding, not controller call shape, and must not be sent. In a built-in-only enum, omit-model is the parent, not a profile pin.",
           "tiers": {
             "standard": "standard → profile `grok-4.6[effort=medium]`",
             "reasoning": "reasoning → profile `grok-4.6[effort=high]`",

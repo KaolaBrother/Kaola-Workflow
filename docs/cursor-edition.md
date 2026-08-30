@@ -106,7 +106,13 @@ The behavior source's `standard` roles receive the unquoted
 `model: grok-4.6[effort=high]`, and `heavy` roles receive the raw, unquoted
 `model: grok-4.6[effort=xhigh]`. Unknown intent tokens fail closed; the generator does not invent a
 fallback roster. Generated dispatch guidance inspects the live Task enum first. When that enum contains a Kaola
-role name, omit a per-call model and leave the named profile as the model/effort carrier. When the
+role name and the materialization receipt is valid, construct the call only from the live schema's
+flat `subagent_type` field and omit per-call `model`. An exact-tier policy remains a post-resolution
+assertion: it does not authorize filling the generic model field, and absence of medium/high from
+that enum is not evidence against a named profile pin. When the host exposes
+`providerOptions.cursor.modelName`, that value is provider evidence for the resolved child; the TUI
+child transcript alone is insufficient. Internal `subagentType.custom.name` encodes provider
+evidence and is never a controller call field. When the
 enum is built-in-only, use only those members as themselves while establishing whether this host's
 real carrier was installed and reloaded: writable `generalPurpose` for generic production/docs/tests the parent may
 delegate, `explore` when this host reports it for read-heavy search, `cursor-guide` for Cursor
@@ -309,10 +315,16 @@ probes passed for all three forges.
   `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/cursor-authority.json` binds the exact managed
   files, modes, hashes, forge, and Kaola-Workflow version. Live CLI evidence found those user files
   alone were not catalog-visible.
+  The same receipt owns
+  `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/templates/agents/runtime-capabilities.json`, copied
+  byte-for-byte from the single adapter registry. The installed helper reads that file, so its
+  doctor does not depend on a repository checkout.
   `--doctor` reports product (`cli`/`app`/`unknown`) and host (`local`/`cloud`/`unknown`)
   facts without installing and never infers one surface from a sibling binary. Its unqualified
   current `runtime_build` and `named_catalog` stay `unknown` without live observation; measured
-  historical facts remain under `evidence_stamp` and `selected_host`.
+  historical facts remain under `evidence_stamp` and `selected_host`. Its `dispatch_contract`
+  object reports the flat call shape, required model omission, exact-tier post-resolution boundary,
+  generic-enum scope, and provider evidence field.
 - By default, support scripts land under
   `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`.
   `kaola-workflow-cursor-surface.js` is both the filesystem/evidence doctor and the explicit

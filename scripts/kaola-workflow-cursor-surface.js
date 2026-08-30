@@ -11,6 +11,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const ADAPTER_SOURCE = path.join(ROOT, 'templates', 'agents', 'runtime-capabilities.json');
+const INSTALLED_ADAPTER_REL = 'kaola-workflow/templates/agents/runtime-capabilities.json';
 const AUTHORITY_RECEIPT_REL = path.join('kaola-workflow', 'cursor-authority.json');
 const PROJECT_RECEIPT_REL = 'kaola-workflow-materialization.json';
 const RECEIPT_SCHEMA = 1;
@@ -324,6 +325,9 @@ function buildGlobalDesired(opts) {
   const recoveryRuleRel = 'rules/' + sync.RECOVERY_RULE;
   desired[recoveryRuleRel] = desiredRecord(
     sourceRegular(path.join(opts.sourceTree, recoveryRuleRel), 'Cursor persistent recovery rule'), 0o644);
+  desired[INSTALLED_ADAPTER_REL] = desiredRecord(
+    sourceRegular(path.join(ROOT, 'templates', 'agents', 'runtime-capabilities.json'),
+      'Cursor doctor capability authority'), 0o644);
   let hooks = {};
   if (!opts.noScripts) {
     for (const name of manifest.supportScripts(opts.forge)) {
@@ -750,6 +754,7 @@ function report(opts) {
     collisions: project ? project.collisions : [], authority: authority.result,
     materialization_receipt: project, evidence_stamp: selected && selected.stamp ? selected.stamp : null,
     capability_gap: null,
+    dispatch_contract: adapter.capabilities.dispatch_conformance,
     surfaces, selected_host: selected,
     note: 'Product and host are explicit inputs. Current runtime_build and named_catalog stay unknown without live observation; selected_host and evidence_stamp are historical adapter evidence. Sibling surfaces are never inferred.',
   };

@@ -111,6 +111,14 @@ automatic, background, parallel, resume,
 nesting, history, service-tier, and model choices stay available wherever the runtime actually
 supports them.
 
+Cursor keeps three field spaces separate. The controller call uses only the flat fields exposed by
+the live `Task` schema, including `subagent_type`; a valid named profile owns its model/effort pin,
+so even an exact-tier requirement omits per-call `model`; and
+`providerOptions.cursor.modelName` is post-dispatch provider evidence. The generic Task model enum
+does not describe named profile availability, and internal provider encodings such as
+`subagentType.custom.name` are not construction instructions. The installed Cursor doctor exposes
+this same boundary in `dispatch_contract` from a receipt-owned copy of the adapter registry.
+
 The finalize surface makes the defaults operational rather than leaving them as a lookup table:
 its Claude `Agent(...)` examples pass the tier model and retain runtime-default effort, while its
 Codex `spawn_agent(...)` examples pass both the tier model and `reasoning_effort`. Those examples do
