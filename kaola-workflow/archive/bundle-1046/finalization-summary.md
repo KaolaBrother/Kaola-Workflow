@@ -161,3 +161,10 @@ archived_paths:
 - kaola-workflow/archive/bundle-1046/finalization-summary.md
 - kaola-workflow/archive/bundle-1046/mission-list.md
 - kaola-workflow/archive/bundle-1046/workflow-state.md
+
+archive_reconciliation:
+- The first sink reported `probe-repo` as an embedded Git repository recorded by gitlink, so its
+  evidence bytes would not survive a fresh clone.
+- The nested boundary at commit `dc22fa4be1496448cbb08ab6752d1187e61113e6` was moved intact to the
+  user's Trash, the four tracked probe files plus `PROVENANCE.md` were committed as ordinary archive
+  files, and no production candidate byte changed.
