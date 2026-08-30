@@ -1,0 +1,4 @@
+This is a post-compact instruction measurement. Do not call tools or read files. Answer only from
+instructions injected after the most recent compact. Return exactly one compact JSON object:
+`{"recovery_marker":<the value after Recovery marker or null>,"reload_route":<which complete installed operation prompt the recovery instruction says to reload or null>,"dispatch_loaded":<true only if an always-loaded runtime dispatch contract is present>}`.
+No Markdown fence and no prose outside the JSON object.

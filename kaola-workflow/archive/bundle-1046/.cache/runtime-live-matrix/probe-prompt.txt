@@ -1,0 +1,11 @@
+This is an instruction-loading measurement. Do not call any tool, do not read any file, and do not
+infer or invent a value. Answer only from instructions already present in your model context when
+this session started. Return exactly one compact JSON object with these keys:
+
+- `contract_nonce`: the value after `Contract nonce:` in machine-global instructions, or null.
+- `project_token`: the value of `probe_project_token` in project instructions, or null.
+- `project_precedence`: the value of `probe_precedence_value` in project instructions, or null.
+- `negative_token`: the value of `probe_negative_token` if any instruction defines it, or null.
+- `recovery_marker`: the value of `Recovery marker:` if present in already-loaded instructions, or null.
+
+No Markdown fence and no prose outside the JSON object.
