@@ -54,6 +54,7 @@ const fs = require('fs');
 const path = require('path');
 const { applyRenames } = require('../templates/routing/rename-table.js');
 const { SLOTS, SPLICES } = require('../templates/routing/slots.js');
+const agentProfiles = require('./generate-agent-profiles.js');
 
 const REPO = path.resolve(__dirname, '..');
 const TEMPLATE_DIR = path.join(REPO, 'templates', 'routing');
@@ -128,6 +129,18 @@ const GENERATED_SURFACES = (() => {
   }
   return rows;
 })();
+
+// Post-compact continuation is a first-class generated prompt, not a runtime
+// script. Claude and Codex ship tracked prompt files for every forge; additive
+// runtimes call renderCompactRecoveryPrompt() from their own edition generator.
+const RUNTIME_RECOVERY_SURFACES = [
+  { runtime: 'claude', surface_type: 'command', forge: 'github', path: 'hooks/kaola-workflow-compact-recovery.md' },
+  { runtime: 'claude', surface_type: 'command', forge: 'gitlab', path: 'plugins/kaola-workflow-gitlab/hooks/kaola-workflow-compact-recovery.md' },
+  { runtime: 'claude', surface_type: 'command', forge: 'gitea', path: 'plugins/kaola-workflow-gitea/hooks/kaola-workflow-compact-recovery.md' },
+  { runtime: 'codex', surface_type: 'skill', forge: 'github', path: 'plugins/kaola-workflow/hooks/kaola-workflow-codex-compact-recovery.md' },
+  { runtime: 'codex', surface_type: 'skill', forge: 'gitlab', path: 'plugins/kaola-workflow-gitlab/hooks/kaola-workflow-codex-compact-recovery.md' },
+  { runtime: 'codex', surface_type: 'skill', forge: 'gitea', path: 'plugins/kaola-workflow-gitea/hooks/kaola-workflow-codex-compact-recovery.md' },
+].map(row => Object.freeze(Object.assign({ topic: 'compact-recovery', skeleton: 'compact-recovery.skeleton.md' }, row)));
 
 // FORGES — the forge axis, DERIVED from the edition tables rather than restated,
 // so a forge can never exist for commands but not skills (or vice versa).
@@ -298,6 +311,24 @@ function renderSurface(row, ir) {
   return renderSkeleton(skeletonText, { surface_type: row.surface_type, forge: row.forge }, ir);
 }
 
+function renderCompactRecoveryPrompt(runtime, forge = 'github') {
+  if (!['claude', 'codex', 'grok', 'cursor'].includes(runtime)) {
+    throw new Error('compact recovery prompt is not enabled for runtime ' + runtime);
+  }
+  if (!FORGES.includes(forge)) throw new Error('unknown compact-recovery forge ' + forge);
+  const slots = Object.assign({}, SLOTS, {
+    'runtime-delegation': agentProfiles.renderRuntimeDelegationGuidanceForRuntime(runtime, forge),
+  });
+  return renderSkeleton(
+    loadSkeleton('compact-recovery.skeleton.md', 'compact-recovery'),
+    { surface_type: runtime === 'codex' ? 'skill' : 'command', forge },
+    { slots, splices: SPLICES });
+}
+
+function renderRuntimeRecoverySurface(row) {
+  return renderCompactRecoveryPrompt(row.runtime, row.forge);
+}
+
 // minimalDiff — the first differing lines (0-based index -> 1-based label),
 // bounded, so --check output stays readable during reverse-engineering.
 function minimalDiff(committed, rendered, limit = 40) {
@@ -335,11 +366,26 @@ function cmdCheck(ir) {
       mismatches++;
     }
   }
+  for (const row of RUNTIME_RECOVERY_SURFACES) {
+    const abs = path.join(REPO, row.path);
+    if (!fs.existsSync(abs)) {
+      console.error(`MISSING: ${row.path} (${row.runtime}/${row.forge}/compact-recovery)`);
+      mismatches++;
+      continue;
+    }
+    const committed = fs.readFileSync(abs, 'utf8');
+    const rendered = renderRuntimeRecoverySurface(row);
+    if (committed !== rendered) {
+      console.error(`DRIFT: ${row.path} (${row.runtime}/${row.forge}/compact-recovery)`);
+      console.error(minimalDiff(committed, rendered));
+      mismatches++;
+    }
+  }
   if (mismatches > 0) {
     console.error(`\ngenerate-routing-surfaces --check: ${mismatches} surface(s) drifted from the skeleton.`);
     process.exit(1);
   }
-  console.log(`generate-routing-surfaces --check: all ${GENERATED_SURFACES.length} surfaces byte-match the skeleton.`);
+  console.log(`generate-routing-surfaces --check: all ${GENERATED_SURFACES.length + RUNTIME_RECOVERY_SURFACES.length} surfaces byte-match the skeleton.`);
 }
 
 // The additive runtime editions render FROM the surfaces above, so until this ran the mandated
@@ -376,7 +422,12 @@ function cmdWrite(ir) {
     const rendered = renderSurface(row, ir);
     fs.writeFileSync(abs, rendered);
   }
-  console.log(`generate-routing-surfaces --write: rendered ${GENERATED_SURFACES.length} surfaces.`);
+  for (const row of RUNTIME_RECOVERY_SURFACES) {
+    const abs = path.join(REPO, row.path);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, renderRuntimeRecoverySurface(row));
+  }
+  console.log(`generate-routing-surfaces --write: rendered ${GENERATED_SURFACES.length + RUNTIME_RECOVERY_SURFACES.length} surfaces.`);
   if (refreshPresentEditionTrees() > 0) process.exit(1);
 }
 
@@ -398,6 +449,8 @@ if (require.main === module) main();
 
 module.exports = {
   GENERATED_SURFACES,
+  RUNTIME_RECOVERY_SURFACES,
+  renderCompactRecoveryPrompt,
   renderSkeleton,
   condMatches,
   resolveKeyed,

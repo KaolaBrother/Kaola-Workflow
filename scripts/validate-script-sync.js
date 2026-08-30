@@ -22,14 +22,8 @@ const codexDir = path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts');
 //     roadmap sync). A previous "sync everything" pass (commit 308f747) clobbered
 //     the Codex variant with the Claude one; do not repeat that.
 //
-//   kaola-workflow-compact-context.js — NOT Claude-only (issue #401 Part 3 corrected this
-//     formerly-stale rationale). A plugin-local copy EXISTS at
-//     plugins/kaola-workflow/scripts/kaola-workflow-compact-context.js and is byte-identical to
-//     the canonical script; the gitlab/gitea forges carry rename-generated ports
-//     (kaola-{forge}-workflow-compact-context.js). The whole family is now covered: canonical
-//     <-> codex in the BYTE_IDENTICAL_GROUPS below, the forge ports by edition-sync generation.
-//     It is therefore NOT in COMMON_SCRIPTS to avoid duplicate enforcement (the byte group already
-//     enforces the claude<->codex parity COMMON_SCRIPTS would).
+//   Compact recovery has no JavaScript support-script family. Claude/Codex/Grok hooks read the
+//     generated runtime prompt directly; Cursor uses an always-applied project Rule.
 //
 //   validate-kaola-workflow-contracts.js (Codex-only) — Codex contract validator;
 //     the Claude validator is validate-workflow-contracts.js (in the allowlist below).
@@ -166,19 +160,6 @@ const BYTE_IDENTICAL_GROUPS = [
     ],
   },
   {
-    // issue #401 Part 3: the compact-context hook's canonical<->codex pair. The script carries
-    // no forge identity strings, so the codex copy is byte-identical to canonical (the gitlab/gitea
-    // forge ports — kaola-{forge}-workflow-compact-context.js — are covered separately as edition-sync
-    // GENERATED_AGGREGATORS because they live at a forge-renamed PATH, not a renamed body).
-    // This closes the live drift where the forge ports carried backticked `fast-summary.md` that
-    // canonical+codex did not, and nothing guarded the family.
-    label: 'compact-context base-name copies',
-    files: [
-      'scripts/kaola-workflow-compact-context.js',
-      'plugins/kaola-workflow/scripts/kaola-workflow-compact-context.js',
-    ],
-  },
-  {
     // THE CROSS-EDITION DRIFT ANCHOR. The Oracle Kernel (kaola-workflow-adaptive-schema.js) has ONE
     // canonical source in scripts/; the three forge copies are GENERATED from it
     // (`edition-sync.js --materialize-kernel`) and COMMITTED, because the Codex/forge install path
@@ -299,27 +280,10 @@ const BYTE_IDENTICAL_GROUPS = [
 // port should say from a regex; a generator derives it from the declared rename set, which does not
 // contain the kernel. Prefer promotion. If a family ever has to live here AND require the kernel,
 // that is the case that needs the normalizer bounded, not another exemption.
-const RENAME_NORMALIZED_FAMILIES = [
-  {
-    // codex-compact-resume: a 3-tree family with NO root canonical. The codex copy is the
-    // reference; the gitlab/gitea ports are rename-normalized identical (the only identity
-    // string is the script's own base name in the header). Brought under coverage with no
-    // content edit (rename-normalized identical at HEAD).
-    label: 'codex-compact-resume forge ports',
-    reference: 'plugins/kaola-workflow/scripts/kaola-workflow-codex-compact-resume.js',
-    ports: [
-      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-codex-compact-resume.js' },
-      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-codex-compact-resume.js' },
-    ],
-  },
-];
+const RENAME_NORMALIZED_FAMILIES = [];
 
-// #418.1: the per-forge config/hooks.json (codex/gitlab/gitea plugin trees). These are
-// rename-normalized: identical EXCEPT the SessionStart compact-resume command path, which carries the
-// forge-renamed script base name (kaola-{forge}-workflow-codex-compact-resume.js). The compact
-// resume hook is the only hook token retained in the JSON, so the
-// generic renameNormalize() (which rewrites every kaola-workflow-<name>) cannot be used — we
-// normalize ONLY the codex-compact-resume token. Reference = codex tree (the base-named source).
+// The per-forge Codex hook mappings are byte-identical: every one reads the same generated prompt
+// basename from its own installed plugin root.
 const CONFIG_HOOKS_FAMILY = {
   label: 'config/hooks.json forge ports',
   reference: 'plugins/kaola-workflow/config/hooks.json',
@@ -328,18 +292,12 @@ const CONFIG_HOOKS_FAMILY = {
     { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/config/hooks.json' },
   ],
 };
-// Normalize ONLY the compact-resume script token (the sole forge-renamed string in config/hooks.json).
 function normalizeConfigHooks(referenceText, forge) {
-  return referenceText.replace(
-    /kaola-workflow-codex-compact-resume/g,
-    `kaola-${forge}-workflow-codex-compact-resume`);
+  return referenceText;
 }
 
-// #629 bullet 1: the root hooks/hooks.json (Claude plugin-root install surface) and its gitlab/gitea
-// ports. MIRRORS CONFIG_HOOKS_FAMILY above: the only per-forge diff is the SessionStart compact-context
-// hook command, which carries the forge-renamed script base name
-// (kaola-{forge}-workflow-compact-context.js). Reference = root tree (the base-named source; no plugins/kaola-workflow
-// copy of hooks/hooks.json exists — the Codex tree ships hooks via config/hooks.json instead).
+// The Claude hook mappings are byte-identical: every one reads the same generated prompt basename
+// from its own plugin root.
 const HOOKS_JSON_FAMILY = {
   label: 'hooks/hooks.json forge ports',
   reference: 'hooks/hooks.json',
@@ -348,11 +306,8 @@ const HOOKS_JSON_FAMILY = {
     { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/hooks/hooks.json' },
   ],
 };
-// Normalize ONLY the compact-context script token (the sole forge-renamed string in hooks/hooks.json).
 function normalizeHooksJson(referenceText, forge) {
-  return referenceText.replace(
-    /kaola-workflow-compact-context/g,
-    `kaola-${forge}-workflow-compact-context`);
+  return referenceText;
 }
 
 // Shared family-check primitive: compare every port in `family.ports` against
@@ -563,16 +518,16 @@ if (require.main === module) {
     for (const d of res.drift) drift.push(d);
   }
 
-  // #418.1: config/hooks.json forge ports (compact-resume token normalized; .sh tokens stay base).
+  // Codex config hook mappings are byte-identical across forge plugin roots.
   {
-    const res = checkNormalizedFamily(CONFIG_HOOKS_FAMILY, normalizeConfigHooks, repoRoot, 'compact-resume-normalized');
+    const res = checkNormalizedFamily(CONFIG_HOOKS_FAMILY, normalizeConfigHooks, repoRoot, 'byte-identical');
     for (const m of res.missing) missing.push(m);
     for (const d of res.drift) drift.push(d);
   }
 
-  // #629 bullet 1: hooks/hooks.json forge ports (compact-context token normalized; .sh tokens stay base).
+  // Claude hook mappings are byte-identical across forge plugin roots.
   {
-    const res = checkNormalizedFamily(HOOKS_JSON_FAMILY, normalizeHooksJson, repoRoot, 'compact-context-normalized');
+    const res = checkNormalizedFamily(HOOKS_JSON_FAMILY, normalizeHooksJson, repoRoot, 'byte-identical');
     for (const m of res.missing) missing.push(m);
     for (const d of res.drift) drift.push(d);
   }

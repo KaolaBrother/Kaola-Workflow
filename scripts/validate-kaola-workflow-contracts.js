@@ -384,8 +384,11 @@ assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'attestPlanne
 // only; see kaola-workflow-claim.js).
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Codex Dispatch Mode Detection');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--codex-dispatch-mode');
-// #266: Codex-only compact/resume hook — no claude scripts/ copy; codex plugin tree only.
-assert(exists(`${pluginRoot}/scripts/kaola-workflow-codex-compact-resume.js`), '#266 codex compact-resume hook missing from Codex plugin');
+// #1044: Codex compact recovery is a generated prompt artifact, not a JavaScript selector.
+assert(exists(`${pluginRoot}/hooks/kaola-workflow-codex-compact-recovery.md`),
+  '#1044 generated Codex compact-recovery prompt missing from plugin');
+assert(!exists(`${pluginRoot}/scripts/kaola-workflow-codex-compact-resume.js`),
+  '#1044 retired Codex compact-resume JavaScript must stay absent');
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all
 // reviewer agent bodies (Codex edition — .toml bodies). Removing the emission section from
@@ -504,15 +507,27 @@ const routingSkels = [
   'templates/routing/next.skeleton.md',
   'templates/routing/finalize.skeleton.md',
 ];
+const dispatchContract = read('templates/routing/dispatch-contract.md');
+const normalizedDispatchContract = norm(dispatchContract);
+assert(/dispatch when it materially reduces main-context residue/i.test(normalizedDispatchContract),
+  'shared dispatch contract must carry the execution-economics judgment');
+assert(/runtime-native defaults/i.test(normalizedDispatchContract) || /task-sensitive model/i.test(normalizedDispatchContract),
+  'shared dispatch contract must leave model/effort selection to runtime metadata or task context');
 for (const rel of routingSkels) {
   const text = read(rel);
-  const n = norm(text);
-  assert(/dispatch when it materially reduces main-context residue/i.test(n),
-    rel + ' must carry the execution-economics dispatch judgment');
-  assert(/runtime-native defaults/i.test(n) || /task-sensitive model/i.test(n),
-    rel + ' must leave model/effort selection to runtime metadata or task context');
+  assert((text.match(/<!-- SLOT:runtime-dispatch-common -->/g) || []).length === 1,
+    rel + ' must consume the shared dispatch contract exactly once');
   assert(!/model="\{[A-Z_]+_MODEL\}"/.test(text),
     rel + ' must not pin a workflow-owned per-spawn model placeholder');
+}
+for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finalize.md',
+  'plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md',
+  'plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md']) {
+  const rendered = norm(read(rel));
+  assert(/dispatch when it materially reduces main-context residue/i.test(rendered),
+    rel + ' must render the shared execution-economics judgment');
+  assert(/runtime-native defaults/i.test(rendered) || /task-sensitive model/i.test(rendered),
+    rel + ' must render the shared model-selection rule');
 }
 {
   const consumerTemplate = read('scripts/kaola-workflow-project-instruction-templates.js');

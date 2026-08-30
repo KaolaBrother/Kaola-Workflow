@@ -108,13 +108,10 @@ const OPENCODE_JSON = path.join(REPO, 'opencode.json');
 // the hooks directory so --write can retire stale installed copies.
 const HOOK_SCRIPTS = [];
 
-// Opencode plugin scripts (byte-copied from tracked templates/opencode/plugins/ into the
-// opencode edition). The tracked template is the canonical source of truth; the plugin's
-// compact-resume reader therefore ships from this copy, while .opencode/plugins/ remains the
-// gitignored generated artifact. Byte-copy (no rendering) mirrors writePlugin().
-const PLUGIN_SCRIPTS = [
-  'kaola-workflow-hooks.js',
-];
+// No Kaola plugin executes during OpenCode compaction. Its million-token runtime profile does not
+// justify a second prompt lifecycle; --write retains ownership of plugins/ only to prune the
+// retired compact reader from generated trees.
+const PLUGIN_SCRIPTS = [];
 
 // Model pins are OPT-IN. Unset → no pin → both tiers inherit whatever model the
 // user is already using in opencode. Set the env var only to pin a specific
@@ -777,7 +774,9 @@ function runCheck(forge) {
   // missing-registered-file direction; this catches the reverse — a future second plugin dropped
   // into templates/opencode/plugins/ without being added to the allowlist.
   {
-    const onDiskPlugins = fs.readdirSync(CANON_PLUGINS_DIR).filter(f => f.endsWith('.js'));
+    const onDiskPlugins = fs.existsSync(CANON_PLUGINS_DIR)
+      ? fs.readdirSync(CANON_PLUGINS_DIR).filter(f => f.endsWith('.js'))
+      : [];
     const registeredSet = new Set(PLUGIN_SCRIPTS);
     for (const file of onDiskPlugins) {
       if (!registeredSet.has(file)) {

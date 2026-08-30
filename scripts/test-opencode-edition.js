@@ -918,15 +918,21 @@ for (const target of emittedCommandTargets) {
   assert(!wfNext.includes('--runtime claude'),
     'A23: workflow-next has NO "--runtime claude" (rewritten to opencode at generation, #2)');
 
-  // A25 (#645): the First Principles axiom POINTER line lives in the shared skeleton body (outside
-  // every REGION marker), so it propagates into the generated opencode workflow-next as well. Lock
-  // its presence so an opencode regen can never drop the consumer axiom reference.
-  // The needle is scoped to ONE line: the pointer sentence wraps in canonical, so a needle
-  // spanning the wrap would be pinning the line-break rather than the rule.
-  assert(wfNext.includes('Principles axioms (the `## First Principles` block'),
-    'A25 (#645): opencode workflow-next must carry the First Principles axiom pointer (shared-body reference line)');
-  assert(wfNext.includes('applied in priority order'),
-    'A25 (#645): opencode workflow-next must carry the priority-order clause');
+  // A25 (#645): compressed command surfaces retain the axiom constraint as
+  // semantic prose, not the retired pointer sentence that named the source
+  // AGENTS.md block. The always-loaded dispatch contract remains the carrier
+  // for runtime facts and is bounded by its recovery marker.
+  assert(/\*\*First Principles\.\*\*/.test(wfNext)
+      && /(?:tie|axiom|priority|correct first)/i.test(wfNext),
+    'A25 (#645): opencode workflow-next retains First Principles constraint semantics without the retired pointer wording');
+  const compactStartA25 = wfNext.indexOf('<!-- KW-COMPACT-RECOVERY-START -->');
+  const compactEndA25 = wfNext.indexOf('<!-- KW-COMPACT-RECOVERY-END -->');
+  const dispatchA25 = wfNext.search(/Runtime dispatch contract \(always loaded\)/i);
+  const dispatchEndA25 = wfNext.indexOf('<!-- KW-RUNTIME-DISPATCH-END -->');
+  assert(compactStartA25 >= 0 && compactEndA25 > compactStartA25
+      && dispatchA25 > compactStartA25 && dispatchEndA25 > dispatchA25
+      && dispatchEndA25 < compactEndA25,
+    'A25 (#645): opencode workflow-next keeps the complete dispatch carrier inside the marked compact block');
   // The companion tighten-only clause ("never cite one to skip a typed gate") is RETIRED with the
   // typed gates it protected: there is no gate an axiom could be cited to skip. What replaced it —
   // the derivation being useful and never required — is not a tighten-only rule and is not pinned
@@ -973,55 +979,19 @@ for (const script of sync.HOOK_SCRIPTS) {
 }
 
 // ---------------------------------------------------------------------------
-// A11: compact-resume plugin — present and syntactically valid (opencode loads
-// .opencode/plugins/*.js at startup; a syntax error would break the session).
+// A11: no compact-resume plugin is generated. OpenCode's measured context does
+// not justify a second prompt lifecycle.
 // ---------------------------------------------------------------------------
 const pluginRel = '.opencode/plugins/kaola-workflow-hooks.js';
-assert(exists(pluginRel), 'A11: hooks adapter plugin deployed at ' + pluginRel);
-if (exists(pluginRel)) {
-  const { spawnSync } = require('child_process');
-  const { mkdtempSync, writeFileSync, rmSync } = require('fs');
-  const os = require('os');
-  // The plugin is ESM (import/export). `node --check` on a .js file needs a
-  // nearest package.json with `"type":"module"` to recognize ESM on Node <22.12,
-  // and .opencode/package.json is gitignored (production runs under Bun, which
-  // auto-detects ESM). Validate against a transient .mjs copy — .mjs is the
-  // explicit ESM extension, so node --check parses it as a module on every Node
-  // version. Hermetic: no new tracked infra, no .gitignore churn, no execution
-  // (--check is syntax-only, the imports do not resolve).
-  const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'opencode-plugin-check-'));
-  const tmpMjs = path.join(tmpDir, 'plugin.mjs');
-  writeFileSync(tmpMjs, read(pluginRel));
-  let r;
-  try {
-    // spawn-class: environment
-    r = spawnSync(process.execPath, ['--check', tmpMjs], { encoding: 'utf8' });
-  } finally {
-    try { rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* tmp leak; non-fatal */ }
-  }
-  assert(r.status === 0, 'A11: hooks adapter plugin parses as ESM (node --check on transient .mjs; Node-version-robust)' + (r.stderr ? ' — ' + r.stderr.trim() : ''));
-  const src = read(pluginRel);
-  // Couple the plugin to the same hook scripts asserted in A10 (no silent rename drift).
-  for (const script of sync.HOOK_SCRIPTS) {
-    assert(src.includes(script), 'A11: plugin references hook script ' + script);
-  }
-  assert(src.includes('experimental.session.compacting'),
-    'A11: plugin registers the surviving compaction hook');
-}
+assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the generated tree');
 
 // ---------------------------------------------------------------------------
-// A11-canon: tracked canonical source for the opencode plugin must exist and the
-// regenerated .opencode/plugins/ copy must be byte-identical to it, so the gap
-// (gitignored plugin with no tracked source) cannot silently reopen.
+// A11-canon: there is no tracked second authoring source for a compact plugin.
 // ---------------------------------------------------------------------------
 {
   const canonPluginRel = 'templates/opencode/plugins/kaola-workflow-hooks.js';
-  assert(exists(canonPluginRel),
-    'A11-canon: tracked canonical source ' + canonPluginRel + ' exists');
-  if (exists(canonPluginRel) && exists('.opencode/plugins/kaola-workflow-hooks.js')) {
-    assert(read(canonPluginRel) === read('.opencode/plugins/kaola-workflow-hooks.js'),
-      'A11-canon: regenerated .opencode/plugins/kaola-workflow-hooks.js is byte-identical to the tracked template');
-  }
+  assert(!exists(canonPluginRel) && JSON.stringify(sync.PLUGIN_SCRIPTS) === '[]',
+    'A11-canon: compact plugin source and generator allowlist are both empty');
 }
 
 // ---------------------------------------------------------------------------
@@ -1297,8 +1267,8 @@ if (exists(pluginRel)) {
       assert(existsSync(path.join(r.dest, '.opencode', 'agents', a + '.md')),
         'P1 (#F9): project install deploys agent ' + a + ' under .opencode/agents/');
     }
-    assert(existsSync(path.join(r.dest, '.opencode', 'plugins', 'kaola-workflow-hooks.js')),
-      'P1 (#F9): project install deploys the hooks plugin under .opencode/plugins/');
+    assert(!existsSync(path.join(r.dest, '.opencode', 'plugins', 'kaola-workflow-hooks.js')),
+      'P1 (#F9): project install deploys no compact plugin');
     for (const h of sync.HOOK_SCRIPTS) {
       assert(existsSync(path.join(r.dest, '.opencode', 'hooks', h)),
         'P1 (#F9): project install deploys hook ' + h + ' under .opencode/hooks/');
@@ -1689,8 +1659,8 @@ if (exists(pluginRel)) {
       assert(sameNames(commands, ADAPTIVE_CORE),
         label + ': commands deploy exactly at the native commands/ path — got '
         + JSON.stringify(commands));
-      assert(existsSync(path.join(layoutRoot, 'plugins', 'kaola-workflow-hooks.js')),
-        label + ': the existing plugins/ surface remains deployed');
+      assert(!existsSync(path.join(layoutRoot, 'plugins', 'kaola-workflow-hooks.js')),
+        label + ': no compact plugin is deployed');
       const hooks = existsSync(path.join(layoutRoot, 'hooks'))
         ? readdirSync(path.join(layoutRoot, 'hooks')).filter(f => f.endsWith('.sh')).sort() : [];
       assert(sameNames(hooks, sync.HOOK_SCRIPTS),
@@ -2353,8 +2323,8 @@ if (exists(pluginRel)) {
       assert(existsSync(path.join(r.cfg, 'agents', a + '.md')),
         'G1: --global deploys agent ' + a + ' at <config>/agents/ (un-nested)');
     }
-    assert(existsSync(path.join(r.cfg, 'plugins', 'kaola-workflow-hooks.js')),
-      'G1: --global deploys the hooks plugin at <config>/plugins/ (opencode global plugin dir)');
+    assert(!existsSync(path.join(r.cfg, 'plugins', 'kaola-workflow-hooks.js')),
+      'G1: --global deploys no compact plugin');
     for (const h of sync.HOOK_SCRIPTS) {
       assert(existsSync(path.join(r.cfg, 'hooks', h)),
         'G1: --global deploys hook ' + h + ' at <config>/hooks/ (sibling of the plugin)');
@@ -3190,7 +3160,7 @@ if (exists(pluginRel)) {
   ].join('\n');
 
   try {
-    assert(existsSync(shipped), 'A29: the generated tree carries the plugin at .opencode/plugins/ (nothing to load otherwise)');
+    assert(!existsSync(shipped), 'A29: retired OpenCode compact plugin stays absent');
     if (existsSync(shipped)) {
       copyFileSync(shipped, asMjs);
       // spawn-class: environment

@@ -695,6 +695,16 @@ if [[ ${#SUPPORT_HOOK_NAMES[@]} -gt 0 ]]; then
   done
 fi
 
+# Compact recovery is shipped as reviewable Markdown. The SessionStart(compact) hook only reads
+# this file; it does not execute a Kaola JavaScript prompt selector.
+COMPACT_RECOVERY_PROMPT="$SOURCE_HOOKS_DIR/kaola-workflow-compact-recovery.md"
+if [[ ! -f "$COMPACT_RECOVERY_PROMPT" ]]; then
+  echo "Install error: generated compact-recovery prompt missing: $COMPACT_RECOVERY_PROMPT" >&2
+  exit 1
+fi
+cp "$COMPACT_RECOVERY_PROMPT" "$SUPPORT_HOOKS_DIR/kaola-workflow-compact-recovery.md"
+echo "Installed compact-recovery prompt: $SUPPORT_HOOKS_DIR/kaola-workflow-compact-recovery.md"
+
 # Install hooks.json with $CLAUDE_PLUGIN_ROOT rewritten to absolute install path.
 # Manual install does not set CLAUDE_PLUGIN_ROOT, so the placeholder is replaced
 # with $SUPPORT_DIR (e.g. ~/.claude/kaola-workflow) at install time.

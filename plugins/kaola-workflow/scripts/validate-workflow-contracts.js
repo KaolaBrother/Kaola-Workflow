@@ -201,7 +201,7 @@ assert(!phaseCommands.includes('commands/workflow-next.md')
   ];
   for (const file of nextCommandCopies) {
     assertIncludes(file, 'Dispatch when it materially reduces main-context residue');
-    assertIncludes(file, 'Keep one production owner for a cohesive');
+    assertIncludes(file, 'Keep one owner for the current cohesive production surface');
     assertNotIncludes(file, 'model="{');
   }
 }
@@ -318,7 +318,8 @@ for (const file of [
   for (const token of retired) assertNotIncludes(file, token);
 }
 
-assertIncludes('hooks/hooks.json', 'compact-context');
+assertIncludes('hooks/hooks.json', 'kaola-workflow-compact-recovery.md');
+assertNotIncludes('hooks/hooks.json', 'compact-context.js');
 assertNotIncludes('hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes('hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assertNotIncludes('hooks/hooks.json', 'session-env');
@@ -540,7 +541,10 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'validated_candidate_hash'
 assertIncludes('commands/kaola-workflow-finalize.md', 'kaola-workflow-validation-runner.js" record');
 assertIncludes('commands/kaola-workflow-finalize.md', '--project {project} --verdict pass --command');
 assertIncludes('commands/kaola-workflow-finalize.md', '--keep-worktree');
-assertIncludes('commands/kaola-workflow-finalize.md', 'Use the metadata captured in Step 9');
+// The compressed surface no longer carries numbered steps. Pin the outcome: sink metadata is
+// captured before archive, while the active workflow-state file still exists.
+assertIncludes('commands/kaola-workflow-finalize.md',
+  'Capture branch, sink kind, issue and `issue_numbers` before archive');
 // #816: ownership-inversion lock — the finalize seam is orchestrator-owned and the mechanical
 // residue is ONE script transaction, so the command must carry NO dispatchable bookkeeping role
 // and MUST carry the one-call transaction. Both directions are pinned: re-introducing a dispatch
@@ -548,11 +552,12 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'Use the metadata captured
 assertNotIncludes('commands/kaola-workflow-finalize.md', 'subagent_type="contractor"');
 assertNotIncludes('commands/kaola-workflow-finalize.md', 'contractor');
 assertIncludes('commands/kaola-workflow-finalize.md', 'ONE resumable script transaction');
-assertIncludes('commands/kaola-workflow-finalize.md', 'node "$CLAIM_JS" finalize \\\n  --project {project} --keep-worktree $SINK_KEEP_OPEN_FLAG');
+assertIncludes('commands/kaola-workflow-finalize.md',
+  '(cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize --project {project} --keep-worktree $SINK_KEEP_OPEN_FLAG)');
 // The two things the transaction will NOT do for the agent, in prose: it never authors the
 // implementation commit, and it owns the worktree->main sync itself. Both were the recurring
 // recovery mistakes, so both stay pinned.
-assertIncludes('commands/kaola-workflow-finalize.md', 'never authors the implementation');
+assertIncludes('commands/kaola-workflow-finalize.md', 'never authors implementation commits');
 assertIncludes('commands/kaola-workflow-finalize.md', 'worktree-to-main project-folder sync');
 assertIncludes('commands/kaola-workflow-finalize.md', 'never hand-copy a staler main copy');
 
@@ -654,7 +659,7 @@ for (const [name, file] of nextSkillEditions) {
 const [, nextSkillBaselineFile] = nextSkillEditions[0];
 const nextSkillBaseline = read(nextSkillBaselineFile);
 const baselineDelegationContract = sectionBody(nextSkillBaseline, 'Delegation');
-const baselineResumeClause = sectionBody(nextSkillBaseline, 'Step 6 — Resume');
+const baselineResumeClause = sectionBody(nextSkillBaseline, 'Resume');
 assert(
   baselineDelegationContract.length > 0 && baselineResumeClause.includes('Look for the work'),
   nextSkillBaselineFile + ' must define a "## Delegation" section and a resume section carrying ' +
@@ -668,7 +673,7 @@ for (const [, file] of nextSkillEditions.slice(1)) {
       nextSkillBaselineFile + ' (issue #211 cross-forge parity)'
   );
   assert(
-    sectionBody(content, 'Step 6 — Resume') === baselineResumeClause,
+    sectionBody(content, 'Resume') === baselineResumeClause,
     file + ' resume section must byte-match the github baseline ' + nextSkillBaselineFile +
       ' (cross-forge parity)'
   );
@@ -785,10 +790,12 @@ assertIncludes('agents/implementer.md', 'smoke-integration');
 // The `--enable-adaptive` flag is warn-ignored: accepted for back-compat and sets nothing. Pin the
 // notice so a regression that silently honors the flag (writes a field / branches on it) reds the chain.
 assertIncludes('install.sh', '--enable-adaptive has no effect');
-// #266: Codex harness scripts (preflight, compact-resume) must be in the install allowlist
-// (#407 manifest). preflight is base-named (4-tree byte-identical); compact-resume is codex-only.
+// #266: the Codex preflight harness remains in the install allowlist. Compact recovery is a
+// generated prompt artifact and must not re-enter the support-script manifest.
 assert(exists('scripts/kaola-workflow-codex-preflight.js'), '#266 codex preflight script missing from scripts/');
 assertManifestScript('kaola-workflow-codex-preflight.js');
+assert(!installManifest.SUPPORT_SCRIPTS.some(name => /compact-(?:context|resume)\.js$/.test(name)),
+  '#1044 compact recovery must not install a JavaScript prompt carrier');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');
 // #725/#770: adaptive is the ONLY installed path — the `installed_paths` union /
 // `resolveInstalledPaths` resolver and the persisted next-work command are retired. Resumption

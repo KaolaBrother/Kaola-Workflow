@@ -28,6 +28,8 @@
 // its own miss sends the operator to `node ./kaola-…-claim.js` and a
 // module-not-found that names the wrong problem.
 
+const fs = require('fs');
+const path = require('path');
 const agentProfiles = require('../../scripts/generate-agent-profiles.js');
 
 const SLOTS = {
@@ -51,6 +53,12 @@ SLOTS['runtime-delegation'] = {
     gitea: agentProfiles.renderRuntimeDelegationGuidanceForRuntime('codex', 'gitea'),
   },
 };
+
+// One common dispatch contract is rendered beside each runtime adapter. Next,
+// Finalization, and compact recovery consume the same bytes; runtime-specific
+// guidance remains adapter-owned below it.
+SLOTS['runtime-dispatch-common'] = fs.readFileSync(
+  path.join(__dirname, 'dispatch-contract.md'), 'utf8').trimEnd();
 
 // resolverFor — the init surfaces resolve a sibling script the SAME way the
 // next/finalize surfaces do, only into a different handle. The recipe is

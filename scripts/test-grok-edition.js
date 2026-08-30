@@ -15,8 +15,8 @@
 // Grok CLI is a coding-agent RUNTIME, not a forge, and it does not ride
 // install.sh / edition-sync.js / npm test. It is delivered the Grok-native
 // way: named agents under `.grok/agents/<role>.md` (spawn_subagent types),
-// flat commands under `.grok/commands/<name>.md`, and `.grok/hooks/`
-// (generated hooks.json with the compact-resume hook). THREE canonical model
+// flat commands under `.grok/commands/<name>.md`, and one `.grok/rules/`
+// compact-safe prompt. THREE canonical model
 // classes: every subagent keeps model: inherit, while standard/reasoning/heavy
 // agents carry the native effort pins medium/high/xhigh respectively.
 //
@@ -427,9 +427,9 @@ function commandRel(name, forge) {
     'G2: .grok/commands set == routing-registry commandSources(github) — expected '
     + JSON.stringify(canonCommandNames) + ' got ' + JSON.stringify(gen));
 
-  const CANON_CARD = /^Agent\(/m;
-  let canonCards = 0;
-  let grokCards = 0;
+  const COMPACT_START = '<!-- KW-COMPACT-RECOVERY-START -->';
+  const COMPACT_END = '<!-- KW-COMPACT-RECOVERY-END -->';
+  const DISPATCH_END = '<!-- KW-RUNTIME-DISPATCH-END -->';
   for (const name of canonCommandNames) {
     const src = forgeLayout.commandSources(DEFAULT_FORGE).find(s => s.basename === name + '.md');
     assert(!!src, 'G2[' + name + ']: commandSources() names this surface');
@@ -442,26 +442,25 @@ function commandRel(name, forge) {
     assert(fm.name === name, 'G2[' + name + ']: frontmatter name matches the command — got ' + JSON.stringify(fm.name));
     assert(typeof fm.description === 'string' && fm.description.trim().length > 0,
       'G2[' + name + ']: frontmatter has a non-empty description');
-    assert(!CANON_CARD.test(content),
-      'G2[' + name + ']: no line-start Agent( dispatch card (rewrite target is spawn_subagent()');
-    const canonHits = [...canon.matchAll(/^Agent\(\n\s+subagent_type="([^"]+)"/gm)].map(m => m[1]);
-    const grokHits = [...content.matchAll(/^spawn_subagent\(\n\s+subagent_type="([^"]+)"/gm)].map(m => m[1]);
-    canonCards += canonHits.length;
-    grokCards += grokHits.length;
-    assert(grokHits.length === canonHits.length,
-      'G2[' + name + ']: spawn_subagent( card count matches canonical Agent( count ('
-      + canonHits.length + ') — got ' + grokHits.length);
-    const n = Math.min(canonHits.length, grokHits.length);
-    for (let i = 0; i < n; i++) {
-      assert(grokHits[i] === canonHits[i],
-        'G2[' + name + '#' + i + ']: spawn_subagent keeps the canonical role "' + canonHits[i]
-        + '" as a named type (got "' + grokHits[i] + '") — Grok hosts named custom agents');
-    }
+    if (name === 'workflow-init') continue;
+    const canonStart = canon.indexOf(COMPACT_START);
+    const canonEnd = canon.indexOf(COMPACT_END);
+    const grokStart = content.indexOf(COMPACT_START);
+    const grokEnd = content.indexOf(COMPACT_END);
+    assert(canonStart >= 0 && canonEnd > canonStart,
+      'G2[' + name + ']: canonical command owns one complete compact recovery block');
+    assert(grokStart >= 0 && grokEnd > grokStart,
+      'G2[' + name + ']: generated command keeps the complete compact recovery block');
+    const grokBlock = grokStart >= 0 && grokEnd > grokStart
+      ? content.slice(grokStart, grokEnd + COMPACT_END.length) : '';
+    const dispatchNeedle = /Runtime dispatch contract \(always loaded\)/i;
+    assert(dispatchNeedle.test(grokBlock) && grokBlock.includes(DISPATCH_END),
+      'G2[' + name + ']: generated compact block carries a bounded always-loaded dispatch contract');
+    assert(!/^Agent\(/m.test(content),
+      'G2[' + name + ']: no stale line-start Agent( example card remains in the generated surface');
   }
-  assert(canonCards > 0,
-    'G2: canonical command surfaces carry at least one line-start Agent( card (rewrite bite)');
-  assert(grokCards === canonCards,
-    'G2: generated spawn_subagent( count equals canonical Agent( count');
+  assert(/spawn_subagent\(/.test(GROK_SYNC_SRC),
+    'G2: Grok renderer retains the native spawn_subagent( carrier without requiring an example card');
 }
 
 {
@@ -596,26 +595,19 @@ for (const role of reviewerGenerator.ROLES) {
 }
 
 // ---------------------------------------------------------------------------
-// G5: hooks — generated hooks.json (or equivalent) registers the SessionStart
-// compact hook. The retired dispatch-log hook is deliberately absent.
+// G5: native Rule — Grok passive-hook stdout is ignored, so the complete
+// recovery prompt rides the documented Rule carrier and no compact hook ships.
 // ---------------------------------------------------------------------------
 {
-  const hooksJsonRel = '.grok/hooks/hooks.json';
-  assert(exists(hooksJsonRel), 'G5: .grok/hooks/hooks.json exists');
-  let parsed = null;
-  try { parsed = JSON.parse(read(hooksJsonRel)); } catch (_) { parsed = null; }
-  assert(parsed && parsed.hooks && typeof parsed.hooks === 'object',
-    'G5: hooks.json parses with a hooks object');
-  const events = parsed && parsed.hooks ? Object.keys(parsed.hooks).sort() : [];
-  assert(events.includes('SessionStart'),
-    'G5: hooks.json registers SessionStart — got ' + JSON.stringify(events));
-  const session = parsed && parsed.hooks ? parsed.hooks.SessionStart : [];
-  const sessionBlob = JSON.stringify(session || []);
-  assert(/compact/i.test(sessionBlob),
-    'G5: SessionStart registers the compact matcher');
-  assert(!/CLAUDE_PLUGIN_ROOT/.test(read(hooksJsonRel)),
-    'G5: hooks.json carries no CLAUDE_PLUGIN_ROOT');
-
+  const ruleRel = '.grok/rules/kaola-workflow-compact-recovery.md';
+  assert(exists(ruleRel), 'G5: generated Grok recovery Rule exists');
+  const rule = exists(ruleRel) ? read(ruleRel) : '';
+  assert(/KW-COMPACT-RECOVERY-V1/.test(rule),
+    'G5: Grok Rule carries the compact-recovery marker');
+  assert(/Runtime dispatch contract \(always loaded\)/.test(rule),
+    'G5: Grok Rule always carries the dispatch contract');
+  assert(JSON.stringify(require('./sync-grok-edition.js').expectedHookFiles()) === '[]',
+    'G5: Grok edition emits no compact hook files');
 }
 
 // ---------------------------------------------------------------------------
@@ -766,8 +758,12 @@ for (const role of reviewerGenerator.ROLES) {
       const scriptsDir = path.join(r.grokHome, 'kaola-workflow', 'scripts');
       assert(fs.existsSync(scriptsDir),
         'G8-project: support scripts land at $GROK_HOME/kaola-workflow/scripts');
-      assert(fs.existsSync(path.join(r.dest, '.grok', 'hooks')),
-        'G8-project: hooks land under <target>/.grok/hooks/');
+      const projectRulePath = path.join(r.dest, '.grok', 'rules', 'kaola-workflow-compact-recovery.md');
+      assert(fs.existsSync(projectRulePath)
+        && /KW-COMPACT-RECOVERY-V1/.test(fs.readFileSync(projectRulePath, 'utf8')),
+        'G8-project: complete recovery Rule lands under <target>/.grok/rules/');
+      assert(!fs.existsSync(path.join(r.grokHome, 'hooks', 'kaola-workflow-hooks.json')),
+        'G8-project: project install creates no global compact hook');
       clean(r);
     }
 
@@ -784,12 +780,18 @@ for (const role of reviewerGenerator.ROLES) {
       }
       assert(!fs.existsSync(path.join(r.grokHome, '.grok')),
         'G8-global: creates NO nested .grok/ under GROK_HOME (Grok scans GROK_HOME itself)');
+      const globalRulePath = path.join(r.grokHome, 'rules', 'kaola-workflow-compact-recovery.md');
+      assert(fs.existsSync(globalRulePath)
+        && /KW-COMPACT-RECOVERY-V1/.test(fs.readFileSync(globalRulePath, 'utf8')),
+        'G8-global: complete recovery Rule lands under GROK_HOME/rules/');
+      assert(!fs.existsSync(path.join(r.grokHome, 'hooks', 'kaola-workflow-hooks.json')),
+        'G8-global: global install emits no compact hook mapping');
       clean(r);
     }
 
     // --forge=gitlab renders `.grok-gitlab/` as the generator SOURCE tree, then
     // copies content into the runtime-native dest Grok actually scans:
-    // <target>/.grok/{agents,commands,hooks}. Same split as kimi (.kimi-gitlab
+    // <target>/.grok/{agents,commands,rules}. Same split as kimi (.kimi-gitlab
     // → .kimi-code/skills) and opencode (.opencode-gitlab → .opencode/).
     {
       const r = runInstaller(['--forge=gitlab']);
@@ -835,14 +837,15 @@ for (const role of reviewerGenerator.ROLES) {
       clean(r);
     }
 
-    // --no-scripts skips scripts/hooks; agents/commands still deploy.
+    // --no-scripts skips executable support; agents/commands/the native Rule still deploy.
     {
       const withScripts = runInstaller([]);
       const scriptsDir = path.join(withScripts.grokHome, 'kaola-workflow', 'scripts');
       assert(fs.existsSync(scriptsDir) && fs.readdirSync(scriptsDir).length > 0,
         'G8-noscripts: default install deploys support scripts (the --no-scripts contrast)');
-      assert(fs.existsSync(path.join(withScripts.dest, '.grok', 'hooks')),
-        'G8-noscripts: default install deploys hooks (the --no-scripts contrast)');
+      assert(fs.existsSync(path.join(withScripts.dest, '.grok', 'rules',
+        'kaola-workflow-compact-recovery.md')),
+      'G8-noscripts: default install deploys the native recovery Rule');
       clean(withScripts);
 
       const r = runInstaller(['--no-scripts']);
@@ -852,6 +855,9 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-noscripts: agents still deploy');
       assert(!fs.existsSync(path.join(r.grokHome, 'kaola-workflow', 'scripts')),
         'G8-noscripts: skips $GROK_HOME/kaola-workflow/scripts');
+      assert(fs.existsSync(path.join(r.dest, '.grok', 'rules',
+        'kaola-workflow-compact-recovery.md')),
+      'G8-noscripts: recovery Rule still deploys because it starts no process');
       const hooksDir = path.join(r.dest, '.grok', 'hooks');
       const hookFiles = fs.existsSync(hooksDir) ? fs.readdirSync(hooksDir) : [];
       assert(hookFiles.length === 0,

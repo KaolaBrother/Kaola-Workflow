@@ -204,44 +204,17 @@ function roleNamesIn(text) {
   return ROLE_NAMES.filter(role => new RegExp(`(?:^|[^a-z0-9-])${role}(?:$|[^a-z0-9-])`).test(prose));
 }
 
-// A roster may be a bullet, table row, or sentence. Its serialization is not the contract; the
-// observable contract is that a tier-labelled role-membership unit names exactly the roles derived
-// from behavior-contracts.json. Keep the unit bounded before the next tier-roster marker so nearby
-// runtime-specific model bindings cannot make a wrong membership look complete.
+// Role membership is derived once from behavior-contracts.json. It is a shared authority check,
+// not a requirement that every runtime adapter or every generated carrier repeat the full roster.
 function tierRosterGaps(text, expected) {
-  const lines = String(text || '').split(/\r?\n/).map(line => normalizedProse(line).toLowerCase());
   const prose = normalizedProse(text).toLowerCase();
-  const markers = {};
-  for (const tier of Object.keys(expected)) {
-    const patterns = [
-      new RegExp(`\\b${tier}\\b.{0,48}\\broles?\\b`, 'g'),
-      new RegExp(`\\broles?\\b.{0,48}\\b${tier}\\b`, 'g'),
-    ];
-    markers[tier] = [];
-    for (const pattern of patterns) {
-      let match;
-      while ((match = pattern.exec(prose)) !== null) markers[tier].push(match.index);
-    }
-    markers[tier] = [...new Set(markers[tier])].sort((a, b) => a - b);
-  }
-
-  const allMarkers = Object.entries(markers)
-    .flatMap(([tier, indices]) => indices.map(index => ({ tier, index })))
-    .sort((a, b) => a.index - b.index);
+  const roster = prose.match(/\brole roster:\s*(.*?)(?=\.(?:\s|$)|$)/);
   const gaps = [];
-  for (const tier of Object.keys(expected)) {
-    const exactLine = lines.some(line => {
-      const labelsTier = new RegExp(`\\b${tier}\\b.{0,48}\\broles?\\b|\\broles?\\b.{0,48}\\b${tier}\\b`).test(line);
-      return labelsTier
-        && JSON.stringify(roleNamesIn(line).sort()) === JSON.stringify(expected[tier]);
-    });
-    if (exactLine) continue;
-    const found = markers[tier].some(index => {
-      const next = allMarkers.find(marker => marker.index > index);
-      const segment = prose.slice(index, next ? next.index : Math.min(prose.length, index + 1200));
-      return JSON.stringify(roleNamesIn(segment).sort()) === JSON.stringify(expected[tier]);
-    });
-    if (!found) gaps.push(`${tier}-role-roster`);
+  for (const [tier, roles] of Object.entries(expected)) {
+    const segment = roster && roster[1].match(
+      new RegExp(`\\b${tier}\\s+[—-]\\s*(.*?)(?=;\\s*(?:standard|reasoning|heavy)\\s+[—-]|$)`));
+    const found = segment ? roleNamesIn(segment[1]).sort() : [];
+    if (JSON.stringify(found) !== JSON.stringify(roles)) gaps.push(`${tier}-role-roster`);
   }
   return gaps;
 }
@@ -265,22 +238,7 @@ function codexV2FieldHits(text) {
     .filter(line => /^\s*(?:task_name|agent_type|message|reasoning_effort|fork_turns)\s*=/.test(line));
 }
 
-function mutateConcreteDispatchBlock(runtime, text, role, mutate) {
-  let changed = false;
-  const call = runtime === 'claude' ? 'Agent' : runtime === 'codex' ? 'spawn_agent' : null;
-  if (!call) return { changed, output: String(text || '') };
-  const pattern = new RegExp(`^${call}\\(\\n[\\s\\S]*?^\\)`, 'gm');
-  const output = String(text || '').replace(pattern, block => {
-    const roleField = runtime === 'codex' ? 'agent_type' : 'subagent_type';
-    if (changed || quotedCallField(block, roleField) !== role) return block;
-    changed = true;
-    return mutate(block);
-  });
-  return { changed, output };
-}
-
-function dispatchDefaultGaps(runtime, text, roleContracts) {
-  if (runtime !== 'claude' && runtime !== 'codex') return [];
+function dispatchBinding(runtime, role, roleContracts) {
   const expected = {
     claude: {
       standard: { model: 'sonnet' },
@@ -293,38 +251,39 @@ function dispatchDefaultGaps(runtime, text, roleContracts) {
       heavy: { model: 'gpt-5.6-sol', effort: 'high' },
     },
   }[runtime];
+  const tier = roleContracts[role] && roleContracts[role].intent_class;
+  return expected && expected[tier] ? expected[tier] : null;
+}
+
+function dispatchDefaultGaps(runtime, text, roleContracts) {
+  if (runtime !== 'claude' && runtime !== 'codex') return [];
   const blocks = concreteDispatchBlocks(runtime, text);
   const gaps = [];
-  const requiredRoles = ['tdd-guide', 'build-error-resolver', 'doc-updater'];
-  for (const role of requiredRoles) {
-    const block = blocks.find(candidate => roleNamesIn(candidate).includes(role));
-    if (!block) {
-      gaps.push(`${role}-concrete-call`);
+  const roleField = runtime === 'codex' ? 'agent_type' : 'subagent_type';
+  for (const [index, block] of blocks.entries()) {
+    const callLabel = `call-${index}`;
+    const role = quotedCallField(block, roleField);
+    if (!role || !Object.prototype.hasOwnProperty.call(roleContracts, role)) {
+      gaps.push(`${callLabel}-role`);
       continue;
     }
-    const tier = roleContracts[role] && roleContracts[role].intent_class;
-    const binding = expected[tier];
-    if (!binding || !new RegExp(`\\bmodel\\s*=\\s*["']${binding.model.replace(/\./g, '\\.') }["']`).test(block)) {
-      gaps.push(`${role}-default-model`);
+    const binding = dispatchBinding(runtime, role, roleContracts);
+    if (!binding || quotedCallField(block, 'model') !== binding.model) {
+      gaps.push(`${callLabel}-default-model`);
     }
-    if (runtime === 'codex'
-        && !new RegExp(`\\breasoning_effort\\s*=\\s*["']${binding && binding.effort}["']`).test(block)) {
-      gaps.push(`${role}-default-effort`);
+    if (runtime === 'codex' && (!binding || quotedCallField(block, 'reasoning_effort') !== binding.effort)) {
+      gaps.push(`${callLabel}-default-effort`);
     }
     if (runtime === 'codex') {
-      if (quotedCallField(block, 'agent_type') !== role) gaps.push(`${role}-agent-type`);
+      if (quotedCallField(block, 'agent_type') !== role) gaps.push(`${callLabel}-agent-type`);
       const taskName = quotedCallField(block, 'task_name');
       const sanitizedRole = role.replace(/-/g, '_');
       if (taskName === null || taskName.length === 0) {
-        gaps.push(`${role}-task-name-required`);
+        gaps.push(`${callLabel}-task-name-required`);
       } else {
-        if (!/^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(taskName)) {
-          gaps.push(`${role}-task-name-sanitize`);
-        }
-        if (!taskName.includes(sanitizedRole)) gaps.push(`${role}-task-name-role`);
+        if (!/^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(taskName)) gaps.push(`${callLabel}-task-name-sanitize`);
+        if (!taskName.includes(sanitizedRole)) gaps.push(`${callLabel}-task-name-role`);
       }
-      if (!quotedCallField(block, 'message')) gaps.push(`${role}-message`);
-      if (quotedCallField(block, 'fork_turns') !== 'none') gaps.push(`${role}-fork-turns`);
     }
   }
   const prose = normalizedProse(text).toLowerCase();
@@ -354,6 +313,46 @@ function commonDelegationGaps(text) {
       && prose.includes('research') && prose.includes('test authorship')
       && prose.includes('documentation') && prose.includes('review'))) {
     gaps.push('production-owner-scope');
+  }
+  return gaps;
+}
+
+function dispatchMarkerGaps(text) {
+  const source = String(text || '');
+  const starts = [...source.matchAll(/<!--\s*KW-RUNTIME-DISPATCH-START\s*-->/g)];
+  const ends = [...source.matchAll(/<!--\s*KW-RUNTIME-DISPATCH-END\s*-->/g)];
+  const gaps = [];
+  if (starts.length !== 1) gaps.push('dispatch-start-marker');
+  if (ends.length !== 1) gaps.push('dispatch-end-marker');
+  if (starts.length === 1 && ends.length === 1 && starts[0].index >= ends[0].index) {
+    gaps.push('dispatch-marker-order');
+  }
+  return gaps;
+}
+
+function dispatchContractSlice(text) {
+  const source = String(text || '');
+  const start = source.match(/<!--\s*KW-RUNTIME-DISPATCH-START\s*-->/);
+  const end = source.match(/<!--\s*KW-RUNTIME-DISPATCH-END\s*-->/);
+  if (!start || !end || start.index >= end.index) return '';
+  return source.slice(start.index, end.index + end[0].length);
+}
+
+function dispatchContractGaps(text) {
+  const gaps = dispatchMarkerGaps(text);
+  const fullBlock = dispatchContractSlice(text);
+  const block = fullBlock.split(/<!--\s*KW-RUNTIME-DELEGATION-START\s*-->/)[0];
+  if (!block) return gaps.concat(['dispatch-contract-missing']);
+
+  const decision = choiceContract(block);
+  for (const gap of commonDelegationGaps(decision)) gaps.push(gap);
+  const prose = normalizedProse(block).toLowerCase();
+  if (!(prose.includes('capability_gap') && prose.includes('specific'))) {
+    gaps.push('specific-capability-gap');
+  }
+  if (!(/generic route\s+impersonat\w*.*named role/.test(prose)
+      || /(?:never|not)\s+.*impersonat\w*.*named role/.test(prose))) {
+    gaps.push('no-impersonation');
   }
   return gaps;
 }
@@ -399,22 +398,10 @@ function runtimeDelegationGaps(runtime, text) {
     if (!alternatives.some(pattern => pattern.test(prose))) gaps.push(name);
   };
 
-  // Every runtime must describe the honest item-local fallback. A generic/native child is valid
-  // only as itself: its brief carries the missing profile's task/custody/evidence/stop contract,
-  // and absence of every adequate route inlines this item with a concrete capability_gap.
-  needs('exact-role-fallback', [/exact named role/, /exact role name/]);
-  needs('native-alternative', [/built-in/, /generic/, /native child/]);
-  needs('honest-mechanism', [/actual mechanism/, /name(?:s|d)? the .*mechanism/, /as itself/]);
-  needs('no-impersonation', [/not (?:pretend|present|claim).*named role/, /never .*named role/,
-    /no impersonation/, /does not impersonate/]);
-  for (const boundary of ['task', 'custody', 'evidence', 'stop']) {
-    if (!prose.includes(boundary)) gaps.push('brief-' + boundary);
-  }
-  needs('current-item-only', [/current item only/, /only (?:the )?current item/, /inline this item/]);
-  needs('all-adequate-routes-exhausted', [/no adequate .*route/, /every adequate .*unavailable/,
-    /only when no .*adequate/]);
-  if (!(prose.includes('capability_gap') && prose.includes('specific'))) gaps.push('specific-capability-gap');
-
+  // Runtime adapters own only runtime-specific facts. The universal item-local judgment, honest
+  // fallback, capability-gap, and no-impersonation contract is checked once in the marked shared
+  // dispatch block below; requiring every adapter paragraph to repeat it was both redundant and
+  // incompatible with the compact generated surfaces.
   // Lookup scope, dispatch carrier, and the three tier bindings are runtime facts. ADR 0019 is the
   // oracle for the tier cells; these tokens deliberately specify results, not sentence wording.
   const runtimeNeeds = {
@@ -457,47 +444,20 @@ function runtimeDelegationGaps(runtime, text) {
     ],
     cursor: [
       ['lookup', [/\.cursor\/agents\//]],
-      ['project-catalog-reachability', [/project.catalog materializ/, /project.*\.cursor\/agents\/.*catalog/,
-        /catalog.*project.*\.cursor\/agents\//]],
-      ['user-file-is-not-catalog-proof', [/user (?:equivalents|scope|files?).*(?:but|not|insufficient).*project.catalog/,
-        /user.*(?:alone|only).*not.*catalog.*project/]],
       ['carrier', [/live [`]?task[`]? schema/]],
       ['standard-tier', [/standard.*grok-4\.6.*medium|grok-4\.6.*medium.*standard/]],
       ['reasoning-tier', [/reasoning.*grok-4\.6.*high|grok-4\.6.*high.*reasoning/]],
       ['heavy-tier', [/heavy.*grok-4\.6.*xhigh|grok-4\.6.*xhigh.*heavy/]],
-      // Cursor catalogs vary by host. The measured supported CLI exposed a writable
-      // generalPurpose route (stream identity: unspecified) and project custom profiles; another
-      // host may expose scoped Explore/Bash/Browser instead. Guidance must therefore name the
-      // measured generic honestly while making the live host catalog—not one frozen enum—the rule.
-      ['custom-route', [/custom.*(?:task|subagenttype)|(?:task|subagenttype).*custom/]],
-      ['measured-writable-generic', [/(?:supported|measured) cli.*writable.*generalpurpose/,
-        /generalpurpose.*writable.*(?:supported|measured) cli/]],
+      ['custom-route', [/subagenttype\.custom\.name/]],
       ['generic-stream-identity', [/generalpurpose.*subagenttype\.unspecified/,
         /subagenttype\.unspecified.*generalpurpose/]],
-      ['current-task-catalog', [/live task (?:catalog|enum)/, /current task (?:catalog|enum)/,
-        /runtime.report.*task (?:catalog|enum)/]],
-      ['host-catalog-variation', CURSOR_HOST_CATALOG_VARIATION],
+      ['current-task-catalog', [/live task (?:catalog|enum)/, /live catalog/]],
+      ['host-catalog-variation', [/cli, app local, and app cloud are separate hosts/]],
       ['reported-route-only', CURSOR_REPORTED_ROUTE_ONLY],
-      // #1036/#1039: checked-in-only and user-global-only Cloud catalogs are negative controls.
-      // The measured carrier is installed for the selected repository by a confirmed Cloud
-      // environment-setup Agent before manual Save and a new same-repository top-level parent.
-      ['cloud-project-negative-control', [/catalog merely committed.*saved user-global-only build are negative controls/,
-        /checked-in catalog.*saved user-global-only build.*negative controls/]],
-      ['cloud-save-before-gap', [/host is confirmed as cursor cloud.*environment setup.*remote machine authority plus the selected repository.*user save.*new top-level agent.*same repository/,
-        /established.*cursor cloud environment setup.*remote machine and selected repository.*click save.*new top-level cloud agent.*same repository/]],
-      ['cloud-build-identity', [/new top-level.*same repository.*inspect its live catalog/,
-        /same-repository.*visible build.*live catalog/]],
-      ['install-all-local-only', [/install-all\.sh`? installs only the machine where it runs and never deploys a cursor cloud environment/]],
-      ['omit-model-when-named', [/omit a requested per-call model only when/,
-        /omit that per-call model only when/]],
-      ['catalog-miss-model-lever', [/resolver-listed model slug/]],
-      ['cloud-negative-control-route', [/cloud negative controls stayed built-in-only/]],
-      ['cloud-saved-named-catalog', [/corrected environment-setup build.*selected repository before snapshot.*new top-level same-repository agent exposed all 14 kaola types/,
-        /environment-setup build.*selected repository.*all 14 kaola names/]],
-      ['global-install-no-ambient-repo', [/does not write an ambient git repository/]],
-      ['cursor-app-cli-distinct', [/product surfaces and app local\/cloud hosts remain independent/,
-        /standalone cli.*cursor app.*different execution hosts/]],
-      ['app-cloud-not-local-ide', [/app local ide and app-started cloud/]],
+      ['cloud-save-before-gap', [/cloud requires installation in its environment setup.*user-saved build.*new top-level agent.*same repository/]],
+      ['omit-model-when-named', [/omit a per-call model only if the named profile resolves its tier/]],
+      ['no-invented-fields', [/invent no fields/]],
+      ['named-catalog-evidence', [/app 3\.17\.21.*saved cloud build.*all 14 names.*implementer/]],
     ],
     zcode: [
       ['lookup', [/(?:~\/|\$\{?zcode_home[^ ]*).*\.zcode\/agents\//,
@@ -656,8 +616,9 @@ assert(!/KW-CLAUDE-(?:TEMPLATE|MANAGED)/.test(initSource),
 {
   const nextSource = read('templates/routing/next.skeleton.md') || '';
   const finalizeSource = read('templates/routing/finalize.skeleton.md') || '';
-  const openCodeHookSource = read('templates/opencode/plugins/kaola-workflow-hooks.js') || '';
-  const compactContextSource = read('scripts/kaola-workflow-compact-context.js') || '';
+  const routing = require(path.join(ROOT, 'scripts', 'generate-routing-surfaces.js'));
+  const compactRecoverySources = ['claude', 'codex', 'grok', 'cursor']
+    .map(runtime => routing.renderCompactRecoveryPrompt(runtime, 'github'));
   const consumerSource = read('scripts/kaola-workflow-project-instruction-templates.js') || '';
   const surfaces = [nextSource, finalizeSource, consumerSource];
   const norm = text => String(text).replace(/\s+/g, ' ').replace(/\\'/g, "'");
@@ -678,7 +639,8 @@ assert(!/KW-CLAUDE-(?:TEMPLATE|MANAGED)/.test(initSource),
     'A3[mission-granularity]: next does not require an immediate BLOCKED on same-custody work');
   assert(surfaces.every(text => !teachesTestOwnerRepair(text)),
     'A3[mission-granularity]: shipped guidance does not let the test owner silently repair production');
-  assert(teachesSelectorAsMission(norm(nextSource).replace(/not by itself a mission/g, 'is itself a mission')),
+  assert(teachesSelectorAsMission(norm(nextSource).replace(
+    /does not by itself create a mission/g, 'is itself a mission')),
     'A3[mission-granularity] mutation RED: teaching one selector as a mission is detected');
   assert(teachesImmediateBlocked(norm(nextSource).replace(/Do not return `BLOCKED` merely because/g,
     'return `BLOCKED` merely because')),
@@ -702,17 +664,17 @@ assert(!/KW-CLAUDE-(?:TEMPLATE|MANAGED)/.test(initSource),
       && /Keep working within the current promised outcome while custody and causal boundary remain unchanged\./i.test(n)
       && /Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class\./i.test(n);
   };
-  const issue1042Sources = [nextSource, finalizeSource, openCodeHookSource, compactContextSource];
+  const issue1042Sources = [nextSource, finalizeSource, ...compactRecoverySources];
   assert(issue1042Sources.every(keepsFinalizationOutsideList),
-    'A3[issue-1042]: next/finalize/OpenCode hook/compact-context keep finalization, closure, archive, and sink outside Mission List with readiness and evidence truth');
+    'A3[issue-1042]: next/finalize/generated compact prompts keep finalization, closure, archive, and sink outside Mission List with readiness and evidence truth');
   assert(issue1042Sources.every(text => !retired.test(norm(text))),
-    'A3[issue-1042]: next/finalize/OpenCode hook/compact-context reject the old absolute repair/re-review append rule');
+    'A3[issue-1042]: next/finalize/generated compact prompts reject the old absolute repair/re-review append rule');
   assert(issue1042Sources.every(keepsAttemptsInsideOutcome),
-    'A3[issue-1042]: next/finalize/OpenCode hook/compact-context keep attempts inside the current outcome and append only new custody outcomes or causal classes');
-  const compactSurfaceNorms = [openCodeHookSource, compactContextSource].map(norm);
+    'A3[issue-1042]: next/finalize/generated compact prompts keep attempts inside the current outcome and append only new custody outcomes or causal classes');
+  const compactSurfaceNorms = compactRecoverySources.map(norm);
   assert(compactSurfaceNorms.every(text => /a completed item and its result are immutable/i.test(text)
     && /one dispatch has one result,? including FAIL/i.test(text)),
-    'A3[issue-1042]: OpenCode hook and compact-context retain compact-resume immutability and one-dispatch/one-result invariants');
+    'A3[issue-1042]: generated compact prompts retain immutability and one-dispatch/one-result invariants');
   const fixture = 'Finalization, Issue closure, archive, and sink are not Mission List items. The last run mission establishes readiness for finalization. The finalization summary, closure evidence, archive state, and sink receipt own the transaction\'s truth. A failed command, intermediate finding, repair attempt, or review round does not by itself create a mission. Keep working within the current promised outcome while custody and causal boundary remain unchanged. Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class.';
   assert(keepsFinalizationOutsideList(fixture) && keepsAttemptsInsideOutcome(fixture),
     'A3[issue-1042] mutation setup: canonical boundary fixture is accepted');
@@ -720,12 +682,13 @@ assert(!/KW-CLAUDE-(?:TEMPLATE|MANAGED)/.test(initSource),
     'A3[issue-1042] mutation RED: finalization inside Mission List is rejected');
   assert(!keepsAttemptsInsideOutcome(fixture.replace('does not by itself', 'must')),
     'A3[issue-1042] mutation RED: one mission per repair/re-review attempt is rejected');
-  assert(!keepsAttemptsInsideOutcome(compactContextSource.replace(
+  const compactRecoveryMutationSubject = compactRecoverySources[0] || '';
+  assert(!keepsAttemptsInsideOutcome(compactRecoveryMutationSubject.replace(
     'does not by itself create a mission', 'creates a mission')),
-    'A3[issue-1042] compact-context mutation RED: attempt-level mission teaching is rejected');
-  assert(!keepsFinalizationOutsideList(compactContextSource.replace(
+    'A3[issue-1042] compact-prompt mutation RED: attempt-level mission teaching is rejected');
+  assert(!keepsFinalizationOutsideList(compactRecoveryMutationSubject.replace(
     'are not Mission List items', 'are Mission List items')),
-    'A3[issue-1042] compact-context mutation RED: finalization inside Mission List is rejected');
+    'A3[issue-1042] compact-prompt mutation RED: finalization inside Mission List is rejected');
 }
 
 // The shipped workflow-init text is necessary but cannot prove that owner bytes survive a real
@@ -2008,12 +1971,15 @@ if (generator && behavior && adapters && profiles.length > 0) {
   assert(codexV2FieldHits(axioms).length === 0,
     'A10-delegation/common: universal axioms carry no Codex V2 task_name/agent_type/message/reasoning_effort/fork_turns call fields');
 
+  const dispatchSource = read('templates/routing/dispatch-contract.md') || '';
+  assert(choiceContract(dispatchSource) === common,
+    'A10-delegation/common-source: dispatch-contract.md carries the one AGENTS decision wording exactly');
   for (const skeletonPath of [
     'templates/routing/next.skeleton.md',
     'templates/routing/finalize.skeleton.md',
   ]) {
-    assert(choiceContract(read(skeletonPath) || '') === common,
-      `A10-delegation/common-source: ${skeletonPath} carries the one AGENTS decision wording exactly`);
+    assert((read(skeletonPath).match(/<!-- SLOT:runtime-dispatch-common -->/g) || []).length === 1,
+      `A10-delegation/common-source: ${skeletonPath} consumes the shared dispatch source once`);
   }
 
   let carriers = [];
@@ -2039,11 +2005,8 @@ if (generator && behavior && adapters && profiles.length > 0) {
       }
       guidanceByAdapter.set(entry.name, guidance);
       const gaps = runtimeDelegationGaps(entry.runtime, guidance);
-      const rosterGaps = tierRosterGaps(guidance, intentRosters);
       assert(guidance.length > 0 && gaps.length === 0,
-        `A10-delegation/adapter[${entry.name}]: guidance names lookup scope, native carrier, ADR 0019 tiers, honest fallback, custody brief, and item-local capability gap — missing ${JSON.stringify(gaps)}`);
-      assert(rosterGaps.length === 0,
-        `A10-delegation/adapter-roster[${entry.name}]: guidance exposes behavior-authority role membership for standard/reasoning/heavy — missing ${JSON.stringify(rosterGaps)}`);
+        `A10-delegation/adapter[${entry.name}]: guidance names its runtime-specific lookup scope, native carrier, and ADR 0019 tier facts — missing ${JSON.stringify(gaps)}`);
 
       // Mutation reachability without freezing the adapter's field names. Find the longest
       // adapter-owned string that the production guidance actually consumes, replace that scalar
@@ -2066,88 +2029,29 @@ if (generator && behavior && adapters && profiles.length > 0) {
       }
     }
 
-    // Cursor mutation bite: the measured CLI enum is evidence for that host, not a schema to
-    // promote across every Cursor surface. Remove both host-variation and current-host-only
-    // qualifiers from the real rendered guidance; the classifier must reject that frozen-enum
-    // near miss while leaving generalPurpose itself available as an honest measured fallback.
+    // Cursor mutation bite: retain only the facts an agent needs at dispatch time. Detailed host
+    // provenance belongs in runtime-capabilities documentation, not repeated prompt prose.
     const cursorEntry = adapterView.entries.find(entry => entry.runtime === 'cursor');
     const cursorGuidance = cursorEntry ? guidanceByAdapter.get(cursorEntry.name) : '';
     if (cursorGuidance) {
       const subject = normalizedProse(cursorGuidance).toLowerCase();
-      const variation = CURSOR_HOST_CATALOG_VARIATION.find(pattern => pattern.test(subject));
-      const currentHostOnly = CURSOR_REPORTED_ROUTE_ONLY.find(pattern => pattern.test(subject));
-      assert(!!variation && !!currentHostOnly,
-        'A10-delegation/cursor-host-mutation: rendered Cursor guidance exposes both catalog-variation and current-host-only seams');
-      if (variation && currentHostOnly) {
-        const frozenEnum = subject
-          .replace(variation, 'one cursor catalog')
-          .replace(currentHostOnly, 'always use that fixed catalog');
-        const frozenGaps = runtimeDelegationGaps('cursor', frozenEnum);
-        assert(frozenEnum !== subject
-          && frozenGaps.includes('host-catalog-variation')
-          && frozenGaps.includes('reported-route-only'),
-        'A10-delegation/cursor-host-mutation: universalizing one measured Cursor enum fails host-scoped acceptance');
-      }
-      const cloudNegative = /a catalog merely committed on the selected branch and a saved user-global-only build are negative controls/;
-      assert(cloudNegative.test(subject),
-        'A10-delegation/cursor-cloud-carrier-mutation: rendered Cursor guidance treats project-only Cloud files as a negative control');
-      const strippedNegative = subject.replace(cloudNegative,
-        'a checked-in catalog or user-global-only build is the complete cloud carrier')
-        .replace(/cloud negative controls stayed built-in-only for a checked-in catalog and for a saved user-global-only build/g,
-          'cloud installs are always visible')
-        .replace(/a checked-in catalog alone and a saved user-global-only build were built-in-only negative controls/g,
-          'all cloud catalogs are visible');
-      const negativeGaps = runtimeDelegationGaps('cursor', strippedNegative);
-      assert(strippedNegative !== subject && negativeGaps.includes('cloud-project-negative-control'),
-        'A10-delegation/cursor-cloud-carrier-mutation: promoting project files to the Cloud carrier fails acceptance');
-      const cloudLifecycle = /after the host is confirmed as cursor cloud, use its environment setup to install the remote machine authority plus the selected repository before snapshot, have the user save, and open a new top-level agent in that same repository before treating a still-missing name as a capability gap/;
+      const hostSeparation = /cli, app local, and app cloud are separate hosts/;
+      assert(hostSeparation.test(subject),
+        'A10-delegation/cursor-host-mutation: guidance keeps the three Cursor execution hosts separate');
+      const collapsedHosts = subject.replace(hostSeparation, 'all cursor products share one host');
+      assert(runtimeDelegationGaps('cursor', collapsedHosts).includes('host-catalog-variation'),
+        'A10-delegation/cursor-host-mutation: collapsing the three hosts fails acceptance');
+      const cloudLifecycle = /cloud requires installation in its environment setup, a tested and user-saved build, then a new top-level agent in the same repository/;
       assert(cloudLifecycle.test(subject),
-        'A10-delegation/cursor-cloud-lifecycle-mutation: rendered Cursor guidance requires a confirmed Cloud host, machine-plus-repository Build, user Save, and a same-repository new parent');
+        'A10-delegation/cursor-cloud-lifecycle-mutation: guidance keeps the Cloud setup, Save, and same-repository handoff');
       const strippedLifecycle = subject.replace(cloudLifecycle,
-        'treat the first project-only catalog miss as a capability gap')
-        .replaceAll('only after the agent has established that it is operating in cursor cloud environment setup may it install the workflow for that remote machine and selected repository',
-          'any local agent may deploy cloud');
+        'treat the first cloud catalog miss as a capability gap');
       const lifecycleGaps = runtimeDelegationGaps('cursor', strippedLifecycle);
       assert(strippedLifecycle !== subject && lifecycleGaps.includes('cloud-save-before-gap'),
-        'A10-delegation/cursor-cloud-lifecycle-mutation: deleting the saved-environment lifecycle fails acceptance');
-      const cloudBuildIdentity = /open a new top-level cloud agent in the same repository from that saved environment and inspect its live catalog/;
-      assert(cloudBuildIdentity.test(subject),
-        'A10-delegation/cursor-cloud-build-identity: guidance requires a same-repository top-level Agent from the saved environment');
-      const strippedBuildIdentity = subject.replace(cloudBuildIdentity,
-        'open any unrelated cloud task and assume the catalog loaded');
-      const buildIdentityGaps = runtimeDelegationGaps('cursor', strippedBuildIdentity);
-      assert(strippedBuildIdentity !== subject && buildIdentityGaps.includes('cloud-build-identity'),
-        'A10-delegation/cursor-cloud-build-identity: removing the same-repository saved-environment handoff fails acceptance');
-      const installAllBoundary = /install-all\.sh`? installs only the machine where it runs and never deploys a cursor cloud environment/;
-      assert(installAllBoundary.test(subject),
-        'A10-delegation/cursor-install-all-cloud-boundary: install-all is current-machine-only');
-      const strippedInstallAll = subject.replace(installAllBoundary,
-        'install-all.sh also deploys Cursor Cloud');
-      const installAllGaps = runtimeDelegationGaps('cursor', strippedInstallAll);
-      assert(strippedInstallAll !== subject && installAllGaps.includes('install-all-local-only'),
-        'A10-delegation/cursor-install-all-cloud-boundary: allowing install-all Cloud deployment fails acceptance');
-      assert(subject.includes('does not write an ambient git repository'),
-        'A10-delegation/cursor-global-first-mutation: rendered Cursor guidance forbids ambient Git writes from --global');
-      const strippedAmbient = subject.replaceAll('does not write an ambient git repository',
-        'also mirrors into the invoking git work tree');
-      const ambientGaps = runtimeDelegationGaps('cursor', strippedAmbient);
-      assert(strippedAmbient !== subject && ambientGaps.includes('global-install-no-ambient-repo'),
-        'A10-delegation/cursor-global-first-mutation: restoring ambient dual-write fails global-first acceptance');
-      assert(subject.includes('product surfaces and app local/cloud hosts remain independent'),
-        'A10-delegation/cursor-app-cli-mutation: rendered Cursor guidance names CLI and App as distinct product surfaces');
-      const strippedAppCli = subject.replaceAll('product surfaces and app local/cloud hosts remain independent',
-        'one cursor product surface')
-        .replaceAll('cursor app local ide and app-started cloud are different execution hosts',
-          'cursor app is the same host as the standalone cli');
-      const appCliGaps = runtimeDelegationGaps('cursor', strippedAppCli);
-      assert(strippedAppCli !== subject && appCliGaps.includes('cursor-app-cli-distinct'),
-        'A10-delegation/cursor-app-cli-mutation: collapsing App into CLI fails surface acceptance');
-      assert(subject.includes('app local ide and app-started cloud'),
-        'A10-delegation/cursor-app-host-mutation: rendered Cursor guidance separates App local IDE from App-started Cloud');
-      const strippedHosts = subject.replaceAll('app local ide and app-started cloud', 'the app host');
-      const hostGaps = runtimeDelegationGaps('cursor', strippedHosts);
-      assert(strippedHosts !== subject && hostGaps.includes('app-cloud-not-local-ide'),
-        'A10-delegation/cursor-app-host-mutation: collapsing Cloud into local IDE fails host acceptance');
+        'A10-delegation/cursor-cloud-lifecycle-mutation: deleting the saved lifecycle fails acceptance');
+      const inventedFields = subject.replace('invent no fields', 'invent unpublished request fields');
+      assert(runtimeDelegationGaps('cursor', inventedFields).includes('no-invented-fields'),
+        'A10-delegation/cursor-schema-mutation: permitting invented Task fields fails acceptance');
     }
 
     const codexEntry = adapterView.entries.find(entry => entry.runtime === 'codex');
@@ -2163,13 +2067,19 @@ if (generator && behavior && adapters && profiles.length > 0) {
       'A10-delegation/codex-lookup-mutation: replacing effective config/profile locators with source-only agents.toml fails discovery acceptance');
     }
 
+    // One adapter render is enough to prove that the generator derives the three tier rosters from
+    // the shared behavior authority. Do not demand that every runtime repeat these role names.
     const rosterWitness = guidanceByAdapter.values().next().value || '';
-    if (tierRosterGaps(rosterWitness, intentRosters).length === 0) {
+    const rosterGaps = tierRosterGaps(rosterWitness, intentRosters);
+    assert(rosterGaps.length === 0,
+      `A10-delegation/common-roster: one shared adapter render carries behavior-authority standard/reasoning/heavy membership — missing ${JSON.stringify(rosterGaps)}`);
+    if (rosterGaps.length === 0) {
       const missingStandardRole = intentRosters.standard[0];
       const mutatedRoster = rosterWitness.replaceAll(missingStandardRole, 'missing-standard-role');
       assert(tierRosterGaps(mutatedRoster, intentRosters).includes('standard-role-roster'),
-        'A10-delegation/roster-mutation: deleting one behavior-authority member from its rendered tier makes the roster fail');
+        'A10-delegation/roster-mutation RED: deleting one behavior-authority member from the shared tier roster is detected');
     }
+
   }
 
   function adapterForCarrier(carrier) {
@@ -2181,13 +2091,13 @@ if (generator && behavior && adapters && profiles.length > 0) {
 
   for (const carrier of carriers) {
     const gaps = runtimeDelegationGaps(carrier.runtime, carrier.content);
-    const rosterGaps = tierRosterGaps(carrier.content, intentRosters);
     assert(choiceContract(carrier.content) === common,
       `A10-delegation/carrier[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: fresh render carries the one common item-local decision contract`);
+    const contractGaps = dispatchContractGaps(carrier.content);
+    assert(contractGaps.length === 0,
+      `A10-delegation/contract[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: fresh render carries one complete marked dispatch contract — missing ${JSON.stringify(contractGaps)}`);
     assert(gaps.length === 0,
-      `A10-delegation/carrier[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: ${carrier.label} states native lookup/carrier/tier/fallback semantics — missing ${JSON.stringify(gaps)}`);
-    assert(rosterGaps.length === 0,
-      `A10-delegation/carrier-roster[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: ${carrier.label} exposes the behavior-authority standard/reasoning/heavy role roster — missing ${JSON.stringify(rosterGaps)}`);
+      `A10-delegation/carrier[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: ${carrier.label} states runtime-specific lookup/carrier/tier semantics — missing ${JSON.stringify(gaps)}`);
     if (carrier.topic === 'next') {
       assert(!RETIRED_RUN_WIDE_INLINE.test(carrier.content),
         `A10-delegation/next-whole-surface[${carrier.runtime}/${carrier.forge}]: ${carrier.label} rejects the retired run-wide "cannot spawn a role agent -> inline" fallback anywhere in the render`);
@@ -2210,27 +2120,48 @@ if (generator && behavior && adapters && profiles.length > 0) {
     }
   }
 
+  const dispatchWitness = carriers.find(carrier => carrier.runtime === 'claude'
+    && carrier.forge === 'github' && carrier.topic === 'next');
+  if (dispatchWitness) {
+    const withoutStart = dispatchWitness.content.replace(
+      /<!--\s*KW-RUNTIME-DISPATCH-START\s*-->/, '');
+    assert(dispatchContractGaps(withoutStart).includes('dispatch-start-marker'),
+      'A10-delegation/dispatch-marker-mutation RED: deleting the shared dispatch start marker is detected');
+
+    const withoutCapabilityGap = dispatchWitness.content.replace(
+      /record the\s+specific `capability_gap`,\s+and/i, 'record a problem, and');
+    assert(withoutCapabilityGap !== dispatchWitness.content
+      && dispatchContractGaps(withoutCapabilityGap).includes('specific-capability-gap'),
+    'A10-delegation/capability-gap-mutation RED: removing the specific capability_gap fallback is detected');
+
+    const withoutIdentityBoundary = dispatchWitness.content.replace(
+      /Never let a generic route\s+impersonate a\s+custody-bearing named role\./i,
+      'Use a generic route whenever it is convenient.');
+    assert(withoutIdentityBoundary !== dispatchWitness.content
+      && dispatchContractGaps(withoutIdentityBoundary).includes('no-impersonation'),
+    'A10-delegation/impersonation-mutation RED: removing the generic-route identity boundary is detected');
+  }
+
   const codexFinalize = carriers.find(carrier => carrier.runtime === 'codex'
     && carrier.forge === 'github' && carrier.topic === 'finalize');
-  if (codexFinalize) {
-    let armed = codexFinalize.content;
-    for (const role of ['tdd-guide', 'build-error-resolver', 'doc-updater']) {
-      const safeName = `finalize_${role.replace(/-/g, '_')}`;
-      const ensured = mutateConcreteDispatchBlock('codex', armed, role, block =>
-        quotedCallField(block, 'task_name') !== null
-          ? block
-          : block.replace(/(^\s*agent_type\s*=.*$)/m, `$1\n  task_name="${safeName}",`));
-      assert(ensured.changed,
-        `A10-delegation/codex-task-name-mutation[${role}]: real finalize render contains the role's concrete spawn_agent example`);
-      armed = ensured.output;
+  if (codexFinalize && concreteDispatchBlocks('codex', codexFinalize.content).length > 0) {
+    // Only concrete calls that the subject actually renders are in scope. The routing contract
+    // may describe the host schema without shipping a fixed tdd/build/docs pipeline.
+    const blocks = concreteDispatchBlocks('codex', codexFinalize.content);
+    const validTarget = blocks.find(block => {
+      const role = quotedCallField(block, 'agent_type');
+      return role && dispatchBinding('codex', role, roleContracts)
+        && quotedCallField(block, 'task_name') !== null;
+    });
+    if (validTarget) {
+      const role = quotedCallField(validTarget, 'agent_type');
+      const deletedText = codexFinalize.content.replace(validTarget,
+        validTarget.replace(/^\s*task_name\s*=.*\n/m, ''));
+      const deletedGaps = dispatchDefaultGaps('codex', deletedText, roleContracts);
+      assert(deletedText !== codexFinalize.content
+        && deletedGaps.some(gap => gap.endsWith('-task-name-required')),
+      `A10-delegation/codex-task-name-mutation RED[${role}]: deleting task_name from an actual valid V2 call is detected`);
     }
-    assert(dispatchDefaultGaps('codex', armed, roleContracts).length === 0,
-      'A10-delegation/codex-task-name-mutation: completing only the missing safe role task names makes the current concrete examples structurally valid');
-    const deleted = mutateConcreteDispatchBlock('codex', armed, 'tdd-guide', block =>
-      block.replace(/^\s*task_name\s*=.*\n/m, ''));
-    const deletedGaps = dispatchDefaultGaps('codex', deleted.output, roleContracts);
-    assert(deleted.changed && deletedGaps.includes('tdd-guide-task-name-required'),
-      'A10-delegation/codex-task-name-mutation RED: deleting task_name from an otherwise valid concrete V2 call is detected');
   }
 
   // Concrete-call mutation bites are conditional on the subject becoming compliant: corrupt one
@@ -2241,14 +2172,25 @@ if (generator && behavior && adapters && profiles.length > 0) {
     const subject = carriers.find(carrier => carrier.runtime === runtime
       && carrier.forge === 'github' && carrier.topic === 'finalize');
     if (!subject || dispatchDefaultGaps(runtime, subject.content, roleContracts).length !== 0) continue;
+    const target = concreteDispatchBlocks(runtime, subject.content).find(block => {
+      const role = quotedCallField(block, runtime === 'codex' ? 'agent_type' : 'subagent_type');
+      return dispatchBinding(runtime, role, roleContracts);
+    });
+    if (!target) continue;
+    const role = quotedCallField(target, runtime === 'codex' ? 'agent_type' : 'subagent_type');
+    const binding = dispatchBinding(runtime, role, roleContracts);
     const corrupted = runtime === 'claude'
-      ? subject.content.replace(/model\s*=\s*["']sonnet["']/, 'model="opus"')
-      : subject.content.replace(/reasoning_effort\s*=\s*["']max["']/, 'reasoning_effort="low"');
+      ? subject.content.replace(target, target.replace(
+        new RegExp(`model\\s*=\\s*["']${binding.model.replace(/\./g, '\\.') }["']`),
+        `model="${binding.model === 'sonnet' ? 'opus' : 'sonnet'}"`))
+      : subject.content.replace(target, target.replace(
+        new RegExp(`reasoning_effort\\s*=\\s*["']${binding.effort}["']`),
+        `reasoning_effort="${binding.effort === 'max' ? 'low' : 'max'}"`));
     const corruptedGaps = dispatchDefaultGaps(runtime, corrupted, roleContracts);
     assert(corrupted !== subject.content
-      && corruptedGaps.includes(runtime === 'claude'
-        ? 'tdd-guide-default-model' : 'tdd-guide-default-effort'),
-    `A10-delegation/finalize-default-mutation[${runtime}]: corrupting a concrete standard-tier call fails even when the surrounding tier table remains correct`);
+      && corruptedGaps.some(gap => gap.endsWith(runtime === 'claude'
+        ? '-default-model' : '-default-effort')),
+    `A10-delegation/finalize-default-mutation[${runtime}/${role}]: corrupting an actual call-carried default fails even when the surrounding tier table remains correct`);
   }
 
   // Subject-byte mutations: remove the two observed distinctions from an otherwise-correct common

@@ -5,8 +5,8 @@ The grok edition makes Kaola-Workflow runnable from
 makes it runnable from opencode. Grok CLI is a coding-agent **runtime** (like
 Codex, opencode, and Kimi), not a git forge, so this edition is delivered the
 Grok-native way — named **agents** under a generated `.grok/agents/` tree, flat
-slash **commands** under `.grok/commands/`, and a hooks JSON file Grok loads
-from its hooks dir — and is fully **additive**: it touches none of the existing
+slash **commands** under `.grok/commands/`, and one complete Rule under
+`.grok/rules/` — and is fully **additive**: it touches none of the existing
 `claude`/`codex`/`gitlab`/`gitea`/`opencode`/`kimi` edition machinery.
 
 Grok loads root-to-cwd project rules including `AGENTS.md` directly. Kaola therefore installs no
@@ -50,8 +50,7 @@ Everything under `.grok/` is **generated from canonical** by
 | ---------------- | ------------------- | ----- |
 | `templates/agents/behavior-contracts.json` + Grok adapter | `.grok/agents/<name>.md` | 14 native profiles with `name`, `description`, native camelCase `promptMode` / `agentsMd`, `model: inherit`, intent-derived `effort: medium\|high\|xhigh`, an explicit capability-derived `tools` allowlist, shared behavior identity, and render-specific hash. Kaola does not emit `permissionMode: plan`: `plan` is not a legal value of the official enum and permission mode is not the tool-boundary carrier. |
 | `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. The marked next/finalize block becomes Grok-native profile, `spawn_subagent`, tier, route, and limit guidance; any concrete Claude dispatch cards are adapted. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
-| `hooks/<script>.sh` | `.grok/hooks/<script>.sh` | No runtime-neutral dispatch hook is installed; the generator retains ownership of this directory for stale-artifact cleanup. |
-| `hooks/hooks.json` (mapping) | `.grok/hooks/hooks.json` | SessionStart `compact` only. Commands use `${GROK_HOME:-$HOME/.grok}` (Grok expands this). The installer copies the file to `${GROK_HOME:-$HOME/.grok}/hooks/kaola-workflow-hooks.json`, and on a project install also to `<project>/.grok/hooks/hooks.json`. |
+| `compact-recovery.skeleton.md` + Grok adapter | `.grok/rules/kaola-workflow-compact-recovery.md` | One complete native Rule carries durable-state recovery, Workflow Next/Finalization choice, the shared dispatch contract, and the Grok adapter. No Grok compact hook is emitted because passive-hook stdout is ignored. |
 
 Generated agents are deliberately model-agnostic. Regenerating the tree never
 overwrites a user's `[subagents.models]` or `[subagents.roles.*]` in
@@ -142,33 +141,37 @@ does not run through `install.sh --forge`.
 ./install-grok.sh --uninstall             # remove the kaola-deployed edition
 ```
 
-Add `--yes` for non-interactive use. `--no-scripts` skips support scripts, hook
-scripts, and the hooks JSON copy. The installer resolves the generated source
+Add `--yes` for non-interactive use. `--no-scripts` skips executable support
+scripts; the native recovery Rule still installs because it starts no process. The installer resolves the generated source
 tree via `node scripts/sync-grok-edition.js --print-tree-root` (a worktree
 install still finds the main-checkout trees).
 
 - **PROJECT** (`--target` / `$PWD`): agents and commands land under
-  `<project>/.grok/{agents,commands}`. The generated `hooks.json` and hook
-  scripts are also copied to `<project>/.grok/hooks/` (Grok loads
-  `<project>/.grok/hooks/*.json`).
-- **GLOBAL** (`--global`): they land under `${GROK_HOME:-$HOME/.grok}/{agents,commands}`.
+  `<project>/.grok/{agents,commands}`. The complete generated Rule lands under
+  `<project>/.grok/rules/`.
+- **GLOBAL** (`--global`): agents and commands land under
+  `${GROK_HOME:-$HOME/.grok}/{agents,commands}`. The complete generated Rule lands under
+  `${GROK_HOME:-$HOME/.grok}/rules/`.
 - Support scripts and hook scripts always land under
   `${GROK_HOME:-$HOME/.grok}/kaola-workflow/{scripts,hooks}`.
-- The same hooks JSON is always copied to
-  `${GROK_HOME:-$HOME/.grok}/hooks/kaola-workflow-hooks.json` regardless of
-  scope, unless `--no-scripts`. The generated file already uses
-  `${GROK_HOME:-$HOME/.grok}`; the installer copies it as-is and does not
-  substitute a `__GROK_HOME__` placeholder.
+
+The Rule is a runtime-native prompt carrier, not an executable hook. It is model context for every
+interaction in scope, so compaction cannot remove it. It starts no subprocess and does not append a
+new copy on each tool call. There is no path selector, JS process, or prompt composition.
 
 `--uninstall` removes only kaola-deployed names. A subsequent bare install
 redeploys the edition.
 
-## Hooks
+## Why no compact hook
 
-Grok's hook model is Claude-JSON compatible, with camelCase payloads and
-tool-name aliases. This edition ships a generated `hooks.json` for the retained
-compact-resume entry. The hook is fail-open everywhere.
+Grok does support Claude-compatible hook JSON, but its event semantics do not supply an injection
+carrier for this job. `SessionStart` matches start sources such as `startup` and `resume`; compaction
+uses `PreCompact`/`PostCompact`. All three are passive, and official documentation says passive-hook
+stdout is ignored. Two live Grok 1.0.13 `/compact` probes confirmed that a `cat` hook did not restore
+the marker, dispatch title, or operation rules even after its file target was repaired. The
+installer therefore removes the byte-known historical mapping and installs no compact hook.
 
-| Event | Claude payload | Grok payload | Adaptation |
-| --- | --- | --- | --- |
-| `SessionStart` compact | `cwd` | `cwd` | none — compact-context stays as-is |
+Grok's official Rules contract is the measured replacement: `.grok/rules/*.md` and
+`$GROK_HOME/rules/*.md` enter model context for every interaction. This keeps recovery prompt
+maintenance in the same common-core + runtime-overlay framework without inventing executable
+machinery.

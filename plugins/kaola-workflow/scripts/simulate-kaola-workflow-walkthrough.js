@@ -272,14 +272,17 @@ function testAC1HooksJson() {
     assert(!(parsed.hooks || {}).PreToolUse,
       '#725: hooks.json must NOT carry a PreToolUse event (pre-commit-guard/write-lane retired)');
 
-    // AC1: SessionStart entry with matcher "compact" must reference the compact-resume script.
+    // AC1: SessionStart entry with matcher "compact" must print the generated prompt directly.
     const sessionStart = (parsed.hooks || {}).SessionStart || [];
     const compactEntry = sessionStart.find(e => e.matcher === 'compact');
     assert(compactEntry !== undefined,
       'AC1: SessionStart must have an entry with matcher "compact"');
     const compactCmd = compactEntry.hooks && compactEntry.hooks[0] && compactEntry.hooks[0].command;
-    assert(typeof compactCmd === 'string' && compactCmd.includes('kaola-workflow-codex-compact-resume.js'),
-      'AC1: SessionStart compact entry command must reference kaola-workflow-codex-compact-resume.js, got: ' + compactCmd);
+    assert(typeof compactCmd === 'string'
+      && /\bcat\b/.test(compactCmd)
+      && compactCmd.includes('hooks/kaola-workflow-codex-compact-recovery.md')
+      && !/\bnode\b|\.js\b/.test(compactCmd),
+      'AC1: SessionStart compact entry must cat the generated prompt without JS, got: ' + compactCmd);
 
     // AC1 idempotency: seed a user-owned entry in SessionStart, then install a second time.
     // #447: hooks land in the global HOME/.codex (tempHomeExisting), not in the project .codex.
@@ -486,100 +489,22 @@ function testKeepOpenArchiveStamp333() {
   }
 }
 
-// AC2 (#284): compact-resume stdout is PLAIN TEXT, not a JSON envelope — and the packet it emits
-// is derived from the RUN RECORD.
-//
-// Two properties, one scenario, and only one of them moved. The #284 subject — plain text rather
-// than a `{ "hookSpecificOutput": ... }` envelope — is a runtime-shape property with no connection
-// to the record format, and survives the re-point untouched. The packet-CONTENT needles did move:
-// they used to read `in-progress node:` / `pending gates:` / `consent-halt markers:` / `task mirror:`
-// off a frozen plan, a `## Node Ledger` and a derived workflow-tasks.json. Those are gone; the
-// packet now comes from mission-list.md, and the assertions below are derived from the format in
-// docs/decisions/0017-the-mission-list.md rather than from the script.
-//
-// The load-bearing one is the in-flight line WITH its dispatched locator. ADR 0017 sizes this whole
-// file to one observed failure — an orchestrator losing what was in flight — so a resume packet that
-// names an in-flight item but not where its work was to land would restate the problem the record
-// exists to solve.
-function testAC2CompactPlainStdout() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-compact-plain-'));
-  try {
-    const projectName = 'issue-284-compact-plain';
-    const projDir = path.join(root, 'kaola-workflow', projectName);
-    fs.mkdirSync(projDir, { recursive: true });
-
-    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
-      '# State', '',
-      '## Project',
-      'name: ' + projectName,
-      'status: active', '',
-      '## Sink',
-      'branch: workflow/issue-284',
-      'issue_number: 284',
-      ''
-    ].join('\n'));
-
-    // One item per status, so the packet cannot pass by reporting a single hard-coded shape.
-    fs.writeFileSync(path.join(projDir, 'mission-list.md'), [
-      '# Retire the node executor',
-      '',
-      '- item: strip the node lifecycle from the walkthrough',
-      '  status: done',
-      '  dispatched: tdd-guide',
-      '  result: 216 scenarios remain',
-      '',
-      '- item: re-point compact-resume at the mission list',
-      '  status: in-flight',
-      '  dispatched: demolish-scripts, output to plugins/*/scripts/*compact-resume.js',
-      '',
-      '- item: author behavioural coverage for the new packet',
-      '  status: todo',
-      ''
-    ].join('\n'));
-
-    const input = JSON.stringify({ cwd: root });
-    const r = runScript(compactResumeScript, [], { input, encoding: 'utf8' });
-    assert(r.status === 0, 'AC2: compact-resume must exit 0, got ' + r.status + '\n' + r.stderr);
-
-    // --- The #284 subject, unchanged: plain text, never a Codex JSON envelope. ---
-    assert(!r.stdout.startsWith('{'),
-      'AC2: compact-resume stdout must NOT be a JSON object (plain text expected), got: ' + r.stdout.slice(0, 80));
-    assert(!r.stdout.includes('"hookSpecificOutput"'),
-      'AC2: compact-resume stdout must NOT contain hookSpecificOutput envelope, got: ' + r.stdout.slice(0, 200));
-
-    // --- Non-vacuity: a well-formed run must not produce an empty packet. This is the failure
-    // --- mode a wiring test is structurally blind to, so it is asserted before any content needle.
-    assert(r.stdout.trim().length > 0,
-      'AC2: a run with a readable mission list must emit a NON-EMPTY packet — silently emitting '
-      + 'nothing is the one failure the hook cannot report on its own');
-
-    assert(r.stdout.includes('Kaola-Workflow compact resume:'),
-      'AC2: packet must include the header line');
-    assert(r.stdout.includes('active project: ' + projectName),
-      'AC2: packet must name the active project, got: ' + r.stdout);
-
-    // --- The record-derived half, per docs/decisions/0017-the-mission-list.md. ---
-    assert(r.stdout.includes('Retire the node executor'),
-      'AC2: the H1 is the goal and must reach the packet, got: ' + r.stdout);
-    assert(/in-flight:.*re-point compact-resume at the mission list/.test(r.stdout),
-      'AC2: the in-flight item is the decision a successor has to make and must be named, got: ' + r.stdout);
-    assert(/dispatched:.*demolish-scripts/.test(r.stdout),
-      'AC2: the in-flight item must carry its DISPATCHED locator — without it the packet restates '
-      + 'the loss the record exists to prevent, got: ' + r.stdout);
-    assert(/done: 1/.test(r.stdout) && /in-flight: 1/.test(r.stdout) && /todo: 1/.test(r.stdout),
-      'AC2: the packet must report the frontier counts (done/in-flight/todo), got: ' + r.stdout);
-
-    // --- Discrimination: the CLOSED item's prose must not be presented as the open decision.
-    // --- Without this, a packet that dumped the whole file verbatim would satisfy every needle above.
-    const inFlightLine = r.stdout.split('\n').find(l => l.startsWith('in-flight:')) || '';
-    assert(!inFlightLine.includes('strip the node lifecycle'),
-      'AC2: the in-flight line must carry the IN-FLIGHT item, not a done one — a verbatim dump of '
-      + 'the file would otherwise pass every assertion above; got: ' + inFlightLine);
-
-    console.log('testAC2CompactPlainStdout (#284 AC2): PASSED');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+// AC2 (#1044): the installed compact carrier is the exact generated, complete runtime prompt.
+// There is no compact-time parser, operation selector, state packet, or JS subprocess.
+function testAC2StaticCompactPrompt() {
+  const routing = require(path.join(repoRoot, 'scripts', 'generate-routing-surfaces.js'));
+  const promptPath = path.join(pluginRoot, 'hooks', 'kaola-workflow-codex-compact-recovery.md');
+  const prompt = fs.readFileSync(promptPath, 'utf8');
+  assert(prompt === routing.renderCompactRecoveryPrompt('codex', 'github'),
+    'AC2: installed Codex prompt must equal the generation-time runtime rendering');
+  assert(prompt.includes('Recovery marker: `KW-COMPACT-RECOVERY-V1`.')
+    && prompt.includes('**Runtime dispatch contract (always loaded).**')
+    && prompt.includes('Workflow Next')
+    && prompt.includes('Finalization'),
+    'AC2: prompt must carry compact continuation plus the dispatch contract');
+  assert(!/\bnode\b|\.js\b|PreToolUse|PostToolUse/.test(prompt),
+    'AC2: prompt must not require compact-time JS or tool-use injection');
+  console.log('testAC2StaticCompactPrompt (#1044 AC2): PASSED');
 }
 
 // #325/#525: updateHooks() hardening — R1 (metacharacter pluginRoot can't break JSON), R2 (output is
@@ -760,9 +685,6 @@ function plantRoadmap(tmp, issue, body) {
 // ---------------------------------------------------------------------------
 
 const preflightScript   = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
-const compactResumeScript = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-compact-resume.js');
-
-
 function runScript(scriptPath, args, opts) {
   return spawnSync(process.execPath, [scriptPath, ...args], {
     encoding: 'utf8',
@@ -1683,7 +1605,7 @@ function main() {
     testCodexFinalizeArchivesClaimFacts333();
     testSelectionEvidenceDockingCodex();
     testKeepOpenArchiveStamp333();   // #333
-    testAC2CompactPlainStdout();
+    testAC2StaticCompactPrompt();
     testCodexFinalizeArchiveVerifiesBeforeDelete();  // #426
     testCodexFinalizeClosesIssueBundleMembers();      // #427
     testCodexBundleFinalizeAllOpenCloseIsPending();   // #508

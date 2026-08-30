@@ -120,6 +120,14 @@
           "availability": "Inspect the current Agent/Task type catalog and effective precedence. Claude currently permits recursive subagents to its native depth limit, which can be configured by the host; do not infer total child unavailability from one missing custom name."
         }
       },
+      "compact_protocol": {
+        "events": ["SessionStart"],
+        "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
+        "session": "The direct prompt tells the agent to read the durable Mission List and continue Workflow Next or Finalization; no private prompt/session binding exists.",
+        "reload": "SessionStart(source=compact) directly outputs the generated runtime prompt before the next model turn.",
+        "tool": "No PreToolUse or PostToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
+        "stop": "No Stop prompt-lifecycle hook is installed."
+      },
       "install_scope": {
         "global_discovery": "supported",
         "required_project_materialization": "no",
@@ -159,6 +167,14 @@
           "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
           "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
         }
+      },
+      "compact_protocol": {
+        "events": ["SessionStart"],
+        "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
+        "session": "The direct prompt tells the agent to read the durable Mission List and continue Workflow Next or Finalization; no private prompt/session binding exists.",
+        "reload": "SessionStart(source=compact) directly outputs the generated runtime prompt before the next model turn.",
+        "tool": "No PreToolUse or PostToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
+        "stop": "No Stop prompt-lifecycle hook is installed."
       },
       "install_scope": {
         "global_discovery": "supported",
@@ -200,6 +216,14 @@
           "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
         }
       },
+      "compact_protocol": {
+        "events": ["SessionStart"],
+        "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
+        "session": "The direct prompt tells the agent to read the durable Mission List and continue Workflow Next or Finalization; no private prompt/session binding exists.",
+        "reload": "SessionStart(source=compact) directly outputs the generated runtime prompt before the next model turn.",
+        "tool": "No PreToolUse or PostToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
+        "stop": "No Stop prompt-lifecycle hook is installed."
+      },
       "install_scope": {
         "global_discovery": "supported",
         "required_project_materialization": "no",
@@ -240,6 +264,14 @@
           "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
         }
       },
+      "compact_protocol": {
+        "events": ["SessionStart"],
+        "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
+        "session": "The direct prompt tells the agent to read the durable Mission List and continue Workflow Next or Finalization; no private prompt/session binding exists.",
+        "reload": "SessionStart(source=compact) directly outputs the generated runtime prompt before the next model turn.",
+        "tool": "No PreToolUse or PostToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
+        "stop": "No Stop prompt-lifecycle hook is installed."
+      },
       "install_scope": {
         "global_discovery": "supported",
         "required_project_materialization": "no",
@@ -279,6 +311,14 @@
           "native_routes": "Native alternatives include broad `general`, read-only local `explore`, and read-only external-research `scout`; direct `@name` invocation, `task_id` resume, and experimental background work remain runtime-owned options.",
           "availability": "Read the current task type catalog, permissions, and user configuration. OpenCode defaults to one child depth unless the user raises it; inherited session settings and optional pins remain user-owned capabilities."
         }
+      },
+      "compact_protocol": {
+        "events": [],
+        "pending": "none — Issue #1044 installs no OpenCode prompt-binding or tool-use lifecycle protocol.",
+        "session": "The initial command remains the prompt authority for this adapter.",
+        "reload": "Compact-risk recovery was not productized for OpenCode in this measured scope.",
+        "tool": "No Kaola prompt-lifecycle tool hook is installed.",
+        "stop": "No Kaola prompt-lifecycle Stop hook is installed."
       },
       "install_scope": {
         "global_discovery": "supported",
@@ -321,6 +361,14 @@
           "availability": "Honor native project/user precedence and the current Agent catalog. Ordinary profiles ignore model fields and inherit session model plus effort; the optional experimental secondary-model pool is user-owned. Built-ins are leaves, while custom profiles may allowlist deeper subagents."
         }
       },
+      "compact_protocol": {
+        "events": [],
+        "pending": "none — Issue #1044 installs no Kimi prompt-binding or tool-use lifecycle protocol.",
+        "session": "The initial command remains the prompt authority for this adapter.",
+        "reload": "Compact-risk recovery was not productized for Kimi in this measured scope; the retired managed PostCompact block is removed on upgrade.",
+        "tool": "No Kaola prompt-lifecycle tool hook is installed.",
+        "stop": "No Kaola prompt-lifecycle Stop hook is installed."
+      },
       "install_scope": {
         "global_discovery": "supported",
         "required_project_materialization": "no",
@@ -361,6 +409,14 @@
           "availability": "Respect the current `spawn_subagent` catalog and its native options. Grok children cannot spawn descendants, but Kaola does not narrow the root runtime's capabilities."
         }
       },
+      "compact_protocol": {
+        "events": ["always-loaded native rule"],
+        "pending": "none — compact recovery has no session sidecar, chunk protocol, or acknowledgement state.",
+        "session": "The direct prompt tells the agent to read the durable Mission List and continue Workflow Next or Finalization; no private prompt/session binding exists.",
+        "reload": "Grok passive hook stdout is ignored. Its documented project/user Rules are model context for every interaction, so the generated complete runtime prompt is installed as one .grok/rules or GROK_HOME/rules file instead of a compact hook.",
+        "tool": "No PreToolUse or PostToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
+        "stop": "No Stop prompt-lifecycle hook is installed."
+      },
       "install_scope": {
         "global_discovery": "supported",
         "required_project_materialization": "no",
@@ -396,17 +452,17 @@
           "heavy": "xhigh"
         },
         "delegation_guidance": {
-          "profile_lookup": "Find custom profiles in project `.cursor/agents/` or user `~/.cursor/agents/`; a generated file at a documented path is not discovery proof. `--global` writes only the selected host's user carrier and does not write an ambient Git repository. Project materialization is explicit `--target DIR`. The standalone CLI requires project materialization on the measured local host; workflow-next/finalize may call the installed safe helper with explicit `$PWD` immediately before a CLI/local named dispatch. The helper derives only from the receipt-verified global authority and fails closed on missing/stale authority, collision, symlink, or modified ownership. Cursor App local IDE and App-started Cloud are different execution hosts and never inherit that CLI materialization rule. `install-all.sh` installs only the machine where it runs and never deploys a Cursor Cloud environment. Only after the agent has established that it is operating in Cursor Cloud environment setup may it install the Workflow for that remote machine and selected repository, test the Build, report its exact ID, and ask the user to click Save. After Save, open a new top-level Cloud Agent in the same repository from that saved environment and inspect its live catalog.",
-          "dispatch_carrier": "Select a custom agent explicitly as `/<role>` or by natural-language routing and use the live `Task` schema. Inspect that schema's type enum first. When it contains a Kaola role name, dispatch that name and omit a requested per-call model only when the named profile can resolve its tier pin. The supported CLI stream materialized a named call as `subagentType.custom.name` and `generalPurpose` as `subagentType.unspecified`; do not invent unpublished request fields. When the live enum is built-in-only, omit-model is the parent, not a profile pin, and a resolver-listed model slug from the live schema is an effort lever. On Cloud, a catalog merely committed on the selected branch and a saved user-global-only Build are negative controls. After the host is confirmed as Cursor Cloud, use its environment setup to install the remote machine authority plus the selected repository before snapshot, have the user Save, and open a new top-level Agent in that same repository before treating a still-missing name as a capability gap.",
+          "profile_lookup": "Find custom profiles in project `.cursor/agents/` or user `~/.cursor/agents/`; a file on disk is not discovery proof, so inspect the live catalog. CLI, App local, and App Cloud are separate hosts. Materialize the selected project explicitly. Cloud requires installation in its environment setup, a tested and user-saved Build, then a new top-level Agent in the same repository; local install never deploys Cloud.",
+          "dispatch_carrier": "Select `/<role>` or route by natural language through the live `Task` schema. Inspect its type enum first; when it contains the exact Kaola role, dispatch that name and omit a per-call model only if the named profile resolves its tier. The measured CLI encoded a named call as `subagentType.custom.name` and generic as `subagentType.unspecified`; invent no fields. In a built-in-only enum, omit-model is the parent, not a profile pin.",
           "tiers": {
             "standard": "standard → profile `grok-4.6[effort=medium]`",
             "reasoning": "reasoning → profile `grok-4.6[effort=high]`",
             "heavy": "heavy → profile `grok-4.6[effort=xhigh]`"
           },
           "tool_boundary": "The named profile's native `readonly` flag carries its write boundary.",
-          "native_routes": "Inspect the live Task catalog. The supported CLI exposed writable `generalPurpose` plus `cursor-guide`, `bugbot`, `security-review`, and `best-of-n-runner`; other Cursor hosts document scoped `Explore`, `Bash`, and `Browser`. Cloud negative controls stayed built-in-only for a checked-in catalog and for a saved user-global-only Build; the corrected environment-setup Build installed the selected repository before snapshot and its new top-level same-repository Agent exposed all 14 Kaola types. Use only a route this host actually reports and under its real capability and identity.",
-          "fallback_search": "If the exact named role is unavailable, inspect the currently reported `generalPurpose`, built-in, and other native child routes for the current item and use each only as itself. First distinguish an uninstalled or unsaved host carrier from a runtime capability gap. A custody-bearing miss after the correct host installation inlines that item with a specific capability_gap; do not convert one miss into a run-wide inline policy.",
-          "availability": "The current Task catalog is authoritative. Authenticated standalone CLI build 2026.08.25-3e8eec8 proved explicit project custom implementer dispatch and the raw Task carrier resolved cursor-grok-4.6-medium when the parent omitted a model override. Cursor App 3.17.21 local IDE separately proved all 14 project Kaola types plus exact implementer dispatch, but did not expose the child model/profile carrier. Cursor Cloud separately proved all 14 Kaola names plus exact implementer only after an agent-confirmed Cloud environment setup installed both the remote machine authority and selected repository, the user manually saved the tested Build, and a new top-level Agent opened in that same repository. A checked-in catalog alone and a saved user-global-only Build were built-in-only negative controls. Cloud child model/profile source remained unobservable. Explicit or automatic selection and resume by agent ID remain runtime-owned options. Reopening the CLI process with the same chat discovered an added project profile, while same-process hot load remains unknown. Product surfaces and App local/Cloud hosts remain independent. `--global` does not write an ambient Git repository, and local `install-all.sh` never installs Cloud."
+          "native_routes": "Inspect the live Task catalog. Measured hosts exposed writable `generalPurpose` and host-specific built-ins; some hosts document scoped `Explore`, `Bash`, or `Browser`. Use only a route this host reports, under its real identity and capability.",
+          "fallback_search": "If the exact name is absent, first distinguish an uninstalled or unsaved host carrier from a capability gap. Then inspect real alternatives for this item; a custody-bearing miss inlines only that item and records the specific `capability_gap`.",
+          "availability": "The live Task catalog is authoritative. CLI build 2026.08.25-3e8eec8 proved project `implementer` dispatch and resolved `cursor-grok-4.6-medium`; App 3.17.21 and the saved Cloud Build each proved all 14 names plus exact `implementer`, but did not expose the child model carrier. CLI profile reload was observed after reopening the process; same-process hot load remains unknown."
         }
       },
       "surfaces": {
@@ -473,6 +529,16 @@
             }
           }
         }
+      },
+      "compact_protocol": {
+        "events": ["alwaysApply project rule"],
+        "pending": "none — Cursor recovery is a persistent system-level project rule, not a hook state machine.",
+        "session": "The same generated rule is project-materialized for standalone CLI, App local, and App Cloud; no host-specific prompt identity is stored.",
+        "reload": "Cursor includes an always-applied project rule at the start of every model context. That common carrier survives compaction on CLI, App local, and Cloud even though Cloud lacks sessionStart and preCompact cannot inject context.",
+        "tool": "No preToolUse or postToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
+        "stop": "No stop prompt-lifecycle hook is installed.",
+        "fast": "Fast is prohibited for named Kaola dispatch and cannot override the canonical model/effort mapping.",
+        "Explore": "Built-in Explore is a truthful read-only route only when the live Cursor catalog exposes it; it cannot impersonate a missing Kaola role."
       }
     },
     "zcode": {
@@ -508,6 +574,14 @@
           "native_routes": "Native alternatives include full `general-purpose` and read-only `Explore`, reached through automatic selection or `@`; foreground/background choice remains runtime-owned.",
           "availability": "Profiles are user-scope and load on the next session; project `.zcode/agents/` is only installer staging. Subagents cannot spawn children, but the root runtime's other native routes remain available."
         }
+      },
+      "compact_protocol": {
+        "events": [],
+        "pending": "none — Issue #1044 installs no ZCode prompt-lifecycle hooks.",
+        "session": "The initial command remains the prompt authority for the measured one-million-token ZCode session.",
+        "reload": "No compact recovery is productized for ZCode in this measured scope; receipt-owned legacy user and project declarations are removed on upgrade.",
+        "tool": "No PreToolUse or PostToolUse Kaola hook is installed, so ordinary tools add zero Kaola context and start zero Kaola subprocesses.",
+        "stop": "No Kaola Stop hook is installed."
       },
       "install_scope": {
         "global_discovery": "supported",

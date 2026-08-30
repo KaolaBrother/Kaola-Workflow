@@ -72,6 +72,9 @@ A few beliefs follow from that order.
 - **Subagents and worktrees** as declinable tools, with 14 generated roles across all seven runtimes.
 - **Runtime-native profiles** — one behavior source per role, with model, effort, tools, permissions,
   hooks, and carriers supplied only by the selected runtime adapter.
+- **Compact-safe workflow prompts** — Workflow Next and Finalization always load the dispatch
+  contract. Compact-risk runtimes restore that contract once after compact; ordinary tool calls
+  never carry Kaola recovery context.
 - **Independent review** — `code-reviewer`, `adversarial-verifier`, and `security-reviewer` are part
   of the same deterministic all-role generation contract as the other eleven roles.
 - **Self-owned validation** — the four local edition chains produce a candidate-bound receipt; a consumer repo records its own verdict instead. Nothing waits on a hosted pipeline.
@@ -312,7 +315,8 @@ explicit, receipt-owned, collision/symlink-safe, and uninstall-safe. On the meas
 only, workflow-next/finalize may safely ensure explicit `$PWD` immediately before a named
 dispatch; App local and Cloud never inherit that CLI rule. Local `install-all.sh` never installs
 Cloud. A Cloud install begins only after an Agent has confirmed it is operating in Cursor Cloud
-environment setup. `sessionStart` performs compact resume only. It takes the same
+environment setup. One project `alwaysApply` rule carries Workflow Next, Finalization, and dispatch
+recovery on standalone CLI, App local, and Cloud; Cursor hooks stay empty. It takes the same
 generated `--forge` axis. See
 [docs/cursor-edition.md](docs/cursor-edition.md).
 
@@ -330,7 +334,7 @@ The first receipt-owning global refresh can adopt an existing 10.0.1 Cursor edit
 changed and retired files byte-match the published per-forge hashes. Modified or unknown bytes are
 still refused; the migration removes the retired ambient catalog helper and stale hook entries.
 
-**ZCode** is likewise an **additive** runtime (not a git forge): `./install-zcode.sh` touches none of the existing edition machinery, resolves support scripts under the selected Kaola ZCode home, and never touches `~/.claude/`. ZCode officially discovers custom subagents only from user `~/.zcode/agents/`, so a project install stages its generated tree and syncs the role roster to user scope. The three commands ship as `.zcode/commands/*.md`. Official documentation currently says project hook blocks are ignored; both project and global installs therefore merge Kaola hooks only into the executable user carrier `${ZCODE_HOME:-$HOME/.zcode}/cli/config.json`, leaving project `.zcode/config.json` and legacy user `config.json` untouched. Generated profiles use native `model`, `thoughtLevel`, and `tools` fields; exact 3.9.1 behavior and `ZCODE_HOME` relocation remain unknown. See [docs/zcode-edition.md](docs/zcode-edition.md).
+**ZCode** is likewise an **additive** runtime (not a git forge): `./install-zcode.sh` touches none of the existing edition machinery, resolves support scripts under the selected Kaola ZCode home, and never touches `~/.claude/`. ZCode discovers custom subagents only from user `~/.zcode/agents/`, so a project install stages its generated tree and syncs the role roster to user scope. The three commands ship as `.zcode/commands/*.md`. Local App `3.10.1/3.10.1.6272` exposed a 1,000,000-token context. An interim PreToolUse prompt gate self-locked a real `/workflow-next` run, so the final edition installs no Kaola hooks; ordinary tool calls add 0 Kaola recovery bytes and start 0 recovery subprocesses. Receipt-owned legacy declarations are removed on upgrade while foreign entries survive. Generated profiles use native `model`, `thoughtLevel`, and `tools` fields. Live named-subagent/model resolution and `ZCODE_HOME` relocation remain unknown. See [docs/zcode-edition.md](docs/zcode-edition.md).
 
 Being additive is about *edition machinery*, not about forge support: these runtimes remain outside `install.sh`, `edition-sync.js`, `npm test`, and the routing-surface contract, and each keeps its own suite (`node scripts/test-opencode-edition.js`, `node scripts/test-kimi-edition.js`, `node scripts/test-grok-edition.js`, `node scripts/test-cursor-edition.js`, `node scripts/test-zcode-edition.js`).
 
@@ -482,7 +486,11 @@ Grok CLI is an additive runtime — installed by its own script, not `--forge`. 
 ./install-grok.sh --yes            # deploy into the current project (.grok/{agents,commands})
 ```
 
-Hooks install as `${GROK_HOME:-~/.grok}/hooks/kaola-workflow-hooks.json` — global regardless of install scope. Full detail: [docs/grok-edition.md](docs/grok-edition.md).
+Grok passive hook stdout is not model context, so this edition installs no compact hook. A project
+install puts one complete Rule under `<project>/.grok/rules/`; a global install puts the same Rule
+under `${GROK_HOME:-~/.grok}/rules/`. Grok's native Rule carrier remains present across model
+interactions and compaction without starting a subprocess. Full detail:
+[docs/grok-edition.md](docs/grok-edition.md).
 
 ### cursor
 
@@ -504,25 +512,27 @@ From a local clone:
 ./install-cursor.sh --target DIR --yes     # explicit project catalog (.cursor/{agents,commands})
 ```
 
-`--no-scripts` skips writing scripts/hooks without forgetting any unchanged receipt-owned assets
-that remain on disk; uninstall still removes those proven bytes and exact hook entries. A later
-ordinary project install promotes a partial no-scripts authority before installing its default
-scripts/hooks without retiring an independently active receipt-owned global live hook. Doctor keeps
+`--no-scripts` skips support scripts and the hooks.json migration without forgetting unchanged
+receipt-owned assets that remain on disk; uninstall still removes those proven bytes and exact hook
+entries. A later ordinary project install promotes a partial no-scripts authority before installing
+its default scripts and removing only retired Kaola hook entries. Doctor keeps
 current Build/live-catalog identity `unknown` unless the active runtime observes it; historical
 measurements remain separately typed as evidence.
 
-Hooks merge into `.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (global). Compact
-resume injects via `sessionStart` `additional_context`; `preCompact` cannot inject. Catalog
-materialization is an explicit safe CLI point-of-use transaction, not a hook. Full detail:
+The installer writes an empty Cursor hook mapping and one project
+`.cursor/rules/kaola-workflow-compact-recovery.mdc` rule with `alwaysApply: true`. Cursor loads that
+system-level context for standalone CLI, App local, and Cloud, including after compact; official
+Cloud lacks `sessionStart`, and `preCompact` cannot inject context. Catalog materialization remains
+an explicit safe CLI point-of-use transaction, not a hook. Full detail:
 [docs/cursor-edition.md](docs/cursor-edition.md).
 
 ### zcode
 
-ZCode is an additive runtime — installed by its own script, not `--forge`. The zcode edition delivers the workflow the ZCode-native way: the three commands become flat `.zcode/commands/*.md` slash commands and each canonical role ships as a named `.zcode/agents/<role>.md`. ZCode officially discovers subagents **only at user scope**, so the installer stages the project tree and syncs the live roster to `${ZCODE_HOME:-~/.zcode}/agents/`; it becomes available in a new session. The public install page exposed 3.8.1 during the 2026-08-27 research, no local binary was present, and exact 3.9.1 plus `ZCODE_HOME` relocation behavior remain unknown. Workspace hook configuration is ignored, so the installer leaves project `.zcode/config.json` and legacy `${ZCODE_HOME:-~/.zcode}/config.json` untouched and merges Kaola hooks only into `${ZCODE_HOME:-~/.zcode}/cli/config.json`. Canonical standard/reasoning/heavy classes render `model: GLM-5.3`, a camelCase `thoughtLevel` pin (`high` / `max` / `max`), and an explicit native `tools` allowlist. Runtime guidance exposes automatic selection and native `@role`; an Agent call uses only the live schema when one is exposed. From a local clone:
+ZCode is an additive runtime — installed by its own script, not `--forge`. Its three commands become flat `.zcode/commands/*.md` slash commands and each canonical role ships as a named `.zcode/agents/<role>.md`. Profiles are synced to `${ZCODE_HOME:-~/.zcode}/agents/` and become available in a new session. Local App `3.10.1/3.10.1.6272` exposed a 1,000,000-token context. The final edition has no Kaola prompt-lifecycle hooks; upgrade removes receipt-owned legacy declarations and leaves foreign entries intact. Canonical standard/reasoning/heavy classes render `model: GLM-5.3`, a camelCase `thoughtLevel` pin (`high` / `max` / `max`), and an explicit native `tools` allowlist. Runtime guidance exposes automatic selection and native `@role`; an Agent call uses only the live schema when one is exposed. From a local clone:
 
 ```bash
-./install-zcode.sh --global --yes   # ${ZCODE_HOME:-~/.zcode} (agents+commands un-nested)
-./install-zcode.sh --yes            # deploy into the current project (.zcode/{agents,commands} + ~/.zcode/agents sync)
+./install-zcode.sh --global --yes   # global agents/commands/support; no executable hooks
+./install-zcode.sh --yes            # project agents/commands; strips receipt-owned legacy hooks
 ```
 
 Full detail: [docs/zcode-edition.md](docs/zcode-edition.md).
@@ -675,8 +685,7 @@ There is **no config key, trust file, or CLI flag that persists trust
 non-interactively** — the only non-interactive option is
 `codex exec --dangerously-bypass-hook-trust`, which skips the check for that single run
 **without** persisting trust (use it only for automation that already vets the hook
-sources). Until the hooks are trusted, compaction-resume and subagent dispatch
-logging do not fire.
+sources). Until the hook is trusted, compact recovery does not fire.
 
 Update an existing Codex install (durable, stale-proof flow):
 
@@ -1193,7 +1202,7 @@ when developing locally. Drift between `scripts/` and
 | `kaola-workflow-closure-audit.js` (GitHub) / `kaola-gitlab-workflow-closure-audit.js` (GitLab) / `kaola-gitea-workflow-closure-audit.js` (Gitea) | Reports closure drift (stale `workflow:in-progress` labels, active folders for closed issues, unarchived PR/MR folders for closed issues). Dry-run JSON by default; `--execute` repairs only the stale in-progress label and never deletes active folders or worktrees. GitLab edition uses `unarchived_mr_folders` with lowercase MR state matching (`merged`/`closed`). Gitea edition keeps `unarchived_pr_folders` with lowercase PR state matching (`merged`/`closed`). Complements `stale-worktree-check`/`-cleanup` (which owns worktree/branch drift). | On demand / audit |
 | `kaola-workflow-sink-merge.js` (GitHub) / `kaola-gitlab-workflow-sink-merge.js` (GitLab) / `kaola-gitea-workflow-sink-merge.js` (Gitea) | Finalization merge sink: fetch, rebase onto `origin/main`, FF-only merge with retry on race conditions, push, close the issue, and clean up the branch. Falls back to the PR sink when the merge is impossible. | Finalization |
 | `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab) / `kaola-gitea-workflow-sink-pr.js` (Gitea) | Finalization PR/MR sink: push the branch, open a PR via `gh pr create` (GitHub), `glab mr create` (GitLab), or `tea pr create` (Gitea), record the PR/MR URL, and optionally enable auto-merge. | Finalization |
-| `kaola-workflow-compact-context.js` | Wired to the `SessionStart` (`compact`) hook. Reads the most recent `workflow-state.md` and injects a resume hint into the post-`/compact` session. | Hook |
+| `templates/routing/compact-recovery.skeleton.md` | Generates one complete post-compact continuation prompt per runtime and forge from the shared recovery core, the single dispatch contract, and the runtime adapter. Claude and Codex print the generated artifact directly from `SessionStart(compact)`; Grok and Cursor carry it in one native always-loaded Rule. No compact-time JS selects or composes a prompt. | Generation/install |
 | `kaola-workflow-run-chains.js` | Runs the edition test chains (`claude`, `codex`, `gitlab`, `gitea`) via `spawnSync` with real exit codes and produces `.cache/chain-receipt.json` (`{headSha, codeTreeHash, startedAt, chains:[{name, exit}]}`). The orchestrator runs it as the last pre-finalization action; the finalize transaction then reads and classifies the receipt. `--accept-known-red name:issue` registers a waiver for a known-red chain. Also hosts the pre-tag `--release-check` gate. | Finalization, Release |
 
 ### Validation and test scripts
@@ -1370,8 +1379,8 @@ Avoid redundant validation runs: an item that only touches implementation runs t
 
 ## Hook policy
 
-Kaola-Workflow ships one Claude Code hook via `install.sh`. It runs
-silently in the background as background hygiene — it does not replace
+Kaola-Workflow ships one Claude Code hook via `install.sh`. It runs once after compact and prints a
+generated prompt file directly — it does not replace
 workflow validation, and `/workflow-next` should not re-run a check the
 hook already performed unless the phase requires broader validation or
 the relevant files changed after the hook fired. Hook output counts as
@@ -1382,24 +1391,24 @@ evidence path.
 
 | Hook ID | Event (matcher) | Purpose | Script |
 |---------|-----------------|---------|--------|
-| `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Claude Code's `/compact`, injects a resume hint from claim/liveness/sink facts and the mission list | `scripts/kaola-workflow-compact-context.js` |
+| `kaola-workflow:compact-context` | `SessionStart` (`compact`) | Print the generated Claude continuation prompt, including Workflow Next, Finalization, dispatch, and the Claude adapter | `cat …/hooks/kaola-workflow-compact-recovery.md` |
 
 ### Codex lifecycle hooks
 
 Codex wires the same compaction hook via `install-codex-agent-profiles.js` (run explicitly or
 through `install-all.sh` at runtime install/upgrade). Since #447, hooks
-install **globally** into `~/.codex/hooks.json`; their scripts land in the stable,
+install **globally** into `~/.codex/hooks.json`; the referenced prompt lands in the stable,
 version-less home `~/.codex/kaola-workflow/{hooks,scripts}`. The hooks are NOT in the
 Codex plugin manifest (`plugin.json`) — they are separate from the plugin bundle.
 Installing into `~/.codex` means one install covers all projects on the machine and
 a runtime installer upgrade refreshes the global copy; no per-repository re-init is needed
-to pick up hook changes. The stable scripts home (`#409`) ensures hook commands
+to pick up hook changes. The stable home (`#409`) ensures hook commands
 survive plugin GC or a worktree purge — `codex plugin add` / upgrade never overwrites
 those paths.
 
 | Hook ID | Event (matcher) | Purpose | Script |
 |---------|-----------------|---------|--------|
-| `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Codex context compaction, injects claim/liveness/sink facts and mission-list resume context from `kaola-workflow-codex-compact-resume.js`. Also still invokable on demand via stdin. | `scripts/kaola-workflow-codex-compact-resume.js` |
+| `kaola-workflow:compact-context` | `SessionStart` (`compact`) | Print the generated Codex continuation prompt, including Workflow Next, Finalization, dispatch, and the Codex adapter | `cat …/hooks/kaola-workflow-codex-compact-recovery.md` |
 
 **Caveats and preconditions:**
 

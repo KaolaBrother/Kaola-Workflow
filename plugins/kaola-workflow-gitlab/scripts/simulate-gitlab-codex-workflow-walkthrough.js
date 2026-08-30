@@ -114,11 +114,13 @@ try {
 const sessionStartEntries = (hooksConfig.hooks && hooksConfig.hooks.SessionStart) || [];
 const compactResumeEntry = sessionStartEntries.find(
   e => e.id === 'kaola-workflow:compact-context' && e.matcher === 'compact' &&
-       (e.hooks || []).some(h => h.command && h.command.includes('kaola-gitlab-workflow-codex-compact-resume.js'))
+       (e.hooks || []).some(h => h.command && /\bcat\b/.test(h.command) &&
+         h.command.includes('kaola-workflow-codex-compact-recovery.md') &&
+         !/\bnode\b|\.js\b/.test(h.command))
 );
 if (!compactResumeEntry) {
   throw new Error(
-    '#284: config/hooks.json SessionStart must expose the gitlab-codex compact-resume command for compact sessions'
+    '#1044: config/hooks.json SessionStart must cat the gitlab-codex static recovery prompt'
   );
 }
 
@@ -141,7 +143,7 @@ if (!compactResumeEntry) {
   // token left the prose when the surfaces regenerated while the shape it named did not, and an
   // assertion on a word is a vote against ever rewording it.
   const next = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-next/SKILL.md'), 'utf8');
-  if (!/issues.{0,80}share one run|bundle/i.test(next)) {
+  if (!/KAOLA_TARGET_ISSUES[\s\S]{0,180}comma-separated set[\s\S]{0,900}--target-issues/i.test(next)) {
     throw new Error('#380: gitlab-codex next SKILL must describe the multi-issue claim shape');
   }
   // The finalize SKILL wires the #369 bundle member-set flag.

@@ -12,17 +12,19 @@
 // surface. Run directly:
 //   node scripts/test-zcode-edition.js
 //
-// ZCode (measured against ZCode 3.9.1) is a coding-agent RUNTIME, not a forge,
+// ZCode (measured against ZCode 3.10.1/3.10.1.6272) is a coding-agent RUNTIME, not a forge,
 // and it does not ride install.sh / edition-sync.js / npm test. It is delivered
 // the ZCode-native way: named agents under `.zcode/agents/<role>.md` (Agent
-// dispatch types), flat commands under `.zcode/commands/<name>.md`, a merged
-// `.zcode/config.json` (hooks object, seven events, no SubagentStart), and
-// support scripts/hooks under `.zcode/kaola-workflow/{scripts,hooks}`.
+// dispatch types), flat commands under `.zcode/commands/<name>.md`, and
+// support scripts under `.zcode/kaola-workflow/scripts`. ZCode deliberately
+// carries no Kaola hook declaration or executable hook subprocess: its measured
+// one-million-token context does not need compact prompt hooks, and the live
+// hook experiment self-locked Workflow Next.
 //
 // ZCode discovers subagents ONLY at user scope (~/.zcode/agents), so the
 // installer syncs the staged `.zcode/agents/` roster to the user home as well.
 //
-// Frontmatter pins (measured on ZCode 3.9.1): every agent carries
+// Frontmatter pins (measured on ZCode 3.10.1/3.10.1.6272): every agent carries
 // `model: GLM-5.3` plus exactly ONE `thoughtLevel:` pinned by its canonical
 // tier — standard → high, reasoning → max, heavy (fable) → max. The frontmatter
 // key is `thoughtLevel`, NOT `reasoningEffort`/`effort`.
@@ -128,6 +130,31 @@ function walkFiles(absDir, relDir) {
   return out;
 }
 
+// ZCode 3.10.1 stores matcher rows under hooks.events.<Event>. Each matcher
+// row owns its executable entries in row.hooks[]. Keep the legacy direct-row
+// branch only for foreign configuration fixtures and pre-3.10.1 migration
+// checks; all generated ZCode command assertions consume the nested entries.
+function hookCommandsFromRow(row) {
+  if (!row || typeof row !== 'object') return [];
+  const nested = Array.isArray(row.hooks) ? row.hooks : [];
+  const entries = nested.length > 0 ? nested : [row];
+  return entries.map(entry => String((entry && entry.command) || ''))
+    .filter(Boolean);
+}
+
+function hookRowsFromConfig(config) {
+  const hooks = config && config.hooks && typeof config.hooks === 'object'
+    ? config.hooks : {};
+  const direct = Object.entries(hooks).flatMap(([event, entries]) =>
+    event === 'enabled' || event === 'events' || !Array.isArray(entries)
+      ? [] : entries.map(entry => ({ event, entry })));
+  const wrapped = hooks.events && typeof hooks.events === 'object' && !Array.isArray(hooks.events)
+    ? Object.entries(hooks.events).flatMap(([event, entries]) =>
+      !Array.isArray(entries) ? [] : entries.map(entry => ({ event, entry })))
+    : [];
+  return direct.concat(wrapped);
+}
+
 const trackedAgents = () => fs.readdirSync(path.join(REPO, 'agents'))
   .filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
 const commandNamesFor = forge => forgeLayout.commandSources(forge)
@@ -165,12 +192,6 @@ const ZCODE_MODEL_CLASS_TIERS = Object.freeze({
   fable: Object.freeze({ tier: 'heavy', model: 'GLM-5.3', thoughtLevel: 'max' }),
   heavy: Object.freeze({ tier: 'heavy', model: 'GLM-5.3', thoughtLevel: 'max' }),
 });
-
-// ZCode 3.9.1 hook events (measured). SubagentStart does NOT exist on ZCode.
-const ZCODE_HOOK_EVENTS = Object.freeze([
-  'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest',
-  'PostToolUse', 'PostToolUseFailure', 'Stop',
-]);
 
 function canonicalAgentClass(name) {
   const { fm } = parseFrontmatter(read('agents/' + name + '.md'));
@@ -571,6 +592,8 @@ function commandRel(name, forge) {
   const staticDispatchFields = text => String(text || '').split(/\r?\n/)
     .filter(line => /^\s*(?:subagent_type|description)\s*=/.test(line));
   const lineStartCall = text => /^(?:Agent|Task)\(/m.test(String(text || ''));
+  const rolePattern = role => new RegExp('`' + String(role).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '`');
+  const namedRolesIn = text => reviewerGenerator.ROLES.filter(role => rolePattern(role).test(String(text || '')));
   let canonicalFinalizeRoles = [];
   for (const name of canonCommandNames) {
     const src = forgeLayout.commandSources(DEFAULT_FORGE).find(s => s.basename === name + '.md');
@@ -588,7 +611,10 @@ function commandRel(name, forge) {
       'G2[' + name + ']: no sibling-runtime Task( / spawn_subagent( dispatch wording');
     assertReal(!/\bmodel\s*=\s*["']/.test(content),
       'G2[' + name + ']: generated command stays free of per-call model dispatch');
-    const canonHits = [...canon.matchAll(/^Agent\(\n\s+subagent_type="([^"]+)"/gm)].map(m => m[1]);
+    // The compressed routing cards no longer carry a static Agent(...) sample.
+    // Preserve the named-role contract by comparing the generated roster that
+    // the canonical runtime-delegation slot actually publishes.
+    const canonHits = namedRolesIn(canon);
     if (name === 'kaola-workflow-finalize') {
       canonicalFinalizeRoles = canonHits;
       assertReal(!lineStartCall(content),
@@ -600,8 +626,7 @@ function commandRel(name, forge) {
           'G2[kaola-workflow-finalize]: native prose preserves the canonical dispatch role ' + role);
       }
       for (const boundary of [
-        'failure command', 'evidence path', 'working directory', 'custody boundary',
-        'changed files', 'checklist',
+        'outcome', 'evidence', 'worktree/commit', 'custody', 'stop condition',
       ]) {
         assertReal(content.toLowerCase().includes(boundary),
           'G2[kaola-workflow-finalize]: native prose preserves the ' + boundary + ' brief boundary');
@@ -635,7 +660,6 @@ function commandRel(name, forge) {
 {
   const VENDOR_SLUG = /\bgrok-4\.\d\b|\bgrok-build\b|\bcursor-grok\b/;
   const VENDOR_NOUN = /\b(?:opus|sonnet|grok|cursor)\b/i;
-  let runtimeZcode = 0;
   for (const rel of generatedTreeRelFiles()) {
     const content = read(rel);
     assertReal(!/CLAUDE_PLUGIN_ROOT/.test(content),
@@ -655,12 +679,38 @@ function commandRel(name, forge) {
       assertReal(!VENDOR_SLUG.test(content) && !VENDOR_NOUN.test(content),
         'G2-leak: ' + rel + ': no vendor slug/noun (grok, opus, sonnet, cursor) in command/hook surfaces');
     }
-    if (/--runtime zcode\b/.test(content)) runtimeZcode++;
   }
-  assertReal(runtimeZcode > 0,
-    'G2: at least one generated file stamps --runtime zcode (claim/startup bite)');
-  assertReal(exists(commandRel('workflow-next')) && /--runtime zcode\b/.test(read(commandRel('workflow-next'))),
-    'G2[workflow-next]: claim invocation stamps --runtime zcode');
+  const generatedNext = exists(commandRel('workflow-next')) ? read(commandRel('workflow-next')) : '';
+  const generatedFinalize = exists(commandRel('kaola-workflow-finalize'))
+    ? read(commandRel('kaola-workflow-finalize')) : '';
+  const configRel = treeLabel(DEFAULT_FORGE) + '/config.json';
+  const generatedConfig = exists(configRel) ? read(configRel) : '';
+  let configValue = null;
+  if (generatedConfig) {
+    try { configValue = JSON.parse(generatedConfig); } catch (_) { /* assertion below */ }
+  }
+  assertReal(!generatedConfig || !!configValue,
+    'G2[config]: optional generated ZCode config remains valid JSON');
+  const configEvents = configValue && configValue.hooks && typeof configValue.hooks === 'object'
+    ? configValue.hooks : {};
+  const directEvents = Object.keys(configEvents).filter(key => key !== 'enabled' && key !== 'events');
+  const nestedEvents = configEvents.events && typeof configEvents.events === 'object'
+    && !Array.isArray(configEvents.events) ? Object.keys(configEvents.events) : [];
+  const configRows = hookRowsFromConfig(configValue).map(row => hookCommandsFromRow(row.entry)).flat();
+  assertReal(directEvents.length === 0 && nestedEvents.length === 0 && configRows.length === 0,
+    'G2[config]: generated ZCode config declares no direct/nested event or Kaola hook row — direct='
+      + JSON.stringify(directEvents) + ' nested=' + JSON.stringify(nestedEvents));
+  assertReal(!/kaola-workflow[/\\](?:hooks|runtime-hook)|compact-(?:context|resume)/i.test(generatedConfig),
+    'G2[config]: generated ZCode config carries no Kaola hook executable path');
+  assertReal(/workflow-next/.test(generatedNext) && /kaola-workflow-finalize/.test(generatedFinalize),
+    'G2[workflow-next]: slash commands retain their own initial loading surfaces');
+  assertReal(!/(?:before\s+any\s+other\s+tool|before\s+ordinary\s+tools)[\s\S]{0,180}prompt\s+bind/i.test(generatedNext),
+    'G2[workflow-next]: command does not require the model to execute prompt bind after UserPromptSubmit activation');
+  const generatedHookShells = generatedTreeRelFiles()
+    .filter(rel => /kaola-workflow[/\\]hooks[/\\].+\.(?:sh|command)$/.test(rel));
+  assertReal(generatedHookShells.length === 0,
+    'G2[config]: generated ZCode tree carries no executable Kaola hook shell — got '
+      + JSON.stringify(generatedHookShells));
 }
 function generatedTreeRelFiles(label) {
   return walkFiles(path.join(TREE_ROOT, label || '.zcode'), label || '.zcode');
@@ -728,95 +778,57 @@ for (const role of reviewerGenerator.ROLES) {
 }
 
 // ---------------------------------------------------------------------------
-// G5: config.json — valid JSON, top-level hooks object with "enabled": true,
-// event keys drawn ONLY from ZCode's seven events, NO SubagentStart. Hook
-// command paths resolve inside the edition (.zcode/kaola-workflow/...).
-// Support scripts land per the install manifest; hooks under .../hooks/.
+// G5: ZCode deliberately has no Kaola hook carrier.  The optional generated
+// config may exist for unrelated runtime settings, but it must contain no
+// direct event key, hooks.events matcher row, Kaola hook path, or executable
+// shell under `.zcode/kaola-workflow/hooks`. Support scripts remain a normal
+// deployment surface and are checked independently below.
 // ---------------------------------------------------------------------------
 {
   const configRel = '.zcode/config.json';
-  assertReal(exists(configRel), 'G5: .zcode/config.json exists (ZCode hook mapping)');
+  const configExists = exists(configRel);
   let parsed = null;
-  try { parsed = JSON.parse(read(configRel)); } catch (_) { parsed = null; }
-  assertReal(parsed !== null && parsed !== undefined,
-    'G5: .zcode/config.json is valid JSON');
-  assertReal(!!parsed && parsed.hooks && typeof parsed.hooks === 'object' && !Array.isArray(parsed.hooks),
-    'G5: config.json has a top-level hooks object');
-  assertReal(!!parsed && parsed.hooks && parsed.hooks.enabled === true,
-    'G5: hooks.enabled is exactly true');
-  const eventKeys = parsed && parsed.hooks
-    ? Object.keys(parsed.hooks).filter(k => k !== 'enabled') : [];
-  assertReal(eventKeys.length > 0,
-    'G5: hooks registers at least one event');
-  for (const k of eventKeys) {
-    assertReal(ZCODE_HOOK_EVENTS.includes(k),
-      'G5: hook event key ' + JSON.stringify(k) + ' is one of ZCode\'s seven events '
-      + '(SessionStart/UserPromptSubmit/PreToolUse/PermissionRequest/PostToolUse/PostToolUseFailure/Stop)');
+  if (configExists) {
+    try { parsed = JSON.parse(read(configRel)); } catch (_) { parsed = null; }
   }
-  assertReal(!parsed || !('SubagentStart' in (parsed.hooks || {})) && !/["']SubagentStart["']/.test(read(configRel)),
-    'G5: NO SubagentStart event (ZCode 3.9.1 has no such hook event)');
-  assertReal(!/CLAUDE_PLUGIN_ROOT/.test(read(configRel)),
-    'G5: config.json carries no CLAUDE_PLUGIN_ROOT');
-  const blob = JSON.stringify(parsed && parsed.hooks || {});
-  assertReal(/\.zcode\/kaola-workflow\//.test(blob),
-    'G5: hook command paths reference .zcode/kaola-workflow/ (edition-resident scripts/hooks)');
-  assertReal(!/~\/\.claude\//.test(blob),
-    'G5: hook command paths do not point outside the edition (~/.claude)');
+  assertReal(!configExists || parsed !== null,
+    'G5: optional .zcode/config.json is valid JSON');
+  const hooks = parsed && parsed.hooks && typeof parsed.hooks === 'object'
+    ? parsed.hooks : {};
+  const directEvents = Object.keys(hooks).filter(key => key !== 'enabled' && key !== 'events');
+  const nestedEvents = hooks.events && typeof hooks.events === 'object' && !Array.isArray(hooks.events)
+    ? Object.keys(hooks.events) : [];
+  const rows = hookRowsFromConfig(parsed);
+  const commands = rows.flatMap(row => hookCommandsFromRow(row.entry));
+  assertReal(directEvents.length === 0 && nestedEvents.length === 0 && commands.length === 0,
+    'G5: generated ZCode config declares no Kaola hook event or command — direct='
+      + JSON.stringify(directEvents) + ' nested=' + JSON.stringify(nestedEvents));
+  assertReal(!/CLAUDE_PLUGIN_ROOT/.test(configExists ? read(configRel) : '')
+    && !/kaola-workflow[/\\](?:hooks|runtime-hook)|compact-(?:context|resume)/i
+      .test(configExists ? read(configRel) : ''),
+    'G5: generated ZCode config carries no external or Kaola hook path');
 
-  // Every hook command named in the mapping resolves to a file in the tree.
-  {
-    const commands = [];
-    for (const k of eventKeys) {
-      const v = parsed.hooks[k];
-      const arr = Array.isArray(v) ? v : (v && Array.isArray(v.commands) ? v.commands : [v]);
-      for (const entry of arr || []) {
-        const cmd = String((entry && (entry.command || entry.cmd)) || entry || '');
-        for (const token of cmd.split(/&&|;/)) {
-          const m = token.match(/\.zcode\/kaola-workflow\/[^\s"']+/);
-          if (m) commands.push(m[0]);
-        }
-      }
-    }
-    assertReal(commands.length > 0,
-      'G5: at least one hook command names an edition-resident path');
-    for (const rel of commands) {
-      const abs = path.join(TREE_ROOT, rel);
-      assertReal(fs.existsSync(abs),
-        'G5: hook command path resolves in the generated tree — ' + rel);
-    }
+  const manifest = require('./kaola-workflow-install-manifest.js');
+  const scriptsDir = path.join(TREE_ROOT, '.zcode', 'kaola-workflow', 'scripts');
+  assertReal(fs.existsSync(scriptsDir),
+    'G5: .zcode/kaola-workflow/scripts/ remains the support-script surface');
+  const deployed = fs.existsSync(scriptsDir)
+    ? fs.readdirSync(scriptsDir).map(f => f.replace(/\.js$/, '')) : [];
+  for (const base of manifest.supportScripts(DEFAULT_FORGE)) {
+    assertReal(deployed.indexOf(String(base).replace(/\.js$/, '')) !== -1,
+      'G5: install-manifest support script deployed under .zcode/kaola-workflow/scripts/ — ' + base);
   }
-
-  // Support scripts + shell hooks.
-  {
-    const manifest = require('./kaola-workflow-install-manifest.js');
-    const scriptsDir = path.join(TREE_ROOT, '.zcode', 'kaola-workflow', 'scripts');
-    assertReal(fs.existsSync(scriptsDir),
-      'G5: .zcode/kaola-workflow/scripts/ exists');
-    const deployed = fs.existsSync(scriptsDir)
-      ? fs.readdirSync(scriptsDir).map(f => f.replace(/\.js$/, '')) : [];
-    for (const base of manifest.supportScripts(DEFAULT_FORGE)) {
-      assertReal(deployed.indexOf(String(base).replace(/\.js$/, '')) !== -1,
-        'G5: install-manifest support script deployed under .zcode/kaola-workflow/scripts/ — ' + base);
-    }
-    const hooksDir = path.join(TREE_ROOT, '.zcode', 'kaola-workflow', 'hooks');
-    assertReal(fs.existsSync(hooksDir),
-      'G5: .zcode/kaola-workflow/hooks/ exists (shell hooks)');
-    if (fs.existsSync(hooksDir)) {
-      const hookFiles = fs.readdirSync(hooksDir).filter(f => f.endsWith('.sh'));
-      assertReal(hookFiles.length > 0,
-        'G5: .zcode/kaola-workflow/hooks/ carries at least one shell hook');
-      for (const f of hookFiles) {
-        const text = fs.readFileSync(path.join(hooksDir, f), 'utf8');
-        assertReal(text.startsWith('#!'),
-          'G5: hook ' + f + ' keeps its shebang as line 1 so ZCode can exec it');
-      }
-    }
-  }
+  const hooksDir = path.join(TREE_ROOT, '.zcode', 'kaola-workflow', 'hooks');
+  const hookFiles = fs.existsSync(hooksDir)
+    ? fs.readdirSync(hooksDir).filter(f => /\.(?:sh|command)$/.test(f)) : [];
+  assertReal(hookFiles.length === 0,
+    'G5: generated ZCode tree carries no executable hook shell — got ' + JSON.stringify(hookFiles));
 }
 
 // ---------------------------------------------------------------------------
 // G6: generator CLI — --write, --check, --refresh-present, --forge=,
-// --print-tree-root, --merge-hooks/--strip-hooks. Unknown forge refused.
+// --print-tree-root, and the receipt-owned --strip-hooks migration utility.
+// Fresh ZCode rendering no longer exposes a hook merge path.
 // --help names the flags.
 // ---------------------------------------------------------------------------
 {
@@ -824,8 +836,8 @@ for (const role of reviewerGenerator.ROLES) {
   const helpOut = String(help.stdout || '') + String(help.stderr || '');
   assertReal(/--write/.test(helpOut) && /--check/.test(helpOut)
     && /--refresh-present/.test(helpOut) && /--print-tree-root/.test(helpOut)
-    && /--forge/.test(helpOut) && /--merge-hooks/.test(helpOut) && /--strip-hooks/.test(helpOut),
-    'G6: --help names --write / --check / --refresh-present / --print-tree-root / --forge= / --merge-hooks / --strip-hooks');
+    && /--forge/.test(helpOut) && /--strip-hooks/.test(helpOut),
+    'G6: --help names --write / --check / --refresh-present / --print-tree-root / --forge= / --strip-hooks');
 
   const printed = runGeneratorCli(['--print-tree-root']);
   assertReal(printed.status === 0, 'G6: --print-tree-root exits 0 (got ' + printed.status + ')');
@@ -852,53 +864,9 @@ for (const role of reviewerGenerator.ROLES) {
   assertReal(bad.status === 2,
     'G6: sync --forge=svn refuses with exit 2 rather than defaulting to github (got ' + bad.status + ')');
 
-  const missingDest = runGeneratorCli(['--merge-hooks']);
+  const missingDest = runGeneratorCli(['--strip-hooks']);
   assertReal(missingDest.status === 2,
-    'G6: --merge-hooks without --dest=PATH exits 2 (got ' + missingDest.status + ')');
-
-  const mergeDir = fs.mkdtempSync(path.join(tmpBase(), 'zcode-merge-'));
-  try {
-    const dest = path.join(mergeDir, 'config.json');
-    fs.writeFileSync(dest, JSON.stringify({
-      model: 'GLM-5.3',
-      hooks: {
-        enabled: true,
-        UserPromptSubmit: [{ command: 'echo user-owned' }],
-      },
-    }, null, 2) + '\n');
-    const before = JSON.parse(fs.readFileSync(dest, 'utf8'));
-    const beforeEvents = Object.keys(before.hooks).filter(k => k !== 'enabled');
-    const merged = runGenerator(['--merge-hooks', '--dest=' + dest]);
-    assertReal(merged.status === 0, 'G6-merge: --merge-hooks exits 0 (got ' + merged.status + ')');
-    const after = JSON.parse(fs.readFileSync(dest, 'utf8'));
-    assertReal(after.model === 'GLM-5.3',
-      'G6-merge: preserves the foreign top-level key "model"');
-    assertReal(Array.isArray(after.hooks.UserPromptSubmit)
-      && after.hooks.UserPromptSubmit[0].command === 'echo user-owned',
-      'G6-merge: preserves the foreign UserPromptSubmit entry');
-    assertReal(after.hooks.enabled === true,
-      'G6-merge: hooks.enabled stays true');
-    const afterEvents = Object.keys(after.hooks).filter(k => k !== 'enabled');
-    const added = afterEvents.filter(k => beforeEvents.indexOf(k) === -1);
-    assertReal(added.length > 0,
-      'G6-merge: appends kaola hook events — got ' + JSON.stringify(afterEvents));
-    const stripped = runGenerator(['--strip-hooks', '--dest=' + dest]);
-    assertReal(stripped.status === 0, 'G6-strip: --strip-hooks exits 0 (got ' + stripped.status + ')');
-    const gone = JSON.parse(fs.readFileSync(dest, 'utf8'));
-    assertReal(Array.isArray(gone.hooks.UserPromptSubmit)
-      && gone.hooks.UserPromptSubmit[0].command === 'echo user-owned',
-      'G6-strip: foreign hook entries remain');
-    for (const k of added) {
-      assertReal(!(k in gone.hooks),
-        'G6-strip: kaola-owned event ' + JSON.stringify(k) + ' is removed');
-    }
-    fs.writeFileSync(dest, 'not-json{');
-    const refuse = runGeneratorCli(['--merge-hooks', '--dest=' + dest]);
-    assertReal(refuse.status === 1,
-      'G6-merge: unreadable dest JSON fails closed (got ' + refuse.status + ')');
-  } finally {
-    try { fs.rmSync(mergeDir, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  }
+    'G6: --strip-hooks without --dest=PATH exits 2 (got ' + missingDest.status + ')');
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,6 +970,8 @@ for (const role of reviewerGenerator.ROLES) {
     const liveConfigPath = fixture => path.join(fixture.zcodeHome, 'cli', 'config.json');
     const legacyHomeConfigPath = fixture => path.join(fixture.zcodeHome, 'config.json');
     const projectConfigPath = fixture => path.join(fixture.dest, '.zcode', 'config.json');
+    const projectReceiptPath = fixture => path.join(fixture.dest, '.zcode', 'kaola-workflow', 'zcode-hooks-state.json');
+    const legacyReceiptPath = fixture => path.join(fixture.zcodeHome, 'kaola-workflow', 'zcode-hooks-state.json');
     const userConfigSeed = () => ({
       theme: 'user-owned-theme',
       hooks: {
@@ -1015,34 +985,9 @@ for (const role of reviewerGenerator.ROLES) {
       fs.writeFileSync(live, JSON.stringify(userConfigSeed(), null, 2) + '\n');
     }
     function kaolaHookCommands(config) {
-      if (!config || !config.hooks || typeof config.hooks !== 'object') return [];
-      return Object.entries(config.hooks).flatMap(([event, entries]) =>
-        event === 'enabled' || !Array.isArray(entries) ? [] : entries)
-        .map(entry => String((entry && entry.command) || ''))
-        .filter(command => /kaola-workflow\/hooks\//.test(command));
-    }
-    function assertExecutableKaolaHooks(config, fixture, label) {
-      const commands = kaolaHookCommands(config);
-      assertReal(commands.length > 0,
-        label + ': live ${ZCODE_HOME}/cli/config.json carries at least one Kaola hook command');
-      for (const command of commands) {
-        // spawn-class: environment
-        const executed = spawnSync('sh', ['-c', command], {
-          cwd: fixture.dest,
-          env: Object.assign({}, process.env, {
-            HOME: fixture.home,
-            ZCODE_HOME: fixture.zcodeHome,
-          }),
-          input: '{}',
-          encoding: 'utf8',
-          timeout: 1000,
-          killSignal: 'SIGKILL',
-        });
-        assertReal(executed.status === 0 && !(executed.error && executed.error.code === 'ETIMEDOUT'),
-          label + ': merged Kaola hook command executes from the target project — command='
-          + JSON.stringify(command) + ', status=' + executed.status + ', error='
-          + (executed.error && executed.error.code || 'none'));
-      }
+      return hookRowsFromConfig(config)
+        .flatMap(row => hookCommandsFromRow(row.entry))
+        .filter(command => /kaola-workflow[/\\]hooks[/\\]|(?:^|[/\\])runtime-hook(?:\.sh)?\b|compact-(?:context|resume)/i.test(command));
     }
     function jsonBytes(value) {
       return JSON.stringify(value, null, 2) + '\n';
@@ -1051,14 +996,15 @@ for (const role of reviewerGenerator.ROLES) {
       return fs.statSync(file).mode & 0o777;
     }
     function hasExactEntry(config, event, expected) {
-      const entries = config && config.hooks && config.hooks[event];
-      return Array.isArray(entries)
-        && entries.some(entry => JSON.stringify(entry) === JSON.stringify(expected));
+      const topLevel = config && config.hooks && config.hooks[event];
+      const wrapped = config && config.hooks && config.hooks.events && config.hooks.events[event];
+      return [topLevel, wrapped].some(entries => Array.isArray(entries)
+        && entries.some(entry => JSON.stringify(entry) === JSON.stringify(expected)));
     }
 
-    // Project deploy: commands remain project-local, while agents and the executable hook mapping
-    // use ZCode's documented user authorities. The ignored project config and legacy home config
-    // are decoys: neither may be the hook carrier.
+    // Project deploy: commands remain project-local. ZCode has no Kaola hook
+    // declaration carrier; pre-existing user/project config is not rewritten
+    // merely because the edition is installed.
     {
       const projectDecoy = JSON.stringify({ project_decoy: 'must-stay-byte-identical' }, null, 2) + '\n';
       const homeDecoy = JSON.stringify({ home_decoy: 'must-stay-byte-identical' }, null, 2) + '\n';
@@ -1077,20 +1023,38 @@ for (const role of reviewerGenerator.ROLES) {
       }
       const configFile = liveConfigPath(r);
       assertReal(fs.existsSync(configFile),
-        'G8-project: hooks merge into documented ${ZCODE_HOME}/cli/config.json');
+        'G8-project: pre-existing user ${ZCODE_HOME}/cli/config.json survives');
       let cfg = null;
       try { cfg = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch (_) { cfg = null; }
       assertReal(!!cfg && cfg.theme === 'user-owned-theme'
         && cfg.hooks && cfg.hooks.enabled === true,
-      'G8-project: live config preserves user top-level keys and enables hooks');
+      'G8-project: user config preserves its top-level keys and enabled state');
       assertReal(!!cfg && Array.isArray(cfg.hooks.UserPromptSubmit)
         && cfg.hooks.UserPromptSubmit[0].command === 'echo user-owned',
-      'G8-project: live config preserves the user-owned hook entry');
-      assertExecutableKaolaHooks(cfg, r, 'G8-project');
+      'G8-project: user config preserves the user-owned hook entry');
+      assertReal(kaolaHookCommands(cfg).length === 0,
+        'G8-project: user config carries no ambient Kaola hook command');
+      const userConfigBefore = fs.readFileSync(configFile, 'utf8');
+      let projectCfg = null;
+      try { projectCfg = JSON.parse(fs.readFileSync(projectConfigPath(r), 'utf8')); }
+      catch (_) { projectCfg = null; }
+      assertReal(!!projectCfg && projectCfg.project_decoy === 'must-stay-byte-identical'
+        && kaolaHookCommands(projectCfg).length === 0,
+        'G8-project: a pre-existing project config remains a foreign no-hook config');
       assertReal(fs.readFileSync(projectConfigPath(r), 'utf8') === projectDecoy,
-        'G8-project: ignored <project>/.zcode/config.json is not used or rewritten');
+        'G8-project: installer does not replace a foreign project config with hook declarations');
       assertReal(fs.readFileSync(legacyHomeConfigPath(r), 'utf8') === homeDecoy,
         'G8-project: legacy ${ZCODE_HOME}/config.json is not used or rewritten');
+      assertReal(fs.readFileSync(configFile, 'utf8') === userConfigBefore,
+        'G8-project: user config remains byte-identical when no ownership receipt exists');
+      assertReal(!fs.existsSync(projectReceiptPath(r)) && !fs.existsSync(legacyReceiptPath(r)),
+        'G8-project: no hook ownership receipt is created');
+      assertReal(!/(?:approve all|pending review|hooks trust review|workspace hook declarations)/i.test(r.stdout + r.stderr),
+        'G8-project: install output has no retired ZCode hook approval/declaration hand-off');
+      const projectHooksDir = path.join(r.dest, '.zcode', 'kaola-workflow', 'hooks');
+      assertReal(!fs.existsSync(projectHooksDir)
+        || fs.readdirSync(projectHooksDir).filter(f => /\.(?:sh|command)$/.test(f)).length === 0,
+        'G8-project: no executable Kaola hook shell is staged in the project');
       for (const name of canonAgents) {
         assertReal(fs.existsSync(path.join(r.zcodeHome, 'agents', name + '.md')),
           'G8-project[' + name + ']: authoritative agent installed under $ZCODE_HOME/agents/');
@@ -1155,6 +1119,7 @@ for (const role of reviewerGenerator.ROLES) {
     // --global: agents/commands land under ZCODE_HOME, un-nested.
     {
       const homeDecoy = JSON.stringify({ home_decoy: 'must-stay-byte-identical' }, null, 2) + '\n';
+      const globalUserConfigBytes = jsonBytes(userConfigSeed());
       const r = runInstaller(['--global'], { skipTarget: true, beforeRun: fixture => {
         seedUserConfig(fixture);
         fs.writeFileSync(legacyHomeConfigPath(fixture), homeDecoy);
@@ -1173,16 +1138,23 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-global: creates NO nested .zcode/ under ZCODE_HOME');
       const globalConfig = liveConfigPath(r);
       assertReal(fs.existsSync(globalConfig),
-        'G8-global: merges hooks into documented ${ZCODE_HOME}/cli/config.json');
+        'G8-global: pre-existing user config remains available');
       let globalCfg = null;
       try { globalCfg = JSON.parse(fs.readFileSync(globalConfig, 'utf8')); } catch (_) { globalCfg = null; }
       assertReal(!!globalCfg && globalCfg.theme === 'user-owned-theme'
         && Array.isArray(globalCfg.hooks.UserPromptSubmit)
         && globalCfg.hooks.UserPromptSubmit[0].command === 'echo user-owned',
-      'G8-global: live config merge preserves user keys and hook entries');
-      assertExecutableKaolaHooks(globalCfg, r, 'G8-global');
+      'G8-global: user config preserves foreign keys and hook entries');
+      assertReal(kaolaHookCommands(globalCfg).length === 0,
+        'G8-global: global install creates no ambient Kaola hook command');
+      assertReal(fs.readFileSync(globalConfig, 'utf8') === globalUserConfigBytes,
+        'G8-global: global install does not rewrite the user config');
       assertReal(fs.readFileSync(legacyHomeConfigPath(r), 'utf8') === homeDecoy,
         'G8-global: legacy ${ZCODE_HOME}/config.json is not used or rewritten');
+      assertReal(!fs.existsSync(projectReceiptPath(r)) && !fs.existsSync(legacyReceiptPath(r)),
+        'G8-global: global install creates no hook ownership receipt');
+      assertReal(!/(?:approve all|pending review|hooks trust review|workspace hook declarations)/i.test(r.stdout + r.stderr),
+        'G8-global: install output has no retired ZCode hook approval/declaration hand-off');
 
       // A consumer cwd must prefer the real support script installed in the global
       // support directory. The generated edition launcher has the same basename;
@@ -1240,12 +1212,21 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-gitlab: gitlab claim basename is distinct from github — otherwise the content pin is vacuous');
       const wfNext = fs.existsSync(path.join(commandsDir, 'workflow-next.md'))
         ? fs.readFileSync(path.join(commandsDir, 'workflow-next.md'), 'utf8') : '';
-      assertReal(wfNext.includes(gitlabClaim),
-        'G8-gitlab: deployed workflow-next is gitlab-shaped — names ' + gitlabClaim);
+      const wfInit = fs.existsSync(path.join(commandsDir, 'workflow-init.md'))
+        ? fs.readFileSync(path.join(commandsDir, 'workflow-init.md'), 'utf8') : '';
+      const finalize = fs.existsSync(path.join(commandsDir, 'kaola-workflow-finalize.md'))
+        ? fs.readFileSync(path.join(commandsDir, 'kaola-workflow-finalize.md'), 'utf8') : '';
+      // The compressed card still carries the forge-specific claim helper and
+      // the ZCode startup runtime. No prompt lifecycle hook is implied by
+      // this command-level forge routing assertion.
+      assertReal(wfNext.includes(gitlabClaim) && /startup --runtime zcode\b/.test(wfNext),
+        'G8-gitlab: compressed workflow-next keeps the forge-specific ZCode startup route ' + gitlabClaim);
       assertReal(!wfNext.includes(githubClaim),
         'G8-gitlab: deployed workflow-next must not name the github claim script ' + githubClaim);
-      assertReal(/\bglab\b/.test(wfNext),
-        'G8-gitlab: deployed workflow-next names glab (gitlab routing surface)');
+      assertReal(finalize.includes(gitlabClaim) && !finalize.includes(githubClaim),
+        'G8-gitlab: finalization keeps the forge-specific claim script ' + gitlabClaim);
+      assertReal(/\bglab\b/.test(wfInit),
+        'G8-gitlab: workflow-init keeps glab (gitlab routing surface)');
       clean(r);
     }
 
@@ -1260,7 +1241,8 @@ for (const role of reviewerGenerator.ROLES) {
       clean(r);
     }
 
-    // --no-scripts skips support scripts and therefore must not wire a non-executable Kaola hook.
+    // --no-scripts skips support scripts and still must not create a ZCode hook
+    // declaration or an approval/trust route.
     {
       const r = runInstaller(['--no-scripts'], { beforeRun: seedUserConfig });
       assertReal(r.status === 0,
@@ -1271,9 +1253,15 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-noscripts: commands still deploy');
       assertReal(!fs.existsSync(path.join(r.zcodeHome, 'kaola-workflow', 'scripts')),
         'G8-noscripts: skips $ZCODE_HOME/kaola-workflow/scripts');
-      const noScriptsConfig = JSON.parse(fs.readFileSync(liveConfigPath(r), 'utf8'));
+      const noScriptsConfig = fs.existsSync(liveConfigPath(r))
+        ? JSON.parse(fs.readFileSync(liveConfigPath(r), 'utf8')) : null;
       assertReal(kaolaHookCommands(noScriptsConfig).length === 0,
         'G8-noscripts: live user config carries no Kaola hook whose script was skipped');
+      assertReal(!fs.existsSync(projectConfigPath(r))
+        && !fs.existsSync(projectReceiptPath(r)) && !fs.existsSync(legacyReceiptPath(r)),
+        'G8-noscripts: no project config or hook receipt is created');
+      assertReal(!/(?:approve all|pending review|hooks trust review|workspace hook declarations)/i.test(r.stdout + r.stderr),
+        'G8-noscripts: install output has no retired ZCode hook approval/declaration hand-off');
       clean(r);
     }
 
@@ -1293,8 +1281,18 @@ for (const role of reviewerGenerator.ROLES) {
       const configFile = liveConfigPath(r);
       let cfg = null;
       try { cfg = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch (_) { cfg = null; }
-      assertReal(kaolaHookCommands(cfg).length > 0,
-        'G8-uninstall: seed install first merged Kaola hooks into the live user config');
+      const userConfigBefore = fs.existsSync(configFile) ? fs.readFileSync(configFile, 'utf8') : '';
+      const projectConfig = projectConfigPath(r);
+      let projectCfg = null;
+      try { projectCfg = JSON.parse(fs.readFileSync(projectConfig, 'utf8')); } catch (_) { projectCfg = null; }
+      assertReal(kaolaHookCommands(cfg).length === 0,
+        'G8-uninstall: seed install leaves no ambient Kaola hooks in the user config');
+      assertReal(!projectCfg || kaolaHookCommands(projectCfg).length === 0,
+        'G8-uninstall: seed install creates no project Kaola hook declaration');
+      assertReal(!fs.existsSync(projectReceiptPath(r)) && !fs.existsSync(legacyReceiptPath(r)),
+        'G8-uninstall: seed install creates no hook ownership receipt');
+      assertReal(!/(?:approve all|pending review|hooks trust review|workspace hook declarations)/i.test(r.stdout + r.stderr),
+        'G8-uninstall: seed install has no retired ZCode hook approval/declaration hand-off');
       // spawn-class: environment
       const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r.dest, '--yes'], {
         env: Object.assign({}, process.env, { HOME: r.home, ZCODE_HOME: r.zcodeHome }),
@@ -1323,8 +1321,14 @@ for (const role of reviewerGenerator.ROLES) {
       assertReal(!!after && Array.isArray(after.hooks.UserPromptSubmit)
         && after.hooks.UserPromptSubmit[0].command === 'echo user-owned',
         'G8-uninstall: foreign hook entries survive (--strip-hooks removes only kaola-owned hooks)');
-      assertReal(kaolaHookCommands(after).length === 0,
-        'G8-uninstall: every Kaola hook entry is stripped from live ${ZCODE_HOME}/cli/config.json');
+      assertReal(fs.readFileSync(configFile, 'utf8') === userConfigBefore,
+        'G8-uninstall: user config remains byte-identical because no ambient carrier was installed');
+      let projectAfter = null;
+      try { projectAfter = JSON.parse(fs.readFileSync(projectConfig, 'utf8')); } catch (_) { projectAfter = null; }
+      assertReal(!projectAfter || kaolaHookCommands(projectAfter).length === 0,
+        'G8-uninstall: every receipt-owned project Kaola declaration is stripped');
+      assertReal(!fs.existsSync(projectReceiptPath(r)),
+        'G8-uninstall: project hook receipt is removed after receipt-owned stripping');
       clean(r);
     }
 
@@ -1354,14 +1358,19 @@ for (const role of reviewerGenerator.ROLES) {
         + 'global hook when hooks.enabled started false (status=' + r.status + ')');
       assertReal(hasExactEntry(after, 'Stop', foreignStop),
         'R3-disabled-foreign: the dormant foreign Stop entry survives byte-for-byte in meaning');
+      assertReal(fs.readFileSync(live, 'utf8') === originalBytes,
+        'R3-disabled-foreign: no-hook project install leaves the foreign user config byte-identical');
+      assertReal(!fs.existsSync(projectConfigPath(r)) && !fs.existsSync(projectReceiptPath(r)),
+        'R3-disabled-foreign: no project hook config or receipt is created');
       clean(r);
     }
 
     // A path substring is not an ownership identity. These two commands are
     // deliberately plausible false positives for the old broad regex: one
     // contains kaola-workflow/hooks and one contains kaola-workflow/scripts.
-    // A real install followed by uninstall must preserve both while removing
-    // only the entries that this install actually added.
+    // Reinstall/migration must remove only the exact rows named by the old
+    // user-level receipt. With no ZCode hook carrier, the foreign project
+    // config remains unchanged and no replacement project receipt is created.
     {
       const foreignHookPath = {
         command: 'sh /opt/customer/kaola-workflow/hooks/user-session-start.sh',
@@ -1373,17 +1382,40 @@ for (const role of reviewerGenerator.ROLES) {
         timeout: 29,
         owner: 'foreign-script-fixture',
       };
+      const legacySession = { command: 'sh legacy-kaola-session-start.sh', timeout: 5 };
+      const legacyPre = { command: 'sh legacy-kaola-pre-tool.sh', timeout: 5 };
       const seed = {
         hooks: {
           enabled: true,
-          SessionStart: [foreignHookPath],
-          PreToolUse: [foreignScriptPath],
+          SessionStart: [foreignHookPath, legacySession],
+          PreToolUse: [foreignScriptPath, legacyPre],
         },
+      };
+      const projectForeign = {
+        matcher: '*',
+        hooks: [{ type: 'command', command: 'echo project-foreign', timeout: 11 }],
+      };
+      const projectSeed = {
+        hooks: { enabled: true, events: { SessionStart: [projectForeign] } },
       };
       const r = runInstaller([], { beforeRun: fixture => {
         const live = liveConfigPath(fixture);
         fs.mkdirSync(path.dirname(live), { recursive: true });
         fs.writeFileSync(live, jsonBytes(seed), { mode: 0o600 });
+        fs.mkdirSync(path.dirname(projectConfigPath(fixture)), { recursive: true });
+        fs.writeFileSync(projectConfigPath(fixture), jsonBytes(projectSeed), { mode: 0o600 });
+        const legacyReceipt = {
+          schema: 'kaola-workflow-zcode-hooks-v1',
+          destination: path.resolve(live),
+          priorEnabled: { present: true, value: true },
+          priorEvents: { present: false },
+          added: [
+            { event: 'SessionStart', entry: legacySession },
+            { event: 'PreToolUse', entry: legacyPre },
+          ],
+        };
+        fs.mkdirSync(path.dirname(legacyReceiptPath(fixture)), { recursive: true });
+        fs.writeFileSync(legacyReceiptPath(fixture), jsonBytes(legacyReceipt), { mode: 0o600 });
       } });
       assertReal(r.status === 0,
         'R3-exact-ownership: seed install exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
@@ -1394,13 +1426,24 @@ for (const role of reviewerGenerator.ROLES) {
         'R3-exact-ownership: a foreign command merely containing kaola-workflow/hooks survives install');
       assertReal(hasExactEntry(installed, 'PreToolUse', foreignScriptPath),
         'R3-exact-ownership: a foreign command merely containing kaola-workflow/scripts survives install');
-      const installedRows = Object.entries(installed && installed.hooks || {}).flatMap(([event, entries]) =>
-        event === 'enabled' || !Array.isArray(entries)
-          ? []
-          : entries.map(entry => ({ event, entry })))
-        .filter(row => !hasExactEntry(seed, row.event, row.entry));
-      assertReal(installedRows.length > 0,
-        'R3-exact-ownership: the install adds at least one exact Kaola hook entry before uninstall');
+      assertReal(!hasExactEntry(installed, 'SessionStart', legacySession)
+        && !hasExactEntry(installed, 'PreToolUse', legacyPre),
+        'R3-exact-ownership: reinstall removes only exact receipt-owned legacy rows');
+      assertReal(!fs.existsSync(legacyReceiptPath(r)),
+        'R3-exact-ownership: legacy migration consumes its exact ownership receipt');
+      let projectInstalled = null;
+      try { projectInstalled = JSON.parse(fs.readFileSync(projectConfigPath(r), 'utf8')); }
+      catch (_) { projectInstalled = null; }
+      assertReal(hasExactEntry(projectInstalled, 'SessionStart', projectForeign),
+        'R3-exact-ownership: project foreign matcher row survives no-hook install');
+      const installedRows = hookRowsFromConfig(projectInstalled)
+        .filter(row => !hasExactEntry(projectSeed, row.event, row.entry));
+      assertReal(installedRows.length === 0,
+        'R3-exact-ownership: project install adds no replacement Kaola matcher rows');
+      assertReal(fs.readFileSync(projectConfigPath(r), 'utf8') === jsonBytes(projectSeed),
+        'R3-exact-ownership: project config remains byte-identical when no hook receipt is created');
+      assertReal(!fs.existsSync(projectReceiptPath(r)),
+        'R3-exact-ownership: project install creates no ownership receipt');
       // spawn-class: environment
       const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r.dest, '--yes'], {
         env: Object.assign({}, process.env, { HOME: r.home, ZCODE_HOME: r.zcodeHome }),
@@ -1413,14 +1456,26 @@ for (const role of reviewerGenerator.ROLES) {
       assertReal(hasExactEntry(uninstalled, 'SessionStart', foreignHookPath)
         && hasExactEntry(uninstalled, 'PreToolUse', foreignScriptPath),
         'R3-exact-ownership: uninstall preserves every foreign path-lookalike entry');
-      assertReal(installedRows.every(row => !hasExactEntry(uninstalled, row.event, row.entry)),
-        'R3-exact-ownership: uninstall removes every exact entry added by this install receipt');
+      assertReal(!hasExactEntry(uninstalled, 'SessionStart', legacySession)
+        && !hasExactEntry(uninstalled, 'PreToolUse', legacyPre),
+        'R3-exact-ownership: uninstall does not resurrect retired legacy rows');
+      let uninstalledProject = null;
+      try { uninstalledProject = JSON.parse(fs.readFileSync(projectConfigPath(r), 'utf8')); }
+      catch (_) { uninstalledProject = null; }
+      assertReal(hasExactEntry(uninstalledProject, 'SessionStart', projectForeign),
+        'R3-exact-ownership: uninstall preserves the foreign project matcher row');
+      assertReal(fs.readFileSync(projectConfigPath(r), 'utf8') === jsonBytes(projectSeed),
+        'R3-exact-ownership: uninstall preserves the foreign project config bytes');
+      assertReal(installedRows.every(row => !hasExactEntry(uninstalledProject, row.event, row.entry)),
+        'R3-exact-ownership: uninstall removes every exact project receipt row');
+      assertReal(!fs.existsSync(projectReceiptPath(r)),
+        'R3-exact-ownership: uninstall removes the project ownership receipt');
       clean(r);
     }
 
-    // When no foreign command is waiting behind the shared flag, Kaola can
-    // enable its own hook. Uninstall must restore the prior false value rather
-    // than leaving a global state change behind.
+    // A disabled legacy user carrier is not a reason for a project install to
+    // create any project hook declaration. Both install and uninstall preserve
+    // the legacy target's exact prior bytes.
     {
       const seed = { hooks: { enabled: false } };
       const r = runInstaller([], { beforeRun: fixture => {
@@ -1429,25 +1484,37 @@ for (const role of reviewerGenerator.ROLES) {
         fs.writeFileSync(live, jsonBytes(seed), { mode: 0o600 });
       } });
       assertReal(r.status === 0,
-        'R3-enabled-restore: install into an otherwise empty disabled hook carrier exits 0');
+        'R3-enabled-restore: install beside a disabled legacy carrier exits 0');
       const live = liveConfigPath(r);
-      const installed = JSON.parse(fs.readFileSync(live, 'utf8'));
-      assertReal(installed.hooks.enabled === true,
-        'R3-enabled-restore: Kaola can enable its own hook when no foreign command would be activated');
+      const legacyBefore = fs.readFileSync(live, 'utf8');
+      assertReal(fs.readFileSync(live, 'utf8') === legacyBefore
+        && JSON.parse(legacyBefore).hooks.enabled === false,
+        'R3-enabled-restore: project install leaves the disabled legacy carrier unchanged');
+      assertReal(!fs.existsSync(projectConfigPath(r)) && !fs.existsSync(projectReceiptPath(r)),
+        'R3-enabled-restore: disabled legacy carrier does not produce a project hook config or receipt');
       // spawn-class: environment
       const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r.dest, '--yes'], {
         env: Object.assign({}, process.env, { HOME: r.home, ZCODE_HOME: r.zcodeHome }),
         encoding: 'utf8',
       });
       const after = JSON.parse(fs.readFileSync(live, 'utf8'));
-      assertReal(ru.status === 0 && after.hooks.enabled === false,
-        'R3-enabled-restore: uninstall restores the exact prior hooks.enabled=false state');
+      let projectAfter = null;
+      try { projectAfter = JSON.parse(fs.readFileSync(projectConfigPath(r), 'utf8')); }
+      catch (_) { projectAfter = null; }
+      assertReal(ru.status === 0 && after.hooks.enabled === false
+        && fs.readFileSync(live, 'utf8') === legacyBefore,
+        'R3-enabled-restore: uninstall preserves the exact prior disabled legacy state');
+      assertReal(!projectAfter || kaolaHookCommands(projectAfter).length === 0,
+        'R3-enabled-restore: uninstall leaves no project Kaola hook declaration');
+      assertReal(!fs.existsSync(projectReceiptPath(r)),
+        'R3-enabled-restore: uninstall removes the project ownership receipt');
       clean(r);
     }
 
-    // Project .zcode/config.json and the legacy ZCODE_HOME/config.json are
-    // ignored by current ZCode. Without an exact receipt identifying them as a
-    // former Kaola carrier, uninstall must not normalize or strip their bytes.
+    // Project .zcode/config.json is the active declaration carrier, while the
+    // legacy ZCODE_HOME/config.json is only a migration target. Without an
+    // exact receipt identifying either file as a former Kaola carrier,
+    // uninstall must not normalize or strip their bytes.
     {
       const legacyEntry = {
         command: 'sh /srv/archive/kaola-workflow/hooks/user-owned-legacy.sh',
@@ -1471,33 +1538,81 @@ for (const role of reviewerGenerator.ROLES) {
       clean(r);
     }
 
-    // Never follow a config.json symlink during either half of the lifecycle.
-    // The external target is user-owned and must remain byte-identical; refusing
-    // the operation is the fail-closed result.
+    // Never follow a project config.json symlink during either half of the
+    // lifecycle. A project receipt and a receipt-owned legacy migration target
+    // are present as well: refusing the operation must preserve all three
+    // ownership boundaries, rather than partially migrating the legacy target.
     for (const operation of ['install', 'uninstall']) {
-      const externalBytes = jsonBytes({
+      const externalProjectBytes = jsonBytes({
+        project: 'external-project-owned',
         hooks: {
           enabled: true,
-          SessionStart: [{ command: 'echo external-user-owned' }],
+          events: {
+            SessionStart: [{
+              matcher: '*',
+              hooks: [{ type: 'command', command: 'echo external-user-owned', timeout: 5 }],
+            }],
+          },
         },
       });
+      const legacyOwned = { command: 'sh legacy-kaola-migration.sh', timeout: 5 };
+      const legacyForeign = { command: 'sh foreign-user-hook.sh', timeout: 7 };
+      const legacyConfigBytes = jsonBytes({
+        hooks: { enabled: true, SessionStart: [legacyOwned, legacyForeign] },
+      });
+      let projectReceiptBytes = '';
+      let legacyReceiptBytes = '';
       const r = runInstaller(operation === 'uninstall' ? ['--uninstall'] : [], {
         beforeRun: fixture => {
-          const live = liveConfigPath(fixture);
-          const external = path.join(fixture.home, 'external-config-' + operation + '.json');
-          fs.mkdirSync(path.dirname(live), { recursive: true });
-          fs.writeFileSync(external, externalBytes, { mode: 0o600 });
-          fs.symlinkSync(external, live);
+          const projectConfig = projectConfigPath(fixture);
+          const externalProject = path.join(fixture.home, 'external-project-config-'
+            + operation + '.json');
+          fs.mkdirSync(path.dirname(projectConfig), { recursive: true });
+          fs.writeFileSync(externalProject, externalProjectBytes, { mode: 0o600 });
+          fs.symlinkSync(externalProject, projectConfig);
+          const projectReceipt = {
+            schema: 'kaola-workflow-zcode-hooks-v1',
+            destination: path.resolve(projectConfig),
+            priorEnabled: { present: true, value: true },
+            priorEvents: { present: true },
+            added: [],
+          };
+          projectReceiptBytes = jsonBytes(projectReceipt);
+          fs.mkdirSync(path.dirname(projectReceiptPath(fixture)), { recursive: true });
+          fs.writeFileSync(projectReceiptPath(fixture), projectReceiptBytes, { mode: 0o600 });
+
+          const legacyConfig = liveConfigPath(fixture);
+          fs.mkdirSync(path.dirname(legacyConfig), { recursive: true });
+          fs.writeFileSync(legacyConfig, legacyConfigBytes, { mode: 0o600 });
+          const legacyReceipt = {
+            schema: 'kaola-workflow-zcode-hooks-v1',
+            destination: path.resolve(legacyConfig),
+            priorEnabled: { present: true, value: true },
+            priorEvents: { present: false },
+            added: [{ event: 'SessionStart', entry: legacyOwned }],
+          };
+          legacyReceiptBytes = jsonBytes(legacyReceipt);
+          fs.mkdirSync(path.dirname(legacyReceiptPath(fixture)), { recursive: true });
+          fs.writeFileSync(legacyReceiptPath(fixture), legacyReceiptBytes, { mode: 0o600 });
         },
       });
-      const external = path.join(r.home, 'external-config-' + operation + '.json');
+      const externalProject = path.join(r.home, 'external-project-config-' + operation + '.json');
+      const projectConfig = projectConfigPath(r);
       assertReal(r.status !== 0,
-        'R3-config-symlink[' + operation + ']: installer fails closed on live config.json symlink '
+        'R3-config-symlink[' + operation + ']: installer fails closed on project config.json symlink '
         + '(got status ' + r.status + ')');
-      assertReal(fs.lstatSync(liveConfigPath(r)).isSymbolicLink(),
-        'R3-config-symlink[' + operation + ']: live config path remains a symlink, never replaced or followed');
-      assertReal(fs.readFileSync(external, 'utf8') === externalBytes,
-        'R3-config-symlink[' + operation + ']: external symlink target remains byte-identical');
+      assertReal(fs.lstatSync(projectConfig).isSymbolicLink(),
+        'R3-config-symlink[' + operation + ']: project config path remains a symlink, never replaced or followed');
+      assertReal(fs.readFileSync(externalProject, 'utf8') === externalProjectBytes,
+        'R3-config-symlink[' + operation + ']: external project target remains byte-identical');
+      assertReal(fs.existsSync(projectReceiptPath(r))
+        && fs.readFileSync(projectReceiptPath(r), 'utf8') === projectReceiptBytes,
+        'R3-config-symlink[' + operation + ']: project config receipt remains byte-identical');
+      assertReal(fs.readFileSync(liveConfigPath(r), 'utf8') === legacyConfigBytes,
+        'R3-config-symlink[' + operation + ']: legacy migration target remains byte-identical');
+      assertReal(fs.existsSync(legacyReceiptPath(r))
+        && fs.readFileSync(legacyReceiptPath(r), 'utf8') === legacyReceiptBytes,
+        'R3-config-symlink[' + operation + ']: legacy migration receipt remains byte-identical');
       clean(r);
     }
 
@@ -1525,30 +1640,32 @@ for (const role of reviewerGenerator.ROLES) {
 
     // A same-directory atomic publisher needs directory write permission to
     // create and rename its temporary sibling. With that publication step
-    // denied, merge and strip must fail and retain the complete original bytes.
-    for (const operation of ['merge', 'strip']) {
+    // denied, receipt-owned strip must fail and retain the complete original
+    // bytes. Fresh ZCode installation never invokes the retired merge path.
+    for (const operation of ['strip']) {
       const dir = fs.mkdtempSync(path.join(tmpBase(), 'zcode-r3-atomic-'));
       const dest = path.join(dir, 'config.json');
       let originalBytes = jsonBytes({
         sentinel: operation + '-original-bytes',
         hooks: {
           enabled: true,
-          Stop: [{ command: 'echo foreign-atomic-fixture' }],
+          Stop: [{ command: 'echo kaola-atomic-owned' }, { command: 'echo foreign-atomic-fixture' }],
         },
       });
       try {
         fs.writeFileSync(dest, originalBytes, { mode: 0o600 });
-        if (operation === 'strip') {
-          const seeded = runGenerator(['--merge-hooks', '--dest=' + dest, '--global']);
-          assertReal(seeded.status === 0,
-            'R3-atomic[strip]: precondition merge creates an exact Kaola entry');
-          originalBytes = fs.readFileSync(dest, 'utf8');
-        }
+        const receipt = {
+          schema: 'kaola-workflow-zcode-hooks-v1',
+          destination: path.resolve(dest),
+          priorEnabled: { present: true, value: true },
+          priorEvents: { present: false },
+          added: [{ event: 'Stop', entry: { command: 'echo kaola-atomic-owned' } }],
+        };
+        fs.writeFileSync(dest + '.kaola-workflow-hooks-state.json', jsonBytes(receipt), { mode: 0o600 });
         fs.chmodSync(dir, 0o500);
         const attempted = runGeneratorCli([
-          operation === 'merge' ? '--merge-hooks' : '--strip-hooks',
+          '--strip-hooks',
           '--dest=' + dest,
-          '--global',
         ]);
         assertReal(attempted.status !== 0,
           'R3-atomic[' + operation + ']: denied same-directory publication exits non-zero '
@@ -1567,7 +1684,8 @@ for (const role of reviewerGenerator.ROLES) {
 
 // ---------------------------------------------------------------------------
 // D2 — docs existence asserts (read-only). docs/zcode-edition.md carries the
-// measured tier mapping; the indexes name zcode; CHANGELOG has an entry.
+// measured tier mapping, the 1M-context/no-hook rationale, and the honest
+// live-dispatch boundary; the indexes name zcode; CHANGELOG has an entry.
 // ---------------------------------------------------------------------------
 {
   const docPath = path.join(REPO, 'docs', 'zcode-edition.md');
@@ -1583,8 +1701,20 @@ for (const role of reviewerGenerator.ROLES) {
       'D2: docs/zcode-edition.md names the standard/reasoning/heavy tier mapping');
     assertReal(/thoughtLevel/i.test(doc) && /NOT reasoningEffort/i.test(doc),
       'D2: docs/zcode-edition.md notes the frontmatter key is thoughtLevel, NOT reasoningEffort');
-    assertReal(/3\.9\.1/.test(doc),
-      'D2: docs/zcode-edition.md mentions the ZCode 3.9.1 measurement');
+    assertReal(/3\.10\.1/.test(doc),
+      'D2: docs/zcode-edition.md mentions the ZCode 3.10.1 measurement');
+    assertReal(/(?:1[,.]?000[,.]?000|1\s*million|1M)\b/i.test(doc),
+      'D2: docs/zcode-edition.md records the measured one-million-token context');
+    assertReal(/(?:no|without|does\s+not|not?)\s+(?:install|declare|use|need|require)?[\s\w-]{0,36}hooks?|hooks?[\s\w-]{0,36}(?:none|disabled|by\s+design|unneeded|not\s+installed)/i.test(doc),
+      'D2: docs/zcode-edition.md states that ZCode has no Kaola hooks by design');
+    assertReal(/self[- ]lock|self[- ]deadlock|deadlock|prompt\s+bind[\s\S]{0,100}(?:lock|loop)/i.test(doc),
+      'D2: docs/zcode-edition.md records the live hook self-lock evidence');
+    assertReal(/(?:bundled|locally\s+installed)[\s\S]{0,120}(?:ZCode(?:\s+App)?|CLI)/i.test(doc)
+      && /live\s+named-subagent\/model\s+resolution\s+remains\s+\*\*unknown\*\*/i.test(doc)
+      && /standalone[\s\S]{0,180}(?:executable|binary)[\s\S]{0,100}(?:absent|missing|not\s+available|not\s+on\s+PATH|unknown)/i.test(doc),
+    'D2: docs/zcode-edition.md keeps bundled/installed and no-standalone/live-dispatch unknown boundaries honest');
+    assertReal(!/zcode\s+hooks\s+trust\s+review|approve\s+all\s+(?:five|two|six)/i.test(doc),
+      'D2: docs/zcode-edition.md does not advertise the retired ZCode hook trust flow');
   }
   for (const rel of ['README.md', 'docs/README.md', 'docs/architecture.md']) {
     const abs = path.join(REPO, ...rel.split('/'));

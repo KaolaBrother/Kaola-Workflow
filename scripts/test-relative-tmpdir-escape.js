@@ -9,7 +9,8 @@
 //
 // THE FAULT, measured at 51db5d2d. Eight shell installer sites (install.sh bootstrap +
 // install_managed_agent + two manifest snapshots; install-opencode.sh two manifest snapshots +
-// seed_config render; install-kimi.sh hooks backup) rely on mktemp's OWN TMPDIR consultation —
+// seed_config render; the then-current install-kimi.sh hooks backup) rely on mktemp's OWN TMPDIR
+// consultation —
 // bare `mktemp` / `mktemp -d` / `mktemp -t NAME` — which is NOT the `"${TMPDIR:-/tmp}/x.XXXXXX"`
 // idiom test-fixture-sandbox.js pins: `:-` guards an EMPTY value, and mktemp itself resolves a
 // relative TMPDIR against the current directory. On the Node side `os.tmpdir()` returns a
@@ -26,12 +27,12 @@
 // when TMPDIR is absolute (man mktemp; measured), so the shell sites cannot escape there and a
 // suite that simply ran the installers on a Mac would pass with or without a fix — vacuously.
 // On GNU coreutils (measured at 9.7) mktemp consults a relative TMPDIR verbatim: `mktemp` and
-// `mktemp -d` create in the cwd, and `mktemp -t kaola-kimi-hooks` (a template with no X's) is
-// "too few X's in template", exit 1 — which under `set -euo pipefail` ABORTS the kimi install
-// whenever a config exists. The mktemp shim below reproduces that measured GNU behaviour table
+// `mktemp -d` create in the cwd. The retired Kimi hooks backup also used
+// `mktemp -t kaola-kimi-hooks` (a template with no X's), which is "too few X's in template",
+// exit 1. The mktemp shim below reproduces that measured GNU behaviour table
 // and is put FIRST on PATH for the installer scenarios, so the shell half of the result is
-// observable on every platform this suite runs on, and the kimi abort is reproduced here on a
-// Mac. What the shim can NOT prove: that a real GNU mktemp binary behaves as the shim does —
+// observable on every platform this suite runs on. What the shim can NOT prove: that a real GNU
+// mktemp binary behaves as the shim does —
 // that is a measurement, and the shim encodes it rather than establishes it. The shim also logs
 // every path it creates (absolutised) to a side file, so WHERE temp writes landed is judged
 // deterministically instead of racing their lifetime; the live poller stays anyway, for writes
@@ -435,10 +436,10 @@ const MECHANISM = 'GNU mktemp consults a relative TMPDIR verbatim and resolves i
   }
 
   // -------------------------------------------------------------------------------------------
-  // C. `bash install-kimi.sh` with an EXISTING config.toml — the hooks-merge backup site. On
-  //    GNU semantics the current `mktemp -t kaola-kimi-hooks` is "too few X's", exit 1, and
-  //    `set -euo pipefail` aborts the whole install: a worse, unfiled defect at the same line,
-  //    invisible on macOS and reproduced here through the shim.
+  // C. `bash install-kimi.sh` with an EXISTING config.toml. Kimi now installs no lifecycle hook,
+  //    so the retired hooks-merge backup must not run at all: the user's config stays byte-identical
+  //    and no managed block is added. The shared TMPDIR property remains pinned by the other
+  //    installer sites in this suite.
   // -------------------------------------------------------------------------------------------
   {
     const home = path.join(sandbox, 'home-c');
@@ -448,7 +449,8 @@ const MECHANISM = 'GNU mktemp consults a relative TMPDIR verbatim and resolves i
     fs.mkdirSync(target, { recursive: true });
     fs.mkdirSync(kimiHome, { recursive: true });
     const userLine = '[kw976_user_owned_section]';
-    fs.writeFileSync(path.join(kimiHome, 'config.toml'), '# user config\n' + userLine + '\nkey = 1\n');
+    const preInstall = '# user config\n' + userLine + '\nkey = 1\n';
+    fs.writeFileSync(path.join(kimiHome, 'config.toml'), preInstall);
     const at = shimLineCount();
     const r = await runObserved('install-kimi.sh',
       ['bash', path.join(checkout, 'install-kimi.sh'), '--yes', '--target', target], {
@@ -460,12 +462,8 @@ const MECHANISM = 'GNU mktemp consults a relative TMPDIR verbatim and resolves i
     assertObservation('install-kimi.sh', r);
     assert(r.code === 0,
       'install-kimi.sh: exits ' + r.code + ' under GNU mktemp semantics with an existing '
-        + 'config.toml. `mktemp -t kaola-kimi-hooks` carries no X\'s: GNU rejects it ("too few '
-        + 'X\'s in template"), and set -euo pipefail turns that into an aborted install for '
-        + 'every GNU user who has a kimi config — macOS never sees it because its mktemp '
-        + 'ignores TMPDIR and accepts -t without X\'s. Required: the install succeeds AND its '
-        + 'temp/backup writes land outside the checkout; the backup mechanism itself is free '
-        + 'to change shape. Output (tail):\n' + r.out.slice(-2000));
+        + 'config.toml. A hook-free install has no hooks backup/merge reason to fail or write '
+        + 'inside the checkout. Output (tail):\n' + r.out.slice(-2000));
     const inside = shimLinesFrom(at).filter(insideCheckout);
     assert(inside.length === 0,
       'install-kimi.sh: mktemp-created paths landed INSIDE the copied checkout: '
@@ -473,18 +471,15 @@ const MECHANISM = 'GNU mktemp consults a relative TMPDIR verbatim and resolves i
     assert(r.newEntries.length === 0, escapeMessage('install-kimi.sh', r, MECHANISM));
     let cfg = null;
     try { cfg = fs.readFileSync(path.join(kimiHome, 'config.toml'), 'utf8'); } catch (_) { cfg = '<MISSING: config.toml no longer exists>'; }
-    assert(cfg.includes(userLine) && cfg.includes('# >>> kaola-workflow kimi hooks'),
-      'install-kimi.sh: after a green install the config must hold BOTH the user\'s own '
-        + 'section and the managed hooks block — a green exit that skipped the merge (or '
-        + 'destroyed the user half) is not a pass. Got:\n' + cfg.slice(0, 800));
+    assert(cfg === preInstall && !cfg.includes('# >>> kaola-workflow kimi hooks'),
+      'install-kimi.sh: a hook-free install must preserve the user config byte-identically and '
+        + 'must not add the retired managed hooks block. Got:\n' + cfg.slice(0, 800));
   }
 
   // -------------------------------------------------------------------------------------------
-  // C2. Same install, but a `kimi` binary whose `doctor` REJECTS the merged config. The backup
-  //     exists to restore the user's file on rejection; a fix must not reach C\'s green exit by
-  //     deleting the backup mechanism. Green at the current baseline BY CONSTRUCTION (the abort
-  //     in C fires before the merge, leaving the config untouched) — this scenario is the
-  //     companion pin that keeps the restore contract through the fix, not a baseline red.
+  // C2. A `kimi` binary whose `doctor` exits non-zero cannot affect a hook-free install. There is
+  //     no generated hook configuration to validate, so the installer must neither invoke this
+  //     obsolete gate nor mutate the user's config while pretending to recover it.
   // -------------------------------------------------------------------------------------------
   {
     const home = path.join(sandbox, 'home-c2');
@@ -510,17 +505,14 @@ const MECHANISM = 'GNU mktemp consults a relative TMPDIR verbatim and resolves i
           KW_MKTEMP_SHIM_LOG: shimLog }),
       });
     assertObservation('install-kimi.sh(doctor-reject)', r);
-    assert(r.code !== 0,
-      'install-kimi.sh(doctor-reject): a config the kimi doctor rejects must abort the install '
-        + 'non-zero — a green exit here means the validation was skipped or its verdict '
-        + 'swallowed. Output (tail):\n' + r.out.slice(-2000));
+    assert(r.code === 0,
+      'install-kimi.sh(doctor-reject): a hook-free install must not invoke an obsolete doctor '
+        + 'gate for hook configuration. Output (tail):\n' + r.out.slice(-2000));
     let cfg = null;
     try { cfg = fs.readFileSync(path.join(kimiHome, 'config.toml'), 'utf8'); } catch (_) { cfg = '<MISSING: config.toml no longer exists>'; }
     assert(cfg === preMerge,
-      'install-kimi.sh(doctor-reject): the pre-merge config.toml must be restored '
-        + 'byte-identically when the doctor rejects the merge. The backup that makes this '
-        + 'possible is the same mechanism the TMPDIR fix touches — a fix that reaches the '
-        + 'green install by deleting the backup destroys the user\'s config on this path. '
+      'install-kimi.sh(doctor-reject): without a hook merge, config.toml must remain '
+        + 'byte-identical; no backup/restore transaction is needed. '
         + 'Got:\n' + cfg.slice(0, 800));
     assert(r.newEntries.length === 0, escapeMessage('install-kimi.sh(doctor-reject)', r, MECHANISM));
   }

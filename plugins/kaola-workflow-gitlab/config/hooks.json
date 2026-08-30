@@ -6,11 +6,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"__KW_PLUGIN_ROOT__/scripts/kaola-gitlab-workflow-codex-compact-resume.js\"",
+            "command": "cat \"__KW_PLUGIN_ROOT__/hooks/kaola-workflow-codex-compact-recovery.md\"",
             "timeout": 5
           }
         ],
-        "description": "Inject Kaola-Workflow resume state after Codex context compaction",
+        "description": "Inject the generated Codex compact-recovery prompt after context compaction",
         "id": "kaola-workflow:compact-context"
       }
     ]

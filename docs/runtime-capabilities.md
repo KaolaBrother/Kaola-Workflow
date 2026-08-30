@@ -2,7 +2,7 @@
 
 This document describes the capability boundary behind Kaola-Workflow's runtime adapters. The
 machine-readable authority is `templates/agents/runtime-capabilities.json`; this page explains its
-operational consequences and records the first-party evidence used through 2026-08-28.
+operational consequences and records the first-party evidence used through 2026-08-30.
 
 ## One repository authority
 
@@ -64,7 +64,28 @@ or modified ownership. Cursor App local and Cloud do not inherit that point-of-u
 Cursor Cloud environment setup may install the remote authority and selected repository, report
 the successful Build ID, and ask the user to click Save. A new top-level Agent in that same
 repository must visibly match the Build before its catalog is trusted.
-`sessionStart` performs compact resume only.
+The same project materialization installs one `alwaysApply` recovery rule for CLI, App local, and
+Cloud. It is separate from named-agent catalog discovery and installs no Cursor hook.
+
+## Compact recovery carriers
+
+The invariant is model-visible content, not hook symmetry: after a real compact and before the next
+model inference, restore the active Workflow Next or Finalization operation rule plus the dispatch
+contract. No runtime needs Kaola context before or after every tool.
+
+| Family | Measured compact-recovery carrier |
+| --- | --- |
+| Claude / Codex | One `SessionStart(source=compact)` command directly prints the generated complete runtime prompt. No compact-time JS and no tool/Stop recovery hooks. |
+| Grok | One native Rule under project `.grok/rules/` or `$GROK_HOME/rules/`. Official docs say Rules enter model context for every interaction, while passive hook stdout is ignored and compact uses distinct `PreCompact`/`PostCompact` events. No compact/tool/Stop recovery hooks. |
+| Cursor CLI / App local / App Cloud | One generated project Rule with `alwaysApply: true`; Rules are system-level prompt context. Cloud does not support `sessionStart`, and `preCompact` cannot inject. Cursor hooks stay empty. |
+| OpenCode | No new Issue #1044 prompt lifecycle; the initial command remains authority and the existing compact-state behavior is unchanged. |
+| Kimi | No Kaola prompt lifecycle; upgrade removes the retired managed PostCompact block. |
+| ZCode | No prompt lifecycle; the measured 1,000,000-token session and a live PreToolUse self-lock argue against a speculative compact gate. |
+
+Across all families, ordinary tool use adds 0 Kaola recovery bytes and starts 0 Kaola recovery
+subprocesses. Recovery-enabled runtimes receive an already-generated artifact and decide Workflow
+Next versus Finalization after rereading durable state. There is no compact-time JS, native session
+token, sidecar, chunk bitmap, or acknowledgement state.
 
 ## Default tier bindings
 
@@ -191,14 +212,25 @@ route does not churn `resolved_profile_hash` or all 126 role profiles.
 
 ### Cursor
 
-- [Rules](https://cursor.com/docs/rules) documents direct root/nested AGENTS support and precedence.
+- [Rules](https://cursor.com/docs/rules) documents direct root/nested AGENTS support and precedence,
+  and says project Rules are persistent system-level prompt context; `Always Apply` includes a rule
+  in every chat/model context.
 - [Subagents](https://prod.cursor.com/docs/subagents) documents profile paths, dispatch, nesting, and
   model bracket parameters. Its IDE catalog describes scoped `Explore`, `Bash`, and `Browser` routes;
   it does not publish one portable Task call schema.
 - [ACP task notifications](https://prod.cursor.com/docs/cli/acp) document observability events; their
   fields are not treated as proof of the model-call input schema.
-- [Hooks](https://cursor.com/docs/hooks) and [CLI usage](https://cursor.com/docs/cli/using)
-  document events and CLI instruction loading.
+- [Hooks](https://cursor.com/docs/hooks) says `sessionStart` can emit `additional_context` for a new
+  composer but is unavailable in Cloud, while `preCompact` is observational and cannot modify the
+  compacted model context. [Cloud best practices](https://cursor.com/docs/cloud-agent/best-practices)
+  says repository `.cursor/rules/*.mdc` rules apply to every Cloud Agent using the repository.
+  [CLI usage](https://cursor.com/docs/cli/using) documents CLI instruction loading.
+
+Together these official contracts establish one cross-host compact carrier: project
+`.cursor/rules/kaola-workflow-compact-recovery.mdc` with `alwaysApply: true`. The installer
+materializes the same file for standalone CLI, App local, and the selected Cloud repository. Its
+hook mapping is deliberately empty; neither a local-only `sessionStart` nor non-injecting
+`preCompact` is used as a false universal mechanism.
 
 **Supported CLI measurement (runtime evidence, 2026-08-27).** Authenticated standalone Cursor CLI
 `2026.08.25-3e8eec8` was re-run against an isolated user carrier and an explicit disposable
@@ -264,8 +296,18 @@ The selected child model and profile source remained unobservable.
   identifies `CLAUDE.md` as onboarding migration input rather than ongoing authority.
 - [Subagents](https://zcode.z.ai/en/docs/subagents) documents user-only profiles, Agent dispatch,
   `model` plus `thoughtLevel`, and the no-child-spawn boundary.
-- [Hooks](https://zcode.z.ai/en/docs/hooks) documents the seven current events, the user
-  `~/.zcode/cli/config.json` carrier, and that workspace hook configuration is ignored.
+- [Hooks](https://zcode.z.ai/en/docs/hooks) documents the seven current events, JSON subprocess
+  protocol, user carrier, and a project-hook limitation that the local 3.10.1 App no longer follows.
+
+**Local application measurement (2026-08-30).** `/Applications/ZCode.app` is version/build
+`3.10.1/3.10.1.6272`. Its bundled CLI and App proved project hook trust/loading, and the session UI
+reported 32,730 / 1,000,000 tokens. An interim approved Issue #1044 configuration then drove a real
+`/workflow-next` run into a self-lock: PreToolUse denied the binding helper that was meant to satisfy
+the gate. The final adapter treats this as falsification of the hook-gated design. It installs no
+Kaola hook declaration, strips receipt-owned legacy project/user rows, and preserves foreign
+configuration. Ordinary tool use therefore has exactly 0 Kaola prompt-recovery hook invocations and
+0 injected recovery bytes. The installed App/schema is verified; live named-subagent dispatch is
+not.
 
 ## Explicit unknowns
 
@@ -274,8 +316,8 @@ The selected child model and profile source remained unobservable.
 - Cursor CLI same-process profile hot load; App local-IDE global discovery, materialization
   necessity, reload, and child model/profile-source observability; Cloud child model/profile-source
   observability and catalog behavior beyond the saved-environment lifecycle measured above;
-- exact ZCode 3.9.1 behavior. The public install page exposed 3.8.1 during this research, so this
-  documentation does not present 3.9.1 as locally or publicly verified;
+- live ZCode 3.10.1 named-subagent dispatch and model resolution. The installed App and hook schema
+  are locally verified, but no standalone `zcode` executable is on PATH for an end-to-end Agent leg;
 - any precedence or conflict behavior not stated by the evidence above.
 - Cursor's and ZCode's unpublished Task/Agent JSON call fields; the live runtime schema is the
   authority when present.

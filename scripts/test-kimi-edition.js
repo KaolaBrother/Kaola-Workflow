@@ -553,37 +553,37 @@ const KIMI_RUNTIME_NATIVE = Object.freeze({
 
 // ---------------------------------------------------------------------------
 // K5: native agent dispatch + enforced tool allowlists. Kimi discovers custom
-// profiles and dispatches them by their frontmatter name, so each canonical
-// `subagent_type="<role>"` becomes `subagent_type="kaola-role-<role>"` directly.
-// Falling back to coder/explore and asking it to invoke a role Skill is not the
-// same carrier: it drops native profile identity and runtime-enforced tools.
+// profiles and dispatches them by their frontmatter name when a command has a
+// native call. A compact command need not contain an example card: dispatch
+// semantics are carried by the bounded runtime contract, and any actual call
+// must retain the native profile identity. Falling back to coder/explore and
+// asking it to invoke a role Skill is not the same carrier.
 // ---------------------------------------------------------------------------
 {
   const CARD = /Agent\(\n\s+subagent_type="([^"]+)"/g;
-  let totalCards = 0;
   for (const file of canonCommands) {
     const name = file.slice(0, -3);
-    const canonCards = [...read('commands/' + file).matchAll(CARD)]
-      .map(m => m[1]).filter(role => canonAgents.includes(role));
     const generated = read(skillDir(name));
     const kimiCards = [...generated.matchAll(CARD)].map(m => m[1]);
-    totalCards += canonCards.length;
-    assert(kimiCards.length === canonCards.length,
-      'K5[' + name + ']: generated dispatch-card count matches canonical (' + canonCards.length + ') — got ' + kimiCards.length);
-    const n = Math.min(canonCards.length, kimiCards.length);
-    for (let i = 0; i < n; i++) {
-      const expected = 'kaola-role-' + canonCards[i];
-      assert(kimiCards[i] === expected,
-        'K5[' + name + '#' + i + ']: canonical ' + canonCards[i]
-        + ' dispatches DIRECTLY as subagent_type="' + expected + '" — got "' + kimiCards[i] + '"');
+    if (name === 'workflow-init') continue;
+    const dispatchAt = generated.search(/Runtime dispatch contract \(always loaded\)/i);
+    const dispatchEnd = generated.indexOf('<!-- KW-RUNTIME-DISPATCH-END -->', dispatchAt);
+    const compactAt = generated.indexOf('<!-- KW-COMPACT-RECOVERY-START -->');
+    const compactEnd = generated.indexOf('<!-- KW-COMPACT-RECOVERY-END -->', compactAt);
+    assert(compactAt >= 0 && compactEnd > compactAt
+        && dispatchAt > compactAt && dispatchEnd > dispatchAt && dispatchEnd < compactEnd,
+      'K5[' + name + ']: generated command carries a bounded always-loaded dispatch contract');
+    for (const actual of kimiCards) {
+      assert(/^kaola-role-[a-z0-9-]+$/.test(actual),
+        'K5[' + name + ']: any native Agent() call retains a kaola-role profile identity — got "' + actual + '"');
     }
     assert(!/subagent_type="(?:coder|explore)"/.test(generated),
       'K5[' + name + ']: generated command does not downgrade a named Kaola role to coder/explore');
     assert(!/First invoke the `kaola-role-[^`]+` Skill|invoke (?:the )?`?kaola-role-[a-z0-9-]+`? Skill/i.test(generated),
       'K5[' + name + ']: generated dispatch prompt carries no role-Skill bootstrap prefix');
   }
-  assert(totalCards > 0,
-    'K5: canonical commands carry at least one Agent() dispatch card (native dispatch bite)');
+  assert(canonCommands.length > 0,
+    'K5: the canonical command set is non-empty for native dispatch contract checks');
 
   const contracts = reviewerGenerator.loadBehaviorContracts().roles;
   let restrictedProfiles = 0;
@@ -668,54 +668,16 @@ for (const role of reviewerGenerator.ROLES) {
 }
 
 // ---------------------------------------------------------------------------
-// K7: hooks — the generated kimi-hooks.toml fragment maps the surviving
-// canonical compaction hook to Kimi's PostCompact rule, and the runtime-neutral
-// shell script remains byte-identical to canonical hooks/.
+// K7: Kimi intentionally emits no compact or tool-use hook. The generated tree
+// must contain no fragment that can reintroduce a per-session prompt lifecycle.
 // ---------------------------------------------------------------------------
 {
-  const toml = read('.kimi/hooks/kimi-hooks.toml');
-  // Determinism only — .kimi/ is gitignored, so this compares the fragment --write just produced
-  // against the same renderer. The armed assertions are the structural ones below (rule count,
-  // event partition, exact command lines, managed-block markers) and the hook-script comparisons
-  // further down, which read the TRACKED canonical hooks/.
-  assert(toml === sync.renderKimiHooksToml(),
-    'K7: renderKimiHooksToml is deterministic across the --write subprocess and this process');
-  // Declared before K7-canon below, which reads it: a `const` referenced above its declaration is a
-  // temporal-dead-zone ReferenceError that both `node --check` and a bare `require()` step over.
-  const blocks = toml.match(/^\[\[hooks\]\]$/gm) || [];
-  // K7-canon: the fragment's two rules must map the TRACKED canonical hooks.json entries, so a
-  // generator that stopped reading canonical (or mapped one entry twice) is caught against source
-  // rather than against itself.
-  {
-    let canonHooks = null;
-    try { canonHooks = JSON.parse(read('hooks/hooks.json')); } catch (_) { canonHooks = null; }
-    assert(canonHooks && canonHooks.hooks && typeof canonHooks.hooks === 'object',
-      'K7-canon: the tracked canonical hooks/hooks.json parses — the kimi fragment is DERIVED from '
-      + 'it, so an unreadable source must fail here rather than silently justify whatever was rendered');
-    const canonEvents = canonHooks && canonHooks.hooks
-      ? Object.keys(canonHooks.hooks).filter(k => Array.isArray(canonHooks.hooks[k])).sort() : [];
-    // DERIVED, not pinned: the fragment must carry one rule per canonical event. Writing `=== 2` on
-    // both sides would pin today's corpus size, and the natural repair for a count pin is to bump
-    // the number — which restores green with a canonical hook silently unmapped.
-    assert(canonEvents.length > 0 && blocks.length === canonEvents.length,
-      'K7-canon: the fragment carries one [[hooks]] rule per canonical event entry — canonical='
-      + JSON.stringify(canonEvents) + ' (' + canonEvents.length + '), fragment rules=' + blocks.length);
-    // The count above is only half of it: the fragment must map the surviving
-    // compaction event, not an arbitrary rule.
-    assert(JSON.stringify(canonEvents) === JSON.stringify(['SessionStart']),
-      'K7-canon: the canonical event set the kimi fragment maps is {SessionStart} — got '
-      + JSON.stringify(canonEvents));
-  }
-  assert(blocks.length === 1,
-    'K7: kimi-hooks.toml carries one [[hooks]] rule for compaction — got ' + blocks.length);
-  const ALLOWED_EVENTS = new Set(['PostCompact']);
-  const events = [...toml.matchAll(/^event = "([^"]+)"$/gm)].map(m => m[1]);
-  assert(events.length === 1 && events.every(e => ALLOWED_EVENTS.has(e)),
-    'K7: the surviving [[hooks]] event is PostCompact — got ' + JSON.stringify(events));
-  assert(/event = "PostCompact"\ncommand = "node __KIMI_HOME__\/kaola-workflow\/scripts\/kaola-workflow-compact-context\.js"/.test(toml),
-    'K7: PostCompact → compact-context.js (the Kimi semantic counterpart of SessionStart"compact")');
-  assert(toml.startsWith('# >>> kaola-workflow kimi hooks') && toml.includes('# <<< kaola-workflow kimi hooks'),
-    'K7: managed-block markers (# >>> / # <<< kaola-workflow kimi hooks) delimit the fragment for idempotent merges');
+  assert(sync.renderKimiHooksToml() === '',
+    'K7: compatibility renderer returns no Kimi hook fragment');
+  assert(JSON.stringify(sync.expectedHookFiles()) === '[]',
+    'K7: fresh generated Kimi tree has zero hook files');
+  assert(!exists('.kimi/hooks/kimi-hooks.toml'),
+    'K7: retired kimi-hooks.toml is pruned from the generated tree');
 }
 for (const script of sync.HOOK_SCRIPTS) {
   const rel = '.kimi/hooks/' + script;
@@ -931,10 +893,8 @@ for (const script of sync.HOOK_SCRIPTS) {
       assert(existsSync(path.join(r.kimiHome, 'kaola-workflow', 'hooks', h)),
         'P1: hook script ' + h + ' deployed at <kimi_home>/kaola-workflow/hooks/');
     }
-    assert(managedBlockCount(r.kimiConfig) === 1,
-      'P1: config.toml carries EXACTLY ONE kaola managed hooks block');
-    assert(readFileSync(r.kimiConfig, 'utf8').includes('[[hooks]]'),
-      'P1: merged config.toml carries the [[hooks]] rules');
+    assert(managedBlockCount(r.kimiConfig) === 0 && !existsSync(r.kimiConfig),
+      'P1: fresh install adds no config.toml hook block or empty config shell');
     assert(!existsSync(r.configPath),
       'P1: default install must not create ~/.config/kaola-workflow/config.json (user-owned; the\n      workflow has no install-time configuration)');
     clean(r);
@@ -952,13 +912,13 @@ for (const script of sync.HOOK_SCRIPTS) {
       'P1g: global native agents resolve under $KIMI_CODE_HOME/agents');
     assert(scopedSkillsDir(r) === path.join(r.kimiHome, 'skills'),
       'P1g: global command Skills resolve under $KIMI_CODE_HOME/skills');
-    assert(managedBlockCount(r.kimiConfig) === 1,
-      'P1g: global install still carries exactly one managed hooks block');
+    assert(managedBlockCount(r.kimiConfig) === 0,
+      'P1g: global install adds no managed hooks block');
     const r2 = runInstaller(['--global'], { home: r.home, kimiHome: r.kimiHome, dest: r.dest });
     assert(r2.ok, 'P1g: global reinstall exits 0');
     expectDeployed(r2, ADAPTIVE_CORE, 'P1g (global reinstall exact-set)');
-    assert(managedBlockCount(r.kimiConfig) === 1,
-      'P1g: global reinstall remains idempotent with one managed hooks block');
+    assert(managedBlockCount(r.kimiConfig) === 0,
+      'P1g: global reinstall remains hook-free');
     // spawn-class: environment
     const ru = spawnSync('bash', [INSTALLER, '--global', '--uninstall', '--yes'], {
       env: Object.assign({}, process.env, { HOME: r.home, KIMI_CODE_HOME: r.kimiHome }), encoding: 'utf8',
@@ -1753,18 +1713,28 @@ for (const script of sync.HOOK_SCRIPTS) {
   // surface these probed (kaola-workflow-fast, kaola-workflow-phase[1-5]) is
   // n2-deleted from canonical, so there is nothing left to opt into or lock in.
 
-  // P4 — idempotency: a default install run TWICE into the same
-  // HOME/KIMI_CODE_HOME/target leaves EXACTLY ONE managed hooks block in
-  // config.toml (strip + re-append, never duplicate), the identical deployed
-  // skill set, and an unchanged shared kaola config.
+  // P4 — idempotency and migration: a reinstall strips the exact retired managed
+  // hooks block, preserves unrelated config, and adds no replacement hook.
   {
     const r1 = runInstaller([]);
     assert(r1.ok, 'P4: first default install exits 0');
+    fs.mkdirSync(path.dirname(r1.kimiConfig), { recursive: true });
+    fs.writeFileSync(r1.kimiConfig, [
+      'owner_setting = true',
+      '',
+      '# >>> kaola-workflow kimi hooks',
+      '[[hooks]]',
+      'event = "PostCompact"',
+      'command = "node retired-compact-context.js --state-hint"',
+      '# <<< kaola-workflow kimi hooks',
+      '',
+    ].join('\n'));
     const r2 = runInstaller([], { home: r1.home, kimiHome: r1.kimiHome, dest: r1.dest });
     assert(r2.ok,
       'P4: second (idempotent) install exits 0 (got status ' + r2.status + (r2.stderr ? ' — ' + firstStderrLine(r2) : '') + ')');
-    assert(managedBlockCount(r1.kimiConfig) === 1,
-      'P4: config.toml still carries EXACTLY ONE managed hooks block after re-install (idempotent merge)');
+    assert(managedBlockCount(r1.kimiConfig) === 0
+      && readFileSync(r1.kimiConfig, 'utf8') === 'owner_setting = true\n',
+      'P4: reinstall removes the retired block and preserves unrelated config bytes');
     assert(JSON.stringify(deployedSkills(r1)) === JSON.stringify(deployedSkills(r2)),
       'P4: re-install leaves the deployed skill set unchanged');
     assert(JSON.stringify(deployedAgents(r1)) === JSON.stringify(deployedAgents(r2)),
@@ -1776,9 +1746,8 @@ for (const script of sync.HOOK_SCRIPTS) {
         && fs.readFileSync(installed).equals(fs.readFileSync(generated)),
       'P4[' + role + ']: managed native profile converges byte-for-byte on reinstall');
     }
-    const hookBlockCount = readFileSync(r1.kimiConfig, 'utf8').match(/^\[\[hooks\]\]$/gm) || [];
-    assert(hookBlockCount.length === 1,
-      'P4: re-installed config.toml carries exactly the one surviving [[hooks]] rule (no duplication)');
+    assert(!/\[\[hooks\]\]|PostCompact|compact-context/.test(readFileSync(r1.kimiConfig, 'utf8')),
+      'P4: reinstall leaves no compact hook residue');
     clean(r1);
     clean(r2);
   }
@@ -2109,18 +2078,8 @@ for (const script of sync.HOOK_SCRIPTS) {
       'FA6[' + forge + ']: ' + tree + '/agents exact set is the canonical 14 native profiles '
       + '(expected ' + JSON.stringify(expectedAgents) + ', got ' + JSON.stringify(actualAgents) + ')');
 
-    // F7: the managed hooks fragment names a script this forge's manifest ACTUALLY
-    // installs. A forge-blind fragment would wire the hook to a basename that no
-    // gitlab/gitea install ever writes — a dead hook that no parity check would see.
-    const frag = fs.readFileSync(path.join(TREE_ROOT, tree, 'hooks', 'kimi-hooks.toml'), 'utf8');
-    const installed = new Set(manifest.supportScripts(forge));
-    const referenced = (frag.match(/kaola-[A-Za-z0-9._-]*\.js/g) || []);
-    assert(referenced.length > 0, 'FA7[' + forge + ']: the hooks fragment references at least one script');
-    for (const ref of referenced) {
-      assert(installed.has(ref),
-        'FA7[' + forge + ']: hooks fragment references "' + ref + '", which the ' + forge
-        + ' install manifest does not deploy — the hook would point at a missing file');
-    }
+    assert(!fs.existsSync(path.join(TREE_ROOT, tree, 'hooks', 'kimi-hooks.toml')),
+      'FA7[' + forge + ']: generated forge tree carries no Kimi compact hook fragment');
   }
 
   // F8: an unknown forge is REFUSED, not silently defaulted to github.
@@ -2176,14 +2135,9 @@ for (const script of sync.HOOK_SCRIPTS) {
           + '-only scripts — found ' + strangers.join(', '));
       }
 
-      // The merged hooks block must reference only scripts/hooks this install wrote.
+      // No Kimi compact lifecycle is installed for any forge.
       const cfg = path.join(kimiHome, 'config.toml');
-      assert(existsSync(cfg), 'FA9[' + forge + ']: the install merges a config.toml hooks block');
-      const toml = readFileSync(cfg, 'utf8');
-      for (const ref of (toml.match(/kaola-[A-Za-z0-9._-]*\.js/g) || [])) {
-        assert(existsSync(path.join(scriptsDir, ref)),
-          'FA9[' + forge + ']: config.toml hook references ' + ref + ', which this install did not write');
-      }
+      assert(!existsSync(cfg), 'FA9[' + forge + ']: fresh install adds no config.toml hook block');
 
       const skill = readFileSync(path.join(dest, '.kimi-code', 'skills', 'workflow-next', 'SKILL.md'), 'utf8');
       const claim = forgeLayout.scriptName('kaola-workflow-claim.js', forge);

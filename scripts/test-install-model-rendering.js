@@ -54,16 +54,18 @@ function agentCallBlocks(text) {
 function claudeFinalizeDefaultGaps(text) {
   const blocks = agentCallBlocks(text);
   const gaps = [];
-  for (const role of ['tdd-guide', 'build-error-resolver', 'doc-updater']) {
+  if (!blocks.some(candidate =>
+    /\bsubagent_type\s*=\s*["']build-error-resolver["']/.test(candidate))) {
+    gaps.push('build-error-resolver-call');
+  }
+  for (const block of blocks) {
+    const roleMatch = block.match(/\bsubagent_type\s*=\s*["']([^"']+)["']/);
+    if (!roleMatch) continue;
+    const role = roleMatch[1];
     const contract = behaviorContracts.roles[role];
+    if (!contract) continue;
     const tier = contract && contract.intent_class;
     const expectedModel = claudeIntentMapping[tier];
-    const block = blocks.find(candidate =>
-      new RegExp(`\\bsubagent_type\\s*=\\s*["']${role}["']`).test(candidate));
-    if (!block) {
-      gaps.push(`${role}-call`);
-      continue;
-    }
     if (!expectedModel
         || !new RegExp(`^\\s*model\\s*=\\s*["']${expectedModel}["']\\s*,?\\s*$`, 'm').test(block)) {
       gaps.push(`${role}-default-model`);
@@ -1175,8 +1177,7 @@ function enableMultiAgentV2(homeRoot) {
           'fs.openSync = function failManagedHookStage(file, ...args) {',
           '  const target = String(file);',
           '  if (target.startsWith(process.env.KAOLA_TEST_HOOK_STABLE_DIR)',
-          "      && target.includes('.kaola-scripts-stage-')",
-          "      && target.endsWith('kaola-workflow-codex-compact-resume.js')) {",
+          "      && target.endsWith('kaola-workflow-codex-compact-recovery.md')) {",
           "    const error = new Error('simulated installer hook refresh failure');",
           "    error.code = 'EIO';",
           '    throw error;',
@@ -3090,17 +3091,17 @@ try {
   assert(
     // Anchor on a heading the surface actually carries; `## Steps` was the anchor until the
     // finalize command was rewritten. The subject — blank-line preservation — is unchanged.
-    finalize.includes('\n\n## Step 1 — Final validation\n\n'),
+    finalize.includes('\n\n## Card: validation, acceptance, and documentation\n\n'),
     'installer rendering should preserve blank markdown lines'
   );
   assert.deepStrictEqual(claudeFinalizeDefaultGaps(finalize), [],
     'installed Claude finalize calls must apply behavior-derived role defaults, omit Claude effort pins, and preserve task-sensitive overrides');
 
-  const missingDefault = mutateAgentCall(finalize, 'tdd-guide', block =>
+  const missingDefault = mutateAgentCall(finalize, 'build-error-resolver', block =>
     block.replace(/^\s*model\s*=.*\n/m, ''));
   assert(missingDefault.changed
-    && claudeFinalizeDefaultGaps(missingDefault.output).includes('tdd-guide-default-model'),
-  '#1035 mutation: removing a concrete standard-role default from finalize is detected');
+    && claudeFinalizeDefaultGaps(missingDefault.output).includes('build-error-resolver-default-model'),
+  '#1035 mutation: removing the concrete routed-role default from finalize is detected');
 
   const wrongTier = mutateAgentCall(finalize, 'build-error-resolver', block =>
     block.replace(/^\s*model\s*=.*$/m, '  model="sonnet",'));
@@ -3108,10 +3109,10 @@ try {
     && claudeFinalizeDefaultGaps(wrongTier.output).includes('build-error-resolver-default-model'),
   '#1035 mutation: routing a reasoning role with the standard model is detected');
 
-  const pinnedEffort = mutateAgentCall(finalize, 'doc-updater', block =>
+  const pinnedEffort = mutateAgentCall(finalize, 'build-error-resolver', block =>
     block.replace(/(^\s*model\s*=.*$)/m, '$1\n  effort="high",'));
   assert(pinnedEffort.changed
-    && claudeFinalizeDefaultGaps(pinnedEffort.output).includes('doc-updater-claude-effort-pin'),
+    && claudeFinalizeDefaultGaps(pinnedEffort.output).includes('build-error-resolver-claude-effort-pin'),
   '#1035 mutation: adding an ADR-forbidden Claude effort pin is detected');
 
   const allCommands = fs.readdirSync(path.join(tmp, '.claude', 'commands'))
@@ -3301,8 +3302,8 @@ try {
       const original = fs.readFileSync(manifestSrc, 'utf8');
       // inject a bogus gitea-only support script into FORGE_ONLY_SCRIPTS.gitea.
       const injected = original.replace(
-        "  gitea: ['kaola-gitea-forge.js',",
-        "  gitea: ['kaola-gitea-NONEXISTENT-typo-363.js', 'kaola-gitea-forge.js',");
+        "  gitea: ['kaola-gitea-forge.js'],",
+        "  gitea: ['kaola-gitea-NONEXISTENT-typo-363.js', 'kaola-gitea-forge.js'],");
       assert(injected !== original, 'planted-typo test: failed to inject a bogus gitea manifest entry');
       fs.writeFileSync(typoManifest, injected);
       // spawn-class: environment

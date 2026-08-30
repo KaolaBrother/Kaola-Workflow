@@ -208,37 +208,22 @@ function renderRuntimeDelegationGuidance(adapter, behaviorSource = loadBehaviorC
   const rosters = rolesByIntent(behaviorSource);
   return [
     DELEGATION_GUIDANCE_START,
-    '## Runtime-native agent capabilities',
+    '## Runtime adapter facts',
     '',
     guidance.profile_lookup,
     guidance.dispatch_carrier,
     '',
-    '**Default tier bindings.** The universal role intent is `standard`, `reasoning`, or `heavy`;',
-    'this runtime maps those defaults as follows while retaining any native, task-sensitive choice',
-    'the runtime genuinely supports:',
-    '',
-    '- ' + guidance.tiers.standard + '.',
-    '- ' + guidance.tiers.reasoning + '.',
-    '- ' + guidance.tiers.heavy + '.',
-    '',
-    '**Role intent roster.** Membership comes from the universal behavior-contract authority; the',
-    'runtime adapter selects only how each tier is carried:',
-    '',
-    '- Standard roles: ' + rosters.standard.map(role => '`' + role + '`').join(', ') + '.',
-    '- Reasoning roles: ' + rosters.reasoning.map(role => '`' + role + '`').join(', ') + '.',
-    '- Heavy roles: ' + rosters.heavy.map(role => '`' + role + '`').join(', ') + '.',
+    '**Tier defaults:** standard — ' + guidance.tiers.standard + '; reasoning — '
+      + guidance.tiers.reasoning + '; heavy — ' + guidance.tiers.heavy + '.',
+    '**Role roster:** standard — ' + rosters.standard.map(role => '`' + role + '`').join(', ')
+      + '; reasoning — ' + rosters.reasoning.map(role => '`' + role + '`').join(', ')
+      + '; heavy — ' + rosters.heavy.map(role => '`' + role + '`').join(', ') + '.',
     '',
     guidance.tool_boundary,
     guidance.native_routes,
     guidance.availability,
     '',
-    guidance.fallback_search
-      || 'If the exact named role is unavailable, inspect the built-in, generic, and other native child routes for the current item.',
-    'A native child is adequate only when its actual mechanism can',
-    'satisfy the task, custody, evidence, and stop boundaries; use it as itself and never present it',
-    'as the missing named role. Inline the current item only when no adequate native route exists,',
-    'then record the specific `capability_gap`; re-evaluate the next item instead of creating a',
-    'run-wide posture.',
+    guidance.fallback_search,
     DELEGATION_GUIDANCE_END,
   ].join('\n');
 }

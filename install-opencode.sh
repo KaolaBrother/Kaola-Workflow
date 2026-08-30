@@ -407,12 +407,18 @@ copy_tree() {
 
   mkdir -p "$layout_root/agents" "$layout_root/commands" \
            "$layout_root/plugins" "$layout_root/hooks"
-  # Deploy the hooks adapter plugin from the TRACKED template source (templates/opencode/plugins/).
-  # This is NOT the self-referential .opencode/plugins/ copy — the tracked template is the canonical
-  # source and is always present. A missing plugin is a LOUD install error (no 2>/dev/null || true).
-  # Run after admission but before the self-dev guard because even in self-dev mode the destination
-  # ($layout_root/plugins/) is distinct from the source (templates/opencode/plugins/).
-  cp "$SCRIPT_DIR/templates/opencode/plugins/"*.js "$layout_root/plugins/"
+  # #1044 retires the old OpenCode compact reader. Remove only the exact historical bytes; preserve
+  # a modified or user-authored file at the same path.
+  local retired_plugin="$layout_root/plugins/kaola-workflow-hooks.js"
+  local retired_plugin_sha="ce9493a152f9982a286787b8098714188757dd11824b9dff8cf442845d3a8ecc"
+  if [[ -f "$retired_plugin" && ! -L "$retired_plugin" ]]; then
+    if [[ "$(sha256_file "$retired_plugin")" == "$retired_plugin_sha" ]]; then
+      rm -f "$retired_plugin"
+      echo "Removed retired OpenCode compact plugin: $retired_plugin"
+    else
+      echo "Preserved modified OpenCode plugin at retired path: $retired_plugin" >&2
+    fi
+  fi
   # Self-dev guard: deploying the edition into its OWN source repo means the canonical .opencode and
   # the destination layout are the same directory, so `cp` would refuse ("X and X are identical") and
   # trip `set -e`. In that case the generated tree already IS the live one — skip the (no-op) copy.
@@ -594,7 +600,7 @@ uninstall_edition() {
     [[ -f "$dest" && ! -L "$dest" ]] || continue
     [[ "$(sha256_file "$dest")" == "$(sha256_file "$f")" ]] && rm -f "$dest"
   done
-  for f in "$SCRIPT_DIR/templates/opencode/plugins/"*.js;    do [[ -f "$f" ]] || continue; rm -f "$layout_root/plugins/$(basename "$f")"; done
+  rm -f "$layout_root/plugins/kaola-workflow-hooks.js"
   for f in "$SOURCE_TREE/hooks/"*.sh;                        do [[ -f "$f" ]] || continue; rm -f "$layout_root/hooks/$(basename "$f")"; done
   # A command or hook RETIRED since the deployed install is absent from the source tree, so the
   # loops above never name it and it would linger forever. Remove the retired names explicitly.

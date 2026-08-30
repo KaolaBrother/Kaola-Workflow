@@ -256,7 +256,7 @@ function hookEntries(mappingText, global) {
 }
 
 function isKaolaHookEntry(entry) {
-  return /(?:^|\/)kaola-workflow-(?:compact-context|ensure-cursor-catalog|subagent-dispatch-log)\.sh$/
+  return /(?:^|\/)kaola-workflow-(?:compact-context|runtime-hook|ensure-cursor-catalog|subagent-dispatch-log)\.sh(?:\s|$)/
     .test(String((entry && entry.command) || ''));
 }
 
@@ -271,6 +271,13 @@ function mergeHooks(existingFile, incoming) {
   if (!current || typeof current !== 'object' || Array.isArray(current)) fail('hooks.json root is not an object');
   current.version = current.version || 1;
   if (!current.hooks || typeof current.hooks !== 'object' || Array.isArray(current.hooks)) current.hooks = {};
+  // Every install is also the migration away from retired Kaola prompt-lifecycle hooks.
+  // Empty incoming hooks must therefore remove old managed entries instead of preserving them.
+  for (const event of Object.keys(current.hooks)) {
+    if (!Array.isArray(current.hooks[event])) continue;
+    current.hooks[event] = current.hooks[event].filter(entry => !isKaolaHookEntry(entry));
+    if (current.hooks[event].length === 0) delete current.hooks[event];
+  }
   for (const [event, entries] of Object.entries(incoming || {})) {
     const prior = Array.isArray(current.hooks[event]) ? current.hooks[event] : [];
     current.hooks[event] = prior.filter(entry => !isKaolaHookEntry(entry)).concat(entries);
@@ -314,6 +321,9 @@ function buildGlobalDesired(opts) {
     const rel = 'commands/' + file;
     desired[rel] = desiredRecord(sourceRegular(path.join(opts.sourceTree, rel), 'command authority'), 0o644);
   }
+  const recoveryRuleRel = 'rules/' + sync.RECOVERY_RULE;
+  desired[recoveryRuleRel] = desiredRecord(
+    sourceRegular(path.join(opts.sourceTree, recoveryRuleRel), 'Cursor persistent recovery rule'), 0o644);
   let hooks = {};
   if (!opts.noScripts) {
     for (const name of manifest.supportScripts(opts.forge)) {
@@ -519,6 +529,7 @@ function projectDesiredFromAuthority(authorityReceipt, noScripts) {
     let projectRel = null;
     if (rel.startsWith('agents/')) projectRel = rel;
     else if (rel.startsWith('commands/')) projectRel = rel;
+    else if (rel.startsWith('rules/')) projectRel = rel;
     else if (!noScripts && rel.startsWith('kaola-workflow/hooks/')) projectRel = 'hooks/' + path.posix.basename(rel);
     if (!projectRel) continue;
     const state = inspectPath(path.join(home, ...rel.split('/')));

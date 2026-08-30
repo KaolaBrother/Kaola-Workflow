@@ -7,11 +7,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PLUGIN_ROOT/scripts/kaola-gitea-workflow-compact-context.js\"",
+            "command": "cat \"$CLAUDE_PLUGIN_ROOT/hooks/kaola-workflow-compact-recovery.md\"",
             "timeout": 5
           }
         ],
-        "description": "Inject Kaola-Workflow resume state after context compaction",
+        "description": "Inject the generated Claude compact-recovery prompt after context compaction",
         "id": "kaola-workflow:compact-context"
       }
     ]

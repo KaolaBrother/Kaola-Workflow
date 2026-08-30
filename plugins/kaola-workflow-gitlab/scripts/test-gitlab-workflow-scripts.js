@@ -1398,8 +1398,8 @@ function testUpdateHooksHardening325() {
 // #409: stable-home regression — install FROM a throwaway copy of the gitlab plugin tree,
 // DELETE the copy, then assert every hooks.json command still resolves to an existing
 // executable in a version-less home (no install-source / version-pinned path), and that
-// reinstall sweeps a planted stale script. The gitlab template references the edition-named
-// kaola-gitlab-workflow-codex-compact-resume.js — hookReferencedRelPaths auto-adjusts.
+// reinstall sweeps a planted stale script. The gitlab template references the generated static
+// Codex recovery prompt, which remains readable after the install source is deleted.
 function test409StableHomeSurvivesDirDeletion() {
   const recursiveCopyDir = (src, dst) => {
     fs.mkdirSync(dst, { recursive: true });
@@ -1521,14 +1521,16 @@ function testInstallProfilesFeaturesTableHandling() {
         `hooks.json event ${event} must have at least one kaola-workflow: entry (got ${managed.length})`);
     }
 
-    // SessionStart compact command must reference the GITLAB edition script name
+    // SessionStart compact command must print the generated prompt directly.
     const sessionStartEntries = freshHooks.hooks['SessionStart'];
     const compactEntry = sessionStartEntries.find(e => e.id && e.id.startsWith('kaola-workflow:'));
     assert.ok(compactEntry, 'SessionStart must have a kaola-workflow: managed entry');
     const compactCmd = (compactEntry.hooks || []).map(h => h.command).join(' ');
     assert.ok(
-      compactCmd.includes('kaola-gitlab-workflow-codex-compact-resume.js'),
-      `SessionStart command must reference kaola-gitlab-workflow-codex-compact-resume.js, got: ${compactCmd}`
+      /\bcat\b/.test(compactCmd)
+        && compactCmd.includes('kaola-workflow-codex-compact-recovery.md')
+        && !/\bnode\b|\.js\b/.test(compactCmd),
+      `SessionStart command must cat the generated prompt without JS, got: ${compactCmd}`
     );
 
     // No unreplaced __KW_PLUGIN_ROOT__ token should remain in the written file
@@ -3095,31 +3097,10 @@ testGitlabWorktreePathForHiddenLocal();
 testGitlabLegacyWorktreeCleanupDryRun();
 
 // ---------------------------------------------------------------------------
-// AC-7 (#266): RED-first regression tests for the 3 new scripts (gitlab edition).
-// Cases 1-2 (stale config, missing profiles), Case 3 (task-mirror),
-// Case 4 (compact-resume), Case 5 (no-silent-inline-fallback).
+// AC-7 (#266/#1044): preflight regression tests plus the static compact prompt.
 // ---------------------------------------------------------------------------
 
 const gitlabPreflightScript     = path.join(gitlabPluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
-const gitlabCompactResumeScript = path.join(gitlabPluginRoot, 'scripts', 'kaola-gitlab-workflow-codex-compact-resume.js');
-
-// Shared mission-list fixture (consistent across editions)
-const GITLAB_FIXTURE_MISSION_LIST = [
-  '# Retire the node executor and land the mission list',
-  '',
-  '- item: extract what is load-bearing before the host dies',
-  '  status: done',
-  '  dispatched: extract subagent, output to the shared kernel',
-  '  result: scripts/kaola-workflow-adaptive-schema.js',
-  '',
-  '- item: delete the node executor and re-wire everything that names it',
-  '  status: in-flight',
-  '  dispatched: demolish subagent, deletions land across scripts/ and plugins/',
-  '',
-  '- item: rewrite the routing surfaces',
-  '  status: todo',
-  ''
-].join('\n');
 
 // Case 1 + Case 2 + Case 5: preflight tests (stale config, missing profiles, no-silent-fallback)
 function testGitlabPreflight266() {
@@ -3732,99 +3713,20 @@ function testGitlabPreflight332() {
 
 // Case 4: compact/resume packet (gitlab edition)
 function testGitlabCompactResume266() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-266-compact-'));
-  try {
-    const projectName = 'issue-266-compact';
-    const projDir = path.join(root, 'kaola-workflow', projectName);
-    fs.mkdirSync(projDir, { recursive: true });
-
-    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
-      '# State', '',
-      '## Project',
-      'name: issue-266-compact',
-      'status: active', '',
-      '## Sink',
-      'branch: workflow/issue-266',
-      'issue_number: 266',
-      ''
-    ].join('\n'));
-
-    fs.writeFileSync(path.join(projDir, 'mission-list.md'), GITLAB_FIXTURE_MISSION_LIST);
-
-    const input = JSON.stringify({ cwd: root });
-
-    // --- GREEN: run compact-resume → deterministic claim + Mission List packet ---
-    const r1 = spawnSync(process.execPath, [gitlabCompactResumeScript],
-      { input, encoding: 'utf8' });
-    assert.strictEqual(r1.status, 0,
-      '#266 gl case4: compact-resume must exit 0, got ' + r1.status + '\n' + r1.stderr);
-    const lines1 = r1.stdout.trim().split('\n');
-
-    assert.strictEqual(lines1[0], 'Kaola-Workflow compact resume:',
-      '#266 gl case4: line[0] must be header, got ' + lines1[0]);
-    assert.ok(lines1[1].includes('issue-266-compact'),
-      '#266 gl case4: active project must include project name, got ' + lines1[1]);
-    assert.ok(lines1.some(line => line === 'claim status: active'),
-      '#266 gl case4: packet must retain claim status, got ' + r1.stdout);
-    assert.ok(lines1.some(line => line === 'branch: workflow/issue-266'),
-      '#266 gl case4: packet must retain sink branch, got ' + r1.stdout);
-    // The goal is the mission list's H1 — the one thing a zero-context successor needs first.
-    const goalLine = lines1.find(line => line.startsWith('goal:')) || '';
-    assert.ok(goalLine.includes('Retire the node executor'),
-      '#266 gl case4: goal line must carry the mission list H1, got ' + goalLine);
-    // In-flight items are the decision to make, so each must carry its dispatched locator:
-    // "look for the work, not the worker" needs somewhere to look.
-    const inFlightLine = lines1.find(line => line.startsWith('in-flight:')) || '';
-    assert.ok(inFlightLine.includes('delete the node executor'),
-      '#266 gl case4: in-flight line must name the in-flight item, got ' + inFlightLine);
-    assert.ok(inFlightLine.includes('dispatched:') && inFlightLine.includes('demolish subagent'),
-      '#266 gl case4: in-flight line must carry the dispatched locator, got ' + inFlightLine);
-    assert.ok(!inFlightLine.includes('extract subagent'),
-      '#266 gl case4: a done item must not appear on the in-flight line, got ' + inFlightLine);
-    const countsLine = lines1.find(line => line.startsWith('mission counts:')) || '';
-    assert.ok(countsLine.includes('done: 1') && countsLine.includes('in-flight: 1') && countsLine.includes('todo: 1'),
-      '#266 gl case4: progress line must count every status, got ' + countsLine);
-
-    // --- Determinism: two runs → identical stdout ---
-    const r2 = spawnSync(process.execPath, [gitlabCompactResumeScript],
-      { input, encoding: 'utf8' });
-    assert.strictEqual(r1.stdout, r2.stdout,
-      '#266 gl case4 det: two compact-resume runs must produce identical stdout');
-
-    // --- A claim with no mission list yet is a normal state, not an error: the file is a
-    // convention, not a precondition. The packet still resumes the claim.
-    fs.rmSync(path.join(projDir, 'mission-list.md'));
-    const rNoList = spawnSync(process.execPath, [gitlabCompactResumeScript],
-      { input, encoding: 'utf8' });
-    assert.strictEqual(rNoList.status, 0,
-      '#266 gl case4: a claim with no mission list must still exit 0, got ' + rNoList.status);
-    const linesNoList = rNoList.stdout.trim().split('\n');
-    const noListGoal = linesNoList.find(line => line.startsWith('goal:')) || '';
-    assert.ok(noListGoal.includes('unknown'),
-      '#266 gl case4: an absent mission list must read as an unknown goal, got ' + noListGoal);
-    const noListCounts = linesNoList.find(line => line.startsWith('mission counts:')) || '';
-    assert.ok(noListCounts.includes('done: 0') && noListCounts.includes('todo: 0'),
-      '#266 gl case4: an absent mission list must count zero items, got ' + noListCounts);
-
-    // --- RED discriminator: no workflow-state → empty stdout ---
-    const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-266-compact-empty-'));
-    try {
-      const rEmpty = spawnSync(process.execPath, [gitlabCompactResumeScript],
-        { input: JSON.stringify({ cwd: emptyRoot }), encoding: 'utf8' });
-      assert.strictEqual(rEmpty.status, 0,
-        '#266 gl case4 RED: empty root must exit 0, got ' + rEmpty.status);
-      assert.strictEqual(rEmpty.stdout.trim(), '',
-        '#266 gl case4 RED: no workflow dir must produce no output, got: ' + rEmpty.stdout);
-    } finally {
-      fs.rmSync(emptyRoot, { recursive: true, force: true });
-    }
-
-    console.log('testGitlabCompactResume266 (#266 case 4): PASSED');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  const repoRoot = path.resolve(gitlabPluginRoot, '..', '..');
+  const routing = require(path.join(repoRoot, 'scripts', 'generate-routing-surfaces.js'));
+  const promptPath = path.join(gitlabPluginRoot, 'hooks', 'kaola-workflow-codex-compact-recovery.md');
+  const prompt = fs.readFileSync(promptPath, 'utf8');
+  assert.strictEqual(prompt, routing.renderCompactRecoveryPrompt('codex', 'gitlab'),
+    '#1044 gl case4: installed prompt must equal its generation-time runtime rendering');
+  assert.ok(prompt.includes('Recovery marker: `KW-COMPACT-RECOVERY-V1`.')
+    && prompt.includes('**Runtime dispatch contract (always loaded).**')
+    && prompt.includes('Workflow Next') && prompt.includes('Finalization'),
+    '#1044 gl case4: static prompt must carry continuation and dispatch roots');
+  assert.ok(!/\bnode\b|\.js\b|PreToolUse|PostToolUse/.test(prompt),
+    '#1044 gl case4: compact recovery must not execute JS or inject around tool use');
+  console.log('testGitlabCompactResume266 (#1044 static prompt): PASSED');
 }
-
 
 // ADR 0018 §5: checkClosureInvariants no longer evaluates any roadmap invariant at all, for any
 // archive disposition — the roadmap-mirror-clean cross-reference test (#339) pinned exactly that

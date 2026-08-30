@@ -4,7 +4,7 @@
 # Additive standalone installer (does NOT modify install.sh, install-opencode.sh, or the
 # claude/codex/gitlab/gitea/opencode editions). Kimi Code is a runtime (like opencode), not
 # a git forge, so it is delivered the kimi-native way: custom profiles under agents/,
-# command-only SKILL.md entries under skills/, plus a managed [[hooks]] block in config.toml.
+# command-only SKILL.md entries under skills/. No compact or tool-use hook is installed.
 #
 # FORGE: --forge=github|gitlab|gitea selects which forge's workflow prose and support scripts
 # to deploy (default github). The runtime is still not a forge — this installer remains
@@ -31,14 +31,8 @@
 #     ${KIMI_CODE_HOME:-$HOME/.kimi-code}/{agents,skills}/.
 #   - Support scripts + hook scripts ALWAYS land under the kimi home (user-level, shared by
 #     every project): ${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/{scripts,hooks}.
-#   - The hooks fragment (.kimi/hooks/kimi-hooks.toml, __KIMI_HOME__ substituted with the
-#     resolved kimi home) is merged into ${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml as a
-#     MANAGED block between the "# >>> kaola-workflow kimi hooks" /
-#     "# <<< kaola-workflow kimi hooks" markers. Re-install strips + re-appends the block:
-#     idempotent, exactly one managed block. Post-merge the config is validated with
-#     `kimi doctor config` when a kimi binary is on PATH; a validation failure restores the
-#     pre-merge config and aborts non-zero. The hooks config is global regardless of install
-#     scope — it is merged on every install unless --no-scripts.
+#   - Re-install removes the retired Kaola managed hooks block from config.toml while preserving
+#     every unrelated line. No replacement PostCompact or tool-use hook is added.
 #
 # REINSTALL IS SELF-HEALING, AND NOTHING WIDER: copy_skills removes each skill dir it is about to
 # re-copy (immediately before re-copying it) plus the RETIRED_ROLE_SKILLS this edition no longer
@@ -81,12 +75,10 @@ Usage: ./install-kimi.sh [--target DIR] [--forge=github|gitlab|gitea] [--global]
   --no-scripts     skip support scripts, hook scripts, and the config.toml hooks merge
   --yes            non-interactive (skip the confirmation prompt)
 
-SUPPORT SCRIPTS + HOOKS: workflow skills resolve support scripts via
+SUPPORT SCRIPTS: workflow skills resolve support scripts via
 ${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts (the list comes from
-scripts/kaola-workflow-install-manifest.js); the 1 kimi hook script lands in
-${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/hooks and are wired into
-${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml as a managed [[hooks]] block (idempotent;
-validated with `kimi doctor config` when a kimi binary is on PATH).
+scripts/kaola-workflow-install-manifest.js). No compact or tool-use hook is installed; a normal
+upgrade removes the retired Kaola managed hooks block from config.toml.
 
 UNINSTALL: --uninstall removes ONLY kaola-deployed artifacts from the resolved scope
 (project DEST_ROOT via --target/$PWD, or --global ${KIMI_CODE_HOME:-$HOME/.kimi-code}):
@@ -503,65 +495,14 @@ install_support_scripts() {
   echo "Installed hook scripts → $hooks_dest"
 }
 
-# Merge the generated hooks fragment (.kimi/hooks/kimi-hooks.toml, __KIMI_HOME__ resolved)
-# into <kimi_home>/config.toml as a MANAGED block (marker comments included). Idempotent:
-# any prior managed block is stripped (markers inclusive) and the fresh fragment appended at
-# EOF with exactly one preceding blank line. The hooks config is global — merged on every
-# install (project or --global) unless --no-scripts. Post-merge, `kimi doctor config`
-# validates the result when a kimi binary is on PATH; a failure restores the pre-merge file
-# and aborts non-zero.
+# Retire the former managed PostCompact block on an ordinary upgrade. No replacement hook is
+# generated: million-token Kimi sessions did not measure a need for a compact prompt lifecycle.
 merge_hooks_config() {
   if [[ "$NO_SCRIPTS" -eq 1 ]]; then
-    echo "Hooks config merge skipped (--no-scripts)."
+    echo "Retired hooks cleanup skipped (--no-scripts)."
     return
   fi
-  local home cfg fragment backup=""
-  home="$(kimi_home)"
-  cfg="$home/config.toml"
-  fragment="$SOURCE_TREE/hooks/kimi-hooks.toml"
-  mkdir -p "$home"
-  if [[ -f "$cfg" ]]; then
-    # Explicit template, not `mktemp -t kaola-kimi-hooks`: on GNU coreutils a -t template
-    # without X's is "too few X's in template", exit 1, and set -euo pipefail turned that
-    # into an aborted install for every GNU user with an existing config.toml (macOS mktemp
-    # accepts the X-less form, which is how it shipped unnoticed).
-    backup="$(mktemp "$KW_TMPDIR/kaola-kimi-hooks.XXXXXX")"
-    cp "$cfg" "$backup"
-  fi
-  KIMI_HOOKS_CFG="$cfg" KIMI_HOOKS_FRAGMENT="$fragment" KIMI_HOME_RESOLVED="$home" node -e '
-    const fs = require("fs");
-    const cfg = process.env.KIMI_HOOKS_CFG;
-    const home = process.env.KIMI_HOME_RESOLVED;
-    const START = "# >>> kaola-workflow kimi hooks";
-    const END = "# <<< kaola-workflow kimi hooks";
-    const frag = fs.readFileSync(process.env.KIMI_HOOKS_FRAGMENT, "utf8")
-      .split("__KIMI_HOME__").join(home).replace(/\s+$/, "");
-    let body = "";
-    if (fs.existsSync(cfg)) body = fs.readFileSync(cfg, "utf8");
-    const kept = [];
-    let inBlock = false;
-    for (const line of body.split("\n")) {
-      if (line.trim() === START) { inBlock = true; continue; }
-      if (line.trim() === END) { inBlock = false; continue; }
-      if (!inBlock) kept.push(line);
-    }
-    const stripped = kept.join("\n").replace(/\s+$/, "");
-    fs.writeFileSync(cfg, (stripped ? stripped + "\n\n" : "") + frag + "\n");
-  '
-  if command -v kimi >/dev/null 2>&1; then
-    local doctor_out
-    if ! doctor_out="$(kimi doctor config "$cfg" 2>&1)"; then
-      if [[ -n "$backup" ]]; then cp "$backup" "$cfg"; else rm -f "$cfg"; fi
-      if [[ -n "$backup" ]]; then rm -f "$backup"; fi
-      echo "error: 'kimi doctor config' rejected $cfg after merging the kaola-workflow hooks block:" >&2
-      echo "$doctor_out" >&2
-      echo "Restored the pre-merge config; aborting. The generated fragment may be stale — check scripts/sync-kimi-edition.js." >&2
-      exit 1
-    fi
-    echo "Validated merged config via 'kimi doctor config'."
-  fi
-  if [[ -n "$backup" ]]; then rm -f "$backup"; fi
-  echo "Merged kaola-workflow hooks → $cfg (managed block; idempotent re-merge)."
+  strip_hooks_config
 }
 
 # Remove the managed hooks block from <kimi_home>/config.toml (uninstall). The rest of the

@@ -224,7 +224,6 @@ const scriptFiles = [
   'kaola-gitea-workflow-claim.js',
   'kaola-gitea-workflow-classifier.js',
   'kaola-gitea-workflow-closure-audit.js',
-  'kaola-gitea-workflow-compact-context.js',
   'kaola-gitea-workflow-sink-merge.js',
   'kaola-gitea-workflow-sink-pr.js',
   'kaola-workflow-resolve-agent-model.js',
@@ -232,7 +231,6 @@ const scriptFiles = [
   'simulate-gitea-codex-workflow-walkthrough.js',
   'install-codex-agent-profiles.js',
   'kaola-workflow-codex-preflight.js',
-  'kaola-gitea-workflow-codex-compact-resume.js',
   'kaola-gitea-workflow-run-chains.js',
   'kaola-gitea-workflow-gap-sweep.js'
 ];
@@ -249,18 +247,20 @@ const installSupportScripts = [
   'kaola-gitea-workflow-claim.js',
   'kaola-gitea-workflow-classifier.js',
   'kaola-gitea-workflow-closure-audit.js',
-  'kaola-gitea-workflow-compact-context.js',
   'kaola-gitea-workflow-sink-merge.js',
   'kaola-gitea-workflow-sink-pr.js',
   'kaola-workflow-resolve-agent-model.js',
   'kaola-workflow-codex-preflight.js',
-  'kaola-gitea-workflow-codex-compact-resume.js',
   'kaola-gitea-workflow-run-chains.js',
   'kaola-gitea-workflow-gap-sweep.js'
 ];
 for (const script of installSupportScripts) {
   assert(giteaManifestScripts.includes(script), 'install manifest must emit Gitea support script: ' + script);
 }
+assert(exists(pluginRoot + '/hooks/kaola-workflow-compact-recovery.md'),
+  'generated Gitea Claude compact-recovery prompt missing');
+assert(exists(pluginRoot + '/hooks/kaola-workflow-codex-compact-recovery.md'),
+  'generated Gitea Codex compact-recovery prompt missing');
 
 const uninstallScript = read('uninstall.sh');
 assert(uninstallScript.includes('github|gitlab|gitea|all'), 'uninstall.sh must accept --forge=gitea in case validation');

@@ -354,6 +354,31 @@ templates/agents/runtime-capabilities.json → native carrier/default bindings
 
 No additive transform searches for Claude prose headings or invents a second runtime policy.
 
+### Compact prompts and recovery
+
+Next and finalize each author from one compressed routing skeleton. The dispatch rule is authored
+once in `dispatch-contract.md`; each operation skeleton and the compact-recovery skeleton consume
+that same slot. At generation time the compact skeleton combines its common continuation core,
+that dispatch contract, and one runtime adapter into a complete runtime artifact. Runtime-specific
+files are render targets, not authoring surfaces.
+
+The recovery invariant is: after a real compact and before the next model inference, the complete
+continuation prompt is present. It tells the model to reread durable state and continue Workflow
+Next or Finalization, and always includes dispatch. It does not require context before or after
+every tool. Claude and Codex meet it with one `SessionStart(compact)` command that directly prints
+the already-generated prompt; no JS derives, selects, or composes anything at compact time. Grok
+and Cursor use native Rules because their passive compact hooks cannot inject model context. Grok
+installs one complete project or global Rule; Cursor installs one project `alwaysApply` Rule because
+Rules are system-level context, Cloud
+has no `sessionStart`, and `preCompact` cannot inject model context.
+
+OpenCode, Kimi, and ZCode keep their initial command as prompt authority in this measured scope.
+Kimi's previously managed PostCompact hint is retired and removed on upgrade. ZCode's
+measured one-million-token context and the self-lock produced by an interim PreToolUse gate argue
+against adding a speculative compact lifecycle. No runtime installs a Kaola PreToolUse,
+PostToolUse, or Stop prompt-recovery hook; ordinary tool calls therefore add no recovery context and
+start no recovery subprocess.
+
 ### Project instruction authority
 
 One Kaola-formatted repository has one universal instruction surface: root `AGENTS.md`. Codex,
@@ -394,7 +419,8 @@ named dispatch; App local and Cloud keep separate live catalogs. Only after an A
 is in Cursor Cloud environment setup may it install the remote authority plus selected repository,
 test the Build, and ask the user to click Save. The user then opens a new top-level Agent in that
 same repository; its visible Build link and live catalog must match before the install is trusted.
-`sessionStart` performs compact resume only.
+That project materialization also installs the shared Cursor `alwaysApply` recovery Rule; no Cursor
+prompt-lifecycle hook is installed.
 
 ### Runtime capability divergence
 

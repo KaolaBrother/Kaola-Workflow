@@ -95,24 +95,26 @@ registry. An unknown forge is refused.
 node scripts/sync-kimi-edition.js --forge=gitea --check
 ```
 
-## Hooks
+## Prompt lifecycle
 
-Kimi hooks are `[[hooks]]` rules in the user `config.toml`. The edition generates
-`.kimi/hooks/kimi-hooks.toml` and maps compact-resume behavior to `PostCompact`. The installer
-merges exactly one block between:
+The Kimi edition generates zero Kaola hook files and installs no `[[hooks]]` prompt-lifecycle rule.
+Its measured context does not justify per-tool injection, and this scope did not prove a compact
+carrier equivalent to the direct Claude/Codex/Grok path. Ordinary tool use adds zero Kaola recovery
+bytes and starts zero Kaola recovery subprocesses.
+
+On upgrade, the installer removes the retired exact managed block between:
 
 ```text
 # >>> kaola-workflow kimi hooks
 # <<< kaola-workflow kimi hooks
 ```
 
-Kimi's documented hook configuration is user-scoped, so both project and global installs merge the
-managed block into `${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml`. Content outside that block is
-preserved. `--no-scripts` skips the hook/support-script install. When a Kimi binary is available,
-the installer validates the merged config and restores the previous file if validation fails.
+Content outside that retired block in
+`${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml` is preserved. When a Kimi binary is available, the
+installer validates the resulting config and restores the previous file if validation fails.
 
 Support scripts live under
-`${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/{scripts,hooks}/`. Generated command Skills use
+`${KIMI_CODE_HOME:-$HOME/.kimi-code}/kaola-workflow/scripts/`. Generated command Skills use
 the Kimi-native resolver and carry no `$CLAUDE_PLUGIN_ROOT` or `~/.claude/kaola-workflow` path.
 
 ## Install and ownership
@@ -127,7 +129,7 @@ the Kimi-native resolver and carry no `$CLAUDE_PLUGIN_ROOT` or `~/.claude/kaola-
 ```
 
 Project installs write command Skills and agents below `<project>/.kimi-code/`. Global installs
-write them directly below `$KIMI_CODE_HOME`. Support scripts and hooks remain user-scoped in both
+write them directly below `$KIMI_CODE_HOME`. Support scripts remain user-scoped in both
 cases.
 
 Every generated native agent is recorded in a filename-plus-SHA manifest; the visible marker alone
@@ -137,7 +139,7 @@ and FIFOs—before writing. Reinstall updates only hash-proven managed profiles 
 migration removes an older `kaola-role-*` Skill directory
 only when its complete one-file bytes match an exact profile shipped by v9.17.2; modified and
 unknown role-shaped Skills remain. Uninstall removes only manifest/exact-byte-proven agents, the
-three reserved Kaola command Skills, managed hook/support files, and the managed config block. It
+three reserved Kaola command Skills, managed support files, and the retired managed config block. It
 preserves the user's other agents, Skills, config content, and the shared
 `~/.config/kaola-workflow/config.json`.
 

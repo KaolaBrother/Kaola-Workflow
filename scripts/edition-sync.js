@@ -50,15 +50,14 @@ const FORGES = ['gitlab', 'gitea'];
 
 // Forge aggregator ports generated from canonical (issue #365 scope).
 const GENERATED_AGGREGATORS = [
-  // #868: four scripts promoted out of validate-script-sync's RENAME_NORMALIZED_FAMILIES. They were
-  // reproducible by the rename pass already — compact-context and release differed from the render by
+  // #868: scripts promoted out of validate-script-sync's RENAME_NORMALIZED_FAMILIES. They were
+  // reproducible by the rename pass already — release differed from the render by
   // NOTHING but the @generated header — so the normalizer was carrying files generation could own.
   // Promoting them is a CORRECTNESS move, not tidying: the normalizer rewrites EVERY
   // kaola-workflow-<name> token, so it renamed gap-sweep's `kaola-workflow-adaptive-schema` require
   // into a module that does not exist in any forge tree, and then certified the result because it was
   // comparing against its own wrong expectation. The rename map HERE is the declared, on-disk set, and
   // the base-named kernel is absent from it, so the same require renders correctly and stays correct.
-  'kaola-workflow-compact-context.js',
   'kaola-workflow-release.js',
   'kaola-workflow-gap-sweep.js',
   'kaola-workflow-run-chains.js',

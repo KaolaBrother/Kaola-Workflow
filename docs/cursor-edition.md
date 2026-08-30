@@ -5,13 +5,16 @@ The cursor edition makes Kaola-Workflow runnable from
 from Grok CLI. Cursor is a coding-agent **runtime** (like Codex, opencode, Kimi,
 and Grok), not a git forge, so this edition is delivered the Cursor-native way —
 named **agents** under a generated `.cursor/agents/` tree, flat
-slash **commands** under `.cursor/commands/`, hook scripts under `.cursor/hooks/`,
-and a merged `.cursor/hooks.json` — and is fully **additive**: it touches none of
+slash **commands** under `.cursor/commands/`, one persistent Rule under `.cursor/rules/`,
+and an empty Kaola hook mapping in `.cursor/hooks.json` — and is fully **additive**: it touches none of
 the existing `claude`/`codex`/`gitlab`/`gitea`/`opencode`/`kimi`/`grok` edition
 machinery.
 
-Cursor Cloud Agents may not fire `sessionStart` and may not load project hooks.
-That gap is declared, not papered over; durable resume stays `mission-list.md`.
+Cursor's official hook contract cannot supply one universal post-compact injection: Cloud does not
+support `sessionStart`, and `preCompact` cannot modify the model context. Official project Rules are
+system-level prompt context, and repository Rules apply to Cloud Agents using that repository. The
+edition therefore materializes one `alwaysApply` Rule for all three hosts and installs no Kaola
+prompt-lifecycle hook.
 Cursor CLI and Cursor App are separate product surfaces; App local IDE and App-started Cloud are
 different execution hosts and must not be inferred from each other or from a CLI binary.
 Authenticated standalone CLI, local App/IDE, and Cloud saved-environment named dispatch were each
@@ -47,7 +50,7 @@ prove that the intended environment loaded. This follows Cursor's documented
 
 Cursor reads root and nested `AGENTS.md` directly, combining parent guidance with more-specific
 instructions. Kaola installs no project-instruction bridge for Cursor. Generated agent frontmatter,
-workspace catalog rules, and hooks are Cursor adapter data, not a copy of the universal contract.
+workspace catalog rules, and the empty hook mapping are Cursor adapter data, not a copy of the universal contract.
 See [runtime capabilities](runtime-capabilities.md#cursor) for first-party evidence and limits.
 
 ## Forge axis
@@ -88,8 +91,8 @@ Everything under `.cursor/` is **generated from canonical** by
 | ---------------- | --------------------- | ----- |
 | `templates/agents/behavior-contracts.json` + Cursor adapter | `.cursor/agents/<name>.md` | 14 native profiles with `name`, `description`, intent-mapped `model: grok-4.6[effort=…]`, capability-derived `readonly`, shared behavior identity, and render-specific hash |
 | `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). The marked next/finalize block becomes Cursor-native profile, live-schema/catalog, tier, route, and limit guidance; any concrete Claude dispatch cards are adapted. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
-| `hooks/<script>.sh` | `.cursor/hooks/<script>.sh` | No runtime-neutral dispatch hook is installed. Compact-context is wrapped as JSON `{additional_context}` for `sessionStart`. There is no ambient catalog materializer. |
-| mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). `sessionStart` carries compact resume only. Project-shaped commands use `.cursor/hooks/…`; a `--global` install rewrites that prefix to `./hooks/`. |
+| marked next/finalize recovery blocks + Cursor adapter | `.cursor/rules/kaola-workflow-compact-recovery.mdc` | One `alwaysApply: true` Rule contains both complete compressed operation prompts and one shared dispatch/adapter block. The same file is materialized for standalone CLI, App local, and Cloud. |
+| mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). Kaola emits an empty mapping and removes receipt-owned legacy prompt hooks; foreign hook entries survive merge. |
 
 Generated agents carry a model-and-effort pin derived from the runtime-neutral intent class.
 `standard`, `reasoning`, and `heavy` are the behavior-source values; only the Cursor adapter maps
@@ -221,8 +224,8 @@ writing when already fresh, returns `materialized` and requires a new process wh
 writes, and fails before mutation on missing/stale authority, collision, symlink, invalid receipt,
 or modified ownership. Cursor App local IDE and App-started Cloud do not inherit that CLI
 point-of-use rule. Cloud uses the confirmed environment-setup
-machine-plus-repository/install/save/same-repository-new-parent lifecycle above. `sessionStart`
-performs compact resume only.
+machine-plus-repository/install/save/same-repository-new-parent lifecycle above. The same explicit
+project materialization writes the `alwaysApply` recovery Rule on CLI, App local, and Cloud.
 
 The official model contract is likewise bounded: `model` is either `inherit` or an exact model ID,
 and bracket parameters carry options such as effort. Team policy, legacy-plan settings, or plan
@@ -231,9 +234,9 @@ profile, generated dispatch guidance omits a per-call model and that profile is 
 carrier. On Path B, a built-in-only enum has no profile pin: omit-model follows the parent, while a
 resolver-listed live-schema model slug is the effort lever.
 
-Compact resume remains edition hook behavior. CLI catalog synchronization is a point-of-use
-next/finalize transaction, not a hook. Durable recovery never depends on either:
-`mission-list.md` is the authority after a new local, CLI, or cloud session.
+Compact recovery is Rule behavior, while CLI catalog synchronization remains a point-of-use
+next/finalize transaction. The Rule supplies model-visible operation and dispatch instructions;
+`mission-list.md` remains durable run authority after a local, CLI, or Cloud restart.
 
 ## Path selection
 
@@ -269,12 +272,12 @@ does not run through `install.sh --forge`.
 ./install-cursor.sh --target DIR --uninstall # remove a receipt-proven project materialization
 ```
 
-Add `--yes` for non-interactive use. `--no-scripts` skips writing support scripts, hook scripts,
-and the hooks JSON merge. It retains receipt ownership for any skipped managed assets that remain
-on disk, so later uninstall still removes unchanged bytes and exact hook entries. A fresh
+Add `--yes` for non-interactive use. `--no-scripts` skips writing support scripts and the hooks JSON
+merge; the persistent Rule is still project content. It retains receipt ownership for any skipped
+managed assets that remain on disk, so later uninstall still removes unchanged bytes and exact hook
+entries. A fresh
 no-scripts authority is deliberately partial; a later default project install promotes it before
-materializing default scripts/hooks without retiring an independently active receipt-owned global
-live hook. Normal install creates a transaction-scoped staging root and
+materializing default scripts without touching foreign hook entries. Normal install creates a transaction-scoped staging root and
 invokes `sync-cursor-edition.js --write --tree-root=<absolute empty staging path>`; the cleanup trap
 removes that source after success or failure. `--regenerate` alone resolves and refreshes the
 main-checkout generated tree.
@@ -287,18 +290,18 @@ published hashes prove ownership, and writes the first authority receipt. Any mo
 symlink, non-regular carrier, or unknown path remains an unmanaged collision. Isolated live upgrade
 probes passed for all three forges.
 
-- **PROJECT** (`--target DIR`): agents and commands land under
-  `<project>/.cursor/{agents,commands}` from the installed global authority. Hook scripts land under
-  `<project>/.cursor/hooks/` and mapping is **merged** into
-  `<project>/.cursor/hooks.json` (other events, e.g. `beforeShellExecution`, stay).
+- **PROJECT** (`--target DIR`): agents, commands, and the recovery Rule land under
+  `<project>/.cursor/{agents,commands,rules}` from the installed global authority. The empty Kaola
+  mapping is **merged** into `<project>/.cursor/hooks.json`; this retires old Kaola prompt hooks while
+  other events, e.g. `beforeShellExecution`, stay.
   A project install does **not** merge into `~/.cursor/hooks.json` — Cursor has
   project-scoped hooks. This is the explicit project materialization. It is never
   selected from ambient cwd of a `--global` command. The receipt
   `.cursor/kaola-workflow-materialization.json` binds target, forge/version, authority hash, and
   every managed file hash.
-- **GLOBAL** (`--global`): they land under `${CURSOR_HOME:-$HOME/.cursor}/{agents,commands}`
-  with **no** nested `.cursor/` directory. Mapping is merged into
-  `${CURSOR_HOME:-$HOME/.cursor}/hooks.json` with command paths rewritten to `./hooks/`.
+- **GLOBAL** (`--global`): they land under `${CURSOR_HOME:-$HOME/.cursor}/{agents,commands,rules}`
+  with **no** nested `.cursor/` directory. The empty Kaola mapping is merged into
+  `${CURSOR_HOME:-$HOME/.cursor}/hooks.json`, preserving foreign entries.
   Running `--global` inside a Git work tree does **not** create or refresh that
   repository's `.cursor/` tree. Project catalogs that already exist are left untouched.
   `--global` from a directory with no git toplevel does not invent a project `.cursor/`
@@ -311,7 +314,7 @@ probes passed for all three forges.
   current `runtime_build` and `named_catalog` stay `unknown` without live observation; measured
   historical facts remain under `evidence_stamp` and `selected_host`.
 - By default, support scripts land under
-  `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/{scripts,hooks}`.
+  `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`.
   `kaola-workflow-cursor-surface.js` is both the filesystem/evidence doctor and the explicit
   authority/materialization transaction. Its installed `--ensure-target DIR` mode is the only
   automatic pre-dispatch materializer and has no ambient-target default.
@@ -320,13 +323,23 @@ probes passed for all three forges.
 receipt-recorded Kaola entries from `hooks.json`. Modified, unmanaged, symlink, non-regular, and
 invalid-receipt paths are preserved. It never deletes the user's `hooks.json` file.
 
-## Hooks
+## Persistent recovery Rule and empty hooks
 
-Cursor's hook model is a JSON mapping at `.cursor/hooks.json` (project) or
-`~/.cursor/hooks.json` (global). This edition ships only the compact wrapper. It uses a five-second
-timeout and is fail-open. Catalog materialization is not a hook; on the measured standalone CLI it
-is the explicit fail-closed point-of-use transaction described above.
+Cursor project Rules are system-level prompt context. The generated
+`.cursor/rules/kaola-workflow-compact-recovery.mdc` has `alwaysApply: true` and contains:
 
-| Event | Claude payload | Cursor payload | Adaptation |
-| --- | --- | --- | --- |
-| `sessionStart` resume | compact stdout injected after compact | `additional_context` JSON, new session only | wrapper turns compact-context.js stdout into `{additional_context}`. `preCompact` cannot inject — declared as `session_start_resume_injection`. Durable resume is `mission-list.md`. |
+- the Workflow Next resume rule;
+- the Finalization resume rule;
+- one shared runtime dispatch contract and Cursor adapter tail;
+- the stable `KW-COMPACT-RECOVERY-V1` probe marker.
+
+This is the only carrier that matches all three required hosts. Standalone Cursor CLI and Cursor
+App local load project Rules; Cursor's Cloud guidance says repository `.cursor/rules/*.mdc` rules
+apply to all Agents using the repository. By contrast, Cloud does not support `sessionStart`, and
+`preCompact` can report compaction but cannot inject or alter the compacted context.
+
+The generated `.cursor/hooks.json` is therefore `{ "version": 1, "hooks": {} }`. Install merges
+that absence by removing only recognized legacy Kaola prompt-hook entries; it preserves every
+foreign event. There is no compact wrapper, PreToolUse, PostToolUse, or Stop script. Ordinary tool
+use adds 0 Kaola recovery bytes and starts 0 Kaola recovery subprocesses. Catalog materialization
+is still the separate fail-closed CLI point-of-use transaction described above.

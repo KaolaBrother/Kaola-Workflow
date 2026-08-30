@@ -224,7 +224,6 @@ const scriptFiles = [
   'kaola-gitlab-workflow-active-folders.js',
   'kaola-gitlab-workflow-claim.js',
   'kaola-gitlab-workflow-classifier.js',
-  'kaola-gitlab-workflow-compact-context.js',
   'kaola-gitlab-workflow-sink-merge.js',
   'kaola-gitlab-workflow-sink-mr.js',
   'kaola-workflow-resolve-agent-model.js',
@@ -232,7 +231,6 @@ const scriptFiles = [
   'simulate-gitlab-codex-workflow-walkthrough.js',
   'install-codex-agent-profiles.js',
   'kaola-workflow-codex-preflight.js',
-  'kaola-gitlab-workflow-codex-compact-resume.js',
   'kaola-gitlab-workflow-run-chains.js',
   'kaola-gitlab-workflow-gap-sweep.js'
 ];
@@ -248,18 +246,20 @@ const installSupportScripts = [
   'kaola-gitlab-workflow-active-folders.js',
   'kaola-gitlab-workflow-claim.js',
   'kaola-gitlab-workflow-classifier.js',
-  'kaola-gitlab-workflow-compact-context.js',
   'kaola-gitlab-workflow-sink-merge.js',
   'kaola-gitlab-workflow-sink-mr.js',
   'kaola-workflow-resolve-agent-model.js',
   'kaola-workflow-codex-preflight.js',
-  'kaola-gitlab-workflow-codex-compact-resume.js',
   'kaola-gitlab-workflow-run-chains.js',
   'kaola-gitlab-workflow-gap-sweep.js'
 ];
 for (const script of installSupportScripts) {
   assert(gitlabManifestScripts.includes(script), 'install manifest must emit GitLab support script: ' + script);
 }
+assert(exists(pluginRoot + '/hooks/kaola-workflow-compact-recovery.md'),
+  'generated GitLab Claude compact-recovery prompt missing');
+assert(exists(pluginRoot + '/hooks/kaola-workflow-codex-compact-recovery.md'),
+  'generated GitLab Codex compact-recovery prompt missing');
 
 // issue #283: kaola-workflow-phase6.md was removed; kaola-workflow-finalize.md is the terminal routine.
 assert(!exists(pluginRoot + '/commands/kaola-workflow-phase6.md'),

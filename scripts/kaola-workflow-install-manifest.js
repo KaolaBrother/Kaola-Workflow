@@ -65,7 +65,6 @@ const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-closure-audit.js',
   'kaola-workflow-closure-contract.js',
   'kaola-workflow-validation-runner.js',
-  'kaola-workflow-compact-context.js',
   'kaola-workflow-sink-merge.js',
   'kaola-workflow-sink-pr.js',
   'kaola-workflow-classifier.js',
@@ -92,12 +91,12 @@ const FORGE_RENAME_OVERRIDES = Object.freeze({
   github: {},
 });
 
-// Per-forge-only ADDS (scripts that exist only in a forge edition): the forge data-layer script +
-// the edition-named Codex compact-resume hook script. Appended after the transformed shared set.
+// Per-forge-only ADDS (scripts that exist only in a forge edition): the forge data-layer script.
+// Compact recovery is a generated prompt artifact, not an installed JavaScript support script.
 const FORGE_ONLY_SCRIPTS = Object.freeze({
   github: [],
-  gitlab: ['kaola-gitlab-forge.js', 'kaola-gitlab-workflow-codex-compact-resume.js'],
-  gitea: ['kaola-gitea-forge.js', 'kaola-gitea-workflow-codex-compact-resume.js'],
+  gitlab: ['kaola-gitlab-forge.js'],
+  gitea: ['kaola-gitea-forge.js'],
 });
 
 const FORGES = Object.freeze(['github', 'gitlab', 'gitea']);

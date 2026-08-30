@@ -96,9 +96,9 @@ function treeLabel(forge) {
 const MANAGED_ROLES = new Set(agentGen.ROLES);
 const ZERO_HASH = '0'.repeat(64);
 
-// No runtime-neutral hook scripts are active in the kimi edition. The generator still owns the
-// hooks directory so --write can retire stale installed copies. The retained PostCompact rule is
-// rendered directly because it runs the edition's compact-resume script.
+// No compact or tool-use hook is active in the Kimi edition. Its million-token runtime profile does
+// not justify a second prompt lifecycle; the generator retains ownership of hooks/ only to prune
+// retired managed artifacts.
 const HOOK_SCRIPTS = [];
 
 // --- minimal frontmatter parser (only the flat key: value surface we need) ---
@@ -267,25 +267,11 @@ function renderCommand(canonContent, commandName, forge) {
   return lines.join('\n') + '\n';
 }
 
-// The generated Kimi hooks fragment maps the retained Claude SessionStart"compact" entry to
-// PostCompact (Kimi's semantic counterpart) running the compact-context script. `__KIMI_HOME__` is
-// a placeholder token the installer substitutes with the real
-// ${KIMI_CODE_HOME:-$HOME/.kimi-code} path at install time; the >>> / <<<
-// marker comments delimit the managed block for idempotent merges.
+// Compatibility export for callers while upgrades remove the retired managed block.
+// Empty means the Kimi adapter generates no compact prompt lifecycle.
 function renderKimiHooksToml(forge) {
-  // The compact-context script is forge-RENAMED, so the managed block must name the
-  // basename the selected forge actually deploys; a github-shaped command would point
-  // at a file a gitlab install never writes.
-  const compactJs = forgeLayout.scriptName('kaola-workflow-compact-context.js', forge || DEFAULT_FORGE);
-  return [
-    '# >>> kaola-workflow kimi hooks',
-    '[[hooks]]',
-    'event = "PostCompact"',
-    'command = "node __KIMI_HOME__/kaola-workflow/scripts/' + compactJs + '"',
-    'timeout = 5',
-    '# <<< kaola-workflow kimi hooks',
-    '',
-  ].join('\n');
+  forgeLayout.assertForge(forge || DEFAULT_FORGE);
+  return '';
 }
 
 // --- IO helpers ---
@@ -345,9 +331,9 @@ function retiredSkillDirs(forge) {
     .map(e => e.name);
 }
 
-// The hook files a fresh render produces: the byte-copied scripts plus the generated TOML fragment.
+// A fresh render produces no hook file.
 function expectedHookFiles() {
-  return HOOK_SCRIPTS.concat(['kimi-hooks.toml']);
+  return [];
 }
 
 // Retired BYTE-COPIED artifacts in the generator-owned hooks dir: a file whose extension is one
@@ -425,7 +411,7 @@ function writeCommands(forge) {
   return wrote;
 }
 
-// Kimi hook-payload adaptations are empty: the retained PostCompact rule is payload-compatible.
+// Kimi hook-payload adaptations are empty because this edition emits no hook.
 const HOOK_ADAPTATIONS = {};
 
 function adaptHookForKimi(script, content) {
@@ -464,13 +450,6 @@ function writeHooks(forge) {
       console.log((HOOK_ADAPTATIONS[script] ? 'adapted    ' : 'copied     ') + treeLabel(forge) + '/hooks/' + script);
       wrote++;
     }
-  }
-  const toml = renderKimiHooksToml(forge);
-  const tomlDest = path.join(out_dir, 'kimi-hooks.toml');
-  if (!fs.existsSync(tomlDest) || fs.readFileSync(tomlDest, 'utf8') !== toml) {
-    fs.writeFileSync(tomlDest, toml);
-    console.log('generated  ' + treeLabel(forge) + '/hooks/kimi-hooks.toml');
-    wrote++;
   }
   return wrote;
 }
@@ -577,14 +556,6 @@ function runCheck(forge) {
     }
     if (readTree(rel) !== adaptHookForKimi(script, read('hooks/' + script))) mismatches.push({ rel, reason: 'drifted from canonical hooks/ (post-adaptation)' });
   }
-  {
-    const rel = tree + '/hooks/kimi-hooks.toml';
-    if (!fs.existsSync(treePath(rel))) {
-      mismatches.push({ rel, reason: 'missing generated hooks fragment' });
-    } else if (readTree(rel) !== renderKimiHooksToml(forge)) {
-      mismatches.push({ rel, reason: 'stale — regenerate' });
-    }
-  }
   for (const name of retiredSkillDirs(forge)) {
     mismatches.push({ rel: tree + '/skills/' + name, reason: 'retired surface not in canonical — prune (--write removes it)' });
   }
@@ -606,7 +577,7 @@ function runCheck(forge) {
   const na = listCanonAgents().length;
   const nc = listCanonCommands(forge).length;
   console.log('sync-kimi-edition[' + forge + ']: ' + na + ' native agent profile(s) + ' + nc + ' command skill(s) + '
-    + (HOOK_SCRIPTS.length + 1) + ' hook file(s) in parity with canonical.');
+    + HOOK_SCRIPTS.length + ' hook file(s) in parity with canonical.');
 }
 
 function usage() {

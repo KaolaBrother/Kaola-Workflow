@@ -8,8 +8,7 @@
 // and it does NOT ride the install.sh --forge= machinery. It is delivered the
 // Grok-native way: named agents under `.grok/agents/<role>.md` (spawn_subagent
 // types), flat slash commands under `.grok/commands/<name>.md`, and
-// `.grok/hooks/` (payload-adapted hooks + a generated hooks.json the
-// installer copies into the Grok hooks dir). Deterministic, idempotent, and
+// `.grok/rules/` (the complete compact-safe workflow rule). Deterministic, idempotent, and
 // parity-checked by test-grok-edition.js.
 //
 // The session supplies the model, while each generated agent carries an effort
@@ -24,7 +23,7 @@
 // `edition-sync.js`, `install.sh`, and the routing-surface --check contract.
 //
 //   --forge=<f>  github (default) | gitlab | gitea.
-//   --write   regenerate <tree>/agents + commands + hooks from canonical.
+//   --write   regenerate <tree>/agents + commands + the native Rule from canonical.
 //   --check   assert the generated tree is in byte-parity with a fresh render.
 // ---------------------------------------------------------------------------
 
@@ -32,6 +31,7 @@ const fs = require('fs');
 const path = require('path');
 const agentGen = require('./generate-agent-profiles');
 const forgeLayout = require('./runtime-edition-forge');
+const routing = require('./generate-routing-surfaces');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -173,28 +173,6 @@ function renderCommand(canonContent, commandName, forge) {
   return lines.join('\n') + '\n';
 }
 
-function renderGrokHooksJson(forge) {
-  const compactJs = forgeLayout.scriptName('kaola-workflow-compact-context.js', forge || DEFAULT_FORGE);
-  // Grok expands ${VAR} in hook command fields and also loads project
-  // `.grok/hooks/*.json`. A placeholder the installer forgot to substitute
-  // would be executed literally, so the generated file uses the same expansion
-  // Grok already understands.
-  const home = '${GROK_HOME:-$HOME/.grok}';
-  return JSON.stringify({
-    hooks: {
-      SessionStart: [{
-        matcher: 'compact',
-        hooks: [{
-          type: 'command',
-          command: 'node "' + home + '/kaola-workflow/scripts/' + compactJs + '"',
-          timeout: 5,
-        }],
-        id: 'kaola-workflow:compact-context',
-      }],
-    },
-  }, null, 2) + '\n';
-}
-
 const HOOK_ADAPTATIONS = {};
 
 function adaptHookForGrok(script, content) {
@@ -246,7 +224,10 @@ function expectedCommandFiles(forge) {
   return listCanonCommands(forge).map(f => f.slice(0, -3));
 }
 function expectedHookFiles() {
-  return HOOK_SCRIPTS.concat(['hooks.json']);
+  return HOOK_SCRIPTS.slice();
+}
+function expectedRuleFiles() {
+  return ['kaola-workflow-compact-recovery.md'];
 }
 
 function retiredAgentFiles(forge) {
@@ -276,7 +257,17 @@ function retiredHookFiles(forge) {
   return fs.readdirSync(dir, { withFileTypes: true })
     .filter(e => e.isFile())
     .map(e => e.name)
-    .filter(n => ['.sh', '.json'].includes(path.extname(n)) && !expected.has(n))
+    .filter(n => ['.sh', '.json', '.md'].includes(path.extname(n)) && !expected.has(n))
+    .sort();
+}
+
+function retiredRuleFiles(forge) {
+  const dir = treePath(path.join(treeLabel(forge), 'rules'));
+  if (!fs.existsSync(dir)) return [];
+  const expected = new Set(expectedRuleFiles());
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter(e => e.isFile() && e.name.endsWith('.md') && !expected.has(e.name))
+    .map(e => e.name)
     .sort();
 }
 
@@ -295,6 +286,11 @@ function pruneTree(forge) {
   for (const f of retiredHookFiles(forge)) {
     fs.rmSync(treePath(path.join(treeLabel(forge), 'hooks', f)), { force: true });
     console.log('pruned     ' + treeLabel(forge) + '/hooks/' + f + ' (retired artifact)');
+    removed++;
+  }
+  for (const f of retiredRuleFiles(forge)) {
+    fs.rmSync(treePath(path.join(treeLabel(forge), 'rules', f)), { force: true });
+    console.log('pruned     ' + treeLabel(forge) + '/rules/' + f + ' (retired rule)');
     removed++;
   }
   return removed;
@@ -335,12 +331,12 @@ function writeCommands(forge) {
   return wrote;
 }
 
-function writeHooks(forge) {
-  const outDir = treePath(path.join(treeLabel(forge), 'hooks'));
-  ensureDir(outDir);
+function writeRuntimeCarrier(forge) {
+  const hooksDir = treePath(path.join(treeLabel(forge), 'hooks'));
   let wrote = 0;
   for (const script of HOOK_SCRIPTS) {
-    const dest = path.join(outDir, script);
+    ensureDir(hooksDir);
+    const dest = path.join(hooksDir, script);
     const content = adaptHookForGrok(script, fs.readFileSync(path.join(CANON_HOOKS_DIR, script), 'utf8'));
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== content) {
       fs.writeFileSync(dest, content);
@@ -349,11 +345,13 @@ function writeHooks(forge) {
       wrote++;
     }
   }
-  const json = renderGrokHooksJson(forge);
-  const jsonDest = path.join(outDir, 'hooks.json');
-  if (!fs.existsSync(jsonDest) || fs.readFileSync(jsonDest, 'utf8') !== json) {
-    fs.writeFileSync(jsonDest, json);
-    console.log('generated  ' + treeLabel(forge) + '/hooks/hooks.json');
+  const rulesDir = treePath(path.join(treeLabel(forge), 'rules'));
+  ensureDir(rulesDir);
+  const prompt = routing.renderCompactRecoveryPrompt('grok', forge);
+  const promptDest = path.join(rulesDir, 'kaola-workflow-compact-recovery.md');
+  if (!fs.existsSync(promptDest) || fs.readFileSync(promptDest, 'utf8') !== prompt) {
+    fs.writeFileSync(promptDest, prompt);
+    console.log('generated  ' + treeLabel(forge) + '/rules/kaola-workflow-compact-recovery.md');
     wrote++;
   }
   return wrote;
@@ -363,7 +361,7 @@ function runWrite(forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
   const a = writeAgents(forge);
   const c = writeCommands(forge);
-  const h = writeHooks(forge);
+  const h = writeRuntimeCarrier(forge);
   const p = pruneTree(forge);
   const total = a + c + h + p;
   console.log('sync-grok-edition[' + forge + ']: write complete (' + total + ' file(s) updated'
@@ -377,7 +375,7 @@ function runRefreshPresent() {
     if (!fs.existsSync(treePath(treeLabel(forge)))) continue;
     changed += writeAgents(forge);
     changed += writeCommands(forge);
-    changed += writeHooks(forge);
+    changed += writeRuntimeCarrier(forge);
     changed += pruneTree(forge);
     refreshed.push(treeLabel(forge));
   }
@@ -429,11 +427,11 @@ function runCheck(forge) {
     }
   }
   {
-    const rel = tree + '/hooks/hooks.json';
+    const rel = tree + '/rules/kaola-workflow-compact-recovery.md';
     if (!fs.existsSync(treePath(rel))) {
-      mismatches.push({ rel, reason: 'missing generated hooks.json' });
-    } else if (readTree(rel) !== renderGrokHooksJson(forge)) {
-      mismatches.push({ rel, reason: 'stale — regenerate' });
+      mismatches.push({ rel, reason: 'missing generated compact-recovery prompt' });
+    } else if (readTree(rel) !== routing.renderCompactRecoveryPrompt('grok', forge)) {
+      mismatches.push({ rel, reason: 'stale compact-recovery prompt — regenerate' });
     }
   }
   for (const f of retiredAgentFiles(forge)) {
@@ -445,6 +443,9 @@ function runCheck(forge) {
   for (const f of retiredHookFiles(forge)) {
     mismatches.push({ rel: tree + '/hooks/' + f, reason: 'retired artifact no longer emitted — prune (--write removes it)' });
   }
+  for (const f of retiredRuleFiles(forge)) {
+    mismatches.push({ rel: tree + '/rules/' + f, reason: 'retired rule no longer emitted — prune (--write removes it)' });
+  }
   if (mismatches.length) {
     console.error('sync-grok-edition[' + forge + ']: PARITY FAILED (' + mismatches.length + ' file(s)):');
     for (const m of mismatches) console.error('  - ' + m.rel + ' — ' + m.reason);
@@ -455,7 +456,8 @@ function runCheck(forge) {
   const na = listCanonAgents().length;
   const nc = listCanonCommands(forge).length;
   console.log('sync-grok-edition[' + forge + ']: ' + na + ' agent(s) + ' + nc + ' command(s) + '
-    + expectedHookFiles().length + ' hook file(s) in parity with canonical.');
+    + expectedHookFiles().length + ' hook file(s) + ' + expectedRuleFiles().length
+    + ' rule file(s) in parity with canonical.');
 }
 
 function usage() {
@@ -464,7 +466,7 @@ function usage() {
     + ' [--forge=github|gitlab|gitea]\n'
     + '  --forge=<f>  which forge to render (default github). github writes .grok/;\n'
     + '               gitlab/gitea write .grok-<forge>/\n'
-    + '  --write   regenerate the forge tree agents + commands + hooks from canonical\n'
+    + '  --write   regenerate the forge tree agents + commands + native Rule from canonical\n'
     + '  --refresh-present  regenerate every forge tree that already exists; create none (ignores --forge)\n'
     + '  --check   assert the generated tree is in byte-parity with a fresh render\n'
     + '  --print-tree-root  print the directory the generated trees land in; write nothing\n'
@@ -496,10 +498,11 @@ module.exports = {
   renderAgent, renderCommand, transformCommandBody,
   rewriteClaudeScriptPaths, GROK_KAOLA_SCRIPT, grokKaolaScript,
   GROK_MODEL_DISPATCH_GUIDANCE, GROK_MODEL_DISPATCH_BLOCK,
-  renderGrokHooksJson, treeLabel, agentRel, commandRel, canonCommandPath, runCheck, runWrite,
+  treeLabel, agentRel, commandRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   adaptHookForGrok, HOOK_ADAPTATIONS,
-  expectedHookFiles, retiredHookFiles, retiredAgentFiles, retiredCommandFiles,
+  expectedHookFiles, expectedRuleFiles, retiredHookFiles, retiredRuleFiles,
+  retiredAgentFiles, retiredCommandFiles,
   parseFrontmatter, parseTools, yamlScalar,
   listCanonAgents, listCanonCommands,
   CANON_AGENTS_DIR, CANON_HOOKS_DIR,

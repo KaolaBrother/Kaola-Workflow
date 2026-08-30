@@ -1,5 +1,39 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Next/finalize and compact recovery now share one subtractive prompt framework (#1044).** The
+  dispatch contract is authored once; operation and recovery skeletons consume it; runtime adapters
+  add only measured differences; generation emits each complete runtime prompt. No rendered runtime
+  file is an authoring surface, and the required dispatch contract is never optional.
+- **Compact recovery follows each runtime's measured carrier (#1044).** Claude and Codex use one
+  `SessionStart(compact)` static `cat` of an already-generated prompt; Grok and Cursor each
+  materialize one native always-loaded Rule because their passive compact hooks cannot inject model
+  context. Cursor's project rule is shared by
+  standalone CLI, App local, and Cloud because Cloud lacks `sessionStart` and `preCompact` cannot
+  inject. OpenCode, Kimi, and ZCode gain no speculative prompt-lifecycle protocol; Kimi upgrades
+  remove the retired managed `PostCompact` block. All ordinary
+  tool calls add 0 Kaola recovery bytes and start 0 Kaola recovery subprocesses.
+- **ZCode retires the interim hook gate (#1044).** A live `/workflow-next` run proved that its
+  PreToolUse prompt-binding design could deny the binding tool itself. Project/global installs now
+  declare no Kaola hooks and remove only receipt-owned legacy rows, preserving foreign config.
+- **Grok uses its native Rule carrier rather than a compact hook (#1044).** Two real compact probes
+  returned `NO / NO / NO`: first when a project hook pointed at a missing global prompt, and again
+  after the command target was repaired. Official Grok documentation resolves the second failure:
+  `SessionStart` does not mean post-compact, and passive-hook stdout is ignored. Project installs now
+  place the generated prompt in `.grok/rules/`; global installs use `$GROK_HOME/rules/`; both retire
+  only byte-known historical mappings and install no compact hook.
+
+### Fixed
+
+- **Compact no longer silently clears Workflow Next, Finalization, or dispatch rules on measured
+  compact-risk runtimes (#1044).** The direct recovery prompt tells the model to reread durable state
+  and continue the correct operation; compact time does not parse state, select a prompt, or run JS.
+  Cursor keeps the same continuation and dispatch rules in every model context. No session sidecar,
+  chunk acknowledgement, or tool-use gate is required.
+
 ## [10.1.1] - 2026-08-28
 
 ### Changed

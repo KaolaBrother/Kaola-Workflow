@@ -16,7 +16,8 @@
 // hand-edited, against a disposable copy so the real tree is never mutated.
 
 const { renderSkeleton, condMatches, resolveKeyed } = require('./generate-routing-surfaces.js');
-const { GENERATED_SURFACES, loadSkeleton, reportTypedFailure } = require('./generate-routing-surfaces.js');
+const { GENERATED_SURFACES, RUNTIME_RECOVERY_SURFACES, loadSkeleton, reportTypedFailure } = require('./generate-routing-surfaces.js');
+const ALL_GENERATED_SURFACES = [...GENERATED_SURFACES, ...RUNTIME_RECOVERY_SURFACES];
 // ONE list, two consumers: the all-role generator owns the retired-vocabulary ban and the routing
 // surfaces are held to the same bytes rather than to a second copy that could drift from it.
 const { ADAPTER_SOURCE, BEHAVIOR_SOURCE, RETIRED_VOCABULARY_BAN } = require('./generate-agent-profiles.js');
@@ -30,7 +31,7 @@ const path = require('path');
 // with a raw ENOENT there would be no readable signal anywhere.
 {
   try {
-    for (const row of GENERATED_SURFACES) loadSkeleton(row.skeleton, row.topic);
+    for (const row of ALL_GENERATED_SURFACES) loadSkeleton(row.skeleton, row.topic);
   } catch (e) {
     if (reportTypedFailure(e)) process.exit(1);
     throw e;
@@ -66,23 +67,13 @@ const retiredRunWideInline = text =>
 
 function tierRosterGaps(text) {
   const prose = normalizeProse(text);
-  const markers = [];
-  for (const tier of Object.keys(intentRosters)) {
-    for (const pattern of [
-      new RegExp(`\\b${tier}\\b.{0,48}\\broles?\\b`, 'g'),
-      new RegExp(`\\broles?\\b.{0,48}\\b${tier}\\b`, 'g'),
-    ]) {
-      let match;
-      while ((match = pattern.exec(prose)) !== null) markers.push({ tier, index: match.index });
-    }
-  }
-  markers.sort((a, b) => a.index - b.index);
-  return Object.keys(intentRosters).filter(tier => !markers.some(marker => {
-    if (marker.tier !== tier) return false;
-    const next = markers.find(candidate => candidate.index > marker.index);
-    const segment = prose.slice(marker.index, next ? next.index : Math.min(prose.length, marker.index + 1200));
-    return JSON.stringify(roleMentions(segment).sort()) === JSON.stringify(intentRosters[tier]);
-  })).map(tier => `${tier}-role-roster`);
+  const roster = prose.match(/\brole roster:\*{0,2}\s*(.*?)(?=\.\s|$)/);
+  return Object.keys(intentRosters).filter(tier => {
+    const segment = roster && roster[1].match(
+      new RegExp(`\\b${tier}\\s+[—-]\\s*(.*?)(?=;\\s*(?:standard|reasoning|heavy)\\s+[—-]|$)`));
+    return !segment
+      || JSON.stringify(roleMentions(segment[1]).sort()) !== JSON.stringify(intentRosters[tier]);
+  }).map(tier => `${tier}-role-roster`);
 }
 
 const ctx = (surface_type, forge) => ({ surface_type, forge });
@@ -274,6 +265,12 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   const topics = Object.keys(TOPICS).sort();
   eq(topics.join(','), 'finalize,init,next', 'registry carries exactly the three generated topics');
   eq(GENERATED_SURFACES.length, 18, 'registry derives 18 surfaces (3 topics x 6)');
+  eq(RUNTIME_RECOVERY_SURFACES.length, 6,
+    'compact-recovery registry derives six tracked Claude/Codex prompt artifacts');
+  eq(RUNTIME_RECOVERY_SURFACES.filter(r => r.runtime === 'claude').length, 3,
+    'compact-recovery registry carries all three Claude forge artifacts');
+  eq(RUNTIME_RECOVERY_SURFACES.filter(r => r.runtime === 'codex').length, 3,
+    'compact-recovery registry carries all three Codex forge artifacts');
   for (const topic of topics) {
     const rows = GENERATED_SURFACES.filter(r => r.topic === topic);
     eq(rows.length, 6, `${topic}: six surfaces`);
@@ -885,10 +882,11 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     // It is not visible in Node's require graph, so copy the path exported by its owning module.
     copy(ADAPTER_SOURCE);
     copy(BEHAVIOR_SOURCE);
-    for (const skeleton of new Set(GENERATED_SURFACES.map(r => r.skeleton))) {
+    copy(path.join('templates', 'routing', 'dispatch-contract.md'));
+    for (const skeleton of new Set(ALL_GENERATED_SURFACES.map(r => r.skeleton))) {
       copy(path.join('templates', 'routing', skeleton));
     }
-    for (const row of GENERATED_SURFACES) copy(row.path);
+    for (const row of ALL_GENERATED_SURFACES) copy(row.path);
 
     const clean = runCheck();
     // The spawned stderr is carried into the message. A sandbox that cannot start reports the same
@@ -899,7 +897,7 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     // message is unchanged.
     eq(clean.status, 0, 'mutation proof: sandbox baseline --check exits 0'
       + (clean.stderr ? `\n    sandbox stderr: ${clean.stderr.trim().split('\n').slice(0, 5).join('\n      ')}` : ''));
-    assert(/all 18 surfaces byte-match/.test(clean.stdout), 'mutation proof: sandbox baseline reports 18 surfaces');
+    assert(/all 24 surfaces byte-match/.test(clean.stdout), 'mutation proof: sandbox baseline reports 24 surfaces');
 
     // Every topic is covered on BOTH render shapes, and the FORGE twins as well as the canonical
     // github surface, because the forge editions are exactly the copies a hand-edit historically
@@ -1008,7 +1006,7 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     .filter(Boolean);
 
   const routingDir = path.resolve(__dirname, '..', 'templates', 'routing');
-  const registered = [...new Set(GENERATED_SURFACES.map(r => r.skeleton))].sort();
+  const registered = [...new Set(ALL_GENERATED_SURFACES.map(r => r.skeleton))].sort();
   const onDisk = fs.readdirSync(routingDir).filter(f => f.endsWith('.skeleton.md')).sort();
   // An unregistered skeleton would carry regions this scan never reads, so the scan's own domain is
   // asserted rather than assumed.
@@ -1046,7 +1044,7 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   // one leak twice makes a reader count defects that are not there.
   const distinctReasons = [...new Set(allReasons)];
   let leaked = 0;
-  for (const row of GENERATED_SURFACES) {
+  for (const row of ALL_GENERATED_SURFACES) {
     const surface = fs.readFileSync(path.join(repoRoot, row.path), 'utf8');
     for (const reason of distinctReasons) {
       if (surface.includes(reason)) {
@@ -1057,7 +1055,7 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
     }
   }
   assert(leaked === 0,
-    `REGION-reason: no region reason reaches any of the ${GENERATED_SURFACES.length} shipped surfaces`);
+    `REGION-reason: no region reason reaches any of the ${ALL_GENERATED_SURFACES.length} shipped surfaces`);
 
   // MUTATION PROOF, both directions, against REAL skeleton bytes held in memory — the tree is never
   // written. Stripping the reason from one real region must be seen; restoring it must clear.

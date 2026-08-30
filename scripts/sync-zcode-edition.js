@@ -4,24 +4,21 @@
 // ---------------------------------------------------------------------------
 // sync-zcode-edition.js — generate the ZCode runtime edition from canonical.
 //
-// ZCode (measured against ZCode 3.9.1) is a coding-agent RUNTIME (like
+// ZCode (measured against ZCode 3.10.1) is a coding-agent RUNTIME (like
 // opencode/Kimi/Grok/Cursor), not a git forge, and it does NOT ride the
 // install.sh --forge= machinery or edition-sync.js. It is delivered the
 // ZCode-native way: named agents under `.zcode/agents/<role>.md` (Agent
-// dispatch types), flat commands under `.zcode/commands/<name>.md`, a merged
-// user-scope `${ZCODE_HOME:-$HOME/.zcode}/cli/config.json` whose top-level `hooks` object requires
-// `"enabled": true` and offers exactly seven events (SessionStart,
-// UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse,
-// PostToolUseFailure, Stop — there is no SubagentStart), and support
-// scripts/hook shells under `.zcode/kaola-workflow/{scripts,hooks}`.
+// dispatch types), flat commands under `.zcode/commands/<name>.md`, an empty
+// generated config, and support scripts under `.zcode/kaola-workflow/scripts`.
+// It installs no prompt-lifecycle hooks.
 // Deterministic, idempotent, parity-checked by test-zcode-edition.js.
 //
-// ZCode discovers subagents and executable hook configuration ONLY at user scope,
-// so the installer additionally syncs the staged agent roster and merges the hooks
-// into the live user configuration.
+// ZCode discovers subagents only at user scope, so the installer additionally syncs the staged
+// agent roster. Receipt-aware hook helpers remain only to remove exact rows and shells emitted by
+// the retired interim design; they never create a current declaration.
 //
 // Canonical model classes drive the generated agent tier pins (measured on
-// ZCode 3.9.1): every agent renders `model: GLM-5.3` plus exactly one
+// ZCode 3.10.1): every agent renders `model: GLM-5.3` plus exactly one
 // camelCase `thoughtLevel:` field — sonnet/standard (standard tier) → high,
 // opus/reasoning (reasoning tier) → max, fable/heavy (heavy tier) → max.
 // The frontmatter key is `thoughtLevel`, NOT `reasoningEffort`/`effort`, and
@@ -66,9 +63,10 @@ let atomicSequence = 0;
 // No runtime-neutral hook shells are active in the ZCode edition. The generator retains ownership
 // of the hook directory so --write can prune stale dispatch artifacts.
 const HOOK_SHELLS = [];
-const COMPACT_WRAPPER = 'kaola-workflow-compact-context.sh';
+// Exact legacy basenames/renderers are retained solely for ownership-safe migration.
+const RUNTIME_WRAPPER = 'kaola-workflow-runtime-hook.sh';
 
-// ZCode 3.9.1 hook events (measured). SubagentStart does NOT exist on ZCode.
+// ZCode 3.10.1 hook events (measured). SubagentStart does NOT exist on ZCode.
 const ZCODE_HOOK_EVENTS = Object.freeze([
   'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest',
   'PostToolUse', 'PostToolUseFailure', 'Stop',
@@ -208,36 +206,36 @@ function renderCommand(canonContent, commandName, forge) {
 }
 
 // ---------------------------------------------------------------------------
-// config.json — the ZCode hook mapping. Hooks live under the top-level
-// `hooks` object, require "enabled": true, and offer exactly seven events
-// (measured on ZCode 3.9.1; there is no SubagentStart). Project-shaped
-// commands are repo-relative; a --global install rewrites the edition prefix
-// to ./kaola-workflow/ (user hooks run from ~/.zcode/).
+// config.json — the ZCode 3.10.1 hook mapping. Hooks live under the top-level
+// `hooks` object, require "enabled": true, and matcher rows live under its
+// `events` object. Project-shaped commands are repo-relative; a --global
+// install rewrites the edition prefix to ./kaola-workflow/.
 // ---------------------------------------------------------------------------
 function renderZcodeConfigJson(forge) {
-  const label = treeLabel(forge);
-  return JSON.stringify({
-    hooks: {
-      enabled: true,
-      SessionStart: [{
-        command: 'sh ' + label + '/kaola-workflow/hooks/' + COMPACT_WRAPPER,
-        timeout: 5,
-      }],
-    },
-  }, null, 2) + '\n';
+  forgeLayout.assertForge(forge || DEFAULT_FORGE);
+  return '{}\n';
 }
 
 function rewriteConfigJsonForGlobal(json, forge) {
   const parsed = JSON.parse(String(json));
   const prefix = 'sh ' + treeLabel(forge) + '/kaola-workflow/';
-  for (const entries of Object.values((parsed && parsed.hooks) || {})) {
-    if (!Array.isArray(entries)) continue;
-    for (const entry of entries) {
-      if (!entry || typeof entry.command !== 'string' || !entry.command.startsWith(prefix)) continue;
-      entry.command = 'sh "${ZCODE_HOME:-$HOME/.zcode}/kaola-workflow/'
-        + entry.command.slice(prefix.length) + '"';
+  const rewrite = (value) => {
+    if (Array.isArray(value)) return value.forEach(rewrite);
+    if (!value || typeof value !== 'object') return;
+    for (const [key, child] of Object.entries(value)) {
+      if (key === 'command' && typeof child === 'string' && child.startsWith(prefix)) {
+        const rest = child.slice(prefix.length);
+        const match = rest.match(/^(\S+)([\s\S]*)$/);
+        if (match) {
+          value[key] = 'sh "${ZCODE_HOME:-$HOME/.zcode}/kaola-workflow/'
+            + match[1] + '"' + match[2];
+        }
+      } else {
+        rewrite(child);
+      }
     }
-  }
+  };
+  rewrite(parsed && parsed.hooks);
   return JSON.stringify(parsed, null, 2) + '\n';
 }
 
@@ -296,10 +294,16 @@ function defaultReceiptPath(destPath) {
 }
 
 function hookRows(hooks) {
-  return Object.entries(hooks || {}).flatMap(([event, entries]) =>
-    event === 'enabled' || !Array.isArray(entries)
+  const direct = Object.entries(hooks || {}).flatMap(([event, entries]) =>
+    event === 'enabled' || event === 'events' || !Array.isArray(entries)
       ? []
       : entries.map(entry => ({ event, entry })));
+  const wrapped = hooks && hooks.events && typeof hooks.events === 'object'
+    && !Array.isArray(hooks.events)
+    ? Object.entries(hooks.events).flatMap(([event, entries]) =>
+      !Array.isArray(entries) ? [] : entries.map(entry => ({ event, entry })))
+    : [];
+  return direct.concat(wrapped);
 }
 
 function readReceipt(receiptPath, destPath) {
@@ -330,7 +334,7 @@ function mergeDestHooks(destPath, opts) {
   assertRegularOrMissing(receiptPath, 'ZCode hook receipt at ' + receiptPath);
   let dest = {};
   if (destStat) dest = readJsonFile(destPath, 'config.json at ' + destPath);
-  dest.hooks = dest.hooks || {};
+  if (!Object.prototype.hasOwnProperty.call(dest, 'hooks')) dest.hooks = {};
   if (!dest.hooks || typeof dest.hooks !== 'object' || Array.isArray(dest.hooks)) {
     throw new Error('config.json at ' + destPath + ' has a non-object hooks value');
   }
@@ -351,17 +355,52 @@ function mergeDestHooks(destPath, opts) {
         present: Object.prototype.hasOwnProperty.call(dest.hooks, 'enabled'),
         value: dest.hooks.enabled,
       },
+      priorEvents: {
+        present: Object.prototype.hasOwnProperty.call(dest.hooks, 'events'),
+      },
       added: [],
     };
+  } else if (!receipt.priorEvents || typeof receipt.priorEvents.present !== 'boolean') {
+    // Receipts written before the 3.10.1 envelope did not record whether an
+    // events object already existed. Preserve that observable shape when the
+    // exact owned direct rows are migrated, so uninstall cannot erase a
+    // user-owned empty events container.
+    receipt.priorEvents = {
+      present: Object.prototype.hasOwnProperty.call(dest.hooks, 'events'),
+    };
   }
+  // A pre-3.10.1 receipt may own direct hooks.<event> rows. Those exact rows
+  // are retired, not copied into hooks.events: the old `{ command, timeout }`
+  // shape is not a 3.10.1 matcher row. The canonical incoming matcher row is
+  // added below. Unreceipted direct rows remain user-owned and untouched.
+  if (!dest.hooks.events || typeof dest.hooks.events !== 'object' || Array.isArray(dest.hooks.events)) {
+    dest.hooks.events = {};
+  }
+  const incomingEvents = incoming.events && typeof incoming.events === 'object'
+    && !Array.isArray(incoming.events) ? incoming.events : {};
+  const stillOwned = [];
+  for (const owned of receipt.added) {
+    const remainsCanonical = Array.isArray(incomingEvents[owned.event])
+      && incomingEvents[owned.event].some(entry => sameJsonValue(entry, owned.entry));
+    if (remainsCanonical) {
+      stillOwned.push(owned);
+      continue;
+    }
+    for (const container of [dest.hooks, dest.hooks.events]) {
+      const entries = container && container[owned.event];
+      if (!Array.isArray(entries)) continue;
+      container[owned.event] = entries.filter(entry => !sameJsonValue(entry, owned.entry));
+      if (container[owned.event].length === 0) delete container[owned.event];
+    }
+  }
+  receipt.added = stillOwned;
   dest.hooks.enabled = true; // Safe here: no dormant foreign hook is activated.
-  for (const [event, entries] of Object.entries(incoming)) {
-    if (event === 'enabled') continue;
-    const existing = Array.isArray(dest.hooks[event]) ? dest.hooks[event] : [];
-    dest.hooks[event] = existing.slice();
+  for (const [event, entries] of Object.entries(incomingEvents)) {
+    const existing = Array.isArray(dest.hooks.events[event]) ? dest.hooks.events[event] : [];
+    dest.hooks.events[event] = existing.slice();
     for (const entry of entries) {
-      if (dest.hooks[event].some(candidate => sameJsonValue(candidate, entry))) continue;
-      dest.hooks[event].push(entry);
+      if (dest.hooks.events[event].some(candidate => sameJsonValue(candidate, entry))) continue;
+      dest.hooks.events[event].push(entry);
       receipt.added.push({ event, entry });
     }
   }
@@ -390,12 +429,23 @@ function stripDestHooks(destPath, opts) {
   const receipt = readReceipt(receiptPath, destPath);
   if (!receipt) return; // No exact proof means no ownership and therefore no mutation.
   const dest = readJsonFile(destPath, 'config.json at ' + destPath);
-  dest.hooks = dest.hooks || {};
+  if (!Object.prototype.hasOwnProperty.call(dest, 'hooks')) dest.hooks = {};
+  if (!dest.hooks || typeof dest.hooks !== 'object' || Array.isArray(dest.hooks)) {
+    throw new Error('config.json at ' + destPath + ' has a non-object hooks value');
+  }
   for (const owned of receipt.added) {
-    const entries = dest.hooks[owned.event];
-    if (!Array.isArray(entries)) continue;
-    dest.hooks[owned.event] = entries.filter(entry => !sameJsonValue(entry, owned.entry));
-    if (dest.hooks[owned.event].length === 0) delete dest.hooks[owned.event];
+    const containers = [dest.hooks.events, dest.hooks];
+    for (const container of containers) {
+      if (!container || typeof container !== 'object' || Array.isArray(container)) continue;
+      const entries = container[owned.event];
+      if (!Array.isArray(entries)) continue;
+      container[owned.event] = entries.filter(entry => !sameJsonValue(entry, owned.entry));
+      if (container[owned.event].length === 0) delete container[owned.event];
+    }
+  }
+  if (dest.hooks.events && typeof dest.hooks.events === 'object'
+      && !Array.isArray(dest.hooks.events) && Object.keys(dest.hooks.events).length === 0) {
+    if (!(receipt.priorEvents && receipt.priorEvents.present === true)) delete dest.hooks.events;
   }
   if (dest.hooks.enabled === true) {
     if (receipt.priorEnabled.present) dest.hooks.enabled = receipt.priorEnabled.value;
@@ -436,20 +486,22 @@ function adaptHookForZcode(script, content) {
   return out;
 }
 
-function renderCompactWrapper(forge) {
-  forge = forge || DEFAULT_FORGE;
-  const compactJs = forgeLayout.scriptName('kaola-workflow-compact-context.js', forge);
+function renderRuntimeHookWrapper() {
   return [
     '#!/bin/sh',
-    '# zcode-edition: SessionStart resume-context wrapper. Feeds the hook payload to the',
-    '# compact-context support script (resolved via the generated tree launcher) and lets',
-    '# its stdout through. Generated by scripts/sync-zcode-edition.js; do not hand-edit.',
+    '# zcode-edition: matcher-row adapter for kaola-workflow-runtime.js.',
+    '# ZCode 3.10.1 passes a JSON payload; identity and operation are projected',
+    '# only when explicit fields are present. Generated by sync-zcode-edition.js.',
+    '# UserPromptSubmit activates only /workflow-next and /kaola-workflow-finalize.',
     '',
-    'HOOK_INPUT="$(cat)"',
-    'SCRIPT="${ZCODE_HOME:-$HOME/.zcode}/kaola-workflow/scripts/' + compactJs + '"',
-    '[ -f "$SCRIPT" ] || exit 0',
-    'printf \'%s\' "$HOOK_INPUT" | node "$SCRIPT" 2>/dev/null || true',
-    'exit 0',
+    'PHASE="${1:-pre-tool}"',
+    '_zh="${ZCODE_HOME:-$HOME/.zcode}"',
+    '_adapter="${KAOLA_WORKFLOW_RUNTIME_HOOK:-$_zh/kaola-workflow/scripts/kaola-workflow-runtime-hook.js}"',
+    'if [ ! -f "$_adapter" ] && [ -f "./scripts/kaola-workflow-runtime-hook.js" ]; then',
+    '  _adapter="./scripts/kaola-workflow-runtime-hook.js"',
+    'fi',
+    '[ -f "$_adapter" ] || exit 0',
+    'exec node "$_adapter" --runtime zcode --phase "$PHASE"',
     '',
   ].join('\n');
 }
@@ -521,7 +573,10 @@ function expectedCommandFiles(forge) {
   return listCanonCommands(forge).map(f => f.slice(0, -3));
 }
 function expectedHookFiles() {
-  return HOOK_SHELLS.concat([COMPACT_WRAPPER]);
+  return [];
+}
+function expectedPromptFiles() {
+  return [];
 }
 function manifestSupportScripts(forge) {
   const manifest = require('./kaola-workflow-install-manifest.js');
@@ -563,6 +618,13 @@ function retiredEditionFiles(forge) {
     const expected = new Set(manifestSupportScripts(forge));
     for (const e of fs.readdirSync(scriptsDir, { withFileTypes: true })) {
       if (e.isFile() && e.name.endsWith('.js') && !expected.has(e.name)) out.push('scripts/' + e.name);
+    }
+  }
+  const promptsDir = path.join(base, 'prompts');
+  if (fs.existsSync(promptsDir)) {
+    const expected = new Set(expectedPromptFiles());
+    for (const e of fs.readdirSync(promptsDir, { withFileTypes: true })) {
+      if (e.isFile() && e.name.endsWith('.md') && !expected.has(e.name)) out.push('prompts/' + e.name);
     }
   }
   return out.sort();
@@ -636,14 +698,6 @@ function writeEditionDir(forge) {
       console.log((HOOK_ADAPTATIONS[script] ? 'adapted    ' : 'copied     ') + treeLabel(forge) + '/kaola-workflow/hooks/' + script);
       wrote++;
     }
-  }
-  const wrapperDest = path.join(hooksDir, COMPACT_WRAPPER);
-  const wrapper = renderCompactWrapper(forge);
-  if (!fs.existsSync(wrapperDest) || fs.readFileSync(wrapperDest, 'utf8') !== wrapper) {
-    fs.writeFileSync(wrapperDest, wrapper);
-    fs.chmodSync(wrapperDest, 0o755);
-    console.log('generated  ' + treeLabel(forge) + '/kaola-workflow/hooks/' + COMPACT_WRAPPER);
-    wrote++;
   }
   const scriptsDir = treePath(path.join(treeLabel(forge), 'kaola-workflow', 'scripts'));
   ensureDir(scriptsDir);
@@ -744,14 +798,6 @@ function runCheck(forge) {
       mismatches.push({ rel, reason: 'drifted from canonical hooks/ (post-adaptation)' });
     }
   }
-  {
-    const rel = tree + '/kaola-workflow/hooks/' + COMPACT_WRAPPER;
-    if (!fs.existsSync(treePath(rel))) {
-      mismatches.push({ rel, reason: 'missing generated compact wrapper' });
-    } else if (readTree(rel) !== renderCompactWrapper(forge)) {
-      mismatches.push({ rel, reason: 'stale — regenerate' });
-    }
-  }
   for (const base of manifestSupportScripts(forge)) {
     const rel = tree + '/kaola-workflow/scripts/' + base;
     if (!fs.existsSync(treePath(rel))) {
@@ -789,7 +835,8 @@ function runCheck(forge) {
   const na = listCanonAgents().length;
   const nc = listCanonCommands(forge).length;
   console.log('sync-zcode-edition[' + forge + ']: ' + na + ' agent(s) + ' + nc + ' command(s) + '
-    + (expectedHookFiles().length + manifestSupportScripts(forge).length) + ' support/hook file(s) in parity with canonical.');
+    + (expectedHookFiles().length + expectedPromptFiles().length + manifestSupportScripts(forge).length)
+    + ' support/hook/prompt file(s) in parity with canonical.');
 }
 
 function usage() {
@@ -853,7 +900,9 @@ module.exports = {
   rewriteClaudeScriptPaths, ZCODE_KAOLA_SCRIPT, zcodeKaolaScript,
   ZCODE_MODEL_DISPATCH_GUIDANCE, ZCODE_MODEL_DISPATCH_BLOCK,
   renderZcodeConfigJson, rewriteConfigJsonForGlobal, mergeDestHooks, stripDestHooks,
-  renderCompactWrapper, COMPACT_WRAPPER, adaptHookForZcode, HOOK_ADAPTATIONS,
+  renderRuntimeHookWrapper, RUNTIME_WRAPPER,
+  expectedPromptFiles,
+  adaptHookForZcode, HOOK_ADAPTATIONS,
   renderSupportLauncher, manifestSupportScripts,
   treeLabel, agentRel, commandRel, configRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,

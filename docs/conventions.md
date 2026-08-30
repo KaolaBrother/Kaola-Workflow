@@ -92,6 +92,29 @@ reloaded.
 Only a miss after the correct host lifecycle is a capability gap. Do not add Kaola
 caps to runtime-owned automatic, parallel, background, resume, nesting, or task-sensitive choices.
 
+## Prompt recovery across compact
+
+`workflow-next` and `kaola-workflow-finalize` always load the runtime dispatch contract before an
+execution-shape decision. Author universal dispatch wording once in
+`templates/routing/dispatch-contract.md`; operation skeletons and
+`compact-recovery.skeleton.md` consume that slot. Runtime adapters add only measured capability
+differences, and generation produces the complete per-runtime prompt. Edit sources, never rendered
+surfaces.
+
+The only shared invariant is model-visible: after a compact and before the next inference, restore
+the complete continuation prompt, including Workflow Next/Finalization routing and dispatch. Do not
+translate that into PreToolUse, PostToolUse, or Stop gates. A compact carrier makes the generated
+artifact model-visible directly; it does not derive the active operation, run a prompt parser, or add private
+session identity, token, generation, or acknowledgement fields to durable state.
+
+Use a direct compact injection only where the runtime exposes one. Grok and Cursor are measured
+Rule-carrier exceptions: Grok passive hook stdout is ignored, while Cursor's one project
+`alwaysApply` rule is the shared carrier for CLI, App local, and Cloud because Cloud
+lacks `sessionStart` and `preCompact` cannot inject. If a runtime has neither a measured compact
+risk nor a valid post-compact injection surface, record that boundary instead of building a tool
+gate. Compress by single-source wording and measured byte budgets, never by making dispatch
+optional or erasing a runtime capability difference.
+
 ## Joining a dispatch
 
 Dispatching a subagent does not end at the spawn call, but nothing prescribes the join: how long to
