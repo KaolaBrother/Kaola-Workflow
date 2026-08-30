@@ -1,0 +1,8 @@
+{
+  "selection_mode": "explicit-target",
+  "selection_bundle": "#1044",
+  "selection_priority_basis": "none recorded (explicit-target); the caller named #1044, and no backlog ranking was persisted",
+  "selection_rejected": "none recorded (explicit-target); no alternatives were persisted",
+  "selection_disjointness": "none recorded (explicit-target); the claim itself is the disjointness check",
+  "clarifications": "none"
+}
