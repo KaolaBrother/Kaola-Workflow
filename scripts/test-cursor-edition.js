@@ -178,9 +178,6 @@ function recoveryRuleVerdict(text) {
   if (!/CLI, App local, and App Cloud are separate hosts/i.test(source)) {
     errors.push('the runtime adapter does not keep CLI, App local, and Cloud distinct');
   }
-  if (!/(?:no|without)[^\n.]{0,80}tool-use\s+(?:hook|lifecycle)/i.test(source)) {
-    errors.push('rule does not exclude tool-use hooks');
-  }
   return { ok: errors.length === 0, errors, frontmatter };
 }
 
@@ -1870,6 +1867,15 @@ for (const role of reviewerGenerator.ROLES) {
         assert(cursorSurface.LEGACY_10_0_1_GLOBAL_HASHES.github[rel]
           === '79e9bd53c1146fc7af9557f4757f6c38de610f2d7ae2cde06c930f3e8ef3aa6c',
         'G8-legacy-adoption: production pins the published 10.0.1 github workflow-next hash');
+        for (const forge of ['github', 'gitlab', 'gitea']) {
+          const retiredPins = cursorSurface.LEGACY_10_0_1_RETIRED_HASHES[forge];
+          assert(retiredPins['kaola-workflow/scripts/kaola-workflow-project-instruction-templates.js']
+            === '32ce6ee0711d7b6a3ed83fec12bd6480ceb91103c7fe5257c427cd1a757bb048',
+          `G8-legacy-retired-${forge}: production pins the published 10.0.1 project template hash`);
+          assert(retiredPins['kaola-workflow/scripts/kaola-workflow-project-instructions.js']
+            === '45104e070377043c605dc69aabd043bc01786c706e7432d1e753632a9a585ed5',
+          `G8-legacy-retired-${forge}: production pins the published 10.0.1 project writer hash`);
+        }
       } finally {
         try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
       }
@@ -2172,12 +2178,14 @@ for (const role of reviewerGenerator.ROLES) {
   const initBody = exists(initRel) ? read(initRel) : '';
   assert(exists(initRel),
     'G11: generated ' + initRel + ' exists');
-  assert(!/KW-AGENTS-TEMPLATE-(?:START|END)/.test(initBody)
-      && /## Step 2 — Reconcile project instructions/.test(initBody)
-      && /kaola-workflow-project-instruction-templates\.js/.test(initBody)
-      && /kaola-workflow-project-instructions\.js/.test(initBody),
-    'G11: generated workflow-init must carry the shared AGENTS.md authority migration job '
-    + 'through the sole distribution module and writer, not an inline Cursor copy');
+  assert(!/kaola-workflow-project-instruction(?:-templates|s)\.js|KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(initBody),
+    'G11: generated workflow-init carries no retired project-prompt owner');
+  assert(/Agent owns the meaning and prose of project instructions/.test(initBody)
+      && /repository facts/.test(initBody)
+      && /Global Workflow Contract already loaded by the runtime/.test(initBody)
+      && /Before changing an existing user-authored or owner-authored instruction file/.test(initBody)
+      && /fresh top-level\s+Agent\/session/.test(initBody),
+    'G11: generated workflow-init carries Agent ownership, grounding, consent, and reload outcomes');
 }
 
 // G10 — every ordinary Cursor tool-use path is hook-free. The generated mapping

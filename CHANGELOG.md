@@ -1,5 +1,31 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Project instructions are now Agent-maintained outcomes rather than script-owned bytes (#1047).**
+  `workflow-init` consumes the runtime-loaded global contract, inspects current repository facts,
+  and lets the Agent organize the smallest useful project contract. It neither locates nor runs
+  installation internals; a missing or inconsistent global authority preserves local rules and is
+  reported as a separate release-tree check. Existing owner-authored content requires authorization
+  before rewrite. Fixed project templates, ownership markers, canonical prompt bytes, semantic
+  compatibility classes, the project-prompt writer, and the producer-only exception are retired;
+  ADR 0023 records the new boundary. The init skeleton is reduced from 398 lines / 21,096 bytes to
+  106 lines / 4,563 bytes; the Claude command from 276 / 14,104 to 102 / 4,761, and the Codex skill
+  to 93 / 4,444. Runtime configuration tutorials, canned document bodies, claim creation,
+  unbounded instruction discovery, and procedural migration prose no longer run on every
+  initialization.
+- **The README is again a product entrypoint instead of an operations manual (#1047).** Runtime,
+  forge, state, quick-start, development, and license capabilities remain discoverable, while
+  installation/update/uninstall detail moves to `docs/installation.md` and existing authoritative
+  edition/API/convention documents. The non-gating measurement changed from 1,801 lines / 122,019
+  bytes / 107 headings to 160 lines / 7,770 bytes / 9 headings.
+- **Kaola-Workflow dogfoods its project-instruction design (#1047).** Root `AGENTS.md` now contains
+  verified producer facts and stricter local constraints without duplicating the machine-global
+  Workflow contract; root `CLAUDE.md` is one `@AGENTS.md` bridge plus Claude-only profile and
+  validation facts.
+
 ## [10.2.0] - 2026-08-30
 
 ### Changed

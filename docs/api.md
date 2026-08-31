@@ -13,39 +13,24 @@ Three commands ship. Everything below is invoked by them or by hand.
 
 | Command | Owns |
 |---|---|
-| `/workflow-init` | bootstrap project-local facts: minimal `AGENTS.md`, thin native bridge, commands, constraints, validation, docs, and local overrides; requires a compatible installed global-contract receipt and migrates only recognized Kaola-owned bytes |
+| `/workflow-init` | consume the runtime-loaded global contract, inspect repository facts, and have the Agent maintain project instructions and the smallest required native bridge; existing owner-authored instructions require authorization before rewrite |
 | `/workflow-next` | select, claim, write the mission list, run it |
 | `/kaola-workflow-finalize` | validate, dock docs, summarize, close, archive, commit, sink |
 
-## Project instruction migration — `kaola-workflow-project-instructions.js`
+## Project instruction boundary
 
-```text
-node scripts/kaola-workflow-project-instructions.js plan|check|apply \
-  --project-root <path> --json
-```
+Project prompt maintenance has no script API. `workflow-init` consumes the global contract already
+loaded by the runtime, then the Agent reads the repository and maintains `AGENTS.md` and any
+necessary thin runtime bridge as ordinary project content. It does not locate or execute installer
+internals. An absent or inconsistent global authority preserves project rules and routes a separate
+release-tree installation check. Repository purpose, commands, tests, documentation, and
+constraints are semantic facts; no CLI classifies or renders them.
 
-The helper writes only project-specific guidance. Universal workflow behavior comes from the
-installed machine-global contract; root `CLAUDE.md` remains the thin `@AGENTS.md` bridge.
-
-- `plan` is read-only. It verifies the global receipt, classifies both files, computes hashes, and
-  reports `planned`, `converged`, `active_run_preserved`, `producer_repository_preserved`, or
-  `decision_required`.
-- `check` is read-only. A safe but unapplied plan becomes `drift` and exits 3.
-- `apply` writes only a safe `planned` result, atomically and by exact path. It becomes a
-  byte-identical no-op after convergence.
-
-The exact current and known released whole-file templates plus recognized Kaola redirects are
-workflow-owned. Surrounding owner bytes remain byte-identical. Missing files may be created;
-malformed markers, owner-only files, and unknown/mixed shapes return `decision_required` without a
-write. Any active run returns `active_run_preserved` before instruction mutation: `AGENTS.md`,
-`CLAUDE.md`, `workflow-state.md`, and `mission-list.md` all remain untouched, with no consent or
-adoption bypass. The producer repository remains protected. The JSON envelope carries
-`schema_version`, `mode`, `status`, `changed`, `files`, `writes`, and `reasons`, including
-before/after hashes and owner-boundary facts.
-
-The installed local receipt must be `CURRENT`, contract schema 1, and hash-compatible with the
-shipped global source. Without it, the helper returns `decision_required` rather than writing a
-project file that would silently omit universal behavior.
+Existing owner-authored instructions require authorization before rewrite. The operation specifies
+outcomes rather than headings, ordering, template fields, canonical bytes, or a target size. A
+subsequent run reads the resulting content and leaves it unchanged when current evidence provides no
+reason to edit. Runtime installers own machine/user commands, profiles, hooks, adapters, and
+receipts; they do not acquire repository-prompt ownership.
 
 ## Routing-surface handoff interface
 
@@ -1581,7 +1566,6 @@ The `--release-check` step is the gate documented above. `--prepare` bumps the v
 | Script | Contract |
 |---|---|
 | `generate-agent-profiles.js --check\|--write\|--print-manifest` | validates the complete 14-role behavior, runtime-capability, and provenance authorities; composes seven runtime families through nine adapter variants; writes/checks the 14 Claude profiles, 42 Codex profiles, three Codex registries, and the 126-render manifest; exposes logical profile renders to the five additive edition generators; and renders/replaces runtime-native next/finalize guidance through the API above. `delegation_guidance` is routing-only and excluded from the native-profile adapter hash, so its change does not churn unchanged profile hashes. `--check` exits non-zero on tracked output drift. Generated prompts exclude provenance. |
-| `kaola-workflow-project-instructions.js plan\|check\|apply --project-root <path> --json` | receipt-gated, ownership-safe minimal project-instruction migration described above. Active runs and unknown/mixed owner bytes are non-mutating. The installed GitHub, GitLab, and Gitea copies are identical. |
 | `kaola-workflow-global-contract.js install\|check\|uninstall --json [--nonce VALUE]` | registry-derived local batch transaction. It discovers the eight local surfaces, deduplicates shared physical carriers, preflights every path/owner/schema before the first write, preserves managed owner bytes, atomically writes or rolls back, and receipts source/render/install hashes plus all nine rows (Cursor Cloud reports `REMOTE_REQUIRED`). `check` exits 3 on drift. Uninstall re-derives every receipt target from the current registry before removing unchanged owned bytes. |
 | `kaola-workflow-global-contract.js install-cloud\|check-cloud\|uninstall-cloud --target REPO --json [--nonce VALUE]` | explicit Cursor Cloud selected-repository transaction. Requires an initialized Git repository, writes the one `.cursor/rules/kaola-workflow-global.mdc` plus a project receipt, and never runs as a side effect of local install-all. |
 | `run-edition-tests.js <scripts/test-*.js>...` | executes every explicitly declared additive edition suite, even after a prior failure; prints child output, retains every failed suite in the final summary, and exits non-zero after all attempts when any child failed. The package script declares opencode, Kimi, Grok, Cursor, and ZCode explicitly so suite registration can see the full lane. |

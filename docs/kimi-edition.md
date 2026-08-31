@@ -7,9 +7,10 @@ forge validation chains.
 
 Kimi loads `AGENTS.md` directly. Its project discovery concatenates instructions from the git root
 toward the current directory, preferring `.kimi-code/AGENTS.md` before `AGENTS.md`/`agents.md` at
-each level. Root `AGENTS.md` is therefore Kaola's universal repository authority; no Kimi bridge or
-copy is installed. The first-party discovery source and the warning-only 32 KiB recommendation are
-linked in [runtime capabilities](runtime-capabilities.md#kimi-code).
+each level. Root `AGENTS.md` is therefore the Agent-maintained project authority; no Kimi bridge or
+copy is installed. Universal Workflow behavior comes from the machine-global carrier. The
+first-party discovery source and the warning-only 32 KiB recommendation are linked in
+[runtime capabilities](runtime-capabilities.md#kimi-code).
 
 ## Native carriers
 

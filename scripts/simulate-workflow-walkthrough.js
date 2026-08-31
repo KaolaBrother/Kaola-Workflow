@@ -11355,32 +11355,10 @@ function testSinkTransactionCleanEndToEnd() {
   }
 }
 
-// #645/#1033: templates/axioms.md is the byte source for the First Principles block on the two
-// repository-authoring surfaces: root AGENTS.md and the user-facing README. Runtime/init surfaces
-// are renderers, never authors, so all 21 must omit the block and point the consumer at AGENTS.md.
-// The startsWith guard keeps a blanked/emptied axioms.md from producing a false green (includes('')
-// is always true), so the guard is load-bearing on BOTH the canonical file and every comparison.
-//
-// TWENTY-ONE DERIVED SURFACES. The list used to be six hand-typed paths, which covered the tracked
-// trees and left generated runtime trees free to drift with nothing to catch it. Neither half is
-// typed here now: the tracked six come from the routing registry that renders them, and the fifteen
-// additive-runtime surfaces are rendered through the sync modules' own renderers. Another forge
-// reaches every runtime with no edit to this function.
-//
-// WHY THE GENERATED TREES ARE RENDERED, NOT READ. They are gitignored and absent from a fresh
-// checkout and from every worktree, so a disk read would face a choice between a permanent false red
-// and a skip-when-absent — and a check that quietly enforces nothing when its subject is missing is
-// the defect this extension exists to remove. Rendering is the same bytes `sync --check` asserts the
-// on-disk tree equals, so the subject is always present and can never be a stale tree. Absence is
-// still loud, one level up: the expected surface COUNT is derived independently, so a renderer that
-// yields nothing reds instead of silently shrinking the sweep.
-//
-// #1005: TWO NAMED SURFACES — the repo's OWN prose. Twenty-one derived surfaces make this guard total over
-// what the workflow SHIPS and blind to the two files that state the same axioms to a reader of this
-// repository: root AGENTS.md's `## First Principles` block and README.md's numbered axiom list. They
-// are NAMED, not derived, because they ARE the subject — no registry emits them — exactly as
-// INIT_TOPIC is named. Root CLAUDE.md deliberately left this set in #1033: it is now a thin runtime
-// bridge into AGENTS.md and duplicating the universal block there would violate the architecture.
+// #645/#1033/#1047: templates/axioms.md remains a non-empty source for operation-level
+// decision guidance, while the compatible machine-global contract is the runtime carrier for
+// universal principles. Project instructions, README, the Claude bridge, and all runtime/init
+// surfaces must not copy the complete canonical block.
 function testAxiomBlockByteIdentity() {
   const routing = require('./generate-routing-surfaces.js');
   const opencodeSync = require('./sync-opencode-edition.js');
@@ -11390,112 +11368,73 @@ function testAxiomBlockByteIdentity() {
   const zcodeSync = require('./sync-zcode-edition.js');
 
   const axioms = read(path.join(repoRoot, 'templates', 'axioms.md'));
-  assert(axioms.startsWith('## First Principles'),
-    'templates/axioms.md must open with the ## First Principles heading; got: ' + JSON.stringify(axioms.slice(0, 40)));
+  assert(axioms.startsWith('## First Principles') && axioms.trim().length > 100,
+    'templates/axioms.md remains a non-vacuous operation-guidance source');
 
-  // The topic this guard is about. Named, not derived — it IS the subject — but asserted, so a
-  // rename reds here instead of silently deriving an empty surface set and passing over nothing.
+  const globalContract = read(path.join(repoRoot, 'templates', 'global',
+    'kaola-workflow-global.md'));
+  for (const principle of [
+    'Correct first; never trade correctness for speed or cost.',
+    'Then save human time without weakening correctness.',
+    'Then spend as little as possible.',
+    'Machines decide facts; humans decide values.',
+    'Own your own verdicts.',
+  ]) {
+    assert(globalContract.includes(principle),
+      'the machine-global contract carries universal principle: ' + principle);
+  }
+
   const INIT_TOPIC = 'init';
   assert(Object.prototype.hasOwnProperty.call(routing.TOPICS, INIT_TOPIC),
-    'the routing registry must still carry the "' + INIT_TOPIC + '" topic this guard checks');
+    'the routing registry still carries the init topic this guard checks');
 
-  // Tracked surfaces: straight from the registry rows that render them.
   const surfaces = routing.GENERATED_SURFACES
-    .filter(r => r.topic === INIT_TOPIC)
-    .map(r => ({ id: r.path, body: read(path.join(repoRoot, r.path)), authorsAxioms: false }));
-
-  // Generated surfaces: rendered in memory from each forge's init COMMAND row (each additive
-  // runtime renders from the command lane; Kimi packages it as a directory-form Skill).
+    .filter(row => row.topic === INIT_TOPIC)
+    .map(row => ({ id: row.path, body: read(path.join(repoRoot, row.path)) }));
   for (const forge of routing.FORGES) {
-    const row = routing.commandSurfacesForForge(forge).find(r => r.topic === INIT_TOPIC);
-    assert(!!row, 'forge ' + forge + ' must ship an ' + INIT_TOPIC + ' command surface to render from');
-    const base = path.basename(row.path, '.md');
-    const canon = read(path.join(repoRoot, row.path));
-    const ocRel = path.relative(repoRoot, path.join(opencodeSync.outDirs(forge).command, base + '.md'));
-    surfaces.push({ id: ocRel, body: opencodeSync.renderCommand(canon, forge, ocRel), authorsAxioms: false });
-    surfaces.push({ id: kimiSync.skillRel(base, forge), body: kimiSync.renderCommand(canon, base, forge), authorsAxioms: false });
-    surfaces.push({ id: grokSync.commandRel(base, forge), body: grokSync.renderCommand(canon, base, forge), authorsAxioms: false });
-    surfaces.push({ id: cursorSync.commandRel(base, forge), body: cursorSync.renderCommand(canon, base, forge), authorsAxioms: false });
-    surfaces.push({ id: zcodeSync.commandRel(base, forge), body: zcodeSync.renderCommand(canon, base, forge), authorsAxioms: false });
+    const row = routing.commandSurfacesForForge(forge).find(candidate => candidate.topic === INIT_TOPIC);
+    assert(!!row, 'forge ' + forge + ' ships an init command surface');
+    const basename = path.basename(row.path, '.md');
+    const canonical = read(path.join(repoRoot, row.path));
+    const ocRel = path.relative(repoRoot,
+      path.join(opencodeSync.outDirs(forge).command, basename + '.md'));
+    surfaces.push({ id: ocRel, body: opencodeSync.renderCommand(canonical, forge, ocRel) });
+    surfaces.push({ id: kimiSync.skillRel(basename, forge),
+      body: kimiSync.renderCommand(canonical, basename, forge) });
+    surfaces.push({ id: grokSync.commandRel(basename, forge),
+      body: grokSync.renderCommand(canonical, basename, forge) });
+    surfaces.push({ id: cursorSync.commandRel(basename, forge),
+      body: cursorSync.renderCommand(canonical, basename, forge) });
+    surfaces.push({ id: zcodeSync.commandRel(basename, forge),
+      body: zcodeSync.renderCommand(canonical, basename, forge) });
   }
 
-  // #1005: the repo's own two prose surfaces. Named, not derived — they ARE the subject, exactly as
-  // INIT_TOPIC is — but each is asserted to exist, so a rename or a move reds here instead of quietly
-  // dropping a surface out of the sweep.
-  const NAMED_SURFACES = ['AGENTS.md', 'README.md'];
-  for (const rel of NAMED_SURFACES) {
-    const abs = path.join(repoRoot, rel);
-    assert(fs.existsSync(abs),
-      'the repo-root ' + rel + ' this guard checks must exist at ' + rel + ' (named surface missing or renamed)');
-    surfaces.push({ id: rel, body: read(abs), authorsAxioms: true });
+  for (const relativePath of ['AGENTS.md', 'README.md', 'CLAUDE.md']) {
+    const absolutePath = path.join(repoRoot, relativePath);
+    assert(fs.existsSync(absolutePath), 'named project surface exists: ' + relativePath);
+    surfaces.push({ id: relativePath, body: read(absolutePath) });
   }
-  const claudeOverlay = read(path.join(repoRoot, 'CLAUDE.md'));
-  assert(/^@AGENTS\.md$/m.test(claudeOverlay),
-    '#1033: root CLAUDE.md must bridge to the universal AGENTS.md contract');
-  assert(!claudeOverlay.includes(axioms),
-    '#1033: root CLAUDE.md must not duplicate the universal First Principles block');
 
-  // ANTI-VACUITY, and its HONEST boundary — the three terms of this width are not equally anchored.
-  // The RUNTIME term is independent: it is read off the filesystem (one `sync-<runtime>-edition.js`
-  // per additive runtime), so deleting a runtime from any table cannot shrink expectation and
-  // measurement together. Deriving it from surfaces.length would be a guard that cannot fail.
-  // The NAMED term is independent, and ONLY because it is the literal `2` below and not
-  // NAMED_SURFACES.length: drop either repo-root path from that list and the measurement shrinks while
-  // the expectation does not, so the floor reds naming what survived. Adding a third named surface is
-  // deliberately a two-place edit — that cost IS the floor. Written as NAMED_SURFACES.length it would
-  // shrink in lockstep and enforce nothing, which is the FORGE term's failure mode, below.
-  // The FORGE term is NOT independent: it comes from the same registry this measures, so deleting a
-  // forge from the edition tables shrinks both sides in lockstep and this floor stays green —
-  // mutation-proved. That case is caught one guard over, by test-generate-routing-surfaces.js's
-  // "registry derives 18 surfaces" assertion, which is why it is left rather than re-anchored. Do
-  // not read this comment as claiming the width is independent of everything; it is independent of
-  // the runtime list and of the named-surface list, and not of the forge list.
   const runtimeEditionCount = fs.readdirSync(path.join(repoRoot, 'scripts'))
-    .filter(f => /^sync-[a-z0-9-]+-edition\.js$/.test(f)).length;
-  // per forge: claude + codex + each additive runtime; plus the two repo-root prose surfaces
-  const expected = routing.FORGES.length * (2 + runtimeEditionCount) + 2;
+    .filter(fileName => /^sync-[a-z0-9-]+-edition\.js$/.test(fileName)).length;
+  const expected = routing.FORGES.length * (2 + runtimeEditionCount) + 3;
   assert(surfaces.length === expected,
-    'the axiom block must be checked on every runtime x forge init surface AND on both repo-root prose '
-      + 'surfaces — expected ' + expected
-      + ', derived ' + surfaces.length + ' (' + surfaces.map(s => s.id).join(', ') + ')');
+    'axiom-duplication sweep covers every runtime x forge init surface plus three named project '
+      + 'surfaces — expected ' + expected + ', got ' + surfaces.length);
 
-  // The census and the ownership split are separate assertions. Keeping the named-author count as
-  // a literal means adding a runtime surface to the authoring set cannot silently weaken the oracle.
-  const authoringSurfaces = surfaces.filter(s => s.authorsAxioms);
-  assert(authoringSurfaces.length === 2
-      && authoringSurfaces.every(s => NAMED_SURFACES.includes(s.id)),
-    '#1033: exactly root AGENTS.md and README.md may author the canonical First Principles block; got '
-      + authoringSurfaces.map(s => s.id).join(', '));
-  assert(surfaces.filter(s => !s.authorsAxioms).length === expected - 2,
-    '#1033: all ' + (expected - 2) + ' runtime/init surfaces must be classified as non-authoring');
+  const duplicates = surfaces.filter(surface => surface.body.includes(axioms)).map(surface => surface.id);
+  assert(duplicates.length === 0,
+    'project/runtime surfaces must not duplicate the canonical First Principles block: '
+      + duplicates.join(', '));
+  assert(read(path.join(repoRoot, 'CLAUDE.md')).split(/\r?\n/)
+    .filter(line => line.trim() === '@AGENTS.md').length === 1,
+  'root CLAUDE.md keeps exactly one effective project-instruction bridge');
 
-  // One whole-block byte comparison serves both sides of the contract: named authoring surfaces must
-  // contain it, while every runtime/init rendering surface must omit it. The report explains which
-  // side failed without changing the verdict.
-  const canonLines = axioms.split('\n').filter(l => l.trim() !== '');
-  const violations = [];
-  for (const s of surfaces) {
-    const containsAxioms = s.body.includes(axioms);
-    if (containsAxioms === s.authorsAxioms) continue;
-    if (!s.authorsAxioms) {
-      violations.push(s.id + ' — duplicated universal authority: runtime/init surfaces must omit the canonical block');
-      continue;
-    }
-    const missing = canonLines.find(l => !s.body.includes(l));
-    violations.push(s.id + ' — stale: ' + (missing
-      ? 'first canonical line absent from it is ' +
-        JSON.stringify(missing.length > 100 ? missing.slice(0, 100) + '\u2026' : missing)
-      : 'every canonical line appears, but not as one contiguous byte-identical block ' +
-        '(blank-line, ordering or indentation drift)'));
-  }
-  assert(violations.length === 0,
-    violations.length + ' of ' + surfaces.length + ' surfaces violate the single-authority '
-      + 'templates/axioms.md contract:\n    ' + violations.join('\n    '));
-
-  console.log('testAxiomBlockByteIdentity: PASSED (' + surfaces.length + ' surfaces)');
+  console.log('testAxiomBlockByteIdentity: PASSED (' + surfaces.length + ' non-authoring surfaces)');
 }
 
 // ---------------------------------------------------------------------------
+
 // SCENARIO REGISTRY
 //
 // Ordered array of [name, fn] pairs preserving the exact execution order from

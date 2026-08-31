@@ -10,8 +10,9 @@ slash **commands** under `.grok/commands/`, and one complete Rule under
 `claude`/`codex`/`gitlab`/`gitea`/`opencode`/`kimi` edition machinery.
 
 Grok loads root-to-cwd project rules including `AGENTS.md` directly. Kaola therefore installs no
-project-instruction bridge for Grok; root `AGENTS.md` remains the universal authority. The generated
-`.grok/agents/` profiles add only Grok-native carrier, model/effort, permission, and dispatch data.
+project-instruction bridge for Grok; root `AGENTS.md` remains the Agent-maintained project authority.
+The machine-global Rule supplies universal Workflow behavior. Generated `.grok/agents/` profiles
+add only Grok-native carrier, model/effort, permission, and dispatch data.
 See [runtime capabilities](runtime-capabilities.md#grok-build) for first-party evidence and limits.
 
 ## Forge axis

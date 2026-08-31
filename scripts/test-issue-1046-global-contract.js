@@ -12,7 +12,6 @@ const ROOT = path.resolve(__dirname, '..');
 const SOURCE = path.join(ROOT, 'templates', 'global', 'kaola-workflow-global.md');
 const REGISTRY = path.join(ROOT, 'templates', 'global', 'runtime-contract-adapters.json');
 const CLI = path.join(ROOT, 'scripts', 'kaola-workflow-global-contract.js');
-const INIT = path.join(ROOT, 'scripts', 'kaola-workflow-project-instructions.js');
 const EXPECTED_SURFACES = [
   'claude-local', 'codex-local', 'opencode-local', 'kimi-local', 'grok-local',
   'cursor-cli-local', 'cursor-app-local', 'cursor-cloud', 'zcode-local',
@@ -51,15 +50,6 @@ function run(args, env, expected = 0) {
     catch (_) { throw new Error(`non-JSON output for ${args.join(' ')}: ${result.stdout}`); }
   }
   return { ...result, json };
-}
-function runInit(args, env, expected = 0) {
-  // spawn-class: cli-contract
-  const result = spawnSync(process.execPath, [INIT, ...args], {
-    cwd: ROOT, env, encoding: 'utf8', timeout: 20000,
-  });
-  same(result.status, expected,
-    `project-instructions ${args.join(' ')} exit (stderr=${result.stderr})`);
-  return JSON.parse(result.stdout);
 }
 function makeEnvironment(root, { installed = true } = {}) {
   const home = path.join(root, 'home');
@@ -216,39 +206,16 @@ try {
   ok(fs.existsSync(path.join(cloudRepo, '.cursor', 'rules', 'kaola-workflow-global.mdc')),
     'A5: Cloud installs the required selected-repository Rule');
 
-  const consumer = path.join(sandbox, 'consumer');
-  fs.mkdirSync(consumer);
-  const initEnv = { ...env, KAOLA_GLOBAL_CONTRACT_RECEIPT: receipt };
-  const init = runInit(['apply', '--project-root', consumer, '--json'], initEnv);
-  same(init.status, 'applied', 'A6: workflow-init accepts a compatible global receipt');
-  const agents = fs.readFileSync(path.join(consumer, 'AGENTS.md'), 'utf8');
-  for (const heading of ['## Project Snapshot', '## Commands', '## Project Constraints',
-    '## Validation Policy', '## Documentation Map', '## Local Overrides']) {
-    ok(agents.includes(heading), `A6: minimal project contract keeps ${heading}`);
-  }
-  for (const removed of ['## First Principles', 'three write moments',
-    'Custody (who decides meaning)', 'Finalization, Issue closure']) {
-    ok(!agents.includes(removed), `A6: project contract subtracts ${removed}`);
-  }
-  ok(agents.includes('global_contract_schema: 1'),
-    'A6: project contract keeps one minimal adoption marker');
-
-  const noReceipt = path.join(sandbox, 'no-receipt');
-  fs.mkdirSync(noReceipt);
-  same(runInit(['plan', '--project-root', noReceipt, '--json'], {
-    ...env, KAOLA_GLOBAL_CONTRACT_RECEIPT: path.join(sandbox, 'absent.json'),
-  }, 2).status, 'decision_required',
-  'A6: workflow-init writes no minimal contract without a compatible global receipt');
-
-  const active = path.join(sandbox, 'active');
-  fs.mkdirSync(path.join(active, 'kaola-workflow', 'run'), { recursive: true });
-  write(path.join(active, 'kaola-workflow', 'run', 'workflow-state.md'), 'status: active\n');
-  write(path.join(active, 'AGENTS.md'), '# Owner active bytes\n');
-  const activeBefore = fs.readFileSync(path.join(active, 'AGENTS.md'));
-  const activeResult = runInit(['apply', '--project-root', active, '--json'], initEnv);
-  same(activeResult.status, 'active_run_preserved', 'A6: active run is never rewritten mid-run');
-  ok(fs.readFileSync(path.join(active, 'AGENTS.md')).equals(activeBefore),
-    'A6: active-run instruction bytes stay unchanged');
+  const initGuidance = fs.readFileSync(path.join(ROOT, 'templates', 'routing', 'init.skeleton.md'), 'utf8');
+  ok(initGuidance.includes('The Global Workflow Contract already loaded by the runtime is the universal authority'),
+    'A6: workflow-init consumes the runtime-loaded contract instead of locating install internals');
+  ok(initGuidance.includes('leave project rules in place and report a separate installation check'),
+    'A6: uncertain global authority preserves local rules and routes installation verification separately');
+  ok(/does not locate, execute, install, or repair runtime\/global machinery/.test(initGuidance),
+    'A6: project initialization does not mutate the global contract transaction');
+  ok(!fs.existsSync(path.join(ROOT, 'scripts',
+    ['kaola-workflow-project', 'instructions.js'].join('-'))),
+  'A6: the retired script-owned project-prompt writer is absent');
 
   const modified = dedicated[0];
   fs.appendFileSync(modified, 'owner mutation\n');

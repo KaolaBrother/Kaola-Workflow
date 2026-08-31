@@ -1,6 +1,6 @@
 # ADR 0022 — Machine-global workflow contract
 
-Status: accepted
+Status: Accepted; project-instruction migration clauses superseded by ADR 0023
 
 ## Context
 
@@ -21,10 +21,11 @@ runtime and carrier are already known at installation.
    only measured discovery, carrier, precedence, reload, and compatibility reads.
 3. Render and install native carriers only in `kaola-workflow-global-contract.js`. Local install is
    one batch-preflighted transaction; Cursor Cloud is an explicit selected-repository transaction.
-4. Require a compatible `CURRENT` receipt before `workflow-init` writes its minimal project
-   contract. Project instructions contain local facts and stricter overrides, not universal prose.
-5. Preserve every active run unchanged. Exact known old templates may migrate; owner-only,
-   malformed, or mixed bytes do not.
+4. `workflow-init` consumes the runtime-loaded contract and never locates or executes installation
+   internals. If that authority is absent or inconsistent, it preserves project rules and routes a
+   separate release-tree installation check.
+5. Preserve every active run and owner-authored project instruction unchanged unless the Agent has
+   an evidence-backed reason and owner authorization to edit it.
 6. Keep the dispatch contract mandatory. V2 compact text contains the global contract, a thin
    durable-state router, the complete dispatch contract, and the measured runtime adapter.
 7. After compact, reread `AGENTS.md`, `workflow-state.md`, and `mission-list.md`, then completely
@@ -64,3 +65,10 @@ commands. A standalone edition installer does not impersonate that transaction.
 - **A short recovery summary:** can leave the full Workflow Next or Finalization prompt absent.
 - **Optional dispatch recovery:** an agent cannot be expected to discover a contract it does not
   know it needs to read.
+
+## Supersession note
+
+ADR 0023 superseded the original project-contract writer and exact-template migration parts of
+decisions 4–5; their wording above reflects the active boundary. The Agent maintains repository
+instructions from verified facts with owner authorization before rewriting existing content. The
+machine-global transaction and compact-recovery design remain active.

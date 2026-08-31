@@ -83,7 +83,7 @@ function assertPortableInit(file, requireDeclaration = true) {
   assert(invocations.length === 0,
     file + ': workflow-init must not execute a runtime/global installer; got '
       + JSON.stringify(invocations));
-  assert(!requireDeclaration || (/Runtime\/global installation is outside `workflow-init`/.test(text)
+  assert(!requireDeclaration || (/does not locate, execute, install, or repair runtime\/global machinery/.test(text)
       && /runtime\/global bytes unchanged/.test(text)),
     file + ': workflow-init must state the portable repository/runtime-install boundary');
   const injected = executableRuntimeInstalls(text
@@ -99,14 +99,21 @@ function assertConcept(file, concept, terms) {
     file + ' must document ' + concept + '; missing: ' + missing.join(', '));
 }
 
-function extractClaudeTemplate(file) {
-  const text = read(file);
-  assert(!/KW-AGENTS-TEMPLATE-(?:START|END)/.test(text),
-    file + ': workflow-init must not embed a second consumer AGENTS template');
-  assert(text.includes('kaola-workflow-project-instruction-templates.js')
-      && text.includes('kaola-workflow-project-instructions.js'),
-    file + ': workflow-init must name the sole distribution template module and its writer');
-  return require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE.trim();
+function assertAgentOwnedInit(file) {
+  const content = read(file);
+  for (const token of [
+    ['kaola-workflow-project-instruction', 'templates.js'].join('-'),
+    ['kaola-workflow-project', 'instructions.js'].join('-'),
+    ['KW', 'AGENTS', 'MANAGED'].join('-'),
+    ['KW', 'CLAUDE', 'OVERLAY', 'MANAGED'].join('-'),
+  ]) assert(!content.includes(token), file + ' retains retired prompt ownership: ' + token);
+  assertConcept(file, 'Agent-owned project instructions', [
+    'The Agent owns the meaning and prose of project instructions',
+    'repository facts',
+    'Global Workflow Contract already loaded by the runtime',
+    'Before changing an existing user-authored or owner-authored instruction file',
+    'fresh top-level Agent/session',
+  ]);
 }
 
 // issue #341: standalone, count-independent forbidden-token check. A forge-touching
@@ -306,8 +313,7 @@ for (const skill of listFiles(pluginRoot + '/skills', file => file.endsWith('SKI
 const gitlabSkillsBase = `${pluginRoot}/skills`;
 const gitlabInitSkill = `${gitlabSkillsBase}/kaola-workflow-init/SKILL.md`;
 assertNotIncludes(gitlabInitSkill, 'Do not create or edit CLAUDE.md');
-assertIncludes(gitlabInitSkill, 'kaola-workflow-project-instructions.js');
-assertIncludes(gitlabInitSkill, 'decision_required');
+assertAgentOwnedInit(gitlabInitSkill);
 assertNotIncludes(gitlabInitSkill, 'READ CLAUDE.md BEFORE ANY ACTION');
 // #1039: runtime installation is outside workflow-init; both native consumers
 // must remain portable and mutation-armed against an executable installer.
@@ -315,15 +321,10 @@ assertPortableInit(gitlabInitSkill);
 assertPortableInit(`${pluginRoot}/commands/workflow-init.md`, false);
 // #401 Part 1: the forge plan-validator refusal-matrix anchor must remain wired into the suite.
 
-// GitLab forge pair CLAUDE.md template must be byte-identical
-const gitlabCmdTemplate = extractClaudeTemplate(`${pluginRoot}/commands/workflow-init.md`);
-const gitlabSkillTemplate = extractClaudeTemplate(gitlabInitSkill);
-assert(gitlabCmdTemplate === gitlabSkillTemplate,
-  'CLAUDE.md template must be byte-identical within GitLab forge pair');
+assertAgentOwnedInit(`${pluginRoot}/commands/workflow-init.md`);
 
-// #606: the Claude dispatch-posture config-audit line must be present in the GitLab workflow-init
-// command, outside the KW-AGENTS-TEMPLATE region.
-assertIncludes(`${pluginRoot}/commands/workflow-init.md`, 'claude_dispatch_posture: teams | classic');
+// #1047: runtime dispatch posture belongs to installed adapters and diagnostics, not project init.
+assertNotIncludes(`${pluginRoot}/commands/workflow-init.md`, 'claude_dispatch_posture: teams | classic');
 
 for (const file of listFiles(pluginRoot + '/scripts', file =>
   file.endsWith('.js') && !file.endsWith('validate-kaola-workflow-gitlab-contracts.js')

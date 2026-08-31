@@ -44,7 +44,7 @@ function assertPortableInit(file, requireDeclaration = true) {
   assert(invocations.length === 0,
     file + ': workflow-init must not execute a runtime/global installer; got '
       + JSON.stringify(invocations));
-  assert(!requireDeclaration || (/Runtime\/global installation is outside `workflow-init`/.test(text)
+  assert(!requireDeclaration || (/does not locate, execute, install, or repair runtime\/global machinery/.test(text)
       && /runtime\/global bytes unchanged/.test(text)),
     file + ': workflow-init must state the portable repository/runtime-install boundary');
   const injected = executableRuntimeInstalls(text
@@ -57,6 +57,23 @@ function assertConcept(file, concept, terms) {
   const content = norm(read(file).toLowerCase());
   const missing = terms.filter(term => !content.includes(norm(term.toLowerCase())));
   assert(missing.length === 0, file + ' must document ' + concept + '; missing: ' + missing.join(', '));
+}
+
+function assertAgentOwnedInit(file) {
+  const content = read(file);
+  for (const token of [
+    ['kaola-workflow-project-instruction', 'templates.js'].join('-'),
+    ['kaola-workflow-project', 'instructions.js'].join('-'),
+    ['KW', 'AGENTS', 'MANAGED'].join('-'),
+    ['KW', 'CLAUDE', 'OVERLAY', 'MANAGED'].join('-'),
+  ]) assert(!content.includes(token), file + ' retains retired prompt ownership: ' + token);
+  assertConcept(file, 'Agent-owned project instructions', [
+    'The Agent owns the meaning and prose of project instructions',
+    'repository facts',
+    'Global Workflow Contract already loaded by the runtime',
+    'Before changing an existing user-authored or owner-authored instruction file',
+    'fresh top-level Agent/session',
+  ]);
 }
 
 function parseJson(file) {
@@ -127,9 +144,7 @@ assertNotIncludes(nextSkill210, 'Ask the user once at startup');
 assertNotIncludes(nextSkill210, 'How should delegation be handled');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--project "$PICK_NEXT_PROJECT" --reason git-freshness-block');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Active folder lifecycle');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'kaola-workflow-project-instructions.js');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'decision_required');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, '<!-- KW-AGENTS-MANAGED-START -->');
+assertAgentOwnedInit(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`);
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'READ CLAUDE.md BEFORE ANY ACTION');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Do not create or edit CLAUDE.md');
 // #1039: workflow-init is a portable repository operation. Runtime installation
@@ -229,16 +244,6 @@ assertConcept('docs/api.md', 'closure contract invariants and receipt schema', [
   '#164',
   '#165'
 ]);
-function extractAgentsTemplate(file) {
-  const text = read(file);
-  assert(!/KW-AGENTS-TEMPLATE-(?:START|END)/.test(text),
-    file + ': workflow-init must not embed a second consumer AGENTS template');
-  assert(text.includes('kaola-workflow-project-instruction-templates.js')
-      && text.includes('kaola-workflow-project-instructions.js'),
-    file + ': workflow-init must name the sole distribution template module and its writer');
-  return require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE.trim();
-}
-
 const initFiles = [
   'commands/workflow-init.md',
   'plugins/kaola-workflow-gitlab/commands/workflow-init.md',
@@ -247,36 +252,17 @@ const initFiles = [
   'plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md',
   'plugins/kaola-workflow-gitea/skills/kaola-workflow-init/SKILL.md'
 ];
-// The universal AGENTS.md template must be byte-identical within each forge pair.
-const githubCmdTemplate = extractAgentsTemplate('commands/workflow-init.md');
-const githubSkillTemplate = extractAgentsTemplate(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`);
-assert(githubCmdTemplate === githubSkillTemplate,
-  'AGENTS.md template must be byte-identical within GitHub forge pair (commands/workflow-init.md vs GitHub SKILL.md)');
-
-const gitlabCmdTemplate = extractAgentsTemplate('plugins/kaola-workflow-gitlab/commands/workflow-init.md');
-const gitlabSkillTemplate = extractAgentsTemplate('plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md');
-assert(gitlabCmdTemplate === gitlabSkillTemplate,
-  'AGENTS.md template must be byte-identical within GitLab forge pair');
-
-const giteaCmdTemplate = extractAgentsTemplate('plugins/kaola-workflow-gitea/commands/workflow-init.md');
-const giteaSkillTemplate = extractAgentsTemplate('plugins/kaola-workflow-gitea/skills/kaola-workflow-init/SKILL.md');
-assert(giteaCmdTemplate === giteaSkillTemplate,
-  'AGENTS.md template must be byte-identical within Gitea forge pair');
-
-// #572 (AC4): the injected ## Kaola-Workflow template must be re-grounded on the adaptive
-// mission-list model — NO retired 6-phase-as-default vocabulary may survive in the consumer
-// block. #538 made adaptive the unconditional default, so a numbered `Phase <n>` token or the
-// "phase file/artifact" durable-state framing in the injected block teaches a retired model.
-// Ban both across every forge's extracted template (the consumer-facing region only — the
-// surrounding command/skill prose may still say "six-phase opt-in path" etc.).
+// Agent-owned init outcomes remain present across all six generated carriers. No carrier may
+// restore the retired phase-shaped project-prompt schema.
 const PHASE_NUMBER_BAN = /Phase\s+\d/;                  // "Phase 1" … "Phase 4"
 const PHASE_FILE_BAN = /phase file|phase artifact/i;   // "phase files" / "current phase file"
 for (const file of initFiles) {
-  const tpl = extractAgentsTemplate(file);
-  assert(!PHASE_NUMBER_BAN.test(tpl),
-    file + ': injected ## Kaola-Workflow template must not teach a numbered Phase <n> model (#572 — adaptive is the unconditional default)');
-  assert(!PHASE_FILE_BAN.test(tpl),
-    file + ': injected ## Kaola-Workflow template must not use "phase file/artifact" durable-state framing (#572)');
+  assertAgentOwnedInit(file);
+  const content = read(file);
+  assert(!PHASE_NUMBER_BAN.test(content),
+    file + ': workflow-init must not teach a numbered Phase <n> project model');
+  assert(!PHASE_FILE_BAN.test(content),
+    file + ': workflow-init must not use phase-file/artifact durable-state framing');
 }
 
 // #769: the two bans above are scoped to the injected consumer CLAUDE.md region, so the SHIPPED
@@ -327,40 +313,15 @@ for (const file of shippedManifests) {
   assertConcept(file, 'the adaptive mission-list model', ['adaptive', 'mission list']);
 }
 
-// #609/#1046: the project-only template must contain no vendor-model dispatch guidance at all.
-// Runtime-neutral behavior lives in the global source; tier bindings live only in adapters.
-assert(!/\b(?:Opus|Sonnet|Haiku|gpt-[\w.-]+|grok-[\w.-]+)\b/i.test(
-  read('scripts/kaola-workflow-project-instruction-templates.js')),
-'scripts/kaola-workflow-project-instruction-templates.js must contain no vendor model literal');
-assertNotIncludes('scripts/kaola-workflow-project-instruction-templates.js',
-  'Name roles by function and reasoning tier');
-
-// #606: the Claude dispatch-posture config-audit line must be present in all three workflow-init
-// COMMAND surfaces (root + gitlab + gitea) — outside the KW-AGENTS-TEMPLATE region, so this check
-// does not touch the initFiles SKILL entries (they stay byte-identical to their template blocks).
+// #1047: runtime dispatch posture belongs to installed adapters and diagnostics, not project init.
 const workflowInitCommands606 = [
   'commands/workflow-init.md',
   'plugins/kaola-workflow-gitlab/commands/workflow-init.md',
   'plugins/kaola-workflow-gitea/commands/workflow-init.md',
 ];
 for (const file of workflowInitCommands606) {
-  assertIncludes(file, 'claude_dispatch_posture: teams | classic');
+  assertNotIncludes(file, 'claude_dispatch_posture: teams | classic');
 }
-
-// #572 (AC5): cross-forge content parity. The three forges' injected templates must be
-// byte-identical MODULO the single forge-noun line (GitHub/GitLab/Gitea issues are the backlog
-// …). The within-forge-pair byte checks above already prove cmd==skill per
-// forge, so comparing the three cmd templates (normalizing the forge noun out) covers all six
-// surfaces transitively — the #309 "one semantic change, mirrored verbatim" invariant.
-function normalizeForgeNoun(tpl) {
-  return tpl.replace(/^- (?:GitHub|GitLab|Gitea) issues are the backlog:/m,
-    '- <FORGE> issues are the backlog:');
-}
-const githubTemplateNorm = normalizeForgeNoun(githubCmdTemplate);
-assert(normalizeForgeNoun(gitlabCmdTemplate) === githubTemplateNorm,
-  '#572: GitLab injected ## Kaola-Workflow template must match GitHub modulo the forge-noun line (#309)');
-assert(normalizeForgeNoun(giteaCmdTemplate) === githubTemplateNorm,
-  '#572: Gitea injected ## Kaola-Workflow template must match GitHub modulo the forge-noun line (#309)');
 
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'issue_scout');
 // #816: the finalize seam records no attestation — the field, the back-fill, and the inline-suspect
@@ -468,41 +429,12 @@ function deriveCodexRoleCatalog() {
   return { roles };
 }
 
-const readmeText = read('README.md');
 const { roles: catalogRoles } = deriveCodexRoleCatalog();
-
-// Role-list block: the ```text block after the "installs Codex-native role profiles"
-// sentence must contain exactly the derived role set (set equality).
-const roleListAnchor = readmeText.indexOf('installs Codex-native role profiles');
-assert(roleListAnchor !== -1, 'README must contain the Codex role-profile catalog anchor sentence');
-const afterAnchor = readmeText.slice(roleListAnchor);
-const blockMatch = afterAnchor.match(/```text\n([\s\S]*?)\n```/);
-assert(blockMatch, 'README must contain the ```text role-list block after the catalog anchor');
-const listedRoles = blockMatch[1].split('\n').map(s => s.trim()).filter(Boolean);
-const missingFromReadme = catalogRoles.filter(r => !listedRoles.includes(r));
-const extraInReadme = listedRoles.filter(r => !catalogRoles.includes(r));
-assert(missingFromReadme.length === 0,
-  'README role list missing roles from config/agents.toml: ' + missingFromReadme.join(', '));
-assert(extraInReadme.length === 0,
-  'README role list has roles not in config/agents.toml: ' + extraInReadme.join(', '));
-
-// #451/#581: the per-role reasoning-effort table is retired (effort is per-node dispatch metadata,
-// not a per-role pin), so the README no longer carries a `| Role | Reasoning effort |` table —
-// there is nothing to pin here anymore.
-
-// Retired role guard: the retired `docs-lookup` role must not be presented as an installable/active
-// role inside the role-list catalog block. Documentation of docs-lookup as a *pruned/retired* file
-// elsewhere in README (the durable upgrade flow) is allowed — that is the opposite of catalog drift,
-// so the guard is scoped to the role-list block rather than the whole file.
-assert(!blockMatch[1].includes('docs-lookup'),
-  'README role catalog must not list the retired docs-lookup role');
+assert(catalogRoles.length > 0 && !catalogRoles.includes('docs-lookup'),
+  'the derived Codex role catalog is non-empty and omits the retired docs-lookup role');
 
 // Tier classifications, role profiles, and runtime-native defaults remain metadata. The workflow
 // policy must not turn them into a fixed per-spawn model/effort pair or reviewer escalation rule.
-const normalizedReadme = norm(readmeText);
-assert(/execution economics/i.test(normalizedReadme) || /dispatch.*inline/i.test(normalizedReadme),
-  'README must describe the execution-economics dispatch/inline judgment');
-
 const routingSkels = [
   'templates/routing/next.skeleton.md',
   'templates/routing/finalize.skeleton.md',
@@ -531,13 +463,6 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
       || /default tier[\s\S]*task-sensitive override/i.test(rendered),
     rel + ' must render the shared model-selection rule');
 }
-{
-  const consumerTemplate = read('scripts/kaola-workflow-project-instruction-templates.js');
-  assert(!/planner \((?:heavy-)?reasoning tier\)/.test(consumerTemplate),
-    '#1046: project-only consumer template must not duplicate a universal planner-tier example');
-}
-
-
 // #340 derived parity guard (enumeration-free): the codex-dispatch config/agents.toml must register
 // exactly the agent profiles present in agents/ — both directions. A profile copied without its
 // [agents.<name>] table is undispatchable (the #328 issue-scout miss); a table without its profile

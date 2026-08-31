@@ -9,9 +9,7 @@
 // replace neither the generator nor its source data.
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const ROLE_NAMES = Object.freeze([
@@ -513,51 +511,54 @@ function freshRoutingCarriers(topic) {
   return carriers;
 }
 
-// A1 — root project instruction authority is inverted, not duplicated.
+// A1 — root project instructions are Agent-owned local facts, not a universal runtime template.
 const agentsRoot = read('AGENTS.md') || '';
 const claudeRoot = read('CLAUDE.md') || '';
-for (const [label, pattern] of [
-  ['project overview', /##\s+Project Overview/i],
-  ['Mission List contract', /Mission List/i],
-  ['durable-state contract', /Durable State Contract/i],
-  ['First Principles', /##\s+First Principles/i],
-  ['Non-Negotiable Rules', /##\s+Non-Negotiable Rules/i],
-  ['validation expectations', /##\s+(?:Running Tests|Validation)/i],
+for (const [label, token] of [
+  ['project identity', 'Kaola-Workflow'],
+  ['Mission List design record', 'docs/decisions/0017-the-mission-list.md'],
+  ['claim implementation', 'scripts/kaola-workflow-claim.js'],
+  ['validation transaction', 'scripts/kaola-workflow-run-chains.js'],
+  ['sink implementation', 'scripts/kaola-workflow-sink-merge.js'],
+  ['focused validation', 'npm test'],
+  ['integration validation', 'node scripts/simulate-workflow-walkthrough.js'],
 ]) {
-  assert(pattern.test(agentsRoot), `A1: root AGENTS.md carries the runtime-neutral ${label}`);
+  assert(agentsRoot.includes(token), `A1: root AGENTS.md retains verified local ${label}`);
 }
 assert(!/READ CLAUDE\.md|single canonical source[^\n]*CLAUDE\.md|only to direct you there/i.test(agentsRoot),
   'A1: root AGENTS.md is the project contract, not an AGENTS→CLAUDE redirect');
-const universalVendor = agentsRoot.match(/\b(?:Claude|Codex|OpenCode|Kimi|Grok|Cursor|ZCode)\b/i);
-assert(!universalVendor,
-  'A1: universal AGENTS.md contains no runtime brand vocabulary'
-  + (universalVendor ? ' — found ' + universalVendor[0] : ''));
+assert(!/KW-AGENTS-MANAGED|^##\s+First Principles\s*$/mi.test(agentsRoot),
+  'A1: root AGENTS.md has no managed wrapper or duplicated machine-global First Principles');
 
-assert(/AGENTS\.md/.test(claudeRoot) && /\bClaude\b/i.test(claudeRoot),
+assert(claudeRoot.split(/\r?\n/).filter(line => line.trim() === '@AGENTS.md').length === 1
+    && /\bClaude\b/i.test(claudeRoot),
   'A2: root CLAUDE.md is a Claude overlay that explicitly bridges to AGENTS.md');
 const duplicatedUniversalSections = [
   'Project Overview', 'Mission List', 'Durable State Contract', 'First Principles',
   'Non-Negotiable Rules',
 ].filter(heading => new RegExp('^##\\s+' + heading.replace(/ /g, '\\s+'), 'mi').test(claudeRoot));
 assert(duplicatedUniversalSections.length === 0,
-  'A2: CLAUDE.md duplicates no universal managed section — duplicated '
+  'A2: CLAUDE.md duplicates no universal section — duplicated '
   + JSON.stringify(duplicatedUniversalSections));
-assert(Buffer.byteLength(claudeRoot) < Buffer.byteLength(agentsRoot),
-  'A2: CLAUDE.md is a thin overlay, smaller than the universal AGENTS.md contract');
+assert(!/KW-CLAUDE-OVERLAY-MANAGED/.test(claudeRoot),
+  'A2: CLAUDE.md has no script-owned overlay wrapper');
 
 // A3 — workflow-init is a project-only consumer of a compatible global contract.
 const initSource = read('templates/routing/init.skeleton.md') || '';
+assert(/for file in AGENTS\.md CLAUDE\.md/.test(initSource)
+    && !/git ls-files|find \. -name AGENTS\.md/.test(initSource),
+  'A3: workflow-init reads root owner instructions without Git-index or repository-wide discovery');
 for (const [label, pattern] of [
   ['user ownership', /user-authored/i],
-  ['byte preservation', /byte-for-byte/i],
-  ['idempotent reruns', /idempotent/i],
-  ['global receipt prerequisite', /compatible machine-global receipt/i],
-  ['project-only contract', /project contract: verified project facts/i],
-  ['active-run freeze', /active_run_preserved/],
-  ['no active-run bypass', /no consent\s+or schema bypass/i],
-  ['runtime-install boundary', /never installs global bytes|global installation is outside/i],
+  ['Agent ownership', /Agent owns the meaning and prose of project instructions/i],
+  ['repository grounding', /repository facts/i],
+  ['runtime-loaded global authority', /Global Workflow Contract already loaded by the runtime/i],
+  ['consent before rewrite', /Before changing an existing user-authored or owner-authored instruction file/i],
+  ['fresh-session verification', /fresh top-level\s+Agent\/session/i],
+  ['no formatting protocol', /no required headings, order, wording,\s+bytes, or length/i],
+  ['runtime-install boundary', /does not locate, execute, install, or repair runtime\/global machinery/i],
 ]) {
-  assert(pattern.test(initSource), `A3: workflow-init carries the ${label} migration outcome`);
+  assert(pattern.test(initSource), `A3: workflow-init carries the ${label} outcome`);
 }
 
 // #1037/#1039: workflow-init owns portable repository instructions only. It may
@@ -599,20 +600,15 @@ assert(runtimeInstallInvocations(cleanInitConsumer + [
   '', '```bash', 'node "$plugin_root/scripts/install-codex-agent-profiles.js" --global', '```', '',
 ].join('\n')).length === 1,
 'A3[init-install-boundary] mutation RED: an injected global runtime installer invocation is detected');
-// The executable distribution module is now the sole consumer-template authoring surface;
-// workflow-init describes and invokes it without embedding a second copy.
-const consumerTemplateSource = read('scripts/kaola-workflow-project-instruction-templates.js') || '';
-const markerRows = [...consumerTemplateSource.matchAll(/<!--\s*(KW-[A-Z0-9-]+)-(START|END)\s*-->/g)]
-  .map(match => ({ name: match[1], edge: match[2] }));
-const neutralMarkerNames = [...new Set(markerRows.map(row => row.name)
-  .filter(name => !name.includes('CLAUDE')))];
-const pairedNeutralMarker = neutralMarkerNames.find(name =>
-  markerRows.some(row => row.name === name && row.edge === 'START')
-  && markerRows.some(row => row.name === name && row.edge === 'END'));
-assert(!!pairedNeutralMarker,
-  'A3: the distribution consumer template declares a paired runtime-neutral managed region');
-assert(!/KW-CLAUDE-(?:TEMPLATE|MANAGED)/.test(initSource),
-  'A3: universal workflow-init regions no longer use retired KW-CLAUDE naming');
+for (const retiredName of [
+  ['kaola-workflow-project-instruction', 'templates.js'].join('-'),
+  ['kaola-workflow-project', 'instructions.js'].join('-'),
+]) {
+  assert(!fs.existsSync(path.join(ROOT, 'scripts', retiredName)),
+    `A3: retired project-prompt artifact is absent — ${retiredName}`);
+}
+assert(!/KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(initSource),
+  'A3: workflow-init contains no retired project-prompt ownership marker');
 
 {
   const nextSource = read('templates/routing/next.skeleton.md') || '';
@@ -620,8 +616,7 @@ assert(!/KW-CLAUDE-(?:TEMPLATE|MANAGED)/.test(initSource),
   const routing = require(path.join(ROOT, 'scripts', 'generate-routing-surfaces.js'));
   const compactRecoverySources = ['claude', 'codex', 'grok', 'cursor']
     .map(runtime => routing.renderCompactRecoveryPrompt(runtime, 'github'));
-  const consumerSource = read('scripts/kaola-workflow-project-instruction-templates.js') || '';
-  const surfaces = [nextSource, finalizeSource, consumerSource];
+  const surfaces = [nextSource, finalizeSource];
   const norm = text => String(text).replace(/\s+/g, ' ').replace(/\\'/g, "'");
   const teachesSelectorAsMission = text => {
     const n = norm(text);
@@ -712,844 +707,42 @@ assert(!/KW-CLAUDE-(?:TEMPLATE|MANAGED)/.test(initSource),
   'A3[issue-1042] compact-prompt mutation RED: finalization inside Mission List is rejected');
 }
 
-// The shipped workflow-init text is necessary but cannot prove that owner bytes survive a real
-// migration. Discover the production migration seam by capability, then exercise its public CLI on
-// temporary projects. No module path is part of the acceptance contract.
-const migrationCandidates = fs.readdirSync(path.join(ROOT, 'scripts'))
-  .filter(name => name.endsWith('.js'))
-  .filter(name => (read('scripts/' + name) || '').includes('classifyProjectInstructions'))
-  .sort();
-let migrationModule = null;
-let migrationPath = null;
-for (const name of migrationCandidates) {
-  try {
-    const candidate = require(path.join(ROOT, 'scripts', name));
-    if (candidate && typeof candidate.classifyProjectInstructions === 'function') {
-      migrationModule = candidate;
-      migrationPath = path.join(ROOT, 'scripts', name);
-      break;
-    }
-  } catch (_) { /* another module owns the matching prose; keep discovering */ }
+// The retired byte migrator and canonical project template are gone. Exercise every freshly
+// rendered runtime/forge init carrier as the subject: each must keep the mechanical safety
+// boundaries while leaving repository-specific meaning to the Agent.
+const retiredPromptArtifacts = [
+  ...['kaola-workflow-project-instruction-templates.js',
+    'kaola-workflow-project-instructions.js'].map(name => `scripts/${name}`),
+  ...['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea']
+    .flatMap(plugin => ['kaola-workflow-project-instruction-templates.js',
+      'kaola-workflow-project-instructions.js'].map(name => `plugins/${plugin}/scripts/${name}`)),
+];
+for (const relativePath of retiredPromptArtifacts) {
+  assert(!fs.existsSync(path.join(ROOT, relativePath)),
+    `A3[retirement]: script-owned project prompt artifact is absent — ${relativePath}`);
 }
-assert(!!migrationModule,
-  'A3: workflow-init exposes a production ownership-classification seam for byte-level fixtures');
 
-if (migrationModule) {
-  const legacyRedirect = [
-    '# AGENTS.md',
-    '',
-    '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**',
-    '>',
-    '> `CLAUDE.md` in this repository root is the **single canonical source** for all',
-    '> non-negotiable rules, project conventions, workflow constraints, and agent',
-    '> behavior. AGENTS.md exists **only** to direct you there.',
-    '>',
-    '> **Required at session start, before any tool call, edit, or response:**',
-    '>',
-    '> 1. Read `CLAUDE.md` in full.',
-    '> 2. Treat its `## Non-Negotiable Rules` section as binding for every action you take in this repo.',
-    '> 3. If `CLAUDE.md` is missing, **stop and ask the user** — do not proceed on assumptions.',
-    '>',
-    '> Do not skip this step because the task looks small. Do not rely on prior',
-    '> session memory. Re-read on every new session.',
-    '',
-    '---',
-    '',
-    '*All other guidance — the workflow, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*',
-    '',
-  ].join('\n');
-
-  function writeInstructionFixture(root, agentsBytes, claudeBytes) {
-    fs.mkdirSync(root, { recursive: true });
-    fs.writeFileSync(path.join(root, 'AGENTS.md'), agentsBytes);
-    fs.writeFileSync(path.join(root, 'CLAUDE.md'), claudeBytes);
-  }
-
-  function compatibleReceiptEnv(projectRoot, envOverrides) {
-    const overrides = Object.assign({}, envOverrides || {});
-    if (!Object.prototype.hasOwnProperty.call(overrides, 'KAOLA_GLOBAL_CONTRACT_RECEIPT')) {
-      const receiptPath = path.join(path.dirname(projectRoot),
-        '.' + path.basename(projectRoot) + '-global-contract-receipt.json');
-      fs.writeFileSync(receiptPath, JSON.stringify({
-        schema_version: 1,
-        contract_schema_version: 1,
-        status: 'CURRENT',
-        source_sha256: 'a'.repeat(64),
-        targets: [{ id: 'codex-local', status: 'INSTALLED' }],
-      }) + '\n');
-      overrides.KAOLA_GLOBAL_CONTRACT_RECEIPT = receiptPath;
-    }
-    return Object.assign({}, process.env, overrides);
-  }
-
-  function runMigration(mode, projectRoot, extraArgs, envOverrides) {
-    // spawn-class: environment
-    const result = spawnSync(process.execPath,
-      [migrationPath, mode, '--project-root', projectRoot, '--json'].concat(extraArgs || []), {
-        encoding: 'utf8', env: compatibleReceiptEnv(projectRoot, envOverrides),
-      });
-    let envelope = null;
-    try { envelope = JSON.parse(String(result.stdout || '').trim()); } catch (_) { /* asserted below */ }
-    return { ...result, envelope };
-  }
-
-  function runMigrationHelper(helperPath, mode, projectRoot, extraArgs, envOverrides) {
-    // spawn-class: environment
-    const result = spawnSync(process.execPath,
-      [helperPath, mode, '--project-root', projectRoot, '--json'].concat(extraArgs || []), {
-        encoding: 'utf8', env: compatibleReceiptEnv(projectRoot, envOverrides),
-      });
-    let envelope = null;
-    try { envelope = JSON.parse(String(result.stdout || '').trim()); } catch (_) { /* asserted below */ }
-    return { ...result, envelope };
-  }
-
-  function exactLineCount(bytes, line) {
-    return String(bytes).split(/\r?\n/).filter(candidate => candidate === line).length;
-  }
-
-  function treeSnapshot(root) {
-    const rows = [];
-    function visit(dir, prefix) {
-      if (!fs.existsSync(dir)) return;
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const rel = prefix ? prefix + '/' + entry.name : entry.name;
-        const file = path.join(dir, entry.name);
-        if (entry.isDirectory()) visit(file, rel);
-        else if (entry.isFile()) rows.push(rel + ':' + fs.readFileSync(file).toString('hex'));
-        else if (entry.isSymbolicLink()) rows.push(rel + ':symlink:' + fs.readlinkSync(file));
-      }
-    }
-    visit(root, '');
-    return rows.sort();
-  }
-
-  function hasRepositorySpecificContract(bytes) {
-    return [
-      /Kaola-Workflow Repository Instructions/,
-      /Kaola-Workflow is a loop-engineering system/,
-      /scripts\/kaola-workflow-claim\.js/,
-      /simulate-workflow-walkthrough\.js/,
-      /npm run test:kaola-workflow:claude/,
-      /docs\/decisions\/0017-the-mission-list\.md/,
-    ].some(pattern => pattern.test(String(bytes)));
-  }
-
-  function injectManagedDrift(bytes, marker) {
-    const token = Buffer.from(`<!-- ${marker}-START -->`);
-    const at = bytes.indexOf(token);
-    if (at < 0) return bytes;
-    const insertion = at + token.length;
-    return Buffer.concat([
-      bytes.subarray(0, insertion),
-      Buffer.from('\nKW_ACCEPTANCE_DRIFT'),
-      bytes.subarray(insertion),
-    ]);
-  }
-
-  function bufferEndsWith(bytes, suffix) {
-    return bytes.length >= suffix.length && bytes.subarray(bytes.length - suffix.length).equals(suffix);
-  }
-
-  function exactManagedSlice(bytes, marker) {
-    const startToken = Buffer.from(`<!-- ${marker}-START -->`);
-    const endToken = Buffer.from(`<!-- ${marker}-END -->`);
-    const start = bytes.indexOf(startToken);
-    const endStart = bytes.indexOf(endToken);
-    if (start < 0 || endStart < start) return null;
-    return bytes.subarray(start, endStart + endToken.length);
-  }
-
-  function releasedConsumerTemplate() {
-    const source = gitBlob('a503edd8:templates/routing/init.skeleton.md');
-    if (!source) return null;
-    const startToken = Buffer.from('<!-- KW-CLAUDE-TEMPLATE-START -->\n```markdown\n');
-    const endToken = Buffer.from('\n```\n<!-- KW-CLAUDE-TEMPLATE-END -->');
-    const start = source.indexOf(startToken);
-    const end = source.indexOf(endToken, start + startToken.length);
-    if (start < 0 || end < 0) return null;
-    return source.subarray(start + startToken.length, end);
-  }
-
-  const ownerAgents = '\nOWNER_AGENTS_SENTINEL=preserve-this-byte-for-byte\n';
-  const ownerClaude = '# Claude owner overlay\n\nOWNER_CLAUDE_SENTINEL=preserve-this-byte-for-byte\n';
-  const mixedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-mixed-'));
-  try {
-    const agentsBefore = legacyRedirect + ownerAgents;
-    writeInstructionFixture(mixedRoot, agentsBefore, ownerClaude);
-
-    const planned = runMigration('plan', mixedRoot);
-    assert(planned.status === 0 && planned.envelope && planned.envelope.status === 'planned',
-      'A3[mixed]: plan classifies a known managed redirect without writing');
-    assert(planned.envelope && planned.envelope.schema_version === 1
-      && planned.envelope.mode === 'plan' && Array.isArray(planned.envelope.writes)
-      && planned.envelope.writes.length === 0,
-    'A3[mixed]: plan returns the stable non-writing JSON envelope');
-    assert(fs.readFileSync(path.join(mixedRoot, 'AGENTS.md'), 'utf8') === agentsBefore
-      && fs.readFileSync(path.join(mixedRoot, 'CLAUDE.md'), 'utf8') === ownerClaude,
-    'A3[mixed]: plan preserves both files byte-for-byte');
-
-    const applied = runMigration('apply', mixedRoot);
-    assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied'
-      && applied.envelope.changed === true,
-    'A3[mixed]: apply migrates the recognized managed bytes');
-    const agentsAfter = fs.readFileSync(path.join(mixedRoot, 'AGENTS.md'), 'utf8');
-    const claudeAfter = fs.readFileSync(path.join(mixedRoot, 'CLAUDE.md'), 'utf8');
-    assert(agentsAfter.includes(ownerAgents) && claudeAfter.includes(ownerClaude),
-      'A3[mixed]: apply preserves surrounding AGENTS and CLAUDE owner bytes exactly');
-    const afterMarkers = [...agentsAfter.matchAll(/<!--\s*(KW-[A-Z0-9-]+)-(START|END)\s*-->/g)]
-      .map(match => ({ name: match[1], edge: match[2] }));
-    const neutralNames = [...new Set(afterMarkers.map(row => row.name)
-      .filter(name => !name.includes('CLAUDE')))];
-    assert(neutralNames.some(name => afterMarkers.some(row => row.name === name && row.edge === 'START')
-      && afterMarkers.some(row => row.name === name && row.edge === 'END')),
-    'A3[mixed]: applied universal bytes use paired runtime-neutral managed markers');
-    assert(!/READ CLAUDE\.md|only to direct you there/i.test(agentsAfter)
-      && /AGENTS\.md/.test(claudeAfter),
-    'A3[mixed]: apply reverses the redirect and leaves a Claude→AGENTS bridge');
-    assert(applied.envelope && applied.envelope.files
-      && applied.envelope.files.agents.outside_bytes_preserved === true
-      && applied.envelope.files.claude.outside_bytes_preserved === true,
-    'A3[mixed]: apply attests owner-byte preservation for both instruction files');
-
-    const firstBytes = { agents: agentsAfter, claude: claudeAfter };
-    const rerun = runMigration('apply', mixedRoot);
-    assert(rerun.status === 0 && rerun.envelope && rerun.envelope.status === 'converged'
-      && rerun.envelope.changed === false && rerun.envelope.writes.length === 0,
-    'A3[mixed]: a second apply is a byte-idempotent converged no-op');
-    assert(fs.readFileSync(path.join(mixedRoot, 'AGENTS.md'), 'utf8') === firstBytes.agents
-      && fs.readFileSync(path.join(mixedRoot, 'CLAUDE.md'), 'utf8') === firstBytes.claude,
-    'A3[mixed]: converged rerun leaves both files byte-identical');
-    const checked = runMigration('check', mixedRoot);
-    assert(checked.status === 0 && checked.envelope && checked.envelope.status === 'converged'
-      && checked.envelope.writes.length === 0,
-    'A3[mixed]: check reports convergence and never writes');
-  } finally {
-    try { fs.rmSync(mixedRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  }
-
-  const conflictRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-conflict-'));
-  try {
-    const conflictAgents = '# Owner AGENTS\n\nOWNER_AUTHORITY_SENTINEL\n';
-    const conflictClaude = '# Owner CLAUDE\n\nOWNER_RUNTIME_SENTINEL\n';
-    writeInstructionFixture(conflictRoot, conflictAgents, conflictClaude);
-    const conflict = runMigration('apply', conflictRoot);
-    assert(conflict.status === 2 && conflict.envelope
-      && conflict.envelope.status === 'decision_required'
-      && conflict.envelope.changed === false && conflict.envelope.writes.length === 0,
-    'A3[conflict]: unknown owner authority requests a decision and writes nothing');
-    assert(fs.readFileSync(path.join(conflictRoot, 'AGENTS.md'), 'utf8') === conflictAgents
-      && fs.readFileSync(path.join(conflictRoot, 'CLAUDE.md'), 'utf8') === conflictClaude,
-    'A3[conflict]: decision-required leaves all owner bytes untouched');
-  } finally {
-    try { fs.rmSync(conflictRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  }
-
-  const noReceiptRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1046-no-global-receipt-'));
-  try {
-    const missingReceipt = path.join(noReceiptRoot, 'absent-global-receipt.json');
-    const result = runMigration('apply', noReceiptRoot, [], {
-      KAOLA_GLOBAL_CONTRACT_RECEIPT: missingReceipt,
-    });
-    assert(result.status === 2 && result.envelope
-      && result.envelope.status === 'decision_required'
-      && result.envelope.changed === false && result.envelope.writes.length === 0
-      && JSON.stringify(result.envelope).includes('global_contract_receipt_missing'),
-    'A3[global-contract]: missing machine-global receipt is a zero-write decision_required result');
-    assert(!fs.existsSync(path.join(noReceiptRoot, 'AGENTS.md'))
-      && !fs.existsSync(path.join(noReceiptRoot, 'CLAUDE.md')),
-    'A3[global-contract]: receipt failure creates no project instruction carrier');
-  } finally {
-    try { fs.rmSync(noReceiptRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  }
-
-  const activeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-active-'));
-  try {
-    writeInstructionFixture(activeRoot, legacyRedirect, ownerClaude);
-    const stateDir = path.join(activeRoot, 'kaola-workflow', 'active-run');
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(path.join(stateDir, 'workflow-state.md'),
-      '# Kaola-Workflow State\n\n## Project\nname: active-run\nstatus: active\n');
-    const missionList = [
-      '# goal',
-      '',
-      '- item: keep extra fields',
-      '  status: done',
-      '  dispatched: self',
-      '  result: already landed',
-      '  role: implementer',
-      '  depends_on: none',
-      '',
-    ].join('\n');
-    fs.writeFileSync(path.join(stateDir, 'mission-list.md'), missionList);
-    const agentsBefore = fs.readFileSync(path.join(activeRoot, 'AGENTS.md'));
-    const claudeBefore = fs.readFileSync(path.join(activeRoot, 'CLAUDE.md'));
-    const active = runMigration('apply', activeRoot);
-    assert(active.status === 0 && active.envelope
-      && active.envelope.status === 'active_run_preserved'
-      && active.envelope.changed === false
-      && active.envelope.writes.length === 0,
-    'A3[active]: any active run freezes both project instruction carriers');
-    const stateAfter = fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8');
-    assert(stateAfter.includes('status: active'),
-      'A3[active]: layout adoption does not rewrite claim/worktree status');
-    assert(fs.readFileSync(path.join(stateDir, 'mission-list.md'), 'utf8') === missionList,
-      'A3[active]: Mission List bytes including extra fields stay untouched');
-    assert(fs.readFileSync(path.join(activeRoot, 'AGENTS.md')).equals(agentsBefore)
-      && fs.readFileSync(path.join(activeRoot, 'CLAUDE.md')).equals(claudeBefore),
-    'A3[active]: active-run preservation leaves both instruction files byte-identical');
-    assert(!fs.existsSync(path.join(stateDir, '.cache', 'instruction-adoption.json')),
-      'A3[active]: frozen active-run migration writes no adoption receipt');
-  } finally {
-    try { fs.rmSync(activeRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  }
-
-  const execRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1037-exec-default-'));
-  try {
-    const canonicalTemplates = require(path.join(ROOT, 'scripts',
-      'kaola-workflow-project-instruction-templates.js'));
-    const driftedAgents = injectManagedDrift(
-      Buffer.from(canonicalTemplates.AGENTS_TEMPLATE), migrationModule.AGENTS_MARKER);
-    writeInstructionFixture(execRoot, driftedAgents, Buffer.from(canonicalTemplates.CLAUDE_TEMPLATE));
-    const stateDir = path.join(execRoot, 'kaola-workflow', 'active-run');
-    fs.mkdirSync(stateDir, { recursive: true });
-    const stateBytes = '# Kaola-Workflow State\n\n## Project\nname: active-run\nstatus: active\n';
-    fs.writeFileSync(path.join(stateDir, 'workflow-state.md'), stateBytes);
-    const planned = runMigration('plan', execRoot);
-    assert(planned.status === 0 && planned.envelope
-      && planned.envelope.status === 'active_run_preserved',
-    'A3[active-execution]: plan freezes drifted project instructions during an active run');
-    const applied = runMigration('apply', execRoot);
-    assert(applied.status === 0 && applied.envelope
-      && applied.envelope.status === 'active_run_preserved'
-      && applied.envelope.changed === false && applied.envelope.writes.length === 0,
-    'A3[active-execution]: apply cannot bypass the active-run freeze');
-    assert(fs.readFileSync(path.join(execRoot, 'AGENTS.md')).equals(driftedAgents),
-      'A3[active-execution]: AGENTS bytes stay until the run closes');
-    assert(fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8') === stateBytes,
-      'A3[active-execution]: workflow-state is never a write target');
-    assert(!fs.existsSync(path.join(stateDir, '.cache', 'instruction-adoption.json')),
-      'A3[active-execution]: active-run freeze writes no adoption receipt');
-  } finally {
-    try { fs.rmSync(execRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  }
-
-  // A production-path schema incompatibility must be emitted by the real
-  // classifier from active run bytes, not by directly feeding a synthetic
-  // classification into compatibilityFor(). It fences instruction writes and
-  // preserves the complete unknown state/Mission List bytes.
-  const incompatibleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1037-state-schema-'));
-  try {
-    writeInstructionFixture(incompatibleRoot, legacyRedirect, ownerClaude);
-    const stateDir = path.join(incompatibleRoot, 'kaola-workflow', 'active-run');
-    fs.mkdirSync(stateDir, { recursive: true });
-    const stateBytes = [
-      '# Kaola-Workflow State', '', 'schema_version: 999', '', '## Project',
-      'name: active-run', 'status: active', 'unknown_required_state: preserve', '',
-    ].join('\n');
-    const missionBytes = [
-      '# preserve incompatible run', '', '- item: keep live locator', '  status: in-flight',
-      '  dispatched: native-child task-17 -> .cache/result.md', '  result:',
-      '  unknown_required_item: preserve', '',
-    ].join('\n');
-    fs.writeFileSync(path.join(stateDir, 'workflow-state.md'), stateBytes);
-    fs.writeFileSync(path.join(stateDir, 'mission-list.md'), missionBytes);
-    const agentsBefore = fs.readFileSync(path.join(incompatibleRoot, 'AGENTS.md'));
-    const claudeBefore = fs.readFileSync(path.join(incompatibleRoot, 'CLAUDE.md'));
-    const planned = runMigration('plan', incompatibleRoot);
-    const applied = runMigration('apply', incompatibleRoot);
-    assert(planned.envelope && planned.envelope.status === 'active_run_preserved',
-      'A3[active-state-schema]: unsupported active state is preserved without migration');
-    assert(applied.status === 0 && applied.envelope
-      && applied.envelope.status === 'active_run_preserved'
-      && applied.envelope.changed === false && applied.envelope.writes.length === 0
-      && JSON.stringify(applied.envelope).includes('state_schema_incompatible'),
-    'A3[active-state-schema]: production apply fences an incompatible active run without writes');
-    assert(fs.readFileSync(path.join(incompatibleRoot, 'AGENTS.md')).equals(agentsBefore)
-      && fs.readFileSync(path.join(incompatibleRoot, 'CLAUDE.md')).equals(claudeBefore)
-      && fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8') === stateBytes
-      && fs.readFileSync(path.join(stateDir, 'mission-list.md'), 'utf8') === missionBytes,
-    'A3[active-state-schema]: schema fence preserves instructions, claim, Mission List, and unknown fields byte-for-byte');
-    assert(!fs.existsSync(path.join(stateDir, '.cache', 'instruction-adoption.json')),
-      'A3[active-state-schema]: fenced state writes no adoption receipt');
-  } finally {
-    try { fs.rmSync(incompatibleRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  }
-
-  // Active-run preservation is repository-wide: neither a managed AGENTS drift nor
-  // an absent thin Claude bridge may be repaired while any run is active.
-  const mixedSchemaRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1037-mixed-schema-'));
-  try {
-    const canonicalTemplates = require(path.join(ROOT, 'scripts',
-      'kaola-workflow-project-instruction-templates.js'));
-    const driftedAgents = injectManagedDrift(
-      Buffer.from(canonicalTemplates.AGENTS_TEMPLATE), migrationModule.AGENTS_MARKER);
-    writeInstructionFixture(mixedSchemaRoot, driftedAgents, Buffer.alloc(0));
-    const stateDir = path.join(mixedSchemaRoot, 'kaola-workflow', 'active-run');
-    fs.mkdirSync(stateDir, { recursive: true });
-    const stateBytes = [
-      '# Kaola-Workflow State', '', 'schema_version: 999', '', '## Project',
-      'name: active-run', 'status: active', 'unknown_required_state: preserve', '',
-    ].join('\n');
-    const missionBytes = [
-      '# preserve mixed run', '', '- item: keep live dispatch', '  status: in-flight',
-      '  dispatched: native-child task-23 -> .cache/result.md', '  result:',
-      '  unknown_required_item: preserve', '',
-    ].join('\n');
-    fs.writeFileSync(path.join(stateDir, 'workflow-state.md'), stateBytes);
-    fs.writeFileSync(path.join(stateDir, 'mission-list.md'), missionBytes);
-    const planned = runMigration('plan', mixedSchemaRoot);
-    const applied = runMigration('apply', mixedSchemaRoot);
-    assert(planned.envelope && planned.envelope.status === 'active_run_preserved'
-      && JSON.stringify(planned.envelope).includes('state_schema_incompatible'),
-    'A3[active-state-schema-mixed]: plan preserves the complete active project surface');
-    assert(applied.status === 0 && applied.envelope
-      && applied.envelope.status === 'active_run_preserved'
-      && applied.envelope.changed === false
-      && applied.envelope.writes.length === 0
-      && JSON.stringify(applied.envelope).includes('state_schema_incompatible')
-      && !Object.prototype.hasOwnProperty.call(applied.envelope, 'consent'),
-    'A3[active-state-schema-mixed]: apply changes neither carrier and exposes no bypass');
-    assert(fs.readFileSync(path.join(mixedSchemaRoot, 'AGENTS.md')).equals(driftedAgents)
-      && fs.readFileSync(path.join(mixedSchemaRoot, 'CLAUDE.md')).equals(Buffer.alloc(0))
-      && fs.readFileSync(path.join(stateDir, 'workflow-state.md'), 'utf8') === stateBytes
-      && fs.readFileSync(path.join(stateDir, 'mission-list.md'), 'utf8') === missionBytes,
-    'A3[active-state-schema-mixed]: freeze preserves instructions, state, Mission List, and unknown fields');
-    const receiptPath = path.join(stateDir, '.cache', 'instruction-adoption.json');
-    assert(!fs.existsSync(receiptPath),
-      'A3[active-state-schema-mixed]: freeze writes no adoption receipt');
-  } finally {
-    try { fs.rmSync(mixedSchemaRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  }
-
-  assert(migrationModule.COMPATIBILITY.AUTHORITY_LAYOUT_EQUIVALENT === 'authority_layout_equivalent'
-    && migrationModule.COMPATIBILITY.EXECUTION_DEFAULT_CHANGE === 'execution_default_change'
-    && migrationModule.COMPATIBILITY.STATE_SCHEMA_INCOMPATIBLE === 'state_schema_incompatible'
-    && migrationModule.COMPATIBILITY.UNKNOWN_OR_MIXED === 'unknown_or_mixed',
-  'A3[compat]: helper exports the four repository compatibility classes');
-  assert(migrationModule.compatibilityFor('agents', { classification: 'known_legacy_redirect' })
-    === 'authority_layout_equivalent',
-  'A3[compat]: known legacy redirect is authority-layout equivalent');
-  assert(migrationModule.compatibilityFor('agents', { classification: 'managed_region', changed: true })
-    === 'execution_default_change',
-  'A3[compat]: AGENTS managed-region drift is an execution-default change');
-  assert(migrationModule.compatibilityFor('claude', { classification: 'managed_region', changed: true })
-    === 'authority_layout_equivalent',
-  'A3[compat]: Claude overlay managed-region rewrite stays layout-equivalent');
-  assert(migrationModule.compatibilityFor('agents', { classification: 'state_schema_incompatible' })
-    === 'state_schema_incompatible',
-  'A3[compat]: a state-schema classification stays non-layout');
-  assert(migrationModule.compatibilityFor('agents', { classification: 'owner_only' })
-    === 'unknown_or_mixed',
-  'A3[compat]: owner-only authority is unknown_or_mixed');
-
-  // A3-installed — workflow-init runs from the distribution that actually ships. Copy each plugin
-  // root away from this repository so an implementation cannot accidentally borrow root-only
-  // AGENTS.md/CLAUDE.md bytes. A successful apply therefore proves that the consumer templates are
-  // owned by, and reachable from, that installed distribution.
-  for (const distribution of [
-    { label: 'github', root: 'plugins/kaola-workflow' },
-    { label: 'gitlab', root: 'plugins/kaola-workflow-gitlab' },
-    { label: 'gitea', root: 'plugins/kaola-workflow-gitea' },
-  ]) {
-    const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), `kw-1033-${distribution.label}-dist-`));
-    try {
-      const installedRoot = path.join(isolatedRoot, 'installed-plugin');
-      const consumerRoot = path.join(isolatedRoot, 'consumer-project');
-      const runtimeHome = path.join(isolatedRoot, 'runtime-home');
-      fs.cpSync(path.join(ROOT, distribution.root), installedRoot, { recursive: true });
-      fs.mkdirSync(consumerRoot, { recursive: true });
-      fs.mkdirSync(path.join(runtimeHome, 'agents'), { recursive: true });
-      fs.mkdirSync(path.join(runtimeHome, 'hooks'), { recursive: true });
-      fs.writeFileSync(path.join(runtimeHome, 'agents', 'OWNER_PROFILE.toml'),
-        'OWNER_RUNTIME_PROFILE=byte-identical\n');
-      fs.writeFileSync(path.join(runtimeHome, 'hooks', 'OWNER_HOOK.sh'),
-        'OWNER_RUNTIME_HOOK=byte-identical\n');
-      const runtimeBefore = treeSnapshot(runtimeHome);
-      const isolatedEnv = {
-        HOME: runtimeHome,
-        CODEX_HOME: runtimeHome,
-        CURSOR_HOME: path.join(runtimeHome, 'cursor'),
-        OPENCODE_HOME: path.join(runtimeHome, 'opencode'),
-        KIMI_HOME: path.join(runtimeHome, 'kimi'),
-        GROK_HOME: path.join(runtimeHome, 'grok'),
-        ZCODE_HOME: path.join(runtimeHome, 'zcode'),
-      };
-      const helperPath = path.join(installedRoot, 'scripts',
-        'kaola-workflow-project-instructions.js');
-      const plan = runMigrationHelper(helperPath, 'plan', consumerRoot, [], isolatedEnv);
-      const applied = runMigrationHelper(helperPath, 'apply', consumerRoot, [], isolatedEnv);
-      const agentsPath = path.join(consumerRoot, 'AGENTS.md');
-      const claudePath = path.join(consumerRoot, 'CLAUDE.md');
-      const agentsAfter = readOptionalFixture(agentsPath);
-      const claudeAfter = readOptionalFixture(claudePath);
-
-      assert(plan.status === 0 && plan.envelope && plan.envelope.status === 'planned'
-        && applied.status === 0 && applied.envelope && applied.envelope.status === 'applied',
-      `A3[installed/${distribution.label}]: the isolated vendored helper can plan and apply using `
-        + 'distribution-owned consumer templates');
-      assert(!!agentsAfter && !!claudeAfter
-        && /<!--\s*KW-AGENTS-MANAGED-START\s*-->/.test(String(agentsAfter))
-        && /<!--\s*KW-CLAUDE-OVERLAY-MANAGED-START\s*-->/.test(String(claudeAfter))
-        && exactLineCount(claudeAfter, '@AGENTS.md') === 1,
-      `A3[installed/${distribution.label}]: installed templates create one universal AGENTS authority `
-        + 'and one load-bearing Claude bridge');
-      assert(!hasRepositorySpecificContract(agentsAfter || Buffer.alloc(0))
-        && !hasRepositorySpecificContract(claudeAfter || Buffer.alloc(0)),
-      `A3[installed/${distribution.label}]: a new consumer receives no Kaola-Workflow repository-specific contract`);
-
-      const canonicalTemplates = require(path.join(ROOT, 'scripts',
-        'kaola-workflow-project-instruction-templates.js'));
-      const expectedManaged = exactManagedSlice(
-        Buffer.from(canonicalTemplates.AGENTS_TEMPLATE), migrationModule.AGENTS_MARKER);
-      const installedManaged = agentsAfter
-        ? exactManagedSlice(agentsAfter, migrationModule.AGENTS_MARKER) : null;
-      assert(!!expectedManaged && !!installedManaged && installedManaged.equals(expectedManaged),
-        `A3[installed/${distribution.label}]: workflow-init installs the consumer AGENTS managed block `
-          + 'byte-equal to the distribution-owned template module');
-      assert(JSON.stringify(treeSnapshot(runtimeHome)) === JSON.stringify(runtimeBefore),
-        `A3[installed/${distribution.label}]: workflow-init leaves installed runtime profiles, `
-          + 'commands, skills, hooks, adapters, and config bytes unchanged');
-    } finally {
-      try { fs.rmSync(isolatedRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-    }
-  }
-
-  // A distribution can accidentally inline today's identical bytes and still satisfy a snapshot
-  // comparison. Mutate only an isolated installed template module and require the real helper to
-  // consume that changed authority; this proves the module remains the live source, not a mirror.
-  const sourceProbeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-template-source-probe-'));
-  try {
-    const installedRoot = path.join(sourceProbeRoot, 'installed-plugin');
-    const consumerRoot = path.join(sourceProbeRoot, 'consumer-project');
-    fs.cpSync(path.join(ROOT, 'plugins/kaola-workflow'), installedRoot, { recursive: true });
-    const templatePath = path.join(installedRoot, 'scripts',
-      'kaola-workflow-project-instruction-templates.js');
-    const templateSource = fs.readFileSync(templatePath, 'utf8');
-    const exportLine = 'module.exports = { AGENTS_TEMPLATE, CLAUDE_TEMPLATE };';
-    const probeLine = [
-      "const PROBED_AGENTS_TEMPLATE = AGENTS_TEMPLATE.replace(",
-      "  '<!-- KW-AGENTS-MANAGED-START -->',",
-      "  '<!-- KW-AGENTS-MANAGED-START -->\\nKW_TEMPLATE_SOURCE_PROBE=isolated-distribution');",
-      'module.exports = { AGENTS_TEMPLATE: PROBED_AGENTS_TEMPLATE, CLAUDE_TEMPLATE };',
-    ].join('\n');
-    assert(templateSource.includes(exportLine),
-      'A3[single-source/mutation]: isolated distribution template exposes the expected export seam');
-    fs.writeFileSync(templatePath, templateSource.replace(exportLine, probeLine));
-    fs.mkdirSync(consumerRoot, { recursive: true });
-    const helperPath = path.join(installedRoot, 'scripts',
-      'kaola-workflow-project-instructions.js');
-    const applied = runMigrationHelper(helperPath, 'apply', consumerRoot);
-    const agentsAfter = readOptionalFixture(path.join(consumerRoot, 'AGENTS.md'));
-    const managedAfter = agentsAfter
-      ? exactManagedSlice(agentsAfter, migrationModule.AGENTS_MARKER) : null;
-    assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied'
-      && !!managedAfter
-      && managedAfter.includes(Buffer.from('KW_TEMPLATE_SOURCE_PROBE=isolated-distribution')),
-    'A3[single-source/mutation]: workflow-init consumes its adjacent template module as the live '
-      + 'consumer AGENTS source');
-  } finally {
-    try { fs.rmSync(sourceProbeRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  }
-
-  // A3-released-template — v9.17.2 emitted a complete consumer CLAUDE.md whose universal contract
-  // lived outside the retired managed region. Exact released bytes are therefore one known whole-
-  // file artifact: retaining their prefix/suffix would preserve a second universal authority. The
-  // whole file may migrate only while its byte identity is intact. Any changed or owner-authored
-  // byte outside that old region makes ownership ambiguous and must require a decision with no
-  // partial migration.
-  const releasedClaude = releasedConsumerTemplate();
-  assert(Buffer.isBuffer(releasedClaude),
-    'A3[released-template]: the exact v9.17.2 workflow-init consumer template loads from a503edd8');
-  if (releasedClaude) {
-    const oldMarker = 'KW-CLAUDE-MANAGED';
-    const oldManaged = exactManagedSlice(releasedClaude, oldMarker);
-    const oldStart = oldManaged ? releasedClaude.indexOf(oldManaged) : -1;
-    const releasedPrefix = oldStart >= 0 ? releasedClaude.subarray(0, oldStart) : Buffer.alloc(0);
-    const releasedSuffix = oldStart >= 0
-      ? releasedClaude.subarray(oldStart + oldManaged.length) : Buffer.alloc(0);
-    assert(!!oldManaged && releasedPrefix.length > 0 && releasedSuffix.length > 0,
-      'A3[released-template]: released fixture has a bounded old managed region plus universal outer bytes');
-
-    const releasedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-released-template-'));
-    try {
-      writeInstructionFixture(releasedRoot, Buffer.from(legacyRedirect), releasedClaude);
-      const applied = runMigration('apply', releasedRoot);
-      const agentsAfter = fs.readFileSync(path.join(releasedRoot, 'AGENTS.md'));
-      const claudeAfter = fs.readFileSync(path.join(releasedRoot, 'CLAUDE.md'));
-      const canonicalTemplates = require(path.join(ROOT, 'scripts',
-        'kaola-workflow-project-instruction-templates.js'));
-      const expectedAgents = Buffer.from(canonicalTemplates.AGENTS_TEMPLATE);
-      const expectedClaude = Buffer.from(canonicalTemplates.CLAUDE_TEMPLATE);
-
-      assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied'
-        && applied.envelope.changed === true,
-      'A3[released-template]: the exact released instruction pair migrates automatically');
-      assert(agentsAfter.equals(expectedAgents),
-        'A3[released-template]: the legacy AGENTS redirect becomes the canonical consumer authority');
-      assert(claudeAfter.equals(expectedClaude),
-        'A3[released-template]: the exact released CLAUDE template is replaced whole-file by the canonical thin bridge');
-      assert(exactLineCount(claudeAfter, '@AGENTS.md') === 1
-        && !claudeAfter.includes(Buffer.from('<!-- KW-CLAUDE-MANAGED-START -->'))
-        && !!exactManagedSlice(claudeAfter, migrationModule.CLAUDE_MARKER)
-        && !/^##\s+(?:Project Snapshot|Commands|Non-Negotiable Rules|First Principles|Kaola-Workflow|Documentation Map|Maintenance)\s*$/mi.test(String(claudeAfter)),
-      'A3[released-template]: migrated CLAUDE.md contains one bridge and none of the retired universal sections');
-
-      const firstAgents = Buffer.from(agentsAfter);
-      const firstClaude = Buffer.from(claudeAfter);
-      const rerun = runMigration('apply', releasedRoot);
-      assert(rerun.status === 0 && rerun.envelope && rerun.envelope.status === 'converged'
-        && rerun.envelope.changed === false && rerun.envelope.writes.length === 0,
-      'A3[released-template]: migrated released consumer converges on its second apply');
-      assert(fs.readFileSync(path.join(releasedRoot, 'AGENTS.md')).equals(firstAgents)
-        && fs.readFileSync(path.join(releasedRoot, 'CLAUDE.md')).equals(firstClaude),
-      'A3[released-template]: converged rerun leaves both migrated files byte-identical');
-    } finally {
-      try { fs.rmSync(releasedRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-    }
-
-    const mixedReleasedVariants = [
-      {
-        label: 'changed-prefix',
-        bytes: Buffer.from(String(releasedClaude).replace(
-          '# Project Instructions', '# Owner-adjusted Project Instructions')),
-      },
-      {
-        label: 'owner-suffix',
-        bytes: Buffer.concat([
-          releasedClaude,
-          Buffer.from('\nOWNER_CLAUDE_SUFFIX=must-not-be-adopted\n'),
-        ]),
-      },
-    ];
-    for (const variant of mixedReleasedVariants) {
-      const mixedReleasedRoot = fs.mkdtempSync(
-        path.join(os.tmpdir(), `kw-1033-released-mixed-${variant.label}-`));
-      try {
-        assert(!!oldManaged && !!exactManagedSlice(variant.bytes, oldMarker)
-          && exactManagedSlice(variant.bytes, oldMarker).equals(oldManaged)
-          && !variant.bytes.equals(releasedClaude),
-        `A3[released-mixed/${variant.label}]: fixture changes only bytes outside the intact old managed region`);
-        const agentsBefore = Buffer.from(legacyRedirect);
-        const claudeBefore = Buffer.from(variant.bytes);
-        writeInstructionFixture(mixedReleasedRoot, agentsBefore, claudeBefore);
-        const applied = runMigration('apply', mixedReleasedRoot);
-        assert(applied.status === 2 && applied.envelope
-          && applied.envelope.status === 'decision_required'
-          && applied.envelope.changed === false && applied.envelope.writes.length === 0,
-        `A3[released-mixed/${variant.label}]: changed outer bytes require an ownership decision, not partial adoption`);
-        assert(fs.readFileSync(path.join(mixedReleasedRoot, 'AGENTS.md')).equals(agentsBefore)
-          && fs.readFileSync(path.join(mixedReleasedRoot, 'CLAUDE.md')).equals(claudeBefore),
-        `A3[released-mixed/${variant.label}]: decision-required leaves both instruction files byte-identical`);
-      } finally {
-        try { fs.rmSync(mixedReleasedRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-      }
-    }
-  }
-
-  // A3-v9 — use the exact supported pre-migration files, not a friendly synthetic owner overlay.
-  function gitBlob(revisionPath) {
-    // spawn-class: environment
-    const result = spawnSync('git', ['show', revisionPath], { cwd: ROOT, encoding: null });
-    return result.status === 0 ? result.stdout : null;
-  }
-
-  function readOptionalFixture(file) {
-    try { return fs.readFileSync(file); } catch (_) { return null; }
-  }
-
-  const v9Agents = gitBlob('a503edd8:AGENTS.md');
-  const v9Claude = gitBlob('a503edd8:CLAUDE.md');
-  assert(Buffer.isBuffer(v9Agents) && Buffer.isBuffer(v9Claude),
-    'A3[v9-exact]: exact a503edd8 AGENTS.md and CLAUDE.md fixtures load from the baseline commit');
-  if (v9Agents && v9Claude) {
-    const v9Root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-v9-exact-'));
-    try {
-      writeInstructionFixture(v9Root, v9Agents, v9Claude);
-      const applied = runMigration('apply', v9Root);
-      const agentsAfter = fs.readFileSync(path.join(v9Root, 'AGENTS.md'));
-      const claudeAfter = fs.readFileSync(path.join(v9Root, 'CLAUDE.md'));
-      assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied',
-        'A3[v9-exact]: the exact a503edd8 instruction pair has a deterministic migration');
-      const universalHeadings = [
-        'Project Overview', 'The mission list', 'Durable State Contract', 'First Principles',
-        'Non-Negotiable Rules',
-      ];
-      const duplicated = universalHeadings.filter(heading => {
-        const pattern = new RegExp('^##\\s+' + heading.replace(/ /g, '\\s+'), 'mi');
-        return pattern.test(String(agentsAfter)) && pattern.test(String(claudeAfter));
-      });
-      assert(duplicated.length === 0 && exactLineCount(claudeAfter, '@AGENTS.md') === 1,
-        'A3[v9-exact]: migration leaves exactly one universal authority and one Claude bridge — duplicated '
-        + JSON.stringify(duplicated));
-      assert(!hasRepositorySpecificContract(agentsAfter) && !hasRepositorySpecificContract(claudeAfter),
-        'A3[v9-exact]: migration does not install Kaola-Workflow repository-specific instructions into a consumer');
-      assert(!/# Kaola-Workflow — Claude Code Instructions/.test(String(claudeAfter))
-        && !/READ CLAUDE\.md|only to direct you there/i.test(String(agentsAfter)),
-      'A3[v9-exact]: retired v9 universal Claude authority and AGENTS redirect are both removed');
-
-      const v9ActiveRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1037-v9-active-'));
-      try {
-        writeInstructionFixture(v9ActiveRoot, v9Agents, v9Claude);
-        const stateDir = path.join(v9ActiveRoot, 'kaola-workflow', 'active-run');
-        fs.mkdirSync(stateDir, { recursive: true });
-        fs.writeFileSync(path.join(stateDir, 'workflow-state.md'),
-          '# Kaola-Workflow State\n\n## Project\nname: active-run\nstatus: active\n');
-        fs.writeFileSync(path.join(stateDir, 'mission-list.md'),
-          '# goal\n\n- item: keep me\n  status: done\n  dispatched: self\n  result: already landed\n');
-        const agentsBefore = fs.readFileSync(path.join(v9ActiveRoot, 'AGENTS.md'));
-        const claudeBefore = fs.readFileSync(path.join(v9ActiveRoot, 'CLAUDE.md'));
-        const appliedActive = runMigration('apply', v9ActiveRoot);
-        assert(appliedActive.status === 0 && appliedActive.envelope
-          && appliedActive.envelope.status === 'active_run_preserved'
-          && appliedActive.envelope.changed === false
-          && appliedActive.envelope.writes.length === 0,
-        'A3[v9-active]: exact v9 pair remains frozen during an active run');
-        assert(fs.readFileSync(path.join(v9ActiveRoot, 'AGENTS.md')).equals(agentsBefore)
-          && fs.readFileSync(path.join(v9ActiveRoot, 'CLAUDE.md')).equals(claudeBefore)
-          && fs.readFileSync(path.join(stateDir, 'mission-list.md'), 'utf8').includes('keep me'),
-        'A3[v9-active]: both instruction carriers and Mission List bytes are unchanged');
-        assert(!fs.existsSync(path.join(stateDir, '.cache', 'instruction-adoption.json')),
-          'A3[v9-active]: active-run freeze leaves no adoption receipt');
-      } finally {
-        try { fs.rmSync(v9ActiveRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-      }
-    } finally {
-      try { fs.rmSync(v9Root, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-    }
-
-    const unknownClaudeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-unknown-claude-'));
-    try {
-      const unknownClaude = Buffer.from([
-        '# Existing project instructions',
-        '',
-        '## Build and release',
-        '',
-        'OWNER_CLAUDE_AUTHORITY=unclassified',
-        '',
-      ].join('\n'));
-      writeInstructionFixture(unknownClaudeRoot, v9Agents, unknownClaude);
-      const result = runMigration('apply', unknownClaudeRoot);
-      assert(result.status === 2 && result.envelope
-        && result.envelope.status === 'decision_required'
-        && result.envelope.changed === false && result.envelope.writes.length === 0,
-      'A3[unknown-claude]: a known legacy AGENTS redirect does not make unknown CLAUDE authority safe');
-      assert(fs.readFileSync(path.join(unknownClaudeRoot, 'AGENTS.md')).equals(v9Agents)
-        && fs.readFileSync(path.join(unknownClaudeRoot, 'CLAUDE.md')).equals(unknownClaude),
-      'A3[unknown-claude]: decision-required preserves both instruction files byte-for-byte');
-    } finally {
-      try { fs.rmSync(unknownClaudeRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-    }
-  }
-
-  // A3-bridge — the Claude import is load-bearing state, not decorative bytes outside convergence.
-  const bridgeOwnerBytes = Buffer.from('\nOWNER_BRIDGE_SUFFIX=preserve-byte-for-byte\n');
-  for (const mutation of [
-    { label: 'deleted', apply: text => text.replace(/^@AGENTS\.md\r?\n/m, '') },
-    { label: 'duplicated', apply: text => text.replace(/^@AGENTS\.md$/m, '@AGENTS.md\n@AGENTS.md') },
-    { label: 'altered', apply: text => text.replace(/^@AGENTS\.md$/m, '@README.md') },
-  ]) {
-    const bridgeRoot = fs.mkdtempSync(path.join(os.tmpdir(), `kw-1033-bridge-${mutation.label}-`));
-    try {
-      const agentsBytes = Buffer.concat([Buffer.from(agentsRoot), bridgeOwnerBytes]);
-      const claudeBytes = Buffer.concat([Buffer.from(mutation.apply(claudeRoot)), bridgeOwnerBytes]);
-      writeInstructionFixture(bridgeRoot, agentsBytes, claudeBytes);
-      const beforeCheck = fs.readFileSync(path.join(bridgeRoot, 'CLAUDE.md'));
-      const checked = runMigration('check', bridgeRoot);
-      assert(checked.status === 3 && checked.envelope && checked.envelope.status === 'drift'
-        && checked.envelope.writes.length === 0,
-      `A3[bridge/${mutation.label}]: check rejects Claude bridge ${mutation.label} drift without writing`);
-      assert(fs.readFileSync(path.join(bridgeRoot, 'CLAUDE.md')).equals(beforeCheck),
-        `A3[bridge/${mutation.label}]: check leaves owner and drift bytes untouched`);
-      const applied = runMigration('apply', bridgeRoot);
-      const claudeAfter = fs.readFileSync(path.join(bridgeRoot, 'CLAUDE.md'));
-      assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied'
-        && exactLineCount(claudeAfter, '@AGENTS.md') === 1
-        && !/^@README\.md$/m.test(String(claudeAfter)),
-      `A3[bridge/${mutation.label}]: apply restores exactly one canonical @AGENTS.md bridge`);
-      assert(bufferEndsWith(claudeAfter, bridgeOwnerBytes),
-        `A3[bridge/${mutation.label}]: bridge repair preserves owner bytes outside the managed envelope`);
-    } finally {
-      try { fs.rmSync(bridgeRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-    }
-  }
-
-  // A3-byte-safety — migration owns only its byte envelope. Non-UTF-8 owner bytes, restrictive
-  // permissions, and symlink topology are not valid collateral for a text-template update.
-  const invalidOwnerBytes = Buffer.from([0xff, 0xfe, 0x41, 0x0a]);
-  const byteRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-invalid-bytes-'));
-  try {
-    const agentsBefore = Buffer.concat([
-      injectManagedDrift(Buffer.from(agentsRoot), migrationModule.AGENTS_MARKER), invalidOwnerBytes,
-    ]);
-    const claudeBefore = Buffer.concat([
-      injectManagedDrift(Buffer.from(claudeRoot), migrationModule.CLAUDE_MARKER), invalidOwnerBytes,
-    ]);
-    writeInstructionFixture(byteRoot, agentsBefore, claudeBefore);
-    const applied = runMigration('apply', byteRoot);
-    const agentsAfter = fs.readFileSync(path.join(byteRoot, 'AGENTS.md'));
-    const claudeAfter = fs.readFileSync(path.join(byteRoot, 'CLAUDE.md'));
-    assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied',
-      'A3[invalid-utf8]: managed drift remains safely repairable around non-UTF-8 owner bytes');
-    assert(bufferEndsWith(agentsAfter, invalidOwnerBytes)
-      && applied.envelope.files.agents.outside_bytes_preserved === true,
-    'A3[invalid-utf8]: AGENTS owner bytes outside the managed region remain byte-identical');
-    assert(bufferEndsWith(claudeAfter, invalidOwnerBytes)
-      && applied.envelope.files.claude.outside_bytes_preserved === true,
-    'A3[invalid-utf8]: CLAUDE owner bytes outside the managed region remain byte-identical');
-  } finally {
-    try { fs.rmSync(byteRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  }
-
-  const modeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-mode-'));
-  try {
-    writeInstructionFixture(modeRoot,
-      injectManagedDrift(Buffer.from(agentsRoot), migrationModule.AGENTS_MARKER),
-      injectManagedDrift(Buffer.from(claudeRoot), migrationModule.CLAUDE_MARKER));
-    fs.chmodSync(path.join(modeRoot, 'AGENTS.md'), 0o600);
-    fs.chmodSync(path.join(modeRoot, 'CLAUDE.md'), 0o600);
-    const applied = runMigration('apply', modeRoot);
-    const agentsMode = fs.statSync(path.join(modeRoot, 'AGENTS.md')).mode & 0o777;
-    const claudeMode = fs.statSync(path.join(modeRoot, 'CLAUDE.md')).mode & 0o777;
-    assert(applied.status === 0 && applied.envelope && applied.envelope.status === 'applied',
-      'A3[mode]: managed instruction drift remains repairable for restrictive owner files');
-    assert(agentsMode === 0o600 && claudeMode === 0o600,
-      'A3[mode]: atomic replacement preserves 0600 on both instruction files — got '
-      + agentsMode.toString(8) + '/' + claudeMode.toString(8));
-  } finally {
-    try { fs.rmSync(modeRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  }
-
-  for (const symlinkName of ['AGENTS.md', 'CLAUDE.md']) {
-    const symlinkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1033-symlink-'));
-    try {
-      const agentsBytes = Buffer.from(agentsRoot);
-      const claudeBytes = Buffer.from(claudeRoot);
-      writeInstructionFixture(symlinkRoot, agentsBytes, claudeBytes);
-      const marker = symlinkName === 'AGENTS.md'
-        ? migrationModule.AGENTS_MARKER : migrationModule.CLAUDE_MARKER;
-      const targetPath = path.join(symlinkRoot, 'owner-shared-instructions.md');
-      const targetBefore = injectManagedDrift(
-        symlinkName === 'AGENTS.md' ? agentsBytes : claudeBytes, marker);
-      fs.writeFileSync(targetPath, targetBefore);
-      const linkPath = path.join(symlinkRoot, symlinkName);
-      fs.unlinkSync(linkPath);
-      fs.symlinkSync(targetPath, linkPath);
-      const otherName = symlinkName === 'AGENTS.md' ? 'CLAUDE.md' : 'AGENTS.md';
-      const otherBefore = fs.readFileSync(path.join(symlinkRoot, otherName));
-      const result = runMigration('apply', symlinkRoot);
-      assert(result.status === 2 && result.envelope
-        && result.envelope.status === 'decision_required'
-        && result.envelope.changed === false && result.envelope.writes.length === 0,
-      `A3[symlink/${symlinkName}]: an instruction symlink requires an owner decision and is not written`);
-      assert(fs.lstatSync(linkPath).isSymbolicLink()
-        && fs.readFileSync(targetPath).equals(targetBefore)
-        && fs.readFileSync(path.join(symlinkRoot, otherName)).equals(otherBefore),
-      `A3[symlink/${symlinkName}]: refusal preserves link topology, target bytes, and peer instructions`);
-    } finally {
-      try { fs.rmSync(symlinkRoot, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-    }
-  }
+const initCarriers = freshRoutingCarriers('init');
+assert(initCarriers.length === 21,
+  `A3[carriers]: all 21 runtime/forge workflow-init renders are covered — got ${initCarriers.length}`);
+for (const carrier of initCarriers) {
+  const label = `${carrier.runtime}/${carrier.forge} (${carrier.label})`;
+  const text = carrier.content;
+  assert(!/kaola-workflow-project-instruction(?:-templates|s)\.js|KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(text),
+    `A3[carriers/${label}]: no retired project-prompt owner remains`);
+  assert(/Agent owns the meaning and prose of project instructions/.test(text)
+      && /repository facts/.test(text)
+      && /Global Workflow Contract already loaded by the runtime/.test(text)
+      && /Before changing an existing user-authored or owner-authored instruction file/.test(text),
+    `A3[carriers/${label}]: Agent ownership, grounding, and consent remain load-bearing`);
+  assert(/fresh top-level\s+Agent\/session/.test(text)
+      && /not a prompt-write lock/.test(text),
+    `A3[carriers/${label}]: active-run warning and fresh-session validation remain explicit`);
+  assert(/no required headings, order, wording,\s+bytes, or length/i.test(text)
+      && !/global_contract_schema\s*:|decision_required|active_run_preserved/.test(text),
+    `A3[carriers/${label}]: no canonical prompt bytes, schema, or migrator verdict remains`);
+  assert(runtimeInstallInvocations(text).length === 0,
+    `A3[carriers/${label}]: workflow-init remains read-only toward runtime/global installation`);
 }
 
 // A3-single-source — workflow-init may describe the helper-owned reconciliation contract, but it

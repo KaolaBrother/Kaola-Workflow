@@ -8,6 +8,8 @@ moments.
 
 - [Architecture](architecture.md) — system structure and data flow, including the AGENTS-first
   authority graph and generated-role boundary.
+- [Installation](installation.md) — shortest correct all-runtime setup, per-runtime scopes, Cursor
+  Cloud lifecycle, update, verification, and uninstall.
 - [Runtime Capabilities](runtime-capabilities.md) — first-party evidence for direct `AGENTS.md`
   loading or Claude's thin bridge, plus native profile discovery, dispatch and fallback routes,
   default tier carriers, runtime limits, hooks, paths, precedence, and known unknowns for all seven
@@ -35,13 +37,16 @@ moments.
 
 ## Decisions
 
-[`decisions/`](decisions/) holds the full catalog. ADR 0020 records the AGENTS-first repository and
-role-authority architecture; ADR 0021 adds runtime-native next/finalize guidance; ADR 0022 moves
-universal workflow behavior to one machine-global contract and compact-safe native carriers. ADR
-0017 remains the Mission List design of record; #1037 refines outcome-level missions, custody vs
-carrier, and active-run layout adoption without adding fields. Most older records describe the
-node/DAG executor that
-ADR 0017 retired or the Claude-first role generation that ADR 0020 supersedes.
+[`decisions/`](decisions/) holds the full catalog. ADR 0021 adds runtime-native next/finalize
+guidance; ADR 0022 moves universal behavior to a machine-global contract and compact-safe native
+carriers; ADR 0023 makes repository instructions an Agent-maintained outcome. ADR 0017 remains the
+Mission List design of record. Most older records describe the node/DAG executor retired by ADR
+0017 or project-prompt ownership retired by ADR 0023.
+
+- **[0023 — Agent-owned project instructions](decisions/0023-agent-owned-project-instructions.md)**
+  — the Agent verifies repository facts, maintains project instructions without a prescribed prose
+  shape, and obtains authorization before rewriting existing owner-authored content. Scripts expose
+  installation evidence but do not own repository prompts.
 
 - **[0021 — Runtime-native orchestration guidance](decisions/0021-runtime-native-orchestration-guidance.md)**
   — common per-item judgment, honest fallback, adapter-rendered native capability exposure, and
@@ -52,10 +57,10 @@ ADR 0017 retired or the Claude-first role generation that ADR 0020 supersedes.
   instructions, and V2 compact recovery that reloads the complete active operation without tool
   hooks or inference-time JavaScript.
 
-- **[0020 — AGENTS-first runtime bridges](decisions/0020-agents-first-runtime-bridges.md)** — one
-  universal repository authority, one behavioral source for all 14 roles, evidence-backed native
-  adapters, prompt-external provenance, and ownership-safe migration. ADR 0021 refines its
-  orchestration/model-routing clauses without changing those authorities.
+- **[0020 — AGENTS-first runtime bridges](decisions/0020-agents-first-runtime-bridges.md)** —
+  historical basis for direct `AGENTS.md` discovery, thin bridges, shared role behavior, and native
+  adapters. ADR 0023 supersedes its project-instruction ownership and migration clauses; ADR 0021
+  retains the routing refinements.
 
 - **[0019 — The heavy-reasoning tier](decisions/0019-the-heavy-reasoning-tier.md)** — historical
   basis for the accepted

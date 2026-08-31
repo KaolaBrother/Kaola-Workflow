@@ -590,27 +590,25 @@ for (const file of canonCommands) {
 }
 
 // ---------------------------------------------------------------------------
-// A24 (#572/#812/#1033): workflow-init carries no second universal template. The
-// generated OpenCode and canonical surfaces both name the one distribution module and
-// executable writer; the module's actual bytes retain the phase and vendor bans.
+// A24 (#1047): OpenCode receives the same Agent-owned project-instruction outcome as the
+// canonical surface, with no script-owned template, writer, managed marker, or fixed schema.
 // ---------------------------------------------------------------------------
 {
   for (const [label, body] of [
     ['opencode', read('.opencode/commands/workflow-init.md')],
     ['canonical-github', read('commands/workflow-init.md')],
   ]) {
-    assert(!/KW-AGENTS-TEMPLATE-(?:START|END)/.test(body)
-      && /kaola-workflow-project-instruction-templates\.js/.test(body)
-      && /kaola-workflow-project-instructions\.js/.test(body),
-    'A24[' + label + ']: workflow-init names the sole consumer template module and writer without embedding it');
+    assert(!/kaola-workflow-project-instruction(?:-templates|s)\.js|KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(body),
+      'A24[' + label + ']: workflow-init carries no retired project-prompt owner');
+    assert(/Agent owns the meaning and prose of project instructions/.test(body)
+      && /repository facts/.test(body)
+      && /Global Workflow Contract already loaded by the runtime/.test(body)
+      && /Before changing an existing user-authored or owner-authored instruction file/.test(body)
+      && /fresh top-level\s+Agent\/session/.test(body),
+    'A24[' + label + ']: workflow-init carries Agent ownership, grounding, consent, and reload outcomes');
+    assert(!/Phase\s+\d|phase file|phase artifact/i.test(body),
+      'A24[' + label + ']: workflow-init does not restore a phase-shaped project prompt schema');
   }
-  const consumerTpl = require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE;
-  assert(!/Phase\s+\d/.test(consumerTpl),
-    'A24 (#572): opencode workflow-init template must not teach a numbered Phase <n> model (adaptive is the unconditional default)');
-  assert(!/phase file|phase artifact/i.test(consumerTpl),
-    'A24 (#572): opencode workflow-init template must not use "phase file/artifact" durable-state framing');
-  assert(!/\bClaude\b|\bOpus\b|\bSonnet\b|\/workflow-next|\/goal|Stop-hook/.test(consumerTpl),
-    'A24 (#812): the injected consumer template must name no vendor, model, or runtime-specific command');
 }
 
 // ---------------------------------------------------------------------------

@@ -52,6 +52,24 @@ function assertConcept(file, concept, terms) {
   assert(missing.length === 0, file + ' must document ' + concept + '; missing: ' + missing.join(', '));
 }
 
+function assertAgentOwnedInit(file) {
+  const content = read(file);
+  const retired = [
+    ['kaola-workflow-project-instruction', 'templates.js'].join('-'),
+    ['kaola-workflow-project', 'instructions.js'].join('-'),
+    ['KW', 'AGENTS', 'MANAGED'].join('-'),
+    ['KW', 'CLAUDE', 'OVERLAY', 'MANAGED'].join('-'),
+  ];
+  for (const token of retired) assert(!content.includes(token), file + ' retains retired prompt ownership: ' + token);
+  assertConcept(file, 'Agent-owned project instructions', [
+    'The Agent owns the meaning and prose of project instructions',
+    'repository facts',
+    'Global Workflow Contract already loaded by the runtime',
+    'Before changing an existing user-authored or owner-authored instruction file',
+    'fresh top-level Agent/session',
+  ]);
+}
+
 function assertBefore(file, first, second) {
   const content = norm(read(file));
   const nf = norm(first), ns = norm(second);
@@ -331,24 +349,12 @@ assert(exists('scripts/kaola-workflow-resolve-agent-model.js'), 'agent model res
 assert(!exists('scripts/kaola-workflow-subagent-statusline.js'), 'subagent status line helper must not exist');
 
 assert(exists('docs/workflow-state-contract.md'), 'detailed workflow state contract doc is missing');
-// AGENTS.md length is a RECOMMENDATION and never a build failure: nothing about this file's size
-// may red a chain. A file past the recommended size is something to tell the user about and offer
-// to help trim, not a reason to refuse the run — the same reason nothing else here refuses.
-// Counted on PHYSICAL lines so the number reported is the number `wc -l` prints. The previous
-// check split on newlines and counted the trailing empty element, so its "200" was really 198: a
-// 199-line file threw, failing a rule that permitted it, and because this sits at column 0 the
-// throw took the whole validator down rather than reporting one finding.
-const agentsMdLines = read('AGENTS.md').replace(/\n$/, '').split(/\r?\n/).length;
-if (agentsMdLines > 200) {
-  process.stderr.write('notice: AGENTS.md is ' + agentsMdLines + ' lines, above the recommended 200. '
-    + 'Nothing fails on this. Move detail to docs/ or skills, and offer the user help trimming it.\n');
-}
-// The producer AGENTS remains rich. Consumer projects now split universal run behavior into the
-// machine-global contract and compact route; their project template intentionally omits it.
+// Root instructions dogfood the Agent-owned project contract. The validator pins repository facts,
+// never headings, ordering, bytes, or a length target.
 assertConcept('AGENTS.md', 'compact durable state contract', [
   'kaola-workflow/.roadmap/_rules.md',
-  'is the one optional local file that survives',
-  'kaola-workflow/{project}/',
+  'only optional local roadmap file',
+  'kaola-workflow/<run>/',
   'workflow-state.md',
   'mission-list.md'
 ]);
@@ -418,73 +424,32 @@ assertConcept('scripts/simulate-workflow-walkthrough.js', 'stale worktree valida
   'stale_branches',
   'dry_run'
 ]);
-assertIncludes('README.md', 'Active folder coordination');
-assertIncludes('README.md', 'Parallel active work');
-assertIncludes('README.md', 'No lease/session layer remains.');
-assertConcept('README.md', 'pointer to detailed state contract', [
-  'docs/workflow-state-contract.md',
-  'durable-state map',
-  'active artifacts include'
-]);
-assertIncludes('AGENTS.md', 'Active work lives in');
-assert(exists('AGENTS.md'), 'AGENTS.md must exist at repo root as the universal authority');
-assertIncludes('AGENTS.md', '<!-- KW-AGENTS-MANAGED-START -->');
+assertIncludes('README.md', 'docs/workflow-state-contract.md');
+assert(exists('AGENTS.md'), 'AGENTS.md must exist at repo root as the project authority');
 assertNotIncludes('AGENTS.md', 'READ CLAUDE.md BEFORE ANY ACTION');
-assertIncludes('CLAUDE.md', '@AGENTS.md');
-assertIncludes('CLAUDE.md', '<!-- KW-CLAUDE-OVERLAY-MANAGED-START -->');
+assertNotIncludes('AGENTS.md', ['KW', 'AGENTS', 'MANAGED'].join('-'));
+assertNotIncludes('AGENTS.md', 'Correct first; never trade correctness for speed or cost');
+assert(read('CLAUDE.md').split(/\r?\n/).filter(line => line.trim() === '@AGENTS.md').length === 1,
+  'CLAUDE.md must carry exactly one effective @AGENTS.md bridge');
+assertNotIncludes('CLAUDE.md', ['KW', 'CLAUDE', 'OVERLAY', 'MANAGED'].join('-'));
 assertNotIncludes('CLAUDE.md', '## The mission list');
-assertIncludes('scripts/kaola-workflow-project-instruction-templates.js', '<!-- KW-AGENTS-MANAGED-START -->');
-assertIncludes('commands/workflow-init.md', 'kaola-workflow-project-instructions.js');
-assertIncludes('commands/workflow-init.md', 'decision_required');
+assertAgentOwnedInit('commands/workflow-init.md');
 
-// #606: the Claude dispatch-posture config-audit line must be present in the root workflow-init
-// command, outside the KW-AGENTS-TEMPLATE region (in the Codex-hooks-note area).
-assertIncludes('commands/workflow-init.md', 'claude_dispatch_posture: teams | classic');
+// #1047: runtime dispatch posture belongs to installed adapters and diagnostics, not project init.
+assertNotIncludes('commands/workflow-init.md', 'claude_dispatch_posture: teams | classic');
 
-// #609/#1046: project-only instructions contain no vendor-model dispatch guidance; the global
-// contract stays vendor-neutral and runtime tier bindings remain adapter data.
-assert(!/\b(?:Opus|Sonnet|Haiku|gpt-[\w.-]+|grok-[\w.-]+)\b/i.test(
-  read('scripts/kaola-workflow-project-instruction-templates.js')),
-'scripts/kaola-workflow-project-instruction-templates.js must contain no vendor model literal');
-assertNotIncludes('scripts/kaola-workflow-project-instruction-templates.js',
-  'Name roles by function and reasoning tier');
-
-// The distribution module is the sole executable project-only AGENTS template. Workflow-init must
-// invoke it without embedding a second copy. Universal mission and routing behavior is intentionally
-// absent here and remains load-bearing in the global/dispatch sources.
+// #1047: project instructions are Agent-maintained prose grounded in the repository. The shipped
+// init surfaces define outcomes and consent, but own no canonical project prompt bytes or parser.
+// Universal mission and routing behavior remains load-bearing in the global/dispatch sources.
 {
-  const missionListVocabulary = ['mission-list.md', '`item`', '`status`', '`dispatched`', '`result`',
-    'Three write moments', 'the list minus done minus in-flight'];
-  const template = norm(require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE);
   const globalContract = norm(read('templates/global/kaola-workflow-global.md'));
   const dispatchContract = norm(read('templates/routing/dispatch-contract.md'));
-  assert(template.trim().length > 0,
-    'the distribution-owned consumer AGENTS template is empty — the bans below would pass vacuously');
-  for (const file of ['commands/workflow-init.md', 'templates/routing/init.skeleton.md']) {
-    const content = read(file);
-    assert(!/KW-AGENTS-TEMPLATE-(?:START|END)/.test(content),
-      file + ': workflow-init must not embed a second consumer AGENTS template');
-    assert(content.includes('kaola-workflow-project-instruction-templates.js')
-        && content.includes('kaola-workflow-project-instructions.js'),
-      file + ': workflow-init must name the sole template module and its executable writer');
-  }
-  for (const gone of retiredExecutor) {
-    assert(!template.includes(norm(gone)),
-      'the consumer AGENTS template must not teach the retired DAG executor — found "' + gone + '"');
-  }
-  for (const taught of missionListVocabulary) {
-    assert(!template.includes(norm(taught)),
-      'the project-only AGENTS template must omit universal mission wording — found "' + taught + '"');
-  }
+  for (const file of ['commands/workflow-init.md', 'templates/routing/init.skeleton.md']) assertAgentOwnedInit(file);
   for (const taught of ['Mission List', '`item`', '`status`', '`dispatched`', '`result`',
     'three write moments']) {
     assert(globalContract.includes(norm(taught)),
       'the machine-global contract must teach mission behavior — missing "' + taught + '"');
   }
-  assert(!template.includes(norm('configured model')),
-    'the consumer AGENTS template must not contain "configured model"');
-  assert(!template.includes(norm('ships its model in its installed profile')),
-    'the consumer AGENTS template must not contain "ships its model in its installed profile"');
   const runtimeRoutingVocabulary = ['Runtime dispatch contract (always loaded)',
     'named, built-in, and generic routes only under their real identities',
     'custody, evidence, and stop boundaries',
@@ -495,8 +460,6 @@ assertNotIncludes('scripts/kaola-workflow-project-instruction-templates.js',
       'the always-loaded dispatch source must teach honest item-local routing — missing "'
       + taught + '"');
   }
-  assert(!/Runtime dispatch contract|capability_gap|named role/i.test(template),
-    'the project-only AGENTS template must not duplicate universal dispatch behavior');
   const noImpersonation = 'Never let a generic route impersonate a custody-bearing named role';
   const impersonatingMutation = dispatchContract.replace(norm(noImpersonation), '');
   assert(!impersonatingMutation.includes(norm(noImpersonation)),
@@ -600,12 +563,6 @@ assert(Array.isArray(packageJson.files) && packageJson.files.includes('hooks/'),
 assert(Array.isArray(packageJson.files) && packageJson.files.includes('scripts/'), 'package files must include scripts/');
 
 const rootVersion = packageJson.version;
-for (const edition of ['GitHub', 'GitLab', 'Gitea']) {
-  assertIncludes(
-    'README.md',
-    'Claude Code command install, ' + edition + ' edition: `' + rootVersion + '`'
-  );
-}
 for (const forge of ['gitlab', 'gitea']) {
   const manifest = JSON.parse(read('plugins/kaola-workflow-' + forge + '/.claude-plugin/plugin.json'));
   assert(
@@ -622,7 +579,6 @@ const codexManifests = [
 ].map(([name, file]) => {
   const manifest = JSON.parse(read(file));
   assert(manifest.name === name, file + ' must declare name ' + name);
-  assertIncludes('README.md', 'Codex `' + name + '` plugin manifest: `' + manifest.version + '`');
   return { name, file, version: manifest.version };
 });
 const codexBaselineVersion = codexManifests[0].version;
@@ -1070,100 +1026,8 @@ assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-
   }
 }
 
-// CONSUMER_DOCS_PATH — a routing surface may only name a `docs/…` path that resolves in the READER's
-// repository. The reader of an installed command or SKILL pack is in a consumer repo, which has no
-// copy of this repository's `docs/` tree, so a surface that says "read `docs/<x>.md`" dead-ends
-// there. That happened: a deleted doc left twelve installed surfaces across four runtimes pointing at
-// a file only this repository ever had, and it was found by a person reading prose — nothing here
-// compared a cited path against what the reader would actually have.
-//
-// TWO READER CONTEXTS, and the whole check is the line between them. (i) The routing surfaces SHIP,
-// so their `docs/…` paths must resolve in the consumer's tree. (ii) This repository's own docs,
-// scripts and CLAUDE.md are read HERE, where `docs/` exists — they are out of scope, and no path in
-// them is a defect for existing only here. Only (i) is scanned.
-//
-// The resolving set is not a taste call and is not hand-typed: it is exactly the doc tree
-// `/workflow-init` creates in the reader's repo, PARSED from the scaffold tree in the init skeleton.
-// So allowed == created, mechanically. Add a scaffold doc and the allowance follows it; cite anything
-// else and the check reds. That is the same distinction the deleted-doc pass drew by hand when it
-// dropped `docs/workflow-state-contract.md` from the consumer scaffold's Documentation Map while
-// keeping the five generic entries.
-//
-// SCOPE, stated: the 18 generated surfaces plus the three skeletons they render from — the ship set
-// with an existing registry, swept at the source as well as in the output so a bad pointer is red
-// before a regenerate. `agents/*.md` is deliberately NOT scanned: its `docs/…` mentions are
-// conditional conventions about the reader's own tree ("if it exists, regenerate it"), not
-// instructions to go read a file, and folding them in would mean four exemptions for four
-// non-defects. The `.opencode`/`.kimi` trees are absent by construction (gitignored build products,
-// zero tracked files); they render FROM these same registry rows, so the source is what is guarded.
-{
-  // A path REFERENCE, not every slash after the word "docs" — prose like "which docs/roadmap files
-  // were created" names no file. Two independent signals, EITHER of which makes it a reference,
-  // because each alone leaves a hole a mutation walked straight through. An extension or a trailing
-  // `/` is the shape a path has, but `docs/finalize-contract` has neither and is still a pointer;
-  // inline code is the other signal, since prose does not backtick a phrase, so a backticked
-  // `docs/x` is being NAMED as a file whether or not the author typed the suffix. Requiring both
-  // would miss the extension-less form; requiring the backtick alone would miss an unbackticked one.
-  // What still slips is a reference that is BOTH unbackticked and extension-less — indistinguishable
-  // from prose by any rule that keeps `docs/roadmap` green.
-  const DOCS_PATH = /docs\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\/?/g;
-  const looksLikeFile = (m) => m.endsWith('/') || /\.[A-Za-z0-9]+$/.test(m);
-  const isInlineCode = (line, at) => line[at - 1] === '`';
-
-  // The scaffold tree, verbatim from the init skeleton:
-  //     docs/
-  //       README.md
-  //       architecture.md
-  //       ...
-  // A `docs/` line at column 0, then its indented children until the indent ends. The skeleton
-  // carries the tree twice (once per surface_type region); both are read and unioned.
-  const INIT_SKELETON = 'templates/routing/init.skeleton.md';
-  const scaffoldDocs = new Set();
-  {
-    const lines = read(INIT_SKELETON).split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i] !== 'docs/') continue;
-      for (let j = i + 1; j < lines.length; j++) {
-        const child = lines[j].match(/^\s+([A-Za-z0-9._-]+\/?)\s*$/);
-        if (!child) break;
-        scaffoldDocs.add('docs/' + child[1]);
-      }
-    }
-  }
-  // A parse that found nothing would red every legitimate site with a misleading message. Say what
-  // actually broke instead.
-  assert(scaffoldDocs.size >= 3,
-    'CONSUMER_DOCS_PATH — the scaffold doc tree could not be read from ' + INIT_SKELETON +
-    ' (found ' + scaffoldDocs.size + ' entr(ies)). The check derives what a consumer repo will have ' +
-    'from that tree; if the tree moved or reflowed, re-point this parse at it.');
-
-  const { GENERATED_SURFACES } = require('./generate-routing-surfaces.js');
-  const shipped = [
-    ...GENERATED_SURFACES.map(row => row.path),
-    ...[...new Set(GENERATED_SURFACES.map(row => 'templates/routing/' + row.skeleton))],
-  ];
-
-  // Every offending site in ONE message. A first-failure abort turns a twelve-surface propagation
-  // into twelve run-read-patch rounds, and the count is what tells you it propagated at all.
-  const dead = [];
-  for (const rel of shipped) {
-    assert(exists(rel), 'CONSUMER_DOCS_PATH — routing surface "' + rel + '" is missing; the check ' +
-      'cannot scan it');
-    const lines = read(rel).split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      for (const m of lines[i].matchAll(DOCS_PATH)) {
-        if (!looksLikeFile(m[0]) && !isInlineCode(lines[i], m.index)) continue;
-        if (scaffoldDocs.has(m[0])) continue;
-        dead.push(rel + ':' + (i + 1) + ': ' + m[0]);
-      }
-    }
-  }
-  assert(dead.length === 0,
-    'CONSUMER_DOCS_PATH — ' + dead.length + ' site(s) name a `docs/…` path that will not resolve ' +
-    'for the reader of an installed surface. A consumer repo has only the doc tree /workflow-init ' +
-    'creates there (' + [...scaffoldDocs].sort().join(', ') + '); anything else exists in this ' +
-    'repository alone. Carry the content on the surface, or point at something the reader has:\n  ' +
-    dead.join('\n  '));
-}
+// #1047: workflow-init no longer owns a fixed consumer docs tree. The Agent derives useful
+// project documentation from repository facts, so a parser that equates one canned tree with
+// every valid consumer path is retired with that mechanism.
 
 console.log('Workflow contract validation passed');

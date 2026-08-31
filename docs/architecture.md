@@ -13,9 +13,10 @@ claim ──► write the mission list ──► run it ──► finalize ─�
 (script)   (agent, one file)          (agent)    (script tx)  (script tx)
 ```
 
-- **`/workflow-init`** — bootstraps project-local `AGENTS.md`, the smallest native entrypoint bridge,
-  docs structure, and issue conventions after verifying the machine-global contract receipt. Run
-  once per project. It also
+- **`/workflow-init`** — consumes the runtime-loaded global contract, reads the repository, and asks the
+  Agent to maintain project instructions, the smallest required native bridge, docs structure, and
+  issue conventions from current repository facts. Run once per project and again when those facts
+  need reconciliation. It also
   reconciles: a repository still carrying the retired
   local backlog layer (`ROADMAP.md`, `.roadmap/issue-*.md`) is diagnosed and reported, and migrated
   only on the owner's answer — never as a side effect of installing or upgrading.
@@ -49,10 +50,11 @@ Cursor Cloud is the one remote row. A local transaction reports it as `REMOTE_RE
 confirmed Cloud setup explicitly materializes the same V2 Rule in the selected Git repository and
 stores a repository receipt. No local installer infers or mutates a Cloud environment.
 
-Once the receipt is compatible, project `AGENTS.md` contains only project snapshot, commands,
-constraints, validation, documentation, and local overrides. Exact known Kaola templates migrate;
-unknown/mixed owner bytes do not. An active run freezes all instruction bytes, so changing the
-global architecture never rewrites the run under its feet.
+Once the receipt is compatible, the Agent maintains project `AGENTS.md` as ordinary repository
+content: verified purpose, commands, constraints, validation, documentation, and stricter local
+overrides. The installer neither owns nor rewrites those bytes. Existing owner-authored instructions
+require owner authorization before rewrite; an active run is a reload concern rather than a hidden
+script migration state.
 
 Compact recovery is also subtractive. Claude/Codex directly inject one pre-rendered V2 artifact at
 `SessionStart(source=compact)`; Grok/Cursor keep that same artifact in one persistent Rule. V2
@@ -411,25 +413,25 @@ start no recovery subprocess.
 
 ### Project instruction authority
 
-One Kaola-formatted repository has one universal instruction surface: root `AGENTS.md`. Codex,
-opencode, Kimi, Grok, Cursor, and ZCode consume it directly within their documented scopes. Claude
-Code enters through a thin root `CLAUDE.md` containing `@AGENTS.md` plus Claude-only overlay bytes.
-Runtime-specific files never duplicate the universal managed region.
+One Kaola-formatted repository has one project instruction authority: root `AGENTS.md`. Codex,
+OpenCode, Kimi, Grok, Cursor, and ZCode consume it directly within their documented scopes. Claude
+Code enters through a thin root `CLAUDE.md` containing one `@AGENTS.md` import plus Claude-only facts.
 
-`workflow-init` delegates migration to `kaola-workflow-project-instructions.js`. Its `plan`,
-`check`, and `apply` modes load the one distribution-owned consumer-template module, classify
-ownership, preserve arbitrary bytes and modes outside managed markers, and return one compatibility
-class per managed change: `authority_layout_equivalent` may apply during an active run without
-rewriting claim, Mission List, worktree, or locators; `execution_default_change` asks in
-conversation and writes nothing until that consent; `state_schema_incompatible` keeps the old
-contract (`active_run_preserved`) or follows an explicit tested migration; `unknown_or_mixed`
-returns `decision_required` without writing. A blanket freeze of every instruction file merely
-because any run is active is retired. The byte-exact v9.17.2 redirect and released consumer-template
-pair migrates whole-file once into the contract and thin bridge; a legacy `KW-CLAUDE-MANAGED` region
-with any changed outer bytes instead requires an owner decision and is not written. This producer
-repository's richer root contract is explicitly preserved. Workflow-init authoring surfaces name this
-module and writer but contain no second universal template. A successful second apply writes nothing
-and preserves identical hashes.
+The Agent owns the result. `workflow-init` consumes the global contract already loaded by the
+runtime, inspects the repository, establishes actual purpose, commands, tests, documentation, and
+constraints, then writes or reorganizes project instructions using its judgment. It does not
+locate installer internals, fill a distribution template, preserve a required heading order, target
+canonical bytes, or call a project-prompt writer. An absent or inconsistent global authority leaves
+project rules intact and routes a separate release-tree installation check. Existing owner-authored
+instructions require owner authorization before rewrite. When an active session changes its own
+instructions, it records that a fresh session or documented runtime reload is needed; scripts do
+not model semantic compatibility for the Agent.
+
+An unmarked, owner-authored `AGENTS.md` is therefore the normal converged state. A subsequent init
+reads it as project content and changes it only when current repository evidence or owner direction
+requires a different outcome. The machine-global receipt remains installer-owned evidence, not a
+license to mutate repository prompts. ADR 0023 records this boundary; ADR 0020's project-prompt
+migration clauses remain historical.
 
 Runtime installation is a separate owner from that portable repository result. `workflow-init`
 does not install, refresh, or choose runtime catalogs, commands, skills, hooks, or adapters; the

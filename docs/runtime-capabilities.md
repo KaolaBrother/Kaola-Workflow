@@ -6,10 +6,12 @@ operational consequences and records the first-party evidence used through 2026-
 
 ## One repository authority
 
-Root `AGENTS.md` is the only universal repository instruction authority. A runtime either reads it
-directly within its documented scope or reaches it through the smallest native entrypoint bridge.
-Runtime-specific files may add native profile syntax, tools, permissions, model/effort settings,
-hooks, and install paths. They must not copy the universal contract.
+Root `AGENTS.md` is the repository's project-instruction authority. An Agent maintains it from
+verified project facts and stricter local constraints; universal Workflow behavior is supplied by
+the machine-global carrier. A runtime either reads `AGENTS.md` directly within its documented scope
+or reaches it through the smallest native entrypoint bridge. Runtime-specific files may add native
+profile syntax, tools, permissions, model/effort settings, hooks, and install paths, but do not copy
+the machine-global contract.
 
 Claude Code is the only supported runtime that needs a bridge. Root `CLAUDE.md` begins with
 `@AGENTS.md`, then contains only the Claude-specific overlay. Codex, opencode, Kimi Code, Grok,

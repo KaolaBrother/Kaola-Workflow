@@ -29,9 +29,9 @@
 // vacuous against a marker-preserving interior gut — pin the actual rule.
 
 // Universal workflow obligations are authored once in the machine-global
-// contract. Init surfaces install project facts through the project-instruction
-// helper; neither the project template nor an operation surface may become a
-// second authoring surface for this wording.
+// contract. Init surfaces verify that carrier read-only, then let the Agent
+// maintain project facts; an operation surface must not become a second
+// authoring surface for universal wording.
 const GLOBAL_CONTRACT_BLOCKS = [
   {
     block_id: 'global-mission-list',
@@ -104,20 +104,19 @@ const REQUIRED_BLOCKS = [
   },
   {
     // The init surface is not the global contract's authoring surface. Every
-    // runtime/forge rendering must name the one project-template module, require
-    // the compatible receipt, and invoke plan/apply/check.
+    // runtime/forge rendering must consume the already-loaded global authority and assign
+    // project-instruction meaning to the Agent without prescribing bytes.
     block_id: 'in-universal-instruction-carrier',
     topic: 'init',
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
-      '`kaola-workflow-project-instruction-templates.js` distribution module',
-      'independently restate the global contract in this surface',
-      'compatible machine-global receipt',
-      'INSTRUCTIONS_JS="$(kaola_script kaola-workflow-project-instructions.js)"',
-      'node "$INSTRUCTIONS_JS" plan --project-root "$PWD" --json',
-      'node "$INSTRUCTIONS_JS" apply --project-root "$PWD" --json',
-      'node "$INSTRUCTIONS_JS" check --project-root "$PWD" --json',
+      'The Global Workflow Contract already loaded by the runtime is the universal authority',
+      '`workflow-init` does not locate, execute, install, or repair runtime/global machinery',
+      'leave project rules in place and report a separate installation check',
+      'The Agent owns the meaning and prose of project instructions',
+      'Before changing an existing user-authored or owner-authored instruction file',
+      'After an edit, use a fresh top-level Agent/session for reliable validation',
     ],
   },
 
@@ -502,18 +501,7 @@ const REQUIRED_BLOCKS = [
     ],
   },
 
-  // ==== backlog-migration: the reconcile pass, init only ====
-  //
-  // The retired backlog layer is the one thing init can find in a consumer repo that
-  // it must NOT simply scaffold around, and the section is the only carrier of that
-  // fact on any shipped surface — a consumer reading this command cannot resolve the
-  // decision record it comes from. Losing the section silently would leave init
-  // walking past a layer that no longer works and saying nothing.
-  //
-  // Tokens are drawn from four independent spans — the never-automatic framing, the
-  // forced ordering's first step, the halfway rule, and the declining-is-an-answer
-  // close — so gutting any one of them while leaving the marker and the other three
-  // reds this block. None is a substring of the marker.
+  // ==== backlog-migration: concise outcome contract, init only ====
   {
     block_id: 'in-backlog-migration',
     topic: 'init',
@@ -521,11 +509,11 @@ const REQUIRED_BLOCKS = [
     surface_type_tag: 'both',
     content_tokens: [
       '<!-- PIN: backlog-migration -->',
-      'Init never deletes it, and installing or upgrading never migrates it.',
-      '**Tier first.** Priority labels exist and carry each open issue\'s tier *before* anything is deleted.',
-      'Never `git rm --cached`, and never delete from disk alone.',
-      'The dangerous state is not *un*-migrated — a tracked, frozen layer is inert and harmless — it is *half*-migrated.',
-      '**Declining is a complete answer.**',
+      'init never deletes them and an upgrade never migrates them',
+      'preserve priority and unresolved residue first',
+      'Never `git rm --cached`, never delete only from disk',
+      'never leave a half-migrated layer',
+      'Declining is a complete answer',
     ],
   },
 ];

@@ -98,13 +98,7 @@ function mutateAgentCall(text, role, mutate) {
   const universalAxioms = fs.readFileSync(path.join(root, 'templates/axioms.md'), 'utf8');
   const globalContract = fs.readFileSync(
     path.join(root, 'templates/global/kaola-workflow-global.md'), 'utf8');
-  const consumerTemplate = require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE;
-  assert(!/planner \((?:heavy-)?reasoning tier\)/.test(consumerTemplate),
-    '#1046: project-only AGENTS template carries no universal planner-tier example');
-  assert(!/Name roles by function and reasoning tier/.test(consumerTemplate),
-    '#1046: project-only AGENTS template carries no universal dispatch naming rule');
   for (const [label, universal] of [
-    ['consumer AGENTS template', consumerTemplate],
     ['machine-global contract', globalContract],
     ['universal axioms', universalAxioms],
   ]) {
@@ -115,8 +109,8 @@ function mutateAgentCall(text, role, mutate) {
     + '\nUse gpt-5.6-luna as the universal default for every standard role.\n';
   assert(vendorModelLiterals(vendorLeakMutation).includes('gpt-5.6-luna'),
     '#1035 mutation: a vendor model hardcoded into the universal consumer contract is detected');
-  assert(/model_reasoning_effort\s*=\s*"ultra"/.test(initSkel),
-    '#1018 AC-11: init.skeleton.md session-posture model_reasoning_effort = "ultra" stays untouched');
+  assert(!/model_reasoning_effort\s*=/.test(initSkel),
+    '#1047: workflow-init carries no runtime model-configuration tutorial');
 
   const PLANNER_CLASS = ['planner', 'code-architect'];
   const REVIEWER_CLASS = [...REVIEWER_ROLES];

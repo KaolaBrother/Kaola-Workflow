@@ -6,6 +6,24 @@ Document coding style, testing rules, Git practices, naming, and review expectat
 record.** Nothing here restates it. These are the rules for building, testing, and releasing *this
 repository* and the surfaces it ships.
 
+## Project instruction maintenance
+
+Project instructions are an Agent-owned outcome, not an installer-owned byte surface. Before
+writing, inspect the repository and establish its actual purpose, commands, tests, documentation,
+and stricter constraints. Consolidate repeated facts and remove machine-global Workflow behavior;
+do not fit the result to prescribed headings, field order, canonical wording, or a length target.
+
+Obtain owner authorization before rewriting existing owner-authored instructions. An unmarked
+owner-authored `AGENTS.md` is a valid normal state, including when its organization differs from
+another repository. A thin runtime bridge contains only what that runtime needs to discover the
+project authority plus genuine runtime-only facts. When edited instructions are already loaded by
+an active session, record the relevant fresh-session or native reload requirement rather than
+inventing semantic compatibility classes.
+
+Tests may prove that retired writer artifacts are absent, bridges resolve, links exist, and required
+product facts remain discoverable. They must not turn prose shape, line count, headings, or exact
+project-prompt bytes into a new template by another name.
+
 ## Orchestration seam
 
 The orchestrator dispatches subagents, judges what comes back, and runs the finalize transaction
@@ -744,8 +762,8 @@ The following forms are runtime identifiers or structural placeholders, not desi
 | `docs/decisions/D-NNN-NN.md` | Full decision record: context, decision, consequences, alternatives |
 | Git commit messages | Traceability link from code change to issue/decision |
 | `docs/conventions.md` (this file) | Durable policy rules — may cite issues and decision records by number |
-| `AGENTS.md` | Concise universal rule stubs — may reference this file by path |
-| `CLAUDE.md` and other runtime overlays | Native bridge/configuration only; no copied provenance or universal contract |
+| `AGENTS.md` | Verified project facts and stricter local constraints — may reference this file by path |
+| `CLAUDE.md` and other runtime overlays | Native bridge/configuration only; no copied provenance or machine-global contract |
 
 ### Enforcement
 

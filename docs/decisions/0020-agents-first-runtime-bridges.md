@@ -1,7 +1,7 @@
 # ADR 0020 — AGENTS-first runtime bridges
 
-Status: Accepted; orchestration and model-routing clauses refined by ADR 0021 · Date: 2026-08-27
-· Issues: #1033, #1034
+Status: Superseded in part by ADR 0023; role/adaptor clauses remain active and orchestration/model
+routing is refined by ADR 0021 · Date: 2026-08-27 · Issues: #1033, #1034
 
 ## Context
 
@@ -108,6 +108,12 @@ observe a sandboxed filesystem result; they do not pin local source identifiers.
   attestation or deterministic model output.
 
 ## Supersession
+
+ADR 0023 supersedes this record's project-instruction ownership, marker, fixed consumer-template,
+and script migration clauses. Root `AGENTS.md` remains the normal cross-runtime project authority
+and Claude still uses the smallest native bridge, but an Agent now maintains those project files
+from verified repository facts. The old migration text remains above as historical context rather
+than current implementation guidance.
 
 This ADR supersedes active guidance that made `CLAUDE.md` the universal authority, treated Claude
 role Markdown as the cross-runtime semantic source, maintained Markdown-to-TOML sentence parity, or

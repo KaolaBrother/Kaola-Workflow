@@ -28,22 +28,16 @@ const LEGACY_10_0_1_GLOBAL_HASHES = Object.freeze({
     'commands/kaola-workflow-finalize.md': 'c7f28964e3cdde50f324352d218bf3623af221a8c8b199e5dd57e73406f868aa',
     'commands/workflow-init.md': '1a63236967525b0edaad94f050a1fb42d6f0af73e7e4a5bbda1cf1e0fd8ee904',
     'commands/workflow-next.md': '79e9bd53c1146fc7af9557f4757f6c38de610f2d7ae2cde06c930f3e8ef3aa6c',
-    'kaola-workflow/scripts/kaola-workflow-project-instruction-templates.js': '32ce6ee0711d7b6a3ed83fec12bd6480ceb91103c7fe5257c427cd1a757bb048',
-    'kaola-workflow/scripts/kaola-workflow-project-instructions.js': '45104e070377043c605dc69aabd043bc01786c706e7432d1e753632a9a585ed5',
   }),
   gitlab: Object.freeze({
     'commands/kaola-workflow-finalize.md': '47ac92786d6373f7b30d3a2486680324656e35deca28aa88564e3ed91544eb56',
     'commands/workflow-init.md': '143118242f829945e617b8e1fa6f98735d6cbcb128aa75c29796472b6c8f7c65',
     'commands/workflow-next.md': '6c061f53131f6327bbd3de27c896740d2a54425efb5ff999bab16b42229eb7e8',
-    'kaola-workflow/scripts/kaola-workflow-project-instruction-templates.js': '32ce6ee0711d7b6a3ed83fec12bd6480ceb91103c7fe5257c427cd1a757bb048',
-    'kaola-workflow/scripts/kaola-workflow-project-instructions.js': '45104e070377043c605dc69aabd043bc01786c706e7432d1e753632a9a585ed5',
   }),
   gitea: Object.freeze({
     'commands/kaola-workflow-finalize.md': '9ccf56a2b9b8486111aa477a84588765be56beac2dde5529f5707f84cd1bac11',
     'commands/workflow-init.md': 'a5020aa480172e62150c57e48cbbed676a9cc78e5224ff93d47134ad5e999405',
     'commands/workflow-next.md': '88400438f8af7de2684c00e92bcce4ca27c6da7aab3fc868389dac4ce27cfa94',
-    'kaola-workflow/scripts/kaola-workflow-project-instruction-templates.js': '32ce6ee0711d7b6a3ed83fec12bd6480ceb91103c7fe5257c427cd1a757bb048',
-    'kaola-workflow/scripts/kaola-workflow-project-instructions.js': '45104e070377043c605dc69aabd043bc01786c706e7432d1e753632a9a585ed5',
   }),
 });
 const LEGACY_10_0_1_RETIRED_HASHES = Object.freeze({
@@ -52,18 +46,24 @@ const LEGACY_10_0_1_RETIRED_HASHES = Object.freeze({
     'kaola-workflow/scripts/kaola-workflow-ensure-cursor-catalog.js': '5fcf7a62de5704b5fa3cbd61bd920315ee7d15b53ced1584d6a460cb5659a9cf',
     'kaola-workflow/hooks/kaola-workflow-ensure-cursor-catalog.sh': '0270c37d2327fe078d5cf99e38f467ad1d4a0fb6c95911919c534444855b5dbb',
     'hooks/kaola-workflow-ensure-cursor-catalog.sh': '0270c37d2327fe078d5cf99e38f467ad1d4a0fb6c95911919c534444855b5dbb',
+    'kaola-workflow/scripts/kaola-workflow-project-instruction-templates.js': '32ce6ee0711d7b6a3ed83fec12bd6480ceb91103c7fe5257c427cd1a757bb048',
+    'kaola-workflow/scripts/kaola-workflow-project-instructions.js': '45104e070377043c605dc69aabd043bc01786c706e7432d1e753632a9a585ed5',
   }),
   gitlab: Object.freeze({
     'rules/kaola-workflow-compact-recovery.mdc': '658211282d061d5024c5738e34664a02cfe721d39432d1323b4cdd601f15f27d',
     'kaola-workflow/scripts/kaola-workflow-ensure-cursor-catalog.js': '5fcf7a62de5704b5fa3cbd61bd920315ee7d15b53ced1584d6a460cb5659a9cf',
     'kaola-workflow/hooks/kaola-workflow-ensure-cursor-catalog.sh': 'fc7c05c1b69d07fd26c957366868dc62c18b230e82e6befe46290d94086c2f02',
     'hooks/kaola-workflow-ensure-cursor-catalog.sh': 'fc7c05c1b69d07fd26c957366868dc62c18b230e82e6befe46290d94086c2f02',
+    'kaola-workflow/scripts/kaola-workflow-project-instruction-templates.js': '32ce6ee0711d7b6a3ed83fec12bd6480ceb91103c7fe5257c427cd1a757bb048',
+    'kaola-workflow/scripts/kaola-workflow-project-instructions.js': '45104e070377043c605dc69aabd043bc01786c706e7432d1e753632a9a585ed5',
   }),
   gitea: Object.freeze({
     'rules/kaola-workflow-compact-recovery.mdc': '658211282d061d5024c5738e34664a02cfe721d39432d1323b4cdd601f15f27d',
     'kaola-workflow/scripts/kaola-workflow-ensure-cursor-catalog.js': '5fcf7a62de5704b5fa3cbd61bd920315ee7d15b53ced1584d6a460cb5659a9cf',
     'kaola-workflow/hooks/kaola-workflow-ensure-cursor-catalog.sh': '8dc2ae61aa594e5f83fbc93867f4f0a740ffac70a94e65f99915454fa6e91047',
     'hooks/kaola-workflow-ensure-cursor-catalog.sh': '8dc2ae61aa594e5f83fbc93867f4f0a740ffac70a94e65f99915454fa6e91047',
+    'kaola-workflow/scripts/kaola-workflow-project-instruction-templates.js': '32ce6ee0711d7b6a3ed83fec12bd6480ceb91103c7fe5257c427cd1a757bb048',
+    'kaola-workflow/scripts/kaola-workflow-project-instructions.js': '45104e070377043c605dc69aabd043bc01786c706e7432d1e753632a9a585ed5',
   }),
 });
 

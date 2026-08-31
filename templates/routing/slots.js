@@ -4,8 +4,8 @@
 //
 // SLOTS are the larger structural pieces a skeleton fills per render context:
 // the frontmatter (2-shape: command description/argument-hint vs skill
-// name/description), the H1, the intro paragraph, and the setup-resolver
-// runtime bash block. SPLICES are the smaller divergences where a command and
+// name/description), the H1, the intro paragraph, and runtime guidance.
+// SPLICES are the smaller divergences where a command and
 // a skill (or one forge and another) differ by only a clause, a route noun, or
 // a script basename.
 //
@@ -15,7 +15,7 @@
 // touch these values: every forge-specific basename here is already written
 // out per forge.
 //
-// One resolver, two shapes. `*-scripts-resolver` sets KAOLA_SCRIPTS (the
+// Next and Finalization share one resolver in two shapes. `*-scripts-resolver` sets KAOLA_SCRIPTS (the
 // installed scripts directory) and CLAIM_JS for both surface shapes, so every
 // sibling script invocation downstream is ONE shared skeleton line plus a
 // forge-keyed basename — rather than a per-surface copy of the same recipe.
@@ -69,30 +69,6 @@ SLOTS['runtime-dispatch-common'] = fs.readFileSync(
 SLOTS['global-workflow-contract'] = fs.readFileSync(
   GLOBAL_WORKFLOW_CONTRACT_SOURCE, 'utf8').trimEnd();
 
-// resolverFor — the init surfaces resolve a sibling script the SAME way the
-// next/finalize surfaces do, only into a different handle. The recipe is
-// DERIVED from `nx-scripts-resolver` rather than copied: the helper definition
-// is line 1 of every resolver value, so a change to how a script is found
-// reaches every surface that finds one, and there is no second copy to drift.
-function resolverFor(handle, basenameByForge) {
-  const out = {};
-  for (const surface of ['command', 'skill']) {
-    out[surface] = {};
-    for (const forge of ['github', 'gitlab', 'gitea']) {
-      const base = SLOTS['nx-scripts-resolver'][surface][forge];
-      const helper = base.slice(0, base.indexOf('\n'));
-      out[surface][forge] = `${helper}\n${handle}="$(kaola_script ${basenameByForge[forge]})"`;
-    }
-  }
-  return out;
-}
-
-SLOTS['in-claim-resolver'] = resolverFor('CLAIM_JS', {
-  github: 'kaola-workflow-claim.js',
-  gitlab: 'kaola-gitlab-workflow-claim.js',
-  gitea: 'kaola-gitea-workflow-claim.js',
-});
-
 const SPLICES = {
   // ---- next: forge nouns, route nouns, and the per-forge invocations. ----
   "nx-issue-fetch": {"github":"If a GitHub remote and an authenticated `gh` are available, read the open issues:","gitlab":"If a GitLab remote and an authenticated `glab` are available, read the open issues:","gitea":"If a Gitea remote and an authenticated `tea` are available, read the open issues:"},
@@ -121,17 +97,8 @@ const SPLICES = {
   "in-sk-002": {"github":"plugin_root=\"plugins/kaola-workflow\"","gitlab":"plugin_root=\"plugins/kaola-workflow-gitlab\"","gitea":"plugin_root=\"plugins/kaola-workflow-gitea\""},
   "in-sk-003": {"github":"  script_path=\"$(find \"$HOME/.codex/plugins/cache\" -path '*/kaola-workflow/*/scripts/install-codex-agent-profiles.js' -print -quit 2>/dev/null)\"","gitlab":"  script_path=\"$(find \"$HOME/.codex/plugins/cache\" -path '*/kaola-workflow-gitlab/*/scripts/install-codex-agent-profiles.js' -print -quit 2>/dev/null)\"","gitea":"  script_path=\"$(find \"$HOME/.codex/plugins/cache\" -path '*/kaola-workflow-gitea/*/scripts/install-codex-agent-profiles.js' -print -quit 2>/dev/null)\""},
   "in-next-route": {"command":"/workflow-next","skill":"kaola-workflow-next"},
-  // The legacy-backlog reconcile pass and the closing summary are Steps 5 and 6 of
-  // the command's numbered procedure; the skill has no Step sequence to continue, so
-  // it carries the same two sections unnumbered.
-  "in-migration-heading": {"command":"## Step 5 — Legacy Backlog Layer","skill":"## Legacy Backlog Layer"},
-  "in-summary-heading": {"command":"## Step 6 — Git And Issue Summary","skill":"## Git And Issue Summary"},
-  "in-shared-007": {"github":"If a GitHub issue is known, create the active workflow folder before starting:","gitlab":"If a GitLab issue is known, create the active workflow folder before starting:","gitea":"If a Gitea issue is known, create the active workflow folder before starting:"},
-  "in-shared-008": {"github":"Replace `{project}` with the workflow project folder name (e.g., `multi-session-substrate`) and `{N}` with the GitHub issue number. If the issue number is unknown, omit `--issue`.","gitlab":"Replace `{project}` with the workflow project folder name (e.g., `multi-session-substrate`) and `{N}` with the GitLab issue number. If the issue number is unknown, omit `--issue`.","gitea":"Replace `{project}` with the workflow project folder name (e.g., `multi-session-substrate`) and `{N}` with the Gitea issue number. If the issue number is unknown, omit `--issue`."},
-  "in-shared-009": {"github":"If `kaola-workflow-claim.js` is unavailable (manual install without the script), skip this step and proceed with local workflow artifacts.","gitlab":"If `kaola-gitlab-workflow-claim.js` is unavailable (manual install without the script), skip this step and proceed with local workflow artifacts.","gitea":"If `kaola-gitea-workflow-claim.js` is unavailable (manual install without the script), skip this step and proceed with local workflow artifacts."},
-  "in-shared-010": {"github":"   - whether a GitHub remote exists","gitlab":"   - whether a GitLab remote exists","gitea":"   - whether a Gitea remote exists"},
-  "in-shared-011": {"github":"   - whether GitHub issues were available for sync","gitlab":"   - whether GitLab issues were available for sync","gitea":"   - whether Gitea issues were available for sync"},
-
+  "in-migration-heading": {"command":"## Legacy Backlog Layer","skill":"## Legacy Backlog Layer"},
+  "in-summary-heading": {"command":"## Git And Issue Summary","skill":"## Git And Issue Summary"},
   // ---- finalize: forge nouns + the per-forge script invocations. ---------
   "fz-runchains-run": {"github":"node \"$KAOLA_SCRIPTS/kaola-workflow-run-chains.js\" --project {project}","gitlab":"node \"$KAOLA_SCRIPTS/kaola-gitlab-workflow-run-chains.js\" --project {project}","gitea":"node \"$KAOLA_SCRIPTS/kaola-gitea-workflow-run-chains.js\" --project {project}"},
   // gap-sweep's two modes are exclusive and both are spliced: the scanner writes the artifact and

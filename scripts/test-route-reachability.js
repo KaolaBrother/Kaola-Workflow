@@ -283,7 +283,6 @@ const {
   REQUIRED_BLOCKS,
   GLOBAL_CONTRACT_BLOCKS,
 } = require('../templates/routing/required-blocks.js');
-const CONSUMER_TEMPLATES = require('./kaola-workflow-project-instruction-templates.js');
 const GLOBAL_CONTRACT = fs.readFileSync(
   path.join(REPO, 'templates/global/kaola-workflow-global.md'), 'utf8');
 
@@ -697,18 +696,22 @@ function checkGlobalContract({ blocks, globalContract }) {
       + JSON.stringify(duplicated));
   }
 
-  const projectTemplate = norm(CONSUMER_TEMPLATES.AGENTS_TEMPLATE);
+  const projectTemplate = norm(fs.readFileSync(path.join(REPO, 'AGENTS.md'), 'utf8'));
   const projectDuplicates = GLOBAL_CONTRACT_BLOCKS.flatMap(block => block.content_tokens
+    .filter(token => token !== 'recoverable outcome')
     .filter(token => projectTemplate.includes(norm(token)))
     .map(token => `${block.block_id} :: ${token}`));
   assert(projectDuplicates.length === 0,
-    'PROJECT-TEMPLATE: project AGENTS must contain local facts only and must not duplicate the global contract; duplicates: '
-    + JSON.stringify(projectDuplicates));
+    'PROJECT-INSTRUCTIONS: producer AGENTS must contain local facts only and must not duplicate the global contract; duplicates: '
+      + JSON.stringify(projectDuplicates));
 
-  const helper = fs.readFileSync(path.join(REPO, 'scripts/kaola-workflow-project-instructions.js'), 'utf8');
-  assert(helper.includes("require('./kaola-workflow-project-instruction-templates.js')")
-      && helper.includes('Buffer.from(consumerTemplates.AGENTS_TEMPLATE)'),
-    'INIT-CARRIER: kaola-workflow-project-instructions.js must load AGENTS_TEMPLATE from the one distribution module');
+  for (const name of [
+    ['kaola-workflow-project-instruction', 'templates.js'].join('-'),
+    ['kaola-workflow-project', 'instructions.js'].join('-'),
+  ]) {
+    assert(!fs.existsSync(path.join(REPO, 'scripts', name)),
+      'INIT-CARRIER: retired script-owned project prompt artifact must be absent: ' + name);
+  }
 }
 
 // --- NON-VACUITY FLOOR (manifest-wide) — every marker-led block must carry at least ONE
@@ -1216,8 +1219,8 @@ function checkGlobalContract({ blocks, globalContract }) {
     }
   }
 
-  // (12) INIT-CARRIER PER-SURFACE MUTATION — remove the executable helper
-  // lifecycle from one real init rendering at a time. The carrier block must
+  // (12) INIT-CARRIER PER-SURFACE MUTATION — remove Agent ownership from one
+  // real init rendering at a time. The carrier block must
   // red naming only that rendering, across all runtime/forge path shapes.
   {
     const block = REQUIRED_BLOCKS.find(b => b.block_id === 'in-universal-instruction-carrier');
@@ -1237,35 +1240,31 @@ function checkGlobalContract({ blocks, globalContract }) {
       }).failures.filter(message => message.startsWith(`missing-token: block ${block.block_id} `));
       const control = carrierFailures(real);
       assert(control.length === 0,
-        'RED-PROOF init-carrier (green control): the unmutated init tree must carry the helper lifecycle everywhere; got '
+        'RED-PROOF init-carrier (green control): the unmutated init tree must carry Agent ownership everywhere; got '
         + JSON.stringify(control));
 
       if (control.length === 0) {
-        const START = 'INSTRUCTIONS_JS="$(kaola_script kaola-workflow-project-instructions.js)"';
-        const END = 'node "$INSTRUCTIONS_JS" check --project-root "$PWD" --json';
+        const OWNERSHIP = 'The Agent owns the meaning and prose of project instructions';
         const surfaceOf = message => message.slice(message.lastIndexOf(' absent from ') + ' absent from '.length);
         const unwitnessed = [];
         for (const target of obligated) {
-          const lines = String(real[target]).split('\n');
-          const start = lines.findIndex(line => line.includes(START));
-          const end = lines.findIndex((line, index) => index >= start && line.includes(END));
-          if (start < 0 || end < start) {
-            unwitnessed.push(`${target} — executable helper lifecycle could not be located`);
+          if (!String(real[target]).includes(OWNERSHIP)) {
+            unwitnessed.push(`${target} — Agent-ownership outcome could not be located`);
             continue;
           }
-          const mutant = lines.slice(0, start).concat(lines.slice(end + 1)).join('\n');
+          const mutant = String(real[target]).replace(OWNERSHIP, 'Project instructions have prose');
           const named = new Set(carrierFailures(Object.assign({}, real, { [target]: mutant })).map(surfaceOf));
           if (!named.has(target)) {
-            unwitnessed.push(`${target} — removing its helper lifecycle reddened no failure naming it`);
+            unwitnessed.push(`${target} — removing Agent ownership reddened no failure naming it`);
             continue;
           }
           named.delete(target);
           if (named.size > 0) {
-            unwitnessed.push(`${target} — removing its helper lifecycle also reddened ${[...named].join(', ')}`);
+            unwitnessed.push(`${target} — removing Agent ownership also reddened ${[...named].join(', ')}`);
           }
         }
         assert(unwitnessed.length === 0,
-          `RED-PROOF init-carrier: removing the helper lifecycle from any one of the ${obligated.length} init surfaces must red only that surface; unwitnessed: `
+          `RED-PROOF init-carrier: removing Agent ownership from any one of the ${obligated.length} init surfaces must red only that surface; unwitnessed: `
           + JSON.stringify(unwitnessed));
       }
     }

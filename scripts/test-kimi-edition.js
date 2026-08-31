@@ -1952,27 +1952,25 @@ for (const script of sync.HOOK_SCRIPTS) {
 }
 
 // ---------------------------------------------------------------------------
-// K11 (#812/#1033, the Kimi twin of A24): workflow-init carries no second
-// universal template. Both runtime surfaces name the one distribution module and
-// writer, while the module's actual bytes retain the phase and vendor bans.
+// K11 (#1047, the Kimi twin of A24): workflow-init is an Agent-owned outcome,
+// not a script-owned project-prompt template or writer protocol.
 // ---------------------------------------------------------------------------
 {
   for (const [label, body] of [
     ['kimi', read(skillDir('workflow-init'))],
     ['canonical-github', read('commands/workflow-init.md')],
   ]) {
-    assert(!/KW-AGENTS-TEMPLATE-(?:START|END)/.test(body)
-      && /kaola-workflow-project-instruction-templates\.js/.test(body)
-      && /kaola-workflow-project-instructions\.js/.test(body),
-    'K11[' + label + ']: workflow-init names the sole consumer template module and writer without embedding it');
+    assert(!/kaola-workflow-project-instruction(?:-templates|s)\.js|KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(body),
+      'K11[' + label + ']: workflow-init carries no retired project-prompt owner');
+    assert(/Agent owns the meaning and prose of project instructions/.test(body)
+      && /repository facts/.test(body)
+      && /Global Workflow Contract already loaded by the runtime/.test(body)
+      && /Before changing an existing user-authored or owner-authored instruction file/.test(body)
+      && /fresh top-level\s+Agent\/session/.test(body),
+    'K11[' + label + ']: workflow-init carries Agent ownership, grounding, consent, and reload outcomes');
+    assert(!/Phase\s+\d|phase file|phase artifact/i.test(body),
+      'K11[' + label + ']: workflow-init does not restore a phase-shaped project prompt schema');
   }
-  const consumerTpl = require('./kaola-workflow-project-instruction-templates.js').AGENTS_TEMPLATE;
-  assert(!/Phase\s+\d/.test(consumerTpl),
-    'K11: kimi workflow-init template must not teach a numbered Phase <n> model (adaptive is the unconditional default)');
-  assert(!/phase file|phase artifact/i.test(consumerTpl),
-    'K11: kimi workflow-init template must not use "phase file/artifact" durable-state framing');
-  assert(!/\bClaude\b|\bOpus\b|\bSonnet\b|\/workflow-next|\/goal|Stop-hook/.test(consumerTpl),
-    'K11 (#812): the injected consumer template must name no vendor, model, or runtime-specific command');
 }
 
 // ---------------------------------------------------------------------------
