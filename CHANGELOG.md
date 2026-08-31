@@ -20,7 +20,8 @@
   forge, state, quick-start, development, and license capabilities remain discoverable, while
   installation/update/uninstall detail moves to `docs/installation.md` and existing authoritative
   edition/API/convention documents. The non-gating measurement changed from 1,801 lines / 122,019
-  bytes / 107 headings to 160 lines / 7,770 bytes / 9 headings.
+  bytes / 107 headings to 169 lines / 8,171 bytes / 9 headings. The final nine lines retain the
+  release transaction's six version anchors without restoring operational detail.
 - **Kaola-Workflow dogfoods its project-instruction design (#1047).** Root `AGENTS.md` now contains
   verified producer facts and stricter local constraints without duplicating the machine-global
   Workflow contract; root `CLAUDE.md` is one `@AGENTS.md` bridge plus Claude-only profile and

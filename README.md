@@ -51,6 +51,15 @@ marketplace plugin entry; Cursor Cloud needs its environment saved and a fresh t
 Those one-time steps, per-runtime/project scopes, hook trust, verification, and forge prerequisites
 are in the [installation guide](docs/installation.md).
 
+Release surface versions (maintained by the release transaction):
+
+- Codex `kaola-workflow` plugin manifest: `10.2.0`
+- Codex `kaola-workflow-gitlab` plugin manifest: `10.2.0`
+- Codex `kaola-workflow-gitea` plugin manifest: `10.2.0`
+- Claude Code command install, GitHub edition: `10.2.0`
+- Claude Code command install, GitLab edition: `10.2.0`
+- Claude Code command install, Gitea edition: `10.2.0`
+
 Update every local runtime from the synchronized checkout:
 
 ```bash
