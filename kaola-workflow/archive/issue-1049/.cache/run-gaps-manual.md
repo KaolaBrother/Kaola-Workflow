@@ -1,0 +1,1 @@
+gap: scope_expansion — The orchestrator added shared instruction policies without a reproduced cross-runtime defect or first explaining the broader scope; owner rejected the expansion and the final candidate restores the shared sources and installed carriers to baseline.

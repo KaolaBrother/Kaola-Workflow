@@ -1,0 +1,200 @@
+{
+  "headSha": "6d5cf620025aabca19beddd9b3c635220131d37b",
+  "workTreeHash": "clean",
+  "codeTreeHash": "8c1d9036738521e9757e66bd93604409bc8617def034cd7ba5f67c7ef28d8e34",
+  "validationTestConsumes": [],
+  "startedAt": "2026-09-05T01:32:24.711Z",
+  "completedAt": "2026-09-05T01:34:37.876Z",
+  "source": "npm-default",
+  "scope": {
+    "decision": "all-four",
+    "reason": "edition_coupling",
+    "base": "7e93763e43864091f722b306c404bb85d7f96052",
+    "touchedEditionPaths": [
+      "README.md",
+      "agents/generated-agent-manifest.json",
+      "agents/implementer.md",
+      "commands/kaola-workflow-finalize.md",
+      "commands/workflow-init.md",
+      "commands/workflow-next.md",
+      "docs/api.md",
+      "docs/decisions/0019-the-heavy-reasoning-tier.md",
+      "docs/decisions/0021-runtime-native-orchestration-guidance.md",
+      "docs/installation.md",
+      "docs/runtime-capabilities.md",
+      "plugins/kaola-workflow-gitea/agents/implementer.toml",
+      "plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md",
+      "plugins/kaola-workflow-gitea/commands/workflow-init.md",
+      "plugins/kaola-workflow-gitea/commands/workflow-next.md",
+      "plugins/kaola-workflow-gitea/hooks/kaola-workflow-codex-compact-recovery.md",
+      "plugins/kaola-workflow-gitea/hooks/kaola-workflow-compact-recovery.md",
+      "plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md",
+      "plugins/kaola-workflow-gitea/skills/kaola-workflow-init/SKILL.md",
+      "plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md",
+      "plugins/kaola-workflow-gitlab/agents/implementer.toml",
+      "plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md",
+      "plugins/kaola-workflow-gitlab/commands/workflow-init.md",
+      "plugins/kaola-workflow-gitlab/commands/workflow-next.md",
+      "plugins/kaola-workflow-gitlab/hooks/kaola-workflow-codex-compact-recovery.md",
+      "plugins/kaola-workflow-gitlab/hooks/kaola-workflow-compact-recovery.md",
+      "plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md",
+      "plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md",
+      "plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md",
+      "plugins/kaola-workflow/agents/implementer.toml",
+      "plugins/kaola-workflow/hooks/kaola-workflow-codex-compact-recovery.md",
+      "plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md",
+      "plugins/kaola-workflow/skills/kaola-workflow-init/SKILL.md",
+      "plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md",
+      "scripts/validate-workflow-contracts.js"
+    ],
+    "changedFileCount": 54,
+    "chains": [
+      "claude",
+      "codex",
+      "gitlab",
+      "gitea"
+    ]
+  },
+  "preamble": {
+    "steps": [
+      {
+        "command": "node scripts/edition-sync.js --materialize-kernel",
+        "duration_ms": 23,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/validate-script-sync.js",
+        "duration_ms": 69,
+        "exitCode": 1
+      },
+      {
+        "command": "node scripts/validate-vendored-agents.js",
+        "duration_ms": 46,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-forge-finalize-findings.js",
+        "duration_ms": 14166,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-forge-archive-scoping.js",
+        "duration_ms": 7839,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-forge-claim-rollback-scoping.js",
+        "duration_ms": 1143,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-forge-claim-reserved-project.js",
+        "duration_ms": 2724,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-active-folders-field-parity.js",
+        "duration_ms": 31,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/generate-routing-surfaces.js --check",
+        "duration_ms": 37,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/edition-sync.js --check",
+        "duration_ms": 52,
+        "exitCode": 0
+      }
+    ]
+  },
+  "chains": [
+    {
+      "name": "claude",
+      "exitCode": 1,
+      "command": "npm run test:kaola-workflow:claude",
+      "duration_ms": 0,
+      "accepted_red": false,
+      "accepted_red_issue": null,
+      "attempts": 1,
+      "retried_transient": false,
+      "timed_out": false,
+      "signal": null,
+      "steps": [],
+      "preamble_failed": "node scripts/validate-script-sync.js"
+    },
+    {
+      "name": "codex",
+      "exitCode": 1,
+      "command": "npm run test:kaola-workflow:codex",
+      "duration_ms": 0,
+      "accepted_red": false,
+      "accepted_red_issue": null,
+      "attempts": 1,
+      "retried_transient": false,
+      "timed_out": false,
+      "signal": null,
+      "steps": [],
+      "preamble_failed": "node scripts/validate-script-sync.js"
+    },
+    {
+      "name": "gitlab",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:gitlab",
+      "duration_ms": 106451,
+      "accepted_red": false,
+      "accepted_red_issue": null,
+      "attempts": 1,
+      "retried_transient": false,
+      "timed_out": false,
+      "signal": null,
+      "steps": [
+        {
+          "command": "node plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js",
+          "duration_ms": 114,
+          "exitCode": 0
+        },
+        {
+          "command": "node plugins/kaola-workflow-gitlab/scripts/simulate-gitlab-workflow-walkthrough.js",
+          "duration_ms": 59985,
+          "exitCode": 0
+        },
+        {
+          "command": "node plugins/kaola-workflow-gitlab/scripts/simulate-gitlab-codex-workflow-walkthrough.js",
+          "duration_ms": 46352,
+          "exitCode": 0
+        }
+      ]
+    },
+    {
+      "name": "gitea",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:gitea",
+      "duration_ms": 105391,
+      "accepted_red": false,
+      "accepted_red_issue": null,
+      "attempts": 1,
+      "retried_transient": false,
+      "timed_out": false,
+      "signal": null,
+      "steps": [
+        {
+          "command": "node plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js",
+          "duration_ms": 107,
+          "exitCode": 0
+        },
+        {
+          "command": "node plugins/kaola-workflow-gitea/scripts/simulate-gitea-workflow-walkthrough.js",
+          "duration_ms": 59607,
+          "exitCode": 0
+        },
+        {
+          "command": "node plugins/kaola-workflow-gitea/scripts/simulate-gitea-codex-workflow-walkthrough.js",
+          "duration_ms": 45677,
+          "exitCode": 0
+        }
+      ]
+    }
+  ]
+}
