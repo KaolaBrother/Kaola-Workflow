@@ -43,7 +43,7 @@ done on the strength of your own passing run.
 
 ## Verification Protocol
 
-1. **Before touching anything**: use supplied baseline evidence when it covers the same candidate, relevant check, and acceptance scope; otherwise run the existing suite (or build) and record the baseline result.
+1. **Before touching anything**: run the existing suite (or build) and record the baseline result.
 2. **Make the change**: stay inside the scope you were given.
 3. **Run the appropriate check** and record it as your verification tier — exactly one of:
    - `tests-green` — the authored suite passes (behavioral work: new logic, bug fixes);
@@ -106,10 +106,10 @@ verification stay exactly as demanding as they were.
 
 <!-- runtime-adapter:start -->
 runtime: codex
-behavior_contract_version: 2
-behavior_contract_hash: 3476a4846517dde34dcc8ec8e1922c6eacd24a4cf9cb9510e7620f57a374a500
+behavior_contract_version: 1
+behavior_contract_hash: e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a
 adapter_capabilities_hash: c16bb93f580c2d9ab28c6d11c332db986c7e8255e900d65de8cd982d5d43b0b0
-resolved_profile_hash: 53c63a346a38379e5eb4c92b48c5ff9528d2b03865386ef97f6344264c93bc8b
+resolved_profile_hash: d5397383fecee7b6885096359a3bd7b4c336cc2b2274401323e41cd089a3de55
 
 ## Runtime adapter
 

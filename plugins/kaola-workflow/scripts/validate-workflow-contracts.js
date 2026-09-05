@@ -274,8 +274,7 @@ for (const file of nextSurfaces) {
   // CONCURRENCY CARRIES NO MACHINERY. This is a subtraction made durable: without the sentence,
   // nothing stops a proof obligation from being reintroduced as "just a small check".
   assertIncludes(file, 'No dispatch count, cap, disjointness proof');
-  assertIncludes(file, 'justification, or fallback stigma attaches to the judgment');
-  assertIncludes(file, 'Workflow adds no separate approval requirement, and dispatch remains subject to the active host/session permission policy');
+  assertIncludes(file, 'justification, approval, or fallback stigma');
   assertIncludes(file, 'Subagents and worktrees are tools, offered and declinable');
 
   // RESUME. The property the whole design was sized to, and the rule that makes it work.

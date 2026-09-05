@@ -9,9 +9,7 @@ surface when handoff and integration cost exceed the benefit, but that scope doe
 independent research, test authorship, documentation, or review items. Dispatch when it materially
 reduces main-context residue, supplies independent judgment, or enables genuinely independent
 parallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,
-cap, disjointness proof, justification, or fallback stigma attaches to the judgment; Workflow adds
-no separate approval requirement, and dispatch remains subject to the active host/session permission
-policy.
+cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
 
 Treat the active runtime adapter below as fact authority. Inspect its effective profile discovery
 and precedence, live call schema and verified fields, standard/reasoning/heavy defaults,

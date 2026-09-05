@@ -88,9 +88,9 @@
       "variant": "claude",
       "role": "implementer",
       "path": "agents/implementer.md",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "3476a4846517dde34dcc8ec8e1922c6eacd24a4cf9cb9510e7620f57a374a500",
-      "resolved_profile_sha256": "c0396f27f5c65646b48c399855d3308af310fb96ae4dbb62268c8f54e147d00b"
+      "behavior_contract_version": 1,
+      "behavior_sha256": "e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a",
+      "resolved_profile_sha256": "54919ed8f2b5849704172e79c96075cbd143812a820e1b8e4917135d6e261e29"
     },
     {
       "runtime": "claude",
@@ -214,9 +214,9 @@
       "variant": "codex-github",
       "role": "implementer",
       "path": "plugins/kaola-workflow/agents/implementer.toml",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "3476a4846517dde34dcc8ec8e1922c6eacd24a4cf9cb9510e7620f57a374a500",
-      "resolved_profile_sha256": "dabdb38875a3ec583e3a09b6bee95e5a10aa3b51ca74a05474f9452d397f28df"
+      "behavior_contract_version": 1,
+      "behavior_sha256": "e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a",
+      "resolved_profile_sha256": "c2b02d1b298eff59e439023e23c460c52b320f4bfb4ca03428c20c23347652f5"
     },
     {
       "runtime": "codex",
@@ -340,9 +340,9 @@
       "variant": "codex-gitlab",
       "role": "implementer",
       "path": "plugins/kaola-workflow-gitlab/agents/implementer.toml",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "3476a4846517dde34dcc8ec8e1922c6eacd24a4cf9cb9510e7620f57a374a500",
-      "resolved_profile_sha256": "dabdb38875a3ec583e3a09b6bee95e5a10aa3b51ca74a05474f9452d397f28df"
+      "behavior_contract_version": 1,
+      "behavior_sha256": "e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a",
+      "resolved_profile_sha256": "c2b02d1b298eff59e439023e23c460c52b320f4bfb4ca03428c20c23347652f5"
     },
     {
       "runtime": "codex",
@@ -466,9 +466,9 @@
       "variant": "codex-gitea",
       "role": "implementer",
       "path": "plugins/kaola-workflow-gitea/agents/implementer.toml",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "3476a4846517dde34dcc8ec8e1922c6eacd24a4cf9cb9510e7620f57a374a500",
-      "resolved_profile_sha256": "dabdb38875a3ec583e3a09b6bee95e5a10aa3b51ca74a05474f9452d397f28df"
+      "behavior_contract_version": 1,
+      "behavior_sha256": "e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a",
+      "resolved_profile_sha256": "c2b02d1b298eff59e439023e23c460c52b320f4bfb4ca03428c20c23347652f5"
     },
     {
       "runtime": "codex",
@@ -592,9 +592,9 @@
       "variant": "opencode",
       "role": "implementer",
       "path": "logical/opencode/agents/implementer.md",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "3476a4846517dde34dcc8ec8e1922c6eacd24a4cf9cb9510e7620f57a374a500",
-      "resolved_profile_sha256": "3c5f01028797c0bd1b78fcaa75ab7fe4a67dab2eb932f25625db66a52472eaa6"
+      "behavior_contract_version": 1,
+      "behavior_sha256": "e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a",
+      "resolved_profile_sha256": "36f19f80c64e24473447755b5dfff8f12a09ee021add6cb6212593fccbd99676"
     },
     {
       "runtime": "opencode",
@@ -718,9 +718,9 @@
       "variant": "kimi",
       "role": "implementer",
       "path": "logical/kimi/agents/implementer.md",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "3476a4846517dde34dcc8ec8e1922c6eacd24a4cf9cb9510e7620f57a374a500",
-      "resolved_profile_sha256": "1774a8ed425f3c74a4bbfb97f5bd87c2c7475af5f87d92d3a0bf9a39cc62da7f"
+      "behavior_contract_version": 1,
+      "behavior_sha256": "e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a",
+      "resolved_profile_sha256": "9f54a7a13b0d0ac63e0580c968313bd5b48164664b6e1a3421dc9c8bb512d637"
     },
     {
       "runtime": "kimi",
@@ -844,9 +844,9 @@
       "variant": "grok",
       "role": "implementer",
       "path": "logical/grok/agents/implementer.md",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "3476a4846517dde34dcc8ec8e1922c6eacd24a4cf9cb9510e7620f57a374a500",
-      "resolved_profile_sha256": "43727e6b59d4f30c7575cdf282245da51801b8a48c5648ead45ce93f54a9f53f"
+      "behavior_contract_version": 1,
+      "behavior_sha256": "e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a",
+      "resolved_profile_sha256": "53f4631e23cf539e71af3be70bd931c1b1450b5c8ab70c82de59c0eaa49e3611"
     },
     {
       "runtime": "grok",
@@ -970,9 +970,9 @@
       "variant": "cursor",
       "role": "implementer",
       "path": "logical/cursor/agents/implementer.md",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "3476a4846517dde34dcc8ec8e1922c6eacd24a4cf9cb9510e7620f57a374a500",
-      "resolved_profile_sha256": "140a8f57f5598b93fde2fc87470c50c3be990bc08f4b2ab70ebd80f7d1df7c64"
+      "behavior_contract_version": 1,
+      "behavior_sha256": "e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a",
+      "resolved_profile_sha256": "2375574b15bc4767ee528ce7531bd3d5b2bbed295409f8df66504332612bd31c"
     },
     {
       "runtime": "cursor",
@@ -1096,9 +1096,9 @@
       "variant": "zcode",
       "role": "implementer",
       "path": "logical/zcode/agents/implementer.md",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "3476a4846517dde34dcc8ec8e1922c6eacd24a4cf9cb9510e7620f57a374a500",
-      "resolved_profile_sha256": "1780e0bf5f328d4268dd0d5f183b277059fa27144da4c4e584daa9600b8c66e4"
+      "behavior_contract_version": 1,
+      "behavior_sha256": "e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a",
+      "resolved_profile_sha256": "91a3010eba8be490f79a2f52d6de2b8dacb9dde648fdfcf3a0a7f54af25b3548"
     },
     {
       "runtime": "zcode",

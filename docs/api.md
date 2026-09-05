@@ -710,11 +710,6 @@ reader can check the claim rather than take it on trust. The producer of all thr
 `kaola-workflow-validation-runner.js record` below — the field the gate requires is the one an
 agent writing the file by hand is likeliest to omit, and both remediation hints name that verb.
 
-Existing finalization evidence can be reused only when its command or chain coverage, candidate
-binding, scope, outcome, and applicable waiver policy remain valid for the frozen candidate. Missing,
-stale, failed, insufficient, or otherwise inapplicable evidence requires running the check; required
-integration chains remain required when their coverage is absent or invalid.
-
 ### Kernel path-stream decoders — `kaola-workflow-adaptive-schema.js`
 
 Every reader that turns a git path stream back into filenames goes through the same anchor, so a

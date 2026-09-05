@@ -23,9 +23,6 @@ and stricter constraints, then resume from existing finalization receipts.
 taking one.
 Closing issues with open work, reorganizing forge work, force-pushing, rewriting history, and
 resolving real content conflicts require the proposal, reason, and user's answer.
-An authorization already given for this task remains valid within its stated scope. Ask again only
-for a new, expanded, or materially different irreversible or value-laden decision; owner-authored
-content remains protected unless that scope explicitly includes the change.
 <!-- /PIN -->
 
 Finalization validates, docks docs, writes terminal records, settles closure, archives, commits, and
@@ -53,12 +50,6 @@ For a consumer without `test:kaola-workflow:*`, run its own validation and recor
 node "$KAOLA_SCRIPTS/kaola-workflow-validation-runner.js" record \
   --project {project} --verdict pass --command "<exact command>"
 ```
-
-Existing finalization evidence may satisfy an already completed check only when its command or chain
-coverage, candidate binding, scope, outcome, and applicable waiver policy all remain valid for the
-frozen candidate. Missing, stale, failed, insufficient, or otherwise inapplicable evidence requires
-running the check; required integration chains remain required when their coverage is absent or
-invalid.
 
 The recorder writes `.cache/final-validation.md` with column-0 `verdict: pass`, the exact command,
 and `validated_candidate_hash`; run it from the candidate worktree the finalize transaction reads.

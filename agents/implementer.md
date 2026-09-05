@@ -3,9 +3,9 @@ name: implementer
 description: "The implementing role. Writes production code for behavioral logic and for work with no natural failing test alike — refactors, scaffolding, config/IaC, UI, migrations, glue — reading and running acceptance tests while preserving their meaning; may perform only mechanical test-path maintenance when explicitly needed."
 tools: ["Read","Write","Edit","Grep","Glob","Bash"]
 model: sonnet
-behavior_contract_version: 2
-behavior_contract_hash: 3476a4846517dde34dcc8ec8e1922c6eacd24a4cf9cb9510e7620f57a374a500
-resolved_profile_hash: 2e4b49075c87d000b861156c387289e5d7e6fa1abdeab2d54c91d816a333be0a
+behavior_contract_version: 1
+behavior_contract_hash: e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a
+resolved_profile_hash: 2074013f9d43c7ac1d369b17335c1b53711ab5c2356c76b7322cfadf32be5095
 ---
 <!-- kaola-workflow-managed-agent: true -->
 
@@ -51,7 +51,7 @@ done on the strength of your own passing run.
 
 ## Verification Protocol
 
-1. **Before touching anything**: use supplied baseline evidence when it covers the same candidate, relevant check, and acceptance scope; otherwise run the existing suite (or build) and record the baseline result.
+1. **Before touching anything**: run the existing suite (or build) and record the baseline result.
 2. **Make the change**: stay inside the scope you were given.
 3. **Run the appropriate check** and record it as your verification tier — exactly one of:
    - `tests-green` — the authored suite passes (behavioral work: new logic, bug fixes);
@@ -114,8 +114,8 @@ verification stay exactly as demanding as they were.
 
 <!-- runtime-adapter:start -->
 runtime: claude
-behavior_contract_version: 2
-behavior_contract_hash: 3476a4846517dde34dcc8ec8e1922c6eacd24a4cf9cb9510e7620f57a374a500
+behavior_contract_version: 1
+behavior_contract_hash: e5ec19299a50738c6efbfd5e91468bfd656937e43b42027b6286b5f979ec6a5a
 adapter_capabilities_hash: a37d8dc46eaf900e371e8985b2007cd0c42713a4be6e05977f66b1fb27efbf65
 
 ## Runtime adapter

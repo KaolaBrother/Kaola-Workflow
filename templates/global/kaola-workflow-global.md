@@ -10,13 +10,6 @@ Universal contract. Project instructions add only verified local facts and stric
 4. Machines decide facts; humans decide values. Escalate irreversible or value-laden choices.
 5. Own your own verdicts. Local evidence, not an external system, decides done.
 
-## Authorization scope
-
-- An authorization given in conversation remains valid for the exact task and scope it names.
-- Ask again only for a new, expanded, or materially different irreversible or value-laden decision;
-  authorization does not silently extend to adjacent work or owner-authored content outside that
-  scope.
-
 ## Premise and evidence
 
 - Measure current truth before an earlier claim shapes work; carry corrections forward.
