@@ -30,7 +30,9 @@ surface when handoff and integration cost exceed the benefit, but that scope doe
 independent research, test authorship, documentation, or review items. Dispatch when it materially
 reduces main-context residue, supplies independent judgment, or enables genuinely independent
 parallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,
-cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+cap, disjointness proof, justification, or fallback stigma attaches to the judgment; Workflow adds
+no separate approval requirement, and dispatch remains subject to the active host/session permission
+policy.
 
 Treat the active runtime adapter below as fact authority. Inspect its effective profile discovery
 and precedence, live call schema and verified fields, standard/reasoning/heavy defaults,
@@ -53,7 +55,7 @@ promised output, not the worker.
 Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.
 Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: "<role>"`; on hosts that expose them, supply `model` and `reasoning_effort` when selecting the role's default tier, while preserving supported `fork_turns` and service-tier choices.
 
-**Tier defaults:** standard — standard → `gpt-5.6-luna` with reasoning effort `max`; reasoning — reasoning → `gpt-5.6-sol` with reasoning effort `medium`; heavy — heavy → `gpt-5.6-sol` with reasoning effort `high`.
+**Tier defaults:** standard — standard → `gpt-5.6-luna` with reasoning effort `max`; reasoning — reasoning → `gpt-6-astra` with reasoning effort `medium`; heavy — heavy → `gpt-6-astra` with reasoning effort `high`.
 **Role roster:** standard — `code-explorer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `metric-optimizer`, `tdd-guide`; reasoning — `adversarial-verifier`, `build-error-resolver`, `code-reviewer`, `security-reviewer`, `synthesizer`; heavy — `code-architect`, `planner`.
 
 The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.
@@ -75,6 +77,9 @@ never required.
 taking one.
 State the proposed destructive Git, deploy, credential, schema/public-API, capability deletion, or
 forge-reorganization action and why; wait. Everything checkable remains yours to execute.
+An authorization already given for this task remains valid within its stated scope. Ask again only
+for a new, expanded, or materially different irreversible or value-laden decision; owner-authored
+content remains protected unless that scope explicitly includes the change.
 <!-- /PIN -->
 
 ## Intake, freshness, claim, and resume
@@ -92,7 +97,9 @@ before the claim is free**: perform read-only measurement or ask when the pick i
 <!-- PIN: forge-is-the-backlog -->
 Establish freshness with status, fetch/prune, and upstream divergence. Continue when synchronized,
 ahead-only, or no-remote; fast-forward only a clean behind-only checkout. Ask before merge, rebase,
-stash, reset, or moving user dirt. Before claim, read each shortlisted candidate's own body and comments.
+stash, reset, or moving user dirt. Honor an existing authorization for this task's stated scope; ask
+again when a freshness action is new, expanded, or materially different, and continue protecting user
+dirt and owner-authored content. Before claim, read each shortlisted candidate's own body and comments.
 Comments are current state: where a comment contradicts the body, the comment wins.
 <!-- /PIN -->
 
@@ -166,8 +173,9 @@ meaning. Failure frontier, then freeze: focused acceptance, affected inventory, 
 exact-candidate review; any mutation invalidates prior PASS evidence for changed bytes. The test
 author owns acceptance meaning. An implementer may not delete, weaken, or reinterpret that
 acceptance to pass. Finalization, closure, archive, and sink are never mission items.
-No dispatch count, cap, disjointness proof, justification, approval, or fallback stigma attaches to
-the judgment. Subagents and worktrees are tools, offered and declinable.
+No dispatch count, cap, disjointness proof, justification, or fallback stigma attaches to the
+judgment; Workflow adds no separate approval requirement, and dispatch remains subject to the active
+host/session permission policy. Subagents and worktrees are tools, offered and declinable.
 
 When all items are done, transition explicitly to:
 

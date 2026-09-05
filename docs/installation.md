@@ -77,6 +77,17 @@ node <active-plugin-root>/scripts/kaola-workflow-codex-preflight.js \
   --doctor --project-root <project-root> --json
 ```
 
+The terminal npm Codex CLI is updated separately from Workflow carriers:
+
+```bash
+npm install --global @openai/codex
+codex --version
+```
+
+The ChatGPT desktop application carries its own Codex binary and is updated independently. The
+Workflow installer does not install or upgrade either Codex surface, and Workflow carriers do not
+require a particular desktop bundle version.
+
 Open Codex, run `/hooks`, and approve the `kaola-workflow:` entries. Trust is content-hash based, so
 changed hook bytes require renewed approval. Exit that session, rerun the profile installer and
 doctor, then start a fresh working session. Automation that has independently vetted the hook source

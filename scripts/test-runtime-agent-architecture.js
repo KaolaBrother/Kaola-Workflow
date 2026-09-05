@@ -236,6 +236,52 @@ function codexV2FieldHits(text) {
     .filter(line => /^\s*(?:task_name|agent_type|message|reasoning_effort|fork_turns)\s*=/.test(line));
 }
 
+// #1049 — Codex tier defaults are a dispatch contract carried by each Codex forge adapter and
+// rendered into Next, Finalize, and compact-recovery surfaces. Profiles still inherit the host
+// model by omission; these defaults describe the explicit dispatch fields only.
+const CODEX_TIER_DEFAULTS = Object.freeze({
+  standard: Object.freeze({ model: 'gpt-5.6-luna', effort: 'max' }),
+  reasoning: Object.freeze({ model: 'gpt-6-astra', effort: 'medium' }),
+  heavy: Object.freeze({ model: 'gpt-6-astra', effort: 'high' }),
+});
+
+function regexEscape(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasToken(text, token) {
+  return new RegExp(`(?:^|[^a-z0-9])${regexEscape(token)}(?:$|[^a-z0-9])`, 'i').test(text);
+}
+
+function codexTierDefaultGaps(text) {
+  const prose = normalizedProse(text);
+  const gaps = [];
+  for (const [tier, binding] of Object.entries(CODEX_TIER_DEFAULTS)) {
+    const match = prose.match(new RegExp(
+      `\\b${tier}\\s*(?:→|—|-)\\s*([\\s\\S]*?)(?=;\\s*(?:standard|reasoning|heavy)\\s*(?:→|—|-)\\s*|$)`,
+      'i'));
+    const segment = match ? match[1] : '';
+    if (!hasToken(segment, binding.model) || !hasToken(segment, binding.effort)) gaps.push(tier);
+  }
+  return gaps;
+}
+
+const CODEX_TIER_FIXTURE = [
+  '**Tier defaults:** standard — standard → `gpt-5.6-luna` with reasoning effort `max`;',
+  'reasoning — reasoning → `gpt-6-astra` with reasoning effort `medium`;',
+  'heavy — heavy → `gpt-6-astra` with reasoning effort `high`.',
+].join(' ');
+assert(codexTierDefaultGaps(CODEX_TIER_FIXTURE).length === 0,
+  'A1049/oracle: decimal model versions and the requested three tier pairs parse as valid');
+assert(codexTierDefaultGaps(CODEX_TIER_FIXTURE.replaceAll('gpt-6-astra', 'gpt-5.6-sol'))
+    .includes('reasoning')
+    && codexTierDefaultGaps(CODEX_TIER_FIXTURE.replaceAll('gpt-6-astra', 'gpt-5.6-sol'))
+      .includes('heavy'),
+  'A1049/oracle RED: the historical Sol reasoning/heavy pair is rejected');
+assert(codexTierDefaultGaps(CODEX_TIER_FIXTURE.replace('effort `high`', 'effort `xhigh`'))
+    .includes('heavy'),
+  'A1049/oracle RED: heavy high does not accept the stronger xhigh token');
+
 function dispatchBinding(runtime, role, roleContracts) {
   const expected = {
     claude: {
@@ -244,9 +290,9 @@ function dispatchBinding(runtime, role, roleContracts) {
       heavy: { model: 'fable' },
     },
     codex: {
-      standard: { model: 'gpt-5.6-luna', effort: 'max' },
-      reasoning: { model: 'gpt-5.6-sol', effort: 'medium' },
-      heavy: { model: 'gpt-5.6-sol', effort: 'high' },
+      standard: CODEX_TIER_DEFAULTS.standard,
+      reasoning: CODEX_TIER_DEFAULTS.reasoning,
+      heavy: CODEX_TIER_DEFAULTS.heavy,
     },
   }[runtime];
   const tier = roleContracts[role] && roleContracts[role].intent_class;
@@ -416,8 +462,8 @@ function runtimeDelegationGaps(runtime, text) {
       ['profile-lookup', [/\.codex\/agents\/kaola-workflow\/<role>\.toml/]],
       ['carrier', [/spawn_agent.*agent_type|agent_type.*spawn_agent/]],
       ['standard-tier', [/standard.*gpt-5\.6-luna.*max|gpt-5\.6-luna.*max.*standard/]],
-      ['reasoning-tier', [/reasoning.*gpt-5\.6-sol.*medium|gpt-5\.6-sol.*medium.*reasoning/]],
-      ['heavy-tier', [/heavy.*gpt-5\.6-sol.*high|gpt-5\.6-sol.*high.*heavy/]],
+      ['reasoning-tier', [/reasoning.*gpt-6-astra.*medium|gpt-6-astra.*medium.*reasoning/]],
+      ['heavy-tier', [/heavy.*gpt-6-astra.*high|gpt-6-astra.*high.*heavy/]],
     ],
     opencode: [
       ['lookup', [/\.opencode\/agents\//]],
@@ -928,6 +974,85 @@ for (const role of ROLE_NAMES) {
     `A7[${role}]: Codex renders one profile for each of three forges`);
   assert(new Set(codexProfiles.map(profile => profile.content)).size === 1,
     `A7[${role}]: forge-neutral Codex triples are byte-identical`);
+}
+
+// #1049 — the requested Codex tier change is source-owned and must reach every tracked carrier.
+// Keep this proof on the generated subject: a copied fixture or a source-only assertion would
+// allow stale Next, Finalize, or compact files to ship while the adapter map looks correct.
+{
+  const codexEntries = adapterView.entries.filter(entry => entry.runtime === 'codex');
+  assert(codexEntries.length === 3
+      && JSON.stringify(codexEntries.map(entry => entry.name).sort())
+        === JSON.stringify(['codex-gitea', 'codex-github', 'codex-gitlab']),
+    'A1049/source: exactly the GitHub, GitLab, and Gitea Codex adapters are covered');
+
+  const sourceTierGaps = codexEntries.flatMap(entry => {
+    const capabilities = capabilityObject(entry.adapter) || {};
+    const guidance = capabilities.delegation_guidance || {};
+    const tiers = guidance.tiers && typeof guidance.tiers === 'object' ? guidance.tiers : {};
+    const tierText = Object.values(tiers).join('; ');
+    const gaps = codexTierDefaultGaps(tierText);
+    for (const tier of Object.keys(CODEX_TIER_DEFAULTS)) {
+      if (!capabilities.intent_mapping || capabilities.intent_mapping[tier] !== 'inherit') {
+        gaps.push(`${tier}-inheritance`);
+      }
+    }
+    return gaps.map(gap => `${entry.name}/${gap}`);
+  });
+  assert(sourceTierGaps.length === 0,
+    'A1049/source: Codex adapters carry Luna/max, Astra/medium, Astra/high and inherit model — gaps '
+      + JSON.stringify(sourceTierGaps));
+
+  const explicitModelProfiles = profiles
+    .filter(profile => profile.runtime === 'codex')
+    .filter(profile => /^\s*model\s*[:=]/mi.test(String(profile.content || '')))
+    .map(profileKey);
+  assert(explicitModelProfiles.length === 0,
+    'A1049/profiles: all 42 Codex role profiles remain model-free and inherit the native host model — '
+      + JSON.stringify(explicitModelProfiles));
+
+  let routing = null;
+  let freshOperationCarriers = [];
+  let freshCompactCarriers = [];
+  try {
+    routing = require(path.join(ROOT, 'scripts', 'generate-routing-surfaces.js'));
+    freshOperationCarriers = ['next', 'finalize'].flatMap(topic =>
+      freshRoutingCarriers(topic).filter(carrier => carrier.runtime === 'codex'));
+    freshCompactCarriers = ['github', 'gitlab', 'gitea'].map(forge => ({
+      label: `codex/${forge}/compact-recovery`,
+      content: routing.renderCompactRecoveryPrompt('codex', forge),
+    }));
+  } catch (error) {
+    assert(false, 'A1049/render: fresh Codex next/finalize/compact carriers render — ' + error.message);
+  }
+
+  const operationGaps = freshOperationCarriers.flatMap(carrier =>
+    codexTierDefaultGaps(carrier.content).map(gap => `${carrier.label}/${gap}`));
+  assert(freshOperationCarriers.length === 6 && operationGaps.length === 0,
+    'A1049/render: fresh Codex next/finalize carriers across all three forges carry the requested '
+      + 'tier defaults — gaps ' + JSON.stringify(operationGaps));
+
+  const compactGaps = freshCompactCarriers.flatMap(carrier =>
+    codexTierDefaultGaps(carrier.content).map(gap => `${carrier.label}/${gap}`));
+  assert(freshCompactCarriers.length === 3 && compactGaps.length === 0,
+    'A1049/render: fresh Codex compact carriers across all three forges carry the requested tier '
+      + 'defaults — gaps ' + JSON.stringify(compactGaps));
+
+  const trackedRows = routing
+    ? [
+      ...routing.GENERATED_SURFACES.filter(row => row.surface_type === 'skill'
+        && ['next', 'finalize'].includes(row.topic)),
+      ...routing.RUNTIME_RECOVERY_SURFACES.filter(row => row.runtime === 'codex'),
+    ]
+    : [];
+  const trackedGaps = trackedRows.flatMap(row => {
+    const content = read(row.path);
+    if (typeof content !== 'string') return [`${row.path}/missing`];
+    return codexTierDefaultGaps(content).map(gap => `${row.path}/${gap}`);
+  });
+  assert(trackedRows.length === 9 && trackedGaps.length === 0,
+    'A1049/tracked: generated Codex next/finalize/compact bytes across all three forges carry the '
+      + 'requested tier defaults — gaps ' + JSON.stringify(trackedGaps));
 }
 
 // A8 — provenance is outside every generated prompt but remains durable and discoverable.

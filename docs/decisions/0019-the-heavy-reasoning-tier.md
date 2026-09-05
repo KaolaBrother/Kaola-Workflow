@@ -42,6 +42,11 @@ surface exists.
 | reasoning | `opus` | `gpt-5.6-sol` / `medium` | inherit + `effort: high` | `grok-4.6[effort=high]` | per-role override list | session model | `GLM-5.3` / `thoughtLevel: max` |
 | heavy | `fable` | `gpt-5.6-sol` / `high` | inherit + `effort: xhigh` | `grok-4.6[effort=xhigh]` | classifies as reasoning | session model | `GLM-5.3` / `thoughtLevel: max` |
 
+**Current mapping note (2026-09-05, #1049).** The historical matrix above and the measurements in
+§4 remain unchanged. Current Codex dispatch uses `gpt-5.6-luna`/`max` for standard,
+`gpt-6-astra`/`medium` for reasoning, and `gpt-6-astra`/`high` for heavy; role profiles omit a
+fixed model and inherit the active host policy.
+
 Claude aliases are unversioned on purpose (owner): they float with model updates. Claude effort is
 **not** pinned — all three tiers run the runtime's default effort. A per-subagent `effort` key
 exists (§4) and stays unused until an observed failure demands it; the tier axis on claude is

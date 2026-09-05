@@ -10,6 +10,9 @@ small, and grounded in repository facts.
 taking one. This includes `git init`, runtime/global configuration, and rewriting an existing
 owner-authored instruction file. Show the smallest useful change first.
 Creating a missing project scaffold is reversible and needs no separate approval.
+An authorization already given for this task remains valid within its stated scope. Ask again only
+for a new, expanded, or materially different irreversible or value-laden decision; owner-authored
+content remains protected unless that scope explicitly includes the change.
 <!-- /PIN -->
 
 <!-- REGION:command — this surface has an argument channel -->

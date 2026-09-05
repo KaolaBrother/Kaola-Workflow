@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Codex dispatch and workflow guidance refreshed (#1049).** Standard remains Luna/max; reasoning
+  and heavy use Astra/medium and Astra/high across the three Codex forge adapters and generated
+  carriers. Scoped authorization, host/session permission boundaries, supplied baseline reuse, and
+  finalization evidence validity rules are now stated in the authoring sources. Terminal npm Codex
+  CLI and the independent ChatGPT desktop bundle are documented as separate update surfaces.
+
 ## [10.2.1] - 2026-08-31
 
 ### Changed

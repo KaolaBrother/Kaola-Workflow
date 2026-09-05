@@ -8,6 +8,10 @@ The workflow supports **Claude Code, Codex, OpenCode, Kimi Code, Grok CLI, Curso
 **GitHub, GitLab, and Gitea**. Runtime-specific model, dispatch, hook, and installation behavior is
 measured rather than flattened into a lowest-common-denominator abstraction.
 
+Codex dispatch defaults are `gpt-5.6-luna`/max for standard work and `gpt-6-astra`/medium or
+`gpt-6-astra`/high for reasoning or heavy work. Codex role profiles omit a fixed model and inherit
+the active host policy; other runtimes keep their native mappings.
+
 ## Why it exists
 
 A capable coding agent can decompose, dispatch, review, and repair work without a scheduler. What it
@@ -68,6 +72,11 @@ git pull --ff-only
 ./install-all.sh --yes --forge=github
 ./install-all.sh --check
 ```
+
+`install-all.sh` refreshes Kaola-Workflow runtime carriers. The terminal npm Codex CLI is a separate
+installation: update it with `npm install --global @openai/codex`, then verify with `codex --version`.
+The ChatGPT desktop application bundles its own Codex binary and is updated independently; neither
+surface is installed or upgraded by `install-all.sh`.
 
 The shared `./uninstall.sh --forge=all` removes Claude surfaces, global Kaola Codex hooks, and Codex
 profiles from the directory scope in which it is run. Remove an additive runtime from its install

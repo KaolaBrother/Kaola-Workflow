@@ -26,7 +26,9 @@ surface when handoff and integration cost exceed the benefit, but that scope doe
 independent research, test authorship, documentation, or review items. Dispatch when it materially
 reduces main-context residue, supplies independent judgment, or enables genuinely independent
 parallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,
-cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+cap, disjointness proof, justification, or fallback stigma attaches to the judgment; Workflow adds
+no separate approval requirement, and dispatch remains subject to the active host/session permission
+policy.
 
 Treat the active runtime adapter below as fact authority. Inspect its effective profile discovery
 and precedence, live call schema and verified fields, standard/reasoning/heavy defaults,
@@ -49,7 +51,7 @@ promised output, not the worker.
 Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.
 Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: "<role>"`; on hosts that expose them, supply `model` and `reasoning_effort` when selecting the role's default tier, while preserving supported `fork_turns` and service-tier choices.
 
-**Tier defaults:** standard — standard → `gpt-5.6-luna` with reasoning effort `max`; reasoning — reasoning → `gpt-5.6-sol` with reasoning effort `medium`; heavy — heavy → `gpt-5.6-sol` with reasoning effort `high`.
+**Tier defaults:** standard — standard → `gpt-5.6-luna` with reasoning effort `max`; reasoning — reasoning → `gpt-6-astra` with reasoning effort `medium`; heavy — heavy → `gpt-6-astra` with reasoning effort `high`.
 **Role roster:** standard — `code-explorer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `metric-optimizer`, `tdd-guide`; reasoning — `adversarial-verifier`, `build-error-resolver`, `code-reviewer`, `security-reviewer`, `synthesizer`; heavy — `code-architect`, `planner`.
 
 The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.
@@ -66,6 +68,9 @@ Honor the current session's multi-agent exposure, V1/V2 call schema, type catalo
 taking one.
 Closing issues with open work, reorganizing forge work, force-pushing, rewriting history, and
 resolving real content conflicts require the proposal, reason, and user's answer.
+An authorization already given for this task remains valid within its stated scope. Ask again only
+for a new, expanded, or materially different irreversible or value-laden decision; owner-authored
+content remains protected unless that scope explicitly includes the change.
 <!-- /PIN -->
 
 Finalization validates, docks docs, writes terminal records, settles closure, archives, commits, and
@@ -95,6 +100,12 @@ CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirn
 node "$KAOLA_SCRIPTS/kaola-workflow-validation-runner.js" record \
   --project {project} --verdict pass --command "<exact command>"
 ```
+
+Existing finalization evidence may satisfy an already completed check only when its command or chain
+coverage, candidate binding, scope, outcome, and applicable waiver policy all remain valid for the
+frozen candidate. Missing, stale, failed, insufficient, or otherwise inapplicable evidence requires
+running the check; required integration chains remain required when their coverage is absent or
+invalid.
 
 The recorder writes `.cache/final-validation.md` with column-0 `verdict: pass`, the exact command,
 and `validated_candidate_hash`; run it from the candidate worktree the finalize transaction reads.

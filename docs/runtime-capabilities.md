@@ -2,7 +2,8 @@
 
 This document describes the capability boundary behind Kaola-Workflow's runtime adapters. The
 machine-readable authority is `templates/agents/runtime-capabilities.json`; this page explains its
-operational consequences and records the first-party evidence used through 2026-08-30.
+operational consequences and records the first-party evidence used through 2026-08-30. The current
+Codex mapping update is the dated #1049 source change, not a new runtime capability measurement.
 
 ## One repository authority
 
@@ -102,8 +103,8 @@ both `workflow-next` and `kaola-workflow-finalize`:
 | Intent | Claude | Codex | OpenCode | Kimi | Grok | Cursor | ZCode |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | standard | `sonnet`; runtime effort | `gpt-5.6-luna` / `max` | session; optional standard model pin | session model/thinking | inherited model + profile `medium` | profile `grok-4.6[effort=medium]` | profile `GLM-5.3` / `thoughtLevel: high` |
-| reasoning | `opus`; runtime effort | `gpt-5.6-sol` / `medium` | optional reasoning-role model pin, otherwise session | session model/thinking | inherited model + profile `high` | profile `grok-4.6[effort=high]` | profile `GLM-5.3` / `thoughtLevel: max` |
-| heavy | `fable`; runtime effort | `gpt-5.6-sol` / `high` | classifies with reasoning for the optional pin, otherwise session | session model/thinking | inherited model + profile `xhigh` | profile `grok-4.6[effort=xhigh]` | profile `GLM-5.3` / `thoughtLevel: max` |
+| reasoning | `opus`; runtime effort | `gpt-6-astra` / `medium` | optional reasoning-role model pin, otherwise session | session model/thinking | inherited model + profile `high` | profile `grok-4.6[effort=high]` | profile `GLM-5.3` / `thoughtLevel: max` |
+| heavy | `fable`; runtime effort | `gpt-6-astra` / `high` | classifies with reasoning for the optional pin, otherwise session | session model/thinking | inherited model + profile `xhigh` | profile `grok-4.6[effort=xhigh]` | profile `GLM-5.3` / `thoughtLevel: max` |
 
 This is not a Kaola scheduler or a blanket prohibition on task-sensitive runtime choices. Claude
 and Codex may carry a selected default on the native call when their live schema permits it;
