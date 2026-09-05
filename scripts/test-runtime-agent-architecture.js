@@ -989,6 +989,9 @@ const METRIC_OPTIMIZER_PASS_RATE_GAPS = Object.freeze([
   'posterior-median-min-delta',
   'ties-and-insufficient-evidence-reject',
   'early-abandonment',
+  'early-abandonment-scoped-restore',
+  'early-abandonment-keep-prior-baseline',
+  'early-abandonment-reset-hard-forbidden',
   'mission-supplied-min-trials',
   'min-trials-default-3',
   'abandonment-log-form',
@@ -1011,6 +1014,22 @@ function metricOptimizerContinuousDefaultGaps(text) {
   if (!/git restore --source=HEAD/.test(prose)) gaps.push('scoped-restore');
   if (!/git reset --hard/i.test(prose) || !/FORBIDDEN/i.test(prose)) gaps.push('reset-hard-forbidden');
   return gaps;
+}
+
+// R1: continuous default already contains scoped restore / keep-prior / reset-hard FORBIDDEN.
+// Completeness of the pass-rate branch is judged on the Early-abandonment reject path slice, not
+// the whole body — through the abandonment log form, before a sibling "Reject otherwise".
+function metricOptimizerEarlyAbandonmentSlice(text) {
+  const prose = String(text || '');
+  const start = prose.search(/early\s+abandonment/i);
+  if (start < 0) return '';
+  const from = prose.slice(start);
+  const sibling = from.search(/\*{0,2}Reject\*{0,2}\s+otherwise\b/i);
+  const bounded = sibling >= 0 ? from.slice(0, sibling) : from;
+  const logIdx = bounded.indexOf('rejected (abandoned after');
+  if (logIdx < 0) return bounded;
+  const close = bounded.indexOf(')', logIdx);
+  return bounded.slice(0, close < 0 ? bounded.length : close + 1);
 }
 
 function metricOptimizerPassRateGaps(text) {
@@ -1038,6 +1057,16 @@ function metricOptimizerPassRateGaps(text) {
     gaps.push('ties-and-insufficient-evidence-reject');
   }
   if (!/early\s+abandonment/i.test(prose)) gaps.push('early-abandonment');
+  const abandonmentSlice = metricOptimizerEarlyAbandonmentSlice(prose);
+  if (!/git restore --source=HEAD/.test(abandonmentSlice)) {
+    gaps.push('early-abandonment-scoped-restore');
+  }
+  if (!/keep(?:s)? the prior baseline/i.test(abandonmentSlice)) {
+    gaps.push('early-abandonment-keep-prior-baseline');
+  }
+  if (!/git reset --hard/i.test(abandonmentSlice) || !/FORBIDDEN/i.test(abandonmentSlice)) {
+    gaps.push('early-abandonment-reset-hard-forbidden');
+  }
   if (!/mission[- ]supplied(?:\s+\w+){0,8}\s+minimum(?:\s+number\s+of)?\s+trials/i.test(prose)) {
     gaps.push('mission-supplied-min-trials');
   }
@@ -1074,6 +1103,7 @@ const A1050_PASS_RATE_FIXTURE = [
   'meets a mission-supplied confidence (default 0.9 when supplied)',
   'and the posterior median clears min_delta. Ties and insufficient evidence are rejects.',
   'Early abandonment after a mission-supplied minimum number of trials (default 3 when supplied),',
+  'revert with git restore --source=HEAD and keep the prior baseline; git reset --hard is FORBIDDEN,',
   'logging rejected (abandoned after <n> trials).',
   'metric_repeats is a ceiling, not a target.',
   'Baseline trial counts are re-measured at loop start and carried forward on accept (posterior-vs-posterior).',
@@ -1085,8 +1115,8 @@ const A1050_PASS_RATE_FIXTURE = [
 assert(metricOptimizerPassRateGaps(A1050_PASS_RATE_FIXTURE).length === 0,
   'A1050/oracle: the required pass-rate wording parses as complete — gaps '
     + JSON.stringify(metricOptimizerPassRateGaps(A1050_PASS_RATE_FIXTURE)));
-assert(METRIC_OPTIMIZER_PASS_RATE_GAPS.length === 20,
-  'A1050/oracle: pass-rate gap catalog covers the 20 required claims');
+assert(METRIC_OPTIMIZER_PASS_RATE_GAPS.length === 23,
+  'A1050/oracle: pass-rate gap catalog covers the 23 required claims');
 
 {
   const mutations = [
@@ -1102,6 +1132,9 @@ assert(METRIC_OPTIMIZER_PASS_RATE_GAPS.length === 20,
     ['ties-and-insufficient-evidence-reject',
       /Ties and insufficient evidence are rejects\./, 'Ties may accept.'],
     ['early-abandonment', /Early abandonment after/, 'Stop after'],
+    ['early-abandonment-scoped-restore', 'git restore --source=HEAD', 'an unscoped revert'],
+    ['early-abandonment-keep-prior-baseline', 'keep the prior baseline', 'drop the baseline'],
+    ['early-abandonment-reset-hard-forbidden', /git reset --hard is FORBIDDEN/, 'git reset --hard is allowed'],
     ['mission-supplied-min-trials', /mission-supplied minimum number of trials/, 'a fixed trial count'],
     ['min-trials-default-3', /default 3 when supplied/, 'default when supplied'],
     ['abandonment-log-form', 'rejected (abandoned after <n> trials)', 'rejected early'],
@@ -1120,6 +1153,13 @@ assert(METRIC_OPTIMIZER_PASS_RATE_GAPS.length === 20,
         && metricOptimizerPassRateGaps(mutated).includes(gap),
       `A1050/oracle RED: dropping ${gap} is detected`);
   }
+  const restoreOnlyOutsideSlice = [
+    'Continuous reject uses git restore --source=HEAD and keep the prior baseline; git reset --hard is FORBIDDEN.',
+    A1050_PASS_RATE_FIXTURE.replace('git restore --source=HEAD', 'an unscoped revert'),
+  ].join(' ');
+  assert(/git restore --source=HEAD/.test(restoreOnlyOutsideSlice)
+      && metricOptimizerPassRateGaps(restoreOnlyOutsideSlice).includes('early-abandonment-scoped-restore'),
+    'A1050/oracle RED: restore only outside the early-abandonment slice is not enough');
 }
 
 {
