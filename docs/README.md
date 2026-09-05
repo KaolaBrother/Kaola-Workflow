@@ -91,10 +91,12 @@ Mission List design of record. Most older records describe the node/DAG executor
   completed by 0017. *Delete the verdict, keep the measurement.* Read it for why the finalize door and
   the sink measure and report rather than refuse.
 
-Everything numbered 0001–0015 and every `D-NNN-NN` record predates 0017. They remain accurate as
-history and as rationale for machinery that still ships around the run (claim, sink, release,
-role-profile generation, the runtime editions) — but where one describes plan grammar, role nodes,
-write sets, gates, epochs, or typed refusals, 0017 supersedes it.
+Everything numbered 0001–0015 and the `D-NNN-NN` records contemporaneous with the DAG executor
+predate 0017. They remain accurate as history and as rationale for machinery that still ships
+around the run (claim, sink, release, role-profile generation, the runtime editions) — but where
+one describes plan grammar, role nodes, write sets, gates, epochs, or typed refusals, 0017
+supersedes it. [D-1050-01](decisions/D-1050-01.md) is a later wording-level note on the
+`metric-optimizer` pass-rate branch; it does not restore that machinery.
 
 ## Other
 
