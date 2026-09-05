@@ -59,3 +59,10 @@ Owner requested a 10.4.0 minor release after this issue is archived. That cut us
 ## Acceptance boundaries
 
 No live Claude/Cursor/Codex/OpenCode/Kimi/Grok/ZCode install or native dispatch was run. No user-acceptance or device check was executed. The delivered change is contract wording plus generated tracked profiles and independent architecture tests.
+
+## Sink Findings
+
+post_rebase_tests: skipped
+
+archived_paths:
+- kaola-workflow/archive/issue-1050/finalization-summary.md
