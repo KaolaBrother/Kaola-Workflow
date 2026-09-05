@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **`metric-optimizer` pass-rate accept/reject (#1050).** Continuous metrics still use
+  median-of-K against `direction` and `min_delta`. When the mission declares a pass-rate
+  metric, the role compares Beta posteriors, accepts only with mission-supplied confidence
+  and a posterior median that clears `min_delta`, and may abandon early. No new script,
+  flag, ledger, or freeze rule. D-1050-01 records the decision; D-634-01 and D-639-01 are
+  unchanged.
+
 ## [10.3.0] - 2026-09-05
 
 ### Changed
