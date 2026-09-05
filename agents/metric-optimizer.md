@@ -4,8 +4,8 @@ description: "Bounded metric-ratchet specialist for direction-not-destination wo
 tools: ["Read","Write","Edit","Grep","Glob","Bash"]
 model: sonnet
 behavior_contract_version: 2
-behavior_contract_hash: 98b76c966a351e928f2115b936524e95421888e6e567789e9eddda66f28813e8
-resolved_profile_hash: a940101e99764bdeb4c8d321408b28ec1a8c7c5bd8a2624e179dd380b5f1c4ec
+behavior_contract_hash: c04139c80202c0494bb831669a66b29764e1185801bfc25ebe6ba7816e550761
+resolved_profile_hash: 4c8174a58e358ca57c129c7d47a93d645f25011d1eb563697f29cdb37de75b10
 ---
 <!-- kaola-workflow-managed-agent: true -->
 
@@ -38,7 +38,7 @@ Per iteration:
      - **Accept**: commit with message `kw-opt iter <k>: <old> -> <new>`; the accepted metric becomes the new baseline.
      - **Reject**: revert with a scoped `git restore --source=HEAD -- <the files you changed>` and keep the prior baseline. **`git reset --hard` is FORBIDDEN** — it is not scoped to your own files and can destroy work outside your iteration.
    - **Pass-rate metric.** The confidence threshold and early-abandonment minimum are mission inputs the orchestrator supplies; the role never invents them. Accept only when the posterior probability that the candidate beats the baseline in `direction` meets a mission-supplied confidence (default 0.9 when supplied) and the posterior median clears `min_delta`. Ties and insufficient evidence are rejects, not accepts. On accept: commit with message `kw-opt iter <k>: <old> -> <new>`; the accepted posterior (trial counts included) becomes the new baseline.
-     - **Early abandonment.** After a mission-supplied minimum number of trials (default 3 when supplied), if the candidate's upper ε-quantile is already below the baseline's posterior median (for `max`; mirror for `min`), reject immediately and do not spend the remaining repeats. Log it as `rejected (abandoned after <n> trials)`.
+     - **Early abandonment.** After a mission-supplied minimum number of trials (default 3 when supplied), if the candidate's upper ε-quantile is already below the baseline's posterior median (for `max`; mirror for `min`), reject immediately and do not spend the remaining repeats: revert with a scoped `git restore --source=HEAD -- <the files you changed>` and keep the prior baseline. **`git reset --hard` is FORBIDDEN**. Log it as `rejected (abandoned after <n> trials)`.
      - **Reject** otherwise: revert with a scoped `git restore --source=HEAD -- <the files you changed>` and keep the prior baseline. **`git reset --hard` is FORBIDDEN** — it is not scoped to your own files and can destroy work outside your iteration.
 6. **Log** the iteration: `iter <k>: <metric> <accepted|rejected> <summary>` — for both accepted AND rejected iterations. On pass-rate runs, include the per-iteration trial counts alongside the metric value so a reader can recompute the decision.
 
@@ -74,7 +74,7 @@ to know what you did.
 <!-- runtime-adapter:start -->
 runtime: claude
 behavior_contract_version: 2
-behavior_contract_hash: 98b76c966a351e928f2115b936524e95421888e6e567789e9eddda66f28813e8
+behavior_contract_hash: c04139c80202c0494bb831669a66b29764e1185801bfc25ebe6ba7816e550761
 adapter_capabilities_hash: a37d8dc46eaf900e371e8985b2007cd0c42713a4be6e05977f66b1fb27efbf65
 
 ## Runtime adapter

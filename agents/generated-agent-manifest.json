@@ -116,8 +116,8 @@
       "role": "metric-optimizer",
       "path": "agents/metric-optimizer.md",
       "behavior_contract_version": 2,
-      "behavior_sha256": "98b76c966a351e928f2115b936524e95421888e6e567789e9eddda66f28813e8",
-      "resolved_profile_sha256": "025d2e428517ac7efa3210f4b605e78bdfe34ac7d5bc12a5b642f61c74c948df"
+      "behavior_sha256": "c04139c80202c0494bb831669a66b29764e1185801bfc25ebe6ba7816e550761",
+      "resolved_profile_sha256": "ce5f8079b5857f7525dd5237ba8b932499642df3b4d8f7161a67f75b90512036"
     },
     {
       "runtime": "claude",
@@ -242,8 +242,8 @@
       "role": "metric-optimizer",
       "path": "plugins/kaola-workflow/agents/metric-optimizer.toml",
       "behavior_contract_version": 2,
-      "behavior_sha256": "98b76c966a351e928f2115b936524e95421888e6e567789e9eddda66f28813e8",
-      "resolved_profile_sha256": "e652797a5324c77b159db7bb93089992adfe4b8a7ee662e3a163ff4df170aa80"
+      "behavior_sha256": "c04139c80202c0494bb831669a66b29764e1185801bfc25ebe6ba7816e550761",
+      "resolved_profile_sha256": "1eeb7f8395a5efe9932fe3f23b7241e6973b2424d65efa2a5d3d39954d49618f"
     },
     {
       "runtime": "codex",
@@ -368,8 +368,8 @@
       "role": "metric-optimizer",
       "path": "plugins/kaola-workflow-gitlab/agents/metric-optimizer.toml",
       "behavior_contract_version": 2,
-      "behavior_sha256": "98b76c966a351e928f2115b936524e95421888e6e567789e9eddda66f28813e8",
-      "resolved_profile_sha256": "e652797a5324c77b159db7bb93089992adfe4b8a7ee662e3a163ff4df170aa80"
+      "behavior_sha256": "c04139c80202c0494bb831669a66b29764e1185801bfc25ebe6ba7816e550761",
+      "resolved_profile_sha256": "1eeb7f8395a5efe9932fe3f23b7241e6973b2424d65efa2a5d3d39954d49618f"
     },
     {
       "runtime": "codex",
@@ -494,8 +494,8 @@
       "role": "metric-optimizer",
       "path": "plugins/kaola-workflow-gitea/agents/metric-optimizer.toml",
       "behavior_contract_version": 2,
-      "behavior_sha256": "98b76c966a351e928f2115b936524e95421888e6e567789e9eddda66f28813e8",
-      "resolved_profile_sha256": "e652797a5324c77b159db7bb93089992adfe4b8a7ee662e3a163ff4df170aa80"
+      "behavior_sha256": "c04139c80202c0494bb831669a66b29764e1185801bfc25ebe6ba7816e550761",
+      "resolved_profile_sha256": "1eeb7f8395a5efe9932fe3f23b7241e6973b2424d65efa2a5d3d39954d49618f"
     },
     {
       "runtime": "codex",
@@ -620,8 +620,8 @@
       "role": "metric-optimizer",
       "path": "logical/opencode/agents/metric-optimizer.md",
       "behavior_contract_version": 2,
-      "behavior_sha256": "98b76c966a351e928f2115b936524e95421888e6e567789e9eddda66f28813e8",
-      "resolved_profile_sha256": "809b4a99d5dab6ab475d8baa68c1e59d447f6fa4aea8beb3a7c0640cf74641a5"
+      "behavior_sha256": "c04139c80202c0494bb831669a66b29764e1185801bfc25ebe6ba7816e550761",
+      "resolved_profile_sha256": "3dc0b27111eac820a54ac1901fd3c9493b75f49c97b6c18c0b50f3f37504e804"
     },
     {
       "runtime": "opencode",
@@ -746,8 +746,8 @@
       "role": "metric-optimizer",
       "path": "logical/kimi/agents/metric-optimizer.md",
       "behavior_contract_version": 2,
-      "behavior_sha256": "98b76c966a351e928f2115b936524e95421888e6e567789e9eddda66f28813e8",
-      "resolved_profile_sha256": "abe879135b3f2e53db5dfd3bed51f0a2b2e23e5d4d38628e13efc474ef658f6c"
+      "behavior_sha256": "c04139c80202c0494bb831669a66b29764e1185801bfc25ebe6ba7816e550761",
+      "resolved_profile_sha256": "3189c6494d0dc75e8626c4b3097c53f37e4be240513df613b3fc948fc41c0f64"
     },
     {
       "runtime": "kimi",
@@ -872,8 +872,8 @@
       "role": "metric-optimizer",
       "path": "logical/grok/agents/metric-optimizer.md",
       "behavior_contract_version": 2,
-      "behavior_sha256": "98b76c966a351e928f2115b936524e95421888e6e567789e9eddda66f28813e8",
-      "resolved_profile_sha256": "d7d15faa97a5ea1c2823c4434a50c0e23a69af1157ba7500569a8ff9ad4f1e00"
+      "behavior_sha256": "c04139c80202c0494bb831669a66b29764e1185801bfc25ebe6ba7816e550761",
+      "resolved_profile_sha256": "c752f7391f4122c2d7a6d62143254395bc44a4373f02febc8e26991ff51e4893"
     },
     {
       "runtime": "grok",
@@ -998,8 +998,8 @@
       "role": "metric-optimizer",
       "path": "logical/cursor/agents/metric-optimizer.md",
       "behavior_contract_version": 2,
-      "behavior_sha256": "98b76c966a351e928f2115b936524e95421888e6e567789e9eddda66f28813e8",
-      "resolved_profile_sha256": "2b98dc3096f9eaba12a5f6d01020b1ab89ba3921bca9f9c2034d9ace7a6dafbc"
+      "behavior_sha256": "c04139c80202c0494bb831669a66b29764e1185801bfc25ebe6ba7816e550761",
+      "resolved_profile_sha256": "0dc99b54575e0db03607abbd6627af4f274ede30475e11f7deb48f6b2df6b42f"
     },
     {
       "runtime": "cursor",
@@ -1124,8 +1124,8 @@
       "role": "metric-optimizer",
       "path": "logical/zcode/agents/metric-optimizer.md",
       "behavior_contract_version": 2,
-      "behavior_sha256": "98b76c966a351e928f2115b936524e95421888e6e567789e9eddda66f28813e8",
-      "resolved_profile_sha256": "44f40946d07c65118ff677764051e2d33700421a1f38dfe11e9be273bd334e9e"
+      "behavior_sha256": "c04139c80202c0494bb831669a66b29764e1185801bfc25ebe6ba7816e550761",
+      "resolved_profile_sha256": "0ff2541b79f95dec41380421df75aecdc8d8d92fc234701c4e3dbd61172580bd"
     },
     {
       "runtime": "zcode",
