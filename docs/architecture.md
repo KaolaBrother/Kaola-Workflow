@@ -448,8 +448,13 @@ hashes; a modified or unknown byte remains a collision, and only exact retired a
 are removed. On the measured standalone CLI only, Workflow `startup` and `resume` spawn the installed helper
 `--ensure-target` when `--runtime cursor --product cli --host local` from all four claim trees
 (canonical GitHub `scripts/kaola-workflow-claim.js`, COMMON_SCRIPTS Codex copy, GitLab hand-port,
-Gitea hand-port). Generated GitLab/Gitea Next stamps `--product cli --host local`; those claim.js
-no longer `unknown_flag`. Omitted, unknown, app, cloud,
+Gitea hand-port). Generated Next (GitHub/GitLab/Gitea) forges `--product cli --host local` only
+inside `scripts/sync-cursor-edition.js` `cursorCliHostGateOpen`:
+`if [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ] || [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; then`.
+Unset App/Cloud-like env takes unstamped `--runtime cursor` and does not run `--product cli --host
+local`. Standalone CLI/local must set `CURSOR_PRODUCT=cli` and `CURSOR_HOST=local` (or the
+`KAOLA_CURSOR_*` twins); this page does not claim that Cursor CLI currently exports those
+`CURSOR_*` names. Those claim.js no longer `unknown_flag`. Omitted, unknown, app, cloud,
 or incomplete pairs skip ensure but still claim/resume. Helper spawn is
 `--forge=<args.forge||'github'>`; `--forge` is not a claim.js flag. Claim.js target is
 `--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()`

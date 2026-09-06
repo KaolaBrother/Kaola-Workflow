@@ -61,8 +61,14 @@ catalogs. Unknown stays `unknown`; a documented path is not a live named-role PA
 Cursor family `named_roles: true` is now live-proven on three independently measured surfaces. On
 the measured standalone CLI only, Workflow `startup`/`resume` (`--runtime cursor --product cli
 --host local`) run the installed safe materializer `--ensure-target` from all four claim trees
-(canonical GitHub, COMMON_SCRIPTS Codex copy, GitLab hand-port, Gitea hand-port). Generated
-GitLab/Gitea Next stamps `--product cli --host local`; those claim.js no longer `unknown_flag`.
+(canonical GitHub, COMMON_SCRIPTS Codex copy, GitLab hand-port, Gitea hand-port). Generated Next
+(GitHub/GitLab/Gitea) forges `--product cli --host local` only inside
+`scripts/sync-cursor-edition.js` `cursorCliHostGateOpen`:
+`if [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ] || [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; then`.
+Unset App/Cloud-like env takes unstamped `--runtime cursor` and does not run `--product cli --host
+local`. Standalone CLI/local must set `CURSOR_PRODUCT=cli` and `CURSOR_HOST=local` (or the
+`KAOLA_CURSOR_*` twins); this page does not claim that Cursor CLI currently exports those
+`CURSOR_*` names. Those claim.js no longer `unknown_flag`.
 Omitted, unknown, app, cloud, or incomplete pairs skip ensure but still claim/resume. Helper spawn
 is `--forge=<args.forge||'github'>`; `--forge` is not a claim.js flag. Claim.js target is
 `--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()`

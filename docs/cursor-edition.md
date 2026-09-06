@@ -232,8 +232,16 @@ Workflow `startup` and `resume` run Repo role prep through the installed helper
 `--ensure-target <target>` with `--forge=<args.forge||'github'> --json`. That identity-flag
 and `ensureCursorCliLocalPrep` path exists on all four claim trees (canonical GitHub
 `scripts/kaola-workflow-claim.js`, COMMON_SCRIPTS Codex copy, GitLab hand-port, Gitea hand-port).
-Generated Next keeps one `.cursor/commands/workflow-next.md` with two operator argv classes
-(unstamped App/Cloud `startup`/`resume` plus CLI `--product cli --host local --cursor-workspace "$CURSOR_WORKSPACE"`); those claim.js no longer `unknown_flag`. `--forge` is not a claim.js flag. Omitted, unknown, app, cloud,
+Generated Next keeps one `.cursor/commands/workflow-next.md`. CLI-stamped
+`--product cli --host local --cursor-workspace "$CURSOR_WORKSPACE"` `startup`/`resume` is wrapped in
+an executable shell gate:
+`if [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ] || [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; then`.
+When those variables are unset (App/Cloud-like env), generated Next takes the unstamped
+`--runtime cursor` path and does not run `--product cli --host local`. Standalone CLI/local must
+set `CURSOR_PRODUCT=cli` and `CURSOR_HOST=local` (or `KAOLA_CURSOR_PRODUCT` / `KAOLA_CURSOR_HOST`);
+this edition guide does not claim that Cursor CLI currently exports those `CURSOR_*` names. The
+first Resume fence still inlines the `CLAIM_JS` resolver outside the `if`. Those claim.js no longer
+`unknown_flag`. `--forge` is not a claim.js flag. Omitted, unknown, app, cloud,
 or incomplete identity pairs skip ensure but still claim/resume. Claim.js `<target>` is
 `--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()`
 (`git rev-parse --show-toplevel`) on first claim — not nested cwd and not the write-worktree.
@@ -262,7 +270,9 @@ resolver-listed live-schema model slug is the effort lever.
 Compact recovery is Rule behavior. CLI catalog bytes are prepared at Workflow startup/resume
 only on explicit `--runtime cursor --product cli --host local` from all four claim trees
 (`--cursor-workspace` when set, else recorded `main_root` on resume; first-claim fallback in
-claim.js is still invoking `getRoot()`). Generated Next appendix names `--cursor-workspace` and
+claim.js is still invoking `getRoot()`). Generated Next forges those CLI identity flags only inside
+the executable `CURSOR_PRODUCT`/`CURSOR_HOST` or `KAOLA_CURSOR_*` shell gate above; unset App/Cloud-like
+env keeps unstamped `--runtime cursor`. Generated Next appendix names `--cursor-workspace` and
 recorded `main_root` and does not name `git rev-parse --show-toplevel` as the known CLI workspace.
 Independently entered Finalize still prepares immediately before named dispatch with explicit `$PWD`. The Rule supplies model-visible
 operation and dispatch instructions;
@@ -357,7 +367,9 @@ probes passed for all three forges.
   ambient-target default. Standalone CLI/local Workflow `startup`/`resume` spawn that mode from
   all four claim trees only on explicit `--runtime cursor --product cli --host local`, against
   `--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()`
-  on first claim in claim.js. Generated Next appendix names `--cursor-workspace` and recorded
+  on first claim in claim.js. Generated Next emits those identity flags only when the executable
+  `CURSOR_PRODUCT`/`CURSOR_HOST` or `KAOLA_CURSOR_*` shell gate matches; it does not stamp them for
+  unset App/Cloud-like env. Generated Next appendix names `--cursor-workspace` and recorded
   `main_root` and does not name `git rev-parse --show-toplevel` as the known CLI workspace.
   Helper spawn is `--forge=<args.forge||'github'>`; `--forge` is not a claim.js flag.
   Independently entered Finalize still uses `--ensure-target "$PWD"` immediately

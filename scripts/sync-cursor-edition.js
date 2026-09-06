@@ -227,15 +227,31 @@ function cursorCliOperatorIdentityArgv() {
   return '--runtime cursor --product cli --host local --cursor-workspace "$CURSOR_WORKSPACE"';
 }
 
+function cursorCliHostGateOpen() {
+  return 'if [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ]'
+    + ' || [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; then';
+}
+
+function cursorCliGatedOperatorLines(cliCommand, elseCommand) {
+  const lines = [cursorCliHostGateOpen(), '  ' + cliCommand];
+  if (elseCommand) {
+    lines.push('else');
+    lines.push('  ' + elseCommand);
+  }
+  lines.push('fi');
+  return lines;
+}
+
 function cursorCliResumeRecoveryFence(forge) {
   const claimJs = forgeLayout.scriptName('kaola-workflow-claim.js', forge);
   return [
     '```bash',
     cursorKaolaScript(forge),
     'CLAIM_JS="$(kaola_script ' + claimJs + ')"',
+  ].concat(cursorCliGatedOperatorLines(
     'node "$CLAIM_JS" resume ' + cursorCliOperatorIdentityArgv(),
-    '```',
-  ].join('\n');
+    'node "$CLAIM_JS" resume --runtime cursor'
+  )).concat(['```']).join('\n');
 }
 
 function cursorCliMaterializationProse(forge) {
@@ -286,7 +302,8 @@ function transformCommandBody(body, forge, label) {
       + ' --target-issues "$KAOLA_TARGET_ISSUES"';
     text = text.replace(
       unstampedStartup,
-      unstampedStartup + '\n```\n\n```bash\n' + cliStartup
+      unstampedStartup + '\n```\n\n```bash\n'
+        + cursorCliGatedOperatorLines(cliStartup).join('\n')
     );
     text = text.replace(
       /^## Resume\n\nOn resume, read `mission-list\.md`/m,

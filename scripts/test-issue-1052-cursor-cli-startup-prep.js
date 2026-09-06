@@ -291,6 +291,32 @@ function hasCliLocalIdentity(line) {
   return /--product(?:\s+|=)cli\b/.test(line) && /--host(?:\s+|=)local\b/.test(line);
 }
 
+function fenceHasExecutableHostGate(fence) {
+  return String(fence || '').split(/\r?\n/).some(raw => {
+    const line = String(raw || '').trim();
+    if (!line || line.startsWith('#') || line.startsWith('<!--')) return false;
+    return /^(if|elif|case)\b/.test(line) && /(product|host)/i.test(line);
+  });
+}
+
+function logInvokesCliLocalIdentity(log, claimBase) {
+  return String(log || '').split(/\n/).some(line =>
+    line.indexOf(claimBase) >= 0
+    && /\b(startup|resume)\b/.test(line)
+    && /(?:^|\s)--product(?:\s+|=)cli(?:\s|$)/.test(line)
+    && /(?:^|\s)--host(?:\s+|=)local(?:\s|$)/.test(line));
+}
+
+function logInvokesCliLocalWithWorkspace(log, claimBase) {
+  return logInvokesCliLocalIdentity(log, claimBase)
+    && String(log || '').split(/\n/).some(line =>
+      line.indexOf(claimBase) >= 0
+      && /\b(startup|resume)\b/.test(line)
+      && /(?:^|\s)--product(?:\s+|=)cli(?:\s|$)/.test(line)
+      && /(?:^|\s)--host(?:\s+|=)local(?:\s|$)/.test(line)
+      && /(?:^|\s)--cursor-workspace(?:\s+|=)/.test(line));
+}
+
 function tokenizeBashLine(line) {
   const tokens = [];
   let cur = '';
@@ -983,6 +1009,11 @@ try {
         st + '-c2-startup-flag: generated CLI startup argv must pass --cursor-workspace (prose is not a gate)');
       assert(cliResume.every(line => /--cursor-workspace(?:\s+|=)/.test(line)),
         st + '-c2-resume-flag: generated CLI resume argv must pass --cursor-workspace (prose is not a gate)');
+      const cliOperatorFences = bashFences(surface.text).filter(fence =>
+        executableClaimLines(fence, 'startup').concat(executableClaimLines(fence, 'resume'))
+          .some(hasCliLocalIdentity));
+      assert(cliOperatorFences.length > 0 && cliOperatorFences.every(fenceHasExecutableHostGate),
+        st + '-c1-host-gate: CLI-stamped startup/resume fences must have an executable shell if/case on product/host; two argv classes and host-negative prose are not a gate');
     }
 
     const nextText = gen.text;
@@ -1144,6 +1175,126 @@ try {
     assert(invokedEmpty,
       tag + '-c3-cold-empty: Resume fragment with CLAIM_JS="" must still resolve and invoke named claim.js resume (log='
       + JSON.stringify(logEmpty.slice(0, 300)) + ')');
+
+    function hostGateEnv(kind, extra) {
+      const env = Object.assign({}, sandbox.env, {
+        PATH: wrapDir + path.delimiter + sandbox.env.PATH,
+        KAOLA_NODE_ARGV_LOG: argvLog,
+        CURSOR_HOME: sandbox.cursorHome,
+        HOME: sandbox.home,
+      }, extra || {});
+      delete env.CLAIM_JS;
+      if (kind === 'cli') {
+        env.CURSOR_PRODUCT = 'cli';
+        env.CURSOR_HOST = 'local';
+        env.KAOLA_CURSOR_PRODUCT = 'cli';
+        env.KAOLA_CURSOR_HOST = 'local';
+      } else {
+        delete env.CURSOR_PRODUCT;
+        delete env.CURSOR_HOST;
+        delete env.KAOLA_CURSOR_PRODUCT;
+        delete env.KAOLA_CURSOR_HOST;
+      }
+      return env;
+    }
+
+    function runHostGateFence(fence, cwd, kind, extra) {
+      try { fs.unlinkSync(argvLog); } catch (_) { /* first run */ }
+      // spawn-class: cli-contract
+      return spawnSync('bash', ['--noprofile', '--norc', '-c', fence], {
+        cwd, env: hostGateEnv(kind, extra), encoding: 'utf8', timeout: 120000,
+      });
+    }
+
+    function readArgvLog() {
+      return fs.existsSync(argvLog) ? fs.readFileSync(argvLog, 'utf8') : '';
+    }
+
+    {
+      const appWs = makeRepo(sandbox, port.forge + '-c1-app-first-resume');
+      const appSeed = runNamedClaim(sandbox, appWs, port.claim, [
+        'startup', '--target-issue', '12561', '--runtime', 'claude', '--json',
+      ]);
+      assert(acquired(appSeed.json),
+        tag + '-c1-host-gate-first-resume-seed: claude startup must acquire (got '
+        + JSON.stringify(appSeed.json) + ')');
+      writeMissionList(appWs, 12561);
+      const appFirst = runHostGateFence(resumeFence, appWs, 'app');
+      const appFirstLog = readArgvLog();
+      const appFirstJson = lastJson(appFirst.stdout) || lastJson(appFirst.stderr);
+      const appFirstPrep = cursorPrep(appFirstJson);
+      assert(!logInvokesCliLocalIdentity(appFirstLog, port.claimBase)
+        && !(appFirstPrep && appFirstPrep.status === 'materialized')
+        && !hasProjectAgents(appWs),
+        tag + '-c1-host-gate-first-resume: compact-recovery first ## Resume fence in an App/Cloud-like env (CLAIM_JS unset, no CLI product/host, sibling agent still on PATH) must not invoke named '
+        + port.claimBase + ' with --product cli --host local and must not set cursor_prep.status=materialized (status='
+        + appFirst.status + ' log=' + JSON.stringify(appFirstLog.slice(0, 400))
+        + ' json=' + JSON.stringify(appFirstJson) + ')');
+    }
+
+    {
+      const cliWs = makeRepo(sandbox, port.forge + '-c1-cli-gated-resume');
+      const cliSeed = runNamedClaim(sandbox, cliWs, port.claim, [
+        'startup', '--target-issue', '12562', '--runtime', 'claude', '--json',
+      ]);
+      assert(acquired(cliSeed.json),
+        tag + '-c1-host-gate-cli-seed: claude startup must acquire (got '
+        + JSON.stringify(cliSeed.json) + ')');
+      writeMissionList(cliWs, 12562);
+      const cliExtra = { CURSOR_WORKSPACE: cliWs, PWD: cliWs };
+      const resumeFences = bashFences(resumeSection(nextText));
+      let cliLog = '';
+      let cliRun = runHostGateFence(resumeFence, cliWs, 'cli', cliExtra);
+      cliLog = readArgvLog();
+      let cliHit = logInvokesCliLocalWithWorkspace(cliLog, port.claimBase);
+      if (!cliHit) {
+        for (let i = 1; i < resumeFences.length; i++) {
+          cliRun = runHostGateFence(resumeFences[i], cliWs, 'cli', cliExtra);
+          cliLog = readArgvLog();
+          if (logInvokesCliLocalWithWorkspace(cliLog, port.claimBase)) {
+            cliHit = true;
+            break;
+          }
+        }
+      }
+      const cliJson = lastJson(cliRun.stdout) || lastJson(cliRun.stderr);
+      const cliPrep = cursorPrep(cliJson);
+      assert(cliHit,
+        tag + '-c1-host-gate-cli-path: first Resume fence or the gated CLI path with explicit CURSOR_PRODUCT=cli CURSOR_HOST=local must still invoke named claim.js with --product cli --host local and --cursor-workspace (CLI must not become skippable-by-omission) (log='
+        + JSON.stringify(cliLog.slice(0, 400)) + ')');
+      if (port.forge === 'github') {
+        assert(hasProjectAgents(cliWs) && cliPrep && cliPrep.status === 'materialized',
+          tag + '-c1-host-gate-cli-prep: GitHub generated CLI path must actually run resume/prep (cursor_prep.status=materialized) (json='
+          + JSON.stringify(cliJson) + ' raw=' + String(cliRun.stderr || cliRun.stdout || '').slice(0, 300) + ')');
+      }
+    }
+
+    {
+      const everyWs = makeRepo(sandbox, port.forge + '-c1-app-every-fence');
+      const everySeed = runNamedClaim(sandbox, everyWs, port.claim, [
+        'startup', '--target-issue', '12563', '--runtime', 'claude', '--json',
+      ]);
+      assert(acquired(everySeed.json),
+        tag + '-c1-host-gate-every-seed: claude startup must acquire (got '
+        + JSON.stringify(everySeed.json) + ')');
+      writeMissionList(everyWs, 12563);
+      const operatorFences = bashFences(nextText).filter(fence =>
+        executableClaimLines(fence, 'startup').length > 0
+        || executableClaimLines(fence, 'resume').length > 0);
+      const everyRun = runHostGateFence(operatorFences.join('\n'), everyWs, 'app', {
+        KAOLA_TARGET_ISSUES: '12563',
+        PWD: everyWs,
+      });
+      const everyLog = readArgvLog();
+      const everyJson = lastJson(everyRun.stdout) || lastJson(everyRun.stderr);
+      const everyPrep = cursorPrep(everyJson);
+      assert(!logInvokesCliLocalIdentity(everyLog, port.claimBase)
+        && !(everyPrep && everyPrep.status === 'materialized')
+        && !hasProjectAgents(everyWs),
+        tag + '-c1-host-gate-every-fence: App executing every startup/resume bash fence must not run the cli/local identity; prose-only skip does not count (status='
+        + everyRun.status + ' log=' + JSON.stringify(everyLog.slice(0, 500))
+        + ' json=' + JSON.stringify(everyJson) + ')');
+    }
   }
 } finally {
   try { fs.rmSync(sandbox.tmp, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }

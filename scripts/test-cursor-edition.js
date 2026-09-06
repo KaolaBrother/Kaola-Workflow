@@ -352,6 +352,26 @@ function cursorCliLineHasCursorWorkspace(line) {
   return /--cursor-workspace(?:\s+|=)/.test(line);
 }
 
+function cursorCliFenceHasExecutableHostGate(fence) {
+  return String(fence || '').split(/\r?\n/).some(raw => {
+    const line = String(raw || '').trim();
+    if (!line || line.startsWith('#') || line.startsWith('<!--')) return false;
+    return /^(if|elif|case)\b/.test(line) && /(product|host)/i.test(line);
+  });
+}
+
+function cursorCliOperatorHostGate(block, errors) {
+  const unguarded = cursorCliBashFences(block).filter(fence => {
+    const stamped = cursorCliExecutableClaimLines(fence, 'startup')
+      .concat(cursorCliExecutableClaimLines(fence, 'resume'))
+      .some(cursorCliLineHasExplicitCliLocalIdentity);
+    return stamped && !cursorCliFenceHasExecutableHostGate(fence);
+  });
+  if (unguarded.length) {
+    errors.push('generated Next CLI startup/resume fence has no executable host/product if/case gate; host-negative prose is not a gate and App/Cloud compact-recovery still forges --product cli --host local');
+  }
+}
+
 function cursorCliMaterializationVerdict(text, forge, surface) {
   const errors = [];
   const source = String(text || '');
@@ -406,6 +426,7 @@ function cursorCliMaterializationVerdict(text, forge, surface) {
     if (cliResume.some(line => !cursorCliLineHasCursorWorkspace(line))) {
       errors.push('generated Next CLI resume omits --cursor-workspace on the operator argv');
     }
+    cursorCliOperatorHostGate(block, errors);
     const appWindow = block.match(/Cursor App[\s\S]{0,900}App-started Cloud[\s\S]{0,900}/);
     if (appWindow && /--product(?:\s+|=)cli\b/.test(appWindow[0]) && /--host(?:\s+|=)local\b/.test(appWindow[0])) {
       errors.push('App local/Cloud guidance inherits standalone CLI --product cli --host local as a default');
@@ -1125,6 +1146,13 @@ function commandRel(name, forge) {
           && droppedLocatorVerdict.errors.some(error => /main_root/.test(error)),
         'G2-cli-materialization-mutation[' + name + ']: omitting --cursor-workspace and recorded main_root is rejected — '
           + droppedLocatorVerdict.errors.join(' | '));
+
+        const extraUnguarded = content + '\n```bash\nnode "$CLAIM_JS" resume --runtime cursor --product cli --host local --cursor-workspace "$CURSOR_WORKSPACE"\n```\n';
+        const extraUnguardedVerdict = cursorCliMaterializationVerdict(extraUnguarded, DEFAULT_FORGE, surface);
+        assert(!extraUnguardedVerdict.ok
+          && extraUnguardedVerdict.errors.some(error => /no executable host\/product if\/case gate/.test(error)),
+        'G2-cli-materialization-mutation[' + name + ']: appending an unguarded CLI fence is rejected — '
+          + extraUnguardedVerdict.errors.join(' | '));
       }
     }
   }

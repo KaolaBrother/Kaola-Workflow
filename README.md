@@ -148,11 +148,20 @@ background/parallel/resume limits, hook behavior, instruction precedence, and kn
 - [Cursor](docs/cursor-edition.md)
 - [ZCode](docs/zcode-edition.md)
 
-Cursor `workflow-next` `startup` and `resume` share one `.cursor/commands` file with two operator
-argv classes. Standalone CLI/local (`--product cli --host local`) runs installed `--ensure-target`
-Repo role prep so project roles materialize, and those CLI lines pass
-`--cursor-workspace "$CURSOR_WORKSPACE"`. App/Cloud do not inherit that CLI ensure. File-ready
-bytes are not live Task catalog proof. Full contract: [Cursor edition](docs/cursor-edition.md).
+Cursor `workflow-next` `startup` and `resume` share one `.cursor/commands` file. CLI-stamped
+`--product cli --host local --cursor-workspace "$CURSOR_WORKSPACE"` startup/resume sits inside an
+executable shell gate:
+
+`if [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ] || [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; then`
+
+When those variables are unset (App/Cloud-like env), the command takes the unstamped
+`--runtime cursor` path and does not run `--product cli --host local`. App/Cloud do not inherit
+that CLI ensure. Standalone CLI/local must set `CURSOR_PRODUCT=cli` and `CURSOR_HOST=local` (or
+the `KAOLA_CURSOR_PRODUCT` / `KAOLA_CURSOR_HOST` twins) so the CLI `--ensure-target` path is not
+skippable-by-omission. This tree does not record that Cursor CLI exports `CURSOR_PRODUCT` or
+`CURSOR_HOST`. The first Resume fence still inlines the `CLAIM_JS` resolver outside the `if`.
+File-ready bytes are not live Task catalog proof. Full contract:
+[Cursor edition](docs/cursor-edition.md).
 
 ## Documentation and development
 
