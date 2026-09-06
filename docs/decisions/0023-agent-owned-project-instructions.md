@@ -67,6 +67,11 @@ This decision supersedes ADR 0020's project managed-region and consumer-migratio
 direct-discovery, thin-bridge, role-behavior, adapter, and provenance decisions remain active. ADR
 0022's machine-global contract, transaction, and compact-recovery design remain active.
 
+Issue #1051 later changed the universal project-instruction rule. Decision 1 remains the typical
+Agent-maintained content for this producer repository (verified facts and stricter local
+constraints). The global contract now permits a scoped project exception: the exception must state
+its scope and must not weaken higher-priority instructions or host safety boundaries.
+
 ## Rejected alternatives
 
 - Make the fixed template shorter: it still gives a script ownership of semantic project facts.

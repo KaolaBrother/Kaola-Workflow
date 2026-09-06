@@ -72,3 +72,8 @@ ADR 0023 superseded the original project-contract writer and exact-template migr
 decisions 4–5; their wording above reflects the active boundary. The Agent maintains repository
 instructions from verified facts with owner authorization before rewriting existing content. The
 machine-global transaction and compact-recovery design remain active.
+
+Issue #1051 later changed the global project-instruction rule: project instructions supplement
+verified local facts and constraints; a project exception must state its scope and must not weaken
+higher-priority instructions or host safety boundaries. That update does not reopen this ADR's
+carrier, transaction, or compact-recovery decisions.

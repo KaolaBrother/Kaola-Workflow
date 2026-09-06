@@ -716,9 +716,14 @@ assert(!/KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(initSource),
   };
   const globalAttemptBoundary = text => {
     const n = norm(text);
-    return /A mission is a recoverable outcome, not a specification, selector/i.test(n)
-      && /A failed command, intermediate finding, repair attempt, or review round does not create another mission/i.test(n)
-      && /Append a mission only for a new recoverable outcome with new custody or a newly discovered independent causal class/i.test(n);
+    return /A mission is a recoverable outcome/i.test(n)
+      && /A failed command, intermediate finding, repair attempt, or review round does not create another mission/i.test(n);
+  };
+  const nextMissionEnumeration = text => {
+    const n = norm(text);
+    return /not a specification, selector/i.test(n)
+      && /Append a mission only for a new recoverable outcome/i.test(n)
+      && /independent causal class/i.test(n);
   };
   assert(globalLifecycleBoundary(globalContract)
       && issue1042OperationSources.every(text => !/Finalization[^.]*are Mission List items/i.test(norm(text))),
@@ -727,12 +732,14 @@ assert(!/KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(initSource),
     'A3[issue-1042]: next/finalize reject the old absolute repair/re-review append rule');
   assert(globalAttemptBoundary(globalContract)
       && issue1042OperationSources.every(text => !/repair or re-review work must append/i.test(norm(text))),
-    'A3[issue-1042]: global authority keeps attempts inside the causal class and operations do not restore attempt missions');
+    'A3[issue-1042]: global authority keeps attempts inside the recoverable outcome and operations do not restore attempt missions');
+  assert(nextMissionEnumeration(nextSource),
+    'A3[issue-1042]: Next teaches the mission-is-not enumeration and causal-class append judgment');
   assert(compactRecoverySources.every(text => text.split(globalContract.trim()).length - 1 === 1),
     'A3[issue-1042]: every compact prompt reloads the exact global contract once');
   assert(compactRecoverySources.every(text => globalAttemptBoundary(text)
     && globalLifecycleBoundary(text)),
-    'A3[issue-1042]: compact recovery retains mission granularity and lifecycle boundary through the global source');
+    'A3[issue-1042]: compact recovery retains attempt/lifecycle boundary through the global source');
   const compactSurfaceNorms = compactRecoverySources.map(norm);
   assert(compactSurfaceNorms.every(text => /a completed item and (?:its )?result are immutable/i.test(text)
     && /one dispatch has one result/i.test(text)),
@@ -745,9 +752,9 @@ assert(!/KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(initSource),
   assert(!keepsAttemptsInsideOutcome(fixture.replace('does not by itself', 'must')),
     'A3[issue-1042] mutation RED: one mission per repair/re-review attempt is rejected');
   const compactRecoveryMutationSubject = compactRecoverySources[0] || '';
-  assert(!globalAttemptBoundary(compactRecoveryMutationSubject.replace(
-    'not a specification, selector', 'a specification and selector')),
-  'A3[issue-1042] compact-prompt mutation RED: selector-level mission teaching is rejected');
+  assert(!nextMissionEnumeration(nextSource.replace(
+    /not a specification(?:, selector)?/i, 'a specification and selector')),
+  'A3[issue-1042] next mutation RED: selector-level mission teaching is rejected');
   assert(!/Finalization, issue closure, archive, and sink are not Mission List items/i.test(
     compactRecoveryMutationSubject.replace('are not Mission List items', 'are Mission List items')),
   'A3[issue-1042] compact-prompt mutation RED: finalization inside Mission List is rejected');

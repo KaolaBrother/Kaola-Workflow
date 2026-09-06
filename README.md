@@ -34,8 +34,9 @@ decomposition, runtime routing, product judgment, review, and the final done ver
 - Local, candidate-bound validation receipts and an exact-commit release transaction.
 - Runtime-native compact recovery for the measured compact-risk hosts, without pre/post tool prompt
   injection or inference-time prompt-composition scripts.
-- A machine-global workflow contract plus Agent-maintained repository instructions containing only
-  verified project facts and stricter local constraints.
+- A machine-global workflow contract plus Agent-maintained repository instructions that supplement
+  verified local facts and constraints. A project exception must state its scope and must not
+  weaken higher-priority instructions or host safety boundaries.
 
 See the [documentation index](docs/README.md) for architecture, APIs, runtime evidence, edition
 guides, conventions, and design decisions.
@@ -91,8 +92,9 @@ Kaola-Workflow has three user-facing entries. Invoke them through the active run
 command or skill carrier.
 
 1. Run `workflow-init` once in a repository. The Agent consumes the runtime-loaded global contract,
-   reads the repository, and maintains concise project instructions grounded in actual commands,
-   tests, documentation, and stricter local constraints. Rewriting existing owner-authored
+   reads the repository, and maintains concise project instructions that supplement verified local
+   facts and constraints. A project exception must state its scope and must not weaken
+   higher-priority instructions or host safety boundaries. Rewriting existing owner-authored
    instructions requires owner authorization; installation checks remain a separate release-tree
    operation.
 2. Run `workflow-next` to select or resume work, claim it, write the Mission List, and execute the

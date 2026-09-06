@@ -1,5 +1,31 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Global workflow contract is shorter and two universal wordings changed (#1051).**
+  `templates/global/kaola-workflow-global.md` remains the sole vendor-neutral source and is still
+  embedded once in compact recovery via `<!-- SLOT:global-workflow-contract -->`. Daily governance
+  stays in that global source even when Next or Finalize is not invoked: forge open issues; later
+  comments with explicit corrections; `.roadmap/_rules.md` with no local backlog mirror; the
+  `kaola-workflow/config.json` / `priority_top_tier_labels` interface (this repository still has no
+  config file); and full paths `kaola-workflow/{project}/workflow-state.md` and `mission-list.md`.
+  Organizing issues does not auto-claim or auto-create a Mission List; daily governance does not
+  auto-create a run; an active run is respected. Four Mission List fields, three write moments,
+  immutable completed results, recoverable outcomes, and `FAIL`/`BLOCKED` remain; the longer
+  mission-boundary and custody/failure-frontier procedure lives in Next. Finalization, closure,
+  archive, and sink are not Mission List items. Measurement of the global source (not a gate): 50
+  lines / 405 English words / 2,825 bytes, previously 57 / 470 / 3,293.
+- **Project instructions supplement local facts; scoped exceptions may not weaken host safety
+  (#1051).** The previous universal rule that project instructions add only verified facts and
+  stricter constraints is replaced: they supplement verified local facts and constraints; a project
+  exception must state its scope and must not weaken higher-priority instructions or host safety
+  boundaries. Continue inside already-granted authorization; unauthorized irreversible or value-laden
+  calls still go to the user. Serve the user's goal and proven problems; a user-requested feature is
+  not refused for lack of a prior observed failure. ADR 0022 and ADR 0023 keep their historical
+  decisions; each notes this global-rule update.
+
 ## [10.4.0] - 2026-09-05
 
 ### Changed
