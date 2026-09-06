@@ -229,7 +229,10 @@ confirmed environment-setup Agent before the Build is saved.
 For the measured standalone CLI/local host only, Workflow `startup` and `resume` run Repo role prep
 through the installed helper
 `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts/kaola-workflow-cursor-surface.js`
-`--ensure-target <target>` with `--forge=<args.forge||'github'> --json`. That
+`--ensure-target <target>` with that edition's install-authority `--forge=` (`github` on
+`scripts/kaola-workflow-claim.js` and the Codex COMMON_SCRIPTS copy, `gitlab` on
+`kaola-gitlab-workflow-claim.js`, `gitea` on `kaola-gitea-workflow-claim.js`) and `--json`. `--forge`
+is not a claim.js operator flag. The
 `applyDemonstratedCursorCliHost` / `ensureCursorCliLocalPrep` path exists on all four claim trees
 (canonical GitHub `scripts/kaola-workflow-claim.js`, COMMON_SCRIPTS Codex copy, GitLab hand-port,
 Gitea hand-port). Generated Next keeps one `.cursor/commands/workflow-next.md`. Generated
@@ -374,7 +377,8 @@ probes passed for all three forges.
   on an unrelated tool, or `--worker-dir` present with or without `--workspace`, skips ensure. The
   documented generated CLI-positive fence is unstamped `--runtime cursor`; operators do not
   pre-export `CURSOR_PRODUCT`/`CURSOR_HOST`/`KAOLA_CURSOR_*`/`CURSOR_WORKSPACE`. Helper spawn is
-  `--forge=<args.forge||'github'>`; `--forge` is not a claim.js flag. Independently entered Finalize
+  that edition's install-authority `--forge=` (`github` / `gitlab` / `gitea` on the matching
+  claim tree); `--forge` is not a claim.js operator flag. Independently entered Finalize
   still uses `--ensure-target "$PWD"` immediately before named dispatch.
 
 `--uninstall` removes only receipt-proven files whose current hash still matches and strips only

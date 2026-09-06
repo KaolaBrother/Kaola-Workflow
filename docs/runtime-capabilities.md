@@ -77,7 +77,8 @@ CLI-positive fence is unstamped `node "$CLAIM_JS" startup --runtime cursor --tar
 `kaola_script` / `CLAIM_JS=` outside any `if`. There is no `cursorCliHostGateOpen`. Real Cursor CLI
 `2026.09.02-c22c1a3` does not export `CURSOR_PRODUCT`, `CURSOR_HOST`, `KAOLA_CURSOR_*`, or
 `CURSOR_WORKSPACE`; operators do not pre-export those names. Those claim.js no longer
-`unknown_flag`. Helper spawn is `--forge=<args.forge||'github'>`; `--forge` is not a claim.js flag.
+`unknown_flag`. Helper spawn is that edition's install-authority `--forge=` (`github` /
+`gitlab` / `gitea` on the matching claim tree); `--forge` is not a claim.js operator flag.
 Claim.js target is `--cursor-workspace` when set, else recorded `main_root` on resume, else
 invoking `getRoot()` (`git rev-parse --show-toplevel`) on first claim — not nested cwd and not the
 write-worktree unless they are that demonstrated opened dir. Independently entered Finalize still

@@ -9,6 +9,11 @@
 // Comment 5561551896: generic unrelated-tool `--workspace` is not CLI; both `--workspace` and
 // `--worker-dir` must not take the workspace branch first as CLI; Darwin `ps args=` spaced
 // opened dirs must prep the full path (unquoted ps + tokenize must not truncate).
+// Comment 5561808292: each edition's isolated `install-cursor.sh --global --forge=<edition>`
+// is the authority for its generated Next first fence + named claim.js. GitHub-authority
+// installs must not stand in for GitLab/Gitea. Matching-authority CLI-positive must prep,
+// not `cursor_prep_failed` / `stale_forge`. Mismatched forge must still fail-closed.
+// Do not invent operator/Runner `--forge` on claim.js as the proof.
 
 const spawnCensus = require('./test-spawn-census');
 spawnCensus.install('test-issue-1052-cursor-cli-startup-prep');
@@ -113,8 +118,9 @@ function issueDir(workspace, n) {
   return path.join(workspace, 'kaola-workflow', 'issue-' + n);
 }
 
-function makeSandbox() {
-  const tmp = fs.mkdtempSync(path.join(tmpParent(), 'kw-1052-'));
+function makeSandbox(forge) {
+  const selectedForge = String(forge || 'github').trim() || 'github';
+  const tmp = fs.mkdtempSync(path.join(tmpParent(), 'kw-1052-' + selectedForge + '-'));
   const home = path.join(tmp, 'home');
   const cursorHome = path.join(tmp, 'cursor-home');
   const bin = path.join(tmp, 'bin');
@@ -175,11 +181,14 @@ function makeSandbox() {
     KAOLA_CLASSIFIER_MOCK_SCRIPT: classifier,
   });
   // spawn-class: environment
-  const install = spawnSync('bash', [INSTALLER, '--global', '--yes'], {
+  const install = spawnSync('bash', [INSTALLER, '--global', '--yes', '--forge=' + selectedForge], {
     cwd: REPO, env, encoding: 'utf8', timeout: 120000,
   });
   const helper = path.join(cursorHome, 'kaola-workflow', 'scripts', 'kaola-workflow-cursor-surface.js');
-  return { tmp, home, cursorHome, bin, env, helper, install, classifier, ghOpen, glabOpen, teaOpen };
+  return {
+    tmp, home, cursorHome, bin, env, helper, install, classifier, ghOpen, glabOpen, teaOpen,
+    forge: selectedForge,
+  };
 }
 
 function makeRepo(sandbox, label) {
@@ -415,6 +424,11 @@ function cursorPrep(json) {
   return (json && json.cursor_prep) || null;
 }
 
+function prepFailedStaleForge(json, raw) {
+  const blob = String(raw || '');
+  return !!(json && json.reason === 'cursor_prep_failed') || /stale_forge/.test(blob);
+}
+
 function firstExecutableStartupFence(text) {
   for (const fence of bashFences(text)) {
     if (executableClaimLines(fence, 'startup').length > 0) return String(fence || '').trim();
@@ -533,10 +547,21 @@ function addIndependentWorktree(sandbox, mainRepo, label) {
   return fs.realpathSync(dest);
 }
 
-const sandbox = makeSandbox();
+const sandbox = makeSandbox('github');
+const extraAuthorities = [];
+const authoritiesByForge = { github: sandbox };
+function getAuthority(forge) {
+  const name = String(forge || 'github').trim() || 'github';
+  if (!authoritiesByForge[name]) {
+    const created = makeSandbox(name);
+    authoritiesByForge[name] = created;
+    extraAuthorities.push(created);
+  }
+  return authoritiesByForge[name];
+}
 try {
   assert(sandbox.install.status === 0 && fs.existsSync(sandbox.helper),
-    '#1052-fixture: isolated --global install must succeed and receipt the helper (status='
+    '#1052-fixture: isolated --global --forge=github install must succeed and receipt the helper (status='
     + sandbox.install.status + ' stderr=' + String(sandbox.install.stderr || '').slice(0, 300) + ')');
 
   // --- startup on empty consumer: prep before claim, match real ensure-target, restart-required
@@ -915,27 +940,45 @@ try {
       && (r.json.unknownFlags.indexOf('--product') >= 0 || r.json.unknownFlags.indexOf('--host') >= 0
         || r.json.unknownFlags.indexOf('--cursor-workspace') >= 0));
   }
-  function portOnlineEnv(port) {
+  function portOnlineEnv(port, box) {
     const extra = { KAOLA_WORKFLOW_OFFLINE: '' };
-    extra[port.mockEnv] = sandbox[port.mockField];
+    extra[port.mockEnv] = box[port.mockField];
     return extra;
   }
   for (const port of NAMED_FORGE_PORTS) {
     const tag = '#1052-port[' + port.name + ']';
+    const authority = getAuthority(port.forge);
+    assert(authority.install.status === 0 && fs.existsSync(authority.helper),
+      tag + '-isolated-authority: install-cursor.sh --global --forge=' + port.forge
+      + ' must succeed and receipt the helper (status=' + authority.install.status
+      + ' stderr=' + String(authority.install.stderr || '').slice(0, 300) + ')');
     assert(fs.existsSync(port.claim), tag + ': named claim.js must exist at ' + port.claim);
+    if (port.forge !== 'github') {
+      const mismatchWs = makeRepo(authority, port.name + '-mismatch-github-claim');
+      const mismatch = runNamedClaim(authority, mismatchWs, CLAIM, [
+        'startup', '--target-issue', '11581', '--runtime', 'cursor',
+      ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
+      assert(mismatch.status !== 0
+        && mismatch.json && mismatch.json.reason === 'cursor_prep_failed'
+        && /stale_forge/.test(mismatch.raw),
+        tag + '-mismatched-github-claim: github kaola-workflow-claim.js against isolated --forge='
+        + port.forge + ' authority must still fail-closed stale_forge; do not weaken the check (got '
+        + JSON.stringify(mismatch.json) + ' raw=' + mismatch.raw.slice(0, 400) + ')');
+    }
 
     {
-      const workspace = makeRepo(sandbox, port.name + '-startup');
+      const workspace = makeRepo(authority, port.name + '-startup');
       const nested = path.join(workspace, 'nested-cwd');
       fs.mkdirSync(nested, { recursive: true });
-      const twin = fs.mkdtempSync(path.join(sandbox.tmp, 'twin-' + port.name + '-'));
-      const twinEnsure = runHelper(sandbox, ['--ensure-target', twin, '--forge=github', '--json'], twin);
+      const twin = fs.mkdtempSync(path.join(authority.tmp, 'twin-' + port.name + '-'));
+      const twinEnsure = runHelper(authority, ['--ensure-target', twin, '--forge=' + port.forge, '--json'], twin);
       let twinBody = null;
       try { twinBody = JSON.parse(twinEnsure.stdout); } catch (_) { /* below */ }
       assert(twinEnsure.status === 0 && twinBody && (twinBody.status === 'materialized' || twinBody.status === 'current'),
-        tag + '-helper-control: installed helper --ensure-target still materializes (status='
+        tag + '-helper-control: installed helper --ensure-target --forge=' + port.forge
+        + ' still materializes (status='
         + twinEnsure.status + ' body=' + JSON.stringify(twinBody) + ')');
-      const r = runNamedClaim(sandbox, nested, port.claim, [
+      const r = runNamedClaim(authority, nested, port.claim, [
         'startup', '--target-issue', '11521', '--runtime', 'cursor',
       ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
       assert(!refusedUnknownIdentity(r),
@@ -959,8 +1002,8 @@ try {
     }
 
     {
-      const workspace = makeRepo(sandbox, port.name + '-app');
-      const app = runNamedClaim(sandbox, workspace, port.claim, [
+      const workspace = makeRepo(authority, port.name + '-app');
+      const app = runNamedClaim(authority, workspace, port.claim, [
         'startup', '--target-issue', '11530', '--runtime', 'cursor',
         '--product', 'app', '--host', 'local', '--json',
       ]);
@@ -971,8 +1014,8 @@ try {
     }
 
     {
-      const workspace = makeRepo(sandbox, port.name + '-omitted');
-      const omitted = runNamedClaim(sandbox, workspace, port.claim, [
+      const workspace = makeRepo(authority, port.name + '-omitted');
+      const omitted = runNamedClaim(authority, workspace, port.claim, [
         'startup', '--target-issue', '11540', '--runtime', 'cursor', '--json',
       ]);
       assertNoExtraRepoWrite(omitted, workspace,
@@ -980,8 +1023,8 @@ try {
     }
 
     {
-      const workspace = makeRepo(sandbox, port.name + '-incomplete');
-      const incomplete = runNamedClaim(sandbox, workspace, port.claim, [
+      const workspace = makeRepo(authority, port.name + '-incomplete');
+      const incomplete = runNamedClaim(authority, workspace, port.claim, [
         'startup', '--target-issue', '11545', '--runtime', 'cursor',
         '--product', 'cli', '--json',
       ]);
@@ -993,14 +1036,14 @@ try {
     }
 
     {
-      const resumeWorkspace = makeRepo(sandbox, port.name + '-resume-omitted');
-      const seed = runNamedClaim(sandbox, resumeWorkspace, port.claim, [
+      const resumeWorkspace = makeRepo(authority, port.name + '-resume-omitted');
+      const seed = runNamedClaim(authority, resumeWorkspace, port.claim, [
         'startup', '--target-issue', '11549', '--runtime', 'claude', '--json',
       ]);
       assert(acquired(seed.json),
         tag + '-identity-resume-omitted-seed: non-Cursor startup must acquire (got '
         + JSON.stringify(seed.json) + ')');
-      const resumeOmitted = runNamedClaim(sandbox, resumeWorkspace, port.claim, [
+      const resumeOmitted = runNamedClaim(authority, resumeWorkspace, port.claim, [
         'resume', '--project', 'issue-11549', '--runtime', 'cursor', '--json',
       ]);
       assert(resumeOmitted.json && resumeOmitted.json.resumed === true
@@ -1011,14 +1054,14 @@ try {
     }
 
     {
-      const workspace = makeRepo(sandbox, port.name + '-resume-cli');
-      const seed = runNamedClaim(sandbox, workspace, port.claim, [
+      const workspace = makeRepo(authority, port.name + '-resume-cli');
+      const seed = runNamedClaim(authority, workspace, port.claim, [
         'startup', '--target-issue', '11526', '--runtime', 'claude', '--json',
       ]);
       assert(acquired(seed.json),
         tag + '-resume-seed: non-Cursor startup must acquire (got ' + JSON.stringify(seed.json) + ')');
       const missionBefore = writeMissionList(workspace, 11526);
-      const resume = runNamedClaim(sandbox, workspace, port.claim, [
+      const resume = runNamedClaim(authority, workspace, port.claim, [
         'resume', '--project', 'issue-11526', '--runtime', 'cursor',
       ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
       assert(!refusedUnknownIdentity(resume),
@@ -1034,17 +1077,17 @@ try {
     }
 
     {
-      const workspace = makeRepo(sandbox, port.name + '-wt-cwd');
-      const first = runNamedClaim(sandbox, workspace, port.claim, [
+      const workspace = makeRepo(authority, port.name + '-wt-cwd');
+      const first = runNamedClaim(authority, workspace, port.claim, [
         'startup', '--target-issue', '11547', '--runtime', 'claude', '--json',
-      ], portOnlineEnv(port));
+      ], portOnlineEnv(port, authority));
       const wt = first.json && (first.json.worktree_path || (first.json.folder && first.json.folder.worktree_path) || '');
       const mainRoot = stateField(workspace, 11547, 'main_root') || workspace;
       assert(first.status === 0 && acquired(first.json) && wt && fs.existsSync(wt),
         tag + '-worktree-cwd-seed: non-Cursor startup must create a write-worktree (got '
         + JSON.stringify(first.json) + ' raw=' + first.raw.slice(0, 300) + ')');
       fs.cpSync(issueDir(workspace, 11547), issueDir(wt, 11547), { recursive: true });
-      const resume = runNamedClaim(sandbox, wt, port.claim, [
+      const resume = runNamedClaim(authority, wt, port.claim, [
         'resume', '--project', 'issue-11547', '--runtime', 'cursor',
       ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
       assert(!refusedUnknownIdentity(resume),
@@ -1060,9 +1103,9 @@ try {
     }
 
     {
-      const workspace = makeRepo(sandbox, port.name + '-explicit-ws');
-      const decoyCwd = makeRepo(sandbox, port.name + '-explicit-decoy');
-      const r = runNamedClaim(sandbox, decoyCwd, port.claim, [
+      const workspace = makeRepo(authority, port.name + '-explicit-ws');
+      const decoyCwd = makeRepo(authority, port.name + '-explicit-decoy');
+      const r = runNamedClaim(authority, decoyCwd, port.claim, [
         'startup', '--target-issue', '11548', '--runtime', 'cursor',
         '--cursor-workspace', workspace,
       ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
@@ -1154,6 +1197,23 @@ try {
 
   for (const port of NAMED_FORGE_PORTS) {
     const tag = '#1052-generated[' + port.name + ']';
+    const authority = getAuthority(port.forge);
+    assert(authority.install.status === 0 && fs.existsSync(authority.helper),
+      tag + '-isolated-authority: install-cursor.sh --global --forge=' + port.forge
+      + ' must succeed and receipt the helper (status=' + authority.install.status
+      + ' stderr=' + String(authority.install.stderr || '').slice(0, 300) + ')');
+    if (port.forge !== 'github') {
+      const mismatchWs = makeRepo(authority, port.forge + '-mismatch-github-claim');
+      const mismatch = runNamedClaim(authority, mismatchWs, CLAIM, [
+        'startup', '--target-issue', '12581', '--runtime', 'cursor',
+      ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
+      assert(mismatch.status !== 0
+        && mismatch.json && mismatch.json.reason === 'cursor_prep_failed'
+        && /stale_forge/.test(mismatch.raw),
+        tag + '-mismatched-github-claim: github kaola-workflow-claim.js against isolated --forge='
+        + port.forge + ' authority must still fail-closed stale_forge; do not weaken the check (got '
+        + JSON.stringify(mismatch.json) + ' raw=' + mismatch.raw.slice(0, 400) + ')');
+    }
     const gen = generateWorkflowNext(sandbox, port.forge);
     assert(gen.status === 0 && gen.text,
       tag + '-sync: isolated sync-cursor-edition.js --write --tree-root must emit workflow-next.md (status='
@@ -1242,7 +1302,7 @@ try {
     const resumeFence = (bashFences(resumeSection(nextText))[0] || '').trim();
     assert(resumeFence.length > 0,
       tag + '-c3-fence: generated ## Resume must contain an executable bash fence');
-    const claimDest = path.join(sandbox.cursorHome, 'kaola-workflow', 'scripts', port.claimBase);
+    const claimDest = path.join(authority.cursorHome, 'kaola-workflow', 'scripts', port.claimBase);
     fs.mkdirSync(path.dirname(claimDest), { recursive: true });
     fs.copyFileSync(port.claim, claimDest);
     const claimSrcDir = path.dirname(port.claim);
@@ -1269,11 +1329,11 @@ try {
       { mode: 0o755 });
 
     function runCold(claimJsValue) {
-      const env = Object.assign({}, sandbox.env, {
-        PATH: wrapDir + path.delimiter + sandbox.env.PATH,
+      const env = Object.assign({}, authority.env, {
+        PATH: wrapDir + path.delimiter + authority.env.PATH,
         KAOLA_NODE_ARGV_LOG: argvLog,
-        CURSOR_HOME: sandbox.cursorHome,
-        HOME: sandbox.home,
+        CURSOR_HOME: authority.cursorHome,
+        HOME: authority.home,
       });
       if (claimJsValue === undefined) delete env.CLAIM_JS;
       else env.CLAIM_JS = claimJsValue;
@@ -1301,11 +1361,11 @@ try {
       + JSON.stringify(logEmpty.slice(0, 300)) + ')');
 
     function hostGateEnv(kind, extra) {
-      const env = Object.assign({}, sandbox.env, {
-        PATH: wrapDir + path.delimiter + sandbox.env.PATH,
+      const env = Object.assign({}, authority.env, {
+        PATH: wrapDir + path.delimiter + authority.env.PATH,
         KAOLA_NODE_ARGV_LOG: argvLog,
-        CURSOR_HOME: sandbox.cursorHome,
-        HOME: sandbox.home,
+        CURSOR_HOME: authority.cursorHome,
+        HOME: authority.home,
       }, extra || {});
       delete env.CLAIM_JS;
       delete env.CURSOR_PRODUCT;
@@ -1340,11 +1400,11 @@ try {
     }
 
     function runLivingFence(parentBin, fence, cwd, extraEnv, parentArgv) {
-      const env = stripInventedCursorGates(Object.assign({}, sandbox.env, {
-        PATH: wrapDir + path.delimiter + sandbox.env.PATH,
+      const env = stripInventedCursorGates(Object.assign({}, authority.env, {
+        PATH: wrapDir + path.delimiter + authority.env.PATH,
         KAOLA_NODE_ARGV_LOG: argvLog,
-        CURSOR_HOME: sandbox.cursorHome,
-        HOME: sandbox.home,
+        CURSOR_HOME: authority.cursorHome,
+        HOME: authority.home,
         KAOLA_FENCE: fence,
         KAOLA_FENCE_CWD: cwd,
         CURSOR_INVOKED_AS: 'cursor-agent',
@@ -1410,11 +1470,15 @@ try {
       assert(startups.length === 1,
         tag + '-c1-first-claim-cli-single: default then-claim-it fence with demonstrated CLI --workspace (no invented CURSOR_PRODUCT/HOST/WORKSPACE/KAOLA_CURSOR_*) must be one startup, not a later gated fence (line='
         + firstLine + ' log=' + JSON.stringify(cliLog.slice(0, 500)) + ')');
-      assert(cliRun.status === 0 && acquired(cliJson) && hasProjectAgents(opened)
+      const cliRaw = String(cliRun.stderr || '') + '\n' + String(cliRun.stdout || '');
+      assert(!prepFailedStaleForge(cliJson, cliRaw)
+        && cliRun.status === 0 && acquired(cliJson) && hasProjectAgents(opened)
         && cliPrep && (cliPrep.status === 'materialized' || cliPrep.status === 'current'),
-        tag + '-c1-first-claim-cli-prep: Repo prep must complete before that single claim (cursor_prep present; agents on the CLI-opened workspace) (status='
+        tag + '-c1-first-claim-cli-matching-authority: isolated install-cursor.sh --global --forge='
+        + port.forge + ' + generated ' + port.forge + ' Next first unstamped fence + '
+        + port.claimBase + ' living parent --workspace must prep, not cursor_prep_failed/stale_forge (status='
         + cliRun.status + ' json=' + JSON.stringify(cliJson) + ' raw='
-        + String(cliRun.stderr || cliRun.stdout || '').slice(0, 400)
+        + cliRaw.slice(0, 400)
         + ' log=' + JSON.stringify(cliLog.slice(0, 400)) + ')');
       const prepTarget = cliPrep && cliPrep.target;
       assert(!prepTarget || fs.realpathSync(prepTarget) === opened,
@@ -1591,6 +1655,9 @@ try {
     }
   }
 } finally {
+  extraAuthorities.forEach(s => {
+    try { fs.rmSync(s.tmp, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  });
   try { fs.rmSync(sandbox.tmp, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
 }
 

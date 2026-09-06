@@ -2215,7 +2215,8 @@ function ensureCursorCliLocalPrep(root, args) {
       + '; run install-cursor.sh --global --yes');
     return { failed: true };
   }
-  const forge = String(args && args.forge || 'github').trim() || 'github';
+  // GitHub install-cursor.sh --forge=github identity; not an operator claim.js flag.
+  const forge = 'github';
   const spawned = spawnSync(process.execPath, [
     helper, '--ensure-target', root, '--forge=' + forge, '--json'
   ], {
