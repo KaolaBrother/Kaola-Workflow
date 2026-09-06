@@ -54,17 +54,22 @@ catalogs. Unknown stays `unknown`; a documented path is not a live named-role PA
 | Kimi Code | `${KIMI_CODE_HOME:-~/.kimi-code}` | no | no | live `kaola-role-implementer` lookup from two unrelated empty repositories |
 | Grok CLI | `${GROK_HOME:-~/.grok}` | no | no | documented user `~/.grok/agents/` |
 | ZCode | `${ZCODE_HOME:-~/.zcode}` (project tree is staging; runtime loads user agents) | no | no (staging only) | documented user-scope discovery |
-| Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/{agents,commands}` (un-nested) | **no** | yes (explicit `--target`; Workflow `startup`/`resume` spawn installed `--ensure-target` only on `--runtime cursor --product cli --host local`, against `--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()`; independently entered Finalize still ensures `"$PWD"` immediately before named dispatch) | live project `implementer`; raw Task carrier resolved `cursor-grok-4.6-medium` |
+| Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/{agents,commands}` (un-nested) | **no** | yes (explicit `--target`; all four claim trees spawn installed `--ensure-target` only on `--runtime cursor --product cli --host local`, against `--cursor-workspace` when set, else recorded `main_root` on resume, else claim.js `getRoot()` on first claim; generated Next appendix names `--cursor-workspace` and recorded `main_root` and does not name `git rev-parse --show-toplevel` as the known CLI workspace; independently entered Finalize still ensures `"$PWD"` immediately before named dispatch) | live project `implementer`; raw Task carrier resolved `cursor-grok-4.6-medium` |
 | Cursor App / local IDE | same documented user carrier; App is not inferred from a CLI binary | **no** | `unknown` | live project catalog with all 14 Kaola types; exact `implementer` succeeded |
 | Cursor App / Cloud host | saved remote environment managed by Cursor | **no** | yes; a confirmed environment-setup Agent materializes the selected repository before Save | live exact-Build 23-type catalog with all 14 Kaola names; exact `implementer` succeeded from a new same-repository parent |
 
 Cursor family `named_roles: true` is now live-proven on three independently measured surfaces. On
 the measured standalone CLI only, Workflow `startup`/`resume` (`--runtime cursor --product cli
---host local`) run the installed safe materializer `--ensure-target` (omitted, unknown, app, cloud,
-or incomplete pairs skip ensure but still claim/resume). The target is `--cursor-workspace` when
-set, else recorded `main_root` on resume, else invoking `getRoot()` (`git rev-parse --show-toplevel`)
-before a new claim and on resume without re-claim. Independently entered Finalize still runs
-`--ensure-target "$PWD"` immediately before named dispatch. The helper derives bytes from the
+--host local`) run the installed safe materializer `--ensure-target` from all four claim trees
+(canonical GitHub, COMMON_SCRIPTS Codex copy, GitLab hand-port, Gitea hand-port). Generated
+GitLab/Gitea Next stamps `--product cli --host local`; those claim.js no longer `unknown_flag`.
+Omitted, unknown, app, cloud, or incomplete pairs skip ensure but still claim/resume. Helper spawn
+is `--forge=<args.forge||'github'>`; `--forge` is not a claim.js flag. Claim.js target is
+`--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()`
+(`git rev-parse --show-toplevel`) on first claim — not nested cwd and not the write-worktree.
+Generated Next appendix names `--cursor-workspace` and recorded `main_root`; it does not name
+`git rev-parse --show-toplevel` as the known CLI workspace. Independently entered Finalize still
+runs `--ensure-target "$PWD"` immediately before named dispatch. The helper derives bytes from the
 receipt-verified global authority, is a no-op when `status: current`, reports
 `restart_boundary: "new_process_same_chat"` when `status: materialized`, and fails before writing
 on missing/stale authority, collision, symlink, or modified ownership. Cursor App local and Cloud

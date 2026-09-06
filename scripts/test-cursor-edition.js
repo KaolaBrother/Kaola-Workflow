@@ -273,6 +273,34 @@ function cursorCliSharedHostNegatives(block, errors) {
   }
 }
 
+function namedForgeClaimScript(forge) {
+  if (forge === 'gitlab') {
+    return path.join(REPO, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-claim.js');
+  }
+  if (forge === 'gitea') {
+    return path.join(REPO, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-claim.js');
+  }
+  // Generated GitHub Next binds CLAIM_JS to kaola-workflow-claim.js. Codex plugin
+  // consumers resolve the COMMON_SCRIPTS copy, not the frozen scripts/ original.
+  return path.join(REPO, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-claim.js');
+}
+
+function cursorCliNextEnsureLocator(block, errors) {
+  const source = String(block || '');
+  const heading = '## Cursor standalone CLI startup and resume Repo role prep';
+  const start = source.indexOf(heading);
+  const appendix = start >= 0 ? source.slice(start) : source;
+  if (/git\s+rev-parse\s+--show-toplevel/.test(appendix)) {
+    errors.push('generated Next names git rev-parse --show-toplevel as the CLI workspace; resume/ensure locators are --cursor-workspace then recorded main_root');
+  }
+  if (!/--cursor-workspace/.test(appendix)) {
+    errors.push('generated Next does not name --cursor-workspace as the explicit CLI workspace locator');
+  }
+  if (!/\bmain_root\b/.test(appendix)) {
+    errors.push('generated Next does not name recorded main_root as the resume ensure locator');
+  }
+}
+
 function cursorCliFailClosedInstallFaults(block, errors) {
   const flatBlock = String(block || '').replace(/\s+/g, ' ');
   const missingAt = flatBlock.indexOf('Missing or stale global authority');
@@ -371,6 +399,7 @@ function cursorCliMaterializationVerdict(text, forge, surface) {
     }
     cursorCliSharedHostNegatives(block, errors);
     cursorCliFailClosedInstallFaults(block, errors);
+    cursorCliNextEnsureLocator(block, errors);
     return { ok: errors.length === 0, errors, block, ensureCalls };
   }
 
@@ -422,37 +451,128 @@ if (process.argv.includes('--path-b-oracle')) {
 }
 
 if (process.argv.includes('--cli-materialization-oracle')) {
-  const isolated = fs.mkdtempSync(path.join(tmpBase(), 'cursor-cli-mat-oracle-'));
-  try {
-    // spawn-class: environment
-    const generated = spawnSync(process.execPath, [SYNC_JS, '--write', '--tree-root=' + isolated], {
-      cwd: REPO, encoding: 'utf8',
-    });
-    if (generated.status !== 0) {
-      console.error('CLI-MATERIALIZATION-ORACLE RED: sync --write --tree-root failed: '
-        + String(generated.stderr || generated.stdout || '').slice(0, 400));
-      process.exit(1);
-    }
-    let oracleFailed = false;
-    for (const name of CURSOR_CLI_MATERIALIZATION_COMMANDS) {
-      const rel = path.join('.cursor', 'commands', name + '.md');
-      const absolute = path.join(isolated, rel);
-      const surface = cursorCliMaterializationSurface(name);
-      const text = fs.existsSync(absolute) ? fs.readFileSync(absolute, 'utf8') : '';
-      const verdict = cursorCliMaterializationVerdict(text, DEFAULT_FORGE, surface);
-      if (!verdict.ok) {
+  const forges = (syncMod.FORGES && syncMod.FORGES.length)
+    ? syncMod.FORGES
+    : ['github', 'gitlab', 'gitea'];
+  let oracleFailed = false;
+  for (const forge of forges) {
+    const isolated = fs.mkdtempSync(path.join(tmpBase(), 'cursor-cli-mat-oracle-' + forge + '-'));
+    try {
+      // spawn-class: environment
+      const generated = spawnSync(process.execPath, [
+        SYNC_JS, '--write', '--forge=' + forge, '--tree-root=' + isolated,
+      ], {
+        cwd: REPO, encoding: 'utf8',
+      });
+      if (generated.status !== 0) {
         oracleFailed = true;
-        for (const error of verdict.errors) {
-          console.error('CLI-MATERIALIZATION-ORACLE RED: ' + name + ': ' + error);
+        console.error('CLI-MATERIALIZATION-ORACLE RED: [' + forge + '] sync --write --tree-root failed: '
+          + String(generated.stderr || generated.stdout || '').slice(0, 400));
+        continue;
+      }
+      const label = treeLabel(forge);
+      for (const name of CURSOR_CLI_MATERIALIZATION_COMMANDS) {
+        const rel = path.join(label, 'commands', name + '.md');
+        const absolute = path.join(isolated, rel);
+        const surface = cursorCliMaterializationSurface(name);
+        const text = fs.existsSync(absolute) ? fs.readFileSync(absolute, 'utf8') : '';
+        const verdict = cursorCliMaterializationVerdict(text, forge, surface);
+        if (!verdict.ok) {
+          oracleFailed = true;
+          for (const error of verdict.errors) {
+            console.error('CLI-MATERIALIZATION-ORACLE RED: [' + forge + '] ' + name + ': ' + error);
+          }
+        }
+        if (surface === 'next') {
+          const startupLines = cursorCliExecutableClaimLines(text, 'startup')
+            .filter(line => /--runtime(?:\s+|=)cursor\b/.test(line));
+          if (startupLines.some(line => !cursorCliLineHasExplicitCliLocalIdentity(line))) {
+            oracleFailed = true;
+            console.error('CLI-MATERIALIZATION-ORACLE RED: [' + forge
+              + '] generated Next dropped explicit --product cli --host local on $CLAIM_JS startup');
+          }
+          const resumeLines = cursorCliExecutableClaimLines(text, 'resume');
+          if (resumeLines.some(line => !cursorCliLineHasExplicitCliLocalIdentity(line))) {
+            oracleFailed = true;
+            console.error('CLI-MATERIALIZATION-ORACLE RED: [' + forge
+              + '] generated Next dropped explicit --product cli --host local on $CLAIM_JS resume');
+          }
+          const claimJs = namedForgeClaimScript(forge);
+          const claimBase = path.basename(claimJs);
+          if (!text.includes(claimBase)) {
+            oracleFailed = true;
+            console.error('CLI-MATERIALIZATION-ORACLE RED: [' + forge
+              + '] generated Next does not bind CLAIM_JS to named ' + claimBase);
+          }
+          if (!fs.existsSync(claimJs)) {
+            oracleFailed = true;
+            console.error('CLI-MATERIALIZATION-ORACLE RED: [' + forge
+              + '] named claim.js missing at ' + claimJs);
+          } else {
+            const tmpHome = fs.mkdtempSync(path.join(tmpBase(), 'cursor-cli-mat-claim-' + forge + '-'));
+            try {
+              // spawn-class: cli-contract
+              const spawned = spawnSync(process.execPath, [
+                claimJs, 'startup', '--target-issue', '1',
+                '--runtime', 'cursor', '--product', 'cli', '--host', 'local', '--json',
+              ], {
+                cwd: tmpHome,
+                encoding: 'utf8',
+                env: Object.assign({}, process.env, {
+                  HOME: tmpHome,
+                  USERPROFILE: tmpHome,
+                  KAOLA_WORKFLOW_OFFLINE: '1',
+                }),
+                timeout: 30000,
+              });
+              const blob = String(spawned.stdout || '') + '\n' + String(spawned.stderr || '');
+              let body = null;
+              try {
+                const lines = blob.trim().split('\n').filter(l => l.trim());
+                for (let i = lines.length - 1; i >= 0; i--) {
+                  try { body = JSON.parse(lines[i]); break; } catch (_) { /* keep */ }
+                }
+              } catch (_) { body = null; }
+              if (body && body.reason === 'unknown_flag') {
+                oracleFailed = true;
+                console.error('CLI-MATERIALIZATION-ORACLE RED: [' + forge
+                  + '] named claim.js refused generated CLI identity flags: '
+                  + JSON.stringify(body));
+              }
+            } finally {
+              try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+            }
+          }
+          const locatorMutant = text.includes('git rev-parse --show-toplevel')
+            ? text
+            : (text + '\n`--ensure-target` transaction against the CLI workspace (`git rev-parse --show-toplevel`).\n');
+          const locatorVerdict = cursorCliMaterializationVerdict(locatorMutant, forge, 'next');
+          if (locatorVerdict.ok
+              || !locatorVerdict.errors.some(error => /git rev-parse|show-toplevel/.test(error))) {
+            oracleFailed = true;
+            console.error('CLI-MATERIALIZATION-ORACLE RED: [' + forge
+              + '] locator oracle does not reject git rev-parse --show-toplevel as the CLI workspace');
+          }
+          const droppedLocator = text
+            .replace(/--cursor-workspace/g, '--not-the-workspace-locator')
+            .replace(/\bmain_root\b/g, 'not_the_recorded_root');
+          const droppedVerdict = cursorCliMaterializationVerdict(droppedLocator, forge, 'next');
+          if (droppedVerdict.ok
+              || !droppedVerdict.errors.some(error => /--cursor-workspace/.test(error))
+              || !droppedVerdict.errors.some(error => /main_root/.test(error))) {
+            oracleFailed = true;
+            console.error('CLI-MATERIALIZATION-ORACLE RED: [' + forge
+              + '] locator oracle does not require --cursor-workspace and recorded main_root');
+          }
         }
       }
+    } finally {
+      try { fs.rmSync(isolated, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
     }
-    if (oracleFailed) process.exit(1);
-    console.log('CLI-MATERIALIZATION-ORACLE GREEN: Next startup/resume order and Finalize pre-dispatch ensure');
-    process.exit(0);
-  } finally {
-    try { fs.rmSync(isolated, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   }
+  if (oracleFailed) process.exit(1);
+  console.log('CLI-MATERIALIZATION-ORACLE GREEN: Next startup/resume identity, named claim.js flags, locator, and Finalize pre-dispatch ensure');
+  process.exit(0);
 }
 
 const trackedAgents = () => fs.readdirSync(path.join(REPO, 'agents'))
@@ -960,6 +1080,25 @@ function commandRel(name, forge) {
           && helperResumeVerdict.errors.some(error => /claim\.js resume/.test(error)),
         'G2-cli-materialization-mutation[' + name + ']: helper-only or mission-list.md resume is rejected — '
           + helperResumeVerdict.errors.join(' | '));
+
+        const revParseMutant = content.includes('git rev-parse --show-toplevel')
+          ? content
+          : (content + '\n`--ensure-target` against the CLI workspace (`git rev-parse --show-toplevel`).\n');
+        const revParseVerdict = cursorCliMaterializationVerdict(revParseMutant, DEFAULT_FORGE, surface);
+        assert(!revParseVerdict.ok
+          && revParseVerdict.errors.some(error => /git rev-parse|show-toplevel/.test(error)),
+        'G2-cli-materialization-mutation[' + name + ']: naming git rev-parse --show-toplevel as the CLI workspace is rejected — '
+          + revParseVerdict.errors.join(' | '));
+
+        const droppedLocator = content
+          .replace(/--cursor-workspace/g, '--not-the-workspace-locator')
+          .replace(/\bmain_root\b/g, 'not_the_recorded_root');
+        const droppedLocatorVerdict = cursorCliMaterializationVerdict(droppedLocator, DEFAULT_FORGE, surface);
+        assert(!droppedLocatorVerdict.ok
+          && droppedLocatorVerdict.errors.some(error => /--cursor-workspace/.test(error))
+          && droppedLocatorVerdict.errors.some(error => /main_root/.test(error)),
+        'G2-cli-materialization-mutation[' + name + ']: omitting --cursor-workspace and recorded main_root is rejected — '
+          + droppedLocatorVerdict.errors.join(' | '));
       }
     }
   }

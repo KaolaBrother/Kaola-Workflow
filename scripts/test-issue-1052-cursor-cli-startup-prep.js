@@ -21,6 +21,32 @@ const IMPLEMENTER = 'implementer.md';
 // Owned explicit identity for standalone CLI/local prep. Omitted product/host is
 // not CLI. Do not treat `--runtime cursor` alone as authorization to write Repo.
 const CURSOR_CLI_LOCAL = Object.freeze(['--product', 'cli', '--host', 'local']);
+const NAMED_FORGE_PORTS = Object.freeze([
+  {
+    name: 'codex-github',
+    claim: path.join(REPO, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-claim.js'),
+    forge: 'github',
+    mockEnv: 'KAOLA_GH_MOCK_SCRIPT',
+    mockField: 'ghOpen',
+    claimBase: 'kaola-workflow-claim.js',
+  },
+  {
+    name: 'gitlab',
+    claim: path.join(REPO, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-claim.js'),
+    forge: 'gitlab',
+    mockEnv: 'KAOLA_GLAB_MOCK_SCRIPT',
+    mockField: 'glabOpen',
+    claimBase: 'kaola-gitlab-workflow-claim.js',
+  },
+  {
+    name: 'gitea',
+    claim: path.join(REPO, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-claim.js'),
+    forge: 'gitea',
+    mockEnv: 'KAOLA_TEA_MOCK_SCRIPT',
+    mockField: 'teaOpen',
+    claimBase: 'kaola-gitea-workflow-claim.js',
+  },
+]);
 
 let passed = 0;
 let failed = 0;
@@ -105,6 +131,32 @@ function makeSandbox() {
     + '}\n'
     + 'process.stdout.write("");\n'
     + 'process.exit(0);\n');
+  const glabOpen = path.join(tmp, 'glab-open.js');
+  fs.writeFileSync(glabOpen,
+    'const a = process.argv.slice(2);\n'
+    + 'if (a[0] === "repo" && a[1] === "view") {\n'
+    + '  process.stdout.write(JSON.stringify({ id: 1, path_with_namespace: "o/r", web_url: "http://example.test" }) + "\\n");\n'
+    + '  process.exit(0);\n'
+    + '}\n'
+    + 'if (a[0] === "issue" && a[1] === "view") {\n'
+    + '  process.stdout.write(JSON.stringify({ iid: Number(a[2]) || 1, state: "opened", title: "t", description: "", labels: [] }) + "\\n");\n'
+    + '  process.exit(0);\n'
+    + '}\n'
+    + 'process.stdout.write("");\n'
+    + 'process.exit(0);\n');
+  const teaOpen = path.join(tmp, 'tea-open.js');
+  fs.writeFileSync(teaOpen,
+    'const a = process.argv.slice(2);\n'
+    + 'if (a[0] === "repo" && a[1] === "view") {\n'
+    + '  process.stdout.write(JSON.stringify({ full_name: "o/r", owner: { login: "o" }, name: "r", html_url: "http://example.test" }) + "\\n");\n'
+    + '  process.exit(0);\n'
+    + '}\n'
+    + 'if (a[0] === "issues" && a[1] === "view") {\n'
+    + '  process.stdout.write(JSON.stringify({ number: Number(a[2]) || 1, state: "open", title: "t", body: "", labels: [] }) + "\\n");\n'
+    + '  process.exit(0);\n'
+    + '}\n'
+    + 'process.stdout.write("");\n'
+    + 'process.exit(0);\n');
   const env = Object.assign({}, process.env, {
     HOME: home,
     USERPROFILE: home,
@@ -122,7 +174,7 @@ function makeSandbox() {
     cwd: REPO, env, encoding: 'utf8', timeout: 120000,
   });
   const helper = path.join(cursorHome, 'kaola-workflow', 'scripts', 'kaola-workflow-cursor-surface.js');
-  return { tmp, home, cursorHome, bin, env, helper, install, classifier, ghOpen };
+  return { tmp, home, cursorHome, bin, env, helper, install, classifier, ghOpen, glabOpen, teaOpen };
 }
 
 function makeRepo(sandbox, label) {
@@ -135,9 +187,13 @@ function makeRepo(sandbox, label) {
 }
 
 function runClaim(sandbox, cwd, argv, extraEnv) {
+  return runNamedClaim(sandbox, cwd, CLAIM, argv, extraEnv);
+}
+
+function runNamedClaim(sandbox, cwd, claimPath, argv, extraEnv) {
   const env = Object.assign({}, sandbox.env, extraEnv || {});
   // spawn-class: cli-contract
-  const result = spawnSync(process.execPath, [CLAIM].concat(argv), {
+  const result = spawnSync(process.execPath, [claimPath].concat(argv), {
     cwd, env, encoding: 'utf8', timeout: 60000,
   });
   return {
@@ -569,6 +625,177 @@ try {
       '#1052-cursor-workspace: prep must target --cursor-workspace, not the decoy git toplevel');
     assert(!hasProjectAgents(decoyCwd),
       '#1052-cursor-workspace: decoy cwd git toplevel must not receive extra Repo writes');
+  }
+
+  // --- named forge claim.js ports: generated Next identity flags are accepted and prep runs
+  function refusedUnknownIdentity(r) {
+    return !!(r.json && r.json.reason === 'unknown_flag'
+      && Array.isArray(r.json.unknownFlags)
+      && (r.json.unknownFlags.indexOf('--product') >= 0 || r.json.unknownFlags.indexOf('--host') >= 0
+        || r.json.unknownFlags.indexOf('--cursor-workspace') >= 0));
+  }
+  function portOnlineEnv(port) {
+    const extra = { KAOLA_WORKFLOW_OFFLINE: '' };
+    extra[port.mockEnv] = sandbox[port.mockField];
+    return extra;
+  }
+  for (const port of NAMED_FORGE_PORTS) {
+    const tag = '#1052-port[' + port.name + ']';
+    assert(fs.existsSync(port.claim), tag + ': named claim.js must exist at ' + port.claim);
+
+    {
+      const workspace = makeRepo(sandbox, port.name + '-startup');
+      const nested = path.join(workspace, 'nested-cwd');
+      fs.mkdirSync(nested, { recursive: true });
+      const twin = fs.mkdtempSync(path.join(sandbox.tmp, 'twin-' + port.name + '-'));
+      const twinEnsure = runHelper(sandbox, ['--ensure-target', twin, '--forge=github', '--json'], twin);
+      let twinBody = null;
+      try { twinBody = JSON.parse(twinEnsure.stdout); } catch (_) { /* below */ }
+      assert(twinEnsure.status === 0 && twinBody && (twinBody.status === 'materialized' || twinBody.status === 'current'),
+        tag + '-helper-control: installed helper --ensure-target still materializes (status='
+        + twinEnsure.status + ' body=' + JSON.stringify(twinBody) + ')');
+      const r = runNamedClaim(sandbox, nested, port.claim, [
+        'startup', '--target-issue', '11521', '--runtime', 'cursor',
+      ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
+      assert(!refusedUnknownIdentity(r),
+        tag + '-startup-flags: named claim.js must accept explicit --product cli --host local, not unknown_flag (got '
+        + JSON.stringify(r.json) + ' raw=' + r.raw.slice(0, 400) + ')');
+      assert(r.status === 0 && acquired(r.json),
+        tag + '-startup-empty: CLI/local startup must still acquire after prep (got '
+        + JSON.stringify(r.json) + ' raw=' + r.raw.slice(0, 400) + ')');
+      const agents = path.join(workspace, '.cursor', 'agents', IMPLEMENTER);
+      const receipt = path.join(workspace, '.cursor', 'kaola-workflow-materialization.json');
+      assert(fs.existsSync(agents) && fs.existsSync(receipt),
+        tag + '-startup-empty: must execute installed --ensure-target Repo prep on the CLI workspace');
+      assert(!fs.existsSync(path.join(nested, '.cursor', 'agents', IMPLEMENTER)),
+        tag + '-startup-empty: decoy nested cwd must not receive Repo prep');
+      const managed = rel => walkRel(path.join(rel, '.cursor'))
+        .filter(name => name !== 'kaola-workflow-materialization.json');
+      const managedSnap = root => managed(root).map(name =>
+        name + ':' + fs.readFileSync(path.join(root, '.cursor', name)).toString('hex'));
+      assert(JSON.stringify(managedSnap(workspace)) === JSON.stringify(managedSnap(twin)),
+        tag + '-startup-empty: prep must reuse the full installed ensure-target write set, not an agents-only copy');
+    }
+
+    {
+      const workspace = makeRepo(sandbox, port.name + '-app');
+      const app = runNamedClaim(sandbox, workspace, port.claim, [
+        'startup', '--target-issue', '11530', '--runtime', 'cursor',
+        '--product', 'app', '--host', 'local', '--json',
+      ]);
+      assert(!refusedUnknownIdentity(app),
+        tag + '-app-local-flags: App/local identity flags must be known (got ' + JSON.stringify(app.json) + ')');
+      assertNoExtraRepoWrite(app, workspace,
+        tag + '-app-local: explicit Cursor App/local must not infer CLI ensure or write project roles');
+    }
+
+    {
+      const workspace = makeRepo(sandbox, port.name + '-omitted');
+      const omitted = runNamedClaim(sandbox, workspace, port.claim, [
+        'startup', '--target-issue', '11540', '--runtime', 'cursor', '--json',
+      ]);
+      assertNoExtraRepoWrite(omitted, workspace,
+        tag + '-identity-omitted: --runtime cursor without product/host must still claim and must not write Repo');
+    }
+
+    {
+      const workspace = makeRepo(sandbox, port.name + '-incomplete');
+      const incomplete = runNamedClaim(sandbox, workspace, port.claim, [
+        'startup', '--target-issue', '11545', '--runtime', 'cursor',
+        '--product', 'cli', '--json',
+      ]);
+      assert(!refusedUnknownIdentity(incomplete),
+        tag + '-identity-product-cli-no-host: --product cli must be a known flag (got '
+        + JSON.stringify(incomplete.json) + ')');
+      assertNoExtraRepoWrite(incomplete, workspace,
+        tag + '-identity-product-cli-no-host: incomplete pair must skip ensure but still claim');
+    }
+
+    {
+      const resumeWorkspace = makeRepo(sandbox, port.name + '-resume-omitted');
+      const seed = runNamedClaim(sandbox, resumeWorkspace, port.claim, [
+        'startup', '--target-issue', '11549', '--runtime', 'claude', '--json',
+      ]);
+      assert(acquired(seed.json),
+        tag + '-identity-resume-omitted-seed: non-Cursor startup must acquire (got '
+        + JSON.stringify(seed.json) + ')');
+      const resumeOmitted = runNamedClaim(sandbox, resumeWorkspace, port.claim, [
+        'resume', '--project', 'issue-11549', '--runtime', 'cursor', '--json',
+      ]);
+      assert(resumeOmitted.json && resumeOmitted.json.resumed === true
+        && resumeOmitted.json.project === 'issue-11549'
+        && !hasProjectAgents(resumeWorkspace),
+        tag + '-identity-resume-omitted: resume without product/host must not write Repo (got '
+        + JSON.stringify(resumeOmitted.json) + ')');
+    }
+
+    {
+      const workspace = makeRepo(sandbox, port.name + '-resume-cli');
+      const seed = runNamedClaim(sandbox, workspace, port.claim, [
+        'startup', '--target-issue', '11526', '--runtime', 'claude', '--json',
+      ]);
+      assert(acquired(seed.json),
+        tag + '-resume-seed: non-Cursor startup must acquire (got ' + JSON.stringify(seed.json) + ')');
+      const missionBefore = writeMissionList(workspace, 11526);
+      const resume = runNamedClaim(sandbox, workspace, port.claim, [
+        'resume', '--project', 'issue-11526', '--runtime', 'cursor',
+      ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
+      assert(!refusedUnknownIdentity(resume),
+        tag + '-resume-flags: resume --product cli --host local must not be unknown_flag (got '
+        + JSON.stringify(resume.json) + ')');
+      assert(resume.json && resume.json.resumed === true && resume.json.project === 'issue-11526',
+        tag + '-resume: resume must keep the existing run (got ' + JSON.stringify(resume.json) + ')');
+      assert(hasProjectAgents(workspace),
+        tag + '-resume: missing roles must be prepared on CLI/local resume');
+      const missionAfter = fs.readFileSync(path.join(issueDir(workspace, 11526), 'mission-list.md'), 'utf8');
+      assert(missionAfter === missionBefore,
+        tag + '-resume: Mission List bytes must be preserved');
+    }
+
+    {
+      const workspace = makeRepo(sandbox, port.name + '-wt-cwd');
+      const first = runNamedClaim(sandbox, workspace, port.claim, [
+        'startup', '--target-issue', '11547', '--runtime', 'claude', '--json',
+      ], portOnlineEnv(port));
+      const wt = first.json && (first.json.worktree_path || (first.json.folder && first.json.folder.worktree_path) || '');
+      const mainRoot = stateField(workspace, 11547, 'main_root') || workspace;
+      assert(first.status === 0 && acquired(first.json) && wt && fs.existsSync(wt),
+        tag + '-worktree-cwd-seed: non-Cursor startup must create a write-worktree (got '
+        + JSON.stringify(first.json) + ' raw=' + first.raw.slice(0, 300) + ')');
+      fs.cpSync(issueDir(workspace, 11547), issueDir(wt, 11547), { recursive: true });
+      const resume = runNamedClaim(sandbox, wt, port.claim, [
+        'resume', '--project', 'issue-11547', '--runtime', 'cursor',
+      ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
+      assert(!refusedUnknownIdentity(resume),
+        tag + '-worktree-cwd-flags: resume CLI/local from write-worktree cwd must accept identity flags (got '
+        + JSON.stringify(resume.json) + ')');
+      assert(resume.json && resume.json.resumed === true && resume.json.project === 'issue-11547',
+        tag + '-worktree-cwd: resume from write-worktree cwd must keep the run (got '
+        + JSON.stringify(resume.json) + ' raw=' + resume.raw.slice(0, 400) + ')');
+      assert(hasProjectAgents(mainRoot) || hasProjectAgents(workspace),
+        tag + '-worktree-cwd: Repo prep must target recorded main_root, not write-worktree cwd');
+      assert(!fs.existsSync(path.join(wt, '.cursor', 'agents', IMPLEMENTER)),
+        tag + '-worktree-cwd: write-worktree must not receive extra Repo writes');
+    }
+
+    {
+      const workspace = makeRepo(sandbox, port.name + '-explicit-ws');
+      const decoyCwd = makeRepo(sandbox, port.name + '-explicit-decoy');
+      const r = runNamedClaim(sandbox, decoyCwd, port.claim, [
+        'startup', '--target-issue', '11548', '--runtime', 'cursor',
+        '--cursor-workspace', workspace,
+      ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
+      assert(!refusedUnknownIdentity(r),
+        tag + '-cursor-workspace-flags: --cursor-workspace must be a known flag (got '
+        + JSON.stringify(r.json) + ')');
+      assert(r.status === 0 && acquired(r.json),
+        tag + '-cursor-workspace: explicit locator must still allow claim (got '
+        + JSON.stringify(r.json) + ' raw=' + r.raw.slice(0, 400) + ')');
+      assert(hasProjectAgents(workspace),
+        tag + '-cursor-workspace: prep must target --cursor-workspace, not decoy cwd');
+      assert(!hasProjectAgents(decoyCwd),
+        tag + '-cursor-workspace: decoy cwd must not receive extra Repo writes');
+    }
   }
 } finally {
   try { fs.rmSync(sandbox.tmp, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }

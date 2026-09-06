@@ -134,7 +134,13 @@ a help probe on a destructive subcommand cannot run a finalize. An **unrecognize
 `unknown_flag` with zero mutation, before any subcommand body — a typo must never fall through to a
 destructive verb. `KNOWN_VALUE_FLAGS` also accepts `--product`, `--host`, and `--cursor-workspace`
 (`cursorWorkspace`) as explicit argv (never inferred from a sibling `agent` binary or Cursor.app).
-`--runtime` is a known value flag; the printed usage lists `claude|codex|opencode|kimi|grok|zcode`,
+Those three identity flags exist on all four claim trees: canonical GitHub
+`scripts/kaola-workflow-claim.js`, COMMON_SCRIPTS Codex copy
+`plugins/kaola-workflow/scripts/kaola-workflow-claim.js` (`npm run sync:editions`), GitLab
+hand-port `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js`, and Gitea
+hand-port `plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js`. `--forge` is not a
+claim.js flag. `--runtime` is a known value flag; the printed usage lists
+`claude|codex|opencode|kimi|grok|zcode`,
 and the Cursor CLI/local prep gate additionally reads the literal `cursor`.
 
 Two flags are retired to warn-and-ignore shims and are never persisted: `--workflow-path` (adaptive
@@ -146,16 +152,22 @@ prints one stderr notice and the claim proceeds unmutated.
 On `startup` (and `pick-next` when it delegates to `cmdStartup`) and on `resume`,
 `isCursorCliLocalWorkflowPath` is true iff `--runtime`/`--product`/`--host` normalize to
 `cursor`/`cli`/`local`. Only then does `ensureCursorCliLocalPrep` run the *installed* helper
-before a new claim and on resume without re-claim. Omitted, unknown, app, cloud, or incomplete
+before a new claim and on resume without re-claim. That gate and helper path exist on all four
+claim trees named above. Generated GitLab/Gitea Next stamps `--product cli --host local`; those
+claim.js no longer `unknown_flag`. Omitted, unknown, app, cloud, or incomplete
 pairs skip ensure but still claim/resume.
 
 ```
 ${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts/kaola-workflow-cursor-surface.js
-  --ensure-target <target> --forge=<forge|github> --json
+  --ensure-target <target> --forge=<args.forge||'github'> --json
 ```
 
-`resolveCursorCliEnsureTarget` chooses `<target>`: `--cursor-workspace` wins; else resume uses
-recorded `main_root`; first-claim fallback is invoking `getRoot()` (`git rev-parse --show-toplevel`).
+`--forge` is not a claim.js flag, so GitLab/Gitea claim trees keep that same helper default of
+`github`. `resolveCursorCliEnsureTarget` chooses `<target>`: `--cursor-workspace` wins; else resume
+uses recorded `main_root`; first-claim fallback in claim.js is still invoking `getRoot()`
+(`git rev-parse --show-toplevel`). Nested cwd and the write-worktree are not the known workspace.
+Generated Next appendix (`cursorCliStartupResumePrepProse`) names `--cursor-workspace` and recorded
+`main_root`; it does not name `git rev-parse --show-toplevel` as the known CLI workspace.
 The helper has no ambient target. `status` and `list-open` do not run this prep (zero-write even
 with CLI/local flags). Cursor App local and App Cloud (`--product app`) are excluded.
 
@@ -1608,7 +1620,7 @@ The `--release-check` step is the gate documented above. `--prepare` bumps the v
 | `install-cursor.sh` | additive Cursor edition installer (`--target DIR` / `--global`, forge axis, regenerate/uninstall/no-scripts/yes/doctor). It writes receipt-owned agents/commands and the doctor capability registry, merges an empty hook mapping, and retires the old duplicate recovery Rule. The separate global-contract transaction owns the local/Cloud Rule. |
 | `kaola-workflow-cursor-surface.js --doctor [--json] [--target DIR] [--product cli\|app\|unknown] [--host local\|cloud\|unknown] [--forge=...]` | Cursor filesystem/evidence reporter; reads the receipt-owned adapter registry and receipt state without a source checkout or sibling-host inference. Unqualified current `runtime_build` and `named_catalog` remain `unknown` absent live observation; `evidence_stamp` and `selected_host` carry historical measured facts. `dispatch_contract` reports the flat `subagent_type` call shape, per-call model omission, exact-tier post-resolution boundary, generic-enum scope, and `providerOptions.cursor.modelName` evidence carrier. |
 | `kaola-workflow-cursor-surface.js --install --scope global\|project [--target DIR] --source-tree DIR [--support-source DIR] [--no-scripts] [--authority-only] [--forge=...]` | receipt-owned agent/command authority or explicit project transaction used by `install-cursor.sh`; strips legacy duplicate Rules and Kaola prompt hooks while preserving foreign entries. |
-| `kaola-workflow-cursor-surface.js --ensure-target DIR [--forge=...]` | installed project materializer with no ambient target. It never bootstraps or repairs authority, returns `current` or `materialized`, and fails closed before target mutation on every authority/ownership fault. Standalone Cursor CLI/local Workflow `startup`/`resume` spawn it only when `--runtime cursor --product cli --host local` (omitted/unknown/app/cloud/incomplete pairs skip ensure but still claim/resume). Claim-time `<target>` is `--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()` (`git rev-parse --show-toplevel`) on first claim. Independently entered Finalize still invokes `--ensure-target "$PWD"` immediately before named dispatch (no CLI identity flags on that line). App local and Cloud are excluded. Cloud environment setup instead invokes the installer directly for its remote machine and selected repository after the Agent confirms that host. |
+| `kaola-workflow-cursor-surface.js --ensure-target DIR [--forge=...]` | installed project materializer with no ambient target. It never bootstraps or repairs authority, returns `current` or `materialized`, and fails closed before target mutation on every authority/ownership fault. Standalone Cursor CLI/local Workflow `startup`/`resume` spawn it from all four claim trees only when `--runtime cursor --product cli --host local` (omitted/unknown/app/cloud/incomplete pairs skip ensure but still claim/resume). Helper spawn is `--forge=<args.forge||'github'>`; `--forge` is not a claim.js flag. Claim-time `<target>` is `--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()` (`git rev-parse --show-toplevel`) on first claim in claim.js. Generated Next appendix names `--cursor-workspace` and recorded `main_root` and does not name `git rev-parse --show-toplevel` as the known CLI workspace. Independently entered Finalize still invokes `--ensure-target "$PWD"` immediately before named dispatch (no CLI identity flags on that line). App local and Cloud are excluded. Cloud environment setup instead invokes the installer directly for its remote machine and selected repository after the Agent confirms that host. |
 | `kaola-workflow-cursor-surface.js --uninstall --scope global\|project [--target DIR]` | removes only receipt-recorded files whose current hashes still match and only exact recorded Kaola hook entries; preserves modified or unproved bytes. |
 | `install-codex-agent-profiles.js` | authoritative Codex install/upgrade transaction; validates source profiles and targets, writes and prunes the managed set, records the manifest, installs hooks, and verifies the result before success |
 | `kaola-workflow-codex-preflight.js --doctor` | explicit user-invoked diagnostic for installed plugin, agent-profile, managed-config, manifest, and hook state. Ordinary workflow entry/resume never invokes it or treats its result as a readiness gate |

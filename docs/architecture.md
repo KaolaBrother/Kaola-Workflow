@@ -446,11 +446,18 @@ receipt-bound and preflight every managed path before writing. The first receipt
 adopt published 10.0.1 global bytes under exact per-forge
 hashes; a modified or unknown byte remains a collision, and only exact retired ambient-helper bytes
 are removed. On the measured standalone CLI only, Workflow `startup` and `resume` spawn the installed helper
-`--ensure-target` when `--runtime cursor --product cli --host local` (omitted, unknown, app, cloud,
-or incomplete pairs skip ensure but still claim/resume). The target is `--cursor-workspace` when
-set, else recorded `main_root` on resume, else invoking `getRoot()` (`git rev-parse --show-toplevel`)
-on first claim; independently entered Finalize still invokes `--ensure-target "$PWD"`
-immediately before named dispatch. App local and Cloud keep separate live catalogs. Only after an Agent establishes it
+`--ensure-target` when `--runtime cursor --product cli --host local` from all four claim trees
+(canonical GitHub `scripts/kaola-workflow-claim.js`, COMMON_SCRIPTS Codex copy, GitLab hand-port,
+Gitea hand-port). Generated GitLab/Gitea Next stamps `--product cli --host local`; those claim.js
+no longer `unknown_flag`. Omitted, unknown, app, cloud,
+or incomplete pairs skip ensure but still claim/resume. Helper spawn is
+`--forge=<args.forge||'github'>`; `--forge` is not a claim.js flag. Claim.js target is
+`--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()`
+(`git rev-parse --show-toplevel`) on first claim — not nested cwd and not the write-worktree.
+Generated Next appendix names `--cursor-workspace` and recorded `main_root`; it does not name
+`git rev-parse --show-toplevel` as the known CLI workspace. Independently entered Finalize still
+invokes `--ensure-target "$PWD"` immediately before named dispatch. App local and Cloud keep
+separate live catalogs. Only after an Agent establishes it
 is in Cursor Cloud environment setup may it install the remote authority plus selected repository,
 test the Build, and ask the user to click Save. The user then opens a new top-level Agent in that
 same repository; its visible Build link and live catalog must match before the install is trusted.
