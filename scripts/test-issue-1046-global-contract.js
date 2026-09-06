@@ -88,13 +88,30 @@ ok(fs.existsSync(REGISTRY), 'A1: one runtime adapter registry exists');
 ok(fs.existsSync(CLI), 'A1: one installation transaction exists');
 
 const source = fs.readFileSync(SOURCE, 'utf8');
+const nextSource = fs.readFileSync(path.join(ROOT, 'templates', 'routing', 'next.skeleton.md'), 'utf8');
+const dispatchSource = fs.readFileSync(path.join(ROOT, 'templates', 'routing', 'dispatch-contract.md'), 'utf8');
+const roleContracts = fs.readFileSync(path.join(ROOT, 'templates', 'agents', 'behavior-contracts.json'), 'utf8');
 for (const phrase of [
   'Correct first', 'Then save human time', 'Then spend as little as possible',
   'Machines decide facts; humans decide values', 'Own your own verdicts',
   'item', 'status', 'dispatched', 'result', 'three write moments',
-  'Custody', 'carrier', 'failure frontier', 'test custody',
   'Finalization, issue closure, archive, and sink are not Mission List items',
 ]) ok(source.includes(phrase), `A1: universal contract carries ${phrase}`);
+{
+  const nextN = nextSource.replace(/\s+/g, ' ');
+  const dispatchN = dispatchSource.replace(/\s+/g, ' ');
+  const rolesN = roleContracts.replace(/\s+/g, ' ');
+  ok(/Custody answers who may decide meaning|Custody decides who may judge meaning/i.test(nextN),
+    'A1: Next carries custody-of-meaning (moved out of the global essay)');
+  ok(/Failure frontier/i.test(nextN),
+    'A1: Next carries the failure-frontier procedure (moved out of the global essay)');
+  ok(/carrier decides where work runs|tool and custody boundaries/i.test(dispatchN + ' ' + nextN),
+    'A1: dispatch/Next carry carrier (moved out of the global essay)');
+  ok(/implementer may not delete, weaken, or reinterpret that acceptance/i.test(nextN),
+    'A1: Next keeps independent acceptance duty reachable');
+  ok(/custody of the test artifact|You do not hold custody of the tests/i.test(rolesN),
+    'A1: role contracts keep independent test custody');
+}
 for (const forbidden of [
   'Claude', 'Codex', 'OpenCode', 'Kimi', 'Grok', 'Cursor', 'ZCode',
   'subagent_type', 'spawn_agent', '~/', '/Users/', '.claude/', '.codex/', '.cursor/',

@@ -10,8 +10,10 @@ repository* and the surfaces it ships.
 
 Project instructions are an Agent-owned outcome, not an installer-owned byte surface. Before
 writing, inspect the repository and establish its actual purpose, commands, tests, documentation,
-and stricter constraints. Consolidate repeated facts and remove machine-global Workflow behavior;
-do not fit the result to prescribed headings, field order, canonical wording, or a length target.
+and constraints. Those files supplement verified local facts; a project exception must state its
+scope and must not weaken higher-priority instructions or host safety boundaries. Consolidate
+repeated facts and remove machine-global Workflow behavior; do not fit the result to prescribed
+headings, field order, canonical wording, or a length target.
 
 Obtain owner authorization before rewriting existing owner-authored instructions. An unmarked
 owner-authored `AGENTS.md` is a valid normal state, including when its organization differs from

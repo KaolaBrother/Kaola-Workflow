@@ -7,9 +7,10 @@ Codex mapping update is the dated #1049 source change, not a new runtime capabil
 
 ## One repository authority
 
-Root `AGENTS.md` is the repository's project-instruction authority. An Agent maintains it from
-verified project facts and stricter local constraints; universal Workflow behavior is supplied by
-the machine-global carrier. A runtime either reads `AGENTS.md` directly within its documented scope
+Root `AGENTS.md` is the repository's project-instruction authority. An Agent maintains it so that
+project instructions supplement verified local facts and constraints; a project exception must
+state its scope and must not weaken higher-priority instructions or host safety boundaries.
+Universal Workflow behavior is supplied by the machine-global carrier. A runtime either reads `AGENTS.md` directly within its documented scope
 or reaches it through the smallest native entrypoint bridge. Runtime-specific files may add native
 profile syntax, tools, permissions, model/effort settings, hooks, and install paths, but do not copy
 the machine-global contract.

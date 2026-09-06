@@ -14,9 +14,10 @@ reading one file.
 
 Recovery marker: `KW-COMPACT-RECOVERY-V2`. This complete prompt owns Workflow Next procedure.
 After compact, the native V2 carrier restores global contract and dispatch, rereads durable state,
-then completely reloads this prompt; no tool-use hook injects it. Read project `AGENTS.md` for local
-facts and stricter constraints, resume the recorded frontier, and transition to Kaola-Workflow
-Finalization only when every mission is done.
+then completely reloads this prompt; no tool-use hook injects it. Read project `AGENTS.md`; it
+supplements verified local facts and constraints. A project exception must state its scope and
+must not weaken higher-priority instructions or host safety boundaries. Resume the recorded
+frontier, and transition to Kaola-Workflow Finalization only when every mission is done.
 
 <!-- KW-RUNTIME-DISPATCH-START -->
 ## Delegation
@@ -67,8 +68,9 @@ Inspect the current Agent/Task type catalog and effective precedence. Claude cur
 
 **First Principles.** When nothing already settles a situation, break the tie by the numbered First
 Principles in the loaded machine-global workflow contract, applied in priority order. Project
-`AGENTS.md` adds only local facts and stricter constraints. Recording a derivation is useful and
-never required.
+`AGENTS.md` adds only local facts and constraints; a project exception must state its scope and
+must not weaken higher-priority instructions or host safety boundaries. Recording a derivation is
+useful and never required.
 
 <!-- PIN: consent-in-conversation -->
 **Consent.** Irreversible and value-laden calls belong to the user — ask, in conversation, before
@@ -150,7 +152,8 @@ Three writes only: create with `status: todo`; before the work goes out, set `in
 the locator; close with `done` and result. Inline work uses `dispatched: self`. A completed item and
 its result are immutable; one dispatch has one result, including FAIL/BLOCKED.
 
-An item is a mission, not a specification. A failed command, intermediate finding, repair attempt,
+An item is a mission, not a specification, selector, assertion, command, review round, role,
+model, dependency edge, or write set. A failed command, intermediate finding, repair attempt,
 or review round does not by itself create a mission. Keep working within the current promised
 outcome while custody and causal boundary remain unchanged. Append a mission only for a new
 recoverable outcome that changes custody or for a newly discovered independent causal class. Do

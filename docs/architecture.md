@@ -51,10 +51,11 @@ confirmed Cloud setup explicitly materializes the same V2 Rule in the selected G
 stores a repository receipt. No local installer infers or mutates a Cloud environment.
 
 Once the receipt is compatible, the Agent maintains project `AGENTS.md` as ordinary repository
-content: verified purpose, commands, constraints, validation, documentation, and stricter local
-overrides. The installer neither owns nor rewrites those bytes. Existing owner-authored instructions
-require owner authorization before rewrite; an active run is a reload concern rather than a hidden
-script migration state.
+content: verified purpose, commands, constraints, validation, and documentation that supplement the
+global contract. A project exception must state its scope and must not weaken higher-priority
+instructions or host safety boundaries. The installer neither owns nor rewrites those bytes.
+Existing owner-authored instructions require owner authorization before rewrite; an active run is
+a reload concern rather than a hidden script migration state.
 
 Compact recovery is also subtractive. Claude/Codex directly inject one pre-rendered V2 artifact at
 `SessionStart(source=compact)`; Grok/Cursor keep that same artifact in one persistent Rule. V2

@@ -5,6 +5,29 @@
 ### Changed
 
 - **Standalone Cursor CLI/local Workflow stamps CLI identity from a living CLI-shaped ancestor plus `--workspace`, then runs installed `--ensure-target` before the single claim (#1052).** Generated startup/resume fences do not stamp `--product cli --host local`. The documented CLI-positive route is the unstamped first fence `node "$CLAIM_JS" startup --runtime cursor --target-issues "$KAOLA_TARGET_ISSUES"` plus `applyDemonstratedCursorCliHost` on all four claim trees (canonical GitHub `scripts/kaola-workflow-claim.js`, COMMON_SCRIPTS Codex copy `plugins/kaola-workflow/scripts/kaola-workflow-claim.js`, GitLab hand-port, Gitea hand-port). Explicit `--product`/`--host` still win. When `--runtime cursor` and both are omitted, claim.js stamps `product=cli`, `host=local`, and `cursorWorkspace=<opened dir>` in-process before the single claim, and on resume without re-claim, only when `isDemonstratedCursorCliExecutable` sees `…/YYYY.MM.DD-<hash>/index.js` or `cursor-agent` **and** `--workspace <opened dir>` shares git identity with cwd; then ensure runs against that dir. Generic `--workspace` on an unrelated tool is not CLI and skips. `--worker-dir` present, with or without `--workspace`, is App-like and skips. No `--workspace` is unknown and skips. Darwin unquoted `ps -ww -p <pid> -o args=` splits on spaces; `collectUnquotedFlagRemainder` takes the `--workspace` value as the remainder until the next `--<flag>` so a path that contains spaces is reconstituted in full. Linux `/proc/<pid>/cmdline` stays NUL-delimited and is unchanged. `isCursorCliLocalWorkflowPath` remains true iff the three tokens normalize to `cursor`/`cli`/`local` after that stamp or explicit argv. `resolveCursorCliEnsureTarget`: `--cursor-workspace` (including the stamped locator) wins; else resume uses recorded `main_root`; first-claim fallback is still invoking `getRoot()`. Nested cwd and the write-worktree are not the known workspace unless they are that demonstrated opened dir. Helper spawn remains `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts/kaola-workflow-cursor-surface.js --ensure-target <target> --forge=<args.forge||'github'> --json`. `--forge` is not a claim.js flag. Helper `current` proceeds; `materialized` adds `cursor_prep.restart_boundary: "new_process_same_chat"` (file-ready, not live Task catalog or same-process hot-load proof). Helper faults fail closed (`result: refuse`, `reason: cursor_prep_failed`, `claim: none`, exit 1). `status`/`list-open` stay zero-write. App local and Cloud stay excluded. Real Cursor CLI `2026.09.02-c22c1a3` does not export `CURSOR_PRODUCT`, `CURSOR_HOST`, `KAOLA_CURSOR_*`, or `CURSOR_WORKSPACE`; operators do not pre-export those names. Resume is one unstamped fence: `kaola_script` / `CLAIM_JS=` outside any `if`, then `node "$CLAIM_JS" resume --runtime cursor`. There is no `cursorCliHostGateOpen`. Independently entered Finalize still uses `--ensure-target "$PWD"` immediately before named dispatch. No `sessionStart` materializer and no `--global` dual-write. This entry does not claim `npm test`, the walkthrough, or `:claude:full`.
+- **Global workflow contract is shorter and two universal wordings changed (#1051).**
+  `templates/global/kaola-workflow-global.md` remains the sole vendor-neutral source and is still
+  embedded once in compact recovery via `<!-- SLOT:global-workflow-contract -->`. Daily governance
+  stays in that global source even when Next or Finalize is not invoked: forge open issues; later
+  comments with explicit corrections; `.roadmap/_rules.md` with no local backlog mirror; the
+  `kaola-workflow/config.json` / `priority_top_tier_labels` interface (this repository still has no
+  config file); and full paths `kaola-workflow/{project}/workflow-state.md` and `mission-list.md`.
+  Organizing issues does not auto-claim or auto-create a Mission List; daily governance does not
+  auto-create a run; an active run is respected. Four Mission List fields, three write moments,
+  immutable completed results, recoverable outcomes, and `FAIL`/`BLOCKED` remain; the longer
+  mission-boundary and custody/failure-frontier procedure lives in Next. Finalization, closure,
+  archive, and sink are not Mission List items. Measurement of the global source (not a gate): 50
+  lines / 405 English words / 2,825 bytes, previously 57 / 470 / 3,293.
+- **Project instructions supplement local facts; scoped exceptions may not weaken host safety
+  (#1051).** The previous universal rule that project instructions add only verified facts and
+  stricter constraints is replaced: they supplement verified local facts and constraints; a project
+  exception must state its scope and must not weaken higher-priority instructions or host safety
+  boundaries. Continue inside already-granted authorization; unauthorized irreversible or value-laden
+  calls still go to the user. Serve the user's goal and proven problems; a user-requested feature is
+  not refused for lack of a prior observed failure. ADR 0022 and ADR 0023 keep their historical
+  decisions; each notes this global-rule update. `docs/api.md` now records those as interface
+  conventions (project-instruction scope, compact-recovery resume boundaries, and daily-governance
+  priority paths) even with no new CLI flags.
 
 ## [10.4.0] - 2026-09-05
 

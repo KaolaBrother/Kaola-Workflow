@@ -8,8 +8,10 @@
 
 Recovery marker: `KW-COMPACT-RECOVERY-V2`. This complete prompt owns Finalization procedure. After
 compact, the native V2 carrier restores global contract and dispatch, rereads durable state, then
-completely reloads this prompt; no tool-use hook injects it. Read project `AGENTS.md` for local facts
-and stricter constraints, then resume from existing finalization receipts.
+completely reloads this prompt; no tool-use hook injects it. Read project `AGENTS.md`; it
+supplements verified local facts and constraints. A project exception must state its scope and
+must not weaken higher-priority instructions or host safety boundaries. Then resume from
+existing finalization receipts.
 
 <!-- KW-RUNTIME-DISPATCH-START -->
 <!-- SLOT:runtime-dispatch-common -->

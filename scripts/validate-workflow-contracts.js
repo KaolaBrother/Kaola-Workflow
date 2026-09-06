@@ -365,6 +365,8 @@ assertConcept('templates/global/kaola-workflow-global.md', 'machine-global Missi
   'dispatched',
   'result',
   'in-flight',
+  'kaola-workflow/{project}/workflow-state.md',
+  'kaola-workflow/{project}/mission-list.md',
 ]);
 assertConcept('templates/routing/compact-recovery.skeleton.md', 'compact durable-state route', [
   'AGENTS.md',
