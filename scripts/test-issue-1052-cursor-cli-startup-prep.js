@@ -458,6 +458,7 @@ function writeLivingFenceParent(tmp, relParts) {
     'const { spawnSync } = require("child_process");',
     'const fence = process.env.KAOLA_FENCE || "";',
     'const cwd = process.env.KAOLA_FENCE_CWD || process.cwd();',
+    // spawn-class: environment
     'const r = spawnSync("bash", ["--noprofile", "--norc", "-c", fence], {',
     '  stdio: "inherit",',
     '  cwd: cwd,',
@@ -1152,6 +1153,7 @@ try {
       }),
       stdio: 'ignore',
     });
+    // spawn-class: environment
     const listed = spawnSync('ps', ['-ww', '-p', String(child.pid), '-o', 'args='], {
       encoding: 'utf8',
       timeout: 3000,
@@ -1173,6 +1175,7 @@ try {
       env: sandbox.env,
       stdio: 'ignore',
     });
+    // spawn-class: environment
     const listed = spawnSync('ps', ['-ww', '-p', String(child.pid), '-o', 'args='], {
       encoding: 'utf8',
       timeout: 3000,
