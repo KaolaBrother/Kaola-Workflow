@@ -185,14 +185,48 @@ function cursorNativeDispatchProse(card) {
     + 'record capability_gap, or dispatch a live built-in only as itself when its real boundary fits.\n';
 }
 
-function cursorCliMaterializationProse(forge) {
+function cursorCliSharedHostAndFailClosedProse() {
   return [
-    '## Cursor standalone CLI pre-dispatch materialization',
-    '',
     'Apply this check only when the current execution product is the standalone Cursor CLI on the',
     'local host. Do not enter this branch merely because a sibling CLI binary exists. Cursor App',
     'local IDE Agent and App-started Cloud are separate hosts: inspect their live Task catalog and',
     'do not apply or infer this CLI materialization rule for either App host.',
+  ].join('\n');
+}
+
+function cursorCliFailClosedRepairProse() {
+  return [
+    'Missing or stale global authority, an unmanaged canonical-name collision, a symlink or',
+    'nonregular carrier, invalid/copied receipt, or modified receipt-owned bytes fails closed before',
+    'project mutation. Report the exact diagnostic and the explicit global-install or owner-file',
+    'repair; never substitute an ambient cwd copier or a sessionStart materializer.',
+  ].join('\n');
+}
+
+function cursorCliStartupResumePrepProse() {
+  return [
+    '## Cursor standalone CLI startup and resume Repo role prep',
+    '',
+    cursorCliSharedHostAndFailClosedProse(),
+    '',
+    'Workflow startup and resume execute Repo role prep through the installed',
+    '`${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts/kaola-workflow-cursor-surface.js`',
+    '`--ensure-target` transaction against the CLI workspace (`git rev-parse --show-toplevel`).',
+    'File-ready on-disk materialization is distinct from live Task catalog visibility: bytes on',
+    'disk do not prove the live Task catalog, enum, or visibility has loaded those roles.',
+    'Missing named or missing project roles are not a capability_gap for omitting this prep.',
+    'A `status: current` result is a byte-level no-write; claim or resume proceeds. A',
+    '`status: materialized` result reports restart_boundary `new_process_same_chat` and requires a',
+    'new Cursor CLI process with the same chat. Do not claim live-loaded or same-process hot load.',
+    cursorCliFailClosedRepairProse(),
+  ].join('\n');
+}
+
+function cursorCliMaterializationProse(forge) {
+  return [
+    '## Cursor standalone CLI pre-dispatch materialization',
+    '',
+    cursorCliSharedHostAndFailClosedProse(),
     '',
     'Immediately before the first named Kaola child dispatch, run the installed transaction with',
     'the current workspace as an explicit target:',
@@ -207,10 +241,7 @@ function cursorCliMaterializationProse(forge) {
     '`status: materialized` result means safe project bytes or their receipt changed: stop named',
     'dispatch, start a new Cursor CLI process with the same chat at this workspace, and re-run the',
     'command before dispatch. The measured reload boundary is a new process, not same-process hot',
-    'load. Missing or stale global authority, an unmanaged canonical-name collision, a symlink or',
-    'nonregular carrier, invalid/copied receipt, or modified receipt-owned bytes fails closed before',
-    'project mutation. Report the exact diagnostic and the explicit global-install or owner-file',
-    'repair; never substitute an ambient cwd copier or a sessionStart materializer.',
+    'load. ' + cursorCliFailClosedRepairProse(),
   ].join('\n');
 }
 
@@ -233,7 +264,17 @@ function transformCommandBody(body, forge, label) {
   text = text.replace(/--runtime claude\b/g, '--runtime cursor');
   text = rewriteClaudeScriptPaths(text, forge);
   const basename = path.posix.basename(label || '');
-  if (basename === 'workflow-next.md' || basename === 'kaola-workflow-finalize.md') {
+  if (basename === 'workflow-next.md') {
+    text = text.replace(
+      /node "\$CLAIM_JS" startup --runtime cursor\b/g,
+      'node "$CLAIM_JS" startup --runtime cursor --product cli --host local'
+    );
+    text = text.replace(
+      /^## Resume\n\nOn resume, read `mission-list\.md`/m,
+      '## Resume\n\n```bash\nnode "$CLAIM_JS" resume --runtime cursor --product cli --host local\n```\n\nOn resume, read `mission-list.md`'
+    );
+    text = text.trimEnd() + '\n\n' + cursorCliStartupResumePrepProse() + '\n';
+  } else if (basename === 'kaola-workflow-finalize.md') {
     text = text.trimEnd() + '\n\n' + cursorCliMaterializationProse(forge) + '\n';
   }
   return text;
@@ -683,6 +724,7 @@ module.exports = {
   rewriteClaudeScriptPaths, CURSOR_KAOLA_SCRIPT, cursorKaolaScript,
   CURSOR_MODEL_DISPATCH_GUIDANCE,
   cursorCliMaterializationProse,
+  cursorCliStartupResumePrepProse,
   renderCursorHooksJson, rewriteHooksJsonForGlobal, mergeDestHooks, stripDestHooks, mappingRel,
   RECOVERY_RULE, RECOVERY_START, RECOVERY_END, DISPATCH_START, DISPATCH_END,
   treeLabel, agentRel, commandRel, canonCommandPath, runCheck, runWrite,

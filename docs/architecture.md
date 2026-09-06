@@ -445,9 +445,12 @@ machine, and never deploys a Cursor Cloud environment. Project `.cursor` catalog
 receipt-bound and preflight every managed path before writing. The first receipt-owning upgrade may
 adopt published 10.0.1 global bytes under exact per-forge
 hashes; a modified or unknown byte remains a collision, and only exact retired ambient-helper bytes
-are removed. On the measured standalone CLI only,
-workflow-next/finalize may invoke the installed helper with explicit `$PWD` immediately before a
-named dispatch; App local and Cloud keep separate live catalogs. Only after an Agent establishes it
+are removed. On the measured standalone CLI only, Workflow `startup` and `resume` spawn the installed helper
+`--ensure-target` when `--runtime cursor --product cli --host local` (omitted, unknown, app, cloud,
+or incomplete pairs skip ensure but still claim/resume). The target is `--cursor-workspace` when
+set, else recorded `main_root` on resume, else invoking `getRoot()` (`git rev-parse --show-toplevel`)
+on first claim; independently entered Finalize still invokes `--ensure-target "$PWD"`
+immediately before named dispatch. App local and Cloud keep separate live catalogs. Only after an Agent establishes it
 is in Cursor Cloud environment setup may it install the remote authority plus selected repository,
 test the Build, and ask the user to click Save. The user then opens a new top-level Agent in that
 same repository; its visible Build link and live catalog must match before the install is trusted.

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Standalone Cursor CLI/local Workflow startup and resume run the installed `--ensure-target` transaction only on explicit `--runtime cursor --product cli --host local` (#1052).** `kaola-workflow-claim.js` `KNOWN_VALUE_FLAGS` includes `product`, `host`, and `cursorWorkspace` (`--cursor-workspace`). `isCursorCliLocalWorkflowPath` is true iff those three tokens normalize to `cursor`/`cli`/`local`. Omitted, unknown, app, cloud, or incomplete pairs skip ensure but still claim/resume. `resolveCursorCliEnsureTarget`: `--cursor-workspace` wins; else resume uses recorded `main_root`; first-claim fallback is invoking `getRoot()` (`git rev-parse --show-toplevel`). When the gate matches, `startup` and `resume` spawn `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts/kaola-workflow-cursor-surface.js --ensure-target <target> --forge=<forge|github> --json` before a new claim and on resume without re-claim. Helper spawn is unchanged. The helper has no ambient target; nested cwd and the write-worktree are not the default locator. Helper `status: current` is a byte-level no-write and claim/resume proceeds; `status: materialized` adds envelope `cursor_prep.restart_boundary: "new_process_same_chat"` (file-ready bytes, not a live catalog proof). Helper faults fail closed before claim with `result: refuse`, `reason: cursor_prep_failed`, `claim: none`, the helper diagnostic, and exit 1. `status` and `list-open` stay zero-write even with CLI/local flags. Cursor App local and App Cloud stay excluded. Generated Next rewrite is `node "$CLAIM_JS" startup --runtime cursor --product cli --host local`; the resume section is `node "$CLAIM_JS" resume --runtime cursor --product cli --host local` then still reads `mission-list.md`. Independently entered Finalize still appends `cursorCliMaterializationProse(forge)` (`## Cursor standalone CLI pre-dispatch materialization`) with `--ensure-target "$PWD"` immediately before named dispatch (no CLI identity flags on ensure-target lines). No `sessionStart` materializer and no `--global` dual-write.
+
 ## [10.4.0] - 2026-09-05
 
 ### Changed

@@ -68,6 +68,7 @@ function deriveRunPosture(worktreePath) {
 // known value flag or unknown. (Keep this in sync with the value flags the subcommands read.)
 const KNOWN_VALUE_FLAGS = new Set([
   'branch', 'issue', 'project', 'reason', 'runtime', 'sink',
+  'product', 'host', 'cursorWorkspace',
   'targetIssue', 'targetIssues', 'workflowPath', 'prNumber', 'issueNumbers', 'base',
   // #603: the Codex dispatch mode the startup surface passes from preflight detection.
   'codexDispatchMode',
@@ -1960,6 +1961,90 @@ function output(obj, code) {
   if (code) process.exitCode = code;
 }
 
+// #1052: standalone Cursor CLI/local Workflow startup and resume run Repo role
+// prep through the *installed* helper. Product/host are explicit argv only —
+// never inferred from a sibling `agent` binary or Cursor.app.
+function installedCursorSurfaceHelperPath() {
+  const home = process.env.CURSOR_HOME || path.join(process.env.HOME || '', '.cursor');
+  return path.join(home, 'kaola-workflow', 'scripts', 'kaola-workflow-cursor-surface.js');
+}
+
+function normalizeHostIdentityToken(value) {
+  return String(value == null ? '' : value).trim().toLowerCase();
+}
+
+function isCursorCliLocalWorkflowPath(args) {
+  return normalizeHostIdentityToken(args && args.runtime) === 'cursor'
+    && normalizeHostIdentityToken(args && args.product) === 'cli'
+    && normalizeHostIdentityToken(args && args.host) === 'local';
+}
+
+// Explicit --cursor-workspace wins. Resume uses recorded main_root from the
+// run's workflow-state.md. First-claim fallback is the invoking git toplevel.
+function resolveCursorCliEnsureTarget(args, invokingRoot, recordedMainRoot) {
+  const locator = args && args.cursorWorkspace;
+  if (locator != null && String(locator).trim() !== '') {
+    return path.resolve(process.cwd(), String(locator).trim());
+  }
+  const recorded = recordedMainRoot != null ? String(recordedMainRoot).trim() : '';
+  if (recorded) return recorded;
+  return invokingRoot;
+}
+
+function cursorPrepEnvelope(body) {
+  if (!body) return {};
+  const cursor_prep = { status: body.status, target: body.target || null };
+  if (body.status === 'materialized') {
+    cursor_prep.restart_boundary = 'new_process_same_chat';
+  }
+  return { cursor_prep };
+}
+
+function refuseCursorPrep(args, diagnostic) {
+  const text = String(diagnostic || '').trim() || 'cursor_prep: installed ensure-target failed (install/authority)';
+  process.stderr.write(text + '\n');
+  output({
+    result: 'refuse',
+    reason: 'cursor_prep_failed',
+    claim: 'none',
+    diagnostic: text
+  }, 1);
+}
+
+function ensureCursorCliLocalPrep(root, args) {
+  if (!isCursorCliLocalWorkflowPath(args)) return { skipped: true };
+  const helper = installedCursorSurfaceHelperPath();
+  if (!fs.existsSync(helper)) {
+    refuseCursorPrep(args, 'cursor_prep: installed helper/authority missing at ' + helper
+      + '; run install-cursor.sh --global --yes');
+    return { failed: true };
+  }
+  const forge = String(args && args.forge || 'github').trim() || 'github';
+  const spawned = spawnSync(process.execPath, [
+    helper, '--ensure-target', root, '--forge=' + forge, '--json'
+  ], {
+    cwd: root,
+    encoding: 'utf8',
+    env: process.env,
+    timeout: 120000
+  });
+  if (spawned.error || spawned.status !== 0) {
+    const diagnostic = String(spawned.stderr || '').trim()
+      || ('cursor_prep: installed ensure-target failed (install/authority/receipt/collision/symlink) status='
+        + spawned.status
+        + (spawned.error ? ' error=' + spawned.error.message : ''));
+    refuseCursorPrep(args, diagnostic);
+    return { failed: true };
+  }
+  let body = null;
+  try { body = JSON.parse(String(spawned.stdout || '').trim()); } catch (_) { body = null; }
+  if (!body || (body.status !== 'current' && body.status !== 'materialized')) {
+    refuseCursorPrep(args, 'cursor_prep: installed ensure-target returned an invalid receipt/status');
+    return { failed: true };
+  }
+  return { failed: false, skipped: false, body: body };
+}
+
 // The claim-time statuses that ANSWER. None of them is a fact about a kernel write: they report an
 // argv usage error, a classifier that would not answer, or a target the caller now knows something
 // about. Nothing was written in any of them, so the caller reads the envelope, re-states its reason
@@ -2104,6 +2189,25 @@ function cmdStartup() {
   const resolvedTargetSource = String(args.targetSource == null ? 'user_directed' : args.targetSource).trim()
     === 'user_directed' ? 'user_directed' : 'orchestrator_selected';
 
+  // MEASURED, and left alone: this surface is INCONSISTENT about which key carries the token.
+  // This answer (and its `cmdPickNext` twin) emits a bare `verdict` with NO `status` key at all,
+  // while every arm composed through the Object.assign below carries BOTH `verdict` and `status`.
+  // A consumer — or a check — comparing `envelope.status` across the two shapes compares
+  // `undefined` to `undefined` on this one and reads it as agreement, which is how the gap stayed
+  // invisible. `verdict` and `result` are both correct here; only the missing `status` is the
+  // defect. Normalizing it is a breaking envelope change for anything keyed on the current shape,
+  // so it is recorded rather than fixed.
+  if (!bundleTargets && !scalarTarget) {
+    output({ verdict: 'no_target', claim: 'none', project: null, issue: null, result: 'answer',
+      reasoning: NO_TARGET_USAGE }, claimExitCode('no_target'));
+    return;
+  }
+
+  // #1052: Cursor CLI/local Repo prep is fail-closed *before* claim mutation.
+  const prep = ensureCursorCliLocalPrep(resolveCursorCliEnsureTarget(args, root, ''), args);
+  if (prep.failed) return;
+  const prepFields = cursorPrepEnvelope(prep.body);
+
   // #328: bundle path
   if (bundleTargets) {
     const result = claimExplicitBundle(root, args);
@@ -2117,23 +2221,10 @@ function cmdStartup() {
       selected_issue: result.issue || null,
       target_source: resolvedTargetSource,
       worktree_path: result.worktree_path || ''
-    }, result, recordNote), claimExitCode(result.status));
+    }, result, recordNote, prepFields), claimExitCode(result.status));
     return;
   }
 
-  // MEASURED, and left alone: this surface is INCONSISTENT about which key carries the token.
-  // This answer (and its `cmdPickNext` twin) emits a bare `verdict` with NO `status` key at all,
-  // while every arm composed through the Object.assign below carries BOTH `verdict` and `status`.
-  // A consumer — or a check — comparing `envelope.status` across the two shapes compares
-  // `undefined` to `undefined` on this one and reads it as agreement, which is how the gap stayed
-  // invisible. `verdict` and `result` are both correct here; only the missing `status` is the
-  // defect. Normalizing it is a breaking envelope change for anything keyed on the current shape,
-  // so it is recorded rather than fixed.
-  if (!scalarTarget) {
-    output({ verdict: 'no_target', claim: 'none', project: null, issue: null, result: 'answer',
-      reasoning: NO_TARGET_USAGE }, claimExitCode('no_target'));
-    return;
-  }
   const result = claimExplicitTarget(root, Object.assign({}, args, { targetIssue: scalarTarget }));
   // Fold the staged origin evidence + persist the resolved record under the claimed project, then
   // surface its digest on the emitted claim JSON.
@@ -2145,7 +2236,7 @@ function cmdStartup() {
     selected_issue: result.issue || null,
     target_source: resolvedTargetSource,
     worktree_path: result.folder ? (result.folder.worktree_path || '') : (result.worktree_path || '')
-  }, result, recordNote), claimExitCode(result.status));
+  }, result, recordNote, prepFields), claimExitCode(result.status));
 }
 
 function cmdPickNext() {
@@ -2306,11 +2397,16 @@ function cmdResume() {
     output({ resumed: false, reason: 'no active workflow project' }, 1);
     return;
   }
-  output({
+  // #1052: Cursor CLI/local resume still runs installed ensure-target against the
+  // recorded CLI workspace (main_root), never the write-worktree git toplevel.
+  const prep = ensureCursorCliLocalPrep(
+    resolveCursorCliEnsureTarget(args, root, folder.main_root), args);
+  if (prep.failed) return;
+  output(Object.assign({
     resumed: true,
     project: folder.project,
     issue: folder.issue_number,
-  });
+  }, cursorPrepEnvelope(prep.body)));
 }
 
 // #333: terminal-stamp the workflow-state CONTENT for an archive. Pure string transform.

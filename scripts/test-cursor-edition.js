@@ -245,27 +245,135 @@ function inspectPathBConsumers(root) {
   return { ok: errors.length === 0, errors, relations };
 }
 
-// The measured standalone CLI needs project profiles before it can expose the
-// named Task catalog. That exception is a pre-dispatch transaction, not an
-// ambient hook and not a fact that may be inferred onto either Cursor App
-// host. Judge the generated consumer bytes so a renderer that drops, moves,
-// or broadens the rule cannot hide behind a correct adapter source.
+// Issue #1052: executable Workflow startup/resume is the skip-proof for standalone
+// CLI Repo prep. Next must describe that program order. Finalize entered independently
+// keeps the existing pre-dispatch ensure guarantee. Shared negatives (App/Cloud, no
+// ambient cwd, no sessionStart, fail-closed install faults) stay required on both.
 const CURSOR_CLI_MATERIALIZATION_COMMANDS = Object.freeze([
   'workflow-next',
   'kaola-workflow-finalize',
 ]);
 
-function cursorCliMaterializationVerdict(text, forge) {
+function cursorCliMaterializationSurface(name) {
+  return name === 'workflow-next' ? 'next' : 'finalize';
+}
+
+function cursorCliSharedHostNegatives(block, errors) {
+  if (!/only when[^.]*standalone Cursor CLI[^.]*local host/i.test(block)) {
+    errors.push('materialization branch is not limited to standalone Cursor CLI local');
+  }
+  if (!/Cursor App[\s\S]{0,180}App-started Cloud[\s\S]{0,220}(?:do not|never) apply or infer[^.]*CLI materialization rule[^.]*App host/i.test(block)) {
+    errors.push('App local and App-started Cloud do not retain a shared negative CLI-rule boundary');
+  }
+  if (!/Cursor App[\s\S]{0,180}App-started Cloud[^.]*separate hosts[^.]*inspect their live Task catalog/i.test(block)) {
+    errors.push('App local and App-started Cloud are not separate live-catalog decisions');
+  }
+  if (!/never substitute an ambient cwd copier or a sessionStart materializer/i.test(block)) {
+    errors.push('ambient and sessionStart materialization are not explicitly excluded');
+  }
+}
+
+function cursorCliFailClosedInstallFaults(block, errors) {
+  const flatBlock = String(block || '').replace(/\s+/g, ' ');
+  const missingAt = flatBlock.indexOf('Missing or stale global authority');
+  const collisionAt = flatBlock.indexOf('collision', missingAt);
+  const symlinkAt = flatBlock.indexOf('symlink', collisionAt);
+  const closedAt = flatBlock.indexOf('fails closed before project mutation', symlinkAt);
+  if (!(missingAt >= 0 && collisionAt > missingAt && symlinkAt > collisionAt && closedAt > symlinkAt)) {
+    errors.push('authority/collision/symlink failures are not specified as fail-closed');
+  }
+  if (/Task unsupported/i.test(block)) {
+    errors.push('fail-closed install faults must not be classified as Task-unsupported');
+  }
+}
+
+function cursorCliExecutableClaimLines(block, verb) {
+  return String(block || '').split(/\r?\n/).filter(line => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('<!--')) return false;
+    return /\bnode\b/.test(line)
+      && /\$CLAIM_JS/.test(line)
+      && new RegExp('\\b' + verb + '\\b').test(line);
+  });
+}
+
+function cursorCliLineHasExplicitCliLocalIdentity(line) {
+  return /--runtime(?:\s+|=)cursor\b/.test(line)
+    && /--product(?:\s+|=)cli\b/.test(line)
+    && /--host(?:\s+|=)local\b/.test(line);
+}
+
+function cursorCliMaterializationVerdict(text, forge, surface) {
   const errors = [];
   const source = String(text || '');
-  const heading = '## Cursor standalone CLI pre-dispatch materialization';
-  const start = source.indexOf(heading);
-  const end = start < 0 ? -1 : source.indexOf('\n## ', start + heading.length);
-  const block = start < 0 ? '' : source.slice(start, end < 0 ? source.length : end);
+  const kind = surface === 'next' ? 'next' : 'finalize';
+  const heading = kind === 'next'
+    ? null
+    : '## Cursor standalone CLI pre-dispatch materialization';
+  const start = heading ? source.indexOf(heading) : 0;
+  const end = heading && start >= 0 ? source.indexOf('\n## ', start + heading.length) : -1;
+  const block = kind === 'next'
+    ? source
+    : (start < 0 ? '' : source.slice(start, end < 0 ? source.length : end));
   const ensureCalls = block.split(/\r?\n/)
     .filter(line => /\bnode\b/.test(line) && /--ensure-target\b/.test(line));
 
-  if (start < 0) errors.push('missing standalone CLI pre-dispatch materialization section');
+  if (kind === 'finalize' && start < 0) {
+    errors.push('missing standalone CLI pre-dispatch materialization section');
+  }
+
+  if (kind === 'next') {
+    if (!/\bstartup\b/i.test(block) || !/\bresume\b/i.test(block)) {
+      errors.push('Next does not state that Workflow startup and resume execute Repo role prep');
+    }
+    const startupLines = cursorCliExecutableClaimLines(block, 'startup')
+      .filter(line => /--runtime(?:\s+|=)cursor\b/.test(line));
+    if (startupLines.length === 0) {
+      errors.push('generated Next startup does not invoke executable claim.js startup --runtime cursor');
+    }
+    if (startupLines.some(line => !cursorCliLineHasExplicitCliLocalIdentity(line))) {
+      errors.push('generated Next startup treats omitted --product/--host as CLI (must pass explicit --product cli --host local)');
+    }
+    const resumeLines = cursorCliExecutableClaimLines(block, 'resume');
+    if (resumeLines.length === 0) {
+      errors.push('generated Next resume/recovery does not invoke executable claim.js resume (helper-only or mission-list.md prose is not the subject)');
+    }
+    if (resumeLines.some(line => !cursorCliLineHasExplicitCliLocalIdentity(line))) {
+      errors.push('generated Next resume treats omitted --product/--host as CLI (must pass explicit --product cli --host local)');
+    }
+    const appWindow = block.match(/Cursor App[\s\S]{0,900}App-started Cloud[\s\S]{0,900}/);
+    if (appWindow && /--product(?:\s+|=)cli\b/.test(appWindow[0]) && /--host(?:\s+|=)local\b/.test(appWindow[0])) {
+      errors.push('App local/Cloud guidance inherits standalone CLI --product cli --host local as a default');
+    }
+    const leakedIdentity = block.split(/\r?\n/).filter(line =>
+      /--product(?:\s+|=)cli\b/.test(line)
+      && /--host(?:\s+|=)local\b/.test(line)
+      && /--ensure-target\b/.test(line));
+    if (leakedIdentity.length) {
+      errors.push('CLI identity flags leaked onto an --ensure-target line; App/Cloud must not inherit them as a default');
+    }
+    if (/Immediately before the first named Kaola child dispatch/i.test(block)) {
+      errors.push('Next still locates Repo prep at first named dispatch, which is skippable');
+    }
+    if (/(?:treat|record|report)\s+missing named.{0,80}capability_gap/i.test(block)
+        && /skip/i.test(block)) {
+      errors.push('missing named roles are authorized as a capability_gap skip of Repo prep');
+    }
+    if (!/(?:must not|do not|never)\s+treat missing named.{0,100}capability_gap|(?:missing named|missing project).{0,120}(?:not|never).{0,80}capability_gap/i.test(block)) {
+      errors.push('Next does not forbid treating missing named roles as capability_gap that skips Repo prep');
+    }
+    if (!/live Task (?:catalog|enum|visibility)/i.test(block)
+        || !/(?:file-ready|on-disk|materializ(?:e|ed|ation))/i.test(block)) {
+      errors.push('Next does not distinguish file-ready project bytes from live Task visibility');
+    }
+    if (!/new_process_same_chat|new Cursor CLI process/i.test(block)) {
+      errors.push('Next does not report the measured CLI restart-required boundary');
+    }
+    cursorCliSharedHostNegatives(block, errors);
+    cursorCliFailClosedInstallFaults(block, errors);
+    return { ok: errors.length === 0, errors, block, ensureCalls };
+  }
+
   if (ensureCalls.length !== 1) {
     errors.push('expected one installed-helper --ensure-target call, found ' + ensureCalls.length);
   } else {
@@ -283,15 +391,7 @@ function cursorCliMaterializationVerdict(text, forge) {
   if (!/CURSOR_MATERIALIZER=.*\$\{CURSOR_HOME:-\$HOME\/\.cursor\}\/kaola-workflow\/scripts\/kaola-workflow-cursor-surface\.js/.test(block)) {
     errors.push('materializer is not resolved from the installed global Cursor authority');
   }
-  if (!/only when[^.]*standalone Cursor CLI[^.]*local host/i.test(block)) {
-    errors.push('materialization branch is not limited to standalone Cursor CLI local');
-  }
-  if (!/Cursor App[\s\S]{0,180}App-started Cloud[\s\S]{0,220}(?:do not|never) apply or infer[^.]*CLI materialization rule[^.]*App host/i.test(block)) {
-    errors.push('App local and App-started Cloud do not retain a shared negative CLI-rule boundary');
-  }
-  if (!/Cursor App[\s\S]{0,180}App-started Cloud[^.]*separate hosts[^.]*inspect their live Task catalog/i.test(block)) {
-    errors.push('App local and App-started Cloud are not separate live-catalog decisions');
-  }
+  cursorCliSharedHostNegatives(block, errors);
   if (!/Immediately before the first named Kaola child dispatch/i.test(block)) {
     errors.push('installed helper is not required immediately before named dispatch');
   }
@@ -305,16 +405,7 @@ function cursorCliMaterializationVerdict(text, forge) {
       && stopAt > materializedAt && restartAt > stopAt)) {
     errors.push('current/materialized outcomes do not preserve no-op versus restart behavior');
   }
-  const missingAt = flatBlock.indexOf('Missing or stale global authority');
-  const collisionAt = flatBlock.indexOf('collision', missingAt);
-  const symlinkAt = flatBlock.indexOf('symlink', collisionAt);
-  const closedAt = flatBlock.indexOf('fails closed before project mutation', symlinkAt);
-  if (!(missingAt >= 0 && collisionAt > missingAt && symlinkAt > collisionAt && closedAt > symlinkAt)) {
-    errors.push('authority/collision/symlink failures are not specified as fail-closed');
-  }
-  if (!/never substitute an ambient cwd copier or a sessionStart materializer/i.test(block)) {
-    errors.push('ambient and sessionStart materialization are not explicitly excluded');
-  }
+  cursorCliFailClosedInstallFaults(block, errors);
   return { ok: errors.length === 0, errors, block, ensureCalls };
 }
 
@@ -328,6 +419,40 @@ if (process.argv.includes('--path-b-oracle')) {
   }
   console.log('PATH-B-ORACLE GREEN: built-in-only omit-model carries the parent, not a profile pin');
   process.exit(0);
+}
+
+if (process.argv.includes('--cli-materialization-oracle')) {
+  const isolated = fs.mkdtempSync(path.join(tmpBase(), 'cursor-cli-mat-oracle-'));
+  try {
+    // spawn-class: environment
+    const generated = spawnSync(process.execPath, [SYNC_JS, '--write', '--tree-root=' + isolated], {
+      cwd: REPO, encoding: 'utf8',
+    });
+    if (generated.status !== 0) {
+      console.error('CLI-MATERIALIZATION-ORACLE RED: sync --write --tree-root failed: '
+        + String(generated.stderr || generated.stdout || '').slice(0, 400));
+      process.exit(1);
+    }
+    let oracleFailed = false;
+    for (const name of CURSOR_CLI_MATERIALIZATION_COMMANDS) {
+      const rel = path.join('.cursor', 'commands', name + '.md');
+      const absolute = path.join(isolated, rel);
+      const surface = cursorCliMaterializationSurface(name);
+      const text = fs.existsSync(absolute) ? fs.readFileSync(absolute, 'utf8') : '';
+      const verdict = cursorCliMaterializationVerdict(text, DEFAULT_FORGE, surface);
+      if (!verdict.ok) {
+        oracleFailed = true;
+        for (const error of verdict.errors) {
+          console.error('CLI-MATERIALIZATION-ORACLE RED: ' + name + ': ' + error);
+        }
+      }
+    }
+    if (oracleFailed) process.exit(1);
+    console.log('CLI-MATERIALIZATION-ORACLE GREEN: Next startup/resume order and Finalize pre-dispatch ensure');
+    process.exit(0);
+  } finally {
+    try { fs.rmSync(isolated, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  }
 }
 
 const trackedAgents = () => fs.readdirSync(path.join(REPO, 'agents'))
@@ -772,35 +897,70 @@ function commandRel(name, forge) {
   for (const name of CURSOR_CLI_MATERIALIZATION_COMMANDS) {
     const rel = commandRel(name);
     const content = exists(rel) ? read(rel) : '';
-    const verdict = cursorCliMaterializationVerdict(content, DEFAULT_FORGE);
+    const surface = cursorCliMaterializationSurface(name);
+    const verdict = cursorCliMaterializationVerdict(content, DEFAULT_FORGE, surface);
     assert(verdict.ok,
-      'G2-cli-materialization[' + name + ']: generated consumer runs the installed safe helper '
-      + 'with explicit "$PWD" only for standalone CLI before named dispatch — '
-      + verdict.errors.join(' | '));
+      surface === 'next'
+        ? ('G2-cli-materialization[' + name + ']: generated Next states executable startup/resume '
+          + 'Repo prep for standalone CLI/local, without a skippable first-named-dispatch ensure — '
+          + verdict.errors.join(' | '))
+        : ('G2-cli-materialization[' + name + ']: generated Finalize keeps the installed safe helper '
+          + 'with explicit "$PWD" for standalone CLI before named dispatch — '
+          + verdict.errors.join(' | ')));
 
     if (verdict.block) {
-      const omitted = content.replace('--ensure-target "$PWD"', '--ensure-target');
-      const omittedVerdict = cursorCliMaterializationVerdict(omitted, DEFAULT_FORGE);
-      assert(omitted !== content && !omittedVerdict.ok
-        && omittedVerdict.errors.some(error => /exact explicit/.test(error)),
-      'G2-cli-materialization-mutation[' + name + ']: removing the explicit target is rejected — '
-        + omittedVerdict.errors.join(' | '));
+      if (surface === 'finalize') {
+        const omitted = content.replace('--ensure-target "$PWD"', '--ensure-target');
+        const omittedVerdict = cursorCliMaterializationVerdict(omitted, DEFAULT_FORGE, surface);
+        assert(omitted !== content && !omittedVerdict.ok
+          && omittedVerdict.errors.some(error => /exact explicit/.test(error)),
+        'G2-cli-materialization-mutation[' + name + ']: removing the explicit target is rejected — '
+          + omittedVerdict.errors.join(' | '));
 
-      const ambient = content.replace('--ensure-target "$PWD"', '--ensure-target "."');
-      const ambientVerdict = cursorCliMaterializationVerdict(ambient, DEFAULT_FORGE);
-      assert(ambient !== content && !ambientVerdict.ok
-        && ambientVerdict.errors.some(error => /exact explicit/.test(error)),
-      'G2-cli-materialization-mutation[' + name + ']: ambientizing the target to cwd shorthand is rejected — '
-        + ambientVerdict.errors.join(' | '));
+        const ambient = content.replace('--ensure-target "$PWD"', '--ensure-target "."');
+        const ambientVerdict = cursorCliMaterializationVerdict(ambient, DEFAULT_FORGE, surface);
+        assert(ambient !== content && !ambientVerdict.ok
+          && ambientVerdict.errors.some(error => /exact explicit/.test(error)),
+        'G2-cli-materialization-mutation[' + name + ']: ambientizing the target to cwd shorthand is rejected — '
+          + ambientVerdict.errors.join(' | '));
+      }
 
       const appScoped = content.replace(
         'do not apply or infer this CLI materialization rule for either App host',
         'apply this CLI materialization rule for both App hosts');
-      const appVerdict = cursorCliMaterializationVerdict(appScoped, DEFAULT_FORGE);
+      const appVerdict = cursorCliMaterializationVerdict(appScoped, DEFAULT_FORGE, surface);
       assert(appScoped !== content && !appVerdict.ok
         && appVerdict.errors.some(error => /negative CLI-rule boundary/.test(error)),
       'G2-cli-materialization-mutation[' + name + ']: applying the CLI rule to App local/Cloud is rejected — '
         + appVerdict.errors.join(' | '));
+
+      if (surface === 'next') {
+        const gapSkip = content + '\nTreat missing named Kaola roles as capability_gap and skip Repo role prep.\n';
+        const gapVerdict = cursorCliMaterializationVerdict(gapSkip, DEFAULT_FORGE, surface);
+        assert(!gapVerdict.ok
+          && gapVerdict.errors.some(error => /capability_gap skip/.test(error)),
+        'G2-cli-materialization-mutation[' + name + ']: authorizing a named-role capability_gap skip is rejected — '
+          + gapVerdict.errors.join(' | '));
+
+        const omittedIdentity = content
+          + '\nnode "$CLAIM_JS" startup --runtime cursor --target-issues "$KAOLA_TARGET_ISSUES"\n';
+        const omittedVerdict = cursorCliMaterializationVerdict(omittedIdentity, DEFAULT_FORGE, surface);
+        assert(!omittedVerdict.ok
+          && omittedVerdict.errors.some(error => /omitted --product|--host/.test(error)),
+        'G2-cli-materialization-mutation[' + name + ']: omitting --product cli --host local on Cursor startup is rejected — '
+          + omittedVerdict.errors.join(' | '));
+
+        const helperOnlyResume = content
+          + '\nnode "$CURSOR_MATERIALIZER" --ensure-target "$PWD" --forge=github --json\n'
+          + 'On resume, read mission-list.md top to bottom.\n';
+        const helperResumeVerdict = cursorCliMaterializationVerdict(
+          helperOnlyResume.replace(/node "\$CLAIM_JS" resume[^\n]*/g, 'On resume, read mission-list.md'),
+          DEFAULT_FORGE, surface);
+        assert(!helperResumeVerdict.ok
+          && helperResumeVerdict.errors.some(error => /claim\.js resume/.test(error)),
+        'G2-cli-materialization-mutation[' + name + ']: helper-only or mission-list.md resume is rejected — '
+          + helperResumeVerdict.errors.join(' | '));
+      }
     }
   }
 }
@@ -1257,11 +1417,16 @@ for (const role of reviewerGenerator.ROLES) {
       'G7[' + forge + ']: agent set is the canonical roster, including knowledge-lookup');
     for (const name of CURSOR_CLI_MATERIALIZATION_COMMANDS) {
       const rel = commandRel(name, forge);
-      const verdict = cursorCliMaterializationVerdict(exists(rel) ? read(rel) : '', forge);
+      const surface = cursorCliMaterializationSurface(name);
+      const verdict = cursorCliMaterializationVerdict(exists(rel) ? read(rel) : '', forge, surface);
       assert(verdict.ok,
-        'G7[' + forge + '][' + name + ']: generated CLI materializer keeps explicit "$PWD" and exact '
-        + '--forge=' + forge + ' without applying the rule to App local/Cloud — '
-        + verdict.errors.join(' | '));
+        surface === 'next'
+          ? ('G7[' + forge + '][' + name + ']: generated Next keeps startup/resume Repo prep on '
+            + 'standalone CLI/local with App/Cloud negative and no named-role capability_gap skip — '
+            + verdict.errors.join(' | '))
+          : ('G7[' + forge + '][' + name + ']: generated Finalize keeps explicit "$PWD" and exact '
+            + '--forge=' + forge + ' without applying the rule to App local/Cloud — '
+            + verdict.errors.join(' | ')));
     }
     const c = runGeneratorCli(['--forge=' + forge, '--check']);
     assert(c.status === 0,

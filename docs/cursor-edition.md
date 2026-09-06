@@ -226,16 +226,25 @@ file alone; that CLI fact is not App or Cloud proof. Cloud user-global discovery
 unsupported; the measured Cloud carrier is a receipt-owned project catalog installed by its
 confirmed environment-setup Agent before the Build is saved.
 
-For the measured standalone CLI/local host only, generated workflow-next/finalize guidance invokes
-the installed safe helper with `--ensure-target "$PWD"` immediately before a named dispatch. It
-derives project bytes only from the receipt-verified global authority, returns `current` without
-writing when already fresh, returns `materialized` and requires a new process when it safely
-writes, and fails before mutation on missing/stale authority, collision, symlink, invalid receipt,
-or modified ownership. Cursor App local IDE and App-started Cloud do not inherit that CLI
-point-of-use rule. Cloud uses the confirmed environment-setup
-machine-plus-repository/install/save/same-repository-new-parent lifecycle above. Recovery is owned
-separately: the global transaction writes the local CLI/App Rule and explicitly materializes the
-Cloud selected-repository Rule.
+For the measured standalone CLI/local host only (`--runtime cursor --product cli --host local`),
+Workflow `startup` and `resume` run Repo role prep through the installed helper
+`${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts/kaola-workflow-cursor-surface.js`
+`--ensure-target <target>` with `--forge=<forge|github> --json`. Omitted, unknown, app, cloud,
+or incomplete identity pairs skip ensure but still claim/resume. `<target>` is
+`--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()`
+(`git rev-parse --show-toplevel`) on first claim — not nested cwd and not the write-worktree.
+Generated Next therefore appends `## Cursor standalone CLI startup and resume Repo role prep`
+rather than a skippable pre-dispatch `$PWD` step. Independently entered Finalize still appends
+`## Cursor standalone CLI pre-dispatch materialization` and invokes
+`--ensure-target "$PWD"` immediately before named dispatch. The helper derives project bytes only
+from the receipt-verified global authority, returns `current` without writing when already fresh,
+returns `materialized` with restart_boundary `new_process_same_chat` when it safely writes, and
+fails before mutation on missing/stale authority, collision, symlink, invalid receipt, or modified
+ownership. Cursor App local IDE and App-started Cloud do not inherit that CLI rule. Cloud uses the
+confirmed environment-setup machine-plus-repository/install/save/same-repository-new-parent
+lifecycle above. Recovery is owned separately: the global transaction writes the local CLI/App Rule
+and explicitly materializes the Cloud selected-repository Rule. There is no `sessionStart`
+materializer and no `--global` dual-write.
 
 The official model contract is likewise bounded: `model` is either `inherit` or an exact model ID,
 and bracket parameters carry options such as effort. Team policy, legacy-plan settings, or plan
@@ -244,9 +253,13 @@ profile, generated dispatch guidance omits a per-call model and that profile is 
 carrier. On Path B, a built-in-only enum has no profile pin: omit-model follows the parent, while a
 resolver-listed live-schema model slug is the effort lever.
 
-Compact recovery is Rule behavior, while CLI catalog synchronization remains a point-of-use
-next/finalize transaction. The Rule supplies model-visible operation and dispatch instructions;
-`mission-list.md` remains durable run authority after a local, CLI, or Cloud restart.
+Compact recovery is Rule behavior. CLI catalog bytes are prepared at Workflow startup/resume
+only on explicit `--runtime cursor --product cli --host local` (`--cursor-workspace` when set,
+else recorded `main_root` on resume, else invoking `getRoot()`), and again at independently entered
+Finalize immediately before named dispatch with explicit `$PWD`. The Rule supplies model-visible
+operation and dispatch instructions;
+`mission-list.md` remains durable run authority after a local, CLI, or Cloud restart. On-disk
+materialization is not live Task-catalog proof.
 
 ## Path selection
 
@@ -332,8 +345,12 @@ probes passed for all three forges.
 - By default, support scripts land under
   `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`.
   `kaola-workflow-cursor-surface.js` is both the filesystem/evidence doctor and the explicit
-  authority/materialization transaction. Its installed `--ensure-target DIR` mode is the only
-  automatic pre-dispatch materializer and has no ambient-target default.
+  authority/materialization transaction. Its installed `--ensure-target DIR` mode has no
+  ambient-target default. Standalone CLI/local Workflow `startup`/`resume` spawn that mode only
+  on explicit `--runtime cursor --product cli --host local`, against `--cursor-workspace` when
+  set, else recorded `main_root` on resume, else invoking `getRoot()` on first claim;
+  independently entered Finalize still uses `--ensure-target "$PWD"` immediately
+  before named dispatch.
 
 `--uninstall` removes only receipt-proven files whose current hash still matches and strips only
 receipt-recorded Kaola entries from `hooks.json`. Modified, unmanaged, symlink, non-regular, and
