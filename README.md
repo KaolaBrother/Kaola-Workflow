@@ -148,20 +148,28 @@ background/parallel/resume limits, hook behavior, instruction precedence, and kn
 - [Cursor](docs/cursor-edition.md)
 - [ZCode](docs/zcode-edition.md)
 
-Cursor `workflow-next` `startup` and `resume` share one `.cursor/commands` file. CLI-stamped
-`--product cli --host local --cursor-workspace "$CURSOR_WORKSPACE"` startup/resume sits inside an
-executable shell gate:
-
-`if { [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ]; } || { [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; }; then`
-
-When those variables are unset (App/Cloud-like env), the command takes the unstamped
-`--runtime cursor` path and does not run `--product cli --host local`. App/Cloud do not inherit
-that CLI ensure. Standalone CLI/local must set `CURSOR_PRODUCT=cli` and `CURSOR_HOST=local` (or
-the `KAOLA_CURSOR_PRODUCT` / `KAOLA_CURSOR_HOST` twins) so the CLI `--ensure-target` path is not
-skippable-by-omission. This tree does not record that Cursor CLI exports `CURSOR_PRODUCT` or
-`CURSOR_HOST`. The first Resume fence still inlines the `CLAIM_JS` resolver outside the `if`.
-File-ready bytes are not live Task catalog proof. Full contract:
-[Cursor edition](docs/cursor-edition.md).
+Cursor `workflow-next` `startup` and `resume` share one `.cursor/commands` file. Generated
+startup and resume fences do not stamp `--product cli --host local`. The documented CLI-positive
+route is the first unstamped fence
+`node "$CLAIM_JS" startup --runtime cursor --target-issues "$KAOLA_TARGET_ISSUES"` plus claim.js
+`applyDemonstratedCursorCliHost` on all four claim trees. When `--runtime cursor` and both
+`--product`/`--host` are omitted, claim.js stamps `product=cli`, `host=local`, and
+`cursorWorkspace=<opened dir>` in-process before the single claim, and on resume without
+re-claim, only when a living ancestor is a CLI-shaped executable
+(`…/YYYY.MM.DD-<hash>/index.js` or `cursor-agent`) **and** `--workspace <opened dir>` that shares
+git identity with cwd, then runs installed `--ensure-target` against that dir. Generic
+`--workspace` on an unrelated tool is not CLI and skips ensure. `--worker-dir` present, with or
+without `--workspace`, is App-like and skips ensure. No `--workspace` is unknown and skips.
+Darwin unquoted `ps -ww -p <pid> -o args=` splits on spaces; `collectUnquotedFlagRemainder` takes
+the `--workspace` value as the remainder until the next `--<flag>` so a path that contains spaces
+is reconstituted in full. Linux `/proc/<pid>/cmdline` stays NUL-delimited and is unchanged.
+Explicit `--product`/`--host` still win. Real Cursor CLI `2026.09.02-c22c1a3` does not export
+`CURSOR_PRODUCT`, `CURSOR_HOST`, `KAOLA_CURSOR_*`, or `CURSOR_WORKSPACE`; operators do not
+pre-export those names. Resume is one unstamped fence: `kaola_script` / `CLAIM_JS=` outside any
+`if`, then `node "$CLAIM_JS" resume --runtime cursor`. There is no `cursorCliHostGateOpen`.
+Independently entered Finalize still runs `--ensure-target "$PWD"` immediately before named
+dispatch. There is no `sessionStart` materializer and no `--global` dual-write. File-ready bytes
+are not live Task catalog proof. Full contract: [Cursor edition](docs/cursor-edition.md).
 
 ## Documentation and development
 

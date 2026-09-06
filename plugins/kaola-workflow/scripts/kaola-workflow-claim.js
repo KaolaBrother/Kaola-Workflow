@@ -1962,8 +1962,14 @@ function output(obj, code) {
 }
 
 // #1052: standalone Cursor CLI/local Workflow startup and resume run Repo role
-// prep through the *installed* helper. Product/host are explicit argv only —
-// never inferred from a sibling `agent` binary or Cursor.app.
+// prep through the *installed* helper. Explicit `--product` / `--host` win.
+// When those are omitted, a living ancestor that is CLI-shaped
+// (`…/YYYY.MM.DD-<hash>/index.js` or `cursor-agent`) *and* has `--workspace
+// <opened>` is Workflow-owned context (not a generic `--workspace` on an
+// unrelated tool, not invented env, not a sibling `agent` binary, not
+// CURSOR_INVOKED_AS). `--worker-dir` (with or without `--workspace`) is
+// App-like and must not materialize. Darwin `ps args=` does not quote spaced
+// paths: `--workspace` value is the remainder until the next `--<flag>`.
 function installedCursorSurfaceHelperPath() {
   const home = process.env.CURSOR_HOME || path.join(process.env.HOME || '', '.cursor');
   return path.join(home, 'kaola-workflow', 'scripts', 'kaola-workflow-cursor-surface.js');
@@ -1979,9 +1985,198 @@ function isCursorCliLocalWorkflowPath(args) {
     && normalizeHostIdentityToken(args && args.host) === 'local';
 }
 
+const CURSOR_CLI_DEMONSTRATED_ANCESTOR_HOPS = 8;
+const CURSOR_CLI_VERSIONED_INDEX_RE = /(^|[\\/])\d{4}\.\d{2}\.\d{2}-[0-9a-fA-F]+[\\/]index\.js$/;
+
+function isCliOptionToken(tok) {
+  return /^--[A-Za-z0-9]/.test(String(tok || ''));
+}
+
+function isDemonstratedCursorCliExecutable(tokens) {
+  const argv = Array.isArray(tokens) ? tokens : [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = String(argv[i] == null ? '' : argv[i]).replace(/\\/g, '/');
+    if (path.basename(tok) === 'cursor-agent') return true;
+    if (CURSOR_CLI_VERSIONED_INDEX_RE.test(tok)) return true;
+  }
+  return false;
+}
+
+function collectUnquotedFlagRemainder(argv, startIndex, head) {
+  const parts = [];
+  if (head != null && String(head).trim() !== '' && !isCliOptionToken(head)) {
+    parts.push(String(head));
+  }
+  let i = startIndex;
+  for (; i < argv.length; i++) {
+    const next = String(argv[i] == null ? '' : argv[i]);
+    if (isCliOptionToken(next)) break;
+    if (next !== '') parts.push(next);
+  }
+  return { value: parts.join(' ').trim(), nextIndex: i };
+}
+
+function tokenizePsCommandLine(line) {
+  const out = [];
+  let cur = '';
+  let quote = '';
+  const text = String(line || '');
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = '';
+      else cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (cur) { out.push(cur); cur = ''; }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function parseDemonstratedCursorParentArgv(tokens) {
+  let workspace = '';
+  let workerDir = false;
+  const argv = Array.isArray(tokens) ? tokens : [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = String(argv[i] == null ? '' : argv[i]);
+    if (tok === '--workspace') {
+      const taken = collectUnquotedFlagRemainder(argv, i + 1, null);
+      if (taken.value) {
+        workspace = taken.value;
+        i = taken.nextIndex - 1;
+      }
+    } else if (tok.indexOf('--workspace=') === 0) {
+      const taken = collectUnquotedFlagRemainder(argv, i + 1, tok.slice('--workspace='.length));
+      workspace = taken.value;
+      i = taken.nextIndex - 1;
+    } else if (tok === '--worker-dir' || tok.indexOf('--worker-dir=') === 0) {
+      workerDir = true;
+    }
+  }
+  return { workspace: workspace, workerDir: workerDir };
+}
+
+function readProcessCmdlineTokens(pid) {
+  pid = Number(pid);
+  if (!Number.isInteger(pid) || pid <= 1) return [];
+  try {
+    const raw = fs.readFileSync(path.join('/proc', String(pid), 'cmdline'));
+    const parts = raw.toString('utf8').split('\0').filter(Boolean);
+    if (parts.length) return parts;
+  } catch (_) { /* hosts without /proc (Darwin) fall through to ps */ }
+  const listed = spawnSync('ps', ['-ww', '-p', String(pid), '-o', 'args='], {
+    encoding: 'utf8',
+    timeout: 3000,
+    env: process.env
+  });
+  if (listed.error || listed.status !== 0) return [];
+  return tokenizePsCommandLine(String(listed.stdout || '').trim());
+}
+
+function readProcessPpid(pid) {
+  pid = Number(pid);
+  if (!Number.isInteger(pid) || pid <= 1) return 0;
+  try {
+    const st = fs.readFileSync(path.join('/proc', String(pid), 'stat'), 'utf8');
+    const close = st.lastIndexOf(')');
+    if (close >= 0) {
+      const rest = st.slice(close + 2).split(/\s+/);
+      const ppid = parseInt(rest[1], 10);
+      if (Number.isInteger(ppid) && ppid > 0) return ppid;
+    }
+  } catch (_) { /* Darwin */ }
+  const listed = spawnSync('ps', ['-p', String(pid), '-o', 'ppid='], {
+    encoding: 'utf8',
+    timeout: 3000,
+    env: process.env
+  });
+  const ppid = parseInt(String(listed.stdout || '').trim(), 10);
+  return Number.isInteger(ppid) && ppid > 0 ? ppid : 0;
+}
+
+function gitCommonIdentity(dir) {
+  try {
+    const abs = fs.realpathSync(dir);
+    const listed = spawnSync('git', ['-C', abs, 'rev-parse', '--git-common-dir'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      env: process.env
+    });
+    if (listed.error || listed.status !== 0) return abs;
+    let common = String(listed.stdout || '').trim();
+    if (!common) return abs;
+    if (!path.isAbsolute(common)) common = path.resolve(abs, common);
+    return fs.realpathSync(common);
+  } catch (_) {
+    return '';
+  }
+}
+
+function demonstratedCursorWorkspaceApplies(workspace) {
+  const loc = String(workspace || '').trim();
+  if (!loc) return false;
+  let ws;
+  try { ws = fs.realpathSync(path.resolve(loc)); } catch (_) { return false; }
+  let cwd;
+  try { cwd = fs.realpathSync(process.cwd()); } catch (_) { cwd = path.resolve(process.cwd()); }
+  if (ws === cwd) return true;
+  if (cwd.length > ws.length && cwd.indexOf(ws + path.sep) === 0) return true;
+  const a = gitCommonIdentity(ws);
+  const b = gitCommonIdentity(cwd);
+  return !!(a && b && a === b);
+}
+
+function inspectDemonstratedCursorParent() {
+  let pid = process.ppid;
+  const seen = new Set();
+  for (let hop = 0; hop < CURSOR_CLI_DEMONSTRATED_ANCESTOR_HOPS && pid > 1; hop++) {
+    if (seen.has(pid)) break;
+    seen.add(pid);
+    const tokens = readProcessCmdlineTokens(pid);
+    const parsed = parseDemonstratedCursorParentArgv(tokens);
+    if (parsed.workerDir) {
+      return { kind: 'app' };
+    }
+    if (isDemonstratedCursorCliExecutable(tokens) && parsed.workspace) {
+      if (demonstratedCursorWorkspaceApplies(parsed.workspace)) {
+        return {
+          kind: 'cli',
+          workspace: fs.realpathSync(path.resolve(parsed.workspace))
+        };
+      }
+    }
+    pid = readProcessPpid(pid);
+  }
+  return { kind: 'unknown' };
+}
+
+function applyDemonstratedCursorCliHost(args) {
+  if (!args || normalizeHostIdentityToken(args.runtime) !== 'cursor') return args;
+  if (args.product != null && String(args.product).trim() !== '') return args;
+  if (args.host != null && String(args.host).trim() !== '') return args;
+  const demonstrated = inspectDemonstratedCursorParent();
+  if (demonstrated.kind !== 'cli') return args;
+  args.product = 'cli';
+  args.host = 'local';
+  if (args.cursorWorkspace == null || String(args.cursorWorkspace).trim() === '') {
+    args.cursorWorkspace = demonstrated.workspace;
+  }
+  return args;
+}
+
 // Explicit --cursor-workspace wins. Resume uses recorded main_root from the
 // run's workflow-state.md. First-claim fallback is the invoking git toplevel.
 function resolveCursorCliEnsureTarget(args, invokingRoot, recordedMainRoot) {
+  applyDemonstratedCursorCliHost(args);
   const locator = args && args.cursorWorkspace;
   if (locator != null && String(locator).trim() !== '') {
     return path.resolve(process.cwd(), String(locator).trim());
@@ -2012,6 +2207,7 @@ function refuseCursorPrep(args, diagnostic) {
 }
 
 function ensureCursorCliLocalPrep(root, args) {
+  applyDemonstratedCursorCliHost(args);
   if (!isCursorCliLocalWorkflowPath(args)) return { skipped: true };
   const helper = installedCursorSurfaceHelperPath();
   if (!fs.existsSync(helper)) {

@@ -446,22 +446,29 @@ receipt-bound and preflight every managed path before writing. The first receipt
 adopt published 10.0.1 global bytes under exact per-forge
 hashes; a modified or unknown byte remains a collision, and only exact retired ambient-helper bytes
 are removed. On the measured standalone CLI only, Workflow `startup` and `resume` spawn the installed helper
-`--ensure-target` when `--runtime cursor --product cli --host local` from all four claim trees
-(canonical GitHub `scripts/kaola-workflow-claim.js`, COMMON_SCRIPTS Codex copy, GitLab hand-port,
-Gitea hand-port). Generated Next (GitHub/GitLab/Gitea) forges `--product cli --host local` only
-inside `scripts/sync-cursor-edition.js` `cursorCliHostGateOpen`:
-`if { [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ]; } || { [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; }; then`.
-Unset App/Cloud-like env takes unstamped `--runtime cursor` and does not run `--product cli --host
-local`. Standalone CLI/local must set `CURSOR_PRODUCT=cli` and `CURSOR_HOST=local` (or the
-`KAOLA_CURSOR_*` twins); this page does not claim that Cursor CLI currently exports those
-`CURSOR_*` names. Those claim.js no longer `unknown_flag`. Omitted, unknown, app, cloud,
-or incomplete pairs skip ensure but still claim/resume. Helper spawn is
+`--ensure-target` from all four claim trees (canonical GitHub `scripts/kaola-workflow-claim.js`,
+COMMON_SCRIPTS Codex copy, GitLab hand-port, Gitea hand-port) after `applyDemonstratedCursorCliHost`.
+Explicit `--product`/`--host` still win. Generated startup/resume fences do not stamp `--product cli
+--host local`; claim.js stamps in-process before the single claim and on resume without re-claim.
+When `--runtime cursor` and both are omitted, a living CLI-shaped ancestor
+(`…/YYYY.MM.DD-<hash>/index.js` or `cursor-agent`) **and** `--workspace <opened dir>` that shares
+git identity with cwd stamps `product=cli`, `host=local`, and `cursorWorkspace=<that dir>` and
+ensure runs against that dir. Generic `--workspace` on an unrelated tool is not CLI and skips.
+`--worker-dir` present, with or without `--workspace`, is App-like and skips; no `--workspace` is
+unknown and skips. Darwin unquoted `ps args=` reconstitutes `--workspace` as the remainder until
+the next `--<flag>` (full path including spaces); Linux `/proc` NUL cmdline is unchanged. The
+documented generated CLI-positive fence is unstamped
+`node "$CLAIM_JS" startup --runtime cursor --target-issues "$KAOLA_TARGET_ISSUES"`. Resume is
+unstamped `node "$CLAIM_JS" resume --runtime cursor` with `kaola_script` / `CLAIM_JS=` outside any
+`if`. There is no `cursorCliHostGateOpen`. Real Cursor CLI `2026.09.02-c22c1a3` does not export
+`CURSOR_PRODUCT`, `CURSOR_HOST`, `KAOLA_CURSOR_*`, or `CURSOR_WORKSPACE`; operators do not
+pre-export those names. Those claim.js no longer `unknown_flag`. Helper spawn is
 `--forge=<args.forge||'github'>`; `--forge` is not a claim.js flag. Claim.js target is
 `--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()`
-(`git rev-parse --show-toplevel`) on first claim — not nested cwd and not the write-worktree.
-Generated Next appendix names `--cursor-workspace` and recorded `main_root`; it does not name
-`git rev-parse --show-toplevel` as the known CLI workspace. Independently entered Finalize still
-invokes `--ensure-target "$PWD"` immediately before named dispatch. App local and Cloud keep
+(`git rev-parse --show-toplevel`) on first claim — not nested cwd and not the write-worktree unless
+they are that demonstrated opened dir. Independently entered Finalize still invokes
+`--ensure-target "$PWD"` immediately before named dispatch. There is no `sessionStart`
+materializer and no `--global` dual-write. App local and Cloud keep
 separate live catalogs. Only after an Agent establishes it
 is in Cursor Cloud environment setup may it install the remote authority plus selected repository,
 test the Build, and ask the user to click Save. The user then opens a new top-level Agent in that

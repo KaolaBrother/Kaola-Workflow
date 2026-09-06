@@ -3,7 +3,12 @@
 
 // Issue #1052: standalone Cursor CLI/local Workflow startup and normal resume must execute
 // Repo role prep through the installed --ensure-target transaction against the CLI workspace.
-// TEST CUSTODY ONLY. Drives the real claim.js CLI and the real cursor-surface helper.
+// TEST CUSTODY ONLY. Drives the real claim.js CLI, generated Next default fences, and the
+// real cursor-surface helper. Normal CLI-positive generated path uses demonstrated
+// `--workspace` context only — not invented CURSOR_PRODUCT / KAOLA_CURSOR_* / CURSOR_WORKSPACE.
+// Comment 5561551896: generic unrelated-tool `--workspace` is not CLI; both `--workspace` and
+// `--worker-dir` must not take the workspace branch first as CLI; Darwin `ps args=` spaced
+// opened dirs must prep the full path (unquoted ps + tokenize must not truncate).
 
 const spawnCensus = require('./test-spawn-census');
 spawnCensus.install('test-issue-1052-cursor-cli-startup-prep');
@@ -11,7 +16,7 @@ spawnCensus.install('test-issue-1052-cursor-cli-startup-prep');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const G = require('./test-git-fixture');
 
 const REPO = path.resolve(__dirname, '..');
@@ -408,6 +413,124 @@ function installTargetNext(sandbox, forge, consumer) {
 
 function cursorPrep(json) {
   return (json && json.cursor_prep) || null;
+}
+
+function firstExecutableStartupFence(text) {
+  for (const fence of bashFences(text)) {
+    if (executableClaimLines(fence, 'startup').length > 0) return String(fence || '').trim();
+  }
+  return '';
+}
+
+function stripInventedCursorGates(env) {
+  const out = Object.assign({}, env);
+  delete out.CURSOR_PRODUCT;
+  delete out.CURSOR_HOST;
+  delete out.KAOLA_CURSOR_PRODUCT;
+  delete out.KAOLA_CURSOR_HOST;
+  delete out.CURSOR_WORKSPACE;
+  return out;
+}
+
+function writeLivingFenceParent(tmp, relParts) {
+  const runner = path.join.apply(path, [tmp].concat(relParts));
+  fs.mkdirSync(path.dirname(runner), { recursive: true });
+  // Keep the parent image alive while bash runs the fence. `exec` would replace
+  // that image and drop demonstrated argv; grandchild claim.js must still
+  // observe it. Do not invent CURSOR_PRODUCT / CURSOR_WORKSPACE here.
+  fs.writeFileSync(runner, [
+    '#!/usr/bin/env node',
+    '"use strict";',
+    'const { spawnSync } = require("child_process");',
+    'const fence = process.env.KAOLA_FENCE || "";',
+    'const cwd = process.env.KAOLA_FENCE_CWD || process.cwd();',
+    'const r = spawnSync("bash", ["--noprofile", "--norc", "-c", fence], {',
+    '  stdio: "inherit",',
+    '  cwd: cwd,',
+    '  env: process.env',
+    '});',
+    'process.exit(r.status == null ? 1 : r.status);',
+    ''
+  ].join('\n'), { mode: 0o755 });
+  return runner;
+}
+
+function writeDemonstratedCursorParent(tmp) {
+  // Real Cursor CLI (2026.09.02-c22c1a3) keeps `index.js --workspace <dir>` (or
+  // `--worker-dir`) alive as an ancestor of the tool bash.
+  return writeLivingFenceParent(tmp, ['fake-cursor-cli', '2026.09.02-c22c1a3', 'index.js']);
+}
+
+function writeUnrelatedWorkspaceParent(tmp) {
+  // Generic `--workspace` on an unrelated tool is not standalone Cursor CLI.
+  return writeLivingFenceParent(tmp, ['unrelated-tool']);
+}
+
+function tokenizePsCommandLineLikeProduction(line) {
+  const out = [];
+  let cur = '';
+  let quote = '';
+  const text = String(line || '');
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = '';
+      else cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (cur) { out.push(cur); cur = ''; }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function parseWorkspaceFlagFromTokens(tokens) {
+  const argv = Array.isArray(tokens) ? tokens : [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = String(argv[i] == null ? '' : argv[i]);
+    if (tok === '--workspace') {
+      const val = argv[i + 1];
+      if (val != null && String(val).trim() !== '' && !String(val).startsWith('--')) {
+        return String(val).trim();
+      }
+    } else if (tok.indexOf('--workspace=') === 0) {
+      return tok.slice('--workspace='.length).trim();
+    }
+  }
+  return '';
+}
+
+function truncatedPrefixOfSpacedPath(full) {
+  const dir = path.dirname(full);
+  const base = path.basename(full);
+  const first = String(base).split(/\s+/)[0];
+  return path.join(dir, first);
+}
+
+function makeSpacedRepo(sandbox, label) {
+  const dir = path.join(sandbox.tmp, 'kaola workspace with spaces-' + label);
+  fs.mkdirSync(dir, { recursive: true });
+  G.init(dir, { branch: 'main' });
+  G.git(dir, ['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(dir, '.gitignore'), '.kw/\n');
+  G.commitAll(dir, 'init');
+  return fs.realpathSync(dir);
+}
+
+function addIndependentWorktree(sandbox, mainRepo, label) {
+  const wt = path.join(sandbox.tmp, 'opened-wt-' + label + '-');
+  const dest = fs.mkdtempSync(wt);
+  fs.rmSync(dest, { recursive: true, force: true });
+  G.gitOk(mainRepo, ['worktree', 'add', dest, '-b', 'kw-1052-opened-' + label]);
+  return fs.realpathSync(dest);
 }
 
 const sandbox = makeSandbox();
@@ -964,12 +1087,69 @@ try {
     assert(/Cursor CLI\/App\/Cloud/.test(readme),
       '#1052-c4-readme-surface: README already names Cursor CLI/App/Cloud, so a docs skip is invalid');
     assert(/startup/i.test(readme) && /resume/i.test(readme)
-      && /(--ensure-target|ensure-target|Repo role prep|project roles|materializ)/i.test(readme)
-      && /(--product cli|--host local|CLI\/local)/i.test(readme),
-      '#1052-c4-readme-prep: README must state the user-visible Cursor CLI/local startup/resume Repo prep');
-    assert(/(App(?:\/Cloud)?|App-started Cloud)[\s\S]{0,220}(do not|does not|must not|never)[\s\S]{0,80}(inherit|infer|apply)[\s\S]{0,80}(CLI|ensure)/i.test(readme)
-      || /(CLI)[\s\S]{0,80}ensure[\s\S]{0,160}(App(?:\/Cloud)?|App-started Cloud)[\s\S]{0,80}(do not|does not|must not|never)/i.test(readme),
-      '#1052-c4-readme-app-cloud: README must state App/Cloud do not inherit the CLI ensure');
+      && /--ensure-target/.test(readme)
+      && /Cursor CLI/i.test(readme)
+      && /(CLI\/local|product=cli)/i.test(readme),
+      '#1052-c4-readme-prep: README must state Cursor CLI/local startup/resume Repo --ensure-target prep');
+    assert(/--worker-dir/.test(readme)
+      && /(App-like|App\/Cloud|App-started Cloud)/i.test(readme)
+      && /--worker-dir[\s\S]{0,220}(App-like|App\/Cloud|App-started Cloud)[\s\S]{0,120}(skip|skips|must not|does not|do not)[\s\S]{0,80}ensure/i.test(readme),
+      '#1052-c4-readme-app-cloud: README must state App/Cloud or App-like --worker-dir do not receive CLI ensure');
+  }
+
+  const demonstratedParent = writeDemonstratedCursorParent(sandbox.tmp);
+  const unrelatedParent = writeUnrelatedWorkspaceParent(sandbox.tmp);
+
+  function measureDarwinPsArgs(script, argv, fenceCwd) {
+    const child = spawn(process.execPath, [script].concat(argv), {
+      cwd: fenceCwd || sandbox.tmp,
+      env: Object.assign({}, sandbox.env, {
+        KAOLA_FENCE: 'sleep 30',
+        KAOLA_FENCE_CWD: fenceCwd || sandbox.tmp,
+      }),
+      stdio: 'ignore',
+    });
+    const listed = spawnSync('ps', ['-ww', '-p', String(child.pid), '-o', 'args='], {
+      encoding: 'utf8',
+      timeout: 3000,
+    });
+    const line = String(listed.stdout || '').trim();
+    try { child.kill('SIGKILL'); } catch (_) { /* probe only */ }
+    return line;
+  }
+
+  {
+    assert(process.platform === 'darwin',
+      '#1052-c2-spaced-darwin-host: spaced --workspace pin requires this Darwin host (got '
+      + process.platform + ')');
+    const commentWorkspace = '/tmp/kaola workspace with spaces';
+    const sleeper = path.join(sandbox.tmp, 'ps-sleeper.js');
+    fs.writeFileSync(sleeper, 'setInterval(function () {}, 1000);\n');
+    const child = spawn(process.execPath, [sleeper, '--workspace', commentWorkspace], {
+      cwd: sandbox.tmp,
+      env: sandbox.env,
+      stdio: 'ignore',
+    });
+    const listed = spawnSync('ps', ['-ww', '-p', String(child.pid), '-o', 'args='], {
+      encoding: 'utf8',
+      timeout: 3000,
+    });
+    const psLine = String(listed.stdout || '').trim();
+    try { child.kill('SIGKILL'); } catch (_) { /* probe only */ }
+    const naiveWorkspace = parseWorkspaceFlagFromTokens(tokenizePsCommandLineLikeProduction(psLine));
+    console.error('MEASURED Darwin ps -ww -p PID -o args=: ' + psLine);
+    console.error('MEASURED tokenizePsCommandLine+parseDemonstratedCursorParentArgv workspace=: '
+      + naiveWorkspace);
+    assert(psLine.length > 0 && psLine.indexOf(commentWorkspace) >= 0,
+      '#1052-c2-spaced-ps-contains-full: host ps args= must contain the full opened path (line='
+      + JSON.stringify(psLine) + ')');
+    assert(psLine.indexOf("'" + commentWorkspace + "'") < 0
+      && psLine.indexOf('"' + commentWorkspace + '"') < 0,
+      '#1052-c2-spaced-ps-unquoted: this Darwin ps args= must not insert quotes around the spaced path (line='
+      + JSON.stringify(psLine) + ')');
+    assert(naiveWorkspace === '/tmp/kaola',
+      '#1052-c2-spaced-naive-truncate: unquoted ps + whitespace tokenize must return /tmp/kaola (got '
+      + JSON.stringify(naiveWorkspace) + ' line=' + JSON.stringify(psLine) + ')');
   }
 
   for (const port of NAMED_FORGE_PORTS) {
@@ -993,42 +1173,31 @@ try {
       const startupLines = executableClaimLines(surface.text, 'startup')
         .filter(line => /--runtime(?:\s+|=)cursor\b/.test(line));
       const resumeLines = executableClaimLines(surface.text, 'resume');
-      const cliStartup = startupLines.filter(hasCliLocalIdentity);
       const appStartup = startupLines.filter(line => !hasCliLocalIdentity(line));
-      const cliResume = resumeLines.filter(hasCliLocalIdentity);
       const appResume = resumeLines.filter(line => !hasCliLocalIdentity(line));
-      assert(cliStartup.length > 0,
-        st + '-c1-cli-startup: standalone CLI consumer path must still emit explicit --product cli --host local');
-      assert(cliResume.length > 0,
-        st + '-c1-cli-resume: standalone CLI consumer path must still emit explicit --product cli --host local on resume');
+      const firstClaimFence = firstExecutableStartupFence(surface.text);
+      assert(firstClaimFence.length > 0,
+        st + '-c1-first-claim-fence: generated Next must emit the skeleton then-claim-it startup fence');
       assert(appStartup.length > 0,
         st + '-c1-app-startup: App/Cloud consumers of this command file must have an executable startup path that does not stamp --product cli --host local (shared-file forge)');
       assert(appResume.length > 0,
         st + '-c1-app-resume: App/Cloud consumers of this command file must have an executable resume path that does not stamp --product cli --host local (shared-file forge)');
-      assert(cliStartup.every(line => /--cursor-workspace(?:\s+|=)/.test(line)),
-        st + '-c2-startup-flag: generated CLI startup argv must pass --cursor-workspace (prose is not a gate)');
-      assert(cliResume.every(line => /--cursor-workspace(?:\s+|=)/.test(line)),
-        st + '-c2-resume-flag: generated CLI resume argv must pass --cursor-workspace (prose is not a gate)');
       const cliOperatorFences = bashFences(surface.text).filter(fence =>
         executableClaimLines(fence, 'startup').concat(executableClaimLines(fence, 'resume'))
           .some(hasCliLocalIdentity));
-      assert(cliOperatorFences.length > 0 && cliOperatorFences.every(fenceHasExecutableHostGate),
-        st + '-c1-host-gate: CLI-stamped startup/resume fences must have an executable shell if/case on product/host; two argv classes and host-negative prose are not a gate');
+      assert(cliOperatorFences.every(fenceHasExecutableHostGate),
+        st + '-c1-host-gate: any CLI-stamped startup/resume fence must have an executable shell if/case on product/host; host-negative prose is not a gate');
     }
 
     const nextText = gen.text;
-    const cliStartupLine = executableClaimLines(nextText, 'startup').find(hasCliLocalIdentity)
-      || executableClaimLines(nextText, 'startup')[0];
+    const firstClaimFence = firstExecutableStartupFence(nextText);
     const appStartupLine = executableClaimLines(nextText, 'startup').find(line => !hasCliLocalIdentity(line));
-    const cliResumeLine = executableClaimLines(nextText, 'resume').find(hasCliLocalIdentity)
-      || executableClaimLines(nextText, 'resume')[0];
     const appResumeLine = executableClaimLines(nextText, 'resume').find(line => !hasCliLocalIdentity(line));
-    assert(cliStartupLine,
-      tag + '-c1-emitted-startup: generated Next must emit an executable claim.js startup line');
-    assert(cliResumeLine,
+    assert(firstClaimFence,
+      tag + '-c1-emitted-startup: generated Next must emit the default first claim.js startup fence');
+    assert(executableClaimLines(nextText, 'resume').length > 0,
       tag + '-c1-emitted-resume: generated Next must emit an executable claim.js resume line');
 
-    const driveGeneratedArgv = port.forge === 'github';
     const issueN = 12521;
     const expandCtx = (cwd, extra) => Object.assign({
       PWD: cwd,
@@ -1038,88 +1207,36 @@ try {
       HOME: sandbox.home,
     }, extra || {});
 
-    if (driveGeneratedArgv) {
-    const opened = makeRepo(sandbox, port.forge + '-opened-ws');
-    const nested = path.join(opened, 'nested-cwd');
-    fs.mkdirSync(nested, { recursive: true });
+    if (port.forge === 'github') {
+      const appStartArgv = emittedClaimArgv(appStartupLine || executableClaimLines(firstClaimFence, 'startup')[0],
+        'startup', expandCtx(sandbox.tmp));
+      const appWs = makeRepo(sandbox, port.forge + '-app-exec');
+      const appRun = runNamedClaim(sandbox, appWs, port.claim, appStartArgv.map(tok => {
+        if (tok === String(issueN) || tok === '$KAOLA_TARGET_ISSUES') return String(issueN);
+        return tok;
+      }));
+      const appPrep = cursorPrep(appRun.json);
+      assert(appRun.status === 0 && acquired(appRun.json) && !hasProjectAgents(appWs)
+        && !(appPrep && appPrep.status === 'materialized'),
+        tag + '-c1-app-drive: App/Cloud executing the installed Next startup argv must not trigger ensureCursorCliLocalPrep / extra Repo writes (argv='
+        + JSON.stringify(appStartArgv) + ' json=' + JSON.stringify(appRun.json) + ' raw='
+        + appRun.raw.slice(0, 300) + ')');
 
-    const forgedAppStartup = appStartupLine || cliStartupLine;
-    const appStartArgv = emittedClaimArgv(forgedAppStartup, 'startup', expandCtx(opened));
-    const appWs = makeRepo(sandbox, port.forge + '-app-exec');
-    const appRun = runNamedClaim(sandbox, appWs, port.claim, appStartArgv.map(tok => {
-      if (tok === String(issueN) || tok === '$KAOLA_TARGET_ISSUES') return String(issueN);
-      return tok;
-    }));
-    const appPrep = cursorPrep(appRun.json);
-    assert(appRun.status === 0 && acquired(appRun.json) && !hasProjectAgents(appWs)
-      && !(appPrep && appPrep.status === 'materialized'),
-      tag + '-c1-app-drive: App/Cloud executing the installed Next startup argv must not trigger ensureCursorCliLocalPrep / extra Repo writes (argv='
-      + JSON.stringify(appStartArgv) + ' json=' + JSON.stringify(appRun.json) + ' raw='
-      + appRun.raw.slice(0, 300) + ')');
-
-    if (appResumeLine || !hasCliLocalIdentity(cliResumeLine || '')) {
-      const seedApp = makeRepo(sandbox, port.forge + '-app-resume-seed');
-      const seed = runNamedClaim(sandbox, seedApp, port.claim, [
-        'startup', '--target-issue', '12531', '--runtime', 'claude', '--json',
-      ]);
-      assert(acquired(seed.json),
-        tag + '-c1-app-resume-seed: claude startup must acquire (got ' + JSON.stringify(seed.json) + ')');
-      const resumeLine = appResumeLine || cliResumeLine;
-      const appResumeArgv = emittedClaimArgv(resumeLine, 'resume', expandCtx(seedApp));
-      const appResumeRun = runNamedClaim(sandbox, seedApp, port.claim, appResumeArgv);
-      const appResumePrep = cursorPrep(appResumeRun.json);
-      assert(appResumeRun.json && appResumeRun.json.resumed === true && !hasProjectAgents(seedApp)
-        && !(appResumePrep && appResumePrep.status === 'materialized'),
-        tag + '-c1-app-resume-drive: App/Cloud executing the installed Next resume argv must not trigger CLI ensure (argv='
-        + JSON.stringify(appResumeArgv) + ' json=' + JSON.stringify(appResumeRun.json) + ')');
-    }
-
-    const cliStartArgv = emittedClaimArgv(cliStartupLine, 'startup', expandCtx(nested));
-    assert(cliStartArgv.indexOf('--product') >= 0 && cliStartArgv.indexOf('cli') >= 0
-      && cliStartArgv.indexOf('--host') >= 0 && cliStartArgv.indexOf('local') >= 0,
-      tag + '-c1-cli-drive-identity: CLI operator argv must keep explicit cli/local (got '
-      + JSON.stringify(cliStartArgv) + ')');
-    assert(cliStartArgv.indexOf('--cursor-workspace') >= 0,
-      tag + '-c2-nested-argv: generated startup driven from nested cwd must pass --cursor-workspace (argv='
-      + JSON.stringify(cliStartArgv) + ')');
-    const cliStart = runNamedClaim(sandbox, nested, port.claim, cliStartArgv);
-    assert(cliStart.status === 0 && acquired(cliStart.json) && hasProjectAgents(opened),
-      tag + '-c1-cli-drive: CLI/local generated startup argv must still run Repo prep on the opened workspace (json='
-      + JSON.stringify(cliStart.json) + ' raw=' + cliStart.raw.slice(0, 300) + ')');
-    assert(!fs.existsSync(path.join(nested, '.cursor', 'agents', IMPLEMENTER)),
-      tag + '-c1-cli-drive: nested cwd must not receive Repo prep');
-    const nestedPrep = cursorPrep(cliStart.json);
-    const nestedTarget = nestedPrep && nestedPrep.target;
-    assert(!nestedTarget || fs.realpathSync(nestedTarget) === opened,
-      tag + '-c2-nested-target: generated --cursor-workspace must name the Cursor-opened workspace, not the nested cwd (target='
-      + nestedTarget + ')');
-
-    const wtSeed = makeRepo(sandbox, port.forge + '-wt-open');
-    const first = runNamedClaim(sandbox, wtSeed, port.claim, [
-      'startup', '--target-issue', '12547', '--runtime', 'claude', '--json',
-    ], (function () {
-      const extra = { KAOLA_WORKFLOW_OFFLINE: '' };
-      extra[port.mockEnv] = sandbox[port.mockField];
-      return extra;
-    }()));
-    const wt = first.json && (first.json.worktree_path || (first.json.folder && first.json.folder.worktree_path) || '');
-    const mainRoot = stateField(wtSeed, 12547, 'main_root') || wtSeed;
-    assert(first.status === 0 && acquired(first.json) && wt && fs.existsSync(wt),
-      tag + '-c2-worktree-seed: non-Cursor startup must create a write-worktree (got '
-      + JSON.stringify(first.json) + ')');
-    fs.cpSync(issueDir(wtSeed, 12547), issueDir(wt, 12547), { recursive: true });
-    const resumeCtx = expandCtx(wt, { CURSOR_WORKSPACE: wt, cursor_workspace: wt, PWD: wt });
-    const wtResumeArgv = emittedClaimArgv(cliResumeLine, 'resume', resumeCtx);
-    assert(wtResumeArgv.indexOf('--cursor-workspace') >= 0,
-      tag + '-c2-worktree-flag: generated resume argv must pass --cursor-workspace (got '
-      + JSON.stringify(wtResumeArgv) + ')');
-    const wtResume = runNamedClaim(sandbox, wt, port.claim, wtResumeArgv);
-    assert(wtResume.json && wtResume.json.resumed === true,
-      tag + '-c2-worktree-resume: generated resume argv must keep the run (got '
-      + JSON.stringify(wtResume.json) + ' raw=' + wtResume.raw.slice(0, 400) + ')');
-    assert(hasProjectAgents(wt),
-      tag + '-c2-worktree-open: Cursor-opened write-worktree must receive Repo prep via generated --cursor-workspace, not recorded main_root ('
-      + mainRoot + ')');
+      if (appResumeLine) {
+        const seedApp = makeRepo(sandbox, port.forge + '-app-resume-seed');
+        const seed = runNamedClaim(sandbox, seedApp, port.claim, [
+          'startup', '--target-issue', '12531', '--runtime', 'claude', '--json',
+        ]);
+        assert(acquired(seed.json),
+          tag + '-c1-app-resume-seed: claude startup must acquire (got ' + JSON.stringify(seed.json) + ')');
+        const appResumeArgv = emittedClaimArgv(appResumeLine, 'resume', expandCtx(seedApp));
+        const appResumeRun = runNamedClaim(sandbox, seedApp, port.claim, appResumeArgv);
+        const appResumePrep = cursorPrep(appResumeRun.json);
+        assert(appResumeRun.json && appResumeRun.json.resumed === true && !hasProjectAgents(seedApp)
+          && !(appResumePrep && appResumePrep.status === 'materialized'),
+          tag + '-c1-app-resume-drive: App/Cloud executing the installed Next resume argv must not trigger CLI ensure (argv='
+          + JSON.stringify(appResumeArgv) + ' json=' + JSON.stringify(appResumeRun.json) + ')');
+      }
     }
 
     const resumeFence = (bashFences(resumeSection(nextText))[0] || '').trim();
@@ -1128,6 +1245,13 @@ try {
     const claimDest = path.join(sandbox.cursorHome, 'kaola-workflow', 'scripts', port.claimBase);
     fs.mkdirSync(path.dirname(claimDest), { recursive: true });
     fs.copyFileSync(port.claim, claimDest);
+    const claimSrcDir = path.dirname(port.claim);
+    for (const name of fs.readdirSync(claimSrcDir).sort()) {
+      if (!name.endsWith('.js')) continue;
+      const src = path.join(claimSrcDir, name);
+      const dest = path.join(path.dirname(claimDest), name);
+      if (!fs.existsSync(dest)) fs.copyFileSync(src, dest);
+    }
 
     const coldWs = makeRepo(sandbox, port.forge + '-cold-resume');
     const coldSeed = runNamedClaim(sandbox, coldWs, port.claim, [
@@ -1215,6 +1339,41 @@ try {
       return fs.existsSync(argvLog) ? fs.readFileSync(argvLog, 'utf8') : '';
     }
 
+    function runLivingFence(parentBin, fence, cwd, extraEnv, parentArgv) {
+      const env = stripInventedCursorGates(Object.assign({}, sandbox.env, {
+        PATH: wrapDir + path.delimiter + sandbox.env.PATH,
+        KAOLA_NODE_ARGV_LOG: argvLog,
+        CURSOR_HOME: sandbox.cursorHome,
+        HOME: sandbox.home,
+        KAOLA_FENCE: fence,
+        KAOLA_FENCE_CWD: cwd,
+        CURSOR_INVOKED_AS: 'cursor-agent',
+      }, extraEnv || {}));
+      delete env.CLAIM_JS;
+      try { fs.unlinkSync(argvLog); } catch (_) { /* first run */ }
+      // spawn-class: cli-contract
+      return spawnSync(parentBin, parentArgv, {
+        cwd, env, encoding: 'utf8', timeout: 120000,
+      });
+    }
+
+    function runDemonstratedFence(fence, cwd, extraEnv, parentArgv) {
+      return runLivingFence(demonstratedParent, fence, cwd, extraEnv, parentArgv);
+    }
+
+    function cliWorkspaceArgv(opened) {
+      return ['--workspace', opened, '--model', 'cursor-grok-4.6-xhigh'];
+    }
+
+    function appWorkerArgv() {
+      return ['--worker-dir', path.join(sandbox.tmp, 'app-worker-' + port.forge)];
+    }
+
+    function claimStartupInvocations(log) {
+      return String(log || '').split(/\n/).filter(line =>
+        line.indexOf(port.claimBase) >= 0 && /\bstartup\b/.test(line));
+    }
+
     {
       const appWs = makeRepo(sandbox, port.forge + '-c1-app-first-resume');
       const appSeed = runNamedClaim(sandbox, appWs, port.claim, [
@@ -1238,96 +1397,170 @@ try {
     }
 
     {
-      const cliWs = makeRepo(sandbox, port.forge + '-c1-cli-gated-resume');
-      const cliSeed = runNamedClaim(sandbox, cliWs, port.claim, [
-        'startup', '--target-issue', '12562', '--runtime', 'claude', '--json',
-      ]);
-      assert(acquired(cliSeed.json),
-        tag + '-c1-host-gate-cli-seed: claude startup must acquire (got '
-        + JSON.stringify(cliSeed.json) + ')');
-      writeMissionList(cliWs, 12562);
-      const cliExtra = { CURSOR_WORKSPACE: cliWs, PWD: cliWs };
-      const resumeFences = bashFences(resumeSection(nextText));
-      let cliLog = '';
-      let cliRun = runHostGateFence(resumeFence, cliWs, 'cli-four', cliExtra);
-      cliLog = readArgvLog();
-      let cliHit = logInvokesCliLocalWithWorkspace(cliLog, port.claimBase);
-      if (!cliHit) {
-        for (let i = 1; i < resumeFences.length; i++) {
-          cliRun = runHostGateFence(resumeFences[i], cliWs, 'cli-four', cliExtra);
-          cliLog = readArgvLog();
-          if (logInvokesCliLocalWithWorkspace(cliLog, port.claimBase)) {
-            cliHit = true;
-            break;
-          }
-        }
-      }
+      const opened = makeRepo(sandbox, port.forge + '-c1-first-claim-cli');
+      const firstLine = executableClaimLines(firstClaimFence, 'startup')[0] || '';
+      const cliRun = runDemonstratedFence(firstClaimFence, opened, {
+        KAOLA_TARGET_ISSUES: '12571',
+        PWD: opened,
+      }, cliWorkspaceArgv(opened));
+      const cliLog = readArgvLog();
       const cliJson = lastJson(cliRun.stdout) || lastJson(cliRun.stderr);
       const cliPrep = cursorPrep(cliJson);
-      assert(cliHit,
-        tag + '-c1-host-gate-cli-path: first Resume fence or the gated CLI path with all four CURSOR_* and KAOLA_CURSOR_* vars must still invoke named claim.js with --product cli --host local and --cursor-workspace (CLI must not become skippable-by-omission) (log='
-        + JSON.stringify(cliLog.slice(0, 400)) + ')');
-      if (port.forge === 'github') {
-        assert(hasProjectAgents(cliWs) && cliPrep && cliPrep.status === 'materialized',
-          tag + '-c1-host-gate-cli-prep: GitHub generated CLI path must actually run resume/prep (cursor_prep.status=materialized) (json='
-          + JSON.stringify(cliJson) + ' raw=' + String(cliRun.stderr || cliRun.stdout || '').slice(0, 300) + ')');
-      }
+      const startups = claimStartupInvocations(cliLog);
+      assert(startups.length === 1,
+        tag + '-c1-first-claim-cli-single: default then-claim-it fence with demonstrated CLI --workspace (no invented CURSOR_PRODUCT/HOST/WORKSPACE/KAOLA_CURSOR_*) must be one startup, not a later gated fence (line='
+        + firstLine + ' log=' + JSON.stringify(cliLog.slice(0, 500)) + ')');
+      assert(cliRun.status === 0 && acquired(cliJson) && hasProjectAgents(opened)
+        && cliPrep && (cliPrep.status === 'materialized' || cliPrep.status === 'current'),
+        tag + '-c1-first-claim-cli-prep: Repo prep must complete before that single claim (cursor_prep present; agents on the CLI-opened workspace) (status='
+        + cliRun.status + ' json=' + JSON.stringify(cliJson) + ' raw='
+        + String(cliRun.stderr || cliRun.stdout || '').slice(0, 400)
+        + ' log=' + JSON.stringify(cliLog.slice(0, 400)) + ')');
+      const prepTarget = cliPrep && cliPrep.target;
+      assert(!prepTarget || fs.realpathSync(prepTarget) === opened,
+        tag + '-c1-first-claim-cli-target: prep target must be the demonstrated --workspace opened dir, not invoking git toplevel alone (target='
+        + prepTarget + ' opened=' + opened + ')');
     }
 
     {
-      const pairWs = makeRepo(sandbox, port.forge + '-c1-cli-cursor-pair-resume');
-      const pairSeed = runNamedClaim(sandbox, pairWs, port.claim, [
-        'startup', '--target-issue', '12564', '--runtime', 'claude', '--json',
-      ]);
-      assert(acquired(pairSeed.json),
-        tag + '-c1-host-gate-cli-cursor-pair-seed: claude startup must acquire (got '
-        + JSON.stringify(pairSeed.json) + ')');
-      writeMissionList(pairWs, 12564);
-      const pairRun = runHostGateFence(resumeFence, pairWs, 'cli', {
-        CURSOR_WORKSPACE: pairWs,
-        PWD: pairWs,
-      });
-      const pairLog = readArgvLog();
-      const pairJson = lastJson(pairRun.stdout) || lastJson(pairRun.stderr);
-      const pairPrep = cursorPrep(pairJson);
-      assert(logInvokesCliLocalWithWorkspace(pairLog, port.claimBase),
-        tag + '-c1-host-gate-cli-cursor-pair-first-resume: first ## Resume fence with only CURSOR_PRODUCT=cli CURSOR_HOST=local (KAOLA_CURSOR_* unset; sibling agent still on PATH) must take the then-arm and invoke named '
-        + port.claimBase + ' with --product cli --host local and --cursor-workspace (status='
-        + pairRun.status + ' log=' + JSON.stringify(pairLog.slice(0, 400))
-        + ' json=' + JSON.stringify(pairJson) + ')');
-      if (port.forge === 'github') {
-        assert(hasProjectAgents(pairWs) && pairPrep && pairPrep.status === 'materialized',
-          tag + '-c1-host-gate-cli-cursor-pair-prep: GitHub generated first Resume then-arm under the documented CURSOR pair must materialize (cursor_prep.status=materialized) (json='
-          + JSON.stringify(pairJson) + ' raw=' + String(pairRun.stderr || pairRun.stdout || '').slice(0, 300) + ')');
-      }
+      const appOpened = makeRepo(sandbox, port.forge + '-c1-first-claim-app');
+      const appRun = runDemonstratedFence(firstClaimFence, appOpened, {
+        KAOLA_TARGET_ISSUES: '12572',
+        PWD: appOpened,
+      }, appWorkerArgv());
+      const appLog = readArgvLog();
+      const appJson = lastJson(appRun.stdout) || lastJson(appRun.stderr);
+      const appPrep = cursorPrep(appJson);
+      assert(appRun.status === 0 && acquired(appJson) && !hasProjectAgents(appOpened)
+        && !(appPrep && appPrep.status === 'materialized')
+        && !logInvokesCliLocalIdentity(appLog, port.claimBase),
+        tag + '-c1-first-claim-app: same default first claim fence with App-like demonstrated context (--worker-dir, no --workspace, CURSOR_INVOKED_AS=cursor-agent, sibling agent on PATH, no invented gate env) must not obtain local-CLI prep or forge --product cli --host local that materializes (status='
+        + appRun.status + ' json=' + JSON.stringify(appJson) + ' log='
+        + JSON.stringify(appLog.slice(0, 400)) + ')');
     }
 
     {
-      const kaolaWs = makeRepo(sandbox, port.forge + '-c1-cli-kaola-twins-resume');
-      const kaolaSeed = runNamedClaim(sandbox, kaolaWs, port.claim, [
-        'startup', '--target-issue', '12565', '--runtime', 'claude', '--json',
-      ]);
-      assert(acquired(kaolaSeed.json),
-        tag + '-c1-host-gate-cli-kaola-twins-seed: claude startup must acquire (got '
-        + JSON.stringify(kaolaSeed.json) + ')');
-      writeMissionList(kaolaWs, 12565);
-      const kaolaRun = runHostGateFence(resumeFence, kaolaWs, 'kaola', {
-        CURSOR_WORKSPACE: kaolaWs,
-        PWD: kaolaWs,
+      const unknownWs = makeRepo(sandbox, port.forge + '-c1-first-claim-unknown');
+      const unknownRun = runHostGateFence(firstClaimFence, unknownWs, 'app', {
+        KAOLA_TARGET_ISSUES: '12573',
+        PWD: unknownWs,
       });
-      const kaolaLog = readArgvLog();
-      const kaolaJson = lastJson(kaolaRun.stdout) || lastJson(kaolaRun.stderr);
-      const kaolaPrep = cursorPrep(kaolaJson);
-      assert(logInvokesCliLocalWithWorkspace(kaolaLog, port.claimBase),
-        tag + '-c1-host-gate-cli-kaola-twins-first-resume: first ## Resume fence with only KAOLA_CURSOR_PRODUCT=cli KAOLA_CURSOR_HOST=local (CURSOR_* unset; sibling agent still on PATH) must take the then-arm and invoke named '
-        + port.claimBase + ' with --product cli --host local and --cursor-workspace (status='
-        + kaolaRun.status + ' log=' + JSON.stringify(kaolaLog.slice(0, 400))
-        + ' json=' + JSON.stringify(kaolaJson) + ')');
-      if (port.forge === 'github') {
-        assert(hasProjectAgents(kaolaWs) && kaolaPrep && kaolaPrep.status === 'materialized',
-          tag + '-c1-host-gate-cli-kaola-twins-prep: GitHub generated first Resume then-arm under KAOLA twins must materialize (cursor_prep.status=materialized) (json='
-          + JSON.stringify(kaolaJson) + ' raw=' + String(kaolaRun.stderr || kaolaRun.stdout || '').slice(0, 300) + ')');
-      }
+      const unknownLog = readArgvLog();
+      const unknownJson = lastJson(unknownRun.stdout) || lastJson(unknownRun.stderr);
+      const unknownPrep = cursorPrep(unknownJson);
+      assert(unknownRun.status === 0 && acquired(unknownJson) && !hasProjectAgents(unknownWs)
+        && !(unknownPrep && unknownPrep.status === 'materialized')
+        && !logInvokesCliLocalIdentity(unknownLog, port.claimBase),
+        tag + '-c1-first-claim-unknown: default first claim fence with no demonstrated --workspace must not obtain local-CLI prep (status='
+        + unknownRun.status + ' json=' + JSON.stringify(unknownJson) + ' log='
+        + JSON.stringify(unknownLog.slice(0, 400)) + ')');
+    }
+
+    {
+      const consumer = makeRepo(sandbox, port.forge + '-c1-generic-workspace');
+      const genericRun = runLivingFence(unrelatedParent, firstClaimFence, consumer, {
+        KAOLA_TARGET_ISSUES: '12576',
+        PWD: consumer,
+      }, ['--workspace', consumer]);
+      const genericLog = readArgvLog();
+      const genericJson = lastJson(genericRun.stdout) || lastJson(genericRun.stderr);
+      const genericPrep = cursorPrep(genericJson);
+      assert(genericRun.status === 0 && acquired(genericJson) && !hasProjectAgents(consumer)
+        && !(genericPrep && genericPrep.status === 'materialized')
+        && !logInvokesCliLocalIdentity(genericLog, port.claimBase),
+        tag + '-c1-generic-workspace-not-cli: first generated fence as grandchild of living unrelated-tool --workspace <repo> (not YYYY.MM.DD-hash/index.js) must keep unknown/App/Cloud non-writing; a generic --workspace flag is not CLI identity (status='
+        + genericRun.status + ' json=' + JSON.stringify(genericJson) + ' log='
+        + JSON.stringify(genericLog.slice(0, 400)) + ' parent=' + unrelatedParent + ')');
+    }
+
+    {
+      const bothWs = makeRepo(sandbox, port.forge + '-c1-workspace-and-worker');
+      const workerDir = path.join(sandbox.tmp, 'app-worker-both-' + port.forge);
+      fs.mkdirSync(workerDir, { recursive: true });
+      const bothRun = runDemonstratedFence(firstClaimFence, bothWs, {
+        KAOLA_TARGET_ISSUES: '12577',
+        PWD: bothWs,
+      }, ['--workspace', bothWs, '--worker-dir', workerDir, '--model', 'cursor-grok-4.6-xhigh']);
+      const bothLog = readArgvLog();
+      const bothJson = lastJson(bothRun.stdout) || lastJson(bothRun.stderr);
+      const bothPrep = cursorPrep(bothJson);
+      assert(bothRun.status === 0 && acquired(bothJson) && !hasProjectAgents(bothWs)
+        && !(bothPrep && bothPrep.status === 'materialized')
+        && !logInvokesCliLocalIdentity(bothLog, port.claimBase),
+        tag + '-c1-workspace-and-worker-dir: ancestor with both --workspace and --worker-dir must not take the workspace branch first as CLI; preserve App/unknown non-writing (status='
+        + bothRun.status + ' json=' + JSON.stringify(bothJson) + ' log='
+        + JSON.stringify(bothLog.slice(0, 400)) + ')');
+    }
+
+    {
+      const main = makeRepo(sandbox, port.forge + '-c2-opened-wt-main');
+      const openedWt = addIndependentWorktree(sandbox, main, port.forge + '-direct');
+      const wtRun = runDemonstratedFence(firstClaimFence, openedWt, {
+        KAOLA_TARGET_ISSUES: '12574',
+        PWD: openedWt,
+      }, cliWorkspaceArgv(openedWt));
+      const wtJson = lastJson(wtRun.stdout) || lastJson(wtRun.stderr);
+      const wtPrep = cursorPrep(wtJson);
+      assert(wtRun.status === 0 && acquired(wtJson) && hasProjectAgents(openedWt)
+        && wtPrep && (wtPrep.status === 'materialized' || wtPrep.status === 'current'),
+        tag + '-c2-cli-opened-worktree: CLI opened directly in an independent worktree (--workspace=that worktree, no invented CURSOR_WORKSPACE) must prep that worktree (json='
+        + JSON.stringify(wtJson) + ' raw=' + String(wtRun.stderr || wtRun.stdout || '').slice(0, 300) + ')');
+      assert(!hasProjectAgents(main),
+        tag + '-c2-cli-opened-worktree-not-main: recorded main_root/main checkout must not receive Repo prep when --workspace is the independent worktree');
+    }
+
+    {
+      const main = makeRepo(sandbox, port.forge + '-c2-main-open');
+      const otherWt = addIndependentWorktree(sandbox, main, port.forge + '-cwd');
+      const mainRun = runDemonstratedFence(firstClaimFence, otherWt, {
+        KAOLA_TARGET_ISSUES: '12575',
+        PWD: otherWt,
+      }, cliWorkspaceArgv(main));
+      const mainJson = lastJson(mainRun.stdout) || lastJson(mainRun.stderr);
+      const mainPrep = cursorPrep(mainJson);
+      assert(mainRun.status === 0 && acquired(mainJson) && hasProjectAgents(main)
+        && mainPrep && (mainPrep.status === 'materialized' || mainPrep.status === 'current'),
+        tag + '-c2-main-cli-other-cwd: main-workspace CLI (--workspace=main) whose shell cwd is another worktree must prep the opened main, not cwd/git toplevel (json='
+        + JSON.stringify(mainJson) + ' raw=' + String(mainRun.stderr || mainRun.stdout || '').slice(0, 300) + ')');
+      assert(!hasProjectAgents(otherWt),
+        tag + '-c2-main-cli-other-cwd-not-wt: shell-cwd worktree must not receive Repo prep when demonstrated --workspace is main');
+    }
+
+    {
+      const spaced = makeSpacedRepo(sandbox, port.forge);
+      const truncated = truncatedPrefixOfSpacedPath(spaced);
+      fs.mkdirSync(truncated, { recursive: true });
+      G.init(truncated, { branch: 'main' });
+      G.git(truncated, ['config', 'commit.gpgsign', 'false']);
+      fs.writeFileSync(path.join(truncated, '.gitignore'), '.kw/\n');
+      G.commitAll(truncated, 'truncated prefix decoy');
+      const spacedPs = measureDarwinPsArgs(demonstratedParent, cliWorkspaceArgv(spaced), spaced);
+      const spacedNaive = parseWorkspaceFlagFromTokens(tokenizePsCommandLineLikeProduction(spacedPs));
+      console.error('MEASURED [' + port.forge + '] CLI parent ps args=: ' + spacedPs);
+      console.error('MEASURED [' + port.forge + '] naive workspace=: ' + spacedNaive);
+      const spacedRun = runDemonstratedFence(firstClaimFence, spaced, {
+        KAOLA_TARGET_ISSUES: '12578',
+        PWD: spaced,
+      }, cliWorkspaceArgv(spaced));
+      const spacedLog = readArgvLog();
+      const spacedJson = lastJson(spacedRun.stdout) || lastJson(spacedRun.stderr);
+      const spacedPrep = cursorPrep(spacedJson);
+      const prepTarget = spacedPrep && spacedPrep.target
+        ? fs.realpathSync(spacedPrep.target)
+        : '';
+      assert(spacedRun.status === 0 && acquired(spacedJson)
+        && hasProjectAgents(spaced)
+        && spacedPrep && (spacedPrep.status === 'materialized' || spacedPrep.status === 'current')
+        && prepTarget === spaced,
+        tag + '-c2-spaced-workspace-full: demonstrated CLI --workspace with spaces must prep the full opened dir via Darwin ps args= → tokenizePsCommandLine, not silently skip and not the truncated prefix (status='
+        + spacedRun.status + ' json=' + JSON.stringify(spacedJson) + ' target=' + prepTarget
+        + ' opened=' + spaced + ' truncated=' + truncated
+        + ' ps=' + JSON.stringify(spacedPs)
+        + ' naive=' + JSON.stringify(spacedNaive)
+        + ' log=' + JSON.stringify(spacedLog.slice(0, 400)) + ')');
+      assert(!hasProjectAgents(truncated),
+        tag + '-c2-spaced-workspace-not-prefix: existing truncated prefix must not receive Repo prep (truncated='
+        + truncated + ')');
     }
 
     {
@@ -1354,59 +1587,7 @@ try {
         && !hasProjectAgents(everyWs),
         tag + '-c1-host-gate-every-fence: App executing every startup/resume bash fence must not run the cli/local identity; prose-only skip does not count (status='
         + everyRun.status + ' log=' + JSON.stringify(everyLog.slice(0, 500))
-        + ' json=' + JSON.stringify(everyJson) + ')');
-    }
-
-    {
-      const pairEveryWs = makeRepo(sandbox, port.forge + '-c1-cli-cursor-pair-every-fence');
-      const pairEverySeed = runNamedClaim(sandbox, pairEveryWs, port.claim, [
-        'startup', '--target-issue', '12566', '--runtime', 'claude', '--json',
-      ]);
-      assert(acquired(pairEverySeed.json),
-        tag + '-c1-host-gate-cli-cursor-pair-every-seed: claude startup must acquire (got '
-        + JSON.stringify(pairEverySeed.json) + ')');
-      writeMissionList(pairEveryWs, 12566);
-      const operatorFences = bashFences(nextText).filter(fence =>
-        executableClaimLines(fence, 'startup').length > 0
-        || executableClaimLines(fence, 'resume').length > 0);
-      const pairEveryRun = runHostGateFence(operatorFences.join('\n'), pairEveryWs, 'cli', {
-        KAOLA_TARGET_ISSUES: '12566',
-        PWD: pairEveryWs,
-        CURSOR_WORKSPACE: pairEveryWs,
-      });
-      const pairEveryLog = readArgvLog();
-      const pairEveryJson = lastJson(pairEveryRun.stdout) || lastJson(pairEveryRun.stderr);
-      assert(logInvokesCliLocalWithWorkspace(pairEveryLog, port.claimBase),
-        tag + '-c1-host-gate-cli-cursor-pair-every-fence: concatenating every generated startup/resume fence with only CURSOR_PRODUCT=cli CURSOR_HOST=local (KAOLA_CURSOR_* unset) must invoke named '
-        + port.claimBase + ' with --product cli --host local and --cursor-workspace (status='
-        + pairEveryRun.status + ' log=' + JSON.stringify(pairEveryLog.slice(0, 500))
-        + ' json=' + JSON.stringify(pairEveryJson) + ')');
-    }
-
-    {
-      const kaolaEveryWs = makeRepo(sandbox, port.forge + '-c1-cli-kaola-twins-every-fence');
-      const kaolaEverySeed = runNamedClaim(sandbox, kaolaEveryWs, port.claim, [
-        'startup', '--target-issue', '12567', '--runtime', 'claude', '--json',
-      ]);
-      assert(acquired(kaolaEverySeed.json),
-        tag + '-c1-host-gate-cli-kaola-twins-every-seed: claude startup must acquire (got '
-        + JSON.stringify(kaolaEverySeed.json) + ')');
-      writeMissionList(kaolaEveryWs, 12567);
-      const operatorFences = bashFences(nextText).filter(fence =>
-        executableClaimLines(fence, 'startup').length > 0
-        || executableClaimLines(fence, 'resume').length > 0);
-      const kaolaEveryRun = runHostGateFence(operatorFences.join('\n'), kaolaEveryWs, 'kaola', {
-        KAOLA_TARGET_ISSUES: '12567',
-        PWD: kaolaEveryWs,
-        CURSOR_WORKSPACE: kaolaEveryWs,
-      });
-      const kaolaEveryLog = readArgvLog();
-      const kaolaEveryJson = lastJson(kaolaEveryRun.stdout) || lastJson(kaolaEveryRun.stderr);
-      assert(logInvokesCliLocalWithWorkspace(kaolaEveryLog, port.claimBase),
-        tag + '-c1-host-gate-cli-kaola-twins-every-fence: concatenating every generated startup/resume fence with only KAOLA_CURSOR_PRODUCT=cli KAOLA_CURSOR_HOST=local (CURSOR_* unset) must invoke named '
-        + port.claimBase + ' with --product cli --host local and --cursor-workspace (status='
-        + kaolaEveryRun.status + ' log=' + JSON.stringify(kaolaEveryLog.slice(0, 500))
-        + ' json=' + JSON.stringify(kaolaEveryJson) + ')');
+        + ' json='         + JSON.stringify(everyJson) + ')');
     }
   }
 } finally {

@@ -54,31 +54,37 @@ catalogs. Unknown stays `unknown`; a documented path is not a live named-role PA
 | Kimi Code | `${KIMI_CODE_HOME:-~/.kimi-code}` | no | no | live `kaola-role-implementer` lookup from two unrelated empty repositories |
 | Grok CLI | `${GROK_HOME:-~/.grok}` | no | no | documented user `~/.grok/agents/` |
 | ZCode | `${ZCODE_HOME:-~/.zcode}` (project tree is staging; runtime loads user agents) | no | no (staging only) | documented user-scope discovery |
-| Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/{agents,commands}` (un-nested) | **no** | yes (explicit `--target`; all four claim trees spawn installed `--ensure-target` only on `--runtime cursor --product cli --host local`, against `--cursor-workspace` when set, else recorded `main_root` on resume, else claim.js `getRoot()` on first claim; generated Next appendix names `--cursor-workspace` and recorded `main_root` and does not name `git rev-parse --show-toplevel` as the known CLI workspace; independently entered Finalize still ensures `"$PWD"` immediately before named dispatch) | live project `implementer`; raw Task carrier resolved `cursor-grok-4.6-medium` |
+| Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/{agents,commands}` (un-nested) | **no** | yes (explicit `--target`; all four claim trees spawn installed `--ensure-target` after `applyDemonstratedCursorCliHost` when identity is `cursor`/`cli`/`local`: explicit argv, or omitted product/host plus a living CLI-shaped ancestor `…/YYYY.MM.DD-<hash>/index.js` or `cursor-agent` **and** `--workspace` sharing git identity with cwd; generic `--workspace` on an unrelated tool skips; `--worker-dir` present with or without `--workspace` skips; no `--workspace` skips; Darwin unquoted `ps args=` remainder until next `--<flag>` reconstitutes paths with spaces, Linux `/proc` NUL cmdline unchanged; `--cursor-workspace` when set, else recorded `main_root` on resume, else claim.js `getRoot()` on first claim; independently entered Finalize still ensures `"$PWD"` immediately before named dispatch) | live project `implementer`; raw Task carrier resolved `cursor-grok-4.6-medium` |
 | Cursor App / local IDE | same documented user carrier; App is not inferred from a CLI binary | **no** | `unknown` | live project catalog with all 14 Kaola types; exact `implementer` succeeded |
 | Cursor App / Cloud host | saved remote environment managed by Cursor | **no** | yes; a confirmed environment-setup Agent materializes the selected repository before Save | live exact-Build 23-type catalog with all 14 Kaola names; exact `implementer` succeeded from a new same-repository parent |
 
 Cursor family `named_roles: true` is now live-proven on three independently measured surfaces. On
-the measured standalone CLI only, Workflow `startup`/`resume` (`--runtime cursor --product cli
---host local`) run the installed safe materializer `--ensure-target` from all four claim trees
-(canonical GitHub, COMMON_SCRIPTS Codex copy, GitLab hand-port, Gitea hand-port). Generated Next
-(GitHub/GitLab/Gitea) forges `--product cli --host local` only inside
-`scripts/sync-cursor-edition.js` `cursorCliHostGateOpen`:
-`if { [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ]; } || { [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; }; then`.
-Unset App/Cloud-like env takes unstamped `--runtime cursor` and does not run `--product cli --host
-local`. Standalone CLI/local must set `CURSOR_PRODUCT=cli` and `CURSOR_HOST=local` (or the
-`KAOLA_CURSOR_*` twins); this page does not claim that Cursor CLI currently exports those
-`CURSOR_*` names. Those claim.js no longer `unknown_flag`.
-Omitted, unknown, app, cloud, or incomplete pairs skip ensure but still claim/resume. Helper spawn
-is `--forge=<args.forge||'github'>`; `--forge` is not a claim.js flag. Claim.js target is
-`--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()`
-(`git rev-parse --show-toplevel`) on first claim — not nested cwd and not the write-worktree.
-Generated Next appendix names `--cursor-workspace` and recorded `main_root`; it does not name
-`git rev-parse --show-toplevel` as the known CLI workspace. Independently entered Finalize still
-runs `--ensure-target "$PWD"` immediately before named dispatch. The helper derives bytes from the
-receipt-verified global authority, is a no-op when `status: current`, reports
+the measured standalone CLI only, Workflow `startup`/`resume` run the installed safe materializer
+`--ensure-target` from all four claim trees (canonical GitHub, COMMON_SCRIPTS Codex copy, GitLab
+hand-port, Gitea hand-port) after `applyDemonstratedCursorCliHost`. Explicit `--product`/`--host`
+still win. Generated startup/resume fences do not stamp `--product cli --host local`; claim.js
+stamps in-process before the single claim and on resume without re-claim. When `--runtime cursor`
+and both are omitted, a living CLI-shaped ancestor (`…/YYYY.MM.DD-<hash>/index.js` or
+`cursor-agent`) **and** `--workspace <opened dir>` that shares git identity with cwd stamps
+`product=cli`, `host=local`, and `cursorWorkspace=<that dir>` and ensure runs against that dir.
+Generic `--workspace` on an unrelated tool is not CLI and skips. `--worker-dir` present, with or
+without `--workspace`, is App-like and skips; no `--workspace` is unknown and skips. Darwin
+unquoted `ps args=` reconstitutes `--workspace` as the remainder until the next `--<flag>` (full
+path including spaces); Linux `/proc` NUL cmdline is unchanged. The documented generated
+CLI-positive fence is unstamped `node "$CLAIM_JS" startup --runtime cursor --target-issues
+"$KAOLA_TARGET_ISSUES"`. Resume is unstamped `node "$CLAIM_JS" resume --runtime cursor` with
+`kaola_script` / `CLAIM_JS=` outside any `if`. There is no `cursorCliHostGateOpen`. Real Cursor CLI
+`2026.09.02-c22c1a3` does not export `CURSOR_PRODUCT`, `CURSOR_HOST`, `KAOLA_CURSOR_*`, or
+`CURSOR_WORKSPACE`; operators do not pre-export those names. Those claim.js no longer
+`unknown_flag`. Helper spawn is `--forge=<args.forge||'github'>`; `--forge` is not a claim.js flag.
+Claim.js target is `--cursor-workspace` when set, else recorded `main_root` on resume, else
+invoking `getRoot()` (`git rev-parse --show-toplevel`) on first claim — not nested cwd and not the
+write-worktree unless they are that demonstrated opened dir. Independently entered Finalize still
+runs `--ensure-target "$PWD"` immediately before named dispatch. The helper derives
+bytes from the receipt-verified global authority, is a no-op when `status: current`, reports
 `restart_boundary: "new_process_same_chat"` when `status: materialized`, and fails before writing
-on missing/stale authority, collision, symlink, or modified ownership. Cursor App local and Cloud
+on missing/stale authority, collision, symlink, or modified ownership. File-ready bytes are not live
+Task catalog proof or same-process hot-load proof. Cursor App local and Cloud
 do not inherit that CLI rule. There is no `sessionStart` materializer and no `--global` dual-write.
 `install-all.sh` installs only its current machine. Only an Agent that has established it is in
 Cursor Cloud environment setup may install the remote authority and selected repository, report

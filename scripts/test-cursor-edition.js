@@ -402,8 +402,14 @@ function cursorCliMaterializationVerdict(text, forge, surface) {
     }
     const cliStartup = startupLines.filter(cursorCliLineHasExplicitCliLocalIdentity);
     const appStartup = startupLines.filter(line => !cursorCliLineHasExplicitCliLocalIdentity(line));
-    if (cliStartup.length === 0) {
-      errors.push('standalone CLI consumer path dropped explicit --product cli --host local on generated Next startup');
+    let firstStartupLine = '';
+    for (const fence of cursorCliBashFences(block)) {
+      const lines = cursorCliExecutableClaimLines(fence, 'startup')
+        .filter(line => /--runtime(?:\s+|=)cursor\b/.test(line));
+      if (lines.length) { firstStartupLine = lines[0]; break; }
+    }
+    if (firstStartupLine && cursorCliLineHasExplicitCliLocalIdentity(firstStartupLine)) {
+      errors.push('default executable commands must not forge CLI identity; residual gated second fence is not the CLI-positive skip-proof');
     }
     if (startupLines.length > 0 && cliStartup.length > 0 && appStartup.length === 0) {
       errors.push('shared generated Next forges --product cli --host local for App/Cloud consumers of the same command file');
@@ -417,9 +423,6 @@ function cursorCliMaterializationVerdict(text, forge, surface) {
     }
     const cliResume = resumeLines.filter(cursorCliLineHasExplicitCliLocalIdentity);
     const appResume = resumeLines.filter(line => !cursorCliLineHasExplicitCliLocalIdentity(line));
-    if (cliResume.length === 0) {
-      errors.push('standalone CLI consumer path dropped explicit --product cli --host local on generated Next resume');
-    }
     if (resumeLines.length > 0 && cliResume.length > 0 && appResume.length === 0) {
       errors.push('shared generated Next forges --product cli --host local on resume for App/Cloud consumers of the same command file');
     }
@@ -1107,15 +1110,15 @@ function commandRel(name, forge) {
         'G2-cli-materialization-mutation[' + name + ']: authorizing a named-role capability_gap skip is rejected — '
           + gapVerdict.errors.join(' | '));
 
-        const omittedIdentity = content.replace(
-          /(--runtime cursor) --product cli --host local/g,
-          '$1'
+        const forgedDefault = content.replace(
+          'node "$CLAIM_JS" startup --runtime cursor --target-issues "$KAOLA_TARGET_ISSUES"',
+          'node "$CLAIM_JS" startup --runtime cursor --product cli --host local --target-issues "$KAOLA_TARGET_ISSUES"'
         );
-        const omittedVerdict = cursorCliMaterializationVerdict(omittedIdentity, DEFAULT_FORGE, surface);
-        assert(omittedIdentity !== content && !omittedVerdict.ok
-          && omittedVerdict.errors.some(error => /standalone CLI consumer path dropped explicit --product cli --host local/.test(error)),
-        'G2-cli-materialization-mutation[' + name + ']: dropping explicit --product cli --host local from the standalone CLI operator path is rejected — '
-          + omittedVerdict.errors.join(' | '));
+        const forgedVerdict = cursorCliMaterializationVerdict(forgedDefault, DEFAULT_FORGE, surface);
+        assert(forgedDefault !== content && !forgedVerdict.ok
+          && forgedVerdict.errors.some(error => /must not forge CLI identity/.test(error)),
+        'G2-cli-materialization-mutation[' + name + ']: stamping --product cli --host local onto the default first startup fence is rejected — '
+          + forgedVerdict.errors.join(' | '));
 
         const helperOnlyResume = content
           + '\nnode "$CURSOR_MATERIALIZER" --ensure-target "$PWD" --forge=github --json\n'
