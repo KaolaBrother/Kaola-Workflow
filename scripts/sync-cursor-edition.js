@@ -223,6 +223,21 @@ function cursorCliStartupResumePrepProse() {
   ].join('\n');
 }
 
+function cursorCliOperatorIdentityArgv() {
+  return '--runtime cursor --product cli --host local --cursor-workspace "$CURSOR_WORKSPACE"';
+}
+
+function cursorCliResumeRecoveryFence(forge) {
+  const claimJs = forgeLayout.scriptName('kaola-workflow-claim.js', forge);
+  return [
+    '```bash',
+    cursorKaolaScript(forge),
+    'CLAIM_JS="$(kaola_script ' + claimJs + ')"',
+    'node "$CLAIM_JS" resume ' + cursorCliOperatorIdentityArgv(),
+    '```',
+  ].join('\n');
+}
+
 function cursorCliMaterializationProse(forge) {
   return [
     '## Cursor standalone CLI pre-dispatch materialization',
@@ -266,13 +281,17 @@ function transformCommandBody(body, forge, label) {
   text = rewriteClaudeScriptPaths(text, forge);
   const basename = path.posix.basename(label || '');
   if (basename === 'workflow-next.md') {
+    const unstampedStartup = 'node "$CLAIM_JS" startup --runtime cursor --target-issues "$KAOLA_TARGET_ISSUES"';
+    const cliStartup = 'node "$CLAIM_JS" startup ' + cursorCliOperatorIdentityArgv()
+      + ' --target-issues "$KAOLA_TARGET_ISSUES"';
     text = text.replace(
-      /node "\$CLAIM_JS" startup --runtime cursor\b/g,
-      'node "$CLAIM_JS" startup --runtime cursor --product cli --host local'
+      unstampedStartup,
+      unstampedStartup + '\n```\n\n```bash\n' + cliStartup
     );
     text = text.replace(
       /^## Resume\n\nOn resume, read `mission-list\.md`/m,
-      '## Resume\n\n```bash\nnode "$CLAIM_JS" resume --runtime cursor --product cli --host local\n```\n\nOn resume, read `mission-list.md`'
+      '## Resume\n\n' + cursorCliResumeRecoveryFence(forge)
+        + '\n\n```bash\nnode "$CLAIM_JS" resume --runtime cursor\n```\n\nOn resume, read `mission-list.md`'
     );
     text = text.trimEnd() + '\n\n' + cursorCliStartupResumePrepProse() + '\n';
   } else if (basename === 'kaola-workflow-finalize.md') {

@@ -153,7 +153,8 @@ On `startup` (and `pick-next` when it delegates to `cmdStartup`) and on `resume`
 `isCursorCliLocalWorkflowPath` is true iff `--runtime`/`--product`/`--host` normalize to
 `cursor`/`cli`/`local`. Only then does `ensureCursorCliLocalPrep` run the *installed* helper
 before a new claim and on resume without re-claim. That gate and helper path exist on all four
-claim trees named above. Generated GitLab/Gitea Next stamps `--product cli --host local`; those
+claim trees named above. Generated Next keeps one `.cursor/commands/workflow-next.md` with two operator argv classes
+(unstamped App/Cloud `startup`/`resume` plus CLI `--product cli --host local --cursor-workspace "$CURSOR_WORKSPACE"`); those
 claim.js no longer `unknown_flag`. Omitted, unknown, app, cloud, or incomplete
 pairs skip ensure but still claim/resume.
 

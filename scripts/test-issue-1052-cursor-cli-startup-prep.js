@@ -252,6 +252,138 @@ function assertNoExtraRepoWrite(r, workspace, label) {
     label + ' (got ' + JSON.stringify(r.json) + ' raw=' + r.raw.slice(0, 300) + ')');
 }
 
+const SYNC_JS = path.join(REPO, 'scripts', 'sync-cursor-edition.js');
+const README = path.join(REPO, 'README.md');
+const CURSOR_TREE_LABEL = Object.freeze({
+  github: '.cursor',
+  gitlab: '.cursor-gitlab',
+  gitea: '.cursor-gitea',
+});
+
+function bashFences(text) {
+  const out = [];
+  const re = /```(?:bash|sh)\n([\s\S]*?)```/g;
+  let m;
+  const source = String(text || '');
+  while ((m = re.exec(source))) out.push(m[1]);
+  return out;
+}
+
+function executableClaimLines(text, verb) {
+  const lines = [];
+  function take(block) {
+    String(block || '').split(/\r?\n/).forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      if (/\bnode\b/.test(trimmed) && /\$CLAIM_JS/.test(trimmed)
+        && new RegExp('\\b' + verb + '\\b').test(trimmed)) {
+        lines.push(trimmed);
+      }
+    });
+  }
+  const fences = bashFences(text);
+  if (fences.length) fences.forEach(take);
+  else take(text);
+  return lines;
+}
+
+function hasCliLocalIdentity(line) {
+  return /--product(?:\s+|=)cli\b/.test(line) && /--host(?:\s+|=)local\b/.test(line);
+}
+
+function tokenizeBashLine(line) {
+  const tokens = [];
+  let cur = '';
+  let quote = null;
+  const s = String(line || '');
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (quote) {
+      if (c === quote) quote = null;
+      else cur += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (/\s/.test(c)) {
+      if (cur) { tokens.push(cur); cur = ''; }
+    } else {
+      cur += c;
+    }
+  }
+  if (cur) tokens.push(cur);
+  return tokens;
+}
+
+function expandArgToken(tok, ctx) {
+  let out = String(tok == null ? '' : tok);
+  out = out.replace(/\$\{CURSOR_HOME:-[^}]+\}/g, ctx.CURSOR_HOME || '');
+  out = out.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name) => {
+    if (Object.prototype.hasOwnProperty.call(ctx, name)) return String(ctx[name]);
+    return '';
+  });
+  out = out.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, name) => {
+    if (Object.prototype.hasOwnProperty.call(ctx, name)) return String(ctx[name]);
+    return '';
+  });
+  return out;
+}
+
+function emittedClaimArgv(line, verb, ctx) {
+  const tokens = tokenizeBashLine(line).map(tok => expandArgToken(tok, ctx));
+  const idx = tokens.findIndex(t => t === verb);
+  if (idx < 0) return [];
+  const argv = tokens.slice(idx);
+  if (argv.indexOf('--json') < 0) argv.push('--json');
+  return argv;
+}
+
+function resumeSection(text) {
+  const source = String(text || '');
+  const start = source.search(/^## Resume\b/m);
+  if (start < 0) return '';
+  const rest = source.slice(start);
+  const next = rest.search(/\n## /);
+  return next < 0 ? rest : rest.slice(0, next);
+}
+
+function generateWorkflowNext(sandbox, forge) {
+  const treeRoot = path.join(sandbox.tmp, 'gen-next-' + forge);
+  fs.mkdirSync(treeRoot, { recursive: true });
+  // spawn-class: environment
+  const generated = spawnSync(process.execPath, [
+    SYNC_JS, '--write', '--forge=' + forge, '--tree-root=' + treeRoot,
+  ], {
+    cwd: REPO, env: sandbox.env, encoding: 'utf8', timeout: 120000,
+  });
+  const label = CURSOR_TREE_LABEL[forge] || '.cursor';
+  const nextPath = path.join(treeRoot, label, 'commands', 'workflow-next.md');
+  return {
+    status: generated.status,
+    raw: combined(generated),
+    nextPath,
+    text: fs.existsSync(nextPath) ? fs.readFileSync(nextPath, 'utf8') : '',
+    treeRoot,
+  };
+}
+
+function installTargetNext(sandbox, forge, consumer) {
+  const args = [INSTALLER, '--target', consumer, '--yes', '--forge=' + forge];
+  // spawn-class: environment
+  const installed = spawnSync('bash', args, {
+    cwd: REPO, env: sandbox.env, encoding: 'utf8', timeout: 120000,
+  });
+  const nextPath = path.join(consumer, '.cursor', 'commands', 'workflow-next.md');
+  return {
+    status: installed.status,
+    raw: combined(installed),
+    nextPath,
+    text: fs.existsSync(nextPath) ? fs.readFileSync(nextPath, 'utf8') : '',
+  };
+}
+
+function cursorPrep(json) {
+  return (json && json.cursor_prep) || null;
+}
+
 const sandbox = makeSandbox();
 try {
   assert(sandbox.install.status === 0 && fs.existsSync(sandbox.helper),
@@ -796,6 +928,222 @@ try {
       assert(!hasProjectAgents(decoyCwd),
         tag + '-cursor-workspace: decoy cwd must not receive extra Repo writes');
     }
+  }
+
+  // --- C1–C4: generated Next / installed consumer call chain (not claim.js --product app) ---
+  {
+    const readme = fs.readFileSync(README, 'utf8');
+    assert(/workflow-next/i.test(readme),
+      '#1052-c4-readme-surface: README already names workflow-next, so a docs skip is invalid');
+    assert(/Cursor CLI\/App\/Cloud/.test(readme),
+      '#1052-c4-readme-surface: README already names Cursor CLI/App/Cloud, so a docs skip is invalid');
+    assert(/startup/i.test(readme) && /resume/i.test(readme)
+      && /(--ensure-target|ensure-target|Repo role prep|project roles|materializ)/i.test(readme)
+      && /(--product cli|--host local|CLI\/local)/i.test(readme),
+      '#1052-c4-readme-prep: README must state the user-visible Cursor CLI/local startup/resume Repo prep');
+    assert(/(App(?:\/Cloud)?|App-started Cloud)[\s\S]{0,220}(do not|does not|must not|never)[\s\S]{0,80}(inherit|infer|apply)[\s\S]{0,80}(CLI|ensure)/i.test(readme)
+      || /(CLI)[\s\S]{0,80}ensure[\s\S]{0,160}(App(?:\/Cloud)?|App-started Cloud)[\s\S]{0,80}(do not|does not|must not|never)/i.test(readme),
+      '#1052-c4-readme-app-cloud: README must state App/Cloud do not inherit the CLI ensure');
+  }
+
+  for (const port of NAMED_FORGE_PORTS) {
+    const tag = '#1052-generated[' + port.name + ']';
+    const gen = generateWorkflowNext(sandbox, port.forge);
+    assert(gen.status === 0 && gen.text,
+      tag + '-sync: isolated sync-cursor-edition.js --write --tree-root must emit workflow-next.md (status='
+      + gen.status + ' raw=' + String(gen.raw || '').slice(0, 300) + ')');
+
+    const surfaces = [{ label: 'generated', text: gen.text }];
+    if (port.forge === 'github') {
+      const consumer = makeRepo(sandbox, port.forge + '-install-target');
+      const installed = installTargetNext(sandbox, port.forge, consumer);
+      assert(installed.status === 0 && installed.text,
+        tag + '-install-target: isolated install-cursor.sh --target must write .cursor/commands/workflow-next.md (status='
+        + installed.status + ' raw=' + String(installed.raw || '').slice(0, 300) + ')');
+      surfaces.push({ label: 'installed', text: installed.text });
+    }
+    for (const surface of surfaces) {
+      const st = tag + '-' + surface.label;
+      const startupLines = executableClaimLines(surface.text, 'startup')
+        .filter(line => /--runtime(?:\s+|=)cursor\b/.test(line));
+      const resumeLines = executableClaimLines(surface.text, 'resume');
+      const cliStartup = startupLines.filter(hasCliLocalIdentity);
+      const appStartup = startupLines.filter(line => !hasCliLocalIdentity(line));
+      const cliResume = resumeLines.filter(hasCliLocalIdentity);
+      const appResume = resumeLines.filter(line => !hasCliLocalIdentity(line));
+      assert(cliStartup.length > 0,
+        st + '-c1-cli-startup: standalone CLI consumer path must still emit explicit --product cli --host local');
+      assert(cliResume.length > 0,
+        st + '-c1-cli-resume: standalone CLI consumer path must still emit explicit --product cli --host local on resume');
+      assert(appStartup.length > 0,
+        st + '-c1-app-startup: App/Cloud consumers of this command file must have an executable startup path that does not stamp --product cli --host local (shared-file forge)');
+      assert(appResume.length > 0,
+        st + '-c1-app-resume: App/Cloud consumers of this command file must have an executable resume path that does not stamp --product cli --host local (shared-file forge)');
+      assert(cliStartup.every(line => /--cursor-workspace(?:\s+|=)/.test(line)),
+        st + '-c2-startup-flag: generated CLI startup argv must pass --cursor-workspace (prose is not a gate)');
+      assert(cliResume.every(line => /--cursor-workspace(?:\s+|=)/.test(line)),
+        st + '-c2-resume-flag: generated CLI resume argv must pass --cursor-workspace (prose is not a gate)');
+    }
+
+    const nextText = gen.text;
+    const cliStartupLine = executableClaimLines(nextText, 'startup').find(hasCliLocalIdentity)
+      || executableClaimLines(nextText, 'startup')[0];
+    const appStartupLine = executableClaimLines(nextText, 'startup').find(line => !hasCliLocalIdentity(line));
+    const cliResumeLine = executableClaimLines(nextText, 'resume').find(hasCliLocalIdentity)
+      || executableClaimLines(nextText, 'resume')[0];
+    const appResumeLine = executableClaimLines(nextText, 'resume').find(line => !hasCliLocalIdentity(line));
+    assert(cliStartupLine,
+      tag + '-c1-emitted-startup: generated Next must emit an executable claim.js startup line');
+    assert(cliResumeLine,
+      tag + '-c1-emitted-resume: generated Next must emit an executable claim.js resume line');
+
+    const driveGeneratedArgv = port.forge === 'github';
+    const issueN = 12521;
+    const expandCtx = (cwd, extra) => Object.assign({
+      PWD: cwd,
+      CLAIM_JS: port.claim,
+      KAOLA_TARGET_ISSUES: String(issueN),
+      CURSOR_HOME: sandbox.cursorHome,
+      HOME: sandbox.home,
+    }, extra || {});
+
+    if (driveGeneratedArgv) {
+    const opened = makeRepo(sandbox, port.forge + '-opened-ws');
+    const nested = path.join(opened, 'nested-cwd');
+    fs.mkdirSync(nested, { recursive: true });
+
+    const forgedAppStartup = appStartupLine || cliStartupLine;
+    const appStartArgv = emittedClaimArgv(forgedAppStartup, 'startup', expandCtx(opened));
+    const appWs = makeRepo(sandbox, port.forge + '-app-exec');
+    const appRun = runNamedClaim(sandbox, appWs, port.claim, appStartArgv.map(tok => {
+      if (tok === String(issueN) || tok === '$KAOLA_TARGET_ISSUES') return String(issueN);
+      return tok;
+    }));
+    const appPrep = cursorPrep(appRun.json);
+    assert(appRun.status === 0 && acquired(appRun.json) && !hasProjectAgents(appWs)
+      && !(appPrep && appPrep.status === 'materialized'),
+      tag + '-c1-app-drive: App/Cloud executing the installed Next startup argv must not trigger ensureCursorCliLocalPrep / extra Repo writes (argv='
+      + JSON.stringify(appStartArgv) + ' json=' + JSON.stringify(appRun.json) + ' raw='
+      + appRun.raw.slice(0, 300) + ')');
+
+    if (appResumeLine || !hasCliLocalIdentity(cliResumeLine || '')) {
+      const seedApp = makeRepo(sandbox, port.forge + '-app-resume-seed');
+      const seed = runNamedClaim(sandbox, seedApp, port.claim, [
+        'startup', '--target-issue', '12531', '--runtime', 'claude', '--json',
+      ]);
+      assert(acquired(seed.json),
+        tag + '-c1-app-resume-seed: claude startup must acquire (got ' + JSON.stringify(seed.json) + ')');
+      const resumeLine = appResumeLine || cliResumeLine;
+      const appResumeArgv = emittedClaimArgv(resumeLine, 'resume', expandCtx(seedApp));
+      const appResumeRun = runNamedClaim(sandbox, seedApp, port.claim, appResumeArgv);
+      const appResumePrep = cursorPrep(appResumeRun.json);
+      assert(appResumeRun.json && appResumeRun.json.resumed === true && !hasProjectAgents(seedApp)
+        && !(appResumePrep && appResumePrep.status === 'materialized'),
+        tag + '-c1-app-resume-drive: App/Cloud executing the installed Next resume argv must not trigger CLI ensure (argv='
+        + JSON.stringify(appResumeArgv) + ' json=' + JSON.stringify(appResumeRun.json) + ')');
+    }
+
+    const cliStartArgv = emittedClaimArgv(cliStartupLine, 'startup', expandCtx(nested));
+    assert(cliStartArgv.indexOf('--product') >= 0 && cliStartArgv.indexOf('cli') >= 0
+      && cliStartArgv.indexOf('--host') >= 0 && cliStartArgv.indexOf('local') >= 0,
+      tag + '-c1-cli-drive-identity: CLI operator argv must keep explicit cli/local (got '
+      + JSON.stringify(cliStartArgv) + ')');
+    assert(cliStartArgv.indexOf('--cursor-workspace') >= 0,
+      tag + '-c2-nested-argv: generated startup driven from nested cwd must pass --cursor-workspace (argv='
+      + JSON.stringify(cliStartArgv) + ')');
+    const cliStart = runNamedClaim(sandbox, nested, port.claim, cliStartArgv);
+    assert(cliStart.status === 0 && acquired(cliStart.json) && hasProjectAgents(opened),
+      tag + '-c1-cli-drive: CLI/local generated startup argv must still run Repo prep on the opened workspace (json='
+      + JSON.stringify(cliStart.json) + ' raw=' + cliStart.raw.slice(0, 300) + ')');
+    assert(!fs.existsSync(path.join(nested, '.cursor', 'agents', IMPLEMENTER)),
+      tag + '-c1-cli-drive: nested cwd must not receive Repo prep');
+    const nestedPrep = cursorPrep(cliStart.json);
+    const nestedTarget = nestedPrep && nestedPrep.target;
+    assert(!nestedTarget || fs.realpathSync(nestedTarget) === opened,
+      tag + '-c2-nested-target: generated --cursor-workspace must name the Cursor-opened workspace, not the nested cwd (target='
+      + nestedTarget + ')');
+
+    const wtSeed = makeRepo(sandbox, port.forge + '-wt-open');
+    const first = runNamedClaim(sandbox, wtSeed, port.claim, [
+      'startup', '--target-issue', '12547', '--runtime', 'claude', '--json',
+    ], (function () {
+      const extra = { KAOLA_WORKFLOW_OFFLINE: '' };
+      extra[port.mockEnv] = sandbox[port.mockField];
+      return extra;
+    }()));
+    const wt = first.json && (first.json.worktree_path || (first.json.folder && first.json.folder.worktree_path) || '');
+    const mainRoot = stateField(wtSeed, 12547, 'main_root') || wtSeed;
+    assert(first.status === 0 && acquired(first.json) && wt && fs.existsSync(wt),
+      tag + '-c2-worktree-seed: non-Cursor startup must create a write-worktree (got '
+      + JSON.stringify(first.json) + ')');
+    fs.cpSync(issueDir(wtSeed, 12547), issueDir(wt, 12547), { recursive: true });
+    const resumeCtx = expandCtx(wt, { CURSOR_WORKSPACE: wt, cursor_workspace: wt, PWD: wt });
+    const wtResumeArgv = emittedClaimArgv(cliResumeLine, 'resume', resumeCtx);
+    assert(wtResumeArgv.indexOf('--cursor-workspace') >= 0,
+      tag + '-c2-worktree-flag: generated resume argv must pass --cursor-workspace (got '
+      + JSON.stringify(wtResumeArgv) + ')');
+    const wtResume = runNamedClaim(sandbox, wt, port.claim, wtResumeArgv);
+    assert(wtResume.json && wtResume.json.resumed === true,
+      tag + '-c2-worktree-resume: generated resume argv must keep the run (got '
+      + JSON.stringify(wtResume.json) + ' raw=' + wtResume.raw.slice(0, 400) + ')');
+    assert(hasProjectAgents(wt),
+      tag + '-c2-worktree-open: Cursor-opened write-worktree must receive Repo prep via generated --cursor-workspace, not recorded main_root ('
+      + mainRoot + ')');
+    }
+
+    const resumeFence = (bashFences(resumeSection(nextText))[0] || '').trim();
+    assert(resumeFence.length > 0,
+      tag + '-c3-fence: generated ## Resume must contain an executable bash fence');
+    const claimDest = path.join(sandbox.cursorHome, 'kaola-workflow', 'scripts', port.claimBase);
+    fs.mkdirSync(path.dirname(claimDest), { recursive: true });
+    fs.copyFileSync(port.claim, claimDest);
+
+    const coldWs = makeRepo(sandbox, port.forge + '-cold-resume');
+    const coldSeed = runNamedClaim(sandbox, coldWs, port.claim, [
+      'startup', '--target-issue', '12533', '--runtime', 'claude', '--json',
+    ]);
+    assert(acquired(coldSeed.json),
+      tag + '-c3-seed: claude startup must acquire (got ' + JSON.stringify(coldSeed.json) + ')');
+    writeMissionList(coldWs, 12533);
+
+    const wrapDir = path.join(sandbox.tmp, 'node-wrap-' + port.forge);
+    fs.mkdirSync(wrapDir, { recursive: true });
+    const argvLog = path.join(sandbox.tmp, 'node-argv-' + port.forge + '.log');
+    fs.writeFileSync(path.join(wrapDir, 'node'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$KAOLA_NODE_ARGV_LOG"\nexec "' + process.execPath + '" "$@"\n',
+      { mode: 0o755 });
+
+    function runCold(claimJsValue) {
+      const env = Object.assign({}, sandbox.env, {
+        PATH: wrapDir + path.delimiter + sandbox.env.PATH,
+        KAOLA_NODE_ARGV_LOG: argvLog,
+        CURSOR_HOME: sandbox.cursorHome,
+        HOME: sandbox.home,
+      });
+      if (claimJsValue === undefined) delete env.CLAIM_JS;
+      else env.CLAIM_JS = claimJsValue;
+      try { fs.unlinkSync(argvLog); } catch (_) { /* first run */ }
+      // spawn-class: cli-contract
+      return spawnSync('bash', ['--noprofile', '--norc', '-c', resumeFence], {
+        cwd: coldWs, env, encoding: 'utf8', timeout: 60000,
+      });
+    }
+
+    const coldUnset = runCold(undefined);
+    const logUnset = fs.existsSync(argvLog) ? fs.readFileSync(argvLog, 'utf8') : '';
+    const invokedUnset = logUnset.indexOf(port.claimBase) >= 0 && /\bresume\b/.test(logUnset);
+    assert(invokedUnset,
+      tag + '-c3-cold-unset: compact-recovery Resume fragment with CLAIM_JS unset must invoke named '
+      + port.claimBase + ' resume, not node "" (status=' + coldUnset.status
+      + ' stdout=' + JSON.stringify(String(coldUnset.stdout || '').slice(0, 200))
+      + ' log=' + JSON.stringify(logUnset.slice(0, 300)) + ')');
+
+    const coldEmpty = runCold('');
+    const logEmpty = fs.existsSync(argvLog) ? fs.readFileSync(argvLog, 'utf8') : '';
+    const invokedEmpty = logEmpty.indexOf(port.claimBase) >= 0 && /\bresume\b/.test(logEmpty);
+    assert(invokedEmpty,
+      tag + '-c3-cold-empty: Resume fragment with CLAIM_JS="" must still resolve and invoke named claim.js resume (log='
+      + JSON.stringify(logEmpty.slice(0, 300)) + ')');
   }
 } finally {
   try { fs.rmSync(sandbox.tmp, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }

@@ -148,6 +148,12 @@ background/parallel/resume limits, hook behavior, instruction precedence, and kn
 - [Cursor](docs/cursor-edition.md)
 - [ZCode](docs/zcode-edition.md)
 
+Cursor `workflow-next` `startup` and `resume` share one `.cursor/commands` file with two operator
+argv classes. Standalone CLI/local (`--product cli --host local`) runs installed `--ensure-target`
+Repo role prep so project roles materialize, and those CLI lines pass
+`--cursor-workspace "$CURSOR_WORKSPACE"`. App/Cloud do not inherit that CLI ensure. File-ready
+bytes are not live Task catalog proof. Full contract: [Cursor edition](docs/cursor-edition.md).
+
 ## Documentation and development
 
 Start from [docs/README.md](docs/README.md). The main references are:

@@ -325,10 +325,31 @@ function cursorCliExecutableClaimLines(block, verb) {
   });
 }
 
+function cursorCliBashFences(block) {
+  const out = [];
+  const re = /```(?:bash|sh)\n([\s\S]*?)```/g;
+  let m;
+  const source = String(block || '');
+  while ((m = re.exec(source))) out.push(m[1]);
+  return out;
+}
+
+function cursorCliOperatorClaimLines(block, verb) {
+  const fenced = [];
+  for (const fence of cursorCliBashFences(block)) {
+    fenced.push.apply(fenced, cursorCliExecutableClaimLines(fence, verb));
+  }
+  return fenced.length ? fenced : cursorCliExecutableClaimLines(block, verb);
+}
+
 function cursorCliLineHasExplicitCliLocalIdentity(line) {
   return /--runtime(?:\s+|=)cursor\b/.test(line)
     && /--product(?:\s+|=)cli\b/.test(line)
     && /--host(?:\s+|=)local\b/.test(line);
+}
+
+function cursorCliLineHasCursorWorkspace(line) {
+  return /--cursor-workspace(?:\s+|=)/.test(line);
 }
 
 function cursorCliMaterializationVerdict(text, forge, surface) {
@@ -354,20 +375,36 @@ function cursorCliMaterializationVerdict(text, forge, surface) {
     if (!/\bstartup\b/i.test(block) || !/\bresume\b/i.test(block)) {
       errors.push('Next does not state that Workflow startup and resume execute Repo role prep');
     }
-    const startupLines = cursorCliExecutableClaimLines(block, 'startup')
+    const startupLines = cursorCliOperatorClaimLines(block, 'startup')
       .filter(line => /--runtime(?:\s+|=)cursor\b/.test(line));
     if (startupLines.length === 0) {
       errors.push('generated Next startup does not invoke executable claim.js startup --runtime cursor');
     }
-    if (startupLines.some(line => !cursorCliLineHasExplicitCliLocalIdentity(line))) {
-      errors.push('generated Next startup treats omitted --product/--host as CLI (must pass explicit --product cli --host local)');
+    const cliStartup = startupLines.filter(cursorCliLineHasExplicitCliLocalIdentity);
+    const appStartup = startupLines.filter(line => !cursorCliLineHasExplicitCliLocalIdentity(line));
+    if (cliStartup.length === 0) {
+      errors.push('standalone CLI consumer path dropped explicit --product cli --host local on generated Next startup');
     }
-    const resumeLines = cursorCliExecutableClaimLines(block, 'resume');
+    if (startupLines.length > 0 && cliStartup.length > 0 && appStartup.length === 0) {
+      errors.push('shared generated Next forges --product cli --host local for App/Cloud consumers of the same command file');
+    }
+    if (cliStartup.some(line => !cursorCliLineHasCursorWorkspace(line))) {
+      errors.push('generated Next CLI startup omits --cursor-workspace on the operator argv');
+    }
+    const resumeLines = cursorCliOperatorClaimLines(block, 'resume');
     if (resumeLines.length === 0) {
       errors.push('generated Next resume/recovery does not invoke executable claim.js resume (helper-only or mission-list.md prose is not the subject)');
     }
-    if (resumeLines.some(line => !cursorCliLineHasExplicitCliLocalIdentity(line))) {
-      errors.push('generated Next resume treats omitted --product/--host as CLI (must pass explicit --product cli --host local)');
+    const cliResume = resumeLines.filter(cursorCliLineHasExplicitCliLocalIdentity);
+    const appResume = resumeLines.filter(line => !cursorCliLineHasExplicitCliLocalIdentity(line));
+    if (cliResume.length === 0) {
+      errors.push('standalone CLI consumer path dropped explicit --product cli --host local on generated Next resume');
+    }
+    if (resumeLines.length > 0 && cliResume.length > 0 && appResume.length === 0) {
+      errors.push('shared generated Next forges --product cli --host local on resume for App/Cloud consumers of the same command file');
+    }
+    if (cliResume.some(line => !cursorCliLineHasCursorWorkspace(line))) {
+      errors.push('generated Next CLI resume omits --cursor-workspace on the operator argv');
     }
     const appWindow = block.match(/Cursor App[\s\S]{0,900}App-started Cloud[\s\S]{0,900}/);
     if (appWindow && /--product(?:\s+|=)cli\b/.test(appWindow[0]) && /--host(?:\s+|=)local\b/.test(appWindow[0])) {
@@ -484,19 +521,6 @@ if (process.argv.includes('--cli-materialization-oracle')) {
           }
         }
         if (surface === 'next') {
-          const startupLines = cursorCliExecutableClaimLines(text, 'startup')
-            .filter(line => /--runtime(?:\s+|=)cursor\b/.test(line));
-          if (startupLines.some(line => !cursorCliLineHasExplicitCliLocalIdentity(line))) {
-            oracleFailed = true;
-            console.error('CLI-MATERIALIZATION-ORACLE RED: [' + forge
-              + '] generated Next dropped explicit --product cli --host local on $CLAIM_JS startup');
-          }
-          const resumeLines = cursorCliExecutableClaimLines(text, 'resume');
-          if (resumeLines.some(line => !cursorCliLineHasExplicitCliLocalIdentity(line))) {
-            oracleFailed = true;
-            console.error('CLI-MATERIALIZATION-ORACLE RED: [' + forge
-              + '] generated Next dropped explicit --product cli --host local on $CLAIM_JS resume');
-          }
           const claimJs = namedForgeClaimScript(forge);
           const claimBase = path.basename(claimJs);
           if (!text.includes(claimBase)) {
@@ -571,7 +595,7 @@ if (process.argv.includes('--cli-materialization-oracle')) {
     }
   }
   if (oracleFailed) process.exit(1);
-  console.log('CLI-MATERIALIZATION-ORACLE GREEN: Next startup/resume identity, named claim.js flags, locator, and Finalize pre-dispatch ensure');
+  console.log('CLI-MATERIALIZATION-ORACLE GREEN: Next CLI identity vs App/Cloud shared-file, --cursor-workspace operator argv, named claim.js flags, locator, and Finalize pre-dispatch ensure');
   process.exit(0);
 }
 
@@ -1062,12 +1086,14 @@ function commandRel(name, forge) {
         'G2-cli-materialization-mutation[' + name + ']: authorizing a named-role capability_gap skip is rejected — '
           + gapVerdict.errors.join(' | '));
 
-        const omittedIdentity = content
-          + '\nnode "$CLAIM_JS" startup --runtime cursor --target-issues "$KAOLA_TARGET_ISSUES"\n';
+        const omittedIdentity = content.replace(
+          /(--runtime cursor) --product cli --host local/g,
+          '$1'
+        );
         const omittedVerdict = cursorCliMaterializationVerdict(omittedIdentity, DEFAULT_FORGE, surface);
-        assert(!omittedVerdict.ok
-          && omittedVerdict.errors.some(error => /omitted --product|--host/.test(error)),
-        'G2-cli-materialization-mutation[' + name + ']: omitting --product cli --host local on Cursor startup is rejected — '
+        assert(omittedIdentity !== content && !omittedVerdict.ok
+          && omittedVerdict.errors.some(error => /standalone CLI consumer path dropped explicit --product cli --host local/.test(error)),
+        'G2-cli-materialization-mutation[' + name + ']: dropping explicit --product cli --host local from the standalone CLI operator path is rejected — '
           + omittedVerdict.errors.join(' | '));
 
         const helperOnlyResume = content

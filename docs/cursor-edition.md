@@ -232,8 +232,8 @@ Workflow `startup` and `resume` run Repo role prep through the installed helper
 `--ensure-target <target>` with `--forge=<args.forge||'github'> --json`. That identity-flag
 and `ensureCursorCliLocalPrep` path exists on all four claim trees (canonical GitHub
 `scripts/kaola-workflow-claim.js`, COMMON_SCRIPTS Codex copy, GitLab hand-port, Gitea hand-port).
-Generated GitLab/Gitea Next stamps `--product cli --host local`; those claim.js no longer
-`unknown_flag`. `--forge` is not a claim.js flag. Omitted, unknown, app, cloud,
+Generated Next keeps one `.cursor/commands/workflow-next.md` with two operator argv classes
+(unstamped App/Cloud `startup`/`resume` plus CLI `--product cli --host local --cursor-workspace "$CURSOR_WORKSPACE"`); those claim.js no longer `unknown_flag`. `--forge` is not a claim.js flag. Omitted, unknown, app, cloud,
 or incomplete identity pairs skip ensure but still claim/resume. Claim.js `<target>` is
 `--cursor-workspace` when set, else recorded `main_root` on resume, else invoking `getRoot()`
 (`git rev-parse --show-toplevel`) on first claim — not nested cwd and not the write-worktree.
