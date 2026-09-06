@@ -24,7 +24,9 @@
   boundaries. Continue inside already-granted authorization; unauthorized irreversible or value-laden
   calls still go to the user. Serve the user's goal and proven problems; a user-requested feature is
   not refused for lack of a prior observed failure. ADR 0022 and ADR 0023 keep their historical
-  decisions; each notes this global-rule update.
+  decisions; each notes this global-rule update. `docs/api.md` now records those as interface
+  conventions (project-instruction scope, compact-recovery resume boundaries, and daily-governance
+  priority paths) even with no new CLI flags.
 
 ## [10.4.0] - 2026-09-05
 

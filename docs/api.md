@@ -13,7 +13,7 @@ Three commands ship. Everything below is invoked by them or by hand.
 
 | Command | Owns |
 |---|---|
-| `/workflow-init` | consume the runtime-loaded global contract, inspect repository facts, and have the Agent maintain project instructions and the smallest required native bridge; existing owner-authored instructions require authorization before rewrite |
+| `/workflow-init` | consume the runtime-loaded global contract, inspect repository facts, and have the Agent maintain project instructions that supplement verified local facts and constraints (a scoped exception must not weaken higher-priority instructions or host safety) plus the smallest required native bridge; existing owner-authored instructions require authorization before rewrite |
 | `/workflow-next` | select, claim, write the mission list, run it |
 | `/kaola-workflow-finalize` | validate, dock docs, summarize, close, archive, commit, sink |
 
@@ -23,8 +23,14 @@ Project prompt maintenance has no script API. `workflow-init` consumes the globa
 loaded by the runtime, then the Agent reads the repository and maintains `AGENTS.md` and any
 necessary thin runtime bridge as ordinary project content. It does not locate or execute installer
 internals. An absent or inconsistent global authority preserves project rules and routes a separate
-release-tree installation check. Repository purpose, commands, tests, documentation, and
-constraints are semantic facts; no CLI classifies or renders them.
+release-tree installation check. Repository purpose, commands, tests, documentation, and local
+facts are semantic facts; no CLI classifies or renders them.
+
+The global contract is universal: project instructions supplement verified local facts and
+constraints. A project exception must state its scope and must not weaken higher-priority
+instructions or host safety. Continue inside already-granted authorization; unauthorized
+irreversible or value-laden calls still go to the user. A user-requested feature is not refused for
+lack of a prior observed failure.
 
 Existing owner-authored instructions require authorization before rewrite. The operation specifies
 outcomes rather than headings, ordering, template fields, canonical bytes, or a target size. A
@@ -77,10 +83,13 @@ carrier was loaded.
 ### Compact recovery — generated direct prompt
 
 The generated V2 prompt contains the exact global contract once, tells the runtime to reread root
-`AGENTS.md`, `workflow-state.md`, and `mission-list.md`, then completely reloads installed Workflow
-Next while work remains or Finalization when all missions are done. It also carries the mandatory
-dispatch contract and measured adapter. Compact time performs no state parsing, operation binding,
-or prompt composition.
+`AGENTS.md`, `kaola-workflow/{project}/workflow-state.md` (claim), and
+`kaola-workflow/{project}/mission-list.md` (run), then completely reloads installed Workflow Next
+without intake or claim while work remains, or Finalization when all missions are done. A successor
+reloads those complete execution rules, recognizes done, in-flight, and remaining work, and does
+not re-claim or re-dispatch work still in flight. It also carries the mandatory dispatch contract
+and measured adapter. Compact time performs no state parsing, operation binding, or prompt
+composition.
 
 Claude and Codex hooks execute only `cat` on their installed V2 prompt. Grok calls no hook: the
 machine-global transaction installs one native Rule because passive hook stdout is ignored. Cursor
@@ -1610,7 +1619,9 @@ retired `parallel_mode`) is ignored, never rewritten.
 
 - `priority_top_tier_labels` — labels that sort as tier 1 regardless of P-label, overriding the
   default `["P0", "P1"]`. Read by `readPriorityConfig` in `kaola-workflow-claim.js`. A non-array or
-  missing value falls back to the default.
+  missing value falls back to the default. This path is daily governance in the machine-global
+  contract and is reachable without invoking Next or Finalize. Organizing issues does not
+  auto-claim. This repository still has no `kaola-workflow/config.json`.
 
 ### Agent model resolution
 
