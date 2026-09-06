@@ -450,7 +450,7 @@ are removed. On the measured standalone CLI only, Workflow `startup` and `resume
 (canonical GitHub `scripts/kaola-workflow-claim.js`, COMMON_SCRIPTS Codex copy, GitLab hand-port,
 Gitea hand-port). Generated Next (GitHub/GitLab/Gitea) forges `--product cli --host local` only
 inside `scripts/sync-cursor-edition.js` `cursorCliHostGateOpen`:
-`if [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ] || [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; then`.
+`if { [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ]; } || { [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; }; then`.
 Unset App/Cloud-like env takes unstamped `--runtime cursor` and does not run `--product cli --host
 local`. Standalone CLI/local must set `CURSOR_PRODUCT=cli` and `CURSOR_HOST=local` (or the
 `KAOLA_CURSOR_*` twins); this page does not claim that Cursor CLI currently exports those

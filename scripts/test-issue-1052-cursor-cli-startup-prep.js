@@ -1184,16 +1184,21 @@ try {
         HOME: sandbox.home,
       }, extra || {});
       delete env.CLAIM_JS;
-      if (kind === 'cli') {
+      delete env.CURSOR_PRODUCT;
+      delete env.CURSOR_HOST;
+      delete env.KAOLA_CURSOR_PRODUCT;
+      delete env.KAOLA_CURSOR_HOST;
+      // kind 'cli': documented CURSOR pair only (KAOLA twins stay unset).
+      // kind 'kaola': documented KAOLA twins only (CURSOR_* stay unset).
+      // kind 'cli-four': both pairs together (kept; must not be the only CLI pin).
+      // kind 'app' / other: all four unset. Sibling `agent` stays on PATH; that is not CLI.
+      if (kind === 'cli' || kind === 'cli-four') {
         env.CURSOR_PRODUCT = 'cli';
         env.CURSOR_HOST = 'local';
+      }
+      if (kind === 'kaola' || kind === 'cli-four') {
         env.KAOLA_CURSOR_PRODUCT = 'cli';
         env.KAOLA_CURSOR_HOST = 'local';
-      } else {
-        delete env.CURSOR_PRODUCT;
-        delete env.CURSOR_HOST;
-        delete env.KAOLA_CURSOR_PRODUCT;
-        delete env.KAOLA_CURSOR_HOST;
       }
       return env;
     }
@@ -1244,12 +1249,12 @@ try {
       const cliExtra = { CURSOR_WORKSPACE: cliWs, PWD: cliWs };
       const resumeFences = bashFences(resumeSection(nextText));
       let cliLog = '';
-      let cliRun = runHostGateFence(resumeFence, cliWs, 'cli', cliExtra);
+      let cliRun = runHostGateFence(resumeFence, cliWs, 'cli-four', cliExtra);
       cliLog = readArgvLog();
       let cliHit = logInvokesCliLocalWithWorkspace(cliLog, port.claimBase);
       if (!cliHit) {
         for (let i = 1; i < resumeFences.length; i++) {
-          cliRun = runHostGateFence(resumeFences[i], cliWs, 'cli', cliExtra);
+          cliRun = runHostGateFence(resumeFences[i], cliWs, 'cli-four', cliExtra);
           cliLog = readArgvLog();
           if (logInvokesCliLocalWithWorkspace(cliLog, port.claimBase)) {
             cliHit = true;
@@ -1260,12 +1265,68 @@ try {
       const cliJson = lastJson(cliRun.stdout) || lastJson(cliRun.stderr);
       const cliPrep = cursorPrep(cliJson);
       assert(cliHit,
-        tag + '-c1-host-gate-cli-path: first Resume fence or the gated CLI path with explicit CURSOR_PRODUCT=cli CURSOR_HOST=local must still invoke named claim.js with --product cli --host local and --cursor-workspace (CLI must not become skippable-by-omission) (log='
+        tag + '-c1-host-gate-cli-path: first Resume fence or the gated CLI path with all four CURSOR_* and KAOLA_CURSOR_* vars must still invoke named claim.js with --product cli --host local and --cursor-workspace (CLI must not become skippable-by-omission) (log='
         + JSON.stringify(cliLog.slice(0, 400)) + ')');
       if (port.forge === 'github') {
         assert(hasProjectAgents(cliWs) && cliPrep && cliPrep.status === 'materialized',
           tag + '-c1-host-gate-cli-prep: GitHub generated CLI path must actually run resume/prep (cursor_prep.status=materialized) (json='
           + JSON.stringify(cliJson) + ' raw=' + String(cliRun.stderr || cliRun.stdout || '').slice(0, 300) + ')');
+      }
+    }
+
+    {
+      const pairWs = makeRepo(sandbox, port.forge + '-c1-cli-cursor-pair-resume');
+      const pairSeed = runNamedClaim(sandbox, pairWs, port.claim, [
+        'startup', '--target-issue', '12564', '--runtime', 'claude', '--json',
+      ]);
+      assert(acquired(pairSeed.json),
+        tag + '-c1-host-gate-cli-cursor-pair-seed: claude startup must acquire (got '
+        + JSON.stringify(pairSeed.json) + ')');
+      writeMissionList(pairWs, 12564);
+      const pairRun = runHostGateFence(resumeFence, pairWs, 'cli', {
+        CURSOR_WORKSPACE: pairWs,
+        PWD: pairWs,
+      });
+      const pairLog = readArgvLog();
+      const pairJson = lastJson(pairRun.stdout) || lastJson(pairRun.stderr);
+      const pairPrep = cursorPrep(pairJson);
+      assert(logInvokesCliLocalWithWorkspace(pairLog, port.claimBase),
+        tag + '-c1-host-gate-cli-cursor-pair-first-resume: first ## Resume fence with only CURSOR_PRODUCT=cli CURSOR_HOST=local (KAOLA_CURSOR_* unset; sibling agent still on PATH) must take the then-arm and invoke named '
+        + port.claimBase + ' with --product cli --host local and --cursor-workspace (status='
+        + pairRun.status + ' log=' + JSON.stringify(pairLog.slice(0, 400))
+        + ' json=' + JSON.stringify(pairJson) + ')');
+      if (port.forge === 'github') {
+        assert(hasProjectAgents(pairWs) && pairPrep && pairPrep.status === 'materialized',
+          tag + '-c1-host-gate-cli-cursor-pair-prep: GitHub generated first Resume then-arm under the documented CURSOR pair must materialize (cursor_prep.status=materialized) (json='
+          + JSON.stringify(pairJson) + ' raw=' + String(pairRun.stderr || pairRun.stdout || '').slice(0, 300) + ')');
+      }
+    }
+
+    {
+      const kaolaWs = makeRepo(sandbox, port.forge + '-c1-cli-kaola-twins-resume');
+      const kaolaSeed = runNamedClaim(sandbox, kaolaWs, port.claim, [
+        'startup', '--target-issue', '12565', '--runtime', 'claude', '--json',
+      ]);
+      assert(acquired(kaolaSeed.json),
+        tag + '-c1-host-gate-cli-kaola-twins-seed: claude startup must acquire (got '
+        + JSON.stringify(kaolaSeed.json) + ')');
+      writeMissionList(kaolaWs, 12565);
+      const kaolaRun = runHostGateFence(resumeFence, kaolaWs, 'kaola', {
+        CURSOR_WORKSPACE: kaolaWs,
+        PWD: kaolaWs,
+      });
+      const kaolaLog = readArgvLog();
+      const kaolaJson = lastJson(kaolaRun.stdout) || lastJson(kaolaRun.stderr);
+      const kaolaPrep = cursorPrep(kaolaJson);
+      assert(logInvokesCliLocalWithWorkspace(kaolaLog, port.claimBase),
+        tag + '-c1-host-gate-cli-kaola-twins-first-resume: first ## Resume fence with only KAOLA_CURSOR_PRODUCT=cli KAOLA_CURSOR_HOST=local (CURSOR_* unset; sibling agent still on PATH) must take the then-arm and invoke named '
+        + port.claimBase + ' with --product cli --host local and --cursor-workspace (status='
+        + kaolaRun.status + ' log=' + JSON.stringify(kaolaLog.slice(0, 400))
+        + ' json=' + JSON.stringify(kaolaJson) + ')');
+      if (port.forge === 'github') {
+        assert(hasProjectAgents(kaolaWs) && kaolaPrep && kaolaPrep.status === 'materialized',
+          tag + '-c1-host-gate-cli-kaola-twins-prep: GitHub generated first Resume then-arm under KAOLA twins must materialize (cursor_prep.status=materialized) (json='
+          + JSON.stringify(kaolaJson) + ' raw=' + String(kaolaRun.stderr || kaolaRun.stdout || '').slice(0, 300) + ')');
       }
     }
 
@@ -1294,6 +1355,58 @@ try {
         tag + '-c1-host-gate-every-fence: App executing every startup/resume bash fence must not run the cli/local identity; prose-only skip does not count (status='
         + everyRun.status + ' log=' + JSON.stringify(everyLog.slice(0, 500))
         + ' json=' + JSON.stringify(everyJson) + ')');
+    }
+
+    {
+      const pairEveryWs = makeRepo(sandbox, port.forge + '-c1-cli-cursor-pair-every-fence');
+      const pairEverySeed = runNamedClaim(sandbox, pairEveryWs, port.claim, [
+        'startup', '--target-issue', '12566', '--runtime', 'claude', '--json',
+      ]);
+      assert(acquired(pairEverySeed.json),
+        tag + '-c1-host-gate-cli-cursor-pair-every-seed: claude startup must acquire (got '
+        + JSON.stringify(pairEverySeed.json) + ')');
+      writeMissionList(pairEveryWs, 12566);
+      const operatorFences = bashFences(nextText).filter(fence =>
+        executableClaimLines(fence, 'startup').length > 0
+        || executableClaimLines(fence, 'resume').length > 0);
+      const pairEveryRun = runHostGateFence(operatorFences.join('\n'), pairEveryWs, 'cli', {
+        KAOLA_TARGET_ISSUES: '12566',
+        PWD: pairEveryWs,
+        CURSOR_WORKSPACE: pairEveryWs,
+      });
+      const pairEveryLog = readArgvLog();
+      const pairEveryJson = lastJson(pairEveryRun.stdout) || lastJson(pairEveryRun.stderr);
+      assert(logInvokesCliLocalWithWorkspace(pairEveryLog, port.claimBase),
+        tag + '-c1-host-gate-cli-cursor-pair-every-fence: concatenating every generated startup/resume fence with only CURSOR_PRODUCT=cli CURSOR_HOST=local (KAOLA_CURSOR_* unset) must invoke named '
+        + port.claimBase + ' with --product cli --host local and --cursor-workspace (status='
+        + pairEveryRun.status + ' log=' + JSON.stringify(pairEveryLog.slice(0, 500))
+        + ' json=' + JSON.stringify(pairEveryJson) + ')');
+    }
+
+    {
+      const kaolaEveryWs = makeRepo(sandbox, port.forge + '-c1-cli-kaola-twins-every-fence');
+      const kaolaEverySeed = runNamedClaim(sandbox, kaolaEveryWs, port.claim, [
+        'startup', '--target-issue', '12567', '--runtime', 'claude', '--json',
+      ]);
+      assert(acquired(kaolaEverySeed.json),
+        tag + '-c1-host-gate-cli-kaola-twins-every-seed: claude startup must acquire (got '
+        + JSON.stringify(kaolaEverySeed.json) + ')');
+      writeMissionList(kaolaEveryWs, 12567);
+      const operatorFences = bashFences(nextText).filter(fence =>
+        executableClaimLines(fence, 'startup').length > 0
+        || executableClaimLines(fence, 'resume').length > 0);
+      const kaolaEveryRun = runHostGateFence(operatorFences.join('\n'), kaolaEveryWs, 'kaola', {
+        KAOLA_TARGET_ISSUES: '12567',
+        PWD: kaolaEveryWs,
+        CURSOR_WORKSPACE: kaolaEveryWs,
+      });
+      const kaolaEveryLog = readArgvLog();
+      const kaolaEveryJson = lastJson(kaolaEveryRun.stdout) || lastJson(kaolaEveryRun.stderr);
+      assert(logInvokesCliLocalWithWorkspace(kaolaEveryLog, port.claimBase),
+        tag + '-c1-host-gate-cli-kaola-twins-every-fence: concatenating every generated startup/resume fence with only KAOLA_CURSOR_PRODUCT=cli KAOLA_CURSOR_HOST=local (CURSOR_* unset) must invoke named '
+        + port.claimBase + ' with --product cli --host local and --cursor-workspace (status='
+        + kaolaEveryRun.status + ' log=' + JSON.stringify(kaolaEveryLog.slice(0, 500))
+        + ' json=' + JSON.stringify(kaolaEveryJson) + ')');
     }
   }
 } finally {

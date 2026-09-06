@@ -152,7 +152,7 @@ Cursor `workflow-next` `startup` and `resume` share one `.cursor/commands` file.
 `--product cli --host local --cursor-workspace "$CURSOR_WORKSPACE"` startup/resume sits inside an
 executable shell gate:
 
-`if [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ] || [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; then`
+`if { [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ]; } || { [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; }; then`
 
 When those variables are unset (App/Cloud-like env), the command takes the unstamped
 `--runtime cursor` path and does not run `--product cli --host local`. App/Cloud do not inherit

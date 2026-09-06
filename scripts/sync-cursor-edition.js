@@ -228,8 +228,8 @@ function cursorCliOperatorIdentityArgv() {
 }
 
 function cursorCliHostGateOpen() {
-  return 'if [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ]'
-    + ' || [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; then';
+  return 'if { [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ]; }'
+    + ' || { [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; }; then';
 }
 
 function cursorCliGatedOperatorLines(cliCommand, elseCommand) {

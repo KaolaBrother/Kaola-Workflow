@@ -235,7 +235,7 @@ and `ensureCursorCliLocalPrep` path exists on all four claim trees (canonical Gi
 Generated Next keeps one `.cursor/commands/workflow-next.md`. CLI-stamped
 `--product cli --host local --cursor-workspace "$CURSOR_WORKSPACE"` `startup`/`resume` is wrapped in
 an executable shell gate:
-`if [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ] || [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; then`.
+`if { [ "${CURSOR_PRODUCT:-}" = cli ] && [ "${CURSOR_HOST:-}" = local ]; } || { [ "${KAOLA_CURSOR_PRODUCT:-}" = cli ] && [ "${KAOLA_CURSOR_HOST:-}" = local ]; }; then`.
 When those variables are unset (App/Cloud-like env), generated Next takes the unstamped
 `--runtime cursor` path and does not run `--product cli --host local`. Standalone CLI/local must
 set `CURSOR_PRODUCT=cli` and `CURSOR_HOST=local` (or `KAOLA_CURSOR_PRODUCT` / `KAOLA_CURSOR_HOST`);
