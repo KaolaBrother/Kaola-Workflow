@@ -15,20 +15,21 @@
 // it pins the producer -> consumer seam rather than a private copy of the wording.
 //
 // Non-goal guards (negative pins) are scoped to the exact named artifact: the GENERATED_SURFACES
-// registry, the behavior-contracts.json role roster (compared against the pre-#1053 baseline
-// commit via `git show`), the Mission List four-field table, the init/finalize skeletons'
-// absence of any "what to remember" step, and claim.js's CLI-flag surface.
+// registry, the Mission List four-field table, the init/finalize skeletons' absence of any "what
+// to remember" step, and claim.js's CLI-flag surface. This suite does NOT pin the
+// behavior-contracts.json role roster against a historical commit (a prior revision did, via
+// `git show <baseline-sha>:...`, and a supervisor review correctly flagged that as wrong for a
+// PERMANENT suite: a shallow clone, an unpacked source tree, or ordinary future history rewrites
+// would break it, and pinning a role COUNT would freeze legitimate future role additions as a
+// false #1053 non-goal forever after). `scripts/generate-agent-profiles.js --check` — already a
+// standing step in both `test:kaola-workflow:claude` and `:claude:full` — is the correct, history-
+// independent guard against a role profile drifting from its own authority; #1053 does not need a
+// second one. See "Revision" in kaola-workflow/bundle-1053/.cache/acceptance-red.md.
 
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
 
 const REPO = path.resolve(__dirname, '..');
-// The commit this worktree was cut from (chore: release 10.5.0), before any #1053 work landed.
-// Used only as a comparison baseline for negative pins that must not move (role roster count);
-// it is NOT how RED is proven (RED is proven by running this file against a checkout of this
-// exact commit, per the harness's mandated procedure).
-const BASELINE_SHA = 'd02f82b7';
 
 let passed = 0;
 let failed = 0;
@@ -83,21 +84,37 @@ function conceptPresent(text, fragments) {
 // and NEGATIVE (a believable near-miss that drops exactly the clause the fragment set exists to
 // catch), so an always-true or always-false detector cannot hide in this suite.
 // ---------------------------------------------------------------------------
+// REVISED after supervisor review: negation must be ATTACHED to the verb/object it governs
+// (bounded proximity, no sentence-ending punctuation between them) rather than checked as a
+// standalone token anywhere in the window. A standalone `/\b(?:not|never|no)\b/i` token was
+// measured to produce a FALSE GREEN: "no other option remains except to demand a fixed
+// requirement format" contains an unrelated "no" and still satisfied the old fragment set even
+// though its meaning is inverted. Synonym sets were also measured and widened where a legitimate
+// paraphrase of the real landed text (e.g. "already settled", "consult the documentation",
+// "ordinary prose") produced a FALSE RED. Both classes of probe are recorded in
+// kaola-workflow/bundle-1053/.cache/acceptance-red.md under "Revision".
+//
+// This is still a mechanical approximation, not a meaning oracle: a sufficiently determined
+// adversarial rewrite (e.g. negating the concept in a WHOLLY different sentence structure the
+// fragments do not anticipate) can still slip through. Where that residual risk could not be
+// closed cheaply, it is left as a known limitation rather than chased with an ever-larger regex.
 const ADDITION_1_CLAUSES = {
   'a_continue_when_clear_no_fixed_format': {
     fragments: [
-      /already\s+clear/i,
+      /already\s+(?:clear|settled|known|established|determined)/i,
       /authoriz/i,
       /\bcontinue\b/i,
-      /\b(?:not|never|no)\b/i,
-      /(?:fixed\s+requirement\s+format|rewrite\s+the\s+issue)/i,
+      // Negation attached to its governed target within one clause (no '.', '?', '!', ';'
+      // between them) — "do not"/"never"/"need not" IMMEDIATELY governing the format/rewrite
+      // clause, not merely present somewhere else in the sentence.
+      /\b(?:do(?:es)?\s+not|never|need\s+not)\b[^.?!;]{0,60}(?:fixed\s+requirement\s+format|rewrite\s+the\s+issue)/i,
     ],
     boundary: 'When the outcome and its acceptance basis are already clear and authorized, continue: do not demand a fixed requirement format.',
     nearMiss: 'When the outcome and its acceptance basis are already clear and authorized, continue by restating the requirement in the standard format.',
   },
   'b_investigate_before_asking': {
     fragments: [
-      /(?:read\s+the\s+code|reproduc\w*|look\s+it\s+up)/i,
+      /(?:read\s+the\s+code|reproduc\w*|look\s+(?:it|something)\s+up|consult(?:s|ed|ing)?\s+the\s+documentation|check(?:s|ed|ing)?\s+the\s+documentation|search(?:es|ed|ing)?\s+for\s+it)/i,
       /implementation\s+detail/i,
       /authoriz\w*\s+scope/i,
       /\bjudgment\b/i,
@@ -111,7 +128,7 @@ const ADDITION_1_CLAUSES = {
       /\bonly\b/i,
       /unresolved\s+choice/i,
       /(?:scope|authoriz\w*|acceptance)/i,
-      /does\s+not\s+depend/i,
+      /(?:does\s+not\s+depend|independent\s+of\s+the\s+answer|regardless\s+of\s+the\s+answer)/i,
     ],
     boundary: 'Ask the user only about an unresolved choice that would change scope, authorization, or the meaning of acceptance, and keep doing the investigation that does not depend on the answer.',
     nearMiss: 'Ask the user about anything unclear, and pause all investigation until the answer arrives.',
@@ -121,7 +138,7 @@ const ADDITION_1_CLAUSES = {
       /authoriz\w*\s+to\s+maintain/i,
       /observable\s+outcome/i,
       /verification\s+basis/i,
-      /(?:plain|natural)\s+language/i,
+      /(?:plain|natural|ordinary)\s+(?:language|prose)/i,
       /already\s+sufficient/i,
     ],
     boundary: 'When authorized to maintain the issue, express the observable outcome and its verification basis in plain language, and cite what is already sufficient.',
@@ -131,17 +148,23 @@ const ADDITION_1_CLAUSES = {
     fragments: [
       /research\s+or\s+design/i,
       /\bonly\b/i,
-      /does\s+not\s+authoriz/i,
-      /implementation/i,
-      /forge\s+writ\w*/i,
-      /\bclaim\b/i,
+      // Negation attached: "do not"/"never" ... "authorize" ... the forbidden object, all within
+      // one clause. The OLD fragment set checked "does not authoriz" and "implementation" as
+      // SEPARATE, unattached fragments, which a measured adversarial sentence exploited: "A
+      // research or design request that does not authorize anything at all is meaningless; it
+      // authorizes only implementation..." satisfied every old fragment while meaning the
+      // opposite. Requiring the object to fall inside the SAME negated clause closes that.
+      /\b(?:do(?:es)?\s+not|never)\b[^.?!;]{0,60}authoriz\w*[^.?!;]{0,60}(?:implementation|forge\s+writ\w*|claim)/i,
     ],
     boundary: 'A research or design request authorizes research or design only; it does not authorize product implementation, forge writes, or a claim.',
     nearMiss: 'A research or design request authorizes research, design, and a first implementation commit.',
   },
 };
 
-// Addition 2 — the proportional explain/verify judgment sentence inside "Run it".
+// Addition 2 — the proportional explain/verify judgment sentence inside "Run it". The polarity
+// gate ("never/does not/do not lowers acceptance") was already attached-by-construction (a single
+// bigram, not a separate negation token), so the measured MAY-lower adversarial was already
+// correctly rejected; only the synonym set needed widening (does/do not lower, not just never).
 const ADDITION_2 = {
   fragments: [
     /explain/i,
@@ -149,7 +172,7 @@ const ADDITION_2 = {
     /verify/i,
     /behavioral\s+impact/i,
     /existing\s+requirements/i,
-    /never\s+lowers?\s+acceptance/i,
+    /(?:never|does\s+not|do\s+not)\s+lowers?\s+(?:the\s+)?acceptance/i,
   ],
   boundary: 'Decide how much to explain by what communication needs, and how much to verify by behavioral impact and the existing requirements; a short explanation or a small change never lowers acceptance, and sufficient existing evidence may be cited.',
   nearMiss: 'A small change always needs the full explanation and a brand-new verification pass regardless of behavioral impact.',
@@ -165,6 +188,53 @@ for (const [name, spec] of Object.entries(ADDITION_1_CLAUSES)) {
 }
 assert(conceptPresent(ADDITION_2.boundary, ADDITION_2.fragments), 'mutation boundary: addition-2 detector accepts its own compliant sentence');
 assert(!conceptPresent(ADDITION_2.nearMiss, ADDITION_2.fragments), 'mutation RED: addition-2 detector rejects its own near-miss sentence');
+
+// Additional adversarial probes from supervisor review, encoded permanently so a future
+// regression back to a loose/unattached negation token (or a narrower synonym set) is caught
+// automatically rather than relying on a one-off manual measurement.
+{
+  // FALSE-RED probes: legitimate synonymous rewrites of the real landed clauses must still match.
+  const synonymRewrites = [
+    ['a: "already settled" instead of "already clear"',
+      'When the intended outcome and its acceptance basis are already settled and authorized, continue: do not demand a fixed requirement format or rewrite the issue to restate it.',
+      ADDITION_1_CLAUSES.a_continue_when_clear_no_fixed_format.fragments],
+    ['b: "consult the documentation" instead of "look it up"',
+      'When a fact is missing, consult the documentation first; implementation detail inside an authorized scope is your own judgment.',
+      ADDITION_1_CLAUSES.b_investigate_before_asking.fragments],
+    ['c: "independent of the answer" instead of "does not depend on the answer"',
+      'Ask the user only about an unresolved choice that would change scope, authorization, or the meaning of acceptance, and keep doing the investigation that is independent of the answer.',
+      ADDITION_1_CLAUSES.c_ask_only_unresolved_scope.fragments],
+    ['d: "ordinary prose" instead of "plain language"',
+      'When authorized to maintain the issue, express the observable outcome and its verification basis in ordinary prose, and cite what is already sufficient.',
+      ADDITION_1_CLAUSES.d_maintain_issue_plain_language.fragments],
+    ['addition-2: "does not lower" instead of "never lowers"',
+      'Decide how much to explain by what communication needs, and how much to verify by behavioral impact and the existing requirements; a short explanation or a small change does not lower acceptance.',
+      ADDITION_2.fragments],
+  ];
+  for (const [label, text, fragments] of synonymRewrites) {
+    assert(conceptPresent(text, fragments), 'false-RED regression guard: legitimate synonym rewrite still matches (' + label + ')');
+  }
+
+  // FALSE-GREEN probes: an inverted/adversarial sentence that merely contains the fragment WORDS
+  // (elsewhere, unattached to the negation) must NOT match.
+  const adversarialInversions = [
+    ['a: unrelated "no" elsewhere in the sentence',
+      'When the outcome is already clear and authorized, continue: no other option remains except to demand a fixed requirement format and rewrite the issue every time.',
+      ADDITION_1_CLAUSES.a_continue_when_clear_no_fixed_format.fragments],
+    ['e: supervisor example — polarity flipped to DOES authorize',
+      'A research or design request DOES authorize implementation, forge writes, and a claim.',
+      ADDITION_1_CLAUSES.e_research_design_scope_only.fragments],
+    ['e: "does not authorize" present but governing an unrelated clause',
+      'A research or design request that does not authorize anything at all is meaningless; it authorizes only implementation, forge writes, and a claim.',
+      ADDITION_1_CLAUSES.e_research_design_scope_only.fragments],
+    ['addition-2: supervisor example — MAY lower acceptance',
+      'A short explanation or a small change MAY lower acceptance, and existing evidence is never sufficient.',
+      ADDITION_2.fragments],
+  ];
+  for (const [label, text, fragments] of adversarialInversions) {
+    assert(!conceptPresent(text, fragments), 'false-GREEN regression guard: inverted/adversarial sentence correctly rejected (' + label + ')');
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 1) Locate the additions in the skeleton itself.
@@ -380,24 +450,13 @@ for (const [name, spec] of Object.entries(DOC_CONCEPTS)) {
 eq(gen.GENERATED_SURFACES.length, 18, 'GENERATED_SURFACES stays at 18 rows (no new topic/surface added for #1053)');
 eq(Object.keys(gen.TOPICS).sort().join(','), 'finalize,init,next', 'TOPICS stays exactly {finalize,init,next}');
 
-// No new role profile: the behavior-contracts.json role roster count is unchanged vs the pre-#1053
-// baseline commit. Read via `git show` rather than a hardcoded number, so this pin is derived from
-// the repository's own history rather than this suite's private guess.
-{
-  let baselineCount = null;
-  try {
-    const raw = execFileSync('git', ['show', BASELINE_SHA + ':templates/agents/behavior-contracts.json'],
-      { cwd: REPO, encoding: 'utf8' });
-    baselineCount = Object.keys(JSON.parse(raw).roles).length;
-  } catch (e) {
-    assert(false, 'could not read baseline templates/agents/behavior-contracts.json at ' + BASELINE_SHA + ': ' + e.message);
-  }
-  if (baselineCount !== null) {
-    const currentPath = path.join(REPO, 'templates', 'agents', 'behavior-contracts.json');
-    const currentCount = Object.keys(JSON.parse(fs.readFileSync(currentPath, 'utf8')).roles).length;
-    eq(currentCount, baselineCount, 'behavior-contracts.json role roster count is unchanged vs baseline ' + BASELINE_SHA + ' (no new role for #1053)');
-  }
-}
+// No new role profile: NOT pinned here against a historical commit (see the file-header comment
+// and kaola-workflow/bundle-1053/.cache/acceptance-red.md "Revision" for why a `git show
+// <baseline-sha>` runtime dependency was removed after supervisor review). #1053's own scope
+// (templates/routing/next.skeleton.md + docs/task-quality.md) never touches
+// templates/agents/behavior-contracts.json, and `node scripts/generate-agent-profiles.js --check`
+// — already a standing step in both `test:kaola-workflow:claude` and `:claude:full` — is the
+// correct, history-independent guard should a role ever drift from its own authority.
 
 // No new Mission List field: the four-field table and "Three writes only" remain in the skeleton.
 {
@@ -414,13 +473,60 @@ eq(Object.keys(gen.TOPICS).sort().join(','), 'finalize,init,next', 'TOPICS stays
 }
 
 // No new required step in init.skeleton.md or finalize.skeleton.md about "what to remember".
+//
+// REVISED after supervisor review: a prior version banned the bare words remember / memoriz* /
+// "lessons learned" ANYWHERE in either file. That is broader than the actual non-goal (#1053's own
+// wording: "no routine 'anything to remember?' step and no learning phase added to init/finalize")
+// and risks a false RED on ordinary, unrelated prose — e.g. "Remember to run the tests" or a
+// code comment mentioning "the #700 collision-suffix lesson" (both occur, harmlessly, in this
+// repository's OTHER files today; a bare-word ban would have broken the moment either idiom showed
+// up in init/finalize too). Narrowed to the actual shape of the non-goal: a STEP-like structure —
+// a heading naming the concept, a routine question form ("anything to remember?" / "what should
+// you remember"), or an imperative instruction to write/log/record something to a memory or
+// learning-loop artifact — rather than the bare words in any context. This is judged pinnable
+// mechanically at that narrower, structural level without freezing prose: it is proven below to
+// accept ordinary "remember"/"lesson" prose and reject only the actual step shapes.
 {
-  const MEMORY_STEP_RE = /\bremember\b|\blearning\s+loop\b|\bmemoriz\w*\b|\blesson(?:s)?\s+learned\b|\bpersonal[- ]memory\b/i;
+  const MEMORY_STEP_RE = new RegExp([
+    // "anything (you want/need) to remember/learn" — the routine prompt form the issue names.
+    '\\banything\\s+(?:\\w+\\s+){0,3}(?:remember|learn)\\b',
+    '\\bwhat\\s+(?:should|would)\\s+(?:you\\s+|we\\s+)?remember\\b',
+    // an imperative directing something be written/logged to a memory or learning-loop artifact.
+    '\\b(?:write|record|save|log|note)\\w*\\b[^.?!]{0,40}\\b(?:to\\s+)?(?:the\\s+)?'
+      + '(?:personal[- ]?memory|memory\\s+file|learning\\s+(?:loop|log)|lessons?[- ]learned\\s+file)\\b',
+  ].join('|'), 'i');
+  const MEMORY_HEADING_RE = /^#{2,4}[^\n]{0,80}\b(?:what\s+to\s+remember|learning\s+loop|memory\s+write|lessons?\s+learned)\b/im;
+  const introducesMemoryStep = text => MEMORY_STEP_RE.test(text) || MEMORY_HEADING_RE.test(text);
+
+  // Mutation self-test: the narrowed detector must NOT flag ordinary unrelated prose (the false
+  // RED this revision exists to fix)...
+  const falsePositiveGuards = [
+    'Remember to run the tests before you finalize.',
+    '// #700 collision-suffix lesson) so the in-place base restore is fine.',
+    'merge-lane close-deferral must not rest ENTIRELY on the caller remembering --keep-worktree.',
+    'Pick a memorable, short branch name.',
+  ];
+  for (const text of falsePositiveGuards) {
+    assert(!introducesMemoryStep(text), 'mutation boundary: ordinary "remember"/"lesson" prose is NOT flagged: ' + JSON.stringify(text));
+  }
+  // ...and it MUST catch the actual non-goal shapes (the false GREEN a bare-word-only scan would
+  // still catch, kept here so the narrowing does not silently disarm the guard).
+  const actualViolations = [
+    '## What to remember\n\nBefore closing, note anything worth keeping.',
+    'Ask yourself: is there anything to remember before closing?',
+    'What should you remember from this run?',
+    'Log lessons learned to the personal-memory file before you stop.',
+    '### Learning loop\n\nUpdate the learning loop with anything new.',
+  ];
+  for (const text of actualViolations) {
+    assert(introducesMemoryStep(text), 'mutation RED: the actual non-goal shape is flagged: ' + JSON.stringify(text));
+  }
+
   for (const file of ['init.skeleton.md', 'finalize.skeleton.md']) {
     const p = path.join(REPO, 'templates', 'routing', file);
     assert(fs.existsSync(p), file + ' exists');
     const text = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
-    assert(!MEMORY_STEP_RE.test(text), file + ' introduces no "what to remember"/learning/memory step');
+    assert(!introducesMemoryStep(text), file + ' introduces no "what to remember"/learning-loop/memory-write step');
   }
 }
 
