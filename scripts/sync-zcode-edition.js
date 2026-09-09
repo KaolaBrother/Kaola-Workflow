@@ -86,38 +86,6 @@ function renderAgent(canonContent, agentName, forge) {
   return agentGen.renderRuntimeRole('zcode', agentName).content;
 }
 
-const ZCODE_MODEL_DISPATCH_GUIDANCE =
-  'Use the named role as `subagent_type`. Generated agent frontmatter already pins the canonical '
-  + 'tier — model GLM-5.3 plus the tier-selected thoughtLevel — so dispatch cards carry no '
-  + 'per-call model override.';
-
-const ZCODE_MODEL_DISPATCH_BLOCK = [
-  '## Agent Model Dispatch',
-  '',
-  'ZCode dispatches subagents through the same `Agent(` card used everywhere: the named role as',
-  '`subagent_type`, no per-call model override. Every generated agent pins `model: GLM-5.3` in',
-  'frontmatter plus exactly one `thoughtLevel:` field selected by its canonical tier — standard',
-  'high, reasoning max, heavy (fable) max — so the tier travels with the named type and is not',
-  'restated on the card.',
-  '',
-  'Dispatch a role with `Agent` using `subagent_type: "<role>"` only. Never substitute a generic',
-  'type plus a prompt costume; impersonation is the bug. The dispatch prompt is the mission and',
-  'locator; do not paste the role contract onto a named type. Card shape:',
-  '',
-  'Agent(',
-  '  prompt="<the mission and locator>",',
-  '  subagent_type="<role>"',
-  ')',
-  '',
-  'The reviewer heavy re-dispatch carve-out does not apply on this runtime: a per-dispatch tier',
-  'escalation is not expressible here, so a reviewer-class re-dispatch runs at the pinned tier of',
-  'its named type. If the pinned tier cannot finish the review, run the review pass inline and',
-  'record what happened in the mission list.',
-  '',
-  'If the named role cannot be spawned, do the work inline and say so — that is tool unavailability.',
-  '',
-].join('\n');
-
 const ZCODE_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _zh="${ZCODE_HOME:-$HOME/.zcode}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_zh/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_zh/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
 
@@ -862,7 +830,6 @@ if (require.main === module) main();
 module.exports = {
   renderAgent, renderCommand, transformCommandBody,
   rewriteClaudeScriptPaths, ZCODE_KAOLA_SCRIPT, zcodeKaolaScript,
-  ZCODE_MODEL_DISPATCH_GUIDANCE, ZCODE_MODEL_DISPATCH_BLOCK,
   renderZcodeConfigJson, rewriteConfigJsonForGlobal, mergeDestHooks, stripDestHooks,
   renderRuntimeHookWrapper, RUNTIME_WRAPPER,
   expectedPromptFiles,

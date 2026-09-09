@@ -8,7 +8,7 @@ const { execFileSync, spawnSync } = require('child_process');
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 // #394: resolve the default branch (origin/HEAD probe chain, offline-safe) so the fallback PR
 // sink targets master/other-default repos correctly — the old hardcoded `--base main` broke them.
-// #1055: defaultBranch now lives in adaptive-schema.js (claim.js only ever forwarded it), so this
+// #1055: defaultBranch moved from claim.js into adaptive-schema.js (claim.js re-exports it), so this
 // module no longer needs to require claim.js at all.
 const { defaultBranch } = adaptiveSchema;
 

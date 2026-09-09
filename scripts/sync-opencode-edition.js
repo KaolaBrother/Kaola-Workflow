@@ -183,47 +183,6 @@ function renderAgent(canonContent, agentName, forge) {
   return agentGen.renderRuntimeRole('opencode', agentName).content;
 }
 
-// Rewrite Claude-specific model prose for opencode. Claude Code dispatches carry an explicit
-// per-call `model=`; opencode has no such parameter, so: (a) replace the recurring canonical
-// "## Agent Model Dispatch" section with the opencode-native block below — canonical's heading is
-// the TRIGGER this transform matches at, never the heading it emits; (b) rewrite the plan-run "Pass
-// model=dispatch.model" and the review-fix "include the explicit model=" instructions that reference
-// that section; (c) drop leftover install-time model placeholders from dispatch lines.
-//
-// Both wordings state what an agent ACTUALLY GETS, never a mechanism that delivers it. Two earlier
-// wordings named one: first the effort `variant`, then per-role effort configuration. Neither
-// described what happens — opencode's task tool hands a subagent the dispatching session's own model
-// and variant whenever the role pins no model, so effort is inherited, not configured and not passed.
-// A prompt surface that names a mechanism dates the moment the mechanism changes, and this one has
-// now dated twice. The heading is matched verbatim by the edition suite's block locator, so it moves
-// in the same change as that anchor, never on its own.
-//
-// The task tool's parameters are `description`, `prompt`, `subagent_type`, `task_id` and `command`
-// — read from the shipped 1.18.11 binary's schema literal. There is no model or effort parameter to
-// pass or to withhold, which is why the block states the inheritance rather than warning against an
-// argument that does not exist.
-const OPENCODE_MODEL_DISPATCH_BLOCK = [
-  '## Model and effort are inherited',
-  '',
-  'A subagent runs the model and reasoning effort of the session that dispatched it. Nothing is',
-  'configured per role, and there is nothing to pass: the `task` tool takes a `subagent_type`, a',
-  '`prompt` and a `description`, and has no model or effort parameter at all. To make a dispatched',
-  "role think harder, raise the session's own effort — every role you dispatch follows it.",
-  '',
-  'Dispatch a role with the `task` tool using `subagent_type: "<role>"`.',
-  '',
-].join('\n');
-
-// The edition's ONE answer to the canonical model-dispatch instruction. Canonical states that
-// instruction as PROSE ("… carries an explicit `model=` line … never omit it"); opencode's task tool
-// has no model parameter, so every such sentence is restated as this single wording.
-const OPENCODE_MODEL_DISPATCH_GUIDANCE =
-  'Dispatch the role via `subagent_type`. It runs the session\'s own model and reasoning effort — '
-  + 'the task tool has no model or effort parameter.';
-
-// The instruction's stable signature: a `model=` mention in PROSE. Card placeholders sit alone on
-// their own line inside a fenced dispatch card and are handled by the native routing renderer, so
-// this matches the INSTRUCTION however it happens to be worded.
 const OPENCODE_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _oc="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_oc/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_oc/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
 
@@ -269,8 +228,6 @@ function transformCommandBody(body, forge, label) {
   // or inline `Agent(...)` code spans.
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'task(\n$1');
   text = text.replace(/^\s+model="[^"]+",?\n/gm, '');
-  // Card placeholder lines. The prose forms are already restated by rewriteModelDispatchInstructions
-  // above, so this only ever sees a card.
   // Tidy trailing whitespace left behind on affected lines.
   text = text.replace(/[ \t]+\n/g, '\n');
   // #F6: the former adapt repair-loop strip (`text.replace(/downgrade to full path \/\s*/g,'')`)
@@ -289,8 +246,6 @@ function transformCommandBody(body, forge, label) {
   // ~/.claude/kaola-workflow). Runs LAST so the resolver line (still Claude-shaped above) is
   // rewritten in full; the earlier transforms do not touch it.
   text = rewriteClaudeScriptPaths(text, forge);
-  // Fail loud rather than half-apply: nothing but the edition's own guidance may still say
-  // `model=` by the time the surface ships.
   return text;
 }
 
@@ -849,7 +804,6 @@ if (require.main === module) main();
 module.exports = {
   renderAgent, renderCommand, renderOpencodeJson, renderNeutralConfig,
   transformCommandBody, opencodeAgentSuffix, rewriteClaudeScriptPaths, OPENCODE_KAOLA_SCRIPT,
-  OPENCODE_MODEL_DISPATCH_GUIDANCE, OPENCODE_MODEL_DISPATCH_BLOCK,
   opencodeKaolaScript, outDirs, treeLabel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   parseFrontmatter, parseTools, roleTier, reasoningRoles,

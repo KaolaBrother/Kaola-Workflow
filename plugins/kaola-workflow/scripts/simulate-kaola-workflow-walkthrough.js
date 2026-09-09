@@ -1130,7 +1130,7 @@ function testCodexPreflight571() {
     fs.rmSync(emptyProject571b, { recursive: true, force: true });
   }
 
-  // --- Test (c): stale global does NOT short-circuit (locks scopeIsFresh && s.exists) ---
+  // --- Test (c): stale global does NOT short-circuit (locks scopeProfilesFresh, i.e. exists && !stale) ---
   // Setup: install to tempHome571c via positional form, then delete one role toml.
   const tempHome571c = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-571c-home-'));
   try {
@@ -1139,7 +1139,7 @@ function testCodexPreflight571() {
       cwd: repoRoot, encoding: 'utf8', env: env571c
     });
     assert(setupC.status === 0, '#571 test(c): setup install must exit 0: ' + setupC.stderr);
-    // Delete one role toml → stale global; scopeIsFresh must return false.
+    // Delete one role toml → stale global; scopeProfilesFresh must return false.
     fs.unlinkSync(
       path.join(tempHome571c, '.codex', 'agents', 'kaola-workflow', 'implementer.toml'));
 

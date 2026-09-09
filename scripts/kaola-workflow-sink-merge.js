@@ -6,8 +6,9 @@ const { execFileSync } = require('child_process');
 // Crash-safe durable write (tmp + fsync + rename) for the sink transaction journals. Base-named in
 // all four trees (the cross-edition byte anchor), so the forge hand-ports carry this exact literal.
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
-// #1055: getCoordRoot / mainRootFromCoord / resolveMainRoot / defaultBranch are pure re-exports of
-// adaptive-schema (claim.js only ever forwarded them) — imported from their owner directly, and
+// #1055: getCoordRoot / mainRootFromCoord / resolveMainRoot are pure re-exports of adaptive-schema
+// (claim.js only ever forwarded them), and defaultBranch moved there from claim.js in the same
+// change (claim.js re-exports the identical object) — all imported from their owner directly, and
 // consolidated onto the single `adaptiveSchema` require above rather than a second require of the
 // same module. The porcelain classifier (parsePorcelainPaths / isParkedLanePath) backs the
 // dirty-worktree data-loss guard, which is a KEEP; it too lives in the byte-identical schema, not
@@ -392,7 +393,8 @@ function reopenIssue(issueNumber, opts) {
   ghExec(['issue', 'reopen', String(issueNumber)], opts || {});
 }
 
-// mainRootFromCoord is now imported from kaola-workflow-claim.js (#579 shared resolver).
+// mainRootFromCoord is imported from kaola-workflow-adaptive-schema.js, its owner (#579 shared
+// resolver; #1055 imported directly instead of through claim.js's forwarder).
 
 function classifyMergeError(stderr) {
   if (FORCE_MERGE_IMPOSSIBLE) {

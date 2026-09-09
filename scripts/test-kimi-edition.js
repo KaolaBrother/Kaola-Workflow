@@ -2910,6 +2910,13 @@ for (const script of sync.HOOK_SCRIPTS) {
     const crlfOut = sync.transformCommandBody(crlfBody, 'github', 'workflow-next.md');
     assert(crlfOut === lfOut,
       'CRLF: transformCommandBody(CRLF body) must equal transformCommandBody(LF body) byte-for-byte');
+    // The equality check above alone would stay green under a mutant that joins with '\r\n'
+    // instead of '\n' — both outputs would still match each other, just both wrong. Pin the
+    // normalization itself: neither output may carry a \r.
+    assert(!crlfOut.includes('\r'),
+      'CRLF: transformCommandBody(CRLF body) output must contain no \\r (normalized to LF)');
+    assert(!lfOut.includes('\r'),
+      'CRLF: transformCommandBody(LF body) output must contain no \\r (normalized to LF)');
   }
 }
 

@@ -236,3 +236,166 @@ above (not mine). Every production `sync-*-edition.js` and `templates/agents/run
 mutant used for arming evidence was reverted; `git diff --stat` on each is empty. All six of my test
 files pass at HEAD: grok 707, kimi 826, cursor 840, opencode 877, zcode 856, oracle 5 assertions /
 300 render comparisons — all exit 0.
+
+## Review follow-up (F1, F2, F3)
+
+By the time these findings arrived, `git log` showed everything from the section above had already
+landed in commit `8791ab55` ("refactor(scripts): converge ownership boundaries and remove proven-dead
+residue", `Refs #1055`) — the implementer's subtraction plus my acceptance work were committed
+together. This section is additive on top of that commit; nothing above was re-verified from scratch,
+only the three findings' targets.
+
+**Constraint honored throughout:** did not touch any `sync-*-edition.js` (team lead editing them
+concurrently in this same worktree — confirmed live: `git status` showed `sync-opencode-edition.js`
+and `sync-zcode-edition.js` modified mid-session by that concurrent work, not by me) or any file
+outside `scripts/test-*.js` and `scripts/fixtures/`.
+
+### F1 (must fix) — `recordKey` joined on a raw NUL byte
+
+Root cause: in the original `Write` tool call, the JS source text `' '` I intended as a
+6-character escape sequence was interpreted as a JSON escape and materialized as a literal NUL byte
+(`0x00`) in the file. Confirmed with a byte-exact check:
+
+```
+$ python3 -c "
+data = open('scripts/test-issue-1055-render-subtraction-oracle.js','rb').read()
+print('NUL count:', data.count(b'\x00'))
+idx = data.find(b'\x00')
+print('context:', data[idx-40:idx+10])
+"
+NUL count: 1
+context: b"c.kind, rec.name, rec.lineEnding].join('\x00');\n}\n\n//"
+```
+
+Fix: replaced the single NUL byte with a plain space character (`perl -i -pe 's/\x00/ /g'`, byte-safe,
+touched exactly the one occurrence). `recordKey` is a pure function of the five record fields and is
+never persisted into the JSON manifest (only `hash` + the five fields are written), so any consistent
+delimiter produces identical map-lookup behavior — the manifest fixture did not need regeneration.
+
+Verification:
+```
+$ file scripts/test-issue-1055-render-subtraction-oracle.js
+scripts/test-issue-1055-render-subtraction-oracle.js: a /usr/bin/env node script text executable, Unicode text, UTF-8 text
+
+$ git diff --stat 5cb85515 -- scripts/test-issue-1055-render-subtraction-oracle.js
+ .../test-issue-1055-render-subtraction-oracle.js   | 223 +++++++++++++++++++++
+ 1 file changed, 223 insertions(+)
+# (no longer "Bin 0 -> 9705 bytes")
+
+$ python3 -c "print(open('scripts/test-issue-1055-render-subtraction-oracle.js','rb').read().count(b'\x00'))"
+0
+
+$ node scripts/test-issue-1055-render-subtraction-oracle.js
+issue-1055-render-subtraction-oracle passed (5 assertions, 300 render comparisons hashed against baseline commit 5cb855153338f7116d691200ad79fb06e553e7f0).
+```
+(oracle passed against the EXISTING fixture — did not regenerate `issue-1055-render-baseline.json`.)
+
+Note on the suggested `LC_ALL=C grep -c $'\x00' file` check: bash cannot hold a NUL byte inside an
+argument (`$'\x00'` silently becomes an empty string), so that idiom actually runs `grep -c ''`
+(matches every line — it printed `223`, the file's line count) rather than testing for NUL. The
+Python byte-count above is the reliable proof and is what I used to confirm 0 NUL bytes.
+
+### F2 — baseline policy stated in the oracle's own header
+
+Added a `BASELINE POLICY` paragraph to the file header (after the "Depends ONLY on..." paragraph,
+before `Usage:`), stating: the fixture is bound to the render output at commit `5cb85515`; a
+deliberate render change regenerates it with `--write-baseline` in the same commit as that change;
+it is never regenerated to make a red assertion pass — a red run means either unintended drift (fix
+the generator) or an unpaired intentional change (pair it with a recapture, don't launder the red
+away). Verified the oracle still runs green after the header-only edit:
+```
+$ node scripts/test-issue-1055-render-subtraction-oracle.js
+issue-1055-render-subtraction-oracle passed (5 assertions, 300 render comparisons hashed against baseline commit 5cb855153338f7116d691200ad79fb06e553e7f0).
+```
+
+### F3 — CRLF blocks strengthened: normalization pin, not only equality
+
+Confirmed the finding's premise first: a mutant that changes the single-line
+`body.split(/\r?\n/).join('\n')` to `body.split(/\r?\n/).join('\r\n')` makes BOTH the LF and CRLF
+paths render with `\r\n` line endings — `crlfOut === lfOut` still holds (both consistently wrong),
+so the pre-existing equality-only assertion cannot catch it.
+
+Added, to each of the five `scripts/test-{grok,kimi,cursor,opencode,zcode}-edition.js` CRLF blocks,
+immediately after the existing equality assertion:
+```js
+assert(!crlfOut.includes('\r'),
+  'CRLF: transformCommandBody(CRLF body) output must contain no \\r (normalized to LF)');
+assert(!lfOut.includes('\r'),
+  'CRLF: transformCommandBody(LF body) output must contain no \\r (normalized to LF)');
+```
+(`assertReal` in zcode's file, matching its existing helper name.) Assertion counts rose by 2 per
+suite: grok 707→709, kimi 826→828, cursor 840→842, opencode 877→879, zcode 856→858. All five still
+pass:
+```
+grok-edition test passed (709 assertions). ...
+kimi-edition test passed (828 assertions). ...
+cursor-edition test passed (842 assertions). ...
+opencode-edition test passed (879 assertions). ...
+zcode-edition test passed (858 assertions). ...
+```
+
+**Arming proof without touching `sync-*-edition.js`.** Because the team lead is editing those files
+concurrently, I did not mutate them on disk (not even temporarily) — instead I wrote a standalone
+harness at `/private/tmp/claude-501/-Volumes-WorkspaceA-ylminiserver-workspace-kaola-workflow/8ce29837-48f3-4418-9032-320f4db44623/scratchpad/f3-mutant-harness.js`
+(outside the repo, in the session scratchpad) that:
+1. Reads each real `scripts/sync-<runtime>-edition.js` with `fs.readFileSync` (read-only — never
+   written).
+2. Builds a mutated copy of that source STRING in memory, replacing exactly one occurrence of
+   `body.split(/\r?\n/).join('\n')` with `body.split(/\r?\n/).join('\r\n')` (asserts the occurrence
+   count is exactly 1 first, so the target can't be ambiguous or silently miss).
+3. Loads the mutated string as a real Node module via `new Module(...)` + `Module._compile`, under a
+   synthetic filename (`<real path>.f3-mutant-inmemory.js`) so its relative `require('./...')` calls
+   still resolve against the real `scripts/` directory and it never collides with the real module in
+   `require`'s cache — no file is ever written to disk for this.
+4. Runs both the real module and the in-memory mutant through the same LF/CRLF
+   `transformCommandBody` calls and reports equality + no-`\r` results for each.
+
+Output (all five runtimes):
+```
+=== grok ===
+  [REAL (control, must be all true)] equality=true noCrInCrlfOut=true noCrInLfOut=true
+  [MUTANT split/join(\r\n) (equality must stay true; no-CR must go false = RED)] equality=true noCrInCrlfOut=false noCrInLfOut=false
+  CONFIRMED: mutant equality=true (loophole reproduced) AND no-CR assertion=false (RED) — F3 fix is armed for grok
+=== kimi ===
+  [REAL (control, must be all true)] equality=true noCrInCrlfOut=true noCrInLfOut=true
+  [MUTANT split/join(\r\n) (equality must stay true; no-CR must go false = RED)] equality=true noCrInCrlfOut=false noCrInLfOut=false
+  CONFIRMED: mutant equality=true (loophole reproduced) AND no-CR assertion=false (RED) — F3 fix is armed for kimi
+=== cursor ===
+  [REAL (control, must be all true)] equality=true noCrInCrlfOut=true noCrInLfOut=true
+  [MUTANT split/join(\r\n) (equality must stay true; no-CR must go false = RED)] equality=true noCrInCrlfOut=false noCrInLfOut=false
+  CONFIRMED: mutant equality=true (loophole reproduced) AND no-CR assertion=false (RED) — F3 fix is armed for cursor
+=== opencode ===
+  [REAL (control, must be all true)] equality=true noCrInCrlfOut=true noCrInLfOut=true
+  [MUTANT split/join(\r\n) (equality must stay true; no-CR must go false = RED)] equality=true noCrInCrlfOut=false noCrInLfOut=false
+  CONFIRMED: mutant equality=true (loophole reproduced) AND no-CR assertion=false (RED) — F3 fix is armed for opencode
+=== zcode ===
+  [REAL (control, must be all true)] equality=true noCrInCrlfOut=true noCrInLfOut=true
+  [MUTANT split/join(\r\n) (equality must stay true; no-CR must go false = RED)] equality=true noCrInCrlfOut=false noCrInLfOut=false
+  CONFIRMED: mutant equality=true (loophole reproduced) AND no-CR assertion=false (RED) — F3 fix is armed for zcode
+
+HARNESS OK — F3 fix proven armed for all five runtimes
+```
+This is direct evidence: for every runtime the equality check reads `true` under the join-mutant
+(the exact loophole F3 named) while the new no-`\r` assertions read `false` (RED), i.e. exactly the
+assertions I added would fail if this mutation ever landed in the real file. Nothing under
+`scripts/` other than my own `test-*.js` edits was written at any point in this cycle — "revert"
+does not apply because nothing on disk was ever mutated.
+
+### Final verification
+
+```
+$ git status --short -- scripts/test-cursor-edition.js scripts/test-grok-edition.js scripts/test-kimi-edition.js scripts/test-opencode-edition.js scripts/test-zcode-edition.js scripts/test-issue-1055-render-subtraction-oracle.js scripts/fixtures/
+ M scripts/test-cursor-edition.js
+ M scripts/test-grok-edition.js
+ M scripts/test-issue-1055-render-subtraction-oracle.js
+ M scripts/test-kimi-edition.js
+ M scripts/test-opencode-edition.js
+ M scripts/test-zcode-edition.js
+```
+(`scripts/fixtures/issue-1055-render-baseline.json` is unchanged — not listed — per F1's "manifest
+unchanged" instruction.) Full-repo `git status --short` additionally shows `sync-opencode-edition.js`
+and `sync-zcode-edition.js` modified — confirmed these are the team lead's own concurrent edits, not
+mine (verified via `git diff` content: further #1055-class dead-code removal, e.g. the
+`OPENCODE_MODEL_DISPATCH_BLOCK` region), plus the other agents' files under `kaola-workflow/bundle-1055/`
+noted in the section above. Did not commit. Final suite run, all green: grok 709, kimi 828, cursor
+842, opencode 879, zcode 858, oracle 5/300.

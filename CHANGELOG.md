@@ -1,5 +1,67 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Shared kernel primitives converge on their true owners, pure relocation (#1055).**
+  `defaultBranch(root)` moves from `kaola-workflow-claim.js` into
+  `kaola-workflow-adaptive-schema.js`, joining `getCoordRoot`/`mainRootFromCoord`/`resolveMainRoot`
+  there; `kaola-workflow-claim.js` re-exports the identical function object, so
+  `claim.defaultBranch` and every existing consumer sees no behavior change.
+  `kaola-workflow-sink-pr.js` now imports `defaultBranch` from adaptive-schema directly and no
+  longer requires `kaola-workflow-claim.js` at all. `kaola-workflow-sink-merge.js` now imports
+  `getCoordRoot`, `mainRootFromCoord`, `resolveMainRoot`, and `defaultBranch` from adaptive-schema
+  and `readActiveFolders` from `kaola-workflow-active-folders.js` — their true owners — instead of
+  via claim's forwarders. Claim-native closure/archive helpers (`removeWorktree`,
+  `buildClosureReceipt`, `checkClosureInvariants`, `appendClosureBlock`, `clearAdvisoryClaim`,
+  `resolveProjectSlug`, `worktreePathFor`, `archiveProjectDir`) stay in claim by decision: a
+  separate closure/archive service module would add an installed file to seven runtimes and two
+  hand-ported forges for a single external consumer.
+- **The five additive-edition sync scripts share their generator helpers instead of restating them
+  (#1055).** `parseFrontmatter`, `parseTools`, `yamlScalar`, `listCanonAgents`,
+  `listCanonCommands`, `canonCommandPath`, and `commandRel` — byte-identical
+  across `sync-{grok,kimi,cursor,opencode,zcode}-edition.js` — now live once in
+  `runtime-edition-forge.js`, the module every sync script already required. Each sync script keeps
+  a thin per-script wrapper where the shared body needs a runtime-specific value (its own
+  `DEFAULT_FORGE` or `treeLabel`) as an explicit argument; `treeLabel`, `runCheck`, `runWrite`, and
+  all hook/permission/prune logic remain fully per-script. No render output changed: a new
+  300-comparison baseline oracle (see Added) hashed every affected render before and after and
+  found zero drift.
+
+### Removed
+
+- **Zero-consumer residue proven dead and deleted (#1055).** In each of
+  `sync-{grok,kimi,cursor,opencode,zcode}-edition.js`: the inert per-line copy loop inside
+  `transformCommandBody` (replaced by the equivalent `body.split(/\r?\n/).join('\n')`
+  normalisation it always performed) and the unreferenced `ZERO_HASH` constant. `lowerSet` (grok,
+  cursor, opencode). In `sync-cursor-edition.js` only, `CURSOR_MODEL_CLASS_PINS` and its resolver
+  `cursorModelPin` — the real cursor model-tier pins are owned by
+  `templates/agents/runtime-capabilities.json` via `generate-agent-profiles.js`'s
+  `renderRuntimeRole('cursor', …)`, and `scripts/test-cursor-edition.js` was migrated to read that
+  adapter data and the rendered output before this deletion landed. In `sync-zcode-edition.js` and
+  `sync-opencode-edition.js`, the exported-but-unconsumed `*_MODEL_DISPATCH_BLOCK` and
+  `*_MODEL_DISPATCH_GUIDANCE` strings whose only reference was that inert loop, together with the
+  comments that described the retired rewrite. `kaola-workflow-sink-merge.js`'s
+  `getRoot` and `requiredArchiveFiles` (both zero-caller wrappers; `scanArchiveTree(...).required`
+  is called directly at the one call site), and the same dead `requiredArchiveFiles` wrapper in the
+  gitlab/gitea sink-merge hand-ports (their `getRoot` is live and stays). `kaola-workflow-validation-runner.js`'s exported
+  `computeLandableBlobEntries`, orphaned since the DAG-era `plan-validator` gate it served was
+  retired (#740, then ADR 0017/0018). `kaola-workflow-codex-preflight.js`'s `scopeIsFresh` (the live
+  gate calls `scopeIsStale` directly).
+
+### Added
+
+- **`scripts/test-issue-1055-render-subtraction-oracle.js` — a 300-comparison render regression
+  oracle (#1055).** Hashes every runtime × forge × role agent render (5 × 3 × 14 = 210) plus every
+  runtime × forge × command × line-ending render (5 × 3 × 3 × 2 = 90) against a baseline manifest,
+  `scripts/fixtures/issue-1055-render-baseline.json`, captured on `5cb85515`; registered on
+  `test:kaola-workflow:claude` and `:claude:full`. Regenerate the baseline only after a deliberate
+  render change, with `--write-baseline`, never to make a red assertion pass. All five edition
+  suites also gained a CRLF/LF acceptance for `transformCommandBody`, and
+  `test-cursor-edition.js`'s fable-tier pin now reads the real adapter data and rendered output
+  instead of a source-regex capture of the retired `CURSOR_MODEL_CLASS_PINS` table.
+
 ## [11.0.0] - 2026-09-09
 
 ### Added

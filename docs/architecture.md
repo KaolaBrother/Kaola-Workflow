@@ -149,11 +149,21 @@ finishes; declining the worktree costs isolation, not correctness.
 Two mechanisms harden concurrent sessions in one checkout: a **single main-root authority** and a
 **four-bucket lane classifier**.
 
-`getCoordRoot`, `mainRootFromCoord` and `resolveMainRoot` are defined once in
+`getCoordRoot`, `mainRootFromCoord`, `resolveMainRoot`, and `defaultBranch` are defined once in
 `kaola-workflow-adaptive-schema.js` (the byte-identical cross-edition drift anchor) and re-exported
-by `kaola-workflow-claim.js`. `writeState` computes `resolveMainRoot(root)` once at claim time and
+by `kaola-workflow-claim.js` as the identical function objects, so existing `claim.<name>` callers
+are unaffected (#1055). `writeState` computes `resolveMainRoot(root)` once at claim time and
 writes `main_root:` into the `## Sink` block, so a caller launched from a linked or detached
-worktree reads one authority instead of re-deriving from cwd.
+worktree reads one authority instead of re-deriving from cwd. `kaola-workflow-sink-merge.js` and
+`kaola-workflow-sink-pr.js` import these four directly from adaptive-schema — their true owner —
+instead of through claim's forwarders; `sink-pr.js` no longer requires `kaola-workflow-claim.js` at
+all. `readActiveFolders` follows the same pattern: sink-merge imports it from
+`kaola-workflow-active-folders.js`, its true definer. Claim-native closure and archive helpers
+(`removeWorktree`, `buildClosureReceipt`, `checkClosureInvariants`, `appendClosureBlock`,
+`clearAdvisoryClaim`, `resolveProjectSlug`, `worktreePathFor`, `archiveProjectDir`) stay owned by
+`kaola-workflow-claim.js` and are still consumed by sink-merge from there — a dedicated
+closure/archive service module was weighed and declined, since it would add an installed file to
+seven runtimes and two hand-ported forges for a single external consumer.
 
 `classifyLane(lane, ctx)` (`kaola-workflow-classifier.js`) is a pure function partitioning an
 active-folder lane into `mine` / `live` / `stale` / `ambiguous`, driven by three claim-time fields
@@ -360,6 +370,12 @@ change already mandates also brings every `.opencode`/`.kimi`/`.grok`/`.cursor`/
 parity — always the main checkout's trees, and never creating one that is absent. They carry their
 own suites (`test-opencode-edition.js`, `test-kimi-edition.js`, `test-grok-edition.js`, `test-cursor-edition.js`, `test-zcode-edition.js`). See
 `opencode-edition.md`, `kimi-edition.md`, `grok-edition.md`, `cursor-edition.md`, and `zcode-edition.md`.
+`runtime-edition-forge.js` also holds the generator helpers the five sync scripts render frontmatter
+and command trees with (`parseFrontmatter`, `parseTools`, `yamlScalar`, `listCanonAgents`,
+`listCanonCommands`, `canonCommandPath`, `commandRel`), shared once instead of restated per script
+(#1055); a per-script wrapper still supplies the one runtime-specific value (`DEFAULT_FORGE` or
+`treeLabel`) a helper needs as an explicit argument, and `treeLabel`/`runCheck`/`runWrite` stay
+fully per-script by design.
 
 ### Natural-language handoff routing
 
