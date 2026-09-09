@@ -1,0 +1,2 @@
+[2m2026-09-09T11:39:21.567464Z[0m [33m WARN[0m Turn deltas still posting at exit; not waiting for them [3msession_id[0m[2m=[0m01a085f6-d414-7761-b77e-231b14730c5e
+[2m2026-09-09T11:39:21.567993Z[0m [33m WARN[0m Final signal sync timed out during exit; continuing [3msession_id[0m[2m=[0m01a085f6-d414-7761-b77e-231b14730c5e [3mtimeout_ms[0m[2m=[0m2000

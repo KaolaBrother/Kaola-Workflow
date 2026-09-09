@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"01a085ad-131b-7d83-814e-3e20f4caaae2"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll start one subagent with your exact instruction, wait for its reply, and paste it verbatim.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a085ad-131b-7d83-814e-3e20f4caaae2","receiver_thread_ids":[],"prompt":null,"agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a085ad-131b-7d83-814e-3e20f4caaae2","receiver_thread_ids":[],"prompt":null,"agents_states":{},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"The subagent’s response failed because of a stream decoding error. I’ll retry with the same subagent.\n"}}
+{"type":"item.started","item":{"id":"item_3","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a085ad-131b-7d83-814e-3e20f4caaae2","receiver_thread_ids":[],"prompt":null,"agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a085ad-131b-7d83-814e-3e20f4caaae2","receiver_thread_ids":[],"prompt":null,"agents_states":{},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"Agent errored: stream disconnected before completion: Encrypted function output content could not be decrypted or decoded.\n\nThis agent's turn failed. If you still need this agent, use the available collaboration tools to give it another task."}}
+{"type":"turn.completed","usage":{"input_tokens":384825,"cached_input_tokens":352128,"cache_write_input_tokens":0,"output_tokens":691,"reasoning_output_tokens":96}}

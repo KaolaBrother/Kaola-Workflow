@@ -1,0 +1,12 @@
+kimi version 0.34.0
+• The user is asking me to list the exact names of tools I have available that can dispatch a subagent. Let me look at my available tools.
+
+  Looking at my tools:
+  - `Agent` — "Launch a subagent to handle a task." This is a subagent dispatch tool.
+  - `AgentSwarm` — "Launch multiple subagents from one prompt template, existing agent resumes, or both." This also dispatches subagents.
+
+  Those are the two. The exact names are `Agent` and `AgentSwarm`.
+
+  Simple question, direct answer.
+
+To resume this session: kimi -r session_be9aa388-75ad-4b28-b3cd-5ab4bd633aa7

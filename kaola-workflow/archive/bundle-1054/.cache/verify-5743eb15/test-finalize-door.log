@@ -1,0 +1,25 @@
+T1: neither claim.js nor run-chains.js requires the plan-validator
+T2: finalize passes over a green, fresh receipt with no plan file present anywhere
+T3: a stale / missing / red receipt PASSES and reports the typed finding twice
+T4: a diff no record describes PASSES, reports changed_paths, and lands durably
+T5: run-chains.js --release-check reproduces every release refusal
+T6: an archive that drops a file refuses; one that moves everything passes
+T7: producer and gate compute the same codeTreeHash from one shared helper + constant
+T8: the consumer arm's `record` producer and the finalize gate agree on one candidate hash
+T8l: `record` binds the working tree it was invoked from, provably not the other one
+T8m: `record` from a linked worktree hashes THAT tree and writes into main's run folder
+T8n: the fallback must not open a route into main's archive band, and must name what it searched
+T9: a hazard-named file must not silently cost the finalize commit
+T10: the Step 8a mirror must not overwrite a receipt or an outcome log the worktree authored
+T10b: the same sequence WITHOUT the refused finalize is green — the axis is step B
+T11: a failed `git status` probe must not read as "no residue to stage"
+finalize-door tests passed (391 assertions)
+T12: a refusing finalize names `release` as the route that gives the claim back
+finalize-door tests passed (455 assertions)
+T12b: the two archive doors name `release` in the `reasoning` they already emit
+T13: archive staging carries `_rules.md` but never a disk-only `.roadmap/` deletion
+T14 (#1054 item 3): no ## Run gaps shape produces a follow-up/backlog-delta statistic any more
+T15: a chains_stale finding carries its culprit paths onto `--check` and into `## Validation`
+T16: the chains_stale operator hint says WHAT drifted, and never excuses the re-run
+T17: finalize fills its own pre-planted headings, and never overwrites one carrying content
+finalize-door tests passed (871 assertions)

@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"01a085af-9b7c-7702-b28a-0bfd19278125"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll ask one subagent to report from its visible context, then return its reply verbatim.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a085af-9b7c-7702-b28a-0bfd19278125","receiver_thread_ids":[],"prompt":null,"agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a085af-9b7c-7702-b28a-0bfd19278125","receiver_thread_ids":[],"prompt":null,"agents_states":{},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"The subagent encountered a connection error. I’ll retry with the same subagent.\n"}}
+{"type":"item.started","item":{"id":"item_3","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a085af-9b7c-7702-b28a-0bfd19278125","receiver_thread_ids":[],"prompt":null,"agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a085af-9b7c-7702-b28a-0bfd19278125","receiver_thread_ids":[],"prompt":null,"agents_states":{},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"Agent errored: stream disconnected before completion: Encrypted function output content could not be decrypted or decoded.\n\nThis agent's turn failed. If you still need this agent, use the available collaboration tools to give it another task."}}
+{"type":"turn.completed","usage":{"input_tokens":261343,"cached_input_tokens":230272,"cache_write_input_tokens":0,"output_tokens":489,"reasoning_output_tokens":54}}

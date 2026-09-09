@@ -1,0 +1,4 @@
+validate-workflow-contracts exit=0
+validate-kaola-workflow-contracts exit=0
+validate-kaola-workflow-gitlab-contracts exit=0
+validate-kaola-workflow-gitea-contracts exit=0

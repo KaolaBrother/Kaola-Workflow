@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a085aa-5612-7190-9f83-070e077705f8"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll start one subagent with your exact instruction, wait for its reply, and paste it verbatim.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a085aa-5612-7190-9f83-070e077705f8","receiver_thread_ids":[],"prompt":null,"agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"collab_tool_call","tool":"wait","sender_thread_id":"01a085aa-5612-7190-9f83-070e077705f8","receiver_thread_ids":[],"prompt":null,"agents_states":{},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Agent errored: stream disconnected before completion: Encrypted function output content could not be decrypted or decoded.\n\nThis agent's turn failed. If you still need this agent, use the available collaboration tools to give it another task."}}
+{"type":"turn.completed","usage":{"input_tokens":232910,"cached_input_tokens":201728,"cache_write_input_tokens":0,"output_tokens":411,"reasoning_output_tokens":44}}

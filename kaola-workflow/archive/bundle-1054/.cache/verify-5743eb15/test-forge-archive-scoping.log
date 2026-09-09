@@ -1,0 +1,14 @@
+scoping[claude/canonical] archive commit fe5d15d1 carried 2 path(s): done
+scoping[codex] archive commit 2ef2c9bc carried 2 path(s): done
+scoping[gitlab] archive commit c16be55b carried 2 path(s): done
+scoping[gitea] archive commit bded70c4 carried 2 path(s): done
+930[claude/canonical/.roadmap] reserved-directory archive: done
+930[codex/.roadmap] reserved-directory archive: done
+930[gitlab/.roadmap] reserved-directory archive: done
+930[gitea/.roadmap] reserved-directory archive: done
+930[claude/canonical/Archive] reserved-directory archive: done
+930[codex/Archive] reserved-directory archive: done
+930[gitlab/Archive] reserved-directory archive: done
+930[gitea/Archive] reserved-directory archive: done
+
+180 passed, 0 failed

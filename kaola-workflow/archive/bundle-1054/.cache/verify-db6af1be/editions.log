@@ -1,0 +1,28 @@
+
+> kaola-workflow@10.5.0 test:kaola-workflow:editions
+> node scripts/run-edition-tests.js scripts/test-opencode-edition.js scripts/test-kimi-edition.js scripts/test-grok-edition.js scripts/test-cursor-edition.js scripts/test-issue-1045-cursor-conformance.js scripts/test-zcode-edition.js scripts/test-zcode-hook-protocol.js scripts/test-zcode-install-trust.js
+
+D0: .opencode is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .opencode-gitlab is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .opencode-gitea is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+opencode-edition test passed (875 assertions). [drift-check: 3 tree(s) in parity (.opencode, .opencode-gitlab, .opencode-gitea)] [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .kimi is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .kimi-gitlab is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .kimi-gitea is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+kimi-edition test passed (824 assertions). [drift-check: 3 tree(s) in parity (.kimi, .kimi-gitlab, .kimi-gitea)] [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .grok is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .grok-gitlab is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .grok-gitea is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+grok-edition test passed (705 assertions). [drift-check: 3 tree(s) in parity (.grok, .grok-gitlab, .grok-gitea)] [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .cursor is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .cursor-gitlab is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .cursor-gitea is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+cursor-edition test passed (834 assertions). [drift-check: 3 tree(s) in parity (.cursor, .cursor-gitlab, .cursor-gitea)] [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+issue-1045 cursor conformance passed (24 assertions).
+D0: .zcode is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .zcode-gitlab is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .zcode-gitea is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+zcode-edition test passed (854 assertions). [drift-check: 3 tree(s) in parity (.zcode, .zcode-gitlab, .zcode-gitea)] [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+zcode hook protocol acceptance passed (32 assertions).
+zcode install acceptance passed (47 assertions).
+edition test lane passed: all 8 suites executed successfully.

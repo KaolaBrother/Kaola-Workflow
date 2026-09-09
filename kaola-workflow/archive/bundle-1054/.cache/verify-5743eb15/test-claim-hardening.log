@@ -1,0 +1,11 @@
+error connecting to api.github.com: net/http: TLS handshake timeout
+error connecting to api.github.com: net/http: TLS handshake timeout
+error connecting to api.github.com: net/http: TLS handshake timeout
+error connecting to api.github.com: net/http: TLS handshake timeout
+GraphQL: Could not resolve to an Issue with the number of 77. (repository.issue)
+API rate limit exceeded for user
+API rate limit exceeded for user
+API rate limit exceeded for user
+Could not resolve to an Issue with the number of 702.
+spawn-census: {"suite":"test-claim-hardening","spawns":1151}
+claim-hardening tests passed (838 assertions)

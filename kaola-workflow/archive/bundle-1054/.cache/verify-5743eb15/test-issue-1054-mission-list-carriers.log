@@ -1,0 +1,18 @@
+1a: claude/canonical/table — no auto Mission List statistics
+1a: claude/canonical/line-form — no auto Mission List statistics
+1a: claude/canonical/unfamiliar — no auto Mission List statistics
+1a: codex/table — no auto Mission List statistics
+1a: codex/line-form — no auto Mission List statistics
+1a: codex/unfamiliar — no auto Mission List statistics
+1a: gitlab/table — no auto Mission List statistics
+1a: gitlab/line-form — no auto Mission List statistics
+1a: gitlab/unfamiliar — no auto Mission List statistics
+1a: gitea/table — no auto Mission List statistics
+1a: gitea/line-form — no auto Mission List statistics
+1a: gitea/unfamiliar — no auto Mission List statistics
+1b: an orchestrator-authored `## Mission List` section survives untouched
+1c: claude/canonical — probeMissionListCoherence/persistMissionListToSummary absent
+1c: codex — probeMissionListCoherence/persistMissionListToSummary absent
+1c: gitlab — probeMissionListCoherence/persistMissionListToSummary absent
+1c: gitea — probeMissionListCoherence/persistMissionListToSummary absent
+test-issue-1054-mission-list-carriers.js passed (116 assertions)

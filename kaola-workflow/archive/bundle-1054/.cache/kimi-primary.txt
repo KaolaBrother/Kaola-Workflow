@@ -1,0 +1,8 @@
+• Both are visible in my context (in the merged `AGENTS.md` reference data), so here they are verbatim:
+
+  **Sentence containing `KW1054-PROJECT-SENTINEL`:**
+  > This project contains the sentinel sentence: KW1054-PROJECT-SENTINEL-a91f7c3e-in-AGENTS.
+
+  **First line of the document headed "Global Workflow Contract"** (from `/Users/ylminiserver/.kimi-code/AGENTS.md`):
+  > Universal contract. Project instructions supplement verified local facts and constraints. A project exception must state its scope and must not weaken higher-priority instructions or host safety boundaries.
+

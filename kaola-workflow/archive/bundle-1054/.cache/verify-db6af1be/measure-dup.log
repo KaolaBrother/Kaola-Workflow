@@ -1,0 +1,48 @@
+Workflow contract validation passed
+Kaola-Workflow Codex contract validation passed
+Kaola-Workflow GitLab contract validation passed
+Kaola-Workflow Gitea contract validation passed
+=== COMPLETENESS GATE — output is unusable unless every capture is COMPLETE ===
+--- scripts/validate-workflow-contracts.js
+    static call sites       : 110
+    distinct sites recorded : 110
+    COMPLETE
+--- scripts/validate-kaola-workflow-contracts.js
+    static call sites       : 43
+    distinct sites recorded : 43
+    COMPLETE
+--- plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js
+    static call sites       : 37
+    distinct sites recorded : 37
+    COMPLETE
+--- plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js
+    static call sites       : 35
+    distinct sites recorded : 35
+    COMPLETE
+Route-reachability test passed (148 assertions).
+
+=== DUPLICATION PARTITION (counts sum per file) ===
+--- scripts/validate-workflow-contracts.js
+    distinct assertions : 483
+    DUP                 : 0
+    KEEP                : 483
+    sums                : OK
+--- scripts/validate-kaola-workflow-contracts.js
+    distinct assertions : 236
+    DUP                 : 0
+    KEEP                : 236
+    sums                : OK
+--- plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js
+    distinct assertions : 71
+    DUP                 : 0
+    KEEP                : 71
+    sums                : OK
+--- plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js
+    distinct assertions : 69
+    DUP                 : 0
+    KEEP                : 69
+    sums                : OK
+
+A DUP is a candidate only. Before deleting one, prove it in the SUBTRACTION direction:
+remove the assertion, then remove that token from the surface it named, and confirm
+test-route-reachability goes RED. Green there means coverage was lost, not duplicated.

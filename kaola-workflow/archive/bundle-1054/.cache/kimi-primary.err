@@ -1,0 +1,23 @@
+kimi version 0.34.0
+• The user is asking me to quote verbatim from my visible context. This is a simple lookup task — I can see the AGENTS.md content rendered in my system prompt. Let me find the sentinel sentence and the first line of the "Global Workflow Contract" document.
+
+  From the AGENTS.md section:
+
+  Sentinel: "This project contains the sentinel sentence: KW1054-PROJECT-SENTINEL-a91f7c3e-in-AGENTS."
+
+  Wait, the user wants the sentence containing the string KW1054-PROJECT-SENTINEL. The sentence is: "This project contains the sentinel sentence: KW1054-PROJECT-SENTINEL-a91f7c3e-in-AGENTS."
+
+  Global Workflow Contract first line: The document headed "# Global Workflow Contract" — its first line. The heading is "# Global Workflow Contract". The first line after... hmm, "the exact first line of any document titled or headed 'Global Workflow Contract'". The first content line after the heading is "Universal contract. Project instructions supplement verified local facts and constraints. A" — but that wraps. The first paragraph reads: "Universal contract. Project instructions supplement verified local facts and constraints. A project exception must state its scope and must not weaken higher-priority instructions or host safety boundaries."
+
+  In the rendered block it's wrapped across lines:
+  "Universal contract. Project instructions supplement verified local facts and constraints. A
+  project exception must state its scope and must not weaken higher-priority instructions or host
+  safety boundaries."
+
+  The "first line" — could be the heading itself "# Global Workflow Contract" or the first content line. I'd interpret "first line of the document" as the first line of its content. The safest is to quote: "# Global Workflow Contract" is the heading. The first line of text is "Universal contract. Project instructions supplement verified local facts and constraints. A project exception must state its scope and must not weaken higher-priority instructions or host safety boundaries."
+
+  Actually in the source file, that paragraph is probably one line (rendered wrapped). I'll quote the full first paragraph as the first line.
+
+  No tools needed; it's in visible context. Answer directly, both items found.
+
+To resume this session: kimi -r session_b9c43ad4-c6dc-4825-9879-326d3f04d18a

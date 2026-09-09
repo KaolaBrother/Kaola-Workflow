@@ -1,0 +1,5 @@
+• I have two tools that can dispatch a subagent:
+
+  - `Agent`
+  - `AgentSwarm`
+

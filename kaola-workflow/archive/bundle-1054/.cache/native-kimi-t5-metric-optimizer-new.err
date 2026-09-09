@@ -1,0 +1,4 @@
+checkFlag(42) = true
+checkFlag(0) = false
+checkFlag("42") = false
+checkFlag() = false

@@ -1,0 +1,13 @@
+behavioural[claude/canonical] archive-staging fault names the live run folder: done
+behavioural[codex] archive-staging fault names the live run folder: done
+behavioural[gitlab] archive-staging fault names the live run folder: done
+behavioural[gitea] archive-staging fault names the live run folder: done
+behavioural-C[claude/canonical] a gitignored archive candidate reports, with git's diagnosis: done
+behavioural-C[codex] a gitignored archive candidate reports, with git's diagnosis: done
+behavioural-D[claude/canonical] unattributable finalize residue is reported, not adopted: done
+behavioural-D[codex] unattributable finalize residue is reported, not adopted: done
+behavioural-D[gitlab] unattributable finalize residue is reported, not adopted: done
+behavioural-D[gitea] unattributable finalize residue is reported, not adopted: done
+static: finding-type registries and their docs/api.md statements: done
+
+233 passed, 0 failed

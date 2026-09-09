@@ -1,0 +1,129 @@
+Test (#700 c/d): sole-archiver sink with a pre-existing archive dir — collision-suffixed archive is committed with closure/attestation metadata, main stays clean, journal disposed
+Test (#694 a): a stale cross-run receipt with flipped keep-open intent must NOT replay closure — reinit + honor --keep-issue-open, issue stays open
+Test (#694 b): a same-cycle crash-resume (matching claim_ts) resumes and completes without a spurious cross-run reinit
+Test (#694 c): the terminal keep-open guard actually probes + reopens a closed issue against a cwd-honest forge (regression: bare {} gh opts made it a silent no-op)
+Test (#707 h): a worktree-postured sink must archive the worktree's untracked .cache node evidence — landed into the live folder before archive, committed at HEAD
+Test (#715 k): a sibling project's interrupted-sink archive receipt must NOT block this sink (exact-path exemption) and stays byte-untouched
+Test (#715 l): over-exemption guard — sibling NON-receipt files and receipt look-alikes stay bucket-3 foreign dirt (sink_blocked, zero mutation)
+Test (#715 m): regression lock for #518 — THIS sink's own live + archive receipts remain exempt
+Test (#893 w1): the untracked archive mirror a --keep-worktree finalize leaves in MAIN must NOT block this sink — the documented worktree finishing sequence completes, and the mirror lands at HEAD byte-for-byte
+Test (#893 w2): with a genuinely foreign file forcing the refusal, this project's own untracked archive mirror must NOT appear in foreign_dirt and must be left byte-untouched
+Test (#893 w3): over-exemption guard — a SIBLING project's archive tree and a project-name PREFIX look-alike stay bucket-3 foreign dirt while this project's own mirror is exempt
+Test (#893 w4): the exemption is superset-verified, not a blanket path allowance — a mirrored file the BRANCH carries at conflicting bytes must still refuse, with the main copy left untouched
+Test (#893 w5): the branch carries a DIVERGENT archive copy whose object cannot be READ — unreadable is unverifiable, not absent, so it must stay bucket-3 foreign dirt
+Test (#893 w6): the branch carries a DIVERGENT archive copy larger than the sink's own git buffer — a read that OVERFLOWS is unverifiable too, and nothing about the repo is broken
+Test (#893 w7): with the divergence unverifiable and nothing else dirty, the sink must still emit a well-formed TYPED envelope and refuse — never crash past preflight with an unparseable failure
+Test (#893 w8): a stray under this project's own archive dir is COMMITTED by archive_commit — the accepted behaviour — but the sink must NAME every own-archive path it commits, on the envelope and in the durable summary, so nothing lands silently
+Test (#893 w9): the committed-paths report covers THIS project only — a sibling's archive receipt is neither committed nor named, and is left byte-untouched
+Test (#893 w10): when git refuses the ignored archive band and the sink commits nothing there, receipt.archived_paths must be present and EMPTY, never undefined — absent and empty are different answers and only one is a report
+Test (#746 o): a journal-only live dir with no workflow-state.md recorded nothing an archive could lose — the sink must skip it and still reach status:sinked, never classify it as evidence-losing
+Test (#832 p / ADR 0013 R3): removeWorktree must RESCUE the run archive up into main and then tear down — the precondition is discharged, not demanded
+Test (#832 q): on a consumer whose .gitignore covers kaola-workflow/archive, the sink must record archive_commit:"skipped_gitignored" — never a silent success for an operation git refused
+Test (#901 y1): a consumer whose .gitignore carries the basename rule ".cache/" must still get its run evidence into the archive commit — asserted as BLOBS at HEAD and in a fresh clone, never as files on disk
+Test (#901 y2): the single-axis control — an irrelevant .gitignore rule leaves the archive commit exactly as before and force-adds nothing
+Test (#901 y3 / #832): a rule over the whole archive band keeps its honest skip — skipped_gitignored, exit 0, NO force-add, archive retained on disk — and now itemizes every required file the skip leaves uncommitted
+Test (#901 y4): with one required evidence file unreadable the force-add cannot take — the sink must refuse sink_incomplete, name every missing path, surface the git add failure that used to be swallowed, and retain the branch and the on-disk archive
+Test (#901 y5/y6): sole-archiver posture (archive_dest SET, so the #700 completeness guard is live) — a basename .cache/ rule must not clip the run evidence out of the collision-suffixed archive commit; irrelevant-rule control alongside
+Test (#901 y7): an archive filename carrying trailing whitespace must be force-added and land as a BLOB on the FIRST run — the -z readers are NUL-split only, never trimmed, and the non-ASCII / embedded-newline / nested / 0-byte shapes must not regress
+Test (#901 y8): a gitignored SYMLINK in the archive must reach the commit as a 120000 blob and survive a FRESH CLONE — "done" at exit 0 is what the defect already reported, and the run's own disk held the symlink throughout
+Test (#901 y9): the -z readers in the shipped sink and claim scripts must split on NUL and nothing else — a .trim() here is invisible to any fixture with tidy filenames
+Test (r): a workflow-only branch yields a typed no_implementation_changes FINDING with a way forward — never a throw — and the skip arms stay silent
+Test (s): a branch whose run was never finalized must STOP the sink — a run_not_finalized finding on the envelope, non-success exit, and the default branch untouched
+Test (t): a branch carrying no implementation must STOP the sink — a no_implementation_changes finding on the envelope, non-success exit, and the default branch untouched
+Test (u): a GREEN post-rebase measurement must be written down — receipt.post_rebase_tests and a durable post_rebase_tests line, not merely a suite that scrolled past
+Test (v): RED post-rebase chains must STOP the sink — a chains_red finding on the envelope, nothing merged or published, and the measurement durable on the surviving journal
+Test (#980 w): a run that stages the worktree journal and then stops before landing it must leave the operator able to FIND the staged copy — not park it under a generated tmpdir name reported nowhere
+Test (#980 w2): the staged-journal note must reach all FOUR sink copies, armed at BOTH stage sites — a canonical-only or single-route fix leaves the same silent tmpdir behind on the copies (w) never drives
+Test (x1): an archive that THREW must not be reported as a sink that happened — no status:sinked, the failure NAMED, the live run record kept off the remote, the issue not closed, and the finalize step left retryable
+Test (x4): an archive that RETURNED without archiving must stop the sink exactly as a thrown one does — the catch arm is not the only door, and a fix written at the catch alone leaves this one open
+Test (x2): a run with NOTHING to archive — no live folder, no archive on main — must still complete; an unset archive_dest is not evidence that an archive failed
+Test (x3): a DRIFTED archiveProjectDir export must still fail loudly and name itself — the deliberate rethrow arm survives, with an undoctored mirror control proving the fixture is not failing for its own reasons
+Test (#907 z1 root): an archive carrying an embedded git repository must either sink, or decline over paths `git add -f` can take — a refusal whose only named remedy exits 128 is a permanent block
+Test (#907 z1 codex): an archive carrying an embedded git repository must either sink, or decline over paths `git add -f` can take — a refusal whose only named remedy exits 128 is a permanent block
+Test (#907 z1 gitlab): an archive carrying an embedded git repository must either sink, or decline over paths `git add -f` can take — a refusal whose only named remedy exits 128 is a permanent block
+Test (#907 z1 gitea): an archive carrying an embedded git repository must either sink, or decline over paths `git add -f` can take — a refusal whose only named remedy exits 128 is a permanent block
+Test (#907 z2 root): the archive-boundary inventory must equal the set the OUTER git actually collapses into a gitlink — a `.git` directory carrying core.bare or core.worktree collapses just as a plain nested repo does, and a benign `.git` must not be mistaken for one
+Test (#907 z2b root): a benign `.git` FILE must not disarm the blob gate for its siblings — with one of them unreadable the sink must still refuse sink_incomplete and name it, never report a complete archive over a file the commit does not carry
+Test (#907 z3 root): an archived symlink whose target the archive does not carry must be NAMED on the receipt while the sink still completes — and a link pointing INSIDE the archive must not be named at all
+Test (#906 z4 root): sink transaction journals must be absent from the published tree at EVERY depth — including the crash-resume orphan the fixed-depth pathspecs missed — while every evidence file beside them still lands
+Test (#907 z2 codex): the archive-boundary inventory must equal the set the OUTER git actually collapses into a gitlink — a `.git` directory carrying core.bare or core.worktree collapses just as a plain nested repo does, and a benign `.git` must not be mistaken for one
+Test (#907 z2b codex): a benign `.git` FILE must not disarm the blob gate for its siblings — with one of them unreadable the sink must still refuse sink_incomplete and name it, never report a complete archive over a file the commit does not carry
+Test (#907 z3 codex): an archived symlink whose target the archive does not carry must be NAMED on the receipt while the sink still completes — and a link pointing INSIDE the archive must not be named at all
+Test (#906 z4 codex): sink transaction journals must be absent from the published tree at EVERY depth — including the crash-resume orphan the fixed-depth pathspecs missed — while every evidence file beside them still lands
+Test (#907 z2 gitlab): the archive-boundary inventory must equal the set the OUTER git actually collapses into a gitlink — a `.git` directory carrying core.bare or core.worktree collapses just as a plain nested repo does, and a benign `.git` must not be mistaken for one
+Test (#907 z2b gitlab): a benign `.git` FILE must not disarm the blob gate for its siblings — with one of them unreadable the sink must still refuse sink_incomplete and name it, never report a complete archive over a file the commit does not carry
+Test (#907 z3 gitlab): an archived symlink whose target the archive does not carry must be NAMED on the receipt while the sink still completes — and a link pointing INSIDE the archive must not be named at all
+Test (#906 z4 gitlab): sink transaction journals must be absent from the published tree at EVERY depth — including the crash-resume orphan the fixed-depth pathspecs missed — while every evidence file beside them still lands
+Test (#907 z2 gitea): the archive-boundary inventory must equal the set the OUTER git actually collapses into a gitlink — a `.git` directory carrying core.bare or core.worktree collapses just as a plain nested repo does, and a benign `.git` must not be mistaken for one
+Test (#907 z2b gitea): a benign `.git` FILE must not disarm the blob gate for its siblings — with one of them unreadable the sink must still refuse sink_incomplete and name it, never report a complete archive over a file the commit does not carry
+Test (#907 z3 gitea): an archived symlink whose target the archive does not carry must be NAMED on the receipt while the sink still completes — and a link pointing INSIDE the archive must not be named at all
+Test (#906 z4 gitea): sink transaction journals must be absent from the published tree at EVERY depth — including the crash-resume orphan the fixed-depth pathspecs missed — while every evidence file beside them still lands
+Test (#973 e root): a linked worktree carrying GENUINE untracked work must not be force-removed silently — the bytes survive somewhere and the operator is told
+Test (#973 f root): a worktree carrying ONLY the workflow's own untracked lane content must still sink, exit unchanged — the flag the guard uses is what lets an ordinary run through
+Test (#973 g root): a worktree carrying only GITIGNORED content must still sink — the third population at this seam, and the control against a guard that reaches past --untracked-files into --ignored
+Test (#973 h root): the same, over a SYMLINK — the shape actually observed. A guard proven only against a regular file is unproven against the artifact that produced this
+Test (#973 i-control root): the LEGACY entry point over a worktree carrying ONLY the workflow's own untracked lane content must still complete
+Test (#973 i root): the LEGACY (non---sink) entry point reaches the same forced removal — genuine untracked work must not be silently destroyed there either
+Test (#973 e codex): a linked worktree carrying GENUINE untracked work must not be force-removed silently — the bytes survive somewhere and the operator is told
+Test (#973 f codex): a worktree carrying ONLY the workflow's own untracked lane content must still sink, exit unchanged — the flag the guard uses is what lets an ordinary run through
+Test (#973 g codex): a worktree carrying only GITIGNORED content must still sink — the third population at this seam, and the control against a guard that reaches past --untracked-files into --ignored
+Test (#973 h codex): the same, over a SYMLINK — the shape actually observed. A guard proven only against a regular file is unproven against the artifact that produced this
+Test (#973 i-control codex): the LEGACY entry point over a worktree carrying ONLY the workflow's own untracked lane content must still complete
+Test (#973 i codex): the LEGACY (non---sink) entry point reaches the same forced removal — genuine untracked work must not be silently destroyed there either
+Test (#973 e gitlab): a linked worktree carrying GENUINE untracked work must not be force-removed silently — the bytes survive somewhere and the operator is told
+Test (#973 f gitlab): a worktree carrying ONLY the workflow's own untracked lane content must still sink, exit unchanged — the flag the guard uses is what lets an ordinary run through
+Test (#973 g gitlab): a worktree carrying only GITIGNORED content must still sink — the third population at this seam, and the control against a guard that reaches past --untracked-files into --ignored
+Test (#973 h gitlab): the same, over a SYMLINK — the shape actually observed. A guard proven only against a regular file is unproven against the artifact that produced this
+Test (#973 i-control gitlab): the LEGACY entry point over a worktree carrying ONLY the workflow's own untracked lane content must still complete
+Test (#973 i gitlab): the LEGACY (non---sink) entry point reaches the same forced removal — genuine untracked work must not be silently destroyed there either
+Test (#973 e gitea): a linked worktree carrying GENUINE untracked work must not be force-removed silently — the bytes survive somewhere and the operator is told
+Test (#973 f gitea): a worktree carrying ONLY the workflow's own untracked lane content must still sink, exit unchanged — the flag the guard uses is what lets an ordinary run through
+Test (#973 g gitea): a worktree carrying only GITIGNORED content must still sink — the third population at this seam, and the control against a guard that reaches past --untracked-files into --ignored
+Test (#973 h gitea): the same, over a SYMLINK — the shape actually observed. A guard proven only against a regular file is unproven against the artifact that produced this
+Test (#973 i-control gitea): the LEGACY entry point over a worktree carrying ONLY the workflow's own untracked lane content must still complete
+Test (#973 i gitea): the LEGACY (non---sink) entry point reaches the same forced removal — genuine untracked work must not be silently destroyed there either
+Test (#978 j root): a file literally NAMED kaola-workflow\<seg>\<name> — one root-level component — must not be force-removed silently; the classifier reads a parked lane where the disk holds genuine work
+Test (#978 k root): an embedded git repository under a FOREIGN lane segment must not be force-removed silently — one collapsed record hides a whole repo, unpushed history included, behind the exemption
+Test (#978 l root): the LEGACY entry point must not destroy the worktree-only run journal the --sink route preserves — same forced removal, no stage on its route, and (i-control) forbids refusing over it
+Test (#978 m root): a symlink the legacy stage cannot copy must not turn the rescue back into silent destruction — the journal survives, or the run says what it could not preserve
+Test (#978 n root): the --sink route's stage has the same throw-and-swallow — a symlink it cannot copy must not cost the journal silently on the route every shipped finalize takes
+Test (#978 j codex): a file literally NAMED kaola-workflow\<seg>\<name> — one root-level component — must not be force-removed silently; the classifier reads a parked lane where the disk holds genuine work
+Test (#978 k codex): an embedded git repository under a FOREIGN lane segment must not be force-removed silently — one collapsed record hides a whole repo, unpushed history included, behind the exemption
+Test (#978 l codex): the LEGACY entry point must not destroy the worktree-only run journal the --sink route preserves — same forced removal, no stage on its route, and (i-control) forbids refusing over it
+Test (#978 m codex): a symlink the legacy stage cannot copy must not turn the rescue back into silent destruction — the journal survives, or the run says what it could not preserve
+Test (#978 n codex): the --sink route's stage has the same throw-and-swallow — a symlink it cannot copy must not cost the journal silently on the route every shipped finalize takes
+Test (#978 j gitlab): a file literally NAMED kaola-workflow\<seg>\<name> — one root-level component — must not be force-removed silently; the classifier reads a parked lane where the disk holds genuine work
+Test (#978 k gitlab): an embedded git repository under a FOREIGN lane segment must not be force-removed silently — one collapsed record hides a whole repo, unpushed history included, behind the exemption
+Test (#978 l gitlab): the LEGACY entry point must not destroy the worktree-only run journal the --sink route preserves — same forced removal, no stage on its route, and (i-control) forbids refusing over it
+Test (#978 m gitlab): a symlink the legacy stage cannot copy must not turn the rescue back into silent destruction — the journal survives, or the run says what it could not preserve
+Test (#978 n gitlab): the --sink route's stage has the same throw-and-swallow — a symlink it cannot copy must not cost the journal silently on the route every shipped finalize takes
+Test (#978 j gitea): a file literally NAMED kaola-workflow\<seg>\<name> — one root-level component — must not be force-removed silently; the classifier reads a parked lane where the disk holds genuine work
+Test (#978 k gitea): an embedded git repository under a FOREIGN lane segment must not be force-removed silently — one collapsed record hides a whole repo, unpushed history included, behind the exemption
+Test (#978 l gitea): the LEGACY entry point must not destroy the worktree-only run journal the --sink route preserves — same forced removal, no stage on its route, and (i-control) forbids refusing over it
+Test (#978 m gitea): a symlink the legacy stage cannot copy must not turn the rescue back into silent destruction — the journal survives, or the run says what it could not preserve
+Test (#978 n gitea): the --sink route's stage has the same throw-and-swallow — a symlink it cannot copy must not cost the journal silently on the route every shipped finalize takes
+Test (#923): a --branch naming a ref that does not exist is never silently accepted — it exits non-zero, never reports sinked, closes no issue, advances no remote, and names the branch; TBD is not exempt
+Test (#931 n0): arming control — closure-audit's summary-citation scanner really does flag a bare-relative .cache/ citation the archive does not hold, so an empty result in (n1)/(n2) is a measurement rather than a dead reader
+Test (#931 n1): a collision with an UNTRACKED pre-existing archive — the run's only copy of that evidence — must be named in the committed record: the suffixed archive is committed as always, and the bytes it commits say which directory was already there
+Test (#931 n2): the same disclosure is owed when the pre-existing archive is TRACKED — a report that only speaks up for the untracked shape leaves the other collision exactly as silent as before
+Test (#931 n3): control — with NO pre-existing archive the sink must claim no collision, so the disclosure carries information instead of being unconditional boilerplate
+Test (#931 n4): the disclosure must reach all FOUR sink copies — a gitlab-only or gitea-only omission is invisible to validate-script-sync.js and to edition-sync.js --check alike, so nothing but this would catch a three-copy fix
+Test (#931 n5 root/collision): the collision statement in the committed record must track whether a prior archive was REALLY there — driven through this edition's own sink
+Test (#931 n5 root/none): the collision statement in the committed record must track whether a prior archive was REALLY there — driven through this edition's own sink
+Test (#931 n5 codex/collision): the collision statement in the committed record must track whether a prior archive was REALLY there — driven through this edition's own sink
+Test (#931 n5 codex/none): the collision statement in the committed record must track whether a prior archive was REALLY there — driven through this edition's own sink
+Test (#931 n5 gitlab/collision): the collision statement in the committed record must track whether a prior archive was REALLY there — driven through this edition's own sink
+Test (#931 n5 gitlab/none): the collision statement in the committed record must track whether a prior archive was REALLY there — driven through this edition's own sink
+Test (#931 n5 gitea/collision): the collision statement in the committed record must track whether a prior archive was REALLY there — driven through this edition's own sink
+Test (#931 n5 gitea/none): the collision statement in the committed record must track whether a prior archive was REALLY there — driven through this edition's own sink
+Test (#936 control): the gh mock is the instrument — it must reject a call made outside a git repo (as real gh does) and its DELETE route must really remove the comment from the store
+Test (#936 a): --sink --keep-issue-open must release BOTH claim artifacts on the issue it leaves open — the label AND the kw:claim marker comment
+Test (#936 b): --sink --keep-issue-open on a BUNDLE must release the label and the kw:claim marker on every member it leaves open, not only the primary
+Test (#936 c): the legacy postMergeCleanup keep-open terminal removes the label on the primary and on every bundle member — it must delete their kw:claim markers too
+Test (#936 d, control): the CLOSE terminal is out of scope and must be unchanged — it still closes the issue, still removes the label, and still reports status:sinked (green before AND after the fix)
+Test (#937 a): --sink --keep-issue-open with a --project that differs from the on-disk folder ONLY IN CASE must still release the claim on every member, and must say it corrected the name
+Test (#937 b, positive control): the same --sink run driven with the EXACT on-disk slug still deletes both markers — without this, "the marker is gone" could be true of a fixture that deletes nothing
+Test (#937 c): the legacy postMergeCleanup keep-open terminal must resolve a mis-cased --project too — its primary and bundle-member arms compose the same marker from the same supplied name
+Test (#937 d, positive control): the legacy terminal driven with the EXACT on-disk slug still deletes both markers
+
+Sink-merge (#694/#700/#705/#707/#715/#746/#832/#893/#923/#931) test suite passed: 1063 assertions.

@@ -1,0 +1,2 @@
+[2m2026-09-09T10:25:18.786891Z[0m [33m WARN[0m proactive bundle sync failed [3merror[0m[2m=[0mNetwork error: error decoding response body
+[2m2026-09-09T10:25:22.970538Z[0m [33m WARN[0m Resident session actor exited unexpectedly; reaping as DeadFailed [3msession_id[0m[2m=[0m01a085b2-e4aa-7020-8db3-a16cf2b4a129

@@ -1,0 +1,1 @@
+candidate=b2866c1a90edfd86adc0cdd319ca368b5a9dc654 dirty=0 scope=docs/api.md only (review R6); re-ran the four contract validators (the only consumers of docs/api.md); everything else unchanged from db6af1be

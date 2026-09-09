@@ -1,0 +1,24 @@
+Test (1): bundle finalize closes all 3 members, archives one folder
+Test (2): warning-first — issue view fails for member 47, recorded in failed_issue_closures, closure still completes
+Test (2b) #369+#396.4 (D2): merge-lane finalize — member 47 open → open_issues + partial token, close_pending suppresses the premature alarm
+Test (2c) #396.4 (D2): post-sink partial (close_disposition UNSET) FIRES remote-members-closed; close_pending suppresses the SAME receipt
+Test (3): single-issue finalize — one issue closed, receipt has NO bundle fields
+Test (#371): release bundle clears the advisory claim for every member
+Test (#371): watch-pr bundle MERGED → per-member buckets + partial token
+Test (#371): watch-pr bundle CLOSED → abandoned archive + per-member label clear
+Test (#371) crash-a: release after a mid-claim crash clears every member
+Test (#371) crash-b: finalize re-run after the source folder is already archived
+Test (#371): in-place finalize provisions no worktree for the bundle
+Test (#508): merge-lane --keep-worktree all-open bundle → remote_issue_closed:close_pending + closed_issues:[] + zero close calls
+Test (#1054 item 3): the archived ## Closure block carries no backlog-delta statistic, for any ## Run gaps content
+Test (#592): --sink --issue-numbers A,B (no --issue) must close every member, not skip closure
+Test (#617 A): merge-lane finalize (sink:merge, no --keep-worktree) must NOT close an open issue online — defers to the merge sink
+Test (#617 B): --sink transaction — closure must run AFTER push_main; a forced push_main failure must NOT have already closed the issue
+Test (#617 C): checkClosureInvariants — remote-closed-after-publish fires when the impl commit is not an ancestor of the sink target, clears once merged
+Test (#617 D): verify-sink subcommand detects an orphaned close (archived project, commit not an ancestor of the sink target)
+Test (#699): verifyArchiveComplete recursively preserves epoch snapshots
+Test (#937 e): bundle finalize with a --project that differs from the on-disk folder ONLY IN CASE must still release the kw:claim marker on every member, and must say it corrected the name
+Test (#937 f): the SINGLE-issue finalize arm composes the same marker from the same supplied name — the bundle loop and the scalar call are separate call sites and neither reaches the other
+Test (#937 g, positive control): the same bundle finalize driven with the EXACT on-disk slug still deletes the marker on every member — without this, "the marker is gone" could be true of a fixture that deletes nothing
+
+test-bundle-finalize: all 194 tests passed

@@ -1,0 +1,6 @@
+Reading additional input from stdin...
+2026-09-09T11:26:29.845836Z  WARN codex_skills::interface: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-09-09T11:26:29.846503Z  WARN codex_skills::interface: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-09-09T11:26:31.940554Z  WARN codex_skills::interface: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-09-09T11:26:31.940576Z  WARN codex_skills::interface: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/
+2026-09-09T11:26:34.709132Z ERROR codex_models_manager::manager: failed to refresh available models: timeout waiting for child process to exit

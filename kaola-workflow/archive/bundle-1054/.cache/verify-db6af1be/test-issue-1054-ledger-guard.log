@@ -1,0 +1,22 @@
+2a: first sync — dest absent, finalize copies the source down
+2b: identical repeat — byte-identical src/dest, finalize succeeds, nothing lost
+2c: staler source refused fail-closed — dest AND main bytes unchanged afterward
+2d: count-proxy trap end-to-end — equal done counts, different content, still refused
+2f: claude/canonical — staler-source refusal, per port
+2f: codex — staler-source refusal, per port
+2f: gitlab — staler-source refusal, per port
+2f: gitea — staler-source refusal, per port
+2g: finalize --check predicts sync_failed read-only, without touching either file
+R1a: claude/canonical — main advances after a successful mirror; the next mirror must not refuse
+R1a: codex — main advances after a successful mirror; the next mirror must not refuse
+R1a: gitlab — main advances after a successful mirror; the next mirror must not refuse
+R1a: gitea — main advances after a successful mirror; the next mirror must not refuse
+R1b: a worktree copy hand-edited after the mirror still refuses content_diverged
+R1c: first_sync and identical-repeat are unchanged by the R1 addition
+R1d: a missing or corrupt mirror-digest.json falls back to refusing content_diverged
+R1e: claude/canonical — --check must not predict sync_failed for a prior_mirror-safe pair
+R1e: codex — --check must not predict sync_failed for a prior_mirror-safe pair
+R1e: gitlab — --check must not predict sync_failed for a prior_mirror-safe pair
+R1e: gitea — --check must not predict sync_failed for a prior_mirror-safe pair
+R1f: --check still predicts mirror_sync_failed when the worktree copy was hand-edited
+test-issue-1054-ledger-guard.js passed (96 assertions)

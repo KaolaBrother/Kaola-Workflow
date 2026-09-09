@@ -1,0 +1,1 @@
+generate-routing-surfaces --check: all 24 surfaces byte-match the skeleton.

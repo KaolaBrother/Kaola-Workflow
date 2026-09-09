@@ -1,0 +1,6 @@
+kimi version 0.34.0
+• The user wants me to dispatch one subagent with a specific task and paste back its full verbatim reply. Let me do that.
+
+• The user asked me to paste the subagent's full verbatim reply back with no summarizing. The reply is the summary block.
+
+To resume this session: kimi -r session_8932d68e-6fb3-4fbe-8ac2-6e3156e7a475

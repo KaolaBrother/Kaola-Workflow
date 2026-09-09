@@ -1,0 +1,10 @@
+2a: first sync — dest absent, finalize copies the source down
+2b: identical repeat — byte-identical src/dest, finalize succeeds, nothing lost
+2c: staler source refused fail-closed — dest AND main bytes unchanged afterward
+2d: count-proxy trap end-to-end — equal done counts, different content, still refused
+2f: claude/canonical — staler-source refusal, per port
+2f: codex — staler-source refusal, per port
+2f: gitlab — staler-source refusal, per port
+2f: gitea — staler-source refusal, per port
+2g: finalize --check predicts sync_failed read-only, without touching either file
+test-issue-1054-ledger-guard.js passed (28 assertions)
