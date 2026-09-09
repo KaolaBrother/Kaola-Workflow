@@ -1,0 +1,29 @@
+[
+  {
+    "name": "same_issue_twice",
+    "result": {
+      "issuesClosed": 1,
+      "followUpsFiled": "2",
+      "followUpNumbers": "1054,1054",
+      "netBacklogDelta": "+1"
+    }
+  },
+  {
+    "name": "plain_prose_issue",
+    "result": {
+      "issuesClosed": 1,
+      "followUpsFiled": "0",
+      "followUpNumbers": "none",
+      "netBacklogDelta": "-1"
+    }
+  },
+  {
+    "name": "same_issue_one_row",
+    "result": {
+      "issuesClosed": 1,
+      "followUpsFiled": "1",
+      "followUpNumbers": "1054",
+      "netBacklogDelta": "0"
+    }
+  }
+]
