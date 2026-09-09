@@ -1816,7 +1816,13 @@ worktree. Also exports `mainRootFromCoord`, `resolveMainRoot`, `resolveSessionMa
 `readPriorityConfig`, `treeDirty`, `commitDiscardArchive`, and the label/worktree maintenance
 commands. `defaultBranch(root)` (#1055: defined in `kaola-workflow-adaptive-schema.js`, re-exported
 here as the same function object) resolves the repository's default branch through a three-stage
-git probe.
+git probe: local `git symbolic-ref --short refs/remotes/origin/HEAD` (no network), then
+`git remote show origin`, then `git ls-remote --symref origin HEAD`, falling back to `main`.
+**Contract (#1056):** `KAOLA_WORKFLOW_OFFLINE=1` (skip stages 2–3) and `KAOLA_GH_REMOTE_TIMEOUT_MS`
+(per-probe timeout, clamped to 1..600000 ms, default 30000) are read from the environment on every
+call, not when the module loads, so the order in which a caller requires modules and sets the
+variables does not change the result. The gitlab/gitea claim ports re-export the same kernel
+function.
 
 **`scripts/kaola-workflow-sink-merge.js`** — `classifyMergeError(error)`, plus the sink transaction
 primitives.

@@ -346,26 +346,9 @@ function treeDirty(root, ownedProjects, exemptRelPaths) {
   } catch (_) { return true; }
 }
 
-function defaultBranch(root) {
-  // #397.3: probe chain (offline-safe). symbolic-ref (local) → remote show → ls-remote --symref →
-  // 'main'. The single origin/HEAD read is UNSET on a clone-of-empty-bare / `git remote add` repo.
-  try {
-    const ref = execFileSync('git', ['-C', root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    if (ref) return ref.replace(/^origin\//, '');
-  } catch (_) {}
-  if (OFFLINE) return 'main';
-  try {
-    const out = execFileSync('git', ['-C', root, 'remote', 'show', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30000 });
-    const m = out.match(/^\s*HEAD branch:\s*(\S+)\s*$/m);
-    if (m && m[1] && m[1] !== '(unknown)') return m[1];
-  } catch (_) {}
-  try {
-    const out = execFileSync('git', ['-C', root, 'ls-remote', '--symref', 'origin', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30000 });
-    const m = out.match(/^ref:\s*refs\/heads\/(\S+)\s+HEAD\s*$/m);
-    if (m && m[1]) return m[1];
-  } catch (_) {}
-  return 'main';
-}
+// #1056: delegate to the kernel's call-time-aware defaultBranch (adaptive-schema.js) instead of a
+// local copy whose own OFFLINE/timeout were captured at this module's load time.
+const defaultBranch = adaptiveSchema.defaultBranch;
 
 function worktreeRegistered(root, wtPath) {
   try {

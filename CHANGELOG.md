@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`defaultBranch(root)` consults the environment at call time (#1056).** After #1055 moved the
+  function into `kaola-workflow-adaptive-schema.js`, `KAOLA_WORKFLOW_OFFLINE` and
+  `KAOLA_GH_REMOTE_TIMEOUT_MS` were read once when the kernel module loaded, so a caller that
+  required the kernel first and set either variable afterwards still got the two network probes and
+  the default 30 s timeout — a behaviour change of a public export against the pre-#1055 shape,
+  reproduced with an `execFileSync` mock. The function now reads both variables on every call; the
+  probe order (local `symbolic-ref`, then `git remote show origin`, then `git ls-remote --symref`),
+  the 1..600000 ms clamp with its 30000 default, and the `'main'` fallback are unchanged. The
+  gitlab/gitea claim hand-ports consume and re-export the kernel function instead of a local copy,
+  so all three forge editions share the one contract. Regression:
+  `scripts/test-issue-1056-default-branch-env-contract.js`.
+
 ### Changed
 
 - **Shared kernel primitives converge on their true owners, pure relocation (#1055).**

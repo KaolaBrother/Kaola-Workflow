@@ -252,7 +252,7 @@ outside `scripts/test-*.js` and `scripts/fixtures/`.
 
 ### F1 (must fix) — `recordKey` joined on a raw NUL byte
 
-Root cause: in the original `Write` tool call, the JS source text `' '` I intended as a
+Root cause: in the original `Write` tool call, the JS source text `'\u0000'` I intended as a
 6-character escape sequence was interpreted as a JSON escape and materialized as a literal NUL byte
 (`0x00`) in the file. Confirmed with a byte-exact check:
 

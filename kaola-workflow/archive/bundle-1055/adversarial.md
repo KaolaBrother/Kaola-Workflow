@@ -317,7 +317,7 @@ function recordKey(rec) {
 }
 ```
 
-The separator was written as a raw control byte instead of the escape `' '`. Consequences,
+The separator was written as a raw control byte instead of the escape `'\u0000'`. Consequences,
 all measured:
 
 - `git diff --numstat` reports `-  -` for the file. Git classifies it as **binary**, so it has no
