@@ -1,24 +1,27 @@
 #!/usr/bin/env node
 'use strict';
 
-// Regression test for the worktree→main anti-clobber fence (kaola-workflow-ledger-compare.js,
-// issue #399 — re-pointed at the MISSION LIST by #877). The guard refuses to copy a STALER main
-// record over a MORE-COMPLETE worktree record (which would reset a finished run's `status: done`
-// items back to open), but FAILS OPEN on the legitimate first sync (dest absent/empty/zero-done).
-// Exercises the pure functions (countComplete, compareLedgers) AND the real CLI exit codes
-// (0 safe / 3 unsafe / 1 usage) — the same contract the retired ## Node Ledger suite pinned.
+// Regression test for the worktree<->main anti-clobber fence (kaola-workflow-ledger-compare.js,
+// issue #399 -> re-pointed at the MISSION LIST by #877 -> re-derived under #1054 from a done-COUNT
+// proxy to a CONTENT-IDENTITY guard.
 //
-// What it counts now is `status: done` lines of the mission-list format, at any indent,
-// including the hand-edited variants the fence's own tiny parse deliberately accepts. The parse is
-// LINE-ANCHORED, not field-aware — see the "known coarseness" case below, pinned as-is on purpose.
+// #1054's trace (kaola-workflow/bundle-1054/.cache/sync-guard-trace.md) measured a real false-safe
+// against production data: the retired `countComplete`'s `status: done` line-regex read 0 on the
+// current TABLE-form Mission List, so `compareLedgers` reported SAFE on a copy that would have
+// discarded 3 of 7 real finished rows because BOTH sides counted zero. The corrected guard drops
+// the count proxy entirely and decides by byte content: dest absent/empty -> safe (`first_sync`);
+// dest byte-identical to src -> safe (`identical`, an idempotent repeat); anything else -> unsafe
+// (`content_diverged`, carrying a bounded diff) — no carrier/format detection, no parser, no
+// schema for the free-text record.
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { compareLedgers, countComplete } = require('./kaola-workflow-ledger-compare');
+const { compareLedgers } = require('./kaola-workflow-ledger-compare');
 
 const scriptPath = path.join(__dirname, 'kaola-workflow-ledger-compare.js');
+const fixturesDir = path.join(__dirname, 'fixtures', 'issue-1054');
 
 let passed = 0;
 function assert(cond, msg) {
@@ -26,18 +29,18 @@ function assert(cond, msg) {
   passed++;
 }
 
-// A mission list in the DOCUMENTED format (docs/decisions/0017-the-mission-list.md): H1 goal,
-// `- item:` bullets, two-space-indented fields, `dispatched` on in-flight/done items, `result` on
-// done items.
-function record(statuses) {
+// A mission list in the documented LINE format (docs/decisions/0017-the-mission-list.md): H1 goal,
+// `- item:` bullets, two-space-indented fields.
+function record(items) {
   const lines = ['# fence fixture — one goal line', ''];
-  statuses.forEach((s, i) => {
-    lines.push('- item: mission ' + (i + 1) + ', one line of prose');
-    lines.push('  status: ' + s);
-    if (s !== 'todo') lines.push('  dispatched: agent-' + (i + 1) + ', output to out/' + (i + 1) + '.md');
-    if (s === 'done') lines.push('  result: out/' + (i + 1) + '.md');
+  for (const it of items) {
+    const slug = it.item.replace(/\s+/g, '-');
+    lines.push('- item: ' + it.item);
+    lines.push('  status: ' + it.status);
+    if (it.status !== 'todo') lines.push('  dispatched: agent, output to ' + slug + '.md');
+    if (it.status === 'done') lines.push('  result: out/' + slug + '.md');
     lines.push('');
-  });
+  }
   return lines.join('\n');
 }
 
@@ -45,143 +48,141 @@ function cli(args) {
   return spawnSync(process.execPath, [scriptPath, ...args], { encoding: 'utf8' });
 }
 
-// --- countComplete over the documented format ----------------------------------------------
-assert(countComplete(record(['done', 'in-flight', 'done', 'todo'])) === 2,
-  'countComplete must count exactly the `status: done` items of a documented-format list');
-assert(countComplete(record(['todo', 'in-flight'])) === 0,
-  'countComplete returns 0 when the list records nothing done');
-assert(countComplete('# just a goal line, no items yet\n') === 0,
-  'countComplete returns 0 on a list with no items');
-assert(countComplete('') === 0 && countComplete(null) === 0 && countComplete(undefined) === 0,
-  'countComplete returns 0 on empty/absent input (the fail-open signal compareLedgers reads)');
-
-// --- hand-edited variants the regex deliberately ACCEPTS -----------------------------------
-// The documented format indents fields by two spaces, but the fence owns a tolerant parse: a
-// hand-edited file legitimately varies (the guard's source file says so). Each accepted variant
-// is pinned individually so a tightening of the regex is a visible contract change here.
-for (const [line, label] of [
-  ['- status: done', 'bullet form (`- status: done`)'],
-  ['status: done', 'zero indent'],
-  ['\tstatus: done', 'tab indent'],
-  ['  STATUS: DONE', 'upper case'],
-  ['  Status: Done', 'mixed case'],
-  ['  status: done  ', 'trailing spaces'],
-  ['  status: done\t', 'trailing tab'],
-  ['  status:done', 'no space after the colon'],
-]) {
-  assert(countComplete('# g\n\n- item: x\n' + line + '\n') === 1,
-    'countComplete must accept the hand-edited variant: ' + label);
-}
-
-// --- lines that must NOT count ---------------------------------------------------------------
-for (const [line, label] of [
-  ['  status: todo', 'status: todo'],
-  ['  status: in-flight', 'status: in-flight'],
-  ['  status: done and verified', '`status: done` with trailing text'],
-  ['  status: donee', 'a longer word starting with done'],
-  ['  status : done', 'space before the colon'],
-  ['-status: done', 'dash with no space (not the bullet form)'],
-  ['  dispatched: status: done', '`status: done` inside another field, same line'],
-]) {
-  assert(countComplete('# g\n\n- item: x\n' + line + '\n') === 0,
-    'countComplete must NOT count: ' + label);
-}
-
-// --- KNOWN COARSENESS, pinned as current behavior --------------------------------------------
-// A `status: done` line inside a multi-line `result:` block ALSO counts: the parse is
-// line-anchored and cannot tell an item field from quoted prose at a deeper indent. Verified by
-// running the shipped regex — this pins what it DOES, not what a field-aware parser would do.
-// Tolerable because the guard is COMPARATIVE (strict >): the same record is counted the same way
-// on both sides of the mirror, so a symmetric over-count cannot manufacture a refusal on an
-// idempotent re-run. If this assertion starts failing, the parse got smarter — re-decide the pin.
-{
-  const withQuotedStatus = [
-    '# g', '',
-    '- item: port the fence',
-    '  status: done',
-    '  dispatched: self',
-    '  result: |',
-    "    the sub-run's own record ended with",
-    '    status: done',
-    ''
-  ].join('\n');
-  assert(countComplete(withQuotedStatus) === 2,
-    'KNOWN COARSENESS: a `status: done` line inside a multi-line result: block counts too '
-    + '(line-anchored parse; got ' + countComplete(withQuotedStatus) + ')');
-}
-
-// --- compareLedgers + the real CLI ------------------------------------------------------------
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ledger-compare-'));
-const moreDoneDest = path.join(tmp, 'worktree-mission-list.md');  // finished worktree record
-const stalerSrc = path.join(tmp, 'main-mission-list.md');         // staler main copy
-const freshSrc = path.join(tmp, 'fresh-main-mission-list.md');
-const emptyDest = path.join(tmp, 'empty-mission-list.md');
-const zeroDoneDest = path.join(tmp, 'zero-done-mission-list.md');
-fs.writeFileSync(moreDoneDest, record(['done', 'done', 'done']));
-fs.writeFileSync(stalerSrc, record(['done', 'in-flight', 'todo']));
-fs.writeFileSync(freshSrc, record(['done', 'done', 'done']));
-fs.writeFileSync(emptyDest, '');
-fs.writeFileSync(zeroDoneDest, record(['todo', 'in-flight']));
 
-// (a) staler source < more-done dest -> UNSAFE (exit 3 / safe:false / typed reason).
+// --- (a) dest absent / empty / undefined -> SAFE, reason 'first_sync' -------------------------
 {
-  const r = compareLedgers(fs.readFileSync(stalerSrc, 'utf8'), fs.readFileSync(moreDoneDest, 'utf8'));
-  assert(r.safe === false, '(a) a staler main copy over a more-done worktree record must be unsafe');
-  assert(r.reason === 'would_regress_complete_ledger', '(a) reason must be would_regress_complete_ledger');
-  assert(r.sourceComplete === 1 && r.destComplete === 3, '(a) done counts must be 1/3, got '
-    + r.sourceComplete + '/' + r.destComplete);
-  const c = cli(['--source', stalerSrc, '--dest', moreDoneDest, '--json']);
-  assert(c.status === 3, '(a) CLI must exit 3 on a regressing copy, got ' + c.status);
-  assert(JSON.parse(c.stdout).reason === 'would_regress_complete_ledger', '(a) CLI JSON reason');
+  const src = record([{ item: 'a', status: 'done' }, { item: 'b', status: 'done' }]);
+  const r1 = compareLedgers(src, null);
+  assert(r1.safe === true && r1.reason === 'first_sync',
+    '(a) dest absent (null) is a legitimate first sync; got ' + JSON.stringify(r1));
+  const r2 = compareLedgers(src, '');
+  assert(r2.safe === true && r2.reason === 'first_sync',
+    '(a) dest empty string is a legitimate first sync; got ' + JSON.stringify(r2));
+  const r3 = compareLedgers(src, undefined);
+  assert(r3.safe === true && r3.reason === 'first_sync',
+    '(a) dest undefined is a legitimate first sync; got ' + JSON.stringify(r3));
+
+  const srcFile = path.join(tmp, 'first-sync-src.md');
+  fs.writeFileSync(srcFile, src);
+  const absentDest = path.join(tmp, 'does-not-exist.md');
+  const c = cli(['--source', srcFile, '--dest', absentDest, '--json']);
+  assert(c.status === 0, '(a) CLI exits 0 on a first sync (dest missing); got ' + c.status);
+  assert(JSON.parse(c.stdout).reason === 'first_sync', '(a) CLI JSON names first_sync');
 }
 
-// (b) dest absent/empty/zero-done -> SAFE (exit 0) — the legitimate first-sync fail-open.
+// --- (b) dest byte-identical to src -> SAFE, reason 'identical' (idempotent repeat) -----------
 {
-  const r = compareLedgers(fs.readFileSync(moreDoneDest, 'utf8'), null);
-  assert(r.safe === true && r.reason === 'ok', '(b) dest absent must fail open (safe)');
-  const absentPath = path.join(tmp, 'does-not-exist.md');
-  const c = cli(['--source', moreDoneDest, '--dest', absentPath, '--json']);
-  assert(c.status === 0, '(b) CLI must exit 0 when dest is absent (first sync), got ' + c.status);
-  assert(JSON.parse(c.stdout).safe === true, '(b) CLI JSON safe:true');
-  const c2 = cli(['--source', moreDoneDest, '--dest', emptyDest, '--json']);
-  assert(c2.status === 0, '(b) CLI must exit 0 when dest is empty, got ' + c2.status);
-  const c3 = cli(['--source', moreDoneDest, '--dest', zeroDoneDest, '--json']);
-  assert(c3.status === 0, '(b) CLI must exit 0 when dest records nothing done, got ' + c3.status);
+  const text = record([{ item: 'a', status: 'done' }, { item: 'b', status: 'in-flight' }]);
+  const r = compareLedgers(text, text);
+  assert(r.safe === true && r.reason === 'identical',
+    '(b) byte-identical dest/src is a safe repeat; got ' + JSON.stringify(r));
+
+  const same = path.join(tmp, 'same.md');
+  fs.writeFileSync(same, text);
+  const c = cli(['--source', same, '--dest', same, '--json']);
+  assert(c.status === 0 && JSON.parse(c.stdout).reason === 'identical',
+    '(b) CLI: comparing a file against itself is a safe repeat; got status ' + c.status);
 }
 
-// (c) source >= dest -> SAFE (exit 0). A fresher main copy, and the EQUAL-counts idempotent
-// re-run of the mirror (STRICT >), both pass.
+// --- (c) content genuinely diverges (dest holds finished work the source lacks) -> UNSAFE ------
+// The ORDINARY regression case, reproduced over the REAL archived bundle-1053 table (byte-copied
+// fixture): a staler source missing 3 of the 7 real finished rows, compared against the full dest.
 {
-  const r = compareLedgers(fs.readFileSync(freshSrc, 'utf8'), fs.readFileSync(stalerSrc, 'utf8'));
-  assert(r.safe === true && r.reason === 'ok', '(c) a fresher source over a staler dest must be safe');
-  assert(r.sourceComplete === 3 && r.destComplete === 1, '(c) done counts must be 3/1');
-  const rEqual = compareLedgers(fs.readFileSync(freshSrc, 'utf8'), fs.readFileSync(moreDoneDest, 'utf8'));
-  assert(rEqual.safe === true && rEqual.reason === 'ok',
-    '(c) equal done counts must pass (strict >) — an idempotent mirror re-run is never refused');
-  const c = cli(['--source', freshSrc, '--dest', moreDoneDest, '--json']);
-  assert(c.status === 0, '(c) CLI must exit 0 on equal counts, got ' + c.status);
+  const fullTable = fs.readFileSync(path.join(fixturesDir, 'bundle-1053-mission-list.md'), 'utf8');
+  const rows = fullTable.split('\n');
+  const doneRowIdx = rows.map((l, i) => [l, i]).filter(([l]) => l.includes('| done |')).map(([, i]) => i);
+  assert(doneRowIdx.length === 7, '(c) fixture premise — bundle-1053 has 7 `| done |` rows; got ' + doneRowIdx.length);
+  const drop = new Set(doneRowIdx.slice(4)); // the last 3 done rows never landed in the stale copy
+  const staleSrc = rows.filter((_, i) => !drop.has(i)).join('\n');
+
+  const r = compareLedgers(staleSrc, fullTable);
+  assert(r.safe === false && r.reason === 'content_diverged',
+    '(c) a source missing 3 of 7 real finished rows must be UNSAFE against the full dest — the exact '
+    + 'false-safe #1054 measured against production data; got ' + JSON.stringify(r));
+  assert(typeof r.diff === 'string' && r.diff.length > 0,
+    '(c) the refusal carries a non-empty diff summary; got ' + JSON.stringify(r.diff));
+  assert(r.diff.includes('dest (worktree copy)') && r.diff.includes('src (main copy)'),
+    '(c) the diff names which side is which; got ' + r.diff.slice(0, 200));
+
+  const srcFile = path.join(tmp, 'stale-src.md');
+  const destFile = path.join(tmp, 'full-dest.md');
+  fs.writeFileSync(srcFile, staleSrc);
+  fs.writeFileSync(destFile, fullTable);
+  const c = cli(['--source', srcFile, '--dest', destFile, '--json']);
+  assert(c.status === 3, '(c) CLI exits 3 on a content-diverged copy; got ' + c.status);
+  const cJson = JSON.parse(c.stdout);
+  assert(cJson.reason === 'content_diverged' && typeof cJson.diff === 'string' && cJson.diff.length > 0,
+    '(c) CLI JSON carries reason + diff; got ' + JSON.stringify(cJson).slice(0, 300));
+
+  // And the REVERSE direction — a full, more-advanced source copied over the stale dest, the
+  // ORDINARY legitimate "main has progressed further" case — is refused TOO, deliberately. Byte
+  // identity is the only safe non-first-sync arm; the trace evaluated and rejected a containment
+  // check ("does dest's content live wholly inside src?") as unable to hold under the Mission
+  // List's in-place-mutation write model without re-deriving field semantics. So any divergence at
+  // all — including this legitimate one-sided advance — now surfaces to the Main Orchestrator
+  // instead of being silently allowed. Pinned here as the corrected scope's deliberate trade
+  // ("safety never judged by counts"), not an oversight.
+  const rBack = compareLedgers(fullTable, staleSrc);
+  assert(rBack.safe === false && rBack.reason === 'content_diverged',
+    '(c-reverse) even a source that only ADDS content differs byte-for-byte from a stale dest and '
+    + 'is refused — no containment check exists, by design; got ' + JSON.stringify(rBack));
 }
 
-// (d) both empty -> SAFE (exit 0).
+// --- (d) THE COUNT-PROXY TRAP: equal `status: done` counts, genuinely different content --------
+// The retired guard counted `status: done` lines and passed on equal counts (STRICT >, so equal
+// was always safe). Two records can carry the SAME count of finished items while recording
+// DIFFERENT finished work — this must be UNSAFE under the content guard even though a count-based
+// reader would have called it safe.
 {
-  const r = compareLedgers('', '');
-  assert(r.safe === true && r.reason === 'ok', '(d) both empty must be safe');
-  const c = cli(['--source', emptyDest, '--dest', emptyDest, '--json']);
-  assert(c.status === 0, '(d) CLI must exit 0 when both empty, got ' + c.status);
+  const destText = record([
+    { item: 'investigate the timeout', status: 'done' },
+    { item: 'patch the retry loop', status: 'done' },
+    { item: 'write the regression test', status: 'in-flight' },
+  ]);
+  // Same status SHAPE (2 done, 1 not-done), but the completed items are DIFFERENT missions — a
+  // real divergent record, not a relabel.
+  const srcText = record([
+    { item: 'investigate the timeout', status: 'done' },
+    { item: 'roll back the bad config', status: 'done' },
+    { item: 'write the regression test', status: 'todo' },
+  ]);
+  const r = compareLedgers(srcText, destText);
+  assert(r.safe === false && r.reason === 'content_diverged',
+    '(d) equal done-counts (2/2) but genuinely different completed work must be UNSAFE — the exact '
+    + 'count-proxy trap #1054 retired the old guard for; got ' + JSON.stringify(r));
 }
 
-// Usage errors are exit 1 (never a regression verdict): missing --source, an unreadable
-// --source, an unknown argument. --help exits 0 and documents the exit-code contract.
+// --- (e) layout independence: an unfamiliar (non-line-form) text goes through the SAME two safe
+// arms — no carrier/format branch exists anywhere in the guard.
+{
+  const unfamiliar = ['# goal: numbered layout', '', '1. **A** — done', '2. **B** — todo', ''].join('\n');
+  const rIdentical = compareLedgers(unfamiliar, unfamiliar);
+  assert(rIdentical.safe === true && rIdentical.reason === 'identical',
+    '(e) an unfamiliar layout compared to itself is still a safe repeat; got ' + JSON.stringify(rIdentical));
+  const rFirstSync = compareLedgers(unfamiliar, null);
+  assert(rFirstSync.safe === true && rFirstSync.reason === 'first_sync',
+    '(e) an unfamiliar layout with no dest yet is still a safe first sync; got ' + JSON.stringify(rFirstSync));
+}
+
+// --- usage errors are exit 1 (never a regression verdict) --------------------------------------
 {
   const c = cli(['--json']);
   assert(c.status === 1, 'missing --source must exit 1 (usage), got ' + c.status);
-  const c2 = cli(['--source', path.join(tmp, 'no-such-source.md'), '--dest', moreDoneDest]);
+  const c2 = cli(['--source', path.join(tmp, 'no-such-source.md'), '--dest', path.join(tmp, 'x.md')]);
   assert(c2.status === 1, 'an unreadable --source must exit 1 (usage/environment), got ' + c2.status);
-  const c3 = cli(['--source', freshSrc, '--frobnicate']);
+  const c3 = cli(['--source', path.join(tmp, 'no-such-source.md'), '--frobnicate']);
   assert(c3.status === 1, 'an unknown argument must exit 1, got ' + c3.status);
   const h = cli(['--help']);
-  assert(h.status === 0 && /exit 3/.test(h.stdout),
-    '--help must exit 0 and document the unsafe exit code, got ' + h.status);
+  assert(h.status === 0 && /content_diverged/.test(h.stdout),
+    '--help documents the content_diverged unsafe exit code; got ' + h.status + '\n' + h.stdout);
+}
+
+// --- negative pin: the retired count proxy is gone from this module entirely -------------------
+{
+  const mod = require('./kaola-workflow-ledger-compare');
+  assert(typeof mod.countComplete === 'undefined',
+    'countComplete (the retired count proxy) is not exported; got ' + typeof mod.countComplete);
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

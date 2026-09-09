@@ -3350,15 +3350,19 @@ function mirrorResidueOutsideProject(mainRoot, root) {
 // Step 8a — artifact mirror. The FINAL copy direction is always main checkout → linked worktree:
 // the worktree holds the complete ledger and the main copy is the one carrying the Finalization
 // artifacts the orchestrator just authored. Before copying, the ledger-regression guard checks
-// whether that copy would push a STALER main plan over a MORE-COMPLETE worktree ledger.
+// whether that copy would DISCARD content the worktree already has — by CONTENT identity, not by
+// counting how much either side records as done (#1054: a count is a proxy that reads 0 on the
+// current table-form Mission List, producing a real false-safe over production data — see
+// `kaola-workflow/bundle-1054/.cache/sync-guard-trace.md`).
 //
-// #837: when it would, the transaction OWNS the repair. It merge-copies the worktree project dir
-// UP into main (worktree wins), re-compares, and only then runs the main→worktree copy. That
-// worktree→main sync used to be an operator `rsync -a` demanded by a typed refusal — a blocker the
-// workflow manufactured for itself out of its own commit policy, so it is a repair obligation
-// discharged before the gate, never an operator obligation. The refusal is RETAINED and RE-TYPED:
-// it is now reachable only when the script CANNOT perform the sync it owes (`mirror_sync_failed`),
-// which stays fail-closed and zero-write on the worktree side.
+// #1054 (superseding #837): when the guard finds the two copies have DIVERGED, the transaction no
+// longer guesses a repair direction. #837's automatic worktree-wins merge assumed the worktree is
+// always the more-current side; the trace above found a real run whose evidence paths point at the
+// OPPOSITE topology, so an unconditional "worktree wins" copy can silently overwrite a newer main
+// record. The transaction instead refuses fail-closed, zero-write on both sides, under the SAME
+// pinned reason (`mirror_sync_failed`) — carrying both absolute paths and a bounded diff so the
+// Main Orchestrator, which owns exactly this judgment, can reconcile by hand and rerun
+// `finalize --check`.
 // Returns one of:
 //   { mirror: 'not_needed' | 'source_absent' | 'skipped_post_archive' | 'mirrored',
 //     ledger_compare: <token>, mirrored_paths: [<rel>…] }
@@ -3395,41 +3399,26 @@ function mirrorFinalizationArtifacts(root, project) {
   if (fs.existsSync(srcRecord)) {
     try {
       const { compareLedgers } = require('./kaola-workflow-ledger-compare.js');
+      const destRecord = path.join(destDir, adaptiveSchema.MISSION_LIST_FILE);
       let destText = null;
-      try { destText = fs.readFileSync(path.join(destDir, adaptiveSchema.MISSION_LIST_FILE), 'utf8'); } catch (_) {}
+      try { destText = fs.readFileSync(destRecord, 'utf8'); } catch (_) {}
       const verdict = compareLedgers(fs.readFileSync(srcRecord, 'utf8'), destText);
       if (!verdict.safe) {
-        // #837 — the script performs the worktree→main sync itself. Merge-copy (worktree wins) so
-        // main-only Finalization artifacts the orchestrator just authored survive, then re-compare
-        // against the repaired source. A sync the script cannot perform is a MACHINE failure, not
-        // an operator obligation: refuse fail-closed under the pinned top-level reason, with the
-        // worktree ledger untouched (nothing has been copied INTO the worktree at this point).
-        let syncFailure = null;
-        try {
-          mergeCopyDir(destDir, srcDir, null, FINALIZE_MIRROR_TREE_BOUND);
-        } catch (e) {
-          if (e instanceof TypeError || e instanceof ReferenceError) throw e;
-          syncFailure = String((e && e.message) || e).slice(0, 400);
-        }
-        let after = null;
-        if (!syncFailure) {
-          try { after = compareLedgers(fs.readFileSync(srcRecord, 'utf8'), destText); }
-          catch (e) { syncFailure = String((e && e.message) || e).slice(0, 400); }
-        }
-        if (syncFailure || !after || !after.safe) {
-          return {
-            refused: true,
-            inner_reason: 'mirror_sync_failed',
-            detail: 'the transaction could not sync the worktree project folder up into the main '
-              + 'checkout (main copy records ' + verdict.sourceComplete + ' done item(s); the '
-              + 'worktree copy records ' + verdict.destComplete + ')'
-              + (syncFailure ? ': ' + syncFailure : '')
-          };
-        }
-        ledgerCompare = 'synced_from_worktree';
-      } else {
-        ledgerCompare = 'pass';
+        // #1054 — no automatic repair: a content-diverged (or diff-unavailable) verdict is a MACHINE
+        // stop, not a machine-repairable state. Refuse fail-closed under the pinned top-level reason,
+        // zero-write on both sides (nothing has been copied either direction at this point), and hand
+        // the orchestrator both absolute paths plus the diff so it can decide which side is current.
+        return {
+          refused: true,
+          inner_reason: 'mirror_sync_failed',
+          detail: 'the run record diverged between the main checkout and the linked worktree ('
+            + verdict.reason + ') — main copy: ' + srcRecord + '; worktree copy: ' + destRecord
+            + '. Reconcile by hand (the Main Orchestrator owns which side is current) and rerun '
+            + '`finalize --check`.'
+            + (verdict.diff ? '\n' + verdict.diff : '')
+        };
       }
+      ledgerCompare = 'pass';
     } catch (e) {
       // A programmer error (missing/renamed export — the cross-edition drift class) must not be
       // swallowed into a silent bypass of the guard.
@@ -3671,7 +3660,7 @@ function emitFinalizeCommitFailure(project, step, committed, finalizeTx) {
 
 // Read-only classification of what Step 8a WILL do. Mirrors mirrorFinalizationArtifacts' own
 // branch order exactly, minus every write.
-//   'not_needed' | 'ready' | 'sync_required' | 'sync_failed' | 'source_absent' | 'skipped_post_archive'
+//   'not_needed' | 'ready' | 'sync_failed' | 'source_absent' | 'skipped_post_archive'
 // `destAuthorityAbsent` carries the one bit the state token cannot: 'ready' is reached from THREE
 // distinct situations (no source record, a safe compare, and a compare that threw — compareLedgers
 // fails open on a null destination), so 'ready' ALONE never means "the mirror will construct the
@@ -3689,14 +3678,19 @@ function emitFinalizeCommitFailure(project, step, committed, finalizeTx) {
 // the authority". A dest whose state file exists but is unreadable or the wrong type is NOT repaired
 // by the mirror (it is skipped as dest-owned), and reads false here, so those tokens still stand.
 //
-// 'ready' is a PROMISE that the copy will happen, so it is falsified the same way the sync_required
-// arm is — by probing the tree that will be WRITTEN. It used to probe nothing at all on this arm
-// (the writability probe existed only below, and it reads the SOURCE), so a read-only worktree
-// `kaola-workflow/` produced `ok:true` + `pending_mirror` from `--check` and then an untyped mkdir
-// EACCES out of the transaction one statement later. An unwritable destination is a genuine
-// operator-owed precondition and reports as `sync_failed`, the token this probe already carries for
-// "the mirror the script owes cannot be performed" — no new vocabulary, and the same
-// `mirror_sync_failed` reason the transaction now emits for that failure.
+// 'ready' is a PROMISE that the copy will happen, so it is falsified by probing the tree that will
+// be WRITTEN. It used to probe nothing at all on this arm (the writability probe existed only below,
+// and it read the SOURCE), so a read-only worktree `kaola-workflow/` produced `ok:true` +
+// `pending_mirror` from `--check` and then an untyped mkdir EACCES out of the transaction one
+// statement later. An unwritable destination is a genuine operator-owed precondition and reports as
+// `sync_failed`, the token this probe already carries for "the mirror the script owes cannot be
+// performed" — no new vocabulary, and the same `mirror_sync_failed` reason the transaction emits for
+// that failure.
+//
+// #1054: `sync_required` (a content-diverged verdict the transaction would repair automatically) is
+// RETIRED — the transaction no longer attempts that repair (see the doc comment above
+// `mirrorFinalizationArtifacts`), so a diverged compare is unconditionally `sync_failed` here too:
+// the prediction must agree with what the transaction will actually do, and it will always refuse.
 function probeFinalizeMirror(root, project) {
   let mainRoot = null;
   try {
@@ -3725,15 +3719,10 @@ function probeFinalizeMirror(root, project) {
     try { destText = fs.readFileSync(path.join(destDir, adaptiveSchema.MISSION_LIST_FILE), 'utf8'); } catch (_) {}
     const verdict = compareLedgers(fs.readFileSync(srcRecord, 'utf8'), destText);
     if (verdict.safe) return { state: ready, mainRoot, destAuthorityAbsent };
-    // A pending worktree→main sync is machinery-repairable, so it is REPORTED as state, never as an
-    // operator-owed precondition — unless the destination is provably unwritable, in which case the
-    // transaction will hit the fail-closed mirror_sync_failed refusal and the operator should know.
-    let writable = true;
-    try {
-      fs.accessSync(srcDir, fs.constants.W_OK);
-      if (fs.existsSync(srcRecord)) fs.accessSync(srcRecord, fs.constants.W_OK);
-    } catch (_) { writable = false; }
-    return { state: writable ? 'sync_required' : 'sync_failed', mainRoot, destAuthorityAbsent };
+    // #1054: a content-diverged (or diff-unavailable) verdict is always a machine stop — the
+    // transaction never attempts an automatic repair for it (see `mirrorFinalizationArtifacts`), so
+    // the prediction must always agree: `sync_failed`, regardless of writability.
+    return { state: 'sync_failed', mainRoot, destAuthorityAbsent };
   } catch (e) {
     if (e instanceof TypeError || e instanceof ReferenceError) throw e;
     return { state: ready, mainRoot, destAuthorityAbsent };
@@ -3829,9 +3818,8 @@ function finalizeAuthorityHint(livePresent, innerReason) {
 // CREATES the live folder the resolution then reads. The read-only checklist resolves over the
 // PRE-mirror tree, so it saw no authority at all and reported `archive_authority_missing`: an
 // operator obligation for a step the script performs itself, unasked, one line later. A pending
-// mirror is machinery-repairable exactly as a pending worktree→main sync is, so it is REPORTED as
-// state (`pending_mirror`) and never pushed into `reasons` — the same rule probeFinalizeMirror
-// already applies to `sync_required`.
+// mirror is machinery-repairable, so it is REPORTED as state (`pending_mirror`) and never pushed
+// into `reasons`.
 //
 // The authority is NOT relocated to the main root: `dest_dir` stays the tree the transaction will
 // read, and only the state file the mirror is about to copy is read out of the source. A prediction
@@ -4005,75 +3993,6 @@ function persistChangedPathsToSummary(projectDir, changed, probe) {
     for (const rel of changed) lines.push('- ' + rel);
   }
   return appendSummarySection(projectDir, '## Changed Paths', lines);
-}
-
-// (C) THE RUN RECORD THAT DISAGREES WITH ITSELF. An item whose outcome is filled in while its
-// `status` still reads something other than `done` is a contradiction nothing but a human reading
-// the file line by line could catch, and the archived run came out byte-identical to a coherent
-// one. It is not a one-off: measured by the predicate below over this repo's own archive, 11 of the
-// 36 records carry at least one, 34 items in all out of 445.
-//
-// This READS the record. It never repairs it, never refuses, and never judges whether a record is
-// SUFFICIENT — an item carrying nothing but its mission is silent, not deficient, and an item with
-// no `status` at all contradicts nothing, so neither is reported. Nor is "in flight with nothing to
-// show", which is a different and louder problem: NO ITEM can be in both states — this one needs an
-// outcome, that one needs none — which is why a count mixing them says nothing about either. That
-// disjointness is structural and does NOT extend to runs. Measured over the archive: 34 items in 11
-// runs here against 14 items in 9 runs there, and of the 15 runs carrying either, 5 carry both.
-//
-// Its own parse, ledger-compare.js style, so a finalize-time report never couples to another reader.
-// Two readings the archive settled:
-//   - The LAST `status:` in an item wins. All eleven duplicate-status items in the archive write the
-//     correction UNDER the stale line, never over it; reading the first reports ten of them whose
-//     author wrote `done` directly beneath.
-//   - A field is a NAME AT THE FRONT of a line — at the bullet, at two spaces, or at column zero,
-//     the three forms the archive uses. Never a substring: `result` prose quotes the record's own
-//     vocabulary ("reads status: done") and `dispatched` prose says "the result:", and a scan
-//     anywhere in the line flips both verdicts.
-// An outcome is a field whose name STARTS with `result` — the plain key and the decorations the
-// archive puts on it (`result so far:`, `result (test leg):`) — AND WHICH CARRIES A VALUE. An
-// orchestrator scaffolding an item writes the four field names ahead of the work, leaving `result:`
-// standing empty; two archived runs end on exactly that item. An empty field is the ABSENCE of an
-// outcome, so counting the key alone would tell a successor that something landed where nothing did
-// — the same wrongness this report exists to catch, arriving through the report. Nothing after the
-// colon and whitespace after the colon are one case; only `\S` tells either from a real value.
-const MISSION_ITEM_LINE = /^(?:- )?item:/;
-const MISSION_STATUS_LINE = /^(?:- |  )?status:[ \t]*([A-Za-z][A-Za-z-]*)/;
-const MISSION_RESULT_LINE = /^(?:- |  )?result\b[^:]*:[ \t]*\S/;
-function probeMissionListCoherence(authorityDir) {
-  let text;
-  // A run with no record measures nothing and says nothing: the mission list is a convention, not
-  // a precondition.
-  try { text = fs.readFileSync(path.join(authorityDir, adaptiveSchema.MISSION_LIST_FILE), 'utf8'); }
-  catch (_) { return null; }
-  const items = [];
-  let cur = null;
-  text.split('\n').forEach((line, i) => {
-    if (MISSION_ITEM_LINE.test(line)) { cur = { line: i + 1, status: null, outcome: false }; items.push(cur); return; }
-    if (!cur) return;
-    const status = line.match(MISSION_STATUS_LINE);
-    if (status) { cur.status = status[1].toLowerCase(); return; }
-    if (MISSION_RESULT_LINE.test(line)) cur.outcome = true;
-  });
-  return {
-    items: items.length,
-    outcome_while_not_done: items
-      .filter(it => it.outcome && it.status !== null && it.status !== 'done')
-      .map(it => it.line)
-  };
-}
-function persistMissionListToSummary(projectDir, mission) {
-  if (!mission) return false;
-  const flagged = mission.outcome_while_not_done || [];
-  const lines = ['items: ' + mission.items,
-    'carrying an outcome while their status is not `done`: ' + flagged.length];
-  if (flagged.length) {
-    lines.push('', 'The record contradicts itself at these `item:` lines — the outcome landed and '
-      + 'the status did not follow. Reported, never repaired, and the finalize is unaffected: this '
-      + 'record is the run\'s own bookkeeping, and what to do about it is the reader\'s call.', '');
-    for (const n of flagged) lines.push('- line ' + n);
-  }
-  return appendSummarySection(projectDir, '## Mission List', lines);
 }
 
 // ONE pass over EVERY finalize precondition. Returns { checks, reasons, authority }:
@@ -4438,34 +4357,31 @@ function cmdFinalize() {
       }
     }
   }
-  // THE THREE FINALIZE REPORTS — taken BEFORE the archive moves the folder, so all of them land in
-  // the copy that is kept:
+  // THE TWO FINALIZE REPORTS — taken BEFORE the archive moves the folder, so both land in the copy
+  // that is kept:
   //   validation    — SELF-HOST (npm): the chain receipt over THIS tree. CONSUMER (non-npm): the
   //                   agent-recorded .cache/final-validation.md, bound to the candidate it
   //                   validated. Classified, never enforced.
   //   changed_paths — what this branch touched outside the run-state and documentation bands.
-  //   mission_list  — #970: items whose outcome is filled in while their status is not `done`, by
-  //                   `item:` line number. Absent entirely when the run wrote no record.
-  // NONE refuses, and none is allowed to: a finalize whose receipt is stale, red or missing, or
-  // whose run record disagrees with itself, still completes, carrying the finding where the
-  // orchestrator will read it. That party owns the outcome — re-run the chains, fix the red, correct
-  // the record, or proceed knowingly.
+  // NONE refuses, and none is allowed to: a finalize whose receipt is stale, red or missing still
+  // completes, carrying the finding where the orchestrator will read it. That party owns the
+  // outcome — re-run the chains, fix the red, or proceed knowingly.
   // #837: probed by the SAME pure helper the one-pass `--check` report reads. `--base` is sourced
   // from the flag and/or KAOLA_FINALIZE_BASE env, defaulting to `main`.
+  // #1054: finalize no longer reads or reports on the Mission List's content — the orchestrator
+  // reads that record and the run's evidence directly; an orchestrator-authored `## Mission List`
+  // section in finalization-summary.md is left exactly as written, never inserted or overwritten.
   let finalizeValidation = null;
   let finalizeChangedPaths = [];
   let finalizeChangedProbe = 'measured';
-  let finalizeMissionList = null;
   {
     const report = probeFinalizeValidationGate(root, finalizeAuthorityDir, finalizeAuthorityState,
       args.base || (process.env.KAOLA_FINALIZE_BASE || '').trim() || null);
     finalizeValidation = report.validation;
     finalizeChangedPaths = report.changed_paths || [];
     finalizeChangedProbe = report.changed_paths_probe || 'measured';
-    finalizeMissionList = probeMissionListCoherence(finalizeAuthorityDir);
     persistValidationToSummary(finalizeAuthorityDir, finalizeValidation);
     persistChangedPathsToSummary(finalizeAuthorityDir, finalizeChangedPaths, finalizeChangedProbe);
-    persistMissionListToSummary(finalizeAuthorityDir, finalizeMissionList);
   }
   const result = archiveProjectDirSafely(root, args.project, 'closed', undefined, { keepOpen: keepIssueOpen, keepRoadmapSource: keepIssueOpen, keepWorktree: args.keepWorktree });
   if (!closureContract.archiveSucceeded(result) && result.archive_incomplete !== true) {
@@ -5228,12 +5144,11 @@ function cmdFinalize() {
   // on any other lane reached the emit and never the archive. Idempotent — a lane that already
   // flushed no-ops here — and it must run BEFORE the emit below, which carries finalizeTx.findings.
   flushFinalizeFindings();
-  // `validation`, `changed_paths` and `mission_list` are MEASUREMENTS on the envelope, never
-  // verdicts: what this repo's own chains said about this tree, what this branch touched outside the
-  // run-state and documentation bands, and where the run's own record disagrees with itself. Nothing
-  // compares any of them to anything, and none can fail the finalize. All are durable in the
-  // archived finalization-summary.md under `## Validation` / `## Changed Paths` / `## Mission List`
-  // — the envelope copies are for whoever is reading the run right now.
+  // `validation` and `changed_paths` are MEASUREMENTS on the envelope, never verdicts: what this
+  // repo's own chains said about this tree, and what this branch touched outside the run-state and
+  // documentation bands. Nothing compares either to anything, and neither can fail the finalize.
+  // Both are durable in the archived finalization-summary.md under `## Validation` /
+  // `## Changed Paths` — the envelope copies are for whoever is reading the run right now.
   const finalizeEmit = Object.assign({ status: 'closed' }, result, {
     claim_label_removed: claimLabelRemoved,
     archive_state_stamped: archiveStateStamped,
@@ -5245,10 +5160,6 @@ function cmdFinalize() {
     finalize_transaction: finalizeTx
   });
   if (finalizeChangedProbe !== 'measured') finalizeEmit.changed_paths_probe = finalizeChangedProbe;
-  // #970: present only when the run wrote a record, so a run without one emits the envelope it
-  // emitted before. A record that agrees with itself still reports — a zero count is the
-  // measurement, and its absence would be indistinguishable from a report that never ran.
-  if (finalizeMissionList) finalizeEmit.mission_list = finalizeMissionList;
   // #937: present only when a name was actually corrected, so a run given the exact spelling emits
   // the envelope it emitted before.
   if (projectSlug.note) finalizeEmit.resolved_project_note = projectSlug.note;

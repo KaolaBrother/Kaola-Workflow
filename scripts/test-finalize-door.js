@@ -3458,17 +3458,20 @@ function closureBlockOf(dest) {
 })();
 
 // ---------------------------------------------------------------------------
-// T17 (#1004) — THE THREE FINALIZE REPORTS MUST SURVIVE A SUMMARY THAT ALREADY CARRIES THEIR
-// HEADINGS.
+// T17 (#1004) — THE FINALIZE REPORTS MUST SURVIVE A SUMMARY THAT ALREADY CARRIES THEIR HEADINGS.
 //
 // T3/T4/T15 all assert the durable half over a run that wrote NO summary, so finalize's writer
 // created the file and every heading in it. That is not the shape a real run has. The finalize
 // Step 6 surface hands the orchestrator a summary skeleton listing `## Validation`,
 // `## Changed Paths` and `## Mission List` among its headings and tells it not to delete them — and
 // `appendSummarySection` declines to write into a heading that already exists. So on an OBEDIENT
-// run all three measurements are computed and then dropped, and the archived record carries three
-// bare headings where the findings should be. Measured over this repository's own archive: 15 empty
-// `## Validation`, 17 empty `## Changed Paths`, 3 empty `## Mission List` in 157 summaries.
+// run the two script-owned measurements are computed and then dropped, and the archived record
+// carries bare headings where the findings should be. Measured over this repository's own archive
+// (pre-#1054): 15 empty `## Validation`, 17 empty `## Changed Paths`, 3 empty `## Mission List` in
+// 157 summaries. #1054 (owner-approved scope correction) retired the auto-statistics writer for
+// `## Mission List` entirely — that heading is Step 6's to plant, but no script's to fill or count
+// any more, so it is no longer in `SCRIPT_OWNED_HEADINGS` and this test only asserts it is left
+// exactly as planted (empty, or with the operator's own prose) in every leg below.
 //
 // THE RULING IS FILL-IF-EMPTY, and its two halves are ONE behaviour, so they are asserted over the
 // same fixture family rather than as two unrelated tests:
@@ -3513,8 +3516,11 @@ const STEP6_HEADINGS = Object.freeze([
   '## Follow-Up Items',
   '## Status: READY FOR FINAL GIT GATE',
 ]);
-// The three of them the script owns, i.e. the three callers that pass no `replace`.
-const SCRIPT_OWNED_HEADINGS = Object.freeze(['## Validation', '## Changed Paths', '## Mission List']);
+// The two of them the script owns, i.e. the callers that pass no `replace`. `## Mission List` was
+// script-owned through v10.5.0; #1054 retired the auto-statistics writer (persistMissionListToSummary)
+// entirely, so that heading is now planted by Step 6 but filled by NOBODY but the orchestrator — see
+// the "MISSION LIST STAYS UNTOUCHED" assertions below, which replace the old fill-and-count pins.
+const SCRIPT_OWNED_HEADINGS = Object.freeze(['## Validation', '## Changed Paths']);
 
 // How many lines of `text` ARE the heading, exactly. A `## Validation` that occurs twice is the
 // duplicate-append failure mode, not a fill.
@@ -3539,9 +3545,13 @@ function headingSequence(text) {
 (function T17_prePlantedHeadingsAreFilledAndContentIsPreserved() {
   console.log('T17: finalize fills its own pre-planted headings, and never overwrites one carrying content');
 
-  // The mission list the run record leg is measured over: two items, the second carrying an outcome
-  // while its status is not `done`. `items: 2` is the count the section must report, and the
-  // contradiction is what makes the section say something a bare heading cannot.
+  // The mission list the run record leg is measured over. #1054 (owner-approved scope correction,
+  // 2026-09-09): finalize no longer parses or counts the Mission List — the record's LAYOUT is not
+  // fixed, only its four field meanings and three write moments (ADR 0017), and a script that
+  // counts missions cannot prove completion. This fixture's content is therefore no longer read
+  // for statistics; it exists only so `## Mission List` is a real, non-empty file finalize can see
+  // and leave alone (scripts/test-issue-1054-mission-list-carriers.js owns the layout-independence
+  // and no-auto-statistics pins across all four claim.js trees).
   const MISSION_LIST = [
     '# goal: pin the fill-if-empty writer',
     '',
@@ -3646,7 +3656,9 @@ function headingSequence(text) {
   }
 
   // The fill half, asserted over one leg's archived summary. `form` names the shape for the message.
-  function assertAllThreeFilled(tag, form, leg) {
+  // #1054: only `## Validation` and `## Changed Paths` are still script-owned; `## Mission List` is
+  // asserted separately below (STAYS EMPTY — nothing fills or counts it any more).
+  function assertScriptOwnedFilledAndMissionListUntouched(tag, form, leg) {
     const { out, text } = leg;
     // (0) The planted skeleton is still ONE skeleton. Every script-owned heading occurs exactly
     // once — a second copy appended at the bottom is the failure mode that would make each content
@@ -3689,15 +3701,14 @@ function headingSequence(text) {
       + 'reported, one `- <path>` bullet each; envelope=' + JSON.stringify(cp)
       + ' section=' + JSON.stringify(cBody));
 
-    // (3) `## Mission List` carries the run record's own count. The fixture's list has two items and
-    // one contradiction, so a section reporting either is a section that was actually written.
+    // (3) #1054: `## Mission List` is NOT script-owned any more — finalize neither counts the
+    // record nor writes any statistic into this heading, on ANY layout. It must stay exactly as
+    // Step 6 planted it (empty in legs A/B), not filled with a count, a contradiction line, or an
+    // "unrecognized" complaint.
     const mBody = sectionBody(text, '## Mission List') || '';
-    assert(/^items: 2$/m.test(mBody),
-      tag + ' (' + form + '): the pre-planted `## Mission List` reports the run record\'s item count '
-      + '(2 items in this fixture); got ' + JSON.stringify(mBody));
-    assert(mBody.includes('carrying an outcome while their status is not `done`: 1'),
-      tag + ' (' + form + '): ...and the contradiction it found — the second item fills in an '
-      + 'outcome while its status still reads `in-flight`; got ' + JSON.stringify(mBody));
+    assert(mBody.trim() === '',
+      tag + ' (' + form + '): `## Mission List` is left EMPTY — finalize no longer parses or '
+      + 'counts the record (#1054); got ' + JSON.stringify(mBody));
   }
 
   // ---- LEG A: the VERBATIM Step 6 skeleton — consecutive `## ` lines, nothing between them, so
@@ -3707,7 +3718,7 @@ function headingSequence(text) {
     plantSummary('issue-9106', '', null)),
   'T17a: fixture premise — the planted summary really is the consecutive-heading form the Step 6 '
     + 'template emits, with nothing between the three script-owned headings');
-  assertAllThreeFilled('T17a', 'consecutive-heading form', legA);
+  assertScriptOwnedFilledAndMissionListUntouched('T17a', 'consecutive-heading form', legA);
   assertPlantedOrderUnchanged('T17a', plantSummary('issue-9106', '', null), legA.text);
   // The cut must not eat its neighbours: every OTHER Step 6 heading is still there, exactly once.
   // `## Status: READY FOR FINAL GIT GATE` is excluded from the verbatim half and checked by PREFIX
@@ -3730,7 +3741,7 @@ function headingSequence(text) {
   // ---- LEG B: the blank-line form real orchestrators write, where each empty body is `\n` rather
   // than ''. It reaches the same rule only if "empty" means `body.trim() === ''`.
   const legB = runLeg('t17b', 'issue-9107', 9107, plantSummary('issue-9107', '\n', null));
-  assertAllThreeFilled('T17b', 'blank-line form', legB);
+  assertScriptOwnedFilledAndMissionListUntouched('T17b', 'blank-line form', legB);
   assertPlantedOrderUnchanged('T17b', plantSummary('issue-9107', '\n', null), legB.text);
 
   // ---- LEG C: THE OWNER'S DECISION. One script-owned heading already carries the operator's own
@@ -3758,9 +3769,9 @@ function headingSequence(text) {
       'T17c: `## Changed Paths` still occurs exactly once; got '
       + headingOccurrences(text, '## Changed Paths'));
 
-    // ...and in the SAME run, the two headings that were empty got filled. Preserving content is
-    // only correct behaviour if filling still happens beside it; a build that simply never writes
-    // passes the three assertions above and fails these.
+    // ...and in the SAME run, the one script-owned heading that was empty got filled. Preserving
+    // content is only correct behaviour if filling still happens beside it; a build that simply
+    // never writes passes the assertion above and fails this one.
     const classification = (legC.out && legC.out.validation && legC.out.validation.classification) || null;
     const vBody = sectionBody(text, '## Validation') || '';
     assert(typeof classification === 'string'
@@ -3769,9 +3780,12 @@ function headingSequence(text) {
       + '(' + JSON.stringify(classification) + ') — preserving a written section and filling an '
       + 'empty one are one rule, and a build that writes nothing at all satisfies only half of it; '
       + 'got ' + JSON.stringify(vBody));
+    // #1054: `## Mission List` was ALSO planted empty in this leg, and stays that way — it is not
+    // script-owned any more, so "preserve written / fill empty" does not apply to it at all.
     const mBody = sectionBody(text, '## Mission List') || '';
-    assert(/^items: 2$/m.test(mBody),
-      'T17c: ...and so was the empty `## Mission List`; got ' + JSON.stringify(mBody));
+    assert(mBody.trim() === '',
+      'T17c: ...and the empty `## Mission List` stays empty too — finalize no longer counts or '
+      + 'fills it (#1054); got ' + JSON.stringify(mBody));
     for (const h of SCRIPT_OWNED_HEADINGS) {
       assert(headingOccurrences(text, h) === 1,
         'T17c: `' + h + '` occurs exactly once; got ' + headingOccurrences(text, h)
