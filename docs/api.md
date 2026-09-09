@@ -437,9 +437,8 @@ tree that the mirror step will construct from the main checkout. `pending_mirror
 longer a self-settling state, because the transaction no longer repairs it automatically. `checks.mirror`
 now reads `sync_failed` for that same case, and it also lands in `reasons` as `mirror_sync_failed` — an
 operator obligation, since only the Main Orchestrator, reading both copies and the diff, can decide
-which side is current. One gap in that agreement: `--check`'s prediction does not read the R1 mirror
-receipt described above, so it can report `sync_failed` for a divergence the write path would actually
-accept as `prior_mirror` and proceed past. The reserved
+which side is current. The prediction reads the mirror receipt described above through the same
+helper as the transaction, so the `prior_mirror` case is reported as passable by both. The reserved
 `archive_authority_missing` is unchanged and still lands in both, because it names a condition
 execution cannot repair.
 
