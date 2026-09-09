@@ -64,7 +64,7 @@
   is called directly at the one call site), and the same dead `requiredArchiveFiles` wrapper in the
   gitlab/gitea sink-merge hand-ports (their `getRoot` is live and stays). `kaola-workflow-validation-runner.js`'s exported
   `computeLandableBlobEntries`, orphaned since the DAG-era `plan-validator` gate it served was
-  retired (#740, then ADR 0017/0018). `kaola-workflow-codex-preflight.js`'s `scopeIsFresh` (the live
+  retired (issue-740, then ADR 0017/0018). `kaola-workflow-codex-preflight.js`'s `scopeIsFresh` (the live
   gate calls `scopeIsStale` directly).
 
 ### Added
