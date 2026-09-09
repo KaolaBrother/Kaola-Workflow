@@ -63,12 +63,12 @@ are in the [installation guide](docs/installation.md).
 
 Release surface versions (maintained by the release transaction):
 
-- Codex `kaola-workflow` plugin manifest: `10.5.0`
-- Codex `kaola-workflow-gitlab` plugin manifest: `10.5.0`
-- Codex `kaola-workflow-gitea` plugin manifest: `10.5.0`
-- Claude Code command install, GitHub edition: `10.5.0`
-- Claude Code command install, GitLab edition: `10.5.0`
-- Claude Code command install, Gitea edition: `10.5.0`
+- Codex `kaola-workflow` plugin manifest: `11.0.0`
+- Codex `kaola-workflow-gitlab` plugin manifest: `11.0.0`
+- Codex `kaola-workflow-gitea` plugin manifest: `11.0.0`
+- Claude Code command install, GitHub edition: `11.0.0`
+- Claude Code command install, GitLab edition: `11.0.0`
+- Claude Code command install, Gitea edition: `11.0.0`
 
 Update every local runtime from the synchronized checkout:
 
