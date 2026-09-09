@@ -147,6 +147,7 @@ function parseEnvelope(stdout) {
   return null;
 }
 function runFinalize(ed, fx, project, extraArgs) {
+  // spawn-class: cli-contract
   const r = spawnSync(process.execPath,
     [path.join(repoRoot, ed.claim), 'finalize', '--project', project, '--keep-worktree'].concat(extraArgs || []),
     { cwd: fx.wtPath, encoding: 'utf8', timeout: 120000,

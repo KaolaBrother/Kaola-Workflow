@@ -133,6 +133,7 @@ for (const ed of EDITIONS) {
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, 'run-gaps-manual.md'),
       'gap: a-real-observation — something this run actually saw\n');
+    // spawn-class: cli-contract
     const r = spawnSync(process.execPath, [gapSweepPath, '--project', project, '--json'], {
       cwd: tmp, encoding: 'utf8', timeout: 30000,
       env: Object.assign({}, process.env, { KAOLA_GAP_ROOT: tmp }),
@@ -162,6 +163,7 @@ function makeTmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1054-finrec-'));
 }
 function sh(cwd, args) {
+  // spawn-class: environment
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
   if (r.status !== 0) throw new Error('git ' + args.join(' ') + ' failed: ' + r.stderr);
   return r;
@@ -226,6 +228,7 @@ function writeGhMock(binDir) {
   ].join('\n'));
 }
 function runFinalize(args, cwd, binDir) {
+  // spawn-class: cli-contract
   return spawnSync(process.execPath, [claimScript, ...args], {
     cwd, encoding: 'utf8', timeout: 60000,
     env: Object.assign({}, process.env, {

@@ -498,7 +498,8 @@ function testAC2StaticCompactPrompt() {
   assert(prompt === routing.renderCompactRecoveryPrompt('codex', 'github'),
     'AC2: installed Codex prompt must equal the generation-time runtime rendering');
   assert(prompt.includes('Recovery marker: `KW-COMPACT-RECOVERY-V2`.')
-    && prompt.includes('**Runtime dispatch contract (always loaded).**')
+    && prompt.includes('already carries the full runtime dispatch contract')
+    && !prompt.includes('KW-RUNTIME-DISPATCH-START')
     && /completely reload the installed Workflow\s+Next prompt/.test(prompt)
     && /completely\s+reload the installed Kaola-Workflow Finalization prompt/.test(prompt),
     'AC2: V2 prompt must carry complete operation reload plus the dispatch contract');
@@ -1372,7 +1373,7 @@ function testCodexPreflight332() {
     const reviewer = path.join(agentsDir, 'code-reviewer.toml');
     const reviewerSource = path.join(pluginRoot, 'agents', 'code-reviewer.toml');
     fs.writeFileSync(reviewer, fs.readFileSync(reviewer, 'utf8').replace(
-      'Precision-first code review specialist', 'Precision-first modified code review specialist'));
+      'Code reviewer. Independently examines', 'Code reviewer. Modified: independently examines'));
     let r = runScript(preflightScript, ['--project-root', root, '--no-autofix', '--json'], {});
     let j = JSON.parse(r.stdout);
     assert(r.status !== 0 && j.status === 'profiles_stale',
@@ -1497,7 +1498,7 @@ function testCodexPreflight332() {
         { recursive: true });
       const cachedReviewer = path.join(cacheAgents, 'code-reviewer.toml');
       fs.writeFileSync(cachedReviewer, fs.readFileSync(cachedReviewer, 'utf8').replace(
-        'Precision-first code review specialist', 'Precision-first cached code review specialist'));
+        'Code reviewer. Independently examines', 'Precision-first cached code review specialist'));
       r = runScript(preflightScript, ['--doctor', '--home', home, '--project-root', proj, '--json'], {});
       assert(r.status === 1, '#332 AC11: stale plugin_cache must fail doctor, got ' + r.status);
       j = JSON.parse(r.stdout);

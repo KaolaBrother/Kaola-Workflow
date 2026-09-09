@@ -3433,7 +3433,7 @@ function testGiteaPreflight332() {
 
     const reviewer = path.join(agentsDir, 'code-reviewer.toml');
     fs.writeFileSync(reviewer, fs.readFileSync(reviewer, 'utf8').replace(
-      'Precision-first code review specialist', 'Precision-first modified code review specialist'));
+      'Code reviewer. Independently examines', 'Code reviewer. Modified: independently examines'));
     let r = pf(['--project-root', root, '--no-autofix', '--json']);
     let j = JSON.parse(r.stdout);
     assert.ok(r.status !== 0 && j.status === 'profiles_stale',
@@ -3533,7 +3533,7 @@ function testGiteaPreflight332() {
         { recursive: true });
       const cachedReviewer = path.join(cacheAgents, 'code-reviewer.toml');
       fs.writeFileSync(cachedReviewer, fs.readFileSync(cachedReviewer, 'utf8').replace(
-        'Precision-first code review specialist', 'Precision-first cached code review specialist'));
+        'Code reviewer. Independently examines', 'Precision-first cached code review specialist'));
       r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
       assert.strictEqual(r.status, 1, '#332 gt AC11: stale plugin_cache must fail doctor');
       j = JSON.parse(r.stdout);
@@ -3566,10 +3566,11 @@ function testGiteaCompactResume266() {
   assert.strictEqual(prompt, routing.renderCompactRecoveryPrompt('codex', 'gitea'),
     '#1044 gt case4: installed prompt must equal its generation-time runtime rendering');
   assert.ok(prompt.includes('Recovery marker: `KW-COMPACT-RECOVERY-V2`.')
-    && prompt.includes('**Runtime dispatch contract (always loaded).**')
+    && prompt.includes('already carries the full runtime dispatch contract')
+    && !prompt.includes('KW-RUNTIME-DISPATCH-START')
     && /completely reload the installed Workflow\s+Next prompt/.test(prompt)
     && /completely\s+reload the installed Kaola-Workflow Finalization prompt/.test(prompt),
-    '#1044 gt case4: static prompt must carry continuation and dispatch roots');
+    '#1044 gt case4: static prompt must carry continuation and the dispatch deferral pointer (codex recovery defers dispatch to the full reload)');
   assert.ok(!/\bnode\b|\.js\b|PreToolUse|PostToolUse/.test(prompt),
     '#1044 gt case4: compact recovery must not execute JS or inject around tool use');
   console.log('testGiteaCompactResume266 (#1044 static prompt): PASSED');

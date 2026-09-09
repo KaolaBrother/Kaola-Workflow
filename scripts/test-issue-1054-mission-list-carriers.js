@@ -106,6 +106,7 @@ function buildRepo(ed, project, issueNumber, missionListText) {
 }
 
 function runFinalize(ed, repo, project) {
+  // spawn-class: cli-contract
   const r = spawnSync(process.execPath,
     [path.join(repoRoot, ed.claim), 'finalize', '--project', project, '--base', 'main'],
     { cwd: repo, encoding: 'utf8', timeout: 120000,
