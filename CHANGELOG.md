@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `docs/task-quality.md` — a short guide to expressing a task's situation, intended outcome, and
+  acceptance basis in a forge issue, with a worked example and a corrections-routing section (#1053).
+
+### Changed
+
+- **Next route carries task-clarity and verification-scope guidance (#1053).**
+  `templates/routing/next.skeleton.md` gained two prose passages: a "Task clarity" paragraph in
+  "Intake, freshness, claim, and resume" (continue when the outcome and its acceptance basis are
+  already clear and authorized, investigate a missing fact before asking, ask the user only about an
+  unresolved scope/authorization/acceptance choice, and treat a research or design request as
+  authorizing research or design only, not implementation) and a verification-scope sentence in "Run
+  it" (decide how much to explain by communication need, how much to verify by behavioral impact and
+  the existing requirements, and never let a short explanation or a small change lower acceptance).
+  No new API, CLI flag, command, role, config key, state field, phase, scorer, or approval gate was
+  added. All six tracked Next surfaces (github/gitlab/gitea × Claude command / Codex skill) and the
+  five additive edition renders (opencode, kimi, grok, cursor, zcode) per forge are generated from
+  the shared skeleton; there is no hand-edited mirror.
+
 ## [10.5.0] - 2026-09-06
 
 ### Changed

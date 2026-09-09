@@ -71,6 +71,12 @@ complete direct prompt from `compact-recovery.skeleton.md`, the single
 `dispatch-contract.md`, and the selected runtime adapter. Only `claude`, `codex`, `grok`, and
 `cursor` have a compact-recovery rendering in the measured scope.
 
+### Task-clarity guidance (#1053)
+
+`#1053` added two generated-prose passages to `templates/routing/next.skeleton.md` — a task-clarity
+paragraph and a verification-scope sentence — and no new CLI, flag, envelope, or contract. See
+[task-quality.md](task-quality.md) for the guide these passages support.
+
 Commands render Claude and skills render forge-matched Codex through the routing slot. Additive
 edition sync scripts replace only this marker in next/finalize; workflow-init is outside the
 interface. Cursor and ZCode call fields not published by those runtimes are not serialized here:

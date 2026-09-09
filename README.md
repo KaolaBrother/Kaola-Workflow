@@ -98,7 +98,13 @@ command or skill carrier.
    instructions requires owner authorization; installation checks remain a separate release-tree
    operation.
 2. Run `workflow-next` to select or resume work, claim it, write the Mission List, and execute the
-   current frontier. A specifically named issue always wins over automatic selection.
+   current frontier. A specifically named issue always wins over automatic selection. Next carries
+   task-clarity guidance: continue when the outcome and its acceptance basis are already clear and
+   authorized, investigate missing facts before asking, and ask the user only about an unresolved
+   scope, authorization, or acceptance decision; a research or design request does not authorize
+   implementation. It also carries a verification-scope judgment: explain by what communication
+   needs, verify by behavioral impact, and a small change never lowers acceptance. See
+   [docs/task-quality.md](docs/task-quality.md).
 3. Run `kaola-workflow-finalize` when all missions are done. It validates the frozen candidate,
    reconciles documentation, writes closure evidence, archives the run, commits, and sinks.
 

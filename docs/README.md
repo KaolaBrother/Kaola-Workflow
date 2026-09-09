@@ -15,6 +15,8 @@ moments.
   default tier carriers, runtime limits, hooks, paths, precedence, and known unknowns for all seven
   runtimes.
 - [API](api.md) — script CLIs, envelopes, and external contracts.
+- [Task Quality](task-quality.md) — how to express a task's outcome and acceptance basis in a forge
+  issue so the Next route can proceed without a fixed requirement template.
 - [Conventions](conventions.md) — coding, testing, Git, and review rules.
 - [Workflow State Contract](workflow-state-contract.md) — durable state, and why the forge, not a
   local file, is the backlog.

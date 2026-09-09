@@ -91,6 +91,16 @@ forge-reorganization action and why; wait. Everything checkable remains yours to
 State the selection aloud before you claim it, including any skipped frontier item. **Everything
 before the claim is free**: perform read-only measurement or ask when the pick is genuinely ambiguous.
 
+**Task clarity.** When the intended outcome and its acceptance basis are already clear and
+authorized, continue: do not demand a fixed requirement format or rewrite the issue to restate it.
+When a fact is missing, read the code, reproduce, or look it up first; implementation detail inside
+an authorized scope is your own judgment. Ask the user only about an unresolved choice that would
+change scope, authorization, or the meaning of acceptance, and keep doing the investigation that
+does not depend on the answer. When authorized to maintain the issue, express the observable outcome
+and its verification basis in plain language, and cite what is already sufficient instead of
+restating it. A research or design request authorizes research or design only; it does not
+authorize product implementation, forge writes, or a claim.
+
 <!-- PIN: forge-is-the-backlog -->
 Establish freshness with status, fetch/prune, and upstream divergence. Continue when synchronized,
 ahead-only, or no-remote; fast-forward only a clean behind-only checkout. Ask before merge, rebase,
@@ -166,7 +176,10 @@ Read list minus done minus in-flight and choose one frontier item. Custody answe
 meaning. Failure frontier, then freeze: focused acceptance, affected inventory, causal repair,
 exact-candidate review; any mutation invalidates prior PASS evidence for changed bytes. The test
 author owns acceptance meaning. An implementer may not delete, weaken, or reinterpret that
-acceptance to pass. Finalization, closure, archive, and sink are never mission items.
+acceptance to pass. Decide how much to explain by what communication needs, and how much to verify
+by behavioral impact and the existing requirements; a short explanation or a small change never
+lowers acceptance, and sufficient existing evidence may be cited rather than reproduced.
+Finalization, closure, archive, and sink are never mission items.
 No dispatch count, cap, disjointness proof, justification, approval, or fallback stigma attaches to
 the judgment. Subagents and worktrees are tools, offered and declinable.
 
