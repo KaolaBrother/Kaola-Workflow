@@ -144,3 +144,29 @@ archived_paths:
 - kaola-workflow/archive/bundle-1053/finalization-summary.md
 - kaola-workflow/archive/bundle-1053/mission-list.md
 - kaola-workflow/archive/bundle-1053/workflow-state.md
+
+## Post-sink install check (issue AC9) — three evidence classes, kept separate
+
+Run from main `0082b978` after the sink; log `.cache/install-0082b978.log`.
+
+1. **Install command exit codes (not byte proof).** `./install-all.sh --yes --forge=github` exit 0; the installer's own
+   per-runtime summary printed `PASS (exit 0)` for claude, opencode, codex (marketplace plugin content refreshed and
+   converged at 10.5.0 — no version bump, no release), kimi, grok, cursor, zcode. `./install-all.sh --check` exit 0 is a
+   **dry-run PLAN** per runtime ("no changes made"); it is not a per-carrier verification and is not claimed as one.
+2. **Per-carrier byte verification (SHA256 + cmp, done by the orchestrator).** Installed Next surface vs the repo render
+   at `0082b978` (production bytes identical to `1b779b38`): claude `~/.claude/commands/workflow-next.md`, opencode
+   `~/.config/opencode/commands/workflow-next.md`, codex `~/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/10.5.0/skills/kaola-workflow-next/SKILL.md`,
+   kimi `~/.kimi-code/skills/workflow-next/SKILL.md`, grok `~/.grok/commands/workflow-next.md`, cursor
+   `~/.cursor/commands/workflow-next.md`, zcode `~/.zcode/commands/workflow-next.md` — all seven **cmp IDENTICAL**
+   to their generated source (sha256 prefixes 77bd0d28 / 00baf41c / 5be7e896 / d8cc0a9e / c5626c13 / 6cc72eb4 /
+   b566f956), and each carries both #1053 passages (grep 1/1). Support scripts: `kaola-workflow-claim.js` anchor
+   `022133fc…` MATCH in the claude, opencode, kimi, grok, cursor, zcode homes; codex plugin copy equals the repo plugin
+   copy. Edition lane re-run from the main root at `0082b978`: 8/8 suites, each edition 3/3 forge trees in parity.
+3. **Global-contract receipt (`~/.config/kaola-workflow/global-contract-receipt.json`, status CURRENT at
+   `0082b978`):** INSTALLED for claude-local, codex-local, opencode-local, kimi-local, grok-local, cursor-cli-local,
+   cursor-app-local; **cursor-cloud = REMOTE_REQUIRED** (a saved Cloud environment cannot be written from this
+   machine); **zcode-local = NOT_INSTALLED** (the `zcode` binary is absent on this machine; only the `~/.zcode` file
+   carrier was written and byte-verified above). Interactive trust flows (Cursor workspace trust, Codex hook trust)
+   were not exercised. No live host session on any runtime was started against the refreshed install.
+
+Repository after install: `git status` clean; main `a4d242ab` = `origin/main`.

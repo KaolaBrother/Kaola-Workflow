@@ -1,0 +1,229 @@
+HEAD=0082b978a7a433cb839fe71092e086431bf09324 start=16:31:08
+== install-all --yes --forge=github ==
+install-all: reinstalling Kaola-Workflow runtimes from 0082b978
+install-all: root=/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow scope=global forge=github yes
+
+>>> [global-contract] node /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/scripts/kaola-workflow-global-contract.js install --json
+{"schema_version":1,"status":"INSTALLED","receipt_path":"/Users/ylminiserver/.config/kaola-workflow/global-contract-receipt.json","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","registry_sha256":"ae71dc1d80c9e7c414bf53b8cd5190b8be1d40ca2524798f299e811679c45aac","targets":[{"id":"claude-local","runtime":"claude","host":"local","status":"INSTALLED","path":"/Users/ylminiserver/.claude/rules/kaola-workflow-global.md","root":"/Users/ylminiserver/.claude","carrier":"dedicated","carrier_group":"claude-user-rule","precedence":"User rules load before project instructions; closer project instructions may add stricter local rules.","reload":"A new session loads the user rule; SessionStart(source=compact) directly reprints static V2 before the next model turn.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"55dc9d9aaba1ad50d3b00ab36bd2fa7e2a156c3d2774efec84a928ec020b4337","install_sha256":"55dc9d9aaba1ad50d3b00ab36bd2fa7e2a156c3d2774efec84a928ec020b4337","before_sha256":"2bcfd46cddc4e1064140417bed66940818f354dc61f39dac43c28c7133f36fdf"},{"id":"codex-local","runtime":"codex","host":"local","status":"INSTALLED","path":"/Users/ylminiserver/.codex/AGENTS.md","root":"/Users/ylminiserver/.codex","carrier":"managed_region","carrier_group":"codex-global-agents","precedence":"Global guidance loads first; project root-to-cwd instructions appear later and may override it.","reload":"A new run discovers global instructions; SessionStart(source=compact) directly reprints static V2 before the next model turn.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"55dc9d9aaba1ad50d3b00ab36bd2fa7e2a156c3d2774efec84a928ec020b4337","install_sha256":"f3597c41fb0892e827a7d7f7f4fe506ccc1902e97e18b6f45449fbc5f50ec740","before_sha256":"f3597c41fb0892e827a7d7f7f4fe506ccc1902e97e18b6f45449fbc5f50ec740","managed_origin":{"kind":"absent","insert_prefix_bytes":0,"insert_suffix_bytes":1}},{"id":"opencode-local","runtime":"opencode","host":"local","status":"INSTALLED","path":"/Users/ylminiserver/.config/opencode/AGENTS.md","root":"/Users/ylminiserver/.config/opencode","carrier":"managed_region","carrier_group":"opencode-global-agents","precedence":"Project and global categories are combined; native global AGENTS wins over the Claude compatibility fallback.","reload":"A fresh session re-runs global and project rule discovery.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"55dc9d9aaba1ad50d3b00ab36bd2fa7e2a156c3d2774efec84a928ec020b4337","install_sha256":"f944db3513f0e3f108ccebf2c4a55607df6f6a9153753da1e84662d692f6c797","before_sha256":"42611602a0c8e2087490ca17f9377e16ff992f385fdcec34f5620c687c63d860","managed_origin":{"kind":"absent","insert_prefix_bytes":0,"insert_suffix_bytes":1}},{"id":"kimi-local","runtime":"kimi","host":"local","status":"INSTALLED","path":"/Users/ylminiserver/.kimi-code/AGENTS.md","root":"/Users/ylminiserver/.kimi-code","carrier":"managed_region","carrier_group":"kimi-global-agents","precedence":"The Kimi-specific global file is merged before project instruction files.","reload":"A new session rebuilds the merged instruction context.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"55dc9d9aaba1ad50d3b00ab36bd2fa7e2a156c3d2774efec84a928ec020b4337","install_sha256":"f944db3513f0e3f108ccebf2c4a55607df6f6a9153753da1e84662d692f6c797","before_sha256":"42611602a0c8e2087490ca17f9377e16ff992f385fdcec34f5620c687c63d860","managed_origin":{"kind":"absent","insert_prefix_bytes":0,"insert_suffix_bytes":1}},{"id":"grok-local","runtime":"grok","host":"local","status":"INSTALLED","path":"/Users/ylminiserver/.grok/rules/kaola-workflow-global.md","root":"/Users/ylminiserver/.grok","carrier":"dedicated","carrier_group":"grok-user-rule","precedence":"The user Rule is persistent context; repository AGENTS instructions add project-local facts.","reload":"Rules enter every interaction, including the first inference after compact.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"3ac781cb7ff69228f25ebf148a821426d38b9bdb7fbaeae841401f56c7e6230a","install_sha256":"3ac781cb7ff69228f25ebf148a821426d38b9bdb7fbaeae841401f56c7e6230a","before_sha256":"6993907f8cf0e304cdba80a95379df781da95adf42fff5f1c79712d30546deab"},{"id":"cursor-cli-local","runtime":"cursor","host":"cli-local","status":"INSTALLED","path":"/Users/ylminiserver/.cursor/rules/kaola-workflow-global.mdc","root":"/Users/ylminiserver/.cursor","carrier":"dedicated","carrier_group":"cursor-local-user-rule","precedence":"Applicable Rules are merged; project rules have higher precedence than user rules.","reload":"A new CLI session reloads the user Rule; alwaysApply carries it into each model context.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"8109c63122e8360f5116e9605e07c9a31ab16ecc910453294ca1bed08d129a7b","install_sha256":"8109c63122e8360f5116e9605e07c9a31ab16ecc910453294ca1bed08d129a7b","before_sha256":"6bffe372305a3620477f372f0776f73a3af4de395cfcd6a14c39c2ffbc320f95"},{"id":"cursor-app-local","runtime":"cursor","host":"app-local","status":"INSTALLED","path":"/Users/ylminiserver/.cursor/rules/kaola-workflow-global.mdc","root":"/Users/ylminiserver/.cursor","carrier":"dedicated","carrier_group":"cursor-local-user-rule","precedence":"Applicable Rules are merged; project rules have higher precedence than user rules.","reload":"A new App Agent session reloads the user Rule; alwaysApply carries it into each model context.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"8109c63122e8360f5116e9605e07c9a31ab16ecc910453294ca1bed08d129a7b","install_sha256":"8109c63122e8360f5116e9605e07c9a31ab16ecc910453294ca1bed08d129a7b","before_sha256":"6bffe372305a3620477f372f0776f73a3af4de395cfcd6a14c39c2ffbc320f95"},{"id":"cursor-cloud","runtime":"cursor","host":"cloud","status":"REMOTE_REQUIRED","carrier":"cloud_project_rule","precedence":"The selected repository Rule is merged as project context and takes precedence over user rules.","reload":"Save the Environment Build, then start a new top-level Agent in the same repository."},{"id":"zcode-local","runtime":"zcode","host":"local","status":"NOT_INSTALLED","carrier":"managed_region","precedence":"User global instructions are appended first and workspace instructions are the primary project source.","reload":"A new task reads the user and current workspace instruction files."}]}
+
+>>> [claude] bash /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/install.sh --forge=github --yes
+Kaola-Workflow — installer
+Forge: github
+
+agent profiles current: 14 roles, seven runtimes, 126 native renders
+Updated managed agent: /Users/ylminiserver/.claude/agents/code-explorer.md
+Updated managed agent: /Users/ylminiserver/.claude/agents/knowledge-lookup.md
+Updated managed agent: /Users/ylminiserver/.claude/agents/planner.md
+Updated managed agent: /Users/ylminiserver/.claude/agents/code-architect.md
+Updated managed agent: /Users/ylminiserver/.claude/agents/tdd-guide.md
+Updated managed agent: /Users/ylminiserver/.claude/agents/implementer.md
+Updated managed agent: /Users/ylminiserver/.claude/agents/investigator.md
+Updated managed agent: /Users/ylminiserver/.claude/agents/build-error-resolver.md
+Updated managed agent: /Users/ylminiserver/.claude/agents/code-reviewer.md
+Updated managed agent: /Users/ylminiserver/.claude/agents/security-reviewer.md
+Updated managed agent: /Users/ylminiserver/.claude/agents/doc-updater.md
+Updated managed agent: /Users/ylminiserver/.claude/agents/adversarial-verifier.md
+Updated managed agent: /Users/ylminiserver/.claude/agents/synthesizer.md
+Updated managed agent: /Users/ylminiserver/.claude/agents/metric-optimizer.md
+Verified managed Kaola-Workflow agents.
+Agent installation proof covers filesystem bytes only; runtime prompt loading is not attested.
+Installed: /Users/ylminiserver/.claude/commands/kaola-workflow-finalize.md
+Installed: /Users/ylminiserver/.claude/commands/workflow-init.md
+Installed: /Users/ylminiserver/.claude/commands/workflow-next.md
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-claim.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-active-folders.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-closure-audit.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-closure-contract.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-validation-runner.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-sink-merge.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-sink-pr.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-classifier.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-resolve-agent-model.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-codex-preflight.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-ledger-compare.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-gap-sweep.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-run-chains.js
+Installed support script: /Users/ylminiserver/.claude/kaola-workflow/scripts/kaola-workflow-telemetry-report.js
+Installed compact-recovery prompt: /Users/ylminiserver/.claude/kaola-workflow/hooks/kaola-workflow-compact-recovery.md
+Installed hooks config: /Users/ylminiserver/.claude/kaola-workflow/hooks/hooks.json
+Backed up existing settings to: /Users/ylminiserver/.claude/backups/settings.json.kaola-workflow.20260909-163110.bak
+Merged Kaola-Workflow settings into: /Users/ylminiserver/.claude/settings.json
+Verified Kaola-Workflow install files.
+
+Open any Claude Code session and run:  /workflow-init
+Then run implementation cycles with:  /workflow-next
+
+Kaola-Workflow Claude dispatch posture:
+  claude_dispatch_posture: teams
+  Agent teams (experimental) is enabled — teammate-mode orchestration is available.
+
+Hooks installed to: /Users/ylminiserver/.claude/kaola-workflow/hooks/hooks.json
+Kaola-Workflow hooks (compaction resume)
+are now enabled in ~/.claude/settings.json.
+
+
+>>> [opencode] bash /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/install-opencode.sh --forge=github --global --yes
+Kaola-Workflow · opencode edition (github) — refreshing generated tree...
+Deploying globally (github) → /Users/ylminiserver/.config/opencode
+Installed workflow agents+commands+plugin+hooks → /Users/ylminiserver/.config/opencode/
+Preserved existing /Users/ylminiserver/.config/opencode/opencode.json (your model choices are kept).
+Installed support scripts → /Users/ylminiserver/.config/opencode/kaola-workflow/scripts (kaola_script() search path; forge github)
+
+Next: open the project in opencode and run a workflow command, e.g.:
+  /workflow-init
+Models resolve from opencode.json; both tiers inherit your opencode default unless you pin them.
+
+>>> [codex] node /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/plugins/kaola-workflow/scripts/install-codex-agent-profiles.js --global
+Kaola-Workflow agent profiles: copied 14 profiles
+Kaola-Workflow agent profiles: config unchanged at .codex/config.toml
+- .codex/agents/kaola-workflow/adversarial-verifier.toml
+- .codex/agents/kaola-workflow/build-error-resolver.toml
+- .codex/agents/kaola-workflow/code-architect.toml
+- .codex/agents/kaola-workflow/code-explorer.toml
+- .codex/agents/kaola-workflow/code-reviewer.toml
+- .codex/agents/kaola-workflow/doc-updater.toml
+- .codex/agents/kaola-workflow/implementer.toml
+- .codex/agents/kaola-workflow/investigator.toml
+- .codex/agents/kaola-workflow/knowledge-lookup.toml
+- .codex/agents/kaola-workflow/metric-optimizer.toml
+- .codex/agents/kaola-workflow/planner.toml
+- .codex/agents/kaola-workflow/security-reviewer.toml
+- .codex/agents/kaola-workflow/synthesizer.toml
+- .codex/agents/kaola-workflow/tdd-guide.toml
+Kaola-Workflow Codex hooks: unchanged at ~/.codex/hooks.json
+Kaola-Workflow Codex hooks: copied 1 hook script(s) into stable home ~/.codex/kaola-workflow (swept 1 stale)
+run /hooks once in Codex to review and trust these command hooks (or codex exec --dangerously-bypass-hook-trust for automation)
+Kaola-Workflow agent profiles: removed 0 stale managed profile(s)
+Kaola-Workflow agent profiles: manifest written at .codex/agents/kaola-workflow/.kaola-managed-profiles.json
+Kaola-Workflow Codex dispatch posture: explicitRequestOnly (model_reasoning_effort="medium")
+Kaola-Workflow Codex dispatch posture: Codex is not configured for proactive sub-agent delegation (dispatch_posture: explicitRequestOnly). To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.
+Kaola-Workflow Codex dispatch posture: effort-gated multi-agent dispatch posture is Codex CLI runtime behavior observed on codex-tui 0.142.5 and not re-verified on Codex >=0.145.0; it may change in a future Codex release.
+Kaola-Workflow Codex multi_agent_v2: enabled
+Kaola-Workflow Codex multi_agent_v2: effective subagent width 4 (max_concurrent_threads_per_session=5 [config])
+Kaola-Workflow Codex multi_agent_v2: max_wait_timeout_ms=3600000
+Kaola-Workflow Codex multi_agent_v2: default_wait_timeout_ms=3600000
+Kaola-Workflow Codex multi_agent_v2: Recommended [features.multi_agent_v2] config for Kaola-Workflow dispatch: set max_concurrent_threads_per_session high enough for the intended fan-out width plus 1 (the budget INCLUDES the orchestrator thread) and max_wait_timeout_ms near the longest expected node runtime so long-poll joins are not capped short. Example:
+[features.multi_agent_v2]
+enabled = true
+max_concurrent_threads_per_session = 5
+max_wait_timeout_ms = 1800000
+Effective subagent width and the default budget of 4 (width 3) when max_concurrent_threads_per_session is absent are Codex >=0.145.0 SOURCE behavior, verified at tag rust-v0.145.0 in codex-rs/core/src/config/mod.rs (DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION = 4; effective_agent_max_threads uses saturating_sub(1)) and introduced by PR #19792 — source-verified, not documented: the public configuration reference does not carry multi_agent_v2 at all. The wait-timeout bounds have no independently verified default and are read only when explicitly configured. Do NOT set agents.max_threads alongside it: that is a separate [agents] key, NOT an alias for max_concurrent_threads_per_session, and it does not raise the MultiAgentV2 cap — that comes from features.multi_agent_v2.max_concurrent_threads_per_session alone. Codex 0.145.0 accepts the key rather than complaining (a config carrying both loads clean), so a stray max_threads leaves the cap where it was instead of erroring.
+status: ok
+
+>>> [codex] marketplace plugin STALE at 10.5.0: served content differs from /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/plugins/kaola-workflow — refreshing kaola-workflow@kaolabrother-kaola-workflow
+Removed plugin `kaola-workflow` from marketplace `kaolabrother-kaola-workflow`.
+Added plugin `kaola-workflow` from marketplace `kaolabrother-kaola-workflow`.
+Installed plugin root: /Users/ylminiserver/.codex/plugins/cache/kaolabrother-kaola-workflow/kaola-workflow/10.5.0
+>>> [codex] marketplace plugin content converged at 10.5.0
+
+>>> [kimi] bash /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/install-kimi.sh --forge=github --global --yes
+Kaola-Workflow · kimi edition (github) — refreshing generated tree...
+Deploying globally (github) → /Users/ylminiserver/.kimi-code
+Installed native agent profiles → /Users/ylminiserver/.kimi-code/agents/ (14)
+Installed workflow skills → /Users/ylminiserver/.kimi-code/skills/
+Installed support scripts → /Users/ylminiserver/.kimi-code/kaola-workflow/scripts (forge github)
+Installed hook scripts → /Users/ylminiserver/.kimi-code/kaola-workflow/hooks
+
+Next: open the project in Kimi Code and run a workflow command, e.g.:
+  /workflow-init
+
+>>> [grok] bash /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/install-grok.sh --forge=github --global --yes
+Kaola-Workflow · grok edition (github) — refreshing generated tree...
+Deploying globally (github) → /Users/ylminiserver/.grok
+Installed workflow agents → /Users/ylminiserver/.grok/agents/ (14)
+Installed workflow commands → /Users/ylminiserver/.grok/commands/
+Installed support scripts → /Users/ylminiserver/.grok/kaola-workflow/scripts (forge github)
+Installed hook scripts → /Users/ylminiserver/.grok/kaola-workflow/hooks
+
+Next: open the project in Grok CLI and run a workflow command, e.g.:
+  /workflow-init
+
+>>> [cursor] bash /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/install-cursor.sh --forge=github --global --yes
+Kaola-Workflow · cursor edition (github) — rendering isolated install source...
+Deploying globally (github) → /Users/ylminiserver/.cursor
+{
+  "scope": "global",
+  "root": "/Users/ylminiserver/.cursor",
+  "receipt": "/Users/ylminiserver/.cursor/kaola-workflow/cursor-authority.json",
+  "files": 34,
+  "adopted_legacy_release": null,
+  "removed_legacy_files": []
+}
+Global authority installed under /Users/ylminiserver/.cursor; no ambient project was materialized.
+
+Next: open the project in Cursor and run a workflow command, e.g.:
+  /workflow-init
+
+>>> [zcode] bash /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/install-zcode.sh --forge=github --global --yes
+Kaola-Workflow · zcode edition (github) — refreshing generated tree...
+Deploying globally (github) → /Users/ylminiserver/.zcode
+Installed workflow agents → /Users/ylminiserver/.zcode/agents/ (14)
+Installed workflow commands → /Users/ylminiserver/.zcode/commands/
+Installed workflow agents → /Users/ylminiserver/.zcode/agents/ (14)
+Synced agent roster to user scope → /Users/ylminiserver/.zcode/agents (ZCode reads agents from user scope only)
+Installed edition script launchers → /Users/ylminiserver/.zcode/kaola-workflow
+Installed support scripts → /Users/ylminiserver/.zcode/kaola-workflow/scripts (forge github)
+Kaola prompt-lifecycle hooks: not installed.
+
+Next: open the project in ZCode and run /workflow-init or /workflow-next.
+
+================ install-all summary (0082b978) ================
+  claude     PASS     (exit 0)
+  opencode   PASS     (exit 0)
+  codex      PASS     (exit 0)  — plugin 10.5.0 (content refreshed)
+  kimi       PASS     (exit 0)
+  grok       PASS     (exit 0)
+  cursor     PASS     (exit 0)
+  zcode      PASS     (exit 0)
+================================================================
+install-all: all runtimes OK
+install_exit=0
+== install-all --check ==
+install-all: reinstalling Kaola-Workflow runtimes from 0082b978
+install-all: root=/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow scope=global forge=github (dry-run)
+
+>>> [global-contract] node /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/scripts/kaola-workflow-global-contract.js check --json
+{"schema_version":1,"status":"CURRENT","receipt_path":"/Users/ylminiserver/.config/kaola-workflow/global-contract-receipt.json","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","targets":[{"id":"claude-local","runtime":"claude","host":"local","status":"CURRENT","path":"/Users/ylminiserver/.claude/rules/kaola-workflow-global.md","root":"/Users/ylminiserver/.claude","carrier":"dedicated","carrier_group":"claude-user-rule","precedence":"User rules load before project instructions; closer project instructions may add stricter local rules.","reload":"A new session loads the user rule; SessionStart(source=compact) directly reprints static V2 before the next model turn.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"55dc9d9aaba1ad50d3b00ab36bd2fa7e2a156c3d2774efec84a928ec020b4337","install_sha256":"55dc9d9aaba1ad50d3b00ab36bd2fa7e2a156c3d2774efec84a928ec020b4337","before_sha256":"2bcfd46cddc4e1064140417bed66940818f354dc61f39dac43c28c7133f36fdf"},{"id":"codex-local","runtime":"codex","host":"local","status":"CURRENT","path":"/Users/ylminiserver/.codex/AGENTS.md","root":"/Users/ylminiserver/.codex","carrier":"managed_region","carrier_group":"codex-global-agents","precedence":"Global guidance loads first; project root-to-cwd instructions appear later and may override it.","reload":"A new run discovers global instructions; SessionStart(source=compact) directly reprints static V2 before the next model turn.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"55dc9d9aaba1ad50d3b00ab36bd2fa7e2a156c3d2774efec84a928ec020b4337","install_sha256":"f3597c41fb0892e827a7d7f7f4fe506ccc1902e97e18b6f45449fbc5f50ec740","before_sha256":"f3597c41fb0892e827a7d7f7f4fe506ccc1902e97e18b6f45449fbc5f50ec740","managed_origin":{"kind":"absent","insert_prefix_bytes":0,"insert_suffix_bytes":1}},{"id":"opencode-local","runtime":"opencode","host":"local","status":"CURRENT","path":"/Users/ylminiserver/.config/opencode/AGENTS.md","root":"/Users/ylminiserver/.config/opencode","carrier":"managed_region","carrier_group":"opencode-global-agents","precedence":"Project and global categories are combined; native global AGENTS wins over the Claude compatibility fallback.","reload":"A fresh session re-runs global and project rule discovery.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"55dc9d9aaba1ad50d3b00ab36bd2fa7e2a156c3d2774efec84a928ec020b4337","install_sha256":"f944db3513f0e3f108ccebf2c4a55607df6f6a9153753da1e84662d692f6c797","before_sha256":"42611602a0c8e2087490ca17f9377e16ff992f385fdcec34f5620c687c63d860","managed_origin":{"kind":"absent","insert_prefix_bytes":0,"insert_suffix_bytes":1}},{"id":"kimi-local","runtime":"kimi","host":"local","status":"CURRENT","path":"/Users/ylminiserver/.kimi-code/AGENTS.md","root":"/Users/ylminiserver/.kimi-code","carrier":"managed_region","carrier_group":"kimi-global-agents","precedence":"The Kimi-specific global file is merged before project instruction files.","reload":"A new session rebuilds the merged instruction context.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"55dc9d9aaba1ad50d3b00ab36bd2fa7e2a156c3d2774efec84a928ec020b4337","install_sha256":"f944db3513f0e3f108ccebf2c4a55607df6f6a9153753da1e84662d692f6c797","before_sha256":"42611602a0c8e2087490ca17f9377e16ff992f385fdcec34f5620c687c63d860","managed_origin":{"kind":"absent","insert_prefix_bytes":0,"insert_suffix_bytes":1}},{"id":"grok-local","runtime":"grok","host":"local","status":"CURRENT","path":"/Users/ylminiserver/.grok/rules/kaola-workflow-global.md","root":"/Users/ylminiserver/.grok","carrier":"dedicated","carrier_group":"grok-user-rule","precedence":"The user Rule is persistent context; repository AGENTS instructions add project-local facts.","reload":"Rules enter every interaction, including the first inference after compact.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"3ac781cb7ff69228f25ebf148a821426d38b9bdb7fbaeae841401f56c7e6230a","install_sha256":"3ac781cb7ff69228f25ebf148a821426d38b9bdb7fbaeae841401f56c7e6230a","before_sha256":"6993907f8cf0e304cdba80a95379df781da95adf42fff5f1c79712d30546deab"},{"id":"cursor-cli-local","runtime":"cursor","host":"cli-local","status":"CURRENT","path":"/Users/ylminiserver/.cursor/rules/kaola-workflow-global.mdc","root":"/Users/ylminiserver/.cursor","carrier":"dedicated","carrier_group":"cursor-local-user-rule","precedence":"Applicable Rules are merged; project rules have higher precedence than user rules.","reload":"A new CLI session reloads the user Rule; alwaysApply carries it into each model context.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"8109c63122e8360f5116e9605e07c9a31ab16ecc910453294ca1bed08d129a7b","install_sha256":"8109c63122e8360f5116e9605e07c9a31ab16ecc910453294ca1bed08d129a7b","before_sha256":"6bffe372305a3620477f372f0776f73a3af4de395cfcd6a14c39c2ffbc320f95"},{"id":"cursor-app-local","runtime":"cursor","host":"app-local","status":"CURRENT","path":"/Users/ylminiserver/.cursor/rules/kaola-workflow-global.mdc","root":"/Users/ylminiserver/.cursor","carrier":"dedicated","carrier_group":"cursor-local-user-rule","precedence":"Applicable Rules are merged; project rules have higher precedence than user rules.","reload":"A new App Agent session reloads the user Rule; alwaysApply carries it into each model context.","source_sha256":"3c8fa1e81d6ee2bbe77e10b3d1193545fb6f2c63a0fd71ca545e1f9b30ce6953","render_sha256":"8109c63122e8360f5116e9605e07c9a31ab16ecc910453294ca1bed08d129a7b","install_sha256":"8109c63122e8360f5116e9605e07c9a31ab16ecc910453294ca1bed08d129a7b","before_sha256":"6bffe372305a3620477f372f0776f73a3af4de395cfcd6a14c39c2ffbc320f95"},{"id":"cursor-cloud","runtime":"cursor","host":"cloud","status":"REMOTE_REQUIRED","carrier":"cloud_project_rule","precedence":"The selected repository Rule is merged as project context and takes precedence over user rules.","reload":"Save the Environment Build, then start a new top-level Agent in the same repository."},{"id":"zcode-local","runtime":"zcode","host":"local","status":"NOT_INSTALLED","carrier":"managed_region","precedence":"User global instructions are appended first and workspace instructions are the primary project source.","reload":"A new task reads the user and current workspace instruction files."}]}
+
+>>> [claude] bash /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/install.sh --forge=github
+
+>>> [opencode] bash /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/install-opencode.sh --forge=github --global
+
+>>> [codex] node /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/plugins/kaola-workflow/scripts/install-codex-agent-profiles.js --global
+
+>>> [codex] marketplace plugin already at 10.5.0 (kaola-workflow@kaolabrother-kaola-workflow)
+
+>>> [kimi] bash /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/install-kimi.sh --forge=github --global
+
+>>> [grok] bash /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/install-grok.sh --forge=github --global
+
+>>> [cursor] bash /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/install-cursor.sh --forge=github --global
+
+>>> [zcode] bash /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/install-zcode.sh --forge=github --global
+
+================ install-all summary (0082b978) ================
+  claude     PLAN     (exit -)
+  opencode   PLAN     (exit -)
+  codex      PLAN     (exit -)  — plugin 10.5.0
+  kimi       PLAN     (exit -)
+  grok       PLAN     (exit -)
+  cursor     PLAN     (exit -)
+  zcode      PLAN     (exit -)
+================================================================
+install-all: dry-run complete — no changes made
+check_exit=0
+== git status after install ==
+== editions from main root ==
+opencode-edition test passed (875 assertions). [drift-check: 3 tree(s) in parity (.opencode, .opencode-gitlab, .opencode-gitea)]
+kimi-edition test passed (824 assertions). [drift-check: 3 tree(s) in parity (.kimi, .kimi-gitlab, .kimi-gitea)]
+grok-edition test passed (705 assertions). [drift-check: 3 tree(s) in parity (.grok, .grok-gitlab, .grok-gitea)]
+cursor-edition test passed (834 assertions). [drift-check: 3 tree(s) in parity (.cursor, .cursor-gitlab, .cursor-gitea)]
+issue-1045 cursor conformance passed (24 assertions).
+zcode-edition test passed (854 assertions). [drift-check: 3 tree(s) in parity (.zcode, .zcode-gitlab, .zcode-gitea)]
+zcode hook protocol acceptance passed (32 assertions).
+zcode install acceptance passed (47 assertions).
+edition test lane passed: all 8 suites executed successfully.
+editions_exit=0
+end=16:33:53
+INSTALL_DONE
