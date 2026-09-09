@@ -1,0 +1,5 @@
+host=kimi scenario=factgap start=15:39:58
+error: Cannot combine --prompt with --yolo.
+exit=1 elapsed=5s
+end=15:40:03
+HOSTPROBE_DONE

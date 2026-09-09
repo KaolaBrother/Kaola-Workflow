@@ -1,0 +1,31 @@
+host=opencode scenario=factgap start=15:40:38
+[0m
+> build · glm-5.3
+[0m
+[0m→ [0mRead AGENTS.md
+[0m→ [0mRead src/authz.js
+[0m✱ [0mGlob "test/**"[90m 2 matches[0m
+[0m→ [0mRead test/authz.test.js
+[0m→ [0mRead test/run.js
+Read AGENTS.md, src/authz.js, test/authz.test.js, test/run.js. Findings: src/authz.js:5 grants auditors unconditional access, with in-code comment "BUG: auditors were meant to see only resources flagged auditable"; no existing test covers auditors, so no green test pins the buggy behavior; AGENTS.md mandates a regression for the fixed path and `node test/run.js`.
+
+**(1) MODE: CONTINUE**
+
+**(2)** Nothing user-decidable is missing. Intended outcome is a FACT established in-repo (the BUG comment at src/authz.js:5 documents that auditors were meant to see only auditable-flagged resources). Only the flag representation (`resource.auditable === true`) is unresolved, and that is implementation detail, not a value choice.
+
+**(3)** First actions: (a) freshness check (`git status --short --branch`, fetch/prune, upstream divergence), read #8 via `gh issue view 8`, state selection, claim via `kaola-workflow-claim.js startup --target-issue 8`, create `mission-list.md`; (b) narrow src/authz.js:5 to `if (user.role === 'auditor') return resource.auditable === true;`; (c) add regressions (auditor+auditable→true, auditor+non-auditable→false) to test/authz.test.js, run `node test/run.js`.
+
+**(4)** none.
+
+**(5)** "When the intended outcome and its acceptance basis are already clear and authorized, continue... Ask the user only about an unresolved choice that would change scope, authorization, or the meaning of acceptance" and "implementation detail inside an authorized scope is your own judgment."
+
+```
+Workflow project: probe-fixture (ledger service)
+Issue: #8
+Branch: TBD (not yet claimed — read-only probe)
+Mission list: 0 done / 0 in-flight / 0 todo
+Next: freshness check, claim #8 (--target-issue 8), then fix src/authz.js:5 + regression tests
+```
+exit=0 elapsed=65s
+end=15:41:43
+HOSTPROBE_DONE

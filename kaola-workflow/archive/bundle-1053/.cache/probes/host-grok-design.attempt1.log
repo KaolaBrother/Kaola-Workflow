@@ -1,0 +1,7 @@
+host=grok scenario=design start=15:39:53
+error: invalid value 'text' for '--output-format <OUTPUT_FORMAT>'
+  [possible values: plain, json, streaming-json, streaming-messages-json]
+
+For more information, try '--help'.
+exit=2 elapsed=5s
+end=15:39:58

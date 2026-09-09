@@ -1,0 +1,624 @@
+HEAD=1b779b382cd02f99ea23ca99235e43b34c58c25a start=15:59:09
+== npm test ==
+
+> kaola-workflow@10.5.0 test
+> npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && npm run test:kaola-workflow:gitlab && npm run test:kaola-workflow:gitea
+
+
+> kaola-workflow@10.5.0 test:kaola-workflow:claude
+> node scripts/edition-sync.js --materialize-kernel && node scripts/validate-script-sync.js && node scripts/test-validate-script-sync.js && node scripts/validate-vendored-agents.js && bash -n install.sh uninstall.sh install-all.sh && node -e "JSON.parse(require('fs').readFileSync('package.json', 'utf8'))" && node scripts/test-agent-model-resolver.js && node scripts/test-install-model-rendering.js && node scripts/test-install-upgrade-rewrite.js && node scripts/test-install-manifest-single-source.js && node scripts/test-validation-runner.js && node scripts/test-install-adaptive-config.js && node scripts/test-uninstall-forge-branches.js && node scripts/test-issue-probe-memo.js && node scripts/test-oracle-kernel.js && node scripts/test-kernel-conformance.js && node scripts/test-outcome-recorder.js && node scripts/test-finalize-door.js && node scripts/test-suite-registration.js && node scripts/test-bundle-state.js && node scripts/test-bundle-claim.js && node scripts/test-priority-list-open.js && node scripts/test-forge-bundle-lane.js && node scripts/test-bundle-finalize.js && node scripts/test-parallel.js --self-test && node scripts/test-edition-sync.js && node scripts/test-release-surface-drift.js && node scripts/test-release.js && node scripts/test-gap-sweep.js && node scripts/test-ledger-compare.js && node scripts/test-validation-allowband.js && node scripts/test-route-reachability.js && node scripts/test-issue-1044-prompt-bundle.js && node scripts/test-issue-1044-runtime-adapters.js && node scripts/test-issue-1045-cursor-conformance.js && node scripts/test-issue-1046-global-contract.js && node scripts/test-issue-1051-global-contract.js && node scripts/test-issue-1052-cursor-cli-startup-prep.js && node scripts/test-issue-1053-next-task-quality.js && node scripts/test-zcode-install-trust.js && node scripts/generate-agent-profiles.js --check && node scripts/test-runtime-agent-architecture.js && node scripts/validate-workflow-contracts.js && node scripts/test-bash-block-guards.js && node scripts/test-spawn-classification.js && node scripts/simulate-workflow-walkthrough.js --shard auto/12 && node scripts/test-relative-tmpdir-escape.js && node scripts/test-forge-finalize-findings.js && node scripts/test-forge-archive-scoping.js && node scripts/test-forge-claim-rollback-scoping.js && node scripts/test-forge-claim-reserved-project.js && node scripts/test-active-folders-field-parity.js && node scripts/generate-routing-surfaces.js --check && node scripts/test-generate-routing-surfaces.js && node scripts/test-install-all.js && node scripts/test-fixture-sandbox.js
+
+edition-sync: materialized shared kernel(s) into forge trees (0 file(s) already present).
+OK: 14 common scripts, 25 byte-identical groups, 0 rename-normalized families, 2 hooks.json families (config + hooks dir), and 5 forge export-superset families in sync.
+    committed kernel parity: 4 Oracle Kernel copies identical at HEAD.
+validate-script-sync guard tests passed (56 assertions; 1 canonicalOnly exclusions machine-guarded)
+Generated agent validation passed for 14 roles at 922d2d8f8b64f4e50936e24465cb3bcac81ac0e1
+Agent model resolver tests passed
+Install model rendering tests passed
+Install upgrade rewrite tests passed
+test-install-manifest-single-source (#407/#412): PASSED
+test-validation-runner: PASSED
+Install adaptive-config tests passed
+Uninstall forge-branch tests passed
+issue-probe-memo tests passed (10 assertions)
+test-oracle-kernel: all 48 assertions passed
+kernel conformance tests passed (247 assertions)
+outcome recorder tests passed (80 assertions)
+T1: neither claim.js nor run-chains.js requires the plan-validator
+T2: finalize passes over a green, fresh receipt with no plan file present anywhere
+T3: a stale / missing / red receipt PASSES and reports the typed finding twice
+T4: a diff no record describes PASSES, reports changed_paths, and lands durably
+T5: run-chains.js --release-check reproduces every release refusal
+T6: an archive that drops a file refuses; one that moves everything passes
+T7: producer and gate compute the same codeTreeHash from one shared helper + constant
+T8: the consumer arm's `record` producer and the finalize gate agree on one candidate hash
+T8l: `record` binds the working tree it was invoked from, provably not the other one
+T8m: `record` from a linked worktree hashes THAT tree and writes into main's run folder
+T8n: the fallback must not open a route into main's archive band, and must name what it searched
+T9: a hazard-named file must not silently cost the finalize commit
+T10: the Step 8a mirror must not overwrite a receipt or an outcome log the worktree authored
+T10b: the same sequence WITHOUT the refused finalize is green — the axis is step B
+T11: a failed `git status` probe must not read as "no residue to stage"
+finalize-door tests passed (395 assertions)
+T12: a refusing finalize names `release` as the route that gives the claim back
+finalize-door tests passed (459 assertions)
+T12b: the two archive doors name `release` in the `reasoning` they already emit
+T13: archive staging carries `_rules.md` but never a disk-only `.roadmap/` deletion
+T14: an unmeasurable follow-up count degrades to `unknown`, and a measured zero stays `0`
+T15: a chains_stale finding carries its culprit paths onto `--check` and into `## Validation`
+T16: the chains_stale operator hint says WHAT drifted, and never excuses the re-run
+T17: finalize fills its own pre-planted headings, and never overwrites one carrying content
+finalize-door tests passed (846 assertions)
+suite registration: 59 test-*.js files, 56 registered, 3 exempt
+Suite registration passed (677 assertions).
+Test (a): parseStateFile reads issue_numbers into an array
+Test (b): single-issue state file yields issue_numbers: [] (AC#1 regression)
+Test (c): classifier blocks issue #47 (member of live bundle [42,47,53])
+Test (d): classifier does NOT block issue #77 (non-member)
+Test (e): a label-held claim names the workflow:in-progress label
+Test (f): a marker-held claim names the kw:claim marker comment
+Test (g): control — a >24h kw:claim marker with no label acquires
+
+test-bundle-state: all 29 tests passed
+Test (1): successful bundle claim [42,47,53]
+Test (2): refused bundle — closed member #47 leaves no active folder, no label
+Test (3): target_ambiguity when both --target-issue and --target-issues set
+Test (4): a 9-issue bundle acquires and carries size advice
+Test (4b): a 5-issue bundle acquires with no size advice
+Test (5): AC#1 regression — single-issue --target-issue N works unchanged
+Test (6): target_set_empty when startup called without --target-issue or --target-issues
+Test (7): #770 a stale --workflow-path (e.g. full) on the bundle lane silently acquires — no refusal
+Test (8): rollback — add-label fails for member 47, member-42 label torn down, no folder remains
+Test (8b): target_set_label_rollback_failed — teardown remove-label also fails
+Test (8c): the rollback pair — clean world ANSWERS, surviving forge residue REFUSES
+Test (8d)/#932: rollback must not delete content of a project folder it did not create
+Test (9): bundle_id is sorted ascending — 53,42,47 -> bundle-42-47-53
+Test (10): KAOLA_TARGET_ISSUES env var triggers bundle claim
+Test (#370): --target-issues 42,4x,53 → target_set_invalid_token naming 4x
+Test (#370): NATIVE=0 bundle creates the in-place branch + records base_branch
+Test (#370-B1): the bundle path asks before branching over uncommitted work
+Test (9): the bundle lane carries the selection record + .origin fold
+Test (11): the twin rule — every target_set_X classifies and exits like its scalar twin X
+
+test-bundle-claim: all 196 tests passed
+
+test-priority-list-open: all 18 tests passed
+forge bundle lane: all 59 assertions passed
+Test (1): bundle finalize closes all 3 members, archives one folder
+Test (2): warning-first — issue view fails for member 47, recorded in failed_issue_closures, closure still completes
+Test (2b) #369+#396.4 (D2): merge-lane finalize — member 47 open → open_issues + partial token, close_pending suppresses the premature alarm
+Test (2c) #396.4 (D2): post-sink partial (close_disposition UNSET) FIRES remote-members-closed; close_pending suppresses the SAME receipt
+Test (3): single-issue finalize — one issue closed, receipt has NO bundle fields
+Test (#371): release bundle clears the advisory claim for every member
+Test (#371): watch-pr bundle MERGED → per-member buckets + partial token
+Test (#371): watch-pr bundle CLOSED → abandoned archive + per-member label clear
+Test (#371) crash-a: release after a mid-claim crash clears every member
+Test (#371) crash-b: finalize re-run after the source folder is already archived
+Test (#371): in-place finalize provisions no worktree for the bundle
+Test (#508): merge-lane --keep-worktree all-open bundle → remote_issue_closed:close_pending + closed_issues:[] + zero close calls
+Test (#992/#993/#994): the archived ## Closure block records the run's backlog delta
+Test (#592): --sink --issue-numbers A,B (no --issue) must close every member, not skip closure
+Test (#617 A): merge-lane finalize (sink:merge, no --keep-worktree) must NOT close an open issue online — defers to the merge sink
+Test (#617 B): --sink transaction — closure must run AFTER push_main; a forced push_main failure must NOT have already closed the issue
+Test (#617 C): checkClosureInvariants — remote-closed-after-publish fires when the impl commit is not an ancestor of the sink target, clears once merged
+Test (#617 D): verify-sink subcommand detects an orphaned close (archived project, commit not an ancestor of the sink target)
+Test (#699): verifyArchiveComplete recursively preserves epoch snapshots
+Test (#937 e): bundle finalize with a --project that differs from the on-disk folder ONLY IN CASE must still release the kw:claim marker on every member, and must say it corrected the name
+Test (#937 f): the SINGLE-issue finalize arm composes the same marker from the same supplied name — the bundle loop and the scalar call are separate call sites and neither reaches the other
+Test (#937 g, positive control): the same bundle finalize driven with the EXACT on-disk slug still deletes the marker on every member — without this, "the marker is gone" could be true of a fixture that deletes nothing
+
+test-bundle-finalize: all 192 tests passed
+PASS  (a1) all four chain names present in results
+PASS  (a2) c1 (passing) stdout fully buffered despite c2 early exit
+PASS  (a3) c3 (passing after c2) stdout fully buffered
+PASS  (b1) summary line for c1 is PASS
+PASS  (b2) summary line for c2 is FAIL
+PASS  (b3) summary line for c3 is PASS
+PASS  (b4) summary line for c4 is PASS
+PASS  (c1) exitCode would be 1 when any chain failed
+PASS  (c2) exitCode would be 0 when all chains pass
+PASS  (d1) c1 stdout equals exactly its own output (buffer isolation)
+PASS  (d2) c2 stdout equals exactly its own output (buffer isolation)
+PASS  (d3) c3 stdout equals exactly its own output (buffer isolation)
+PASS  (e) TEST_PARALLEL='1' visible in child env (c4 stdout === '1')
+PASS  (f1) every ordinal is owned by exactly one shard for widths 1..12 
+PASS  (f2) no --shard => sharded:false and owns() is total
+PASS  (f3) malformed --shard values all refuse
+PASS  (f3) well-formed --shard parses
+PASS  (f4a) complete shard set audits ok
+PASS  (f4b) a dropped scenario => shard_coverage_mismatch
+PASS  (f4c) shards disagreeing on the registry => shard_registry_drift
+PASS  (f4d) a silent shard => shard_report_missing
+PASS  (f4e) a duplicated shard index => shard_report_duplicate
+PASS  (f5) parseCoverage recovers exactly one payload
+
+self-test: 23 assertions passed, 0 failed
+test-parallel self-test passed
+edition-sync tests passed (28 assertions)
+Release-surface drift regression passed (9 assertions)
+test-release: all 247 assertions passed
+gap-sweep tests passed (173 assertions)
+Ledger-compare fence regression passed (40 assertions)
+validation-allowband guard passed (16 assertions; 4 validator-referenced prose files all kept as CODE)
+Route-reachability test passed (172 assertions).
+Issue #1044 prompt-framework acceptance: 153 passed, 0 failed.
+Issue #1044 runtime-adapter acceptance: 65 passed, 0 failed.
+issue-1045 cursor conformance passed (24 assertions).
+issue-1046 global-contract acceptance: 141 passed
+issue-1051 measurement helper (not a gate): lines=50 english_words=405 bytes=2825
+issue-1051 global-contract acceptance: 55 passed
+MEASURED Darwin ps -ww -p PID -o args=: /opt/homebrew/Cellar/node@24/24.18.0/bin/node /var/folders/8s/y93yqng93xb4__nl4jlh_g9c0000gn/T/kw-1052-github-cKrF0F/ps-sleeper.js --workspace /tmp/kaola workspace with spaces
+MEASURED tokenizePsCommandLine+parseDemonstratedCursorParentArgv workspace=: /tmp/kaola
+MEASURED [github] CLI parent ps args=: /opt/homebrew/Cellar/node@24/24.18.0/bin/node /var/folders/8s/y93yqng93xb4__nl4jlh_g9c0000gn/T/kw-1052-github-cKrF0F/fake-cursor-cli/2026.09.02-c22c1a3/index.js --workspace /private/var/folders/8s/y93yqng93xb4__nl4jlh_g9c0000gn/T/kw-1052-github-cKrF0F/kaola workspace with spaces-github --model cursor-grok-4.6-xhigh
+MEASURED [github] naive workspace=: /private/var/folders/8s/y93yqng93xb4__nl4jlh_g9c0000gn/T/kw-1052-github-cKrF0F/kaola
+MEASURED [gitlab] CLI parent ps args=: /opt/homebrew/Cellar/node@24/24.18.0/bin/node /var/folders/8s/y93yqng93xb4__nl4jlh_g9c0000gn/T/kw-1052-github-cKrF0F/fake-cursor-cli/2026.09.02-c22c1a3/index.js --workspace /private/var/folders/8s/y93yqng93xb4__nl4jlh_g9c0000gn/T/kw-1052-github-cKrF0F/kaola workspace with spaces-gitlab --model cursor-grok-4.6-xhigh
+MEASURED [gitlab] naive workspace=: /private/var/folders/8s/y93yqng93xb4__nl4jlh_g9c0000gn/T/kw-1052-github-cKrF0F/kaola
+MEASURED [gitea] CLI parent ps args=: /opt/homebrew/Cellar/node@24/24.18.0/bin/node /var/folders/8s/y93yqng93xb4__nl4jlh_g9c0000gn/T/kw-1052-github-cKrF0F/fake-cursor-cli/2026.09.02-c22c1a3/index.js --workspace /private/var/folders/8s/y93yqng93xb4__nl4jlh_g9c0000gn/T/kw-1052-github-cKrF0F/kaola workspace with spaces-gitea --model cursor-grok-4.6-xhigh
+MEASURED [gitea] naive workspace=: /private/var/folders/8s/y93yqng93xb4__nl4jlh_g9c0000gn/T/kw-1052-github-cKrF0F/kaola
+spawn-census: {"suite":"test-issue-1052-cursor-cli-startup-prep","spawns":710}
+issue-1052 cursor CLI startup/resume prep passed (251 assertions).
+== test-issue-1053-next-task-quality ==
+test-issue-1053-next-task-quality: all 264 assertions passed.
+zcode install acceptance passed (47 assertions).
+agent profiles current: 14 roles, seven runtimes, 126 native renders
+runtime-agent-architecture test passed (859 assertions). [generator: scripts/generate-agent-profiles.js]
+Workflow contract validation passed
+Preparing worktree (checking out 'workflow/issue-700')
+Preparing worktree (checking out 'workflow/issue-800')
+Preparing worktree (checking out 'workflow/issue-4242')
+test-bash-block-guards: all 49 assertions passed (#361 bash-block execution)
+spawn-classification passed (10 mutation assertions; 718 spawn sites across 79 files, 314 classified, 404 grandfathered; 154 slot(s) of slack — lower a ceiling with --table)
+testAxiomBlockByteIdentity: PASSED (24 non-authoring surfaces)
+testE2EGitHubMergeFullChain: PASSED
+testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge: PASSED
+testClassifierOfflineUnverifiedNoLocalEvidence: PASSED
+testAuditAndRepairLabels: PASSED
+testSinkMergeCloseExitZeroButStillOpenFailsClosed: PASSED
+testClosureAuditStaleInProgressLabels: PASSED
+testClosureAuditExecuteLabelRemovalNonTimeoutFails: PASSED
+testClosureAuditScopedArchiveAmbiguousMatch903: PASSED
+testReleaseCheckPreTagGate: PASSED
+testFinalizeIncompleteNegativeControlRepoDirty: PASSED
+testSinkForeignDirtExemptsSiblingReceipt715: PASSED
+##KW-SHARD {"suite":"simulate-workflow-walkthrough","index":2,"total":12,"scenarios":179,"ran":15,"passed":15,"failed":0}
+Workflow walkthrough simulation passed
+spawn-census: {"suite":"simulate-workflow-walkthrough","spawns":294}
+relative-TMPDIR escape: installers + walkthrough + run-chains leave nothing in the checkout: done
+
+50 passed, 0 failed
+behavioural[claude/canonical] archive-staging fault names the live run folder: done
+behavioural[codex] archive-staging fault names the live run folder: done
+behavioural[gitlab] archive-staging fault names the live run folder: done
+behavioural[gitea] archive-staging fault names the live run folder: done
+behavioural-C[claude/canonical] a gitignored archive candidate reports, with git's diagnosis: done
+behavioural-C[codex] a gitignored archive candidate reports, with git's diagnosis: done
+behavioural-D[claude/canonical] unattributable finalize residue is reported, not adopted: done
+behavioural-D[codex] unattributable finalize residue is reported, not adopted: done
+behavioural-D[gitlab] unattributable finalize residue is reported, not adopted: done
+behavioural-D[gitea] unattributable finalize residue is reported, not adopted: done
+static: finding-type registries and their docs/api.md statements: done
+
+233 passed, 0 failed
+scoping[claude/canonical] archive commit 74f15d8d carried 2 path(s): done
+scoping[codex] archive commit 4b881321 carried 2 path(s): done
+scoping[gitlab] archive commit 93ea7aa3 carried 2 path(s): done
+scoping[gitea] archive commit 70e8f1cc carried 2 path(s): done
+930[claude/canonical/.roadmap] reserved-directory archive: done
+930[codex/.roadmap] reserved-directory archive: done
+930[gitlab/.roadmap] reserved-directory archive: done
+930[gitea/.roadmap] reserved-directory archive: done
+930[claude/canonical/Archive] reserved-directory archive: done
+930[codex/Archive] reserved-directory archive: done
+930[gitlab/Archive] reserved-directory archive: done
+930[gitea/Archive] reserved-directory archive: done
+
+180 passed, 0 failed
+#932[claude/canonical] claim rollback scoping: done
+#932[codex] claim rollback scoping: done
+#932[gitlab] claim rollback scoping: done
+#932[gitea] claim rollback scoping: done
+
+32 passed, 0 failed
+#933[claude/canonical] claim reserved-project resolution: done
+#933[codex] claim reserved-project resolution: done
+#933[gitlab] claim reserved-project resolution: done
+#933[gitea] claim reserved-project resolution: done
+
+12/12 legs ran (4 editions x 3 legs)
+212 passed, 0 failed
+active-folders-field-parity tests passed (163 assertions)
+generate-routing-surfaces --check: all 24 surfaces byte-match the skeleton.
+test-generate-routing-surfaces: all 480 assertions passed.
+install-all contract test passed (275 assertions).
+fixture sandbox: a relative TMPDIR leaves nothing in the checkout: done
+
+7 passed, 0 failed
+
+> kaola-workflow@10.5.0 test:kaola-workflow:codex
+> node scripts/edition-sync.js --materialize-kernel && node scripts/validate-script-sync.js && node scripts/validate-kaola-workflow-contracts.js && node plugins/kaola-workflow/scripts/simulate-kaola-workflow-walkthrough.js && node scripts/test-forge-finalize-findings.js && node scripts/test-forge-archive-scoping.js && node scripts/test-forge-claim-rollback-scoping.js && node scripts/test-forge-claim-reserved-project.js && node scripts/test-active-folders-field-parity.js && node scripts/generate-routing-surfaces.js --check
+
+edition-sync: materialized shared kernel(s) into forge trees (0 file(s) already present).
+OK: 14 common scripts, 25 byte-identical groups, 0 rename-normalized families, 2 hooks.json families (config + hooks dir), and 5 forge export-superset families in sync.
+    committed kernel parity: 4 Oracle Kernel copies identical at HEAD.
+Kaola-Workflow Codex contract validation passed
+testInstallSchemaPruneManifest332 (#332 AC3-AC6,AC9-path): PASSED
+testCodexPreflight266 (#266 cases 1,2,5): PASSED
+testCodexDispatchPosture598 (#598 AC1 installer report): PASSED
+testCodexMultiAgentV2Bounds611 (#611 AC6 installer report): PASSED
+testCodexPreflight571 (#571 global-scope gate): PASSED
+testCodexPreflight332 (#332 AC7-AC11): PASSED
+testAC1HooksJson (#284 AC1): PASSED
+testUpdateHooksHardening325: PASSED
+test409StableHomeSurvivesDirDeletion (#409): PASSED
+testCodexFinalizeArchivesClaimFacts333: PASSED
+testSelectionEvidenceDockingCodex: PASSED
+testKeepOpenArchiveStamp333: PASSED
+testAC2StaticCompactPrompt (#1044 AC2): PASSED
+testCodexFinalizeArchiveVerifiesBeforeDelete: PASSED
+testCodexFinalizeClosesIssueBundleMembers: PASSED
+testCodexBundleFinalizeAllOpenCloseIsPending: PASSED
+Kaola-Workflow walkthrough simulation passed
+spawn-census: {"suite":"simulate-kaola-workflow-walkthrough","spawns":165}
+behavioural[claude/canonical] archive-staging fault names the live run folder: done
+behavioural[codex] archive-staging fault names the live run folder: done
+behavioural[gitlab] archive-staging fault names the live run folder: done
+behavioural[gitea] archive-staging fault names the live run folder: done
+behavioural-C[claude/canonical] a gitignored archive candidate reports, with git's diagnosis: done
+behavioural-C[codex] a gitignored archive candidate reports, with git's diagnosis: done
+behavioural-D[claude/canonical] unattributable finalize residue is reported, not adopted: done
+behavioural-D[codex] unattributable finalize residue is reported, not adopted: done
+behavioural-D[gitlab] unattributable finalize residue is reported, not adopted: done
+behavioural-D[gitea] unattributable finalize residue is reported, not adopted: done
+static: finding-type registries and their docs/api.md statements: done
+
+233 passed, 0 failed
+scoping[claude/canonical] archive commit 239f3835 carried 2 path(s): done
+scoping[codex] archive commit 007ed0fe carried 2 path(s): done
+scoping[gitlab] archive commit 7c7f6866 carried 2 path(s): done
+scoping[gitea] archive commit 5f57006b carried 2 path(s): done
+930[claude/canonical/.roadmap] reserved-directory archive: done
+930[codex/.roadmap] reserved-directory archive: done
+930[gitlab/.roadmap] reserved-directory archive: done
+930[gitea/.roadmap] reserved-directory archive: done
+930[claude/canonical/Archive] reserved-directory archive: done
+930[codex/Archive] reserved-directory archive: done
+930[gitlab/Archive] reserved-directory archive: done
+930[gitea/Archive] reserved-directory archive: done
+
+180 passed, 0 failed
+#932[claude/canonical] claim rollback scoping: done
+#932[codex] claim rollback scoping: done
+#932[gitlab] claim rollback scoping: done
+#932[gitea] claim rollback scoping: done
+
+32 passed, 0 failed
+#933[claude/canonical] claim reserved-project resolution: done
+#933[codex] claim reserved-project resolution: done
+#933[gitlab] claim reserved-project resolution: done
+#933[gitea] claim reserved-project resolution: done
+
+12/12 legs ran (4 editions x 3 legs)
+212 passed, 0 failed
+active-folders-field-parity tests passed (163 assertions)
+generate-routing-surfaces --check: all 24 surfaces byte-match the skeleton.
+
+> kaola-workflow@10.5.0 test:kaola-workflow:gitlab
+> node scripts/edition-sync.js --materialize-kernel && node scripts/validate-vendored-agents.js && node scripts/edition-sync.js --check && node plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js && node plugins/kaola-workflow-gitlab/scripts/simulate-gitlab-workflow-walkthrough.js && node plugins/kaola-workflow-gitlab/scripts/simulate-gitlab-codex-workflow-walkthrough.js && node scripts/test-forge-finalize-findings.js && node scripts/test-forge-archive-scoping.js && node scripts/test-forge-claim-rollback-scoping.js && node scripts/test-forge-claim-reserved-project.js && node scripts/test-active-folders-field-parity.js && node scripts/generate-routing-surfaces.js --check
+
+edition-sync: materialized shared kernel(s) into forge trees (0 file(s) already present).
+Generated agent validation passed for 14 roles at 922d2d8f8b64f4e50936e24465cb3bcac81ac0e1
+edition-sync: 6 forge aggregator ports in parity with canonical.
+edition-sync: committed kernel parity verified at HEAD.
+Kaola-Workflow GitLab contract validation passed
+testFallbackGuardsAfterArchive: PASSED
+testAuditAndRepairLabels: PASSED
+testSinkMrUsesFinalizationSummary: PASSED
+testGitlabBundleClaimCreatesOneFolder: PASSED
+testGitlabClosurePersistence: PASSED
+testGitlabSelectionEvidenceDocking: PASSED
+testGitlabBundleRefusalLeavesNoFolder: PASSED
+testGitlabBundleDuplicateIssueBlocking: PASSED
+testGitlabBundleFinalizeOnlineAllClosedArchives: PASSED
+testGitlabBundleSingleIssueStateHasNoBundleFields: PASSED
+testGitlabFinalizeArchiveVerifiesBeforeDelete: PASSED
+testGitlabFinalizeClosesIssueBundleMembers: PASSED
+testGitlabBundleFinalizeAllOpenCloseIsPending: PASSED
+GitLab workflow walkthrough simulation passed
+spawn-census: {"suite":"simulate-gitlab-workflow-walkthrough","spawns":102}
+GitLab Codex workflow walkthrough simulation passed
+spawn-census: {"suite":"simulate-gitlab-codex-workflow-walkthrough","spawns":3}
+behavioural[claude/canonical] archive-staging fault names the live run folder: done
+behavioural[codex] archive-staging fault names the live run folder: done
+behavioural[gitlab] archive-staging fault names the live run folder: done
+behavioural[gitea] archive-staging fault names the live run folder: done
+behavioural-C[claude/canonical] a gitignored archive candidate reports, with git's diagnosis: done
+behavioural-C[codex] a gitignored archive candidate reports, with git's diagnosis: done
+behavioural-D[claude/canonical] unattributable finalize residue is reported, not adopted: done
+behavioural-D[codex] unattributable finalize residue is reported, not adopted: done
+behavioural-D[gitlab] unattributable finalize residue is reported, not adopted: done
+behavioural-D[gitea] unattributable finalize residue is reported, not adopted: done
+static: finding-type registries and their docs/api.md statements: done
+
+233 passed, 0 failed
+scoping[claude/canonical] archive commit 13c0911d carried 2 path(s): done
+scoping[codex] archive commit 7a32d201 carried 2 path(s): done
+scoping[gitlab] archive commit c8737641 carried 2 path(s): done
+scoping[gitea] archive commit 155dbadb carried 2 path(s): done
+930[claude/canonical/.roadmap] reserved-directory archive: done
+930[codex/.roadmap] reserved-directory archive: done
+930[gitlab/.roadmap] reserved-directory archive: done
+930[gitea/.roadmap] reserved-directory archive: done
+930[claude/canonical/Archive] reserved-directory archive: done
+930[codex/Archive] reserved-directory archive: done
+930[gitlab/Archive] reserved-directory archive: done
+930[gitea/Archive] reserved-directory archive: done
+
+180 passed, 0 failed
+#932[claude/canonical] claim rollback scoping: done
+#932[codex] claim rollback scoping: done
+#932[gitlab] claim rollback scoping: done
+#932[gitea] claim rollback scoping: done
+
+32 passed, 0 failed
+#933[claude/canonical] claim reserved-project resolution: done
+#933[codex] claim reserved-project resolution: done
+#933[gitlab] claim reserved-project resolution: done
+#933[gitea] claim reserved-project resolution: done
+
+12/12 legs ran (4 editions x 3 legs)
+212 passed, 0 failed
+active-folders-field-parity tests passed (163 assertions)
+generate-routing-surfaces --check: all 24 surfaces byte-match the skeleton.
+
+> kaola-workflow@10.5.0 test:kaola-workflow:gitea
+> node scripts/edition-sync.js --materialize-kernel && node scripts/validate-vendored-agents.js && node scripts/edition-sync.js --check && node plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js && node plugins/kaola-workflow-gitea/scripts/simulate-gitea-workflow-walkthrough.js && node plugins/kaola-workflow-gitea/scripts/simulate-gitea-codex-workflow-walkthrough.js && node scripts/test-forge-finalize-findings.js && node scripts/test-forge-archive-scoping.js && node scripts/test-forge-claim-rollback-scoping.js && node scripts/test-forge-claim-reserved-project.js && node scripts/test-active-folders-field-parity.js && node scripts/generate-routing-surfaces.js --check
+
+edition-sync: materialized shared kernel(s) into forge trees (0 file(s) already present).
+Generated agent validation passed for 14 roles at 922d2d8f8b64f4e50936e24465cb3bcac81ac0e1
+edition-sync: 6 forge aggregator ports in parity with canonical.
+edition-sync: committed kernel parity verified at HEAD.
+Kaola-Workflow Gitea contract validation passed
+testFallbackGuardsAfterArchive: PASSED
+testAuditAndRepairLabels: PASSED
+testSinkPrUsesFinalizationSummary: PASSED
+testGiteaBundleClaimCreatesOneFolder: PASSED
+testGiteaClosurePersistence: PASSED
+testGiteaSelectionEvidenceDocking: PASSED
+testGiteaBundleRefusalLeavesNoFolder: PASSED
+testGiteaBundleDuplicateIssueBlocking: PASSED
+testGiteaBundleFinalizeOnlineAllClosedArchives: PASSED
+testGiteaBundleSingleIssueStateHasNoBundleFields: PASSED
+testGiteaFinalizeArchiveVerifiesBeforeDelete: PASSED
+testGiteaFinalizeClosesIssueBundleMembers: PASSED
+testGiteaBundleFinalizeAllOpenCloseIsPending: PASSED
+Gitea workflow walkthrough simulation passed
+spawn-census: {"suite":"simulate-gitea-workflow-walkthrough","spawns":117}
+Gitea Codex workflow walkthrough simulation passed
+spawn-census: {"suite":"simulate-gitea-codex-workflow-walkthrough","spawns":3}
+behavioural[claude/canonical] archive-staging fault names the live run folder: done
+behavioural[codex] archive-staging fault names the live run folder: done
+behavioural[gitlab] archive-staging fault names the live run folder: done
+behavioural[gitea] archive-staging fault names the live run folder: done
+behavioural-C[claude/canonical] a gitignored archive candidate reports, with git's diagnosis: done
+behavioural-C[codex] a gitignored archive candidate reports, with git's diagnosis: done
+behavioural-D[claude/canonical] unattributable finalize residue is reported, not adopted: done
+behavioural-D[codex] unattributable finalize residue is reported, not adopted: done
+behavioural-D[gitlab] unattributable finalize residue is reported, not adopted: done
+behavioural-D[gitea] unattributable finalize residue is reported, not adopted: done
+static: finding-type registries and their docs/api.md statements: done
+
+233 passed, 0 failed
+scoping[claude/canonical] archive commit 250b4ca8 carried 2 path(s): done
+scoping[codex] archive commit ac9a3a13 carried 2 path(s): done
+scoping[gitlab] archive commit 6085317d carried 2 path(s): done
+scoping[gitea] archive commit c3fa58af carried 2 path(s): done
+930[claude/canonical/.roadmap] reserved-directory archive: done
+930[codex/.roadmap] reserved-directory archive: done
+930[gitlab/.roadmap] reserved-directory archive: done
+930[gitea/.roadmap] reserved-directory archive: done
+930[claude/canonical/Archive] reserved-directory archive: done
+930[codex/Archive] reserved-directory archive: done
+930[gitlab/Archive] reserved-directory archive: done
+930[gitea/Archive] reserved-directory archive: done
+
+180 passed, 0 failed
+#932[claude/canonical] claim rollback scoping: done
+#932[codex] claim rollback scoping: done
+#932[gitlab] claim rollback scoping: done
+#932[gitea] claim rollback scoping: done
+
+32 passed, 0 failed
+#933[claude/canonical] claim reserved-project resolution: done
+#933[codex] claim reserved-project resolution: done
+#933[gitlab] claim reserved-project resolution: done
+#933[gitea] claim reserved-project resolution: done
+
+12/12 legs ran (4 editions x 3 legs)
+212 passed, 0 failed
+active-folders-field-parity tests passed (163 assertions)
+generate-routing-surfaces --check: all 24 surfaces byte-match the skeleton.
+npm_test_exit=0
+== walkthrough ==
+testAxiomBlockByteIdentity: PASSED (24 non-authoring surfaces)
+testKeepOpenArchiveStamp: PASSED
+testManualArchiveBackstop: PASSED
+testSinkPrUsesFinalizationSummary: PASSED
+testClassifierDependsOnGate: PASSED
+testActiveFoldersExcludesClosedIssue895: PASSED
+testStartupJsonAndHiddenLocalWorktrees: PASSED
+testWorktreeAdaptiveProvisioned: PASSED
+testArchiveDestinationResolvesAgainstMain832: PASSED
+testArchiveCommitHonestUnderGitignore832: PASSED
+testFinalizeNarrowStagingExcludesForeignArchive: PASSED
+testStaleWorktreeCheck: PASSED
+testStaleWorktreeCleanup: PASSED
+testReadPriorityConfig: PASSED
+testE2EGitHubMergeFullChain: PASSED
+testSinkMergeRefusesLiveFolder: PASSED
+testSinkRefusesDirtyWorktree: PASSED
+testProbeHelpersFailClosed: PASSED
+testArchiveIntegrityPortedToAllEditions832: PASSED
+testStaleDiagnosticsPortedToAllEditions1002: PASSED
+testFillIfEmptySummarySectionPortedToAllEditions1004: PASSED
+testSinkMergeBlocksUnpushedCommits: PASSED
+testAssertWorktreeCleanFailsClosedOnProbeFault: PASSED
+testAssertWorktreeCleanFailsClosedOnListProbeFault: PASSED
+testSinkRefusesOnPushMainFailure: PASSED
+testSinkRefusesOnPushUpstreamFailure: PASSED
+testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge: PASSED
+testSinkTransactionStampsPublishedHeadAfterRebase: PASSED
+testSinkRefusesOnCloseFailure: PASSED
+testSinkMergeAutoPushesWhenNoUpstream: PASSED
+testSinkMergeOfflineSkipsPublishGuard: PASSED
+testSinkMergeNonDefaultBranchMaster: PASSED
+testSinkMergeReRebasesOnFfRace: PASSED
+testSinkMergeConsumerRepoSkipsNpmTestGate: PASSED
+testSinkMergeBareRemoteDeleteOrder: PASSED
+testE2EGitHubPrFullChain: PASSED
+testParallelIssueIndependence: PASSED
+testClassifierFailClosedOnRemoteError: PASSED
+testClassifierOfflineUnverifiedNoLocalEvidence: PASSED
+testClassifierOfflineVerifiedOwnedFolderRoutes: PASSED
+testClassifierOfflineUnverifiedWithUnrelatedActiveFolder: PASSED
+testStartupExplicitTargetRedAnswers: PASSED
+testClassifierTopLevelIssueFlag: PASSED
+testClaimProjectOwnedFolderFailingRemote: PASSED
+testFinalizeRemovesClaimLabel: PASSED
+testFinalizeNullFolderFallbackReadsArchive: PASSED
+testFinalizeOfflineSkipsLabelInvariant: PASSED
+testFinalizeOfflineReportsSkippedClaimRelease: PASSED
+testFinalizeReportsMissionListOutcomeWithoutDone: PASSED
+testWatchPrEmitsClaimLabelReceipt: PASSED
+testAuditAndRepairLabels: PASSED
+testFinalizeClaimLabelFailedTriggersInvariant: PASSED
+testClearAdvisoryClaimDeletesMarkerComment: PASSED
+testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker: PASSED
+testClearAdvisoryClaimOfflineSkipsDelete: PASSED
+testSinkKeepOpenReleasesClaimMarker: PASSED
+testKeepOpenSinkLeavesTheIssueReClaimable: PASSED
+testSinkMergeEmitsClosureReceipt: PASSED
+testWatchPrMergedClosureReceipt: PASSED
+testFinalizeOfflineClosureReceiptSkipped: PASSED
+testSinkMergeMockabilityAndReceipt: PASSED
+testSinkMergeCloseFailureWarning: PASSED
+testSinkMergeCloseExitZeroButStillOpenFailsClosed: PASSED
+testSinkMergeSkipsArchivedProjectPhantom: PASSED
+testKeepOpenMergeFullChain: PASSED
+testKeepOpenFinalizeFlagAlias: PASSED
+testSinkMergeKeepOpenOnlineMock: PASSED
+testSinkMergePostPushReopenOnMock: PASSED
+testBundleFinalizeAllOpenCloseIsPending: PASSED
+testSinkMergeKeepOpenRequiresIssue: PASSED
+testSinkMergeKeepOpenArchivedStateGuard: PASSED
+testSinkPrKeepOpenRefusal: PASSED
+testClosureAuditOfflineRemoteClassesSkipped: PASSED
+testClosureAuditArchiveContentDrift832: PASSED
+testClosureAuditStaleInProgressLabels: PASSED
+testClosureAuditActiveFolderForClosedIssueReportsDirty: PASSED
+testClosureAuditUnarchivedPrFolderMerged: PASSED
+testClosureAuditExecuteRepairsLabels: PASSED
+testClosureAuditExecuteNeverTouchesActiveFolders: PASSED
+testClosureAuditDryRunNeverCallsRemoveLabel: PASSED
+testClosureAuditStaleLabelsTimeout: PASSED
+testClosureAuditUnresolvedClosedState: PASSED
+testClosureAuditProbeFailureUnresolved: PASSED
+testClosureAuditTimeoutEnvInvalidFallsBack: PASSED
+testClosureAuditExecuteDetectionTimeoutPropagates: PASSED
+testClosureAuditExecuteLabelRemovalTimeoutBreaks: PASSED
+testClosureAuditExecuteLabelRemovalNonTimeoutFails: PASSED
+testClosureAuditPrFolderTimeout: PASSED
+testClosureAuditProjectScopePartitions903: PASSED
+testClosureAuditRejectsUnknownFlagAndHelp903: PASSED
+testClosureAuditMistypedProjectExitsOne903: PASSED
+testClosureAuditProjectNameIsNotAPath903: PASSED
+testClosureAuditScopedCleanIsFailClosed903: PASSED
+testClosureAuditBundleMemberActiveFolderClosed903: PASSED
+testClosureAuditCitationMissingOmittedWhenEmpty903: PASSED
+testClosureAuditCitationMissingReportsAndExcludesJsonl903: PASSED
+testClosureAuditScopingHelpers903: PASSED
+testClosureAuditScopedArchiveNameMatch903: PASSED
+testClosureAuditScopedArchiveAmbiguousMatch903: PASSED
+testProbeTimeoutEnv: PASSED
+testContractValidatorOfflineSkip: PASSED
+testContractValidatorReflowTolerant: PASSED
+testContractValidatorMissingTag: PASSED
+testTagAncestorGuard402: PASSED
+testWatchPrAbandonedClosureInvariantsClean: PASSED
+testClaimReclaimsStatelessOrphanDir: PASSED
+testPatchBranchGuards: PASSED
+testAdaptiveOffClaimRefusal: PASSED
+testAdaptiveOffPreservesTwoWay: PASSED
+testAdaptiveResumeAfterFlipOff: PASSED
+testReleaseCheckPreTagGate: PASSED
+testGitignoreCoversKw: PASSED
+testWorktreeHiddenLocalPath: PASSED
+testLegacyWorktreeCleanupDryRun: PASSED
+testLegacyWorktreeCleanupDirtySkip: PASSED
+testAdaptiveWorktreeProvisionedE2E: PASSED
+sink-merge: FINDING no_implementation_changes: branch workflow/issue-911 carries no implementation changes beyond origin/main — every changed file is a kaola-workflow/** workflow artifact: kaola-workflow/archive/issue-911/workflow-state.md. Nothing was merged and nothing was pushed.
+  If the branch was meant to deliver implementation, its final commit is missing: add the real changed files and re-run the sink. If it is deliberately a docs/roadmap-only change, that is a legitimate deliverable and the route for it is a pull request — run sink-pr for this branch, which stages the content for review rather than publishing it.
+testSinkReportsWorkflowOnlyBranch: PASSED
+testSinkAllowsMixedBranch: PASSED
+testClaimFinalizeSinkChainCompletes: PASSED
+testSelectionEvidenceDocking: PASSED
+testFinalizeIncompleteResumesCrashState: PASSED
+testFinalizeIncompleteNegativeControlAlreadyDone: PASSED
+testFinalizeIncompleteNegativeControlRepoDirty: PASSED
+testFinalizeIncompleteWorktreeReentryFix: PASSED
+testBundleClaimCreatesOneFolder: PASSED
+testBundleRefusalLeavesNoFolder: PASSED
+testBundleDuplicateIssueBlocking: PASSED
+testBundleFinalizeReceiptFields: PASSED
+testBundleSingleIssueStateHasNoBundleFields: PASSED
+testFinalizeArchiveVerifiesBeforeDelete: PASSED
+testArchiveCompleteSourceRelative676: PASSED
+testFinalizeClosesIssueBundleMembers: PASSED
+testHarnessSelfCheck: PASSED
+testSinkTransactionBlockedByForeignDirt: PASSED
+testSinkForeignDirtExemptsSiblingReceipt715: PASSED
+testSinkTransactionCrashResume: PASSED
+testSinkTransactionCleanEndToEnd: PASSED
+testTwoLanesInOneCheckout579: PASSED
+testPlanlessAndPlannedInitialAuthority699: PASSED
+testArchiveCallersFailClosed699: PASSED
+testOfflineNoHistoryClaimRoot699: PASSED
+testArchiveNeverRelocatesReservedDir930: PASSED (4/4 names x 2 lanes)
+testClaimRollbackRemovesOnlyWhatItCreated932: PASSED (created removed, adopted intact)
+testClaimNeverAdoptsReservedDir933: PASSED (3/3 doors)
+##KW-SHARD {"suite":"simulate-workflow-walkthrough","index":1,"total":1,"scenarios":179,"ran":179,"passed":179,"failed":0}
+Workflow walkthrough simulation passed
+spawn-census: {"suite":"simulate-workflow-walkthrough","spawns":2118}
+walkthrough_exit=0
+== editions ==
+
+> kaola-workflow@10.5.0 test:kaola-workflow:editions
+> node scripts/run-edition-tests.js scripts/test-opencode-edition.js scripts/test-kimi-edition.js scripts/test-grok-edition.js scripts/test-cursor-edition.js scripts/test-issue-1045-cursor-conformance.js scripts/test-zcode-edition.js scripts/test-zcode-hook-protocol.js scripts/test-zcode-install-trust.js
+
+D0: .opencode is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .opencode-gitlab is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .opencode-gitea is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+opencode-edition test passed (875 assertions). [drift-check: 3 tree(s) in parity (.opencode, .opencode-gitlab, .opencode-gitea)] [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .kimi is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .kimi-gitlab is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .kimi-gitea is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+kimi-edition test passed (824 assertions). [drift-check: 3 tree(s) in parity (.kimi, .kimi-gitlab, .kimi-gitea)] [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .grok is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .grok-gitlab is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .grok-gitea is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+grok-edition test passed (705 assertions). [drift-check: 3 tree(s) in parity (.grok, .grok-gitlab, .grok-gitea)] [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .cursor is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .cursor-gitlab is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .cursor-gitea is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+cursor-edition test passed (834 assertions). [drift-check: 3 tree(s) in parity (.cursor, .cursor-gitlab, .cursor-gitea)] [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+issue-1045 cursor conformance passed (24 assertions).
+D0: .zcode is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .zcode-gitlab is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+D0: .zcode-gitea is present and in parity with canonical. [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+zcode-edition test passed (854 assertions). [drift-check: 3 tree(s) in parity (.zcode, .zcode-gitlab, .zcode-gitea)] [tree root: /Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow, not this checkout]
+zcode hook protocol acceptance passed (32 assertions).
+zcode install acceptance passed (47 assertions).
+edition test lane passed: all 8 suites executed successfully.
+editions_exit=0
+== status ==
+END_HEAD=1b779b382cd02f99ea23ca99235e43b34c58c25a end=16:16:43
+VERIFY_DONE

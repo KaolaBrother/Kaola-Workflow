@@ -1,0 +1,4 @@
+host=kimi scenario=design start=15:39:53
+error: Cannot combine --prompt with --yolo.
+exit=1 elapsed=5s
+end=15:39:58

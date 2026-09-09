@@ -1,0 +1,46 @@
+host=kimi scenario=factgap start=15:44:36
+kimi version 0.34.0
+• Let me read the repository files as instructed: AGENTS.md, src/authz.js, test/.
+
+• I'll read the repository files before deciding.mission-list.md
+02fb575 fixture
+
+
+• The repo has a clear bug: src/authz.js line 5 — auditors see everything, but the comment says "BUG: auditors were meant to see only resources flagged auditable". Issue #8: "Auditors see too much." The code comment documents the intended behavior. AGENTS.md requires keeping tests green and adding a regression for the fixed path.
+
+  Is anything missing? The intended outcome is clear from the code comment: auditors should see only resources flagged `auditable`. The field name `auditable` is stated in the comment. So the FACT is establishable from the repository — the intended semantics are documented in the code itself. Acceptance basis: AGENTS.md (tests green + regression test). Authorization is explicit: "you're authorized."
+
+  So mode: CONTINUE (after claim per the Next route). Actually the route says: claim, write mission list, run. "Task clarity. When the intended outcome and its acceptance basis are already clear and authorized, continue."
+
+  The scenario says read-only, so I just decide and explain.
+
+  First three concrete actions:
+  1. Run freshness/claim script (list-open, view issue #8, claim with --target-issue 8) — but I'm read-only here; the actions I list are what I would do.
+  2. Fix src/authz.js line 5: `if (user.role === 'auditor') return resource.auditable === true;`
+  3. Add regression in test/authz.test.js (auditor + auditable resource → true; auditor + non-auditable → false), run `node test/run.js`.
+
+  Also read kaola-workflow/issue-7/mission-list.md? The route says never adopt an active folder's issue; the user named issue #8 exactly, so select it exactly. There's an active issue-7 folder — need to note it's a different session's folder perhaps. "The user named an issue: select it exactly. Never substitute another, and never adopt an active folder's issue in its place."
+
+  Verbatim question: none.
+
+  Quote the deciding sentence: "When the intended outcome and its acceptance basis are already clear and authorized, continue: do not demand a fixed requirement format or rewrite the issue to restate it." Also "When a fact is missing, read the code, reproduce, or look it up first."
+
+  Keep to ≤20 lines.
+
+• (1) **MODE: CONTINUE** (proceed to claim → mission list → implement; no user question needed).
+
+  (2) **Nothing decisive is missing — the intended behavior is a FACT in the repository.** `src/authz.js:5` carries the spec inline: `if (user.role === 'auditor') return true; // BUG: auditors were meant to see only resources flagged auditable`. So the fix is established, not a user value call: auditors pass only when the resource is flagged `auditable`. The acceptance basis is also repo-given: AGENTS.md requires `node test/run.js` green plus a regression for the fixed path, and `test/authz.test.js` currently has no auditor case — that's the gap to fill. Issue #8's terse body ("Auditors see too much.") matches this exactly; there are no comments contradicting the body. Note: `kaola-workflow/issue-7/` is an active folder for a *different* issue — the user named #8, so I select exactly #8 and never adopt issue-7's folder.
+
+  (3) First three concrete actions:
+  1. Run the route's freshness + claim block (`git status/fetch`, `list-open`, `gh issue view 8`), state the selection aloud (issue #8, skipping the active issue-7 folder), then `startup --target-issues 8`.
+  2. Create `kaola-workflow/{project}/mission-list.md` with the single mission (restrict auditor access to auditable-flagged resources, with regression test), then edit `src/authz.js:5` to `if (user.role === 'auditor') return resource.auditable === true;`.
+  3. Add regression assertions to `test/authz.test.js` (auditor + `auditable: true` → true; auditor + unflagged → false), run `node test/run.js`, record results, then transition to `/kaola-workflow-finalize`.
+
+  (4) Verbatim question to the user: **none.**
+
+  (5) Deciding sentences from the Next route: "When the intended outcome and its acceptance basis are already clear and authorized, continue: do not demand a fixed requirement format or rewrite the issue to restate it." and "When a fact is missing, read the code, reproduce, or look it up first; implementation detail inside an authorized scope is your own judgment." Also governing selection: "The user named an issue: select it exactly. Never substitute another, and never adopt an active folder's issue in its place."
+
+To resume this session: kimi -r session_412e332e-6b7d-4848-8d31-2acda7e38c38
+exit=0 elapsed=110s
+end=15:46:26
+HOSTPROBE_DONE

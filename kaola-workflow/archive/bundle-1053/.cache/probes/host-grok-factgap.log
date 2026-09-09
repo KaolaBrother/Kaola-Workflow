@@ -1,0 +1,14 @@
+host=grok scenario=factgap start=15:45:06
+I'll read the repo and the Next-route task-clarity rules, then decide the mode from evidence rather than from the issue title alone.**(1) MODE:** INVESTIGATE-THEN-CONTINUE
+
+**(2)** Missing piece is a **FACT** in the repo, not a user value-choice. `#8` is only “Auditors see too much.” `src/authz.js` already states the intended rule: `auditor` currently returns `true` with `// BUG: auditors were meant to see only resources flagged auditable`. Tests cover admin/owner/other only; AGENTS.md requires a regression on any `authz.js` change. Do **not** adopt `kaola-workflow/issue-7/` (different issue; Next forbids substituting an active folder).
+
+**(3)** First actions: (a) keep target **#8** exactly; (b) recover acceptance from that BUG comment (auditor allowed only if auditable; admin/owner unchanged); (c) on a real run, claim `#8` and implement + regression—this probe stays read-only.
+
+**(4)** none
+
+**(5)** “When a fact is missing, read the code, reproduce, or look it up first; implementation detail inside an authorized scope is your own judgment. Ask the user only about an unresolved choice that would change scope, authorization, or the meaning of acceptance, and keep doing the investigation that does not depend on the answer.” Also: “When the intended outcome and its acceptance basis are already clear and authorized, continue: do not demand a fixed requirement format or rewrite the issue to restate it.” And: “**The user named an issue**: select it exactly. Never substitute another, and never adopt an active folder's issue in its place.”
+[2m2026-09-09T07:46:34.050067Z[0m [33m WARN[0m Error killing MCP child process group: Operation not permitted (os error 1)
+exit=0 elapsed=90s
+end=15:46:36
+HOSTPROBE_DONE
