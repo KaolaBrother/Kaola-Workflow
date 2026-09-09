@@ -19,7 +19,7 @@ const closureContract = require('./kaola-workflow-closure-contract');
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 // #579: shared resolver — single source replacing local re-impls in claim.js / adaptive-node.js / sink-merge.js.
 const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, isParkedLanePath,
-  splitNulPaths } = adaptiveSchema;
+  splitNulPaths, defaultBranch } = adaptiveSchema;
 // #579: lane classifier (resolveSessionMarker + classifyLane) — imported in-process (no subprocess).
 const { resolveSessionMarker, classifyLane } = require('./kaola-workflow-classifier');
 // parseGoal reads the run's goal (the mission list's H1); the two expansion readers feed the
@@ -700,33 +700,8 @@ function treeDirty(root, ownedProjects, exemptRelPaths) {
   } catch (_) { return true; }
 }
 
-function defaultBranch(root) {
-  // #397.3: probe chain (offline-safe). The single refs/remotes/origin/HEAD read is UNSET on a
-  // clone-of-empty-bare or `git remote add` repo, so a master-default repo fell straight back to
-  // 'main' → sink-merge then failed at `checkout main` (confusing, but fail-closed). Try the local
-  // symbolic-ref first (no network), then `git remote show` and `ls-remote --symref` (network, may
-  // be unavailable offline — swallowed), then default to 'main'. The first probe that resolves wins.
-  // 1) Local symbolic-ref (no network).
-  try {
-    const ref = execFileSync('git', ['-C', root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    if (ref) return ref.replace(/^origin\//, '');
-  } catch (_) {}
-  // Offline: never make a network probe — fall straight to the default.
-  if (OFFLINE) return 'main';
-  // 2) `git remote show origin` → "HEAD branch: <name>" (network).
-  try {
-    const out = execFileSync('git', ['-C', root, 'remote', 'show', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: REMOTE_TIMEOUT_MS });
-    const m = out.match(/^\s*HEAD branch:\s*(\S+)\s*$/m);
-    if (m && m[1] && m[1] !== '(unknown)') return m[1];
-  } catch (_) {}
-  // 3) `git ls-remote --symref origin HEAD` → "ref: refs/heads/<name>\tHEAD" (network).
-  try {
-    const out = execFileSync('git', ['-C', root, 'ls-remote', '--symref', 'origin', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: REMOTE_TIMEOUT_MS });
-    const m = out.match(/^ref:\s*refs\/heads\/(\S+)\s+HEAD\s*$/m);
-    if (m && m[1]) return m[1];
-  } catch (_) {}
-  return 'main';
-}
+// #1055: defaultBranch now lives in adaptive-schema.js (imported above as part of the
+// destructure from `adaptiveSchema`); this file no longer defines it locally.
 
 function branchExists(root, branch) {
   try {

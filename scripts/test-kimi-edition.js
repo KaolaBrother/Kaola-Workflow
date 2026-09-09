@@ -2894,6 +2894,25 @@ for (const script of sync.HOOK_SCRIPTS) {
   }
 }
 
+// #1055: transformCommandBody's line-splitting loop is a no-op pass-through
+// (split(/\r?\n/) then join('\n')) — its only surviving effect is CRLF -> LF
+// normalization. Pin that behavior directly: a CRLF command body must render
+// byte-identically to the same body with LF endings.
+{
+  const forgeLayout = require('./runtime-edition-forge.js');
+  const crlfSrc = forgeLayout.commandSources('github').find(s => s.basename === 'workflow-next.md');
+  assert(!!crlfSrc, 'CRLF: workflow-next.md is a registered command source');
+  if (crlfSrc) {
+    const rawBody = fs.readFileSync(crlfSrc.absPath, 'utf8');
+    const lfBody = rawBody.replace(/\r\n/g, '\n');
+    const crlfBody = lfBody.replace(/\n/g, '\r\n');
+    const lfOut = sync.transformCommandBody(lfBody, 'github', 'workflow-next.md');
+    const crlfOut = sync.transformCommandBody(crlfBody, 'github', 'workflow-next.md');
+    assert(crlfOut === lfOut,
+      'CRLF: transformCommandBody(CRLF body) must equal transformCommandBody(LF body) byte-for-byte');
+  }
+}
+
 if (failed) {
   console.error('\nkimi-edition test FAILED: ' + failed + ' failure(s), ' + passed + ' passed.'
     + driftVerdict);

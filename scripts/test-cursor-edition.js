@@ -671,19 +671,23 @@ const CURSOR_MODEL_CLASS_TIERS = Object.freeze({
   heavy: Object.freeze({ tier: 'heavy', pin: 'grok-4.6[effort=xhigh]' }),
 });
 
-// #1018: CURSOR_MODEL_CLASS_PINS is the production map (not exported). The
-// allowlist/pin must gain fable -> grok-4.6[effort=xhigh].
-const CURSOR_SYNC_SRC = fs.readFileSync(path.join(REPO, 'scripts', 'sync-cursor-edition.js'), 'utf8');
-const CURSOR_MODEL_CLASS_PINS_PIN = (() => {
-  const m = CURSOR_SYNC_SRC.match(/const CURSOR_MODEL_CLASS_PINS = Object\.freeze\(\{([\s\S]*?)\}\)/);
-  const out = {};
-  if (!m) return out;
-  for (const row of m[1].split('\n')) {
-    const mm = row.match(/^\s*([A-Za-z0-9_-]+)\s*:\s*'([^']+)'/);
-    if (mm) out[mm[1]] = mm[2];
-  }
-  return out;
-})();
+// #1018/#1055: CURSOR_MODEL_CLASS_PINS was a retired production map in
+// sync-cursor-edition.js that renderAgent never consulted — it delegates entirely to
+// generate-agent-profiles.renderRuntimeRole('cursor', name), whose model line is driven by
+// templates/agents/runtime-capabilities.json's cursor adapter (capabilities.model +
+// capabilities.intent_mapping[tier]). Pin the SAME meaning (every tier, including
+// fable/heavy at xhigh) against that REAL chain: the adapter's own declared values, and the
+// actual rendered .cursor agent output for a fable-tier role. Do NOT read
+// sync-cursor-edition.js source text — a retired table there proves nothing about behavior.
+const CURSOR_ADAPTER_CAPS = JSON.parse(fs.readFileSync(
+  path.join(REPO, 'templates', 'agents', 'runtime-capabilities.json'), 'utf8')).runtimes.cursor.capabilities;
+// Hardcoded independently of the adapter file so a mutation to the adapter's own
+// intent_mapping/model values is caught rather than compared against itself.
+const CURSOR_REAL_TIER_PINS_PIN = Object.freeze({
+  standard: 'grok-4.6[effort=medium]',
+  reasoning: 'grok-4.6[effort=high]',
+  heavy: 'grok-4.6[effort=xhigh]',
+});
 
 // ---------------------------------------------------------------------------
 // Additive boundary — cursor is a runtime, not a forge. Read the tree; do not
@@ -835,11 +839,22 @@ const canonRosters = canonicalRosters(canonAgents);
   assert(canonRosters.unknown.length === 0,
     'G0-roster: every canonical agent model belongs to the known sonnet/opus/fable classes — unknown='
     + JSON.stringify(canonRosters.unknown));
-  assert(Object.prototype.hasOwnProperty.call(CURSOR_MODEL_CLASS_PINS_PIN, 'fable'),
-    'G0-fable: CURSOR_MODEL_CLASS_PINS must include a fable entry');
-  assert(CURSOR_MODEL_CLASS_PINS_PIN.fable === 'grok-4.6[effort=xhigh]',
-    'G0-fable: CURSOR_MODEL_CLASS_PINS.fable must be grok-4.6[effort=xhigh] — got '
-    + JSON.stringify(CURSOR_MODEL_CLASS_PINS_PIN.fable));
+  assert(CURSOR_ADAPTER_CAPS.model === 'grok-4.6',
+    'G0-fable: templates/agents/runtime-capabilities.json runtimes.cursor.capabilities.model '
+    + 'must be grok-4.6 — got ' + JSON.stringify(CURSOR_ADAPTER_CAPS.model));
+  for (const tier of ['standard', 'reasoning', 'heavy']) {
+    const adapterPin = CURSOR_ADAPTER_CAPS.model + '[effort=' + CURSOR_ADAPTER_CAPS.intent_mapping[tier] + ']';
+    assert(adapterPin === CURSOR_REAL_TIER_PINS_PIN[tier],
+      'G0-fable: cursor adapter tier ' + tier + ' must resolve to ' + CURSOR_REAL_TIER_PINS_PIN[tier]
+      + ' — got ' + JSON.stringify(adapterPin));
+  }
+  for (const role of ['planner', 'code-architect']) {
+    const rendered = reviewerGenerator.renderRuntimeRole('cursor', role).content;
+    const pinLine = 'model: ' + CURSOR_REAL_TIER_PINS_PIN.heavy;
+    assert(rendered.split(/\r?\n/).includes(pinLine),
+      'G0-fable: renderRuntimeRole(cursor, ' + role + ') must render the real heavy/fable pin '
+      + JSON.stringify(pinLine) + ' — got ' + rendered.slice(0, 300));
+  }
   for (const name of canonAgents) {
     if (name === 'planner' || name === 'code-architect') continue;
     assert(canonicalAgentClass(name).model !== 'fable',
@@ -2562,6 +2577,24 @@ for (const role of reviewerGenerator.ROLES) {
     'G10-hook: expectedHookFiles() is empty — no SessionStart/Pre/Post/Stop/UserPrompt hook is declared');
   assert(!generatedTreeFiles('.cursor').some(rel => /(?:^|\/)hooks\//i.test(rel)),
     'G10-hook: generated Cursor tree carries no executable hook file');
+}
+
+// #1055: transformCommandBody's line-splitting loop is a no-op pass-through
+// (split(/\r?\n/) then join('\n')) — its only surviving effect is CRLF -> LF
+// normalization. Pin that behavior directly: a CRLF command body must render
+// byte-identically to the same body with LF endings.
+{
+  const crlfSrc = forgeLayout.commandSources(DEFAULT_FORGE).find(s => s.basename === 'workflow-next.md');
+  assert(!!crlfSrc, 'CRLF: workflow-next.md is a registered command source');
+  if (crlfSrc) {
+    const rawBody = fs.readFileSync(crlfSrc.absPath, 'utf8');
+    const lfBody = rawBody.replace(/\r\n/g, '\n');
+    const crlfBody = lfBody.replace(/\n/g, '\r\n');
+    const lfOut = syncMod.transformCommandBody(lfBody, DEFAULT_FORGE, 'workflow-next.md');
+    const crlfOut = syncMod.transformCommandBody(crlfBody, DEFAULT_FORGE, 'workflow-next.md');
+    assert(crlfOut === lfOut,
+      'CRLF: transformCommandBody(CRLF body) must equal transformCommandBody(LF body) byte-for-byte');
+  }
 }
 
 if (failed) {

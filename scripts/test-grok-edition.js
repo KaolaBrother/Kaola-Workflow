@@ -906,6 +906,25 @@ for (const role of reviewerGenerator.ROLES) {
   }
 }
 
+// #1055: transformCommandBody's line-splitting loop is a no-op pass-through
+// (split(/\r?\n/) then join('\n')) — its only surviving effect is CRLF -> LF
+// normalization. Pin that behavior directly: a CRLF command body must render
+// byte-identically to the same body with LF endings.
+{
+  const grokSync = require('./sync-grok-edition.js');
+  const crlfSrc = forgeLayout.commandSources(DEFAULT_FORGE).find(s => s.basename === 'workflow-next.md');
+  assert(!!crlfSrc, 'CRLF: workflow-next.md is a registered command source');
+  if (crlfSrc) {
+    const rawBody = fs.readFileSync(crlfSrc.absPath, 'utf8');
+    const lfBody = rawBody.replace(/\r\n/g, '\n');
+    const crlfBody = lfBody.replace(/\n/g, '\r\n');
+    const lfOut = grokSync.transformCommandBody(lfBody, DEFAULT_FORGE, 'workflow-next.md');
+    const crlfOut = grokSync.transformCommandBody(crlfBody, DEFAULT_FORGE, 'workflow-next.md');
+    assert(crlfOut === lfOut,
+      'CRLF: transformCommandBody(CRLF body) must equal transformCommandBody(LF body) byte-for-byte');
+  }
+}
+
 if (failed) {
   console.error('\ngrok-edition test FAILED: ' + failed + ' failure(s), ' + passed + ' passed.'
     + driftVerdict);

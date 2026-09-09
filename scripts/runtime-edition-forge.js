@@ -33,6 +33,7 @@
 const path = require('path');
 const routing = require('./generate-routing-surfaces.js');
 const manifest = require('./kaola-workflow-install-manifest.js');
+const agentGen = require('./generate-agent-profiles');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -107,6 +108,72 @@ function commandSources(forge) {
   }));
 }
 
+// --- helpers shared by the runtime-edition sync scripts (grok/kimi/cursor/opencode/zcode) ---
+// Each was byte-identical across every script that defined it; moved here once so no per-edition
+// copy can drift from the others. `treeLabel` and the DEFAULT_FORGE fallback stay per-script (each
+// edition's own tree namer / default), so any helper below that needs one takes it as an explicit
+// argument instead of closing over a local.
+
+// --- minimal frontmatter parser (only the flat key: value surface we need) ---
+function parseFrontmatter(text) {
+  const m = String(text).match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (!m) return { fm: {}, body: text };
+  const fm = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const mm = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+    if (mm) fm[mm[1]] = mm[2].trim();
+  }
+  return { fm, body: m[2] };
+}
+
+// Parse a bracketed `tools: [a, b, c]` frontmatter scalar into an array.
+function parseTools(raw) {
+  if (!raw) return [];
+  const inner = String(raw).replace(/^\[/, '').replace(/\]$/, '').trim();
+  if (!inner) return [];
+  return inner.split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+}
+
+// Some runtime YAML parsers are strict: an unquoted `description: … facts: use …` is
+// silently dropped (measured: knowledge-lookup vanished from `grok inspect` until
+// the description was JSON-quoted). Quote when the value would not be a plain YAML
+// scalar.
+function yamlScalar(value) {
+  const s = String(value == null ? '' : value);
+  if (s === '' || /[:#{}[\],&*!|>'"%@`\n]/.test(s) || /^(true|false|null|~)$/i.test(s)) {
+    return JSON.stringify(s);
+  }
+  return s;
+}
+
+// The full canonical role roster, as every runtime edition's MANAGED_ROLES set derives it.
+function listCanonAgents() {
+  return [...agentGen.ROLES];
+}
+
+// The command surfaces a runtime edition renders FROM, for a forge, as sorted basenames. Sourced
+// from the routing-surface registry rather than a directory listing, so the forge variants are the
+// generated, byte-checked surfaces themselves — a runtime edition holds no command list of its own
+// to drift. `forge` must already be resolved by the caller (each edition applies its own
+// DEFAULT_FORGE fallback before calling in).
+function listCanonCommands(forge) {
+  return commandSources(forge).map(s => s.basename).sort();
+}
+
+function canonCommandPath(basename, forge) {
+  const src = commandSources(forge).find(s => s.basename === basename);
+  if (!src) throw new Error(`no command surface "${basename}" for forge ${forge}`);
+  return src.absPath;
+}
+
+// Repo-relative path for a generated command file under a runtime's tree. grok, cursor, and zcode
+// all carry the identical body; `treeLabel` — each edition's own `.grok`/`.cursor`/`.zcode` +
+// forge-suffix namer — is the one per-edition variable, threaded through as an explicit argument
+// instead of restated per file.
+function commandRel(treeLabelFn, name, forge) {
+  return treeLabelFn(forge) + '/commands/' + name + '.md';
+}
+
 function main(argv) {
   let forge = null;
   let mode = null;
@@ -148,4 +215,11 @@ module.exports = {
   selfDevScriptsDir,
   scriptName,
   commandSources,
+  parseFrontmatter,
+  parseTools,
+  yamlScalar,
+  listCanonAgents,
+  listCanonCommands,
+  canonCommandPath,
+  commandRel,
 };

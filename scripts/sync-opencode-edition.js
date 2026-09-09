@@ -47,7 +47,6 @@ const path = require('path');
 const agentGen = require('./generate-agent-profiles');
 const forgeLayout = require('./runtime-edition-forge');
 const MANAGED_ROLES = new Set(agentGen.ROLES);
-const ZERO_HASH = '0'.repeat(64);
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -120,27 +119,7 @@ const ENV_STANDARD_MODEL = process.env.KAOLA_OPENCODE_STANDARD_MODEL || '';
 const ENV_REASONING_MODEL = process.env.KAOLA_OPENCODE_REASONING_MODEL || '';
 
 // --- minimal frontmatter parser (only the flat key: value surface we need) ---
-function parseFrontmatter(text) {
-  const m = String(text).match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-  if (!m) return { fm: {}, body: text };
-  const fm = {};
-  for (const line of m[1].split(/\r?\n/)) {
-    const mm = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
-    if (mm) fm[mm[1]] = mm[2].trim();
-  }
-  return { fm, body: m[2] };
-}
-
-function parseTools(raw) {
-  if (!raw) return [];
-  const inner = String(raw).replace(/^\[/, '').replace(/\]$/, '').trim();
-  if (!inner) return [];
-  return inner.split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
-}
-
-function lowerSet(arr) {
-  return new Set(arr.map(x => String(x).toLowerCase()));
-}
+const { parseFrontmatter, parseTools } = forgeLayout;
 
 // Canonical tool → the opencode permission axis that governs it. A generated agent's restrictions
 // are DERIVED from its canonical profile's `tools:` list: an axis is denied when canonical grants
@@ -172,9 +151,7 @@ function roleTier(intentClass) {
   return (token === 'reasoning' || token === 'heavy') ? 'reasoning' : 'standard';
 }
 
-function listCanonAgents() {
-  return [...agentGen.ROLES];
-}
+const { listCanonAgents } = forgeLayout;
 
 // The command surfaces this edition renders FROM, for a forge. Sourced from the
 // routing-surface registry rather than a directory listing, so the forge variants
@@ -183,13 +160,11 @@ function listCanonAgents() {
 // Sorted, so the emitted order is the directory order this generator used before
 // the forge axis and does not depend on the registry's topic order.
 function listCanonCommands(forge) {
-  return forgeLayout.commandSources(forge || DEFAULT_FORGE).map(s => s.basename).sort();
+  return forgeLayout.listCanonCommands(forge || DEFAULT_FORGE);
 }
 
 function canonCommandPath(basename, forge) {
-  const src = forgeLayout.commandSources(forge || DEFAULT_FORGE).find(s => s.basename === basename);
-  if (!src) throw new Error(`no command surface "${basename}" for forge ${forge || DEFAULT_FORGE}`);
-  return src.absPath;
+  return forgeLayout.canonCommandPath(basename, forge || DEFAULT_FORGE);
 }
 
 // --- renderers (pure; exported for parity test) ---
@@ -284,20 +259,7 @@ function rewriteClaudeScriptPaths(text, forge) {
 // The canonical section this transform substitutes at — the TRIGGER, never a heading it emits.
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
-  // Anchored model-dispatch rewrite FIRST, on canonical text only — before the loop below
-  // substitutes OPENCODE_MODEL_DISPATCH_BLOCK, so the edition's own guidance is never fed back
-  // through the rewrite.
-  const lines = body.split(/\r?\n/);
-  const out = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    out.push(line);
-    i++;
-  }
-  // A canonical rename that walked out from under the anchor above reports itself here rather than
-  // silently dropping the block.
-  let text = out.join('\n');
+  let text = body.split(/\r?\n/).join('\n');
   if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
     text = agentGen.replaceRuntimeDelegationGuidance(text, 'opencode', forge);
   }

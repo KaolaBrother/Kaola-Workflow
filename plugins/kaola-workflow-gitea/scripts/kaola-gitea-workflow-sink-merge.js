@@ -1693,10 +1693,6 @@ function scanArchiveTree(mainRoot, archiveRel) {
   return { required: required.sort(), embeddedRepos: embeddedRepos.sort() };
 }
 
-function requiredArchiveFiles(mainRoot, archiveRel) {
-  return scanArchiveTree(mainRoot, archiveRel).required;
-}
-
 // #901: the paths under `pathspec` that git would REFUSE to stage — untracked AND covered by an
 // ignore rule. This is the granularity a directory probe cannot reach: a consumer's basename rule
 // `.cache/` leaves the archive DIRECTORY un-ignored (measured: `check-ignore` exits 1) while

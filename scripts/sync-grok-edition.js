@@ -49,58 +49,19 @@ function treeLabel(forge) {
 }
 
 const MANAGED_ROLES = new Set(agentGen.ROLES);
-const ZERO_HASH = '0'.repeat(64);
 
 // No runtime-neutral hook scripts are active in the Grok edition. The generator retains ownership
 // of the hooks directory so --write can prune stale dispatch artifacts.
 const HOOK_SCRIPTS = [];
 
-function parseFrontmatter(text) {
-  const m = String(text).match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-  if (!m) return { fm: {}, body: text };
-  const fm = {};
-  for (const line of m[1].split(/\r?\n/)) {
-    const mm = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
-    if (mm) fm[mm[1]] = mm[2].trim();
-  }
-  return { fm, body: m[2] };
-}
-
-function parseTools(raw) {
-  if (!raw) return [];
-  const inner = String(raw).replace(/^\[/, '').replace(/\]$/, '').trim();
-  if (!inner) return [];
-  return inner.split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
-}
-
-function lowerSet(arr) {
-  return new Set(arr.map(x => String(x).toLowerCase()));
-}
-
-// Grok's agent YAML parser is strict: an unquoted `description: … facts: use …` is
-// silently dropped (measured: knowledge-lookup vanished from `grok inspect` until
-// the description was JSON-quoted). Quote when the value would not be a plain YAML
-// scalar.
-function yamlScalar(value) {
-  const s = String(value == null ? '' : value);
-  if (s === '' || /[:#{}[\],&*!|>'"%@`\n]/.test(s) || /^(true|false|null|~)$/i.test(s)) {
-    return JSON.stringify(s);
-  }
-  return s;
-}
-
-function listCanonAgents() {
-  return [...agentGen.ROLES];
-}
+const { parseFrontmatter, parseTools, yamlScalar, listCanonAgents } = forgeLayout;
 
 function listCanonCommands(forge) {
-  return forgeLayout.commandSources(forge || DEFAULT_FORGE).map(s => s.basename).sort();
+  return forgeLayout.listCanonCommands(forge || DEFAULT_FORGE);
 }
 
 function canonCommandPath(basename, forge) {
-  const src = forgeLayout.commandSources(forge || DEFAULT_FORGE).find(s => s.basename === basename);
-  if (!src) throw new Error(`no command surface "${basename}" for forge ${forge || DEFAULT_FORGE}`);
-  return src.absPath;
+  return forgeLayout.canonCommandPath(basename, forge || DEFAULT_FORGE);
 }
 
 function renderAgent(canonContent, agentName, forge) {
@@ -140,15 +101,7 @@ function rewriteClaudeScriptPaths(text, forge) {
 
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
-  const lines = body.split(/\r?\n/);
-  const out = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    out.push(line);
-    i++;
-  }
-  let text = out.join('\n');
+  let text = body.split(/\r?\n/).join('\n');
   if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
     text = agentGen.replaceRuntimeDelegationGuidance(text, 'grok', forge);
   }
@@ -213,7 +166,7 @@ function agentRel(name, forge) {
   return treeLabel(forge) + '/agents/' + name + '.md';
 }
 function commandRel(name, forge) {
-  return treeLabel(forge) + '/commands/' + name + '.md';
+  return forgeLayout.commandRel(treeLabel, name, forge);
 }
 
 function expectedAgentFiles(forge) {

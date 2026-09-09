@@ -1,0 +1,2441 @@
+{
+  "tool": "kaola-workflow-issue-1055-render-subtraction-oracle",
+  "schema": 1,
+  "captured_at_commit": "5cb855153338f7116d691200ad79fb06e553e7f0",
+  "runtimes": [
+    "grok",
+    "kimi",
+    "cursor",
+    "opencode",
+    "zcode"
+  ],
+  "forges": [
+    "gitea",
+    "github",
+    "gitlab"
+  ],
+  "roles": [
+    "adversarial-verifier",
+    "build-error-resolver",
+    "code-architect",
+    "code-explorer",
+    "code-reviewer",
+    "doc-updater",
+    "implementer",
+    "investigator",
+    "knowledge-lookup",
+    "metric-optimizer",
+    "planner",
+    "security-reviewer",
+    "synthesizer",
+    "tdd-guide"
+  ],
+  "commands": [
+    "kaola-workflow-finalize",
+    "workflow-init",
+    "workflow-next"
+  ],
+  "total_comparisons": 300,
+  "records": [
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "b661c6520ea522f0b1a1c5dc8946ffb4a678fb78959817eced33ca8df9280864"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "738edf49247e3068989647c20c5cb63e16e6a522bf920d3a7841102fe213258c"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "e5ff1e87c6c11445f6433d9572ee41db3b7bca894f83c080b8b71493b9b666a4"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "8cda12d588f8bb2d93510cc4120a63608a8a2527c29c4735e55c2f600d509f23"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "a0e42279f488edc1841d9af7a7747a48ef3c53c138da5864b2204dcc01289302"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "0a5147fe7612191df9abdd88dd5c616d41745049e8ff904f03b61540094ecd37"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "36ae6cf5b78059097e9bf34e0d00d6f93b179bb58ee9b94282d7474f8b852ad9"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "65b01cf1ae9e28512fbc5fe279130a3ca58a2474c97af95be7c9d140879b29ed"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "2af57644634c44287a28ba8b423136b23fc7e35f1a95c5baf27aca4ffaa7f790"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "1ff0fd72d5dcd19faff278a6416eb9afdf67d2ce6297e77a8c788ce9f2988ec3"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "62ef5194544b8dbec704685194c573989eb501d3e6d78dfcb50a930ac124df99"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "3fe7ad309626211ba38c6c330f667bddaf1b9cd7ee487c96127fada14e0264f0"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "28c1373b4d60ddef176cfc5ba1910e23b8291f29a3859d1d31f18c2007ed771d"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "ce66aeb1e912e55a118e596cef7d2a4afd431023ef6d24c4150fb3b9ee705545"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "127955ff2fa554244b1d6e16c2753cd63e32038fde4a01645fd2a14dfc4fbdf4"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "127955ff2fa554244b1d6e16c2753cd63e32038fde4a01645fd2a14dfc4fbdf4"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "e6bf805f7a84e1ab794a8719d47e316c08009209105cfd16adee4bc3c982d1fe"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "e6bf805f7a84e1ab794a8719d47e316c08009209105cfd16adee4bc3c982d1fe"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "10d30e29ce8e166ca8f802db7da94816f6642f81bafdab27664334e569230103"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "10d30e29ce8e166ca8f802db7da94816f6642f81bafdab27664334e569230103"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "b661c6520ea522f0b1a1c5dc8946ffb4a678fb78959817eced33ca8df9280864"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "738edf49247e3068989647c20c5cb63e16e6a522bf920d3a7841102fe213258c"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "e5ff1e87c6c11445f6433d9572ee41db3b7bca894f83c080b8b71493b9b666a4"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "8cda12d588f8bb2d93510cc4120a63608a8a2527c29c4735e55c2f600d509f23"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "a0e42279f488edc1841d9af7a7747a48ef3c53c138da5864b2204dcc01289302"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "0a5147fe7612191df9abdd88dd5c616d41745049e8ff904f03b61540094ecd37"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "36ae6cf5b78059097e9bf34e0d00d6f93b179bb58ee9b94282d7474f8b852ad9"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "65b01cf1ae9e28512fbc5fe279130a3ca58a2474c97af95be7c9d140879b29ed"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "2af57644634c44287a28ba8b423136b23fc7e35f1a95c5baf27aca4ffaa7f790"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "1ff0fd72d5dcd19faff278a6416eb9afdf67d2ce6297e77a8c788ce9f2988ec3"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "62ef5194544b8dbec704685194c573989eb501d3e6d78dfcb50a930ac124df99"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "3fe7ad309626211ba38c6c330f667bddaf1b9cd7ee487c96127fada14e0264f0"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "28c1373b4d60ddef176cfc5ba1910e23b8291f29a3859d1d31f18c2007ed771d"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "ce66aeb1e912e55a118e596cef7d2a4afd431023ef6d24c4150fb3b9ee705545"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "4958bf7ad0b2642f4437282191bd47e7aa99ccf9f90893c6d614f5fcf76debd2"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "4958bf7ad0b2642f4437282191bd47e7aa99ccf9f90893c6d614f5fcf76debd2"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "9758e1ebd0a3435684f2fb6a76646db917911440978795a226737129c0e086e3"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "9758e1ebd0a3435684f2fb6a76646db917911440978795a226737129c0e086e3"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "6cc72eb4c2d134489add98cf6137354920594cf3897989f872500895f81d29d2"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "6cc72eb4c2d134489add98cf6137354920594cf3897989f872500895f81d29d2"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "b661c6520ea522f0b1a1c5dc8946ffb4a678fb78959817eced33ca8df9280864"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "738edf49247e3068989647c20c5cb63e16e6a522bf920d3a7841102fe213258c"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "e5ff1e87c6c11445f6433d9572ee41db3b7bca894f83c080b8b71493b9b666a4"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "8cda12d588f8bb2d93510cc4120a63608a8a2527c29c4735e55c2f600d509f23"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "a0e42279f488edc1841d9af7a7747a48ef3c53c138da5864b2204dcc01289302"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "0a5147fe7612191df9abdd88dd5c616d41745049e8ff904f03b61540094ecd37"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "36ae6cf5b78059097e9bf34e0d00d6f93b179bb58ee9b94282d7474f8b852ad9"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "65b01cf1ae9e28512fbc5fe279130a3ca58a2474c97af95be7c9d140879b29ed"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "2af57644634c44287a28ba8b423136b23fc7e35f1a95c5baf27aca4ffaa7f790"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "1ff0fd72d5dcd19faff278a6416eb9afdf67d2ce6297e77a8c788ce9f2988ec3"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "62ef5194544b8dbec704685194c573989eb501d3e6d78dfcb50a930ac124df99"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "3fe7ad309626211ba38c6c330f667bddaf1b9cd7ee487c96127fada14e0264f0"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "28c1373b4d60ddef176cfc5ba1910e23b8291f29a3859d1d31f18c2007ed771d"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "ce66aeb1e912e55a118e596cef7d2a4afd431023ef6d24c4150fb3b9ee705545"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "8c01cf8a020ccbbf5a5d6f10bca1cce7ca6b218c3d9828e9b41845449098db9e"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "8c01cf8a020ccbbf5a5d6f10bca1cce7ca6b218c3d9828e9b41845449098db9e"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "27289f5ac450faf8c947786f2f48ea2ffcf21031e3e99e75236bae7e75e12ba5"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "27289f5ac450faf8c947786f2f48ea2ffcf21031e3e99e75236bae7e75e12ba5"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "013b665bc16b32a0260090f3ed10bfaf15900086ee9af1707fe7202b29a23eeb"
+    },
+    {
+      "runtime": "cursor",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "013b665bc16b32a0260090f3ed10bfaf15900086ee9af1707fe7202b29a23eeb"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "2e5f74dcab6672f0c076b58e63f63d7c4ff5a8e0e0a2b73811eb7e3a4906b637"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "307f4b58d5865360420895f53bbcc884ac0343f106ad5d42034d1f17cb7b0f07"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "c1d2a627ea5a87a230c5315903d5873ac1bb2d41770c2f8a70801e678a3188f9"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "9f2904cbed9aed599a163fb058c3eeffafdbb6c368bc96b3d010a1ff50805f9f"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "c99fe16b90573cdf711259475b3eec7976fcf118b7037b6fb23ab8c21802baf8"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "b9de78d9996280c39931dfc1ce69be997bb79b62f060fe3655dd25729d97115d"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "c7e5bd5bf4954bb30250a70cf8591afa1af3b78168edb1a2d365601ceca834bd"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "9ab9be79ffd5808c8387794864d39fd8ab458e2b63e58668f18c99f947d87bde"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "eac72a702d82cc3e111f7b1c7f83a8640c33e180bf4926d6cd2697d0c04070d0"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "2b6ab2fc35542307c7dee7d6fc42d780a37cb2f6ee537b850b7e0c223cbcb688"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "a78f7422bb5624c28739ad7656f7ca948468131bc3ada349013686f6d9bdde98"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "fa53a64be48741dc18099d7485674b13c31188dcef1ac11f6ffbb0fad467845e"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "4edd4bdea3be84a341bc98a94991e7f25e0b1833e3062456eb88589f1c6e883a"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "ee31c55290b8dc52ebf9fe617d68b495521189d81e54002f7f4331568a83fa3a"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "ca8795d14dd884a562f78b62b9a9ec961c6138931ef46d26db5569412db48e48"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "ca8795d14dd884a562f78b62b9a9ec961c6138931ef46d26db5569412db48e48"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "6c8387cb59df1f352600088da0721c31aa5bb9660691c3977fd3a1f4807a9b5d"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "6c8387cb59df1f352600088da0721c31aa5bb9660691c3977fd3a1f4807a9b5d"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "d702017a4fefb69696415f875c1b786b66c61958f1d3e0d5a01670e8416b382c"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "d702017a4fefb69696415f875c1b786b66c61958f1d3e0d5a01670e8416b382c"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "2e5f74dcab6672f0c076b58e63f63d7c4ff5a8e0e0a2b73811eb7e3a4906b637"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "307f4b58d5865360420895f53bbcc884ac0343f106ad5d42034d1f17cb7b0f07"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "c1d2a627ea5a87a230c5315903d5873ac1bb2d41770c2f8a70801e678a3188f9"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "9f2904cbed9aed599a163fb058c3eeffafdbb6c368bc96b3d010a1ff50805f9f"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "c99fe16b90573cdf711259475b3eec7976fcf118b7037b6fb23ab8c21802baf8"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "b9de78d9996280c39931dfc1ce69be997bb79b62f060fe3655dd25729d97115d"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "c7e5bd5bf4954bb30250a70cf8591afa1af3b78168edb1a2d365601ceca834bd"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "9ab9be79ffd5808c8387794864d39fd8ab458e2b63e58668f18c99f947d87bde"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "eac72a702d82cc3e111f7b1c7f83a8640c33e180bf4926d6cd2697d0c04070d0"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "2b6ab2fc35542307c7dee7d6fc42d780a37cb2f6ee537b850b7e0c223cbcb688"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "a78f7422bb5624c28739ad7656f7ca948468131bc3ada349013686f6d9bdde98"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "fa53a64be48741dc18099d7485674b13c31188dcef1ac11f6ffbb0fad467845e"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "4edd4bdea3be84a341bc98a94991e7f25e0b1833e3062456eb88589f1c6e883a"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "ee31c55290b8dc52ebf9fe617d68b495521189d81e54002f7f4331568a83fa3a"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "2a04ed9cba2b9663c20b4eb0caf1d222a126bcfb65dcfd55114eb6fa5e7069bd"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "2a04ed9cba2b9663c20b4eb0caf1d222a126bcfb65dcfd55114eb6fa5e7069bd"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "d10dada5936fca5b1b011ab0f7d5ae7267be76d0ff1bf1e5a157ec90ac7e5694"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "d10dada5936fca5b1b011ab0f7d5ae7267be76d0ff1bf1e5a157ec90ac7e5694"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "c5626c13f4968fe1775c39bb37d88cd2bd5d8dcba406f9f38e7c297ab2bb9736"
+    },
+    {
+      "runtime": "grok",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "c5626c13f4968fe1775c39bb37d88cd2bd5d8dcba406f9f38e7c297ab2bb9736"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "2e5f74dcab6672f0c076b58e63f63d7c4ff5a8e0e0a2b73811eb7e3a4906b637"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "307f4b58d5865360420895f53bbcc884ac0343f106ad5d42034d1f17cb7b0f07"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "c1d2a627ea5a87a230c5315903d5873ac1bb2d41770c2f8a70801e678a3188f9"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "9f2904cbed9aed599a163fb058c3eeffafdbb6c368bc96b3d010a1ff50805f9f"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "c99fe16b90573cdf711259475b3eec7976fcf118b7037b6fb23ab8c21802baf8"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "b9de78d9996280c39931dfc1ce69be997bb79b62f060fe3655dd25729d97115d"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "c7e5bd5bf4954bb30250a70cf8591afa1af3b78168edb1a2d365601ceca834bd"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "9ab9be79ffd5808c8387794864d39fd8ab458e2b63e58668f18c99f947d87bde"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "eac72a702d82cc3e111f7b1c7f83a8640c33e180bf4926d6cd2697d0c04070d0"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "2b6ab2fc35542307c7dee7d6fc42d780a37cb2f6ee537b850b7e0c223cbcb688"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "a78f7422bb5624c28739ad7656f7ca948468131bc3ada349013686f6d9bdde98"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "fa53a64be48741dc18099d7485674b13c31188dcef1ac11f6ffbb0fad467845e"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "4edd4bdea3be84a341bc98a94991e7f25e0b1833e3062456eb88589f1c6e883a"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "ee31c55290b8dc52ebf9fe617d68b495521189d81e54002f7f4331568a83fa3a"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "72b5c7b3c9dce329dad7e168a62f71a6ba18963bcc8d207b6ec207a514cac917"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "72b5c7b3c9dce329dad7e168a62f71a6ba18963bcc8d207b6ec207a514cac917"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "3ce4e5288e4cc8dfa58b8b89aaf24158f845e674d843b1be853c3bb8076ee759"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "3ce4e5288e4cc8dfa58b8b89aaf24158f845e674d843b1be853c3bb8076ee759"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "38f0570e7021cd62b24c0fd6d88ade58232d2991be06a4295354d1c5adaf5f17"
+    },
+    {
+      "runtime": "grok",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "38f0570e7021cd62b24c0fd6d88ade58232d2991be06a4295354d1c5adaf5f17"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "e46b61ed6cbd5c2c4ef096ff5baed906fa0bbc2b2aa42e464d83b000b425a0d9"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "3338495785d65c59e532bf549b1d58709ec42fcd63a545a6cc264a534f517e15"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "ba604bd81a501e1c75cbae8d02bd82481504ce1d16cb10dfbab5992f7aa44a05"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "6674e091b3a51cbd78a285768a132b79f8642bad755d90c51043beeac4bc366f"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "2b467cc0279cf7e7b8b141d72dff9a5ebb24a7c3a61d9bc31e5ecf659fd14760"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "bb167301dcb7a1efbbf0a607c285c39f7192601369063df4cf9430299a0cce2d"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "7dbf587ee1f5ae63044b7261a3e91bedddadc846b424e90f944746cf68cbef8d"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "143348928b765d9c79cbdb9479cc139d12b0fb35aeadecf463a8a69ede5b92c3"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "899fbb2e7921d16c4e424751ebfa35528ce564bf95f56d192f310a3d4ad8d449"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "2a4c973103453920a17c709f72e319ee617e9b5c5dd86687c2fa9e9cd98361ce"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "e74d450c7a465dc2a204ba0119eee737ce02149c86d8c1f8e93a4e800252cca5"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "957c2bf16829e008eb5ccda4571bf558fccc999c972f463d27bdedc47bfba294"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "ae2d40339eaa03b3a161eeacaa0aae10966463bda235aee096bb5193b48769a1"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "bbc7063c9b4d8149687cf16dcd5157c1a290a1437792d267ec7e85e1e1a9f1ca"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "48d16a39d42e6a84b034de92edb07dde68a639fd7eba99acd37cd9af194e7c59"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "48d16a39d42e6a84b034de92edb07dde68a639fd7eba99acd37cd9af194e7c59"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "840715dda1ba0c33f7ed3d7da5c8353280f878d93f779cd1011c0d5b4ffb542c"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "840715dda1ba0c33f7ed3d7da5c8353280f878d93f779cd1011c0d5b4ffb542c"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "f86929646455d2226d0ef50fa5175bcc340aafbc3bdcb8a8675945a06ad94d51"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "f86929646455d2226d0ef50fa5175bcc340aafbc3bdcb8a8675945a06ad94d51"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "e46b61ed6cbd5c2c4ef096ff5baed906fa0bbc2b2aa42e464d83b000b425a0d9"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "3338495785d65c59e532bf549b1d58709ec42fcd63a545a6cc264a534f517e15"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "ba604bd81a501e1c75cbae8d02bd82481504ce1d16cb10dfbab5992f7aa44a05"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "6674e091b3a51cbd78a285768a132b79f8642bad755d90c51043beeac4bc366f"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "2b467cc0279cf7e7b8b141d72dff9a5ebb24a7c3a61d9bc31e5ecf659fd14760"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "bb167301dcb7a1efbbf0a607c285c39f7192601369063df4cf9430299a0cce2d"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "7dbf587ee1f5ae63044b7261a3e91bedddadc846b424e90f944746cf68cbef8d"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "143348928b765d9c79cbdb9479cc139d12b0fb35aeadecf463a8a69ede5b92c3"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "899fbb2e7921d16c4e424751ebfa35528ce564bf95f56d192f310a3d4ad8d449"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "2a4c973103453920a17c709f72e319ee617e9b5c5dd86687c2fa9e9cd98361ce"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "e74d450c7a465dc2a204ba0119eee737ce02149c86d8c1f8e93a4e800252cca5"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "957c2bf16829e008eb5ccda4571bf558fccc999c972f463d27bdedc47bfba294"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "ae2d40339eaa03b3a161eeacaa0aae10966463bda235aee096bb5193b48769a1"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "bbc7063c9b4d8149687cf16dcd5157c1a290a1437792d267ec7e85e1e1a9f1ca"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "95bc126bc9445358a678284846d605ca90c24c67dc213da5e3981710edd6a18e"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "95bc126bc9445358a678284846d605ca90c24c67dc213da5e3981710edd6a18e"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "585f7f74a625853767f54302e81d8d8e6200cee8a4579ac7c3898648718af132"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "585f7f74a625853767f54302e81d8d8e6200cee8a4579ac7c3898648718af132"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "d8cc0a9e80ec2ef6addd7308f203a9dd49d6b79075ab36cd33b0e1df10fe6788"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "d8cc0a9e80ec2ef6addd7308f203a9dd49d6b79075ab36cd33b0e1df10fe6788"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "e46b61ed6cbd5c2c4ef096ff5baed906fa0bbc2b2aa42e464d83b000b425a0d9"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "3338495785d65c59e532bf549b1d58709ec42fcd63a545a6cc264a534f517e15"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "ba604bd81a501e1c75cbae8d02bd82481504ce1d16cb10dfbab5992f7aa44a05"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "6674e091b3a51cbd78a285768a132b79f8642bad755d90c51043beeac4bc366f"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "2b467cc0279cf7e7b8b141d72dff9a5ebb24a7c3a61d9bc31e5ecf659fd14760"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "bb167301dcb7a1efbbf0a607c285c39f7192601369063df4cf9430299a0cce2d"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "7dbf587ee1f5ae63044b7261a3e91bedddadc846b424e90f944746cf68cbef8d"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "143348928b765d9c79cbdb9479cc139d12b0fb35aeadecf463a8a69ede5b92c3"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "899fbb2e7921d16c4e424751ebfa35528ce564bf95f56d192f310a3d4ad8d449"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "2a4c973103453920a17c709f72e319ee617e9b5c5dd86687c2fa9e9cd98361ce"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "e74d450c7a465dc2a204ba0119eee737ce02149c86d8c1f8e93a4e800252cca5"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "957c2bf16829e008eb5ccda4571bf558fccc999c972f463d27bdedc47bfba294"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "ae2d40339eaa03b3a161eeacaa0aae10966463bda235aee096bb5193b48769a1"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "bbc7063c9b4d8149687cf16dcd5157c1a290a1437792d267ec7e85e1e1a9f1ca"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "8e1b27d2fcf8bd8f6cd1781ee60df386aa6d5ce3580018822eff01b6a2defba0"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "8e1b27d2fcf8bd8f6cd1781ee60df386aa6d5ce3580018822eff01b6a2defba0"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "b6079bb8c59523ac845137d5f06b0f56b0af0ffc760c489f0626bde135071c2a"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "b6079bb8c59523ac845137d5f06b0f56b0af0ffc760c489f0626bde135071c2a"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "e7418018cc65abe7412c41762636828ff2e277a4b61bd7b8c83d1122bbabdb36"
+    },
+    {
+      "runtime": "kimi",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "e7418018cc65abe7412c41762636828ff2e277a4b61bd7b8c83d1122bbabdb36"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "dc201ce579a1ea57af2b15533994932d53019f9fd98f92109bdbe5b5045ba5a5"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "05717445ffb0887c13838a2545a700c5541d9304e2a7c85c0488e84b8a1692ad"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "43569aa5abab965ee67dfaf761b8f0d1bcc45d0feb72392fbae7217af2fed3fa"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "a255cd0ecb2f0a8b85adaedb4cf403fd57ec9e18159420af47e4d6f1bd75f211"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "b972fea523e31a282a568be184f6f7260426251223054f1e204216a1fa427710"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "cb9a7aa40567d95825b0a416b017b6974badad097d72b2d47accf2f9db787a3a"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "34b5f94b8779e228e0139a4b0a6bc94b952da28a66d400ac62b0d53f8e3c1deb"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "3866c2a5d051d4004897cb87f22c00e35f574f508a91cfaf2017a3c929a71919"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "430287d61d8d9726c59bd7b8e82a53de9a1ca61c9bce9be0a9b47754f28934b3"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "a969bbf4560e518bbdcc397c8d1c8b22ecd699a7c85a791ebeb8dc2d0505e295"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "5a3b054c1b3ca76bff0515aff2f1da3c903a678bd7d6eb14dfde955ca1696cae"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "03a70cbccbcbfe697d9321d1b47a15bcb406bf1f5cb19bc50d9df7aea257518f"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "ce1bab48d6427ead0f74dcb71d4efeefe80c83a0f1fe1214b7878b38b58df6aa"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "476073e7bc17e4184977389b3af86bf4bdd679143fde5f115ea79a13ea8ebd3a"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "4b8815f4d04b8b5a5fbc4ccec5c7c03cead4de5a03704b4a1ba0f8276eb63ca2"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "4b8815f4d04b8b5a5fbc4ccec5c7c03cead4de5a03704b4a1ba0f8276eb63ca2"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "35264c67b4271b007f2ec5627a73fe073a6ccaf26c5490e11ca67d1fa57388f0"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "35264c67b4271b007f2ec5627a73fe073a6ccaf26c5490e11ca67d1fa57388f0"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "dbcbbb6d3c551919151c6e16a4b5625b94e184f88ce4940d819a06cb8ea0c987"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "dbcbbb6d3c551919151c6e16a4b5625b94e184f88ce4940d819a06cb8ea0c987"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "dc201ce579a1ea57af2b15533994932d53019f9fd98f92109bdbe5b5045ba5a5"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "05717445ffb0887c13838a2545a700c5541d9304e2a7c85c0488e84b8a1692ad"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "43569aa5abab965ee67dfaf761b8f0d1bcc45d0feb72392fbae7217af2fed3fa"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "a255cd0ecb2f0a8b85adaedb4cf403fd57ec9e18159420af47e4d6f1bd75f211"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "b972fea523e31a282a568be184f6f7260426251223054f1e204216a1fa427710"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "cb9a7aa40567d95825b0a416b017b6974badad097d72b2d47accf2f9db787a3a"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "34b5f94b8779e228e0139a4b0a6bc94b952da28a66d400ac62b0d53f8e3c1deb"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "3866c2a5d051d4004897cb87f22c00e35f574f508a91cfaf2017a3c929a71919"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "430287d61d8d9726c59bd7b8e82a53de9a1ca61c9bce9be0a9b47754f28934b3"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "a969bbf4560e518bbdcc397c8d1c8b22ecd699a7c85a791ebeb8dc2d0505e295"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "5a3b054c1b3ca76bff0515aff2f1da3c903a678bd7d6eb14dfde955ca1696cae"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "03a70cbccbcbfe697d9321d1b47a15bcb406bf1f5cb19bc50d9df7aea257518f"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "ce1bab48d6427ead0f74dcb71d4efeefe80c83a0f1fe1214b7878b38b58df6aa"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "476073e7bc17e4184977389b3af86bf4bdd679143fde5f115ea79a13ea8ebd3a"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "b2ebfdf90f6399ba8f29feb5ecae23e3b62489335fe5f5f0b683393598d76a2f"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "b2ebfdf90f6399ba8f29feb5ecae23e3b62489335fe5f5f0b683393598d76a2f"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "0c1b52c11d92e4a32244d7e53cbd78a12f264fa934302a1cc788b2a59bb5039a"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "0c1b52c11d92e4a32244d7e53cbd78a12f264fa934302a1cc788b2a59bb5039a"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "00baf41cdcaa9472ca1c40e79a7d0073cd3a012fb9c7f6a8e7465158e35d1b26"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "00baf41cdcaa9472ca1c40e79a7d0073cd3a012fb9c7f6a8e7465158e35d1b26"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "dc201ce579a1ea57af2b15533994932d53019f9fd98f92109bdbe5b5045ba5a5"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "05717445ffb0887c13838a2545a700c5541d9304e2a7c85c0488e84b8a1692ad"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "43569aa5abab965ee67dfaf761b8f0d1bcc45d0feb72392fbae7217af2fed3fa"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "a255cd0ecb2f0a8b85adaedb4cf403fd57ec9e18159420af47e4d6f1bd75f211"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "b972fea523e31a282a568be184f6f7260426251223054f1e204216a1fa427710"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "cb9a7aa40567d95825b0a416b017b6974badad097d72b2d47accf2f9db787a3a"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "34b5f94b8779e228e0139a4b0a6bc94b952da28a66d400ac62b0d53f8e3c1deb"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "3866c2a5d051d4004897cb87f22c00e35f574f508a91cfaf2017a3c929a71919"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "430287d61d8d9726c59bd7b8e82a53de9a1ca61c9bce9be0a9b47754f28934b3"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "a969bbf4560e518bbdcc397c8d1c8b22ecd699a7c85a791ebeb8dc2d0505e295"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "5a3b054c1b3ca76bff0515aff2f1da3c903a678bd7d6eb14dfde955ca1696cae"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "03a70cbccbcbfe697d9321d1b47a15bcb406bf1f5cb19bc50d9df7aea257518f"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "ce1bab48d6427ead0f74dcb71d4efeefe80c83a0f1fe1214b7878b38b58df6aa"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "476073e7bc17e4184977389b3af86bf4bdd679143fde5f115ea79a13ea8ebd3a"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "68cd5ea221959157241e3f67a1c93ed080d9453fc84f11502bc086ed04c010d0"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "68cd5ea221959157241e3f67a1c93ed080d9453fc84f11502bc086ed04c010d0"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "1d780785d17b115f61a52d6be21600f60dd16758c9c59f92fb805011a153a5d1"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "1d780785d17b115f61a52d6be21600f60dd16758c9c59f92fb805011a153a5d1"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "9e3fc6a6fc77d9db1ad2adffe418b31a04a9b301d1c794bc937c8386149c196a"
+    },
+    {
+      "runtime": "opencode",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "9e3fc6a6fc77d9db1ad2adffe418b31a04a9b301d1c794bc937c8386149c196a"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "6cbc99cdce9250e8495d5cc4aa698d59d18e80aa8e2ee10f1d59b11026884794"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "3385e08e28f079552bd441e723115ba509e2e724b0573c3f369f9d252d57543c"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "c00330bf6de5fe5198521791cba9765c12677705e45764448bc7ef05e942ee14"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "d7fdd52169b5ef4687ed6f4ba595982081dda3dbe0318e107fe7df6974dcb071"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "8ed55d37ae197ad961fd3e06491acee04cfed112071a704b751027aeb172a10c"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "047a601ad170cb4d171672a46ac7d8bc0034600f48b33460427cffefe0f07b2f"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "384c9854b0ce846abce68135b81ddb0bf092810a6daac897965606a5aec2b714"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "7ee2295bb46a086c7e1359a1e332ef43ac78bbc0e407331642579834d21724b8"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "4e4075c1b692abaeb3dc928a6457badf44101a4198d572d13217250a321c697b"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "bac98dc916ab1c9ae3081548a17c244c569bada581ad7e43788eb432dcca6b48"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "83aec5c38fe678435467b7c517f4f0d6d714e675d916bd004193c0762688fe77"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "7668a1b9e0929536d2f4cf418f1aff61ea5e5126174a0150c4ef88944d2810ec"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "12edac58d06db988d3716f01098e7a2c3a47a22e8c408ad56e57df2385bbb861"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "48fc2ffb5588a079b59b3693e14194618e7227757e8901c9c2803f7f44f411e5"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "36c769298dbebeb3e8db91da778852027e9a980fb8c046e7856eb142451cf750"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "36c769298dbebeb3e8db91da778852027e9a980fb8c046e7856eb142451cf750"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "e6bf805f7a84e1ab794a8719d47e316c08009209105cfd16adee4bc3c982d1fe"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "e6bf805f7a84e1ab794a8719d47e316c08009209105cfd16adee4bc3c982d1fe"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "c5b2436d9fb01b83f8dbf44540f7e0f26921126ac640fafb01b7ce289ae58f2e"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitea",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "c5b2436d9fb01b83f8dbf44540f7e0f26921126ac640fafb01b7ce289ae58f2e"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "6cbc99cdce9250e8495d5cc4aa698d59d18e80aa8e2ee10f1d59b11026884794"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "3385e08e28f079552bd441e723115ba509e2e724b0573c3f369f9d252d57543c"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "c00330bf6de5fe5198521791cba9765c12677705e45764448bc7ef05e942ee14"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "d7fdd52169b5ef4687ed6f4ba595982081dda3dbe0318e107fe7df6974dcb071"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "8ed55d37ae197ad961fd3e06491acee04cfed112071a704b751027aeb172a10c"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "047a601ad170cb4d171672a46ac7d8bc0034600f48b33460427cffefe0f07b2f"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "384c9854b0ce846abce68135b81ddb0bf092810a6daac897965606a5aec2b714"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "7ee2295bb46a086c7e1359a1e332ef43ac78bbc0e407331642579834d21724b8"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "4e4075c1b692abaeb3dc928a6457badf44101a4198d572d13217250a321c697b"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "bac98dc916ab1c9ae3081548a17c244c569bada581ad7e43788eb432dcca6b48"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "83aec5c38fe678435467b7c517f4f0d6d714e675d916bd004193c0762688fe77"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "7668a1b9e0929536d2f4cf418f1aff61ea5e5126174a0150c4ef88944d2810ec"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "12edac58d06db988d3716f01098e7a2c3a47a22e8c408ad56e57df2385bbb861"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "48fc2ffb5588a079b59b3693e14194618e7227757e8901c9c2803f7f44f411e5"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "b32fb21063c20a2acfc9e2d5af0e2c06de04d9d3539eca5be51d9956313df4df"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "b32fb21063c20a2acfc9e2d5af0e2c06de04d9d3539eca5be51d9956313df4df"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "9758e1ebd0a3435684f2fb6a76646db917911440978795a226737129c0e086e3"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "9758e1ebd0a3435684f2fb6a76646db917911440978795a226737129c0e086e3"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "b566f956fd11e0d450f68a28243c06ae9080060fbbd68ffad4bdbcde4560333a"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "github",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "b566f956fd11e0d450f68a28243c06ae9080060fbbd68ffad4bdbcde4560333a"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "adversarial-verifier",
+      "lineEnding": "n/a",
+      "hash": "6cbc99cdce9250e8495d5cc4aa698d59d18e80aa8e2ee10f1d59b11026884794"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "build-error-resolver",
+      "lineEnding": "n/a",
+      "hash": "3385e08e28f079552bd441e723115ba509e2e724b0573c3f369f9d252d57543c"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-architect",
+      "lineEnding": "n/a",
+      "hash": "c00330bf6de5fe5198521791cba9765c12677705e45764448bc7ef05e942ee14"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-explorer",
+      "lineEnding": "n/a",
+      "hash": "d7fdd52169b5ef4687ed6f4ba595982081dda3dbe0318e107fe7df6974dcb071"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "code-reviewer",
+      "lineEnding": "n/a",
+      "hash": "8ed55d37ae197ad961fd3e06491acee04cfed112071a704b751027aeb172a10c"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "doc-updater",
+      "lineEnding": "n/a",
+      "hash": "047a601ad170cb4d171672a46ac7d8bc0034600f48b33460427cffefe0f07b2f"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "implementer",
+      "lineEnding": "n/a",
+      "hash": "384c9854b0ce846abce68135b81ddb0bf092810a6daac897965606a5aec2b714"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "investigator",
+      "lineEnding": "n/a",
+      "hash": "7ee2295bb46a086c7e1359a1e332ef43ac78bbc0e407331642579834d21724b8"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "knowledge-lookup",
+      "lineEnding": "n/a",
+      "hash": "4e4075c1b692abaeb3dc928a6457badf44101a4198d572d13217250a321c697b"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "metric-optimizer",
+      "lineEnding": "n/a",
+      "hash": "bac98dc916ab1c9ae3081548a17c244c569bada581ad7e43788eb432dcca6b48"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "planner",
+      "lineEnding": "n/a",
+      "hash": "83aec5c38fe678435467b7c517f4f0d6d714e675d916bd004193c0762688fe77"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "security-reviewer",
+      "lineEnding": "n/a",
+      "hash": "7668a1b9e0929536d2f4cf418f1aff61ea5e5126174a0150c4ef88944d2810ec"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "synthesizer",
+      "lineEnding": "n/a",
+      "hash": "12edac58d06db988d3716f01098e7a2c3a47a22e8c408ad56e57df2385bbb861"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "agent",
+      "name": "tdd-guide",
+      "lineEnding": "n/a",
+      "hash": "48fc2ffb5588a079b59b3693e14194618e7227757e8901c9c2803f7f44f411e5"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "CRLF",
+      "hash": "a4d1218369b889d568cb053bee307a4e773b5f5a7b6e4b675df6e6c701cca5db"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "kaola-workflow-finalize",
+      "lineEnding": "LF",
+      "hash": "a4d1218369b889d568cb053bee307a4e773b5f5a7b6e4b675df6e6c701cca5db"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "CRLF",
+      "hash": "27289f5ac450faf8c947786f2f48ea2ffcf21031e3e99e75236bae7e75e12ba5"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-init",
+      "lineEnding": "LF",
+      "hash": "27289f5ac450faf8c947786f2f48ea2ffcf21031e3e99e75236bae7e75e12ba5"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "CRLF",
+      "hash": "cbd464c13bc8ec1299da2a636a3340a6c4e3a4b2855e210b1cd5c7622b6fff47"
+    },
+    {
+      "runtime": "zcode",
+      "forge": "gitlab",
+      "kind": "command",
+      "name": "workflow-next",
+      "lineEnding": "LF",
+      "hash": "cbd464c13bc8ec1299da2a636a3340a6c4e3a4b2855e210b1cd5c7622b6fff47"
+    }
+  ]
+}

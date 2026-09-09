@@ -8,7 +8,9 @@ const { execFileSync, spawnSync } = require('child_process');
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 // #394: resolve the default branch (origin/HEAD probe chain, offline-safe) so the fallback PR
 // sink targets master/other-default repos correctly — the old hardcoded `--base main` broke them.
-const { defaultBranch } = require('./kaola-workflow-claim.js');
+// #1055: defaultBranch now lives in adaptive-schema.js (claim.js only ever forwarded it), so this
+// module no longer needs to require claim.js at all.
+const { defaultBranch } = adaptiveSchema;
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const CONFIG_PATH = path.join(os.homedir(), '.config', 'kaola-workflow', 'config.json');

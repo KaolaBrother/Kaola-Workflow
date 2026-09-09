@@ -3,16 +3,24 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { getCoordRoot, mainRootFromCoord, resolveMainRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock, clearAdvisoryClaim, resolveProjectSlug } = require('./kaola-workflow-claim.js');
-// The porcelain classifier backs the dirty-worktree data-loss guard, which is a KEEP. It lives in
-// the byte-identical schema, not in claim.js — claim.js only ever re-exported it.
-const { parsePorcelainPaths, isParkedLanePath } = require('./kaola-workflow-adaptive-schema.js');
-// #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains.js requires
-// no sink-merge symbol, so this is non-circular.
-const { resolveChains } = require('./kaola-workflow-run-chains.js');
 // Crash-safe durable write (tmp + fsync + rename) for the sink transaction journals. Base-named in
 // all four trees (the cross-edition byte anchor), so the forge hand-ports carry this exact literal.
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
+// #1055: getCoordRoot / mainRootFromCoord / resolveMainRoot / defaultBranch are pure re-exports of
+// adaptive-schema (claim.js only ever forwarded them) — imported from their owner directly, and
+// consolidated onto the single `adaptiveSchema` require above rather than a second require of the
+// same module. The porcelain classifier (parsePorcelainPaths / isParkedLanePath) backs the
+// dirty-worktree data-loss guard, which is a KEEP; it too lives in the byte-identical schema, not
+// in claim.js — claim.js only ever re-exported it.
+const { parsePorcelainPaths, isParkedLanePath, getCoordRoot, mainRootFromCoord, resolveMainRoot, defaultBranch } = adaptiveSchema;
+// readActiveFolders is a pure re-export of active-folders.js (claim.js only ever forwarded it) —
+// imported from its owner directly.
+const { readActiveFolders } = require('./kaola-workflow-active-folders');
+// claim-native symbols with no forwarding source (see #1055 audit): imported from claim.js only.
+const { removeWorktree, buildClosureReceipt, checkClosureInvariants, appendClosureBlock, clearAdvisoryClaim, resolveProjectSlug } = require('./kaola-workflow-claim.js');
+// #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains.js requires
+// no sink-merge symbol, so this is non-circular.
+const { resolveChains } = require('./kaola-workflow-run-chains.js');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const FORCE_FF_FAIL = parseInt(process.env.KAOLA_WORKFLOW_FORCE_FF_FAIL || '0', 10);
@@ -382,17 +390,6 @@ function probeIssueClosed(issueNumber, opts) {
 function reopenIssue(issueNumber, opts) {
   if (OFFLINE || issueNumber == null) return;
   ghExec(['issue', 'reopen', String(issueNumber)], opts || {});
-}
-
-function getRoot() {
-  try {
-    return execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore']
-    }).trim();
-  } catch (_) {
-    return process.cwd();
-  }
 }
 
 // mainRootFromCoord is now imported from kaola-workflow-claim.js (#579 shared resolver).
@@ -1633,10 +1630,6 @@ function scanArchiveTree(mainRoot, archiveRel) {
   return { required: required.sort(), embeddedRepos: embeddedRepos.sort() };
 }
 
-function requiredArchiveFiles(mainRoot, archiveRel) {
-  return scanArchiveTree(mainRoot, archiveRel).required;
-}
-
 // #901: the paths under `pathspec` that git would REFUSE to stage — untracked AND covered by an
 // ignore rule. This is the granularity a directory probe cannot reach: a consumer's basename rule
 // `.cache/` leaves the archive DIRECTORY un-ignored (measured: `check-ignore` exits 1) while
@@ -2174,7 +2167,9 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       let wtStageErr = null;
       let wtStageSrc = null;
       try {
-        const { removeWorktree: removeWt, readActiveFolders: readAF, worktreePathFor: wtPathFor } = require('./kaola-workflow-claim.js');
+        const { removeWorktree: removeWt, worktreePathFor: wtPathFor } = require('./kaola-workflow-claim.js');
+        // #1055: readActiveFolders is a pure re-export of active-folders.js — imported from its owner.
+        const { readActiveFolders: readAF } = require('./kaola-workflow-active-folders');
         const folder = readAF(mainRoot, { excludeClosedIssues: false }).find(f => f.project === args.project);
         let wtPath = null;
         try { wtPath = (folder && folder.worktree_path) || wtPathFor(mainRoot, args.project); } catch (_) {}
@@ -3076,7 +3071,9 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   }
 
   try {
-    const { removeWorktree: removeWt, readActiveFolders: readAF } = require('./kaola-workflow-claim.js');
+    const { removeWorktree: removeWt } = require('./kaola-workflow-claim.js');
+    // #1055: readActiveFolders is a pure re-export of active-folders.js — imported from its owner.
+    const { readActiveFolders: readAF } = require('./kaola-workflow-active-folders');
     const folder = readAF(mainRoot, { excludeClosedIssues: false }).find(f => f.project === args.project);
     removeWt(mainRoot, args.project, folder);
   } catch (_) {}

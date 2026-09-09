@@ -2865,14 +2865,6 @@ function scopeProfilesFresh(s) {
     && s.manifest === 'present';
 }
 
-// #571: a scope is "fresh" iff it exists AND inspectScope finds nothing stale.
-// The `s.exists` guard is LOAD-BEARING: an absent scope reads "not stale" inside
-// scopeIsStale (the `s.exists &&` short-circuits), so without this guard an absent
-// ~/.codex would wrongly count as "fresh" and PASS the gate.
-function scopeIsFresh(s) {
-  return s.exists && !scopeIsStale(s);
-}
-
 function scopeReport(scope, name, codexDir, repair, readOnly) {
   return {
     scope: name,

@@ -828,6 +828,44 @@ function resolveMainRoot(root) {
   try { return mainRootFromCoord(getCoordRoot(r)); } catch (_) { return r; }
 }
 
+// #1055: defaultBranch's only module-level dependencies besides execFileSync. Duplicated here
+// (not centralized) to match the existing per-module pattern — sink-merge.js and sink-pr.js
+// already carry their own identical copies of these two toggles.
+const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
+const REMOTE_TIMEOUT_MS = (() => {
+  const n = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
+  return Number.isInteger(n) && n > 0 ? Math.min(n, 600000) : 30000;
+})();
+
+// #397.3: probe chain (offline-safe). The single refs/remotes/origin/HEAD read is UNSET on a
+// clone-of-empty-bare or `git remote add` repo, so a master-default repo fell straight back to
+// 'main' → sink-merge then failed at `checkout main` (confusing, but fail-closed). Try the local
+// symbolic-ref first (no network), then `git remote show` and `ls-remote --symref` (network, may
+// be unavailable offline — swallowed), then default to 'main'. The first probe that resolves wins.
+function defaultBranch(root) {
+  const { execFileSync } = require('child_process');
+  // 1) Local symbolic-ref (no network).
+  try {
+    const ref = execFileSync('git', ['-C', root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (ref) return ref.replace(/^origin\//, '');
+  } catch (_) {}
+  // Offline: never make a network probe — fall straight to the default.
+  if (OFFLINE) return 'main';
+  // 2) `git remote show origin` → "HEAD branch: <name>" (network).
+  try {
+    const out = execFileSync('git', ['-C', root, 'remote', 'show', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: REMOTE_TIMEOUT_MS });
+    const m = out.match(/^\s*HEAD branch:\s*(\S+)\s*$/m);
+    if (m && m[1] && m[1] !== '(unknown)') return m[1];
+  } catch (_) {}
+  // 3) `git ls-remote --symref origin HEAD` → "ref: refs/heads/<name>\tHEAD" (network).
+  try {
+    const out = execFileSync('git', ['-C', root, 'ls-remote', '--symref', 'origin', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: REMOTE_TIMEOUT_MS });
+    const m = out.match(/^ref:\s*refs\/heads\/(\S+)\s+HEAD\s*$/m);
+    if (m && m[1]) return m[1];
+  } catch (_) {}
+  return 'main';
+}
+
 function refuse(reason, extra) {
   return Object.assign({ result: 'refuse', reason: reason }, extra || {});
 }
@@ -1880,6 +1918,7 @@ module.exports = {
   getCoordRoot,
   mainRootFromCoord,
   resolveMainRoot,
+  defaultBranch,
   ADAPTIVE_PATH,
   NEXT_COMMAND,
   NEXT_SKILL,
