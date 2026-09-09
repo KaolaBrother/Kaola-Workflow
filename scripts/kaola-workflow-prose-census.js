@@ -693,6 +693,16 @@ function main(argv) {
     return (next && !next.startsWith('--')) ? next : null;
   };
 
+  // A retired or misspelled flag is refused, not silently ignored: `--fail-on-regression` once
+  // turned --compare into a gate, and a caller still passing it must learn that nothing gates.
+  const KNOWN_FLAGS = ['--json', '--summary', '--write-baseline', '--compare'];
+  for (const arg of args) {
+    if (arg.startsWith('--') && !KNOWN_FLAGS.includes(arg)) {
+      console.log(JSON.stringify({ result: 'refuse', reason: 'unknown_argument', argument: arg }));
+      return 1;
+    }
+  }
+
   if (args.includes('--write-baseline')) {
     const rel = flagValue('--write-baseline') || DEFAULT_BASELINE;
     const result = census();

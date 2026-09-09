@@ -379,15 +379,34 @@ node scripts/kaola-workflow-claim.js finalize --project {project} --keep-worktre
 node scripts/kaola-workflow-claim.js finalize --project {project} --check --json
 ```
 
-One resumable transaction: the worktree→main artifact mirror, the archive-and-status close, roadmap
+One resumable transaction: the main→worktree artifact mirror, the archive-and-status close, roadmap
 staging, and the `chore: finalize {project}` commit gate. It is idempotent — re-running the same
 call resumes at whichever step it stopped on — and the emit names every step it completed.
 
 It never authors the implementation commit (if implementation-shaped changes are uncommitted,
-author the commit and re-run), and it owns the project-folder sync itself, in **both** directions —
-worktree→main and main→worktree. Either direction failing is typed the same way, `mirror_sync_failed`,
-and fails closed before anything downstream has run, so a sync the script cannot perform is a refusal
-the operator can read rather than an untyped crash.
+author the commit and re-run), and it owns the project-folder sync itself in **one** direction —
+main→worktree. `#1054` retired the worktree→main "repair" that used to run when the two copies
+diverged: on `content_diverged` (or `diff_unavailable`), `compareLedgers`'s verdict, the transaction
+now refuses `mirror_sync_failed` fail-closed and zero-write on both sides instead of guessing that
+the worktree side is the more current one. `detail` names both absolute paths (the main copy and the
+worktree copy) plus a bounded diff, and tells the Main Orchestrator — the party that owns which side
+is current — to reconcile by hand and rerun `finalize --check`. An unwritable destination for the
+one remaining (main→worktree) copy fails the same way, under the same `mirror_sync_failed` reason.
+
+**`#1054` R1** narrowed what counts as a divergence worth refusing. After every successful copy the
+mirror writes its own receipt, `.cache/mirror-digest.json` in the linked worktree's project folder
+(basename → sha256 of the bytes it just copied; missing or unparsable degrades silently to the
+pre-R1 comparison, never a throw). The next mirror invocation reads that receipt and hands its digest
+to `compareLedgers` as `opts.priorDigest`: if the worktree copy's current bytes still hash to exactly
+what this same mirror wrote last time, nothing but the mirror has touched it since, so a source that
+has legitimately moved on is the mirror's own forward progress, not an operator conflict —
+`compareLedgers` returns `{ safe: true, reason: 'prior_mirror' }` and the copy proceeds. A worktree
+copy that hashes to anything else (independently edited, or no receipt present) still falls straight
+through to the ordinary content comparison and refuses exactly as before. The receipt is transaction
+state, not a run record — it rides into the archive unexcluded, like `.cache/chain-receipt.json`.
+`finalize --check`'s read-only prediction reads the same receipt through the same helper
+(`probeFinalizeMirror` passes `priorDigest` too, and never writes it), so the prediction and the
+transaction agree on the `prior_mirror` case as well as on a genuine divergence.
 
 ### `finalize --check` — one read-only pass
 
@@ -412,9 +431,15 @@ stopped being a verdict.
 
 **`checks` and `reasons` answer different questions**, and the split is what a caller acts on. A token
 in `reasons` is an operator obligation. A token that appears only in `checks` is state the transaction
-settles itself: `sync_required` is the long-standing case, and `workflow_state: 'pending_mirror'` is
-the other one — an authority absent from this working tree that the mirror step will construct from the
-main checkout. `pending_mirror` never enters `reasons` and never makes `ok` false. The reserved
+settles itself: `workflow_state: 'pending_mirror'` is the case — an authority absent from this working
+tree that the mirror step will construct from the main checkout. `pending_mirror` never enters
+`reasons` and never makes `ok` false. `#1054` retired `sync_required`: a divergent record mirror is no
+longer a self-settling state, because the transaction no longer repairs it automatically. `checks.mirror`
+now reads `sync_failed` for that same case, and it also lands in `reasons` as `mirror_sync_failed` — an
+operator obligation, since only the Main Orchestrator, reading both copies and the diff, can decide
+which side is current. One gap in that agreement: `--check`'s prediction does not read the R1 mirror
+receipt described above, so it can report `sync_failed` for a divergence the write path would actually
+accept as `prior_mirror` and proceed past. The reserved
 `archive_authority_missing` is unchanged and still lands in both, because it names a condition
 execution cannot repair.
 
@@ -1800,15 +1825,31 @@ primitives.
 `resolveOutputPath`, `getGitTopLevel`, `classifyScope`, `resolveDiffBase`, `computeChangedFiles`,
 `forgeReferencedScripts`, `isEditionCouplingPath`.
 
-**`scripts/kaola-workflow-ledger-compare.js`** — `compareLedgers(srcText, destText)`. Record-
+**`scripts/kaola-workflow-ledger-compare.js`** — `compareLedgers(srcText, destText, opts?)`. Record-
 regression guard for the finalize Step-8a artifact mirror, re-derived under #1054 to decide by
 **content**, not by counting how much work either side records as done: a `status: done` line-count
 read zero on a table-form Mission List and reported a copy SAFE that would have erased finished
-rows, because both sides counted zero. Returns `{ safe, reason, diff? }` — `reason` is `first_sync`
-(destination absent/empty), `identical` (destination byte-identical to source), or
-`content_diverged` (destination carries content the copy would discard/overwrite, with a bounded
-`diff`); `safe` is true only for the first two. Forge-neutral (byte-identical across editions);
-required by `kaola-workflow-claim.js`.
+rows, because both sides counted zero. Returns `{ safe, reason, diff? }`.
+
+**Module API — five reasons.** `reason` is `first_sync` (destination absent/empty), `identical`
+(destination byte-identical to source), `prior_mirror` (`#1054` R1: `opts.priorDigest` is supplied
+and the destination's current bytes hash to it — the destination is exactly what a prior mirror
+wrote and nothing else has touched it since, so a source that has moved on is that mirror's own
+forward progress, not a conflict), `content_diverged` (destination carries content the copy would
+discard/overwrite, with a bounded `diff`), or `diff_unavailable` (content diverges but neither
+`diff` nor `git diff --no-index` could produce output, `diff: ''`); `safe` is true only for the
+first three. `opts.priorDigest` is checked after `first_sync`/`identical` and before the diff
+comparison. Required by `kaola-workflow-claim.js`, the only production caller that supplies
+`priorDigest` (read from `.cache/mirror-digest.json`, written by the same call after
+every successful copy).
+
+**CLI (`--source`/`--dest`/`--json`/`--help`) — four reachable reasons.** The script's CLI builds no
+`opts` and has no digest flag, so `prior_mirror` cannot fire from it: exit 0 is reached only via
+`first_sync`/`identical`, exit 3 only via `content_diverged`/`diff_unavailable`. `--help` names
+`prior_mirror` too, but only as an explanatory aside marking it as a programmatic-caller-only,
+not-reachable-from-this-CLI outcome — it does not add a fifth CLI exit code or JSON reason the
+script itself can emit. `prior_mirror` is a module-API-only outcome, reached solely through the
+direct function call `mirrorFinalizationArtifacts` makes with a real `priorDigest`.
 
 ### GitLab edition
 

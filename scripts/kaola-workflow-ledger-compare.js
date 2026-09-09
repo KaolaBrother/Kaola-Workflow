@@ -23,6 +23,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 // A diff's information lives in line boundaries, not byte count, so the truncation bound here is
@@ -83,11 +84,23 @@ function diffSummary(destText, srcText) {
 // OVERWRITTEN), by content:
 //   - dest absent/empty         -> safe, reason 'first_sync'    (the legitimate first mirror)
 //   - dest byte-identical to src -> safe, reason 'identical'     (an idempotent re-run)
+//   - dest hashes to opts.priorDigest -> safe, reason 'prior_mirror' (dest is exactly what THIS
+//     mirror last wrote and nothing else touched it — see below)
 //   - otherwise                 -> unsafe, reason 'content_diverged', carrying a bounded `diff`
 //     summary of what the copy would discard/overwrite (dest -> src); if no diff tool could run,
 //     reason 'diff_unavailable' instead, still unsafe, with `diff` == ''.
 // No count, no carrier/format detection, no parser: the decision is textual identity.
-function compareLedgers(srcText, destText) {
+//
+// #1054 R1 (review candidate 5743eb15): a source that legitimately advances after a successful
+// mirror used to refuse the NEXT mirror attempt as a content divergence — the transaction reading
+// state it manufactured itself as an operator conflict. `opts.priorDigest`, the sha256 hex of the
+// bytes THIS mirror copied into dest the last time it ran safely, lets an unmodified dest recognize
+// its own prior write: dest's CURRENT bytes still hashing to that digest means nothing but the
+// mirror has touched dest since, so a diverged source is the mirror's own forward progress, not a
+// conflict. `priorDigest` never overrides `first_sync` or `identical` — both are checked first — and
+// a dest that does not hash to the supplied digest (independently edited, or no digest supplied)
+// falls straight through to the ordinary content comparison, refused exactly as before.
+function compareLedgers(srcText, destText, opts) {
   if (destText == null || destText === '') {
     return { safe: true, reason: 'first_sync' };
   }
@@ -95,11 +108,19 @@ function compareLedgers(srcText, destText) {
   if (destText === src) {
     return { safe: true, reason: 'identical' };
   }
+  const priorDigest = opts && opts.priorDigest;
+  if (priorDigest && sha256Hex(destText) === priorDigest) {
+    return { safe: true, reason: 'prior_mirror' };
+  }
   const { summary, unavailable } = diffSummary(destText, src);
   if (unavailable) {
     return { safe: false, reason: 'diff_unavailable', diff: '' };
   }
   return { safe: false, reason: 'content_diverged', diff: summary };
+}
+
+function sha256Hex(text) {
+  return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
 function readOrNull(p) {
@@ -119,7 +140,9 @@ function main(argv) {
     else if (a === '-h' || a === '--help') {
       process.stdout.write(
         'Usage: kaola-workflow-ledger-compare.js --source <mission-list.md> --dest <mission-list.md> [--json]\n' +
-        '  exit 0  safe to copy source over dest (first_sync, identical)\n' +
+        '  exit 0  safe to copy source over dest (first_sync, identical, or — programmatic callers\n' +
+        '          of compareLedgers() only, passing { priorDigest }, not reachable from this CLI —\n' +
+        '          prior_mirror: dest still hashes to the digest the mirror itself last wrote)\n' +
         '  exit 3  unsafe: content_diverged (dest carries content the copy would discard/overwrite) or diff_unavailable\n' +
         '  exit 1  usage error / source unreadable\n');
       return 0;

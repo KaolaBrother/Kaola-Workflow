@@ -3251,6 +3251,43 @@ const FINALIZE_MIRROR_TREE_BOUND = new Set([
   '.cache/' + adaptiveSchema.OUTCOME_LOG_NAME,
 ]);
 
+// #1054 R1: the mirror's own prior-write receipt — see compareLedgers' `priorDigest` arm in
+// kaola-workflow-ledger-compare.js. TRANSACTION STATE, not a run record: it exists solely so the
+// NEXT mirror invocation in THIS worktree can recognize an untouched dest as its own prior copy,
+// and it is never read by anything outside `mirrorFinalizationArtifacts`.
+//
+// DECISION (archive): left UNEXCLUDED, on purpose. Once a project is archived, `!fs.existsSync
+// (destDir) && findArchiveAuthorities(...).length > 0` short-circuits every future call to
+// `skipped_post_archive` before this file is ever read again, so a copy sitting in the archive is
+// simply inert — the same shape as `.cache/chain-receipt.json` or `.cache/run-gaps.json`, both also
+// TREE_BOUND/JSON evidence that rides into the archive unexcluded. Actively dropping it would need
+// its own carve-out through `verifyArchiveComplete`'s "every file the source holds must reach the
+// destination" proof (the same seam `SINK_JOURNAL_RE` occupies for the sink's OWN journals,
+// sink-receipt.json/sink-fallback.json — a different family: those are 'forge' records disposed at
+// terminal success because a live one left behind would misdescribe unfinished sink progress as
+// current; this one describes nothing the archive step or a reader could misread). That is real
+// machinery this review finding does not warrant, so none is built; enforcement point is simply
+// "there is none" — `copyDir` carries it unconditionally, like every other `.cache/*.json` file.
+const MIRROR_DIGEST_REL = path.join('.cache', 'mirror-digest.json');
+function sha256Hex(text) {
+  return require('crypto').createHash('sha256').update(text, 'utf8').digest('hex');
+}
+// Missing or unparsable degrades to `null` — never throws — so a reader falls back to no
+// `priorDigest`, i.e. the pre-R1 behaviour (compareLedgers' new arm simply does not fire).
+function readMirrorDigest(destDir) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(destDir, MIRROR_DIGEST_REL), 'utf8'));
+    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+  } catch (_) { return null; }
+}
+// Best-effort: called only after the mirror copy itself already succeeded, so a write failure here
+// must not turn a successful mirror into a refusal — it only costs the NEXT run the prior_mirror
+// leniency, which falls back to the ordinary content comparison, never to a silent bypass.
+function writeMirrorDigest(destDir, entries) {
+  try { writeFile(path.join(destDir, MIRROR_DIGEST_REL), JSON.stringify(entries, null, 2) + '\n'); }
+  catch (_) { /* transaction state; losing it degrades gracefully on the next mirror */ }
+}
+
 // Finalization residue the orchestrator authored OUTSIDE kaola-workflow/ in the main checkout
 // (CHANGELOG, docs, .env.example …) belongs on the branch too, so the commit gate can hand it to the
 // sink. Copies main's dirty non-`kaola-workflow/` files into the linked worktree and returns the
@@ -3338,13 +3375,21 @@ function mirrorFinalizationArtifacts(root, project) {
   // Record-regression guard (fail-open on a first sync — the compare module owns that semantics).
   let ledgerCompare = 'skipped_no_record';
   const srcRecord = path.join(srcDir, adaptiveSchema.MISSION_LIST_FILE);
+  let srcRecordText = null;
   if (fs.existsSync(srcRecord)) {
     try {
       const { compareLedgers } = require('./kaola-workflow-ledger-compare.js');
       const destRecord = path.join(destDir, adaptiveSchema.MISSION_LIST_FILE);
       let destText = null;
       try { destText = fs.readFileSync(destRecord, 'utf8'); } catch (_) {}
-      const verdict = compareLedgers(fs.readFileSync(srcRecord, 'utf8'), destText);
+      srcRecordText = fs.readFileSync(srcRecord, 'utf8');
+      // #1054 R1: the receipt this same function wrote after ITS OWN last successful copy — read
+      // BEFORE the compare, degrading a missing or unparsable file to no priorDigest (today's
+      // pre-R1 behaviour), never throwing.
+      const priorDigest = readMirrorDigest(destDir);
+      const verdict = compareLedgers(srcRecordText, destText, {
+        priorDigest: priorDigest ? priorDigest[adaptiveSchema.MISSION_LIST_FILE] : undefined
+      });
       if (!verdict.safe) {
         // #1054 — no automatic repair: a content-diverged (or diff-unavailable) verdict is a MACHINE
         // stop, not a machine-repairable state. Refuse fail-closed under the pinned top-level reason,
@@ -3384,6 +3429,14 @@ function mirrorFinalizationArtifacts(root, project) {
       detail: 'the transaction could not mirror the main checkout\'s project folder down into the '
         + 'linked worktree (' + destDir + '): ' + String((e && e.message) || e).slice(0, 400)
     };
+  }
+  // #1054 R1: record what this successful copy just wrote into dest, so the NEXT mirror can
+  // recognize an untouched dest as its own prior write (see the priorDigest read above) instead of
+  // refusing the source's legitimate forward progress as a conflict. Best-effort: the mirror already
+  // succeeded by this point, and losing the receipt only costs the next run the prior_mirror leniency
+  // — it falls back to the ordinary (pre-R1) content comparison, never to a silent bypass.
+  if (srcRecordText !== null) {
+    writeMirrorDigest(destDir, { [adaptiveSchema.MISSION_LIST_FILE]: sha256Hex(srcRecordText) });
   }
   return {
     mirror: 'mirrored',
@@ -3659,7 +3712,14 @@ function probeFinalizeMirror(root, project) {
     const { compareLedgers } = require('./kaola-workflow-ledger-compare.js');
     let destText = null;
     try { destText = fs.readFileSync(path.join(destDir, adaptiveSchema.MISSION_LIST_FILE), 'utf8'); } catch (_) {}
-    const verdict = compareLedgers(fs.readFileSync(srcRecord, 'utf8'), destText);
+    // #1054 R1 follow-up: the prediction must agree with what the transaction will actually do, and
+    // the transaction now reads its own prior-write receipt (see `mirrorFinalizationArtifacts`
+    // above and `readMirrorDigest`, shared rather than duplicated here) — a main-side advance over
+    // an untouched worktree copy is `ready`, not `sync_failed`, once a receipt says so.
+    const priorDigest = readMirrorDigest(destDir);
+    const verdict = compareLedgers(fs.readFileSync(srcRecord, 'utf8'), destText, {
+      priorDigest: priorDigest ? priorDigest[adaptiveSchema.MISSION_LIST_FILE] : undefined
+    });
     if (verdict.safe) return { state: ready, mainRoot, destAuthorityAbsent };
     // #1054: a content-diverged (or diff-unavailable) verdict is always a machine stop — the
     // transaction never attempts an automatic repair for it (see `mirrorFinalizationArtifacts`), so
@@ -4169,9 +4229,12 @@ function cmdFinalize() {
   // implementation probe so the machinery never reads its own mirror as operator dirt.
   let mirroredResiduePaths = [];
   // Step 8a — artifact mirror, BEFORE any gate reads the authority and before any side effect.
-  // #837: a staler main copy is REPAIRED here (the transaction syncs worktree→main itself); the
-  // refusal survives only for a sync the script cannot perform, and stays zero-write on the
-  // worktree side — the complete worktree ledger is never overwritten with a staler main copy.
+  // #1054: the mirror is ONE direction only, main checkout -> linked worktree. A content-diverged
+  // (or diff-unavailable) run record is a MACHINE stop, not a machine-repairable state: the
+  // transaction refuses zero-write on both sides and hands the divergence to the Main Orchestrator,
+  // who owns which side is current. The only other refusal path is the copy itself failing (e.g. an
+  // unwritable worktree destination); both share `inner_reason: 'mirror_sync_failed'` and are told
+  // apart by `detail`.
   {
     const mirror = mirrorFinalizationArtifacts(root, args.project);
     if (mirror.refused) {
@@ -4181,15 +4244,17 @@ function cmdFinalize() {
         inner_reason: mirror.inner_reason,
         project: args.project,
         detail: mirror.detail,
-        operator_hint: 'The transaction owns the project-folder sync between the main checkout and '
-          + 'the linked worktree, in BOTH directions, and could not perform it — one of the two '
-          + 'trees is unwritable, or the main copy could not be repaired. `detail` names the tree '
-          + 'and the error. Make that tree writable, then re-run finalize. Never hand-copy a staler '
-          + 'main ledger over the worktree. No archive or closure side effect was made. '
-          + 'The claim is still held. Fixing this and re-running finalize is how the run finishes; '
-          + 'if it will not be finished at all, `release` from the main root — not from inside the '
-          + 'project folder, which it refuses — gives the claim back, archiving the run as abandoned '
-          + 'and tearing down its worktree and branch.',
+        operator_hint: 'The transaction mirrors the run record ONE way, from the main checkout down '
+          + 'into the linked worktree, and could not complete it. `detail` names which of two causes: '
+          + 'either the main and worktree copies have genuinely diverged — read `detail` for both '
+          + 'absolute paths (and the diff, when available), reconcile by hand since only the Main '
+          + 'Orchestrator can judge which side is current, then re-run `finalize --check`; or the '
+          + 'worktree destination could not be written to — make that tree writable, then re-run '
+          + 'finalize. Never hand-copy a staler main ledger over the worktree. No archive or closure '
+          + 'side effect was made. The claim is still held. Fixing this and re-running finalize is how '
+          + 'the run finishes; if it will not be finished at all, `release` from the main root — not '
+          + 'from inside the project folder, which it refuses — gives the claim back, archiving the '
+          + 'run as abandoned and tearing down its worktree and branch.',
         errors: [mirror.inner_reason]
       }, 1);
       return;

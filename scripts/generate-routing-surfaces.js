@@ -352,9 +352,12 @@ function renderCompactRecoveryPrompt(runtime, forge = 'github', options = {}) {
   // render that only points at the full reload must not carry them around the pointer (a
   // consumer that keys on the marker would read the pointer as the contract). Drop the marker
   // lines, then collapse the blank line the skeleton keeps between the two now-empty slots.
+  // Scoped to the marker region: the START marker swallows the blank line the skeleton keeps
+  // between the two slots (now one pointer + one empty slot), and the END marker line goes with
+  // its own newline, so nothing else in the document is reflowed.
   return rendered
-    .replace(/^<!-- KW-RUNTIME-DISPATCH-(START|END) -->\n/gm, '')
-    .replace(/\n{3,}/g, '\n\n');
+    .replace(/^<!-- KW-RUNTIME-DISPATCH-START -->\n([\s\S]*?)\n*<!-- KW-RUNTIME-DISPATCH-END -->\n/m,
+      (_, inner) => inner.replace(/\n+$/, '') + '\n\n');
 }
 
 function renderRuntimeRecoverySurface(row) {

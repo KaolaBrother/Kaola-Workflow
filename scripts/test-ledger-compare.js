@@ -17,8 +17,11 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { compareLedgers } = require('./kaola-workflow-ledger-compare');
+
+function sha256(text) { return crypto.createHash('sha256').update(text, 'utf8').digest('hex'); }
 
 const scriptPath = path.join(__dirname, 'kaola-workflow-ledger-compare.js');
 const fixturesDir = path.join(__dirname, 'fixtures', 'issue-1054');
@@ -176,6 +179,78 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ledger-compare-'));
   const h = cli(['--help']);
   assert(h.status === 0 && /content_diverged/.test(h.stdout),
     '--help documents the content_diverged unsafe exit code; got ' + h.status + '\n' + h.stdout);
+}
+
+// --- (f) R1 (#1054 review, candidate 5743eb15): the mirror must accept its own prior write when
+// the SOURCE legitimately advances after a successful mirror. compareLedgers gains a third,
+// OPTIONAL options argument: `{ priorDigest }`, the sha256 hex of the bytes the mirror itself
+// copied into dest the last time it ran safely. When dest's CURRENT bytes still hash to exactly
+// that digest — i.e. dest is untouched since that copy — a source that has since diverged is not a
+// conflict, it is the mirror's own forward progress, and the verdict is safe, reason 'prior_mirror'.
+// This is additive and narrow: every existing arm (first_sync / identical / content_diverged, with
+// no third argument or an empty options object) is unchanged, and a dest that does NOT hash to the
+// supplied digest — because it was independently edited, or because no digest was ever supplied —
+// falls straight through to the existing content-identity comparison. No new leniency is created for
+// any pair the old guard already called unsafe; this only recognizes the ONE additional pair the old
+// guard mis-called unsafe: dest is exactly what THIS mirror last wrote, and nothing else touched it.
+{
+  const v1 = record([{ item: 'a', status: 'done' }, { item: 'b', status: 'in-flight' }]);
+  const v2 = record([{ item: 'a', status: 'done' }, { item: 'b', status: 'done' }, { item: 'c', status: 'todo' }]);
+  const digestV1 = sha256(v1);
+
+  // (f1) dest untouched since the mirror wrote it (hashes to priorDigest); src has since advanced
+  // to v2 — SAFE, reason prior_mirror, even though dest !== src and dest is neither empty nor
+  // byte-identical to src (the two arms that already covered it).
+  const rPrior = compareLedgers(v2, v1, { priorDigest: digestV1 });
+  assert(rPrior.safe === true && rPrior.reason === 'prior_mirror',
+    '(f1) dest unchanged since the mirror wrote it must be safe against an advanced source, reason '
+    + 'prior_mirror; got ' + JSON.stringify(rPrior));
+
+  // (f2) dest was independently edited after the mirror (even by one byte) — its current bytes no
+  // longer hash to priorDigest, so this must NOT take the prior_mirror arm; it falls through to the
+  // ordinary content comparison and is refused exactly as before.
+  const v1Edited = v1 + '\n<!-- one byte of drift -->\n';
+  const rEdited = compareLedgers(v2, v1Edited, { priorDigest: digestV1 });
+  assert(rEdited.safe === false && rEdited.reason === 'content_diverged',
+    '(f2) a dest independently edited after the mirror must still refuse content_diverged even with '
+    + 'a priorDigest supplied — the digest has to match dest\'s CURRENT bytes, not merely exist; got '
+    + JSON.stringify(rEdited));
+
+  // (f3) no priorDigest at all (undefined options, or omitted third argument) — today's behaviour,
+  // completely unchanged. This is the regression control: every call site that does not yet supply
+  // a digest (or a caller on an older signature) must see the identical old verdict.
+  const rNoOpt3 = compareLedgers(v2, v1);
+  assert(rNoOpt3.safe === false && rNoOpt3.reason === 'content_diverged',
+    '(f3a) calling with no third argument at all must be byte-for-byte today\'s behaviour; got '
+    + JSON.stringify(rNoOpt3));
+  const rNoOpt4 = compareLedgers(v2, v1, {});
+  assert(rNoOpt4.safe === false && rNoOpt4.reason === 'content_diverged',
+    '(f3b) an empty options object (no priorDigest key) must also be today\'s behaviour; got '
+    + JSON.stringify(rNoOpt4));
+  const rNoOpt5 = compareLedgers(v2, v1, { priorDigest: null });
+  assert(rNoOpt5.safe === false && rNoOpt5.reason === 'content_diverged',
+    '(f3c) an explicit null priorDigest must also fall through to today\'s behaviour; got '
+    + JSON.stringify(rNoOpt5));
+
+  // (f4) a WRONG/corrupt digest (garbage, or the hash of something else entirely) must not be
+  // treated as a match by coincidence or by a loose comparison — refused exactly as (f2).
+  const rWrongDigest = compareLedgers(v2, v1, { priorDigest: 'not-a-real-sha256-digest' });
+  assert(rWrongDigest.safe === false && rWrongDigest.reason === 'content_diverged',
+    '(f4) a corrupt/garbage priorDigest must not match dest\'s real hash and must refuse; got '
+    + JSON.stringify(rWrongDigest));
+
+  // (f5) priorDigest must never override the two EARLIER, stronger arms. A first-sync dest (absent)
+  // is still first_sync regardless of any digest supplied, and a byte-identical dest/src pair is
+  // still 'identical', not 'prior_mirror' — the new arm only ever fires on the THIRD, previously-
+  // unsafe case, never reclassifying the two that were already safe.
+  const rStillFirstSync = compareLedgers(v2, null, { priorDigest: digestV1 });
+  assert(rStillFirstSync.safe === true && rStillFirstSync.reason === 'first_sync',
+    '(f5a) a genuinely absent dest is still first_sync even with a priorDigest supplied; got '
+    + JSON.stringify(rStillFirstSync));
+  const rStillIdentical = compareLedgers(v2, v2, { priorDigest: digestV1 });
+  assert(rStillIdentical.safe === true && rStillIdentical.reason === 'identical',
+    '(f5b) a byte-identical dest/src pair is still \'identical\', never \'prior_mirror\', even with an '
+    + 'unrelated priorDigest supplied; got ' + JSON.stringify(rStillIdentical));
 }
 
 // --- negative pin: the retired count proxy is gone from this module entirely -------------------

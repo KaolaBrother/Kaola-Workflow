@@ -33,11 +33,15 @@
   sidecar are retired outright, and finalize no longer depends on it. The archive keeps one docking
   evidence sidecar, `.cache/doc-docking.md`; `.cache/doc-updater.md` is retired from
   `ARCHIVE_CACHE_SIDECAR_MD`. `kaola-workflow-ledger-compare.js`'s Step-8a mirror guard now decides
-  by content (`compareLedgers` returns `first_sync` / `identical` / `content_diverged` with a
-  bounded diff) instead of counting `status: done` lines — the old counter read a table-form Mission
-  List as zero on both sides and could pass a copy that erased finished rows; on divergence the
-  transaction now refuses `mirror_sync_failed` and no longer auto-repairs by copying the worktree
-  over main.
+  by content (`compareLedgers` returns `first_sync`, `identical`, `content_diverged` with a bounded
+  diff, or `diff_unavailable`) instead of counting `status: done` lines — the old counter read a
+  table-form Mission List as zero on both sides and could pass a copy that erased finished rows; on
+  a genuine divergence the transaction now refuses `mirror_sync_failed` and no longer auto-repairs by
+  copying the worktree over main. A fifth reason, `prior_mirror`, closes a review-caught regression
+  in that first shape: the mirror writes its own receipt after each copy
+  (`.cache/mirror-digest.json`) and recognizes an untouched worktree copy as its own prior write on
+  the next run, so a main copy that has legitimately moved on since is no longer refused as a
+  conflict.
 - **All fourteen role contracts rewritten around positioning, deliverable, unique custody, and stop
   condition (#1054).** `templates/agents/behavior-contracts.json` bodies dropped fixed-phase
   procedure, numeric thresholds, verification-tier menus, default commands, and the column-zero
@@ -58,10 +62,13 @@
 - **Contract validators check interfaces and generation, not prose wording (#1054).** 80 duplicate
   assertions proven redundant against `templates/routing/required-blocks.js`'s own manifest coverage
   (by a per-candidate subtraction probe) were removed from `validate-workflow-contracts.js` and
-  `validate-kaola-workflow-contracts.js`; role-body wording pins (`smoke-integration`,
-  `finding: id=`, `verdict: pass`) were replaced with concept-level checks against each role's
-  current wording; the finalize mirror-guard pin now exercises `compareLedgers`/
-  `mirrorFinalizationArtifacts`'s real content-based refusal instead of pinning retired source text.
+  `validate-kaola-workflow-contracts.js`; 22 role-body wording pins (`smoke-integration`,
+  `finding: id=`, `verdict: pass`) across all four validators were deleted outright under the
+  owner's ruling, with nothing added in their place — generation integrity
+  (`generate-agent-profiles --check`, `validate-vendored-agents.js`, hash binding) and native
+  behavior acceptance now carry that responsibility, not a wording gate; the finalize mirror-guard
+  pin now exercises `compareLedgers`/`mirrorFinalizationArtifacts`'s real content-based refusal
+  instead of pinning retired source text.
 - **Role contracts are classified by measured content, not historical framing (#1054).**
   `templates/agents/provenance.json` moves to schema 2: all fourteen role contracts are
   `kaola_authored`; six carry a `history` record naming their retired Everything Claude Code origin

@@ -54,10 +54,17 @@ rather than trusting the orchestrator that wrote it and the evidence it points t
    (`chain-receipt.json`'s `accepted_red` entries) and settles nothing on its own. The archive keeps one
    docking-evidence sidecar, `.cache/doc-docking.md` (`.cache/doc-updater.md` retired). The record mirror
    between a linked worktree and the main checkout is guarded by **content**, not a count:
-   `compareLedgers` returns `first_sync` / `identical` / `content_diverged` (with a bounded diff), and a
-   divergence now refuses `mirror_sync_failed` outright — the transaction no longer guesses a repair
+   `compareLedgers` returns `first_sync`, `identical`, `content_diverged` (with a bounded diff), or
+   `diff_unavailable` (content diverges but no diff tool could produce output), and a genuine
+   divergence refuses `mirror_sync_failed` outright — the transaction no longer guesses a repair
    direction by copying the worktree's copy over main's, since #1053's own run record shows that
-   direction is not universally the correct one.
+   direction is not universally the correct one. A fifth reason, `prior_mirror`, closes a review
+   finding (R1) against the first shipped shape of this guard: the mirror now writes its own receipt
+   after each copy (`.cache/mirror-digest.json`) and, on the next run, recognizes an untouched
+   worktree copy as its own prior write rather than refusing the main copy's legitimate forward
+   progress as a conflict — a real regression the review caught, where a source that had genuinely
+   moved on since the transaction's own last successful copy was refused exactly like an operator
+   conflict.
 2. **A role body states positioning, deliverable, unique custody, and stop condition — nothing else is
    ritual.** No fixed phase, numeric threshold, verification-tier menu, default command, or shape is
    prescribed in prose the current model generation can decide for itself. A reviewer delivers
@@ -82,10 +89,12 @@ rather than trusting the orchestrator that wrote it and the evidence it points t
    rather than converged by fiat.
 4. **A validator checks an interface or a generation guarantee, not a sentence.** An assertion proven
    redundant against a manifest-driven coverage check is removed, not kept as a second witness of the
-   same fact. A wording pin tied to retired procedure (the tier-name vocabulary, the column-zero review
-   format) is replaced by a concept-level check against the role's current, real wording — still able to
-   fail if the concept the role must still deliver disappears, but no longer coupled to one exact
-   phrasing.
+   same fact. A wording pin tied to retired procedure — the tier-name vocabulary, the column-zero
+   review format (`smoke-integration`, `finding: id=`, `verdict: pass`; 22 assertions across the four
+   validators) — is deleted outright under the owner's ruling, with **nothing added in its place**:
+   no successor pin re-asserts the underlying concept against the role's current wording. Generation
+   integrity (`generate-agent-profiles --check`, `validate-vendored-agents.js`, hash binding across
+   126 renders) and native behavior acceptance carry that responsibility instead of a wording gate.
 5. **Source classification is measured, not asserted.** `templates/agents/provenance.json` records
    `source_kind: kaola_authored` for all fourteen current role contracts. Six keep a `history` record
    naming their retired origin (Everything Claude Code, MIT, a pinned commit) and the measurement that
@@ -103,9 +112,11 @@ rather than trusting the orchestrator that wrote it and the evidence it points t
   it as a gate input any more. `kaola-workflow-gap-sweep.js --check`, `--summary`, `--offline`, and
   `.cache/run-gaps-manual.md` are gone; a caller that still invokes `--check` gets the same "unknown
   argument" refusal as any other retired flag.
-- A finalize mirror divergence between a linked worktree and main now always stops for the
-  orchestrator to resolve — get the merge correct, resynchronize, or choose a direction deliberately —
-  instead of the transaction silently guessing "worktree wins."
+- A finalize mirror divergence between a linked worktree and main stops for the orchestrator to
+  resolve — get the merge correct, resynchronize, or choose a direction deliberately — instead of the
+  transaction silently guessing "worktree wins," unless the worktree copy is untouched since this
+  same transaction's own last successful copy (`prior_mirror`), in which case the copy proceeds
+  without treating the mirror's own forward progress as a conflict.
 - Role bodies are markedly smaller across the board (685–1,001 characters across all fourteen roles,
   were 1,170–8,832) and can be extended with a new fact without also carrying the facts every other
   role already states in the shared machine-global contract.

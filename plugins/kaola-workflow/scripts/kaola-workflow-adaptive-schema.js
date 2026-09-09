@@ -1063,6 +1063,8 @@ const KERNEL_ARTIFACT_REGISTRY = Object.freeze([
     'the tests-green oracle receipt (npm repo kind), candidate-bound'],
   ['.cache/run-gaps.json', 'record', 'evidence', 'script',
     'the run-gap sweep result; its writer refuses to overwrite a prior cycle, so it is durable gap evidence'],
+  ['.cache/mirror-digest.json', 'record', 'evidence', 'script',
+    '#1054 R1: the Step-8a artifact mirror\'s own prior-write receipt (sha256 of the bytes it last copied); lets the next mirror recognize an untouched dest as its own forward copy instead of refusing a legitimately advanced source as a conflict'],
   ['.cache/origin/selection-record.json', 'record', 'evidence', 'script',
     'the gate-validated selection record; the degenerate form exists so "explicit target" is distinguishable from "record lost"'],
   [/^\.cache\/validation-vectors\/[^/]+\.json$/, 'record', 'evidence', 'script',

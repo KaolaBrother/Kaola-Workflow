@@ -225,7 +225,7 @@ chains_incomplete > chains_red > chains_waived`. Exit 0 on pass, 1 on any refusa
 ### The finalize transaction
 
 `kaola-workflow-claim.js finalize --project P` is one resumable script transaction: the
-worktree→main artifact mirror, the archive-and-status close, roadmap staging, and the
+main→worktree artifact mirror, the archive-and-status close, roadmap staging, and the
 `chore: finalize {project}` commit gate. Atomicity belongs to the script; judgment stays with the
 orchestrator.
 
@@ -252,9 +252,14 @@ longer parses the Mission List or any other orchestrator-authored record as a ma
 orchestrator reads `mission-list.md` and the run's evidence directly, and a completed Mission's
 `result` stays immutable, never a landing place for the finalize transaction's own findings.
 
-The transaction never authors the implementation commit, and it owns the worktree→main project
-folder sync itself. The archive still fails loudly if it would lose a file — an operation refusing
-to destroy data, which is the one hard stop left in this phase.
+The transaction never authors the implementation commit, and it owns the main→worktree project
+folder sync itself — the one direction the transaction performs. It decides by content identity, not
+a count, plus a self-written receipt (`.cache/mirror-digest.json`, `#1054` R1) that lets it recognize
+its own prior copy: a worktree copy still hashing to what this same mirror last wrote is the mirror's
+own forward progress when main has since advanced, not a conflict. A worktree copy that genuinely
+diverged instead refuses `mirror_sync_failed` for the Main Orchestrator to reconcile by hand, with no
+automatic repair in the other direction. The archive still fails loudly if it would lose a
+file — an operation refusing to destroy data, which is the one hard stop left in this phase.
 
 ### Merge sink (default)
 

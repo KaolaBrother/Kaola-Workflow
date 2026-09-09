@@ -26,8 +26,11 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const G = require('./test-git-fixture');
+
+function sha256(text) { return crypto.createHash('sha256').update(text, 'utf8').digest('hex'); }
 
 const repoRoot = path.resolve(__dirname, '..');
 const fixturesDir = path.join(__dirname, 'fixtures', 'issue-1054');
@@ -323,6 +326,290 @@ for (const ed of EDITIONS) {
     assert(real.status !== 0 && real.out && real.out.reason === 'finalize_mirror_refused',
       '2g: the real finalize over the SAME still-untouched fixture reaches the SAME refusal --check '
       + 'predicted; got ' + JSON.stringify(real.out && { result: real.out.result, reason: real.out.reason }));
+  } finally { destroyFixture(fx); }
+})();
+
+// ===========================================================================
+// R1 (#1054 review, candidate 5743eb15): the mirror must not refuse its own prior write when the
+// MAIN-side record legitimately advances after a successful mirror. Reproduces the review's own
+// probe methodology exactly — calling the production `mirrorFinalizationArtifacts(root, project)`
+// directly, twice, with a main-side content change in between — rather than driving two full
+// `finalize` CLI runs, because the first CLI run archives the project (moving it out of the live
+// tree), which would make a genuine second mirror call unreachable through the CLI at all.
+//
+// Design of record (team lead, for the implementer, pinned here as the observable contract): the
+// mirror writes `.cache/mirror-digest.json` into the DEST project folder, mapping the mirrored
+// basename to the sha256 of the bytes it copied. `mirrorDigestPath` and `readMirrorDigest` below
+// pin the receipt's LOCATION and SHAPE, not the code that produces it.
+// ===========================================================================
+
+function mirrorDigestPath(wtPath, project) {
+  return path.join(wtPath, 'kaola-workflow', project, '.cache', 'mirror-digest.json');
+}
+function readMirrorDigest(wtPath, project) {
+  try { return JSON.parse(fs.readFileSync(mirrorDigestPath(wtPath, project), 'utf8')); } catch (_) { return null; }
+}
+
+// Advance a mission-list text the way a legitimate main-side edit would — the guard treats content
+// as opaque text (no parser, no schema), so any byte change stands in for a real one.
+function advanced(text) {
+  return text + '\n<!-- R1 fixture: main advanced after the prior mirror -->\n';
+}
+
+// ===========================================================================
+// (a) after a successful mirror, a main-side advance with an UNTOUCHED worktree copy mirrors again
+// — safe, and the copy proceeds — on all four editions.
+// ===========================================================================
+for (const ed of EDITIONS) {
+  console.log('R1a: ' + ed.label + ' — main advances after a successful mirror; the next mirror must not refuse');
+  const project = nextProject();
+  const fx = buildLinkedFixture(ed, project, 9830, REAL_TABLE, null);
+  try {
+    const claim = require(path.join(repoRoot, ed.claim));
+    // PASS 1 — first sync. Real production call, not a simulation of one.
+    const pass1 = claim.mirrorFinalizationArtifacts(fx.wtPath, project);
+    assert(!pass1.refused, 'R1a: ' + ed.label + ' — pass 1 (first sync) must not refuse; got '
+      + JSON.stringify(pass1));
+    const destAfter1 = fs.readFileSync(path.join(fx.wtPath, 'kaola-workflow', project, 'mission-list.md'), 'utf8');
+    assert(destAfter1 === REAL_TABLE,
+      'R1a: ' + ed.label + ' — pass 1 must have actually copied the source down; got different content');
+
+    // The main-side advance. The worktree copy is left byte-for-byte what pass 1 wrote.
+    const v2 = advanced(REAL_TABLE);
+    fs.writeFileSync(path.join(fx.srcDir, 'mission-list.md'), v2);
+
+    // PASS 2 — the case R1 measured as a false refusal at 5743eb15.
+    const pass2 = claim.mirrorFinalizationArtifacts(fx.wtPath, project);
+    assert(!pass2.refused,
+      'R1a: ' + ed.label + ' — pass 2 (main advanced, worktree untouched since pass 1) must NOT '
+      + 'refuse mirror_sync_failed; got ' + JSON.stringify(pass2));
+    const destAfter2 = fs.readFileSync(path.join(fx.wtPath, 'kaola-workflow', project, 'mission-list.md'), 'utf8');
+    assert(destAfter2 === v2,
+      'R1a: ' + ed.label + ' — pass 2 must actually copy the advanced source down (the mirror '
+      + 'proceeds, it does not merely decline to refuse); got '
+      + (destAfter2 === REAL_TABLE ? 'the STALE pass-1 content (copy silently skipped)' : 'neither'));
+
+    // The receipt: written by the mirror itself, in the DEST project folder's .cache, mapping the
+    // mirrored basename to the sha256 of what it just copied (v2's bytes, after pass 2).
+    const digest = readMirrorDigest(fx.wtPath, project);
+    assert(digest !== null,
+      'R1a: ' + ed.label + ' — ' + mirrorDigestPath(fx.wtPath, project) + ' must exist after a '
+      + 'successful mirror');
+    assert(digest && digest['mission-list.md'] === sha256(v2),
+      'R1a: ' + ed.label + ' — the receipt must map mission-list.md to the sha256 of the bytes the '
+      + 'mirror just copied (' + sha256(v2) + '); got ' + JSON.stringify(digest));
+  } finally { destroyFixture(fx); }
+}
+
+// ===========================================================================
+// (b) a worktree copy edited independently after a successful mirror — even by one byte — still
+// refuses content_diverged. The receipt existing is not enough; its recorded digest has to match
+// dest's CURRENT bytes.
+// ===========================================================================
+(function worktreeEditedIndependentlyStillRefuses() {
+  console.log('R1b: a worktree copy hand-edited after the mirror still refuses content_diverged');
+  const ed = EDITIONS[0];
+  const project = nextProject();
+  const fx = buildLinkedFixture(ed, project, 9831, REAL_TABLE, null);
+  try {
+    const claim = require(path.join(repoRoot, ed.claim));
+    const pass1 = claim.mirrorFinalizationArtifacts(fx.wtPath, project);
+    assert(!pass1.refused, 'R1b: pass 1 (first sync) must not refuse; got ' + JSON.stringify(pass1));
+    assert(readMirrorDigest(fx.wtPath, project) !== null, 'R1b: pass 1 must have written the receipt');
+
+    // The worktree copy is edited independently — ONE byte — after the mirror wrote it.
+    const destPath = path.join(fx.wtPath, 'kaola-workflow', project, 'mission-list.md');
+    const editedByOneByte = REAL_TABLE + '.';
+    fs.writeFileSync(destPath, editedByOneByte);
+
+    // Main also advances, exactly as in R1a — the ordinary trigger for the new safe arm.
+    const v2 = advanced(REAL_TABLE);
+    fs.writeFileSync(path.join(fx.srcDir, 'mission-list.md'), v2);
+
+    const pass2 = claim.mirrorFinalizationArtifacts(fx.wtPath, project);
+    assert(pass2.refused === true && pass2.inner_reason === 'mirror_sync_failed',
+      'R1b: a worktree copy that no longer matches the mirror\'s own receipt must refuse '
+      + 'mirror_sync_failed, receipt or no receipt; got ' + JSON.stringify(pass2));
+    const destUnchanged = fs.readFileSync(destPath, 'utf8');
+    assert(destUnchanged === editedByOneByte,
+      'R1b: zero-write on refusal — the hand-edited worktree copy must be untouched');
+    const srcUnchanged = fs.readFileSync(path.join(fx.srcDir, 'mission-list.md'), 'utf8');
+    assert(srcUnchanged === v2, 'R1b: zero-write on refusal — the main copy must be untouched');
+  } finally { destroyFixture(fx); }
+})();
+
+// ===========================================================================
+// (c) REGRESSION CONTROL — first_sync and identical-unchanged still behave exactly as before,
+// driven the SAME way (direct mirrorFinalizationArtifacts calls) as the new legs above, so a
+// regression introduced by the R1 change lands on the same call path this file now exercises twice.
+// ===========================================================================
+(function firstSyncAndIdenticalStillWork() {
+  console.log('R1c: first_sync and identical-repeat are unchanged by the R1 addition');
+  const ed = EDITIONS[0];
+  const project = nextProject();
+  const fx = buildLinkedFixture(ed, project, 9832, REAL_TABLE, null);
+  try {
+    const claim = require(path.join(repoRoot, ed.claim));
+    const pass1 = claim.mirrorFinalizationArtifacts(fx.wtPath, project);
+    assert(!pass1.refused, 'R1c: first sync must not refuse; got ' + JSON.stringify(pass1));
+
+    // An immediate repeat with NOTHING changed on either side — the plain identical case, which
+    // must still short-circuit to 'identical' and never depend on the new receipt at all.
+    const pass2 = claim.mirrorFinalizationArtifacts(fx.wtPath, project);
+    assert(!pass2.refused, 'R1c: an untouched identical repeat must not refuse; got ' + JSON.stringify(pass2));
+    const dest = fs.readFileSync(path.join(fx.wtPath, 'kaola-workflow', project, 'mission-list.md'), 'utf8');
+    assert(dest === REAL_TABLE, 'R1c: the record is unchanged after the identical repeat');
+  } finally { destroyFixture(fx); }
+})();
+
+// ===========================================================================
+// (d) a MISSING or CORRUPT receipt falls back to today's behaviour — divergence refuses. The new
+// safe arm is not a general "trust the worktree" relaxation; without a valid receipt matching
+// dest's current bytes, the exact same main-advanced/worktree-untouched shape as R1a must refuse.
+// ===========================================================================
+(function missingOrCorruptReceiptFallsBackToRefusal() {
+  console.log('R1d: a missing or corrupt mirror-digest.json falls back to refusing content_diverged');
+  const ed = EDITIONS[0];
+
+  // (d1) MISSING — pass 1 mirrors normally, the receipt is then deleted, main advances, worktree
+  // is untouched (byte-identical to what R1a proves is otherwise SAFE). Without the receipt this
+  // must refuse exactly as it did before R1 — the safety is not derivable any other way.
+  {
+    const project = nextProject();
+    const fx = buildLinkedFixture(ed, project, 9833, REAL_TABLE, null);
+    try {
+      const claim = require(path.join(repoRoot, ed.claim));
+      const pass1 = claim.mirrorFinalizationArtifacts(fx.wtPath, project);
+      assert(!pass1.refused, 'R1d1: pass 1 (first sync) must not refuse; got ' + JSON.stringify(pass1));
+      const digestFile = mirrorDigestPath(fx.wtPath, project);
+      assert(fs.existsSync(digestFile), 'R1d1 precondition: the receipt must exist after pass 1');
+      fs.rmSync(digestFile, { force: true });
+
+      const v2 = advanced(REAL_TABLE);
+      fs.writeFileSync(path.join(fx.srcDir, 'mission-list.md'), v2);
+
+      const pass2 = claim.mirrorFinalizationArtifacts(fx.wtPath, project);
+      assert(pass2.refused === true && pass2.inner_reason === 'mirror_sync_failed',
+        'R1d1: a missing receipt must fall back to refusing mirror_sync_failed for a shape that '
+        + 'would otherwise be safe — got ' + JSON.stringify(pass2));
+      const destUnchanged = fs.readFileSync(path.join(fx.wtPath, 'kaola-workflow', project, 'mission-list.md'), 'utf8');
+      assert(destUnchanged === REAL_TABLE, 'R1d1: zero-write on refusal — dest untouched');
+    } finally { destroyFixture(fx); }
+  }
+
+  // (d2) CORRUPT — the receipt exists but is not parseable JSON. Same fallback: refuse, never throw
+  // and never silently treat unparseable evidence as permission.
+  {
+    const project = nextProject();
+    const fx = buildLinkedFixture(ed, project, 9834, REAL_TABLE, null);
+    try {
+      const claim = require(path.join(repoRoot, ed.claim));
+      const pass1 = claim.mirrorFinalizationArtifacts(fx.wtPath, project);
+      assert(!pass1.refused, 'R1d2: pass 1 (first sync) must not refuse; got ' + JSON.stringify(pass1));
+      const digestFile = mirrorDigestPath(fx.wtPath, project);
+      fs.writeFileSync(digestFile, '{ not valid json');
+
+      const v2 = advanced(REAL_TABLE);
+      fs.writeFileSync(path.join(fx.srcDir, 'mission-list.md'), v2);
+
+      let pass2 = null;
+      let threw = null;
+      try {
+        const claim2 = require(path.join(repoRoot, ed.claim));
+        pass2 = claim2.mirrorFinalizationArtifacts(fx.wtPath, project);
+      } catch (e) { threw = e; }
+      assert(threw === null,
+        'R1d2: a corrupt receipt must degrade to a refusal, never throw out of the transaction; got '
+        + (threw && threw.message));
+      assert(pass2 && pass2.refused === true && pass2.inner_reason === 'mirror_sync_failed',
+        'R1d2: a corrupt (unparseable) receipt must fall back to refusing mirror_sync_failed; got '
+        + JSON.stringify(pass2));
+    } finally { destroyFixture(fx); }
+  }
+})();
+
+// ===========================================================================
+// R1-follow-up (#1054 review, candidate 5743eb15, docs-agent gap): `finalize --check` is the
+// READ-ONLY twin of the transaction's own Step-8a mirror (`probeFinalizeMirror`, `evaluateFinalize
+// Preconditions`), and its own doc comment says its prediction "must agree with what the transaction
+// will actually do." R1a already proves the real transaction now accepts a main-advanced /
+// worktree-untouched pair as safe (`prior_mirror`). `--check` must predict that SAME verdict — not
+// the pre-R1 `sync_failed` the ordinary content-diverged branch would still produce without also
+// consulting the mirror's own receipt.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// (e) after a real mirror + a main-side advance with an UNTOUCHED worktree copy, `finalize --check`
+// must NOT predict `sync_failed` / `mirror_sync_failed` — on all four editions — and must remain
+// read-only (neither record file nor the receipt itself is touched by the prediction).
+// ---------------------------------------------------------------------------
+for (const ed of EDITIONS) {
+  console.log('R1e: ' + ed.label + ' — --check must not predict sync_failed for a prior_mirror-safe pair');
+  const project = nextProject();
+  const fx = buildLinkedFixture(ed, project, 9840, REAL_TABLE, null);
+  try {
+    const claim = require(path.join(repoRoot, ed.claim));
+    const pass1 = claim.mirrorFinalizationArtifacts(fx.wtPath, project);
+    assert(!pass1.refused, 'R1e: ' + ed.label + ' — pass 1 (first sync) must not refuse; got ' + JSON.stringify(pass1));
+    const digestBefore = fs.readFileSync(mirrorDigestPath(fx.wtPath, project), 'utf8');
+
+    // Main advances; the worktree copy is left byte-for-byte what pass 1 wrote — the exact shape
+    // R1a proves the real transaction now accepts.
+    const v2 = advanced(REAL_TABLE);
+    fs.writeFileSync(path.join(fx.srcDir, 'mission-list.md'), v2);
+
+    const r = runFinalize(ed, fx, project, ['--check']);
+    assert(r.out && r.out.checks && r.out.checks.mirror === 'ready',
+      'R1e: ' + ed.label + ' — checks.mirror must predict "ready" (the mirror will proceed safely), '
+      + 'not sync_failed, for a main-advanced/worktree-untouched pair; got '
+      + JSON.stringify(r.out && r.out.checks));
+    assert(r.out && Array.isArray(r.out.reasons) && !r.out.reasons.includes('mirror_sync_failed'),
+      'R1e: ' + ed.label + ' — reasons must NOT include mirror_sync_failed for this pair; got '
+      + JSON.stringify(r.out && r.out.reasons));
+
+    // Read-only: --check never copies, and never rewrites the receipt it just consulted.
+    const destBytes = fs.readFileSync(path.join(fx.wtPath, 'kaola-workflow', project, 'mission-list.md'), 'utf8');
+    assert(destBytes === REAL_TABLE, 'R1e: ' + ed.label + ' — --check left the worktree record byte-unchanged');
+    const srcBytes = fs.readFileSync(path.join(fx.srcDir, 'mission-list.md'), 'utf8');
+    assert(srcBytes === v2, 'R1e: ' + ed.label + ' — --check left the main record byte-unchanged');
+    const digestAfter = fs.readFileSync(mirrorDigestPath(fx.wtPath, project), 'utf8');
+    assert(digestAfter === digestBefore, 'R1e: ' + ed.label + ' — --check left the mirror receipt byte-unchanged');
+  } finally { destroyFixture(fx); }
+}
+
+// ---------------------------------------------------------------------------
+// (f) with an independently edited worktree copy (the receipt no longer matches dest's CURRENT
+// bytes), `--check` still predicts the refusal — the receipt alone is not a blanket "trust the
+// worktree" relaxation for the prediction either, mirroring R1b's real-transaction assertion.
+// ---------------------------------------------------------------------------
+(function checkStillPredictsRefusalWhenWorktreeEditedIndependently() {
+  console.log('R1f: --check still predicts mirror_sync_failed when the worktree copy was hand-edited');
+  const ed = EDITIONS[0];
+  const project = nextProject();
+  const fx = buildLinkedFixture(ed, project, 9841, REAL_TABLE, null);
+  try {
+    const claim = require(path.join(repoRoot, ed.claim));
+    const pass1 = claim.mirrorFinalizationArtifacts(fx.wtPath, project);
+    assert(!pass1.refused, 'R1f: pass 1 (first sync) must not refuse; got ' + JSON.stringify(pass1));
+
+    const destPath = path.join(fx.wtPath, 'kaola-workflow', project, 'mission-list.md');
+    const editedByOneByte = REAL_TABLE + '.';
+    fs.writeFileSync(destPath, editedByOneByte);
+
+    const v2 = advanced(REAL_TABLE);
+    fs.writeFileSync(path.join(fx.srcDir, 'mission-list.md'), v2);
+
+    const r = runFinalize(ed, fx, project, ['--check']);
+    assert(r.out && r.out.checks && r.out.checks.mirror === 'sync_failed',
+      'R1f: checks.mirror must still predict sync_failed once the worktree copy no longer matches '
+      + 'the receipt; got ' + JSON.stringify(r.out && r.out.checks));
+    assert(r.out && Array.isArray(r.out.reasons) && r.out.reasons.includes('mirror_sync_failed'),
+      'R1f: reasons must still include mirror_sync_failed; got ' + JSON.stringify(r.out && r.out.reasons));
+
+    const destUnchanged = fs.readFileSync(destPath, 'utf8');
+    assert(destUnchanged === editedByOneByte, 'R1f: --check left the hand-edited worktree record byte-unchanged');
+    const srcUnchanged = fs.readFileSync(path.join(fx.srcDir, 'mission-list.md'), 'utf8');
+    assert(srcUnchanged === v2, 'R1f: --check left the main record byte-unchanged');
   } finally { destroyFixture(fx); }
 })();
 
