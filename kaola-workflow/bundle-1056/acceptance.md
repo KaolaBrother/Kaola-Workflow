@@ -166,3 +166,72 @@ No file under `scripts/kaola-workflow-adaptive-schema.js`, any other `scripts/*.
 file, or `plugins/` was left modified — every mutant was applied and reverted within this session,
 each confirmed byte-identical via `git diff --stat` before moving to the next. Nothing was
 committed.
+
+## Review follow-up (N1, N2)
+
+Two review notes from the team lead, addressed on a scratch copy while the worktree was busy with
+a validation chain, then copied back verbatim (`diff` against the scratch copy showed no
+difference before this update).
+
+**N1 — the gitlab/gitea claim ports honour `KAOLA_GH_REMOTE_TIMEOUT_MS` after the #1056 import
+swap.** Their deleted local `defaultBranch` copies hard-coded `timeout: 30000` and ignored the env
+entirely; post-fix they delegate to their own `kaola-workflow-adaptive-schema.js` copy, which reads
+the timeout per call. Added, per port (gitlab, gitea), inside scenario 6's edition loop: (a) with
+`KAOLA_GH_REMOTE_TIMEOUT_MS='1234'` set *after* the port module loads, the stage-2 `execFileSync`
+`timeout` option must be `1234`; (b) with the env left fully unset, the timeout must stay at the
+unchanged `30000` default. 4 new driver runs × 2 assertions = 8 new assertions (31 → 39 before N2's
+own floor check, 40 after).
+
+**N2 — an assertion-count floor.** A final `assert(passed + failed + 1 === EXPECTED_ASSERTIONS, ...)`
+(`EXPECTED_ASSERTIONS = 40`, counting the floor check itself) now closes the suite, so a child
+scenario that silently ran zero assertions (a driver bug that returns without reaching its own
+`assert()` calls, without throwing) fails the suite even though every assertion that did run passed.
+
+**Isolation method.** Rather than run the mutating proof against the worktree (busy with a chain),
+`git archive e72407b8 -- plugins/kaola-workflow-gitlab/scripts plugins/kaola-workflow-gitea/scripts
+scripts` and the same for `f210ef76` were extracted into two self-contained trees under the
+scratchpad (`baseline-e72407b8/`, `candidate-f210ef76/`) — full trees, not single files, because the
+ports' `defaultBranch` pulls in their forge/classifier/active-folders/closure-contract siblings
+transitively. The suite gained one line to support this without changing its default behavior:
+
+```js
+const REPO = process.env.KW_TEST_1056_REPO_ROOT
+  ? path.resolve(process.env.KW_TEST_1056_REPO_ROOT)
+  : path.resolve(__dirname, '..');
+```
+
+Unset (the normal in-worktree invocation), `REPO` resolves exactly as before
+(`path.resolve(__dirname, '..')`); the env var only matters when pointing the suite at an extracted
+tree from a different directory.
+
+**GREEN on candidate `f210ef76`** (`KW_TEST_1056_REPO_ROOT=.../candidate-f210ef76 node
+scripts/test-issue-1056-default-branch-env-contract.js`):
+```
+40 passed, 0 failed (test-issue-1056-default-branch-env-contract.js)
+```
+Exit code: 0.
+
+**RED on baseline `e72407b8`** (`KW_TEST_1056_REPO_ROOT=.../baseline-e72407b8 node
+scripts/test-issue-1056-default-branch-env-contract.js`) — the 8 pre-existing RED lines reproduced
+unchanged, plus 2 new ones from N1:
+```
+FAIL: #1056 N1 (gitlab, timeout=1234 after port load): stage-2 execFileSync timeout must be 1234 (the port used to hard-code 30000 regardless of env); got 30000
+FAIL: #1056 N1 (gitea, timeout=1234 after port load): stage-2 execFileSync timeout must be 1234 (the port used to hard-code 30000 regardless of env); got 30000
+
+30 passed, 10 failed (test-issue-1056-default-branch-env-contract.js)
+```
+Exit code: 1. (N1's unset-default sub-case stayed GREEN on both trees, as expected — baseline's
+hard-coded `30000` happens to already match the unset-default's `30000`, so only the `1234`
+sub-case discriminates baseline from candidate.)
+
+**N2 armed.** A throwaway mutant copy (never written into the worktree or committed) wrapped one of
+gitlab's two new N1 assertion blocks in `if (false) { ... }`, simulating a silently-skipped child
+scenario, and was run against the candidate tree:
+```
+FAIL: #1056 N2: assertion-count floor — expected exactly 40 total assertions to run (including this floor check), got 36; a silently skipped child scenario must fail the suite, not pass quietly
+
+35 passed, 1 failed (test-issue-1056-default-branch-env-contract.js)
+```
+Exit code: 1 — every assertion that ran still passed, yet the suite failed solely on the floor
+check, confirming N2 catches exactly the failure mode it was added for. The mutant file was deleted
+immediately after this run; nothing under the tracked suite was touched by it.

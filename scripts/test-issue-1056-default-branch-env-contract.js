@@ -60,7 +60,12 @@
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const REPO = path.resolve(__dirname, '..');
+// KW_TEST_1056_REPO_ROOT lets a copy of this suite (e.g. run from a scratch directory against an
+// extracted baseline or candidate tree) point REPO somewhere other than its own parent directory,
+// without touching any file the suite itself resolves paths from. Unset, behavior is unchanged.
+const REPO = process.env.KW_TEST_1056_REPO_ROOT
+  ? path.resolve(process.env.KW_TEST_1056_REPO_ROOT)
+  : path.resolve(__dirname, '..');
 const SCHEMA = path.join(REPO, 'scripts', 'kaola-workflow-adaptive-schema.js');
 const CLAIM = path.join(REPO, 'scripts', 'kaola-workflow-claim.js');
 const GITLAB_SCHEMA = path.join(REPO, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-workflow-adaptive-schema.js');
@@ -378,6 +383,36 @@ function buildPortOfflineDriver(schemaPath, claimPath, requirePortFirst) {
   ].join('\n');
 }
 
+// N1 (review): after the import swap the ports delegate their whole defaultBranch to their own
+// adaptive-schema.js copy, which reads KAOLA_GH_REMOTE_TIMEOUT_MS per call — unlike their deleted
+// local copies, which hard-coded `timeout: 30000` and ignored the env entirely. Requires the
+// PORT before the env is set (matching scenario 6's own reproduction order for the ports) so the
+// pin exercises the same "env arrives after the module that used to own the toggle" shape; a
+// call-time contract must not care. `timeoutEnvValue === null` leaves the env fully unset, pinning
+// the untouched default.
+function buildPortTimeoutDriver(schemaPath, claimPath, timeoutEnvValue) {
+  const plan = {
+    stage1: { mode: 'throw', message: 'no symbolic-ref' },
+    stage2: { mode: 'return', value: 'HEAD branch: develop\n' },
+    stage3: { mode: 'return', value: 'ref: refs/heads/should-not-be-called\tHEAD\n' },
+  };
+  const lines = [
+    'const schema = require(' + JSON.stringify(schemaPath) + ');',
+    "delete process.env.KAOLA_WORKFLOW_OFFLINE;",
+    "delete process.env.KAOLA_GH_REMOTE_TIMEOUT_MS;",
+    'const port = require(' + JSON.stringify(claimPath) + ');',
+  ];
+  if (timeoutEnvValue !== null) {
+    lines.push('process.env.KAOLA_GH_REMOTE_TIMEOUT_MS = ' + JSON.stringify(timeoutEnvValue) + ';');
+  }
+  return [
+    harnessSource(plan),
+    ...lines,
+    "const result = port.defaultBranch('/tmp/kw-1056-s6t');",
+    printSource({ result: 'result', calls: '__calls' }),
+  ].join('\n');
+}
+
 for (const edition of [
   { name: 'gitlab', schema: GITLAB_SCHEMA, claim: GITLAB_CLAIM },
   { name: 'gitea', schema: GITEA_SCHEMA, claim: GITEA_CLAIM },
@@ -402,7 +437,30 @@ for (const edition of [
     assert(argvs.length === 1 && /symbolic-ref/.test(argvs[0] || ''),
       '#1056 scenario 6 (' + edition.name + ', port-before-env): offline set AFTER the port itself loads (but before the call) must still make zero network probes; got ' + JSON.stringify(argvs));
   }
+  // N1: KAOLA_GH_REMOTE_TIMEOUT_MS set AFTER the port loads must reach the stage-2 timeout.
+  {
+    const out = runChild(buildPortTimeoutDriver(edition.schema, edition.claim, '1234'));
+    assert(out.result === 'develop', '#1056 N1 (' + edition.name + ', timeout=1234 after port load): expected "develop"; got ' + JSON.stringify(out.result));
+    const stage2Call = (out.calls || []).find((c) => /remote show/.test(c.argv));
+    assert(stage2Call && stage2Call.timeout === 1234,
+      '#1056 N1 (' + edition.name + ', timeout=1234 after port load): stage-2 execFileSync timeout must be 1234 (the port used to hard-code 30000 regardless of env); got ' + JSON.stringify(stage2Call && stage2Call.timeout));
+  }
+  // N1: with KAOLA_GH_REMOTE_TIMEOUT_MS unset, the 30000 default must be unchanged.
+  {
+    const out = runChild(buildPortTimeoutDriver(edition.schema, edition.claim, null));
+    assert(out.result === 'develop', '#1056 N1 (' + edition.name + ', timeout unset): expected "develop"; got ' + JSON.stringify(out.result));
+    const stage2Call = (out.calls || []).find((c) => /remote show/.test(c.argv));
+    assert(stage2Call && stage2Call.timeout === 30000,
+      '#1056 N1 (' + edition.name + ', timeout unset): default timeout must stay 30000; got ' + JSON.stringify(stage2Call && stage2Call.timeout));
+  }
 }
+
+// N2 (review): an assertion-count floor — a child scenario that silently ran zero assertions (a
+// driver bug that never reaches its own assert() calls without throwing) must fail the suite even
+// though every assert() that DID run passed. EXPECTED_ASSERTIONS includes this floor check itself.
+const EXPECTED_ASSERTIONS = 40;
+assert(passed + failed + 1 === EXPECTED_ASSERTIONS,
+  '#1056 N2: assertion-count floor — expected exactly ' + EXPECTED_ASSERTIONS + ' total assertions to run (including this floor check), got ' + (passed + failed + 1) + '; a silently skipped child scenario must fail the suite, not pass quietly');
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed (test-issue-1056-default-branch-env-contract.js)');
 process.exit(failed ? 1 : 0);

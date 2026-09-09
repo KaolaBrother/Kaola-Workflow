@@ -1751,7 +1751,9 @@ lookup starts at the effective project or user `.codex/config.toml`: its managed
 ### Timeouts
 
 - **`KAOLA_GH_REMOTE_TIMEOUT_MS`** (default 30000) — timeout for all forge API calls made by
-  `ghExec`, `glabExec` and `teaExec`: issue and PR state checks, closure audits, label operations.
+  `ghExec`, `glabExec` and `teaExec`: issue and PR state checks, closure audits, label operations,
+  and (read per call since #1056) the two network git probes inside `defaultBranch`
+  (`git remote show origin`, `git ls-remote --symref origin HEAD`) in all three forge editions.
   On timeout the affected operation returns an `unavailable` or `skipped_timeout` sentinel instead
   of failing hard. Non-numeric, zero or negative values fall back to the default; values above
   600000 (10 minutes) are clamped, so a large value cannot silently disable the hang protection.
@@ -1821,8 +1823,11 @@ git probe: local `git symbolic-ref --short refs/remotes/origin/HEAD` (no network
 **Contract (#1056):** `KAOLA_WORKFLOW_OFFLINE=1` (skip stages 2–3) and `KAOLA_GH_REMOTE_TIMEOUT_MS`
 (per-probe timeout, clamped to 1..600000 ms, default 30000) are read from the environment on every
 call, not when the module loads, so the order in which a caller requires modules and sets the
-variables does not change the result. The gitlab/gitea claim ports re-export the same kernel
-function.
+variables does not change the result. The gitlab/gitea claim ports re-export `defaultBranch` from
+their own plugin-local `kaola-workflow-adaptive-schema.js` copy (byte-identical to canonical, a
+separate module instance); before #1056 their local copies hard-coded the 30000 ms probe timeout,
+so those two editions now honour `KAOLA_GH_REMOTE_TIMEOUT_MS` for the git probes as well — the
+unset default is still 30000.
 
 **`scripts/kaola-workflow-sink-merge.js`** — `classifyMergeError(error)`, plus the sink transaction
 primitives.

@@ -12,9 +12,12 @@
   reproduced with an `execFileSync` mock. The function now reads both variables on every call; the
   probe order (local `symbolic-ref`, then `git remote show origin`, then `git ls-remote --symref`),
   the 1..600000 ms clamp with its 30000 default, and the `'main'` fallback are unchanged. The
-  gitlab/gitea claim hand-ports consume and re-export the kernel function instead of a local copy,
-  so all three forge editions share the one contract. Regression:
-  `scripts/test-issue-1056-default-branch-env-contract.js`.
+  gitlab/gitea claim hand-ports consume and re-export the kernel function (from their own
+  byte-identical plugin-local kernel copy) instead of a local copy that hard-coded the 30000 ms
+  probe timeout, so all three forge editions share the one contract and the two ports now honour
+  `KAOLA_GH_REMOTE_TIMEOUT_MS` for the git probes too (unset default unchanged at 30000).
+  Regression: `scripts/test-issue-1056-default-branch-env-contract.js` (40 assertions with an
+  assertion-count floor; 10 RED on the pre-fix tree).
 
 ### Changed
 
