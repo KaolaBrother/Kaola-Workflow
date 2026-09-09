@@ -520,3 +520,4 @@ archived_paths:
 - kaola-workflow/archive/bundle-1054/finalization-summary.md
 - kaola-workflow/archive/bundle-1054/mission-list.md
 - kaola-workflow/archive/bundle-1054/workflow-state.md
+- Second `sink-merge --sink` run (14:10–14:24 UTC) after pushing main: rebased the branch onto origin/main 8b240fe2 (commits 8c6e3d06..3b08fde5), re-gated, fast-forwarded main, committed the archive (`be08a80d chore: archive bundle-1054 [sink]`, 322 tracked files), pushed `8b240fe2..be08a80d`, closed #1054 (CLOSED 2026-09-09T14:24:17Z), deleted the remote and local branch and the worktree. Closure audit (dry run): project clean, no stale label, no active folder, archive complete, summary citations present. The sink journal was disposed at terminal success, as designed.
