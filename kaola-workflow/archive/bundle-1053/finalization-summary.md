@@ -59,9 +59,10 @@ limits → post-sink section below.
 DOCKED — `.cache/doc-docking.md`, `.cache/doc-updater.md`.
 
 ## Run gaps
+- manual:finalize-report (archived summary `## Mission List` reads `items: 0` for a 7-row table-form mission list): filed: #1054
 
 ## Follow-Up Items
-- None filed. Run-process defects found during this run (fixture leak, truncated brief, CLI flags) were corrected
+- Filed #1054 (bug, P3): the finalize Mission List coherence probe parses only the `item:`/`status:`/`result:` line form, so the table-form record every current run writes reads as 0 items; earlier archives hid it by hand-writing the `## Mission List` heading. Body 2,300 bytes, confirmed present. Run-process defects found during this run (fixture leak, truncated brief, CLI flags) were corrected
   in-run and are recorded in `.cache/dogfood.md`; O1/O2 are declared test residuals, not product defects.
 - Issue correction to post before close: the local design draft was never on this machine; the issue body already
   states it is not required (no premise error; recorded as a comment for the record).
@@ -95,6 +96,8 @@ Files this branch changed outside the run-state and documentation bands:
 
 items: 0
 carrying an outcome while their status is not `done`: 0
+
+(Transaction reading; the actual record has 7 rows, all `done` with results — see `mission-list.md` and #1054.)
 
 ## Sink Findings
 
