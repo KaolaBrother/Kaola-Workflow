@@ -17,6 +17,19 @@ const DISPATCH_END = '<!-- KW-RUNTIME-DISPATCH-END -->';
 const MARKER = 'KW-COMPACT-RECOVERY-V2';
 const RUNTIMES = ['claude', 'codex', 'grok', 'cursor'];
 const FORGES = ['github', 'gitlab', 'gitea'];
+// #1054 item 25 (measured, not asserted by this suite as production policy): grok's persistent
+// Rule and cursor's alwaysApply Rule are the ONLY always-loaded carrier of the dispatch contract
+// on those hosts, so their compact-recovery render keeps the full dispatch/adapter blocks. claude
+// and codex recovery instead reloads the complete installed Next/Finalize prompt, which already
+// carries dispatch — repeating it in recovery would load it twice, so those two runtimes render a
+// one-sentence deferred-note pointer instead. Read from the generator's own export (routing.
+// RECOVERY_FULL_DISPATCH_RUNTIMES) rather than duplicating the runtime list by hand.
+// Fall back to the pinned target split when the generator does not (yet) export
+// RECOVERY_FULL_DISPATCH_RUNTIMES, so this suite runs (and correctly REDs) against the pre-#1054
+// baseline instead of throwing.
+const FULL_DISPATCH_RUNTIMES = Array.isArray(routing.RECOVERY_FULL_DISPATCH_RUNTIMES)
+  ? routing.RECOVERY_FULL_DISPATCH_RUNTIMES : ['grok', 'cursor'];
+const DEFERRED_NOTE_PATTERN = /already carries the full runtime dispatch contract/i;
 
 let passed = 0;
 let failed = 0;
@@ -50,11 +63,25 @@ for (const forge of FORGES) {
     rendered.set(runtime + ':' + forge, prompt);
     assert(count(prompt, START) === 1 && count(prompt, END) === 1,
       `B1[${runtime}/${forge}]: one compact recovery boundary`);
-    assert(count(prompt, DISPATCH_START) === 1 && count(prompt, DISPATCH_END) === 1,
-      `B1[${runtime}/${forge}]: one dispatch boundary`);
+    // The dispatch region marker delimits the dispatch contract itself; a deferred (claude/codex)
+    // render legitimately drops the marker along with the content it would otherwise wrap (so a
+    // consumer keying on the marker cannot mistake a one-sentence pointer for the real contract).
+    // It is required exactly once for an always-loaded carrier, and absent entirely otherwise.
+    const expectMarker = FULL_DISPATCH_RUNTIMES.includes(runtime) ? 1 : 0;
+    assert(count(prompt, DISPATCH_START) === expectMarker && count(prompt, DISPATCH_END) === expectMarker,
+      `B1[${runtime}/${forge}]: dispatch boundary marker count matches this runtime's carrier role (expected ${expectMarker})`);
     assert(prompt.includes(MARKER), `B1[${runtime}/${forge}]: recovery marker is present`);
-    assert(prompt.includes(dispatch),
-      `B2[${runtime}/${forge}]: exact shared dispatch wording is embedded`);
+    if (FULL_DISPATCH_RUNTIMES.includes(runtime)) {
+      assert(prompt.includes(dispatch),
+        `B2[${runtime}/${forge}]: exact shared dispatch wording is embedded (always-loaded carrier)`);
+    } else {
+      assert(!prompt.includes(dispatch),
+        `B2[${runtime}/${forge}]: the shared dispatch wording is NOT re-embedded — the full Next/Finalize reload already carries it`);
+      assert(DEFERRED_NOTE_PATTERN.test(prompt),
+        `B2[${runtime}/${forge}]: a deferred-note pointer explains the dispatch contract is not restated`);
+      assert(!/Runtime adapter facts/.test(prompt),
+        `B2[${runtime}/${forge}]: the runtime-adapter overlay is NOT re-embedded either`);
+    }
     assert(count(prompt, globalContract) === 1,
       `B2[${runtime}/${forge}]: exact machine-global contract is reloaded once`);
     assert(!prompt.includes('<!-- SLOT:'),
@@ -67,19 +94,50 @@ for (const forge of FORGES) {
       `B3[${runtime}/${forge}]: prompt resumes from durable files`);
     assert(!/node\s|\.js\b|PreToolUse|PostToolUse|sidecar|opaque token|chunk bitmap/i.test(prompt),
       `B4[${runtime}/${forge}]: runtime prompt contains no executable prompt machinery`);
-    assert(bytes(prompt) >= 6500 && bytes(prompt) <= 8500,
-      `B5[${runtime}/${forge}]: complete static prompt stays within measured 6.5–8.5 KB budget (got ${bytes(prompt)} B)`);
+    if (FULL_DISPATCH_RUNTIMES.includes(runtime)) {
+      assert(bytes(prompt) >= 6500 && bytes(prompt) <= 8500,
+        `B5[${runtime}/${forge}]: complete static prompt (always-loaded carrier) stays within measured 6.5–8.5 KB budget (got ${bytes(prompt)} B)`);
+    } else {
+      // claude/codex defer the dispatch/adapter content to the full Next/Finalize reload, so their
+      // recovery render is smaller by roughly that content's size; bounded loosely (not pinned to
+      // today's exact byte count) so an unrelated future wording tweak doesn't false-positive here.
+      assert(bytes(prompt) >= 1500 && bytes(prompt) < 5500,
+        `B5[${runtime}/${forge}]: deferred-dispatch prompt is materially smaller than the always-loaded carrier budget (got ${bytes(prompt)} B)`);
+    }
   }
 }
 
 for (const runtime of RUNTIMES) {
   const github = rendered.get(runtime + ':github');
-  assert(FORGES.every(forge => rendered.get(runtime + ':' + forge).includes(dispatch)),
-    `C1[${runtime}]: all forge renders retain the exact common contract`);
-  assert(/Runtime adapter facts/.test(github), `C1[${runtime}]: runtime overlay is present`);
+  if (FULL_DISPATCH_RUNTIMES.includes(runtime)) {
+    assert(FORGES.every(forge => rendered.get(runtime + ':' + forge).includes(dispatch)),
+      `C1[${runtime}]: all forge renders retain the exact common contract`);
+    assert(/Runtime adapter facts/.test(github), `C1[${runtime}]: runtime overlay is present`);
+  } else {
+    assert(FORGES.every(forge => DEFERRED_NOTE_PATTERN.test(rendered.get(runtime + ':' + forge))),
+      `C1[${runtime}]: all forge renders carry the deferred-note pointer instead of the common contract`);
+    assert(!/Runtime adapter facts/.test(github), `C1[${runtime}]: no runtime overlay is embedded`);
+  }
 }
-assert(new Set(RUNTIMES.map(runtime => rendered.get(runtime + ':github'))).size === RUNTIMES.length,
-  'C2: runtime prompts differ where measured adapter capabilities differ');
+{
+  // C2 (revised for #1054 item 25): only the always-loaded-carrier runtimes embed measured
+  // per-runtime adapter content, so only THEY are required to differ pairwise. claude and codex
+  // now share the same deferred-note path with no runtime-specific content in the recovery render
+  // itself (that specificity lives only in the full Next/Finalize reload, covered elsewhere), so
+  // asserting they render byte-IDENTICAL prompts is the correct positive claim, not a relaxation.
+  const deferredGroup = RUNTIMES.filter(r => !FULL_DISPATCH_RUNTIMES.includes(r));
+  assert(new Set(FULL_DISPATCH_RUNTIMES.map(runtime => rendered.get(runtime + ':github'))).size
+      === FULL_DISPATCH_RUNTIMES.length,
+    'C2: always-loaded-carrier runtime prompts differ where measured adapter capabilities differ');
+  assert(new Set(deferredGroup.map(runtime => rendered.get(runtime + ':github'))).size === 1,
+    'C2: deferred-dispatch runtimes render byte-identical recovery prompts (no runtime-specific content lives in the deferred path)');
+  for (const full of FULL_DISPATCH_RUNTIMES) {
+    for (const deferred of deferredGroup) {
+      assert(rendered.get(full + ':github') !== rendered.get(deferred + ':github'),
+        `C2: ${full} (always-loaded carrier) differs from ${deferred} (deferred)`);
+    }
+  }
+}
 
 for (const row of routing.RUNTIME_RECOVERY_SURFACES) {
   const committed = read(row.path);

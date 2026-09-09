@@ -395,19 +395,16 @@ assertNotIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', '--codex-
 
 
 
-// issue #290 / #288: pin the machine-readable findings-emission contract presence in all
-// reviewer agent bodies (GitLab edition — .toml bodies). Removing the emission section from
-// any of these files must fail npm test so a re-vendor or refactor cannot silently drop it.
-for (const reviewerBody of [
-  pluginRoot + '/agents/code-reviewer.toml',
-  pluginRoot + '/agents/security-reviewer.toml',
-  pluginRoot + '/agents/adversarial-verifier.toml'
-]) {
-  assertIncludes(reviewerBody, 'finding: id=');
-  // #285: pin the machine-readable verdict-block emission contract (the column-0 block
-  // that --verdict-check reads at Finalization) so a gate node always emits it.
-  assertIncludes(reviewerBody, 'verdict: pass');
-}
+// issue #290/#288 + #285, REVISED for #1054 owner ruling (19:03 heartbeat): the fixed machine
+// column-zero `finding: id=...` row and the `verdict: pass` receipt line are retired procedure
+// ritual — #1054's role redesign bans the rigid finding-row/review_conclusion protocol from role
+// bodies. The real `.cache/final-validation.md` machine consumer still needs its own verdict
+// mechanism, but that is pinned where it is actually produced/consumed, not in these reviewer role
+// prompts. No pin on the three reviewer `.toml` bodies' CURRENT wording replaces it: assertConcept
+// is norm+includes, so it reds on an equivalent rephrasing — a new wording gate, not a behavior
+// check. The structural authority (generate-agent-profiles.js --check, validate-vendored-agents.js:
+// render == authority, hash-bound) and native-host acceptance (mission 14) already carry this
+// responsibility.
 
 
 // issue #332: source agent-profile schema wall (AC2). require() THIS tree's own

@@ -21,6 +21,52 @@
   added. All six tracked Next surfaces (github/gitlab/gitea × Claude command / Codex skill) and the
   five additive edition renders (opencode, kimi, grok, cursor, zcode) per forge are generated from
   the shared skeleton; there is no hand-edited mirror.
+- **Finalize no longer parses the Mission List or any other orchestrator-authored record as a
+  machine interface (#1054).** Finalize's durable measurements are two again (`## Validation`,
+  `## Changed Paths`); the retired third, `mission_list` / `## Mission List` (an item count and a
+  status-vs-outcome statistic, computed by `probeMissionListCoherence`), is gone — the orchestrator
+  reads `mission-list.md` and the run's own evidence directly and states its own conclusion. The
+  `## Closure` block drops the format-dependent backlog-delta fields (`follow_ups_filed`,
+  `follow_up_numbers`, `net_backlog_delta`); `issues_closed`, computed directly from the claimed set,
+  survives. `kaola-workflow-gap-sweep.js` is now an optional, non-gating diagnostic: its `--check`
+  reconciliation gate, `--summary`, `--offline`, and the `.cache/run-gaps-manual.md` hand-seeding
+  sidecar are retired outright, and finalize no longer depends on it. The archive keeps one docking
+  evidence sidecar, `.cache/doc-docking.md`; `.cache/doc-updater.md` is retired from
+  `ARCHIVE_CACHE_SIDECAR_MD`. `kaola-workflow-ledger-compare.js`'s Step-8a mirror guard now decides
+  by content (`compareLedgers` returns `first_sync` / `identical` / `content_diverged` with a
+  bounded diff) instead of counting `status: done` lines — the old counter read a table-form Mission
+  List as zero on both sides and could pass a copy that erased finished rows; on divergence the
+  transaction now refuses `mirror_sync_failed` and no longer auto-repairs by copying the worktree
+  over main.
+- **All fourteen role contracts rewritten around positioning, deliverable, unique custody, and stop
+  condition (#1054).** `templates/agents/behavior-contracts.json` bodies dropped fixed-phase
+  procedure, numeric thresholds, verification-tier menus, default commands, and the column-zero
+  review-finding format; reviewers now deliver natural-language findings, and
+  `.cache/final-validation.md`'s verdict still comes only from executed validation. Compact-recovery
+  renders keep the full runtime-dispatch/adapter block only for Grok and Cursor, the hosts whose Rule
+  is the only always-loaded carrier of it (`RECOVERY_FULL_DISPATCH_RUNTIMES`); Claude and Codex
+  collapse that block to a one-sentence pointer at the full Next/Finalize reload. Claude's generated
+  appendix now carries `runtime: claude` plus prose only, since the hash fields already live in its
+  YAML frontmatter; every other runtime keeps the full hash block.
+- **Codex profile-schema constants and tier rosters have one authoring source (#1054).**
+  `MANIFEST_BASENAME`, `RETIRED_PROFILE_FILES`, `EFFORT_VALUES`, `CODEX_PINNED_*`, and
+  `validateProfileText` moved into `kaola-workflow-adaptive-schema.js`; `kaola-workflow-resolve-
+  agent-model.js`'s `DEFAULT_AGENT_MODELS` is now a generated marked block written and checked by
+  `generate-agent-profiles.js`. `kaola-workflow-prose-census.js` no longer computes a proportionality
+  verdict or supports `--fail-on-regression`; it reports diagnostic metrics only. The AGENTS.md
+  200-line notice in the Codex contract validator is gone (ADR 0023: no line budget).
+- **Contract validators check interfaces and generation, not prose wording (#1054).** 80 duplicate
+  assertions proven redundant against `templates/routing/required-blocks.js`'s own manifest coverage
+  (by a per-candidate subtraction probe) were removed from `validate-workflow-contracts.js` and
+  `validate-kaola-workflow-contracts.js`; role-body wording pins (`smoke-integration`,
+  `finding: id=`, `verdict: pass`) were replaced with concept-level checks against each role's
+  current wording; the finalize mirror-guard pin now exercises `compareLedgers`/
+  `mirrorFinalizationArtifacts`'s real content-based refusal instead of pinning retired source text.
+- **Role contracts are classified by measured content, not historical framing (#1054).**
+  `templates/agents/provenance.json` moves to schema 2: all fourteen role contracts are
+  `kaola_authored`; six carry a `history` record naming their retired Everything Claude Code origin
+  (pinned commit, license, and the measurement that showed no upstream text survives in the
+  rewritten bodies). See `docs/agents-source.md` for the full record.
 
 ## [10.5.0] - 2026-09-06
 

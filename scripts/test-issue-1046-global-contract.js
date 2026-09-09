@@ -109,8 +109,13 @@ for (const phrase of [
     'A1: dispatch/Next carry carrier (moved out of the global essay)');
   ok(/implementer may not delete, weaken, or reinterpret that acceptance/i.test(nextN),
     'A1: Next keeps independent acceptance duty reachable');
-  ok(/custody of the test artifact|You do not hold custody of the tests/i.test(rolesN),
-    'A1: role contracts keep independent test custody');
+  // "A1: role contracts keep independent test custody" DELETED per owner ruling (19:03
+  // heartbeat, #1054): this assertion checked only whether one of a few known phrasings of
+  // tdd-guide's custody claim appeared anywhere in the role-contracts source — a positive wording
+  // pin (any equivalent rephrasing not on the list would red it for no real reason), with no
+  // other structural meaning once the phrasing list is removed. tdd-guide's custody is protected
+  // by generation integrity (generate-agent-profiles --check, validate-vendored-agents, hashes)
+  // and native behavior acceptance (mission 14), not by a wording gate in this file.
 }
 for (const forbidden of [
   'Claude', 'Codex', 'OpenCode', 'Kimi', 'Grok', 'Cursor', 'ZCode',

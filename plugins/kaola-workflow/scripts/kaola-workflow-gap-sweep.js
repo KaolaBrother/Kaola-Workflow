@@ -2,31 +2,31 @@
 'use strict';
 
 // ---------------------------------------------------------------------------
-// kaola-workflow-gap-sweep.js (issue #435 — run-gap capture gate)
+// kaola-workflow-gap-sweep.js
 //
-// Machine-verifiable gap capture. Scans the per-project .cache/ for run-
-// discovered defect signals, deduplicates them by (reasonClass, sample),
-// writes a structured run-gaps artifact, and optionally gates finalization by
-// checking that every swept gap has been mapped in the ## Run gaps section of
-// the finalization summary.
+// #1054 item 1/2/4: this used to be a two-mode gate — a scanner that wrote a
+// structured run-gaps artifact, and a `--check` reconciliation that refused
+// finalization unless every swept signal was hand-mapped into the free-text
+// `## Run gaps` section of finalization-summary.md. That reconciliation is
+// retired: it judged the ORCHESTRATOR's real record by regex-parsing its
+// prose, and equivalent legitimate expressions of the same disposition
+// (bullets / free prose / a table) were accepted or silently misread as
+// zero. Nothing in finalize depends on this script any more.
+//
+// What remains is an OPTIONAL, non-gating diagnostic: scan a project's
+// .cache/ for machine-observable signals (today: a chain accepted red in
+// chain-receipt.json) and write/print them. It is never invoked by finalize
+// and its output settles nothing on its own — an orchestrator may run it,
+// read it, or ignore it.
 //
 // Usage:
-//   node kaola-workflow-gap-sweep.js --project <name> [options]
-//
-// Subcommands / modes:
-//   (default)   Scanner: scan .cache/, write artifact, emit JSON if --json.
-//   --check     Gate: read artifact + summary ## Run gaps section; pass or refuse.
+//   node kaola-workflow-gap-sweep.js --project <name> [--json] [--output <path>]
 //
 // Options:
 //   --project <name>          REQUIRED — project folder under kaola-workflow/.
 //   --json                    Emit a JSON summary line to stdout.
-//   --check                   Gate mode (reads existing artifact + summary).
-//   --summary <path>          Override finalization-summary.md path.
-//                             Default: kaola-workflow/<P>/finalization-summary.md
 //   --output <path>           Override artifact path.
 //                             Default: kaola-workflow/<P>/.cache/run-gaps.json
-//   --offline                 Skip live issue-existence probe (always skipped
-//                             when KAOLA_WORKFLOW_OFFLINE is set).
 //   -h / --help               Print usage.
 //
 // Root override (for tests):
@@ -35,7 +35,6 @@
 //
 // Reason classes (closed enum):
 //   deferred_red_chain        chain in chain-receipt.json with accepted_red:true
-//   manual:<kebab-slug>       lines in .cache/run-gaps-manual.md (gap: <class> — <text>)
 //
 // FORGE-NEUTRAL: this file invokes no forge-specific CLI binary or brand name
 // and makes no forge API calls. The codex plugin copy is byte-identical; the
@@ -44,23 +43,6 @@
 
 const fs   = require('fs');
 const path = require('path');
-
-// ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
-
-function isOffline() {
-  return process.env.KAOLA_WORKFLOW_OFFLINE === '1' ||
-         process.env.KAOLA_WORKFLOW_OFFLINE === 'true';
-}
-
-// Slugify a free-form string into a kebab identifier.
-function toKebab(str) {
-  return str
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'gap';
-}
 
 // ---------------------------------------------------------------------------
 // Scanner helpers
@@ -82,38 +64,6 @@ function scanChainReceipt(cacheDir) {
     }));
 }
 
-// Read optional run-gaps-manual.md and return manual:<slug> items.
-// Line grammar: "gap: <class> — <text>" (em-dash or simple dash accepted).
-function scanManual(cacheDir) {
-  const p = path.join(cacheDir, 'run-gaps-manual.md');
-  if (!fs.existsSync(p)) return [];
-  const raw = fs.readFileSync(p, 'utf8');
-  const items = [];
-  for (const line of raw.split('\n')) {
-    const l = line.trim();
-    if (!l.startsWith('gap:')) continue;
-    // Strip "gap: " prefix then split on em-dash (—) or " - ".
-    const body = l.slice(4).trim();
-    let cls, text;
-    // Support both em-dash and ASCII dash separator.
-    const emIdx = body.indexOf('—');
-    const dashIdx = body.indexOf(' - ');
-    if (emIdx !== -1) {
-      cls  = body.slice(0, emIdx).trim();
-      text = body.slice(emIdx + 1).trim();
-    } else if (dashIdx !== -1) {
-      cls  = body.slice(0, dashIdx).trim();
-      text = body.slice(dashIdx + 3).trim();
-    } else {
-      cls  = body;
-      text = body;
-    }
-    const slug = toKebab(cls);
-    items.push({ reasonClass: 'manual:' + slug, sample: text || cls, count: 1 });
-  }
-  return items;
-}
-
 // Deduplicate items by (reasonClass, sample). For duplicates, sum counts.
 function dedup(items) {
   const map = new Map();
@@ -129,7 +79,7 @@ function dedup(items) {
 }
 
 // ---------------------------------------------------------------------------
-// Scanner (default mode)
+// Scanner
 // ---------------------------------------------------------------------------
 
 function runScan(opts) {
@@ -197,20 +147,14 @@ function runScan(opts) {
   }
 
   // Scope guard: only read from this project's .cache.
-  const raw = [
-    ...scanChainReceipt(cacheDir),
-    ...scanManual(cacheDir),
-  ];
-  const sweptClasses = dedup(raw);
+  const sweptClasses = dedup(scanChainReceipt(cacheDir));
 
   // Ensure output directory exists.
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
   const artifact = { project, sweptClasses };
-  // `run-gaps.json` is a kernel Evidence record — the sweep result the finalization gate reads back,
-  // and one this writer deliberately refuses to recompute over a prior cycle. So it takes the
-  // crash-safe atomic replace like every other record write: a half-written artifact would parse as
-  // a SHORTER swept-class list, and the gate would pass on gaps that were swept but never stored.
+  // `run-gaps.json` is a diagnostic record, kept crash-safe like every other record write: a
+  // half-written artifact would parse as a SHORTER swept-class list than the scan actually found.
   require('./kaola-workflow-adaptive-schema').writeFileAtomicReplace(
     outputPath, JSON.stringify(artifact, null, 2) + '\n');
 
@@ -221,278 +165,6 @@ function runScan(opts) {
       sweptClasses,
       artifact: outputPath,
     }) + '\n');
-  }
-  return 0;
-}
-
-// ---------------------------------------------------------------------------
-// Gate (--check mode)
-// ---------------------------------------------------------------------------
-
-// How many `filed: #N` refs one line of the section carries. The spelling is the strict grammar's
-// own tail (see the row regex below) and deliberately nothing looser: a bare `#N` cited in passing
-// is not a filing, and a `noise:` disposition is a row the run decided NOT to file. Both wider
-// keyings were measured against this repository's archive and both are wrong — `#N` anywhere flags
-// three sections that merely mention an issue number, and `filed:`/`noise:`/`#N` together flags
-// eight more whose unread text records no filing at all.
-function countFiledRefs(line) {
-  return (String(line).match(/filed:\s*#\d+/g) || []).length;
-}
-
-// Parse the ## Run gaps section from a summary file.
-// Returns an array of { reasonClass, sample, kind, ref } or null if section absent.
-//
-// The array also carries a non-enumerable `unaccountedFiled`: how many `filed: #N` refs sit in the
-// section on lines this scan did not read — a bullet that missed the grammar, a continuation line
-// of a row that wrapped, a section written as a markdown table. An empty array used to mean two
-// unrelated things — "the section is present and records no filing" and "the section is present and
-// I read none of it" — and the closure stamp reported the second as a measured `0`. Measured over
-// 154 archived summaries: 6 sections carry 18 filings this scan accounted for none of, every one of
-// them stamped as a confident zero or an undercount. Free text stays free text: prose under the
-// heading carries no `filed: #N`, so it reads 0 here and keeps its measured zero.
-//
-// A PROPERTY ON THE ARRAY, not a new return shape. runCheck reads this value four ways — `!== null`
-// and `.length > 0` to arm observed_gap_unseeded, `.length === 0` for the vacuous pass, `.find` in
-// the forward match — and a non-array shape turns `.length > 0` into `undefined > 0`, disarming a
-// refusal with no error and no output. Array.isArray, .length, .find and .filter all keep working
-// here by construction, so every one of those reads stays untouched rather than re-audited.
-function parseGapSection(summaryPath) {
-  if (!fs.existsSync(summaryPath)) return null;
-  const raw = fs.readFileSync(summaryPath, 'utf8');
-  const lines = raw.split('\n');
-
-  let inSection = false;
-  const entries = [];
-  let unaccountedFiled = 0;
-
-  for (const line of lines) {
-    const l = line.trim();
-    if (/^## Run gaps\s*$/.test(l)) {
-      inSection = true;
-      continue;
-    }
-    // Stop at the next ## heading.
-    if (inSection && /^## /.test(l)) break;
-    if (!inSection) continue;
-    // Not a bullet at all — a table row, or the continuation of a bullet that wrapped. The scan has
-    // never read these and does not start now; it only records the filings it is walking past.
-    if (!l.startsWith('- ')) {
-      unaccountedFiled += countFiledRefs(l);
-      continue;
-    }
-
-    // Grammar: "- <reasonClass> (<sample>): filed: #N"
-    //       OR "- <reasonClass> (<sample>): noise: <text>"
-    //
-    // The sample group is LAZY — (.+?) — and that quantifier is load-bearing in BOTH directions:
-    //   * a negated class ([^)]+) rejects any sample that itself contains ")" (e.g. an API symbol
-    //     like "retryAfter(from:)"), so a correctly-written mapping row never parses and the gate
-    //     refuses gaps_unswept for a gap the operator did map;
-    //   * a GREEDY (.+) backtracks to the LAST "): " in the line, so a legal free-text noise
-    //     justification that happens to contain "): filed: #N" is mis-carved into the sample and
-    //     the gate refuses observed_gap_unseeded quoting a sample the operator never wrote.
-    // Lazy takes the LEFTMOST "): " followed by a valid filed:/noise: tail, which disambiguates
-    // both shapes. Do not "simplify" this quantifier.
-    const m = l.match(/^-\s+(\S+)\s+\((.+?)\):\s+(filed:\s*#(\d+)|noise:\s+(.+))$/);
-    if (!m) {
-      // The bullet was not read, so any filing written on it was not read either.
-      unaccountedFiled += countFiledRefs(l);
-      // A line that looks like a mapping attempt but fails the strict grammar used to be dropped
-      // silently, and then surfaced far away as a gaps_unswept / observed_gap_unseeded refusal with
-      // nothing pointing at the offending line. Warn on that population only: a parenthesised
-      // sample immediately followed by a filed:/noise: tail marker. Free-text bullets ("- none",
-      // prose notes) are ignored by design for back-compat and must never warn — they carry no
-      // "(<sample>): filed:|noise:" shape, so they cannot reach this branch's condition. The
-      // warning is advisory: it goes to stderr, never changes the parse result or the exit code,
-      // and never contaminates the single --json line on stdout.
-      if (/^-\s+.*\(.*\):\s*(filed:|noise:)/.test(l)) {
-        process.stderr.write(
-          'gap-sweep: ignoring malformed ## Run gaps mapping line (expected ' +
-          '"- <class> (<sample>): filed: #N" or "- <class> (<sample>): noise: <text>"): ' + l + '\n'
-        );
-      }
-      continue;
-    }
-    const reasonClass = m[1];
-    const sample      = m[2];
-    const full        = m[3];
-    if (full.startsWith('filed:')) {
-      entries.push({ reasonClass, sample, kind: 'filed', ref: m[4] });
-    } else {
-      entries.push({ reasonClass, sample, kind: 'noise', ref: m[5] || '' });
-    }
-  }
-
-  if (!inSection) return null;
-  // Non-enumerable, so the count travels with the rows without becoming one: JSON.stringify,
-  // Object.keys and object spread all skip it, and nothing that reads this array reads it by key.
-  Object.defineProperty(entries, 'unaccountedFiled', { value: unaccountedFiled });
-  return entries;
-}
-
-// Does a ## Run gaps summary sample denote the SAME gap as a seeded sample?
-//
-// The two used to be compared with strict `===`, so a summary that ABBREVIATED or ELABORATED on the
-// seeded prose — the normal thing to write in a summary — refused even though the gap was correctly
-// seeded, correctly observed, and correctly mapped. The information was present; only its
-// serialization differed. Match by containment instead: either side being a prefix/substring of the
-// other identifies the same gap, symmetrically (the summary may shorten OR extend the seeded text).
-//
-// This loosens the SAMPLE comparison and nothing else. The reasonClass comparison stays EXACT at
-// both call sites, an empty side never matches (a degenerate sample would otherwise be contained in
-// everything), and a sample with no containment relation still refuses.
-function samplesMatch(a, b) {
-  const left  = String(a === undefined || a === null ? '' : a).trim();
-  const right = String(b === undefined || b === null ? '' : b).trim();
-  if (!left || !right) return false;
-  return left === right || left.includes(right) || right.includes(left);
-}
-
-function runCheck(opts) {
-  const { project, outputPath, summaryPath, asJson, forceOffline } = opts;
-
-  // Read the artifact.
-  let artifact;
-  try {
-    artifact = JSON.parse(fs.readFileSync(outputPath, 'utf8'));
-  } catch (e) {
-    if (asJson) {
-      process.stdout.write(JSON.stringify({
-        result: 'refuse',
-        reason: 'artifact_missing',
-        detail: 'run-gaps.json not found; run --project ' + project + ' first',
-      }) + '\n');
-    } else {
-      process.stderr.write('gap-sweep: artifact not found at ' + outputPath + '; run scanner first\n');
-    }
-    return 1;
-  }
-
-  const sweptClasses = Array.isArray(artifact.sweptClasses) ? artifact.sweptClasses : [];
-
-  // Parse ## Run gaps section FIRST — even when sweptClasses is empty. This is the reverse
-  // containment check (#653 finding D): a manually observed gap that was never seeded through
-  // .cache/run-gaps-manual.md must not pass vacuously just because the scanner swept nothing.
-  const gapEntries = parseGapSection(summaryPath);
-
-  // Reverse containment: every strict-regex ## Run gaps entry must exist in sweptClasses under an
-  // EXACT reasonClass with a sample that denotes the same gap (samplesMatch) — i.e. it was actually
-  // seeded/observed by the scanner, not hand-typed into the summary without ever being mapped to a
-  // machine-checked source.
-  if (gapEntries !== null && gapEntries.length > 0) {
-    const unseeded = gapEntries
-      .filter(e => !sweptClasses.some(sc => sc.reasonClass === e.reasonClass && samplesMatch(sc.sample, e.sample)))
-      .map(e => ({ reasonClass: e.reasonClass, sample: e.sample }));
-
-    if (unseeded.length > 0) {
-      const detail = 'seed via .cache/run-gaps-manual.md (gap: <class> — <text>), re-run the scanner, then --check';
-      if (asJson) {
-        process.stdout.write(JSON.stringify({
-          result: 'refuse',
-          reason: 'observed_gap_unseeded',
-          unseeded,
-          detail,
-        }) + '\n');
-      } else {
-        process.stderr.write(
-          'gap-sweep: observed gap(s) never seeded through .cache/run-gaps-manual.md: ' +
-          unseeded.map(u => u.reasonClass + '(' + u.sample + ')').join(', ') + '\n' +
-          detail + '\n'
-        );
-      }
-      return 1;
-    }
-  }
-
-  // Vacuous pass only when BOTH sides are empty.
-  if (sweptClasses.length === 0 && (gapEntries === null || gapEntries.length === 0)) {
-    if (asJson) {
-      process.stdout.write(JSON.stringify({
-        result: 'pass',
-        mapped: 0,
-        filed: 0,
-        noise: 0,
-      }) + '\n');
-    }
-    return 0;
-  }
-
-  // If section absent and swept is non-empty => all unmapped.
-  if (gapEntries === null) {
-    const unmapped = sweptClasses.map(c => ({ reasonClass: c.reasonClass, sample: c.sample }));
-    if (asJson) {
-      process.stdout.write(JSON.stringify({
-        result: 'refuse',
-        reason: 'gaps_unswept',
-        unmapped,
-      }) + '\n');
-    } else {
-      process.stderr.write(
-        'gap-sweep: ## Run gaps section absent in ' + summaryPath + '\n' +
-        'Unmapped: ' + unmapped.map(u => u.reasonClass + '(' + u.sample + ')').join(', ') + '\n'
-      );
-    }
-    return 1;
-  }
-
-  // Match each swept tuple against section entries.
-  const unmapped = [];
-  let filedCount = 0;
-  let noiseCount = 0;
-
-  for (const sc of sweptClasses) {
-    const match = gapEntries.find(e =>
-      e.reasonClass === sc.reasonClass && samplesMatch(e.sample, sc.sample)
-    );
-    if (!match) {
-      unmapped.push({ reasonClass: sc.reasonClass, sample: sc.sample });
-    } else if (match.kind === 'filed') {
-      filedCount++;
-    } else {
-      noiseCount++;
-    }
-  }
-
-  if (unmapped.length > 0) {
-    if (asJson) {
-      process.stdout.write(JSON.stringify({
-        result: 'refuse',
-        reason: 'gaps_unswept',
-        unmapped,
-      }) + '\n');
-    } else {
-      process.stderr.write(
-        'gap-sweep: unmapped gaps: ' +
-        unmapped.map(u => u.reasonClass + '(' + u.sample + ')').join(', ') + '\n'
-      );
-    }
-    return 1;
-  }
-
-  // Online probe for filed: #N entries (when not forced offline and env not offline).
-  const offline = forceOffline || isOffline();
-  const verification = offline ? 'offline' : undefined;
-
-  if (!offline) {
-    // Probe is kept forge-neutral: we check if the issue number looks valid
-    // syntactically (already done by regex) but skip live HTTP calls to avoid
-    // forge coupling. Real wiring would use the forge-neutral HTTP layer.
-    // Per n1-design: "if a forge probe is awkward to keep neutral, accept
-    // filed:#N syntactically and rely on the offline/online flag — n1 says
-    // the syntactic check is the floor."
-    // Thus: syntactic check only; verification field omitted when online.
-  }
-
-  const out = {
-    result: 'pass',
-    mapped: sweptClasses.length,
-    filed: filedCount,
-    noise: noiseCount,
-  };
-  if (verification !== undefined) out.verification = verification;
-
-  if (asJson) {
-    process.stdout.write(JSON.stringify(out) + '\n');
   }
   return 0;
 }
@@ -511,12 +183,12 @@ function runCheck(opts) {
 // HAVING A FOLDER OF THAT NAME IS NOT THE SAME AS HOLDING THE RUN. The stop condition is a bare
 // existence test, so anything of that name terminates the search: the stray a pre-#971 sweep wrote
 // into the worktree, or an empty directory an operator created by hand. Standing in front of the
-// real record, such a leftover makes the scanner sweep an empty .cache and the gate certify it —
-// the vacuous pass exits 0 while the evidence sits one tree over, and it does so whether or not the
-// sweep itself ever succeeded. workflow-state.md is the file the claim transaction writes into the
-// folder it creates — later writers only update a copy that already exists, or (the finalize mirror)
-// carry that one forward — so its presence is the one signal on disk separating a folder some claim
-// created from a directory that merely shares its name.
+// real record, such a leftover makes the scanner sweep an empty .cache — the vacuous pass exits 0
+// while the evidence sits one tree over, and it does so whether or not the sweep itself ever
+// succeeded. workflow-state.md is the file the claim transaction writes into the folder it creates
+// — later writers only update a copy that already exists, or (the finalize mirror) carry that one
+// forward — so its presence is the one signal on disk separating a folder some claim created from a
+// directory that merely shares its name.
 //
 // It is a TIE-BREAK, never a requirement. This tree still wins when it carries the signature — the
 // post-mirror window, where BOTH trees legitimately do and the worktree copy is the one to read —
@@ -542,10 +214,7 @@ function main(argv) {
 
   let project     = null;
   let outputArg   = null;  // resolved against the run root, once the project names it
-  let summaryArg  = null;  // ditto
   let asJson      = false;
-  let checkMode   = false;
-  let forceOffline = false;
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -563,27 +232,14 @@ function main(argv) {
         return 1;
       }
       outputArg = val;
-    } else if (a === '--summary') {
-      const val = args[++i];
-      if (!val) {
-        process.stderr.write('gap-sweep: --summary requires a value\n');
-        return 1;
-      }
-      summaryArg = val;
     } else if (a === '--json') {
       asJson = true;
-    } else if (a === '--check') {
-      checkMode = true;
-    } else if (a === '--offline') {
-      forceOffline = true;
     } else if (a === '-h' || a === '--help') {
       process.stdout.write(
-        'Usage: kaola-workflow-gap-sweep.js --project <name> [--json] [--check]\n' +
-        '                                    [--summary <path>] [--output <path>]\n' +
-        '                                    [--offline]\n' +
+        'Usage: kaola-workflow-gap-sweep.js --project <name> [--json] [--output <path>]\n' +
         '\n' +
-        'Scanner (default): scan .cache/ for run gaps, write artifact, emit JSON.\n' +
-        'Gate (--check):    verify all swept gaps are mapped in finalization summary.\n'
+        'Optional diagnostic: scan .cache/ for machine-observable run gaps and write/print them.\n' +
+        'Not part of the finalize transaction and gates nothing.\n'
       );
       return 0;
     } else {
@@ -597,31 +253,18 @@ function main(argv) {
     return 1;
   }
 
-  // Resolve the root, then every path, after we know the project name. Both modes resolve here,
-  // before the mode split: a scanner and a gate that disagreed about the folder would sweep one
-  // .cache and certify the other, which reads as a pass over gaps nobody looked at.
   const root = resolveRunRoot(project);
 
   const defaultCacheDir = path.join(root, 'kaola-workflow', project, '.cache');
   const outputPath = outputArg
     ? path.resolve(root, outputArg)
     : path.join(defaultCacheDir, 'run-gaps.json');
-  const summaryPath = summaryArg
-    ? path.resolve(root, summaryArg)
-    : path.join(root, 'kaola-workflow', project, 'finalization-summary.md');
 
-  if (checkMode) {
-    return runCheck({ project, outputPath, summaryPath, asJson, forceOffline });
-  } else {
-    return runScan({ project, outputPath, asJson, root });
-  }
+  return runScan({ project, outputPath, asJson, root });
 }
 
 if (require.main === module) {
   process.exit(main(process.argv));
 }
 
-// parseGapSection is exported because the closure block reports over the SAME rows this gate refuses
-// on, and one grammar with two spellings is two grammars. Its null-vs-array distinction is part of
-// the contract: null is a section that could not be located, [] a located section carrying nothing.
-module.exports = { main, parseGapSection };
+module.exports = { main };

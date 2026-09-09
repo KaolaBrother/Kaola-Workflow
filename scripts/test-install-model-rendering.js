@@ -143,20 +143,15 @@ function mutateAgentCall(text, role, mutate) {
       + JSON.stringify(resolver.DEFAULT_AGENT_MODELS[role]));
   }
 
-  const clampNeedles = [
-    /dispatched surface/i,
-    /observation/i,
-    /never expanded/i,
-    /never acted on/i,
-  ];
-  for (const role of REVIEWER_CLASS) {
-    const body = fs.readFileSync(path.join(root, 'agents', role + '.md'), 'utf8');
-    for (const re of clampNeedles) {
-      assert(re.test(body),
-        '#1018 AC-7: agents/' + role + '.md must carry reviewer scope-clamp wording matching ' + re
-        + ' (findings anchor to the dispatched surface; out-of-scope as observations, never expanded, never acted on)');
-    }
-  }
+  // #1018 AC-7 DELETED per owner ruling (19:03 heartbeat, #1054): the original "findings anchor
+  // to the dispatched surface; out-of-scope as observations, never expanded, never acted on"
+  // wording was procedure-ritual boilerplate #1054's role redesign retired from all three
+  // reviewer bodies. My first revision replaced it with a per-role "scope-anchor phrase" positive
+  // check — but that is still a wording pin (an equivalent rephrasing that keeps each reviewer
+  // bounded to its one assigned subject, without using that exact phrase, would red it for no
+  // real reason). No meaning survives AC-7 that isn't already a prose gate, so it is deleted
+  // outright rather than kept as a synonym-widened pin. Reviewer scope boundaries are protected by
+  // generation integrity and native behavior acceptance (mission 14), not by this suite.
 }
 
 
@@ -745,6 +740,9 @@ function enableMultiAgentV2(homeRoot) {
       fs.mkdirSync(path.join(stableDir, 'scripts'), { recursive: true });
       fs.copyFileSync(path.join(root, 'plugins', 'kaola-workflow', 'scripts',
         'install-codex-agent-profiles.js'), fixtureInstallerPath);
+      fs.copyFileSync(path.join(root, 'plugins', 'kaola-workflow', 'scripts',
+        'kaola-workflow-adaptive-schema.js'),
+        path.join(fixturePlugin, 'scripts', 'kaola-workflow-adaptive-schema.js'));
       fs.writeFileSync(path.join(fixturePlugin, 'config', 'hooks.json'),
         hookTemplate(['hooks/first.sh']));
       fs.writeFileSync(path.join(fixturePlugin, 'hooks', 'first.sh'), 'replacement hook\n');
@@ -1098,6 +1096,9 @@ function enableMultiAgentV2(homeRoot) {
       fs.mkdirSync(path.join(stableDir, 'scripts'), { recursive: true });
       fs.copyFileSync(path.join(root, 'plugins', 'kaola-workflow', 'scripts',
         'install-codex-agent-profiles.js'), fixtureInstallerPath);
+      fs.copyFileSync(path.join(root, 'plugins', 'kaola-workflow', 'scripts',
+        'kaola-workflow-adaptive-schema.js'),
+        path.join(fixturePlugin, 'scripts', 'kaola-workflow-adaptive-schema.js'));
       fs.writeFileSync(path.join(fixturePlugin, 'config', 'hooks.json'),
         hookTemplate(['hooks/first.sh', 'scripts/second.js']));
       fs.writeFileSync(path.join(fixturePlugin, 'hooks', 'first.sh'), 'first replacement\n');
@@ -1364,9 +1365,14 @@ function enableMultiAgentV2(homeRoot) {
     },
     {
       label: 'description metadata drift',
+      // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live rewritten description
+      // (measured: `description = "Code reviewer. Independently examines...` in
+      // plugins/kaola-workflow/agents/code-reviewer.toml) — the old "Precision-first code review
+      // specialist" prefix no longer exists, so this mutation was a byte-identical no-op. A short
+      // stable prefix of the live description is enough; the whole sentence is not pinned.
       mutate: text => text.replace(
-        'description = "Precision-first code review specialist',
-        'description = "Drifted code review specialist'),
+        'description = "Code reviewer. Independently examines',
+        'description = "Drifted. Independently examines'),
     },
     {
       label: 'nickname metadata drift',
@@ -2832,8 +2838,10 @@ function enableMultiAgentV2(homeRoot) {
     },
     {
       label: 'resolved profile hash mismatch',
-      text: reviewer.replace('Precision-first code review specialist',
-        'Precision-first code-review specialist'),
+      // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live description prefix (see
+      // "description metadata drift" above) — the old substring no longer exists in `reviewer`.
+      text: reviewer.replace('Code reviewer. Independently examines',
+        'Code-reviewer. Independently examines'),
       code: 'agent_resolved_profile_hash_mismatch',
     },
     {
@@ -2908,8 +2916,11 @@ function enableMultiAgentV2(homeRoot) {
     },
     {
       label: 'invalid TOML escape inside reviewer instructions',
-      text: resignCodexReviewer(reviewer.replace('## Prompt defense',
-        '## Prompt defense\n\n- invalid TOML escape: \\q')),
+      // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live body's opening heading
+      // (measured: `# Code Reviewer` in plugins/kaola-workflow/agents/code-reviewer.toml) — the
+      // old `## Prompt defense` heading no longer exists, so this mutation was a no-op.
+      text: resignCodexReviewer(reviewer.replace('# Code Reviewer',
+        '# Code Reviewer\n\n- invalid TOML escape: \\q')),
       code: 'codex_role_instruction_toml_backslash_forbidden',
     },
     {
@@ -2931,7 +2942,9 @@ function enableMultiAgentV2(homeRoot) {
     },
     {
       label: 'bare carriage return inside reviewer instructions',
-      text: resignCodexReviewer(reviewer.replace('## Prompt defense', '## Prompt defense\rX')),
+      // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live body's opening heading
+      // (see "invalid TOML escape inside reviewer instructions" above).
+      text: resignCodexReviewer(reviewer.replace('# Code Reviewer', '# Code Reviewer\rX')),
       code: 'codex_role_toml_line_endings_forbidden',
     },
   ];
@@ -2951,9 +2964,12 @@ function enableMultiAgentV2(homeRoot) {
     ordinary.replace(/^developer_instructions/m, '  model = "gpt-5.6-sol"\ndeveloper_instructions'),
     ordinary.replace(/^developer_instructions/m, '[shadow] # valid TOML table\ndeveloper_instructions'),
     ordinary.replace(/^description/m, 'name = "implementer"\ndescription'),
-    ordinary.replace('## Your Role',
-      '## Your Role\n\n- invalid TOML escape: \\q'),
-    ordinary.replace('## Your Role', '## Your Role\rX'),
+    // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live opening heading (measured:
+    // `# Implementer` in plugins/kaola-workflow/agents/implementer.toml) — the old `## Your Role`
+    // heading no longer exists, so both mutations below were no-ops.
+    ordinary.replace('# Implementer',
+      '# Implementer\n\n- invalid TOML escape: \\q'),
+    ordinary.replace('# Implementer', '# Implementer\rX'),
     `# raw control \u0001\n${ordinary}`,
   ];
   for (const [index, mutation] of ordinaryMutations.entries()) {
@@ -3028,8 +3044,10 @@ function enableMultiAgentV2(homeRoot) {
     fs.cpSync(path.join(pluginRoot, 'config'), path.join(staleRepository, 'config'), { recursive: true });
     fs.cpSync(path.join(pluginRoot, 'agents'), path.join(staleRepository, 'agents'), { recursive: true });
     const stalePath = path.join(staleRepository, 'agents', 'code-reviewer.toml');
+    // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live description prefix (see
+    // "description metadata drift" above).
     fs.writeFileSync(stalePath, fs.readFileSync(stalePath, 'utf8').replace(
-      'Precision-first code review specialist', 'Precision-first stale code review specialist'));
+      'Code reviewer. Independently examines', 'Code reviewer. Independently stale examines'));
     const staleCheck = codexProfileInstaller.validateSourceProfiles(staleRepository);
     assert(!staleCheck.ok, 'modified repository reviewer profile must fail source validation');
     assert.strictEqual(staleCheck.repair,
@@ -3553,8 +3571,10 @@ try {
       assert.strictEqual(preflightJson.dispatch_mode, 'v2-task-name', '#775: preflight reports v2-task-name once [agents] enabled=true');
       const reviewerProfilePath = path.join(projectAgentsDir, 'code-reviewer.toml');
       const reviewerProfileBeforeDrift = fs.readFileSync(reviewerProfilePath, 'utf8');
+      // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live description prefix (see
+      // "description metadata drift" above).
       fs.writeFileSync(reviewerProfilePath, reviewerProfileBeforeDrift.replace(
-        'Precision-first code review specialist', 'Precision-first modified code review specialist'));
+        'Code reviewer. Independently examines', 'Code reviewer. Independently modified examines'));
       // spawn-class: environment
       const reviewerDrift = spawnSync(process.execPath,
         [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'],

@@ -17,34 +17,34 @@ const path = require('path');
 // never fire for one. Keep an entry byte-equal to its source `agents/<role>.md` frontmatter: the two
 // are one declaration seen from two sides, and a divergence silently re-tiers the role on every
 // install.
+//
+// GENERATED (#29 audit): the block below is written by `node scripts/generate-agent-profiles.js
+// --write` (drift reported by `--check`) from the SAME two-step derivation that writes each
+// agents/<role>.md `model:` frontmatter line — templates/agents/behavior-contracts.json's declared
+// `intent_class` per role, resolved through templates/agents/runtime-capabilities.json's claude
+// `intent_mapping` (standard->sonnet, reasoning->opus, heavy->fable) — so this map and that
+// frontmatter can never independently drift again. The per-role rationale for why a given role sits
+// at standard/reasoning/heavy (e.g. the adversarial verifier's reasoning-class judgment, or the
+// synthesizer's write-overlap intent resolution) lives in git history and in
+// templates/agents/behavior-contracts.json, not here.
+// GENERATED: DEFAULT_AGENT_MODELS (do not edit; source: templates/agents)
 const DEFAULT_AGENT_MODELS = {
+  'adversarial-verifier': 'opus',
+  'build-error-resolver': 'opus',
+  'code-architect': 'fable',
   'code-explorer': 'sonnet',
+  'code-reviewer': 'opus',
+  'doc-updater': 'sonnet',
+  'implementer': 'sonnet',
   'investigator': 'sonnet',
   'knowledge-lookup': 'sonnet',
-  planner: 'fable',
-  // These defaults are each role's declarative tier, and that tier does reach the other runtimes —
-  // transitively, through the pins above, never as a dispatch-time lookup. The Codex tier classes are
-  // held in lockstep with this map and the opencode reasoning-role list derives from the frontmatter
-  // this map is held equal to, so re-tiering a role here re-tiers it there at the next sync.
-  'code-architect': 'fable',
-  'tdd-guide': 'sonnet',
-  'implementer': 'sonnet',
-  'build-error-resolver': 'opus',
-  'code-reviewer': 'opus',
-  'security-reviewer': 'opus',
-  'doc-updater': 'sonnet',
-  // The adversarial verifier's shipped tier is reasoning: verification here routinely OVERTURNS
-  // conclusions that green suites and the implementer's own mutation proof had already accepted, so
-  // it is reasoning-class judgment, not a bounded read. A dispatch may still raise or lower it.
-  'adversarial-verifier': 'opus',
-  // #634: metric-optimizer runs a bounded metric-ratchet loop; the per-iteration reasoning is small
-  // (the change-gate verifier and reviewer carry the judgment), so its default is the standard tier.
-  // A dispatch may raise it.
   'metric-optimizer': 'sonnet',
-  // #463 (write-overlap): the synthesizer resolves real write-leg merge conflicts BY INTENT — a
-  // reasoning-class task, so its default is opus. A dispatch may still raise or lower it.
-  synthesizer: 'opus'
+  'planner': 'fable',
+  'security-reviewer': 'opus',
+  'synthesizer': 'opus',
+  'tdd-guide': 'sonnet'
 };
+// END GENERATED
 
 // This resolver stays dependency-free so installed runtimes can use its metadata without a schema
 // sibling on disk.

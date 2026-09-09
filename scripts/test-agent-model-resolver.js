@@ -107,17 +107,39 @@ assert.deepStrictEqual([...preflight.CODEX_PINNED_HEAVY_ROLES].sort(), [...heavy
   'preflight heavy roster must match schema');
 assert.deepStrictEqual([...installer.CODEX_PINNED_HEAVY_ROLES].sort(), [...heavyRoles].sort(),
   'installer heavy roster must match schema');
-function unknownRoleCheckAcceptsHeavy(src, label) {
-  const idx = src.indexOf('no Codex profile-tier policy');
-  assert.ok(idx >= 0, `${label} still has the unknown-role / no-policy check`);
-  const window = src.slice(Math.max(0, idx - 500), idx + 80);
+// #1054 item 29 (TEST-AUTHOR EDIT, not implementer): `validateProfileText` and the
+// CODEX_PINNED_* constants (including the unknown-role / "no Codex profile-tier policy" check)
+// moved to the one forge-neutral authoring source, scripts/kaola-workflow-adaptive-schema.js (4
+// byte-identical kernel copies) — preflight and the installer now `require()` them from the
+// kernel instead of each declaring their own copy, so the check text is absent from those two
+// files BY DESIGN. Repoint the probe: assert the kernel carries the check once (still accepting
+// CODEX_PINNED_HEAVY_ROLES), and that each consumer requires the kernel rather than redeclaring
+// the constant locally.
+const kernelSource = fs.readFileSync(path.join(__dirname, 'kaola-workflow-adaptive-schema.js'), 'utf8');
+{
+  const idx = kernelSource.indexOf('no Codex profile-tier policy');
+  assert.ok(idx >= 0, 'kaola-workflow-adaptive-schema.js still has the unknown-role / no-policy check');
+  assert.strictEqual(kernelSource.indexOf('no Codex profile-tier policy', idx + 1), -1,
+    'kaola-workflow-adaptive-schema.js carries the unknown-role / no-policy check exactly once');
+  const window = kernelSource.slice(Math.max(0, idx - 500), idx + 80);
   assert.ok(/CODEX_PINNED_HEAVY_ROLES/.test(window),
-    `${label} unknown-role check must accept CODEX_PINNED_HEAVY_ROLES`);
+    'kernel unknown-role check must accept CODEX_PINNED_HEAVY_ROLES');
+  assert.ok(/module\.exports\s*=\s*{[\s\S]*\bCODEX_PINNED_HEAVY_ROLES\b/.test(kernelSource),
+    'kernel exports CODEX_PINNED_HEAVY_ROLES');
 }
-unknownRoleCheckAcceptsHeavy(
+function unknownRoleCheckSourcedFromKernel(src, label) {
+  assert.ok(!/const\s+CODEX_PINNED_HEAVY_ROLES\s*=/.test(src),
+    `${label} must not declare its own CODEX_PINNED_HEAVY_ROLES — it requires the kernel instead`);
+  assert.ok(!src.includes('no Codex profile-tier policy'),
+    `${label} must not carry its own copy of the unknown-role / no-policy check text — the kernel is the one authoring source`);
+  assert.ok(/require\((['"])\.?\/?(?:\.\.\/)*kaola-workflow-adaptive-schema\1\)/.test(src)
+      && /CODEX_PINNED_HEAVY_ROLES/.test(src),
+    `${label} must require CODEX_PINNED_HEAVY_ROLES from the kernel (./kaola-workflow-adaptive-schema)`);
+}
+unknownRoleCheckSourcedFromKernel(
   fs.readFileSync(path.join(__dirname, 'kaola-workflow-codex-preflight.js'), 'utf8'),
   'preflight');
-unknownRoleCheckAcceptsHeavy(
+unknownRoleCheckSourcedFromKernel(
   fs.readFileSync(path.join(__dirname, '../plugins/kaola-workflow/scripts/install-codex-agent-profiles.js'), 'utf8'),
   'install-codex');
 

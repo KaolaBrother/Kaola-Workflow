@@ -73,10 +73,12 @@ function loadRegistry(env = process.env) {
 
 function renderContract({ source, target, nonce = '' }) {
   const sourceText = Buffer.isBuffer(source) ? source.toString('utf8') : String(source);
-  const persistentCompactCarrier = ['grok', 'cursor'].includes(target.runtime);
+  const routing = require('./generate-routing-surfaces.js');
+  // Same runtime set routing.renderCompactRecoveryPrompt uses to decide whether a runtime's
+  // recovery render is its host's only always-loaded dispatch/adapter carrier — authored once.
+  const persistentCompactCarrier = routing.RECOVERY_FULL_DISPATCH_RUNTIMES.includes(target.runtime);
   const contractText = persistentCompactCarrier
-    ? require('./generate-routing-surfaces.js').renderCompactRecoveryPrompt(
-      target.runtime, 'github', { globalContract: sourceText })
+    ? routing.renderCompactRecoveryPrompt(target.runtime, 'github', { globalContract: sourceText })
     : sourceText;
   const meta = [
     `Contract schema: 1`,

@@ -351,7 +351,10 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
       '--issue-numbers',
       'closure-audit',
       'sink-merge',
-      'doc-updater',
+      // #1054 item 5: doc-updater.md is retired as a required docking evidence file — one
+      // surviving file, doc-docking.md, replaces it. See
+      // scripts/test-issue-1054-finalize-record-simplification.js Group C/D for the pin.
+      'doc-docking',
       'kaola-workflow/archive/',
     ],
   };

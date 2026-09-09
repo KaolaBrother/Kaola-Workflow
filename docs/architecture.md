@@ -235,7 +235,7 @@ together — mirror, `workflow_state`, `implementation_commit`, `staging_guard`,
 Nothing short-circuits; a failed rung never hides a later one. `validation` is reported as state,
 never as a reason.
 
-Three measurements ride the emitted envelope and are written durably into
+Two measurements ride the emitted envelope and are written durably into
 `finalization-summary.md`, and the durable half is not optional — a conversion that emits a finding
 and drops the state the refusal was freezing is a deletion, not a conversion:
 
@@ -245,11 +245,12 @@ and drops the state the refusal was freezing is a deletion, not a conversion:
   `kaola-workflow/**`). Nothing compares that list against a declaration, because there is no
   declaration to compare it to. It is there so a reader can see what moved and notice what does not
   belong.
-- **`mission_list`** → `## Mission List`: how many missions the run's own record holds, and the
-  `item:` line of every one carrying an outcome while its `status` is not `done`. A run that wrote
-  no record measures nothing and says nothing; a record that agrees with itself still reports. The
-  record is read and never repaired, and the finalize is unaffected either way — what to do about a
-  contradiction is the reader's call.
+
+`#1054` retired a third measurement that used to sit beside these two, `mission_list` → `## Mission
+List` — a count of the run's own missions and which carried an outcome while not `done`. Finalize no
+longer parses the Mission List or any other orchestrator-authored record as a machine interface: the
+orchestrator reads `mission-list.md` and the run's evidence directly, and a completed Mission's
+`result` stays immutable, never a landing place for the finalize transaction's own findings.
 
 The transaction never authors the implementation commit, and it owns the worktree→main project
 folder sync itself. The archive still fails loudly if it would lose a file — an operation refusing

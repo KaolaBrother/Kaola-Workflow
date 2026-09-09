@@ -2,135 +2,135 @@
   "tool": "kaola-workflow-prose-census",
   "schema": 1,
   "predicate": "ADR 0013 P5 — prose census",
-  "captured_at_commit": "d7061626579a4052bad632e7edb95781bd517217",
+  "captured_at_commit": "6ae5374bbbec156b531d1c81b2f2671204b228ad",
   "routing_surfaces": {
     "generated": {
       "surface_count": 16,
-      "total_lines": 6647,
+      "total_lines": 3369,
       "by_topic": {
         "next": {
-          "total_lines": 1605,
+          "total_lines": 1264,
           "surface_count": 6,
           "by_surface": [
             {
               "path": "commands/workflow-next.md",
               "surface_type": "command",
               "forge": "github",
-              "lines": 255
+              "lines": 210
             },
             {
               "path": "plugins/kaola-workflow-gitea/commands/workflow-next.md",
               "surface_type": "command",
               "forge": "gitea",
-              "lines": 255
+              "lines": 212
             },
             {
               "path": "plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md",
               "surface_type": "skill",
               "forge": "gitea",
-              "lines": 280
+              "lines": 212
             },
             {
               "path": "plugins/kaola-workflow-gitlab/commands/workflow-next.md",
               "surface_type": "command",
               "forge": "gitlab",
-              "lines": 255
+              "lines": 210
             },
             {
               "path": "plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md",
               "surface_type": "skill",
               "forge": "gitlab",
-              "lines": 280
+              "lines": 210
             },
             {
               "path": "plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md",
               "surface_type": "skill",
               "forge": "github",
-              "lines": 280
+              "lines": 210
             }
           ]
         },
         "init": {
-          "total_lines": 2550,
+          "total_lines": 585,
           "surface_count": 6,
           "by_surface": [
             {
               "path": "commands/workflow-init.md",
               "surface_type": "command",
               "forge": "github",
-              "lines": 410
+              "lines": 102
             },
             {
               "path": "plugins/kaola-workflow-gitea/commands/workflow-init.md",
               "surface_type": "command",
               "forge": "gitea",
-              "lines": 410
+              "lines": 102
             },
             {
               "path": "plugins/kaola-workflow-gitea/skills/kaola-workflow-init/SKILL.md",
               "surface_type": "skill",
               "forge": "gitea",
-              "lines": 440
+              "lines": 93
             },
             {
               "path": "plugins/kaola-workflow-gitlab/commands/workflow-init.md",
               "surface_type": "command",
               "forge": "gitlab",
-              "lines": 410
+              "lines": 102
             },
             {
               "path": "plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md",
               "surface_type": "skill",
               "forge": "gitlab",
-              "lines": 440
+              "lines": 93
             },
             {
               "path": "plugins/kaola-workflow/skills/kaola-workflow-init/SKILL.md",
               "surface_type": "skill",
               "forge": "github",
-              "lines": 440
+              "lines": 93
             }
           ]
         },
         "finalize": {
-          "total_lines": 2492,
+          "total_lines": 1520,
           "surface_count": 6,
           "by_surface": [
             {
               "path": "commands/kaola-workflow-finalize.md",
               "surface_type": "command",
               "forge": "github",
-              "lines": 422
+              "lines": 257
             },
             {
               "path": "plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md",
               "surface_type": "command",
               "forge": "gitea",
-              "lines": 422
+              "lines": 257
             },
             {
               "path": "plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md",
               "surface_type": "skill",
               "forge": "gitea",
-              "lines": 408
+              "lines": 249
             },
             {
               "path": "plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md",
               "surface_type": "command",
               "forge": "gitlab",
-              "lines": 423
+              "lines": 258
             },
             {
               "path": "plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md",
               "surface_type": "skill",
               "forge": "gitlab",
-              "lines": 409
+              "lines": 250
             },
             {
               "path": "plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md",
               "surface_type": "skill",
               "forge": "github",
-              "lines": 408
+              "lines": 249
             }
           ]
         }
@@ -138,23 +138,23 @@
     },
     "authoring_sources": {
       "file_count": 6,
-      "total_lines": 1768,
+      "total_lines": 1160,
       "files": [
         {
           "path": "templates/routing/next.skeleton.md",
-          "lines": 274
+          "lines": 163
         },
         {
           "path": "templates/routing/init.skeleton.md",
-          "lines": 549
+          "lines": 106
         },
         {
           "path": "templates/routing/finalize.skeleton.md",
-          "lines": 442
+          "lines": 210
         },
         {
           "path": "templates/routing/slots.js",
-          "lines": 168
+          "lines": 113
         },
         {
           "path": "templates/routing/rename-table.js",
@@ -162,7 +162,7 @@
         },
         {
           "path": "templates/routing/required-blocks.js",
-          "lines": 287
+          "lines": 520
         }
       ]
     },
@@ -173,54 +173,54 @@
   },
   "contract_validators": {
     "validator_count": 4,
-    "total_pin_calls": 330,
-    "total_literal_needles": 399,
+    "total_pin_calls": 249,
+    "total_literal_needles": 309,
     "total_inline_needles": 71,
     "total_forbidden_patterns": 21,
     "by_validator": [
       {
         "edition": "claude",
         "path": "scripts/validate-workflow-contracts.js",
-        "lines": 1138,
-        "pin_calls": 157,
+        "lines": 1109,
+        "pin_calls": 123,
         "pin_calls_by_helper": {
-          "assertIncludes": 114,
-          "assertNotIncludes": 28,
+          "assertIncludes": 75,
+          "assertNotIncludes": 36,
           "assertBefore": 1,
-          "assertConcept": 14
+          "assertConcept": 11
         },
-        "literal_needles": 204,
+        "literal_needles": 165,
         "forbidden_patterns": 0,
-        "inline_needles": 9,
+        "inline_needles": 10,
         "parse_warnings": []
       },
       {
         "edition": "codex",
         "path": "scripts/validate-kaola-workflow-contracts.js",
-        "lines": 742,
-        "pin_calls": 55,
+        "lines": 658,
+        "pin_calls": 46,
         "pin_calls_by_helper": {
-          "assertIncludes": 34,
-          "assertNotIncludes": 17,
-          "assertConcept": 4
+          "assertIncludes": 24,
+          "assertNotIncludes": 19,
+          "assertConcept": 3
         },
-        "literal_needles": 69,
+        "literal_needles": 56,
         "forbidden_patterns": 0,
-        "inline_needles": 14,
+        "inline_needles": 13,
         "parse_warnings": []
       },
       {
         "edition": "gitlab",
         "path": "plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js",
-        "lines": 675,
-        "pin_calls": 60,
+        "lines": 603,
+        "pin_calls": 41,
         "pin_calls_by_helper": {
-          "assertIncludes": 41,
+          "assertIncludes": 23,
           "assertNotIncludes": 14,
-          "assertConcept": 3,
+          "assertConcept": 2,
           "assertNoForbidden": 2
         },
-        "literal_needles": 64,
+        "literal_needles": 45,
         "forbidden_patterns": 11,
         "inline_needles": 23,
         "parse_warnings": []
@@ -228,15 +228,15 @@
       {
         "edition": "gitea",
         "path": "plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js",
-        "lines": 677,
-        "pin_calls": 58,
+        "lines": 609,
+        "pin_calls": 39,
         "pin_calls_by_helper": {
-          "assertIncludes": 39,
+          "assertIncludes": 21,
           "assertNotIncludes": 14,
-          "assertConcept": 3,
+          "assertConcept": 2,
           "assertNoForbidden": 2
         },
-        "literal_needles": 62,
+        "literal_needles": 43,
         "forbidden_patterns": 10,
         "inline_needles": 25,
         "parse_warnings": []
@@ -256,7 +256,7 @@
         "test-",
         "simulate-"
       ],
-      "files_scanned": 101,
+      "files_scanned": 94,
       "token_rule": "^[a-z][a-z0-9_]{2,}$",
       "excluded_outcome_values": [
         "ok",
@@ -265,13 +265,13 @@
       "refuse_envelope_window": 400
     },
     "distinct_conditions": 121,
-    "emission_sites": 666,
-    "dynamic_sites": 0,
+    "emission_sites": 605,
+    "dynamic_sites": 4,
     "by_shape": {
       "reason_literal": {
         "note": "`reason: '<code>'` object properties",
-        "sites": 360,
-        "distinct": 61
+        "sites": 365,
+        "distinct": 71
       },
       "refuse_envelope_status": {
         "note": "`status:` / `verdict:` literals inside a refuse/escalate/halt envelope",
@@ -285,13 +285,13 @@
       },
       "inner_reason": {
         "note": "`inner_reason: '<code>'` sub-codes",
-        "sites": 10,
+        "sites": 8,
         "distinct": 1
       },
       "reasons_push": {
         "note": "`reasons.push('<token>')` report-all findings",
-        "sites": 162,
-        "distinct": 30
+        "sites": 100,
+        "distinct": 25
       },
       "refuse_helper": {
         "note": "`refuse('<code>')` / `bad('<code>')` / `fail('<code>')` helper calls",
@@ -300,8 +300,8 @@
       },
       "thrown_error": {
         "note": "`throw new Error('<code>')` converted by a catch",
-        "sites": 70,
-        "distinct": 22
+        "sites": 68,
+        "distinct": 17
       }
     },
     "adjacent_shapes": {
@@ -325,6 +325,8 @@
     },
     "conditions": [
       "active_folder_still_present",
+      "agent_behavior_contract_version_invalid",
+      "agent_developer_instructions_missing",
       "already_finalized",
       "ancestry_indeterminate",
       "archive_exception",
@@ -334,10 +336,9 @@
       "archive_reserved_directory",
       "archived_before_sink",
       "archived_impl_uncommitted",
-      "artifact_missing",
       "base_unresolved",
-      "behavior_core_identity_missing",
-      "behavior_core_markers_invalid",
+      "behavior_contract_identity_missing",
+      "behavior_contract_role_unknown",
       "branch_lingering",
       "candidate_baseline_unavailable",
       "candidate_diff_unavailable",
@@ -347,10 +348,8 @@
       "candidate_surface_mismatch",
       "canonical_json_cycle",
       "canonical_json_non_plain_object",
-      "canonical_json_number_invalid",
       "canonical_json_number_not_integer",
       "canonical_json_sparse_or_undefined",
-      "canonical_json_type_invalid",
       "canonical_json_undefined",
       "chains_empty",
       "chains_red",
@@ -361,8 +360,10 @@
       "claim_primary_issue_invalid",
       "claim_worktree_path_invalid",
       "claude_chain_absent",
-      "codex_model_pin_forbidden",
       "command_shape_unsupported",
+      "content_diverged",
+      "cursor_prep_failed",
+      "diff_unavailable",
       "diff_unresolved",
       "dirty_tree_refused",
       "edition_coupling",
@@ -376,12 +377,15 @@
       "finalize_gate_unverified",
       "finalize_incomplete",
       "finalize_mirror_refused",
+      "first_sync",
       "foreign_run_gaps_output",
-      "gaps_unswept",
+      "identical",
       "impl_commit_not_ancestor",
       "impl_commit_unresolvable_with_lingering_branch",
       "implementation_commit_missing",
+      "install_root_",
       "lockstep_violation",
+      "managed_basename_",
       "managed_block_ambiguous",
       "memo",
       "mirror_sync_failed",
@@ -391,34 +395,37 @@
       "no_chains",
       "no_implementation_changes",
       "no_target",
+      "non_directory_carrier_",
       "non_edition_diff",
       "non_fast_forward",
-      "observed_gap_unseeded",
       "project_archived",
+      "provenance",
       "publication_receipt_contradictory",
       "publication_receipt_incomplete",
       "realpath_unresolved",
+      "receipt_",
+      "receipt_invalid_file_record",
+      "receipt_invalid_json",
+      "receipt_invalid_metadata",
+      "receipt_invalid_project_metadata",
+      "receipt_invalid_schema",
+      "receipt_target_mismatch",
       "refused",
       "release_history_unavailable",
       "release_receipt_contradictory",
       "release_tag_list_unavailable",
       "remote_closed_after_publish_unverified",
-      "resolved_profile_hash_zero_slot_missing",
+      "resolved_profile_hash_count",
+      "resolved_profile_hash_mismatch",
+      "resolver_models_markers_missing",
       "resume_ambiguous",
       "retired",
-      "reviewer_behavior_contract_hash_outside_core",
-      "reviewer_behavior_contract_version_outside_core",
-      "reviewer_behavior_core_hash_missing",
-      "reviewer_behavior_core_role_mismatch",
-      "reviewer_behavior_core_version_missing",
-      "reviewer_resolved_profile_hash_missing",
-      "reviewer_resolved_profile_hash_outside_identity",
       "run_not_finalized",
       "runner_node_",
       "signal",
-      "single_in_progress",
       "sink_blocked",
       "sink_incomplete",
+      "stage_failed",
       "staging_guard_foreign_archive",
       "staging_guard_multi_project",
       "stale_sink_receipt",
@@ -430,32 +437,25 @@
       "target_unavailable",
       "target_unverified",
       "timeout",
-      "toml_developer_instructions_backslash_forbidden",
-      "toml_developer_instructions_control_character_forbidden",
-      "toml_developer_instructions_delimiter_collision",
-      "toml_developer_instructions_line_endings_forbidden",
-      "toml_profile_backslash_forbidden",
       "toolchain_identity_unresolved",
       "unknown_flag",
-      "unlink_failed",
       "user_target_blocked",
       "user_target_closed",
       "user_target_red",
       "worktree_dirty",
       "worktree_lingering",
-      "worktree_status_unavailable",
-      "would_regress_complete_ledger"
+      "worktree_status_unavailable"
     ]
   },
   "ratio": {
     "basis": "distinct typed condition strings across all seven emission shapes",
     "distinct_conditions": 121,
-    "routing_surface_lines": 6647,
-    "authoring_source_lines": 1768,
-    "needle_pins": 399,
-    "surface_lines_per_condition": 54.934,
-    "authoring_lines_per_condition": 14.612,
-    "needle_pins_per_condition": 3.298,
+    "routing_surface_lines": 3369,
+    "authoring_source_lines": 1160,
+    "needle_pins": 309,
+    "surface_lines_per_condition": 27.843,
+    "authoring_lines_per_condition": 9.587,
+    "needle_pins_per_condition": 2.554,
     "reading": "P5 holds when these three per-condition ratios stay flat as the census shrinks. A ratio that RISES means prose or pins survived the refusal they described."
   }
 }

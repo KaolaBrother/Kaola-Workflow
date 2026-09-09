@@ -1001,37 +1001,23 @@ const { archiveSucceeded } = require('./kaola-workflow-closure-contract');
 })();
 
 // ---------------------------------------------------------------------------
-// Test (#992/#993/#994): the CLOSURE DELTA — what this run took off the backlog and what it put
-// back on. The archived `## Closure` block records five terminal facts and none of them is a
-// quantity, so the one question a successor asks of a finished run — did the backlog get smaller
-// or larger — is answerable only by re-reading the forge. Four fields answer it in the record:
-// `issues_closed`, `follow_ups_filed`, `follow_up_numbers`, `net_backlog_delta`.
+// Test (#1054 item 3, SUPERSEDING #992/#993/#994): the CLOSURE DELTA STATISTIC is retired. The
+// archived `## Closure` block used to carry `follow_ups_filed` / `follow_up_numbers` /
+// `net_backlog_delta`, derived by hand-parsing the run's own `## Run gaps` prose — the exact
+// mechanism #1054's audit names directly: "关闭1个 Issue 时，同一 follow-up 写两行、一行或普通文字会
+// 得到不同 backlog delta" (closing one issue, the same follow-up written as two rows, one row, or
+// plain prose produces a DIFFERENT backlog delta). That is not a bug in the parser; it is what a
+// hand-authored record read as a statistic always does. The fix in docs/decisions/0017 and the
+// #1054 acceptance evidence is retirement, not a better parse: three legs below still differ in
+// filing COUNT and PROSE SHAPE exactly as the original test did (4 filed with one `noise:` row / 14
+// filed / 0 filed as an empty section) but must now leave IDENTICAL closure blocks, because no
+// statistic is derived from any of it any more.
 //
-// WHY THE BUNDLE LANE IS WHERE `issues_closed` IS PINNED. On the shipped merge lane cmdFinalize
-// closes ZERO issues — `mergeLaneDeferred` defaults true and the real `gh issue close` calls happen
-// later, in sink-merge.js, after `appendClosureBlock` has already written a heading-guarded block
-// the sink can never revise (this is exactly what the neighbouring #508 test measures: `closure.closed
-// === []` and zero close calls). So `issues_closed` is NOT a count of closes this process made; it is
-// the size of the set this run's closure decision is closing — `closure.attempted`, the claimed set.
-// A four-member bundle makes that distinguishable from every plausible near-miss: an implementation
-// stamping `closed.length` would say 0 here, and one stamping 1 would be reading the scalar
-// `issue_number` instead of the member array.
+// `issues_closed` SURVIVES UNCHANGED — it is not derived from ## Run gaps at all, so its pin (the
+// claimed-set size on the merge lane, never a close-call count) is untouched below.
 //
-// WHY THE THREE LEGS. `net_backlog_delta = follow_ups_filed - issues_closed`, rendered with an
-// explicit sign when non-zero. Three renderings exist and each leg produces exactly one of them
-// against the SAME four-member claimed set, so the delta cannot be right by coincidence:
-//   4 filed  ->  `0`    (the issue's own worked example: a run that replaced what it closed)
-//  14 filed  -> `+10`   (its second: a run that found ten more problems than it fixed)
-//   0 filed  ->  `-4`   (and the measured-zero half: parsed, empty, NOT unmeasurable)
-//
-// The `noise:` row in leg A is load-bearing. The `## Run gaps` grammar carries two kinds of entry
-// and only one of them is a FILING; an implementation counting rows rather than `filed:` refs reads
-// 5 here and gets both the count and the delta wrong.
-//
-// ZERO NEW FORGE CALLS. The gap section is on disk, in the run's own finalization-summary.md, and
-// resolving it must cost nothing on the wire. The mock logs every invocation; the three legs claim
-// identical members under an identical project name in three separate roots, so their call logs must
-// come out BYTE-IDENTICAL however many follow-ups the summary names.
+// ZERO NEW FORGE CALLS is untouched too, and is now trivially true rather than merely true: with no
+// statistic derived from the gap section, there is no computation left that could reach the wire.
 // ---------------------------------------------------------------------------
 
 // The `## Closure` block of an ARCHIVED state, as a field map. That copy is the only one: the block
@@ -1116,8 +1102,8 @@ function runClosureDeltaLeg(gapRows) {
   }
 }
 
-(function testClosureBlockRecordsBacklogDelta() {
-  console.log('Test (#992/#993/#994): the archived ## Closure block records the run\'s backlog delta');
+(function testClosureBlockNoLongerRecordsBacklogDelta() {
+  console.log('Test (#1054 item 3): the archived ## Closure block carries no backlog-delta statistic, for any ## Run gaps content');
 
   // Leg A — four filings and one noise row against four claimed issues: the delta is 0.
   const legA = runClosureDeltaLeg([
@@ -1160,40 +1146,30 @@ function runClosureDeltaLeg(gapRows) {
       + JSON.stringify(leg.out && leg.out.closure_receipt && leg.out.closure_receipt.closure));
   }
 
-  // ---- Coverage 3: filings, their numbers, and the signed delta ----
-  const fA = legA.fields || {};
-  assert(fA.follow_ups_filed === '4',
-    '#992 A: `follow_ups_filed` counts the `filed:` refs in `## Run gaps`, and that section carries '
-    + 'FIVE rows of which one is `noise:` — a noise row is an observation the run decided not to '
-    + 'file, so counting rows rather than filings reads 5; got ' + JSON.stringify(fA.follow_ups_filed));
-  assert(fA.follow_up_numbers === '7001,7002,7003,7004',
-    '#992 A: `follow_up_numbers` lists the filed issue numbers in the order the section names them, '
-    + 'comma-separated with no spaces — and the `noise:` row contributes none, because it has no '
-    + 'number to contribute; got ' + JSON.stringify(fA.follow_up_numbers));
-  assert(fA.net_backlog_delta === '0',
-    '#992 A: four closed and four filed is a net-zero run, and zero renders bare — the sign is '
-    + 'explicit only when there is a direction to state; got ' + JSON.stringify(fA.net_backlog_delta));
-
-  const fB = legB.fields || {};
-  assert(fB.follow_ups_filed === '14',
-    '#992 B: fourteen `filed:` rows is fourteen filings; got ' + JSON.stringify(fB.follow_ups_filed));
-  assert(fB.follow_up_numbers === '7101,7102,7103,7104,7105,7106,7107,7108,7109,7110,7111,7112,7113,7114',
-    '#992 B: every filed number is listed, in section order; got ' + JSON.stringify(fB.follow_up_numbers));
-  assert(fB.net_backlog_delta === '+10',
-    '#992 B: fourteen filed against four closed GREW the backlog by ten, and a growth reported as '
-    + '`10` reads as a magnitude with no direction — the leading `+` is what makes the sign of the '
-    + 'delta legible without arithmetic; got ' + JSON.stringify(fB.net_backlog_delta));
-
-  const fC = legC.fields || {};
-  assert(fC.follow_ups_filed === '0',
-    '#992 C: a `## Run gaps` section that is PRESENT and carries no filing is a measured zero, and '
-    + 'it must read as one; got ' + JSON.stringify(fC.follow_ups_filed));
-  assert(fC.follow_up_numbers === 'none',
-    '#992 C: with nothing filed the number list is `none` — an empty value would be '
-    + 'indistinguishable from a field that failed to render; got ' + JSON.stringify(fC.follow_up_numbers));
-  assert(fC.net_backlog_delta === '-4',
-    '#992 C: four closed and nothing filed SHRANK the backlog by four; got '
-    + JSON.stringify(fC.net_backlog_delta));
+  // ---- Coverage 3 (rewritten for #1054 item 3): NO statistic survives, on any of the three legs,
+  // even though the legs still differ sharply in filing count and prose shape (4 filed with one
+  // `noise:` row / 14 filed / 0 filed as an empty section) — the exact inputs the retired mechanism
+  // used to turn into three different `follow_ups_filed`/`follow_up_numbers`/`net_backlog_delta`
+  // values. And with the statistic gone, the three legs' closure blocks must be INDISTINGUISHABLE
+  // (module archived_at): the sharpest form of "no differing statistic anywhere".
+  for (const [label, leg] of [['A (4 filed)', legA], ['B (14 filed)', legB], ['C (0 filed)', legC]]) {
+    const f = leg.fields || {};
+    for (const key of ['follow_ups_filed', 'follow_up_numbers', 'net_backlog_delta']) {
+      assert(!(key in f),
+        '#1054 ' + label + ': the ## Closure block must carry no ' + key + ' line — #1054 item 3 '
+        + 'retires the backlog-delta statistic outright, regardless of how many filings ## Run gaps '
+        + 'names; got ' + JSON.stringify(f));
+    }
+  }
+  const strip = f => { const c = Object.assign({}, f); delete c.archived_at; return c; };
+  const canon = JSON.stringify(strip(legC.fields));
+  for (const [label, leg] of [['A (4 filed)', legA], ['B (14 filed)', legB]]) {
+    const got = JSON.stringify(strip(leg.fields));
+    assert(got === canon,
+      '#1054 ' + label + ' vs C (0 filed): identical ## Closure blocks are required once the '
+      + 'backlog-delta statistic is gone, even though the three legs\' ## Run gaps sections filed a '
+      + 'different number of follow-ups; C=' + canon + ' ' + label + '=' + got);
+  }
 
   // ---- Coverage 5: zero new forge calls ----
   //

@@ -46,10 +46,13 @@ for (const role of generator.ROLES) {
     relativePath + ' must not embed provenance inside runtime prompt bytes');
 }
 
-for (const record of Object.values(provenance.roles)) {
-  if (record.source_kind === 'ecc_derived') {
-    assert(record.source_commit === pinnedCommit,
-      'ECC-derived provenance must remain pinned to ' + pinnedCommit);
+// Every current contract is Kaola-authored; a historical origin record, where one exists, stays
+// pinned to the commit the earlier material was taken from so the history remains locatable.
+for (const [role, record] of Object.entries(provenance.roles)) {
+  assert(record.source_kind === 'kaola_authored', role + ' must be classified kaola_authored');
+  if (record.history && record.history.origin === 'everything_claude_code') {
+    assert(record.history.source_commit === pinnedCommit,
+      role + ' historical origin must stay pinned to ' + pinnedCommit);
   }
 }
 
@@ -77,4 +80,4 @@ assert(packageJson.files.includes('agents/'), 'package files must include agents
 assert(packageJson.files.includes('templates/'), 'package files must include templates/');
 assert(packageJson.files.includes('scripts/'), 'package files must include scripts/');
 
-console.log(`Generated agent validation passed for ${expectedAgents.length} roles at ${pinnedCommit}`);
+console.log('Generated agent validation passed for ' + generator.ROLES.length + ' Kaola-authored roles (historical origin records pinned to ' + pinnedCommit.slice(0, 8) + ')');

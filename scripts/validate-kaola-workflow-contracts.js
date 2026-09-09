@@ -130,13 +130,19 @@ for (const skill of skills) {
   const file = `${pluginRoot}/skills/${skill}/SKILL.md`;
   assert(exists(file), file + ' is missing');
   assertIncludes(file, `name: ${skill}`);
-  assertIncludes(file, 'workflow-state.md');
+  // #1054 item 27 (nx-claim-is-bookkeeping): 'workflow-state.md' on kaola-workflow-next's SKILL.md
+  // specifically was proven duplicate by subtraction against required-blocks.js (removing it from
+  // just that file independently reds test-route-reachability's own MANIFEST presence check — see
+  // .cache/implementation-validators.md). Kept for init/finalize, which required-blocks.js does not
+  // obligate for this token.
+  if (skill !== 'kaola-workflow-next') assertIncludes(file, 'workflow-state.md');
   assertIncludes(file, 'kaola-workflow/');
   for (const token of retired) assertNotIncludes(file, token);
 }
 
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'active folders');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--target-issue');
+// #1054 item 27 (nx-claim-is-bookkeeping): '--target-issue' here was proven duplicate by
+// subtraction against required-blocks.js — see .cache/implementation-validators.md.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'watch-pr');
 // Issue #210: Codex defaults to delegated compliance — the startup delegate-vs-inline prompt is retired.
 const nextSkill210 = `${pluginRoot}/skills/kaola-workflow-next/SKILL.md`;
@@ -218,18 +224,7 @@ for (const edition of ['claude', 'codex', 'gitlab', 'gitea']) {
   assert(testScript.includes(`npm run test:kaola-workflow:${edition}`), `package.json scripts.test must chain test:kaola-workflow:${edition}`);
 }
 assert(exists('docs/workflow-state-contract.md'), 'detailed workflow state contract doc is missing');
-// AGENTS.md length is a RECOMMENDATION and never a build failure: nothing about this file's size
-// may red a chain. A file past the recommended size is something to tell the user about and offer
-// to help trim, not a reason to refuse the run — the same reason nothing else here refuses.
-// Counted on PHYSICAL lines so the number reported is the number `wc -l` prints. The previous
-// check split on newlines and counted the trailing empty element, so its "200" was really 198: a
-// 199-line file threw, failing a rule that permitted it, and because this sits at column 0 the
-// throw took the whole validator down rather than reporting one finding.
-const agentsMdLines = read('AGENTS.md').replace(/\n$/, '').split(/\r?\n/).length;
-if (agentsMdLines > 200) {
-  process.stderr.write('notice: AGENTS.md is ' + agentsMdLines + ' lines, above the recommended 200. '
-    + 'Nothing fails on this. Move detail to docs/ or skills, and offer the user help trimming it.\n');
-}
+// AGENTS.md has no line budget (ADR 0023): nothing here measures or comments on its size.
 // Both docs/workflow-state-contract.md concepts (durable sources, and legacy coordination as
 // transitional only) are asserted with these exact term lists by scripts/validate-workflow-contracts.js
 // on the same repo-root path.
@@ -351,19 +346,16 @@ assert(exists(`${pluginRoot}/hooks/kaola-workflow-codex-compact-recovery.md`),
 assert(!exists(`${pluginRoot}/scripts/kaola-workflow-codex-compact-resume.js`),
   '#1044 retired Codex compact-resume JavaScript must stay absent');
 
-// issue #290 / #288: pin the machine-readable findings-emission contract presence in all
-// reviewer agent bodies (Codex edition — .toml bodies). Removing the emission section from
-// any of these files must fail npm test so a re-vendor or refactor cannot silently drop it.
-for (const reviewerBody of [
-  `${pluginRoot}/agents/code-reviewer.toml`,
-  `${pluginRoot}/agents/security-reviewer.toml`,
-  `${pluginRoot}/agents/adversarial-verifier.toml`
-]) {
-  assertIncludes(reviewerBody, 'finding: id=');
-  // #285: pin the machine-readable verdict-block emission contract (the column-0 block
-  // that --verdict-check reads at Finalization) so a Codex gate node always emits it.
-  assertIncludes(reviewerBody, 'verdict: pass');
-}
+// issue #290/#288 + #285, REVISED for #1054 owner ruling (19:03 heartbeat): the fixed machine
+// column-zero `finding: id=...` row and the `verdict: pass` receipt line are retired procedure
+// ritual — #1054's role redesign bans the rigid finding-row/review_conclusion protocol from role
+// bodies. The real `.cache/final-validation.md` machine consumer still needs its own verdict
+// mechanism, but that is pinned where it is actually produced/consumed, not in these reviewer role
+// prompts. No pin on the three reviewer `.toml` bodies' CURRENT wording replaces it: assertConcept
+// is norm+includes, so it reds on an equivalent rephrasing — a new wording gate, not a behavior
+// check. The structural authority (generate-agent-profiles.js --check, validate-vendored-agents.js:
+// render == authority, hash-bound) and native-host acceptance (mission 14) already carry this
+// responsibility.
 
 // issue #332: source agent-profile schema wall. require() the installer (the #325
 // require.main guard means require() never runs main()) and assert its source-tree

@@ -311,21 +311,50 @@ function renderSurface(row, ir) {
   return renderSkeleton(skeletonText, { surface_type: row.surface_type, forge: row.forge }, ir);
 }
 
+// RECOVERY_FULL_DISPATCH_RUNTIMES — runtimes whose compact-recovery render is the ONLY
+// always-loaded carrier of the dispatch contract + runtime adapter on that host: grok's
+// persistent Rule and cursor's alwaysApply Rule (kaola-workflow-global-contract.js's
+// persistentCompactCarrier reuses this same set for its own recovery-vs-static-source
+// branch, so the runtime list is authored once). claude and codex instead point recovery at
+// a full reload of the installed Next/Finalize prompt (RUNTIME_RECOVERY_SURFACES below,
+// hooks/*compact-recovery*.md), and that reload already carries the dispatch contract and
+// runtime adapter — repeating them in the recovery render itself would load them twice, so
+// those two runtimes get a one-sentence pointer instead of the full blocks.
+const RECOVERY_FULL_DISPATCH_RUNTIMES = ['grok', 'cursor'];
+
+const RECOVERY_DISPATCH_DEFERRED_NOTE = 'The Next or Finalization reload above already ' +
+  'carries the full runtime dispatch contract and runtime adapter facts, so this recovery ' +
+  'step does not restate them.';
+
 function renderCompactRecoveryPrompt(runtime, forge = 'github', options = {}) {
   if (!['claude', 'codex', 'grok', 'cursor'].includes(runtime)) {
     throw new Error('compact recovery prompt is not enabled for runtime ' + runtime);
   }
   if (!FORGES.includes(forge)) throw new Error('unknown compact-recovery forge ' + forge);
+  const fullDispatchCarrier = RECOVERY_FULL_DISPATCH_RUNTIMES.includes(runtime);
   const slots = Object.assign({}, SLOTS, {
-    'runtime-delegation': agentProfiles.renderRuntimeDelegationGuidanceForRuntime(runtime, forge),
+    'runtime-dispatch-common': fullDispatchCarrier
+      ? SLOTS['runtime-dispatch-common']
+      : RECOVERY_DISPATCH_DEFERRED_NOTE,
+    'runtime-delegation': fullDispatchCarrier
+      ? agentProfiles.renderRuntimeDelegationGuidanceForRuntime(runtime, forge)
+      : '',
   });
   if (Object.prototype.hasOwnProperty.call(options, 'globalContract')) {
     slots['global-workflow-contract'] = String(options.globalContract).trimEnd();
   }
-  return renderSkeleton(
+  const rendered = renderSkeleton(
     loadSkeleton('compact-recovery.skeleton.md', 'compact-recovery'),
     { surface_type: runtime === 'codex' ? 'skill' : 'command', forge },
     { slots, splices: SPLICES });
+  if (fullDispatchCarrier) return rendered;
+  // Deferred case: the KW-RUNTIME-DISPATCH markers delimit the dispatch contract itself, so a
+  // render that only points at the full reload must not carry them around the pointer (a
+  // consumer that keys on the marker would read the pointer as the contract). Drop the marker
+  // lines, then collapse the blank line the skeleton keeps between the two now-empty slots.
+  return rendered
+    .replace(/^<!-- KW-RUNTIME-DISPATCH-(START|END) -->\n/gm, '')
+    .replace(/\n{3,}/g, '\n\n');
 }
 
 function renderRuntimeRecoverySurface(row) {
@@ -453,6 +482,7 @@ if (require.main === module) main();
 module.exports = {
   GENERATED_SURFACES,
   RUNTIME_RECOVERY_SURFACES,
+  RECOVERY_FULL_DISPATCH_RUNTIMES,
   renderCompactRecoveryPrompt,
   renderSkeleton,
   condMatches,

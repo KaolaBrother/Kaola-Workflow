@@ -271,7 +271,7 @@ function detectArchiveContentIncomplete(root) {
 
 // (h) #901: archiveRequiredContent above reads DISK ONLY, so it can require nothing beyond the
 // identity anchor. An archive whose finalization-summary cites `.cache/final-validation.md` or
-// `.cache/doc-updater.md` as its evidence, and does not contain it, therefore looks complete: the
+// `.cache/doc-docking.md` as its evidence, and does not contain it, therefore looks complete: the
 // anchor is present and no rule asks whether the run's own citations resolve.
 //
 // The summary's citation IS the archive's own record of what it held — the same record-derived

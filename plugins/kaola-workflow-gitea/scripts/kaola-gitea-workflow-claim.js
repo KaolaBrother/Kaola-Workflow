@@ -27,11 +27,6 @@ const closureContract = require('./kaola-workflow-closure-contract');
 // archive rollup line below. All three come from the kernel, so nothing in the finalize/archive
 // path loads a plan reader.
 const { parseGoal } = adaptiveSchema;
-// #992: the `## Run gaps` row grammar has ONE owner — the gate that refuses on it — and the closure
-// block now reports over the same rows. Import that parser instead of restating its regex: a second
-// spelling would count filings the gate does not, and the two would disagree silently. Module load
-// is side-effect-free (fs + path + declarations, and a `require.main` guard around its CLI).
-const { parseGapSection } = require('./kaola-gitea-workflow-gap-sweep');
 
 const CLAIM_LABEL = forge.CLAIM_LABEL || 'workflow:in-progress';
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
@@ -2390,9 +2385,13 @@ function appendClosureBlock(destDir, fields) {
     const p = path.join(destDir, 'workflow-state.md');
     let s = fs.readFileSync(p, 'utf8');
     if (/^## Closure$/m.test(s)) return false;
-    // #992: the backlog-delta half is supplied by the finalize path, which holds both terms. The
-    // watch-pr and sink-sole-archiver lanes measure neither, and a lane that did not measure says so
-    // — rendering a plausible number there would be the exact conflation the fields exist to end.
+    // #1054 item 3: the backlog-delta statistic that used to sit here (follow-ups filed, their
+    // numbers, and the net change) is retired outright — it derived from parsing the free-text
+    // `## Run gaps` prose, and different legitimate expressions of the same filed follow-ups
+    // produced different (or unknown) numbers. `issues_closed` survives: it comes from the claimed
+    // set this run's closure decision is closing, never from parsed prose, so it degrades to
+    // 'unknown' only when a lane genuinely did not measure it (watch-pr / sink-sole-archiver call
+    // sites below).
     const delta = key => (fields[key] === undefined || fields[key] === null) ? 'unknown' : fields[key];
     s = s.trimEnd() + '\n\n## Closure\n' +
       'archived_at: ' + new Date().toISOString() + '\n' +
@@ -2400,68 +2399,11 @@ function appendClosureBlock(destDir, fields) {
       'claim_label_removed: ' + fields.claimLabelRemoved + '\n' +
       'worktree_removed: ' + fields.worktreeRemoved + '\n' +
       'closure_invariants: ' + fields.closureInvariants + '\n' +
-      // #992/#993/#994: what this run took off the backlog and what it put back on — the one
-      // question a successor asks of a finished run that five terminal tokens cannot answer.
-      'issues_closed: ' + delta('issuesClosed') + '\n' +
-      'follow_ups_filed: ' + delta('followUpsFiled') + '\n' +
-      'follow_up_numbers: ' + delta('followUpNumbers') + '\n' +
-      'net_backlog_delta: ' + delta('netBacklogDelta') + '\n';
+      'issues_closed: ' + delta('issuesClosed') + '\n';
     // Atomic: this is the same workflow-state.md whose torn form readActiveFolders silently skips.
     writeFile(p, s);
     return true;
   } catch (_) { return false; }
-}
-
-// #992/#993/#994: the run's backlog delta, for the `## Closure` block above. The filing refs live
-// ONLY in the `## Run gaps` prose of the run's own finalization-summary.md (run-gaps.json carries
-// the swept classes but no issue numbers), so this reads the disk that summary is already sitting on
-// and costs nothing on the wire. Candidates are probed archive-first then live, the order
-// probeSelectionEvidence uses and for the same reason: archiveProjectDir has already run.
-//
-// DEGRADATION. parseGapSection reports a section it could not LOCATE as null — no summary, or a
-// summary with no such heading — and a section it located as an array. A located section carrying no
-// filing is a MEASUREMENT whose answer is zero; only an unlocatable one was never measured, and that
-// degrades to `unknown` rather than to a `0` nobody claimed (the finalize_commit / changed_paths_probe
-// rule). Free-text bullets under the heading are ignored by the grammar BY DESIGN, so a section of
-// them is a located section carrying zero filings — the same measured zero, not a third answer.
-// `issuesClosed` comes from the claimed set, never from the summary, so it never degrades here.
-//
-// LOCATING IS NOT READING. A section can be present, carry its filings in plain sight, and still be
-// unreadable to the grammar — rows with no parenthesised sample, a row wrapped across physical
-// lines, a section written as a markdown table. All three produce an array, and the array is what
-// used to make this a confident `0`; measured over 154 archived runs, 6 sections lost 18 filings
-// that way, and the reader who opens the summary finds the numbers sitting there with no reason to
-// doubt the count. parseGapSection now carries out `unaccountedFiled`, the `filed: #N` refs it
-// walked past, and any of them is enough: a PARTIAL read is not a measurement of the whole — a
-// count that reached one of three rows is not "one follow-up", it is an undercount rendered as an
-// integer, which is worse than no count because nothing downstream can tell it from a right one.
-function computeBacklogDelta(issuesClosed, projectDirCandidates) {
-  let filed = null;
-  let unaccountedFiled = 0;
-  for (const dir of (projectDirCandidates || [])) {
-    if (!dir) continue;
-    let entries = null;
-    try { entries = parseGapSection(path.join(dir, 'finalization-summary.md')); } catch (_) { entries = null; }
-    if (entries !== null) {
-      filed = entries.filter(e => e.kind === 'filed');
-      unaccountedFiled = Number(entries.unaccountedFiled) || 0;
-      break;
-    }
-  }
-  if (filed === null || unaccountedFiled > 0) {
-    return { issuesClosed: issuesClosed, followUpsFiled: 'unknown',
-      followUpNumbers: 'unknown', netBacklogDelta: 'unknown' };
-  }
-  const net = filed.length - issuesClosed;
-  return {
-    issuesClosed: issuesClosed,
-    followUpsFiled: String(filed.length),
-    // DOCUMENT order — the order the run filed them. Sorting would discard that and gain nothing.
-    followUpNumbers: filed.length > 0 ? filed.map(e => e.ref).join(',') : 'none',
-    // The sign is explicit only when there is a direction to state: a growth reported as `10` reads
-    // as a magnitude, and the leading `+` is what makes the direction legible without arithmetic.
-    netBacklogDelta: net === 0 ? '0' : (net > 0 ? '+' + net : String(net)),
-  };
 }
 
 // n5 (#653 finding D3): advisory selection-evidence probe. A file matching selection-evidence.*
@@ -3925,12 +3867,12 @@ function probeFinalizeValidationGate(root, authorityDir, authorityState, base) {
 // writable before the commit that carries it AND again if a later step finds something, or one of
 // the two is silently lost. Only the findings flush passes it, and it alone relocates the section
 // it restates to the tail of the file.
-// #1004: idempotence is by CONTENT, not by heading. Step 6 of the finalize surface tells the
-// orchestrator to pre-create `## Validation`, `## Changed Paths` and `## Mission List`, so keying
-// on the heading meant an obedient run computed all three findings and then dropped them — 15, 17
-// and 3 empty sections in this repository's own 157 archived summaries. A heading whose body is
-// blank is the finding's own slot and gets FILLED where it sits; a heading whose body carries prose
-// is the operator's record and is never overwritten.
+// #1004: idempotence is by CONTENT, not by heading. The finalize surface's summary card tells the
+// orchestrator to pre-create `## Validation` and `## Changed Paths`, so keying on the heading meant
+// an obedient run computed both findings and then dropped them — empty sections measured across
+// this repository's own archived summaries. A heading whose body is blank is the finding's own slot
+// and gets FILLED where it sits; a heading whose body carries prose is the operator's record and is
+// never overwritten.
 function appendSummarySection(projectDir, heading, lines, replace) {
   try {
     const p = path.join(projectDir, 'finalization-summary.md');
@@ -4770,13 +4712,13 @@ function cmdFinalize() {
   // sink-merge, so the default merge lane is honestly close-pending, never a false `closed`).
   const issueDisposition = keepIssueOpen ? 'kept-open'
     : (remoteIssueClosed === 'already_closed' ? 'closed' : 'close-pending');
-  // #992: the size of the set this run's closure decision is CLOSING — the claimed set the sink will
-  // close after the merge, not a count of close calls this process made, which is zero on the shipped
-  // merge lane by design (#508/#617) and would report every such run as having closed nothing. A
-  // keep-open run declined to close, so its decision closes zero.
-  const backlogDelta = computeBacklogDelta(
-    keepIssueOpen ? 0 : ((closureReceipt.closure && closureReceipt.closure.attempted) || []).length,
-    [result.dest, path.join(root, 'kaola-workflow', args.project)]);
+  // #992/#1054: the size of the set this run's closure decision is CLOSING — the claimed set the
+  // sink will close after the merge, not a count of close calls this process made, which is zero on
+  // the shipped merge lane by design (#508/#617) and would report every such run as having closed
+  // nothing. A keep-open run declined to close, so its decision closes zero. The backlog-delta
+  // statistic that used to sit beside this is retired outright (#1054 item 3).
+  const issuesClosed = keepIssueOpen ? 0
+    : ((closureReceipt.closure && closureReceipt.closure.attempted) || []).length;
   // #333: append the compact terminal receipt to the archived state (facts only known after the
   // rename: claim/worktree disposition + issue disposition). Presence-guarded / idempotent.
   if (result.dest) {
@@ -4785,10 +4727,7 @@ function cmdFinalize() {
       claimLabelRemoved: claimLabelRemoved,
       worktreeRemoved: worktreeRemoved,
       closureInvariants: invariantResult.ok ? 'ok' : ('violations:' + invariantResult.violations.length),
-      issuesClosed: backlogDelta.issuesClosed,
-      followUpsFiled: backlogDelta.followUpsFiled,
-      followUpNumbers: backlogDelta.followUpNumbers,
-      netBacklogDelta: backlogDelta.netBacklogDelta
+      issuesClosed: issuesClosed
     });
   }
   // #333: keep-worktree commit block MOVED here (commit-last) — after the ## Closure append so the
@@ -5770,10 +5709,8 @@ function copyDir(src, dest) {
 // gate evidence and are excluded by the .md filter.
 const ARCHIVE_CACHE_SIDECAR_MD = new Set([
   'final-validation.md',   // finalize validation-gate evidence (column-0 verdict: pass); archiveProjectDir normalizes it by name
-  'run-gaps-manual.md',    // manual gap-sweep annotations sidecar
   'selection-evidence.md', // issue-selection evidence sidecar
-  'doc-docking.md',        // finalize Documentation-Docking sub-step (DOCKED/BLOCKED)
-  'doc-updater.md',        // finalize doc-updater sub-step output
+  'doc-docking.md',        // finalize Documentation-Docking sub-step (DOCKED/BLOCKED) — the one docking evidence file
 ]);
 
 // #901: the exempt sidecars a LIVE copy holds and the archive destination does not. The byte

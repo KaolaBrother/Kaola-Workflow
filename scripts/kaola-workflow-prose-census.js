@@ -8,8 +8,8 @@
 // refusals demote, choreography is surviving its refusal — a violation of T11 to be hunted, not
 // tolerated."
 //
-// Nothing measured either number. This script measures all three and prints the ratio that makes
-// proportionality visible at a glance:
+// Nothing measured either number. This script measures all three and reports the raw counts and
+// per-condition ratios so proportionality can be READ, not decided by this tool:
 //
 //   1. ROUTING SURFACES — line counts for the 30 generated surfaces (5 topics x the SIX propagation
 //      surfaces per topic: 3 Claude commands + 3 Codex SKILL packs), taken from the generator's own
@@ -28,11 +28,11 @@
 //      /`fail()` helper calls; and `throw new Error('<code>')` converted by a catch. A `reason:`-
 //      only scan undercounts by roughly 3x in `claim.js` alone.
 //
-// This is a MEASURING TOOL, not a gate. It answers "what are the three numbers now" — R3's
-// missing-tool test applied to P5: a prediction nobody can measure is a hope. `--compare` prints a
-// proportionality verdict but exits 0 unless `--fail-on-regression` is passed, because a hard gate
-// here would red every intermediate batch of a campaign whose whole point is that the two numbers
-// move together only at the END.
+// This is a MEASURING TOOL, not a gate — and carries no correctness verdict of its own. It answers
+// "what are the three numbers now, and how did they change" — R3's missing-tool test applied to P5:
+// a prediction nobody can measure is a hope. `--compare` prints the raw before/after counts and
+// deltas, never a pass/fail judgement; nothing in this tool decides whether a change is
+// proportional, and it is wired into no chain.
 //
 // Reads only. `--write-baseline` is the single writing mode and is explicit.
 //
@@ -40,8 +40,7 @@
 //   (no args) | --json         emit the full census as JSON on stdout
 //   --summary                  emit a human-readable table
 //   --write-baseline [path]    capture a snapshot (default scripts/prose-census-baseline.json)
-//   --compare [path]           diff the live census against a baseline snapshot
-//   --fail-on-regression       with --compare, exit 1 when prose is outrunning its refusals
+//   --compare [path]           diff the live census against a baseline snapshot (diagnostic only)
 //   --help
 
 const fs = require('fs');
@@ -570,27 +569,20 @@ function census(opts) {
 }
 
 // ---------------------------------------------------------------------------
-// Compare — the proportionality verdict.
+// Compare — raw counts and their diff. Diagnostic only: no threshold, no verdict, no exit-code
+// judgement. Reading proportionality out of these numbers is left to whoever reads the JSON.
 // ---------------------------------------------------------------------------
-
-// Proportional means: prose shrank at least as fast as the census. `slack` is the tolerance on the
-// per-condition ratio; a 5% rise is rounding, a 20% rise is choreography surviving its refusal.
-const RATIO_SLACK = 0.05;
 
 function compareMetric(label, baselineRatio, liveRatio) {
   if (baselineRatio === null || liveRatio === null) {
-    return { metric: label, verdict: 'unmeasurable', baseline: baselineRatio, live: liveRatio };
+    return { metric: label, baseline: baselineRatio, live: liveRatio, ratio_change_pct: null };
   }
   const change = baselineRatio === 0 ? 0 : (liveRatio - baselineRatio) / baselineRatio;
-  let verdict = 'proportional';
-  if (change > RATIO_SLACK) verdict = 'prose_lagging';
-  else if (change < -RATIO_SLACK) verdict = 'prose_leading';
   return {
     metric: label,
     baseline: baselineRatio,
     live: liveRatio,
     ratio_change_pct: Math.round(change * 1000) / 10,
-    verdict,
   };
 }
 
@@ -621,8 +613,6 @@ function compare(baseline, live) {
     conditions_removed: [...baseConditions].filter(c => !liveConditions.has(c)).sort(),
     conditions_added: [...liveConditions].filter(c => !baseConditions.has(c)).sort(),
     metrics,
-    verdict: metrics.some(m => m.verdict === 'prose_lagging') ? 'prose_lagging'
-      : metrics.every(m => m.verdict === 'unmeasurable') ? 'unmeasurable' : 'proportional',
   };
 }
 
@@ -683,10 +673,11 @@ function usage() {
   return [
     'usage: kaola-workflow-prose-census.js [--json|--summary]',
     '       kaola-workflow-prose-census.js --write-baseline [path]',
-    '       kaola-workflow-prose-census.js --compare [path] [--fail-on-regression]',
+    '       kaola-workflow-prose-census.js --compare [path]',
     '',
     'Measures ADR 0013 P5: routing-surface line count, contract-validator needle-pin count,',
-    'and the refusal census across all seven emission shapes, plus the proportionality ratio.',
+    'and the refusal census across all seven emission shapes, plus their per-condition ratios.',
+    '--compare reports raw before/after counts and deltas only — a diagnostic, never a verdict.',
     'Default baseline path: ' + DEFAULT_BASELINE,
   ].join('\n');
 }
@@ -737,7 +728,7 @@ function main(argv) {
     }
     const diff = compare(baseline, census());
     console.log(JSON.stringify(diff, null, 2));
-    return (args.includes('--fail-on-regression') && diff.verdict === 'prose_lagging') ? 1 : 0;
+    return 0;
   }
 
   const result = census();

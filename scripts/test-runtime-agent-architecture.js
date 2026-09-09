@@ -983,244 +983,18 @@ for (const role of ROLE_NAMES) {
     `A7[${role}]: forge-neutral Codex triples are byte-identical`);
 }
 
-// #1050 — metric-optimizer pass-rate / Beta-posterior accept-reject and early abandonment.
-// Wording-level acceptance on the behavior-contract body (authority) and every native render of
-// that role. Continuous median-of-K remains the default. No new production script is in scope.
-const METRIC_OPTIMIZER_PASS_RATE_GAPS = Object.freeze([
-  'pass-rate-branch',
-  'continuous-named-default',
-  'beta-posterior',
-  'posterior-probability-beats-baseline',
-  'mission-supplied-confidence',
-  'confidence-default-0.9',
-  'posterior-median-min-delta',
-  'ties-and-insufficient-evidence-reject',
-  'early-abandonment',
-  'early-abandonment-scoped-restore',
-  'early-abandonment-keep-prior-baseline',
-  'early-abandonment-reset-hard-forbidden',
-  'mission-supplied-min-trials',
-  'min-trials-default-3',
-  'abandonment-log-form',
-  'metric-repeats-ceiling',
-  'baseline-remeasured-at-loop-start',
-  'baseline-carried-forward-on-accept',
-  'posterior-vs-posterior',
-  'orchestrator-supplies-inputs',
-  'role-never-invents-thresholds',
-  'ambiguous-metric-kind-stop',
-  'output-contract-trial-counts',
-]);
-
-function metricOptimizerContinuousDefaultGaps(text) {
-  const prose = String(text || '');
-  const gaps = [];
-  if (!/median-of-K/i.test(prose) || !/\bmetric_repeats\b/.test(prose)) gaps.push('median-of-k');
-  if (!/\bdirection\b/.test(prose) || !/\bmin_delta\b/.test(prose)) gaps.push('direction-and-min-delta');
-  if (!/kw-opt iter/.test(prose)) gaps.push('accept-commit-message');
-  if (!/git restore --source=HEAD/.test(prose)) gaps.push('scoped-restore');
-  if (!/git reset --hard/i.test(prose) || !/FORBIDDEN/i.test(prose)) gaps.push('reset-hard-forbidden');
-  return gaps;
-}
-
-// R1: continuous default already contains scoped restore / keep-prior / reset-hard FORBIDDEN.
-// Completeness of the pass-rate branch is judged on the Early-abandonment reject path slice, not
-// the whole body — through the abandonment log form, before a sibling "Reject otherwise".
-function metricOptimizerEarlyAbandonmentSlice(text) {
-  const prose = String(text || '');
-  const start = prose.search(/early\s+abandonment/i);
-  if (start < 0) return '';
-  const from = prose.slice(start);
-  const sibling = from.search(/\*{0,2}Reject\*{0,2}\s+otherwise\b/i);
-  const bounded = sibling >= 0 ? from.slice(0, sibling) : from;
-  const logIdx = bounded.indexOf('rejected (abandoned after');
-  if (logIdx < 0) return bounded;
-  const close = bounded.indexOf(')', logIdx);
-  return bounded.slice(0, close < 0 ? bounded.length : close + 1);
-}
-
-function metricOptimizerPassRateGaps(text) {
-  const prose = String(text || '');
-  const gaps = [];
-  if (!/\bpass[- ]rate\s+metric\b/i.test(prose)) gaps.push('pass-rate-branch');
-  if (!/\bcontinuous\s+metric\b/i.test(prose) || !/\bdefault\b/i.test(prose)) {
-    gaps.push('continuous-named-default');
-  }
-  const hasExactBeta = /Beta\s*\(\s*1\s*\+\s*n_success\s*,\s*1\s*\+\s*n_failure\s*\)/.test(prose);
-  const hasEquivalentBeta = /\bBeta\b/.test(prose) && /\bn_success\b/.test(prose) && /\bn_failure\b/.test(prose);
-  if (!hasExactBeta && !hasEquivalentBeta) gaps.push('beta-posterior');
-  if (!/posterior\s+probability/i.test(prose) || !/\bbeats\b/i.test(prose)
-      || !/\bbaseline\b/i.test(prose) || !/\bdirection\b/.test(prose)) {
-    gaps.push('posterior-probability-beats-baseline');
-  }
-  if (!/mission[- ]supplied(?:\s+\w+){0,8}\s+confidence|\bconfidence(?:\s+\w+){0,8}\s+mission[- ]supplied/i.test(prose)) {
-    gaps.push('mission-supplied-confidence');
-  }
-  if (!/\b0\.9\b/.test(prose)) gaps.push('confidence-default-0.9');
-  if (!/posterior\s+median/i.test(prose) || !/\bmin_delta\b/.test(prose)) {
-    gaps.push('posterior-median-min-delta');
-  }
-  if (!/\bties\b/i.test(prose) || !/insufficient\s+evidence/i.test(prose) || !/\breject/i.test(prose)) {
-    gaps.push('ties-and-insufficient-evidence-reject');
-  }
-  if (!/early\s+abandonment/i.test(prose)) gaps.push('early-abandonment');
-  const abandonmentSlice = metricOptimizerEarlyAbandonmentSlice(prose);
-  if (!/git restore --source=HEAD/.test(abandonmentSlice)) {
-    gaps.push('early-abandonment-scoped-restore');
-  }
-  if (!/keep(?:s)? the prior baseline/i.test(abandonmentSlice)) {
-    gaps.push('early-abandonment-keep-prior-baseline');
-  }
-  if (!/git reset --hard/i.test(abandonmentSlice) || !/FORBIDDEN/i.test(abandonmentSlice)) {
-    gaps.push('early-abandonment-reset-hard-forbidden');
-  }
-  if (!/mission[- ]supplied(?:\s+\w+){0,8}\s+minimum(?:\s+number\s+of)?\s+trials/i.test(prose)) {
-    gaps.push('mission-supplied-min-trials');
-  }
-  if (!/(?:default(?:s)?(?:\s+is|\s+of|:|\s+when\s+supplied)?\s*(?:is\s+)?)3\b|\(default\s+3\b/i.test(prose)) {
-    gaps.push('min-trials-default-3');
-  }
-  if (!prose.includes('rejected (abandoned after')) gaps.push('abandonment-log-form');
-  if (!/\bmetric_repeats\b/.test(prose) || !/\bceiling\b/i.test(prose) || !/not a target/i.test(prose)) {
-    gaps.push('metric-repeats-ceiling');
-  }
-  if (!/re-?measur/i.test(prose) || !/(?:loop start|start of the loop)/i.test(prose)) {
-    gaps.push('baseline-remeasured-at-loop-start');
-  }
-  if (!/carried forward/i.test(prose) || !/\baccept/i.test(prose)) {
-    gaps.push('baseline-carried-forward-on-accept');
-  }
-  if (!/posterior[- ]vs[- ]posterior/i.test(prose)) gaps.push('posterior-vs-posterior');
-  if (!/orchestrator supplies/i.test(prose)) gaps.push('orchestrator-supplies-inputs');
-  if (!/never invent/i.test(prose)) gaps.push('role-never-invents-thresholds');
-  if (!/\bambiguous\s+metric\s+kind\b/i.test(prose) || !/\bSTOP\b/.test(prose)) {
-    gaps.push('ambiguous-metric-kind-stop');
-  }
-  if (!/output contract/i.test(prose) || !/per-iteration trial counts/i.test(prose)) {
-    gaps.push('output-contract-trial-counts');
-  }
-  return gaps;
-}
-
-const A1050_PASS_RATE_FIXTURE = [
-  'Continuous metric (default, unchanged).',
-  'Pass-rate metric (distinct from the continuous default).',
-  'Model each as Beta(1 + n_success, 1 + n_failure).',
-  'Accept only when the posterior probability that the candidate beats the baseline in direction',
-  'meets a mission-supplied confidence (default 0.9 when supplied)',
-  'and the posterior median clears min_delta. Ties and insufficient evidence are rejects.',
-  'Early abandonment after a mission-supplied minimum number of trials (default 3 when supplied),',
-  'revert with git restore --source=HEAD and keep the prior baseline; git reset --hard is FORBIDDEN,',
-  'logging rejected (abandoned after <n> trials).',
-  'metric_repeats is a ceiling, not a target.',
-  'Baseline trial counts are re-measured at loop start and carried forward on accept (posterior-vs-posterior).',
-  'The confidence threshold and early-abandonment minimum are mission inputs the orchestrator supplies;',
-  'the role never invents them; ambiguous metric kind is a STOP (never ask inside the loop).',
-  'Output Contract includes per-iteration trial counts on pass-rate runs.',
-].join(' ');
-
-assert(metricOptimizerPassRateGaps(A1050_PASS_RATE_FIXTURE).length === 0,
-  'A1050/oracle: the required pass-rate wording parses as complete — gaps '
-    + JSON.stringify(metricOptimizerPassRateGaps(A1050_PASS_RATE_FIXTURE)));
-assert(METRIC_OPTIMIZER_PASS_RATE_GAPS.length === 23,
-  'A1050/oracle: pass-rate gap catalog covers the 23 required claims');
-
-{
-  const mutations = [
-    ['pass-rate-branch', /Pass-rate metric \(distinct from the continuous default\)\./, 'Rate metric.'],
-    ['continuous-named-default', /Continuous metric \(default, unchanged\)\./, 'Unchanged metric.'],
-    ['beta-posterior', /Beta\(1 \+ n_success, 1 \+ n_failure\)/, 'a binomial model'],
-    ['posterior-probability-beats-baseline',
-      /the posterior probability that the candidate beats the baseline in direction/,
-      'a point estimate'],
-    ['mission-supplied-confidence', /mission-supplied confidence/, 'hardcoded confidence'],
-    ['confidence-default-0.9', /default 0\.9 when supplied/, 'default when supplied'],
-    ['posterior-median-min-delta', /the posterior median clears min_delta/, 'a mean comparison'],
-    ['ties-and-insufficient-evidence-reject',
-      /Ties and insufficient evidence are rejects\./, 'Ties may accept.'],
-    ['early-abandonment', /Early abandonment after/, 'Stop after'],
-    ['early-abandonment-scoped-restore', 'git restore --source=HEAD', 'an unscoped revert'],
-    ['early-abandonment-keep-prior-baseline', 'keep the prior baseline', 'drop the baseline'],
-    ['early-abandonment-reset-hard-forbidden', /git reset --hard is FORBIDDEN/, 'git reset --hard is allowed'],
-    ['mission-supplied-min-trials', /mission-supplied minimum number of trials/, 'a fixed trial count'],
-    ['min-trials-default-3', /default 3 when supplied/, 'default when supplied'],
-    ['abandonment-log-form', 'rejected (abandoned after <n> trials)', 'rejected early'],
-    ['metric-repeats-ceiling', /is a ceiling, not a target/, 'is the required sample size'],
-    ['baseline-remeasured-at-loop-start', /re-measured at loop start/, 'taken from the last accept'],
-    ['baseline-carried-forward-on-accept', /carried forward on accept/, 'discarded on accept'],
-    ['posterior-vs-posterior', '(posterior-vs-posterior)', '(point-vs-point)'],
-    ['orchestrator-supplies-inputs', /the orchestrator supplies/, 'the role chooses'],
-    ['role-never-invents-thresholds', /the role never invents them/, 'the role may pick defaults'],
-    ['ambiguous-metric-kind-stop', /ambiguous metric kind is a STOP/, 'guess the metric kind'],
-    ['output-contract-trial-counts', /per-iteration trial counts on pass-rate runs/, 'the metric value only'],
-  ];
-  for (const [gap, needle, replacement] of mutations) {
-    const mutated = A1050_PASS_RATE_FIXTURE.replace(needle, replacement);
-    assert(mutated !== A1050_PASS_RATE_FIXTURE
-        && metricOptimizerPassRateGaps(mutated).includes(gap),
-      `A1050/oracle RED: dropping ${gap} is detected`);
-  }
-  const restoreOnlyOutsideSlice = [
-    'Continuous reject uses git restore --source=HEAD and keep the prior baseline; git reset --hard is FORBIDDEN.',
-    A1050_PASS_RATE_FIXTURE.replace('git restore --source=HEAD', 'an unscoped revert'),
-  ].join(' ');
-  assert(/git restore --source=HEAD/.test(restoreOnlyOutsideSlice)
-      && metricOptimizerPassRateGaps(restoreOnlyOutsideSlice).includes('early-abandonment-scoped-restore'),
-    'A1050/oracle RED: restore only outside the early-abandonment slice is not enough');
-}
-
-{
-  const contract = roleContracts['metric-optimizer'] || {};
-  const body = String(contract.body || '');
-  const continuousGaps = metricOptimizerContinuousDefaultGaps(body);
-  assert(continuousGaps.length === 0,
-    'A1050/source: metric-optimizer continuous default (median-of-K, direction/min_delta, '
-      + 'kw-opt commit, scoped restore, reset --hard forbidden) remains — gaps '
-      + JSON.stringify(continuousGaps));
-
-  const sourceGaps = metricOptimizerPassRateGaps(body);
-  assert(sourceGaps.length === 0,
-    'A1050/source: metric-optimizer behavior-contract body carries the pass-rate branch — gaps '
-      + JSON.stringify(sourceGaps));
-
-  const nativeRenders = profiles.filter(profile => profile.role === 'metric-optimizer');
-  const expectedNative = RUNTIME_NAMES.reduce((count, runtime) =>
-    count + (runtime === 'codex' ? 3 : 1), 0);
-  assert(nativeRenders.length === expectedNative,
-    `A1050/render: every native family renders metric-optimizer (7 families; Codex ×3 forges) — got `
-      + nativeRenders.length + ' expected ' + expectedNative);
-
-  const coveredRuntimes = sorted(new Set(nativeRenders.map(profile => profile.runtime)));
-  assert(JSON.stringify(coveredRuntimes) === JSON.stringify(SORTED_RUNTIME_NAMES),
-    'A1050/render: metric-optimizer native coverage is all seven families — got '
-      + JSON.stringify(coveredRuntimes));
-
-  const codexVariants = sorted(nativeRenders
-    .filter(profile => profile.runtime === 'codex')
-    .map(profile => profile.variant || ''));
-  assert(JSON.stringify(codexVariants)
-      === JSON.stringify(['codex-gitea', 'codex-github', 'codex-gitlab']),
-    'A1050/render: Codex metric-optimizer covers GitHub, GitLab, and Gitea — got '
-      + JSON.stringify(codexVariants));
-
-  for (const profile of nativeRenders) {
-    const label = `${profile.runtime}/${profile.variant || 'base'}`;
-    const renderContinuous = metricOptimizerContinuousDefaultGaps(profile.content);
-    assert(renderContinuous.length === 0,
-      `A1050/render[${label}]: continuous default survives native rendering — gaps `
-        + JSON.stringify(renderContinuous));
-    const renderGaps = metricOptimizerPassRateGaps(profile.content);
-    assert(renderGaps.length === 0,
-      `A1050/render[${label}]: pass-rate branch reaches the native profile — gaps `
-        + JSON.stringify(renderGaps));
-  }
-
-  const productionMetricOptimizerScripts = fs.readdirSync(path.join(ROOT, 'scripts'))
-    .filter(name => /metric-optimizer/i.test(name) && !/^test[-.]/.test(name));
-  assert(productionMetricOptimizerScripts.length === 0,
-    'A1050/no-new-script: scripts/ gained no non-test *metric-optimizer* production file — found '
-      + JSON.stringify(productionMetricOptimizerScripts));
-}
+// #1050 — RETIRED by #1054. This block used to require metric-optimizer's behavior-contract
+// body (and every native render of it) to carry fixed Beta-posterior / median-of-K statistical
+// prose. #1054's role redesign explicitly retires that fixed-statistics vocabulary from role
+// bodies (numeric thresholds, Beta/posterior/quantile statistics are banned ritual — see
+// scripts/test-issue-1054-role-redesign.js Group B). Requiring that prose to be PRESENT directly
+// contradicted the new authority, so the whole #1050 pinning block (source + native-render +
+// no-new-script proof) is removed here rather than left to rot as dead-but-passing weight; the
+// current metric-optimizer meaning (route fixed-destination work to `implementer`, never
+// `tdd-guide`; no fixed statistical method mandated in the body) is pinned in
+// scripts/test-issue-1054-role-redesign.js instead. TEST-AUTHOR EDIT, not implementer: this is
+// mechanical retirement of a test that pinned a body shape #1054's authority explicitly retires,
+// not a change to what #1054 accepts.
 
 // #1049 — the requested Codex tier change is source-owned and must reach every tracked carrier.
 // Keep this proof on the generated subject: a copied fixture or a source-only assertion would
@@ -1278,27 +1052,58 @@ assert(METRIC_OPTIMIZER_PASS_RATE_GAPS.length === 23,
     'A1049/render: fresh Codex next/finalize carriers across all three forges carry the requested '
       + 'tier defaults — gaps ' + JSON.stringify(operationGaps));
 
-  const compactGaps = freshCompactCarriers.flatMap(carrier =>
-    codexTierDefaultGaps(carrier.content).map(gap => `${carrier.label}/${gap}`));
-  assert(freshCompactCarriers.length === 3 && compactGaps.length === 0,
-    'A1049/render: fresh Codex compact carriers across all three forges carry the requested tier '
-      + 'defaults — gaps ' + JSON.stringify(compactGaps));
+  // #1054 item 25 (TEST-AUTHOR EDIT, not implementer), the global-recovery dedupe: codex is not
+  // an always-loaded dispatch carrier (RECOVERY_FULL_DISPATCH_RUNTIMES — grok and cursor only;
+  // fall back to that pinned pair when the generator does not yet export it, so this still runs
+  // pre-#1054), so its compact-recovery render now points at the full Next/Finalize reload
+  // instead of restating the tier defaults a second time. Assert that deferred pointer instead of
+  // requiring the tier text to be duplicated here.
+  const codexKeepsDispatch = (Array.isArray(routing && routing.RECOVERY_FULL_DISPATCH_RUNTIMES)
+    ? routing.RECOVERY_FULL_DISPATCH_RUNTIMES : ['grok', 'cursor']).includes('codex');
+  if (codexKeepsDispatch) {
+    const compactGaps = freshCompactCarriers.flatMap(carrier =>
+      codexTierDefaultGaps(carrier.content).map(gap => `${carrier.label}/${gap}`));
+    assert(freshCompactCarriers.length === 3 && compactGaps.length === 0,
+      'A1049/render: fresh Codex compact carriers across all three forges carry the requested tier '
+        + 'defaults — gaps ' + JSON.stringify(compactGaps));
+  } else {
+    const deferredGaps = freshCompactCarriers
+      .filter(carrier => !/already carries the full runtime dispatch contract|does not restate/i.test(carrier.content))
+      .map(carrier => carrier.label);
+    assert(freshCompactCarriers.length === 3 && deferredGaps.length === 0,
+      'A1049/render: fresh Codex compact carriers across all three forges point at the full '
+        + 'reload instead of restating tier defaults — gaps ' + JSON.stringify(deferredGaps));
+  }
 
-  const trackedRows = routing
-    ? [
-      ...routing.GENERATED_SURFACES.filter(row => row.surface_type === 'skill'
-        && ['next', 'finalize'].includes(row.topic)),
-      ...routing.RUNTIME_RECOVERY_SURFACES.filter(row => row.runtime === 'codex'),
-    ]
+  const trackedOperationRows = routing
+    ? routing.GENERATED_SURFACES.filter(row => row.surface_type === 'skill'
+      && ['next', 'finalize'].includes(row.topic))
     : [];
-  const trackedGaps = trackedRows.flatMap(row => {
+  const trackedRecoveryRows = routing
+    ? routing.RUNTIME_RECOVERY_SURFACES.filter(row => row.runtime === 'codex')
+    : [];
+  const trackedOperationGaps = trackedOperationRows.flatMap(row => {
     const content = read(row.path);
     if (typeof content !== 'string') return [`${row.path}/missing`];
     return codexTierDefaultGaps(content).map(gap => `${row.path}/${gap}`);
   });
-  assert(trackedRows.length === 9 && trackedGaps.length === 0,
-    'A1049/tracked: generated Codex next/finalize/compact bytes across all three forges carry the '
-      + 'requested tier defaults — gaps ' + JSON.stringify(trackedGaps));
+  assert(trackedOperationRows.length === 6 && trackedOperationGaps.length === 0,
+    'A1049/tracked: generated Codex next/finalize bytes across all three forges carry the '
+      + 'requested tier defaults — gaps ' + JSON.stringify(trackedOperationGaps));
+  // #1054 item 25 (TEST-AUTHOR EDIT, not implementer), the global-recovery dedupe: the tracked
+  // Codex compact-recovery files are the committed form of the same deferred render checked above
+  // — require the deferred pointer when codex is not an always-loaded dispatch carrier, and the
+  // tier defaults otherwise.
+  const trackedRecoveryGaps = trackedRecoveryRows.flatMap(row => {
+    const content = read(row.path);
+    if (typeof content !== 'string') return [`${row.path}/missing`];
+    if (codexKeepsDispatch) return codexTierDefaultGaps(content).map(gap => `${row.path}/${gap}`);
+    return /already carries the full runtime dispatch contract|does not restate/i.test(content)
+      ? [] : [`${row.path}/deferred-note-missing`];
+  });
+  assert(trackedRecoveryRows.length === 3 && trackedRecoveryGaps.length === 0,
+    'A1049/tracked: generated Codex compact-recovery bytes across all three forges match this '
+      + 'runtime\'s carrier role — gaps ' + JSON.stringify(trackedRecoveryGaps));
 }
 
 // A8 — provenance is outside every generated prompt but remains durable and discoverable.
@@ -1320,8 +1125,17 @@ assert(provenanceOutputs.length === 0,
   'A8: generated agent-facing prompt bytes contain no provenance narration — found '
   + JSON.stringify(provenanceOutputs));
 const provenanceDoc = read('docs/agents-source.md') || '';
+// #1054 (TEST-AUTHOR EDIT, not implementer): the source reclassification recorded in
+// kaola-workflow/bundle-1054/.cache/source-classification.md retired the re-vendor/"Local
+// Overrides" checklist concept along with the re-vendor relationship itself — provenance.json is
+// now schema 2, every role is `kaola_authored`, and docs/agents-source.md documents that under
+// "Source classification" and "Historical origin" headings instead. 'Local Overrides' replaced
+// with the schema-2 concepts that now carry the same durable-discoverability claim; the historical
+// origin facts (repository/commit/license/copyright/blob-SHA/six role names) and the prompt-bytes
+// ban are unchanged.
 for (const token of [
-  'Repository:', 'Pinned commit:', 'Upstream blob SHA', 'License:', 'Copyright:', 'Local Overrides',
+  'Repository:', 'Pinned commit:', 'Upstream blob SHA', 'License:', 'Copyright:',
+  'kaola_authored', 'Historical origin', 'Source classification',
   'build-error-resolver', 'code-architect', 'code-explorer', 'doc-updater', 'planner', 'tdd-guide',
 ]) {
   assert(provenanceDoc.includes(token), `A8: durable provenance metadata records ${token}`);

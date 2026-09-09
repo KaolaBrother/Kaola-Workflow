@@ -429,29 +429,33 @@ will read it, so the check and the transaction cannot silently disagree about wh
 | `source_dir` | The directory that proves the authority today, or `null`. On `pending_mirror` this is the **main-resident** run folder the mirror will copy |
 | `dest_dir` | The directory the transaction will read the authority from. Equals `source_dir` except on `pending_mirror`, where it is `<linked_root>/kaola-workflow/<project>`. `null` when `source` is `none` |
 
-### The three reports
+### The two reports
 
-The finalize transaction takes three measurements — two from `probeFinalizeValidationGate`, one from
-`probeMissionListCoherence`. None refuses, and each lands in two places — the emitted envelope and,
-durably, `kaola-workflow/{project}/finalization-summary.md`. The durable half is not optional: a
-conversion that emits a finding and drops the state the refusal was freezing is a deletion, not a
-conversion.
+The finalize transaction takes two measurements, both from `probeFinalizeValidationGate`. Neither
+refuses, and each lands in two places — the emitted envelope and, durably,
+`kaola-workflow/{project}/finalization-summary.md`. The durable half is not optional: a conversion
+that emits a finding and drops the state the refusal was freezing is a deletion, not a conversion.
 
 | Envelope field | Durable heading | Content |
 |---|---|---|
 | `validation` | `## Validation` | the typed chain-receipt finding from `adaptiveSchema.evaluateChainReceipt`, computed **in process** — no subprocess, no plan file |
 | `changed_paths` | `## Changed Paths` | `adaptiveSchema.changedPathsSinceBase(root, base, project)` — `git diff <base>...HEAD --name-only` minus the bookkeeping band |
-| `mission_list` | `## Mission List` | `{ items, outcome_while_not_done }` — how many missions the run's own record holds, and the `item:` line of each one carrying an outcome while its `status` is not `done` |
 
-**The durable write is fill-if-empty, and it never overwrites prose.** All three land through one
-writer, `appendSummarySection`, and what it does turns on what the heading already holds: absent,
-and the section is appended at the tail; present with an empty body, and it is filled **in place**,
-keeping its position relative to its neighbours; present with content, and it is left exactly as
-written. So the transaction never overwrites prose an orchestrator wrote, and the section is
-idempotent by **content rather than by heading** — a crash-resumed re-entry still cannot stack a
-second copy of a section that already says something, while a summary that pre-created the three
-headings, as the finalize surface's Step 6 instructs, receives the measurements instead of dropping
-them. `## Finalize Findings` is written by the same function under a different rule (see below).
+#1054: a third measurement, `mission_list` / `## Mission List` (a count of the run's own missions and
+which carried an outcome while not `done`), used to sit beside these two. It is retired — the
+orchestrator reads `mission-list.md` and the run's evidence directly, and Finalization is not a
+Mission List item; a completed Mission's `result` stays immutable and is never a landing place for
+the finalize transaction's own findings.
+
+**The durable write is fill-if-empty, and it never overwrites prose.** Both land through one writer,
+`appendSummarySection`, and what it does turns on what the heading already holds: absent, and the
+section is appended at the tail; present with an empty body, and it is filled **in place**, keeping
+its position relative to its neighbours; present with content, and it is left exactly as written. So
+the transaction never overwrites prose an orchestrator wrote, and the section is idempotent by
+**content rather than by heading** — a crash-resumed re-entry still cannot stack a second copy of a
+section that already says something, while a summary that pre-created the two headings, as the
+finalize surface's summary card instructs, receives the measurements instead of dropping them.
+`## Finalize Findings` is written by the same function under a different rule (see below).
 
 `changed_paths_probe` is added to the envelope only when it is not `measured`; `unavailable` means
 the branch diff could not be enumerated, which is reported as "not measured", never as a verdict
@@ -462,12 +466,6 @@ used to be an attribution sweep against declared write sets that refused the rem
 write sets are gone, and a mission-list `result` is free text, not a path set — parsing one back
 into one would re-invent the declaration. The comparison went; the measurement stayed, so a reader
 can see what moved and notice what does not belong.
-
-`mission_list` is present only when the run wrote a `mission-list.md` — a run without one emits the
-envelope it emitted before, and writes no section. A record that agrees with itself still reports,
-with an empty `outcome_while_not_done`: a key appearing only on a contradictory run would be
-indistinguishable from a report that never ran. The record is read and never repaired, and nothing
-about the exit code, `status` or `reasons` turns on it.
 
 ### Finalize envelope
 
@@ -480,7 +478,6 @@ about the exit code, `status` or `reasons` turns on it.
   "issue_disposition": "kept-open|close-pending|closed|unknown",
   "validation": { "classification": "chains_green", "green": true, "mode": "chain-receipt" },
   "changed_paths": ["scripts/foo.js"],
-  "mission_list": { "items": 6, "outcome_while_not_done": [25, 52] },
   "closure_receipt": {},
   "closure_invariants": { "ok": true, "violations": [] },
   "finalize_transaction": {}
@@ -1596,22 +1593,20 @@ consumer's own `ROADMAP.md` is untouched either way: migrating it off is a separ
 ## Run-gap sweep — `kaola-workflow-gap-sweep.js`
 
 ```
-Usage: kaola-workflow-gap-sweep.js --project <name> [--json] [--check]
-                                   [--summary <path>] [--output <path>] [--offline]
+Usage: kaola-workflow-gap-sweep.js --project <name> [--json] [--output <path>]
 ```
 
-Two modes, and they are exclusive — neither runs the other. The **scanner** (default) scans the run's
-`.cache/` for gaps the run itself discovered, writes `.cache/run-gaps.json`, and under `--json`
-reports the `sweptClasses` the `## Run gaps` section is written from. The **gate** (`--check`) reads
-that artifact back and verifies every swept gap is mapped in `finalization-summary.md` `## Run gaps`,
-one line each, either `filed: #N` or `noise: <justification>`. An orchestrator-authored row the
-scanner never observed is added to `.cache/run-gaps-manual.md` and re-swept, so what is written was
-actually swept.
+#1054: an optional, non-gating diagnostic — not part of the finalize transaction and never spliced
+into it. It scans the run's `.cache/` for machine-observable signals (today: a chain accepted red in
+`chain-receipt.json`) and writes/prints `.cache/run-gaps.json`. Its output settles nothing on its
+own; an orchestrator may run it, read it, or ignore it.
 
-The gate consumes; it never produces. Run against an artifact no scanner wrote it refuses
-`artifact_missing` and exits 1, which is why the finalize surface splices **both** invocations — the
-scan in Step 6, ahead of the section its `sweptClasses` populates, and the gate in Step 7 to
-reconcile the two sides.
+The former `--check` gate — a reconciliation that refused finalization unless every swept signal was
+hand-mapped into a free-text `## Run gaps` section of `finalization-summary.md` — is retired outright,
+along with the `.cache/run-gaps-manual.md` hand-seeding sidecar it read. Equivalent legitimate
+expressions of the same disposition (bullets, free prose, a table) were accepted, refused, or
+silently misread as zero; the reconciliation judged the orchestrator's real record by regex-parsing
+its prose. Nothing in `finalize` depends on this script any more.
 
 ## Telemetry — `kaola-workflow-telemetry-report.js`
 
@@ -1805,11 +1800,15 @@ primitives.
 `resolveOutputPath`, `getGitTopLevel`, `classifyScope`, `resolveDiffBase`, `computeChangedFiles`,
 `forgeReferencedScripts`, `isEditionCouplingPath`.
 
-**`scripts/kaola-workflow-ledger-compare.js`** — `countComplete(missionListText)`,
-`compareLedgers(srcText, destText)`. Record-regression guard for the finalize Step-8a artifact
-mirror: fails closed only when the destination `mission-list.md` records strictly more
-`status: done` items than the source about to overwrite it, fail-open otherwise. Forge-neutral
-(byte-identical across editions); required by `kaola-workflow-claim.js`.
+**`scripts/kaola-workflow-ledger-compare.js`** — `compareLedgers(srcText, destText)`. Record-
+regression guard for the finalize Step-8a artifact mirror, re-derived under #1054 to decide by
+**content**, not by counting how much work either side records as done: a `status: done` line-count
+read zero on a table-form Mission List and reported a copy SAFE that would have erased finished
+rows, because both sides counted zero. Returns `{ safe, reason, diff? }` — `reason` is `first_sync`
+(destination absent/empty), `identical` (destination byte-identical to source), or
+`content_diverged` (destination carries content the copy would discard/overwrite, with a bounded
+`diff`); `safe` is true only for the first two. Forge-neutral (byte-identical across editions);
+required by `kaola-workflow-claim.js`.
 
 ### GitLab edition
 

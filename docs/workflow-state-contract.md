@@ -48,7 +48,6 @@ at the end exist to catch what the named rows do not.
 | `/^\.cache\/validation-vectors\/[^/]+\.json$/` | record | evidence | script | local validation-runner receipts: exact command, environment digests, repeated results, bound candidate |
 | `.cache/final-validation.md` | record | evidence | agent | the tests-green oracle receipt (consumer repo kind), candidate-hash bound; recorded by the agent, not a producer script |
 | `.cache/selection-evidence.md` | record | evidence | agent | the no-target selection rationale, docked verbatim; not faithfully reconstructible after the claim |
-| `.cache/run-gaps-manual.md` | record | evidence | agent | agent/operator-authored gap items — an input no script can regenerate |
 | `finalization-summary.md` | record | evidence | agent | the terminal artifact — the run's agent-authored close-out record |
 | `.cache/sink-receipt.json` | record | forge | script | step-by-step record of what has already reached the outside world; disposed at terminal success, when the forge itself becomes the authority |
 | `.cache/sink-fallback.json` | record | forge | script | the sink fallback journal, same lifetime rule as sink-receipt.json |
@@ -110,8 +109,10 @@ file but is only as complete as its own source walk.
   and genuine closure facts. It does not carry a progress pointer or executable resume policy. See
   Workflow State Fields below.
 - `kaola-workflow/{project}/finalization-summary.md` is the terminal artifact, and the only place
-  the finalize transaction's own three measurements survive the process that took them
-  (`## Validation`, `## Changed Paths` and `## Mission List`).
+  the finalize transaction's own two measurements survive the process that took them
+  (`## Validation` and `## Changed Paths`). Finalize does not parse `mission-list.md` or any other
+  orchestrator-authored record as a machine interface — it reads it, but does not gate on it or
+  land its own findings there (`#1054`).
 - A `fast-summary.md` on disk is read only tolerantly: the classifier's defensive `## Scope` parse
   (feeding in-flight write-set overlap detection) and the router's active-folder detection both
   recognize such a marker. It is never newly authored, so these parses do not fire for a freshly
@@ -175,9 +176,10 @@ a **measurement, not a declaration**: the archive is complete iff every file pre
 `kaola-workflow/{project}/` before the move is present, byte-for-byte (size + SHA-256), after it.
 It walks the source recursively and requires every file it finds — including files no record ever
 mentioned. `workflow-state.md` is additionally required unconditionally as the archive's identity
-anchor. Five fixed `.cache/*.md` finalize sidecars are optional
-(`final-validation.md`, `run-gaps-manual.md`, `selection-evidence.md`, `doc-docking.md`,
-`doc-updater.md`); everything else is byte-checked.
+anchor. Three fixed `.cache/*.md` finalize sidecars are optional
+(`final-validation.md`, `selection-evidence.md`, `doc-docking.md`); everything else is byte-checked.
+(`run-gaps-manual.md` and `doc-updater.md` were dropped from this exempt set when `#1054` retired
+the mechanisms that produced them.)
 
 This is an operation refusing to destroy data, not a workflow judging work — the same class as a
 failed write. It replaced a required set *derived* from the Node Ledger (every `complete` row
@@ -243,8 +245,11 @@ progress journal or execution plan. Its live blocks are:
   the selected issue(s). They are evidence attached to the claim, not progress state, and a missing
   origin record never becomes an execution instruction.
 - `## Closure` — appended at archive time with `archived_at`, issue/claim/worktree dispositions,
-  closure invariants, issue closure facts, and measured follow-up/backlog facts. The closure contract
-  is status plus existing receipts and sink facts; no progress marker is required.
+  closure invariants, and issue closure facts including `issues_closed`. The closure contract is
+  status plus existing receipts and sink facts; no progress marker is required. `#1054` retired the
+  block's backlog-delta fields (`follow_ups_filed`, `follow_up_numbers`, `net_backlog_delta`), which
+  varied with how the orchestrator happened to format its own free-text record; `issues_closed` is
+  computed directly from the claimed set and survives.
 
 Fresh state contains only these claim/sink/liveness facts and genuine closure data. Older state files
 may still contain retired progress, evidence, or timestamp residue; `removeLegacyStateBlocks` strips

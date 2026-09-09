@@ -182,22 +182,21 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
-// T6c: run-gap SCANNER pin — a finalize surface that splices only the gate routes the
-// orchestrator into a refusal it was never told how to clear. gap-sweep's two modes are
-// exclusive: `--check` is a gate that READS `.cache/run-gaps.json` and, when the file is
-// absent, refuses `artifact_missing` and exits 1. The default (scanner) mode is what WRITES
-// that artifact, and `--json` is the only way it reports `sweptClasses` — the very list the
-// author copies into `## Run gaps`. So each shipped finalize surface must name BOTH
-// invocations, and the scan must come before the row grammar it feeds and before the gate
-// that reconciles against it. A scan spliced after the gate satisfies a naive "mentions
-// --json" reading while supplying nothing to either consumer.
+// T6c — SUPERSEDED by #1054 item 1/2/4: this used to require that a finalize surface splice
+// BOTH gap-sweep invocations (the writing scan and the `--check` reconciliation gate), in
+// scan-before-gate order, alongside the strict `## Run gaps` row grammar the gate reconciled
+// against. That gate, the grammar, and the ordering it fed are ALL retired — the live
+// `kaola-workflow-gap-sweep.js` no longer accepts `--check` at all (it falls through to the
+// generic "unknown argument" path and exits 1), and nothing in finalize invokes the script.
+// The retired assertions are deleted, not weakened: there is no successor "correct ordering"
+// to require over machinery that no longer exists.
 //
-// Read the RENDERED surfaces only — never the skeleton or slots.js. A pin that read the
-// authoring source would go green while the shipped surfaces stayed wrong. The universe is
-// DERIVED from GENERATED_SURFACES, the same registry `generate-routing-surfaces --check`
-// byte-compares, which carries exactly the TRACKED surfaces: the additive .opencode/.kimi
-// finalize copies are gitignored, so folding them in would make this vacuous in a fresh
-// worktree while still reporting a full assertion count.
+// REWRITTEN to pin the opposite property, using the same forge-correct basename derivation
+// (still real coverage — a per-forge gap-sweep script name the two other suites do not check):
+// no shipped finalize surface may invoke gap-sweep with the retired `--check` flag (an
+// operator who copied old advice would hit "unknown argument", not a working gate), and none
+// may still state the retired row grammar sentence. Read the RENDERED surfaces only, per the
+// same universe-derivation rule the retired version used.
 // ---------------------------------------------------------------------------
 {
   const { GENERATED_SURFACES } = require('./generate-routing-surfaces.js');
@@ -209,13 +208,8 @@ for (const ed of codexEditions) {
   const gapSweepBasename = forge =>
     forge === 'github' ? GAP_SWEEP_CANON : path.basename(forgeRel(GAP_SWEEP_CANON, forge));
 
-  // The strict `## Run gaps` row grammar — the sentence that tells the author what to write.
-  // Its input is the scan's sweptClasses, which is why the ordering below is the real property.
+  // The retired strict `## Run gaps` row grammar sentence.
   const ROW_GRAMMAR = '<reasonClass> (<sample>): filed: #N';
-
-  // A commented-out invocation instructs nobody (the closure-audit splice ships one on
-  // purpose), so a `#`-led line is not a run however well-formed the command on it is.
-  const isLive = text => !/^\s*#/.test(text);
 
   const finalizeSurfaces = GENERATED_SURFACES.filter(r => r.topic === 'finalize');
   assert(finalizeSurfaces.length === 6,
@@ -229,42 +223,15 @@ for (const ed of codexEditions) {
       assert(false, `T6c: ${row.path} is a registry-declared finalize surface but is not on disk`);
       continue;
     }
-    const lines = fs.readFileSync(path.join(REPO, row.path), 'utf8').split('\n');
-    // Bind to THIS surface's forge basename: a gitea surface invoking the github script is a
-    // miss here, not a pass, so the pin cannot be satisfied by one basename copied everywhere.
-    const invocations = lines
-      .map((text, i) => ({ text, i }))
-      .filter(l => l.text.includes(base) && isLive(l.text));
-    const gate = invocations.find(l => l.text.includes('--check'));
-    const scan = invocations.find(l => l.text.includes('--json') && !l.text.includes('--check'));
-
-    assert(gate !== undefined,
-      `T6c: ${row.path} must still splice the run-gap GATE (${base} ... --check)`);
-    assert(scan !== undefined,
-      `T6c: ${row.path} splices no run-gap SCAN — no live line runs ${base} with --json, so `
-      + `nothing on this surface writes .cache/run-gaps.json or reports sweptClasses, and the `
-      + `gate it does splice can only refuse artifact_missing`);
-    if (scan) {
-      assert(scan.text.includes('--project'),
-        `T6c: ${row.path} runs the scan without --project, which gap-sweep requires — the `
-        + `invocation exits 1 before scanning anything`);
-    }
-    if (scan && gate) {
-      assert(scan.i < gate.i,
-        `T6c: ${row.path} splices the GATE at line ${gate.i + 1} ahead of the SCAN at line `
-        + `${scan.i + 1}. The gate reads the artifact the scan writes, so a scan placed after `
-        + `it cannot supply what the gate already looked for`);
-    }
-    const grammar = lines.findIndex(text => text.includes(ROW_GRAMMAR));
-    assert(grammar >= 0,
-      `T6c: ${row.path} must state the strict "## Run gaps" row grammar (${ROW_GRAMMAR}) — it `
-      + `is the anchor the ordering check below is measured against`);
-    if (scan && grammar >= 0) {
-      assert(scan.i < grammar,
-        `T6c: ${row.path} states the "## Run gaps" row grammar at line ${grammar + 1} ahead of `
-        + `the SCAN at line ${scan.i + 1}. sweptClasses is what tells the author WHICH rows to `
-        + `write, so a scan the author reaches afterwards leaves those rows written from memory`);
-    }
+    const content = fs.readFileSync(path.join(REPO, row.path), 'utf8');
+    const lines = content.split('\n');
+    const retiredGateLine = lines.find(text => text.includes(base) && text.includes('--check'));
+    assert(retiredGateLine === undefined,
+      `T6c (#1054): ${row.path} must not splice ${base} with the retired --check gate — the live `
+      + `script reports that flag as an unknown argument and exits 1; got line ${JSON.stringify(retiredGateLine)}`);
+    assert(!content.includes(ROW_GRAMMAR),
+      `T6c (#1054): ${row.path} must not still state the retired "## Run gaps" row grammar `
+      + `(${ROW_GRAMMAR}) — the gate that reconciled against it is gone`);
   }
 }
 

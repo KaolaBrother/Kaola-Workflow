@@ -267,7 +267,7 @@ complete registration surface:
 | Path | What pins the roster |
 |------|----------------------|
 | `templates/agents/behavior-contracts.json` | exactly one complete behavior record and intent class per role |
-| `templates/agents/provenance.json` | exactly one origin/local classification and source record per role |
+| `templates/agents/provenance.json` | exactly one `source_kind` and, where one applies, a `history` origin record per role |
 | `scripts/generate-agent-profiles.js` | exact role set, schema, native rendering, three Codex registries, and output manifest |
 | `agents/generated-agent-manifest.json` | 9 renders per role and the behavior/render hashes |
 | installers and preflight | selected-source, managed-set, installed-byte, and pruning proof from the generated inventory |
@@ -523,74 +523,31 @@ This is the accepted loss ADR 0017 names: early scope-violation detection went w
 sets, so a stray edit is noticed when a reader looks, not one step later. The report is what replaced
 it — read it rather than skipping past it.
 
-## Run-gap capture at finalize (#435)
+## Run-gap sweep (#435, #653, retired as a gate by #1054)
 
-Prose assertions about "no defects found" or "gaps addressed" are insufficient evidence of
-run-gap coverage at Finalization. Before Finalization's gap sweep runs, the orchestrator seeds
-any run gap it directly observed but the automated scanners cannot see (transient tool noise, a
-manual retry, an environmental flake) by appending a `gap: <class> — <text>` line to
-`.cache/run-gaps-manual.md` (issue #653 / D-653-01) — the reverse-containment check in step 3
-below refuses a `## Run gaps` entry with no matching seeded or scanned source.
+`node scripts/kaola-workflow-gap-sweep.js --project <P> [--json] [--output <path>]` is an
+**optional, non-gating diagnostic** — it is not part of the finalize transaction and is never
+spliced into it. It scans only `kaola-workflow/<P>/.cache/` (scope guard — no archive bleed) for
+machine-observable signals (today: a chain accepted red in `chain-receipt.json`, reason class
+`deferred_red_chain`) and writes/prints `.cache/run-gaps.json`. Its output settles nothing on its
+own; an orchestrator may run it, read it, or ignore it.
 
-The orchestrator MUST:
+The former `--check` gate — a reconciliation that refused finalization unless every swept signal
+was hand-mapped into a strict-grammar `## Run gaps` section of `finalization-summary.md`, with a
+reverse-containment check (`observed_gap_unseeded`) added by #653 — is retired outright, along
+with `--summary`, `--offline`, and the `.cache/run-gaps-manual.md` hand-seeding sidecar those
+modes read. #1054's own audit found the reconciliation judging the orchestrator's real record by
+regex-parsing its prose: an equivalent, legitimate expression of the same disposition (bullets,
+free prose, a table) was accepted, refused, or silently misread as zero depending on shape alone.
 
-1. Run `node scripts/kaola-workflow-gap-sweep.js --project <P> --json` to produce
-   `.cache/run-gaps.json`. The scanner reads only `kaola-workflow/<P>/.cache/` (scope guard —
-   no archive bleed). It sweeps two machine-reliable signal sources: `chain-receipt.json`
-   (`accepted_red:true` entries = `deferred_red_chain`) and the optional
-   `.cache/run-gaps-manual.md` (`gap: <class> — <text>` lines = `manual:<slug>`). Items are
-   deduplicated by `(reasonClass, sample)`. **Most of what a run discovers now arrives through the
-   manual seed** — the automatic node-repair signal went with the node lifecycle, so seeding what
-   you observed is the difference between a captured gap and a lost one.
-2. Populate the `## Run gaps` section of `finalization-summary.md` — one line per swept
-   `(reasonClass, sample)` tuple — in exactly one of two forms:
-   - `- <reasonClass> (<sample>): filed: #N` — gap tracked by an open issue.
-   - `- <reasonClass> (<sample>): noise: <one-line justification>` — gap justified as not
-     worth tracking.
+Nothing in `finalize` depends on this script any more, and there is no longer a required grammar
+for how an orchestrator records what a run discovered. The orchestrator reads the run's own
+evidence and record directly and states its conclusion in prose; that conclusion is not parsed
+back into a machine gate.
 
-   The heading itself must read exactly `## Run gaps`, with nothing else on the line. A heading
-   carrying a qualifier reads as no section at all, and the whole section is skipped however
-   well-formed its rows are.
-
-   The `<sample>` is delimited by the FIRST `): ` that is followed by a valid `filed:`/`noise:`
-   tail (issue #726). Consequently a sample may itself contain parentheses — e.g.
-   `- manual:api-probe (retryAfter(from:)): filed: #N` — and a `noise:` justification, which is
-   unconstrained free text, may itself contain `): filed: #N` without being mis-carved into the
-   sample. A bullet that looks like a mapping row (a parenthesised sample immediately followed by
-   a `filed:`/`noise:` tail marker) but does not match the grammar is still skipped, and now names
-   itself on stderr as an advisory `ignoring malformed ## Run gaps mapping line` warning so a typo
-   does not resurface later as a puzzling `gaps_unswept` / `observed_gap_unseeded` refusal. The
-   warning never changes the parse result, the exit code, or the `--json` line on stdout, and
-   free-text bullets (`- none`, prose notes) remain silently ignored by design.
-3. Run `node scripts/kaola-workflow-gap-sweep.js --project <P> --check` as the gate. It checks
-   BOTH directions (issue #653 / D-653-01): a swept-but-unmapped tuple refuses `gaps_unswept`
-   (forward, unchanged — `{ result: 'refuse', reason: 'gaps_unswept', unmapped: [{reasonClass,
-   sample}] }`); a `## Run gaps` entry matching the strict `- <class> (<sample>): filed:|noise:
-   ...` grammar with no matching seeded/scanned source refuses `observed_gap_unseeded`
-   (`unseeded: [{reasonClass, sample}]`, reverse — new). A vacuous pass now requires BOTH sides
-   empty — no swept classes AND no strict-grammar `## Run gaps` entries; free-text lines that
-   don't match the grammar (e.g. `- none`) are ignored by design, preserving back-compat with
-   existing summaries. Either refusal exits 1 and blocks finalization until resolved. Because a
-   paren-bearing sample now parses (issue #726), a hand-typed row whose sample contains `)` is
-   subject to reverse containment like any other — previously such a row never parsed, so it fell
-   through to the both-sides-empty vacuous pass and escaped the check entirely.
-
-   In BOTH directions, a summary sample is matched to a seeded sample by CONTAINMENT, not byte
-   equality (issue #836): after trimming, either side being a prefix/substring of the other
-   identifies the same gap, symmetrically — so a summary may abbreviate the seeded prose (drop a
-   `(replan.js:1474)` tail) or elaborate on it without refusing. The information is what is
-   checked, not its serialization. Nothing else loosens: the `reasonClass` comparison stays EXACT,
-   an empty sample on either side never matches, a sample with no containment relation still
-   refuses `observed_gap_unseeded`, and a seeded gap with no mapping row at all still refuses
-   `gaps_unswept`.
-4. Cite the gate exit code as evidence in the finalization summary. Never record a
-   `gaps_addressed: true` prose attestation without a passing `--check` invocation.
-
-The `--check` gate is the ONLY valid run-gap evidence; classify its result structurally by the
-typed `reason` field (`gaps_unswept`, `observed_gap_unseeded`), never by string-matching error
-text.
-
-Decision records: `docs/decisions/D-435-01.md`, `docs/decisions/D-653-01.md`.
+Decision records: `docs/decisions/D-435-01.md`, `docs/decisions/D-653-01.md` — both describe the
+retired gate and its reverse-containment extension; see the "Superseded" notes on those records
+for what replaced them.
 
 ## Release
 

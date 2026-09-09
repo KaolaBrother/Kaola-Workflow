@@ -1,8 +1,12 @@
 # Kaola-Workflow
 
-Bookkeeping for coding agents. Give Kaola-Workflow a forge issue and the agent claims the work,
-records a resumable Mission List, runs it with native subagents when useful, validates the resulting
-bytes, and settles the issue.
+Kaola-Workflow turns forge issues into verified, recoverable software delivery. Agents own the
+planning and execution; Kaola-Workflow preserves the work, its evidence, and the path to completion
+across coding runtimes.
+
+Give it a forge issue: the agent claims the work, records a resumable Mission List, runs it with
+native subagents when useful, validates the resulting bytes against the exact candidate, and settles
+the issue through finalize, archive, and sink.
 
 The workflow supports **Claude Code, Codex, OpenCode, Kimi Code, Grok CLI, Cursor, and ZCode** on
 **GitHub, GitLab, and Gitea**. Runtime-specific model, dispatch, hook, and installation behavior is
@@ -29,7 +33,8 @@ decomposition, runtime routing, product judgment, review, and the final done ver
 ## What ships
 
 - Resumable single-issue and multi-issue runs with collision-safe claims and optional worktrees.
-- Fourteen shared role behaviors rendered into native profiles for every supported runtime.
+- Fourteen role behaviors — each with its own positioning, deliverable, unique custody, and stop
+  condition — rendered into native profiles for every supported runtime.
 - GitHub, GitLab, and Gitea claim, closure, merge-sink, and PR/MR fallback surfaces.
 - Local, candidate-bound validation receipts and an exact-commit release transaction.
 - Runtime-native compact recovery for the measured compact-risk hosts, without pre/post tool prompt
@@ -204,6 +209,6 @@ release transaction are documented in [API](docs/api.md) and [Conventions](docs/
 
 ## License
 
-Kaola-Workflow is released under the MIT License; see [LICENSE](LICENSE). Six shared role contracts
-retain pinned Everything Claude Code provenance under the same license. Their source and attribution
-are recorded outside agent-facing prompts in [Agent Sources](docs/agents-source.md).
+Kaola-Workflow is released under the MIT License; see [LICENSE](LICENSE). The fourteen role
+contracts are Kaola-authored; their sources and history are described in
+[Agent Sources](docs/agents-source.md).

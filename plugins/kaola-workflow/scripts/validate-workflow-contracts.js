@@ -217,9 +217,12 @@ assert(!phaseCommands.includes('commands/workflow-next.md')
     'plugins/kaola-workflow-gitlab/commands/workflow-next.md',
     'plugins/kaola-workflow-gitea/commands/workflow-next.md',
   ];
+  // #1054 item 27 (audit group nx-concurrency-is-judgment): the two content pins here were proven
+  // duplicate by subtraction against templates/routing/required-blocks.js — removing either token
+  // from any of these three files independently reds test-route-reachability's own MANIFEST
+  // presence check. See kaola-workflow/bundle-1054/.cache/implementation-validators.md for the
+  // per-candidate proof.
   for (const file of nextCommandCopies) {
-    assertIncludes(file, 'Dispatch when it materially reduces main-context residue');
-    assertIncludes(file, 'Keep one owner for the current cohesive production surface');
     assertNotIncludes(file, 'model="{');
   }
 }
@@ -250,26 +253,20 @@ for (const file of nextSurfaces) {
   assertIncludes(file, 'State the selection aloud before you claim it');
   // Everything before the claim is free, and the claim itself is bookkeeping rather than a door.
   assertIncludes(file, 'Everything before the claim is free');
-  assertIncludes(file, 'The claim is bookkeeping');
-  assertIncludes(file, 'reports a fact about the target rather than a verdict');
-  assertIncludes(file, '--target-issue');
-  assertIncludes(file, '--target-issues');
+  // #1054 item 27 (nx-claim-is-bookkeeping): 'The claim is bookkeeping', 'reports a fact about the
+  // target rather than a verdict', '--target-issue', and '--target-issues' were proven duplicate by
+  // subtraction against required-blocks.js — see .cache/implementation-validators.md.
 
   // THE MISSION LIST. It is the run's only coordination record, so the surface must name the file,
   // carry the format itself rather than pointing at it, and carry the three write moments. The
   // reader of an installed surface is in a consumer repo, where no path into this repository's
   // docs resolves — so the order/absence facts have to travel with the surface.
   assertIncludes(file, 'kaola-workflow/{project}/mission-list.md');
-  assertIncludes(file, 'nothing depends on a stable ID');
-  assertIncludes(file, 'absent fields are simply absent');
-  assertIncludes(file, 'status: todo');
-  assertIncludes(file, 'dispatched: self');
-  // ORDER IS THE WHOLE POINT: `dispatched` is written BEFORE the work goes out. Written after, the
-  // file records nothing about the window in which a process actually dies.
-  assertIncludes(file, 'before the work goes');
+  // #1054 item 27 (nx-mission-list): 'nothing depends on a stable ID', 'absent fields are simply
+  // absent', 'status: todo', 'dispatched: self', 'before the work goes', and 'mission, not a
+  // specification' were proven duplicate by subtraction against required-blocks.js — see
+  // .cache/implementation-validators.md.
   assertBefore(file, 'Write the mission list', 'Run it');
-  // An item is a mission, not a specification — the control boundary, one level up.
-  assertIncludes(file, 'mission, not a specification');
 
   // CONCURRENCY CARRIES NO MACHINERY. This is a subtraction made durable: without the sentence,
   // nothing stops a proof obligation from being reintroduced as "just a small check".
@@ -279,7 +276,8 @@ for (const file of nextSurfaces) {
 
   // RESUME. The property the whole design was sized to, and the rule that makes it work.
   assertIncludes(file, 'Look for the work, not for the worker');
-  assertIncludes(file, 'if the output the dispatch promised has landed');
+  // #1054 item 27 (nx-resume-rule): 'if the output the dispatch promised has landed' was proven
+  // duplicate by subtraction against required-blocks.js — see .cache/implementation-validators.md.
 
   // CONSENT. The durable valve is gone; this sentence is the entire mechanism.
   assertIncludes(file, 'Irreversible and value-laden calls belong to the user');
@@ -540,16 +538,14 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'never hand-copy a staler 
 assertIncludes('commands/kaola-workflow-finalize.md', 'issue_action');
 assertIncludes('commands/kaola-workflow-finalize.md', '--keep-issue-open');
 assertIncludes('commands/kaola-workflow-finalize.md', 'merge-sink-only');
-// THE VALIDATION REPORT — the finalize door measures and reports; it does not refuse. Both halves
-// are pinned, because a conversion that emits a verdict and drops the durable state is a deletion
-// rather than a conversion: the finding lands on the envelope AND under a heading in the summary.
-assertIncludes('commands/kaola-workflow-finalize.md', 'It does not refuse');
-assertIncludes('commands/kaola-workflow-finalize.md', 'under `validation`');
-assertIncludes('commands/kaola-workflow-finalize.md', '## Validation');
-assertIncludes('commands/kaola-workflow-finalize.md', '`changed_paths`');
-assertIncludes('commands/kaola-workflow-finalize.md', '## Changed Paths');
-// ...and the one hard stop that is NOT a gate: an archive that would lose a file.
-assertIncludes('commands/kaola-workflow-finalize.md', 'fails loudly if it would lose a file');
+// #1054 item 27 (audit groups fn-validation-report, fn-changed-paths-report,
+// fn-archive-loses-nothing): the six content pins that used to live here (the validation-report
+// prose 'It does not refuse'/'under `validation`'/'## Validation', the changed-paths prose
+// '`changed_paths`'/'## Changed Paths', and the archive hard-stop 'fails loudly if it would lose a
+// file') were ALL proven duplicate by subtraction against required-blocks.js — removing any one of
+// them from commands/kaola-workflow-finalize.md independently reds test-route-reachability's own
+// MANIFEST presence check. See kaola-workflow/bundle-1054/.cache/implementation-validators.md for
+// the per-candidate proof.
 // The retired executor vocabulary must not return on the finalize command.
 for (const gone of ['workflow-plan.md', 'Node Ledger', 'plan_hash', '--verdict-check',
   '--gate-verify', '--barrier-check', '--resume-check', 'plan-validator']) {
@@ -731,10 +727,76 @@ for (const forge of ['', '-gitlab', '-gitea']) {
 // and the refusal survives only for a sync the script cannot perform. Pin the guard, the retained
 // top-level reason, and the re-typed inner reason, so a change that drops the guard or silently
 // re-opens the operator obligation cannot pass — the 2026-06-11 audit reproduced the clobber live.
-assertIncludes('scripts/kaola-workflow-claim.js', 'kaola-workflow-ledger-compare.js');
+// #1054 (superseding #837, item 28: TEST-AUTHOR EDIT, not implementer): this block used to pin
+// the ledger guard's SOURCE SHAPE literally (`if (!verdict.safe) {`, `inner_reason:
+// 'mirror_sync_failed',`, …), which collided head-on with #1054's own in-flight rewrite of those
+// same lines (compareLedgers now decides the mirror by CONTENT, not by the #837 worktree-wins
+// auto-repair the guard used to attempt). Pin the BEHAVIOR the guard exists to protect instead:
+// a refactor that reshapes the source while keeping the outcome stays green here; one that drops
+// the outcome (auto-repairs a divergence, or stops refusing) reds regardless of wording.
 assertIncludes('scripts/kaola-workflow-claim.js', "reason: 'finalize_mirror_refused',");
-assertIncludes('scripts/kaola-workflow-claim.js', 'if (!verdict.safe) {');
-assertIncludes('scripts/kaola-workflow-claim.js', "inner_reason: 'mirror_sync_failed',");
+{
+  const ledgerCompare = require('./kaola-workflow-ledger-compare.js');
+  assert(typeof ledgerCompare.compareLedgers === 'function',
+    'scripts/kaola-workflow-ledger-compare.js must export compareLedgers');
+  const claimModule = require('./kaola-workflow-claim.js');
+  assert(typeof claimModule.mirrorFinalizationArtifacts === 'function',
+    'scripts/kaola-workflow-claim.js must export mirrorFinalizationArtifacts');
+
+  // compareLedgers decides by CONTENT (#1054's whole premise — a count/format proxy read 0 on the
+  // real table-form Mission List and produced a false-safe over production data).
+  const missingDest = ledgerCompare.compareLedgers('src text', null);
+  assert(missingDest.safe === true && missingDest.reason === 'first_sync',
+    'compareLedgers(src, missing-dest) must be safe/first_sync, got: ' + JSON.stringify(missingDest));
+  const identical = ledgerCompare.compareLedgers('same text', 'same text');
+  assert(identical.safe === true && identical.reason === 'identical',
+    'compareLedgers(identical texts) must be safe/identical, got: ' + JSON.stringify(identical));
+  const diverged = ledgerCompare.compareLedgers('src text v2', 'dest text v1 — different content');
+  assert(diverged.safe === false && diverged.reason === 'content_diverged',
+    'compareLedgers(diverged texts) must be unsafe/content_diverged, got: ' + JSON.stringify(diverged));
+
+  // mirrorFinalizationArtifacts (the exported write-path sibling of the unexported read-only
+  // probeFinalizeMirror) must refuse fail-closed, zero-write, under mirror_sync_failed on a REAL
+  // linked worktree whose mission-list.md diverged from the main copy — never guess a repair
+  // direction (the retired #837 worktree-wins auto-merge).
+  const G = require('./test-git-fixture');
+  const fsMod = require('fs');
+  const os = require('os');
+  const pathMod = require('path');
+  const mainRoot = fsMod.realpathSync(fsMod.mkdtempSync(pathMod.join(os.tmpdir(), 'kw-validate-ledger-')));
+  const kwRoot = mainRoot + '.kw';
+  const project = 'issue-99001';
+  const wtPath = pathMod.join(kwRoot, project);
+  try {
+    G.init(mainRoot, { branch: 'main' });
+    fsMod.writeFileSync(pathMod.join(mainRoot, 'README.md'), 'init\n');
+    G.commitAll(mainRoot, 'init');
+    fsMod.mkdirSync(kwRoot, { recursive: true });
+    G.exec(mainRoot, ['worktree', 'add', '-b', 'workflow/' + project, '--', wtPath, 'main'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+
+    const srcDir = pathMod.join(mainRoot, 'kaola-workflow', project);
+    const destDir = pathMod.join(wtPath, 'kaola-workflow', project);
+    fsMod.mkdirSync(srcDir, { recursive: true });
+    fsMod.mkdirSync(destDir, { recursive: true });
+    fsMod.writeFileSync(pathMod.join(srcDir, 'mission-list.md'),
+      '# Goal\n\n- item: a\n  status: done\n  result: out/a.md\n');
+    fsMod.writeFileSync(pathMod.join(destDir, 'mission-list.md'),
+      '# Goal\n\n- item: a\n  status: todo\n');
+
+    const result = claimModule.mirrorFinalizationArtifacts(wtPath, project);
+    assert(result && result.refused === true && result.inner_reason === 'mirror_sync_failed',
+      'mirrorFinalizationArtifacts must refuse a diverged main/worktree mission-list.md under ' +
+      'inner_reason mirror_sync_failed (no automatic repair direction), got: ' + JSON.stringify(result));
+  } finally {
+    try {
+      G.exec(mainRoot, ['worktree', 'remove', '--force', wtPath],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch (_) { /* best effort */ }
+    fsMod.rmSync(mainRoot, { recursive: true, force: true });
+    fsMod.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
 // #816: the folded transaction — mirror, archive/close, roadmap staging, commit gate — plus the
 // two typed guardrails that carry over. Dropping any of them reds the chain.
 assertIncludes('scripts/kaola-workflow-claim.js', "reason: 'implementation_commit_missing',");
@@ -752,7 +814,13 @@ assertIncludes('scripts/kaola-workflow-closure-contract.js', 'remote-members-clo
 assertIncludes('scripts/kaola-workflow-sink-merge.js', 'isSinkMode');
 assertIncludes('scripts/kaola-workflow-sink-merge.js', 'sink-receipt.json');
 assertIncludes('scripts/kaola-workflow-sink-merge.js', 'sink_blocked');
-assertIncludes('agents/implementer.md', 'smoke-integration');
+// #1054 owner ruling (19:03 heartbeat): the fixed four-name verification-tier vocabulary
+// (tests-green/regression-green/build-green/smoke-integration) is retired procedure ritual, and no
+// pin on the implementer body's CURRENT wording replaces it — assertConcept is norm+includes, so an
+// equivalent rephrasing reds a validator that adds nothing to acceptance meaning. The role-body
+// text is authored, structurally checked (render == authority, hash-bound) by
+// generate-agent-profiles.js --check and validate-vendored-agents.js, and behaviorally accepted by
+// native-host runs (mission 14) — none of that needs a literal-phrase gate here.
 // The `--enable-adaptive` flag is warn-ignored: accepted for back-compat and sets nothing. Pin the
 // notice so a regression that silently honors the flag (writes a field / branches on it) reds the chain.
 assertIncludes('install.sh', '--enable-adaptive has no effect');
@@ -768,16 +836,15 @@ assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');
 // follows the claim facts and the mission list instead of an executable state field.
 // finalize adaptive prerequisite (#283: phase6 renamed to finalize)
 
-// issue #290 / #288: pin the machine-readable findings-emission contract presence in all
-// reviewer agent bodies (CLAUDE edition — .md bodies). Removing the emission section from
-// any of these files must fail npm test so a re-vendor or refactor cannot silently drop it.
-for (const reviewerBody of [
-  'agents/code-reviewer.md',
-  'agents/security-reviewer.md',
-  'agents/adversarial-verifier.md'
-]) {
-  assertIncludes(reviewerBody, 'finding: id=');
-}
+// issue #290/#288, REVISED for #1054 owner ruling (19:03 heartbeat): the fixed machine column-zero
+// `finding: id=...` row emission format is retired procedure ritual (#1054's role redesign bans the
+// rigid finding-row/review_conclusion protocol from role bodies — the real
+// `.cache/final-validation.md` consumer is what still needs that shape, pinned elsewhere, not the
+// reviewer role prompts themselves). No pin on the three reviewer bodies' CURRENT wording replaces
+// it: assertConcept is norm+includes, so it reds on an equivalent rephrasing of "delivers
+// verifiable findings" — a new wording gate, not a behavior check. The structural authority
+// (generate-agent-profiles.js --check, validate-vendored-agents.js: render == authority, hash-bound)
+// and native-host acceptance (mission 14) already carry this responsibility.
 // #407 surface-undercount cross-check: every name the install manifest emits for a forge MUST be a
 // real file in that forge's source scripts dir — so the manifest can never list a phantom (which the
 // installer's fail-closed missing-source check would then abort on), and a renamed forge port that
@@ -881,9 +948,16 @@ for (const reviewerBody of [
 assertIncludes('scripts/kaola-workflow-claim.js', "band && band !== project && band.indexOf(project + '.archived-') !== 0");
 assertIncludes('commands/kaola-workflow-finalize.md', 'Stage only this project');
 
-// n5 (#653 finding D): selection-evidence docking + run-gap manual-seed prose must reach the
-// router + finalize/plan-run surfaces, and the observed_gap_unseeded refusal must be documented.
-assertIncludes('commands/kaola-workflow-finalize.md', 'run-gaps-manual.md');
+// #1054 item 1/2/4: the free-text run-gap gate (and its manual-seed sidecar) is retired outright,
+// not merely undocumented — the generated finalize surface must carry NO trace of it. Rewritten
+// from the #653/n5-era assertIncludes('run-gaps-manual.md') this superseded, which pinned the
+// OPPOSITE: that the manual-seed sidecar reach the finalize surface. See docs/decisions/0017 and
+// the bundle-1054 acceptance evidence for the retirement this now pins.
+function assertExcludes(file, needle) {
+  assert(!norm(read(file)).includes(norm(needle)), file + ' must not include (retired #1054): ' + needle);
+}
+assertExcludes('commands/kaola-workflow-finalize.md', 'run-gaps-manual.md');
+assertExcludes('commands/kaola-workflow-finalize.md', 'gap-sweep');
 
 // manual edition, the lifecycle must expose one shared classifier/reducer contract, and all
 // authoring/execution/finalization prompt families must retain their generated machine envelope.

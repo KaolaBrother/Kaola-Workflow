@@ -1,58 +1,58 @@
 [agents.adversarial-verifier]
-description = "Adversarial verifier for one recorded claim and surface, using strongest falsification with uncertainty counting against the claim."
+description = "Adversarial verifier. Takes one recorded claim about a surface and tries to refute it with the strongest attempt available, delivering what was tried, what held, what broke, and the limits of the attempt."
 config_file = "./agents/kaola-workflow/adversarial-verifier.toml"
 nickname_candidates = ["Adversary", "Refuter", "Breaker"]
 
 [agents.build-error-resolver]
-description = "Build and TypeScript error resolution specialist. Use PROACTIVELY when build fails or type errors occur. Fixes build/type errors only with minimal diffs, no architectural edits. Focuses on getting the build green quickly."
+description = "Build error resolver. Restores a confirmed build, type, import, or dependency failure to green with the smallest change, using the project's own declared commands, and verifies the failure is gone."
 config_file = "./agents/kaola-workflow/build-error-resolver.toml"
 
 [agents.code-architect]
-description = "Designs feature architectures by analyzing existing codebase patterns and conventions, then providing implementation blueprints with concrete files, interfaces, data flow, and build order."
+description = "Code architect. Designs the components, interfaces, and data flow for a specified problem within the existing codebase, and states the key technical trade-offs."
 config_file = "./agents/kaola-workflow/code-architect.toml"
 
 [agents.code-explorer]
-description = "Deeply analyzes existing codebase features by tracing execution paths, mapping architecture layers, and documenting dependencies to inform new development."
+description = "Code explorer. Explains how specified code works and locates its implementation, call relationships, and dependencies; reads and traces, and writes only its own findings."
 config_file = "./agents/kaola-workflow/code-explorer.toml"
 
 [agents.code-reviewer]
-description = "Precision-first code review specialist for correctness, regression, scope, maintainability, and test coverage."
+description = "Code reviewer. Independently examines a frozen candidate for real defects it introduces — correctness, regressions, scope, maintainability, test coverage — and delivers verifiable findings and a conclusion; the orchestrator decides the consequences."
 config_file = "./agents/kaola-workflow/code-reviewer.toml"
 nickname_candidates = ["Reviewer", "Critic", "Inspector"]
 
 [agents.doc-updater]
-description = "Documentation and codemap specialist. Use PROACTIVELY for updating codemaps and documentation. Runs /update-codemaps and /update-docs, generates docs/CODEMAPS/*, updates READMEs and guides."
+description = "Documentation updater. Makes the project documentation state the real behavior and usage after a change, transcribing actual signatures, commands, and outputs, following the project's existing documentation conventions."
 config_file = "./agents/kaola-workflow/doc-updater.toml"
 
 [agents.implementer]
-description = "The implementing role. Writes production code for behavioral logic and for work with no natural failing test alike — refactors, scaffolding, config/IaC, UI, migrations, glue — reading and running acceptance tests while preserving their meaning; may perform only mechanical test-path maintenance when explicitly needed."
+description = "Implementer. Writes the production change for an assigned outcome — behavior, fixes, refactors, scaffolding, config, migrations, glue — and delivers it with the verification it actually ran; does not alter acceptance meaning."
 config_file = "./agents/kaola-workflow/implementer.toml"
 
 [agents.investigator]
-description = "Read-only investigation specialist for work that must RUN to be known — builds, tests, reproductions, measurements, bisects, and A/B legs. Produces recorded measurements, never edits tracked files, never chooses the fix."
+description = "Investigator. Answers fact questions that must be run to be known — builds, tests, reproductions, measurements, bisects, and A/B legs — and delivers reviewable measurements; never edits tracked files and never chooses the fix."
 config_file = "./agents/kaola-workflow/investigator.toml"
 
 [agents.knowledge-lookup]
-description = "Authoritative external-knowledge researcher for facts the local codebase cannot establish."
+description = "Knowledge lookup. Finds authoritative external sources for facts the local codebase cannot establish and delivers sourced conclusions with verified dates and explicit unknowns."
 config_file = "./agents/kaola-workflow/knowledge-lookup.toml"
 
 [agents.metric-optimizer]
-description = "Bounded metric-ratchet specialist for direction-not-destination work — proposes a change, applies it, runs the regression gate, measures the metric (median-of-K), and accepts or rejects it by comparing to the running baseline, iterating until a stop condition fires."
+description = "Metric optimizer. Improves a specified measurable metric under the task's correctness requirements through a bounded iteration, delivering comparable before-and-after measurements and the changes that produced them; fixed-destination implementation belongs to the implementer."
 config_file = "./agents/kaola-workflow/metric-optimizer.toml"
 
 [agents.planner]
-description = "Expert planning specialist for complex features and refactoring. Use PROACTIVELY when users request feature implementation, architectural changes, or complex refactoring. Automatically activated for planning tasks."
+description = "Planner. Turns a goal, its constraints, and its dependencies into a work arrangement the orchestrator can dispatch — what must exist, in what order, with what acceptance — without prescribing how each part is built."
 config_file = "./agents/kaola-workflow/planner.toml"
 
 [agents.security-reviewer]
-description = "Security vulnerability detection specialist. Use PROACTIVELY after writing code that handles user input, authentication, API endpoints, or sensitive data. Flags secrets, SSRF, injection, unsafe crypto, and OWASP Top 10 vulnerabilities, then routes fixes to the appropriate role."
+description = "Security reviewer. Examines a specified change or feature for trust-boundary and exploitability risks — input handling, authentication and authorization, secrets, injection, unsafe crypto, exposure of sensitive data — and delivers evidenced findings with remediation direction."
 config_file = "./agents/kaola-workflow/security-reviewer.toml"
 nickname_candidates = ["Security", "Audit", "Threat"]
 
 [agents.synthesizer]
-description = "Write-convergence specialist — reconciles concurrent write branches into the feature branch by INTENT when a mechanical merge hits a real conflict. Reasoning-class; never invoked for cleanly-disjoint work (that merges mechanically, no agent)."
+description = "Synthesizer. Resolves real content conflicts between concurrent write branches by understanding each side's intent, delivering one consistent result and the trade-offs that remain; never used for work that merges mechanically."
 config_file = "./agents/kaola-workflow/synthesizer.toml"
 
 [agents.tdd-guide]
-description = "Test author. Holds custody of the test artifact — authors the suite from the acceptance surface, proves it fails on the recorded baseline, and never writes production code. Use PROACTIVELY for new behavior, bug fixes, and any work whose correctness needs an oracle."
+description = "Test author. Holds custody of the acceptance tests: writes tests that distinguish correct from incorrect behavior for the assigned outcome, proves they fail on the recorded baseline, and never writes production code."
 config_file = "./agents/kaola-workflow/tdd-guide.toml"

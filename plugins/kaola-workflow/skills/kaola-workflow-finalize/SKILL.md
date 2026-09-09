@@ -119,46 +119,21 @@ Walk the issue statement for every claimed member and name what satisfies each p
 test, validation receipt, or prose evidence, judged in context. Mission results record the run's
 answers, but there is no mechanical match; a part you cannot satisfy is a blocker, not a footnote.
 
-Review the project Documentation Update Checklist and changed public behavior, APIs, setup,
-architecture, environment, validation, README, API docs, architecture docs, changelog, and examples.
-Dispatch documentation custody when useful; it must transcribe real signatures, JSON/help/schema or
-return BLOCK, never invent fields. Write `.cache/doc-updater.md` and `.cache/doc-docking.md` with
-checked files, fixes/no-impact reasons, and `DOCKED`/`BLOCKED`; continue only when docked.
+Review AGENTS.md's documentation checklist against changed public behavior — APIs, setup,
+architecture, environment, validation, README, API docs, architecture docs, changelog, and examples
+— and follow it; do not relist its files here. Dispatch documentation custody when useful; it must
+transcribe real signatures, JSON/help/schema or return BLOCK, never invent fields. Write one docking
+evidence file, `.cache/doc-docking.md`, with checked files, fixes/no-impact reasons, and
+`DOCKED`/`BLOCKED`; continue only when docked.
 
 The finalize transaction reports `changed_paths`. Put it under `## Changed Paths`; Nothing compares
-that list against a guessed write set. `## Validation`, `## Changed Paths` and `## Mission List` are
-where the finalize transaction's own findings land.
+that list against a guessed write set. `## Validation` and `## Changed Paths` are where the finalize
+transaction's own findings land.
 
-## Card: summary and run-gap reconciliation
+## Card: summary
 
-Run the scanner first:
-
-```bash
-kaola_script(){ _n="$1"; _p="plugins/kaola-workflow/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
-CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
-node "$KAOLA_SCRIPTS/kaola-workflow-gap-sweep.js" --project {project} --json
-```
-
-Then create `finalization-summary.md` with Delivered, Files
-Changed, Test Coverage, `## Validation`, `## Changed Paths`, `## Mission List`, Documentation
-Docking, `## Run gaps`, Follow-Up Items, and final readiness status.
-
-Write the heading exactly `## Run gaps`, with nothing else on the line. Every swept class has one:
-
-- `- <reasonClass> (<sample>): filed: #N` — gap tracked by an open issue.
-- `- <reasonClass> (<sample>): noise: <one-line justification>` — gap justified as not worth tracking.
-
-A heading qualifier, prose, or a line that is not a bullet in one of those two forms — prose, or a
-row of a markdown table — is not read as a gap. Reconcile the summary against `.cache/run-gaps.json`;
-hand-written observations must first enter `.cache/run-gaps-manual.md` and be swept.
-
-After the rows exist, run the reconciliation gate:
-
-```bash
-kaola_script(){ _n="$1"; _p="plugins/kaola-workflow/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
-CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
-node "$KAOLA_SCRIPTS/kaola-workflow-gap-sweep.js" --project {project} --check
-```
+Create `finalization-summary.md` with Delivered, Files Changed, Test Coverage, `## Validation`,
+`## Changed Paths`, Documentation Docking, Follow-Up Items, and final readiness status.
 
 Scan all run records for deferred items, partial work, conflicts, review follow-ups, and user value
 decisions. Ask before reorganizing forge work. A run may intentionally keep the whole issue set open
@@ -169,8 +144,7 @@ only through the recorded closure decision; never silently mix per-member outcom
 <!-- PIN: forge-is-the-backlog -->
 For each real run-discovered defect, file a follow-up and record `filed: #N`. Give it a priority tier
 in the same breath: an issue filed without a `P0`–`P3` label sorts **last** on the open list, beneath
-every tiered issue. For a hand-written gap, append the matching `gap: <class> — <text>` line to
-`.cache/run-gaps-manual.md` and re-run the scanner, so what is written was actually swept.
+every tiered issue.
 
 `## Measured` carries only what this run observed; every figure there names the commit it was
 measured at and the command or artifact it came from. `## Hypothesis` carries attributions no run
@@ -178,9 +152,8 @@ has confirmed; a cause derived by reading code lands there by default. `## Propo
 (non-binding)` is optional and carries that label when it appears. Add one `searched:` line recording
 the duplicate probe you actually ran — its query and its hit count.
 
-After filing, confirm the issue exists and its body is non-empty, and record the issue number and the
-body length you saw in this run's own record. That record is the mission list's result line, never
-the `## Run gaps` row.
+After filing, confirm the issue exists and its body is non-empty, and record that in this run's own
+finalize-transaction record — never in a completed Mission's result, which stays immutable.
 
 When evidence corrects the current issue, post that correction as a comment on the issue before it
 closes. Never close quietly against text now known to be wrong. A correction is not a follow-up: a

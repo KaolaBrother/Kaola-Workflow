@@ -21,7 +21,8 @@ moments.
 - [Workflow State Contract](workflow-state-contract.md) — durable state, and why the forge, not a
   local file, is the backlog.
 - [Agent Behavior Sources and Provenance](agents-source.md) — the 14-role behavioral authority,
-  nine adapter variants, 126-render manifest, ECC attribution, and refresh procedure.
+  nine adapter variants, 126-render manifest, source classification with historical origin record,
+  and how to add or change a role.
 
 ## Runtime editions
 
@@ -41,9 +42,20 @@ moments.
 
 [`decisions/`](decisions/) holds the full catalog. ADR 0021 adds runtime-native next/finalize
 guidance; ADR 0022 moves universal behavior to a machine-global contract and compact-safe native
-carriers; ADR 0023 makes repository instructions an Agent-maintained outcome. ADR 0017 remains the
-Mission List design of record. Most older records describe the node/DAG executor retired by ADR
-0017 or project-prompt ownership retired by ADR 0023.
+carriers; ADR 0023 makes repository instructions an Agent-maintained outcome; ADR 0024 retires
+finalize's parsing of the orchestrator's own records and rewrites role bodies around positioning,
+deliverable, custody, and stop condition. ADR 0017 remains the Mission List design of record. Most
+older records describe the node/DAG executor retired by ADR 0017 or project-prompt ownership
+retired by ADR 0023.
+
+- **[0024 — Finalize measures; roles state positioning; one authority per constant](decisions/0024-finalize-measures-roles-state-one-authority.md)**
+  — finalize keeps two durable measurements (`## Validation`, `## Changed Paths`) and stops parsing
+  the Mission List or any other orchestrator-authored record as a machine interface; the finalize
+  mirror guard decides by content, not a count; role bodies state positioning, deliverable, unique
+  custody, and stop condition; one authoring source per constant, with a generated or required
+  mirror where a second copy is structurally necessary; validators check interfaces and generation
+  guarantees, not prose wording; source classification follows what the current content measurably
+  retains.
 
 - **[0023 — Agent-owned project instructions](decisions/0023-agent-owned-project-instructions.md)**
   — the Agent verifies repository facts, maintains project instructions without a prescribed prose

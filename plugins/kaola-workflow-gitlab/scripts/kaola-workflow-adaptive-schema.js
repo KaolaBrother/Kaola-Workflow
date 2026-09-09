@@ -87,6 +87,289 @@ const CODEX_PINNED_HEAVY_ROLES = Object.freeze([
   'code-architect',
 ]);
 
+// Codex agent-profile schema (issue #332; #29 audit convergence). ONE authoring source for the
+// TOML shape rules `kaola-workflow-codex-preflight.js` (read-only validation, all 4 trees) and
+// `install-codex-agent-profiles.js` (write-time validation + install, the 3 plugin trees) both
+// need. Before this convergence the two files hand-duplicated this whole block; they were
+// byte-identical except two cosmetic differences (an unguarded vs `String(value)`-guarded
+// `escapeRegExp`, and one stray blank line in `agentProfileContract`) — resolved here in favor of
+// the more defensive `escapeRegExp` and the tighter formatting, since both were functionally the
+// same logic, not distinct check semantics. `sha256Hex` is NOT re-declared: `agentProfileContract`
+// below uses the `sha256Hex` already exported by this module (identical
+// `crypto.createHash('sha256').update(x).digest('hex')` logic).
+//
+// MANIFEST_BASENAME — ownership record written inside the managed agents dir so a
+//   future installer can distinguish stale Kaola-generated files from user-owned ones.
+// RETIRED_PROFILE_FILES — Kaola-generated role files removed/renamed from source. The
+//   prune step removes these even with NO manifest present (repairs every pre-manifest
+//   machine). docs-lookup.toml was renamed to knowledge-lookup in #249; the six `<role>-max`
+//   effort variants were retired in #451. Append here whenever a role file is removed/renamed.
+// EFFORT_VALUES — recognized historical values used only to classify migration input.
+const MANIFEST_BASENAME = '.kaola-managed-profiles.json';
+const RETIRED_PROFILE_FILES = [
+  'docs-lookup.toml',
+  // #451: the six `<role>-max` xhigh effort-variant profiles are retired - pruned on upgrade so a
+  // machine that installed #405 loses them. NEVER blanket-glob `*-max` (a user may own one); list
+  // only the Kaola-generated names.
+  'planner-max.toml',
+  'code-architect-max.toml',
+  'tdd-guide-max.toml',
+  'code-reviewer-max.toml',
+  'security-reviewer-max.toml',
+  'adversarial-verifier-max.toml',
+  // The finalize seam is orchestrator-owned: the mechanical residue folded into the finalize
+  // transaction, so the bookkeeping role retired. Pruned on upgrade so a previously-installed
+  // profile cannot linger and shadow.
+  'contractor.toml',
+];
+const EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'];
+const CODEX_ROLE_TOP_LEVEL_FIELDS = Object.freeze([
+  'name', 'description', 'nickname_candidates', 'developer_instructions',
+]);
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function parseTopLevelString(top, key) {
+  const re = new RegExp('^' + escapeRegExp(key) + '\\s*=\\s*"([^"]*)"\\s*$', 'm');
+  const m = top.match(re);
+  return m ? m[1] : null;
+}
+
+function parseStringArrayLine(top, key) {
+  const re = new RegExp('^' + escapeRegExp(key) + '\\s*=\\s*\\[([^\\]]*)\\]\\s*$', 'm');
+  const m = top.match(re);
+  if (!m) return { present: false, values: [], valid: true };
+  const body = m[1].trim();
+  if (!body) return { present: true, values: [], valid: true };
+  const values = [];
+  const parts = body.split(',').map(s => s.trim()).filter(Boolean);
+  for (const part of parts) {
+    const pm = part.match(/^"([^"]+)"$/);
+    if (!pm) return { present: true, values: [], valid: false };
+    values.push(pm[1]);
+  }
+  return { present: true, values, valid: true };
+}
+
+function sameStringArray(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  return a.every((v, i) => v === b[i]);
+}
+
+// Managed role profiles intentionally use one small canonical TOML grammar: four bare,
+// column-zero assignments and one triple-quoted developer_instructions block, with no tables.
+// Reject every other spelling rather than approximating TOML acceptance. This makes quoted,
+// dotted, indented, or table-scoped keys fail closed even when Codex itself parses them.
+const TOML_KEY_SEGMENT_PATTERN = `(?:"(?:\\\\.|[^"\\\\])*"|'[^']*'|[A-Za-z0-9_-]+)`;
+const TOML_ASSIGNMENT_PATTERN = new RegExp(
+  `^(\\s*)(${TOML_KEY_SEGMENT_PATTERN}(?:\\s*\\.\\s*${TOML_KEY_SEGMENT_PATTERN})*)\\s*=`,
+);
+
+function tomlKeyLabel(raw) {
+  const key = String(raw).trim();
+  if (/^[A-Za-z0-9_-]+$/.test(key)) return key;
+  if (/^"(?:\\.|[^"\\])*"$/.test(key)) {
+    try { return JSON.parse(key); } catch (_) { return key; }
+  }
+  if (/^'[^']*'$/.test(key)) return key.slice(1, -1);
+  return key.replace(/\s+/g, '');
+}
+
+function profileTopLevelShape(text) {
+  const source = String(text);
+  const instructionRe = /^developer_instructions\s*=\s*("""|''')([\s\S]*?)\1\s*(?:\r?\n|$)/gm;
+  const instructionMatches = [...source.matchAll(instructionRe)].map(match => {
+    const normalized = [match[0], match[2]];
+    normalized.index = match.index;
+    return normalized;
+  });
+  let outside = '';
+  let cursor = 0;
+  for (const match of instructionMatches) {
+    outside += source.slice(cursor, match.index);
+    cursor = match.index + match[0].length;
+  }
+  outside += source.slice(cursor);
+
+  const fields = instructionMatches.map(() => 'developer_instructions');
+  const violations = [];
+  if (source.includes('\r')) violations.push({ kind: 'line_endings', value: 'LF required' });
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(source)) {
+    violations.push({ kind: 'control', value: 'raw TOML control character' });
+  }
+  const instructionBackslash = instructionMatches.some(match => match[1].includes('\\'));
+  if (source.includes('\\')) {
+    violations.push(instructionBackslash
+      ? { kind: 'instruction_backslash', value: 'backslash in multiline basic string' }
+      : { kind: 'backslash', value: 'backslash in managed TOML' });
+  }
+  for (const [index, line] of outside.split(/\r?\n/).entries()) {
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    const table = line.match(/^\s*(\[\[?.*?\]\]?)\s*(?:#.*)?$/);
+    if (table) {
+      violations.push({ kind: 'table', value: table[1], line: index + 1 });
+      continue;
+    }
+    const assignment = line.match(TOML_ASSIGNMENT_PATTERN);
+    if (!assignment) {
+      violations.push({ kind: 'syntax', value: line.trim(), line: index + 1 });
+      continue;
+    }
+    const rawKey = assignment[2];
+    const field = tomlKeyLabel(rawKey);
+    fields.push(field);
+    if (assignment[1] !== '' || !/^[A-Za-z0-9_-]+$/.test(rawKey)) {
+      violations.push({ kind: 'syntax', value: `noncanonical key ${rawKey}`, line: index + 1 });
+    }
+    if (!CODEX_ROLE_TOP_LEVEL_FIELDS.includes(field)) {
+      violations.push({ kind: 'field', value: field, line: index + 1 });
+    }
+  }
+  for (const field of CODEX_ROLE_TOP_LEVEL_FIELDS) {
+    const count = fields.filter(value => value === field).length;
+    if (count > 1) violations.push({ kind: 'duplicate', value: field, count });
+  }
+  return {
+    source,
+    outside,
+    fields,
+    violations,
+    instructionMatches,
+    instructionMatch: instructionMatches.length === 1 ? instructionMatches[0] : null,
+    instructionBody: instructionMatches.length === 1 ? instructionMatches[0][1] : null,
+  };
+}
+
+function genericShapeReasons(shape) {
+  return shape.violations.map(violation => {
+    if (violation.kind === 'line_endings') return 'codex_role_toml_line_endings_forbidden';
+    if (violation.kind === 'control') return 'codex_role_toml_control_character_forbidden';
+    if (violation.kind === 'instruction_backslash') return 'codex_role_instruction_toml_backslash_forbidden';
+    if (violation.kind === 'backslash') return 'codex_role_toml_backslash_forbidden';
+    if (violation.kind === 'field') return `codex_role_field_forbidden: ${violation.value}`;
+    if (violation.kind === 'table') return `codex_role_table_forbidden: ${violation.value}`;
+    if (violation.kind === 'duplicate') return `codex_role_top_level_field_duplicate: ${violation.value}`;
+    return `codex_role_top_level_syntax_forbidden: line=${violation.line} ${violation.value}`;
+  });
+}
+
+function agentProfileContract(text, role) {
+  const reasons = [];
+  const source = String(text || '');
+  const instructionMatch = source.match(/^developer_instructions\s*=\s*'''([\s\S]*?)'''\s*$/m)
+    || source.match(/^developer_instructions\s*=\s*"""([\s\S]*?)"""\s*$/m);
+  const instructionText = instructionMatch ? instructionMatch[1] : '';
+  if (!instructionMatch) reasons.push('agent_developer_instructions_missing');
+  const startCount = instructionText.split('<!-- runtime-adapter:start -->').length - 1;
+  const endCount = instructionText.split('<!-- runtime-adapter:end -->').length - 1;
+  if (startCount !== 1 || endCount !== 1) {
+    reasons.push(`agent_runtime_adapter_invalid: starts=${startCount} ends=${endCount}`);
+  }
+  const fields = {};
+  for (const field of ['runtime', 'behavior_contract_version', 'behavior_contract_hash',
+    'adapter_capabilities_hash', 'resolved_profile_hash']) {
+    const matches = [...instructionText.matchAll(new RegExp(`^${field}:\\s*([^\\r\\n]+)\\s*$`, 'gm'))];
+    if (matches.length !== 1) reasons.push(`agent_${field}_not_unique: count=${matches.length}`);
+    else fields[field] = matches[0][1].trim();
+  }
+  if (fields.runtime && fields.runtime !== 'codex') reasons.push(`agent_runtime_mismatch: ${fields.runtime}`);
+  if (fields.behavior_contract_version && !/^\d+$/.test(fields.behavior_contract_version)) {
+    reasons.push('agent_behavior_contract_version_invalid');
+  }
+  for (const field of ['behavior_contract_hash', 'adapter_capabilities_hash', 'resolved_profile_hash']) {
+    if (fields[field] && !/^[0-9a-f]{64}$/.test(fields[field])) reasons.push(`agent_${field}_invalid`);
+  }
+  if (fields.resolved_profile_hash && /^[0-9a-f]{64}$/.test(fields.resolved_profile_hash)) {
+    const normalized = source.replace(
+      /(resolved_profile_hash:\s*)[0-9a-f]{64}/g,
+      '$1' + '0'.repeat(64),
+    );
+    const expected = sha256Hex(normalized);
+    if (fields.resolved_profile_hash !== expected) {
+      reasons.push(`agent_resolved_profile_hash_mismatch: expected=${expected} got=${fields.resolved_profile_hash}`);
+    }
+  }
+  const identity = reasons.length === 0 ? {
+    role,
+    behavior_contract_version: Number(fields.behavior_contract_version),
+    behavior_contract_hash: fields.behavior_contract_hash,
+    adapter_capabilities_hash: fields.adapter_capabilities_hash,
+    resolved_profile_hash: fields.resolved_profile_hash,
+  } : null;
+  return { reasons: [...new Set(reasons)], identity };
+}
+
+// #332 schema check — inline regex, no TOML lib. The ONE validator both the preflight
+// (read-only) and the installer (write-time) call — same semantics, real callers differ only in
+// WHEN they invoke it and what they do with a non-empty result (installer refuses the write;
+// preflight reports a typed finding and may auto-reinstall). Returns [] when valid, or a list of
+// human-readable reasons.
+function validateProfileText(text, role, expectedMeta = null) {
+  const reasons = [];
+  const shape = profileTopLevelShape(text);
+  const top = shape.outside;
+  reasons.push(...genericShapeReasons(shape));
+
+  const nameMatch = top.match(/^name\s*=\s*"([^"]*)"\s*$/m);
+  if (!nameMatch) {
+    reasons.push("missing or empty top-level 'name' (codex >=0.138 ignores the profile)");
+  } else if (nameMatch[1] === '') {
+    reasons.push("top-level 'name' is empty");
+  } else if (nameMatch[1] !== role) {
+    reasons.push(`top-level 'name' is "${nameMatch[1]}" but must equal the role "${role}"`);
+  }
+
+  const desc = parseTopLevelString(top, 'description');
+  if (desc === null) {
+    reasons.push("missing top-level 'description'");
+  } else if (desc.trim() === '') {
+    reasons.push("top-level 'description' is empty");
+  } else if (expectedMeta && expectedMeta.description && desc !== expectedMeta.description) {
+    reasons.push("top-level 'description' does not match config/agents.toml");
+  }
+
+  const nick = parseStringArrayLine(top, 'nickname_candidates');
+  if (nick.present && !nick.valid) {
+    reasons.push("top-level 'nickname_candidates' must be a TOML string array");
+  } else if (nick.present && nick.values.length === 0) {
+    reasons.push("top-level 'nickname_candidates' must not be empty when present");
+  }
+  if (expectedMeta && expectedMeta.nicknameCandidates && expectedMeta.nicknameCandidates.length > 0) {
+    if (!nick.present) {
+      reasons.push("missing top-level 'nickname_candidates'");
+    } else if (!sameStringArray(nick.values, expectedMeta.nicknameCandidates)) {
+      reasons.push("top-level 'nickname_candidates' does not match config/agents.toml");
+    }
+  }
+
+  const modelLines = shape.fields.filter(field => field === 'model');
+  const effortLines = shape.fields.filter(field => field === 'model_reasoning_effort');
+  if (!CODEX_PINNED_STANDARD_ROLES.includes(role) && !CODEX_PINNED_REASONING_ROLES.includes(role) && !CODEX_PINNED_HEAVY_ROLES.includes(role)) {
+    reasons.push(`role "${role}" has no Codex profile-tier policy`);
+  }
+  if (modelLines.length > 0) reasons.push("top-level 'model' must be omitted to inherit the parent session");
+  if (effortLines.length > 0) reasons.push("top-level 'model_reasoning_effort' must be omitted to inherit the parent session");
+
+  const instrMatch = shape.instructionMatch;
+  if (!instrMatch) {
+    reasons.push("missing top-level 'developer_instructions' triple-quoted block");
+  } else if (instrMatch[1].trim() === '') {
+    reasons.push("'developer_instructions' body is blank");
+  } else {
+    // The FULL / compact-summary / dispatch.evidence_file / evidence-binding rules stood here.
+    // All four were halves of the DAG's per-node evidence contract — a seeded `.cache/{node-id}.md`
+    // path handed to a role at dispatch, and a nonce binding the file to the open that minted it.
+    // Neither exists under a mission list: the orchestrator decides at dispatch time where a result
+    // should land, so a profile cannot be required to promise a path nobody has chosen yet.
+  }
+
+  reasons.push(...agentProfileContract(text, role).reasons);
+
+  return [...new Set(reasons)];
+}
+
 // Claim identity. Forge-neutral and side-effect-free so every edition hashes the same
 // bytes; filesystem/Git observation lives in the claim script, and this module owns only
 // normalization and the digest domain.
@@ -788,8 +1071,6 @@ const KERNEL_ARTIFACT_REGISTRY = Object.freeze([
     'the tests-green oracle receipt (consumer repo kind), candidate-hash bound; recorded by the agent, not a producer script'],
   ['.cache/selection-evidence.md', 'record', 'evidence', 'agent',
     'the no-target selection rationale, docked verbatim; not faithfully reconstructible after the claim'],
-  ['.cache/run-gaps-manual.md', 'record', 'evidence', 'agent',
-    'agent/operator-authored gap items — an input no script can regenerate'],
   ['finalization-summary.md', 'record', 'evidence', 'agent',
     'the terminal artifact; the script-owned ## Attestation section is appended to it presence-guarded'],
 
@@ -1604,6 +1885,21 @@ module.exports = {
   CODEX_PINNED_STANDARD_ROLES,
   CODEX_PINNED_REASONING_ROLES,
   CODEX_PINNED_HEAVY_ROLES,
+  // Codex agent-profile schema (issue #332; #29 audit convergence) — the one authority for the
+  // preflight (read-only) and installer (write-time) TOML shape checks.
+  MANIFEST_BASENAME,
+  RETIRED_PROFILE_FILES,
+  EFFORT_VALUES,
+  CODEX_ROLE_TOP_LEVEL_FIELDS,
+  escapeRegExp,
+  parseTopLevelString,
+  parseStringArrayLine,
+  sameStringArray,
+  tomlKeyLabel,
+  profileTopLevelShape,
+  genericShapeReasons,
+  agentProfileContract,
+  validateProfileText,
   isPlainObject,
   canonicalJson,
   sha256Hex,

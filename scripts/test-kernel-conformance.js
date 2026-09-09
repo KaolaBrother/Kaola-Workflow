@@ -404,6 +404,10 @@ const NON_ATOMIC_EXEMPT = [
     why: 'the global-contract transaction publishes each complete temp file by same-directory atomic rename and rolls the batch back on any later write failure',
   },
   {
+    file: 'kaola-workflow-ledger-compare.js', api: 'writeFileSync', klass: 'outside-project-space',
+    why: 'diffSummary writes both mission-list texts into a private fs.mkdtempSync scratch directory under os.tmpdir() purely so `diff -u` (or `git diff --no-index`) can render a bounded operator summary; the directory is removed in a finally block, nothing is ever read back for a durability decision, and no kaola-workflow/<project>/ record path is touched at any point',
+  },
+  {
     file: 'kaola-workflow-sink-merge.js', api: 'copyFileSync', klass: 'mirror-copy',
     why: 'the sink-staged union copies only into paths that do not exist yet, from a staged worktree copy that outlives the step',
   },

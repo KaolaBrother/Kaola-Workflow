@@ -15,6 +15,16 @@ const CODEX_CONFIG_PATHS = Object.freeze([
   'plugins/kaola-workflow-gitlab/config/agents.toml',
   'plugins/kaola-workflow-gitea/config/agents.toml',
 ]);
+// #29 audit: DEFAULT_AGENT_MODELS in kaola-workflow-resolve-agent-model.js is a GENERATED block —
+// the SAME derivation (behavior-contracts intent_class -> runtime-capabilities claude
+// intent_mapping) that writes each agents/<role>.md `model:` frontmatter line, so the two can never
+// independently drift. The resolver itself stays require()-free of this generator and of
+// templates/agents (installed runtimes have no schema sibling on disk); only `--write`/`--check`
+// here ever read the marked region. Canonical target only — edition-sync.js propagates the write to
+// the other 3 byte-identical resolver-module-copies trees (it is not itself a template/render).
+const RESOLVER_MODELS_PATH = 'scripts/kaola-workflow-resolve-agent-model.js';
+const RESOLVER_MODELS_START = '// GENERATED: DEFAULT_AGENT_MODELS (do not edit; source: templates/agents)';
+const RESOLVER_MODELS_END = '// END GENERATED';
 const ZERO_HASH = '0'.repeat(64);
 const ROLES = Object.freeze([
   'adversarial-verifier',
@@ -174,17 +184,22 @@ function validateRuntimeAdapters(source) {
 }
 
 function validateProvenance(source) {
-  if (!source || source.schema_version !== 1 || !source.origins || !source.roles) {
-    throw new Error('provenance: schema_version 1, origins, and roles are required');
+  if (!source || source.schema_version !== 2 || !source.origins || !source.roles) {
+    throw new Error('provenance: schema_version 2, origins, and roles are required');
   }
   for (const role of ROLES) {
     const record = source.roles[role];
-    if (!record || !['ecc_derived', 'kaola_local'].includes(record.source_kind)) {
+    if (!record || record.source_kind !== 'kaola_authored') {
       throw new Error('provenance: missing role ' + role);
     }
-    if (record.source_kind === 'ecc_derived') {
-      for (const field of ['origin', 'upstream_path', 'source_commit', 'source_blob_sha', 'source_sha256']) {
-        if (!record[field]) throw new Error('provenance: ' + role + ' missing ' + field);
+    // A role may carry a historical origin record; it describes where an EARLIER contract came
+    // from, never the current one, so it must be complete enough to locate that material.
+    if (record.history) {
+      for (const field of ['origin', 'upstream_path', 'source_commit', 'source_blob_sha', 'source_sha256', 'retired_by']) {
+        if (!record.history[field]) throw new Error('provenance: ' + role + ' history missing ' + field);
+      }
+      if (!source.origins[record.history.origin]) {
+        throw new Error('provenance: ' + role + ' history names unknown origin ' + record.history.origin);
       }
     }
   }
@@ -288,15 +303,23 @@ function nativeTools(contract, runtime = 'claude') {
 }
 
 function runtimeAppendix(runtime, adapter, contract, behaviorSha) {
-  const capabilitySha = adapterHash(adapter);
-  const lines = [
-    '<!-- runtime-adapter:start -->',
-    'runtime: ' + runtime,
-    'behavior_contract_version: ' + contract.behavior_contract_version,
-    'behavior_contract_hash: ' + behaviorSha,
-    'adapter_capabilities_hash: ' + capabilitySha,
-  ];
-  if (runtime !== 'claude') lines.push('resolved_profile_hash: ' + ZERO_HASH);
+  const lines = ['<!-- runtime-adapter:start -->', 'runtime: ' + runtime];
+  // Claude alone already carries behavior_contract_version/hash and resolved_profile_hash as
+  // machine-readable YAML frontmatter (markdownFrontmatter, `runtime === 'claude'` branch);
+  // no installer, preflight, or test reads a second copy from this prose appendix, and nothing
+  // reads adapter_capabilities_hash for Claude at all (that field's only real consumer is the
+  // Codex preflight/installer, which has no frontmatter and needs it here). Repeating hashes a
+  // model does not need to interpret was audit item "同根因补充" (hash appendix carrier); every
+  // other runtime keeps the full block below because the appendix is its only machine carrier.
+  if (runtime !== 'claude') {
+    const capabilitySha = adapterHash(adapter);
+    lines.push(
+      'behavior_contract_version: ' + contract.behavior_contract_version,
+      'behavior_contract_hash: ' + behaviorSha,
+      'adapter_capabilities_hash: ' + capabilitySha,
+      'resolved_profile_hash: ' + ZERO_HASH,
+    );
+  }
   lines.push('',
     '## Runtime adapter',
     '',
@@ -506,6 +529,67 @@ function manifestFor(profiles) {
   };
 }
 
+// The Claude dispatch tier for every role: behavior-contracts' declared `intent_class`
+// (standard/reasoning/heavy) resolved through runtime-capabilities' claude `intent_mapping`
+// (standard->sonnet, reasoning->opus, heavy->fable) — the identical two-step lookup
+// `markdownFrontmatter` uses above to write each agents/<role>.md `model:` line.
+function defaultAgentModelsMap(behaviorSource = loadBehaviorContracts(), adapterSource = loadRuntimeAdapters()) {
+  const intentMapping = adapterSource.runtimes.claude.capabilities.intent_mapping;
+  const out = {};
+  for (const role of [...ROLES].sort()) {
+    out[role] = intentMapping[behaviorSource.roles[role].intent_class];
+  }
+  return out;
+}
+
+function renderDefaultAgentModelsBlock(behaviorSource = loadBehaviorContracts(), adapterSource = loadRuntimeAdapters()) {
+  const map = defaultAgentModelsMap(behaviorSource, adapterSource);
+  const entries = Object.entries(map);
+  const body = entries.map(([role, model], index) => {
+    const comma = index === entries.length - 1 ? '' : ',';
+    return `  '${role}': '${model}'${comma}`;
+  }).join('\n');
+  return [
+    RESOLVER_MODELS_START,
+    'const DEFAULT_AGENT_MODELS = {',
+    body,
+    '};',
+    RESOLVER_MODELS_END,
+  ].join('\n');
+}
+
+function resolverModelsMarkerRange(fileText) {
+  const startIdx = fileText.indexOf(RESOLVER_MODELS_START);
+  const endIdx = fileText.indexOf(RESOLVER_MODELS_END);
+  if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) return null;
+  return { startIdx, endIdx: endIdx + RESOLVER_MODELS_END.length };
+}
+
+function checkResolverModels(root = ROOT) {
+  const filePath = path.join(root, RESOLVER_MODELS_PATH);
+  const actual = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null;
+  const expectedBlock = renderDefaultAgentModelsBlock(loadBehaviorContracts(root), loadRuntimeAdapters(root));
+  if (actual === null) return { ok: false, path: RESOLVER_MODELS_PATH };
+  const range = resolverModelsMarkerRange(actual);
+  if (!range) return { ok: false, path: RESOLVER_MODELS_PATH };
+  const currentBlock = actual.slice(range.startIdx, range.endIdx);
+  return { ok: currentBlock === expectedBlock, path: RESOLVER_MODELS_PATH };
+}
+
+function writeResolverModels(root = ROOT) {
+  const filePath = path.join(root, RESOLVER_MODELS_PATH);
+  const actual = fs.readFileSync(filePath, 'utf8');
+  const range = resolverModelsMarkerRange(actual);
+  if (!range) {
+    throw new Error('resolver_models_markers_missing: ' + RESOLVER_MODELS_PATH);
+  }
+  const expectedBlock = renderDefaultAgentModelsBlock(loadBehaviorContracts(root), loadRuntimeAdapters(root));
+  const next = actual.slice(0, range.startIdx) + expectedBlock + actual.slice(range.endIdx);
+  const changed = next !== actual;
+  if (changed) fs.writeFileSync(filePath, next);
+  return changed;
+}
+
 function expected(root = ROOT) {
   loadProvenance(root);
   const behaviorSource = loadBehaviorContracts(root);
@@ -533,6 +617,7 @@ function checkGeneratedProfiles(root = ROOT) {
     const actual = fs.existsSync(absolute) ? fs.readFileSync(absolute, 'utf8') : null;
     if (actual !== output.codexConfig) drift.push(configPath);
   }
+  if (!checkResolverModels(root).ok) drift.push(RESOLVER_MODELS_PATH);
   return drift;
 }
 
@@ -548,6 +633,7 @@ function writeGeneratedProfiles(root = ROOT) {
     fs.mkdirSync(path.dirname(path.join(root, configPath)), { recursive: true });
     fs.writeFileSync(path.join(root, configPath), output.codexConfig);
   }
+  writeResolverModels(root);
   return output.profiles;
 }
 
@@ -610,6 +696,13 @@ module.exports = {
   validateBehaviorContracts,
   validateRuntimeAdapters,
   renderCodexConfig,
+  defaultAgentModelsMap,
+  renderDefaultAgentModelsBlock,
+  checkResolverModels,
+  writeResolverModels,
+  RESOLVER_MODELS_PATH,
+  RESOLVER_MODELS_START,
+  RESOLVER_MODELS_END,
 };
 
 if (require.main === module) main(process.argv);

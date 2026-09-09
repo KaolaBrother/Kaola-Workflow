@@ -300,18 +300,19 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    // The third measurement, same rule as the other two: a durable destination,
-    // compared to nothing. The token is the SENTENCE, not the bare heading —
-    // `## Mission List` alone is satisfied by either of its two occurrences on
-    // the surface, so it survives losing one of them. This pins the rule that
-    // makes all three sections script-owned, which is the thing a surface must
-    // not quietly drop.
+    // #1054 item 8: Mission List is retired from this sentence's list of finalize-
+    // transaction findings landing places. A completed Mission's result is
+    // immutable (ADR 0017) and finalization is not a Mission List item, so nothing
+    // here may claim Mission List as a place the TRANSACTION's own findings land —
+    // that description was the coupling the audit named directly. `## Validation`
+    // and `## Changed Paths` remain the two durable destinations, compared to
+    // nothing, that this block still pins.
     block_id: 'fn-mission-list-report',
     topic: 'finalize',
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
-      '`## Validation`, `## Changed Paths` and `## Mission List` are where the finalize transaction\'s own findings land',
+      '`## Validation` and `## Changed Paths` are where the finalize transaction\'s own findings land',
     ],
   },
   {
@@ -324,24 +325,11 @@ const REQUIRED_BLOCKS = [
       'invalidates prior PASS evidence for changed bytes',
     ],
   },
-  {
-    // The grammar the gap scanner actually parses, stated where the section is
-    // written. Four independently-deletable obligations, one token each: a
-    // heading carrying a qualifier reads as section-absent, the two bullet forms
-    // are the only rows read, and prose or a markdown-table row is not a gap
-    // however plainly its issue number sits in the text. Each row token carries
-    // its `- <reasonClass> (<sample>):` head, so dropping the head alone reds.
-    block_id: 'fn-run-gaps-grammar',
-    topic: 'finalize',
-    runtime_tag: 'both',
-    surface_type_tag: 'both',
-    content_tokens: [
-      'Write the heading exactly `## Run gaps`, with nothing else on the line',
-      '`- <reasonClass> (<sample>): filed: #N` — gap tracked by an open issue.',
-      '`- <reasonClass> (<sample>): noise: <one-line justification>` — gap justified as not worth tracking.',
-      'a line that is not a bullet in one of those two forms — prose, or a row of a markdown table — is not read as a gap',
-    ],
-  },
+  // #1054 item 1/2/4: `fn-run-gaps-grammar` retired outright — the `## Run gaps` free-text bullet
+  // grammar it pinned (heading qualifier / filed: / noise: / table-row rules) is gone from the
+  // surface along with the gate that parsed it (docs/decisions/0017-the-mission-list.md; the
+  // scripts/test-issue-1054-finalize-record-simplification.js Group D pins the retirement from the
+  // test side). No replacement block: there is no successor grammar to require.
   {
     // R3's replacement, and the reason the refusal could go: the sink reports,
     // and the orchestrator is accountable for the branch ending up right. All
@@ -448,12 +436,22 @@ const REQUIRED_BLOCKS = [
     // Nothing else on a shipped surface tells a finalize reader that: the sorter's
     // own rule is carried on the NEXT topic, not on the surface doing the filing.
     //
-    // Tokens are drawn from every one of the five rules, one per obligation rather
-    // than one per paragraph, so gutting a single obligation — the tier duty, its
-    // measured consequence, the stamping duty, the reading-derived-cause default,
-    // the non-binding remedy label, the duplicate probe, the existence-and-body
-    // check, or where that check is recorded — reds this block even with the marker
-    // and the other obligations intact. None is a substring of the marker.
+    // Tokens are drawn from every one of the remaining rules, one per obligation
+    // rather than one per paragraph, so gutting a single obligation — the tier duty,
+    // its measured consequence, the stamping duty, the reading-derived-cause
+    // default, the non-binding remedy label, the duplicate probe, the
+    // existence-and-body check, or where that check is recorded — reds this block
+    // even with the marker and the other obligations intact. None is a substring of
+    // the marker.
+    //
+    // #1054 item 1/2/4/6/7: the hand-written-gap re-seed instruction
+    // ("append ... to .cache/run-gaps-manual.md and re-run the scanner") and the
+    // issue-body-length transcription are RETIRED — that machinery no longer
+    // exists on the surface or in the script. The existence-and-body check and its
+    // landing place are REWORDED, not dropped: the record now names the finalize
+    // transaction's own record explicitly, and states — rather than merely implies
+    // by omission — that a completed Mission's result stays immutable and is never
+    // the landing place (#1054 item 7, ADR 0017).
     //
     // THE TIER RULE TAKES TWO TOKENS, because it is two obligations. The duty is one;
     // the consequence is the other, and it is pinned separately because it is the
@@ -479,7 +477,6 @@ const REQUIRED_BLOCKS = [
       // The tier duty and its measured consequence, in surface order.
       'Give it a priority tier in the same breath',
       'an issue filed without a `P0`–`P3` label sorts **last** on the open list, beneath every tiered issue',
-      'append the matching `gap: <class> — <text>` line to `.cache/run-gaps-manual.md` and re-run the scanner, so what is written was actually swept.',
       'post that correction as a comment on the issue before it closes.',
       'Never close quietly against text now known to be wrong.',
       'A correction is not a follow-up: a follow-up is new work with its own `filed: #N`; a correction is the record of what this issue turned out to be, and it lands on the issue it corrects.',
@@ -492,10 +489,12 @@ const REQUIRED_BLOCKS = [
       '`## Proposed remedy (non-binding)` is optional and carries that label when it appears.',
       'Add one `searched:` line recording the duplicate probe you actually ran — its query and its hit count',
       // The filing verification: the check itself, and the record it lands in. The
-      // second is not decoration — routing it to the `## Run gaps` row instead would
-      // put free text through a strict parser-owned grammar the scanner owns.
-      'confirm the issue exists and its body is non-empty, and record the issue number and the body length you saw in this run\'s own record',
-      'That record is the mission list\'s result line, never the `## Run gaps` row',
+      // second is not decoration — a completed Mission's result is immutable (ADR
+      // 0017) and Finalization is not a Mission List item, so nothing here may write
+      // a new fact back into one; the finalize transaction's own record is the only
+      // legitimate landing place (#1054 item 7).
+      'confirm the issue exists and its body is non-empty, and record that in this run\'s own finalize-transaction record',
+      'never in a completed Mission\'s result, which stays immutable',
     ],
   },
 
