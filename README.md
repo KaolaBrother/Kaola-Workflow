@@ -8,7 +8,7 @@ Give it a forge issue: the agent claims the work, records a resumable Mission Li
 native subagents when useful, validates the resulting bytes against the exact candidate, and settles
 the issue through finalize, archive, and sink.
 
-The workflow supports **Claude Code, Codex, OpenCode, Kimi Code, Grok CLI, Cursor, and ZCode** on
+The workflow supports **Claude Code, Codex, OpenCode, Kimi Code, Grok CLI, Cursor, ZCode, and Devin CLI** on
 **GitHub, GitLab, and Gitea**. Runtime-specific model, dispatch, hook, and installation behavior is
 measured rather than flattened into a lowest-common-denominator abstraction.
 
@@ -149,6 +149,7 @@ The complete durable-state and bundle contracts are in
 | Grok CLI | commands, named agents, persistent recovery Rule | `./install-grok.sh` |
 | Cursor CLI/App/Cloud | commands, named agents, persistent recovery Rule | `./install-cursor.sh` |
 | ZCode | commands and named agents | `./install-zcode.sh` |
+| Devin CLI | inline skills, named agents, UserPromptSubmit recovery | `./install-devin.sh` |
 
 All forge-aware installers accept `--forge=github|gitlab|gitea`. Codex chooses the forge through
 the installed plugin entry. For measured profile discovery, model/effort carriers, dispatch schema,
@@ -160,6 +161,7 @@ background/parallel/resume limits, hook behavior, instruction precedence, and kn
 - [Grok](docs/grok-edition.md)
 - [Cursor](docs/cursor-edition.md)
 - [ZCode](docs/zcode-edition.md)
+- [Devin CLI](docs/devin-edition.md)
 
 Cursor `workflow-next` `startup` and `resume` share one `.cursor/commands` file. Generated
 startup and resume fences do not stamp `--product cli --host local`. The documented CLI-positive

@@ -29,7 +29,7 @@ const ROLE_NAMES = Object.freeze([
   'tdd-guide',
 ]);
 const RUNTIME_NAMES = Object.freeze([
-  'claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode',
+  'claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin',
 ]);
 const SORTED_RUNTIME_NAMES = Object.freeze(sorted(RUNTIME_NAMES));
 const COVERAGE_FIELDS = Object.freeze({
@@ -948,6 +948,7 @@ const expectedCounts = {
   grok: 14,
   cursor: 14,
   zcode: 14,
+  devin: 14,
 };
 for (const runtime of RUNTIME_NAMES) {
   const runtimeProfiles = profiles.filter(profile => profile.runtime === runtime);

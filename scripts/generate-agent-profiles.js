@@ -42,7 +42,7 @@ const ROLES = Object.freeze([
   'synthesizer',
   'tdd-guide',
 ]);
-const RUNTIMES = Object.freeze(['claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode']);
+const RUNTIMES = Object.freeze(['claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin']);
 const REQUIRED_COVERAGE = Object.freeze([
   'purpose', 'inputs', 'authority_custody', 'writes', 'deliverable', 'verification', 'stop_conditions',
 ]);
@@ -174,9 +174,22 @@ function validateRuntimeAdapters(source) {
         throw new Error('runtime-capabilities: incomplete Cursor dispatch conformance');
       }
     }
+    if (adapter.runtime === 'devin') {
+      const caps = adapter.capabilities;
+      if (typeof caps.nesting !== 'number'
+          || typeof caps.hot_reload !== 'boolean'
+          || typeof caps.rules_survive_compaction !== 'boolean') {
+        throw new Error('runtime-capabilities: Devin explicit capability fields missing');
+      }
+      const compact = adapter.compact_protocol;
+      if (!compact || !Array.isArray(compact.events)
+          || !compact.events.includes('UserPromptSubmit')) {
+        throw new Error('runtime-capabilities: Devin compact protocol must use UserPromptSubmit');
+      }
+    }
   }
   if (JSON.stringify([...runtimeSet].sort()) !== JSON.stringify([...RUNTIMES].sort())) {
-    throw new Error('runtime-capabilities: expected all seven runtime families');
+    throw new Error('runtime-capabilities: expected all eight runtime families');
   }
   if (adapterEntries(source).filter(entry => entry.adapter.runtime === 'codex').length !== 3) {
     throw new Error('runtime-capabilities: expected three forge-neutral Codex adapters');
@@ -230,6 +243,17 @@ function rolesByIntent(behaviorSource = loadBehaviorContracts()) {
   return rosters;
 }
 
+function runtimeHostName(runtime) {
+  return runtime.charAt(0).toUpperCase() + runtime.slice(1);
+}
+
+function runtimeHostGuard(runtime) {
+  const host = runtimeHostName(runtime);
+  return 'Host: ' + host + '. If the running host is not ' + host
+    + ', ignore this adapter section entirely and use the Kaola adapter installed for the actual host;'
+    + ' if none is installed, record `capability_gap: no Kaola adapter for host <name>` and work inline.';
+}
+
 function renderRuntimeDelegationGuidance(adapter, behaviorSource = loadBehaviorContracts()) {
   if (!adapter || !adapter.runtime || !adapter.capabilities) {
     throw new Error('runtime delegation guidance requires one runtime adapter');
@@ -240,6 +264,8 @@ function renderRuntimeDelegationGuidance(adapter, behaviorSource = loadBehaviorC
   return [
     DELEGATION_GUIDANCE_START,
     '## Runtime adapter facts',
+    '',
+    runtimeHostGuard(adapter.runtime),
     '',
     guidance.profile_lookup,
     guidance.dispatch_carrier,
@@ -293,6 +319,12 @@ function yamlScalar(value) {
 
 function nativeTools(contract, runtime = 'claude') {
   const required = new Set(contract.capability_requirements);
+  if (runtime === 'devin') {
+    const tools = ['read', 'grep', 'glob'];
+    if (required.has('scoped_write')) tools.push('edit', 'write');
+    if (required.has('command_execution')) tools.push('exec');
+    return tools;
+  }
   const tools = ['Read', 'Grep', 'Glob'];
   if (required.has('scoped_write')) tools.splice(1, 0, 'Write', 'Edit');
   if (required.has('command_execution')) tools.push('Bash');
@@ -372,6 +404,8 @@ function markdownFrontmatter(runtime, role, contract, adapter) {
     lines.push('model: ' + capabilities.model);
     lines.push('thoughtLevel: ' + intent);
     lines.push('tools: ' + JSON.stringify(nativeTools(contract, runtime)));
+  } else if (runtime === 'devin') {
+    lines.push('allowed-tools: ' + JSON.stringify(nativeTools(contract, runtime)));
   }
   lines.push('---', '');
   return lines.join('\n');
@@ -652,7 +686,7 @@ function main(argv) {
   }
   if (mode === '--write') {
     const profiles = writeGeneratedProfiles(ROOT);
-    console.log('generated ' + profiles.length + ' native role profiles across seven runtimes');
+    console.log('generated ' + profiles.length + ' native role profiles across eight runtimes');
     return;
   }
   const output = expected(ROOT);
@@ -665,7 +699,7 @@ function main(argv) {
     console.error('agent profile drift:\n' + drift.map(file => '- ' + file).join('\n'));
     process.exit(1);
   }
-  console.log('agent profiles current: 14 roles, seven runtimes, 126 native renders');
+  console.log('agent profiles current: 14 roles, eight runtimes, 140 native renders');
 }
 
 module.exports = {

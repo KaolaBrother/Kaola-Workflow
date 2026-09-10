@@ -256,7 +256,7 @@ function canonicalRosters(names) {
 }
 
 // ---------------------------------------------------------------------------
-// B0-claim — claim help USAGE runtime enum ends with |zcode. The mirror copies
+// B0-claim — claim help USAGE runtime enum ends with |devin. The mirror copies
 // under plugins/kaola-workflow*/scripts/ carry the same enum. cursor is
 // intentionally absent there — that drift is NOT to be fixed here.
 // ---------------------------------------------------------------------------
@@ -284,10 +284,10 @@ function canonicalRosters(names) {
   for (const abs of claimCopies) {
     const rel = path.relative(REPO, abs);
     const src = fs.readFileSync(abs, 'utf8');
-    const usage = src.match(/--runtime claude\|codex\|opencode\|kimi\|grok(\|cursor)?\|?/);
-    assertReal(src.includes('--runtime claude|codex|opencode|kimi|grok|zcode'),
-      'B0-claim[' + rel + ']: USAGE runtime enum ends with |zcode '
-      + '(--runtime claude|codex|opencode|kimi|grok|zcode)');
+    const usage = src.match(/--runtime claude\|codex\|opencode\|kimi\|grok(\|cursor)?(\|zcode)?\|?/);
+    assertReal(src.includes('--runtime claude|codex|opencode|kimi|grok|zcode|devin'),
+      'B0-claim[' + rel + ']: USAGE runtime enum ends with |devin '
+      + '(--runtime claude|codex|opencode|kimi|grok|zcode|devin)');
   }
 }
 

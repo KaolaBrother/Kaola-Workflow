@@ -84,6 +84,90 @@
       "locator": "https://zcode.z.ai/en/docs/agents",
       "observed_at": "2026-08-27T00:00:00Z",
       "claim": "User-global and workspace-root AGENTS.md files are supported directly."
+    },
+    "devin_f1": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F1: `devin doctor --json` reported loaded profiles from user `~/.config/devin/agents/` and project `.devin/agents/`; `.claude/agents/` files were not counted."
+    },
+    "devin_f2": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F2: A fresh `devin -p` session listed probe profiles from `.devin/agents/` plus built-ins `subagent_explore` and `subagent_general`; project `.claude/agents/*.md` did not appear. Parent reported `MODEL: Adaptive` and export showed `agent.model_name = Adaptive` with `generation_model = kimi-k2-7`."
+    },
+    "devin_f3": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F3: Exact named foreground dispatch succeeded for probe profiles and `subagent_general` with no repository mutation; every parent step resolved to `generation_model = kimi-k2-7`."
+    },
+    "devin_f4": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F4: Unpinned custom child profiles showed `You are powered by Subagent Default.`; `model: adaptive` showed `You are powered by Adaptive.`; `model: inherit` passed through as a literal model name (do not emit); `subagent_general` inherited the parent."
+    },
+    "devin_f5": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F5: Subagent tray showed router labels (`Adaptive`, `Subagent Default`) rather than resolved model names."
+    },
+    "devin_f6": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F6: A `subagent_general` child reported `PROFILES: NONE`, confirming `run_subagent` is unavailable inside a child and the default nesting depth is one."
+    },
+    "devin_f7": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F7: A write-capable profile running in the background with no prior write grant was denied, leaving the target file uncreated; background agents automatically deny tools requiring approval."
+    },
+    "devin_f8": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F8: Hook discovery loaded providers including `devin`, `agents_standard`, `cursor`, `windsurf`, `claude`, `opencode`, `zed`, `copilot` and loaded the Kaola Claude `SessionStart` hook from `~/.claude/settings.json` into Devin sessions (cross-host leak #1057)."
+    },
+    "devin_f9": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F9: The `SessionStart` hook fired with stdin containing `hook_event_name=SessionStart` and `source=startup`; its `additionalContext` reached the model verbatim."
+    },
+    "devin_f10": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F10: A `PostCompaction` hook fired after `/compact` but its `additionalContext` did not reach the model, consistent with docs limiting `additionalContext` to `UserPromptSubmit`, `SessionStart`, and `PostToolUse`."
+    },
+    "devin_f11": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F11: After `/compact` the model context dropped `SessionStart` context, AGENTS.md blocks, and imported `.cursor`/`.claude`/`.windsurf` rules; `KW-COMPACT-RECOVERY-START` went from present to absent."
+    },
+    "devin_f12": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F12: A `UserPromptSubmit` hook after compaction injected `additionalContext` that was quoted by the model, making it the only deterministic post-compaction context carrier measured."
+    },
+    "devin_f13": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F13: A profile created after session start failed with `Subagent failed to start`, byte-identical to an unknown name; the catalog is fixed at session start."
+    },
+    "devin_f14": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "claim": "F14: `devin doctor` is present in this build and does not validate `model` values; it accepted both `adaptive` and `inherit`."
     }
   },
   "runtimes": {
@@ -597,6 +681,47 @@
         "ambient_repository_write": false,
         "evidence_status": "documented"
       }
+    },
+    "devin": {
+      "runtime": "devin",
+      "evidence": [
+        "devin_f1", "devin_f2", "devin_f3", "devin_f4", "devin_f5", "devin_f6", "devin_f7",
+        "devin_f8", "devin_f9", "devin_f10", "devin_f11", "devin_f12", "devin_f13", "devin_f14"
+      ],
+      "capabilities": {
+        "named_roles": true,
+        "deterministic_profiles": true,
+        "capability_gap": "explicit",
+        "instruction_loading": "direct",
+        "profile_format": "markdown_yaml",
+        "role_dispatch": "named_profile",
+        "model_carrier": "host_router",
+        "tool_binding": "allowed-tools",
+        "hook_scope": "user_and_project",
+        "nesting": 1,
+        "hot_reload": false,
+        "rules_survive_compaction": false,
+        "intent_mapping": {"standard": "host_router", "reasoning": "host_router", "heavy": "host_router"},
+        "delegation_guidance": {
+          "profile_lookup": "Find profiles in project `.devin/agents/` or user `~/.config/devin/agents/`; the catalog is fixed at session start, so restart the session after installation.",
+          "dispatch_carrier": "Dispatch with `run_subagent(profile, is_background, resume)` / `read_subagent` using an exact profile from the session-start catalog; no model, subagent, or agent field is pinned by Kaola.",
+          "tiers": {"standard": "standard → `host_router`", "reasoning": "reasoning → `host_router`", "heavy": "heavy → `host_router`"},
+          "tool_boundary": "The profile `allowed-tools` list uses Devin-native `read`, `grep`, `glob`, `edit`, `write`, and `exec` names and carries the role capability boundary.",
+          "native_routes": "Use foreground, background, or resume through the live `run_subagent` schema; the Devin host router owns role routing.",
+          "availability": "The profile catalog is fixed at session start. Rules may drop after compaction, so the single UserPromptSubmit carrier reloads the global contract and Devin adapter before routing continues.",
+          "fallback_search": "If an exact profile is absent from the session-start catalog, use only a live native route that satisfies custody and capability requirements; otherwise work inline and report the capability gap."
+        }
+      },
+      "compact_protocol": {
+        "events": ["UserPromptSubmit"],
+        "pending": "none — one hook reloads the static global carrier after rules drop during compaction.",
+        "session": "The global ~/.config/devin/AGENTS.md carrier contains the workflow contract and host-guarded Devin adapter.",
+        "reload": "Exactly one UserPromptSubmit hook in ~/.config/devin/config.json reloads the global carrier for routing and compact recovery.",
+        "tool": "No per-tool Kaola hook is installed.",
+        "stop": "No Kaola stop hook is installed.",
+        "rules_survive_compaction": false
+      },
+      "install_scope": {"global_discovery": "supported", "required_project_materialization": "no", "ambient_repository_write": false, "evidence_status": "documented"}
     }
   }
 }

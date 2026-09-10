@@ -5,7 +5,7 @@
 # by an Agent that has established it is inside Cursor Cloud environment setup.
 #
 # This is a THIN ORCHESTRATOR, not a coupling: it CALLS each installer unchanged
-# and never folds the additive editions (opencode/kimi/grok/cursor) into install.sh,
+# and never folds the additive editions (opencode/kimi/grok/cursor/zcode/devin) into install.sh,
 # edition-sync.js, npm test, or the six routing surfaces. The additive-edition
 # boundary (D-530-02) is preserved — each edition stays independently
 # installable and independently tested. The only thing this script adds is a
@@ -60,7 +60,7 @@ esac
 
 # Ordered runtime list — the single source of truth this script iterates and the
 # contract test (scripts/test-install-all.js) cross-checks against the tree.
-RUNTIMES=(claude opencode codex kimi grok cursor zcode)
+RUNTIMES=(claude opencode codex kimi grok cursor zcode devin)
 
 # Codex marketplace-plugin convergence inputs.
 # KAOLA_CODEX_BIN is a test seam ONLY (scripts/test-install-all.js points it at a
@@ -111,15 +111,16 @@ Reinstall/refresh every Kaola-Workflow runtime edition on this machine in sequen
   5. grok      Grok CLI      (install-grok.sh)
   6. cursor    Cursor        (install-cursor.sh)
   7. zcode     ZCode         (install-zcode.sh)
+  8. devin     Devin         (install-devin.sh)
 
 Options:
   --forge=github|gitlab|gitea   Forge for every forge-aware runtime (default: github).
-                                Threaded to Claude, opencode, Kimi Code, Grok CLI, and Cursor. Codex
+                                Threaded to Claude, opencode, Kimi Code, Grok CLI, Cursor, ZCode, and Devin. Codex
                                 selects its forge by marketplace plugin entry instead.
-  --global                      Install opencode/Codex/Kimi/Grok/Cursor into the global config root (default)
-  --project[=DIR]               Install opencode/Codex/Kimi/Grok/Cursor into a project dir (default: CWD)
+  --global                      Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin globally (default)
+  --project[=DIR]               Install opencode/Codex/Kimi/Grok/Cursor/ZCode/Devin into a project dir (default: CWD)
   --yes                         Non-interactive; forward -y to every interactive installer
-  --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi,grok,cursor,zcode) — logged loudly
+  --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi,grok,cursor,zcode,devin) — logged loudly
   --strict                      Fail-fast: stop at the first failing runtime
   --check                       Read-only verification: require the installed global contract to
                                 be CURRENT, print each runtime command, and report pending Codex
@@ -131,7 +132,7 @@ Cloud, an environment-setup Agent uses the Cursor installer directly for that
 remote machine and selected repository, then asks the user to Save the Build.
 
 The Claude installer (install.sh) has no global/project concept — it installs
-its plugin regardless of scope; --global/--project apply to the other five.
+its plugin regardless of scope; --global/--project apply to the other seven.
 The Codex installer accepts neither --yes nor --forge, so those are
 not forwarded to it; Codex picks its forge by which marketplace plugin entry
 you add (kaola-workflow, -gitlab, -gitea). Exit status is non-zero if ANY runtime failed
@@ -664,9 +665,9 @@ fi
 # Per-runtime scope flags for the additive runtimes (install.sh has no
 # global/project concept, so it never receives them).
 if [[ "$SCOPE" == "global" ]]; then
-  OC_SCOPE=(--global);            KIMI_SCOPE=(--global);            GROK_SCOPE=(--global);            CURSOR_SCOPE=(--global);            ZCODE_SCOPE=(--global);            CODEX_SCOPE=(--global)
+  OC_SCOPE=(--global);            KIMI_SCOPE=(--global);            GROK_SCOPE=(--global);            CURSOR_SCOPE=(--global);            ZCODE_SCOPE=(--global);            DEVIN_SCOPE=(--global);            CODEX_SCOPE=(--global)
 else
-  OC_SCOPE=(--target "$PROJECT_DIR"); KIMI_SCOPE=(--target "$PROJECT_DIR"); GROK_SCOPE=(--target "$PROJECT_DIR"); CURSOR_SCOPE=(--target "$PROJECT_DIR"); ZCODE_SCOPE=(--target "$PROJECT_DIR"); CODEX_SCOPE=("$PROJECT_DIR")
+  OC_SCOPE=(--target "$PROJECT_DIR"); KIMI_SCOPE=(--target "$PROJECT_DIR"); GROK_SCOPE=(--target "$PROJECT_DIR"); CURSOR_SCOPE=(--target "$PROJECT_DIR"); ZCODE_SCOPE=(--target "$PROJECT_DIR"); DEVIN_SCOPE=(--target "$PROJECT_DIR"); CODEX_SCOPE=("$PROJECT_DIR")
 fi
 
 # Build each runtime's command as a non-empty array (bash-3.2 set -u safe:
@@ -693,6 +694,9 @@ CURSOR_CMD=(bash "$ROOT/install-cursor.sh" --forge="$FORGE" "${CURSOR_SCOPE[@]}"
 ZCODE_CMD=(bash "$ROOT/install-zcode.sh" --forge="$FORGE" "${ZCODE_SCOPE[@]}")
 [[ "$YES" == "1" ]] && ZCODE_CMD+=(--yes)
 
+DEVIN_CMD=(bash "$ROOT/install-devin.sh" --forge="$FORGE" "${DEVIN_SCOPE[@]}")
+[[ "$YES" == "1" ]] && DEVIN_CMD+=(--yes)
+
 run_one claude   "${CLAUDE_CMD[@]}"
 run_one opencode "${OPENCODE_CMD[@]}"
 run_one codex    "${CODEX_CMD[@]}"
@@ -704,7 +708,8 @@ fi
 run_one kimi     "${KIMI_CMD[@]}"
 run_one grok     "${GROK_CMD[@]}"
 run_one cursor   "${CURSOR_CMD[@]}"
-run_one zcode     "${ZCODE_CMD[@]}"
+run_one zcode    "${ZCODE_CMD[@]}"
+run_one devin    "${DEVIN_CMD[@]}"
 
 print_summary
 overall=$?

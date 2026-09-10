@@ -280,6 +280,7 @@ const kimiSync = require('./sync-kimi-edition.js');
 const grokSync = require('./sync-grok-edition.js');
 const cursorSync = require('./sync-cursor-edition.js');
 const zcodeSync = require('./sync-zcode-edition.js');
+const devinSync = require('./sync-devin-edition.js');
 const {
   FORGES: ROUTING_FORGES,
   GENERATED_SURFACES: ROUTING_SURFACES,
@@ -311,6 +312,10 @@ const RUNTIME_EDITIONS = [
   {
     id: 'zcode',
     surfaceFor: forge => base => zcodeSync.commandRel(base, forge),
+  },
+  {
+    id: 'devin',
+    surfaceFor: forge => base => devinSync.skillRel(base, forge),
   },
 ];
 
@@ -403,6 +408,7 @@ const GENERATED_SURFACE_CONTENT = (() => {
       map.set(grokSync.commandRel(base, forge), grokSync.renderCommand(canon, base, forge));
       map.set(cursorSync.commandRel(base, forge), cursorSync.renderCommand(canon, base, forge));
       map.set(zcodeSync.commandRel(base, forge), zcodeSync.renderCommand(canon, base, forge));
+      map.set(devinSync.skillRel(base, forge), devinSync.renderSkill(canon, base, forge));
     }
   }
   return map;
@@ -621,7 +627,7 @@ function checkGlobalContract({ blocks, globalContract }) {
 
 // --- SINGLE GLOBAL AUTHORITY + INIT CARRIER ---------------------------------
 // The universal mission/backlog contract lives in the machine-global source
-// once. Init's 21 runtime/forge surfaces require a compatible installed receipt
+// once. Init's 24 runtime/forge surfaces require a compatible installed receipt
 // and write only project-local facts. This is composition, not restatement.
 {
   const globalIds = GLOBAL_CONTRACT_BLOCKS.map(b => b.block_id).sort();
@@ -644,8 +650,8 @@ function checkGlobalContract({ blocks, globalContract }) {
     const everyTree = MANIFEST_EDITIONS.command.length + MANIFEST_EDITIONS.skill.length;
     assert(!error && files.length === everyTree,
       `INIT-CARRIER: carrier must reach all ${everyTree} init surfaces, got ${files.length}${error ? ' (' + error + ')' : ''}`);
-    assert(files.length === 21,
-      `INIT-CARRIER: expected 21 runtime/forge init surfaces; got ${files.length}. Verify every new surface before changing the literal`);
+    assert(files.length === 24,
+      `INIT-CARRIER: expected 24 runtime/forge init surfaces; got ${files.length}. Verify every new surface before changing the literal`);
 
     const duplicated = [];
     for (const file of files) {
@@ -808,7 +814,7 @@ function checkGlobalContract({ blocks, globalContract }) {
     //     It is a two-place edit on purpose: a fourth forge, or a third additive runtime, reds this
     //     line, and the correct response is to confirm the NEW surfaces carry the pointer and then
     //     move the number — never to move the number first.
-    const NEXT_SURFACES = 21;   // 3 forges x (claude command + codex skill + opencode + kimi + grok + cursor + zcode)
+    const NEXT_SURFACES = 24;   // 3 forges x (claude command + codex skill + opencode + kimi + grok + cursor + zcode + devin)
     assert(files.length === NEXT_SURFACES,
       `axiom pointer: the axiom pointer is obligated on ${files.length} next surface(s), expected `
       + `${NEXT_SURFACES}. If the surface universe legitimately changed, verify the pointer is on `

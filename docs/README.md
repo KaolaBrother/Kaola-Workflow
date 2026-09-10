@@ -12,7 +12,7 @@ moments.
   Cloud lifecycle, update, verification, and uninstall.
 - [Runtime Capabilities](runtime-capabilities.md) — first-party evidence for direct `AGENTS.md`
   loading or Claude's thin bridge, plus native profile discovery, dispatch and fallback routes,
-  default tier carriers, runtime limits, hooks, paths, precedence, and known unknowns for all seven
+  default tier carriers, runtime limits, hooks, paths, precedence, and known unknowns for all eight
   runtimes.
 - [API](api.md) — script CLIs, envelopes, and external contracts.
 - [Task Quality](task-quality.md) — how to express a task's outcome and acceptance basis in a forge
@@ -21,7 +21,7 @@ moments.
 - [Workflow State Contract](workflow-state-contract.md) — durable state, and why the forge, not a
   local file, is the backlog.
 - [Agent Behavior Sources and Provenance](agents-source.md) — the 14-role behavioral authority,
-  nine adapter variants, 126-render manifest, source classification with historical origin record,
+  ten adapter variants, 140-render manifest, source classification with historical origin record,
   and how to add or change a role.
 
 ## Runtime editions
@@ -37,6 +37,8 @@ moments.
   host-specific install/reload carriers, and hooks.
 - [ZCode Edition](zcode-edition.md) — direct user-plus-workspace `AGENTS.md`, user-scope generated
   agents, `thoughtLevel`, known hook limits, and explicit version/relocation unknowns.
+- [Devin CLI Edition](devin-edition.md) — host-routed unpinned agents, inline skills, managed global
+  contract, and UserPromptSubmit recovery after compaction drops rules.
 
 ## Decisions
 

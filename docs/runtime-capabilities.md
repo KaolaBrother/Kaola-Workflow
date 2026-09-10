@@ -17,7 +17,7 @@ the machine-global contract.
 
 Claude Code is the only supported runtime that needs a bridge. Root `CLAUDE.md` begins with
 `@AGENTS.md`, then contains only the Claude-specific overlay. Codex, opencode, Kimi Code, Grok,
-Cursor, and ZCode have documented direct `AGENTS.md` support.
+Cursor, ZCode, and Devin have direct `AGENTS.md` support.
 
 ## Capability map
 
@@ -30,6 +30,7 @@ Cursor, and ZCode have documented direct `AGENTS.md` support.
 | Grok Build | Project `.grok/agents/` or user `~/.grok/agents/`; `spawn_subagent` with named `subagent_type` | Full `general-purpose`; read/shell `explore` and `plan`; background, isolation, resume, cwd, and optional per-call model | Children cannot spawn descendants; the root runtime's other choices remain available |
 | Cursor | Documented project/user `.cursor/agents/` plus compatibility paths; explicit `/role`, natural-language routing, or the live Task schema. CLI and App are separate product surfaces; App local vs Cloud are different hosts. Standalone CLI reached an explicit project `implementer`; local App and a new same-repository Cloud parent from a saved environment each exposed all 14 Kaola types and dispatched exact `implementer` | Host-dependent: local App, CLI, and correctly saved Cloud environments expose different native routes beside the Kaola catalog; checked-in-only and saved-user-global-only Cloud negative controls exposed native routes only | The current Task catalog is authoritative. CLI uses explicit safe project materialization. Cloud requires an Agent-confirmed environment setup to install its remote authority plus selected repository, followed by manual Save and a new same-repository parent. `install-all.sh` is local-only and never deploys Cloud |
 | ZCode | Runtime-loaded user `${ZCODE_HOME:-~/.zcode}/agents/`; project `.zcode/agents/` is installer staging; automatic selection, native `@role`, or the live Agent schema | Full `general-purpose` and read-only `Explore`; foreground/background stays native | Profiles load in a new session and children cannot spawn. The staged project tree is not runtime profile discovery |
+| Devin CLI | User `~/.config/devin/agents/` or project `.devin/agents/`; `run_subagent(profile, is_background, resume)` with an exact session-start profile | `subagent_explore`, parent-model `subagent_general`, and unpinned custom profiles routed by the host | Catalog fixed at session start; default nesting is one; background tools needing new approval are denied; Kaola pins no model |
 
 Cursor and ZCode do not publish one complete Task/Agent call schema. Their generated guidance names
 the verified routes, then tells the orchestrator to use the current session's exposed schema and
@@ -111,6 +112,7 @@ contract. No runtime needs Kaola context before or after every tool.
 | OpenCode | No new Issue #1044 prompt lifecycle; the initial command remains authority and the existing compact-state behavior is unchanged. |
 | Kimi | No Kaola prompt lifecycle; upgrade removes the retired managed PostCompact block. |
 | ZCode | No prompt lifecycle; the measured 1,000,000-token session and a live PreToolUse self-lock argue against a speculative compact gate. |
+| Devin CLI | One `UserPromptSubmit` command hook injects a short pointer to the managed global carrier only when V2 is absent. This carrier is used because measured compaction drops AGENTS/rules and `PostCompaction` does not inject `additionalContext`. |
 
 Across all families, ordinary tool use adds 0 Kaola recovery bytes and starts 0 Kaola recovery
 subprocesses. Recovery-enabled runtimes receive an already-generated artifact, reread durable state,

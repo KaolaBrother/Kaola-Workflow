@@ -34,9 +34,9 @@ derivation.
 ## Global behavior, local facts
 
 Universal workflow behavior has one authoring source:
-`templates/global/kaola-workflow-global.md`. A nine-row registry declares the real discovery,
+`templates/global/kaola-workflow-global.md`. A ten-row registry declares the real discovery,
 carrier, precedence, reload, and compatibility reads for Claude, Codex, OpenCode, Kimi, Grok,
-Cursor CLI, Cursor App, Cursor Cloud, and ZCode. Runtime adapters render native carriers; they are
+Cursor CLI, Cursor App, Cursor Cloud, ZCode, and Devin CLI. Runtime adapters render native carriers; they are
 not secondary behavior authorities.
 
 `install-all.sh` runs `kaola-workflow-global-contract.js` before any edition installer. The
@@ -362,15 +362,15 @@ plus `scripts/validate-script-sync.js` enforce that. `kaola-workflow-adaptive-sc
 file held **byte-identical** across all four trees: it is the cross-edition drift anchor, and every
 constant shared between a producer and a consumer lives there so the two cannot disagree.
 
-**Five additive runtime editions** — opencode, Kimi, Grok, Cursor, and ZCode — are runtimes, not forges. They are not wired
+**Six additive runtime editions** — opencode, Kimi, Grok, Cursor, ZCode, and Devin — are runtimes, not forges. They are not wired
 into `npm test`, `edition-sync.js`, `install.sh`, or the routing generator's render targets, but
 their sync scripts derive their command surfaces from that same routing registry (via
 `runtime-edition-forge.js`), so the `generate-routing-surfaces.js --write` that a routing-surface
-change already mandates also brings every `.opencode`/`.kimi`/`.grok`/`.cursor`/`.zcode` tree already on the machine back into
+change already mandates also brings every `.opencode`/`.kimi`/`.grok`/`.cursor`/`.zcode`/`.devin` tree already on the machine back into
 parity — always the main checkout's trees, and never creating one that is absent. They carry their
-own suites (`test-opencode-edition.js`, `test-kimi-edition.js`, `test-grok-edition.js`, `test-cursor-edition.js`, `test-zcode-edition.js`). See
-`opencode-edition.md`, `kimi-edition.md`, `grok-edition.md`, `cursor-edition.md`, and `zcode-edition.md`.
-`runtime-edition-forge.js` also holds the generator helpers the five sync scripts render frontmatter
+own suites (`test-opencode-edition.js`, `test-kimi-edition.js`, `test-grok-edition.js`, `test-cursor-edition.js`, `test-zcode-edition.js`, `test-devin-edition.js`). See
+`opencode-edition.md`, `kimi-edition.md`, `grok-edition.md`, `cursor-edition.md`, `zcode-edition.md`, and `devin-edition.md`.
+`runtime-edition-forge.js` also holds the generator helpers the six sync scripts render frontmatter
 and command trees with (`parseFrontmatter`, `parseTools`, `yamlScalar`, `listCanonAgents`,
 `listCanonCommands`, `canonCommandPath`, `commandRel`), shared once instead of restated per script
 (#1055); a per-script wrapper still supplies the one runtime-specific value (`DEFAULT_FORGE` or

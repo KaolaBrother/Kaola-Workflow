@@ -91,6 +91,17 @@
       "compatibility_reads": ["workspace AGENTS.md", "other project Cursor Rules"]
     },
     {
+      "id": "devin-local",
+      "runtime": "devin",
+      "host": "local",
+      "discovery": { "kind": "command", "commands": ["devin"] },
+      "carrier_group": "devin-global-agents",
+      "carrier": { "kind": "managed_region", "format": "markdown", "root_env": "DEVIN_CONFIG_DIR", "default_root": ".config/devin", "relative_path": "AGENTS.md" },
+      "precedence": "Global AGENTS guidance is supplemented by project instructions; the active-host guard prevents cross-runtime adapter use.",
+      "reload": "The single UserPromptSubmit hook reloads the carrier after compaction drops rules.",
+      "compatibility_reads": ["project AGENTS.md"]
+    },
+    {
       "id": "zcode-local",
       "runtime": "zcode",
       "host": "local",

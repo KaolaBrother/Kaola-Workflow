@@ -62,14 +62,14 @@ reclassify a role by maintaining a second list.
 | Export | Contract |
 | --- | --- |
 | `renderRuntimeDelegationGuidance(adapter)` | render one complete marked block from a validated adapter |
-| `runtimeAdapter(runtime, forge, root)` | resolve one of the nine closed adapter variants; Codex is forge-keyed |
+| `runtimeAdapter(runtime, forge, root)` | resolve one of the ten closed adapter variants; Codex is forge-keyed |
 | `renderRuntimeDelegationGuidanceForRuntime(runtime, forge, root)` | resolve then render the block |
 | `replaceRuntimeDelegationGuidance(content, runtime, forge, root)` | replace exactly one balanced marker region; missing or duplicate markers fail loudly |
 
 `generate-routing-surfaces.js` exports `renderCompactRecoveryPrompt(runtime, forge)`. It renders a
 complete direct prompt from `compact-recovery.skeleton.md`, the single
-`dispatch-contract.md`, and the selected runtime adapter. Only `claude`, `codex`, `grok`, and
-`cursor` have a compact-recovery rendering in the measured scope.
+`dispatch-contract.md`, and the selected runtime adapter. Only `claude`, `codex`, `grok`, `cursor`, and
+`devin` have a compact-recovery rendering in the measured scope.
 
 ### Task-clarity guidance (#1053)
 
@@ -101,7 +101,7 @@ Claude and Codex hooks execute only `cat` on their installed V2 prompt. Grok cal
 machine-global transaction installs one native Rule because passive hook stdout is ignored. Cursor
 also calls no hook: local CLI/App share one user `alwaysApply` Rule, while Cloud explicitly
 materializes identical bytes in its selected repository. Edition installers emit no duplicate Rule.
-OpenCode, Kimi, and ZCode install no Kaola compact prompt lifecycle in this measured scope.
+Devin installs one `UserPromptSubmit` command hook whose `additionalContext` tells the orchestrator to reread the managed global carrier only when V2 is absent; this measured carrier survives post-compaction prompts. OpenCode, Kimi, and ZCode install no Kaola compact prompt lifecycle in this measured scope.
 
 No runtime registers Kaola PreToolUse, PostToolUse, or Stop prompt injection. Ordinary tool calls
 therefore add zero Kaola recovery bytes and start zero Kaola recovery subprocesses. There is no
@@ -139,7 +139,7 @@ usage: kaola-workflow-claim.js <subcommand> [flags]
 
   flags: --project P [--json] [--force] [--strict] [--issue N] [--target-issue N]
          [--target-issues A,B] [--pr-number N] [--branch B] [--reason R]
-         [--runtime claude|codex|opencode|kimi|grok|zcode] [--sink merge|mr|pr] [--keep-worktree]
+         [--runtime claude|codex|opencode|kimi|grok|zcode|devin] [--sink merge|mr|pr] [--keep-worktree]
          [--keep-open|--keep-issue-open] [--keep-branch] [--execute] [--archive] [--export]
   --help, -h   print usage and exit, with zero side effects
 ```

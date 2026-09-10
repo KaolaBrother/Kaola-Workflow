@@ -26,7 +26,8 @@
     "kimi",
     "grok",
     "cursor",
-    "zcode"
+    "zcode",
+    "devin"
   ],
   "profiles": [
     {
@@ -1162,6 +1163,132 @@
       "behavior_contract_version": 1,
       "behavior_sha256": "0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20",
       "resolved_profile_sha256": "48fc2ffb5588a079b59b3693e14194618e7227757e8901c9c2803f7f44f411e5"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "adversarial-verifier",
+      "path": "logical/devin/agents/adversarial-verifier.md",
+      "behavior_contract_version": 3,
+      "behavior_sha256": "37fae3cbfe32775728cb1e6fe93b087bad719955e78d6d555011db36f4b992c8",
+      "resolved_profile_sha256": "ca04e15114657c5feefe5fcec7174dc19e8bca1caaa2139fb3ac2a4400c14c3b"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "build-error-resolver",
+      "path": "logical/devin/agents/build-error-resolver.md",
+      "behavior_contract_version": 1,
+      "behavior_sha256": "4bdb9d11c0d523d6bbec5962cf05429d31da544f182779aab4592ae8d5f3cd09",
+      "resolved_profile_sha256": "42e8ac8ac3871df7ed2c290d386b1435afdf85ade6bc7dd00b4b9c458d78cd77"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "code-architect",
+      "path": "logical/devin/agents/code-architect.md",
+      "behavior_contract_version": 1,
+      "behavior_sha256": "6962dea4a4db50669fe3cd44efe730fc6bc54489ebf0082ea3d4eed37200b81b",
+      "resolved_profile_sha256": "28c28578d0c69a400539423093bff3152d079f15d98439910d33b29d917409ce"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "code-explorer",
+      "path": "logical/devin/agents/code-explorer.md",
+      "behavior_contract_version": 1,
+      "behavior_sha256": "52b32679a8a45971ef7473befceccaadc57208ab90075deb5c206994e0b43b9a",
+      "resolved_profile_sha256": "554a9bb4888b506e7ad2bb54961d9b84b3d0fbbc356fec06073545a4248f08d8"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "code-reviewer",
+      "path": "logical/devin/agents/code-reviewer.md",
+      "behavior_contract_version": 3,
+      "behavior_sha256": "7f746ba03195b08c0929fd3f7818f081a7fbc250af10823ef44ce5ba8fe209b8",
+      "resolved_profile_sha256": "0af9c24fd7a0daa9ad4c705e390c3290ed894fc76a12b600c2b84ac298e317b1"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "doc-updater",
+      "path": "logical/devin/agents/doc-updater.md",
+      "behavior_contract_version": 1,
+      "behavior_sha256": "c0ecdd974909f9d5dcfabf0f2090cba1ee35884f741b3d7685ea227c53c1f6c5",
+      "resolved_profile_sha256": "b698e57d747704f8c070989f0d21830ec140cf91afee76b5bc9bf8ac495f43c6"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "implementer",
+      "path": "logical/devin/agents/implementer.md",
+      "behavior_contract_version": 1,
+      "behavior_sha256": "92031ae1aeb5a31affabe2c85bb1bada4881d0460bcab978fb4105c85356ce46",
+      "resolved_profile_sha256": "b40eedf145bfd551fa4b684e4fb0b53c4240190507f9513d75dabf96ab20d800"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "investigator",
+      "path": "logical/devin/agents/investigator.md",
+      "behavior_contract_version": 1,
+      "behavior_sha256": "4f1817a36d260e8802ed6c337a95c20dc1faee88bf6e9586ad973e4984bee18d",
+      "resolved_profile_sha256": "a00164febf551228d660361f0b11a47ad3fdee0390a0b7ea44b1194f9f251cbe"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "knowledge-lookup",
+      "path": "logical/devin/agents/knowledge-lookup.md",
+      "behavior_contract_version": 1,
+      "behavior_sha256": "290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b",
+      "resolved_profile_sha256": "21db04850349dd8d149ec3e55391679477936fce7b8a96c4c3bac49f7ceb51ce"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "metric-optimizer",
+      "path": "logical/devin/agents/metric-optimizer.md",
+      "behavior_contract_version": 2,
+      "behavior_sha256": "4f5215b795f7657a2b1a6bb5325b133b61c48bbda47fa0211dd6e1069d1164f0",
+      "resolved_profile_sha256": "8df9733db3dddb5ec16da7a11c5b489566f84bd632130adad3a880d54efd6622"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "planner",
+      "path": "logical/devin/agents/planner.md",
+      "behavior_contract_version": 1,
+      "behavior_sha256": "a9f0d2031fe9fbdd53b200e7d5b18207ff038b6f8c597e07134ca77701118672",
+      "resolved_profile_sha256": "5dc989adec73befcba11453258016f26c9855d3bf6b943896b29bb9d7c53b4d3"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "security-reviewer",
+      "path": "logical/devin/agents/security-reviewer.md",
+      "behavior_contract_version": 3,
+      "behavior_sha256": "87a4f1589fef43645bea2c47e2dc627a118b572240e3e1c62b2c9b8ec21ed125",
+      "resolved_profile_sha256": "d18a2d2b3242b1ac1b62e6535817f094596091095c83578d146aef5c5d4fb567"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "synthesizer",
+      "path": "logical/devin/agents/synthesizer.md",
+      "behavior_contract_version": 1,
+      "behavior_sha256": "b2a428191f21997ceab865bd1ed05265dc2a7c86007817093a67084756334e7a",
+      "resolved_profile_sha256": "0202b82388ab1554f5b2503525fb69b8b4319512b4dfef11c02cc98357647ff5"
+    },
+    {
+      "runtime": "devin",
+      "variant": "devin",
+      "role": "tdd-guide",
+      "path": "logical/devin/agents/tdd-guide.md",
+      "behavior_contract_version": 1,
+      "behavior_sha256": "0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20",
+      "resolved_profile_sha256": "53c1eba63fa055d34367df5b9dabea632b601dc8c243a13fd5acb80ba0f976d3"
     }
   ]
 }
