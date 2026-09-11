@@ -1,0 +1,3 @@
+verdict: pass
+validation_command: npm test
+validated_candidate_hash: 8efa712c9c184afefb82f4f1ad668111614138ad231d87f40a81e6e6eacb7759
