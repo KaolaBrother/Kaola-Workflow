@@ -69,7 +69,7 @@ retired by ADR 0023.
   owner-approved default tier bindings without a Kaola scheduler or invented runtime limits.
 
 - **[0022 — Machine-global workflow contract](decisions/0022-machine-global-workflow-contract.md)**
-  — one universal source, nine measured host adapters, batch-safe installation, subtractive project
+  — one universal source, ten measured host adapters, batch-safe installation, subtractive project
   instructions, and V2 compact recovery that reloads the complete active operation without tool
   hooks or inference-time JavaScript.
 

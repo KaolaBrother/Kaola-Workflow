@@ -895,11 +895,11 @@ assert(!behaviorVendor,
   'A5: universal role behavior authority contains no runtime/model/path vocabulary'
   + (behaviorVendor ? ' — found ' + behaviorVendor[0] : ''));
 
-// A6 — seven declared runtime adapters and the complete native render matrix.
+// A6 — eight declared runtime adapters and the complete native render matrix.
 const adapterView = adapterEntries(adapters);
 const declaredRuntimes = sorted(new Set(adapterView.entries.map(entry => entry.runtime).filter(Boolean)));
 assert(JSON.stringify(declaredRuntimes) === JSON.stringify(SORTED_RUNTIME_NAMES),
-  'A6: adapters declare all seven runtime families exactly — got ' + JSON.stringify(declaredRuntimes));
+  'A6: adapters declare all eight runtime families exactly — got ' + JSON.stringify(declaredRuntimes));
 for (const runtime of RUNTIME_NAMES) {
   const entries = adapterView.entries.filter(entry => entry.runtime === runtime);
   assert(entries.length > 0, `A6[${runtime}]: a declared runtime adapter exists`);
@@ -1160,7 +1160,7 @@ if (generator && behavior && adapters && roleContracts['code-reviewer'] && profi
     + JSON.stringify(changed));
   assert(JSON.stringify(sorted(new Set(changedProfiles.map(profile => profile.runtime))))
       === JSON.stringify(SORTED_RUNTIME_NAMES),
-  'A9: shared behavior mutation reaches all seven runtime families');
+  'A9: shared behavior mutation reaches all eight runtime families');
 }
 
 // A10 — mutation proof: a valid adapter change is isolated, and deleting that required capability

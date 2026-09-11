@@ -48,6 +48,11 @@ scope. The inventory is seven runtime families and nine adapter variants: Claude
 forges; and opencode, Kimi, Grok, Cursor, and ZCode. Fourteen roles across those variants produce 126
 deterministic renders.
 
+*(Inventory note, 2026-09-11 / #1059.)* That census was current at ADR 0020's acceptance. The live
+closed inventory is eight runtime families, ten adapter variants, and 140 deterministic renders
+after the Devin edition; see `agents/generated-agent-manifest.json`. The historical paragraph above
+is not rewritten.
+
 `scripts/generate-agent-profiles.js` composes behavior plus adapter. Claude Markdown, Codex TOML,
 and every additive runtime profile are render targets. A runtime adapter may use native capability
 fields, but it may not copy or independently restate universal behavior. An unavailable required
@@ -97,7 +102,7 @@ observe a sandboxed filesystem result; they do not pin local source identifiers.
 
 - One consumer repository can switch runtimes without changing its universal Kaola contract.
 - Adding or repairing a universal role clause changes one source and must reach all nine adapter
-  variants under mutation proof.
+  variants under mutation proof. *(Later inventory: ten adapter variants / #1059.)*
 - Runtime-native optimization is permitted where the capability map supports it, without turning
   native syntax into universal policy.
 - Runtime support claims require first-party evidence. Unknown size, precedence, version, or path

@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Formally retire reviewer→Heavy/fable escalation (#1059).** ADR 0019 records that the
+  workflow-owned reviewer re-dispatch to Heavy/`fable` has been retired since #1032
+  (`7e116d6c`); Yanlei confirmed 2026-09-11. Heavy remains the planner-class default
+  (`planner` / `code-architect`). Live edition docs no longer describe a bounded reviewer
+  escalation. When more power is needed, the orchestrator does the work itself. Escalation
+  surfaces are not restored.
+- **Live role-inventory counts follow the current manifest (#1059).** Live docs now state eight
+  runtime families, ten adapter variants, and 140 deterministic renders (14×10), matching
+  `generate-agent-profiles.js --print-manifest`. Historical ADR 0020 and CHANGELOG 10.0.0
+  paragraphs keep their then-current 7/9/126 facts with an annotation.
+
 ## [11.1.0] - 2026-09-11
 
 ### Added
@@ -420,7 +435,8 @@
 - **One behavioral source for all 14 roles (#1033).** `templates/agents/behavior-contracts.json`,
   the evidence-backed adapter map, and prompt-external provenance now feed one generalized
   generator. The current closed inventory is seven runtime families, nine adapter variants, and
-  126 deterministic native renders. Claude Markdown is a render target, not the interchange format;
+  126 deterministic native renders. *(At 10.0.0. Later Devin made this eight families / ten adapters
+  / 140 renders; live docs corrected in #1059.)* Claude Markdown is a render target, not the interchange format;
   the reviewer-only generator, reviewer templates, prose-parity test, and Claude-shaped rewrite
   authority are retired.
 - **Ownership-safe project instruction migration (#1033).** `workflow-init` now uses a standard-
@@ -556,6 +572,8 @@
   session-inherited. Claude reviewers rest on `opus` with one bounded `fable` escalation in command
   runtime. Every reviewer dispatch states its surface and acceptance; generated additive runtimes
   omit that dynamic escalation. Reviewer bodies clamp findings to the dispatched surface.
+  *(Later: the reviewer→`fable` re-dispatch was withdrawn in #1032 / `7e116d6c` and formally
+  retired in #1059; Heavy remains the planner-class default.)*
 
 
 ## [9.14.3] - 2026-08-23

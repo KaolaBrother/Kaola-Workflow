@@ -97,6 +97,11 @@ The #1018 live probe closed the Grok heavy cell: a generated planner carrying
 `effort: xhigh` reached a child with `reasoning_effort: xhigh` on Grok CLI 1.0.5. The
 candidate evidence is retained at `kaola-workflow/issue-1018/.cache/live-grok.md`.
 
+The grok/cursor “no per-call override” rows remain capability measurements. They are **not** a
+remaining named escalation divergence: the workflow-owned reviewer→heavy path is retired
+(2026-09-11 / #1059), so those hosts no longer need a carve-out relative to a Claude-only
+re-dispatch that is itself withdrawn.
+
 ## 5. The reviewer scope clamp
 
 One wording, two placements. The dispatch guidance in `templates/routing/` requires every
@@ -106,6 +111,11 @@ dispatched surface; anything outside it — architecture-level observations incl
 as an observation, never expanded, never acted on.** This specifies the result a finding must
 have, not a review method, per `docs/conventions.md`; it does not cap what the reviewer may read,
 only what may leave as a finding.
+
+**Retired as an upgrade trigger (2026-09-11 / #1059).** The clamp is not an auto-escalation
+clause and does not restore reviewer→`fable` re-dispatch. Surfaces must not grow a
+scope-clamp-triggered Heavy upgrade. If the review needs more power, the orchestrator does the
+work itself.
 
 ## 6. Divergences declared, not papered over
 

@@ -1,7 +1,7 @@
 # Agent Behavior Sources and Provenance
 
 Kaola-Workflow has one runtime-neutral behavioral authority for every installed role. Native Claude,
-Codex, opencode, Kimi, Grok, Cursor, and ZCode artifacts are generated outputs, not authoring
+Codex, opencode, Kimi, Grok, Cursor, ZCode, and Devin artifacts are generated outputs, not authoring
 surfaces.
 
 ## Canonical source graph
@@ -9,13 +9,13 @@ surfaces.
 | Source | Owns | Must not own |
 | --- | --- | --- |
 | `templates/agents/behavior-contracts.json` | The complete 14-role inventory; purpose, inputs, authority/custody, writes, deliverable, verification, stop conditions, capability requirements, and `standard` / `reasoning` / `heavy` intent | Runtime brands, native model names, tool syntax, home paths, hooks, or provenance narration |
-| `templates/agents/runtime-capabilities.json` | Evidence-backed instruction loading, native carriers, dispatch, model/effort mapping, tool binding, hook scope, and nine closed adapter variants | Universal role behavior or arbitrary prompt extensions |
+| `templates/agents/runtime-capabilities.json` | Evidence-backed instruction loading, native carriers, dispatch, model/effort mapping, tool binding, hook scope, and ten closed adapter variants | Universal role behavior or arbitrary prompt extensions |
 | `templates/agents/provenance.json` | Source classification (`source_kind`) for all fourteen roles, plus an optional `history` record — origin, pinned commit, license, copyright, upstream path/blob/content hashes, and measurement — for roles that carry one | Agent-facing prompt content or runtime behavior |
 | `scripts/generate-agent-profiles.js` | Schema validation, deterministic composition, behavior/render hashes, native profile rendering, generated manifest, and check/write modes | Project migration, installation policy, release mutation, or a second behavior source |
-| `agents/generated-agent-manifest.json` | The 14-role, seven-runtime, 126-render inventory and source/output hashes | Provenance prose or independent policy |
+| `agents/generated-agent-manifest.json` | The 14-role, eight-runtime, 140-render inventory and source/output hashes | Provenance prose or independent policy |
 
-The inventory has seven runtime families and nine adapter variants: Claude; Codex for GitHub,
-GitLab, and Gitea; and one each for opencode, Kimi, Grok, Cursor, and ZCode. The three Codex variants
+The inventory has eight runtime families and ten adapter variants: Claude; Codex for GitHub,
+GitLab, and Gitea; and one each for opencode, Kimi, Grok, Cursor, ZCode, and Devin. The three Codex variants
 are forge-neutral for role behavior and render byte-identical profile bodies.
 
 ## Identity and proof boundary
@@ -30,7 +30,7 @@ bytes change. The two hashes prove deterministic source and filesystem artifacts
 that a proprietary runtime loaded private prompt bytes or that stochastic executions produce the
 same prose or verdict.
 
-Shared-contract mutation tests require a role change to reach all nine variants. Adapter mutation
+Shared-contract mutation tests require a role change to reach all ten variants. Adapter mutation
 tests require a runtime-only change to remain isolated to that runtime family. This semantic and
 native-render proof replaces cross-runtime sentence-paraphrase equality.
 
@@ -46,7 +46,7 @@ and `resolved_profile_hash`.
 
 `templates/agents/behavior-contracts.json` is the current authoring authority for every role; all
 fourteen role contracts are Kaola-authored. Together with `templates/agents/runtime-capabilities.json`
-it generates 126 renders (14 roles × 9 adapter variants) through `scripts/generate-agent-profiles.js`.
+it generates 140 renders (14 roles × 10 adapter variants) through `scripts/generate-agent-profiles.js`.
 
 `templates/agents/provenance.json` (`schema_version: 2`) records, for each of the fourteen roles:
 

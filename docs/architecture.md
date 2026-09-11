@@ -163,7 +163,7 @@ all. `readActiveFolders` follows the same pattern: sink-merge imports it from
 `clearAdvisoryClaim`, `resolveProjectSlug`, `worktreePathFor`, `archiveProjectDir`) stay owned by
 `kaola-workflow-claim.js` and are still consumed by sink-merge from there — a dedicated
 closure/archive service module was weighed and declined, since it would add an installed file to
-seven runtimes and two hand-ported forges for a single external consumer.
+eight runtimes and two hand-ported forges for a single external consumer.
 
 `classifyLane(lane, ctx)` (`kaola-workflow-classifier.js`) is a pure function partitioning an
 active-folder lane into `mine` / `live` / `stale` / `ambiguous`, driven by three claim-time fields
@@ -516,16 +516,16 @@ Its routing-only guidance additionally exposes built-in/generic routes and nativ
 parallel, resume, nesting, history, or cold-start boundaries where evidence establishes them. It
 does not impose a Kaola concurrency cap or lowest-common-denominator runtime.
 
-Runtimes and forges remain independent axes. The closed role inventory has seven runtime families
-and nine adapter variants: one Claude, three Codex forge variants, and one each for opencode, Kimi,
-Grok, Cursor, and ZCode. Additive installers still take `--forge` to select routing/forge prose; that
+Runtimes and forges remain independent axes. The closed role inventory has eight runtime families
+and ten adapter variants: one Claude, three Codex forge variants, and one each for opencode, Kimi,
+Grok, Cursor, ZCode, and Devin. Additive installers still take `--forge` to select routing/forge prose; that
 does not create another role-behavior adapter.
 
 ### Agent behavior and native profiles
 
 `templates/agents/behavior-contracts.json` is the only behavioral authority for all 14 roles.
 `scripts/generate-agent-profiles.js` composes each role with the selected native adapter, producing
-126 deterministic renders. Root `agents/*.md`, the 42 Codex TOMLs, and additive runtime profiles are
+140 deterministic renders. Root `agents/*.md`, the 42 Codex TOMLs, and additive runtime profiles are
 outputs. No output is edited as a semantic source.
 
 The behavior source owns purpose, inputs, authority/custody, writes, deliverable, verification, stop
@@ -534,7 +534,7 @@ runtime, vendor, native model, tool syntax, home path, or hook vocabulary. Adapt
 differences and may not carry arbitrary universal prompt prose.
 
 Every render carries a shared `behavior_contract_hash` and a render-specific
-`resolved_profile_hash`. Shared-behavior mutation must reach all nine variants for that role;
+`resolved_profile_hash`. Shared-behavior mutation must reach all ten variants for that role;
 adapter mutation must stay inside one runtime family. Byte identity remains required for true
 forge-neutral twins, but cross-runtime sentence equality is not the oracle.
 

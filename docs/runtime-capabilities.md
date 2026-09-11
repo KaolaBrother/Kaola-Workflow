@@ -172,13 +172,13 @@ documentation, and review remain separately dispatchable.
 
 ## Adapter inventory
 
-The closed inventory contains seven runtime families and nine adapter variants:
+The closed inventory contains eight runtime families and ten adapter variants:
 
 - one Claude adapter;
 - three forge-neutral Codex variants (`codex-github`, `codex-gitlab`, `codex-gitea`);
-- one each for opencode, Kimi, Grok, Cursor, and ZCode.
+- one each for opencode, Kimi, Grok, Cursor, ZCode, and Devin.
 
-With 14 roles, that produces 126 deterministic renders. `behavior_contract_hash` identifies the
+With 14 roles, that produces 140 deterministic renders. `behavior_contract_hash` identifies the
 runtime-neutral role contract; `resolved_profile_hash` identifies one native render. A shared
 behavior mutation must reach every variant for that role. An adapter mutation must affect only its
 runtime family. Equal behavior hashes do not promise equal natural-language outputs.
@@ -188,7 +188,7 @@ generator renders it into the `runtime-delegation` slot in both next/finalize sk
 receive Claude guidance, forge-matched skills receive Codex guidance, and each additive edition
 replaces the marked block with its own runtime render. `workflow-init` intentionally has no dispatch
 block. Routing-only guidance is excluded from the adapter hash, so explaining an already-supported
-route does not churn `resolved_profile_hash` or all 126 role profiles.
+route does not churn `resolved_profile_hash` or all 140 role profiles.
 
 ## First-party evidence
 

@@ -100,6 +100,10 @@ Codex block in skill surfaces. The five additive edition transforms replace that
 their own adapter render for `workflow-next` and `kaola-workflow-finalize`. `workflow-init` does not
 carry dispatch teaching.
 
+*(Edition-transform note, 2026-09-11 / #1059.)* Devin later added a sixth additive edition transform;
+the live set is opencode, Kimi, Grok, Cursor, ZCode, and Devin. The historical “five” count above is
+not rewritten.
+
 The same adapter file still feeds native role profiles, but routing-only guidance is excluded from
 `resolved_profile_hash`. Editing orchestration explanation therefore regenerates next/finalize
 surfaces without pretending the native profile bytes changed. Structural markers, adapter lookup,

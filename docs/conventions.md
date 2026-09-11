@@ -301,7 +301,7 @@ All 14 roles follow one workflow:
 3. Run `node scripts/generate-agent-profiles.js --write`, then `--check`. Never hand-edit a generated
    Claude Markdown, Codex TOML, additive runtime profile, Codex registry, or manifest.
 4. Run `node scripts/test-runtime-agent-architecture.js` and
-   `npm run test:kaola-workflow:editions`. A behavior mutation must reach all nine variants; an
+   `npm run test:kaola-workflow:editions`. A behavior mutation must reach all ten variants; an
    adapter mutation must remain isolated to one runtime family.
 
 `behavior_contract_hash` establishes deterministic runtime-neutral contract equivalence.
@@ -321,7 +321,7 @@ never pass. It is self-contained and depends on no hosted pipeline.
 
 Cross-runtime equivalence is source identity plus semantic mutation, not prose parity. Every role
 has one behavior record; every native render records that behavior hash and its own complete-render
-hash. The generated manifest pins the closed 126-render inventory. The three Codex forge profiles
+hash. The generated manifest pins the closed 140-render inventory. The three Codex forge profiles
 for a role remain byte-identical because forge identity does not change role behavior.
 
 **`config/hooks.json` family (#418.1).** The three plugin-tree `config/hooks.json` files
@@ -679,10 +679,10 @@ Design-rationale provenance — issue refs, decision IDs, invariant tags, ADR ci
 
 ### What counts as a prompt surface
 
-The full set across all four forge editions plus opencode, Kimi, Grok, Cursor, and ZCode:
+The full set across all four forge editions plus opencode, Kimi, Grok, Cursor, ZCode, and Devin:
 
 - **Agent definitions** — every profile recorded in `agents/generated-agent-manifest.json`, including
-  Claude Markdown, Codex TOML, and native additive runtime renders. The five additive sync scripts
+  Claude Markdown, Codex TOML, and native additive runtime renders. The six additive sync scripts
   consume `generate-agent-profiles.js`; none authors behavior.
 - **Commands** — `commands/*.md` (github-claude), `plugins/kaola-workflow-gitlab/commands/`, `plugins/kaola-workflow-gitea/commands/`, Codex `skills/kaola-workflow-*/SKILL.md` (including the two forge-codex SKILL packs), opencode generated command mirrors, kimi generated command skills (`.kimi/skills/<command>/SKILL.md`), grok `.grok/commands/*.md`, cursor `.cursor/commands/*.md`
 - **Skills** — `plugins/*/skills/*/SKILL.md` across all three plugin editions
