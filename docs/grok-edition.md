@@ -77,10 +77,11 @@ retains `model: inherit`, emits the effort for its canonical class
 command cards carry no per-call `model=` override.
 
 The #1018 live probe verified that a generated `effort: xhigh` planner reaches a
-child at `reasoning_effort: xhigh` on Grok CLI 1.0.5. Generated command surfaces
-preserve the reviewer scope-and-acceptance packet but omit Claude's one-bounded
-reviewer heavy re-dispatch: `spawn_subagent` has no per-call effort override, so
-Grok reviewers remain on their static generated effort.
+child at `reasoning_effort: xhigh` on Grok CLI 1.0.5. `spawn_subagent` has no
+per-call effort override, so Grok reviewers remain on their static generated
+effort (`high` for reasoning-class). The former Claude-only reviewer→heavy
+re-dispatch carve-out is retired for every runtime (ADR 0019 / #1059); there is
+no workflow-owned fable escalation to omit or mirror here.
 
 **Observed Grok CLI 1.0.5 limitation.** The live close probe passed with the
 actual `tdd-guide` at `medium` and `code-reviewer` at `high` from an `xhigh`

@@ -120,10 +120,11 @@ inherits the model you already use.
 > A role that pins a model no longer inherits the session's effort either — that is opencode's
 > coupling, not this edition's, and it is the trade this opt-in makes.
 
-Generated command surfaces preserve the reviewer scope-and-acceptance packet but
-omit Claude's one-bounded reviewer heavy re-dispatch. opencode's `task` tool has
-no per-call model or effort parameter; reviewers follow the session and any
-user-owned model pin that applies to their classified role.
+opencode's `task` tool has no per-call model or effort parameter; reviewers
+follow the session and any user-owned model pin that applies to their classified
+role. The former Claude-only reviewer→heavy re-dispatch carve-out is retired for
+every runtime (ADR 0019 / #1059); there is no workflow-owned fable escalation to
+omit or mirror here.
 
 ## Runtime-native orchestration guidance
 

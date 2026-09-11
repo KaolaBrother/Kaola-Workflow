@@ -1,16 +1,23 @@
 # 0019 — The heavy-reasoning tier
 
-- **Status:** Accepted 2026-08-24. The three-tier implementation is present in Issue #1018 / PR
-  #1019 on this branch and is pending merge to `main`; this record now describes the shipped
-  candidate surfaces rather than the former two-tier-only state.
-- **Date:** 2026-08-24
+- **Status:** Accepted 2026-08-24 for the three-tier model (standard / reasoning / heavy).
+  **Partial supersession (2026-09-11, Yanlei via Anna-TaskClaimer / #1059 item 1):** the §3
+  "one sanctioned reviewer escalation" and related dynamic reviewer→`fable` re-dispatch are
+  **retired**. Surfaces already dropped that wording in #1032 (`7e116d6c`); this ADR now records
+  the retirement formally rather than describing escalation as current behavior. The Heavy tier
+  itself — planner/code-architect defaults and the standard/reasoning/heavy intent mapping —
+  remains Accepted and unchanged.
+- **Date:** 2026-08-24 (escalation retirement noted 2026-09-11)
 - **Extends:** the two-tier role classification (`sonnet`/standard, `opus`/reasoning) — the plan
   vocabulary #610 fixed and every edition derives from. Does not supersede any prior ADR.
 - **Owner decisions (recorded 2026-08-24, in conversation):** codex standard tier unchanged;
-  planner-class = `planner` + `code-architect`; opencode and kimi behavior unchanged; the
-  grok/cursor escalation gap accepted as a declared divergence; the two default downgrades in §3
-  confirmed deliberate; Claude bindings stay on unversioned aliases so they float with model
-  updates.
+  planner-class = `planner` + `code-architect`; opencode and kimi behavior unchanged; the two
+  default reviewer resting-tier downgrades in §3 confirmed deliberate; Claude bindings stay on
+  unversioned aliases so they float with model updates.
+- **Owner decision (recorded 2026-09-11):** retire the workflow-owned reviewer→heavy/fable
+  escalation carve-out. Rationale: when more power is needed, the main orchestrator should just
+  do the work itself — the orchestrator already typically runs a strong model — so a
+  workflow-owned reviewer→fable escalation is unnecessary (aligns with #1032 D7).
 
 ## 1. What forced this
 
@@ -52,28 +59,25 @@ Claude aliases are unversioned on purpose (owner): they float with model updates
 exists (§4) and stays unused until an observed failure demands it; the tier axis on claude is
 model-only.
 
-## 3. Role defaults and the one sanctioned escalation
+## 3. Role defaults (reviewer→heavy escalation retired)
 
-- **Planner-class** (`planner`, `code-architect`) re-tiers to `fable`. These are the only two
-  frontmatter edits.
+- **Planner-class** (`planner`, `code-architect`) re-tiers to `fable`. These remain the only two
+  frontmatter heavy defaults.
 - **Reviewer-class** (`code-reviewer`, `adversarial-verifier`, `security-reviewer` — the
-  `generate-reviewer-profiles.js` ROLES set) **stays at reasoning**. The orchestrator may
-  re-dispatch a reviewer at heavy in exactly two situations: a reasoning-tier attempt failed to
-  finish the review, or the surface is judged complex enough before dispatch. That is a judgment
-  call, not a trigger table — nothing inspects it, consistent with how concurrency carries no
-  machinery.
-- Claude's command runtime carries this one bounded `fable` re-dispatch. Generated additive command
-  surfaces retain the required reviewer scope-and-acceptance wording but omit the dynamic escalation
-  because those runtimes have no equivalent per-call override.
-- The codex routing contract's "do not escalate, downgrade, or override" pin is reworded to carry
-  this single carve-out. One wording; every runtime that renders the contract reads it.
+  `generate-reviewer-profiles.js` ROLES set) **stays at reasoning**. There is **no**
+  workflow-owned reviewer→`fable` / heavy re-dispatch path.
+- **Retired (2026-09-11 / #1059 item 1; surfaces cleared in #1032 `7e116d6c`).** The former "one
+  sanctioned escalation" — Claude command-runtime bounded `fable` re-dispatch when a
+  reasoning-tier review failed or the surface looked complex, plus the codex routing-contract
+  carve-out — is withdrawn and is not current behavior. If more power is needed, the main
+  orchestrator does the work itself rather than re-dispatching a reviewer at heavy (Yanlei: the
+  orchestrator already typically runs a strong model; aligns with #1032 D7).
 - Every other role keeps its tier.
 
-**Two deliberate downgrades, owner-confirmed.** On codex, reviewers move from `gpt-5.6-sol`/high
-to `gpt-5.6-sol`/medium by default, with sol/high now the escalation target rather than the
-resting state. On claude, reviewers rest at `opus` with `fable` as the escalation target,
-retiring the fable-always habit. Both trade nothing on axiom 1 — the heavy tier remains one
-decision away — and stop resting spend at the top of the range (axiom 3).
+**Two deliberate downgrades, owner-confirmed (still in force for resting tiers).** On codex,
+reviewers moved from `gpt-5.6-sol`/high to `gpt-5.6-sol`/medium by default. On claude, reviewers
+rest at `opus`, retiring the prior fable-always habit. Heavy remains the planner-class resting
+tier; it is not a reviewer escalation target.
 
 ## 4. What was measured before deciding (2026-08-24)
 
@@ -105,11 +109,10 @@ only what may leave as a finding.
 
 ## 6. Divergences declared, not papered over
 
-- **grok and cursor cannot escalate dynamically.** Effort lives in the generated agent pin and
-  the dispatch call carries no override (§4, both refuted/undocumented). Reviewers there rest at
-  their pinned `high` and the escalation move simply does not exist on those runtimes. This is a
-  named divergence — capabilities genuinely differ — not a rewrite. Heavy-variant reviewer agents
-  (`code-reviewer-heavy`, …) would close the gap and are **recorded, not built** (§7).
+- **No runtime carries a workflow-owned reviewer→heavy escalation** (retired 2026-09-11).
+  Grok and Cursor already lacked a per-call override (§4); with the Claude carve-out withdrawn,
+  that former "named divergence" is moot. Heavy-variant reviewer agents (`code-reviewer-heavy`,
+  …) stay **recorded, not built** (§7) and are not a substitute for the retired path.
 - **kimi is single-tier and stays so** (owner). Its renderer drops `model:` entirely; the third
   token passes through with no effect and no kimi surface changes.
 - **opencode behavior is unchanged** (owner) — which *forces* one code change rather than zero:
@@ -121,18 +124,20 @@ only what may leave as a finding.
 
 ## 7. Watch list (recorded, not built)
 
-- Heavy-variant reviewer agents for grok/cursor — build only if the resting-at-high divergence
-  observably hurts a run.
-- Auto-escalation triggers, or any inspector on the escalation choice.
+- Heavy-variant reviewer agents for grok/cursor — still recorded, not built; not a path back to
+  the retired reviewer→heavy escalation.
+- Auto-escalation triggers, or any inspector on an escalation choice — superseded by retirement;
+  do not rebuild.
 - Effort pins on claude dispatches (the verified `effort` key stays unused).
-- Escalation for any role outside reviewer-class.
+- Escalation for any role outside reviewer-class — do not add; orchestrator does heavy work
+  itself when needed.
 
 ## 8. Blast radius
 
 Frontmatter: `agents/planner.md`, `agents/code-architect.md`. Resolver:
 `kaola-workflow-resolve-agent-model.js` `DEFAULT_AGENT_MODELS` (held byte-equal to frontmatter).
 Skeletons: `templates/routing/next.skeleton.md` + `finalize.skeleton.md` (codex three-way routing
-contract, escalation carve-out, scope-stating dispatch guidance) and regeneration of every
+contract; the former escalation carve-out is retired — see status note) and regeneration of every
 rendered surface. Also `init.skeleton.md`: the consumer-`CLAUDE.md` managed block's one
 tier-naming example — `planner (reasoning tier)` — misstates planner's tier once it moves to
 heavy; the rule it illustrates (function + tier, never a vendor model) is unchanged, only the

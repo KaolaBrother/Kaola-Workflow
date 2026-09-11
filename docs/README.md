@@ -82,11 +82,11 @@ retired by ADR 0023.
   basis for the accepted
   standard/reasoning/heavy axis: planner and code-architect are canonical heavy roles; Codex uses
   Luna/max, Sol/medium, and Sol/high; Grok and Cursor carry heavy effort pins; OpenCode classifies
-  `fable` with reasoning and Kimi remains session-inherited. Claude reviewers rest on `opus` with
-  one bounded `fable` escalation in command runtime. Additive generated command surfaces omit that
-  dynamic reviewer escalation while preserving reviewer scope and acceptance wording. ADR 0020
-  supersedes its Claude-shaped role-source details; ADR 0021 retains the runtime binding matrix as
-  default dispatch policy while replacing the old rendering mechanism.
+  `fable` with reasoning and Kimi remains session-inherited. Reviewers rest at reasoning; the
+  former Claude-only bounded `fable` reviewer escalation is **retired** (2026-09-11 / #1059;
+  surfaces cleared in #1032) — when more power is needed the orchestrator does the work itself.
+  ADR 0020 supersedes its Claude-shaped role-source details; ADR 0021 retains the runtime binding
+  matrix as default dispatch policy while replacing the old rendering mechanism.
 
 - **[0017 — The mission list: four fields where the DAG was](decisions/0017-the-mission-list.md)** — the
   design of record. A run is one file of `item` / `status` / `dispatched` / `result`, written at three
