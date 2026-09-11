@@ -1243,7 +1243,7 @@
       "path": "logical/devin/agents/knowledge-lookup.md",
       "behavior_contract_version": 1,
       "behavior_sha256": "290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b",
-      "resolved_profile_sha256": "21db04850349dd8d149ec3e55391679477936fce7b8a96c4c3bac49f7ceb51ce"
+      "resolved_profile_sha256": "2e9541d20fac7c7c657898b7d2c4edee852caa30e944b5ee9aba28db0c8b974d"
     },
     {
       "runtime": "devin",

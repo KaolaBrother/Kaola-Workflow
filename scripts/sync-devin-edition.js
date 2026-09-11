@@ -43,12 +43,12 @@ function renderAgent(_canon, role) {
   return agentGen.renderRuntimeRole('devin', role).content;
 }
 
+// Devin keeps skill descriptions in context across compaction (#1058 F11), so the description
+// carries the command's own sentence verbatim plus when to invoke it.
 function skillDescription(baseDescription, name) {
-  const base = String(baseDescription || '');
-  const invoke = base
-    ? `Invoke this skill for ${base.replace(/\.$/, '').toLowerCase()}. `
-    : `Invoke this skill for the Kaola "/${name}" workflow command. `;
-  return invoke + 'The model may invoke it autonomously when continuing a Kaola workflow mission.';
+  const base = String(baseDescription || '').trim().replace(/\.$/, '');
+  const lead = base || `Kaola "/${name}" workflow command`;
+  return `${lead}. Invoke when the user asks for /${name} or when continuing a Kaola workflow mission.`;
 }
 
 function renderSkill(canon, name, forge = DEFAULT_FORGE) {

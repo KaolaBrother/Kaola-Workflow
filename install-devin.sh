@@ -19,8 +19,13 @@
 # Global layout:
 #   ~/.config/devin/agents/<role>.md
 #   ~/.config/devin/skills/<name>/SKILL.md
-#   ~/.config/devin/AGENTS.md   (managed global contract, via kaola-workflow-global-contract.js)
+#   ~/.config/devin/AGENTS.md   (managed global contract, via kaola-workflow-global-contract.js —
+#                                the machine-wide transaction shared with install-all.sh; it
+#                                refreshes every detected runtime's carrier, not only Devin's)
 #   ~/.config/devin/config.json (one Kaola UserPromptSubmit hook)
+#
+# DEVIN_CONFIG_DIR relocates this install for hermetic tests only. Devin itself does not read
+# it; Devin resolves its user config directory from XDG_CONFIG_HOME (or %APPDATA%\devin).
 #
 # Project layout:
 #   <DIR>/.devin/agents/<role>.md
@@ -116,14 +121,31 @@ ups_command() {
 
 # Install or refresh the managed global AGENTS.md carrier through the shared
 # global-contract CLI, which follows the same receipt/ownership rules as the
-# other runtimes.
-install_global_carrier() {
-  node "$SCRIPT_DIR/scripts/kaola-workflow-global-contract.js" install --json >/dev/null
+# other runtimes. That CLI is one machine-wide transaction: it refreshes the
+# carrier of every runtime it detects on this machine, not only Devin.
+# Both modes report the devin-local target instead of discarding the CLI exit code.
+global_contract() {
+  local mode="$1" output rc=0
+  output="$(node "$SCRIPT_DIR/scripts/kaola-workflow-global-contract.js" "$mode" --json 2>&1)" || rc=$?
+  node - "$mode" "$rc" "$HOME_ROOT/AGENTS.md" "$output" <<'NODE'
+const [mode, rcText, carrierPath, output] = process.argv.slice(2);
+const rc = Number(rcText);
+let doc = null;
+try { doc = JSON.parse(output); } catch (_) { /* non-JSON output is reported verbatim below */ }
+const target = doc && Array.isArray(doc.targets) ? doc.targets.find(t => t.id === 'devin-local') : null;
+const overall = doc && doc.status ? doc.status : 'UNKNOWN';
+const devin = target ? target.status : 'ABSENT';
+if (rc === 0) process.exit(0);
+console.error(`${mode}: global contract ${overall} (exit ${rc}); devin-local carrier ${devin} at ${carrierPath}`);
+if (!doc) console.error(output);
+else if (doc.error) console.error(`${mode}: ${doc.error}`);
+if (mode === 'check') console.error('check: run ./install-all.sh --yes (or ./install-devin.sh) to refresh the machine-global contract');
+process.exit(1);
+NODE
 }
 
-check_global_carrier() {
-  node "$SCRIPT_DIR/scripts/kaola-workflow-global-contract.js" check --json >/dev/null
-}
+install_global_carrier() { global_contract install; }
+check_global_carrier() { global_contract check; }
 
 # Manage the single Kaola UserPromptSubmit hook in Devin config.json.
 # Existing non-Kaola entries are preserved; any prior Kaola entry is replaced.

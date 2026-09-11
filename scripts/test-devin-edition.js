@@ -44,8 +44,11 @@ const expectedTools = role => {
   const out = ['read', 'grep', 'glob'];
   if (req.has('scoped_write')) out.push('edit', 'write');
   if (req.has('command_execution')) out.push('exec');
+  if (req.has('external_research')) out.push('web_search', 'webfetch');
   return out;
 };
+assert(contracts['knowledge-lookup'].capability_requirements.includes('external_research'),
+  'knowledge-lookup contract requires external_research (guards the Devin web tool mapping below)');
 
 for (const role of agents.ROLES) {
   const text = sync.renderAgent('', role);
@@ -81,6 +84,11 @@ for (const forge of ['github', 'gitlab', 'gitea']) {
     }
     assert(skill.includes('triggers:\n  - user\n  - model'),
       forge + '/' + name + ' skill triggers are user+model');
+    const baseDescription = fs.readFileSync(source, 'utf8').match(/^description:\s*(.+)$/m)[1]
+      .replace(/^"|"$/g, '').replace(/\.$/, '');
+    const rendered = JSON.parse(skill.match(/^description:\s*(.+)$/m)[1]);
+    assert(rendered.startsWith(baseDescription + '. Invoke when the user asks for /' + name),
+      forge + '/' + name + ' skill description keeps the command sentence verbatim, then says when to invoke: ' + rendered);
     if (name === 'workflow-next') {
       assert(skill.includes('node "$CLAIM_JS" startup --runtime devin --target-issues'),
         forge + '/workflow-next emits startup --runtime devin');
@@ -133,6 +141,19 @@ try {
     HOME: fixture.home,
     PATH: fixture.bin + path.delimiter + process.env.PATH,
   };
+  // A check against a home with nothing installed must name the missing Devin carrier instead of
+  // aborting silently on the global-contract exit code.
+  // spawn-class: cli-contract
+  const preCheck = spawnSync(
+    'bash',
+    [path.join(REPO, 'install-devin.sh'), '--global', '--forge=github', '--check'],
+    { cwd: REPO, env, encoding: 'utf8', timeout: 60000 }
+  );
+  assert.notStrictEqual(preCheck.status, 0, 'pre-install --check fails');
+  assert(/global contract/.test(preCheck.stderr) && /devin-local/.test(preCheck.stderr)
+    && /\.config\/devin\/AGENTS\.md/.test(preCheck.stderr),
+    'pre-install --check names the global contract, the devin-local target, and its carrier path: ' + preCheck.stderr);
+
   // spawn-class: environment
   const installResult = spawnSync(
     'bash',

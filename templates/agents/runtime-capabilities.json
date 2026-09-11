@@ -706,7 +706,7 @@
           "profile_lookup": "Find profiles in project `.devin/agents/` or user `~/.config/devin/agents/`; the catalog is fixed at session start, so restart the session after installation.",
           "dispatch_carrier": "Dispatch with `run_subagent(profile, is_background, resume)` / `read_subagent` using an exact profile from the session-start catalog; no model, subagent, or agent field is pinned by Kaola.",
           "tiers": {"standard": "standard → `host_router`", "reasoning": "reasoning → `host_router`", "heavy": "heavy → `host_router`"},
-          "tool_boundary": "The profile `allowed-tools` list uses Devin-native `read`, `grep`, `glob`, `edit`, `write`, and `exec` names and carries the role capability boundary.",
+          "tool_boundary": "The profile `allowed-tools` list uses Devin-native `read`, `grep`, `glob`, `edit`, `write`, `exec`, `web_search`, and `webfetch` names and carries the role capability boundary.",
           "native_routes": "Use foreground, background, or resume through the live `run_subagent` schema; the Devin host router owns role routing.",
           "availability": "The profile catalog is fixed at session start. Rules may drop after compaction, so the single UserPromptSubmit carrier reloads the global contract and Devin adapter before routing continues.",
           "fallback_search": "If an exact profile is absent from the session-start catalog, use only a live native route that satisfies custody and capability requirements; otherwise work inline and report the capability gap."

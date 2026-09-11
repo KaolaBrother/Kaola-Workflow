@@ -9,6 +9,9 @@
 ### Fixed
 
 - **Foreign runtime adapters are host-guarded (#1057).** Every generated delegation and compact-recovery adapter now names its host and tells other hosts to ignore the block, preventing compatibility imports from teaching Devin Cursor-only `Task`, model, or field semantics while leaving the universal contract host-neutral.
+- **Devin `knowledge-lookup` keeps its web tools.** The Devin render of the `external_research` capability now maps to the native `web_search` and `webfetch` tool names; before, the `allowed-tools` allowlist silently withheld both from the one role whose contract requires them. The Devin adapter fact and edition doc list the two names; `test-devin-edition.js` derives the expectation from the behavior contract.
+- **`install-devin.sh` reports the global-contract outcome.** `install` and `--check` no longer discard the machine-wide global-contract exit code: a `DRIFT` or absent carrier prints the overall status, the `devin-local` target status, and the carrier path instead of exiting silently after the staging line. The header and edition doc state that this step is the same machine-wide transaction `install-all.sh` runs (it refreshes every detected runtime's carrier) and that `DEVIN_CONFIG_DIR` is a Kaola relocation override which Devin itself does not read.
+- **Devin skill descriptions keep the command sentence verbatim.** The rendered `description` no longer lower-cases the source sentence into "Invoke this skill for initialize …"; it now carries the command's own description followed by when to invoke the skill.
 
 ## [11.0.1] - 2026-09-09
 

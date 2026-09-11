@@ -323,6 +323,7 @@ function nativeTools(contract, runtime = 'claude') {
     const tools = ['read', 'grep', 'glob'];
     if (required.has('scoped_write')) tools.push('edit', 'write');
     if (required.has('command_execution')) tools.push('exec');
+    if (required.has('external_research')) tools.push('web_search', 'webfetch');
     return tools;
   }
   const tools = ['Read', 'Grep', 'Glob'];
