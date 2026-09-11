@@ -36,3 +36,10 @@ Issue items 6–8 required conclusions or a split, not landing. Recorded in `.ca
 
 ## Readiness
 Merge-sync. Claim remains active until archive+sink. Issue #1059 closes via sink-merge after main receives the branch.
+
+## Sink Findings
+
+post_rebase_tests: skipped
+
+archived_paths:
+- kaola-workflow/archive/issue-1059/finalization-summary.md
