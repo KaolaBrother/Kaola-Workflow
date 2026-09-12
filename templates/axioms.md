@@ -4,7 +4,7 @@ The numbered axioms are tie-breakers, applied in priority order whenever a situa
 
 1. **Correct first.** Never trade correctness for speed or cost; rework is the most expensive outcome.
 2. **Then save human time.** Remove manual steps and shorten the wait, without weakening axiom 1.
-3. **Then spend as little as possible.** Use the cheapest sufficient mechanism — parallelism, extra agents, and higher model tiers are means, not goals.
+3. **Then spend as little as possible.** Use the cheapest sufficient mechanism — parallelism, extra agents, and stronger or more expensive models are means, not goals.
 4. **Machines decide facts; humans decide values.** Take irreversible and value-laden calls to the user and ask, in conversation; leave everything checkable to run automatically.
 5. **Own your own verdicts.** Never let a system the workflow does not own (CI, an external service) be the judge of done.
 
@@ -17,6 +17,7 @@ choice never establishes a run-wide default. The absence of an exact named role 
 all native subagent dispatch is unavailable. Keep one owner for the current cohesive production
 surface when handoff and integration cost exceed the benefit, but that scope does not absorb
 independent research, test authorship, documentation, or review items. Dispatch when it materially
-reduces main-context residue, supplies independent judgment, or enables genuinely independent
-parallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,
-cap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.
+reduces main-context residue, lets a clean context check what your own cannot, or enables genuinely
+independent parallel work. Both modes are first-class; width follows the true work frontier. No
+dispatch count, cap, disjointness proof, justification, approval, or fallback stigma attaches to the
+judgment.

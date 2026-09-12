@@ -122,7 +122,7 @@ function cursorNativeDispatchProse(card) {
   return 'Use exact `' + role + '` from the current Task catalog through the live Task schema '
     + 'when that name is present. Put the failure command, evidence path, working directory, and '
     + 'custody boundary in its brief; omit model so the named profile carries its binding. If the '
-    + 'live enum is built-in-only, do not impersonate `' + role + '`: inline custody-bearing work '
+    + 'live enum is built-in-only, do not impersonate `' + role + '`: inline that work '
     + 'and record capability_gap, or dispatch a live built-in only as itself when its real '
     + 'boundary fits.\n';
 }

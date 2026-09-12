@@ -56,15 +56,15 @@ node "$KAOLA_SCRIPTS/kaola-workflow-validation-runner.js" record \
 The recorder writes `.cache/final-validation.md` with column-0 `verdict: pass`, the exact command,
 and `validated_candidate_hash`; run it from the candidate worktree the finalize transaction reads.
 
-On failure, repair a trivial correction inline or dispatch the role that owns the failure:
-`tdd-guide` for acceptance meaning, `build-error-resolver` for build/type/lint/tooling, and the
-review gate for a review finding. Use the live runtime adapter and a self-sufficient brief.
+On failure, repair a trivial correction inline, or dispatch a suggested route: `tdd-guide` or
+yourself for acceptance meaning; `implementer` or yourself for a build, type, lint, or tooling
+failure; after your own verdict on a review finding, `implementer` or yourself for the fix. Use the
+live runtime adapter and a self-sufficient brief.
 
 <!-- REGION:command — additive runtimes render this through their native dispatch carrier -->
 ```text
 Agent(
-  subagent_type="build-error-resolver",
-  model="opus",
+  subagent_type="implementer",
   description="Routed fix: {the failing command}",
   prompt="the exact failure, evidence path, working directory, custody, and stop boundary"
 )
@@ -86,7 +86,7 @@ answers, but there is no mechanical match; a part you cannot satisfy is a blocke
 
 Review AGENTS.md's documentation checklist against changed public behavior — APIs, setup,
 architecture, environment, validation, README, API docs, architecture docs, changelog, and examples
-— and follow it; do not relist its files here. Dispatch documentation custody when useful; it must
+— and follow it; do not relist its files here. Dispatch `doc-updater` when useful; it must
 transcribe real signatures, JSON/help/schema or return BLOCK, never invent fields. Write one docking
 evidence file, `.cache/doc-docking.md`, with checked files, fixes/no-impact reasons, and
 `DOCKED`/`BLOCKED`; continue only when docked.

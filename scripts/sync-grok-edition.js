@@ -101,10 +101,6 @@ function transformCommandBody(body, forge, label) {
     text = agentGen.replaceRuntimeDelegationGuidance(text, 'grok', forge);
   }
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'spawn_subagent(\n$1');
-  // Retired roles (#1062): a canonical card that names one reroutes to the surviving
-  // custody-bearing fix role, `implementer`.
-  text = text.replace(/subagent_type="(adversarial-verifier|build-error-resolver|code-architect|metric-optimizer|planner|security-reviewer|synthesizer)"/g,
-    'subagent_type="implementer"');
   text = text.replace(/^\s+model="[^"]+",?\n/gm, '');
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime grok');

@@ -415,15 +415,10 @@ function markdownFrontmatter(runtime, role, contract, adapter) {
   return lines.join('\n');
 }
 
-function runtimeRestrictions(runtime, contract) {
-  return '';
-}
-
 function renderMarkdown(runtime, role, contract, adapter) {
   const behaviorSha = behaviorHash(contract);
   const zeroed = markdownFrontmatter(runtime, role, contract, adapter)
     + '<!-- kaola-workflow-managed-agent: true -->\n\n'
-    + runtimeRestrictions(runtime, contract)
     + contract.body.trim() + '\n\n'
     + runtimeAppendix(runtime, adapter, contract, behaviorSha) + '\n';
   return normalizeResolvedProfileHash(zeroed).replace(ZERO_HASH, sha256(normalizeResolvedProfileHash(zeroed)));
