@@ -1,0 +1,72 @@
+== session row
+frost-amusement|fusion-claude-fable-5-1-high-sidekick-swe-2-medium|normal|/private/tmp/kw-fusion-probe|2026-09-12 03:44:51
+== subagent heads
+sidekick|566
+== 'powered by' lines (node_id, parent, snippet)
+4|3|You are powered by' sentence verbatim or NONE>\". Paste its reply verbatim.","metadata":{"
+8|7|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+14|13|You are powered by' sentence verbatim or NONE>\". Paste its reply verbatim.","metadata":{"
+18|17|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+24|23|You are powered by' sentence verbatim or NONE>\". Paste its reply verbatim.","metadata":{"
+30|29|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+36|35|You are powered by' sentence verbatim or NONE>\". Paste its reply verbatim.","metadata":{"
+39|38|You are powered by' sentence verbatim or NONE>","block":true},"index":0,"kind":"function"}
+40|root|You are powered by' sentence verbatim or NONE>\n</lead_handoff>","metadata":{"num_tokens":
+42|41|You are powered by SWE-2 Medium.","metadata":{"num_tokens":null,"is_user_input":null,"requ
+43|42|You are powered by' sentence verbatim or NONE>\n</lead_handoff>","metadata":{"num_tokens":
+45|44|You are powered by SWE-2 Medium.","metadata":{"num_tokens":null,"is_user_input":null,"requ
+46|45|You are powered by' sentence verbatim or NONE>\n</lead_handoff>","metadata":{"num_tokens":
+49|48|You are powered by SWE-2 Medium.","metadata":{"num_tokens":null,"is_user_input":null,"requ
+50|49|You are powered by' sentence verbatim or NONE>\n</lead_handoff>","metadata":{"num_tokens":
+52|51|You are powered by SWE-2 Medium.","tool_calls":[],"thinking":{"thinking":"The lead asked f
+53|51|You are powered by SWE-2 Medium.","tool_calls":[],"thinking":{"thinking":"The lead asked f
+54|38|You are powered by' sentence verbatim or NONE>","block":true},"index":0,"kind":"function"}
+56|55|You are powered by SWE-2 Medium.\n</subagent_completion_notification>","metadata":{"num_to
+57|56|You are powered by SWE-2 Medium.\n```","tool_calls":[],"metadata":{"num_tokens":242,"is_us
+58|56|You are powered by SWE-2 Medium.\n```","tool_calls":[],"metadata":{"num_tokens":242,"is_us
+91|90|You are powered by' sentence verbatim or NONE>\". Paste its reply verbatim.\n\n=== MESSAGE
+93|92|You are powered by' sentence verbatim or NONE>”\n   The sidekick response had to be pasted
+95|94|You are powered by' sentence verbatim or NONE>”\n   The sidekick response had to be pasted
+156|155|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+160|159|You are powered by' sentence verbatim or NONE>”\n   The sidekick response had to be pasted
+193|192|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+197|196|You are powered by' sentence verbatim or NONE>”\n   The sidekick response had to be pasted
+231|230|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+235|234|You are powered by' sentence verbatim or NONE>”\n   The sidekick response had to be pasted
+281|280|You are powered by' sentence\". Paste the result verbatim, or the exact error if the tool 
+283|282|You are powered by Adaptive.","metadata":{"num_tokens":null,"is_user_input":null,"request_
+286|285|You are powered by' sentence verbatim or NONE>”\n   The sidekick response had to be pasted
+324|323|You are powered by' sentence\". Paste the result verbatim, or the exact error if the tool 
+326|325|You are powered by Adaptive.","metadata":{"num_tokens":null,"is_user_input":null,"request_
+329|328|You are powered by' sentence verbatim or NONE>”\n   The sidekick response had to be pasted
+367|366|You are powered by' sentence\". Paste the result verbatim, or the exact error if the tool 
+369|368|You are powered by Adaptive.","metadata":{"num_tokens":null,"is_user_input":null,"request_
+372|371|You are powered by' sentence verbatim or NONE>”\n   The sidekick response had to be pasted
+410|409|You are powered by' sentence\". Paste the result verbatim, or the exact error if the tool 
+415|414|You are powered by' sentence\". Paste the result verbatim, or the exact error if the tool 
+417|416|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+422|421|You are powered by' sentence verbatim or NONE>”\n   The sidekick response had to be pasted
+460|459|You are powered by' sentence\". Paste the result verbatim, or the exact error if the tool 
+464|463|You are powered by' sentence\". Paste the result verbatim, or the exact error if the tool 
+466|465|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+471|470|You are powered by' sentence verbatim or NONE>”\n   The sidekick response had to be pasted
+509|508|You are powered by' sentence\". Paste the result verbatim, or the exact error if the tool 
+513|512|You are powered by' sentence\". Paste the result verbatim, or the exact error if the tool 
+515|514|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+520|519|You are powered by' sentence verbatim or NONE>”\n   The sidekick response had to be pasted
+558|557|You are powered by' sentence\". Paste the result verbatim, or the exact error if the tool 
+562|561|You are powered by' sentence\". Paste the result verbatim, or the exact error if the tool 
+563|562|You are powered by' sentence","block":true},"index":0,"kind":"function"}],"thinking":{"thi
+564|273|You are powered by' sentence\n</lead_handoff>","metadata":{"num_tokens":null,"is_user_inpu
+565|564|You are powered by SWE-2 Medium.","tool_calls":[],"thinking":{"thinking":"I'm powered by S
+566|564|You are powered by SWE-2 Medium.","tool_calls":[],"thinking":{"thinking":"I'm powered by S
+567|562|You are powered by' sentence","block":true},"index":0,"kind":"function"}],"thinking":{"thi
+569|568|You are powered by SWE-2 Medium.\n</subagent_completion_notification>","metadata":{"num_to
+570|569|You are powered by SWE-2 Medium.\n```","tool_calls":[],"metadata":{"num_tokens":94,"is_use
+571|569|You are powered by SWE-2 Medium.\n```","tool_calls":[],"metadata":{"num_tokens":94,"is_use
+== tool names that appeared in tool_call_state
+{
+ "Handed off to sidekick": 8,
+ "Checked on subagent Sidekick": 1
+}
+== generation_model / model_name fields anywhere in metadata

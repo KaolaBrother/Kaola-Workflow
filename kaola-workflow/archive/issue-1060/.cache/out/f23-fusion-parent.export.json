@@ -1,0 +1,1547 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "stream-giraffe",
+  "agent": {
+    "name": "devin",
+    "version": "3000.10.21",
+    "model_name": "Fusion (Claude Fable 5.1 High + SWE-2 Medium)",
+    "tool_definitions": [
+      {
+        "type": "function",
+        "function": {
+          "name": "ask_user_question",
+          "description": "Present multiple-choice questions to the user and collect their answers.\n\nUse this tool when you need the user to make a decision between several options, such as choosing\nan implementation approach, selecting a library, or confirming a design choice.\n\nKey constraints:\n- 1-4 questions per call\n- 2-4 options per question (an \"Other\" free-text option is always added automatically)\n- Keep headers short (e.g. \"Auth method\", \"Library\"); headers over 16 characters are truncated\n- Option labels should be 1-5 words\n\nThe user can:\n- Select from the predefined options\n- Type a custom answer via the \"Other\" option\n- Skip or decline the question to ask for clarification\n\nIf the user submits answers, you will receive a key-value mapping of question text to their selections.\nQuestions the user skipped are marked with \"skipped\": true — treat a skipped question as the user\ndeclining to choose, not as an error, and proceed with your best judgment.\nIf the user chooses to chat instead, you will receive a rejection with any partial answers they provided.",
+          "parameters": {
+            "additionalProperties": false,
+            "required": [
+              "questions"
+            ],
+            "type": "object",
+            "properties": {
+              "questions": {
+                "description": "Array of 1-4 question objects to present to the user.",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "question": {
+                      "description": "The full question text to display to the user.",
+                      "type": "string"
+                    },
+                    "header": {
+                      "description": "Short label displayed as a chip/tag, e.g. \"Auth method\", \"Library\".\nLabels longer than 16 characters are truncated with an ellipsis (\"…\") for display.",
+                      "type": "string"
+                    },
+                    "options": {
+                      "description": "The choices presented to the user (2-4 options). An \"Other\" free-text option is always added automatically.",
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "description": "Display text the user sees (1-5 words).",
+                            "type": "string"
+                          },
+                          "description": {
+                            "description": "Explanation of what this option means or its trade-offs.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "label",
+                          "description"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "multi_select": {
+                      "description": "If true, the user can select multiple options; if false, single-select only.",
+                      "type": "boolean",
+                      "default": false
+                    }
+                  },
+                  "required": [
+                    "question",
+                    "header",
+                    "options"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "answers": {
+                "description": "User's answers, keyed by question text. Populated by the UI when the user responds.\nDo not set this yourself; it will be filled in automatically.",
+                "type": "object",
+                "additionalProperties": {
+                  "description": "Represents a single answer from the user for one question.",
+                  "type": "object",
+                  "properties": {
+                    "selected": {
+                      "description": "The selected option label(s). For single-select, this will have one element.\nFor multi-select, it may have multiple. If \"Other\" was chosen, it will contain \"Other\".",
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "custom_text": {
+                      "description": "Custom text provided by the user. Set when the user selects \"Other\".",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "selected"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "browser_preview",
+          "description": "Spin up a browser preview for a running web server.\n\nThis lets the USER interact with the web server as normal, and lets them send\nyou what they see: selecting a DOM element (with its React component and source\nlocation, when resolvable) or the browser console output. Those captures go into\nthe USER's message box for them to send — you will not receive them unless they\ndo, so ask them to share what they see rather than waiting.\n\nUsage notes:\n  - The server must already be running; start it with a background command\n    first (`timeout: 0`) if it isn't.\n  - Returns immediately with a preview ID and URL. The preview stays up for the\n    rest of the session, so the USER can keep using it after you stop.\n  - An attempt is made to open the URL in the USER's browser; the URL is always\n    printed in case that fails (e.g. over SSH or in a container).\n  - Calling this again for the same URL returns the existing preview.\n  - Use `close_browser_preview` when the preview is no longer needed, e.g.\n    before shutting down the server it points at.\n",
+          "parameters": {
+            "required": [
+              "url",
+              "name"
+            ],
+            "properties": {
+              "url": {
+                "description": "The URL of the target web server to provide a browser preview for. This\nshould contain the scheme (e.g. http:// or https://), domain (e.g.\nlocalhost or 127.0.0.1), and port (e.g. :8080) but no path.",
+                "type": "string"
+              },
+              "name": {
+                "description": "A short 3-5 word name for the target web server. Should be title-cased\ne.g. 'Personal Website'. Format as a simple string, not as markdown; and\nplease output the title directly, do not prefix it with 'Title:' or\nanything similar.",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "close_browser_preview",
+          "description": "Closes a running browser preview by its ID.\n\n- Takes a preview_id parameter, as returned by `browser_preview`\n- The preview URL stops working; the web server it points at is untouched\n- Previews are closed automatically when the session ends, so this is only\n  needed to close one early\n",
+          "parameters": {
+            "required": [
+              "preview_id"
+            ],
+            "properties": {
+              "preview_id": {
+                "description": "The ID of the browser preview to close.",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "description": "Performs exact string replacements in files.\n\nUsage:\n- You must use your `read` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.\n- When editing text from read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.\n- ALWAYS prefer editing existing files to creating new ones.\n- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n- The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.\n- Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.",
+          "parameters": {
+            "required": [
+              "file_path",
+              "old_string",
+              "new_string"
+            ],
+            "properties": {
+              "file_path": {
+                "description": "The absolute path to the file to modify",
+                "type": "string"
+              },
+              "old_string": {
+                "description": "The text to replace. Always provide `old_string` before `new_string` so that streaming displays can show the diff progressively.",
+                "type": "string"
+              },
+              "new_string": {
+                "description": "The text to replace it with (must be different from `old_string`)",
+                "type": "string"
+              },
+              "replace_all": {
+                "description": "Replace all occurrences of `old_string` (default false)",
+                "type": "boolean",
+                "default": false
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "exec",
+          "description": "Executes a given shell command in a persistent shell session and waits for output with optional timeout, ensuring proper handling and security measures.\n\nCommands run under bash by default on every platform (Git Bash on Windows; PowerShell only if Git Bash is missing) unless you set `shell_flavor`. Write the command in that shell's syntax; never wrap it in another shell (`bash -lc \"...\"`, `powershell -Command \"...\"`), which parses your quoting and `$` expansions twice. To use a different shell, set `shell_flavor` (e.g. `shell_flavor: \"powershell\"` for Windows-native cmdlets).\n\nIMPORTANT: This tool is for terminal operations like git, npm, docker, etc. DO NOT use it for file operations (reading, writing, editing, searching, finding files) - use the specialized tools for this instead.\n\nBefore executing the command, please follow these steps:\n\n1. Directory Verification:\n   - If the command will create new directories or files, first use `ls` to verify the parent directory exists and is the correct location\n   - For example, before running \"mkdir foo/bar\", first use `ls foo` to check that \"foo\" exists and is the intended parent directory\n\n2. Command Execution:\n   - Always quote file paths that contain spaces with double quotes (e.g., cd \"path with spaces/file.txt\")\n   - Examples of proper quoting:\n     - cd \"/Users/name/My Documents\" (correct)\n     - cd /Users/name/My Documents (incorrect - will fail)\n     - python \"/path/with spaces/script.py\" (correct)\n     - python /path/with spaces/script.py (incorrect - will fail)\n   - After ensuring proper quoting, execute the command.\n   - Capture the output of the command.\n\nUsage notes:\n  - If the output is too long, it will be truncated before being returned to you.\n  - Commands run in a persistent shell session for each shell_id, preserving state between calls. The working directory persists between commands.\n  - One-shot commands (no `shell_id`) do NOT share state with each other: the working directory does NOT persist between calls. Use the optional `workdir` parameter (an absolute path to an existing directory) to set the working directory for a command, instead of a leading `cd` that the next call would forget. With a `shell_id`, `workdir` changes that session's directory before running the command.\n  - Prefer one command per call: to do several things, make several calls in the same message instead of separating commands with `;` or a newline.\n  - Chain with `&&` when a command must not run unless the previous one succeeded (PowerShell: `cmd1; if ($?) { cmd2 }`).\n  - Use absolute paths in your commands instead of `cd` if possible. You may use `cd` if the User explicitly requests it.\n  - Passwords cannot be entered into this tool, so `sudo` fails when it needs one. Do NOT retry with a TTY or ask the user to type a password — run without sudo or ask the user to run the command themselves.\n",
+          "parameters": {
+            "additionalProperties": false,
+            "required": [
+              "command"
+            ],
+            "type": "object",
+            "properties": {
+              "command": {
+                "description": "The command to execute in the current shell session.\n\nExamples:\n- Bash: \"echo 'Hello World'\", \"ls -la\", \"git status\"\n- PowerShell: \"Write-Output 'Hello World'\", \"Get-ChildItem\"\n\nNote: Do NOT include the shell executable (like \"bash -c\" or \"powershell -Command\") in the command.\nThe command should be the raw shell command as you would type it in the active shell.",
+                "type": "string"
+              },
+              "shell_id": {
+                "description": "Optional shell ID to reuse an existing interactive session. Use shell IDs to maintain multiple shell sessions. When shell ID is provided, writes to that session's stdin. When no shell ID is provided, a new session is created.",
+                "type": "string"
+              },
+              "workdir": {
+                "description": "Optional absolute path to use as the working directory for this command (does not persist between one-shot calls; with a `shell_id` it cds the session).",
+                "type": "string"
+              },
+              "timeout": {
+                "description": "Optional timeout in milliseconds (default: background after 10s idle or 30s total).\nWhen it elapses, a still-running command is backgrounded and its shell_id returned for `get_output`/`kill_shell`. Set to `0` to background immediately.",
+                "type": "integer"
+              },
+              "tty": {
+                "description": "Allocate a PTY-backed interactive session. Default `false`.\n`false` (default): one-shot non-interactive command run through pipes; good for most use cases.\n`true`: persistent interactive session — for TUI programs (vim, tmux, top, REPLs) or state that must persist across calls.",
+                "type": "boolean",
+                "default": false
+              },
+              "shell_flavor": {
+                "description": "Which shell runs the command: `bash`, `zsh`, `fish` or `powershell`.\nDefaults to bash on every platform (Git Bash on Windows; PowerShell only\non a Windows machine without Git Bash). Pick a shell here instead of\nnesting one shell inside another: the command is handed to it verbatim,\nso `shell_flavor: \"powershell\"` runs plain PowerShell syntax with no\nbash parse of your quoting and `$` expansions in between. Only valid\nwhen starting a new shell: a `shell_id` that already exists keeps the\nshell it was started with.",
+                "type": "string",
+                "enum": [
+                  "bash",
+                  "zsh",
+                  "fish",
+                  "powershell"
+                ]
+              },
+              "env": {
+                "description": "Environment variables for this command's process tree, e.g.\n`{\"API_KEY\": \"abc123\", \"NODE_ENV\": \"development\"}`. These take effect\nonly when a new shell is started, so `env` cannot be combined with\n`shell_id` — omit `shell_id` (the call is rejected otherwise) so the\nvariables are set from the shell's first process onward. They are\nvisible to this command and its child processes only, not to other\nshells or later commands.",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "properties": {}
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "find_file_by_name",
+          "description": "Fast file name/path pattern matching tool that works with any codebase size using glob patterns. Supports brace expansion (e.g., `**/*.{ts,tsx,js,jsx}`). Matches against file paths, not file contents. Do NOT use this tool for searching for things like function names, variable names, etc. which should be searched against file contents (e.g. using grep).",
+          "parameters": {
+            "required": [
+              "pattern"
+            ],
+            "properties": {
+              "pattern": {
+                "description": "The glob pattern to match files against.\nExamples:\n- `*.py` - matches all Python files in the current directory only (not subdirectories)\n- `**/*.js` - matches all JavaScript files in the current directory and all subdirectories recursively\n- `src/**/*.ts` - matches all TypeScript files within the `src` folder and its subdirectories\n- `test_*.py` - matches Python files starting with `test_` in the current directory (e.g., `test_utils.py`)\n- `**/*.{ts,tsx}` - matches all TypeScript files (both .ts and .tsx) recursively using brace expansion",
+                "type": "string"
+              },
+              "path": {
+                "description": "The directory to search in (defaults to current working directory)",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "get_output",
+          "description": "Reads the output from a background shell process.\n\nUsage notes:\n- The shell_id argument is required (use the ID returned by the exec tool)\n- You can specify an optional timeout in milliseconds (up to 280000ms). Timeouts below 10000ms (10s) are raised to 10s; the default is 10s.\n- IMPORTANT: timeout is the MAX wait — this returns immediately when the process exits. If you want to wait for a finite command to finish, set a long timeout and do not repeatedly poll. For a process that is expected to keep running (dev servers, watchers, daemons), a long timeout always waits the full duration — use a short timeout (10-30s) to read its startup output, repeating until the ready signal appears, or verify readiness directly (e.g. curl the port).\n- The process continues running after reading output\n- This will return the output of the most recently executed command in the shell if there is no current command running command\n",
+          "parameters": {
+            "required": [
+              "shell_id"
+            ],
+            "properties": {
+              "shell_id": {
+                "description": "The ID of the shell to read output from.",
+                "type": "string"
+              },
+              "timeout": {
+                "description": "Optional timeout in milliseconds.",
+                "type": "integer"
+              },
+              "incremental": {
+                "description": "If true (default), returns the changes since your last read. For interactive shells whose\nscreen redraws in place (progress bars, block redraws), this is a unified diff so in-place\nline changes are shown as `-`old / `+`new; for plain append-only output it is the new lines.\nIf false, returns the full output buffer.",
+                "type": "boolean"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "description": "A powerful search tool built on ripgrep.\n\nUsage:\n- Always prefer this tool over invoking `grep` or `rg` as a shell command. It has been optimized for correct permissions and access.\n- The pattern is treated as a regular expression using Rust regex syntax (like `rg` defaults): look-ahead/look-behind (e.g. `(?!...)`, `(?<=...)`) and backreferences are NOT supported. Rewrite without them, e.g. use `foo\\([^)]` instead of `foo\\((?!\\))`.\n- Filter files with the glob_pattern parameter in glob format (e.g., \"*.rs\", \"src/**/*.py\").\n- Use output_mode to control results: 'content' for matching lines, 'files_with_matches' for file paths only, 'count' for match counts. Set case_insensitive for case-insensitive matching and context_lines to show lines around each match.\n- If the result is truncated, narrow your search with a more specific pattern or more filters.\n- Files larger than 4 MB are skipped.",
+          "parameters": {
+            "additionalProperties": false,
+            "required": [
+              "pattern"
+            ],
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "description": "The regular expression pattern to search for, passed to ripgrep under the hood",
+                "type": "string"
+              },
+              "path": {
+                "description": "The directory or file to search in. Defaults to current directory.",
+                "type": "string",
+                "default": "."
+              },
+              "glob_pattern": {
+                "description": "Glob pattern to filter files (e.g., '*.rs' searches .rs files in current dir but not subdirs, 'src/**/*.py' searches .py files in src/ and its subdirs). Defaults to searching all files.",
+                "type": "string"
+              },
+              "output_mode": {
+                "type": "string",
+                "enum": [
+                  "content",
+                  "files_with_matches",
+                  "count"
+                ],
+                "description": "How to format the output.",
+                "default": "content"
+              },
+              "case_insensitive": {
+                "description": "Perform case-insensitive search. Defaults to false.",
+                "type": "boolean",
+                "default": false
+              },
+              "max_results": {
+                "description": "Maximum number of matches to return. Defaults to 100, max 20,000. Only applicable for \"content\" output mode.",
+                "type": "integer"
+              },
+              "context_lines": {
+                "description": "Number of lines to show before and after each match (context). Defaults to 0.",
+                "type": "integer",
+                "default": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "kill_shell",
+          "description": "Kills a running background shell by its ID.\n\n- Takes a shell_id parameter identifying the shell to kill\n- Returns a success or failure status\n- Use this tool when you need to terminate a long-running shell\n",
+          "parameters": {
+            "required": [
+              "shell_id"
+            ],
+            "properties": {
+              "shell_id": {
+                "description": "The ID of the shell to kill.",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "mcp_call_tool",
+          "description": "Execute a tool on an MCP server. Use this to interact with external services like Linear, GitHub, Slack, databases, and more. The tool result will be returned as structured data.",
+          "parameters": {
+            "required": [
+              "server_name",
+              "tool_name"
+            ],
+            "properties": {
+              "server_name": {
+                "description": "Name of the MCP server to use (e.g., \"linear\", \"github\").",
+                "type": "string"
+              },
+              "tool_name": {
+                "description": "Name of the tool to execute.",
+                "type": "string"
+              },
+              "arguments": {
+                "description": "Input arguments for the tool as a JSON object.",
+                "type": "object",
+                "additionalProperties": true,
+                "default": {}
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "mcp_list_servers",
+          "description": "Lists all MCP servers you have access to. Use this first if the user is asking about any third party integrations (e.g. Slack, Linear, etc).",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "mcp_list_tools",
+          "description": "List available tools and resources from MCP servers. Use this to discover what capabilities are available before calling mcp_call_tool.",
+          "parameters": {
+            "properties": {
+              "server_name": {
+                "description": "Name of the MCP server to list tools from (e.g., \"linear\", \"github\"). If not provided, lists tools from all configured servers.",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "mcp_read_resource",
+          "description": "Read a resource from an MCP server. Resources can be files, database records, API responses, or any data exposed by the MCP server. Returns the resource content as text or binary data.",
+          "parameters": {
+            "required": [
+              "server_name",
+              "resource_uri"
+            ],
+            "properties": {
+              "server_name": {
+                "description": "Name of the MCP server (e.g., \"linear\", \"github\").",
+                "type": "string"
+              },
+              "resource_uri": {
+                "description": "Resource URI to read (e.g., \"<file:///path/to/file>\", \"<linear://issue/123>\").",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "notebook_edit",
+          "description": "Edit a cell in a Jupyter notebook file (.ipynb) - replace, insert, or delete cells",
+          "parameters": {
+            "additionalProperties": false,
+            "required": [
+              "notebook_path",
+              "cell_number",
+              "new_source"
+            ],
+            "type": "object",
+            "properties": {
+              "notebook_path": {
+                "description": "The absolute path to the Jupyter notebook file (.ipynb) to edit.",
+                "type": "string"
+              },
+              "cell_number": {
+                "description": "The 0-based index of the cell to edit.",
+                "type": "integer"
+              },
+              "new_source": {
+                "description": "The new source content for the cell.",
+                "type": "string"
+              },
+              "cell_type": {
+                "description": "The type of the cell. If not specified, keeps the current type (for replace) or defaults to code (for insert).",
+                "type": "string",
+                "enum": [
+                  "code",
+                  "markdown"
+                ]
+              },
+              "edit_mode": {
+                "default": "replace",
+                "description": "The edit operation to perform. Defaults to replace.",
+                "type": "string",
+                "enum": [
+                  "replace",
+                  "insert",
+                  "delete"
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "notebook_read",
+          "description": "Read a Jupyter notebook file (.ipynb) and extract all cells with their outputs",
+          "parameters": {
+            "required": [
+              "notebook_path"
+            ],
+            "properties": {
+              "notebook_path": {
+                "description": "The absolute path to the Jupyter notebook file to read (must be absolute, not relative)",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read",
+          "description": "Reads a file from the filesystem. The file_path parameter must be an absolute path, not a relative path. By default, it reads up to 20000 characters starting from the beginning of the file. You can optionally specify a line offset and limit (especially handy for long files), but it's recommended to read the whole file by not providing these parameters. Any lines longer than 2000 characters will be truncated.",
+          "parameters": {
+            "required": [
+              "file_path"
+            ],
+            "properties": {
+              "file_path": {
+                "description": "The absolute path to the file to read.",
+                "type": "string"
+              },
+              "offset": {
+                "description": "Optional line number to start reading from (1-based).",
+                "type": "integer"
+              },
+              "limit": {
+                "description": "Optional number of lines to read.",
+                "type": "integer"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_subagent",
+          "description": "Reads the response from a background subagent, using the agent_id you got from the sidekick or run_subagent tool or a <subagent_completion_notification> message. You use block=true to wait for completion. If you have other work to do, you can do that (you'll be notified whenever a subagent completes). This tool will never interrupt a running subagent. For the sidekick, blocking calls allow timeouts up to 2700 seconds, which is also the default when timeout is omitted.",
+          "parameters": {
+            "required": [
+              "agent_id"
+            ],
+            "properties": {
+              "agent_id": {
+                "description": "The ID of the background subagent to read output from.",
+                "type": "string"
+              },
+              "block": {
+                "description": "If true, block until the subagent finishes or the timeout expires.",
+                "type": "boolean",
+                "default": false
+              },
+              "timeout": {
+                "description": "Maximum number of seconds to wait when blocking. Defaults to 30, capped at 600, unless the tool description documents different limits for a specific subagent type.",
+                "type": "integer"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "request_scope",
+          "description": "Request read or write access to a directory. Use this tool when you encounter a permission error due to sandboxing and need access to a path outside your current allowed directories. The user will be prompted to approve or deny the request. This tool is a no-op if the scope is already granted.",
+          "parameters": {
+            "required": [
+              "scope",
+              "path"
+            ],
+            "properties": {
+              "scope": {
+                "description": "The type of access to request: \"read\" or \"write\".",
+                "type": "string"
+              },
+              "path": {
+                "description": "The absolute path to the directory to request access to.",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "run_subagent",
+          "description": "Launch an independent subagent to handle a task autonomously.\n\nSubagents (also referred to as just \"agents\") handle self-contained, multi-step tasks, such as broad or uncertain searches. When you do run several at once, launch them in parallel rather than one after the other, and keep their work disjoint so they don't interfere with each other (e.g. no two subagents writing the same files).\n\nSkip subagents when simpler tools suffice:\n- If you already know the file path, read it directly\n- Use your grep and glob tools rather than subagents when you think they will meet your needs quickly without many attempts\n- Use your edit or read tools directly if only a few files are involved\n\n- Don't use a subagent to do singular tasks like running a command\n\nWriting effective prompts:\n- Subagents are stateless; they cannot ask clarifying questions, and they can't see any of your context. Front-load all context they might neeed: relevant file paths, function/class names, what you already know, and exactly what you need back.\n- State whether the subagent should make changes or only investigate. It has no visibility into the user's original request. When asking open-ended questions, explicitly state how thorough of an answer you want.\nUsage notes:\n- The user never sees subagent output directly, so you'll need to distill subagents' answers into your own response if you want to .\n- You can generally trust subagent results. Avoid re-doing their work unless something looks wrong.\n\n- Set is_background=true to run a background subagent without blocking. You will be notified automatically when it finishes with a <subagent_completion_notification> message. You can check on the status of a background subagent using your read_subagent tool. To wait for a subagent to complete to see its response, call read_subagent with block=true. Background agents are nice for parallelism and work that might take unexpectedly long, in which case you'd want to do other work while waiting.\n        - Set is_background=false to run a foreground subagent when you need the answer before continuing. You can't do any other work while a foreground subagent is running, and at most one foreground agent can run at once. Despite these restrictions, foreground users have a slightly nicer UX and are less frequently blocked by permission issues. So use is_background=false when you don't need paralellism and would have otherwise spawned a background agent then immediately called read_subagent with block=true.\n        - If you want to run both background subagents and a foreground subagent, run the background subagents first and then run the foreground subagent. Don't try to launch multiple foreground subagents in parallel; instead use background subagents or run the foreground subagents sequentially so you can see each subagent's output before launching the next one.",
+          "parameters": {
+            "required": [
+              "title",
+              "task",
+              "profile"
+            ],
+            "properties": {
+              "title": {
+                "description": "A short, human-readable title for this subagent.",
+                "type": "string"
+              },
+              "task": {
+                "description": "The task or prompt to give the subagent. Be specific and detailed.",
+                "type": "string"
+              },
+              "profile": {
+                "description": "The id of the profile to use for this subagent.",
+                "type": "string"
+              },
+              "is_background": {
+                "description": "If true, the subagent runs in the background and returns its ID\nimmediately. You will be automatically woken up with the result\nwhen it completes. You can check progress with read_subagent if\nneeded, but do not poll in a loop — just continue with other work\nor end your turn.",
+                "type": "boolean",
+                "default": false
+              },
+              "resume": {
+                "description": "If set to an agent id (which you can get from the response of a previous\nrun_subagent invocation), your prompt will be sent to that agent, so it can\nrespond using its existing execution transcript as context.",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "sidekick",
+          "description": "Hand off work to your persistent Devin sidekick subagent. There is exactly one sidekick for the whole session: its conversation context and runtime persist across handoffs, and it runs on the same machine (shared filesystem and repos). With `block: true` (the default) the call waits and returns the sidekick's report directly, streaming progress. With `block: false` it returns immediately and the report arrives later in a subagent completion notification; when you run out of parallel work, wait for it with `read_subagent` (`block: true`) rather than polling in a loop or inventing the report yourself. Calling this again while the sidekick is running injects the new message into the running handoff as an interrupt rather than starting a second sidekick. The sidekick cannot talk to the user and does not own commits, pushes, pull requests or CI; user-facing and authority actions stay with you.\n\nCorrectness-critical authoring is NOT delegable through this tool: any query against a shared/production data system, any prompt/rubric/grader/eval-harness text, and any scoring/threshold/sampling/pipeline configuration must be authored by YOU before the handoff (to a file, or verbatim in the brief). A message that asks the sidekick to write, port, adapt, rewrite, or design any of those artifacts is an INVALID brief. Size is irrelevant: a 20-turn rubric or 200-line query is still yours to write. The sidekick executes lead-authored artifacts and reports results; it never composes them.",
+          "parameters": {
+            "required": [
+              "message"
+            ],
+            "properties": {
+              "message": {
+                "description": "The message to send the sidekick.",
+                "type": "string"
+              },
+              "block": {
+                "description": "Whether this handoff blocks until the sidekick finishes and returns its\nreport directly (default: true). If the wait times out or is interrupted\nfirst, the handoff continues in the background and its report arrives in a\n<subagent_completion_notification>; do not assume it finished before that\nnotification.",
+                "type": "boolean",
+                "default": true
+              }
+            },
+            "additionalProperties": false,
+            "type": "object"
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "skill",
+          "description": "Invoke or discover skills. Modes: 'invoke' (default) activates a skill by name; 'list' and 'search' accept exactly one source, either a project `path` or `source: \"plugins\"` for active plugin skills. 'list' scans only the project root; 'search' recurses and filters by optional keywords. Use plugin search before concluding that a referenced plugin skill does not exist.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "default": "invoke",
+                "description": "The skill operation to perform. Defaults to \"invoke\" if omitted.",
+                "type": "string",
+                "enum": [
+                  "invoke",
+                  "list",
+                  "search"
+                ]
+              },
+              "skill": {
+                "description": "The name of the skill to invoke (required for 'invoke' command).\nUse one of the available skills listed in the system prompt.",
+                "type": "string",
+                "default": null
+              },
+              "path": {
+                "description": "Project path to discover skills in. Scans skill directories (e.g.\n.devin/skills/) at the project root; `list` does not recurse into\nsubdirectories, while `search` does. Relative paths are resolved\nagainst the session's working directory. Provide either `path` or\n`source` for list/search, not both.",
+                "type": "string",
+                "default": null
+              },
+              "source": {
+                "description": "Set to `plugins` to list or search active plugin skills instead of\nscanning a project path.",
+                "type": "string",
+                "enum": [
+                  "plugins"
+                ]
+              },
+              "keywords": {
+                "description": "List of keywords to search for. Empty or omitted means include all skills.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": null
+              },
+              "keywords_mode": {
+                "type": "string",
+                "enum": [
+                  "or",
+                  "and"
+                ],
+                "description": "Controls whether all keywords or any keyword need to be present.",
+                "default": "or"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "todo_write",
+          "description": "Use this tool to create and manage a structured task list for your current session. It tracks your progress and gives the user visibility into what you are working on.\n\n## When to use\nUse this tool for multi-step tasks (3 or more distinct steps), non-trivial tasks that require planning, or when the user provides multiple tasks or explicitly asks for a todo list. Skip it for trivial, single-step, or purely conversational/informational requests — just do the task directly.\n\n## Task states and management\n- Each task is pending, in_progress, or completed\n- Keep exactly ONE task in_progress at a time; mark it in_progress when starting work on it\n- Mark a task completed IMMEDIATELY after finishing it\n- Only mark a task completed when it is fully done — if you hit errors or blockers, keep it in_progress and add a new task describing what must be resolved\n- Add follow-up tasks discovered during work; remove tasks that are no longer relevant\n- Create specific, actionable items and break complex work into smaller steps\n\n## Example\nFor \"Add a dark mode toggle to settings, then run tests and build\":\n1. Add dark mode toggle component to settings page (in_progress)\n2. Wire up dark mode state management\n3. Update existing components to support theme switching\n4. Run tests and build, fixing any failures",
+          "parameters": {
+            "additionalProperties": false,
+            "required": [
+              "todos"
+            ],
+            "type": "object",
+            "properties": {
+              "todos": {
+                "description": "The updated list of todo items.",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "description": "The task description.",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "in_progress",
+                        "completed"
+                      ],
+                      "description": "Current status of the todo item."
+                    }
+                  },
+                  "required": [
+                    "content",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "web_search",
+          "description": "Search the web for information using a search query. Returns relevant web page titles, URLs, and summaries. Use this when you need to find information online.\n\nYou must not include extraneous information in web searches. For example, to find latest python version, do *NOT* search \"latest Python version 2026 3.11 3.12 3.13\". The \"2026 3.11 3.12 3.13\" is unnecessary. Keep the search string simple and focused, e.g. \"latest Python version\".",
+          "parameters": {
+            "required": [
+              "query"
+            ],
+            "properties": {
+              "query": {
+                "description": "The search query to find relevant web pages.",
+                "type": "string"
+              },
+              "num_results": {
+                "description": "Maximum number of results to return. Defaults to 5.",
+                "type": "integer",
+                "default": null
+              },
+              "domain": {
+                "description": "Optional domain to restrict search results to (e.g. \"docs.rs\").",
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "type": "object"
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "webfetch",
+          "description": "Fetches a web page and returns its content as readable text.",
+          "parameters": {
+            "required": [
+              "url"
+            ],
+            "properties": {
+              "url": {
+                "description": "The URL to fetch content from.",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "write",
+          "description": "Write content to a file, creating it if needed and overwriting it if it exists.\n\nUsage:\n- Prefer the edit tool for modifying existing files. Only use this tool to create new files or for complete rewrites.\n- If overwriting an existing file, you SHOULD use the read tool first to read the file's contents.\n- NEVER proactively create documentation files (*.md) or README files unless explicitly requested.\n- Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.",
+          "parameters": {
+            "required": [
+              "file_path",
+              "content"
+            ],
+            "properties": {
+              "file_path": {
+                "description": "The absolute path to the file to write",
+                "type": "string"
+              },
+              "content": {
+                "description": "The content to write to the file",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "write_to_process",
+          "description": "Writes input to an interactive process running in a shell with support for both text and special characters.\n\nIMPORTANT: This command will NOT work if there is no command running in the shell. If you want to execute a command in the shell use the exec tool.\n\nProvide exactly ONE of text_input or bytes_input (never both). To answer a prompt that needs an Enter keypress (e.g. a [y/n] prompt), set bytes_input to y<CR> (the y character followed by Enter).\n\nInput options:\n- text_input: Literal text content (no special character interpretation)\n- bytes_input: Special characters using angle bracket notation (e.g., <ESC>, <CR>, <UP>, <C-c>)\n\nSpecial character notation:\n- <ESC> = Escape character\n- <CR> = Carriage return (Enter)\n- <LF> = Line feed (newline)\n- <BS> = Backspace\n- <UP>, <DOWN>, <LEFT>, <RIGHT> = Arrow keys\n- <C-c>, <C-d>, <C-z> = Ctrl+key combinations\n",
+          "parameters": {
+            "required": [
+              "shell_id"
+            ],
+            "properties": {
+              "shell_id": {
+                "description": "The ID of the shell to write to.",
+                "type": "string"
+              },
+              "text_input": {
+                "description": "Text content to write to the shell (interpreted as literal text).",
+                "type": "string"
+              },
+              "bytes_input": {
+                "description": "Special characters/bytes to write to the shell (interpreted with angle bracket notation).",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "additionalProperties": false
+          }
+        }
+      }
+    ],
+    "extra": {
+      "backend": "Windsurf",
+      "permission_mode": "Normal"
+    }
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-09-12T03:35:45.992934+00:00",
+      "source": "system",
+      "message": "You are Devin, an interactive command line agent from Cognition.\n\nYour job is to use these instructions and the tools available to you to help the user. It is important that you do so earnestly and helpfully, as you are very important to the success of Cognition. Best of luck! We love you. <3\n\nIf the user asks for help, you can check your documentation by invoking the Devin skill (if available). Otherwise, this information may be helpful:\n\n- /help: list commands\n- /bug: report a bug to the Devin CLI developers\n- for support, users can visit https://devin.ai/support\n\nWhen creating new configuration for this tool — including skills, rules, MCP server configs, or any project settings:\n\n- Always use the `.devin/` directory for NEW configuration (e.g. `.devin/skills/<name>/SKILL.md`, `.devin/config.json`)\n- For global (user-level) configuration, use `~/.config/devin/`\n- Do NOT place new configuration in `.claude/`, `.cursor/`, or other tool-specific directories unless explicitly asked. These are only read for compatibility, not written to.\n- If the `devin-cli` skill is available, ALWAYS invoke it and explore for detailed documentation on configuration format and options\n\nWhen reading or referencing existing skills, always use the actual source path reported by the skill tool — skills may live in `.devin/`, `.agents/`, or other directories.\n\n\n# Modes\n\nThe active mode is how the user would like you to act.\n\n- Normal (default, if not specified): Full autonomy to use all your tools freely. For example: exploring a codebase, writing or editing code, etc.\n- Plan: Explore the codebase, ask the user clarifying questions, and then create a plan for what you're going to do next. Do NOT make changes until you're out of this mode and the user has approved the plan.\n\nAdhere strictly to the constraints of the active mode to avoid frustrating the user!\n\n\n# Style\n\n## Professional Objectivity\n\nPrioritize technical accuracy and truthfulness over validating the user's beliefs. It is best for the user if you honestly apply the same rigorous standards to all ideas and disagree when necessary, even if it may not be what the user wants to hear. Objective guidance and respectful correction are more valuable than false agreement. Whenever there is uncertainty, it's best to investigate to find the truth first rather than instinctively confirming the user's beliefs.\n\n## Tone\n\n- Be concise, direct, and to the point. When running commands, briefly explain what you're doing and why so the user can follow along.\n- Remember that your output will be displayed in a command line interface. Your responses can use Github-flavored markdown for formatting, and will be rendered in a monospace font using the CommonMark specification.\n- Output text to communicate with the user; all text you output outside of tool use is displayed to the user. Only use tools to complete tasks. Never use tools like exec or code comments as means to communicate with the user during the session.\n- If you cannot or will not help the user with something, please do not say why or what it could lead to, since this comes across as preachy and annoying. Please offer helpful alternatives if possible, and otherwise keep your response to 1-2 sentences.\n- Only use emojis if the user explicitly requests it. Avoid using emojis in all communication unless asked.\n- If the user asks about timelines or estimated completion times for your work, do not give them concrete estimates as you are not able to accurately predict how long it will take you to achieve a task. Instead just say that you will do your best to complete the task as soon as possible.\n- Avoid guessing. You should verify the real state of the world with your tools before answering the user's questions.\n\n<example>\nuser: What command should I run to watch files in the current directory and rebuild?\nassistant: [use the exec tool to run `ls` and list the files in the current directory, then read docs/commands in the relevant file to find out how to watch files]\nassistant: npm run dev\n</example>\n\n<example>\nuser: what files are in the directory src/?\nassistant: [runs ls and sees foo.c, bar.c, baz.c]\nassistant: foo.c, bar.c, baz.c\nuser: which file contains the implementation of Foo?\nassistant: [reads foo.c]\nassistant: src/foo.c contains `struct Foo`, which implements [...]\n</example>\n\n<example>\nuser: can you write tests for this feature\nassistant: [uses grep and glob search tools to find where similar tests are defined, uses concurrent read file tool use blocks in one tool call to read relevant files at the same time, uses edit file tool to write new tests]\n</example>\n\n## Proactiveness\n\nYou are allowed to be proactive, but only when the user asks you to do something. You should strive to strike a balance between:\n\n1. Doing the right thing when asked, including taking actions and follow-up actions\n\n2. Not surprising the user with actions you take without asking\n\nFor example, if the user asks you how to approach something, you should do your best to explore and answer their question first, but not jump to implementation just yet.\n\n## Handling ambiguous requests\n\nWhen a user request is unclear:\n- First attempt to interpret the request using available context\n- Search the codebase for related code, patterns, or documentation that clarifies intent. Also consider searching the web.\n- If still uncertain after investigation, ask a focused clarifying question\n\n## File references\n\nWhen your output text references specific files or code snippets, use the `<ref_file ... />` and `<ref_snippet ... />` self-closing XML tags to create clickable citations. These tags allow the user to view the referenced code directly in the conversation.\n\nCitation format:\n- `<ref_file file=\"/absolute/path/to/file\" />` - Reference an entire file\n- `<ref_snippet file=\"/absolute/path/to/file\" lines=\"start-end\" />` - Reference specific lines in a file\n\n<example>\nuser: Where are errors from the client handled?\nassistant: Clients are marked as failed in the `connectToServer` function. <ref_snippet file=\"/home/ubuntu/repos/project/src/services/process.ts\" lines=\"710-715\" />\n</example>\n\n<example>\nuser: Can you show me the config file?\nassistant: Here's the configuration file: <ref_file file=\"/home/ubuntu/repos/project/config.json\" />\n</example>\n\n## Tool usage policy\n\n- When webfetch returns a redirect, immediately follow it with a new request.\n- When making multiple edits to the same file or related files and you already know what changes are needed, batch them together.\n\nWhen a tool call produces output that is too long, the output will be truncated and the remaining content will be written to a file. You will see a `<truncation_notice>` tag containing the path to the overflow file. You are responsible for reading this file if you need the full output.\n\n\n# Programming\n\nSince you live in the user's terminal, a very common use-case you will get is writing code. Fortunately, you've been extensively trained in software engineering and are well-equipped to help them out!\n\n## Existing Conventions\n\nWhen making changes to files, first understand the codebase's code conventions. Explore dependencies, references, and related system to understand the codebase's patterns and abstractions. Mimic code style, use existing libraries and utilities, and follow existing patterns.\n- NEVER assume that a given library is available, even if it is well known. Whenever you write code that uses a library or framework, first check that this codebase already uses the given library. For example, you might look at neighboring files, or check the package.json (or cargo.toml, and so on depending on the language). If you're adding a dependency prefer running the package manager command (e.g. npm add or cargo add) instead of editing the file.\n- When adding a new dependency, strongly prefer a version published at least 7 days ago. Newly published versions have not been vetted and a non-trivial fraction of supply chain attacks are caught and yanked within the first few days. Avoid floating ranges (`latest`, `*`, unbounded `>=`) that auto-resolve to brand-new releases.\n- When you create a new component, first look at existing components to see how they're written; then consider framework choice, naming conventions, typing, and other conventions.\n- When you edit a piece of code, first look at the code's surrounding context (especially its imports) to understand the code's choice of frameworks and libraries. Then consider how to make the given change in a way that is most idiomatic.\n- Always follow security best practices. Never introduce code that exposes or logs secrets and keys. Never commit secrets or keys to the repository. Never modify repository security policies or compliance controls (e.g. `minimumReleaseAge`, `minimumReleaseAgeExclude`, branch protection configs, `.npmrc` security settings) to work around CI or build failures — escalate to the user instead. Unless otherwise specified (even if the task seems silly), assume the code is for a real production task.\n\n## Code style\n\n- IMPORTANT: Do NOT add or remove comments unless asked! If you find that you've accidentally deleted an existing comment, be sure to put it back.\n- Default to writing compact code – collapse duplicate else branches, avoid unnecessary nesting, and share abstractions.\n- Follow idiomatic conventions for the language you're writing.\n- Avoid excessive & verbose error handling in your code. Errors should be handled, but not every line needs to be try/catched. Think about the right error boundaries (and look at existing code for error handling style)\n\n## Debugging\n\nWhen debugging issues:\n- First reproduce the problem reliably\n- Trace the code path to understand the flow\n- Add targeted logging or print statements to isolate the issue\n- Identify the root cause before attempting fixes\n- Verify the fix addresses the root cause, not just symptoms\n\n## Workflow\n\nYou should generally prefer to implement new features or fix bugs as follows...\n\n1. If the project has test infrastructure, write a failing test to show the bug\n2. Fix the bug\n3. Ensure that the test now passes\n\nWorking this way makes it easier to tell if you've actually fixed the bug, and saves you from needing to verify later.\n\n## Git\n\n### Creating commits\n1. Run in parallel: `git status`, `git diff`, `git log` (to match commit style)\n2. Draft a concise commit message focusing on \"why\" not \"what\". Check for sensitive info.\n3. Stage files and commit with this format:\n```\ngit commit -m \"$(cat <<'EOF'\nCommit message here.\n\nGenerated with [Devin](https://devin.ai)\n\nCo-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>\nEOF\n)\"\n```\n4. If pre-commit hooks modify files and the commit fails, stage the modified files and retry the commit.\n\n### Creating pull requests\nUse `gh` for all GitHub operations. Run in parallel: `git status`, `git diff`, `git log`, `git diff main...HEAD`\n\nReview ALL commits (not just latest), then create PR:\n```\ngh pr create --title \"title\" --body \"$(cat <<'EOF'\n## Summary\n<bullet points>\n\n#### Test plan\n<checklist>\n\nGenerated with [Devin](https://devin.ai)\nEOF\n)\"\n```\n\n### Git rules\n- NEVER update git config\n- NEVER use `-i` flags (interactive mode not supported)\n- DO NOT push unless explicitly asked\n- DO NOT commit if no changes exist\n\n\n# Task Management\nUse the todo_write tool to plan and track multi-step tasks for user visibility. Don't use it for trivial or single-step tasks, and don't make single-item plans. Mark a task in_progress before starting and completed immediately after — don't batch completions.\n\n**Never silently drop user-requested tasks.** If one seems infeasible: (1) keep it in the todo list as in_progress or blocked, and (2) immediately message the user (non-blocking) with what you tried, what's blocking you, and alternatives. Don't remove it just because you think it can't be done — the user may have context you lack.\n\nUsers may configure 'hooks', shell commands that execute in response to events like tool calls, in settings. Treat feedback from hooks, including <user-prompt-submit-hook>, as coming from the user. If you get blocked by a hook, determine if you can adjust your actions in response to the blocked message. If not, ask the user to check their hooks configuration.\n\n## Completing Tasks\n\nThe user will primarily request you perform software engineering tasks. This includes solving bugs, adding new functionality, refactoring code, explaining code, and more. For these tasks the following steps are recommended:\n- Use the todo_write tool to plan the task if required\n- Use the available search tools to understand the codebase and the user's query. You are encouraged to use the search tools extensively both in parallel and sequentially.\n- Before making changes, thoroughly explore the codebase to understand the architecture, patterns, and related systems. Read relevant files, trace dependencies, and understand how components interact.\n- Implement the solution using all tools available to you\n\n## Verification\n\nBefore considering a task complete, verify your work. Use judgment based on what you changed - optimize for fast iteration:\n\n- Check for project-specific verification instructions in project rules files (`AGENTS.md`, or similar)\n- Run relevant verification steps based on the scope of changes (lint, typecheck, build, tests)\n- For isolated functionality, consider a temporary test file to verify behavior, then delete it\n- Self-critique: review changes for edge cases and refine as needed\n- If you cannot find verification commands, ask the user and suggest saving them to a project config file\n\n## Saving learned information\n\nIf you discover useful project information (build commands, test commands, verification steps, user preferences, ...) that isn't already documented:\n- If a rules file exists (`AGENTS.md`, etc.), append to it\n- Otherwise, create `AGENTS.md` in the current directory with the learned information\n\n## Error recovery\n\nWhen encountering errors (failed commands, build failures, test failures):\n- Keep trying different approaches to resolve the issue\n- Search for similar issues in the codebase or documentation\n- Only ask the user for help as a last resort after exhausting reasonable options\n- Exception: Always ask the user for help with authentication issues, project configuration changes, or permission problems\n\n## System Guidance\nYou may receive `<system_guidance>` messages containing hints, reminders, or contextual guidance before you take action. These notes are injected by the system to help you make better decisions. Pay attention to their content but do not acknowledge or respond to them directly—simply incorporate their guidance into your actions.\n\n\n\n# Tool Tips\n\n## Shell\nNEVER invoke `rg`, `grep`, or `find` as shell commands — use the provided search tools instead. They have been optimized for correct permissions and access.\n\n\n## File-related tools\n- read can read images (PNG, JPG, etc) - the contents are presented visually.\n- For Jupyter notebooks (.ipynb files), use notebook_read instead of read.\n- Speculatively read multiple files as a batch when potentially useful.\n- Do NOT create documentation files to describe your changes or plan. Exception: persistent project info files like `AGENTS.md` are allowed.\n\n\n# Safety\n\nIMPORTANT: Assist with defensive security tasks only. Refuse to create, modify, or improve code that may be used maliciously. Do not assist with credential discovery or harvesting, including bulk crawling for SSH keys, browser cookies, or cryptocurrency wallets. Allow security analysis, detection rules, vulnerability explanations, defensive tools, and security documentation.\n\nIMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files.\n\n## Destructive Operations\n\nNEVER perform irreversible destructive operations without explicit user confirmation for that specific action, even if you have permission to run the command. This includes:\n- Deleting or truncating database tables, dropping schemas, bulk-deleting rows\n- `rm -rf`, deleting directories, or removing files you did not just create\n- Force-pushing, rewriting git history, deleting branches, checking out over uncommitted changes, or bypassing commit hooks\n- Sending emails, making payments, or calling APIs with real-world side effects\n\nIf a destructive step is required, STOP and describe exactly what you are about to run and why, then wait for the user. Do not assume a previous approval extends to a new destructive operation. If you realize you have already caused data loss, say so immediately rather than attempting to hide or quietly repair it.\n\n\n\n## Available MCP Servers (for third-party tools)\n\n{\"servers\":[{\"name\":\"kaola-tasks\"},{\"name\":\"zai-mcp-server\"},{\"name\":\"wps-office\"},{\"name\":\"web-reader\"},{\"name\":\"zread\"},{\"name\":\"web-search-prime\"}]}\n\nIMPORTANT: You MUST call `mcp_list_tools` for a server before calling `mcp_call_tool` on it. This is required to discover the available tools and their correct input schemas. Never guess tool names or arguments — always list tools first.\n",
+      "extra": {
+        "telemetry": {
+          "source": "sysprompt",
+          "operation": "normal"
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-09-12T03:35:45.995219+00:00",
+      "source": "system",
+      "message": "Available subagent profiles for the `run_subagent` tool. Choose the most appropriate profile based on whether the task requires write access:\n- `adversarial-verifier`: Adversarial verifier. Takes one recorded claim about a surface and tries to refute it with the strongest attempt available, delivering what was tried, what held, what broke, and the limits of the attempt.\n- `build-error-resolver`: Build error resolver. Restores a confirmed build, type, import, or dependency failure to green with the smallest change, using the project's own declared commands, and verifies the failure is gone.\n- `code-architect`: Code architect. Designs the components, interfaces, and data flow for a specified problem within the existing codebase, and states the key technical trade-offs.\n- `code-explorer`: Code explorer. Explains how specified code works and locates its implementation, call relationships, and dependencies; reads and traces, and writes only its own findings.\n- `code-reviewer`: Code reviewer. Independently examines a frozen candidate for real defects it introduces — correctness, regressions, scope, maintainability, test coverage — and delivers verifiable findings and a conclusion; the orchestrator decides the consequences.\n- `doc-updater`: Documentation updater. Makes the project documentation state the real behavior and usage after a change, transcribing actual signatures, commands, and outputs, following the project's existing documentation conventions.\n- `implementer`: Implementer. Writes the production change for an assigned outcome — behavior, fixes, refactors, scaffolding, config, migrations, glue — and delivers it with the verification it actually ran; does not alter acceptance meaning.\n- `investigator`: Investigator. Answers fact questions that must be run to be known — builds, tests, reproductions, measurements, bisects, and A/B legs — and delivers reviewable measurements; never edits tracked files and never chooses the fix.\n- `knowledge-lookup`: Knowledge lookup. Finds authoritative external sources for facts the local codebase cannot establish and delivers sourced conclusions with verified dates and explicit unknowns.\n- `kwp-adaptive`: kw-1060 probe kwp-adaptive\n- `kwp-astra`: kw-1060 probe kwp-astra\n- `kwp-astra-full`: kw-1060 probe kwp-astra-full\n- `kwp-fable`: kw-1060 probe kwp-fable\n- `kwp-fable-full`: kw-1060 probe kwp-fable-full\n- `kwp-fusion`: kw-1060 probe kwp-fusion\n- `kwp-fusion-full`: kw-1060 probe kwp-fusion-full\n- `kwp-gpt`: kw-1060 probe kwp-gpt\n- `kwp-swe`: kw-1060 probe kwp-swe\n- `kwp-swe-full`: kw-1060 probe kwp-swe-full\n- `kwp-unpinned`: kw-1060 probe kwp-unpinned\n- `kwp-writer`: kw-1060 probe kwp-writer\n- `metric-optimizer`: Metric optimizer. Improves a specified measurable metric under the task's correctness requirements through a bounded iteration, delivering comparable before-and-after measurements and the changes that produced them; fixed-destination implementation belongs to the implementer.\n- `planner`: Planner. Turns a goal, its constraints, and its dependencies into a work arrangement the orchestrator can dispatch — what must exist, in what order, with what acceptance — without prescribing how each part is built.\n- `security-reviewer`: Security reviewer. Examines a specified change or feature for trust-boundary and exploitability risks — input handling, authentication and authorization, secrets, injection, unsafe crypto, exposure of sensitive data — and delivers evidenced findings with remediation direction.\n- `synthesizer`: Synthesizer. Resolves real content conflicts between concurrent write branches by understanding each side's intent, delivering one consistent result and the trade-offs that remain; never used for work that merges mechanically.\n- `tdd-guide`: Test author. Holds custody of the acceptance tests: writes tests that distinguish correct from incorrect behavior for the assigned outcome, proves they fail on the recorded baseline, and never writes production code.",
+      "extra": {
+        "telemetry": {
+          "source": "sysprompt",
+          "operation": "subagent_profiles"
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-09-12T03:35:46.975150+00:00",
+      "source": "system",
+      "message": "## Sidekick\nYou have a `sidekick` tool: a persistent subagent that works alongside you on the same machine (shared filesystem and repos; its shell sessions are separate from yours). You are the lead: you own the outcome and the user-facing and authority actions — talking to the user, planning, and directing the sidekick. The user interacts with one Devin: you. Unless they explicitly ask about the sidekick, do not mention it or distinguish its work from yours; describe all work as your own acts and decisions in the first person, never as instructions you gave to someone — when you redirect or cancel work in flight, say what you decided, never the fact that you told someone to make it; own the combined result and present it directly. The sidekick does the hands-on work you direct, such as implementing changes and verifying results. Your job is to give it context and done-criteria, then review, critique, and decide what to do with its report — decide and direct, don't re-derive what it already gave you or take over its work. When you write your todo list, mark the steps you'll hand off so you don't drift into doing them yourself.\n- **Delegate by default** the hands-on work — including implementation and verification; keep judgment, design, and the user-facing and authority actions. This includes (non-exhaustively):\n  - **Implementation:** ONLY implement a step yourself if it's trivially small (you can make the edit AND confirm it in 1-2 of your own turns total, with nothing left to test afterwards, e.g. a stray import); correctness-critical (below).\n  - **Verification & environment:** Delegate environment setup and environment repair — even when the failure blocks an action you were doing yourself — as well as running builds, linters, type-checks, and test suites. When your brief names verification commands, name the narrowest ones that cover the change — the sidekick treats your list as mandatory, so a \"run everything\" brief re-gates unchanged work on every handoff; reserve a full-suite pass for at most one final gate. Checking correctness-critical outputs (below) is not delegable verification — that stays with you.\n- **Keep for yourself** — the judgment and authority side of the same principle:\n  - Investigations (e.g. codebase exploration, root-cause tracing, git-history archaeology) — if your reply will restate the findings as your own grounded answer, do the exploration yourself.\n  - Planning and design decisions.\n  - **Correctness-critical work — where wrong output looks plausible instead of erroring.** Data analysis and measurement (queries, counts, metrics), eval/benchmark harnesses, and data-pipeline/model configuration produce numbers and artifacts the user will rely on, with no compiler or test suite to catch a wrong choice. Author, run, and check that work yourself regardless of size; delegate only mechanical execution of a recipe you fully authored (launching N identical jobs from your exact spec) — never the authoring or the checking.\n  - Reviewing the sidekick's diff before it lands.\n  - Talking to the user, pull request creation and updates, and code-review responses.\n- Review comments: reading and judging them is yours, and replies are yours; prefer to batch the resulting code changes into one sidekick handoff (implement, verify, push to the branch) rather than editing yourself or handling comments one at a time.\n- It remembers everything from previous handoffs (code it wrote, files it explored, your earlier instructions), so don't re-explain context it already has. The same goes for its runtime state: background shells and processes it started (dev servers, DB connections, in-flight long-running commands) usually survive between handoffs. Every brief that involves servers or long-running processes must include one line on runtime state — e.g. \"the server from the previous handoff may still be running; check and reuse it, restart only if it's gone or the code changed\" — and, when a later handoff may need them, tell it to leave those processes running at the end instead of tearing them down. Restarting a still-live server or re-running an in-flight long command from scratch wastes the whole wait. On each handoff give it the goal, your plan, the constraints, and how to verify (if applicable).\n- **Never make the sidekick redo work you already did — the anti-duplication rule runs both ways.** Results you already derived go into the handoff as settled, authoritative inputs (the values, or the path to the file holding them; persist them first if they only live in your context), not with an invitation to recompute, re-derive or double-check them — ask for that only when you have reason to doubt them. Once a derived result has been delivered, treat it as frozen data: further work on how it is presented must read that data, not re-run the derivation behind it — so if what you built recomputes its inputs from the source of truth every time it runs, capture those inputs as data first and re-render from the capture. Re-deriving wastes the work and lets what you show drift from what you already delivered.\n- Track the lead-only actions you have promised the user (messages, review replies, PR title/description updates) — the sidekick cannot do these, so a handoff brief that includes one silently drops it. Do each one the moment the code handoff returns, before dispatching any follow-up handoff — never leave one parked behind a long blocking wait.\n- Blocking dispatch is the default: a `sidekick` call waits for the handoff to finish inside the tool call. Pass `block: false` only when you genuinely have parallel lead work to do during the handoff (drafting review replies, PR title/description updates that arise during the handoff); don't start work that's redundant with what the sidekick is doing, and never poll with `read_subagent` in a loop. The report is delivered to you automatically when it finishes. When you have run out of parallel work and still need the report, wait for it with `read_subagent` (`block: true`) rather than ending your turn or guessing at what it will say.\n- If using `read_subagent` for the sidekick (e.g. after the initial `sidekick` call has timed out), omit the timeout parameter (i.e. use the default value) by default unless there is an explicit reason to do otherwise.\n- A user message that arrives while a handoff is in flight is yours to act on before you do anything else, including going back to waiting: judge what it means for the work the sidekick is doing right now, and act on that judgment — handle lead-only work yourself in that same turn, and for anything that concerns the running handoff, call `sidekick` again with a new `message`: it is injected into the running handoff as an interrupt rather than starting a second sidekick. Redirect it with a corrected brief, tell it to wrap up and report what it has, or send a purely informational update (\"the user now wants X; fold it in or ignore it as you see fit\") — you do not need new work to hand off, and you do not need to abort the handoff, to send one. Resume waiting only once you have decided the message changes nothing for the sidekick and needs no action from you; deciding it needs nothing is a call you make deliberately, never by default. Waiting out a brief the user has already moved past wastes the whole handoff.\n- Planning is yours alone. Form your plan at the design level: tell the sidekick what to change and why, plus the hard edge cases, and point it at the relevant places. High-level does not mean thin — keep your design judgment and the tricky cases. Settle the consequential choices before handing off: the exact interface (e.g. signature, types, data shape, which existing helper/seam to use) and the exact tests (e.g. cases, assertions, where to stub) — a snippet is fine when it's the clearest way to say it. Don't leave alternatives for the sidekick to pick; it will guess, and a wrong guess costs an extra delegation round.\n- **Queries against shared/production systems (databases, warehouses, shared proxies): the exact query text is always yours.** This applies to read-only queries too: the risk is not mutation, it is a wrong number delivered to the user as fact (wrong table, wrong filter, a query shape that silently misses part of the data). Users rely on the precision of the numbers you report, so never delegate query authorship. If you don't yet know the table or schema, that means two handoffs by default: have the sidekick return the schema and candidate sources first, then hand it the exact final query; tell it a schema surprise means stop and report, never substitute its own query shape.\n- **Never hand off implementation of an unsettled ask.** If any part of the ask still needs exploration, an audit, or the user's agreement, settle it first, and dispatch implementation only once it's settled.\n- Review the evidence it reports back (diff, test output, files and visual artifacts such as screenshots and logs) instead of re-running it yourself. Its prose is a claim, the artifacts are the evidence: have it hand back their paths rather than clean them up. Do final verification yourself only when the user needs your own recorded proof, the sidekick cannot access the required surface, or its evidence is incomplete or suspicious.\n- Review the sidekick's code before it lands. A handoff report about code it wrote or committed is itself a landing point: read the full diff and give it a verdict before your next action — including before stopping or blocking on the user — and likewise before you commit or push. Review at every landing point, not just a spot-check, unless you just reviewed that exact diff. Complete the whole review before acting, then dispatch all findings at once. Fix something yourself only if it's truly one or two of your own turns including any verification (revert a churned lockfile, drop a stray import); anything that needs tests run or might cascade goes back to the sidekick as one consolidated brief.\n- You tend to send the sidekick multiple small rework handoffs after its initial pass, which slows down task completion. Instead, review the full output YOURSELF, then batch all feedback — defects, incomplete items, and other gaps — into a single consolidated handoff. And don't take the work over after a single miss — send that feedback as a rework handoff first.\n- The sidekick never sees the user's messages or your conversation — beyond the shared session context it knows only your handoff text and what it discovers itself, so pass along relevant user requirements, decisions, and constraints explicitly in the handoff. It can use credentials already provisioned in the environment, but it cannot request new secrets from the user; when a task needs one of the lead-only actions above, it will stop and report to you.\n- Answer its questions concretely in one handoff — don't make it ask twice. A blocker is still a handoff: pick a direction and hand execution back, even when it asks you to fix something. If it reports an environment blocker, prefer telling it how to get unblocked rather than fixing it yourself. However, handle a blocker directly when it needs your authority, or when the sidekick has already tried with your guidance and still can't. If after a couple of rounds it is stuck or going in circles, take the task over and do it yourself.\n- **User urgency:** When the user is impatient or waiting on a concrete deliverable, do the minimal action that unblocks them YOURSELF immediately — even if it's normally delegated — and move slow validation (test gates, full check suites) off the critical path: run it after the deliverable is out, or in the background. Do not hand the urgent action to a busy sidekick and block-wait on it.\n\n### Known failure patterns when delegating\n- **Premature implementation briefing.** There's a natural pull to start writing an implementation brief as soon as you have a plausible idea of what to do. Working solo, you'd catch a wrong assumption naturally as you go; but when delegating, the sidekick generally executes what you wrote, and changing course afterwards is much harder. Hold your plan to a higher confidence bar than you'd need to start executing yourself. Common symptoms include:\n  - Unverified claims stated as fact. Every claim your plan depends on must either be verified or explicitly marked as a hypothesis / open question for the sidekick to verify.\n  - Incomplete verification instructions that miss surfaces you never discovered.\n- **Promoting a delegated hypothesis to a confirmed conclusion.** When an investigation report ranks candidate causes, the ranking is not a verdict: present a cause as the confirmed root cause only if evidence shows its code path actually executes in the reported scenario. If the report says discriminating evidence is still needed, carry that forward — present the leading candidate as a hypothesis and name the check that would settle it, rather than publishing it as fact. Agreement on the symptom (a restatement of what happened) is never evidence for a particular mechanism.",
+      "extra": {
+        "telemetry": {
+          "source": "local_fusion",
+          "operation": "lead_framing"
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-09-12T03:35:47.575417+00:00",
+      "source": "system",
+      "message": "You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).",
+      "extra": {
+        "telemetry": {
+          "source": "system",
+          "operation": "unknown"
+        }
+      }
+    },
+    {
+      "step_id": 5,
+      "timestamp": "2026-09-12T03:35:47.575421+00:00",
+      "source": "system",
+      "message": "## Parallel tool calls\n\nBefore each response, first privately list what you need next; then request every item that doesn't depend on another's result in that one response. This applies just as much mid-task, when the next calls are only implied by what you're doing, as when several things are asked for explicitly. One read-only call when you already know the next ones is a round trip wasted. Calls in one response run in order, so edits and the verification that checks them belong in the same response. Defer a call only when its arguments need a result you haven't seen yet.",
+      "extra": {
+        "telemetry": {
+          "source": "system",
+          "operation": "unknown"
+        }
+      }
+    },
+    {
+      "step_id": 6,
+      "timestamp": "2026-09-12T03:35:45.995308+00:00",
+      "source": "system",
+      "message": "<system_info>\nThe following information is automatically generated context about your current environment.\nCurrent workspace directories:\n  /private/tmp/kw-fusion-probe (cwd)\n\nPlatform: macos\nOS Version: Darwin 25.6.0\nToday's date: Saturday, 2026-09-12\n</system_info>",
+      "extra": {
+        "telemetry": {
+          "source": "system",
+          "operation": "unknown"
+        }
+      }
+    },
+    {
+      "step_id": 7,
+      "timestamp": "2026-09-12T03:35:46.975508+00:00",
+      "source": "system",
+      "message": "<rules type=\"always-on\">\n<rule name=\"kaola-workflow-global\" path=\"/Users/ylpromax5/.cursor/rules/kaola-workflow-global.mdc\">\n<!-- KW-COMPACT-RECOVERY-START -->\n# Kaola-Workflow compact recovery\n\nRecovery marker: `KW-COMPACT-RECOVERY-V2`.\n\n# Global Workflow Contract\n\nUniversal contract. Project instructions supplement verified local facts and constraints. A\nproject exception must state its scope and must not weaken higher-priority instructions or host\nsafety boundaries.\n\n## First Principles\n\n1. Correct first; never trade correctness for speed or cost.\n2. Then save human time without weakening correctness.\n3. Then spend as little as possible.\n4. Machines decide facts; humans decide values. Continue inside already-granted authorization and\n   scope. Unauthorized irreversible or value-laden calls still go to the user.\n5. Own your own verdicts. Local evidence, not an external system, decides done.\n\n## Premise and evidence\n\n- Measure current truth before an earlier claim shapes work; carry corrections forward.\n- Read the target before writing. Distinguish evidence, inference, and unknown. Verify at the\n  scope of the change.\n- Keep changes surgical. Serve the user's goal and proven problems; avoid speculative mechanisms. A\n  user-requested feature is not refused for lack of a prior observed failure.\n\n## Backlog and durable state\n\n- The forge's open issue list is backlog truth; later comments with explicit corrections win.\n- `kaola-workflow/.roadmap/_rules.md` is the one optional local roadmap file that survives. Nothing\n  else is generated or tracked under `.roadmap/`; there is no local backlog mirror to refresh.\n- Declare top-priority labels in `kaola-workflow/config.json` under `priority_top_tier_labels`.\n- `kaola-workflow/{project}/workflow-state.md` records the claim;\n  `kaola-workflow/{project}/mission-list.md` records the run.\n- Organizing issues does not auto-claim and does not auto-create a Mission List. Daily governance\n  does not auto-create a run; when an active run exists, other operations respect it.\n\n## Mission List\n\n- One run has one Mission List with `item`, `status`, `dispatched`, and `result`.\n- Use three write moments: create; write `dispatched` before the work goes out, including where the\n  output will land; then write `result`. A completed item and its result are immutable. One dispatch\n  has one result, including `FAIL` or `BLOCKED`.\n- A mission is a recoverable outcome. A failed command, intermediate finding, repair attempt, or\n  review round does not create another mission. `BLOCKED` means the current owner cannot safely or\n  legitimately continue.\n- Resume by trusting done results, reconciling in-flight locators, and continuing the frontier: the\n  list minus done minus in-flight.\n- Never claim an unexecuted environment, device, service, or user acceptance check passed.\n  Mutation invalidates affected PASS evidence.\n- Finalization, issue closure, archive, and sink are not Mission List items. The last mission only\n  establishes readiness; lifecycle records own the transaction's final truth.\n\n## Resume the active operation\n\nRead project `AGENTS.md`, active `workflow-state.md`, and `mission-list.md`. With open work,\ncompletely reload the installed Workflow Next prompt and resume its frontier without intake or\nclaim. When all missions are done,\ncompletely reload the installed Kaola-Workflow Finalization prompt and continue from its receipts.\n\n<!-- KW-RUNTIME-DISPATCH-START -->\n## Delegation\n\n**Runtime dispatch contract (always loaded).**\n\nChoose dispatch or inline per item: re-evaluate the choice for every mission item; one item's\nchoice never establishes a run-wide default. The absence of an exact named role is not proof that\nall native subagent dispatch is unavailable. Keep one owner for the current cohesive production\nsurface when handoff and integration cost exceed the benefit, but that scope does not absorb\nindependent research, test authorship, documentation, or review items. Dispatch when it materially\nreduces main-context residue, supplies independent judgment, or enables genuinely independent\nparallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,\ncap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.\n\nTreat the active runtime adapter below as fact authority. Inspect its effective profile discovery\nand precedence, live call schema and verified fields, standard/reasoning/heavy defaults,\nmodel/effort/thought carrier or inheritance, tool and custody boundaries, and native background,\nparallel, resume, nesting, reload, and session limits. Unknown fields stay unknown; live schema wins.\n\nUse named, built-in, and generic routes only under their real identities. A default tier guides\nselection but never disables a task-sensitive override the host actually exposes. If an exact role\nis absent, inspect adequate native routes; use one only when it satisfies custody, evidence, and\nstop boundaries. Otherwise work inline, record the specific `capability_gap`, and re-evaluate the\nnext item. Never let a generic route impersonate a custody-bearing named role.\n\nBefore dispatch, write the mission's `dispatched` locator. Send a bounded, self-sufficient brief\nnaming the outcome, evidence, worktree or commit, custody, and stop condition. Reconcile the\npromised output, not the worker.\n\n<!-- KW-RUNTIME-DELEGATION-START -->\n## Runtime adapter facts\n\nHost: Cursor. If the running host is not Cursor, ignore this adapter section entirely and use the Kaola adapter installed for the actual host; if none is installed, record `capability_gap: no Kaola adapter for host <name>` and work inline.\n\nFind custom profiles in project `.cursor/agents/` or user `~/.cursor/agents/`; a file on disk is not discovery proof, so inspect the live catalog. CLI, App local, and App Cloud are separate hosts. Materialize the selected project explicitly. Cloud requires installation in its environment setup, a tested and user-saved Build, then a new top-level Agent in the same repository; local install never deploys Cloud.\nInspect the current `Task` schema and send only fields it exposes. If the exact Kaola role is present and its materialized profile receipt is valid, call `Task` with the live flat `subagent_type: \"<role>\"` field and MUST omit the per-call `model`; an exact-tier requirement is a post-resolution assertion, never authorization to populate that field. Absence of medium/high from the generic Task model enum is not a named-profile capability gap. Verify an exact tier from `providerOptions.cursor.modelName` provider evidence when the host exposes it; a TUI child transcript alone is insufficient. Internal `subagentType.custom.name` is provider encoding, not controller call shape, and must not be sent. In a built-in-only enum, omit-model is the parent, not a profile pin.\n\n**Tier defaults:** standard — standard → profile `grok-4.6[effort=medium]`; reasoning — reasoning → profile `grok-4.6[effort=high]`; heavy — heavy → profile `grok-4.6[effort=xhigh]`.\n**Role roster:** standard — `code-explorer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `metric-optimizer`, `tdd-guide`; reasoning — `adversarial-verifier`, `build-error-resolver`, `code-reviewer`, `security-reviewer`, `synthesizer`; heavy — `code-architect`, `planner`.\n\nThe named profile's native `readonly` flag carries its write boundary.\nInspect the live Task catalog. Measured hosts exposed writable `generalPurpose` and host-specific built-ins; some hosts document scoped `Explore`, `Bash`, or `Browser`. Use only a route this host reports, under its real identity and capability.\nThe live Task catalog is authoritative. CLI build 2026.08.25-3e8eec8 proved project `implementer` dispatch and resolved `cursor-grok-4.6-medium`; App 3.17.21 and the saved Cloud Build each proved all 14 names plus exact `implementer`, but did not expose the child model carrier. CLI profile reload was observed after reopening the process; same-process hot load remains unknown.\n\nIf the exact name is absent, first distinguish an uninstalled or unsaved host carrier from a capability gap. Then inspect real alternatives for this item; a custody-bearing miss inlines only that item and records the specific `capability_gap`.\n<!-- KW-RUNTIME-DELEGATION-END -->\n<!-- KW-RUNTIME-DISPATCH-END -->\n<!-- KW-COMPACT-RECOVERY-END -->\n\nContract schema: 1\n</rule>\n\n<rule name=\"global_rules\" path=\"/Users/ylpromax5/.codeium/windsurf/memories/global_rules.md\">\n\n</rule>\n\n<rule name=\"AGENTS\" path=\"/Users/ylpromax5/.config/devin/AGENTS.md\">\n<!-- KW-GLOBAL-CONTRACT-MANAGED-START -->\n<!-- KW-COMPACT-RECOVERY-START -->\n# Kaola-Workflow compact recovery\n\nRecovery marker: `KW-COMPACT-RECOVERY-V2`.\n\n# Global Workflow Contract\n\nUniversal contract. Project instructions supplement verified local facts and constraints. A\nproject exception must state its scope and must not weaken higher-priority instructions or host\nsafety boundaries.\n\n## First Principles\n\n1. Correct first; never trade correctness for speed or cost.\n2. Then save human time without weakening correctness.\n3. Then spend as little as possible.\n4. Machines decide facts; humans decide values. Continue inside already-granted authorization and\n   scope. Unauthorized irreversible or value-laden calls still go to the user.\n5. Own your own verdicts. Local evidence, not an external system, decides done.\n\n## Premise and evidence\n\n- Measure current truth before an earlier claim shapes work; carry corrections forward.\n- Read the target before writing. Distinguish evidence, inference, and unknown. Verify at the\n  scope of the change.\n- Keep changes surgical. Serve the user's goal and proven problems; avoid speculative mechanisms. A\n  user-requested feature is not refused for lack of a prior observed failure.\n\n## Backlog and durable state\n\n- The forge's open issue list is backlog truth; later comments with explicit corrections win.\n- `kaola-workflow/.roadmap/_rules.md` is the one optional local roadmap file that survives. Nothing\n  else is generated or tracked under `.roadmap/`; there is no local backlog mirror to refresh.\n- Declare top-priority labels in `kaola-workflow/config.json` under `priority_top_tier_labels`.\n- `kaola-workflow/{project}/workflow-state.md` records the claim;\n  `kaola-workflow/{project}/mission-list.md` records the run.\n- Organizing issues does not auto-claim and does not auto-create a Mission List. Daily governance\n  does not auto-create a run; when an active run exists, other operations respect it.\n\n## Mission List\n\n- One run has one Mission List with `item`, `status`, `dispatched`, and `result`.\n- Use three write moments: create; write `dispatched` before the work goes out, including where the\n  output will land; then write `result`. A completed item and its result are immutable. One dispatch\n  has one result, including `FAIL` or `BLOCKED`.\n- A mission is a recoverable outcome. A failed command, intermediate finding, repair attempt, or\n  review round does not create another mission. `BLOCKED` means the current owner cannot safely or\n  legitimately continue.\n- Resume by trusting done results, reconciling in-flight locators, and continuing the frontier: the\n  list minus done minus in-flight.\n- Never claim an unexecuted environment, device, service, or user acceptance check passed.\n  Mutation invalidates affected PASS evidence.\n- Finalization, issue closure, archive, and sink are not Mission List items. The last mission only\n  establishes readiness; lifecycle records own the transaction's final truth.\n\n## Resume the active operation\n\nRead project `AGENTS.md`, active `workflow-state.md`, and `mission-list.md`. With open work,\ncompletely reload the installed Workflow Next prompt and resume its frontier without intake or\nclaim. When all missions are done,\ncompletely reload the installed Kaola-Workflow Finalization prompt and continue from its receipts.\n\n<!-- KW-RUNTIME-DISPATCH-START -->\n## Delegation\n\n**Runtime dispatch contract (always loaded).**\n\nChoose dispatch or inline per item: re-evaluate the choice for every mission item; one item's\nchoice never establishes a run-wide default. The absence of an exact named role is not proof that\nall native subagent dispatch is unavailable. Keep one owner for the current cohesive production\nsurface when handoff and integration cost exceed the benefit, but that scope does not absorb\nindependent research, test authorship, documentation, or review items. Dispatch when it materially\nreduces main-context residue, supplies independent judgment, or enables genuinely independent\nparallel work. Both modes are first-class; width follows the true work frontier. No dispatch count,\ncap, disjointness proof, justification, approval, or fallback stigma attaches to the judgment.\n\nTreat the active runtime adapter below as fact authority. Inspect its effective profile discovery\nand precedence, live call schema and verified fields, standard/reasoning/heavy defaults,\nmodel/effort/thought carrier or inheritance, tool and custody boundaries, and native background,\nparallel, resume, nesting, reload, and session limits. Unknown fields stay unknown; live schema wins.\n\nUse named, built-in, and generic routes only under their real identities. A default tier guides\nselection but never disables a task-sensitive override the host actually exposes. If an exact role\nis absent, inspect adequate native routes; use one only when it satisfies custody, evidence, and\nstop boundaries. Otherwise work inline, record the specific `capability_gap`, and re-evaluate the\nnext item. Never let a generic route impersonate a custody-bearing named role.\n\nBefore dispatch, write the mission's `dispatched` locator. Send a bounded, self-sufficient brief\nnaming the outcome, evidence, worktree or commit, custody, and stop condition. Reconcile the\npromised output, not the worker.\n\n<!-- KW-RUNTIME-DELEGATION-START -->\n## Runtime adapter facts\n\nHost: Devin. If the running host is not Devin, ignore this adapter section entirely and use the Kaola adapter installed for the actual host; if none is installed, record `capability_gap: no Kaola adapter for host <name>` and work inline.\n\nFind profiles in project `.devin/agents/` or user `~/.config/devin/agents/`; the catalog is fixed at session start, so restart the session after installation.\nDispatch with `run_subagent(profile, is_background, resume)` / `read_subagent` using an exact profile from the session-start catalog; no model, subagent, or agent field is pinned by Kaola.\n\n**Tier defaults:** standard — standard → `host_router`; reasoning — reasoning → `host_router`; heavy — heavy → `host_router`.\n**Role roster:** standard — `code-explorer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `metric-optimizer`, `tdd-guide`; reasoning — `adversarial-verifier`, `build-error-resolver`, `code-reviewer`, `security-reviewer`, `synthesizer`; heavy — `code-architect`, `planner`.\n\nThe profile `allowed-tools` list uses Devin-native `read`, `grep`, `glob`, `edit`, `write`, `exec`, `web_search`, and `webfetch` names and carries the role capability boundary.\nUse foreground, background, or resume through the live `run_subagent` schema; the Devin host router owns role routing.\nThe profile catalog is fixed at session start. Rules may drop after compaction, so the single UserPromptSubmit carrier reloads the global contract and Devin adapter before routing continues.\n\nIf an exact profile is absent from the session-start catalog, use only a live native route that satisfies custody and capability requirements; otherwise work inline and report the capability gap.\n<!-- KW-RUNTIME-DELEGATION-END -->\n<!-- KW-RUNTIME-DISPATCH-END -->\n<!-- KW-COMPACT-RECOVERY-END -->\n\nContract schema: 1\n<!-- KW-GLOBAL-CONTRACT-MANAGED-END -->\n\n</rule>\n\n<rule name=\"CLAUDE\" path=\"/Users/ylpromax5/.claude/CLAUDE.md\">\n\n</rule>\n\n<rule name=\"AGENTS\" path=\"/private/tmp/kw-fusion-probe/AGENTS.md\">\nKW-PROBE-PROJECT-AGENTS-MARKER-1060\n\n</rule>\n</rules>",
+      "extra": {
+        "telemetry": {
+          "source": "rules",
+          "operation": "content"
+        }
+      }
+    },
+    {
+      "step_id": 8,
+      "timestamp": "2026-09-12T03:35:47.627005+00:00",
+      "source": "system",
+      "message": "Kaola-Workflow: if KW-COMPACT-RECOVERY-V2 is not in your context, read /Users/ylpromax5/.config/devin/AGENTS.md and the active kaola-workflow/*/workflow-state.md and mission-list.md before acting.",
+      "extra": {
+        "telemetry": {
+          "source": "system",
+          "operation": "unknown"
+        }
+      }
+    },
+    {
+      "step_id": 9,
+      "timestamp": "2026-09-12T03:35:47.655764+00:00",
+      "source": "system",
+      "message": "KW-PROBE-UPS-MARKER-1060",
+      "extra": {
+        "telemetry": {
+          "source": "system",
+          "operation": "unknown"
+        }
+      }
+    },
+    {
+      "step_id": 10,
+      "timestamp": "2026-09-12T03:35:47.655823+00:00",
+      "source": "user",
+      "message": "Dispatch these subagent profiles one at a time in the foreground with the prompt \"go\", and paste each reply verbatim under a heading with the profile name: kwp-unpinned, kwp-fable, kwp-fable-full, kwp-swe, kwp-swe-full, kwp-fusion, kwp-fusion-full, kwp-astra, kwp-gpt, kwp-astra-full, kwp-adaptive, subagent_general. If a dispatch fails, paste the exact error text. Do nothing else.",
+      "extra": {
+        "telemetry": {
+          "source": "user",
+          "operation": "unknown"
+        }
+      }
+    },
+    {
+      "step_id": 11,
+      "timestamp": "2026-09-12T03:35:47.657504+00:00",
+      "source": "system",
+      "message": "<available_skills>\nThe following skills can be invoked using your skill tools. When ANY skill — built-in OR repository — clearly matches the user's request or the current task, invoke it immediately at the start of the session. If more than one skill matches, invoke ALL of them (issue the invocations in parallel) — do not stop at the single most obvious one.\n\n- **wps-ppt**: WPS 演示智能助手，通过自然语言操控 PPT，解决排版美化、内容生成、动画设置等痛点问题 (source: /Users/ylpromax5/.claude/skills/wps-ppt/SKILL.md)\n- **workflow-next**: Workflow Next. Claims the work, writes the run's mission list, and runs it. Resumable from that one file. Invoke when the user asks for /workflow-next or when continuing a Kaola workflow mission. (source: /Users/ylpromax5/.config/devin/skills/workflow-next/SKILL.md)\n- **kaola-workflow-finalize**: Kaola-Workflow Finalization. Final validation, documentation docking, closure, archive, commit, and sink. Invoke when the user asks for /kaola-workflow-finalize or when continuing a Kaola workflow mission. (source: /Users/ylpromax5/.config/devin/skills/kaola-workflow-finalize/SKILL.md)\n- **wps-excel**: WPS 表格智能助手，通过自然语言操控 Excel，解决公式编写、数据清洗、图表创建等痛点问题 (source: /Users/ylpromax5/.claude/skills/wps-excel/SKILL.md)\n- **devin-kaola-project-runner**: Use when Codex should communicate with a Devin CLI main conversation through an exact tmux session by starting it, reading evidence, sending Agent-selected prompts or keys, reading replies, and stopping only that session. (source: /Users/ylpromax5/.config/devin/skills/devin-kaola-project-runner/SKILL.md)\n- **wps-word**: WPS 文字智能助手，通过自然语言操控 Word 文档，解决排版、格式、内容编辑等痛点问题 (source: /Users/ylpromax5/.claude/skills/wps-word/SKILL.md)\n- **workflow-init**: Initialize a project for Kaola-Workflow with CLAUDE.md guidance, docs structure, and Git/GitHub issue conventions. Invoke when the user asks for /workflow-init or when continuing a Kaola workflow mission. (source: /Users/ylpromax5/.config/devin/skills/workflow-init/SKILL.md)\n- **wps-office**: WPS Office 跨应用智能助手，统一管理 Excel、Word、PPT 三大应用，处理跨应用操作和通用功能 (source: /Users/ylpromax5/.claude/skills/wps-office/SKILL.md)\n- **devin-cli**: Look up Devin CLI documentation (skills, extensibility, configuration, commands, models, troubleshooting) (source: /Users/ylpromax5/.local/share/devin/cli/_versions/3000.10.21/share/devin/docs)\n- **declarative-repo-setup**: Generate and verify a working environment.yaml (Devin snapshot-setup blueprint) for a repo (source: builtin:drs)\n- **upload-secrets**: Securely upload local secrets (dotenv files, env vars, API keys) to the Devin Cloud secrets manager — values never enter the conversation (source: builtin:upload-secrets)\n</available_skills>",
+      "extra": {
+        "telemetry": {
+          "source": "system",
+          "operation": "unknown"
+        }
+      }
+    },
+    {
+      "step_id": 12,
+      "timestamp": "2026-09-12T03:35:47.846891+00:00",
+      "source": "system",
+      "message": "<system_guidance>\nThe sidekick is available for delegating mechanical work, including (non-exhaustively):\n- **Implementation:** ONLY implement a step yourself if it's trivially small (you can make the edit AND confirm it in 1-2 of your own turns total, with nothing left to test afterwards, e.g. a stray import); correctness-critical (data analysis and measurement, eval harnesses, data-pipeline configuration — the authoring and the checking stay with you regardless of size; mechanical execution of a recipe you fully authored can still be handed off). Anything that needs a test written or run, touches more than one file, or that you'd want to look over again afterwards is not trivial, however clearly you already see the code — brief it. The moment your investigation settles the design, your next action is a brief, not an edit — write the brief before touching any file. The point of this split: the sidekick costs a small fraction of what your own turns cost, and quality is protected because you design the change and review its result — so handing off implementation and its verification saves most of a change's cost without lowering its quality. Implementing it yourself forfeits that saving; put the effort into a brief the sidekick can execute exactly instead.\n- **Verification & environment:** Delegate environment setup and repair, builds, linters, type-checks, and test suites — briefing the narrowest checks that cover the change, not a full-suite rerun on every handoff.\n- **Environment blockers:** When a broken environment or dependency setup surfaces (e.g. the sidekick escalates one) and the repair involves mechanical work, hand that work to the sidekick with a direction (or several worth trying) based on your high-level judgment rather than doing the entire repair yourself; take it over only if it continues to fail on the same problem repeatedly even with your guidance.\n</system_guidance>",
+      "extra": {
+        "telemetry": {
+          "source": "local_fusion",
+          "operation": "first_message_reminder"
+        }
+      }
+    },
+    {
+      "step_id": 13,
+      "timestamp": "2026-09-12T03:35:50.947960+00:00",
+      "source": "agent",
+      "message": "",
+      "model_name": "claude-fable-5-1-high",
+      "reasoning_content": "I need to dispatch each subagent profile one at a time in the foreground with the prompt \"go\", pasting each reply verbatim. Starting with kwp-unpinned.\n\n",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_01P7gMkwSehEzcozD7J84kbV",
+          "function_name": "run_subagent",
+          "arguments": {
+            "title": "kwp-unpinned probe",
+            "task": "go",
+            "profile": "kwp-unpinned",
+            "is_background": false
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_01P7gMkwSehEzcozD7J84kbV",
+            "content": "Subagent agent_id=e0c23ebf completed successfully:\n\nTOKEN=kwp-unpinned\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=0\nRECOVERY_MARKER=0"
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 32527,
+        "completion_tokens": 191,
+        "cached_tokens": 13244,
+        "extra": {
+          "cache_creation_input_tokens": 19279
+        }
+      },
+      "extra": {
+        "generation_model": "claude-fable-5-1-high",
+        "telemetry": {
+          "source": "assistant",
+          "operation": "inference"
+        }
+      }
+    },
+    {
+      "step_id": 14,
+      "timestamp": "2026-09-12T03:35:58.694591+00:00",
+      "source": "agent",
+      "message": "",
+      "model_name": "claude-fable-5-1-high",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_01WvizipDxpuWaNFs76mfopM",
+          "function_name": "run_subagent",
+          "arguments": {
+            "title": "kwp-fable probe",
+            "task": "go",
+            "profile": "kwp-fable",
+            "is_background": false
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_01WvizipDxpuWaNFs76mfopM",
+            "content": "Subagent agent_id=d3a8ee82 completed successfully:\n\nTOKEN=kwp-fable\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=1\nRECOVERY_MARKER=1"
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 32827,
+        "completion_tokens": 127,
+        "cached_tokens": 32523,
+        "extra": {
+          "cache_creation_input_tokens": 302
+        }
+      },
+      "extra": {
+        "generation_model": "claude-fable-5-1-high",
+        "telemetry": {
+          "source": "assistant",
+          "operation": "inference"
+        }
+      }
+    },
+    {
+      "step_id": 15,
+      "timestamp": "2026-09-12T03:36:08.601375+00:00",
+      "source": "agent",
+      "message": "",
+      "model_name": "claude-fable-5-1-high",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_01YNR8uTT2zhgU112WnjWy2r",
+          "function_name": "run_subagent",
+          "arguments": {
+            "title": "kwp-fable-full probe",
+            "task": "go",
+            "profile": "kwp-fable-full",
+            "is_background": false
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_01YNR8uTT2zhgU112WnjWy2r",
+            "content": "Subagent agent_id=222e3668 completed successfully:\n\nTOKEN=kwp-fable-full\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=0\nRECOVERY_MARKER=0"
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 33062,
+        "completion_tokens": 131,
+        "cached_tokens": 32825,
+        "extra": {
+          "cache_creation_input_tokens": 235
+        }
+      },
+      "extra": {
+        "generation_model": "claude-fable-5-1-high",
+        "telemetry": {
+          "source": "assistant",
+          "operation": "inference"
+        }
+      }
+    },
+    {
+      "step_id": 16,
+      "timestamp": "2026-09-12T03:36:16.515926+00:00",
+      "source": "agent",
+      "message": "",
+      "model_name": "claude-fable-5-1-high",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_01SrZkVQqL1CixcEStkrwhLj",
+          "function_name": "run_subagent",
+          "arguments": {
+            "title": "kwp-swe probe",
+            "task": "go",
+            "profile": "kwp-swe",
+            "is_background": false
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_01SrZkVQqL1CixcEStkrwhLj",
+            "content": "Subagent agent_id=67909a96 completed successfully:\n\nTOKEN=kwp-swe\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=1\nRECOVERY_MARKER=1"
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 33300,
+        "completion_tokens": 127,
+        "cached_tokens": 33060,
+        "extra": {
+          "cache_creation_input_tokens": 238
+        }
+      },
+      "extra": {
+        "generation_model": "claude-fable-5-1-high",
+        "telemetry": {
+          "source": "assistant",
+          "operation": "inference"
+        }
+      }
+    },
+    {
+      "step_id": 17,
+      "timestamp": "2026-09-12T03:36:28.128043+00:00",
+      "source": "agent",
+      "message": "",
+      "model_name": "claude-fable-5-1-high",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_01WdbgEBze33CT71sFjQ4VgY",
+          "function_name": "run_subagent",
+          "arguments": {
+            "title": "kwp-swe-full probe",
+            "task": "go",
+            "profile": "kwp-swe-full",
+            "is_background": false
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_01WdbgEBze33CT71sFjQ4VgY",
+            "content": "Subagent agent_id=db6d82d8 completed successfully:\n\nTOKEN=kwp-swe-full\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=0\nRECOVERY_MARKER=0"
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 33532,
+        "completion_tokens": 131,
+        "cached_tokens": 33298,
+        "extra": {
+          "cache_creation_input_tokens": 232
+        }
+      },
+      "extra": {
+        "generation_model": "claude-fable-5-1-high",
+        "telemetry": {
+          "source": "assistant",
+          "operation": "inference"
+        }
+      }
+    },
+    {
+      "step_id": 18,
+      "timestamp": "2026-09-12T03:36:35.963852+00:00",
+      "source": "agent",
+      "message": "",
+      "model_name": "claude-fable-5-1-high",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_01MFuAz9suUrzVfZGB62CeJj",
+          "function_name": "run_subagent",
+          "arguments": {
+            "title": "kwp-fusion probe",
+            "task": "go",
+            "profile": "kwp-fusion",
+            "is_background": false
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_01MFuAz9suUrzVfZGB62CeJj",
+            "content": "Subagent agent_id=bc3cfd2b completed successfully:\n\nTOKEN=kwp-fusion\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=0\nRECOVERY_MARKER=0"
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 33772,
+        "completion_tokens": 129,
+        "cached_tokens": 33530,
+        "extra": {
+          "cache_creation_input_tokens": 240
+        }
+      },
+      "extra": {
+        "generation_model": "claude-fable-5-1-high",
+        "telemetry": {
+          "source": "assistant",
+          "operation": "inference"
+        }
+      }
+    },
+    {
+      "step_id": 19,
+      "timestamp": "2026-09-12T03:36:44.170398+00:00",
+      "source": "agent",
+      "message": "",
+      "model_name": "claude-fable-5-1-high",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_013EqQViQiLp6r7fA9BJtUDU",
+          "function_name": "run_subagent",
+          "arguments": {
+            "title": "kwp-fusion-full probe",
+            "task": "go",
+            "profile": "kwp-fusion-full",
+            "is_background": false
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_013EqQViQiLp6r7fA9BJtUDU",
+            "content": "Subagent agent_id=b6d90ef7 completed successfully:\n\nTOKEN=kwp-fusion-full\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=0\nRECOVERY_MARKER=0"
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 34010,
+        "completion_tokens": 133,
+        "cached_tokens": 33770,
+        "extra": {
+          "cache_creation_input_tokens": 238
+        }
+      },
+      "extra": {
+        "generation_model": "claude-fable-5-1-high",
+        "telemetry": {
+          "source": "assistant",
+          "operation": "inference"
+        }
+      }
+    },
+    {
+      "step_id": 20,
+      "timestamp": "2026-09-12T03:36:53.145993+00:00",
+      "source": "agent",
+      "message": "",
+      "model_name": "claude-fable-5-1-high",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_017cdvHJHdShNk2KbvxcHr7z",
+          "function_name": "run_subagent",
+          "arguments": {
+            "title": "kwp-astra probe",
+            "task": "go",
+            "profile": "kwp-astra",
+            "is_background": false
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_017cdvHJHdShNk2KbvxcHr7z",
+            "content": "Subagent agent_id=bbd4e97c completed successfully:\n\nTOKEN=kwp-astra\nTOOLS=functions.find_file_by_name,functions.grep,functions.read,multi_tool_use.parallel\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=1\nRECOVERY_MARKER=1"
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 34254,
+        "completion_tokens": 127,
+        "cached_tokens": 34008,
+        "extra": {
+          "cache_creation_input_tokens": 244
+        }
+      },
+      "extra": {
+        "generation_model": "claude-fable-5-1-high",
+        "telemetry": {
+          "source": "assistant",
+          "operation": "inference"
+        }
+      }
+    },
+    {
+      "step_id": 21,
+      "timestamp": "2026-09-12T03:37:01.796215+00:00",
+      "source": "agent",
+      "message": "",
+      "model_name": "claude-fable-5-1-high",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_01MXWjXQicBzHnLofQiUZoxb",
+          "function_name": "run_subagent",
+          "arguments": {
+            "title": "kwp-gpt probe",
+            "task": "go",
+            "profile": "kwp-gpt",
+            "is_background": false
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_01MXWjXQicBzHnLofQiUZoxb",
+            "content": "Subagent agent_id=5512d51a completed successfully:\n\nTOKEN=kwp-gpt\nTOOLS=functions.find_file_by_name,functions.grep,functions.read,multi_tool_use.parallel\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=1\nRECOVERY_MARKER=1"
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 34509,
+        "completion_tokens": 129,
+        "cached_tokens": 34252,
+        "extra": {
+          "cache_creation_input_tokens": 255
+        }
+      },
+      "extra": {
+        "generation_model": "claude-fable-5-1-high",
+        "telemetry": {
+          "source": "assistant",
+          "operation": "inference"
+        }
+      }
+    },
+    {
+      "step_id": 22,
+      "timestamp": "2026-09-12T03:37:10.317460+00:00",
+      "source": "agent",
+      "message": "",
+      "model_name": "claude-fable-5-1-high",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_01NrVshs8XKbRKDs7BF47fUJ",
+          "function_name": "run_subagent",
+          "arguments": {
+            "title": "kwp-astra-full probe",
+            "task": "go",
+            "profile": "kwp-astra-full",
+            "is_background": false
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_01NrVshs8XKbRKDs7BF47fUJ",
+            "content": "Subagent agent_id=134af767 completed successfully:\n\nTOKEN=kwp-astra-full\nTOOLS=functions.find_file_by_name,functions.grep,functions.read,multi_tool_use.parallel\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=1\nRECOVERY_MARKER=1"
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 34765,
+        "completion_tokens": 131,
+        "cached_tokens": 34507,
+        "extra": {
+          "cache_creation_input_tokens": 256
+        }
+      },
+      "extra": {
+        "generation_model": "claude-fable-5-1-high",
+        "telemetry": {
+          "source": "assistant",
+          "operation": "inference"
+        }
+      }
+    },
+    {
+      "step_id": 23,
+      "timestamp": "2026-09-12T03:37:18.940885+00:00",
+      "source": "agent",
+      "message": "",
+      "model_name": "claude-fable-5-1-high",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_016fejs57eiS5hb2HgNUMktY",
+          "function_name": "run_subagent",
+          "arguments": {
+            "title": "kwp-adaptive probe",
+            "task": "go",
+            "profile": "kwp-adaptive",
+            "is_background": false
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_016fejs57eiS5hb2HgNUMktY",
+            "content": "Subagent agent_id=6ec71e57 completed successfully:\n\nWhat would you like me to do?"
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 35023,
+        "completion_tokens": 131,
+        "cached_tokens": 34763,
+        "extra": {
+          "cache_creation_input_tokens": 258
+        }
+      },
+      "extra": {
+        "generation_model": "claude-fable-5-1-high",
+        "telemetry": {
+          "source": "assistant",
+          "operation": "inference"
+        }
+      }
+    },
+    {
+      "step_id": 24,
+      "timestamp": "2026-09-12T03:37:24.262607+00:00",
+      "source": "agent",
+      "message": "",
+      "model_name": "claude-fable-5-1-high",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_01MTBTXLrFACkKco27CXoWXr",
+          "function_name": "run_subagent",
+          "arguments": {
+            "title": "subagent_general probe",
+            "task": "go",
+            "profile": "subagent_general",
+            "is_background": false
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_01MTBTXLrFACkKco27CXoWXr",
+            "content": "Unknown profile: subagent_general"
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 35190,
+        "completion_tokens": 125,
+        "cached_tokens": 35021,
+        "extra": {
+          "cache_creation_input_tokens": 167
+        }
+      },
+      "extra": {
+        "generation_model": "claude-fable-5-1-high",
+        "telemetry": {
+          "source": "assistant",
+          "operation": "inference"
+        }
+      }
+    },
+    {
+      "step_id": 25,
+      "timestamp": "2026-09-12T03:37:37.151008+00:00",
+      "source": "agent",
+      "message": "## kwp-unpinned\n```\nTOKEN=kwp-unpinned\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=0\nRECOVERY_MARKER=0\n```\n\n## kwp-fable\n```\nTOKEN=kwp-fable\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=1\nRECOVERY_MARKER=1\n```\n\n## kwp-fable-full\n```\nTOKEN=kwp-fable-full\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=0\nRECOVERY_MARKER=0\n```\n\n## kwp-swe\n```\nTOKEN=kwp-swe\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=1\nRECOVERY_MARKER=1\n```\n\n## kwp-swe-full\n```\nTOKEN=kwp-swe-full\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=0\nRECOVERY_MARKER=0\n```\n\n## kwp-fusion\n```\nTOKEN=kwp-fusion\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=0\nRECOVERY_MARKER=0\n```\n\n## kwp-fusion-full\n```\nTOKEN=kwp-fusion-full\nTOOLS=find_file_by_name,grep,read\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=0\nRECOVERY_MARKER=0\n```\n\n## kwp-astra\n```\nTOKEN=kwp-astra\nTOOLS=functions.find_file_by_name,functions.grep,functions.read,multi_tool_use.parallel\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=1\nRECOVERY_MARKER=1\n```\n\n## kwp-gpt\n```\nTOKEN=kwp-gpt\nTOOLS=functions.find_file_by_name,functions.grep,functions.read,multi_tool_use.parallel\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=1\nRECOVERY_MARKER=1\n```\n\n## kwp-astra-full\n```\nTOKEN=kwp-astra-full\nTOOLS=functions.find_file_by_name,functions.grep,functions.read,multi_tool_use.parallel\nPROFILES=NONE\nSIDEKICK=NO\nAGENTS_MARKER=1\nRECOVERY_MARKER=1\n```\n\n## kwp-adaptive\n```\nWhat would you like me to do?\n```\n\n## subagent_general\n```\nUnknown profile: subagent_general\n```",
+      "model_name": "claude-fable-5-1-high",
+      "tool_calls": [],
+      "metrics": {
+        "prompt_tokens": 35332,
+        "completion_tokens": 1057,
+        "cached_tokens": 35188,
+        "extra": {
+          "cache_creation_input_tokens": 142
+        }
+      },
+      "extra": {
+        "generation_model": "claude-fable-5-1-high",
+        "telemetry": {
+          "source": "assistant",
+          "operation": "inference"
+        }
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 442103,
+    "total_completion_tokens": 2669,
+    "total_cached_tokens": 419989,
+    "total_steps": 25
+  }
+}

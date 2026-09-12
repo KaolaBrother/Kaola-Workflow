@@ -1,0 +1,16 @@
+== session row
+malachite-ironclad|fusion-claude-fable-5-1-high-sidekick-swe-2-medium|normal|/private/tmp/kw-fusion-probe|2026-09-12 03:26:09
+== subagent heads
+== 'powered by' lines (node_id, parent, snippet)
+4|3|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+8|7|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+14|13|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+18|17|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+24|23|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+30|29|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+36|35|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+39|38|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).\nTOOLS=ask_user_question
+40|38|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).\nTOOLS=ask_user_question
+== tool names that appeared in tool_call_state
+{}
+== generation_model / model_name fields anywhere in metadata

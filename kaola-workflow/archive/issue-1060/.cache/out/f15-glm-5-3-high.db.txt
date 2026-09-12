@@ -1,0 +1,16 @@
+== session row
+cuddly-grin|glm-5-3-high|normal|/private/tmp/kw-fusion-probe|2026-09-12 03:27:47
+== subagent heads
+== 'powered by' lines (node_id, parent, snippet)
+4|3|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+6|5|You are powered by GLM-5.3 High.","metadata":{"num_tokens":null,"is_user_input":null,"requ
+12|11|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+14|13|You are powered by GLM-5.3 High.","metadata":{"num_tokens":null,"is_user_input":null,"requ
+20|19|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+23|22|You are powered by GLM-5.3 High.","metadata":{"num_tokens":null,"is_user_input":null,"requ
+29|28|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+31|30|You are powered by GLM-5.3 High.\nTOOLS=ask_user_question, browser_preview, close_browser_
+32|30|You are powered by GLM-5.3 High.\nTOOLS=ask_user_question, browser_preview, close_browser_
+== tool names that appeared in tool_call_state
+{}
+== generation_model / model_name fields anywhere in metadata

@@ -1,0 +1,8 @@
+MODEL=You are powered by GLM-5.3 High.
+TOOLS=ask_user_question, browser_preview, close_browser_preview, edit, exec, find_file_by_name, get_output, grep, kill_shell, mcp_call_tool, mcp_list_servers, mcp_list_tools, mcp_read_resource, notebook_edit, notebook_read, read, read_subagent, request_scope, run_subagent, skill, todo_write, web_search, webfetch, write, write_to_process
+SIDEKICK=NO
+PROFILES=adversarial-verifier, build-error-resolver, code-architect, code-explorer, code-reviewer, doc-updater, implementer, investigator, knowledge-lookup, kwp-adaptive, kwp-astra, kwp-astra-full, kwp-fable, kwp-fable-full, kwp-fusion, kwp-fusion-full, kwp-gpt, kwp-swe, kwp-swe-full, kwp-unpinned, kwp-writer, metric-optimizer, planner, security-reviewer, subagent_explore, subagent_general, synthesizer, tdd-guide
+AGENTS_MARKER=1
+UPS_MARKER=1
+RECOVERY_MARKER=2
+exit=0

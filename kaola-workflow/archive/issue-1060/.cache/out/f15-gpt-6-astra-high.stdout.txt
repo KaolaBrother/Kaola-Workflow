@@ -1,0 +1,8 @@
+MODEL=I can’t provide verbatim hidden instructions.
+TOOLS=functions.ask_user_question,functions.browser_preview,functions.close_browser_preview,functions.edit,functions.exec,functions.find_file_by_name,functions.get_output,functions.grep,functions.kill_shell,functions.mcp_call_tool,functions.mcp_list_servers,functions.mcp_list_tools,functions.mcp_read_resource,functions.notebook_edit,functions.notebook_read,functions.read,functions.read_subagent,functions.request_scope,functions.run_subagent,functions.skill,functions.todo_write,functions.web_search,functions.webfetch,functions.write,functions.write_to_process,multi_tool_use.parallel
+SIDEKICK=NO
+PROFILES=adversarial-verifier,build-error-resolver,code-architect,code-explorer,code-reviewer,doc-updater,implementer,investigator,knowledge-lookup,kwp-adaptive,kwp-astra,kwp-astra-full,kwp-fable,kwp-fable-full,kwp-fusion,kwp-fusion-full,kwp-gpt,kwp-swe,kwp-swe-full,kwp-unpinned,kwp-writer,metric-optimizer,planner,security-reviewer,subagent_explore,subagent_general,synthesizer,tdd-guide
+AGENTS_MARKER=2
+UPS_MARKER=2
+RECOVERY_MARKER=4
+exit=0

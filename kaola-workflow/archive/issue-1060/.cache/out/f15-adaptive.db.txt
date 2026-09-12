@@ -1,0 +1,16 @@
+== session row
+unique-turner|adaptive|normal|/private/tmp/kw-fusion-probe|2026-09-12 03:26:28
+== subagent heads
+== 'powered by' lines (node_id, parent, snippet)
+4|3|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+6|5|You are powered by Adaptive.","metadata":{"num_tokens":null,"is_user_input":null,"request_
+12|11|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+14|13|You are powered by Adaptive.","metadata":{"num_tokens":null,"is_user_input":null,"request_
+20|19|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+23|22|You are powered by Adaptive.","metadata":{"num_tokens":null,"is_user_input":null,"request_
+29|28|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+31|30|You are powered by Adaptive.\nTOOLS=ask_user_question,browser_preview,close_browser_previe
+32|30|You are powered by Adaptive.\nTOOLS=ask_user_question,browser_preview,close_browser_previe
+== tool names that appeared in tool_call_state
+{}
+== generation_model / model_name fields anywhere in metadata

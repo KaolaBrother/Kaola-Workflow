@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "checks": [
+    {
+      "check": "custom subagent profiles",
+      "status": "pass",
+      "detail": "26 profile(s) loaded: adversarial-verifier, build-error-resolver, code-architect, code-explorer, code-reviewer, doc-updater, implementer, investigator, knowledge-lookup, kwp-adaptive, kwp-astra, kwp-astra-full, kwp-fable, kwp-fable-full, kwp-fusion, kwp-fusion-full, kwp-gpt, kwp-swe, kwp-swe-full, kwp-unpinned, kwp-writer, metric-optimizer, planner, security-reviewer, synthesizer, tdd-guide"
+    }
+  ]
+}

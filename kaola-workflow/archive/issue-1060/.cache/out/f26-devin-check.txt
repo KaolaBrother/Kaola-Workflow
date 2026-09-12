@@ -1,0 +1,3 @@
+Kaola-Workflow · devin edition (github) — staging generated artifacts...
+check: skills do not match rendered source
+exit=1

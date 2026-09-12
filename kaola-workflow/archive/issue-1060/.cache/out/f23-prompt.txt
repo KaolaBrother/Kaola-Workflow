@@ -1,0 +1,1 @@
+Dispatch these subagent profiles one at a time in the foreground with the prompt "go", and paste each reply verbatim under a heading with the profile name: kwp-unpinned, kwp-fable, kwp-fable-full, kwp-swe, kwp-swe-full, kwp-fusion, kwp-fusion-full, kwp-astra, kwp-gpt, kwp-astra-full, kwp-adaptive, subagent_general. If a dispatch fails, paste the exact error text. Do nothing else.

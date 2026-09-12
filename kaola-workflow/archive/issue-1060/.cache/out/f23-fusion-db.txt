@@ -1,0 +1,56 @@
+== session row
+stream-giraffe|fusion-claude-fable-5-1-high-sidekick-swe-2-medium|normal|/private/tmp/kw-fusion-probe|2026-09-12 03:35:47
+== subagent heads
+== 'powered by' lines (node_id, parent, snippet)
+8|7|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+18|17|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+30|29|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+42|41|You are powered by Subagent Default.","metadata":{"num_tokens":null,"is_user_input":null,"
+45|44|You are powered by Subagent Default.","metadata":{"num_tokens":null,"is_user_input":null,"
+48|47|You are powered by Subagent Default.","metadata":{"num_tokens":null,"is_user_input":null,"
+57|56|You are powered by Claude Fable 5 XHigh.","metadata":{"num_tokens":null,"is_user_input":nu
+60|59|You are powered by Claude Fable 5 XHigh.","metadata":{"num_tokens":null,"is_user_input":nu
+63|62|You are powered by Claude Fable 5 XHigh.","metadata":{"num_tokens":null,"is_user_input":nu
+72|71|You are powered by Claude Fable 5.1 High.","metadata":{"num_tokens":null,"is_user_input":n
+75|74|You are powered by Claude Fable 5.1 High.","metadata":{"num_tokens":null,"is_user_input":n
+78|77|You are powered by Claude Fable 5.1 High.","metadata":{"num_tokens":null,"is_user_input":n
+87|86|You are powered by SWE-2 High.","metadata":{"num_tokens":null,"is_user_input":null,"reques
+90|89|You are powered by SWE-2 High.","metadata":{"num_tokens":null,"is_user_input":null,"reques
+93|92|You are powered by SWE-2 High.","metadata":{"num_tokens":null,"is_user_input":null,"reques
+102|101|You are powered by SWE-2 Medium.","metadata":{"num_tokens":null,"is_user_input":null,"requ
+105|104|You are powered by SWE-2 Medium.","metadata":{"num_tokens":null,"is_user_input":null,"requ
+108|107|You are powered by SWE-2 Medium.","metadata":{"num_tokens":null,"is_user_input":null,"requ
+117|116|You are powered by Fusion (Claude Fable 5.1 Medium + SWE-2 Medium).","metadata":{"num_toke
+120|119|You are powered by Fusion (Claude Fable 5.1 Medium + SWE-2 Medium).","metadata":{"num_toke
+123|122|You are powered by Fusion (Claude Fable 5.1 Medium + SWE-2 Medium).","metadata":{"num_toke
+132|131|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+135|134|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+138|137|You are powered by Fusion (Claude Fable 5.1 High + SWE-2 Medium).","metadata":{"num_tokens
+147|146|You are powered by GPT-6 Astra XHigh Thinking.","metadata":{"num_tokens":null,"is_user_inp
+150|149|You are powered by GPT-6 Astra XHigh Thinking.","metadata":{"num_tokens":null,"is_user_inp
+153|152|You are powered by GPT-6 Astra XHigh Thinking.","metadata":{"num_tokens":null,"is_user_inp
+162|161|You are powered by GPT-6 Astra Medium Thinking.","metadata":{"num_tokens":null,"is_user_in
+165|164|You are powered by GPT-6 Astra Medium Thinking.","metadata":{"num_tokens":null,"is_user_in
+168|167|You are powered by GPT-6 Astra Medium Thinking.","metadata":{"num_tokens":null,"is_user_in
+177|176|You are powered by GPT-6 Astra High Thinking.","metadata":{"num_tokens":null,"is_user_inpu
+180|179|You are powered by GPT-6 Astra High Thinking.","metadata":{"num_tokens":null,"is_user_inpu
+183|182|You are powered by GPT-6 Astra High Thinking.","metadata":{"num_tokens":null,"is_user_inpu
+192|191|You are powered by Adaptive.","metadata":{"num_tokens":null,"is_user_input":null,"request_
+195|194|You are powered by Adaptive.","metadata":{"num_tokens":null,"is_user_input":null,"request_
+198|197|You are powered by Adaptive.","metadata":{"num_tokens":null,"is_user_input":null,"request_
+== tool names that appeared in tool_call_state
+{
+ "Ran kwp-fusion-full subagent kwp-fusion-full probe": 1,
+ "Ran kwp-adaptive subagent kwp-adaptive probe": 1,
+ "Ran kwp-astra subagent kwp-astra probe": 1,
+ "Ran kwp-fusion subagent kwp-fusion probe": 1,
+ "Ran general subagent subagent_general probe": 1,
+ "Ran kwp-gpt subagent kwp-gpt probe": 1,
+ "Ran kwp-astra-full subagent kwp-astra-full probe": 1,
+ "Ran kwp-unpinned subagent kwp-unpinned probe": 1,
+ "Ran kwp-swe subagent kwp-swe probe": 1,
+ "Ran kwp-swe-full subagent kwp-swe-full probe": 1,
+ "Ran kwp-fable subagent kwp-fable probe": 1,
+ "Ran kwp-fable-full subagent kwp-fable-full probe": 1
+}
+== generation_model / model_name fields anywhere in metadata

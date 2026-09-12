@@ -1,0 +1,19 @@
+== subagent_heads
+sidekick|566
+== parent walk from 566 to root
+chain: 566 <- 564 <- 273 <- 271 <- 270 <- 268 <- 143 <- 141 <- 140 <- 138 <- 137 <- 136 <- 134 <- 133 <- 130 <- 115 <- 105 <- 103 <- 102 <- 100 <- 84 <- 82 <- 81 <- 79 <- 69 <- 67 <- 66 <- 64 <- 53 <- 51 <- 50 <- 49 <- 48 root: 48
+root powered-by snippet: {"message_id":"2d74a361-af69-44aa-b238-bda8fde1d322","role":"system","content":"You are the Sidekick subagent of Devin,
+
+== generation_model distinct counts
+claude-fable-5-1-high","teleme|109
+compactor","telemetry":{"sourc|1
+gpt-5-6-sol-low","telemetry":{|5
+swe-2-medium","telemetry":{"so|29
+== sidekick chain powered-by node (system prefix)
+42|{"message_id":"89aa20d5-53d4-400c-ac7c-b5eabc19a545","role":"system","content":"You are powered by SWE-2 Medium.","metadata":{"num_tokens":null,"is_user_input":null,"request_id":null,"metrics":null,"f
+45|{"message_id":"89aa20d5-53d4-400c-ac7c-b5eabc19a545","role":"system","content":"You are powered by SWE-2 Medium.","metadata":{"num_tokens":null,"is_user_input":null,"request_id":null,"metrics":null,"f
+49|{"message_id":"89aa20d5-53d4-400c-ac7c-b5eabc19a545","role":"system","content":"You are powered by SWE-2 Medium.","metadata":{"num_tokens":null,"is_user_input":null,"request_id":null,"metrics":null,"f
+52|{"message_id":"3b65ff48-e008-4c3a-9fcd-a576de953b82","role":"assistant","content":"TOOLS=browser_preview, close_browser_preview, edit, exec, find_file_by_name, get_output, grep, kill_shell, mcp_call_t
+
+== chain root node 48 content head
+{"message_id":"2d74a361-af69-44aa-b238-bda8fde1d322","role":"system","content":"You are the Sidekick subagent of Devin, an AI software engineer, paired with a lead agent: the lead plans the work and hands you tasks; you carry them out — exploring the codebase, implementing changes, and verifying res

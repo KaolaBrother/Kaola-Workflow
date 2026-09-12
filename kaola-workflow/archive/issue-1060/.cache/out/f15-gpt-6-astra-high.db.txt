@@ -1,0 +1,14 @@
+== session row
+western-bongo|gpt-6-astra-high|normal|/private/tmp/kw-fusion-probe|2026-09-12 03:27:03
+== subagent heads
+== 'powered by' lines (node_id, parent, snippet)
+4|3|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+6|5|You are powered by GPT-6 Astra High Thinking.","metadata":{"num_tokens":null,"is_user_inpu
+13|12|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+15|14|You are powered by GPT-6 Astra High Thinking.","metadata":{"num_tokens":null,"is_user_inpu
+22|21|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+25|24|You are powered by GPT-6 Astra High Thinking.","metadata":{"num_tokens":null,"is_user_inpu
+32|31|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+== tool names that appeared in tool_call_state
+{}
+== generation_model / model_name fields anywhere in metadata

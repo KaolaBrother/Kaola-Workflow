@@ -1,0 +1,98 @@
+## kwp-unpinned
+
+TOKEN=kwp-unpinned
+TOOLS=find_file_by_name,grep,read
+PROFILES=NONE
+SIDEKICK=NO
+AGENTS_MARKER=1
+RECOVERY_MARKER=1
+
+## kwp-fable
+
+TOKEN=kwp-fable
+TOOLS=find_file_by_name,grep,read
+PROFILES=NONE
+SIDEKICK=NO
+AGENTS_MARKER=1
+RECOVERY_MARKER=1
+
+## kwp-fable-full
+
+TOKEN=kwp-fable-full
+TOOLS=find_file_by_name,grep,read
+PROFILES=NONE
+SIDEKICK=NO
+AGENTS_MARKER=0
+RECOVERY_MARKER=0
+
+## kwp-swe
+
+TOKEN=kwp-swe
+TOOLS=find_file_by_name,grep,read
+PROFILES=NONE
+SIDEKICK=NO
+AGENTS_MARKER=1
+RECOVERY_MARKER=1
+
+## kwp-swe-full
+
+TOKEN=kwp-swe-full
+TOOLS=find_file_by_name,grep,read
+PROFILES=NONE
+SIDEKICK=NO
+AGENTS_MARKER=1
+RECOVERY_MARKER=1
+
+## kwp-fusion
+
+TOKEN=kwp-fusion
+TOOLS=find_file_by_name,grep,read
+PROFILES=NONE
+SIDEKICK=NO
+AGENTS_MARKER=0
+RECOVERY_MARKER=0
+
+## kwp-fusion-full
+
+TOKEN=kwp-fusion-full
+TOOLS=find_file_by_name,grep,read
+PROFILES=NONE
+SIDEKICK=NO
+AGENTS_MARKER=0
+RECOVERY_MARKER=0
+
+## kwp-astra
+
+TOKEN=kwp-astra
+TOOLS=functions.find_file_by_name,functions.grep,functions.read,multi_tool_use.parallel
+PROFILES=NONE
+SIDEKICK=NO
+AGENTS_MARKER=1
+RECOVERY_MARKER=1
+
+## kwp-gpt
+
+TOKEN=kwp-gpt
+TOOLS=functions.find_file_by_name,functions.grep,functions.read,multi_tool_use.parallel
+PROFILES=NONE
+SIDEKICK=NO
+AGENTS_MARKER=1
+RECOVERY_MARKER=1
+
+## kwp-astra-full
+
+TOKEN=kwp-astra-full
+TOOLS=functions.find_file_by_name,functions.grep,functions.read,multi_tool_use.parallel
+PROFILES=NONE
+SIDEKICK=NO
+AGENTS_MARKER=1
+RECOVERY_MARKER=1
+
+## kwp-adaptive
+
+Ready when you are — what would you like me to do?
+
+## subagent_general
+
+What would you like me to do? (e.g., write Go code, start a task, run a command)
+exit=0

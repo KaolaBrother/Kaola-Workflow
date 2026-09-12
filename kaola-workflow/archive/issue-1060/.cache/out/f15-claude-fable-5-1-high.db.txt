@@ -1,0 +1,16 @@
+== session row
+observant-molybdenum|claude-fable-5-1-high|normal|/private/tmp/kw-fusion-probe|2026-09-12 03:26:42
+== subagent heads
+== 'powered by' lines (node_id, parent, snippet)
+4|3|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+6|5|You are powered by Claude Fable 5.1 High.","metadata":{"num_tokens":null,"is_user_input":n
+13|12|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+15|14|You are powered by Claude Fable 5.1 High.","metadata":{"num_tokens":null,"is_user_input":n
+22|21|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+25|24|You are powered by Claude Fable 5.1 High.","metadata":{"num_tokens":null,"is_user_input":n
+32|31|You are powered by ...\" sentence from your system prompt, verbatim>\nTOOLS=<comma-separat
+34|33|You are powered by Claude Fable 5.1 High.\nTOOLS=ask_user_question,browser_preview,close_b
+35|33|You are powered by Claude Fable 5.1 High.\nTOOLS=ask_user_question,browser_preview,close_b
+== tool names that appeared in tool_call_state
+{}
+== generation_model / model_name fields anywhere in metadata
