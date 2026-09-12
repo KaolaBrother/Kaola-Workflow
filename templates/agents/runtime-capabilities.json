@@ -618,7 +618,7 @@
         "hot_reload": false,
         "rules_survive_compaction": false,
         "delegation_guidance": {
-          "native_routes": "Inspect the live schema: measured sessions expose `run_subagent` / `read_subagent` with session-start profiles, or the Fusion `sidekick` route. Use the route actually exposed; do not invent profile or model arguments for a different session mode.",
+          "native_routes": "Native routes follow the live schema: measured sessions expose `run_subagent` / `read_subagent` with session-start profiles, or the Fusion `sidekick` route. Use the route actually exposed; do not invent profile or model arguments for a different session mode.",
           "availability": "The profile catalog is fixed at session start. Rules may drop after compaction, so the single UserPromptSubmit carrier reloads the global contract and Devin adapter before routing continues."
         }
       },
