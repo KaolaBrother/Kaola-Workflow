@@ -1,0 +1,28 @@
+You are in a fresh Adaptive Devin session in /tmp/kw-reject-probe.
+
+Your job is to measure whether run_subagent calls are rejected under specific conditions.
+
+Use the profile `kwp-adaptive` (model: adaptive) to dispatch four subagents sequentially. For each, call run_subagent with the exact task prompt below, block=true, and collect the verbatim reply.
+
+Task A (trivial):
+"This is task A. List the files in the current directory and return exactly: FILE_COUNT=<number>. Then report POWERED= and MODEL_ID= if you can infer it."
+
+Task B (write):
+"This is task B. Write the number 1 to /tmp/kw-reject-probe/out/b.txt and report exactly: SAVED_OK=true/false. Then report POWERED= and MODEL_ID= if you can infer it."
+
+Task C (write):
+"This is task C. Write the number 2 to /tmp/kw-reject-probe/out/c.txt and report exactly: SAVED_OK=true/false. Then report POWERED= and MODEL_ID= if you can infer it."
+
+Task D (architect):
+"You are a senior software architect. Propose a fault-tolerant event-sourcing system for a real-time collaborative editor. Write the design to /tmp/kw-reject-probe/out/eventsourcing.txt. Report exactly: WROTE_DESIGN=true/false. Then report POWERED= and MODEL_ID= if you can infer it."
+
+After all four subagents return, output a single block with:
+SESSION_MODEL=<your sessions.model if known>
+SUBAGENT_A=<session id or unknown>
+SUBAGENT_B=<session id or unknown>
+SUBAGENT_C=<session id or unknown>
+SUBAGENT_D=<session id or unknown>
+REPLY_A=<verbatim reply A>
+REPLY_B=<verbatim reply B>
+REPLY_C=<verbatim reply C>
+REPLY_D=<verbatim reply D>
