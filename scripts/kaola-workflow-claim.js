@@ -3347,7 +3347,7 @@ function findArchiveAuthorities(root, project) {
   const candidateRoots = [root];
   try {
     const main = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
-    if (!candidateRoots.some(candidate => path.resolve(candidate) === path.resolve(main))) {
+    if (!candidateRoots.some(candidate => fs.realpathSync(candidate) === main)) {
       candidateRoots.push(main);
     }
   } catch (_) {}
@@ -3369,6 +3369,24 @@ function findArchiveAuthorities(root, project) {
     }
   }
   return authorities;
+}
+
+// A main-only live claim can start a new run under a historical slug. A matching
+// archive supersedes that live copy after a crash; a strictly newer claim does not.
+function mainClaimNeedsMirror(srcDir, root, project) {
+  try {
+    const state = fs.readFileSync(path.join(srcDir, 'workflow-state.md'), 'utf8');
+    const ts = field(state, 'claim_ts');
+    if (!ts || !field(state, 'claim_identity_digest') || field(state, 'status') === 'closed') return false;
+    if (path.resolve(field(state, 'worktree_path') || '') !== path.resolve(root)) return false;
+    return findArchiveAuthorities(root, project).every(dir => {
+      try {
+        const archived = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+        if (field(archived, 'claim_identity_digest') === field(state, 'claim_identity_digest')) return false;
+        return (field(archived, 'claim_ts') || '') < ts;
+      } catch (error) { return error.code === 'ENOENT'; }
+    });
+  } catch (_) { return false; }
 }
 
 // ─── #816: the mechanical finalization transaction ────────────────────────────────────────────
@@ -3542,7 +3560,8 @@ function mirrorFinalizationArtifacts(root, project) {
   // The residue OUTSIDE kaola-workflow/ is a SEPARATE obligation the commit gate still owes the
   // sink, and the archive never superseded it — so it is mirrored on this path too. Skipping it
   // silently dropped the orchestrator's CHANGELOG/doc edits from every crash-resumed run.
-  if (!fs.existsSync(destDir) && findArchiveAuthorities(root, project).length > 0) {
+  if (!fs.existsSync(destDir) && findArchiveAuthorities(root, project).length > 0
+      && !mainClaimNeedsMirror(srcDir, root, project)) {
     return {
       mirror: 'skipped_post_archive',
       ledger_compare: 'not_needed',
@@ -3876,7 +3895,8 @@ function probeFinalizeMirror(root, project) {
   // the prediction reads is a different question, and is the one that leaves this function.
   const destAbsent = !fs.existsSync(destDir);
   const destAuthorityAbsent = !fs.existsSync(path.join(destDir, 'workflow-state.md'));
-  if (destAbsent && findArchiveAuthorities(root, project).length > 0) {
+  if (destAbsent && findArchiveAuthorities(root, project).length > 0
+      && !mainClaimNeedsMirror(srcDir, root, project)) {
     return { state: 'skipped_post_archive', mainRoot, destAuthorityAbsent };
   }
   if (!fs.existsSync(srcDir)) return { state: 'source_absent', mainRoot, destAuthorityAbsent };
@@ -3938,7 +3958,16 @@ function resolveFinalizeAuthority(root, project) {
     // path. An unreadable entry remains live authority and fails type proof below.
     livePresent = !error || error.code !== 'ENOENT';
   }
-  const candidates = livePresent ? [liveDir] : findArchiveAuthorities(root, project);
+  let candidates = livePresent ? [liveDir] : findArchiveAuthorities(root, project);
+  if (!livePresent && candidates.length > 1) {
+    // A historical doc-only directory has no claim authority. It cannot make the
+    // one surviving claimed archive ambiguous; unreadable or multiple state files can.
+    const withState = candidates.filter(dir => {
+      try { fs.lstatSync(path.join(dir, 'workflow-state.md')); return true; }
+      catch (error) { return error.code !== 'ENOENT'; }
+    });
+    if (withState.length === 1) candidates = withState;
+  }
   const authorityDir = candidates.length === 1 ? candidates[0] : null;
   const statePath = authorityDir ? path.join(authorityDir, 'workflow-state.md') : null;
   let authorityState = '';
@@ -6791,6 +6820,8 @@ if (require.main === module) {
 
 module.exports = {
   archiveProjectDir,
+  findArchiveAuthorities,
+  resolveFinalizeAuthority,
   buildBranchName,
   buildClosureReceipt,
   checkClosureInvariants,

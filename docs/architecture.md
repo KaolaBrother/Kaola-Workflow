@@ -3,6 +3,11 @@
 System boundaries, major components, data flow, and durable state. Read it as the anatomy of an
 engineered agent loop: what the orchestrator owns, what the scripts own, and what survives a crash.
 
+A project name can be reused across runs. The live claim and an exact recorded archive destination
+identify the current transaction; a historical doc-only folder is not a competing claim. Without
+an identifying claim or receipt, multiple claimed archives stay ambiguous. Mirroring, sink journal
+placement, and scoped audit preserve this distinction (#1067).
+
 ## The shape of a run
 
 Kaola-Workflow is bookkeeping for an orchestrating agent. It does not schedule the agent's work,

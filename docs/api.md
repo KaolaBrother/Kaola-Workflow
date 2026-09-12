@@ -7,6 +7,18 @@ decomposed, dispatched and recorded — is the mission list, which has no CLI at
 `decisions/0017-the-mission-list.md` for the design record and `architecture.md` for how it fits
 together.
 
+## Same-name archive resolution
+
+Finalization mirrors a main-only live claim into its recorded worktree when existing archives
+belong to earlier runs; a matching archived claim still takes the crash-resume path. A doc-only
+archive without workflow state cannot displace the single state-bearing archive. Multiple
+state-bearing archives remain ambiguous rather than selecting the newest timestamp.
+
+Sink uses the matching claim or an existing receipt's exact `archive_dest` for collision-suffixed
+archives, journal placement, and durable findings. Unrelated or divergent files remain protected.
+Scoped closure audit resolves live state first, then a unique claimed archive; historical archive
+findings remain visible outside that scope. No new run-record field is introduced (#1067).
+
 ## Command surface
 
 Three commands ship. Everything below is invoked by them or by hand.
@@ -1667,6 +1679,9 @@ The `--release-check` step is the gate documented above. `--prepare` bumps the v
 `--release-check` now share — and `--push` publishes.
 
 ## Installation and edition sync
+
+`install.sh` copies generated command files verbatim. Agent profiles own model bindings;
+command installation performs no model-placeholder substitution (#1066).
 
 | Script | Contract |
 |---|---|

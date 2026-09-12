@@ -142,8 +142,9 @@ function stateIssueNumbers(content) {
 }
 
 // Resolve a project's member issues from its OWN record: the live folder first, then its archive
-// under any of the three name shapes (oldest name first, so an exact bare name wins over a
-// timestamped sibling). Returns resolved:false when the project has no workflow-state.md anywhere.
+// under any of the three name shapes. A live claim wins; a single archived claim can
+// disambiguate doc-only history. Multiple archived claims keep name ambiguity rather
+// than selecting by timestamp. Returns resolved:false when no state can be read.
 function resolveProjectIssues(root, project) {
   const workflowDir = path.join(root, 'kaola-workflow');
   const archiveBase = path.join(workflowDir, 'archive');
@@ -156,11 +157,19 @@ function resolveProjectIssues(root, project) {
   for (const name of names) {
     if (archiveNameMatchesProject(name, project)) candidates.push(path.join(archiveBase, name, 'workflow-state.md'));
   }
-  for (const file of candidates) {
+  const claimed = candidates.map(file => {
+    try { return { file, ts: field(fs.readFileSync(file, 'utf8'), 'claim_ts') || '' }; }
+    catch (_) { return { file, ts: '' }; }
+  }).filter(entry => entry.ts);
+  const live = claimed.find(entry => entry.file === candidates[0]);
+  const uniqueClaim = !!live || claimed.length === 1;
+  const ordered = uniqueClaim ? [(live || claimed[0]).file] : candidates;
+  for (const file of ordered) {
     let content;
     try { content = fs.readFileSync(file, 'utf8'); } catch (_) { continue; }
     return {
       resolved: true,
+      claim_resolved: !!uniqueClaim,
       state_file: path.relative(root, file).split(path.sep).join('/'),
       issue_numbers: stateIssueNumbers(content)
     };
@@ -177,6 +186,7 @@ function resolveScope(root, args) {
   let stateFile = null;
   let ambiguous = false;
   let projectUnresolved = false;
+  let claimResolved = false;
   if (args.project) {
     const found = resolveProjectIssues(root, args.project);
     // An unresolvable --project must not answer "clean". Reporting a clean verdict for a mistyped
@@ -193,14 +203,17 @@ function resolveScope(root, args) {
     // verdict, so the answer is "the project did not resolve" rather than "the project is clean".
     projectUnresolved = !found.resolved;
     stateFile = found.state_file;
+    claimResolved = found.claim_resolved;
     for (const n of found.issue_numbers) issues.add(n);
-    ambiguous = archiveNameIsAmbiguous(root, args.project);
+    ambiguous = !found.claim_resolved && archiveNameIsAmbiguous(root, args.project);
   }
   return {
     project: args.project,
     issues,
     issue_numbers: Array.from(issues).sort((a, b) => a - b),
     state_file: stateFile,
+    claim_resolved: !!claimResolved,
+    archive_name: stateFile && !ambiguous && stateFile.startsWith('kaola-workflow/archive/') ? stateFile.split('/')[2] : null,
     project_unresolved: projectUnresolved,
     archive_name_ambiguous: ambiguous
   };
@@ -501,7 +514,7 @@ function scopePredicate(key, scope) {
   if (key === 'unresolved_closed_state') return n => scope.issues.has(n);
   if (key === 'stale_in_progress_labels') return f => scope.issues.has(f.number);
   if (key === 'archive_content_incomplete' || key === 'archive_summary_citation_missing') {
-    return f => scope.project != null && archiveNameMatchesProject(f.project, scope.project);
+    return f => scope.project != null && !(scope.claim_resolved && !scope.archive_name) && (scope.archive_name ? f.project === scope.archive_name : archiveNameMatchesProject(f.project, scope.project));
   }
   return f => (scope.project != null && f.project === scope.project) || scope.issues.has(f.issue_number);
 }
@@ -667,6 +680,7 @@ module.exports = {
   archiveNameMatchesProject,
   stateIssueNumbers,
   resolveProjectIssues,
+  resolveScope,
   partitionDriftByScope,
   driftCounts,
   driftIsClean

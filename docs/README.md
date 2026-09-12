@@ -37,7 +37,7 @@ moments.
   environments), live-enum routing, host-specific install/reload carriers, and hooks.
 - [ZCode Edition](zcode-edition.md) — direct user-plus-workspace `AGENTS.md`, vendor-native
   dispatch (no Kaola role profiles), known hook limits, and explicit version/relocation unknowns.
-- [Devin CLI Edition](devin-edition.md) — vendor-harness `run_subagent` dispatch (no Kaola role
+- [Devin CLI Edition](devin-edition.md) — live-schema vendor-harness dispatch (no Kaola role
   profiles), inline skills, managed global contract, and UserPromptSubmit recovery after
   compaction drops rules.
 

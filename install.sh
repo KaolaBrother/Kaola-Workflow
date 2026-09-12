@@ -523,47 +523,6 @@ install_agent_files() {
 
 install_agent_files
 
-extract_agent_model() {
-  local agent_file="$1"
-  [[ -f "$agent_file" ]] || return 0
-  awk '
-    NR == 1 && $0 == "---" { in_frontmatter = 1; next }
-    in_frontmatter && $0 == "---" { exit }
-    in_frontmatter && $0 ~ /^[[:space:]]*model[[:space:]]*:/ {
-      sub(/^[[:space:]]*model[[:space:]]*:[[:space:]]*/, "", $0)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
-      if (substr($0, 1, 1) == "\"" && substr($0, length($0), 1) == "\"") {
-        $0 = substr($0, 2, length($0) - 2)
-      }
-      print
-      exit
-    }
-  ' "$agent_file"
-}
-
-# The source agent frontmatter is the ONLY model authority for the install. An `inherit`
-# value resolves to empty on purpose: render_command_file drops the whole model= line for it.
-resolve_agent_model_for_install() {
-  local agent="$1"
-  local model
-  model="$(extract_agent_model "$(agent_source_file "$agent")")"
-  if [[ "$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')" == "inherit" ]]; then
-    return 0
-  fi
-  printf '%s\n' "$model"
-}
-
-# Registered placeholders are exactly the ones some command surface actually spells. A name
-# here with no consumer is inert residue; a name a surface spells with no arm here is the #646
-# regression (empty model → line silently dropped, or a hard install error out of model= context).
-# Both lists below must carry the same names — add to and remove from them in the same edit.
-model_for_placeholder() {
-  case "$1" in
-    TDD_GUIDE_MODEL) resolve_agent_model_for_install tdd-guide ;;
-    DOC_UPDATER_MODEL) resolve_agent_model_for_install doc-updater ;;
-  esac
-}
-
 # Disposal, not a tail: older installs wrote an agent model manifest that the runtime
 # resolver consulted ahead of the static defaults. The resolver no longer reads it, so a
 # leftover file would be inert but misleading — delete it on every upgrade.
@@ -576,43 +535,6 @@ dispose_agent_model_manifest() {
 }
 
 dispose_agent_model_manifest
-
-render_command_file() {
-  local source_file="$1"
-  local dest_file="$2"
-  local line rendered placeholder model skip_line
-  local placeholders=(
-    TDD_GUIDE_MODEL
-    DOC_UPDATER_MODEL
-  )
-
-  : > "$dest_file"
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    rendered="$line"
-    skip_line=0
-    for placeholder in "${placeholders[@]}"; do
-      if [[ "$rendered" == *"{$placeholder}"* ]]; then
-        model="$(model_for_placeholder "$placeholder")"
-        if [[ -z "$model" ]]; then
-          if [[ "$rendered" == *"model=\"{$placeholder}\""* ]]; then
-            # inherit/empty model in the frontmatter model="{X}" context → drop the line (intended).
-            skip_line=1
-            break
-          fi
-          # #363: an inherit/empty model in ANY OTHER context would silently empty the placeholder
-          # and corrupt prose. Fail loudly instead of producing a corrupted command file.
-          echo "Install error: placeholder {$placeholder} resolved to empty (inherit) in a non-model context in $(basename "$source_file"):" >&2
-          echo "  $line" >&2
-          exit 1
-        fi
-        rendered="${rendered//\{$placeholder\}/$model}"
-      fi
-    done
-    if [[ "$skip_line" -eq 0 ]]; then
-      printf '%s\n' "$rendered" >> "$dest_file"
-    fi
-  done < "$source_file"
-}
 
 # Install commands
 if [[ ! -d "$SOURCE_COMMANDS_DIR" ]]; then
@@ -632,7 +554,8 @@ for command_file in "$SOURCE_COMMANDS_DIR"/*.md; do
   # Remove the file this install is about to write, immediately before writing it — the shadowing
   # stale copy is cleared without a namespace glob having to guess which names are still shipped.
   rm -f "$dest"
-  render_command_file "$command_file" "$dest"
+  # Commands are complete generated files; model bindings belong to agent profiles.
+  cp "$command_file" "$dest"
   echo "Installed: $dest"
   installed=$((installed + 1))
 done

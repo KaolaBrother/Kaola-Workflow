@@ -6176,6 +6176,34 @@ assertKeepOpenResolvesTheProjectSlug937('#937 c (legacy, mis-cased)', 'legacy', 
 console.log('Test (#937 d, positive control): the legacy terminal driven with the EXACT on-disk slug still deletes both markers');
 assertKeepOpenResolvesTheProjectSlug937('#937 d (legacy, exact)', 'legacy', 'issue-93704', 93704, 93714, 'issue-93704');
 
+// #1067: the keep-worktree archive already exists before this sink starts, beside
+// a tracked old unclaimed run. The sink must journal and commit the current destination.
+(function testPreFinalizedCollisionArchive() {
+  const project = 'issue-106709';
+  const issue = 106709;
+  const suffix = project + '.archived-2026-09-12T13-08-06-899Z';
+  const mirror = archiveMirrorFiles(project, issue);
+  const fx = buildKeepWorktreeArchiveMirrorFixture(project, issue, { plant: mirrorPlant(suffix, mirror) });
+  fx.projectName = project;
+  try {
+    const oldRel = 'kaola-workflow/archive/' + project + '/mission-list.md';
+    const oldBytes = '# Historical unclaimed documentation run\n';
+    fs.mkdirSync(path.dirname(path.join(fx.tmpRoot, oldRel)), {recursive:true});
+    fs.writeFileSync(path.join(fx.tmpRoot, oldRel), oldBytes);
+    git(fx.tmpRoot, ['add', '--', oldRel]);
+    git(fx.tmpRoot, ['commit', '-m', 'old archive']);
+    git(fx.tmpRoot, ['push', 'origin', 'main']);
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+    assert(result.status === 0 && out && out.status === 'sinked', '#1067 collision sink completes: ' + result.stdout + result.stderr);
+    const rel = 'kaola-workflow/archive/' + suffix;
+    assert(out && out.receipt && out.receipt.archive_dest === rel, '#1067 receipt binds actual current destination');
+    assert(showAtHead(fx.tmpRoot, rel + '/workflow-state.md') !== null, '#1067 current archive committed');
+    assert(showAtHead(fx.tmpRoot, oldRel) === oldBytes, '#1067 historical archive preserved');
+    assert(!fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow/archive', project, '.cache')), '#1067 journal never creates cache under old archive');
+  } finally { cleanup(fx); }
+})();
+
 // --------------------------------------------------------------------------- summary
 
 if (failed === 0) {

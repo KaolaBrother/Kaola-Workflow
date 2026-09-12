@@ -6,7 +6,7 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const forge = require('./kaola-gitea-forge');
-const { getCoordRoot, readActiveFolders, removeWorktree, worktreePathFor, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock, clearAdvisoryClaim, resolveProjectSlug } = require('./kaola-gitea-workflow-claim');
+const { getCoordRoot, readActiveFolders, removeWorktree, worktreePathFor, buildClosureReceipt, checkClosureInvariants, defaultBranch, appendClosureBlock, clearAdvisoryClaim, resolveProjectSlug, findArchiveAuthorities } = require('./kaola-gitea-workflow-claim');
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-gitea-workflow-run-chains');
@@ -119,10 +119,10 @@ function resolveSinkProjectSlug(args, mainRoot) {
 // Where the run's record lives, newest-authority first: the recorded archive dest, the plain
 // archive, then the live folder. Null when the run has no folder on disk at all.
 function resolveRunRecordDir(mainRoot, project, archiveDestRel) {
-  const candidates = [];
-  if (archiveDestRel) candidates.push(path.join(mainRoot, archiveDestRel));
-  candidates.push(path.join(mainRoot, 'kaola-workflow', 'archive', project));
-  candidates.push(path.join(mainRoot, 'kaola-workflow', project));
+  const live = path.join(mainRoot, 'kaola-workflow', project);
+  const candidates = archiveDestRel ? [path.join(mainRoot, archiveDestRel)] : [live];
+  const archive = currentArchiveDir(mainRoot, project);
+  if (archive) candidates.push(archive);
   for (const dir of candidates) {
     try { if (fs.statSync(dir).isDirectory()) return dir; } catch (_) {}
   }
@@ -1398,14 +1398,64 @@ function writeSinkReceipt(receiptPath, receipt) {
   adaptiveSchema.writeFileAtomicReplace(receiptPath, JSON.stringify(receipt, null, 2) + '\n');
 }
 
-function resolveSinkReceiptPath(mainRoot, project) {
+function currentArchiveDir(mainRoot, project, branch) {
+  const candidates = findArchiveAuthorities(mainRoot, project);
+  let liveClaim = null;
+  try {
+    const live = fs.readFileSync(path.join(mainRoot, 'kaola-workflow', project, 'workflow-state.md'), 'utf8');
+    const match = live.match(/^claim_ts:\s*(.+?)\s*$/m);
+    if (match) liveClaim = match[1].trim();
+  } catch (_) {}
+  const stamped = [];
+  for (const dir of candidates) {
+    try {
+      if (!fs.lstatSync(dir).isDirectory()) return null;
+      if (!fs.lstatSync(path.join(dir, 'workflow-state.md')).isFile()) return null;
+      const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+      const ts = state.match(/^claim_ts:\s*(.+?)\s*$/m);
+      const recordedBranch = state.match(/^branch:\s*(.+?)\s*$/m);
+      if (ts && (!liveClaim || ts[1].trim() === liveClaim)
+          && (!branch || (recordedBranch && recordedBranch[1].trim() === branch))) stamped.push(dir);
+    } catch (error) { if (error.code !== 'ENOENT') return null; }
+  }
+  // With no surviving live state, two claimed histories remain ambiguous. Timestamps
+  // do not authorize choosing one simply because it is later.
+  if (stamped.length === 1) return stamped[0];
+  if (stamped.length > 1) {
+    const anchored = stamped.filter(dir => {
+      try {
+        const receipt = JSON.parse(fs.readFileSync(path.join(dir, '.cache', 'sink-receipt.json'), 'utf8'));
+        const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+        const ts = state.match(/^claim_ts:\s*(.+?)\s*$/m);
+        return receipt.project === project && (!branch || receipt.branch === branch)
+          && ts && receipt.claim_ts === ts[1].trim()
+          && receipt.archive_dest === path.relative(mainRoot, dir).split(path.sep).join('/');
+      } catch (_) { return false; }
+    });
+    return anchored.length === 1 ? anchored[0] : null;
+  }
+  if (liveClaim) return null;
+  return candidates.length === 1 && path.basename(candidates[0]) === project ? candidates[0] : null;
+}
+
+
+function resolveSinkReceiptPath(mainRoot, project, branch) {
+  const current = currentArchiveDir(mainRoot, project, branch);
+  if (current && !fs.existsSync(path.join(mainRoot, 'kaola-workflow', project))) {
+    return path.join(current, '.cache', 'sink-receipt.json');
+  }
+  if (!fs.existsSync(path.join(mainRoot, 'kaola-workflow', project))
+      && findArchiveAuthorities(mainRoot, project).length > 1) {
+    throw new Error('archive_authority_ambiguous: no current claim or sink receipt identifies the archive for ' + project);
+  }
   const live = path.join(mainRoot, 'kaola-workflow', project, '.cache', 'sink-receipt.json');
   const archive = path.join(mainRoot, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json');
   if (fs.existsSync(live)) return live;
   if (fs.existsSync(archive)) return archive;
   // A collision-suffixed archive (archive/<project>.archived-<ts>/) may hold the receipt: the
   // finalize step follows archiveProjectDir's actual dest, so a crash-resume must scan the suffixed
-  // candidates too (newest suffix first — the suffix is a sortable timestamp).
+  // candidates too (newest suffix first — the suffix is a sortable timestamp). Same scan discipline
+  // as readCurrentClaimTs; the exact prefix match cannot hit an unrelated project name.
   try {
     const archiveRoot = path.join(mainRoot, 'kaola-workflow', 'archive');
     const suffixed = fs.readdirSync(archiveRoot)
@@ -1415,6 +1465,7 @@ function resolveSinkReceiptPath(mainRoot, project) {
       if (fs.existsSync(candidate)) return candidate;
     }
   } catch (_) {}
+  // Default: write to live (or archive if live project dir is absent)
   const liveDir = path.join(mainRoot, 'kaola-workflow', project);
   if (fs.existsSync(liveDir)) return live;
   return archive;
@@ -1524,8 +1575,11 @@ function readCurrentClaimTs(mainRoot, project, branch) {
 // belongs to an earlier run of the same reused project; reinitialize so the pipeline re-runs fresh
 // under THIS run's flags (its recorded steps, including a prior closure:done, are NOT replayed).
 function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers, defBranch, keepIssueOpen) {
-  const receiptPath = resolveSinkReceiptPath(mainRoot, project);
-  const currentClaimTs = readCurrentClaimTs(mainRoot, project, branch);
+  const receiptPath = resolveSinkReceiptPath(mainRoot, project, branch);
+  const existingArchive = !fs.existsSync(path.join(mainRoot, 'kaola-workflow', project)) && currentArchiveDir(mainRoot, project, branch);
+  const currentClaimTs = existingArchive && fs.existsSync(path.join(existingArchive, 'workflow-state.md'))
+    ? (fs.readFileSync(path.join(existingArchive, 'workflow-state.md'), 'utf8').match(/^claim_ts:\s*(.+?)\s*$/m) || [])[1] || null
+    : readCurrentClaimTs(mainRoot, project, branch);
   const resolveBranchHead = () => {
     try { return execFileSync('git', ['-C', mainRoot, 'rev-parse', branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) { return null; }
   };
@@ -1553,7 +1607,8 @@ function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers,
       // one (a stash left by a pre-retirement sink run that has not yet been restored).
       removed_duplicates: [], archived_paths: [],
       steps
-    }, extra || {});
+    }, existingArchive && path.basename(existingArchive) !== project
+      ? { archive_dest: path.relative(mainRoot, existingArchive).split(path.sep).join('/') } : {}, extra || {});
   };
   if (fs.existsSync(receiptPath)) {
     try {
@@ -1810,6 +1865,8 @@ function sinkPreflight(mainRoot, project, branch) {
 
   const porcelain = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '-uall'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   const lines = porcelain.split('\n').filter(Boolean);
+  const ownArchiveDir = currentArchiveDir(mainRoot, project, branch);
+  const ownArchivePrefix = ownArchiveDir ? path.relative(mainRoot, ownArchiveDir).split(path.sep).join('/') + '/' : 'kaola-workflow/archive/' + project + '/';
   const worktreePaths = new Set();
   try {
     const list = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
@@ -1877,7 +1934,6 @@ function sinkPreflight(mainRoot, project, branch) {
     // whose action is fs.unlinkSync and would destroy the finalization summary and mission list. Scoped
     // to THIS project on a SEGMENT BOUNDARY (the trailing '/'): a sibling's archive tree and a
     // project-name prefix look-alike stay bucket-3. ?? only.
-    const ownArchivePrefix = 'kaola-workflow/archive/' + project + '/';
     if (xy === '??' && filePath.startsWith(ownArchivePrefix)) {
       let branchHasPath = false;
       try { execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', branch + ':' + filePath], { stdio: 'ignore' }); branchHasPath = true; } catch (_) {}
@@ -2825,6 +2881,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  sinkPreflight,
+  resolveSinkReceiptPath,
+  resolveRunRecordDir,
   classifyMergeError,
   closeLinkedIssue,
   fastForwardMain,

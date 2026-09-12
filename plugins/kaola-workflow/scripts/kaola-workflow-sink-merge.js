@@ -18,7 +18,7 @@ const { parsePorcelainPaths, isParkedLanePath, getCoordRoot, mainRootFromCoord, 
 // imported from its owner directly.
 const { readActiveFolders } = require('./kaola-workflow-active-folders');
 // claim-native symbols with no forwarding source (see #1055 audit): imported from claim.js only.
-const { removeWorktree, buildClosureReceipt, checkClosureInvariants, appendClosureBlock, clearAdvisoryClaim, resolveProjectSlug } = require('./kaola-workflow-claim.js');
+const { removeWorktree, buildClosureReceipt, checkClosureInvariants, appendClosureBlock, clearAdvisoryClaim, resolveProjectSlug, findArchiveAuthorities } = require('./kaola-workflow-claim.js');
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains.js requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-workflow-run-chains.js');
@@ -145,14 +145,13 @@ function sinkEmit(payload, exitCode) {
   if (exitCode != null) process.exitCode = exitCode;
 }
 
-// Where the run's record lives, newest-authority first: the recorded archive dest (possibly
-// collision-suffixed), the plain archive, then the live folder. Returns null when the run has
-// no folder on disk at all — the finding then rides stderr + the envelope only.
+// Follow the recorded archive destination, then a live run or uniquely identified
+// archive. A plain historical directory is not authority for a newer suffixed run.
 function resolveRunRecordDir(mainRoot, project, archiveDestRel) {
-  const candidates = [];
-  if (archiveDestRel) candidates.push(path.join(mainRoot, archiveDestRel));
-  candidates.push(path.join(mainRoot, 'kaola-workflow', 'archive', project));
-  candidates.push(path.join(mainRoot, 'kaola-workflow', project));
+  const live = path.join(mainRoot, 'kaola-workflow', project);
+  const candidates = archiveDestRel ? [path.join(mainRoot, archiveDestRel)] : [live];
+  const archive = currentArchiveDir(mainRoot, project);
+  if (archive) candidates.push(archive);
   for (const dir of candidates) {
     try { if (fs.statSync(dir).isDirectory()) return dir; } catch (_) {}
   }
@@ -1357,8 +1356,57 @@ function pruneSinkArchiveSkeleton(mainRoot, project) {
   } catch (_) { return false; }
 }
 
+// Resolve one archive carrying the current claim, never every directory sharing its slug.
+function currentArchiveDir(mainRoot, project, branch) {
+  const candidates = findArchiveAuthorities(mainRoot, project);
+  let liveClaim = null;
+  try {
+    const live = fs.readFileSync(path.join(mainRoot, 'kaola-workflow', project, 'workflow-state.md'), 'utf8');
+    const match = live.match(/^claim_ts:\s*(.+?)\s*$/m);
+    if (match) liveClaim = match[1].trim();
+  } catch (_) {}
+  const stamped = [];
+  for (const dir of candidates) {
+    try {
+      if (!fs.lstatSync(dir).isDirectory()) return null;
+      if (!fs.lstatSync(path.join(dir, 'workflow-state.md')).isFile()) return null;
+      const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+      const ts = state.match(/^claim_ts:\s*(.+?)\s*$/m);
+      const recordedBranch = state.match(/^branch:\s*(.+?)\s*$/m);
+      if (ts && (!liveClaim || ts[1].trim() === liveClaim)
+          && (!branch || (recordedBranch && recordedBranch[1].trim() === branch))) stamped.push(dir);
+    } catch (error) { if (error.code !== 'ENOENT') return null; }
+  }
+  // With no surviving live state, two claimed histories remain ambiguous. Timestamps
+  // do not authorize choosing one simply because it is later.
+  if (stamped.length === 1) return stamped[0];
+  if (stamped.length > 1) {
+    const anchored = stamped.filter(dir => {
+      try {
+        const receipt = JSON.parse(fs.readFileSync(path.join(dir, '.cache', 'sink-receipt.json'), 'utf8'));
+        const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+        const ts = state.match(/^claim_ts:\s*(.+?)\s*$/m);
+        return receipt.project === project && (!branch || receipt.branch === branch)
+          && ts && receipt.claim_ts === ts[1].trim()
+          && receipt.archive_dest === path.relative(mainRoot, dir).split(path.sep).join('/');
+      } catch (_) { return false; }
+    });
+    return anchored.length === 1 ? anchored[0] : null;
+  }
+  if (liveClaim) return null;
+  return candidates.length === 1 && path.basename(candidates[0]) === project ? candidates[0] : null;
+}
+
 // #429: locate the sink-receipt.json — live project .cache first, archive .cache fallback.
-function resolveSinkReceiptPath(mainRoot, project) {
+function resolveSinkReceiptPath(mainRoot, project, branch) {
+  const current = currentArchiveDir(mainRoot, project, branch);
+  if (current && !fs.existsSync(path.join(mainRoot, 'kaola-workflow', project))) {
+    return path.join(current, '.cache', 'sink-receipt.json');
+  }
+  if (!fs.existsSync(path.join(mainRoot, 'kaola-workflow', project))
+      && findArchiveAuthorities(mainRoot, project).length > 1) {
+    throw new Error('archive_authority_ambiguous: no current claim or sink receipt identifies the archive for ' + project);
+  }
   const live = path.join(mainRoot, 'kaola-workflow', project, '.cache', 'sink-receipt.json');
   const archive = path.join(mainRoot, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json');
   if (fs.existsSync(live)) return live;
@@ -1434,10 +1482,13 @@ function readCurrentClaimTs(mainRoot, project, branch) {
 // `git checkout <branch>` causes a checkout conflict. The first disk write is deferred to the
 // merge step, after which the checked-out content matches main and the overwrite is safe.
 function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers, defBranch, keepIssueOpen) {
-  const receiptPath = resolveSinkReceiptPath(mainRoot, project);
+  const receiptPath = resolveSinkReceiptPath(mainRoot, project, branch);
   // #694: the current run's claim_ts — used to detect a receipt left behind by an EARLIER run of
   // the same (reused) project name, so we never replay its recorded steps (incl. closure).
-  const currentClaimTs = readCurrentClaimTs(mainRoot, project, branch);
+  const existingArchive = !fs.existsSync(path.join(mainRoot, 'kaola-workflow', project)) && currentArchiveDir(mainRoot, project, branch);
+  const currentClaimTs = existingArchive && fs.existsSync(path.join(existingArchive, 'workflow-state.md'))
+    ? (fs.readFileSync(path.join(existingArchive, 'workflow-state.md'), 'utf8').match(/^claim_ts:\s*(.+?)\s*$/m) || [])[1] || null
+    : readCurrentClaimTs(mainRoot, project, branch);
   const resolveBranchHead = () => {
     try { return execFileSync('git', ['-C', mainRoot, 'rev-parse', branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) { return null; }
   };
@@ -1468,7 +1519,8 @@ function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers,
       // is the silence the report exists to close.
       archived_paths: [],
       steps
-    }, extra || {});
+    }, existingArchive && path.basename(existingArchive) !== project
+      ? { archive_dest: path.relative(mainRoot, existingArchive).split(path.sep).join('/') } : {}, extra || {});
   };
   if (fs.existsSync(receiptPath)) {
     try {
@@ -1772,6 +1824,8 @@ function sinkPreflight(mainRoot, project, branch) {
 
   const porcelain = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '-uall'], { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   const lines = porcelain.split('\n').filter(Boolean);
+  const ownArchiveDir = currentArchiveDir(mainRoot, project, branch);
+  const ownArchivePrefix = ownArchiveDir ? path.relative(mainRoot, ownArchiveDir).split(path.sep).join('/') + '/' : 'kaola-workflow/archive/' + project + '/';
 
   // Collect registered worktree paths so we can exclude them from foreign-dirt classification.
   // Registered worktrees show up as untracked dirs in git status -uall if not gitignored.
@@ -1890,8 +1944,7 @@ function sinkPreflight(mainRoot, project, branch) {
     // that a boundary-less prefix test would silently swallow — the never-touches-another-project
     // invariant is unchanged. Untracked (??) only, as bucket 2 is: a tracked modification or deletion
     // under the archive path is a local edit to committed content, not finalize's mirror.
-    const ownArchivePrefix = 'kaola-workflow/archive/' + project + '/';
-    if (xy === '??' && filePath.startsWith(ownArchivePrefix)) {
+    if (xy === '??' && ownArchivePrefix && filePath.startsWith(ownArchivePrefix)) {
       let branchHasPath = false;
       try {
         execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', branch + ':' + filePath],
@@ -3415,4 +3468,4 @@ if (require.main === module) {
   try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
 }
 
-module.exports = { classifyMergeError, assertBranchHasNonWorkflowChanges };
+module.exports = { classifyMergeError, assertBranchHasNonWorkflowChanges, sinkPreflight, resolveSinkReceiptPath, resolveRunRecordDir };

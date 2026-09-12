@@ -35,7 +35,16 @@ The global-contract step is the same machine-wide transaction `install-all.sh` r
 
 ## Dispatch and model ownership
 
-The live carrier is `run_subagent(profile, is_background, resume)`, with `read_subagent` used to reconcile background results. Only profiles present in the session-start catalog are dispatchable: the built-in `subagent_general` (parent-model) and any user-owned profiles. A missing named Kaola role is design, not a `capability_gap` — the orchestrator uses an adequate native route or works inline per item.
+The live schema owns the route. Earlier measured sessions exposed `run_subagent(profile, is_background, resume)` with `read_subagent`, the built-in `subagent_general`, and session-start user profiles. A fresh Fusion session on 2026-09-12 instead exposed `sidekick`; its ACP event carried `cognition.ai/sidekick: true` on a completed read of the probe file. No child model telemetry was exposed. Do not transfer profile/model arguments between these different session modes. A missing named Kaola role is design, not a `capability_gap` — the orchestrator uses an adequate native route or works inline per item.
+
+A narrated child reply does not establish a dispatch: use the native tool event to establish
+that a child ran, and inspect its findings or artifacts separately to judge the outcome. A file
+can also be written by the parent; read-only work need not create one. This applies the existing
+orchestrator verdict rule and adds no gate or record field. The #1063 archive reports three
+sessions with narrated replies but no dispatch events; its retained summary is not the original
+session export. #1065 records that evidence limit. A simulated answer cannot establish why a
+real dispatch was rejected, or rule out prompt content or task difficulty. The vendor cause
+remains unknown.
 
 Read-only work may run in the background. Write-capable work runs in the foreground unless the required write scope was already approved, because background agents automatically deny tools that require new approval. Children cannot spawn descendants in the measured default configuration.
 

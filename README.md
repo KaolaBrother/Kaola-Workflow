@@ -2,7 +2,8 @@
 
 Kaola-Workflow turns forge issues into verified, recoverable software delivery. Agents own the
 planning and execution; Kaola-Workflow preserves the work, its evidence, and the path to completion
-across coding runtimes.
+across coding runtimes. Reusing an issue name keeps historical archives separate;
+finalization and sink follow the current run’s claim and archive destination.
 
 Give it a forge issue: the agent claims the work, records a resumable Mission List, runs it with
 native subagents when useful, validates the resulting bytes against the exact candidate, and settles
@@ -30,7 +31,9 @@ where their evidence was expected to land. Kaola-Workflow persists exactly that 
 - no plan grammar, DAG, execution engine, or dispatch quota.
 
 The forge remains the backlog. Git remains the content record. The Agent keeps ownership of
-decomposition, runtime routing, product judgment, review, and the final done verdict.
+decomposition, runtime routing, product judgment, review, and the final done verdict. A child
+reply in prose does not prove a dispatch; native events and the resulting work answer separate
+questions (see [Devin evidence limits](docs/devin-edition.md#dispatch-and-model-ownership)).
 
 ## What ships
 

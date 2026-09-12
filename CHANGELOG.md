@@ -11,6 +11,14 @@ binding runtimes and a native route on native-only runtimes.
 
 ### Changed
 
+- **Remove unused command model-placeholder rendering (#1066).** `install.sh` copies the
+  generated commands verbatim; agent-profile bindings and command installation remain intact.
+- **Clarify dispatch evidence limits (#1065).** Native tool events establish a dispatch;
+  findings and artifacts establish its outcome. The retained #1063 summary does not replace
+  raw session exports, and simulated replies do not explain a real tool rejection. No new gate
+  or Mission List field is introduced. Devin guidance follows the live schema, including the
+  measured Fusion `sidekick` route alongside earlier profile-based sessions.
+
 - **Lean orchestrator: 14 roles → 7, tier axis retired, one `subagent_default` per binding
   adapter (#1062, ADR 0025).** The orchestrator now holds judgment and acceptance itself, and a
   subagent exists to do token-heavy work on a cheaper model — so the
@@ -47,6 +55,12 @@ binding runtimes and a native route on native-only runtimes.
   rewriting their historical matrices.
 
 ### Fixed
+
+- **Follow the current run through a same-name archive collision (#1067).** A new main-only
+  claim mirrors into its worktree despite doc-only history; an already archived matching claim
+  does not resurrect. Sink journals and findings follow the actual archive destination, and
+  scoped audit leaves unrelated historical findings outside the current run. Multiple claimed
+  histories remain ambiguous without a current claim or exact sink receipt.
 
 - **Kimi retired-sweep requires exact v9.17.2 bytes (#1062).** `install-kimi.sh` no longer
   deletes `kaola-role-*` role Skills by bare name on install or uninstall; a role-shaped Skill
