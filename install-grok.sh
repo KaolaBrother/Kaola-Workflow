@@ -123,7 +123,7 @@ if [[ "$REGENERATE" -eq 1 ]]; then
 fi
 
 # Names here are removed on install and uninstall by basename.
-RETIRED_AGENTS=()
+RETIRED_AGENTS=(planner code-architect synthesizer build-error-resolver metric-optimizer adversarial-verifier security-reviewer)
 RETIRED_COMMANDS=()
 RETIRED_HOOKS=(kaola-workflow-subagent-dispatch-log.sh)
 RETIRED_SUPPORT_SCRIPTS=()

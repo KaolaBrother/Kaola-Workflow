@@ -417,7 +417,7 @@ assertNotIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', '--codex-
 // installer copy (require.main guard means require() never runs main()) and assert its
 // source-tree validator passes for the Gitea plugin tree — every agents/*.toml has a
 // matching non-empty top-level `name`, a description, valid nickname_candidates, inherited
-// runtime-key omission, declarative tier metadata, non-blank developer_instructions, every config_file resolves, and every toml is referenced by
+// runtime-key omission, the single subagent binding, non-blank developer_instructions, every config_file resolves, and every toml is referenced by
 // exactly one [agents.*] entry (catches the issue-scout class of omission forever).
 const giteaInstaller = require('./install-codex-agent-profiles.js');
 const giteaProfiles = giteaInstaller.validateSourceProfiles(path.join(root, pluginRoot));
@@ -426,24 +426,30 @@ assert(giteaProfiles.ok,
 const giteaSchema = require('./kaola-workflow-adaptive-schema.js');
 const giteaPreflight = require('./kaola-workflow-codex-preflight.js');
 const sortGiteaPolicy = values => [...values].sort();
-assert(JSON.stringify(sortGiteaPolicy(giteaInstaller.CODEX_PINNED_STANDARD_ROLES))
-    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_STANDARD_ROLES)),
-  'Gitea installer role-metadata policy must match adaptive schema');
-assert(JSON.stringify(sortGiteaPolicy(giteaInstaller.CODEX_PINNED_REASONING_ROLES))
-    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_REASONING_ROLES)),
-  'Gitea installer reasoning-role policy must match adaptive schema');
-assert(JSON.stringify(sortGiteaPolicy(giteaInstaller.CODEX_PINNED_HEAVY_ROLES))
-    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_HEAVY_ROLES)),
-  'Gitea installer heavy-role policy must match adaptive schema');
-assert(JSON.stringify(sortGiteaPolicy(giteaPreflight.CODEX_PINNED_STANDARD_ROLES))
-    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_STANDARD_ROLES)),
-  'Gitea preflight role-metadata policy must match adaptive schema');
-assert(JSON.stringify(sortGiteaPolicy(giteaPreflight.CODEX_PINNED_REASONING_ROLES))
-    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_REASONING_ROLES)),
-  'Gitea preflight reasoning-role policy must match adaptive schema');
-assert(JSON.stringify(sortGiteaPolicy(giteaPreflight.CODEX_PINNED_HEAVY_ROLES))
-    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_HEAVY_ROLES)),
-  'Gitea preflight heavy-role policy must match adaptive schema');
+assert(JSON.stringify(sortGiteaPolicy(giteaInstaller.CODEX_PINNED_ROLES))
+    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_ROLES)),
+  'Gitea installer pinned-role policy must match adaptive schema');
+assert(JSON.stringify(sortGiteaPolicy(giteaPreflight.CODEX_PINNED_ROLES))
+    === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_ROLES)),
+  'Gitea preflight pinned-role policy must match adaptive schema');
+assert(giteaSchema.CODEX_PINNED_MODEL === 'gpt-5.6-luna'
+    && giteaSchema.CODEX_PINNED_EFFORT === 'max',
+  'Gitea pinned subagent binding must be gpt-5.6-luna/max');
+{
+  const dir = path.join(root, pluginRoot, 'agents');
+  for (const file of fs.readdirSync(dir).filter(name => name.endsWith('.toml')).sort()) {
+    const text = fs.readFileSync(path.join(dir, file), 'utf8');
+    const top = giteaSchema.profileTopLevelShape(text).outside;
+    assert((top.match(/^model\s*=\s*"gpt-5\.6-luna"\s*$/gm) || []).length === 1
+        && (top.match(/^model_reasoning_effort\s*=\s*"max"\s*$/gm) || []).length === 1,
+      pluginRoot + '/agents/' + file
+        + ' must carry exactly one model = "gpt-5.6-luna" and one model_reasoning_effort = "max" line');
+    const role = file.slice(0, -5);
+    assert(giteaSchema.validateProfileText(text, role).length === 0,
+      pluginRoot + '/agents/' + file + ' fails kernel profile validation: '
+        + giteaSchema.validateProfileText(text, role).join('; '));
+  }
+}
 assert(giteaInstaller.CODEX_STANDARD_MODEL === 'gpt-5.6-sol'
     && giteaInstaller.CODEX_STANDARD_EFFORT === 'medium'
     && giteaPreflight.CODEX_STANDARD_MODEL === giteaInstaller.CODEX_STANDARD_MODEL
@@ -505,8 +511,9 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
       && /^[0-9a-f]{64}$/.test(entry.profileContract.adapter_capabilities_hash)
       && /^[0-9a-f]{64}$/.test(entry.profileContract.resolved_profile_hash),
     pluginRoot + ' must bind behavior, adapter, and resolved profile hashes for ' + role);
-    assert(!/^model(?:_reasoning_effort)?\s*=/m.test(entry.sourceText),
-      pluginRoot + ' agent profiles must inherit the parent model by omission');
+    assert(/^model\s*=\s*"gpt-5\.6-luna"\s*$/m.test(entry.sourceText)
+      && /^model_reasoning_effort\s*=\s*"max"\s*$/m.test(entry.sourceText),
+      pluginRoot + ' pinned profiles must carry the gpt-5.6-luna/max subagent binding');
   }
   assertIncludes(installerFile, 'profile_contracts');
   assertIncludes(installerFile, 'profile_source_repair');
@@ -571,10 +578,10 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'prob
 }
 
 // B2 model-noun purge (#609, the forge-codex twin of #537; #610 renamed the plan vocabulary to
-// neutral tier tokens with legacy aliases): forge-codex prompt surfaces (agents/*.toml,
+// neutral tokens with legacy aliases): forge-codex prompt surfaces (agents/*.toml,
 // config/agents.toml, skills/*/SKILL.md) must not use Claude model NOUNS (Opus/Sonnet/haiku) as
 // runtime-model prose ("the Opus orchestrator", "reasoning-class (Opus)", "no haiku"). The plan
-// tier tokens translate to a per-spawn reasoning_effort at dispatch, so a Claude model name reads
+// tokens translate to a per-spawn reasoning_effort at dispatch, so a Claude model name reads
 // as nonsense here. The ONLY permitted opus/sonnet are the B1 LEGACY-ALIAS mentions: the closed
 // `{opus|sonnet}` set literal (pre-#610 frozen plans), the `model: opus`/`model: sonnet` -> effort
 // mapping tokens, and the `opus`/`sonnet` legacy-alias-pair notation the #610 rename introduced.
@@ -598,7 +605,7 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'prob
       if (m) {
         assert(false,
           rel + ':' + (i + 1) + ': B2 model-noun "' + m[0] + '" — a Claude model name must not appear ' +
-          'as runtime-model prose on a forge-codex surface; use tier/effort vocabulary (only the B1 ' +
+          'as runtime-model prose on a forge-codex surface; use capability/effort vocabulary (only the B1 ' +
           '`{opus|sonnet}` set, the `model: opus`/`model: sonnet` mapping, and the `opus`/`sonnet` ' +
           'legacy-alias-pair mention are allowed).');
       }

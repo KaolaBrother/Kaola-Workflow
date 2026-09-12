@@ -48,12 +48,11 @@ AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
 SOURCE_AGENTS_DIR="$SCRIPT_DIR/agents"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
 MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
-REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "investigator" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "synthesizer" "metric-optimizer")
+REQUIRED_AGENTS=("code-explorer" "code-reviewer" "doc-updater" "implementer" "investigator" "knowledge-lookup" "tdd-guide")
 YES=0
 FORGE=github
 MERGE_SETTINGS=1
-# There is no install-time model axis: the agent tree ships one model assignment per role
-# and the frozen plan's per-node tier column governs every workflow dispatch.
+# There is no install-time model axis: the agent tree ships one subagent binding per runtime.
 
 usage() {
   echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge]"
@@ -561,7 +560,6 @@ resolve_agent_model_for_install() {
 model_for_placeholder() {
   case "$1" in
     TDD_GUIDE_MODEL) resolve_agent_model_for_install tdd-guide ;;
-    BUILD_ERROR_RESOLVER_MODEL) resolve_agent_model_for_install build-error-resolver ;;
     DOC_UPDATER_MODEL) resolve_agent_model_for_install doc-updater ;;
   esac
 }
@@ -585,7 +583,6 @@ render_command_file() {
   local line rendered placeholder model skip_line
   local placeholders=(
     TDD_GUIDE_MODEL
-    BUILD_ERROR_RESOLVER_MODEL
     DOC_UPDATER_MODEL
   )
 

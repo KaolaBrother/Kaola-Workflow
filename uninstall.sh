@@ -5,12 +5,12 @@ FORGE=""
 AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
 MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
-REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "investigator" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "synthesizer" "metric-optimizer")
+REQUIRED_AGENTS=("code-explorer" "code-reviewer" "doc-updater" "implementer" "investigator" "knowledge-lookup" "tdd-guide")
 # Every role a previous release deployed into ~/.claude/agents and later retired — censused from
 # agents/ history, not from memory. Uninstall must name these itself: it removes the agent
 # manifest below, so a name missed here is unremovable by any later install (the manifest-driven
 # sweep needs a pre-install manifest row that no longer exists).
-RETIRED_AGENTS=("contractor" "docs-lookup" "issue-scout" "workflow-planner")
+RETIRED_AGENTS=("contractor" "docs-lookup" "issue-scout" "workflow-planner" "planner" "code-architect" "synthesizer" "build-error-resolver" "metric-optimizer" "adversarial-verifier" "security-reviewer")
 
 usage() {
   echo "Usage: ./uninstall.sh [--forge=github|gitlab|gitea|all]"

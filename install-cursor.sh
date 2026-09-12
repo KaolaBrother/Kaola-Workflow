@@ -34,8 +34,8 @@
 #     retired prompt hooks are removed while foreign entries are preserved. No Kaola hook script
 #     is installed. Skip support scripts and the hooks.json migration with --no-scripts.
 #
-# Models: generated agents carry raw per-tier frontmatter pins from the canonical standard/
-# reasoning classes; this installer seeds no user-specific per-role model or effort config.
+# Models: generated agents carry the one subagent binding this runtime ships; this installer
+# seeds no user-specific per-role model or effort config.
 
 set -euo pipefail
 

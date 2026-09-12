@@ -32,9 +32,8 @@ const os = require('os');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
-const requiredAgents = ['code-explorer', 'knowledge-lookup', 'planner', 'code-architect',
-  'tdd-guide', 'build-error-resolver', 'code-reviewer', 'security-reviewer', 'doc-updater',
-  'adversarial-verifier'];
+const requiredAgents = ['code-explorer', 'code-reviewer', 'doc-updater', 'implementer',
+  'investigator', 'knowledge-lookup', 'tdd-guide'];
 const MANIFEST_NAME = '.kaola-workflow-agent-manifest';
 
 function sha256(buf) {

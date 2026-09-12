@@ -3,7 +3,8 @@
 #
 # Additive standalone installer (does NOT modify install.sh or the
 # claude/codex/gitlab/gitea editions). opencode is a runtime (like Codex), not a
-# git forge, so it is delivered the opencode-native way: opencode.json + .opencode/.
+# git forge, so it is delivered the opencode-native way: .opencode/. This runtime installs
+# no Kaola role profiles by design.
 #
 # FORGE: --forge=github|gitlab|gitea selects which forge's workflow prose and support
 # scripts to deploy (default github). The runtime is still not a forge — this installer
@@ -17,33 +18,25 @@
 #   ./install-opencode.sh                         # deploy into the current directory
 #   ./install-opencode.sh --target /path/to/repo  # deploy into a specific project
 #   ./install-opencode.sh --forge=gitlab          # deploy the GitLab-shaped edition
-#   ./install-opencode.sh --global                # deploy agents+commands to ~/.config/opencode
+#   ./install-opencode.sh --global                # deploy commands to ~/.config/opencode
 #   ./install-opencode.sh --regenerate            # refresh the generated tree from canonical here
-#
-# Models: the seeded opencode.json pins NOTHING per role — a subagent runs the model and reasoning
-# effort of the session that dispatched it, which is what opencode already does for a role that pins
-# no model. Pin a tier to a different model via KAOLA_OPENCODE_STANDARD_MODEL / _REASONING_MODEL.
-# This installer seeds the file only if absent, so re-running never clobbers your choices — but a
-# preserved config is also how a config goes STALE, so the install REPORTS any per-role effort
-# setting left in it (those no longer do anything) and regenerates only if you pass --adopt-config,
-# which REPLACES the file rather than merging into it and keeps a timestamped .bak.
 #
 # COMMAND SET: the install deploys the workflow command set (finalize, workflow-init,
 # workflow-next) into .opencode/commands/. The generated .opencode/commands/*
 # are produced by sync-opencode-edition.js from the canonical sources.
 #
-# The generated commands + agents resolve support scripts via an
+# The generated commands resolve support scripts via an
 # OPENCODE-NATIVE path (${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts)
 # — there is NO $CLAUDE_PLUGIN_ROOT and NO ~/.claude/kaola-workflow in the deployed tree.
 # install_support_scripts deploys to that opencode-native dir (not ~/.claude/).
 #
-# DEPLOY LAYOUT (scope-dependent — opencode resolves agents/commands/plugins differently by scope):
-#   - PROJECT (--target/$PWD): agents/commands/plugins/hooks live under <project>/.opencode/{...}
+# DEPLOY LAYOUT (scope-dependent — opencode resolves commands/plugins differently by scope):
+#   - PROJECT (--target/$PWD): commands/plugins/hooks live under <project>/.opencode/{...}
 #     (the project-local .opencode dir opencode scans).
 #   - GLOBAL (--global): they live DIRECTLY under the config root ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/{...}
 #     (NOT a nested .opencode/ — the config dir IS opencode's global ".opencode equivalent"; a nested
 #     ~/.config/opencode/.opencode/ is never scanned). copy_tree takes a `layout_root` arg for exactly this.
-#   - opencode.json always lands at the config/project root (dest_root), never under the layout subtree.
+#   - opencode.json is user-owned and is never written by this installer.
 #
 # REINSTALL IS SELF-HEALING, AND NOTHING WIDER: copy_tree removes each command file it is about
 # to re-copy (immediately before re-copying it) plus the RETIRED_WORKFLOW_COMMANDS this edition no
@@ -51,17 +44,15 @@
 # command it has nothing to put back. --uninstall removes the full deployed surface; see
 # uninstall_edition.
 #
-# BOTH HALVES OF THE DEPLOY NAME WHAT THEY RETIRE, and differ only in where that set comes from.
-# Commands DECLARE it: RETIRED_WORKFLOW_COMMANDS lists the names this edition once shipped and no
-# longer does, and a deployed command that is neither retired nor about to be written is left
-# alone. The namespace glob that used to stand in for that list could not tell the two apart, so
-# it swept whatever the source failed to render — silently, and reported as a successful install.
-# Agents DERIVE it: agent files are NOT namespaced (bare `code-explorer.md`) and share the
-# deployed agent dir with user-authored agents, so there is no pattern that means "ours" and no
-# list to keep. Instead copy_tree records `<filename>\t<sha256>` for every agent it deploys, and
-# the NEXT install removes exactly the previously-recorded files the tree no longer ships that are
-# still byte-identical to what we wrote. A file absent from the manifest is user-authored and is
-# never touched; a recorded file the user then edited is their work and is never touched either.
+# THE DEPLOY NAMES WHAT IT RETIRES. Commands DECLARE it: RETIRED_WORKFLOW_COMMANDS lists the
+# names this edition once shipped and no longer does, and a deployed command that is neither
+# retired nor about to be written is left alone. The namespace glob that used to stand in for
+# that list could not tell the two apart, so it swept whatever the source failed to render —
+# silently, and reported as a successful install. Retired agents DERIVE it: a previous release
+# recorded `<filename>\t<sha256>` for every agent it deployed, so upgrade removes exactly the
+# previously-recorded files that are still byte-identical to what we wrote. A file absent from
+# the manifest is user-authored and is never touched; a recorded file the user then edited is
+# their work and is never touched either.
 
 set -euo pipefail
 
@@ -83,37 +74,24 @@ REGENERATE=0
 UNINSTALL=0
 YES=0
 NO_SCRIPTS=0
-ADOPT_CONFIG=0
 FORGE="github"
-
-# The explicit opt-in that lets an install replace an existing, USER-OWNED opencode.json. Spelled
-# once: the argument parser matches this and the drift report tells the user this, so the flag the
-# report names can never be a flag the parser does not accept.
-ADOPT_CONFIG_FLAG="--adopt-config"
 
 usage() {
   cat <<'EOF'
 Usage: ./install-opencode.sh [--target DIR] [--forge=github|gitlab|gitea] [--global]
-                            [--regenerate] [--uninstall] [--no-scripts] [--adopt-config] [--yes]
+                            [--regenerate] [--uninstall] [--no-scripts] [--yes]
   --target DIR     deploy into DIR (default: current directory)
   --forge F        github (default), gitlab, or gitea — which forge's workflow prose
                    and support scripts to deploy
-  --global         deploy agents+commands+plugin+hooks into ~/.config/opencode (all projects)
+  --global         deploy commands+plugin+hooks into ~/.config/opencode (all projects)
   --regenerate     refresh the in-repo .opencode/ tree from canonical, then exit
   --uninstall      remove the kaola-deployed opencode edition from the resolved scope
                    (honors --target/--global), then exit (see UNINSTALL below)
   --no-scripts     skip installing support scripts (see SUPPORT SCRIPTS below)
-  --adopt-config   replace an existing opencode.json with a freshly generated one
-                   (see CONFIG DRIFT below); without it an existing config is never written
   --yes            non-interactive (accept the default deploy path)
 
-CONFIG DRIFT: opencode.json is user-owned, so an install preserves it — which is also how it
-goes stale. A config written by an older install pins per-role reasoning effort
-(agent.<role>.options or .variant); those settings no longer do anything, because a subagent runs
-the model and effort of the session that dispatched it. Every install NAMES the entries still
-carrying them and changes nothing. An entry that only pins a model is yours and is not counted.
-Regenerating is the --adopt-config opt-in, and that REPLACES the file rather than merging into it
-— hand edits and model pins go — after copying the old one to <config>.<timestamp>.bak.
+CONFIG: opencode.json is user-owned and is never written by this installer, including any
+agent.<role>.model entries an older release seeded.
 
 SUPPORT SCRIPTS: workflow commands locate scripts via kaola_script(), which searches
 ./scripts/ and ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/
@@ -123,9 +101,9 @@ repo needs none of that (./scripts/ is used directly).
 
 UNINSTALL: --uninstall removes ONLY kaola-deployed artifacts from the resolved scope
 (project DEST_ROOT via --target/$PWD, or --global ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}):
-the deployed agents/commands/plugin/hooks (agents by deploy manifest + source-tree filename,
-the rest by source-tree filename — never a blind rm of a dir; the manifest is what lets an
-agent RETIRED since the last install still be removed) and the opencode-native support scripts.
+the deployed commands/plugin/hooks and any previously-deployed agents (agents by deploy
+manifest — never a blind rm of a dir; the manifest is what lets an agent RETIRED since the
+last install still be removed) and the opencode-native support scripts.
 The SHARED ~/.config/kaola-workflow/config.json is kept for any co-installed Claude/Codex edition.
 Your own opencode.json (model/permission config) is PRESERVED. A subsequent bare install
 then deploys the workflow edition.
@@ -141,7 +119,6 @@ while [[ "$#" -gt 0 ]]; do
     --regenerate) REGENERATE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --no-scripts) NO_SCRIPTS=1; shift ;;
-    "$ADOPT_CONFIG_FLAG") ADOPT_CONFIG=1; shift ;;
     -y|--yes) YES=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -353,7 +330,7 @@ copy_tree() {
   local legacy_agent_dir="$layout_root/agent"
   local legacy_manifest="$legacy_agent_dir/$AGENT_MANIFEST_NAME"
 
-  # Native-agent ownership is the install transaction's admission wall. Refuse every unproven
+  # Retired-agent ownership is the install transaction's admission wall. Refuse every unproven
   # topology or same-name collision before mkdir/cp changes any runtime surface (including the
   # plugin). A later refusal must never leave an otherwise failed install partially deployed.
   if [[ -L "$layout_root/agents" || ( -e "$layout_root/agents" && ! -d "$layout_root/agents" )
@@ -372,7 +349,6 @@ copy_tree() {
         || [[ -n "${manifest_name:-}" ]]; do
       [[ -n "${manifest_name:-}" ]] || continue
       is_plain_basename "$manifest_name" || continue
-      [[ -f "$SOURCE_AGENT_DIR/$manifest_name" ]] && continue
       retired_dest="$layout_root/agents/$manifest_name"
       if [[ -L "$retired_dest" || ( -e "$retired_dest" && ! -f "$retired_dest" ) ]]; then
         echo "Install error: refusing non-regular retired native agent: $retired_dest" >&2
@@ -380,33 +356,8 @@ copy_tree() {
       fi
     done < "$agent_manifest"
   fi
-  local agent_file agent_base existing_hash recorded_hash source_hash
-  for agent_file in "$SOURCE_AGENT_DIR/"*.md; do
-    [[ -f "$agent_file" ]] || continue
-    agent_base="$(basename "$agent_file")"
-    if [[ -L "$layout_root/agents/$agent_base" ]]; then
-      echo "Install error: refusing symbolic-link native agent: $layout_root/agents/$agent_base" >&2
-      exit 1
-    fi
-    if [[ -e "$layout_root/agents/$agent_base" && ! -f "$layout_root/agents/$agent_base" ]]; then
-      echo "Install error: refusing non-regular native agent: $layout_root/agents/$agent_base" >&2
-      exit 1
-    fi
-    [[ -f "$layout_root/agents/$agent_base" ]] || continue
-    existing_hash="$(sha256_file "$layout_root/agents/$agent_base")"
-    source_hash="$(sha256_file "$agent_file")"
-    recorded_hash=""
-    if [[ -f "$agent_manifest" ]]; then
-      recorded_hash="$(manifest_row_hash "$agent_base" "$agent_manifest" 2>/dev/null || true)"
-    fi
-    if [[ "$existing_hash" != "$source_hash" && "$existing_hash" != "$recorded_hash" ]]; then
-      echo "Install error: refusing to overwrite unmanaged native agent: $layout_root/agents/$agent_base" >&2
-      exit 1
-    fi
-  done
 
-  mkdir -p "$layout_root/agents" "$layout_root/commands" \
-           "$layout_root/plugins" "$layout_root/hooks"
+  mkdir -p "$layout_root/commands" "$layout_root/plugins" "$layout_root/hooks"
   # #1044 retires the old OpenCode compact reader. Remove only the exact historical bytes; preserve
   # a modified or user-authored file at the same path.
   local retired_plugin="$layout_root/plugins/kaola-workflow-hooks.js"
@@ -426,32 +377,12 @@ copy_tree() {
     echo "Self-dev deploy (source .opencode is already the live tree) → copy skipped."
     return
   fi
-  # Agents: snapshot the previous deploy manifest, re-copy the current source set, record the new
-  # manifest, then sweep whatever the previous manifest owned that the tree has since retired.
-  local prev_manifest manifest_tmp agent_count
-  prev_manifest="$(mktemp "$KW_TMPDIR/kaola-opencode-manifest-prev.XXXXXX")"
-  if [[ -f "$agent_manifest" ]]; then
-    cp "$agent_manifest" "$prev_manifest"
-  fi
-  manifest_tmp="$(mktemp "$KW_TMPDIR/kaola-opencode-manifest.XXXXXX")"
-  agent_count=0
-  for agent_file in "$SOURCE_AGENT_DIR/"*.md; do
-    [[ -f "$agent_file" ]] || continue
-    agent_base="$(basename "$agent_file")"
-    cp "$agent_file" "$layout_root/agents/$agent_base"
-    printf '%s\t%s\n' "$agent_base" "$(sha256_file "$layout_root/agents/$agent_base")" >> "$manifest_tmp"
-    agent_count=$((agent_count + 1))
-  done
-  # Fail CLOSED on an empty agent source (the previous bare `cp <dir>/*.md` errored out here; a
-  # silent zero-agent deploy would be the 5.4.0 silent-empty regression class).
-  if [[ "$agent_count" -eq 0 ]]; then
-    rm -f "$manifest_tmp" "$prev_manifest"
-    echo "Install error: no agent sources found in $SOURCE_AGENT_DIR" >&2
-    exit 1
-  fi
-  mv "$manifest_tmp" "$agent_manifest"
-  sweep_retired_agents "$prev_manifest" "$layout_root/agents"
-  rm -f "$prev_manifest"
+  # Retired agents: this runtime ships no Kaola role profiles, so the previous install's
+  # manifest is the whole deletion set — remove every recorded file still byte-identical to
+  # what we wrote, then retire the manifest itself. Unrecorded or user-modified files stay.
+  sweep_retired_agents "$agent_manifest" "$layout_root/agents"
+  rm -f "$agent_manifest"
+  rmdir "$layout_root/agents" 2>/dev/null || true
   # Migrate the retired singular agent carrier using its own manifest proof. Modified or
   # unrecorded files are preserved byte-for-byte; the obsolete manifest itself is retired.
   if [[ -f "$legacy_manifest" ]]; then
@@ -511,7 +442,7 @@ copy_tree() {
   done
   cp "$SOURCE_TREE/hooks/"*.sh "$layout_root/hooks/" 2>/dev/null || true
   chmod +x "$layout_root/hooks/"*.sh 2>/dev/null || true
-  echo "Installed workflow agents+commands+plugin+hooks → $layout_root/"
+  echo "Installed workflow commands+plugin+hooks → $layout_root/"
 }
 
 # Remove ONLY kaola-deployed artifacts from the resolved scope, by source-tree filename plus the
@@ -550,24 +481,10 @@ uninstall_edition() {
     echo "Uninstall error: refusing non-regular native agent manifest under $layout_root" >&2
     return 1
   fi
-  local link_probe
-  for link_probe in "$SOURCE_AGENT_DIR/"*.md; do
-    [[ -f "$link_probe" ]] || continue
-    if [[ -L "$layout_root/agents/$(basename "$link_probe")" ]]; then
-      echo "Uninstall error: refusing symbolic-link native agent: $layout_root/agents/$(basename "$link_probe")" >&2
-      return 1
-    fi
-    if [[ -e "$layout_root/agents/$(basename "$link_probe")"
-          && ! -f "$layout_root/agents/$(basename "$link_probe")" ]]; then
-      echo "Uninstall error: refusing non-regular native agent: $layout_root/agents/$(basename "$link_probe")" >&2
-      return 1
-    fi
-  done
   local f base sub
-  # Agents: remove the UNION of what the deploy manifest records this installer wrote — which
-  # includes agents RETIRED since that install and therefore absent from the current source tree —
-  # and the current source-tree filenames, so an install predating the manifest still uninstalls
-  # cleanly. Manifest-listed names only; an unlisted file is user-authored and is left alone.
+  # Agents: remove what the deploy manifest records this installer wrote — which includes every
+  # agent RETIRED since that install. Manifest-listed names only; an unlisted file is
+  # user-authored and is left alone.
   #
   # Like the sweep, this ENUMERATES the agent dir and intersects it against the manifest rather
   # than building `$layout_root/agent/<manifest name>` — a manifest row is never treated as a
@@ -588,12 +505,6 @@ uninstall_edition() {
     done
     rm -f "$agent_manifest"
   fi
-  for f in "$SOURCE_AGENT_DIR/"*.md; do
-    [[ -f "$f" ]] || continue
-    dest="$layout_root/agents/$(basename "$f")"
-    [[ -f "$dest" && ! -L "$dest" ]] || continue
-    [[ "$(sha256_file "$dest")" == "$(sha256_file "$f")" ]] && rm -f "$dest"
-  done
   for f in "$SOURCE_COMMAND_DIR/"*.md; do
     [[ -f "$f" ]] || continue
     dest="$layout_root/commands/$(basename "$f")"
@@ -717,146 +628,6 @@ install_support_scripts() {
   echo "Installed support scripts → $dest (kaola_script() search path; forge $FORGE)"
 }
 
-# Report how an existing opencode.json differs from what the generator emits NOW, and say nothing
-# when it does not differ. Compared by the ROLE SET of the agent block: role names are what actually
-# goes stale (a role retired since the file was written stays in it; a role added since never
-# appears), and they stay comparable across changes to what each role carries.
-#
-# Where adoption puts the file it replaces: `<config>.<timestamp>.bak`. Spelled ONCE — the drift
-# report promises this shape and seed_config writes exactly it, so the recovery path the user is
-# told about is the one that exists.
-#
-# Never returns a path that already exists. A timestamp alone is NOT enough and this was measured,
-# not assumed: two adoptions landed in the same clock second, and the second one overwrote the
-# backup of the user's original with a copy of the generated config — destroying the very pins the
-# backup exists to preserve.
-config_backup_path() {
-  local candidate="$1.$2.bak" n=1
-  while [[ -e "$candidate" ]]; do candidate="$1.$2-$n.bak"; n=$((n + 1)); done
-  printf '%s\n' "$candidate"
-}
-
-# Report what is STALE in an existing opencode.json, and say nothing when nothing is.
-#
-# The subject is a per-role entry carrying an effort setting — `agent.<role>.variant` or
-# `agent.<role>.options`. Those are the two shapes this edition ever wrote per role, and neither does
-# anything now: a subagent runs the model and reasoning effort of the session that dispatched it. A
-# block left behind still READS as live configuration, which is the whole reason to say so.
-#
-# An entry that only pins a `model` is the user's own supported choice — it is not counted and not
-# named. The check needs no baseline from the generator, which is what makes it survive: it asks what
-# the file carries, not how it compares to a role set the workflow no longer ships.
-#
-# This only ever PRINTS. The file is user-owned; rewriting it is the $ADOPT_CONFIG_FLAG opt-in.
-report_config_drift() {
-  local cfg="$1"
-  KW_CFG="$cfg" \
-  KW_DRIFT_FLAG="$ADOPT_CONFIG_FLAG" \
-  KW_DRIFT_BACKUP="$(config_backup_path "$(basename "$cfg")" "<timestamp>")" \
-  node - <<'NODE' || true
-const fs = require("fs");
-const BACKUP_SHAPE = process.env.KW_DRIFT_BACKUP;
-
-// opencode.json is JSONC and the generated one uses comments, so a plain JSON.parse is tried
-// first and a comment strip only as a fallback. The strip is STRING-AWARE: a line-anchored or
-// naive `//` strip eats the "https://opencode.ai/config.json" inside $schema.
-function stripComments(t) {
-  let out = "", i = 0, inStr = false, esc = false;
-  while (i < t.length) {
-    const c = t[i];
-    if (inStr) {
-      out += c;
-      if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false;
-      i++; continue;
-    }
-    if (c === '"') { inStr = true; out += c; i++; continue; }
-    if (c === "/" && t[i + 1] === "/") { while (i < t.length && t[i] !== "\n") i++; continue; }
-    if (c === "/" && t[i + 1] === "*") { i += 2; while (i < t.length && !(t[i] === "*" && t[i + 1] === "/")) i++; i += 2; continue; }
-    out += c; i++;
-  }
-  return out;
-}
-function parse(text) {
-  for (const t of [text, stripComments(text)]) {
-    try { return JSON.parse(t); } catch (_) { /* try the next form */ }
-  }
-  return null;
-}
-// The per-role keys this edition used to write. `variant` was the pre-#927 shape, `options` the
-// #927 one; both are inert now. `model` is deliberately absent — that pin is the user's own.
-const STALE_KEYS = ["variant", "options"];
-
-// Every `agent.<role>` entry carrying one of those keys, by name.
-function staleEntries(cfg) {
-  const a = cfg && cfg.agent;
-  if (!a || typeof a !== "object" || Array.isArray(a)) return [];
-  return Object.keys(a).filter(role => {
-    const e = a[role];
-    return e && typeof e === "object" && !Array.isArray(e)
-      && STALE_KEYS.some(k => Object.prototype.hasOwnProperty.call(e, k));
-  }).sort();
-}
-
-let existing = null;
-try { existing = parse(fs.readFileSync(process.env.KW_CFG, "utf8")); } catch (_) { existing = null; }
-// Unreadable or not JSON at all: not this installer's to diagnose, and never a reason to fail.
-if (!existing || typeof existing !== "object") process.exit(0);
-
-const stale = staleEntries(existing);
-if (stale.length === 0) process.exit(0);
-
-const say = ["  ⚠ Config drift: it pins per-role reasoning effort, which no longer does anything."];
-say.push("      " + stale.length + " role entry(ies) carrying an inert effort setting: " + stale.join(", "));
-say.push("      A subagent runs the model and reasoning effort of the session that dispatched it, so");
-say.push("      these are left over from an older install. An entry that only pins a model is yours");
-say.push("      and is not counted here.");
-// Disclose the COST before the flag is run, not after: adoption regenerates rather than merges, so
-// a model pin the user set by hand is replaced. Naming the backup is what makes that recoverable —
-// so this text and the copy in seed_config below stand or fall together.
-say.push("      Nothing was changed. Re-run with " + process.env.KW_DRIFT_FLAG + " to adopt it: that REPLACES this");
-say.push("      file rather than merging (hand edits and model pins go), after copying it to " + BACKUP_SHAPE + ".");
-console.log(say.join("\n"));
-NODE
-}
-
-seed_config() {
-  local dest_root="$1"
-  local cfg="$dest_root/opencode.json"
-  if [[ -f "$cfg" && "$ADOPT_CONFIG" -ne 1 ]]; then
-    echo "Preserved existing $cfg (your model choices are kept)."
-    # Preserving is also how a config goes stale, and nothing else looks at it. Report what is
-    # stale; acting on a user-owned file needs the explicit opt-in.
-    report_config_drift "$cfg"
-    return
-  fi
-  # Rendered to a TEMP file and moved into place, never written straight onto the user's file: a
-  # render that fails partway must not leave a truncated config behind. This is the only write
-  # protection left besides the backup, and it is deliberately not a refusal.
-  local rendered
-  rendered="$(mktemp "$KW_TMPDIR/kaola-opencode-config.XXXXXX")"
-  node "$SCRIPT_DIR/scripts/sync-opencode-edition.js" --write-config-to "$rendered" >/dev/null
-  if [[ -f "$cfg" ]]; then
-    # The flag is the user's decision to take the new config, not their consent to lose the old
-    # one — so copy it FIRST. A backup that cannot be written is the one case here that destroys
-    # something, so it fails loudly instead of replacing the file anyway.
-    local backup
-    backup="$(config_backup_path "$cfg" "$(date +%Y%m%d%H%M%S)")"
-    if ! cp "$cfg" "$backup"; then
-      rm -f "$rendered"
-      echo "Install error: could not back up $cfg — refusing to replace it." >&2
-      exit 1
-    fi
-    echo "Replacing $cfg with a freshly generated config (you passed $ADOPT_CONFIG_FLAG)."
-    echo "  Your previous config, hand edits and model pins included → $backup"
-  fi
-  mv "$rendered" "$cfg"
-  chmod 644 "$cfg"   # mktemp is 0600; this is the user's own config, not a secret
-  echo "Seeded $cfg — nothing is pinned per role: a subagent runs the model and reasoning effort"
-  echo "  of the session that dispatched it."
-  echo "  To put a tier on a DIFFERENT model, pin it via KAOLA_OPENCODE_STANDARD_MODEL /"
-  echo "  KAOLA_OPENCODE_REASONING_MODEL and re-run."
-}
-
 # --uninstall short-circuits the install entirely (functions are defined above).
 if [[ "$UNINSTALL" -eq 1 ]]; then
   uninstall_edition
@@ -866,21 +637,18 @@ fi
 if [[ "$GLOBAL" -eq 1 ]]; then
   DEST_ROOT="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
   echo "Deploying globally ($FORGE) → $DEST_ROOT"
-  # GLOBAL: opencode scans the config root DIRECTLY (agents/commands/plugins under ~/.config/opencode/,
+  # GLOBAL: opencode scans the config root DIRECTLY (commands/plugins under ~/.config/opencode/,
   # NOT a nested .opencode/). layout_root = the config root itself.
   copy_tree "$DEST_ROOT" "$DEST_ROOT"
-  seed_config "$DEST_ROOT"
   install_support_scripts
 else
   DEST_ROOT="${TARGET:-$PWD}"
   echo "Deploying into project ($FORGE) → $DEST_ROOT"
   # PROJECT: opencode scans <project>/.opencode/. layout_root = $DEST_ROOT/.opencode (copy_tree default).
   copy_tree "$DEST_ROOT" "$DEST_ROOT/.opencode"
-  seed_config "$DEST_ROOT"
   install_support_scripts
 fi
 
 echo ""
 echo "Next: open the project in opencode and run a workflow command, e.g.:"
 echo "  /workflow-init"
-echo "Models resolve from opencode.json; both tiers inherit your opencode default unless you pin them."

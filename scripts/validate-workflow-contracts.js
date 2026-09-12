@@ -198,7 +198,10 @@ const routedFixFiles = [
   'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
 ];
 for (const file of routedFixFiles) {
-  assertIncludes(file, 'subagent_type="build-error-resolver"');
+  assertIncludes(file, 'subagent_type="implementer"');
+  const card = read(file).match(/Agent\(\n[\s\S]*?^\)/m);
+  assert(card && !/^ {2}model=/m.test(card[0]),
+    file + ': the routed-fix card must carry no model= line; the named profile carries its binding');
 }
 
 assert(exists('commands/workflow-next.md'), 'workflow-next command is missing');
@@ -453,14 +456,14 @@ assertNotIncludes('commands/workflow-init.md', 'claude_dispatch_posture: teams |
   const runtimeRoutingVocabulary = ['Runtime dispatch contract (always loaded)',
     'named, built-in, and generic routes only under their real identities',
     'custody, evidence, and stop boundaries',
-    'Never let a generic route impersonate a custody-bearing named role',
+    'Never let a generic route claim a named role\'s identity',
     'record the specific `capability_gap`'];
   for (const taught of runtimeRoutingVocabulary) {
     assert(dispatchContract.includes(norm(taught)),
       'the always-loaded dispatch source must teach honest item-local routing — missing "'
       + taught + '"');
   }
-  const noImpersonation = 'Never let a generic route impersonate a custody-bearing named role';
+  const noImpersonation = 'Never let a generic route claim a named role\'s identity';
   const impersonatingMutation = dispatchContract.replace(norm(noImpersonation), '');
   assert(!impersonatingMutation.includes(norm(noImpersonation)),
     'the consumer routing guard mutation removes no-impersonation before testing the oracle');
@@ -1005,8 +1008,8 @@ assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-
 }
 
 // VENDOR_MODEL_NOUN_BAN: no agent-facing prompt surface, in ANY edition, may name a vendor's
-// model by brand. A prompt describes the reasoning class it needs — `reasoning tier`,
-// `reasoning-floor`, `standard tier` — never "Opus"/"Sonnet"/"GPT-5". A brand noun is wrong on
+// model by brand. The child binding is declared once per adapter; surfaces describe capability,
+// never a vendor model noun — not "Opus"/"Sonnet"/"GPT-5". A brand noun is wrong on
 // three of the four runtimes that read the same wording, and it silently re-teaches a rule the
 // portable plan vocabulary already states.
 //
@@ -1023,7 +1026,7 @@ assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-
 // what was decided and when, and rewriting them would falsify the record.
 //
 // Lowercase `opus`/`sonnet` are DELIBERATELY not matched: they are the portable plan `model`-column
-// tier tokens, a closed machine vocabulary, not prose about a vendor. Their live carriers are the
+// tokens, a closed machine vocabulary, not prose about a vendor. Their live carriers are the
 // resolver's DEFAULT_AGENT_MODELS and the agent frontmatter it is pinned against
 // (kaola-workflow-resolve-agent-model.js).
 {
@@ -1070,7 +1073,7 @@ assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-
   }
 
   // A guard that scans nothing passes everything. Assert the walk actually reached the surfaces.
-  assert(scanned.length >= 60,
+  assert(scanned.length >= 46,
     'VENDOR_MODEL_NOUN_BAN — expected to scan every prompt surface across all editions, but only ' +
     scanned.length + ' file(s) were reached; the root list or the directory walk is broken.');
 
@@ -1082,9 +1085,9 @@ assert((packageJson.scripts || {})['test:kaola-workflow:claude'].includes('test-
       if (m) {
         assert(false,
           rel + ':' + (i + 1) + ': VENDOR_MODEL_NOUN_BAN — vendor model noun "' + m[0] +
-          '" must not appear in an agent-facing prompt surface. Name the reasoning class instead ' +
-          '(e.g. "reasoning tier", "reasoning-floor", "standard tier"); the lowercase `opus`/' +
-          '`sonnet` plan-column aliases are unaffected. See docs/conventions.md.');
+          '" must not appear in an agent-facing prompt surface. Describe the required capability ' +
+          'instead; the lowercase `opus`/`sonnet` plan-column aliases are unaffected. ' +
+          'See docs/conventions.md.');
       }
     }
   }

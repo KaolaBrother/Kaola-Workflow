@@ -6,7 +6,7 @@
 // ZCode 3.10.1 has a 1,000,000-token context in the measured installation, and
 // the live hook experiment could self-lock Workflow Next by intercepting the
 // model's compatibility bind. Compact-only prompt recovery belongs to Cursor
-// and Grok. The ZCode installer therefore deploys agents/commands/support
+// and Grok. The ZCode installer therefore deploys commands/support
 // files, but declares no Kaola hook at project scope or global scope. Legacy
 // hook rows are removable only with their exact ownership receipt; foreign
 // configuration and foreign shells are never a cleanup casualty.
@@ -225,11 +225,18 @@ function assertNoObsoleteTrustOutput(result, label) {
 }
 
 // B. Clean project/global installs must not create a ZCode hook declaration,
-// receipt, ambient shell, or obsolete trust hand-off. Agents and commands
-// remain the actual ZCode edition surface.
+// receipt, ambient shell, or obsolete trust hand-off. Commands remain the
+// actual ZCode edition surface; this runtime installs no Kaola role profiles,
+// so a previously deployed roster is removed instead.
+const RETIRED_ROLES = ['code-explorer', 'knowledge-lookup', 'planner', 'code-architect',
+  'tdd-guide', 'implementer', 'investigator', 'build-error-resolver', 'code-reviewer',
+  'security-reviewer', 'doc-updater', 'adversarial-verifier', 'synthesizer', 'metric-optimizer'];
 for (const scope of ['project', 'global']) {
   const fixture = makeFixture(scope);
   try {
+    // Seed one retired Kaola roster file at user scope; upgrade must remove it.
+    write(path.join(fixture.zcodeHome, 'agents', 'planner.md'),
+      '---\nname: planner\n---\nretired roster file\n');
     const result = runInstaller(fixture, { global: scope === 'global' });
     const projectConfig = configIfPresent(projectConfigPath(fixture));
     assertReal(result.status === 0,
@@ -250,8 +257,12 @@ for (const scope of ['project', 'global']) {
       assertReal(!fs.existsSync(projectConfigPath(fixture)),
         'global: no unrelated project hook config is materialized');
     }
-    assertReal(fs.existsSync(path.join(fixture.zcodeHome, 'agents')),
-      scope + ': agent roster is still deployed');
+    const agentsDir = path.join(fixture.zcodeHome, 'agents');
+    const leftover = fs.existsSync(agentsDir)
+      ? fs.readdirSync(agentsDir).filter(f => RETIRED_ROLES.includes(f.replace(/\.md$/, '')))
+      : [];
+    assertReal(leftover.length === 0,
+      scope + ': no Kaola agent roster remains deployed' + (leftover.length ? ' — ' + leftover.join(',') : ''));
     const commandRoot = scope === 'global'
       ? path.join(fixture.zcodeHome, 'commands')
       : path.join(fixture.project, '.zcode', 'commands');

@@ -360,7 +360,7 @@ assert(!exists(`${pluginRoot}/scripts/kaola-workflow-codex-compact-resume.js`),
 // issue #332: source agent-profile schema wall. require() the installer (the #325
 // require.main guard means require() never runs main()) and assert its source-tree
 // validator passes — every agents/*.toml has a matching non-empty top-level `name`,
-// a description, valid nickname_candidates, inherited runtime-key omission plus declarative tier metadata,
+// a description, valid nickname_candidates, inherited runtime-key omission plus the single subagent binding,
 // a non-blank developer_instructions, every
 // config_file resolves, and every toml is referenced by exactly one [agents.*] entry.
 // This is the AC2 wall: it FAILS on a tree that drifts a profile schema or leaves a
@@ -372,24 +372,30 @@ assert(codexProfiles.ok,
 const codexSchema = require(path.join(root, pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
 const codexPreflight = require(path.join(root, pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js'));
 const sorted = values => [...values].sort();
-assert(JSON.stringify(sorted(codexInstaller.CODEX_PINNED_STANDARD_ROLES))
-    === JSON.stringify(sorted(codexSchema.CODEX_PINNED_STANDARD_ROLES)),
-  'Codex installer role-metadata policy must match adaptive schema');
-assert(JSON.stringify(sorted(codexInstaller.CODEX_PINNED_REASONING_ROLES))
-    === JSON.stringify(sorted(codexSchema.CODEX_PINNED_REASONING_ROLES)),
-  'Codex installer reasoning-role policy must match adaptive schema');
-assert(JSON.stringify(sorted(codexInstaller.CODEX_PINNED_HEAVY_ROLES))
-    === JSON.stringify(sorted(codexSchema.CODEX_PINNED_HEAVY_ROLES)),
-  'Codex installer heavy-role policy must match adaptive schema');
-assert(JSON.stringify(sorted(codexPreflight.CODEX_PINNED_STANDARD_ROLES))
-    === JSON.stringify(sorted(codexSchema.CODEX_PINNED_STANDARD_ROLES)),
-  'Codex preflight role-metadata policy must match adaptive schema');
-assert(JSON.stringify(sorted(codexPreflight.CODEX_PINNED_REASONING_ROLES))
-    === JSON.stringify(sorted(codexSchema.CODEX_PINNED_REASONING_ROLES)),
-  'Codex preflight reasoning-role policy must match adaptive schema');
-assert(JSON.stringify(sorted(codexPreflight.CODEX_PINNED_HEAVY_ROLES))
-    === JSON.stringify(sorted(codexSchema.CODEX_PINNED_HEAVY_ROLES)),
-  'Codex preflight heavy-role policy must match adaptive schema');
+assert(JSON.stringify(sorted(codexInstaller.CODEX_PINNED_ROLES))
+    === JSON.stringify(sorted(codexSchema.CODEX_PINNED_ROLES)),
+  'Codex installer pinned-role policy must match adaptive schema');
+assert(JSON.stringify(sorted(codexPreflight.CODEX_PINNED_ROLES))
+    === JSON.stringify(sorted(codexSchema.CODEX_PINNED_ROLES)),
+  'Codex preflight pinned-role policy must match adaptive schema');
+assert(codexSchema.CODEX_PINNED_MODEL === 'gpt-5.6-luna'
+    && codexSchema.CODEX_PINNED_EFFORT === 'max',
+  'Codex pinned subagent binding must be gpt-5.6-luna/max');
+for (const edition of ['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea']) {
+  const dir = path.join(root, 'plugins', edition, 'agents');
+  for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.toml')).sort()) {
+    const text = fs.readFileSync(path.join(dir, file), 'utf8');
+    const top = codexSchema.profileTopLevelShape(text).outside;
+    assert((top.match(/^model\s*=\s*"gpt-5\.6-luna"\s*$/gm) || []).length === 1
+        && (top.match(/^model_reasoning_effort\s*=\s*"max"\s*$/gm) || []).length === 1,
+      'plugins/' + edition + '/agents/' + file
+        + ' must carry exactly one model = "gpt-5.6-luna" and one model_reasoning_effort = "max" line');
+    const role = file.slice(0, -5);
+    assert(codexSchema.validateProfileText(text, role).length === 0,
+      'plugins/' + edition + '/agents/' + file + ' fails kernel profile validation: '
+        + codexSchema.validateProfileText(text, role).join('; '));
+  }
+}
 assert(codexInstaller.CODEX_STANDARD_MODEL === 'gpt-5.6-sol'
     && codexInstaller.CODEX_STANDARD_EFFORT === 'medium'
     && codexPreflight.CODEX_STANDARD_MODEL === codexInstaller.CODEX_STANDARD_MODEL
@@ -413,8 +419,8 @@ function deriveCodexRoleCatalog() {
   const roles = [];
   const re = /^\[agents\.([a-z0-9-]+)\]/gm;
   let m;
-  // The <role>-max variants remain retired. Base profiles inherit the parent-session runtime pair;
-  // their declarative tier metadata remains separate while the catalog derives the role SET only.
+  // The <role>-max variants remain retired. Base profiles pin the single subagent binding;
+  // the catalog derives the role SET only.
   while ((m = re.exec(templateText)) !== null) {
     roles.push(m[1]);
   }
@@ -425,7 +431,7 @@ const { roles: catalogRoles } = deriveCodexRoleCatalog();
 assert(catalogRoles.length > 0 && !catalogRoles.includes('docs-lookup'),
   'the derived Codex role catalog is non-empty and omits the retired docs-lookup role');
 
-// Tier classifications, role profiles, and runtime-native defaults remain metadata. The workflow
+// The single subagent binding and runtime-native defaults remain adapter metadata. The workflow
 // policy must not turn them into a fixed per-spawn model/effort pair or reviewer escalation rule.
 const routingSkels = [
   'templates/routing/next.skeleton.md',
@@ -436,7 +442,7 @@ const normalizedDispatchContract = norm(dispatchContract);
 assert(/dispatch when it materially reduces main-context residue/i.test(normalizedDispatchContract),
   'shared dispatch contract must carry the execution-economics judgment');
 assert(/runtime-native defaults/i.test(normalizedDispatchContract)
-    || /default tier[\s\S]*task-sensitive override/i.test(normalizedDispatchContract),
+    || /subagent default binding[\s\S]*task-sensitive override/i.test(normalizedDispatchContract),
   'shared dispatch contract must leave model/effort selection to runtime metadata or task context');
 for (const rel of routingSkels) {
   const text = read(rel);
@@ -452,7 +458,7 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
   assert(/dispatch when it materially reduces main-context residue/i.test(rendered),
     rel + ' must render the shared execution-economics judgment');
   assert(/runtime-native defaults/i.test(rendered)
-      || /default tier[\s\S]*task-sensitive override/i.test(rendered),
+      || /subagent default binding[\s\S]*task-sensitive override/i.test(rendered),
     rel + ' must render the shared model-selection rule');
 }
 // #340 derived parity guard (enumeration-free): the codex-dispatch config/agents.toml must register
@@ -546,8 +552,9 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
         && /^[0-9a-f]{64}$/.test(entry.profileContract.adapter_capabilities_hash)
         && /^[0-9a-f]{64}$/.test(entry.profileContract.resolved_profile_hash),
       edition + ' must bind behavior and resolved profile hashes for ' + role);
-      assert(!/^model(?:_reasoning_effort)?\s*=/m.test(entry.sourceText),
-        edition + ' reviewer profiles must inherit the parent model by omission');
+      assert(/^model\s*=\s*"gpt-5\.6-luna"\s*$/m.test(entry.sourceText)
+        && /^model_reasoning_effort\s*=\s*"max"\s*$/m.test(entry.sourceText),
+        edition + ' pinned profiles must carry the gpt-5.6-luna/max subagent binding');
     }
   }
   assert(new Set(installerFiles).size === 1,
@@ -612,10 +619,10 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
 }
 
 // B2 model-noun purge (#609, the codex twin of #537; #610 renamed the plan vocabulary to neutral
-// tier tokens with legacy aliases): Codex prompt surfaces (agents/*.toml, config/agents.toml,
+// tokens with legacy aliases): Codex prompt surfaces (agents/*.toml, config/agents.toml,
 // skills/*/SKILL.md) must not use Claude model NOUNS (Opus/Sonnet/haiku) as if they were this
 // runtime's models ("the Opus orchestrator", "reasoning-class (Opus)", "no haiku", "opus ~= 5x
-// sonnet"). Those read as nonsense on the Codex runtime, where the plan tier tokens translate at
+// sonnet"). Those read as nonsense on the Codex runtime, where the plan tokens translate at
 // dispatch to a per-spawn reasoning_effort. The ONLY permitted opus/sonnet are the B1 LEGACY-ALIAS
 // mentions: the closed `{opus|sonnet}` set literal (pre-#610 frozen plans), the `model: opus`/
 // `model: sonnet` -> effort mapping tokens, and the `opus`/`sonnet` legacy-alias-pair notation the
@@ -647,7 +654,7 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
       if (m) {
         assert(false,
           rel + ':' + (i + 1) + ': B2 model-noun "' + m[0] + '" — a Claude model name must not appear ' +
-          'as runtime-model prose on a Codex surface; use tier/effort vocabulary (only the B1 ' +
+          'as runtime-model prose on a Codex surface; use capability/effort vocabulary (only the B1 ' +
           '`{opus|sonnet}` column-token set, the `model: opus`/`model: sonnet` effort mapping, and the ' +
           '`opus`/`sonnet` legacy-alias-pair mention are allowed). See docs/conventions.md.');
       }
