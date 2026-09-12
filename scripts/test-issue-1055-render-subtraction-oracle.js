@@ -15,13 +15,14 @@
 // from renderAgent / renderCommand / transformCommandBody's actual output, so a safe
 // subtraction must leave every rendered byte identical to before.
 //
-// This oracle renders every agent and command surface these five modules produce — 5 runtimes
-// x 3 forges x 14 roles = 210 agent renders, plus 5 runtimes x 3 forges x 3 commands x 2
-// line-ending variants (LF, CRLF) = 90 command renders, 300 renders total — hashes each, and
-// diffs the hashes against a baseline manifest captured on commit 5cb85515 (main HEAD before
-// the #1055 subtraction, i.e. the last known-good state). A hash drift anywhere fails loud with
-// the first differing runtime/forge/artifact; a runtime or forge silently skipped from either
-// loop is caught by the asserted 300 count, not merely by an emptied diff.
+// This oracle renders every agent and command surface these five modules produce — 2 binding
+// runtimes x 3 forges x 7 roles = 42 agent renders, plus 5 runtimes x 3 forges x 3 commands x 2
+// line-ending variants (LF, CRLF) = 90 command renders, 132 renders total — hashes each, and
+// diffs the hashes against the baseline manifest (recaptured under #1062: the render changed
+// when the 14-role catalog became 7 and the native-only editions stopped shipping profiles).
+// A hash drift anywhere fails loud with the first differing runtime/forge/artifact; a runtime or
+// forge silently skipped from either loop is caught by the asserted 132 count, not merely by an
+// emptied diff.
 //
 // Depends ONLY on the five sync-*-edition.js modules, generate-agent-profiles.js,
 // runtime-edition-forge.js, and the tracked commands/*.md canonical sources under templates/
@@ -51,7 +52,11 @@ const { execSync } = require('child_process');
 const REPO = path.resolve(__dirname, '..');
 const BASELINE_PATH = path.join(REPO, 'scripts', 'fixtures', 'issue-1055-render-baseline.json');
 
-const RUNTIMES = ['grok', 'kimi', 'cursor', 'opencode', 'zcode'];
+// #1062 split: only the binding runtimes render agent profiles; the native-only editions
+// (kimi, opencode, zcode) ship no Kaola role profiles and contribute command renders only.
+const AGENT_RUNTIMES = ['grok', 'cursor'];
+const COMMAND_RUNTIMES = ['grok', 'kimi', 'cursor', 'opencode', 'zcode'];
+const RUNTIMES = COMMAND_RUNTIMES;
 
 const forgeLayout = require('./runtime-edition-forge.js');
 const agentGen = require('./generate-agent-profiles.js');
@@ -68,10 +73,10 @@ function sha256(text) {
   return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex');
 }
 
-// renderAgent(canonContent, role, forge) is uniform across all five modules and ignores
+// renderAgent(canonContent, role, forge) is uniform across the binding modules and ignores
 // canonContent/forge (each delegates to generate-agent-profiles.renderRuntimeRole(runtime,
 // role)) — pass through faithfully anyway so a future runtime that DOES consult forge is
-// still exercised per-forge, matching the spec's 5 x 3 x 14 count.
+// still exercised per-forge, matching the spec's 2 x 3 x 7 count.
 function renderAgentFor(runtime, role, forge) {
   return MODULES[runtime].renderAgent('', role, forge);
 }
@@ -95,16 +100,20 @@ function recordKey(rec) {
   return [rec.runtime, rec.forge, rec.kind, rec.name, rec.lineEnding].join(' ');
 }
 
-// Deterministic 300-record manifest: 5 runtimes x 3 forges x 14 roles (agent, lineEnding
+// Deterministic 132-record manifest: 2 runtimes x 3 forges x 7 roles (agent, lineEnding
 // "n/a") + 5 runtimes x 3 forges x 3 commands x 2 line-ending variants (command).
 function buildManifest() {
   const records = [];
-  for (const runtime of RUNTIMES) {
+  for (const runtime of AGENT_RUNTIMES) {
     for (const forge of FORGES) {
       for (const role of ROLES) {
         const content = renderAgentFor(runtime, role, forge);
         records.push({ runtime, forge, kind: 'agent', name: role, lineEnding: 'n/a', hash: sha256(content) });
       }
+    }
+  }
+  for (const runtime of COMMAND_RUNTIMES) {
+    for (const forge of FORGES) {
       for (const src of commandsFor(forge)) {
         const commandName = src.basename.slice(0, -3);
         const rawContent = fs.readFileSync(src.absPath, 'utf8');
@@ -136,8 +145,8 @@ function currentCommit() {
   }
 }
 
-const EXPECTED_TOTAL = RUNTIMES.length * FORGES.length * ROLES.length
-  + RUNTIMES.length * FORGES.length * 3 /* commands */ * 2 /* line-ending variants */;
+const EXPECTED_TOTAL = AGENT_RUNTIMES.length * FORGES.length * ROLES.length
+  + COMMAND_RUNTIMES.length * FORGES.length * 3 /* commands */ * 2 /* line-ending variants */;
 
 const argv = process.argv.slice(2);
 
@@ -148,6 +157,7 @@ if (argv.includes('--write-baseline')) {
     schema: 1,
     captured_at_commit: currentCommit(),
     runtimes: RUNTIMES,
+    agent_runtimes: AGENT_RUNTIMES,
     forges: FORGES,
     roles: ROLES,
     commands: [...new Set(records.filter(r => r.kind === 'command').map(r => r.name))].sort(),
@@ -168,11 +178,11 @@ function assert(cond, msg) {
   console.error('FAIL: ' + msg);
 }
 
-assert(EXPECTED_TOTAL === 300,
-  'ORACLE: the spec-derived expected count must be exactly 300 (5 runtimes x 3 forges x 14 roles '
-  + '= 210, plus 5 runtimes x 3 forges x 3 commands x 2 line-ending variants = 90) — got '
-  + EXPECTED_TOTAL + '. RUNTIMES=' + RUNTIMES.length + ' FORGES=' + FORGES.length
-  + ' ROLES=' + ROLES.length);
+assert(EXPECTED_TOTAL === 132,
+  'ORACLE: the spec-derived expected count must be exactly 132 (2 runtimes x 3 forges x 7 roles '
+  + '= 42, plus 5 runtimes x 3 forges x 3 commands x 2 line-ending variants = 90) — got '
+  + EXPECTED_TOTAL + '. AGENT_RUNTIMES=' + AGENT_RUNTIMES.length + ' COMMAND_RUNTIMES='
+  + COMMAND_RUNTIMES.length + ' FORGES=' + FORGES.length + ' ROLES=' + ROLES.length);
 
 if (!fs.existsSync(BASELINE_PATH)) {
   console.error('FATAL: baseline manifest missing at ' + BASELINE_PATH
@@ -185,13 +195,13 @@ if (!fs.existsSync(BASELINE_PATH)) {
 const baseline = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8'));
 const current = buildManifest();
 
-assert(current.length === 300,
-  'ORACLE: exactly 300 render comparisons expected — got ' + current.length + '. A silently '
+assert(current.length === 132,
+  'ORACLE: exactly 132 render comparisons expected — got ' + current.length + '. A silently '
   + 'skipped runtime, forge, role, or command would change this count.');
-assert(baseline.total_comparisons === 300,
-  'ORACLE: baseline manifest itself must record 300 comparisons — got ' + baseline.total_comparisons);
-assert(Array.isArray(baseline.records) && baseline.records.length === 300,
-  'ORACLE: baseline manifest must carry exactly 300 record(s) — got '
+assert(baseline.total_comparisons === 132,
+  'ORACLE: baseline manifest itself must record 132 comparisons — got ' + baseline.total_comparisons);
+assert(Array.isArray(baseline.records) && baseline.records.length === 132,
+  'ORACLE: baseline manifest must carry exactly 132 record(s) — got '
   + (Array.isArray(baseline.records) ? baseline.records.length : typeof baseline.records));
 
 const baselineByKey = new Map();

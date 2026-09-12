@@ -16,9 +16,8 @@
 // install.sh / edition-sync.js / npm test. It is delivered the Grok-native
 // way: named agents under `.grok/agents/<role>.md` (spawn_subagent types),
 // flat commands under `.grok/commands/<name>.md`, and one `.grok/rules/`
-// compact-safe prompt. THREE canonical model
-// classes: every subagent keeps model: inherit, while standard/reasoning/heavy
-// agents carry the native effort pins medium/high/xhigh respectively.
+// compact-safe prompt. ONE canonical binding (#1062): every generated Grok
+// agent pins model: grok-4.6 with effort: medium.
 //
 // Outside `npm test`, the forge chains, and the fast gate: an additive
 // runtime edition is not a forge. The script exists so the suite is
@@ -127,46 +126,26 @@ function expectedNativeTools(role) {
   return tools;
 }
 
-function canonicalAgentClass(name) {
-  const { fm } = parseFrontmatter(read('agents/' + name + '.md'));
-  const model = String(fm.model || '').trim().toLowerCase();
-  const binding = GROK_MODEL_CLASS_TIERS[model];
-  return binding
-    ? { model, tier: binding.tier, effort: binding.effort }
-    : { model, tier: 'unknown', effort: null };
-}
+// #1062 — the Grok binding is the adapter's single `subagent_default`, not a
+// per-role tier. Derive the expected Grok binding from runtime-capabilities.json
+// so a binding change is judged by the adapter authority itself.
+const GROK_SUBAGENT_DEFAULT = reviewerGenerator.loadRuntimeAdapters(REPO)
+  .runtimes.grok.capabilities.subagent_default || {};
 
-function canonicalRosters(names) {
-  const rosters = { standard: [], reasoning: [], heavy: [], unknown: [] };
-  for (const name of names) {
-    const tier = canonicalAgentClass(name).tier;
-    if (!rosters[tier]) rosters[tier] = [];
-    rosters[tier].push(name);
-  }
-  for (const tier of Object.keys(rosters)) rosters[tier].sort();
-  return rosters;
+function canonicalAgentClass() {
+  return { model: GROK_SUBAGENT_DEFAULT.model, effort: GROK_SUBAGENT_DEFAULT.effort };
 }
 
 // ---------------------------------------------------------------------------
-// GROK_RUNTIME_NATIVE — the three-tier effort binding as a DECLARED table entry,
+// GROK_RUNTIME_NATIVE — the single subagent binding as a DECLARED table entry,
 // not merely as prose. Deleting the declaration reds this suite.
 // ---------------------------------------------------------------------------
 const GROK_RUNTIME_NATIVE = Object.freeze({
-  tiered_effort_pin:
-    'Grok subagents inherit the session model, so generated agents keep model: inherit while canonical standard/reasoning/heavy model classes stamp effort: medium/high/xhigh respectively.',
+  single_subagent_binding:
+    'Grok generated agents pin the one subagent binding model: grok-4.6 with effort: medium; per-call model and effort are omitted because the profile pins both.',
 });
 
-// The canonical model tokens are the existing portable class markers, not a
-// second role roster. Derive each expected Grok binding from agents/*.md so a
-// role addition or tier move is judged by the canonical frontmatter itself.
 const GROK_SYNC_SRC = fs.readFileSync(path.join(REPO, 'scripts', 'sync-grok-edition.js'), 'utf8');
-const GROK_ADAPTER_EFFORTS = reviewerGenerator.loadRuntimeAdapters(REPO)
-  .runtimes.grok.capabilities.intent_mapping;
-const GROK_MODEL_CLASS_TIERS = Object.freeze({
-  sonnet: Object.freeze({ tier: 'standard', effort: GROK_ADAPTER_EFFORTS.standard }),
-  opus: Object.freeze({ tier: 'reasoning', effort: GROK_ADAPTER_EFFORTS.reasoning }),
-  fable: Object.freeze({ tier: 'heavy', effort: GROK_ADAPTER_EFFORTS.heavy }),
-});
 
 // ---------------------------------------------------------------------------
 // Additive boundary — grok is a runtime, not a forge. Read the tree; do not
@@ -287,7 +266,6 @@ assert(treeLabel('github') === '.grok'
 
 const canonAgents = trackedAgents();
 const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
-const canonRosters = canonicalRosters(canonAgents);
 
 // ---------------------------------------------------------------------------
 // G0 — THE SUBJECT UNDER TEST IS THE GENERATOR'S OUTPUT, derived from TRACKED
@@ -306,28 +284,25 @@ const canonRosters = canonicalRosters(canonAgents);
   }
   assert(canonAgents.length > 0 && canonCommandNames.length > 0,
     'G0-roster: the canonical agents/ inventory and routing-registry command surfaces are both non-empty');
-  assert(canonAgents.includes('knowledge-lookup'),
-    'G0-roster: knowledge-lookup is in the canonical agents/*.md inventory');
-  assert(canonRosters.standard.length > 0,
-    'G0-roster: canonical sonnet model class derives a non-empty standard roster');
-  assert(canonRosters.reasoning.length > 0,
-    'G0-roster: canonical opus model class derives a non-empty reasoning roster');
-  assert(canonRosters.heavy.includes('planner') && canonRosters.heavy.includes('code-architect'),
-    'G0-roster: planner-class (planner, code-architect) is the heavy (fable) roster — heavy='
-    + JSON.stringify(canonRosters.heavy));
-  assert(canonRosters.unknown.length === 0,
-    'G0-roster: every canonical agent model belongs to the known sonnet/opus/fable classes — unknown='
-    + JSON.stringify(canonRosters.unknown));
-  assert(GROK_ADAPTER_EFFORTS.heavy === 'xhigh' || GROK_ADAPTER_EFFORTS.heavy === 'high',
-    'G0-fable: runtime adapter heavy effort must be xhigh or high — got '
-    + JSON.stringify(GROK_ADAPTER_EFFORTS.heavy));
+  assert(canonAgents.length === 7 && canonAgents.includes('knowledge-lookup'),
+    'G0-roster: the canonical agents/*.md inventory is exactly the seven-role catalog — got '
+    + JSON.stringify(canonAgents));
+  for (const retired of ['planner', 'code-architect', 'synthesizer', 'build-error-resolver',
+    'metric-optimizer', 'adversarial-verifier', 'security-reviewer']) {
+    assert(!canonAgents.includes(retired),
+      'G0-roster: retired role ' + retired + ' is absent from the canonical inventory');
+  }
+  assert(GROK_SUBAGENT_DEFAULT.model === 'grok-4.6' && GROK_SUBAGENT_DEFAULT.effort === 'medium',
+    'G0-binding: runtime adapter subagent_default is model grok-4.6 / effort medium — got '
+    + JSON.stringify(GROK_SUBAGENT_DEFAULT));
   assert(!/const\s+GROK_MODEL_EFFORTS\b|function\s+effortForModelToken\b/.test(GROK_SYNC_SRC),
     'G0-adapter: sync-grok-edition carries no executable hardcoded effort table; '
     + 'runtime-capabilities.json is the sole runtime identifier authority');
   for (const name of canonAgents) {
-    if (name === 'planner' || name === 'code-architect') continue;
-    assert(canonicalAgentClass(name).model !== 'fable',
-      'G0-roster: ' + name + ' must not change tier to fable — got ' + canonicalAgentClass(name).model);
+    const { fm } = parseFrontmatter(read('agents/' + name + '.md'));
+    assert(String(fm.model || '').trim() === 'sonnet',
+      'G0-roster: ' + name + ' canonical profile carries the single Claude binding model: sonnet — got '
+      + JSON.stringify(fm.model));
   }
 }
 
@@ -350,9 +325,9 @@ function commandRel(name, forge) {
 
 // ---------------------------------------------------------------------------
 // G1: agents — exact set = canonical agents/*.md. knowledge-lookup MUST be
-// present. Frontmatter: name, description, model: inherit, and effort derived
-// from the canonical model class (standard/sonnet → medium, reasoning/opus →
-// high, heavy/fable → xhigh). `reasoning_effort:` is not a Grok agent field. Frontmatter `tools:`
+// present. Frontmatter: name, description, and the single adapter binding
+// model: grok-4.6 with effort: medium (#1062 — one subagent binding per
+// adapter, no tier axis). `reasoning_effort:` is not a Grok agent field. Frontmatter `tools:`
 // is the enforced native allowlist derived from the role capability contract; prose-only
 // restrictions do not satisfy this contract. Body examples may still name MCP tool ids.
 // ---------------------------------------------------------------------------
@@ -373,8 +348,8 @@ function commandRel(name, forge) {
     assert(fm.name === name, 'G1[' + name + ']: frontmatter name is the role — got ' + JSON.stringify(fm.name));
     assert(typeof fm.description === 'string' && fm.description.trim().length > 0,
       'G1[' + name + ']: frontmatter has a non-empty description');
-    assert(fm.model === 'inherit',
-      'G1[' + name + ']: frontmatter model is inherit — got ' + JSON.stringify(fm.model));
+    assert(fm.model === 'grok-4.6',
+      'G1[' + name + ']: frontmatter model is the single binding grok-4.6 — got ' + JSON.stringify(fm.model));
     assert(fm.promptMode === 'full',
       'G1[' + name + ']: native camelCase promptMode is full — got ' + JSON.stringify(fm.promptMode));
     assert(!Object.prototype.hasOwnProperty.call(fm, 'permissionMode'),
@@ -385,13 +360,13 @@ function commandRel(name, forge) {
       + JSON.stringify(fm.agentsMd));
     assert(!/^(?:prompt_mode|permission_mode|agents_md)\s*:/m.test(raw),
       'G1[' + name + ']: frontmatter contains no ignored snake_case spellings for Grok native fields');
-    const canonical = canonicalAgentClass(name);
-    assert(canonical.tier !== 'unknown',
-      'G1[' + name + ']: canonical model class is known — got ' + JSON.stringify(canonical.model));
+    const canonical = canonicalAgentClass();
+    assert(canonical.model === 'grok-4.6' && canonical.effort === 'medium',
+      'G1[' + name + ']: adapter binding is known — got ' + JSON.stringify(canonical));
     const expectedEffort = canonical.effort;
     assert(fm.effort === expectedEffort,
-      'G1[' + name + ']: effort is ' + JSON.stringify(expectedEffort) + ' for canonical '
-      + canonical.tier + ' tier — got ' + JSON.stringify(fm.effort));
+      'G1[' + name + ']: effort is ' + JSON.stringify(expectedEffort)
+      + ' under the single subagent binding — got ' + JSON.stringify(fm.effort));
     assert((raw.match(/^\s*effort\s*:/gm) || []).length === 1,
       'G1[' + name + ']: carries exactly one effort: field');
     assert(!/^\s*reasoning_effort\s*:/m.test(raw),
@@ -467,6 +442,11 @@ function commandRel(name, forge) {
 {
   const B2_MODEL_NOUN = /\b(Opus|Sonnet)\b/;
   const VENDOR_SLUG = /\bgrok-4\.\d\b|\bgrok-build\b/;
+  // #1062 — the binding legitimately names grok-4.6 on profile `model:`/`effort:` lines and on
+  // the `**Subagent default:**` declaration; the slug is banned everywhere else.
+  const stripBindingLines = content => content.split('\n')
+    .filter(line => !/^\s*(?:model|effort)\s*:/.test(line) && !line.includes('**Subagent default:**'))
+    .join('\n');
   let runtimeGrok = 0;
   for (const rel of generatedTreeFiles('.grok')) {
     const content = read(rel);
@@ -480,9 +460,9 @@ function commandRel(name, forge) {
     assert(!/model="\{/.test(content),
       'G2-leak: ' + rel + ': no model="{...}" placeholder');
     assert(!/\bmodel="/.test(content),
-      'G2-leak: ' + rel + ': no per-call model=" override (inherit the session model)');
-    assert(!VENDOR_SLUG.test(content),
-      'G2-leak: ' + rel + ': no vendor model slug (grok-4.x / grok-build)');
+      'G2-leak: ' + rel + ': no per-call model=" override (the profile pins the binding)');
+    assert(!VENDOR_SLUG.test(stripBindingLines(content)),
+      'G2-leak: ' + rel + ': no vendor model slug (grok-4.x / grok-build) outside the declared binding');
     const lines = content.split('\n');
     for (let i = 0; i < lines.length; i++) {
       const m = lines[i].match(B2_MODEL_NOUN);
@@ -501,30 +481,28 @@ function commandRel(name, forge) {
 }
 
 // ---------------------------------------------------------------------------
-// G2-declaration: GROK_RUNTIME_NATIVE.tiered_effort_pin exists, names the two
-// canonical effort pins, and the generated tree matches it. The separate
-// model: inherit assertion below must remain even if this declaration changes.
+// G2-declaration: GROK_RUNTIME_NATIVE.single_subagent_binding exists, names the
+// one binding, and the generated tree matches it. The separate model: grok-4.6
+// assertion below must remain even if this declaration changes.
 // ---------------------------------------------------------------------------
 {
-  const KEY = 'tiered_effort_pin';
+  const KEY = 'single_subagent_binding';
   const reason = GROK_RUNTIME_NATIVE[KEY];
   assert(typeof reason === 'string' && reason.trim().length >= 20,
     'G2-declaration: GROK_RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason');
-  assert(/standard.*reasoning/i.test(reason)
-    && /medium/i.test(reason) && /high/i.test(reason) && /heavy/i.test(reason),
-    'G2-declaration: the "' + KEY + '" reason must state standard/reasoning/heavy '
-    + 'medium/high/xhigh effort pins');
+  assert(/grok-4\.6/i.test(reason) && /medium/i.test(reason),
+    'G2-declaration: the "' + KEY + '" reason must state the grok-4.6 / medium binding');
   for (const name of canonAgents) {
     const rel = agentRel(name);
     if (!exists(rel)) continue;
     const { fm, raw } = parseFrontmatter(read(rel));
-    const canonical = canonicalAgentClass(name);
-    assert(/^\s*model\s*:\s*inherit\s*$/m.test(raw),
-      'G2-declaration: ' + rel + ' independently carries model: inherit (the model contract is '
+    const canonical = canonicalAgentClass();
+    assert(/^\s*model\s*:\s*grok-4\.6\s*$/m.test(raw),
+      'G2-declaration: ' + rel + ' independently carries model: grok-4.6 (the model contract is '
       + 'separate from ' + KEY + ')');
     assert(fm.effort === canonical.effort,
       'G2-declaration: ' + rel + ' carries effort: ' + canonical.effort
-      + ' for canonical ' + canonical.tier + ' tier');
+      + ' under the single subagent binding');
   }
   for (const rel of generatedTreeFiles('.grok')) {
     const content = read(rel);
@@ -686,12 +664,12 @@ for (const role of reviewerGenerator.ROLES) {
       const rel = agentRel(name, forge);
       const content = exists(rel) ? read(rel) : '';
       const { fm } = parseFrontmatter(content);
-      const canonical = canonicalAgentClass(name);
-      assert(fm.model === 'inherit',
-        'G7[' + forge + '][' + name + ']: generated model remains inherit');
+      const canonical = canonicalAgentClass();
+      assert(fm.model === 'grok-4.6',
+        'G7[' + forge + '][' + name + ']: generated model is the single binding grok-4.6');
       assert(fm.effort === canonical.effort,
-        'G7[' + forge + '][' + name + ']: generated effort follows canonical '
-        + canonical.tier + ' tier — expected ' + canonical.effort + ' got ' + JSON.stringify(fm.effort));
+        'G7[' + forge + '][' + name + ']: generated effort follows the single subagent binding'
+        + ' — expected ' + canonical.effort + ' got ' + JSON.stringify(fm.effort));
     }
     const c = runGeneratorCli(['--forge=' + forge, '--check']);
     assert(c.status === 0,

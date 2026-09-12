@@ -121,7 +121,7 @@ function teachesMissionEnumeration(text) {
     && /independent causal class/i.test(text);
 }
 function teachesIndependentAcceptance(text) {
-  return /implementer may not delete, weaken, or reinterpret that acceptance/i.test(text)
+  return /implementer (?:may not|does not) delete, weaken, or reinterpret/i.test(text)
     || /never weakens, deletes, skips, or changes the behavior they accept/i.test(text)
     || /What you may never do is change what a test accepts/i.test(text);
 }
@@ -306,11 +306,11 @@ ok(teachesFourFields(global) && !/`effort`/.test((global.split('Mission List')[1
   }), 'A6 mutation RED: omitting the global source from compact recovery is detected');
 
   const guttedNext = next.replace(
-    /The test author owns acceptance meaning\.[\s\S]*?acceptance to pass\./,
+    /When a `tdd-guide` holds the acceptance tests[\s\S]*?you hold that meaning\./,
     '');
   ok(teachesIndependentAcceptance(next),
     'A6 setup: live Next currently carries independent acceptance');
-  ok(!/implementer may not delete, weaken, or reinterpret that acceptance/i.test(guttedNext),
+  ok(!/implementer (?:may not|does not) delete, weaken, or reinterpret/i.test(guttedNext),
     'A6 mutation RED: deleting independent-acceptance language from Next is detected');
 
   const blanketEscalate = 'Escalate every irreversible or value-laden choice, including already-granted work.';

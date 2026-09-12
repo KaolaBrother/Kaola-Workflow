@@ -17,8 +17,8 @@
 // flat commands under `.cursor/commands/<name>.md`. The machine-global contract
 // transaction owns the one always-applied Rule; this edition owns no duplicate
 // project Rule, hook declaration, or hook subprocess.
-// Three canonical model classes: standard/reasoning/heavy
-// agents carry unquoted Grok 4.6 frontmatter pins with medium/high/xhigh effort. Named-profile
+// One canonical subagent binding (#1062): every generated
+// agent carries the unquoted Grok 4.6 frontmatter pin grok-4.6[effort=medium]. Named-profile
 // command cards carry no static per-dispatch model override; a built-in-only catalog-miss path may
 // use only a resolver-listed live model slug. Compact recovery is carried by the global transaction
 // for standalone CLI, App local, and Cloud materialization; ordinary tool use has no Kaola injection.
@@ -628,65 +628,35 @@ const trackedAgents = () => fs.readdirSync(path.join(REPO, 'agents'))
 const commandNamesFor = forge => forgeLayout.commandSources(forge)
   .map(s => s.basename.replace(/\.md$/, '')).sort();
 
-function canonicalAgentClass(name) {
-  const { fm } = parseFrontmatter(read('agents/' + name + '.md'));
-  const model = String(fm.model || '').trim().toLowerCase();
-  const binding = CURSOR_MODEL_CLASS_TIERS[model];
-  return binding
-    ? { model, tier: binding.tier, pin: binding.pin }
-    : { model, tier: 'unknown', pin: null };
-}
-
-function canonicalRosters(names) {
-  const rosters = { standard: [], reasoning: [], heavy: [], unknown: [] };
-  for (const name of names) {
-    const tier = canonicalAgentClass(name).tier;
-    if (!rosters[tier]) rosters[tier] = [];
-    rosters[tier].push(name);
-  }
-  for (const tier of Object.keys(rosters)) rosters[tier].sort();
-  return rosters;
-}
-
-// ---------------------------------------------------------------------------
-// CURSOR_RUNTIME_NATIVE — the frontmatter tier pin as a DECLARED
-// table entry, not merely as prose. Deleting the declaration reds this suite.
-// ---------------------------------------------------------------------------
-const CURSOR_RUNTIME_NATIVE = Object.freeze({
-  frontmatter_tier_pin:
-    'Cursor generated agent frontmatter pins canonical standard/reasoning/heavy model classes to unquoted grok-4.6[effort=medium/high/xhigh]; command cards omit per-call model dispatch.',
-  machine_global_recovery_rule:
-    'Cursor standalone CLI, App local, and App-started Cloud receive one machine-global alwaysApply Rule; no tool-use hook or Kaola hook subprocess is installed, so ordinary tool use adds zero context.',
-});
-
-// The canonical model tokens are the existing portable class markers, not a
-// second role roster. Derive each expected Cursor binding from agents/*.md so a
-// role addition or tier move is judged by the canonical frontmatter itself.
-const CURSOR_MODEL_CLASS_TIERS = Object.freeze({
-  sonnet: Object.freeze({ tier: 'standard', pin: 'grok-4.6[effort=medium]' }),
-  standard: Object.freeze({ tier: 'standard', pin: 'grok-4.6[effort=medium]' }),
-  opus: Object.freeze({ tier: 'reasoning', pin: 'grok-4.6[effort=high]' }),
-  reasoning: Object.freeze({ tier: 'reasoning', pin: 'grok-4.6[effort=high]' }),
-  fable: Object.freeze({ tier: 'heavy', pin: 'grok-4.6[effort=xhigh]' }),
-  heavy: Object.freeze({ tier: 'heavy', pin: 'grok-4.6[effort=xhigh]' }),
-});
-
-// #1018/#1055: CURSOR_MODEL_CLASS_PINS was a retired production map in
-// sync-cursor-edition.js that renderAgent never consulted — it delegates entirely to
+// #1018/#1055/#1062: renderAgent delegates entirely to
 // generate-agent-profiles.renderRuntimeRole('cursor', name), whose model line is driven by
-// templates/agents/runtime-capabilities.json's cursor adapter (capabilities.model +
-// capabilities.intent_mapping[tier]). Pin the SAME meaning (every tier, including
-// fable/heavy at xhigh) against that REAL chain: the adapter's own declared values, and the
-// actual rendered .cursor agent output for a fable-tier role. Do NOT read
+// templates/agents/runtime-capabilities.json's cursor adapter (capabilities.subagent_default).
+// Pin the SAME meaning — one binding for every role — against that REAL chain: the adapter's own
+// declared values and the actual rendered .cursor agent output. Do NOT read
 // sync-cursor-edition.js source text — a retired table there proves nothing about behavior.
 const CURSOR_ADAPTER_CAPS = JSON.parse(fs.readFileSync(
   path.join(REPO, 'templates', 'agents', 'runtime-capabilities.json'), 'utf8')).runtimes.cursor.capabilities;
 // Hardcoded independently of the adapter file so a mutation to the adapter's own
-// intent_mapping/model values is caught rather than compared against itself.
-const CURSOR_REAL_TIER_PINS_PIN = Object.freeze({
-  standard: 'grok-4.6[effort=medium]',
-  reasoning: 'grok-4.6[effort=high]',
-  heavy: 'grok-4.6[effort=xhigh]',
+// subagent_default values is caught rather than compared against itself.
+const CURSOR_REAL_BINDING_PIN = 'grok-4.6[effort=medium]';
+
+function canonicalAgentClass() {
+  const binding = (CURSOR_ADAPTER_CAPS.subagent_default) || {};
+  return {
+    model: binding.model,
+    pin: binding.model && binding.effort ? `${binding.model}[effort=${binding.effort}]` : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// CURSOR_RUNTIME_NATIVE — the frontmatter binding pin as a DECLARED
+// table entry, not merely as prose. Deleting the declaration reds this suite.
+// ---------------------------------------------------------------------------
+const CURSOR_RUNTIME_NATIVE = Object.freeze({
+  frontmatter_binding_pin:
+    'Cursor generated agent frontmatter pins the one subagent binding as unquoted grok-4.6[effort=medium]; command cards omit per-call model dispatch.',
+  machine_global_recovery_rule:
+    'Cursor standalone CLI, App local, and App-started Cloud receive one machine-global alwaysApply Rule; no tool-use hook or Kaola hook subprocess is installed, so ordinary tool use adds zero context.',
 });
 
 // ---------------------------------------------------------------------------
@@ -808,7 +778,6 @@ assert(treeLabel('github') === '.cursor'
 
 const canonAgents = trackedAgents();
 const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
-const canonRosters = canonicalRosters(canonAgents);
 
 // ---------------------------------------------------------------------------
 // G0 — THE SUBJECT UNDER TEST IS THE GENERATOR'S OUTPUT, derived from TRACKED
@@ -825,40 +794,33 @@ const canonRosters = canonicalRosters(canonAgents);
       + path.join(TREE_ROOT, '.cursor') + ' — nothing below can be tested.');
     process.exit(1);
   }
-  assert(canonAgents.length > 0 && canonCommandNames.length > 0,
-    'G0-roster: the canonical agents/ inventory and routing-registry command surfaces are both non-empty');
-  assert(canonAgents.includes('knowledge-lookup'),
-    'G0-roster: knowledge-lookup is in the canonical agents/*.md inventory');
-  assert(canonRosters.standard.length > 0,
-    'G0-roster: canonical sonnet/standard model class derives a non-empty standard roster');
-  assert(canonRosters.reasoning.length > 0,
-    'G0-roster: canonical opus/reasoning model class derives a non-empty reasoning roster');
-  assert(canonRosters.heavy.includes('planner') && canonRosters.heavy.includes('code-architect'),
-    'G0-roster: planner-class (planner, code-architect) is the heavy (fable) roster — heavy='
-    + JSON.stringify(canonRosters.heavy));
-  assert(canonRosters.unknown.length === 0,
-    'G0-roster: every canonical agent model belongs to the known sonnet/opus/fable classes — unknown='
-    + JSON.stringify(canonRosters.unknown));
-  assert(CURSOR_ADAPTER_CAPS.model === 'grok-4.6',
-    'G0-fable: templates/agents/runtime-capabilities.json runtimes.cursor.capabilities.model '
-    + 'must be grok-4.6 — got ' + JSON.stringify(CURSOR_ADAPTER_CAPS.model));
-  for (const tier of ['standard', 'reasoning', 'heavy']) {
-    const adapterPin = CURSOR_ADAPTER_CAPS.model + '[effort=' + CURSOR_ADAPTER_CAPS.intent_mapping[tier] + ']';
-    assert(adapterPin === CURSOR_REAL_TIER_PINS_PIN[tier],
-      'G0-fable: cursor adapter tier ' + tier + ' must resolve to ' + CURSOR_REAL_TIER_PINS_PIN[tier]
-      + ' — got ' + JSON.stringify(adapterPin));
+  assert(canonAgents.length === 7 && canonAgents.includes('knowledge-lookup'),
+    'G0-roster: the canonical agents/*.md inventory is exactly the seven-role catalog — got '
+    + JSON.stringify(canonAgents));
+  for (const retired of ['planner', 'code-architect', 'synthesizer', 'build-error-resolver',
+    'metric-optimizer', 'adversarial-verifier', 'security-reviewer']) {
+    assert(!canonAgents.includes(retired),
+      'G0-roster: retired role ' + retired + ' is absent from the canonical inventory');
   }
-  for (const role of ['planner', 'code-architect']) {
-    const rendered = reviewerGenerator.renderRuntimeRole('cursor', role).content;
-    const pinLine = 'model: ' + CURSOR_REAL_TIER_PINS_PIN.heavy;
+  assert(CURSOR_ADAPTER_CAPS.subagent_default
+      && CURSOR_ADAPTER_CAPS.subagent_default.model === 'grok-4.6'
+      && CURSOR_ADAPTER_CAPS.subagent_default.effort === 'medium',
+    'G0-binding: templates/agents/runtime-capabilities.json cursor subagent_default is '
+    + 'grok-4.6/medium — got ' + JSON.stringify(CURSOR_ADAPTER_CAPS.subagent_default));
+  assert(!CURSOR_ADAPTER_CAPS.intent_mapping,
+    'G0-binding: cursor adapter carries no retired intent_mapping tier axis');
+  {
+    const rendered = reviewerGenerator.renderRuntimeRole('cursor', 'implementer').content;
+    const pinLine = 'model: ' + CURSOR_REAL_BINDING_PIN;
     assert(rendered.split(/\r?\n/).includes(pinLine),
-      'G0-fable: renderRuntimeRole(cursor, ' + role + ') must render the real heavy/fable pin '
+      'G0-binding: renderRuntimeRole(cursor, implementer) renders the single binding pin '
       + JSON.stringify(pinLine) + ' — got ' + rendered.slice(0, 300));
   }
   for (const name of canonAgents) {
-    if (name === 'planner' || name === 'code-architect') continue;
-    assert(canonicalAgentClass(name).model !== 'fable',
-      'G0-roster: ' + name + ' must not change tier to fable — got ' + canonicalAgentClass(name).model);
+    const rendered = reviewerGenerator.renderRuntimeRole('cursor', name).content;
+    assert(rendered.split(/\r?\n/).includes('model: ' + CURSOR_REAL_BINDING_PIN),
+      'G0-binding: renderRuntimeRole(cursor, ' + name + ') renders the single binding pin '
+      + JSON.stringify(CURSOR_REAL_BINDING_PIN));
   }
 }
 
@@ -887,29 +849,20 @@ const canonRosters = canonicalRosters(canonAgents);
 }
 
 {
-  const fableCanonical = [
-    '---',
-    'name: planner',
-    'description: fable class probe',
-    'model: fable',
-    '---',
-    '',
-    'probe',
-    '',
-  ].join('\n');
-  let rendered = '';
-  let accepted = false;
+  // A retired role name must be rejected by the subject rather than silently rendering under the
+  // new seven-role catalog — fail closed, no invented roster entry.
+  let rejected = false;
   try {
-    rendered = syncMod.renderAgent(fableCanonical, 'planner');
-    accepted = true;
-  } catch (e) {
-    accepted = false;
-    rendered = String(e && e.message || e);
+    syncMod.renderAgent('probe', 'planner');
+  } catch (_) {
+    rejected = true;
   }
-  assert(accepted,
-    'G0-fable: renderAgent accepts fable (must not silently classify as standard) — ' + rendered);
-  assert(/model: grok-4\.6\[effort=xhigh\]/.test(rendered),
-    'G0-fable: renderAgent pins fable as grok-4.6[effort=xhigh] — got ' + rendered.slice(0, 200));
+  assert(rejected,
+    'G0-roster: renderAgent rejects the retired role planner (fail closed; #1062 catalog) — got no throw');
+  const rendered = syncMod.renderAgent('probe', 'implementer');
+  assert(/model: grok-4\.6\[effort=medium\]/.test(rendered),
+    'G0-binding: renderAgent pins every surviving role as grok-4.6[effort=medium] — got '
+    + rendered.slice(0, 200));
 }
 
 function agentRel(name, forge) {
@@ -954,12 +907,12 @@ function commandRel(name, forge) {
     assert(fm.name === name, 'G1[' + name + ']: frontmatter name is the role — got ' + JSON.stringify(fm.name));
     assert(typeof fm.description === 'string' && fm.description.trim().length > 0,
       'G1[' + name + ']: frontmatter has a non-empty description');
-    const canonical = canonicalAgentClass(name);
-    assert(canonical.tier !== 'unknown',
-      'G1[' + name + ']: canonical model class is known — got ' + JSON.stringify(canonical.model));
+    const canonical = canonicalAgentClass();
+    assert(canonical.pin === CURSOR_REAL_BINDING_PIN,
+      'G1[' + name + ']: adapter binding is known — got ' + JSON.stringify(canonical.model));
     const modelLines = raw.split(/\r?\n/).filter(line => /^\s*model\s*:/.test(line));
     assert(modelLines.length === 1 && modelLines[0] === 'model: ' + canonical.pin,
-      'G1[' + name + ']: model line is exactly the unquoted canonical tier pin '
+      'G1[' + name + ']: model line is exactly the unquoted single-binding pin '
       + JSON.stringify(canonical.pin) + ' — got ' + JSON.stringify(modelLines));
     assert(!/^\s*model\s*:\s*["']/m.test(raw),
       'G1[' + name + ']: model pin is not YAML-quoted (bracket syntax must remain raw)');
@@ -1048,8 +1001,8 @@ function commandRel(name, forge) {
     assert(/Cloud requires installation in its environment setup, a tested and user-saved Build, then a new top-level Agent in the same repository/i.test(content),
       'G2[' + name + ']: Cloud gap verdict follows confirmed setup, machine-plus-repository install, Save, and same-repository new parent');
     assert(/MUST omit the per-call `model`/i.test(content)
-      && /exact-tier requirement is a post-resolution assertion/i.test(content),
-      'G2[' + name + ']: named-profile tier owns model resolution even under exact-tier policy');
+      && /exact-binding requirement is a post-resolution assertion/i.test(content),
+      'G2[' + name + ']: named-profile binding owns model resolution even under exact-binding policy');
     assert(/App 3\.17\.21 and the saved Cloud Build each proved all 14 names plus exact `implementer`/i.test(content),
       'G2[' + name + ']: saved Cloud environment exposes all 14 Kaola types through its project catalog');
     assert(/send only fields it exposes/i.test(content),
@@ -1285,7 +1238,7 @@ function commandRel(name, forge) {
 }
 
 // G2-leak forbids vendor model slugs on command/rule cards except for the
-// explicit tier bindings inside the runtime-delegation block on next/finalize.
+// explicit subagent binding inside the runtime-delegation block on next/finalize.
 {
   const B2_MODEL_NOUN = /\b(Opus|Sonnet)\b/;
   const VENDOR_SLUG = /\bgrok-4\.\d\b|\bgrok-build\b/;
@@ -1314,7 +1267,7 @@ function commandRel(name, forge) {
     const inside = content.slice(start + DELEGATION_START.length, end);
     const outside = content.slice(0, start) + content.slice(end + DELEGATION_END.length);
     if (!VENDOR_SLUG.test(inside)) {
-      return { ok: false, reason: 'runtime-delegation block has no tier model slug' };
+      return { ok: false, reason: 'runtime-delegation block has no binding model slug' };
     }
     if (VENDOR_SLUG.test(outside)) {
       return { ok: false, reason: 'vendor model slug escaped the runtime-delegation block' };
@@ -1340,7 +1293,7 @@ function commandRel(name, forge) {
     if (!/\/agents\//.test(rel)) {
       const scope = vendorSlugScope(rel, content);
       assert(scope.ok,
-        'G2-leak: ' + rel + ': vendor model slugs are confined to the unique runtime-delegation tier block on next/finalize — '
+        'G2-leak: ' + rel + ': vendor model slugs are confined to the unique runtime-delegation binding block on next/finalize — '
         + scope.reason);
     }
     const lines = content.split('\n');
@@ -1363,7 +1316,7 @@ function commandRel(name, forge) {
     'G2: generated edition contains no duplicate compact-recovery Rule');
 
   // Mutation bite: an allowed command path is not itself a blanket exemption.
-  // The same scope check must reject a tier slug copied past the closing marker.
+  // The same scope check must reject a binding slug copied past the closing marker.
   for (const rel of TIER_GUIDANCE_COMMANDS) {
     if (!exists(rel)) {
       assert(false, 'G2-leak-mutation: ' + rel + ': generated consumer exists for the mutation oracle');
@@ -1377,17 +1330,17 @@ function commandRel(name, forge) {
 }
 
 // ---------------------------------------------------------------------------
-// G2-declaration: CURSOR_RUNTIME_NATIVE.frontmatter_tier_pin exists, names
-// the two canonical class pins, and the generated tree matches it.
+// G2-declaration: CURSOR_RUNTIME_NATIVE.frontmatter_binding_pin exists, names
+// the one subagent binding pin, and the generated tree matches it.
 // ---------------------------------------------------------------------------
 {
-  const KEY = 'frontmatter_tier_pin';
+  const KEY = 'frontmatter_binding_pin';
   const reason = CURSOR_RUNTIME_NATIVE[KEY];
   assert(typeof reason === 'string' && reason.trim().length >= 20,
     'G2-declaration: CURSOR_RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason');
-  assert(/frontmatter/i.test(reason) && /standard/i.test(reason) && /reasoning/i.test(reason)
-    && /medium/i.test(reason) && /high/i.test(reason) && /unquoted/i.test(reason) && /heavy|xhigh/i.test(reason),
-    'G2-declaration: the "' + KEY + '" reason must state unquoted standard/reasoning/heavy medium/high/xhigh frontmatter pins');
+  assert(/frontmatter/i.test(reason) && /grok-4\.6/i.test(reason)
+    && /medium/i.test(reason) && /unquoted/i.test(reason),
+    'G2-declaration: the "' + KEY + '" reason must state the unquoted grok-4.6[effort=medium] frontmatter pin');
   const resumeKey = 'machine_global_recovery_rule';
   const resumeReason = CURSOR_RUNTIME_NATIVE[resumeKey];
   assert(typeof resumeReason === 'string' && resumeReason.trim().length >= 20,
@@ -1400,9 +1353,9 @@ function commandRel(name, forge) {
     const rel = agentRel(name);
     if (!exists(rel)) continue;
     const { raw } = parseFrontmatter(read(rel));
-    const canonical = canonicalAgentClass(name);
+    const canonical = canonicalAgentClass();
     assert(raw.split(/\r?\n/).includes('model: ' + canonical.pin),
-      'G2-declaration: ' + rel + ' carries the canonical unquoted frontmatter pin '
+      'G2-declaration: ' + rel + ' carries the single unquoted frontmatter pin '
       + JSON.stringify(canonical.pin));
     assert(!/^\s*effort\s*:/m.test(raw) && !/^\s*reasoning_effort\s*:/m.test(raw),
       'G2-declaration: ' + rel + ' carries a separate effort field; effort belongs in the model ID');

@@ -260,7 +260,7 @@ assert(runItSection !== null && conceptPresent(runItSection, ADDITION_2.fragment
 // Existing rule this issue must not disturb: PASS invalidation by mutation, literally present in
 // the skeleton already (pinned as an exact string because it is EXISTING text this suite is not
 // asking anyone to author, not a new passage whose wording is this suite's own invention).
-assert(runItSection !== null && runItSection.includes('any mutation invalidates prior PASS evidence for changed bytes'),
+assert(runItSection !== null && runItSection.replace(/\s+/g, ' ').includes('any mutation invalidates prior PASS evidence for changed bytes'),
   'skeleton Run it section still carries the existing PASS-invalidation-by-mutation rule');
 
 // ---------------------------------------------------------------------------
@@ -289,7 +289,7 @@ for (const row of nextRows) {
   }
   assert(runIt !== null && conceptPresent(runIt, ADDITION_2.fragments),
     row.path + ': renders addition-2 proportional explain/verify sentence');
-  assert(runIt !== null && runIt.includes('any mutation invalidates prior PASS evidence for changed bytes'),
+  assert(runIt !== null && runIt.replace(/\s+/g, ' ').includes('any mutation invalidates prior PASS evidence for changed bytes'),
     row.path + ': renders the existing PASS-invalidation-by-mutation rule');
 }
 

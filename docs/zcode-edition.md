@@ -22,29 +22,25 @@ class does not justify a prompt-lifecycle gate.
 
 `node scripts/sync-zcode-edition.js --write` renders, for each forge:
 
-- `.zcode/agents/<role>.md`: native ZCode profile frontmatter and shared behavior identity.
 - `.zcode/commands/<name>.md`: the routing-registry command set with ZCode runtime guidance.
 - `.zcode/config.json`: an empty deterministic hook declaration object.
 - `.zcode/kaola-workflow/scripts/`: support-script launchers used by the command surface.
+
+ZCode is a native_only runtime under #1062: the render produces no `.zcode/agents/` role
+profiles. Older releases installed a Kaola agent roster there and synced it to user scope; the
+installer now sweeps only managed-marker retired files and never touches user-authored agents.
 
 Issue #1044 generates no ZCode prompt components and no hook shell. `--check` re-renders and
 byte-compares; `--refresh-present` updates only edition trees already present.
 
 ## Model and dispatch adapter
 
-The runtime-neutral intent classes render as:
+ZCode installs no Kaola role profiles, so there is no profile binding to pin: generated dispatch
+prose names no `subagent_type="<kaola role>"` target and invents no per-call model field. Earlier
+releases pinned `model: GLM-5.3` plus a `thoughtLevel` key on each rendered profile; that profile
+carrier retired with the role catalog under #1062.
 
-| intent | ZCode profile |
-|---|---|
-| standard | `model: GLM-5.3`, `thoughtLevel: high` |
-| reasoning | `model: GLM-5.3`, `thoughtLevel: max` |
-| heavy | `model: GLM-5.3`, `thoughtLevel: max` |
-
-The key is `thoughtLevel`, NOT reasoningEffort, and it is paired with an explicit `model`. The
-profile carries the model/thought default, so generated dispatch prose does not invent a per-call
-model field.
-
-ZCode documents automatic subagent selection and native `@<role>` dispatch. If a live session
+ZCode documents automatic subagent selection and native `@` dispatch. If a live session
 exposes an Agent call with named types, its schema wins. The public documentation does not publish
 one complete JSON call schema, so the adapter names no unverified call fields. `general-purpose`
 and read-only `Explore` remain truthful alternatives when the live catalog exposes them; neither
@@ -52,16 +48,17 @@ may impersonate a missing custody-bearing Kaola role. ZCode children cannot spaw
 
 ## Discovery and installation
 
-ZCode discovers subagent profiles at user scope. A project install stages profiles and commands
-under `<target>/.zcode/` and synchronizes profiles to `${ZCODE_HOME:-~/.zcode}/agents/`. The
-project profile directory is installer staging, not independent discovery evidence.
+ZCode discovers subagent profiles only at user scope. A project install stages commands under
+`<target>/.zcode/`; it deploys no Kaola agent profiles at any scope. On upgrade the installer
+sweeps retired managed-marker files from both `<target>/.zcode/agents/` staging and
+`${ZCODE_HOME:-~/.zcode}/agents/`, preserving every user-authored file.
 
 `./install-zcode.sh [--target DIR] [--forge=github|gitlab|gitea] [--global] [--regenerate]
 [--uninstall] [--no-scripts] [--yes]`
 
-- A project install deploys agents and commands, installs shared support scripts, and writes no
+- A project install deploys commands, installs shared support scripts, and writes no
   Kaola hook declaration.
-- `--global` deploys the user-scope agents and commands without writing an ambient repository or
+- `--global` deploys the user-scope commands without writing an ambient repository or
   executable hook mapping.
 - Upgrade strips receipt-owned legacy Kaola entries from both the user CLI config and project
   `.zcode/config.json`, while preserving foreign entries and keys.

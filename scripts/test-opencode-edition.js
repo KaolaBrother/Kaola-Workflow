@@ -58,25 +58,18 @@ const TREE_ROOT = (() => {
   // git owns. A33 below asserts that outcome on disk; this is the same statement, for the probe.
   return path.basename(abs) === '.git' ? path.dirname(abs) : REPO;
 })();
-// OpenCode's documented file-defined-agent discovery directory. Kept independent
-// of sync.OUT_AGENT_DIR so the test can disagree with a producer that chooses the
-// wrong native path.
+// OpenCode's documented file-defined-agent discovery directory. OpenCode is a native_only
+// runtime (#1062): the generator emits no `.opencode/agents/` tree at all, and every agent-dir
+// assertion below is an ABSENCE assertion — the directory is the surface the runtime must not
+// ship.
 const OPENCODE_NATIVE_AGENT_DIR = path.join(TREE_ROOT, '.opencode', 'agents');
 const OPENCODE_NATIVE_COMMAND_DIR = path.join(TREE_ROOT, '.opencode', 'commands');
-// Existing non-path assertions still need to inspect the baseline's rendered bytes
-// when the native directory is absent, otherwise the first readdir would abort and
-// hide every N* path failure below. This lens never decides acceptance: N1-N3/N6
-// independently require the plural path and reject the singular fallback.
-const observedAgentDir = () => fs.existsSync(OPENCODE_NATIVE_AGENT_DIR)
-  ? OPENCODE_NATIVE_AGENT_DIR : sync.OUT_AGENT_DIR;
 const observedCommandDir = () => fs.existsSync(OPENCODE_NATIVE_COMMAND_DIR)
   ? OPENCODE_NATIVE_COMMAND_DIR : sync.OUT_COMMAND_DIR;
 const observedRel = rel => {
   const text = String(rel);
-  const agentAdjusted = fs.existsSync(OPENCODE_NATIVE_AGENT_DIR)
-    ? text : text.replace(/^(\.opencode(?:-[^/]+)?)\/agents\//, '$1/agent/');
   return fs.existsSync(OPENCODE_NATIVE_COMMAND_DIR)
-    ? agentAdjusted : agentAdjusted.replace(/^(\.opencode(?:-[^/]+)?)\/commands\//, '$1/command/');
+    ? text : text.replace(/^(\.opencode(?:-[^/]+)?)\/commands\//, '$1/command/');
 };
 
 // The ONE expression that decides which root a repo-relative path belongs to. The labels come from
@@ -169,8 +162,8 @@ const treeWhere = TREE_ROOT === REPO ? '' : ' [tree root: ' + TREE_ROOT + ', not
 // ---------------------------------------------------------------------------
 // Self-provision: regenerate .opencode/ from tracked canonical sources before
 // any assertion that reads it. In a clean worktree .opencode/ is fully absent
-// (it is gitignored); sync --write populates agents, commands, hooks, AND the
-// plugin from templates/opencode/plugins/. This makes the suite green from
+// (it is gitignored); sync --write populates commands only — this runtime installs
+// no Kaola role profiles, hooks, or plugin (#1062). This makes the suite green from
 // tracked sources alone with no manual seeding.
 // ---------------------------------------------------------------------------
 {
@@ -262,27 +255,32 @@ function parseFrontmatterKeys(content) {
 // that, never "parity with canonical", which is the claim they cannot support.
 // ---------------------------------------------------------------------------
 {
-  const provisioned = fs.existsSync(observedAgentDir()) && fs.existsSync(observedCommandDir());
+  const provisioned = fs.existsSync(observedCommandDir());
   assert(provisioned,
-    'A0: the generated tree exists after sync --write — an ABSENT tree must fail loudly here rather '
-    + 'than let every readdir-driven loop below iterate over nothing');
+    'A0: the generated command tree exists after sync --write — an ABSENT tree must fail loudly '
+    + 'here rather than let every readdir-driven loop below iterate over nothing');
   if (!provisioned) {
     // Stop here rather than let the first readdir throw: a stack trace three assertions later is a
     // worse report than one line naming the cause, and every count after it would be meaningless.
-    console.error('FATAL: sync --write reported success but produced no tree at '
-      + observedAgentDir() + ' / ' + observedCommandDir() + ' — nothing below can be tested.');
+    console.error('FATAL: sync --write reported success but produced no command tree at '
+      + observedCommandDir() + ' — nothing below can be tested.');
     process.exit(1);
   }
 }
 
 // ---------------------------------------------------------------------------
-// A1/A2/A3: agents — every canonical agent is generated, model-agnostic, and
-// permission-mapped from its canonical tool set.
+// A1/A2/A3 — NATIVE-ONLY AGENT ABSENCE (#1062). OpenCode installs no Kaola role profiles by
+// design: the canonical agents/ inventory still exists (it feeds the binding runtimes), and the
+// live property is that NONE of it is rendered onto this runtime — no `.opencode/agents/` tree,
+// no profile for any canonical or retired name, no subagent-mode frontmatter anywhere in the
+// generated tree.
 // ---------------------------------------------------------------------------
 const canonAgents = sync.listCanonAgents();
-const genAgentFiles = fs.readdirSync(observedAgentDir()).filter(f => f.endsWith('.md'));
-assert(new Set(genAgentFiles.map(f => f.slice(0, -3))).size === canonAgents.length,
-  'A1: .opencode/agents/ count matches canonical agent count (' + canonAgents.length + ')');
+const genAgentFiles = fs.existsSync(OPENCODE_NATIVE_AGENT_DIR)
+  ? fs.readdirSync(OPENCODE_NATIVE_AGENT_DIR).filter(f => f.endsWith('.md')) : [];
+assert(genAgentFiles.length === 0,
+  'A1 (#1062): sync --write renders NO .opencode/agents/*.md — OpenCode installs no Kaola role '
+  + 'profiles — found ' + JSON.stringify(genAgentFiles));
 // A1-roster: the count above compares a just-regenerated tree against the roster that generated
 // it, so it holds however wrong that roster is. The LIVE property is that the generator's roster
 // predicate sees the whole TRACKED canonical inventory — read here independently of the generator.
@@ -299,120 +297,36 @@ assert(new Set(genAgentFiles.map(f => f.slice(0, -3))).size === canonAgents.leng
 }
 
 for (const name of canonAgents) {
-  const rel = '.opencode/agents/' + name + '.md';
-  assert(exists(rel), 'A2[' + name + ']: generated agent exists');
-  const content = read(rel);
-  const keys = parseFrontmatterKeys(content);
-  assert(keys.includes('description'), 'A2[' + name + ']: frontmatter has description');
-  const fmText = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)[1];
-  assert(/^\s*mode:\s*subagent\s*$/m.test(fmText), 'A2[' + name + ']: mode is subagent');
-  assert(!/^\s*model\s*:/.test(fmText),
-    'A2[' + name + ']: NO model field (model-agnostic; tier resolved by opencode.json)');
-  // read-only permission mapping mirrors the generator's logic.
-  const canon = read('agents/' + name + '.md');
-  const tools = sync.parseTools(sync.parseFrontmatter(canon).fm.tools);
-  const toolSet = new Set(tools.map(t => t.toLowerCase()));
-  const readOnly = !toolSet.has('write') && !toolSet.has('edit');
-  if (readOnly) {
-    assert(/edits*\n*\s*edit:\s*deny/.test(content) || /edit:\s*deny/.test(fmText),
-      'A3[' + name + ']: read-only agent denies edit');
-  }
+  assert(!fs.existsSync(path.join(OPENCODE_NATIVE_AGENT_DIR, name + '.md')),
+    'A2[#1062 ' + name + ']: no opencode profile is rendered for this canonical role');
 }
+// The singular carrier retired with the same mechanism; it must not reappear either.
+assert(!fs.existsSync(path.join(TREE_ROOT, '.opencode', 'agent')),
+  'A2 (#1062/#1033): sync --write produces no .opencode/agent/ singular carrier either');
 
-// A3-domain: the `if (readOnly)` branch above fires for ZERO roles today (all 14 canonical roles
-// grant Write), so on its own it is a conditional that reads like coverage and asserts nothing —
-// and a tool-grant parse that broke and returned nothing would look exactly the same. Assert the
-// partition instead of skipping it: recompute it here straight from the tracked frontmatter, with
-// no generator function in the loop, so the emptiness is a stated fact and the moment a read-only
-// role exists the branch above starts enforcing for real.
+// A3 (#1062): the permission/tool-mapping machinery retired WITH the profiles it mapped — no
+// file in the generated tree may carry an agent frontmatter at all. The scan is over every
+// generated .md, not just agents/, so a profile smuggled into commands/ surfaces here too.
 {
-  const grantsWrite = name => {
-    const line = (read('agents/' + name + '.md').match(/^tools:\s*(.+)$/m) || [])[1] || '';
-    const t = line.replace(/[[\]"']/g, ' ').split(/[,\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
-    return t.includes('write') || t.includes('edit');
+  const treeMd = [];
+  const walkMd = dir => {
+    if (!fs.existsSync(dir)) return;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walkMd(p);
+      else if (e.name.endsWith('.md')) treeMd.push(p);
+    }
   };
-  const independentReadOnly = canonAgents.filter(n => !grantsWrite(n)).sort();
-  const generatorReadOnly = canonAgents.filter(n => {
-    const set = new Set(sync.parseTools(sync.parseFrontmatter(read('agents/' + n + '.md')).fm.tools).map(t => t.toLowerCase()));
-    return !set.has('write') && !set.has('edit');
-  }).sort();
-  assert(canonAgents.length > 0,
-    'A3-domain: the canonical role set is non-empty (the A2/A3 loop above has something to enforce over)');
-  assert(JSON.stringify(generatorReadOnly) === JSON.stringify(independentReadOnly),
-    'A3-domain: the generator\'s tool-grant parse agrees with an independent read of the canonical '
-    + '`tools:` frontmatter — generator=' + JSON.stringify(generatorReadOnly)
-    + ', independent=' + JSON.stringify(independentReadOnly)
-    + (independentReadOnly.length === 0
-      ? ' (empty is the CORRECT answer for this roster and is asserted, not skipped)' : ''));
-  for (const name of independentReadOnly) {
-    const fmText = (read('.opencode/agents/' + name + '.md').match(/^---\r?\n([\s\S]*?)\r?\n---/) || [])[1] || '';
-    assert(/edit:\s*deny/.test(fmText),
-      'A3-domain[' + name + ']: read-only role denies edit in its generated permission block');
-  }
-}
-
-// ---------------------------------------------------------------------------
-// A3-bash: the LIVE tool-restriction axis, asserted in BOTH directions.
-//
-// The edit axis above governs an empty set — every canonical role grants Write — so A3/A3-domain
-// now carry exactly one property: that the tool-grant parse still agrees with the frontmatter, and
-// that its emptiness is a stated fact rather than a silent skip. They no longer witness the
-// generator emitting anything, because there is nothing for them to emit.
-//
-// The BASH axis is the one that ships. The generator writes `permission: bash: deny` for every
-// canonical role that withholds Bash, and nothing asserted that until now: a regression in
-// deniedPermissionAxes would ship those roles WITH shell access and every assertion in this file
-// would stay green.
-//
-// BOTH directions, because a one-sided check passes a predicate that denies everything — deny-all
-// is as wrong as deny-nothing and is the easier mistake to make. The expected partition is derived
-// from the canonical frontmatter with a parser local to this file, so a bug in the generator's own
-// parse cannot define the answer it is checked against, and a fourth restricted role is covered the
-// day it is added rather than the day someone remembers to list it.
-// ---------------------------------------------------------------------------
-{
-  const grants = (name, tool) => {
-    const line = (read('agents/' + name + '.md').match(/^tools:\s*(.+)$/m) || [])[1] || '';
-    return line.replace(/[[\]"']/g, ' ').split(/[,\s]+/)
-      .map(s => s.trim().toLowerCase()).filter(Boolean).includes(tool);
-  };
-  const deniesBash = name => {
-    const fmText = (read('.opencode/agents/' + name + '.md').match(/^---\r?\n([\s\S]*?)\r?\n---/) || [])[1] || '';
-    return /^\s*bash:\s*deny\s*$/m.test(fmText);
-  };
-  const restricted = canonAgents.filter(n => !grants(n, 'bash')).sort();
-  const unrestricted = canonAgents.filter(n => grants(n, 'bash')).sort();
-
-  // Non-vacuity on BOTH sides: with either partition empty this degrades to a one-directional
-  // check, which is the failure mode it exists to avoid — so the emptiness would have to be said
-  // out loud rather than inferred from a loop that quietly ran zero times.
-  assert(restricted.length > 0,
-    'A3-bash: at least one canonical role withholds Bash — an empty restricted set makes the '
-    + 'deny-side assertion vacuous and the guard one-directional');
-  assert(unrestricted.length > 0,
-    'A3-bash: at least one canonical role grants Bash — an empty unrestricted set makes the '
-    + 'must-NOT-deny assertion vacuous, which is what a deny-everything predicate needs to pass');
-
-  // The generator's own predicate is checked against the independent partition, which also gives
-  // deniedPermissionAxes a consumer.
-  const generatorRestricted = canonAgents.filter(n => {
-    const set = new Set(sync.parseTools(sync.parseFrontmatter(read('agents/' + n + '.md')).fm.tools).map(t => t.toLowerCase()));
-    return sync.deniedPermissionAxes(set).includes('bash');
-  }).sort();
-  assert(JSON.stringify(generatorRestricted) === JSON.stringify(restricted),
-    'A3-bash: deniedPermissionAxes() names the same Bash-withholding roles as the canonical '
-    + 'frontmatter read independently — generator=' + JSON.stringify(generatorRestricted)
-    + ', canonical=' + JSON.stringify(restricted));
-
-  for (const name of restricted) {
-    assert(deniesBash(name),
-      'A3-bash[' + name + ']: canonical withholds Bash, so the generated agent MUST carry '
-      + '`bash: deny` — without it this role ships with shell access on opencode');
-  }
-  for (const name of unrestricted) {
-    assert(!deniesBash(name),
-      'A3-bash[' + name + ']: canonical GRANTS Bash, so the generated agent must NOT deny it — a '
-      + 'predicate that denies every role would satisfy the deny-side assertions above and fail here');
+  walkMd(path.join(TREE_ROOT, '.opencode'));
+  assert(treeMd.length > 0,
+    'A3 (#1062): the generated tree has at least one .md to scan — an empty scan would make the '
+    + 'subagent-frontmatter check below vacuous');
+  for (const p of treeMd) {
+    const fmText = (fs.readFileSync(p, 'utf8').match(/^---\r?\n([\s\S]*?)\r?\n---/) || [])[1] || '';
+    assert(!/^\s*mode:\s*subagent\s*$/m.test(fmText),
+      'A3 (#1062): ' + path.relative(TREE_ROOT, p) + ' declares no mode: subagent frontmatter');
+    assert(!/^\s*bash:\s*deny\s*$/m.test(fmText) && !/^\s*edit:\s*deny\s*$/m.test(fmText),
+      'A3 (#1062): ' + path.relative(TREE_ROOT, p) + ' carries no retired per-role permission block');
   }
 }
 
@@ -442,10 +356,20 @@ for (const file of canonCommands) {
   const content = read(rel);
   assert(!/model="\{/.test(content),
     'A5[' + file + ']: no install-time model="{...}" placeholders remain');
+  // A5-native-only (#1062): the delegation block is the native_only form — no Kaola role roster,
+  // no single-binding line, no dispatch card naming a Kaola role.
+  assert(!content.includes('**Roles:**'),
+    'A5[' + file + '] (#1062): no **Roles:** roster — this runtime ships no Kaola profiles');
+  assert(!content.includes('**Subagent default:**'),
+    'A5[' + file + '] (#1062): no **Subagent default:** binding line — binding adapters only');
+  for (const role of canonAgents) {
+    assert(!content.includes('subagent_type="' + role + '"'),
+      'A5[' + file + '] (#1062): no subagent_type="' + role + '" dispatch card');
+  }
 }
 
 // ---------------------------------------------------------------------------
-// A14: model-prose consistency. opencode centralizes effort in opencode.json (no per-call
+// A14: model-prose consistency. opencode inherits the session model (no per-call
 // model=), so EVERY surviving `model=` mention must be the "do NOT / Never pass" guidance.
 //
 // SCOPE, stated exactly. The universal over `model=` residue is NOT here — it is
@@ -465,118 +389,21 @@ for (const file of canonCommands) {
 }
 
 // ---------------------------------------------------------------------------
-// A6: render DETERMINISM — the tree `sync --write` produced in a separate process equals what
-// renderAgent produces here. That is the whole claim: this suite regenerated the tree moments ago,
-// so this can never witness a disagreement with CANONICAL, only a renderer that is not a pure
-// function of its input (a clock, a Set iteration order, an env read).
-//
-// A6-body is the armed half — see A0. The generated agent must still CARRY the canonical role
-// contract, checked against tracked bytes with no generator function in the loop.
+// A6-agent / A6-body / A6-reviewer — DELETED WITH THEIR SUBJECT (#1062). OpenCode renders no
+// role profiles, so there is no generated agent body for a canonical contract to survive into,
+// no reviewer profile to carry a re-stamped resolved_profile_hash, and no renderAgent to be
+// deterministic. The render-determinism claim survives on the command surface below.
 // ---------------------------------------------------------------------------
-for (const name of canonAgents) {
-  const expected = sync.renderAgent(read('agents/' + name + '.md'), name);
-  assert(read('.opencode/agents/' + name + '.md') === expected,
-    'A6[' + name + ']: renderAgent is deterministic across the --write subprocess and this process');
-}
 
-// A6-body: every non-empty line of the canonical role contract survives into the generated agent.
-// The generator declares agent bodies VERBATIM apart from the Claude script-path rewrite, and that
-// rewrite is a no-op on every current agent — measured: zero canonical body lines fail to survive,
-// so the exemption set is EMPTY and any miss is a real transform, not a known one. A new body
-// rewrite reds here on purpose: "one rule, one wording" makes a runtime divergence something to
-// declare, and this is where an undeclared one surfaces.
-{
-  const bodyOf = text => {
-    const m = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
-    return m ? text.slice(m[0].length) : text;
-  };
-  let checkedLines = 0;
-  for (const name of canonAgents) {
-    const canonLines = reviewerGenerator.behaviorIdentityFromCore(read('agents/' + name + '.md'))
-      .core.split('\n').map(s => s.trim()).filter(Boolean);
-    const generated = read('.opencode/agents/' + name + '.md');
-    const missing = canonLines.filter(line => !generated.includes(line));
-    checkedLines += canonLines.length;
-    assert(canonLines.length > 0,
-      'A6-body[' + name + ']: the canonical role contract has a non-empty body — an empty one would '
-      + 'make the survival check below vacuous');
-    assert(missing.length === 0,
-      'A6-body[' + name + ']: every canonical contract line survives into the generated agent — '
-      + missing.length + ' of ' + canonLines.length + ' missing, first: '
-      + JSON.stringify(String(missing[0]).slice(0, 120)));
-  }
-  assert(checkedLines > 0,
-    'A6-body: the survival check covered at least one canonical contract line (scan bite)');
-}
-
-// Reviewer contracts retain deterministic normalized behavior identity through the OpenCode
-// transform. This is a contract/profile assertion only: foundation-model findings and prose remain
-// stochastic and are never promised to match across runtimes.
-for (const role of reviewerGenerator.ROLES) {
-  const canonical = reviewerGenerator.behaviorIdentityFromCore(read('agents/' + role + '.md'));
-  const opencodeText = read('.opencode/agents/' + role + '.md');
-  // behaviorIdentityFromCore THROWS on a body whose behavior-core markers are gone. Measured: a
-  // generator that drops the reviewer body aborts this file mid-run with a stack trace, so every
-  // assertion after this point is never reached and the failure count is a lie. Catch it into a
-  // clean FAIL — the same shape as the identity assertions below, which is what a reader trusts.
-  let opencode = null;
-  try { opencode = reviewerGenerator.behaviorIdentityFromCore(opencodeText); } catch (e) {
-    assert(false, `A6-reviewer[${role}]: the generated agent still carries an extractable behavior core — ${e.message}`);
-    opencode = { role: null, behavior_contract_version: null, behavior_contract_hash: null, core: null };
-  }
-  assert(opencode.role === canonical.role
-    && opencode.behavior_contract_version === canonical.behavior_contract_version
-    && opencode.behavior_contract_hash === canonical.behavior_contract_hash,
-  `A6-reviewer[${role}]: OpenCode agent retains normalized reviewer behavior identity`);
-  assert(opencode.core === canonical.core,
-    `A6-reviewer[${role}]: OpenCode transform preserves reviewer behavior-core bytes`);
-  // #708: the opencode reviewer profile carries its OWN re-stamped resolved_profile_hash (over the
-  // transformed opencode bytes), so the stamp binds the profile that actually ships. The runtime
-  // resolver that once read it back retired with the node executor — this suite is its consumer now. The hash must be present, valid (verifyResolved
-  // ProfileHash throws on mismatch), and DIFFERENT from the Claude hash (the bytes differ). Without
-  // it, every review-gated adaptive plan on opencode hard-refuses at open-next with
-  // review_profile_identity_unavailable.
-  const ocHash = (opencodeText.match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
-  assert(ocHash && /^[0-9a-f]{64}$/.test(ocHash),
-    `A6-reviewer[${role}]: OpenCode reviewer carries a valid resolved_profile_hash`);
-  // Bare, this THROWS on a bad hash and kills the run — a verdict nobody counted. The kimi twin
-  // already catches it into an assertion; this is that shape.
-  let ocHashVerifies = true;
-  try { reviewerGenerator.verifyResolvedProfileHash(opencodeText); } catch (_) { ocHashVerifies = false; }
-  assert(ocHashVerifies,
-    `A6-reviewer[${role}]: resolved_profile_hash verifies over the opencode bytes (zeroed-self sha256)`);
-  const clHash = (read('agents/' + role + '.md').match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
-  assert(ocHash !== clHash,
-    `A6-reviewer[${role}]: OpenCode resolved_profile_hash is re-stamped over opencode bytes (differs from Claude)`);
-  // The behavior_contract_version/hash in the opencode frontmatter must match the canonical source
-  // (runtime-neutral identity, not bytes — so it survives the frontmatter transform).
-  assert(new RegExp('^behavior_contract_version:\\s*' + canonical.behavior_contract_version + '\\s*$', 'm').test(opencodeText),
-    `A6-reviewer[${role}]: OpenCode frontmatter carries behavior_contract_version`);
-  assert(new RegExp('^behavior_contract_hash:\\s*' + canonical.behavior_contract_hash + '\\s*$', 'm').test(opencodeText),
-    `A6-reviewer[${role}]: OpenCode frontmatter carries behavior_contract_hash`);
-  assert(!/(?:identical|same|byte-identical)[^\n]{0,80}(?:model output|findings|verdict|review output)/i.test(opencodeText),
-    `A6-reviewer[${role}]: OpenCode agent makes no stochastic-output-identity claim`);
-}
-
-// #708 END-TO-END, RETIRED WITH ITS CONSUMER. The reviewer profile hash was re-stamped over the
-// opencode bytes so `resolveReviewerProfileIdentity` could bind a schema-2 review receipt to the
-// exact profile that produced it, and this block drove that resolver against the installed tree.
-// The resolver lived in the node executor and went with it, along with the review receipts it
-// bound. The re-stamped hash itself is still generated and still checked above (A6-reviewer:
-// present, valid under verifyResolvedProfileHash, and distinct from the Claude hash); what is no
-// longer covered is any CONSUMER resolving that hash back to a profile, because there is none.
-
-// A13: the retired roles must not be regenerated onto this runtime. `workflow-planner` carried the
-// mapTier effort-tier guidance through `opencodeAgentSuffix` — the one agent whose opencode body
-// was not verbatim; the planner role is retired, so both the role and its suffix are gone and the
-// remaining claim is that EVERY agent body is now verbatim.
-for (const retired of ['contractor.md', 'workflow-planner.md']) {
+// A13: no role — canonical OR historical — is regenerated onto this runtime. `workflow-planner`
+// carried the mapTier effort-tier guidance through `opencodeAgentSuffix`; the planner role, the
+// tier mechanism, and now the whole profile surface are gone (#1062).
+for (const retired of ['contractor.md', 'workflow-planner.md', 'planner.md', 'code-architect.md',
+    'synthesizer.md', 'build-error-resolver.md', 'metric-optimizer.md',
+    'adversarial-verifier.md', 'security-reviewer.md', 'docs-lookup.md', 'issue-scout.md']) {
   assert(!fs.existsSync(path.join(TREE_ROOT, '.opencode', 'agents', retired)),
-    'A13: the retired role ' + retired + ' must not ship on the opencode edition');
+    'A13 (#1062): the retired role ' + retired + ' must not ship on the opencode edition');
 }
-assert(sync.opencodeAgentSuffix('implementer') === ''
-  && sync.opencodeAgentSuffix('code-reviewer') === '',
-  'A13: opencodeAgentSuffix is empty for every surviving role — no agent body is rewritten');
 // Same reading as the agent loop above: render DETERMINISM, not parity with canonical. Command
 // bodies carry several DECLARED transforms (model-dispatch strip, placeholder strip, runtime
 // rewrite, script-path rewrite), so a blanket line-survival rule of the A6-body kind would be a
@@ -644,8 +471,11 @@ for (const file of canonCommands) {
   assert(!PROVENANCE_BAN.test('AC7'), 'A25-neg: PROVENANCE_BAN must not flag grey-zone label AC7');
   assert(!PROVENANCE_BAN.test('M4'),  'A25-neg: PROVENANCE_BAN must not flag grey-zone label M4');
 
-  // Surface scan: generated opencode agent + command mirrors must be provenance-free.
-  const ocAgentFiles = fs.readdirSync(observedAgentDir())
+  // Surface scan: generated opencode command mirrors must be provenance-free. The agent mirror
+  // retired with the native_only catalog (#1062); the dir is guarded, not assumed absent here —
+  // A1 owns its absence.
+  const ocAgentFiles = (fs.existsSync(OPENCODE_NATIVE_AGENT_DIR)
+    ? fs.readdirSync(OPENCODE_NATIVE_AGENT_DIR) : [])
     .filter(f => f.endsWith('.md'))
     .map(f => '.opencode/agents/' + f);
   const ocCommandFiles = fs.readdirSync(observedCommandDir())
@@ -666,9 +496,9 @@ for (const file of canonCommands) {
 
 // ---------------------------------------------------------------------------
 // A7/A8: opencode.json — valid JSONC, schema-pinned, default_agent "build", and
-// byte-for-byte parity with the generator. The generator DEFAULTS to pinning
-// NOTHING, so on a fresh install BOTH tiers inherit the model the user is
-// already using in opencode (no provider is hard-coded); pins are opt-in.
+// byte-for-byte parity with the generator. There is ONE render now (#1062): it pins
+// NOTHING, so a fresh install inherits the model the user is already using in
+// opencode (no provider is hard-coded).
 // ---------------------------------------------------------------------------
 assert(exists('opencode.json'), 'A7: opencode.json exists');
 let cfg;
@@ -685,121 +515,38 @@ assert(cfg.default_agent === 'build', 'A7: default_agent is "build"');
 assert(read('opencode.json') === sync.renderOpencodeJson(),
   'A7: committed opencode.json is byte-equal to renderOpencodeJson() (regenerate via --write-config)');
 
-function parseRendered(opts) {
-  return JSON.parse(stripJsonc(sync.renderOpencodeJson(opts)));
-}
-
-// A8 (default): no pins ⇒ BOTH tiers inherit the user default — no top-level
-// "model", no "agent" block. No provider is hard-coded on a fresh install.
-const def = parseRendered({ standardModel: '', reasoningModel: '' });
-assert(def.model === undefined, 'A8: default config pins NO top-level "model" (inherits user default)');
-assert(def.agent === undefined, 'A8: default config pins NO "agent" overrides (reasoning inherits user default)');
-
-// A8 (opt-in pin): pinning both tiers yields a provider/model string + an agent
-// block covering EXACTLY the runtime-neutral reasoning/heavy intent roles.  The
-// OpenCode config is a consumer of behavior intent, never of Claude's rendered
-// model token: a valid Claude-only adapter evolution must not move this roster.
-const reasoning = sync.reasoningRoles();
-const behaviorContracts = reviewerGenerator.loadBehaviorContracts(REPO);
-const behaviorReasoning = Object.entries(behaviorContracts.roles)
-  .filter(([, contract]) => contract.intent_class === 'reasoning' || contract.intent_class === 'heavy')
-  .map(([role]) => role)
-  .sort();
-assert(JSON.stringify(reasoning) === JSON.stringify(behaviorReasoning),
-  'A8-intent (#1033/R4): reasoningRoles() derives exactly from behavior-contract intent_class — expected ['
-  + behaviorReasoning.join(', ') + '], got [' + reasoning.join(', ') + ']');
-const pinned = parseRendered({ standardModel: 'test/std', reasoningModel: 'test/reas' });
-assert(pinned.model === 'test/std', 'A8: pinned standard tier carries the given provider/model');
-const pinnedReasoning = Object.keys(pinned.agent || {}).sort();
-assert(JSON.stringify(pinnedReasoning) === JSON.stringify(reasoning),
-  'A8: pinned reasoning overrides cover EXACTLY the behavior-contract reasoning roles (' + reasoning.join(', ') + '); got [' + pinnedReasoning.join(', ') + ']');
-for (const role of reasoning) {
-  assert(pinned.agent[role].model === 'test/reas',
-    'A8[' + role + ']: pinned reasoning tier carries the given provider/model');
-}
-
-// Adapter-isolation mutation.  This is a VALID Claude-only change: the
-// runtime-neutral `standard` intent is remapped to a Claude token that the
-// adapter schema already accepts.  Generate the resulting Claude profiles,
-// expose those bytes to the real OpenCode subject through its filesystem input,
-// and require both reasoningRoles() and renderNeutralConfig() to stay unchanged.
-// The subject is never mocked; only its isolated canonical-file environment is.
+// A8 (#1062): the render takes NO options now — there is one config and it pins nothing. The
+// tier axis (`standardModel`/`reasoningModel` opts, `reasoningRoles()`, per-role `agent.<role>`
+// overrides, `intent_class` rosters) retired with the runtime profiles it configured. The live
+// assertions are the absence claims: no top-level `model`, no `agent` block, no role name.
 {
-  const adapters = reviewerGenerator.loadRuntimeAdapters(REPO);
-  const mutatedAdapters = JSON.parse(JSON.stringify(adapters));
-  mutatedAdapters.runtimes.claude.capabilities.intent_mapping.standard = 'opus';
-  reviewerGenerator.validateRuntimeAdapters(mutatedAdapters);
-  const mutatedClaudeProfiles = new Map(reviewerGenerator
-    .renderProfiles(behaviorContracts, mutatedAdapters)
-    .filter(profile => profile.variant === 'claude')
-    .map(profile => [path.basename(profile.path), profile.content]));
-  const baselineClaudeProfiles = new Map(reviewerGenerator
-    .renderProfiles(behaviorContracts, adapters)
-    .filter(profile => profile.variant === 'claude')
-    .map(profile => [path.basename(profile.path), profile.content]));
-  const changedClaudeRoles = [...mutatedClaudeProfiles]
-    .filter(([name, content]) => baselineClaudeProfiles.get(name) !== content)
-    .map(([name]) => name);
-  assert(changedClaudeRoles.length > 0,
-    'A8-adapter-isolation (#1033/R4) anti-vacuity: valid Claude-only mutation changes rendered Claude profiles');
-
-  const originalReadFileSync = fs.readFileSync;
-  let mutatedReasoning;
-  let mutatedConfig;
-  try {
-    fs.readFileSync = function isolatedClaudeProfileRead(file, options) {
-      const absolute = typeof file === 'string' ? path.resolve(file) : '';
-      const name = path.basename(absolute);
-      if (path.dirname(absolute) === path.resolve(sync.CANON_AGENTS_DIR)
-          && mutatedClaudeProfiles.has(name)) {
-        const content = mutatedClaudeProfiles.get(name);
-        return typeof options === 'string' || (options && options.encoding)
-          ? content : Buffer.from(content);
-      }
-      return originalReadFileSync.apply(fs, arguments);
-    };
-    mutatedReasoning = sync.reasoningRoles();
-    mutatedConfig = sync.renderNeutralConfig({
-      standardModel: 'test/std',
-      reasoningModel: 'test/reas',
-    });
-  } finally {
-    fs.readFileSync = originalReadFileSync;
+  const def = JSON.parse(stripJsonc(sync.renderOpencodeJson()));
+  assert(def.model === undefined, 'A8: default config pins NO top-level "model" (inherits user default)');
+  assert(def.agent === undefined,
+    'A8 (#1062): the config declares NO "agent" block — no Kaola role profiles exist to configure');
+  assert(sync.renderOpencodeJson() === sync.renderNeutralConfig(),
+    'A8 (#1062): renderOpencodeJson() is the neutral config — one render, no option surface');
+  const cfgText = sync.renderOpencodeJson();
+  for (const role of canonAgents) {
+    assert(!cfgText.includes('"' + role + '"'),
+      'A8 (#1062): no canonical role name appears in the emitted config — got "' + role + '"');
   }
-  assert(JSON.stringify(mutatedReasoning) === JSON.stringify(behaviorReasoning),
-    'A8-adapter-isolation (#1033/R4): valid Claude-only adapter mutation cannot change OpenCode reasoningRoles() — expected ['
-    + behaviorReasoning.join(', ') + '], got [' + mutatedReasoning.join(', ') + ']');
-  assert(mutatedConfig === sync.renderNeutralConfig({
-    standardModel: 'test/std',
-    reasoningModel: 'test/reas',
-  }),
-  'A8-adapter-isolation (#1033/R4): renderNeutralConfig() is byte-invariant under a valid Claude-only adapter mutation');
 }
 
-// A12 / S1-contract / A12-options — DELETED WITH THEIR MECHANISM. Per-role effort tiering is
-// removed, so every subject these three bands read is gone:
-//
-//   A12            pinned `topTierRoles()` / `standardTierRoles()` — the role→tier split itself.
-//   S1-contract    pinned `effortForProvider` / `contractForProvider` — the provider→API-contract
-//                  resolver and its per-contract effort payloads.
-//   A12-options    pinned `renderOpencodeJson({inheritModel})`'s `agent.<role>.options` payload per
-//                  contract, that the two tiers stayed distinct, that no `variant`/`variants` key
-//                  survived beside it, and the subagent-criterion half.
-//
-// With them go their two private helpers, `stableJson` and `deepHasKey`, which had no other caller
-// once A26 went, and the two prior deletion notes about the `variant`-era assertions those bands
-// replaced — a note about a deletion inside a band that is itself deleted documents nothing.
+// A12 / S1-contract / A12-options / A8-opt-in-pin / A8-adapter-isolation — DELETED WITH THEIR
+// MECHANISM. Per-role effort tiering and the tier-axis config options are removed, so every
+// subject those bands read is gone: the role→tier split, the provider→API-contract resolver, the
+// `agent.<role>.options` payloads, the `reasoningRoles()` intent roster, and the Claude-adapter
+// isolation mutation that defended it.
 //
 // WHY, IN ONE LINE, SO A LATER READER DOES NOT RE-ADD THEM: opencode already hands a dispatched
-// subagent the parent session's effort whenever the role pins no model, measured end to end. The
-// tiers were an override of correct native behaviour, not a repair, and configuration that does
-// nothing but reads as live is what hid the original defect for as long as it existed.
+// subagent the parent session's model and effort — children inherit the session — and a runtime
+// that installs no Kaola role profiles has no role to pin. Configuration that does nothing but
+// reads as live is what hid the original defect for as long as it existed.
 //
 // NOT LOST WITH THEM — asserted elsewhere, on machinery that survives:
-//   · the reasoning-role SET is still pinned, by A8, against `reasoningRoles()` through the opt-in
-//     model-pin path (`renderNeutralConfig`), which is a different feature and stays;
-//   · the default render still pins NO top-level `model` and NO `agent` block — A8 again, and that
-//     assertion is now the whole of what a default install emits;
+//   · the emitted config still pins NO top-level `model` and NO `agent` block — A8 above, now the
+//     whole of what a default install emits;
 //   · the plugin's surviving hooks and its single-export loader contract — A29.
 
 // ---------------------------------------------------------------------------
@@ -963,17 +710,20 @@ for (const target of emittedCommandTargets) {
 }
 
 // ---------------------------------------------------------------------------
-// A10: hooks — every runtime-neutral hook script is deployed under
-// .opencode/hooks/ byte-identical to canonical hooks/, so the adapter plugin and
-// the canonical edition share ONE source of truth (no logic drift).
+// A10 (#1062): hooks — the opencode edition emits NO hook scripts (HOOK_SCRIPTS is the empty
+// set and the generated tree carries no .sh under .opencode/hooks/). The directory stays
+// generator-owned only so --write can retire stale installed copies — the sweep below is what
+// protects that, not a deploy.
 // ---------------------------------------------------------------------------
-for (const script of sync.HOOK_SCRIPTS) {
-  const rel = '.opencode/hooks/' + script;
-  assert(exists(rel), 'A10[' + script + ']: hook deployed under .opencode/hooks/');
-  if (exists(rel)) {
-    assert(read(rel) === read('hooks/' + script),
-      'A10[' + script + ']: byte-identical to canonical hooks/' + script);
-  }
+assert(JSON.stringify(sync.HOOK_SCRIPTS) === '[]',
+  'A10 (#1062): the opencode hook deploy set is empty — a hook rejoining it must be declared, '
+  + 'not slipped in (got ' + JSON.stringify(sync.HOOK_SCRIPTS) + ')');
+{
+  const hooksDir = path.join(TREE_ROOT, '.opencode', 'hooks');
+  const shipped = fs.existsSync(hooksDir)
+    ? fs.readdirSync(hooksDir).filter(f => f.endsWith('.sh')) : [];
+  assert(shipped.length === 0,
+    'A10 (#1062): the generated tree ships no .opencode/hooks/*.sh — found ' + JSON.stringify(shipped));
 }
 
 // ---------------------------------------------------------------------------
@@ -1051,25 +801,35 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
 {
   const { spawnSync } = require('child_process');
   const probe = path.join(observedCommandDir(), 'kaola-workflow-__kw_retired_probe.md');
+  // #1062: the agents dir is itself a retired surface — a stale role profile a previous release
+  // generated must be flagged and pruned by the same mechanism.
+  const agentProbe = path.join(OPENCODE_NATIVE_AGENT_DIR, '__kw_retired_agent_probe.md');
   // spawn-class: environment
   const runSync = (flag) => spawnSync(process.execPath,
     [path.join(REPO, 'scripts', 'sync-opencode-edition.js'), flag], { encoding: 'utf8' });
   try {
     fs.writeFileSync(probe, '# transient retired-surface probe — must not persist\n');
+    fs.mkdirSync(OPENCODE_NATIVE_AGENT_DIR, { recursive: true });
+    fs.writeFileSync(agentProbe, '# transient retired-agent probe — must not persist\n');
     // (a) --check flags the retired surface: non-zero exit, names the offender.
     const chk = runSync('--check');
     assert(chk.status !== 0,
       'A-prune(a): --check must exit NON-ZERO when a retired *.md surface is present in .opencode/commands/');
     assert(((chk.stdout || '') + (chk.stderr || '')).includes('__kw_retired_probe'),
       'A-prune(a): --check output must name the retired surface');
+    assert(((chk.stdout || '') + (chk.stderr || '')).includes('__kw_retired_agent_probe'),
+      'A-prune(a) (#1062): --check output must name the retired agent surface too');
     // (b) --write prunes it: the file is gone and --check returns to 0.
     runSync('--write');
     assert(!fs.existsSync(probe),
       'A-prune(b): --write must REMOVE the retired surface (idempotent mirror)');
+    assert(!fs.existsSync(agentProbe),
+      'A-prune(b) (#1062): --write must REMOVE the retired agent surface');
     assert(runSync('--check').status === 0,
       'A-prune(b): --check exits 0 after the retired surface is pruned');
   } finally {
     try { fs.unlinkSync(probe); } catch (_) { /* best-effort cleanup */ }
+    try { fs.unlinkSync(agentProbe); } catch (_) { /* best-effort cleanup */ }
   }
 }
 
@@ -1270,19 +1030,24 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     const deployed = readdirSync(cmdDir(r.dest)).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
     assert(JSON.stringify(deployed) === JSON.stringify([...ADAPTIVE_CORE].sort()),
       'P1 (#F5): default install deploys EXACTLY the adaptive-core set and nothing else — got ' + JSON.stringify(deployed));
-    // P1 (#F9): the NON-command surfaces actually land at the project layout opencode resolves
-    // (<project>/.opencode/{agents,plugins,hooks}) — not just commands. A missing surface fails here
-    // instead of vacuously passing (the leak block below previously `continue`d on a missing dir).
+    // P1 (#1062): the install deploys NO role profiles, plugin, or hooks — the commands are the
+    // whole shipped surface now. A stray agent file landing here fails, not skips.
+    const destAgentDir = path.join(r.dest, '.opencode', 'agents');
+    const destAgents = existsSync(destAgentDir)
+      ? readdirSync(destAgentDir).filter(f => f.endsWith('.md')) : [];
+    assert(destAgents.length === 0,
+      'P1 (#1062): project install deploys NO .opencode/agents/*.md — got ' + JSON.stringify(destAgents));
     for (const a of sync.listCanonAgents()) {
-      assert(existsSync(path.join(r.dest, '.opencode', 'agents', a + '.md')),
-        'P1 (#F9): project install deploys agent ' + a + ' under .opencode/agents/');
+      assert(!existsSync(path.join(destAgentDir, a + '.md')),
+        'P1 (#1062): project install deploys no profile for canonical role ' + a);
     }
     assert(!existsSync(path.join(r.dest, '.opencode', 'plugins', 'kaola-workflow-hooks.js')),
       'P1 (#F9): project install deploys no compact plugin');
-    for (const h of sync.HOOK_SCRIPTS) {
-      assert(existsSync(path.join(r.dest, '.opencode', 'hooks', h)),
-        'P1 (#F9): project install deploys hook ' + h + ' under .opencode/hooks/');
-    }
+    const destHooksDir = path.join(r.dest, '.opencode', 'hooks');
+    const destHooks = existsSync(destHooksDir)
+      ? readdirSync(destHooksDir).filter(f => f.endsWith('.sh')) : [];
+    assert(destHooks.length === 0,
+      'P1 (#1062): project install deploys NO .opencode/hooks/*.sh — got ' + JSON.stringify(destHooks));
     assert(!existsSync(r.configPath),
       'P1: default install must not create ~/.config/kaola-workflow/config.json (user-owned; the\n      workflow has no install-time configuration)');
     clean(r);
@@ -1473,15 +1238,17 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     assert(!sync.HOOK_SCRIPTS.includes(RETIRED_HOOK),
       'P8: the planted hook is not in the deploy set — a name that is deployed is not evidence '
       + 'about any sweep (deploy set: ' + JSON.stringify(sync.HOOK_SCRIPTS) + ')');
+    fs.mkdirSync(hooksDir, { recursive: true });
     fs.writeFileSync(path.join(hooksDir, RETIRED_HOOK),
       '#!/usr/bin/env bash\n# shipped by an older release\n');
     const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
     assert(r2.ok, 'P8: reinstall over a live install exits 0 (got status ' + r2.status
       + (r2.stderr ? ' — ' + String(r2.stderr).split('\n')[0] : '') + ')');
-    // The sweep is only evidence alongside a real deploy.
-    const missingHooks = sync.HOOK_SCRIPTS.filter(h => !existsSync(path.join(hooksDir, h)));
-    assert(missingHooks.length === 0,
-      'P8: the same install still deploys every current hook — missing: ' + missingHooks.join(', '));
+    // The sweep is only evidence alongside a real deploy — and the deploy set is now empty of
+    // hooks entirely (#1062): the commands still landing is the control.
+    const missingCmds = ADAPTIVE_CORE.filter(n => !hasCmd(r1.dest, n));
+    assert(missingCmds.length === 0,
+      'P8: the same install still deploys the whole command set — missing: ' + missingCmds.join(', '));
     assert(!existsSync(path.join(hooksDir, RETIRED_HOOK)),
       'P8 (#977): a hook retired in an earlier release is removed on reinstall — '
       + RETIRED_HOOK + ' is still on disk after it');
@@ -1532,10 +1299,11 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     const crypto = require('crypto');
     const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
     const AGENT_MANIFEST = '.kaola-workflow-agent-manifest';
+    // #1062: the canonical catalog is exactly seven roles, and this runtime ships none of them —
+    // every agent assertion below is about legacy cleanup and ownership, not deployment.
     const expectedRoles = [
-      'adversarial-verifier', 'build-error-resolver', 'code-architect', 'code-explorer',
-      'code-reviewer', 'doc-updater', 'implementer', 'investigator', 'knowledge-lookup',
-      'metric-optimizer', 'planner', 'security-reviewer', 'synthesizer', 'tdd-guide',
+      'code-explorer', 'code-reviewer', 'doc-updater', 'implementer', 'investigator',
+      'knowledge-lookup', 'tdd-guide',
     ];
     const expectedCommands = ['kaola-workflow-finalize', 'workflow-init', 'workflow-next'];
     const mdNames = dir => existsSync(dir)
@@ -1603,15 +1371,12 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     const generatedCommandsSingular = path.join(TREE_ROOT, '.opencode', 'command');
     const canonicalRoles = fs.readdirSync(path.join(REPO, 'agents'))
       .filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
-    assert(canonicalRoles.length === 14 && sameNames(canonicalRoles, expectedRoles),
-      'N0 (#1033): the acceptance roster is exactly the 14 canonical roles — got '
+    assert(canonicalRoles.length === 7 && sameNames(canonicalRoles, expectedRoles),
+      'N0 (#1033/#1062): the acceptance roster is exactly the 7 canonical roles — got '
       + JSON.stringify(canonicalRoles));
-    assert(path.resolve(sync.OUT_AGENT_DIR) === path.resolve(generatedPlural),
-      'N1 (#1033): sync.OUT_AGENT_DIR names the OpenCode-native plural path .opencode/agents/; got '
-      + sync.OUT_AGENT_DIR);
-    assert(sameNames(mdNames(generatedPlural), expectedRoles),
-      'N2 (#1033): sync --write generates EXACTLY 14 native profiles under .opencode/agents/ — got '
-      + JSON.stringify(mdNames(generatedPlural)));
+    assert(mdNames(generatedPlural).length === 0,
+      'N1/N2 (#1033/#1062): sync --write generates NO native profiles under .opencode/agents/ — '
+      + 'OpenCode installs no Kaola role profiles; got ' + JSON.stringify(mdNames(generatedPlural)));
     assert(!existsSync(generatedSingular),
       'N3 (#1033): sync --write retires the non-native generated .opencode/agent/ directory');
     assert(path.resolve(sync.OUT_COMMAND_DIR) === path.resolve(generatedCommandsPlural),
@@ -1675,18 +1440,19 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
         ? readdirSync(path.join(layoutRoot, 'hooks')).filter(f => f.endsWith('.sh')).sort() : [];
       assert(sameNames(hooks, sync.HOOK_SCRIPTS),
         label + ': the existing hooks/ surface remains exactly the generated hook set');
-      assert(existsSync(path.join(configRoot, 'opencode.json')),
-        label + ': opencode.json remains at the existing project/config root');
+      assert(!existsSync(path.join(configRoot, 'opencode.json')),
+        label + ' (#1062): the installer never creates opencode.json — it is user-owned and '
+        + 'nothing seeded one in this fixture');
     };
 
-    // Fresh project install: plural discovery path, exact roster, no singular residue,
+    // Fresh project install: no role profiles at all, no singular residue,
     // and all non-agent surfaces remain where OpenCode already resolves them.
     {
       const r = runInstaller([]);
       const plural = path.join(r.dest, '.opencode', 'agents');
       assert(r.ok, 'N6-project (#1033): fresh project install exits 0 (got ' + r.status + ')');
-      assert(sameNames(mdNames(plural), expectedRoles),
-        'N6-project (#1033): project install deploys exactly 14 profiles to .opencode/agents/ — got '
+      assert(mdNames(plural).length === 0,
+        'N6-project (#1033/#1062): project install deploys NO profiles to .opencode/agents/ — got '
         + JSON.stringify(mdNames(plural)));
       assert(!existsSync(path.join(r.dest, '.opencode', 'agent')),
         'N6-project (#1033): fresh project install creates no singular .opencode/agent/ directory');
@@ -1707,8 +1473,8 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     {
       const r = runGlobalInstaller([]);
       assert(r.ok, 'N6-global (#1033): fresh global install exits 0 (got ' + r.status + ')');
-      assert(sameNames(mdNames(path.join(r.cfg, 'agents')), expectedRoles),
-        'N6-global (#1033): global install deploys exactly 14 profiles to <config>/agents/ — got '
+      assert(mdNames(path.join(r.cfg, 'agents')).length === 0,
+        'N6-global (#1033/#1062): global install deploys NO profiles to <config>/agents/ — got '
         + JSON.stringify(mdNames(path.join(r.cfg, 'agents'))));
       assert(!existsSync(path.join(r.cfg, 'agent')),
         'N6-global (#1033): fresh global install creates no singular <config>/agent/ directory');
@@ -1801,11 +1567,22 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
           : runInstaller([], { home, dest, timeout: 10000 });
         const after = carrierWorldFingerprint(roots);
         const label = 'N10-carrier-' + scope + '-' + carrier;
-        assert(!result.error && !result.ok,
-          label + ' (#1033/R2): install refuses the non-regular native ownership carrier without blocking (status '
-          + result.status + ', error ' + (result.error && result.error.code) + ')');
-        assert(after === before,
-          label + ' (#1033/R2): refusal happens before any agent, plugin, command, hook, config, or runtime mutation');
+        if (carrier === 'profile-directory') {
+          // #1062: with no profile deploy left, an unrecorded directory at a role name is simply
+          // user topology — preserved, never refused: nothing writes to agents/ to collide with it.
+          assert(result.ok,
+            label + ' (#1033/#1062): install completes over an unrecorded role-named directory — '
+            + 'nothing deploys to agents/ to collide with it (status ' + result.status + ')');
+          assert(fs.lstatSync(profile).isDirectory()
+            && textEquals(path.join(profile, 'OWNER_SENTINEL'), 'owner profile directory\n'),
+            label + ' (#1033/#1062): the unrecorded role-named directory is preserved byte-intact');
+        } else {
+          assert(!result.error && !result.ok,
+            label + ' (#1033/R2): install refuses the non-regular native ownership carrier without blocking (status '
+            + result.status + ', error ' + (result.error && result.error.code) + ')');
+          assert(after === before,
+            label + ' (#1033/R2): refusal happens before any agent, plugin, command, hook, config, or runtime mutation');
+        }
         try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
         try { rmSync(dest, { recursive: true, force: true }); } catch (_) {}
         try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
@@ -1958,8 +1735,8 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
         'N8-project (#1033): install preserves a manifest-recorded singular profile whose bytes were user-edited');
       assert(readFileSync(path.join(singular, 'my-own-helper.md'), 'utf8') === userBody,
         'N8-project (#1033): install preserves an unrelated singular user profile byte-intact');
-      assert(sameNames(mdNames(path.join(dest, '.opencode', 'agents')), expectedRoles),
-        'N8-project (#1033): legacy cleanup still converges the plural native roster');
+      assert(mdNames(path.join(dest, '.opencode', 'agents')).length === 0,
+        'N8-project (#1033/#1062): legacy cleanup deploys no plural native roster — nothing ships');
       clean(r);
     }
 
@@ -2048,8 +1825,8 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       assert(readFileSync(path.join(singular, 'legacy-edited.md'), 'utf8') === editedBody
         && readFileSync(path.join(singular, 'my-own-helper.md'), 'utf8') === userBody,
         'N8-global (#1033): global migration preserves edited and unrelated singular profiles byte-intact');
-      assert(sameNames(mdNames(path.join(cfg, 'agents')), expectedRoles),
-        'N8-global (#1033): legacy global cleanup still converges the plural native roster');
+      assert(mdNames(path.join(cfg, 'agents')).length === 0,
+        'N8-global (#1033/#1062): legacy global cleanup deploys no plural native roster — nothing ships');
       try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
       try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
     }
@@ -2078,7 +1855,8 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     }
 
     // An unmanaged same-name profile in the NEW native directory is not stale
-    // Kaola output.  Refuse before overwrite or partial deployment.
+    // Kaola output — and under #1062 there is no profile deploy left for it to
+    // collide with. It is user data: preserved byte-intact, marker-forged or not.
     {
       const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-collision-home-'));
       const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-collision-dest-'));
@@ -2087,13 +1865,13 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       fs.mkdirSync(plural, { recursive: true });
       fs.writeFileSync(collision, forgedManagedBody);
       const r = runInstaller([], { home, dest });
-      assert(!r.ok,
-        'N10-project (#1033/R2): unmanaged same-name plural profile makes project install fail closed even when it forges the managed marker');
-      assert(readFileSync(collision, 'utf8') === forgedManagedBody,
-        'N10-project (#1033/R2): collision refusal preserves the marker-forging unmanaged profile byte-intact');
-      assert(!existsSync(path.join(plural, AGENT_MANIFEST))
+      assert(r.ok,
+        'N10-project (#1033/#1062): an unmanaged role-named profile is user data, not a collision '
+        + '— nothing deploys to agents/ for it to collide with (status ' + r.status + ')');
+      assert(readFileSync(collision, 'utf8') === forgedManagedBody
         && mdNames(plural).length === 1,
-        'N10-project (#1033): collision refusal writes no manifest and deploys no other profiles');
+        'N10-project (#1033/#1062): the marker-forging unmanaged profile is preserved byte-intact '
+        + 'and nothing joins it');
       try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
       try { rmSync(dest, { recursive: true, force: true }); } catch (_) {}
     }
@@ -2106,20 +1884,19 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       fs.mkdirSync(plural, { recursive: true });
       fs.writeFileSync(collision, forgedManagedBody);
       const r = runGlobalInstaller([], { home, cfg });
-      assert(!r.ok,
-        'N10-global (#1033/R2): unmanaged same-name plural profile makes global install fail closed even when it forges the managed marker');
-      assert(readFileSync(collision, 'utf8') === forgedManagedBody
-        && !existsSync(path.join(plural, AGENT_MANIFEST))
+      assert(r.ok
+        && readFileSync(collision, 'utf8') === forgedManagedBody
         && mdNames(plural).length === 1,
-        'N10-global (#1033/R2): global collision refusal preserves the marker-forging file and deploys no other profiles');
+        'N10-global (#1033/#1062): the marker-forging unmanaged global profile is preserved '
+        + 'byte-intact and nothing joins it (status ' + r.status + ')');
       try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
       try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
     }
 
     // A symlink is owner-selected topology, not a same-name file Kaola may
     // adopt because its target currently happens to equal generated bytes.
-    // Exercise the hash-equal near miss: a name/hash-only implementation accepts
-    // it, while an lstat ownership boundary refuses before deploying anything.
+    // Under #1062 nothing deploys beside it either way — the link and its
+    // external target are both preserved, and the install completes.
     {
       const home = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-symlink-home-'));
       const dest = mkdtempSync(path.join(os.tmpdir(), 'opencode-native-symlink-dest-'));
@@ -2127,18 +1904,19 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       const plural = path.join(dest, '.opencode', 'agents');
       const collision = path.join(plural, 'code-explorer.md');
       const target = path.join(outside, 'owner-profile.md');
-      const targetBytes = fs.readFileSync(path.join(generatedPlural, 'code-explorer.md'));
+      const targetBytes = Buffer.from('# Owner profile bytes\n');
       fs.mkdirSync(plural, { recursive: true });
       fs.writeFileSync(target, targetBytes);
       fs.symlinkSync(target, collision);
       const r = runInstaller([], { home, dest });
-      assert(!r.ok,
-        'N10-symlink-project (#1033/R2): same-name plural profile symlink fails closed even when its target bytes equal generated output');
+      assert(r.ok,
+        'N10-symlink-project (#1033/#1062): install completes over a same-name profile symlink — '
+        + 'nothing deploys to agents/ to collide with it (status ' + r.status + ')');
       assert(existsSync(collision) && fs.lstatSync(collision).isSymbolicLink()
         && fs.readFileSync(target).equals(targetBytes)
-        && !existsSync(path.join(plural, AGENT_MANIFEST))
         && mdNames(plural).length === 1,
-        'N10-symlink-project (#1033/R2): refusal preserves symlink topology and external target bytes and deploys no other profiles');
+        'N10-symlink-project (#1033/#1062): symlink topology and external target bytes are '
+        + 'preserved and nothing joins the dir');
       try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
       try { rmSync(dest, { recursive: true, force: true }); } catch (_) {}
       try { rmSync(outside, { recursive: true, force: true }); } catch (_) {}
@@ -2151,18 +1929,17 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       const plural = path.join(cfg, 'agents');
       const collision = path.join(plural, 'code-explorer.md');
       const target = path.join(outside, 'owner-profile.md');
-      const targetBytes = fs.readFileSync(path.join(generatedPlural, 'code-explorer.md'));
+      const targetBytes = Buffer.from('# Owner profile bytes\n');
       fs.mkdirSync(plural, { recursive: true });
       fs.writeFileSync(target, targetBytes);
       fs.symlinkSync(target, collision);
       const r = runGlobalInstaller([], { home, cfg });
-      assert(!r.ok,
-        'N10-symlink-global (#1033/R2): global same-name profile symlink fails closed even when its target bytes equal generated output');
-      assert(existsSync(collision) && fs.lstatSync(collision).isSymbolicLink()
+      assert(r.ok
+        && existsSync(collision) && fs.lstatSync(collision).isSymbolicLink()
         && fs.readFileSync(target).equals(targetBytes)
-        && !existsSync(path.join(plural, AGENT_MANIFEST))
         && mdNames(plural).length === 1,
-        'N10-symlink-global (#1033/R2): global refusal preserves symlink topology and external target bytes and deploys no other profiles');
+        'N10-symlink-global (#1033/#1062): global install preserves the same-name symlink and its '
+        + 'external target and deploys nothing beside it (status ' + r.status + ')');
       try { rmSync(home, { recursive: true, force: true }); } catch (_) {}
       try { rmSync(cfg, { recursive: true, force: true }); } catch (_) {}
       try { rmSync(outside, { recursive: true, force: true }); } catch (_) {}
@@ -2171,17 +1948,29 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     // Manifest ownership is conditional on the recorded hash still matching.
     // A user edit leaves the generated marker in place, so this catches a
     // marker-only fallback that undoes the manifest check during uninstall.
+    // #1062: no fresh deploy seeds the profile anymore, so the fixture plants a
+    // previous-release manifest + file itself — the recorded bytes stand in for
+    // what an older install wrote, and the edit breaks the hash.
+    const deployedBody = '---\nkaola-workflow-managed-agent: true\n---\n# Previously deployed Kaola profile\n';
+    const plantRecordedProfile = plural => {
+      fs.mkdirSync(plural, { recursive: true });
+      fs.writeFileSync(path.join(plural, 'code-reviewer.md'), deployedBody);
+      fs.writeFileSync(path.join(plural, AGENT_MANIFEST),
+        'code-reviewer.md\t' + sha256(Buffer.from(deployedBody)) + '\n');
+      return path.join(plural, 'code-reviewer.md');
+    };
     {
       const r = runInstaller([]);
       const plural = path.join(r.dest, '.opencode', 'agents');
-      const profile = path.join(plural, 'code-reviewer.md');
-      const edited = readFileSync(profile, 'utf8') + '\nUSER_EDIT_SENTINEL\n';
+      const profile = plantRecordedProfile(plural);
+      const edited = deployedBody + '\nUSER_EDIT_SENTINEL\n';
       assert(edited.includes('kaola-workflow-managed-agent: true'),
         'N10-modified-project (#1033/R2) anti-vacuity: edited current profile retains the managed marker');
       fs.writeFileSync(profile, edited);
       const reinstall = runInstaller([], { home: r.home, dest: r.dest });
-      assert(!reinstall.ok && readFileSync(profile, 'utf8') === edited,
-        'N10-modified-project (#1033/R2): reinstall fails closed and preserves a hash-mismatched current plural profile byte-intact');
+      assert(reinstall.ok && readFileSync(profile, 'utf8') === edited,
+        'N10-modified-project (#1033/#1062): reinstall completes and preserves a hash-mismatched '
+        + 'manifest-recorded profile byte-intact — an edited file is user data, not stale output');
       // spawn-class: environment
       const uninstall = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r.dest, '--yes'],
         { env: Object.assign({}, process.env, { HOME: r.home }), encoding: 'utf8' });
@@ -2194,12 +1983,13 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     {
       const r = runGlobalInstaller([]);
       const plural = path.join(r.cfg, 'agents');
-      const profile = path.join(plural, 'code-reviewer.md');
-      const edited = readFileSync(profile, 'utf8') + '\nUSER_EDIT_SENTINEL\n';
+      const profile = plantRecordedProfile(plural);
+      const edited = deployedBody + '\nUSER_EDIT_SENTINEL\n';
       fs.writeFileSync(profile, edited);
       const reinstall = runGlobalInstaller([], { home: r.home, cfg: r.cfg });
-      assert(!reinstall.ok && readFileSync(profile, 'utf8') === edited,
-        'N10-modified-global (#1033/R2): global reinstall fails closed and preserves a hash-mismatched current plural profile byte-intact');
+      assert(reinstall.ok && readFileSync(profile, 'utf8') === edited,
+        'N10-modified-global (#1033/#1062): global reinstall completes and preserves a '
+        + 'hash-mismatched manifest-recorded profile byte-intact');
       // spawn-class: environment
       const uninstall = spawnSync('bash', [INSTALLER, '--global', '--uninstall', '--yes'], {
         env: Object.assign({}, process.env, { HOME: r.home, OPENCODE_CONFIG_DIR: r.cfg }),
@@ -2215,35 +2005,38 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     // Uninstall removes every hash-proven plural profile and exact current
     // command blob, preserves unrelated profiles, and treats familiar names in
     // retired singular carriers as user data unless their bytes prove ownership.
+    // #1062: the seed install deploys no agents, so the fixture plants the
+    // previous-release manifest + recorded profile itself — that pair is what
+    // "a Kaola install once lived here" means now.
     {
       const r = runInstaller([]);
       const plural = path.join(r.dest, '.opencode', 'agents');
       const singular = path.join(r.dest, '.opencode', 'agent');
       const pluralCommands = path.join(r.dest, '.opencode', 'commands');
       const singularCommands = path.join(r.dest, '.opencode', 'command');
-      assert(sameNames(mdNames(plural), expectedRoles),
-        'N11-project (#1033) anti-vacuity: seed install created the exact plural roster before uninstall');
       assert(sameNames(mdNames(pluralCommands), expectedCommands),
         'N11-command-project (#1033) anti-vacuity: seed install created the exact plural command roster before uninstall');
       fs.mkdirSync(plural, { recursive: true });
       fs.mkdirSync(singular, { recursive: true });
-      fs.mkdirSync(pluralCommands, { recursive: true });
       fs.mkdirSync(singularCommands, { recursive: true });
+      const recordedProfile = path.join(plural, 'code-explorer.md');
+      fs.writeFileSync(recordedProfile, deployedBody);
+      fs.writeFileSync(path.join(plural, AGENT_MANIFEST),
+        'code-explorer.md\t' + sha256(Buffer.from(deployedBody)) + '\n');
       fs.writeFileSync(path.join(plural, 'my-own-helper.md'), userBody);
       fs.writeFileSync(path.join(singular, 'my-old-helper.md'), userBody);
       fs.writeFileSync(path.join(pluralCommands, 'my-own-command.md'), '# My unrelated command\n');
       fs.writeFileSync(path.join(singularCommands, 'workflow-next.md'),
         unprovenLegacyCommandBody('workflow-next.md'));
       fs.writeFileSync(path.join(singularCommands, 'my-old-command.md'), '# My old unrelated command\n');
+      fs.writeFileSync(path.join(r.dest, 'opencode.json'), '# user-owned config placeholder\n');
       // spawn-class: environment
       const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r.dest, '--yes'],
         { env: Object.assign({}, process.env, { HOME: r.home }), encoding: 'utf8' });
-      const canonicalLeft = expectedRoles.filter(role => existsSync(path.join(plural, role + '.md')));
       assert(r.ok && ru.status === 0,
         'N11-project (#1033): native project install then uninstall both exit 0');
-      assert(canonicalLeft.length === 0 && !existsSync(path.join(plural, AGENT_MANIFEST)),
-        'N11-project (#1033): uninstall removes all manifest-owned plural profiles and its manifest — left '
-        + JSON.stringify(canonicalLeft));
+      assert(!existsSync(recordedProfile) && !existsSync(path.join(plural, AGENT_MANIFEST)),
+        'N11-project (#1033): uninstall removes the manifest-owned plural profile and its manifest');
       assert(readFileSync(path.join(plural, 'my-own-helper.md'), 'utf8') === userBody
         && readFileSync(path.join(singular, 'my-old-helper.md'), 'utf8') === userBody,
         'N11-project (#1033): uninstall preserves unrelated plural and singular user profiles byte-intact');
@@ -2269,31 +2062,31 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       const singular = path.join(r.cfg, 'agent');
       const pluralCommands = path.join(r.cfg, 'commands');
       const singularCommands = path.join(r.cfg, 'command');
-      assert(sameNames(mdNames(plural), expectedRoles),
-        'N11-global (#1033) anti-vacuity: seed install created the exact global plural roster before uninstall');
       assert(sameNames(mdNames(pluralCommands), expectedCommands),
         'N11-command-global (#1033) anti-vacuity: seed install created the exact global plural command roster before uninstall');
       fs.mkdirSync(plural, { recursive: true });
       fs.mkdirSync(singular, { recursive: true });
-      fs.mkdirSync(pluralCommands, { recursive: true });
       fs.mkdirSync(singularCommands, { recursive: true });
+      const recordedProfile = path.join(plural, 'code-explorer.md');
+      fs.writeFileSync(recordedProfile, deployedBody);
+      fs.writeFileSync(path.join(plural, AGENT_MANIFEST),
+        'code-explorer.md\t' + sha256(Buffer.from(deployedBody)) + '\n');
       fs.writeFileSync(path.join(plural, 'my-own-helper.md'), userBody);
       fs.writeFileSync(path.join(singular, 'my-old-helper.md'), userBody);
       fs.writeFileSync(path.join(pluralCommands, 'my-own-command.md'), '# My unrelated command\n');
       fs.writeFileSync(path.join(singularCommands, 'workflow-next.md'),
         unprovenLegacyCommandBody('workflow-next.md'));
       fs.writeFileSync(path.join(singularCommands, 'my-old-command.md'), '# My old unrelated command\n');
+      fs.writeFileSync(path.join(r.cfg, 'opencode.json'), '# user-owned config placeholder\n');
       // spawn-class: environment
       const ru = spawnSync('bash', [INSTALLER, '--global', '--uninstall', '--yes'], {
         env: Object.assign({}, process.env, { HOME: r.home, OPENCODE_CONFIG_DIR: r.cfg }),
         encoding: 'utf8',
       });
-      const canonicalLeft = expectedRoles.filter(role => existsSync(path.join(plural, role + '.md')));
       assert(r.ok && ru.status === 0,
         'N11-global (#1033): native global install then uninstall both exit 0');
-      assert(canonicalLeft.length === 0 && !existsSync(path.join(plural, AGENT_MANIFEST)),
-        'N11-global (#1033): uninstall removes all owned global plural profiles and its manifest — left '
-        + JSON.stringify(canonicalLeft));
+      assert(!existsSync(recordedProfile) && !existsSync(path.join(plural, AGENT_MANIFEST)),
+        'N11-global (#1033): uninstall removes the manifest-owned global plural profile and its manifest');
       assert(readFileSync(path.join(plural, 'my-own-helper.md'), 'utf8') === userBody
         && readFileSync(path.join(singular, 'my-old-helper.md'), 'utf8') === userBody,
         'N11-global (#1033): uninstall preserves unrelated global plural and singular profiles byte-intact');
@@ -2315,8 +2108,10 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     // On the unfixed baseline, stop cleanly after the complete native-path contract
     // has run. The remainder of this legacy suite contains direct reads of the new
     // directories and cannot add path evidence when those directories do not exist.
-    if (!existsSync(generatedPlural) || !existsSync(generatedCommandsPlural)) {
-      console.error('\nopencode-edition test FAILED: native plural layout absent after '
+    // #1062: only the command tree is generated — the agents dir is absent BY DESIGN now, so it
+    // cannot be part of this guard.
+    if (!existsSync(generatedCommandsPlural)) {
+      console.error('\nopencode-edition test FAILED: native plural command layout absent after '
         + failed + ' recorded failure(s), ' + passed + ' passed.' + driftVerdict);
       process.exit(1);
     }
@@ -2324,27 +2119,31 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
   {
     const r = runGlobalInstaller([]);
     assert(r.ok, 'G1: --global install exits 0 (got status ' + r.status + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
-    // Commands/agents/plugin/hooks land DIRECTLY under the config root.
+    // Commands land DIRECTLY under the config root; agents/plugin/hooks ship nothing (#1062).
     for (const name of ADAPTIVE_CORE) {
       assert(existsSync(path.join(r.cfg, 'commands', name + '.md')),
         'G1[' + name + ']: --global deploys adaptive-core command at <config>/commands/ (un-nested)');
     }
+    const globalAgents = existsSync(path.join(r.cfg, 'agents'))
+      ? readdirSync(path.join(r.cfg, 'agents')).filter(f => f.endsWith('.md')) : [];
+    assert(globalAgents.length === 0,
+      'G1 (#1062): --global deploys NO agents at <config>/agents/ — got ' + JSON.stringify(globalAgents));
     for (const a of sync.listCanonAgents()) {
-      assert(existsSync(path.join(r.cfg, 'agents', a + '.md')),
-        'G1: --global deploys agent ' + a + ' at <config>/agents/ (un-nested)');
+      assert(!existsSync(path.join(r.cfg, 'agents', a + '.md')),
+        'G1 (#1062): --global deploys no profile for canonical role ' + a);
     }
     assert(!existsSync(path.join(r.cfg, 'plugins', 'kaola-workflow-hooks.js')),
       'G1: --global deploys no compact plugin');
-    for (const h of sync.HOOK_SCRIPTS) {
-      assert(existsSync(path.join(r.cfg, 'hooks', h)),
-        'G1: --global deploys hook ' + h + ' at <config>/hooks/ (sibling of the plugin)');
-    }
+    const globalHooks = existsSync(path.join(r.cfg, 'hooks'))
+      ? readdirSync(path.join(r.cfg, 'hooks')).filter(f => f.endsWith('.sh')) : [];
+    assert(globalHooks.length === 0,
+      'G1 (#1062): --global deploys NO hooks at <config>/hooks/ — got ' + JSON.stringify(globalHooks));
     // The nested ~/.config/opencode/.opencode/ that opencode never scans must NOT exist.
     assert(!existsSync(path.join(r.cfg, '.opencode')),
       'G1 (#F1): --global creates NO nested .opencode/ under the config root (opencode never scans it)');
-    // opencode.json lands at the config root.
-    assert(existsSync(path.join(r.cfg, 'opencode.json')),
-      'G1: --global seeds opencode.json at the config root');
+    // opencode.json is user-owned; the installer never creates one (#1062).
+    assert(!existsSync(path.join(r.cfg, 'opencode.json')),
+      'G1 (#1062): --global does not create opencode.json (user-owned; nothing seeded it)');
     // G1 (#F1 + #544): the leak invariant must also hold on the GLOBAL layout F1 newly enabled
     // (the project-layout leak block below greps r.dest/.opencode; the global tree lives un-nested
     // under r.cfg and was never under any leak test while the global install was dead).
@@ -2565,6 +2364,9 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
   {
     const r1 = runInstaller([]);
     assert(r1.ok, 'U1: seed install exits 0');
+    // #1062: the installer never creates opencode.json — the user-owned config the uninstall must
+    // preserve is planted, as a real box holds it.
+    fs.writeFileSync(path.join(r1.dest, 'opencode.json'), '# user-owned config placeholder\n');
     assert(existsSync(path.join(r1.dest, 'opencode.json')), 'U1: opencode.json present before uninstall');
     // Uninstall the same scope.
     // spawn-class: environment
@@ -2576,7 +2378,7 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     }
     for (const a of sync.listCanonAgents()) {
       assert(!existsSync(path.join(r1.dest, '.opencode', 'agents', a + '.md')),
-        'U1: agent ' + a + ' removed by --uninstall');
+        'U1 (#1062): no profile for canonical role ' + a + ' exists to survive --uninstall');
     }
     assert(!existsSync(path.join(r1.dest, '.opencode', 'plugins', 'kaola-workflow-hooks.js')),
       'U1: hooks plugin removed by --uninstall');
@@ -2625,6 +2427,7 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     for (const n of RETIRED_CMDS) {
       fs.writeFileSync(path.join(cmdDir(r1.dest), n), 'shipped by an older release\n');
     }
+    fs.mkdirSync(hooksDir, { recursive: true });
     fs.writeFileSync(path.join(hooksDir, RETIRED_HOOK),
       '#!/usr/bin/env bash\n# shipped by an older release\n');
     fs.writeFileSync(path.join(cmdDir(r1.dest), USER_OWNED), 'user-owned\n');
@@ -2723,11 +2526,16 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
   // Commands live in a reserved `kaola-workflow-*` / `workflow-*` namespace, so the
   // command prune above is namespace-complete and a retired command self-heals.
   // Agent files are NOT namespaced (bare `code-explorer.md`) and the deployed agent
-  // dir is SHARED with user-authored agents, so a blind prune is unavailable — the
-  // install records a `<filename>\t<sha256>` manifest and the next install removes
-  // exactly what it proves this installer wrote and the user has not touched.
+  // dir is SHARED with user-authored agents, so a blind prune is unavailable — a
+  // previous release recorded a `<filename>\t<sha256>` manifest and the next install
+  // removes exactly what it proves this installer wrote and the user has not touched.
   // Before this, a role retired from the tree stayed deployed and dispatchable
   // forever, and survived --uninstall too (which iterated the CURRENT source tree).
+  //
+  // #1062 makes the sweep the ONLY agent-dir writer: a fresh install deploys no
+  // profiles, so every manifest the sweep reads is one a previous release left, and
+  // the fixtures below plant that state explicitly — recorded files, recorded hash,
+  // the three classes the sweep must tell apart.
   // -------------------------------------------------------------------------
   {
     const crypto = require('crypto');
@@ -2738,32 +2546,30 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     assert(r1.ok, 'R1: seed install exits 0 (got ' + r1.status + ')');
     const agentDir = path.join(r1.dest, '.opencode', 'agents');
     const manifestPath = path.join(agentDir, AGENT_MANIFEST);
-    assert(existsSync(manifestPath), 'R1 (#795): the install records an agent deploy manifest');
+    assert(!existsSync(manifestPath),
+      'R1 (#1062): a fresh install records NO agent manifest — nothing was deployed to account for');
 
-    // The manifest describes EXACTLY the canonical agent set, at the deployed bytes.
-    const lines = readFileSync(manifestPath, 'utf8').split('\n').filter(Boolean);
-    const manifestNames = lines.map(l => l.split('\t')[0]).sort();
+    // The previous-release state: the manifest it wrote plus the profiles it recorded — the
+    // canonical names it deployed, a name retired before the upgrade, and the classes whose
+    // custody changed after install.
+    fs.mkdirSync(agentDir, { recursive: true });
     const canonNames = sync.listCanonAgents().map(n => n + '.md').sort();
-    assert(JSON.stringify(manifestNames) === JSON.stringify(canonNames),
-      'R1 (#795): manifest lists exactly the canonical agents — got ' + JSON.stringify(manifestNames));
-    const hashDrift = [];
-    for (const line of lines) {
-      const [n, h] = line.split('\t');
-      if (sha256(readFileSync(path.join(agentDir, n))) !== h) hashDrift.push(n);
-    }
-    assert(hashDrift.length === 0,
-      'R1 (#795): every recorded hash matches the deployed bytes — drifted: ' + hashDrift.join(', '));
-
-    // Plant the three classes the sweep must tell apart.
+    const deployedBody = n => '---\nname: ' + n.slice(0, -3) + '\n---\n\nPreviously deployed.\n';
     const retiredBody = '---\nname: issue-scout\n---\n\nRetired role.\n';          // ours, retired
     const editedRecorded = '---\nname: legacy-role\n---\n\nOriginal.\n';           // ours, then user-edited
     const userAuthored = '---\nname: my-own-helper\n---\n\nMy own agent.\n';       // never ours
+    let manifestRows = '';
+    for (const n of canonNames) {
+      fs.writeFileSync(path.join(agentDir, n), deployedBody(n));
+      manifestRows += n + '\t' + sha256(Buffer.from(deployedBody(n))) + '\n';
+    }
     fs.writeFileSync(path.join(agentDir, 'issue-scout.md'), retiredBody);
     fs.writeFileSync(path.join(agentDir, 'legacy-role.md'), editedRecorded + '\nUser edit.\n');
     fs.writeFileSync(path.join(agentDir, 'my-own-helper.md'), userAuthored);
-    fs.appendFileSync(manifestPath,
+    manifestRows +=
       'issue-scout.md\t' + sha256(Buffer.from(retiredBody)) + '\n' +
-      'legacy-role.md\t' + sha256(Buffer.from(editedRecorded)) + '\n');
+      'legacy-role.md\t' + sha256(Buffer.from(editedRecorded)) + '\n';
+    fs.writeFileSync(manifestPath, manifestRows);
 
     const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
     assert(r2.ok, 'R2: reinstall exits 0 (got ' + r2.status + (r2.stderr ? ' — ' + String(r2.stderr).split('\n')[0] : '') + ')');
@@ -2771,18 +2577,17 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       'R2 (#795): a retired agent recorded in the previous manifest is removed on reinstall');
     assert(/Removed retired agent: .*issue-scout\.md/.test(r2.stdout),
       'R2 (#795): the sweep names each removal — stdout: ' + r2.stdout.split('\n').slice(-6).join(' | '));
+    for (const n of canonNames) {
+      assert(!existsSync(path.join(agentDir, n)),
+        'R2 (#1062): previously-deployed ' + n + ' is manifest-proven Kaola property and retires '
+        + 'with the profile set — the current tree ships no agents to keep it current for');
+    }
     assert(existsSync(path.join(agentDir, 'legacy-role.md')),
       'R2 (#795): a retired agent the user edited after install is left untouched');
     assert(readFileSync(path.join(agentDir, 'my-own-helper.md'), 'utf8') === userAuthored,
       'R2 (#795): a user-authored agent absent from the manifest is never swept');
-    for (const a of sync.listCanonAgents()) {
-      assert(existsSync(path.join(agentDir, a + '.md')),
-        'R2 (#795): canonical agent ' + a + ' still deployed after the sweep');
-    }
-    const afterNames = readFileSync(manifestPath, 'utf8').split('\n').filter(Boolean)
-      .map(l => l.split('\t')[0]).sort();
-    assert(JSON.stringify(afterNames) === JSON.stringify(canonNames),
-      'R2 (#795): the rewritten manifest owns only what the tree ships — got ' + JSON.stringify(afterNames));
+    assert(!existsSync(manifestPath),
+      'R2 (#795): the consumed manifest is retired with its records — a fresh tree owns nothing');
 
     // Idempotent: nothing left to sweep on a converged reinstall.
     const r3 = runInstaller([], { home: r1.home, dest: r1.dest });
@@ -2793,17 +2598,13 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     // since the last install (the old uninstall iterated the current source tree, so
     // an orphan survived it). A never-recorded user agent still survives.
     fs.writeFileSync(path.join(agentDir, 'issue-scout.md'), retiredBody);
-    fs.appendFileSync(manifestPath, 'issue-scout.md\t' + sha256(Buffer.from(retiredBody)) + '\n');
+    fs.writeFileSync(manifestPath, 'issue-scout.md\t' + sha256(Buffer.from(retiredBody)) + '\n');
     // spawn-class: environment
     const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
       { env: Object.assign({}, process.env, { HOME: r1.home }), encoding: 'utf8' });
     assert(ru.status === 0, 'R3: --uninstall exits 0 (got ' + ru.status + ')');
     assert(!existsSync(path.join(agentDir, 'issue-scout.md')),
       'R3 (#795): --uninstall removes an agent retired since the last install (manifest-driven)');
-    for (const a of sync.listCanonAgents()) {
-      assert(!existsSync(path.join(agentDir, a + '.md')),
-        'R3: --uninstall still removes canonical agent ' + a);
-    }
     assert(existsSync(path.join(agentDir, 'my-own-helper.md')),
       'R3 (#795): --uninstall never touches a user-authored agent absent from the manifest');
     assert(!existsSync(manifestPath), 'R3 (#795): --uninstall removes its own manifest');
@@ -2836,6 +2637,9 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     assert(r1.ok, 'R4: seed install exits 0 (got ' + r1.status + ')');
     const agentDir = path.join(r1.dest, '.opencode', 'agents');
     const manifestPath = path.join(agentDir, AGENT_MANIFEST);
+    // A fresh install deploys no agents and records no manifest (#1062): the dir and the
+    // manifest below are the state a previous release left behind.
+    fs.mkdirSync(agentDir, { recursive: true });
 
     // Victims OUTSIDE the agent dir. `.opencode/VICTIM.txt` is one level up;
     // `<dest>/DEEP-VICTIM.txt` is two — the shape the verifier reproduced.
@@ -2873,14 +2677,18 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       'R4 (#795): the traversal guard does not disarm the sweep for a legitimate retired agent');
 
     // (b) --uninstall. Re-plant both victims and a manifest naming them; the
-    //     uninstall half had NO validation at all before this guard.
+    //     uninstall half had NO validation at all before this guard. A recorded
+    //     previous-release file rides along to prove the removal still works.
     fs.writeFileSync(upOne, upOneBody);
     fs.writeFileSync(upTwo, upTwoBody);
+    fs.mkdirSync(agentDir, { recursive: true });
     const userAuthored = '---\nname: my-own-helper\n---\n\nMy own agent.\n';
     fs.writeFileSync(path.join(agentDir, 'my-own-helper.md'), userAuthored);
-    fs.appendFileSync(manifestPath,
+    fs.writeFileSync(path.join(agentDir, 'issue-scout.md'), retiredBody);
+    fs.writeFileSync(manifestPath,
       '../VICTIM.txt\tignored\n' +
-      '../../DEEP-VICTIM.txt\tignored\n');
+      '../../DEEP-VICTIM.txt\tignored\n' +
+      'issue-scout.md\t' + sha256(Buffer.from(retiredBody)) + '\n');
 
     // spawn-class: environment
     const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
@@ -2894,10 +2702,8 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       'R4 (#795): the outside file survives --uninstall byte-identical');
     assert(existsSync(path.join(agentDir, 'my-own-helper.md')),
       'R4 (#795): --uninstall still never touches a user-authored agent absent from the manifest');
-    for (const a of sync.listCanonAgents()) {
-      assert(!existsSync(path.join(agentDir, a + '.md')),
-        'R4: --uninstall still removes canonical agent ' + a);
-    }
+    assert(!existsSync(path.join(agentDir, 'issue-scout.md')),
+      'R4: --uninstall still removes a manifest-recorded previous-release agent');
     clean(r1);
   }
 }
@@ -3243,51 +3049,28 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
 }
 
 // ---------------------------------------------------------------------------
-// A27 — installer drift: `seed_config` preserves an existing opencode.json and
-// says nothing about what is in it, so a long-lived config keeps carrying
-// settings that stopped meaning anything, with nothing anywhere that reports it.
+// A27 + A28 (#1062) — the installer NEVER writes opencode.json.
 //
-// THE SUBJECT MOVED, AND THAT IS THE POINT. It used to be the config's ROLE SET,
-// compared against the set the generator emits. Per-role effort tiering is
-// removed and the generator emits no `agent` block at all, so that comparison has
-// no baseline and no possible subject — it is deleted here rather than propped up
-// with a substitute. What is stale NOW is an entry that pins per-role reasoning
-// effort: inert, because a subagent runs the model and effort of the session that
-// dispatched it, and still reading as live configuration to anyone who opens the
-// file. That check needs no baseline, which is why it survives the removal.
+// The machinery these bands used to pin is gone with its subject: the installer carried a
+// `seed_config` that wrote a scaffolded opencode.json, a drift report that named stale
+// `agent.<role>` effort entries, an opt-in flag that adopted the regenerated config, and a
+// backup that kept the replaced bytes. Under the native_only catalog there is nothing left to
+// scaffold, nothing left to drift against, and nothing left to adopt: OpenCode installs no
+// Kaola role profiles, so no `agent.<role>` entry is Kaola's to report on or rewrite — the
+// whole file is the user's.
 //
-// The owner ruling is three-part and each part is asserted separately: DETECT the
-// staleness, REPORT exactly what is stale, and act only behind an EXPLICIT opt-in
-// — never overwrite a user-owned file silently. The opt-in's SPELLING is not
-// pinned here: the test requires that the report itself names a flag, and then
-// proves that flag does the adoption. A test that froze the name would be a
-// mechanism claim that rots; requiring the report to be actionable is the result.
+// What remains is the strongest form of the same ruling, and it is stated as disk outcomes:
+// whatever shape a user-owned opencode.json takes — populated agent pins, retired-era effort
+// entries, a model pin, a non-JSON file, a wrong-shaped `agent` — the installer reads nothing
+// in it, reports nothing about it, and leaves it BYTE-IDENTICAL; and where none exists it
+// creates none. The KAOLA_OPENCODE_* env knobs are gone with the option surface they fed, so
+// there is no input left that could change this answer either.
 // ---------------------------------------------------------------------------
 {
   const { spawnSync } = require('child_process');
-  const { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } = require('fs');
+  const { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } = require('fs');
   const os = require('os');
   const INSTALLER = path.join(REPO, 'install-opencode.sh');
-  const PASSED_FLAGS = new Set(['--target', '--yes', '--no-scripts', '--help']);
-
-  // A stale, user-owned config: four role entries carrying a per-role effort setting, in BOTH of
-  // the shapes this edition ever wrote (`options` and the older `variant`), plus one entry that
-  // pins ONLY a model. That last one is the negative control INSIDE the fixture — it is the user's
-  // own supported choice and must not be named, so a check that simply lists every role under
-  // `agent` fails here.
-  const STALE_ROLES = ['contractor', 'issue-scout', 'planner', 'workflow-planner'];
-  const MODEL_ONLY_ROLE = 'code-reviewer';
-  const DRIFTED = JSON.stringify({
-    $schema: 'https://opencode.ai/config.json',
-    default_agent: 'build',
-    agent: {
-      planner: { options: { reasoningEffort: 'xhigh' } },
-      contractor: { options: { reasoningEffort: 'high' } },
-      'issue-scout': { variant: 'high' },
-      'workflow-planner': { variant: 'max' },
-      'code-reviewer': { model: 'openai/gpt-5' },
-    },
-  }, null, 2) + '\n';
 
   function runInstall(dest, home, extra) {
     // spawn-class: environment
@@ -3297,455 +3080,97 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     });
     return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
   }
-  function freshDrifted() {
+  const wipe = f => {
+    try { rmSync(f.home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    try { rmSync(f.dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  };
+
+  // One case per shape a user-owned config legitimately takes. Each is a distinct way an
+  // overreaching installer could damage it: rewriting "stale-looking" entries, failing the
+  // install over content it cannot parse, or indexing into a shape it did not expect.
+  const CONFIG_CASES = [
+    {
+      label: 'full-agent-block',
+      // Entries in every shape this edition ever wrote — `options`, the older `variant`, and a
+      // plain model pin. All of it is the user's now; none of it is reported on or rewritten.
+      body: JSON.stringify({
+        $schema: 'https://opencode.ai/config.json',
+        default_agent: 'build',
+        agent: {
+          planner: { options: { reasoningEffort: 'xhigh' } },
+          contractor: { options: { reasoningEffort: 'high' } },
+          'issue-scout': { variant: 'high' },
+          'workflow-planner': { variant: 'max' },
+          'code-reviewer': { model: 'openai/gpt-5' },
+        },
+      }, null, 2) + '\n',
+    },
+    {
+      label: 'model-pins-only',
+      body: JSON.stringify({
+        $schema: 'https://opencode.ai/config.json',
+        default_agent: 'build',
+        agent: {
+          implementer: { model: 'anthropic/claude-sonnet-4-5' },
+          'code-reviewer': { model: 'openai/gpt-5' },
+        },
+      }, null, 2) + '\n',
+    },
+    {
+      label: 'not-json',
+      // An unreadable config is not this installer's to diagnose, and is never a reason to fail
+      // the install or to guess at its contents.
+      body: 'this is not json at all { " \n',
+    },
+    {
+      label: 'agent-wrong-shape',
+      body: JSON.stringify({ $schema: 'https://opencode.ai/config.json', agent: ['planner'] }, null, 2) + '\n',
+    },
+    {
+      label: 'generated-identical',
+      // A config equal to what the generator emits must be treated the same as any other — the
+      // rule is "never written", not "never written unless it happens to match".
+      body: sync.renderOpencodeJson(),
+    },
+  ];
+
+  for (const c of CONFIG_CASES) {
     const home = mkdtempSync(path.join(os.tmpdir(), 'oc-a27-home-'));
     const dest = mkdtempSync(path.join(os.tmpdir(), 'oc-a27-dest-'));
-    writeFileSync(path.join(dest, 'opencode.json'), DRIFTED);
-    return { home, dest, cfg: path.join(dest, 'opencode.json') };
-  }
-  const wipe = f => {
-    try { rmSync(f.home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-    try { rmSync(f.dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  };
-
-  let optInFlags = [];
-  {
-    const f = freshDrifted();
+    const cfg = path.join(dest, 'opencode.json');
     try {
-      const r = runInstall(f.dest, f.home, []);
-      // Nothing refuses: a drifted config is a finding to report, not a failed install.
-      assert(r.status === 0,
-        'A27: an install over a DRIFTED opencode.json still exits 0 — reporting drift is a finding, '
-        + 'not a refusal (got ' + r.status + ')');
-      // REPORT EXACTLY WHAT IS STALE, BY NAME.
-      //
-      // RE-ANCHORED SUBJECT. This used to compare the config's role SET against the set the
-      // generator emits, in both directions — roles it carries that are no longer shipped, and
-      // roles shipped now that it lacks. That comparison is DELETED WITH ITS MECHANISM: with
-      // per-role effort tiering removed the generator emits no `agent` block at all, so there is no
-      // baseline left to compare against and the "missing role" direction has no possible subject.
-      // The check that survives is the mirror image, and it needs no baseline: an entry pinning
-      // per-role effort is inert now, and a block that does nothing while reading as live
-      // configuration is exactly what the user has to be told about.
-      for (const role of STALE_ROLES) {
-        assert(r.out.includes(role),
-          'A27: the report NAMES the role "' + role + '", whose entry pins a per-role effort setting '
-          + 'that no longer does anything — a subagent runs the model and effort of the session that '
-          + 'dispatched it. Both shapes this edition ever wrote count (`options` and the older '
-          + '`variant`); naming the count without the names leaves the user nothing to edit.');
-      }
-      // NEGATIVE CONTROL, INSIDE THE FIXTURE — a model-only entry is the user's own choice.
-      assert(!r.out.includes(MODEL_ONLY_ROLE),
-        'A27: the report does NOT name "' + MODEL_ONLY_ROLE + '", whose entry pins only a model — '
-        + 'that is a supported user choice, not a leftover. A check that lists every role under '
-        + '`agent` would name it, and would be telling the user to delete their own configuration.');
-      // NEVER OVERWRITE SILENTLY.
-      assert(readFileSync(f.cfg, 'utf8') === DRIFTED,
-        'A27: the drifted opencode.json is left BYTE-IDENTICAL — it is user-owned, and detection is '
-        + 'not permission to rewrite it');
-      // The report has to be actionable: it must name the flag that adopts the regenerated config.
-      optInFlags = [...new Set(r.out.match(/--[a-z][a-z0-9-]+/g) || [])]
-        .filter(x => !PASSED_FLAGS.has(x)).slice(0, 6);
-      assert(optInFlags.length > 0,
-        'A27: the drift report names an explicit opt-in flag that regenerates the config — a report '
-        + 'that states the drift but not how to act on it leaves the user with nothing to do. '
-        + 'Flags found in output: ' + JSON.stringify(optInFlags));
-    } finally { wipe(f); }
-  }
-
-  // The opt-in actually adopts. Every flag the report named is tried; at least one must replace the
-  // drifted config with what the generator emits.
-  if (optInFlags.length > 0) {
-    let adopted = null;
-    const tried = [];
-    for (const flag of optInFlags) {
-      const f = freshDrifted();
-      try {
-        const r = runInstall(f.dest, f.home, [flag]);
-        const after = existsSync(f.cfg) ? readFileSync(f.cfg, 'utf8') : '';
-        tried.push(flag + '(exit ' + r.status + (after === DRIFTED ? ', unchanged' : ', rewritten') + ')');
-        if (r.status === 0 && after !== DRIFTED && after !== '') { adopted = { flag, after }; break; }
-      } finally { wipe(f); }
-    }
-    assert(adopted !== null,
-      'A27: the flag the drift report names actually regenerates the config on explicit opt-in — '
-      + 'tried ' + tried.join(', '));
-    if (adopted) {
-      // The `{ inheritModel }` argument this comparison used to pass is GONE WITH ITS MECHANISM:
-      // the generator has one render now, and an argument it silently ignores is the dead-knob
-      // class this whole change exists to remove. The claim is unchanged — after the opt-in the
-      // file is exactly what the generator emits.
-      const expected = sync.renderOpencodeJson();
-      assert(adopted.after === expected,
-        'A27: after the explicit opt-in, opencode.json is exactly what the generator emits '
-        + '(flag ' + adopted.flag + ')');
-    }
-  }
-
-  // NEGATIVE CONTROL — a guard that fires on everything is not a guard. An install over a config
-  // the generator itself just wrote carries no per-role effort at all, so the check must say
-  // NOTHING. Read off the report's own vocabulary rather than a role list: post-re-anchor the
-  // generated config names no roles anywhere, so "no role name appeared" would be true of a check
-  // that had been deleted outright.
-  {
-    const home = mkdtempSync(path.join(os.tmpdir(), 'oc-a27n-home-'));
-    const dest = mkdtempSync(path.join(os.tmpdir(), 'oc-a27n-dest-'));
-    try {
-      writeFileSync(path.join(dest, 'opencode.json'), sync.renderOpencodeJson());
+      writeFileSync(cfg, c.body);
+      const before = readdirSync(dest).sort();
       const r = runInstall(dest, home, []);
-      assert(r.status === 0, 'A27-neg: an install over a freshly generated opencode.json exits 0 (got ' + r.status + ')');
-      assert(!/drift/i.test(r.out),
-        'A27-neg: a config the generator itself just wrote produces NO drift report — a check that '
-        + 'fires on everything tells the user nothing. Output:\n' + r.out.trim().slice(0, 600));
-      assert(!r.out.includes(STALE_ROLES[0]) && !r.out.includes(MODEL_ONLY_ROLE),
-        'A27-neg: …and no role is named in it either');
-    } finally {
-      try { rmSync(home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-      try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // A27-quiet — the three inputs on which this check must say NOTHING and must
-  // never fail the install. Each is a distinct way to over-fire, and over-firing
-  // here is not a cosmetic defect: the report tells a user their configuration is
-  // dead and invites them to replace the file.
-  //
-  // The FIRST is the one the negative control above cannot reach. A27-neg feeds a
-  // config with no `agent` block at all, so a check that had lost its
-  // `variant`/`options` filter entirely — and simply named every role under
-  // `agent` — would still pass it. The filter is the whole boundary between "this
-  // setting is inert" and "this is your own model pin", and this is what holds it.
-  // -------------------------------------------------------------------------
-  {
-    const QUIET_CASES = [
-      {
-        label: 'model-pins-only',
-        // An `agent` block, fully populated, carrying nothing but model pins. The user's own
-        // supported choice: it must be neither named nor counted, and must not raise a report.
-        body: JSON.stringify({
-          $schema: 'https://opencode.ai/config.json',
-          default_agent: 'build',
-          agent: {
-            planner: { model: 'openai/gpt-5' },
-            implementer: { model: 'anthropic/claude-sonnet-4-5' },
-            'code-reviewer': { model: 'openai/gpt-5' },
-          },
-        }, null, 2) + '\n',
-        why: 'an `agent` block whose entries pin ONLY a model is the user\'s own configuration — '
-          + 'naming it tells them to delete their own pins, and a check that lost its effort-key '
-          + 'filter would name every one of these',
-      },
-      {
-        label: 'not-json',
-        body: 'this is not json at all { " \n',
-        why: 'an unreadable or non-JSON config is not this installer\'s to diagnose, and is never a '
-          + 'reason to fail the install or to guess at its contents',
-      },
-      {
-        label: 'agent-wrong-shape',
-        // `agent` present but an array — a shape the reader must survive rather than index into.
-        body: JSON.stringify({ $schema: 'https://opencode.ai/config.json', agent: ['planner'] }, null, 2) + '\n',
-        why: 'an `agent` value of the wrong shape must be read as "nothing stale here", not crashed on',
-      },
-    ];
-    for (const c of QUIET_CASES) {
-      const home = mkdtempSync(path.join(os.tmpdir(), 'oc-a27q-home-'));
-      const dest = mkdtempSync(path.join(os.tmpdir(), 'oc-a27q-dest-'));
-      const cfg = path.join(dest, 'opencode.json');
-      try {
-        writeFileSync(cfg, c.body);
-        const r = runInstall(dest, home, []);
-        assert(r.status === 0,
-          'A27-quiet[' + c.label + ']: the install still exits 0 (got ' + r.status + ') — ' + c.why);
-        assert(!/drift/i.test(r.out),
-          'A27-quiet[' + c.label + ']: NO drift report — ' + c.why + '. Output:\n'
-          + r.out.trim().slice(0, 600));
-        assert(readFileSync(cfg, 'utf8') === c.body,
-          'A27-quiet[' + c.label + ']: the config is left BYTE-IDENTICAL — reading a user-owned file '
-          + 'is not permission to rewrite it, least of all one that was not understood');
-      } finally {
-        try { rmSync(home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-        try { rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-      }
-    }
-  }
-
-}
-
-// ---------------------------------------------------------------------------
-// A28 — adoption must not destroy the config it replaces.
-//
-// A27 proves the opt-in ADOPTS. It says nothing about what happens to the file adoption
-// overwrites, and that file is the user's: hand edits, model pins, permission choices. Everything
-// below is the recovery half of that same ruling, asserted as four separate results:
-//
-//   1. the replaced config is recoverable byte-for-byte after adoption;
-//   2. a SECOND adoption inside the SAME clock second does not clobber the first backup — the
-//      measured defect, where two adoptions in one second shared a backup name and the second
-//      overwrote the user's original with the generated config, leaving a reassuring file with
-//      nothing in it worth recovering;
-//   3. a backup that CANNOT be written aborts instead of replacing the file anyway — the one
-//      outcome here that destroys something;
-//   4. the report the user reads BEFORE opting in discloses that adopting replaces rather than
-//      merges, and the path it promises is the path adoption actually writes.
-//
-// NEITHER the flag's spelling NOR the backup's naming scheme is pinned, for A27's reason: a test
-// that freezes a mechanism is a claim that rots. The flag is discovered from the report; the
-// backup is identified by its CONTENT (the bytes that were replaced), and the promised path is
-// matched as a SHAPE taken from the report itself. An implementation that names backups by PID,
-// counter or hash satisfies every assertion here — what it may not do is lose the file.
-// ---------------------------------------------------------------------------
-{
-  const { spawnSync } = require('child_process');
-  const {
-    mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, rmSync,
-  } = require('fs');
-  const os = require('os');
-  const INSTALLER = path.join(REPO, 'install-opencode.sh');
-  const PASSED_FLAGS = new Set(['--target', '--yes', '--no-scripts', '--help']);
-
-  // A user-owned config: stale (so the pre-flag report fires) and carrying a hand-set model pin
-  // — the concrete thing adoption throws away and the backup exists to give back.
-  const USER_CONFIG = JSON.stringify({
-    $schema: 'https://opencode.ai/config.json',
-    default_agent: 'build',
-    model: 'openai/gpt-4.1',
-    agent: {
-      planner: { options: { reasoningEffort: 'xhigh' } },
-      contractor: { options: { reasoningEffort: 'high' } },
-    },
-  }, null, 2) + '\n';
-
-  function runInstall(dest, home, extra, envExtra) {
-    // spawn-class: environment
-    const r = spawnSync('bash', [INSTALLER, '--target', dest, '--yes', '--no-scripts'].concat(extra || []), {
-      // No inherited-model env: the installer no longer reads one, and a knob set here that
-      // nothing consumes is the same dead configuration the removal is about.
-      env: Object.assign({}, process.env, { HOME: home }, envExtra || {}),
-      encoding: 'utf8',
-    });
-    return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
-  }
-  function fresh() {
-    const home = mkdtempSync(path.join(os.tmpdir(), 'oc-a28-home-'));
-    const dest = mkdtempSync(path.join(os.tmpdir(), 'oc-a28-dest-'));
-    writeFileSync(path.join(dest, 'opencode.json'), USER_CONFIG);
-    return { home, dest, cfg: path.join(dest, 'opencode.json') };
-  }
-  const wipe = f => {
-    try { chmodSync(f.dest, 0o755); } catch (_) { /* non-fatal */ }
-    try { rmSync(f.home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-    try { rmSync(f.dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-  };
-  // Everything the install left BESIDE the config. The backup is found in here by content, never
-  // by name — that is what keeps the naming scheme unpinned.
-  const sideFiles = dest => readdirSync(dest, { withFileTypes: true })
-    .filter(e => e.isFile() && e.name !== 'opencode.json').map(e => e.name).sort();
-  const sideRead = (dest, name) => { try { return readFileSync(path.join(dest, name), 'utf8'); } catch (_) { return null; } };
-  const holdersOf = (dest, text) => sideFiles(dest).filter(n => sideRead(dest, n) === text);
-  const brief = t => (t.length > 900 ? t.slice(0, 900) + ' …' : t);
-
-  // A promised path, as a MATCHER. Any `<…>`/`{…}`/`[…]` placeholder becomes "anything", so the
-  // report may spell its variable part however it likes; the rest must be literal.
-  const shapeToRegExp = shape => {
-    const SENT = '\u0000';
-    const withSent = shape.replace(/<[^>]*>|\{[^}]*\}|\[[^\]]*\]/g, SENT);
-    const escaped = withSent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp('^' + escaped.split(SENT).join('.+') + '$');
-  };
-
-  // ---- the report the user reads before deciding -------------------------------------------
-  let report = '';
-  {
-    const f = fresh();
-    try {
-      const r = runInstall(f.dest, f.home, []);
       assert(r.status === 0,
-        'A28: an install over a drifted user-owned config exits 0 (got ' + r.status + ')');
-      report = r.out;
-      assert(readFileSync(f.cfg, 'utf8') === USER_CONFIG,
-        'A28: the reporting install left the user config byte-identical (precondition for everything below)');
-    } finally { wipe(f); }
+        'A27[' + c.label + '] (#1062): install over a user-owned opencode.json exits 0 (got '
+        + r.status + ')');
+      assert(readFileSync(cfg, 'utf8') === c.body,
+        'A27[' + c.label + '] (#1062): opencode.json is left BYTE-IDENTICAL — it is user-owned, '
+        + 'and reading it is not permission to rewrite it');
+      const after = readdirSync(dest).sort();
+      const added = after.filter(n => !before.includes(n));
+      assert(JSON.stringify(added) === JSON.stringify(['.opencode']),
+        'A27[' + c.label + '] (#1062): the only new entry beside the config is the command tree '
+        + 'itself — no backup, report, or scaffold — added ' + JSON.stringify(added));
+    } finally { wipe({ home, dest }); }
   }
 
-  // (4a) DISCLOSE THE COST BEFORE THE OPT-IN. A user who is told only "re-run with <flag> to adopt
-  // it" reasonably expects their pins to survive a merge. The wording is free; what the report may
-  // not do is stay silent about the file being rewritten rather than merged into.
-  assert(/\breplac(e|es|ed|ing)\b/i.test(report),
-    'A28: the pre-flag drift report discloses that adopting REPLACES the existing config rather '
-    + 'than merging into it — the disclosure has to arrive before the user runs the flag, because '
-    + 'after it the pins are already gone. Any wording carries; this one says nothing. Report:\n'
-    + brief(report));
-
-  // (4b) …and it must say WHERE the replaced file goes. Collected as shapes, checked against the
-  // real thing below: a promise nothing fulfils is worse than no promise, because it reads as a
-  // recovery path the user will look for and not find.
-  const promised = [...new Set(report.match(/\S*opencode\.json\S+/g) || [])]
-    .map(s => s.replace(/[.,;:)\]]+$/, ''))
-    .filter(s => path.basename(s) !== 'opencode.json');
-  assert(promised.length > 0,
-    'A28: the pre-flag drift report names WHERE the config it replaces is kept — "it is backed up" '
-    + 'with no path is not a recovery path. Report:\n' + brief(report));
-
-  // ---- discover the opt-in flag, and prove the backup on the run that finds it ---------------
-  let adoptFlag = null;
-  const candidates = [...new Set(report.match(/--[a-z][a-z0-9-]+/g) || [])]
-    .filter(x => !PASSED_FLAGS.has(x)).slice(0, 6);
-  const tried = [];
-  for (const flag of candidates) {
-    const f = fresh();
+  // ABSENT STAYS ABSENT. The installer writes no scaffold — a fresh consumer project has no
+  // opencode.json until the user makes one.
+  {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'oc-a27-home-'));
+    const dest = mkdtempSync(path.join(os.tmpdir(), 'oc-a27-dest-'));
     try {
-      const r = runInstall(f.dest, f.home, [flag]);
-      const after = existsSync(f.cfg) ? readFileSync(f.cfg, 'utf8') : '';
-      tried.push(flag + '(exit ' + r.status + (after === USER_CONFIG ? ', unchanged' : ', rewritten') + ')');
-      if (!(r.status === 0 && after !== USER_CONFIG && after !== '')) continue;
-      adoptFlag = flag;
-
-      // (1) THE REPLACED CONFIG IS RECOVERABLE, BYTE FOR BYTE. Identified by content: whatever the
-      // installer named it, one of the files it left behind has to BE the user's config.
-      const keepers = holdersOf(f.dest, USER_CONFIG);
-      assert(keepers.length > 0,
-        'A28: adoption keeps the config it replaced, byte-for-byte, in a file beside it — the user '
-        + 'opted into a new config, not into losing the old one. Files left beside it: '
-        + JSON.stringify(sideFiles(f.dest)));
-
-      // (4c) THE PROMISE IS THE PRACTICE. The path the pre-flag report named must be the path the
-      // writer produces — one spelling, or the recovery instruction points somewhere empty.
-      const kept = sideFiles(f.dest);
-      const fulfilled = promised.filter(p => {
-        const re = shapeToRegExp(p);
-        return kept.some(n => re.test(n) || re.test(path.join(f.dest, n)));
-      });
-      assert(fulfilled.length > 0,
-        'A28: the backup path the drift report PROMISES is the path adoption actually writes — '
-        + 'promised ' + JSON.stringify(promised) + ', wrote ' + JSON.stringify(kept));
-    } finally { wipe(f); }
-    if (adoptFlag) break;
-  }
-  assert(adoptFlag !== null,
-    'A28: the drift report names a flag that adopts the regenerated config (A27 proves this too; '
-    + 'it is repeated here because every assertion below is scoped to it, and a guard that quietly '
-    + 'skips when its subject is not found is not a guard) — tried ' + (tried.join(', ') || '(none)'));
-
-  if (adoptFlag) {
-    // ---- (2) TWO ADOPTIONS INSIDE ONE CLOCK SECOND ------------------------------------------
-    // The clock is FROZEN on PATH for both runs. Racing the real clock is what makes this test
-    // useless: two installs are seconds apart, so a name derived from the clock alone is unique
-    // and the collision under test never occurs — the suite would pass against the very code that
-    // loses the file. Frozen, ANY clock-derived name collides, and the assertion is about the
-    // outcome (both replaced configs still recoverable), not about how uniqueness is obtained.
-    const shimDir = mkdtempSync(path.join(os.tmpdir(), 'oc-a28-clock-'));
-    const realDate = ['/bin/date', '/usr/bin/date'].find(p => existsSync(p));
-    assert(!!realDate,
-      'A28: a real `date` exists to fall through to — without one the shim below is not a frozen '
-      + 'clock, it is a broken PATH, and every result under it means nothing');
-    if (realDate) {
-      const f = fresh();
-      try {
-        writeFileSync(path.join(shimDir, 'date'),
-          '#!/bin/sh\n'
-          // Any format request answers with one fixed stamp; everything else is the real date.
-          // Format-agnostic on purpose: pinning the exact format string would re-introduce the
-          // mechanism coupling this block is written to avoid, and would silently un-freeze the
-          // clock the day the format changed.
-          + 'case "$1" in\n'
-          + "  +*) printf '%s\\n' '19700101000000'; exit 0 ;;\n"
-          + 'esac\n'
-          + 'exec ' + realDate + ' "$@"\n');
-        chmodSync(path.join(shimDir, 'date'), 0o755);
-        const frozenEnv = { PATH: shimDir + path.delimiter + process.env.PATH };
-
-        // Fixture control: the clock really is frozen. Two reads, one value.
-        // spawn-class: environment
-        const t1 = spawnSync('date', ['+%Y%m%d%H%M%S'], { env: Object.assign({}, process.env, frozenEnv), encoding: 'utf8' });
-        // spawn-class: environment
-        const t2 = spawnSync('date', ['+%Y%m%d%H%M%S'], { env: Object.assign({}, process.env, frozenEnv), encoding: 'utf8' });
-        assert(t1.status === 0 && t1.stdout.trim() !== '' && t1.stdout === t2.stdout,
-          'A28: the frozen-clock shim answers two reads with ONE value — otherwise the two '
-          + 'adoptions below are not in the same clock second and prove nothing (got '
-          + JSON.stringify(t1.stdout) + ' then ' + JSON.stringify(t2.stdout) + ')');
-
-        const r1 = runInstall(f.dest, f.home, [adoptFlag], frozenEnv);
-        assert(r1.status === 0, 'A28: first adoption under the frozen clock exits 0 (got ' + r1.status + ')');
-        const generatedFirst = readFileSync(f.cfg, 'utf8');
-        const after1 = sideFiles(f.dest);
-
-        const r2 = runInstall(f.dest, f.home, [adoptFlag], frozenEnv);
-        assert(r2.status === 0, 'A28: second adoption under the frozen clock exits 0 (got ' + r2.status + ')');
-        const after2 = sideFiles(f.dest);
-
-        // Non-vacuity: the second run must have written a backup of its OWN. If it kept nothing,
-        // the survival check below passes for free and measures nothing.
-        assert(after2.length > after1.length,
-          'A28: the second adoption inside the same clock second wrote its own backup — with no '
-          + 'second write there is no collision for the check below to survive (files beside the '
-          + 'config went ' + JSON.stringify(after1) + ' → ' + JSON.stringify(after2) + ')');
-
-        // THE DEFECT, PINNED. The user's ORIGINAL must still be readable somewhere.
-        assert(holdersOf(f.dest, USER_CONFIG).length > 0,
-          'A28: after a SECOND adoption inside the SAME clock second, the user\'s ORIGINAL config '
-          + 'is STILL recoverable — a backup name derived from the clock alone collides here, and '
-          + 'the second adoption then overwrites the first backup with the generated config: a '
-          + 'reassuring file holding nothing worth recovering. Files beside the config: '
-          + JSON.stringify(after2));
-
-        // And the second adoption kept what IT replaced, so neither run is the one that loses.
-        assert(holdersOf(f.dest, generatedFirst).length > 0,
-          'A28: the second adoption also kept the config IT replaced — the rule is per adoption, '
-          + 'not "the first one is special". Files beside the config: ' + JSON.stringify(after2));
-      } finally {
-        wipe(f);
-        try { rmSync(shimDir, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-      }
-    }
-
-    // ---- (3) A BACKUP THAT CANNOT BE WRITTEN ABORTS, IT DOES NOT REPLACE ANYWAY --------------
-    // The destination directory is made read-only AFTER a normal install has populated it: no new
-    // entry (the backup) can be created there, while the existing config file stays writable — so
-    // the only thing standing between the user and a silent loss is the installer refusing.
-    {
-      const f = fresh();
-      try {
-        const seed = runInstall(f.dest, f.home, []);
-        assert(seed.status === 0, 'A28: seed install exits 0 (precondition, got ' + seed.status + ')');
-        assert(readFileSync(f.cfg, 'utf8') === USER_CONFIG,
-          'A28: the seed install preserved the user config (precondition)');
-        chmodSync(f.dest, 0o555);
-
-        // FIXTURE CONTROL — the directory really is unwritable. Under root, or on a filesystem
-        // that ignores the mode, nothing below is the scenario it claims to be; say that plainly
-        // instead of failing on the guard as if the installer had misbehaved.
-        let blocked = false;
-        try { writeFileSync(path.join(f.dest, '.kw-writability-probe'), 'x'); }
-        catch (_) { blocked = true; }
-        assert(blocked,
-          'A28: the fixture can actually make a new file in the destination unwritable — it cannot '
-          + 'here (running as root, or a filesystem that ignores the mode), so the backup below is '
-          + 'writable after all and the abort under test is never reached');
-
-        // CONTROL — the read-only directory alone must not break an install. Without this, the
-        // non-zero exit below proves nothing: it could be the tree deploy failing long before
-        // adoption is reached, and the assertion would hold with no backup guard at all.
-        const control = runInstall(f.dest, f.home, []);
-        assert(control.status === 0,
-          'A28: with the destination read-only, a NON-adopting install still exits 0 — the failure '
-          + 'asserted next has to be attributable to the adoption, not to the directory (got '
-          + control.status + ')');
-
-        const r = runInstall(f.dest, f.home, [adoptFlag]);
-        assert(r.status !== 0,
-          'A28: an adoption whose backup CANNOT be written fails loudly instead of proceeding — '
-          + 'exit ' + r.status + '. Nothing else refuses here; this one does, because carrying on '
-          + 'is the case that destroys something.');
-        assert(readFileSync(f.cfg, 'utf8') === USER_CONFIG,
-          'A28: …and the config it could not back up is left BYTE-IDENTICAL. Replacing a file '
-          + 'after failing to keep a copy of it is the exact outcome the backup exists to prevent.');
-        assert(holdersOf(f.dest, USER_CONFIG).length === 0,
-          'A28: the aborted adoption left no partial backup behind (precondition sanity — the copy '
-          + 'genuinely could not be written, so the abort was the real path, not a stale file)');
-      } finally { wipe(f); }
-    }
+      const r = runInstall(dest, home, []);
+      assert(r.status === 0,
+        'A27[absent] (#1062): install into a project with no opencode.json exits 0 (got ' + r.status + ')');
+      assert(!existsSync(path.join(dest, 'opencode.json')),
+        'A27[absent] (#1062): the installer does NOT create opencode.json — it is user-owned, and '
+        + 'a scaffold that reads as live configuration is the dead-knob class #1062 removes');
+      assert(existsSync(path.join(dest, '.opencode', 'commands', 'workflow-next.md')),
+        'A27[absent]: the same install still deploys the command surface (control)');
+    } finally { wipe({ home, dest }); }
   }
 }
 
@@ -3883,21 +3308,23 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     // every run by the maximal-flag leg below, and a wrong `write`/`write-config` half surfaces as a
     // contradiction between the never-blanket check and the sufficiency check, which cannot both
     // hold if the flag named here is not the one that clears it.
-    const agentDir = path.join(scratch, '.opencode', 'agents');
-    const agentMd = (fs.existsSync(agentDir)
-      ? fs.readdirSync(agentDir).filter(f => f.endsWith('.md')).sort() : [])[0] || '';
-    assert(agentMd !== '',
-      'A30: the regenerated fixture has a generated agent to plant drift in — with none, the '
+    // #1062: the tree renders no agents, so the write-clearable generated file is a command —
+    // the one surface class this edition still ships.
+    const commandDir = path.join(scratch, '.opencode', 'commands');
+    const commandMd = (fs.existsSync(commandDir)
+      ? fs.readdirSync(commandDir).filter(f => f.endsWith('.md')).sort() : [])[0] || '';
+    assert(commandMd !== '',
+      'A30: the regenerated fixture has a generated command to plant drift in — with none, the '
       + 'write-clearable scenario has no subject and its green would mean nothing');
     const ROGUE_PLUGIN = 'zzz-a30-unregistered.js';
     const CLASSES = {
-      'stale generated agent': {
-        rel: '.opencode/agents/' + agentMd,
+      'stale generated command': {
+        rel: '.opencode/commands/' + commandMd,
         clearedBy: 'write',
-        // Guarded, not assumed: with no agent to drift the assertion above has already said so,
+        // Guarded, not assumed: with no command to drift the assertion above has already said so,
         // and a throw from here would replace that named failure with a stack trace.
         plant: () => {
-          if (agentMd) fs.appendFileSync(path.join(agentDir, agentMd), '\n<!-- A30 planted drift -->\n');
+          if (commandMd) fs.appendFileSync(path.join(commandDir, commandMd), '\n<!-- A30 planted drift -->\n');
         },
       },
       'stale user-owned opencode.json': {
@@ -3932,12 +3359,12 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     // profile is identical to the entry above it, so it would re-run this loop for a branch
     // already measured.
     const SCENARIOS = [
-      ['stale generated agent'],
+      ['stale generated command'],
       ['stale user-owned opencode.json'],
       ['unregistered canonical plugin'],
-      ['stale user-owned opencode.json', 'stale generated agent'],
+      ['stale user-owned opencode.json', 'stale generated command'],
       ['stale user-owned opencode.json', 'unregistered canonical plugin'],
-      ['stale generated agent', 'unregistered canonical plugin'],
+      ['stale generated command', 'unregistered canonical plugin'],
     ];
 
     let adviceSeen = 0;
@@ -4138,12 +3565,12 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
     return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
   };
   const readIf = p => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '');
-  const behaviorSource = root => path.join(root, 'templates', 'agents', 'behavior-contracts.json');
-  const plantBehaviorMarker = (root, role, marker) => {
-    const file = behaviorSource(root);
-    const source = JSON.parse(fs.readFileSync(file, 'utf8'));
-    source.roles[role].body += '\n' + marker + '\n';
-    fs.writeFileSync(file, JSON.stringify(source, null, 2) + '\n');
+  // OpenCode renders no agent surfaces (#1062), so the per-checkout discriminator rides the one
+  // canonical surface this edition still renders: commands/workflow-next.md → tree commands/.
+  const commandSource = root => path.join(root, 'commands', 'workflow-next.md');
+  const plantCommandMarker = (root, marker) => {
+    const file = commandSource(root);
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8') + '\n' + marker + '\n');
   };
   const head = out => String(out).split('\n').filter(Boolean).slice(0, 4).join(' | ');
 
@@ -4199,22 +3626,21 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
         + 'source tree, an exported model pin — is a different test wearing this one\'s name. Got '
         + 'exit ' + c0.status + ': ' + head(c0.out));
 
-      const agentFile = (fs.existsSync(path.join(mainRoot, 'agents'))
-        ? fs.readdirSync(path.join(mainRoot, 'agents')).filter(f => f.endsWith('.md')).sort() : [])[0] || '';
-      assert(agentFile !== '',
-        'A31: the fixture has a canonical agent to plant a marker in — with none there is no '
-        + 'subject and both markers would be absent from every tree for a reason that is not the '
+      const agentFile = 'workflow-next.md';
+      assert(fs.existsSync(commandSource(mainRoot)),
+        'A31: the fixture has a canonical command surface to plant a marker in — with none there is '
+        + 'no subject and both markers would be absent from every tree for a reason that is not the '
         + 'one this band reports');
 
       const MAIN_MARK = 'A31-MARKER-PLANTED-IN-MAIN';
       const WT_MARK = 'A31-MARKER-PLANTED-IN-WORKTREE';
-      const renderedRel = path.join(sync.treeLabel(DEF_FORGE), 'agents', agentFile);
+      const renderedRel = path.join(sync.treeLabel(DEF_FORGE), 'commands', agentFile);
 
       if (agentFile) {
         // Control: a canonical edit reaches the rendered surface AT ALL. Without it, the marker
         // assertions below could red forever against a correct implementation, and a marker that
         // never renders would make the "main's marker is gone" half true for the wrong reason.
-        plantBehaviorMarker(mainRoot, agentFile.slice(0, -3), MAIN_MARK);
+        plantCommandMarker(mainRoot, MAIN_MARK);
         const w1 = runSync(mainRoot, mainRoot, ['--forge=' + DEF_FORGE, '--write']);
         assert(w1.status === 0,
           'A31: the fixture regenerates after the main-side plant — exit ' + w1.status + ': ' + head(w1.out));
@@ -4223,8 +3649,8 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
           + 'reach ' + renderedRel + ', so this fixture cannot tell WHICH checkout\'s sources were '
           + 'rendered and both marker assertions below would be vacuous');
 
-        plantBehaviorMarker(wtRoot, agentFile.slice(0, -3), WT_MARK);
-        assert(!readIf(behaviorSource(wtRoot)).includes(MAIN_MARK),
+        plantCommandMarker(wtRoot, WT_MARK);
+        assert(!readIf(commandSource(wtRoot)).includes(MAIN_MARK),
           'A31: control — the worktree holds its own copy of the canonical sources. If it shared '
           + 'main\'s file, both markers would be in both checkouts and the discriminator would be gone');
 
@@ -4243,7 +3669,7 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
           + 'found it — the observed failure this band exists for');
         assert(!landed.includes(MAIN_MARK),
           'A31: ...and renders it from the INVOKING checkout\'s canonical sources. Main\'s tree still '
-          + 'carries the marker planted in MAIN\'s agents/, which means the sources were resolved '
+          + 'carries the marker planted in MAIN\'s commands/, which means the sources were resolved '
           + 'against the main checkout too — a sync from a worktree would then re-render main from '
           + 'its own unchanged sources and the run\'s edits would never reach any tree');
         assert(!fs.existsSync(path.join(wtRoot, sync.treeLabel(DEF_FORGE))),
@@ -4278,7 +3704,7 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       'A31: sync --write succeeds in a directory that is not a git checkout — exit ' + w3.status
       + ': ' + head(w3.out) + '. An unpacked source tree has no main checkout to resolve, and a '
       + 'resolution that throws there breaks both installers');
-    assert(fs.existsSync(path.join(plainRoot, sync.treeLabel(DEF_FORGE), 'agents')),
+    assert(fs.existsSync(path.join(plainRoot, sync.treeLabel(DEF_FORGE), 'commands')),
       'A31: ...and writes the tree into the root the script itself lives in');
     assert(!fs.existsSync(path.join(neutralCwd, sync.treeLabel(DEF_FORGE))),
       'A31: ...and never into the process cwd — the tree landed in ' + neutralCwd + ', which owns '
@@ -4391,7 +3817,7 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
         tag + ': the generated tree is NOT written inside the directory git uses for its own '
         + 'storage. It is at ' + inGitStorage + '. That directory belongs to git, which may rewrite '
         + 'or repack around it, and nobody looking for a generated tree looks there');
-      assert(fs.existsSync(path.join(beside, 'agents')),
+      assert(fs.existsSync(path.join(beside, 'commands')),
         tag + ': ...it is beside the script instead, at ' + beside + '. There is no main checkout in '
         + 'this posture — a bare repository has no working tree and a submodule\'s storage is not a '
         + 'checkout — so beside the script is the only place left that a reader owns. It landed at '
@@ -4569,14 +3995,13 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
       try { a34Roots.push(fs.realpathSync(mainRoot)); } catch (_) { /* the literal spelling stands */ }
       const namesTheOtherRoot = s => a34Roots.some(r => String(s).includes(r));
 
-      const a34Agent = (fs.existsSync(path.join(wtRoot, 'agents'))
-        ? fs.readdirSync(path.join(wtRoot, 'agents')).filter(f => f.endsWith('.md')).sort() : [])[0] || '';
-      assert(a34Agent !== '' && fs.existsSync(path.join(mainRoot, 'agents', a34Agent)),
-        'A34: both checkouts hold a canonical agent to edit — with none there is no way to make a '
-        + 'refresh change anything, and the fires-leg below would be observing an empty refresh');
+      const a34Agent = 'workflow-next.md';
+      assert(fs.existsSync(commandSource(wtRoot)) && fs.existsSync(commandSource(mainRoot)),
+        'A34: both checkouts hold a canonical command surface to edit — with none there is no way '
+        + 'to make a refresh change anything, and the fires-leg below would be observing an empty refresh');
 
-      if (a34Agent && fs.existsSync(path.join(mainRoot, 'agents', a34Agent))) {
-        const a34Rendered = path.join(a34MainTree, 'agents', a34Agent);
+      if (a34Agent && fs.existsSync(commandSource(mainRoot))) {
+        const a34Rendered = path.join(a34MainTree, 'commands', a34Agent);
 
         // SETTLE FIRST. The in-parity leg needs a refresh that genuinely changes nothing, and what
         // A31 left is not that by construction: it wrote ONE forge with --write, while
@@ -4605,13 +4030,13 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
 
         // (b) FIRES on a real cross-checkout change, (c) NAMES the root, (d) on STDERR only.
         const WT_MARK_34 = 'A34-MARKER-FROM-THE-WORKTREE';
-        plantBehaviorMarker(wtRoot, a34Agent.slice(0, -3), WT_MARK_34);
+        plantCommandMarker(wtRoot, WT_MARK_34);
         const r1 = runSync(wtRoot, wtRoot, ['--refresh-present']);
         assert(r1.status === 0,
           'A34: the changing refresh succeeds — exit ' + r1.status + ': ' + head(r1.out));
         assert(readIf(a34Rendered).includes(WT_MARK_34),
           'A34: control — that refresh really did change the OTHER checkout. ' + a34Rendered
-          + ' does not carry the marker just planted in the worktree\'s canonical agent, so there '
+          + ' does not carry the marker just planted in the worktree\'s canonical surface, so there '
           + 'was no cross-checkout change to announce and the three assertions below would be '
           + 'asking whether a note fired for an event that never happened');
         assert(r1.stderr.includes(A34_NOTE),
@@ -4633,14 +4058,14 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
 
         // (e) SILENT FROM THE CHECKOUT THAT OWNS THE TREE, THOUGH FILES ARE WRITTEN.
         const MAIN_MARK_34 = 'A34-MARKER-FROM-MAIN';
-        plantBehaviorMarker(mainRoot, a34Agent.slice(0, -3), MAIN_MARK_34);
+        plantCommandMarker(mainRoot, MAIN_MARK_34);
         const r2 = runSync(mainRoot, mainRoot, ['--refresh-present']);
         assert(r2.status === 0,
           'A34: --refresh-present from the main checkout succeeds — exit ' + r2.status + ': '
           + head(r2.out));
         assert(readIf(a34Rendered).includes(MAIN_MARK_34),
           'A34: control — the main-checkout refresh WROTE, and wrote real changes. ' + a34Rendered
-          + ' does not carry the marker planted in main\'s own canonical agent, so this run changed '
+          + ' does not carry the marker planted in main\'s own canonical surface, so this run changed '
           + 'nothing and the silence below would be the changed-nothing gate rather than the '
           + 'same-checkout gate this leg is for');
         assert(!r2.stderr.includes(A34_NOTE) && !r2.stdout.includes(A34_NOTE),
@@ -4655,6 +4080,9 @@ assert(!exists(pluginRel), 'A11: retired compact plugin is absent from the gener
         // MAIN's tree and the refresh runs from the WORKTREE, whose sources the tree is otherwise
         // in parity with after the settle, so the prune is the only change there is.
         runSync(wtRoot, wtRoot, ['--refresh-present']);
+        // The stray goes into the tree's retired agents/ carrier: the generator owns that path
+        // wholesale now (any .md there is a retired surface), so the prune removes it.
+        fs.mkdirSync(path.join(a34MainTree, 'agents'), { recursive: true });
         const a34Stray = path.join(a34MainTree, 'agents', '__a34-retired-probe.md');
         fs.writeFileSync(a34Stray, '# A34 retired-artifact probe\n');
         const r3 = runSync(wtRoot, wtRoot, ['--refresh-present']);

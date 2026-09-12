@@ -400,8 +400,12 @@ const MECHANISM = 'GNU mktemp consults a relative TMPDIR verbatim and resolves i
   }
 
   // -------------------------------------------------------------------------------------------
-  // B. `bash install-opencode.sh --yes --target <scratch>` — manifest snapshots + the rendered
-  //    opencode.json seed.
+  // B. `bash install-opencode.sh --yes --target <scratch>` — under #1062 this installer deploys
+  //    commands only: the manifest snapshots and the opencode.json seed that used mktemp are
+  //    gone, so the script carries NO bare-mktemp call site at all. The leg pins that fact (the
+  //    shim observing zero calls is then a confirmed property, not a bypass) and keeps the run
+  //    itself: a green install under a relative TMPDIR must still deploy the command payload and
+  //    leave nothing in the checkout.
   // -------------------------------------------------------------------------------------------
   {
     const home = path.join(sandbox, 'home-b');
@@ -418,10 +422,12 @@ const MECHANISM = 'GNU mktemp consults a relative TMPDIR verbatim and resolves i
     assertObservation('install-opencode.sh', r);
     const lines = shimLinesFrom(at);
     const inside = lines.filter(insideCheckout);
-    assert(lines.length > 0,
-      'install-opencode.sh: the shim observed ZERO mktemp calls — either the installer no '
-        + 'longer uses mktemp (re-derive this instrument around its replacement) or the shim '
-        + 'was bypassed and the location verdicts are vacuous.');
+    assert(!/(^|[^"'\w])mktemp([ \t]|$)/m.test(
+        fs.readFileSync(path.join(checkout, 'install-opencode.sh'), 'utf8')
+          .split('\n').filter(l => !l.trim().startsWith('#')).join('\n')),
+      'install-opencode.sh (#1062): the script carries no mktemp call site — the agent deploy and '
+        + 'opencode.json seed that used it are gone, so a silent shim log is a property, not a '
+        + 'bypassed instrument');
     assert(inside.length === 0,
       'install-opencode.sh: ' + inside.length + ' of ' + lines.length + ' mktemp-created paths '
         + 'landed INSIDE the copied checkout: ' + JSON.stringify(inside.slice(0, 6)) + '. '
@@ -430,8 +436,10 @@ const MECHANISM = 'GNU mktemp consults a relative TMPDIR verbatim and resolves i
     assert(r.code === 0,
       'install-opencode.sh: exits ' + r.code + ' under a relative TMPDIR. Output (tail):\n'
         + r.out.slice(-2000));
-    assert(fs.existsSync(path.join(target, 'opencode.json')),
-      'install-opencode.sh: no opencode.json was seeded at the target — a green exit that '
+    const deployed = path.join(target, '.opencode', 'commands');
+    assert(fs.existsSync(deployed)
+        && fs.readdirSync(deployed).filter(n => n.endsWith('.md')).length > 0,
+      'install-opencode.sh: no command payload landed at ' + deployed + ' — a green exit that '
         + 'deployed nothing is not a pass.');
   }
 

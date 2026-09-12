@@ -51,13 +51,6 @@ function eq(actual, expected, msg) {
 
 const behaviorContracts = JSON.parse(fs.readFileSync(
   path.join(__dirname, '..', 'templates', 'agents', 'behavior-contracts.json'), 'utf8'));
-const intentRosters = Object.freeze(['standard', 'reasoning', 'heavy'].reduce((out, tier) => {
-  out[tier] = Object.entries(behaviorContracts.roles)
-    .filter(([, contract]) => contract.intent_class === tier)
-    .map(([role]) => role)
-    .sort();
-  return out;
-}, {}));
 const allRoles = Object.keys(behaviorContracts.roles);
 const normalizeProse = text => String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
 const roleMentions = text => allRoles.filter(role =>
@@ -65,15 +58,17 @@ const roleMentions = text => allRoles.filter(role =>
 const retiredRunWideInline = text =>
   /if\s+the\s+runtime\s+cannot\s+spawn\s+(?:an?\s+)?role\s+agent[\s\S]{0,100}?keep\s+the\s+work\s+inline/i.test(text);
 
-function tierRosterGaps(text) {
+// #1062: a binding surface carries one `**Roles:**` line naming exactly the 7-role roster and one
+// `**Subagent default:**` line — the tier-partitioned rosters are gone.
+function bindingRosterGaps(text) {
   const prose = normalizeProse(text);
-  const roster = prose.match(/\brole roster:\*{0,2}\s*(.*?)(?=\.\s|$)/);
-  return Object.keys(intentRosters).filter(tier => {
-    const segment = roster && roster[1].match(
-      new RegExp(`\\b${tier}\\s+[—-]\\s*(.*?)(?=;\\s*(?:standard|reasoning|heavy)\\s+[—-]|$)`));
-    return !segment
-      || JSON.stringify(roleMentions(segment[1]).sort()) !== JSON.stringify(intentRosters[tier]);
-  }).map(tier => `${tier}-role-roster`);
+  const roster = prose.match(/\*\*roles:\*\*\s*(.*?)(?=\.\s|$)/);
+  const gaps = [];
+  if (!roster || JSON.stringify(roleMentions(roster[1]).sort()) !== JSON.stringify([...allRoles].sort())) {
+    gaps.push('roles-line');
+  }
+  if (!/\*\*subagent default:\*\*/.test(prose)) gaps.push('subagent-default-line');
+  return gaps;
 }
 
 const ctx = (surface_type, forge) => ({ surface_type, forge });
@@ -370,7 +365,7 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
         assert(rendered.includes(token), `real ${topic} token ${token} propagates to ${row.path}`);
       }
       if (topic === 'next' || topic === 'finalize') {
-        const rosterGaps = tierRosterGaps(rendered);
+        const rosterGaps = bindingRosterGaps(rendered);
         assert(rosterGaps.length === 0,
           `real ${topic} behavior-authority role roster propagates to ${row.path} — missing ${JSON.stringify(rosterGaps)}`);
       }

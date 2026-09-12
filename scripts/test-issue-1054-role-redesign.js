@@ -2,7 +2,7 @@
 'use strict';
 
 // Issue #1054 (mission 9 — role redesign). TEST CUSTODY ONLY: this suite pins ACCEPTANCE MEANING
-// for `templates/agents/behavior-contracts.json` (the 14-role authority) and its generated
+// for `templates/agents/behavior-contracts.json` (the 7-role authority) and its generated
 // carriers. No production code lives here.
 //
 // The issue's own instruction is explicit: role bodies stop being "an old model's process
@@ -20,13 +20,14 @@
 //      review_conclusion/column-zero/word-count/last-line reviewer protocol, and the doc-updater
 //      "Last Updated: YYYY-MM-DD" / fixed codemap directory prescription.
 //   C. metric-optimizer routes fixed-destination, non-metric work to `implementer` — never
-//      `tdd-guide` (the issue names this as a concrete misrouting defect, item 21).
+//      `tdd-guide` (the issue names this as a concrete misrouting defect, item 21). The role
+//      itself is retired by #1062, so the pin is now absence: no role may carry the misroute.
 //   D. Custody sentences survive the prose diet: tdd-guide writes no production code; implementer
 //      does not alter accepted meaning; investigator/code-explorer/knowledge-lookup write only
 //      their own findings; the orchestrator (not the reviewer roles) decides consequences.
-//   E. Machine-consumed fields stay intact: non-empty description; intent_class and
-//      capability_requirements per role unchanged from the 662bcd33.. / 6ae5374b lineage (tier
-//      policy is ADR 0019/0021 territory, out of this issue's scope); REQUIRED_COVERAGE
+//   E. Machine-consumed fields stay intact: non-empty description; capability_requirements per
+//      role unchanged from the 662bcd33.. / 6ae5374b lineage; the intent_class field is absent on
+//      every role (#1062 retired the tier axis it encoded); REQUIRED_COVERAGE
 //      completeness is a METADATA property, not a body-prose-restatement requirement (proved by
 //      generating from a body that does not restate the seven coverage sections).
 //   F. Compact-recovery carrier dedupe (issue item 25): the recovery skeleton and every rendered
@@ -35,7 +36,7 @@
 //      the full Next/Finalize reload carries. This is ALSO RED at the #1054 baseline: the
 //      skeleton still carries `runtime-dispatch-common` / `runtime-delegation` slots at 6ae5374b.
 //   G. Negative: this suite adds no new prompt-quality gate (no word-count/ratio/length assertion
-//      on prose quality), and role/tool-allowlist/schema shape is unchanged (14 roles, capability
+//      on prose quality), and role/tool-allowlist/schema shape is unchanged (7 roles, capability
 //      requirements pinned in E, so derived tool allowlists follow).
 //
 // Groups A, B, C, and F are RED items: they fail against the 6ae5374b baseline (verified in an
@@ -64,8 +65,8 @@ const adapters = generator.loadRuntimeAdapters(ROOT);
 const profiles = generator.renderProfiles(behavior, adapters);
 const ROLES = generator.ROLES;
 
-assert(Array.isArray(ROLES) && ROLES.length === 14,
-  'setup: generator declares exactly 14 roles — got ' + (ROLES && ROLES.length));
+assert(Array.isArray(ROLES) && ROLES.length === 7,
+  'setup: generator declares exactly 7 roles — got ' + (ROLES && ROLES.length));
 assert(JSON.stringify([...ROLES].sort()) === JSON.stringify(Object.keys(behavior.roles).sort()),
   'setup: behavior authority declares exactly the generator role roster');
 
@@ -145,7 +146,7 @@ function duplicateParagraphGroups(bodiesByRole) {
 
 // Defense in depth: the same measurement over the CLAUDE native render's body slice (between the
 // managed-agent marker and the shared runtime-adapter appendix, which is intentionally identical
-// across all 14 roles and must be excluded or every role would trivially "duplicate" the
+// across all roles and must be excluded or every role would trivially "duplicate" the
 // appendix). This proves the dedupe reaches generated output, not only the authority.
 function renderedBodySlice(content) {
   const markerEnd = content.indexOf('kaola-workflow-managed-agent: true -->');
@@ -342,15 +343,17 @@ for (const check of RITUAL_CHECKS) {
 // not red this suite. The negative captures the one thing that is actually wrong to say.
 // ===========================================================================
 {
-  const text = body('metric-optimizer');
-  const misroutesToTddGuide = /fixed-destination[\s\S]{0,40}tdd-guide/i.test(text)
-    || /fixed-destination[\s\S]{0,80}stays[\s\S]{0,10}`?tdd-guide`?/i.test(text);
-  assert(misroutesToTddGuide === false,
-    'C/source: metric-optimizer does not say fixed-destination implementation stays with tdd-guide');
-
-  const renderText = claudeRender('metric-optimizer');
-  assert(!(/fixed-destination[\s\S]{0,40}tdd-guide/i.test(renderText)),
-    'C/render: the native Claude render does not misroute fixed-destination work to tdd-guide either');
+  assert(!ROLES.includes('metric-optimizer') && !('metric-optimizer' in behavior.roles),
+    'C/source: metric-optimizer is retired — absent from the generator roster and the authority');
+  assert(!profiles.some(p => p.role === 'metric-optimizer'),
+    'C/render: no native render exists for the retired metric-optimizer role');
+  for (const role of ROLES) {
+    const text = body(role);
+    const misroutesToTddGuide = /fixed-destination[\s\S]{0,40}tdd-guide/i.test(text)
+      || /fixed-destination[\s\S]{0,80}stays[\s\S]{0,10}`?tdd-guide`?/i.test(text);
+    assert(misroutesToTddGuide === false,
+      `C/source[${role}]: no role says fixed-destination implementation stays with tdd-guide`);
+  }
 }
 
 // Group D (custody-sentence wording pins) DELETED per owner ruling (19:03 heartbeat): a positive
@@ -364,30 +367,23 @@ for (const check of RITUAL_CHECKS) {
 // Group E — machine-consumed fields stay intact.
 // ===========================================================================
 const PINNED_METADATA = {
-  'adversarial-verifier': { intent: 'reasoning', caps: ['repository_read', 'scoped_write', 'command_execution'] },
-  'build-error-resolver': { intent: 'reasoning', caps: ['repository_read', 'scoped_write', 'command_execution'] },
-  'code-architect': { intent: 'heavy', caps: ['repository_read', 'scoped_write', 'command_execution'] },
-  'code-explorer': { intent: 'standard', caps: ['repository_read', 'scoped_write'] },
-  'code-reviewer': { intent: 'reasoning', caps: ['repository_read', 'scoped_write', 'command_execution'] },
-  'doc-updater': { intent: 'standard', caps: ['repository_read', 'scoped_write', 'command_execution'] },
-  'implementer': { intent: 'standard', caps: ['repository_read', 'scoped_write', 'command_execution'] },
-  'investigator': { intent: 'standard', caps: ['repository_read', 'scoped_write', 'command_execution'] },
-  'knowledge-lookup': { intent: 'standard', caps: ['repository_read', 'scoped_write', 'external_research'] },
-  'metric-optimizer': { intent: 'standard', caps: ['repository_read', 'scoped_write', 'command_execution'] },
-  'planner': { intent: 'heavy', caps: ['repository_read', 'scoped_write'] },
-  'security-reviewer': { intent: 'reasoning', caps: ['repository_read', 'scoped_write', 'command_execution'] },
-  'synthesizer': { intent: 'reasoning', caps: ['repository_read', 'scoped_write', 'command_execution'] },
-  'tdd-guide': { intent: 'standard', caps: ['repository_read', 'scoped_write', 'command_execution'] },
+  'code-explorer': { caps: ['repository_read', 'scoped_write'] },
+  'code-reviewer': { caps: ['repository_read', 'scoped_write', 'command_execution'] },
+  'doc-updater': { caps: ['repository_read', 'scoped_write', 'command_execution'] },
+  'implementer': { caps: ['repository_read', 'scoped_write', 'command_execution'] },
+  'investigator': { caps: ['repository_read', 'scoped_write', 'command_execution'] },
+  'knowledge-lookup': { caps: ['repository_read', 'scoped_write', 'external_research'] },
+  'tdd-guide': { caps: ['repository_read', 'scoped_write', 'command_execution'] },
 };
 for (const role of ROLES) {
   const contract = behavior.roles[role];
   assert(typeof contract.description === 'string' && contract.description.trim().length > 0,
     `E/source[${role}]: description is non-empty`);
   const pin = PINNED_METADATA[role];
-  assert(!!pin, `E/setup[${role}]: this suite has a pinned tier/capability row for every role`);
+  assert(!!pin, `E/setup[${role}]: this suite has a pinned capability row for every role`);
   if (!pin) continue;
-  assert(contract.intent_class === pin.intent,
-    `E/source[${role}]: intent_class stays ${pin.intent} (tier policy is ADR 0019/0021, out of #1054's scope) — got ${contract.intent_class}`);
+  assert(!('intent_class' in contract),
+    `E/source[${role}]: intent_class is absent — the tier axis it encoded is retired by #1062 — got ${contract.intent_class}`);
   assert(JSON.stringify(contract.capability_requirements) === JSON.stringify(pin.caps),
     `E/source[${role}]: capability_requirements unchanged — got ${JSON.stringify(contract.capability_requirements)}`);
 }
@@ -412,13 +408,14 @@ for (const role of ROLES) {
       + (renderThrew ? (' — threw ' + renderThrew.message) : ''));
 }
 
-// Every runtime's renderer accepts the current bodies with no throw (already exercised by the
-// renderProfiles() call above; assert the coverage explicitly so a runtime silently dropped from
-// RUNTIMES would be caught here too).
+// Every profile-producing runtime's renderer accepts the current bodies with no throw (already
+// exercised by the renderProfiles() call above; assert the coverage explicitly so a binding
+// runtime silently dropped from BINDING_RUNTIMES would be caught here too). Native-only runtimes
+// render no profiles by design (#1062).
 {
   const renderedRuntimes = new Set(profiles.map(p => p.runtime));
-  assert(JSON.stringify([...renderedRuntimes].sort()) === JSON.stringify([...generator.RUNTIMES].sort()),
-    'E/render: every declared runtime rendered at least one profile with no throw — got '
+  assert(JSON.stringify([...renderedRuntimes].sort()) === JSON.stringify([...generator.BINDING_RUNTIMES].sort()),
+    'E/render: every binding runtime rendered at least one profile with no throw — got '
       + JSON.stringify([...renderedRuntimes].sort()));
 }
 
@@ -483,17 +480,16 @@ for (const role of ROLES) {
 }
 
 // ===========================================================================
-// Group G — negative: 14 roles, no schema field added, no tool-allowlist drift beyond what E's
+// Group G — negative: 7 roles, no schema field added, no tool-allowlist drift beyond what E's
 // pinned capability_requirements already implies. This suite itself introduces no new
 // word-count/ratio/length prompt-quality gate (see the concept-anchor style of Groups B-D above,
 // which ban NAMED retired literals, not prose shape).
 // ===========================================================================
-assert(ROLES.length === 14, 'G: exactly 14 roles remain — got ' + ROLES.length);
+assert(ROLES.length === 7, 'G: exactly 7 roles remain — got ' + ROLES.length);
 assert(JSON.stringify([...ROLES].sort()) === JSON.stringify([
-  'adversarial-verifier', 'build-error-resolver', 'code-architect', 'code-explorer', 'code-reviewer',
-  'doc-updater', 'implementer', 'investigator', 'knowledge-lookup', 'metric-optimizer', 'planner',
-  'security-reviewer', 'synthesizer', 'tdd-guide',
-]), 'G: exactly the named 14 roles remain — got ' + JSON.stringify([...ROLES].sort()));
+  'code-explorer', 'code-reviewer', 'doc-updater', 'implementer', 'investigator',
+  'knowledge-lookup', 'tdd-guide',
+]), 'G: exactly the named 7 roles remain — got ' + JSON.stringify([...ROLES].sort()));
 
 for (const role of ROLES) {
   const contract = behavior.roles[role];

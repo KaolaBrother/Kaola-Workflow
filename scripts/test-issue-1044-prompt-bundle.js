@@ -95,8 +95,11 @@ for (const forge of FORGES) {
     assert(!/node\s|\.js\b|PreToolUse|PostToolUse|sidecar|opaque token|chunk bitmap/i.test(prompt),
       `B4[${runtime}/${forge}]: runtime prompt contains no executable prompt machinery`);
     if (FULL_DISPATCH_RUNTIMES.includes(runtime)) {
-      assert(bytes(prompt) >= 6500 && bytes(prompt) <= 8500,
-        `B5[${runtime}/${forge}]: complete static prompt (always-loaded carrier) stays within measured 6.5–8.5 KB budget (got ${bytes(prompt)} B)`);
+      // Measured per-runtime ceilings: grok's always-loaded carrier is ~7.9 KB; cursor's carries a
+      // ~1.5 KB larger adapter block plus the #1062 single-binding contract and measures ~9.5 KB.
+      const ceiling = { grok: 8500, cursor: 10500 }[runtime] || 8500;
+      assert(bytes(prompt) >= 6500 && bytes(prompt) <= ceiling,
+        `B5[${runtime}/${forge}]: complete static prompt (always-loaded carrier) stays within measured 6.5 KB–${(ceiling / 1000).toFixed(1)} KB budget (got ${bytes(prompt)} B)`);
     } else {
       // claude/codex defer the dispatch/adapter content to the full Next/Finalize reload, so their
       // recovery render is smaller by roughly that content's size; bounded loosely (not pinned to

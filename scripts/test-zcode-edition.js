@@ -14,20 +14,23 @@
 //
 // ZCode (measured against ZCode 3.10.1/3.10.1.6272) is a coding-agent RUNTIME, not a forge,
 // and it does not ride install.sh / edition-sync.js / npm test. It is delivered
-// the ZCode-native way: named agents under `.zcode/agents/<role>.md` (Agent
-// dispatch types), flat commands under `.zcode/commands/<name>.md`, and
+// the ZCode-native way: flat commands under `.zcode/commands/<name>.md` and
 // support scripts under `.zcode/kaola-workflow/scripts`. ZCode deliberately
 // carries no Kaola hook declaration or executable hook subprocess: its measured
 // one-million-token context does not need compact prompt hooks, and the live
 // hook experiment self-locked Workflow Next.
 //
-// ZCode discovers subagents ONLY at user scope (~/.zcode/agents), so the
-// installer syncs the staged `.zcode/agents/` roster to the user home as well.
+// Issue #1062 made ZCode a native_only runtime: it installs NO Kaola role
+// profiles. Older releases deployed a Kaola agent roster into
+// `<project>/.zcode/agents/` and synced it to `${ZCODE_HOME:-~/.zcode}/agents/`
+// (the only scope ZCode discovers); the installer now sweeps only
+// managed-marker retired files from both locations and never touches a
+// user-authored agent, even one named like a Kaola role.
 //
-// Frontmatter pins (measured on ZCode 3.10.1/3.10.1.6272): every agent carries
-// `model: GLM-5.3` plus exactly ONE `thoughtLevel:` pinned by its canonical
-// tier — standard → high, reasoning → max, heavy (fable) → max. The frontmatter
-// key is `thoughtLevel`, NOT `reasoningEffort`/`effort`.
+// The generated command surfaces carry the native_only delegation block: no
+// `**Roles:**` roster, no `**Subagent default:**`, no `subagent_type="<kaola
+// role>"` dispatch cards — the adapter records the native `general-purpose`
+// and read-only `Explore` routes instead.
 //
 // Outside `npm test`, the forge chains, and the fast gate: an additive
 // runtime edition is not a forge. The script exists so the suite is
@@ -159,59 +162,21 @@ const trackedAgents = () => fs.readdirSync(path.join(REPO, 'agents'))
   .filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
 const commandNamesFor = forge => forgeLayout.commandSources(forge)
   .map(s => s.basename.replace(/\.md$/, '')).sort();
-const behaviorContracts = reviewerGenerator.loadBehaviorContracts(REPO).roles;
-
-function expectedNativeTools(role) {
-  const required = new Set(behaviorContracts[role].capability_requirements || []);
-  const tools = ['Read', 'Grep', 'Glob'];
-  if (required.has('scoped_write')) tools.splice(1, 0, 'Write', 'Edit');
-  if (required.has('command_execution')) tools.push('Bash');
-  if (required.has('external_research')) tools.push('WebSearch', 'WebFetch');
-  return tools;
-}
-
 // ---------------------------------------------------------------------------
-// ZCODE_RUNTIME_NATIVE — the frontmatter thoughtLevel pin as a DECLARED
-// table entry, not merely as prose. Deleting the declaration reds this suite.
+// ZCODE_RUNTIME_NATIVE — the native_only posture as a DECLARED table entry,
+// not merely as prose. Deleting the declaration reds this suite.
 // ---------------------------------------------------------------------------
 const ZCODE_RUNTIME_NATIVE = Object.freeze({
-  frontmatter_thought_level_pin:
-    'ZCode generated agent frontmatter pins every agent to model: GLM-5.3 plus exactly one camelCase thoughtLevel: field set by canonical tier — standard high, reasoning max, heavy (fable) max. The key is thoughtLevel, NOT reasoningEffort/effort.',
+  native_only_design:
+    'ZCode is a native_only runtime under #1062: it installs no Kaola role profiles, renders no .zcode/agents/ tree, and its command surfaces carry the native_only delegation block (native `general-purpose` / read-only `Explore` routes) instead of a `**Roles:**` roster or `**Subagent default:**` binding.',
 });
 const ZCODE_SYNC_SRC = fs.readFileSync(path.join(REPO, 'scripts', 'sync-zcode-edition.js'), 'utf8');
 const ZCODE_ADAPTER = reviewerGenerator.loadRuntimeAdapters(REPO).runtimes.zcode;
 
-// The canonical model tokens are the existing portable class markers. Derive
-// each expected ZCode binding from agents/*.md so a role addition or tier move
-// is judged by the canonical frontmatter itself.
-const ZCODE_MODEL_CLASS_TIERS = Object.freeze({
-  sonnet: Object.freeze({ tier: 'standard', model: 'GLM-5.3', thoughtLevel: 'high' }),
-  standard: Object.freeze({ tier: 'standard', model: 'GLM-5.3', thoughtLevel: 'high' }),
-  opus: Object.freeze({ tier: 'reasoning', model: 'GLM-5.3', thoughtLevel: 'max' }),
-  reasoning: Object.freeze({ tier: 'reasoning', model: 'GLM-5.3', thoughtLevel: 'max' }),
-  fable: Object.freeze({ tier: 'heavy', model: 'GLM-5.3', thoughtLevel: 'max' }),
-  heavy: Object.freeze({ tier: 'heavy', model: 'GLM-5.3', thoughtLevel: 'max' }),
-});
-
-function canonicalAgentClass(name) {
-  const { fm } = parseFrontmatter(read('agents/' + name + '.md'));
-  const model = String(fm.model || '').trim().toLowerCase();
-  const binding = ZCODE_MODEL_CLASS_TIERS[model];
-  return binding
-    ? { model, tier: binding.tier, pin: binding }
-    : { model, tier: 'unknown', pin: null };
-}
-
-function canonicalRosters(names) {
-  const rosters = { standard: [], reasoning: [], heavy: [], unknown: [] };
-  for (const name of names) {
-    const tier = canonicalAgentClass(name).tier;
-    if (!rosters[tier]) rosters[tier] = [];
-    rosters[tier].push(name);
-  }
-  for (const tier of Object.keys(rosters)) rosters[tier].sort();
-  return rosters;
-}
+// The canonical roster is still the authority for what the installer must
+// sweep: older releases installed every agents/*.md name into the project and
+// user scopes, so the retired-file list covers the full historical roster.
+const KAOLA_MANAGED_MARKER = 'kaola-workflow-managed-agent: true';
 
 // ---------------------------------------------------------------------------
 // B0 — additive boundary. zcode is a runtime, not a forge. Read the tree; do
@@ -392,188 +357,101 @@ assertReal(treeLabel('github') === '.zcode'
 
 const canonAgents = trackedAgents();
 const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
-const canonRosters = canonicalRosters(canonAgents);
 
 // ---------------------------------------------------------------------------
 // G0 — THE SUBJECT UNDER TEST IS THE GENERATOR'S OUTPUT, derived from TRACKED
-// canonical sources. An absent tree must fail loudly rather than let every
-// readdir-driven loop iterate over nothing.
+// canonical sources. Under #1062 ZCode is native_only: the generated tree has
+// commands and support scripts but NO .zcode/agents role-profile directory.
 // ---------------------------------------------------------------------------
 {
-  const provisioned = fs.existsSync(path.join(TREE_ROOT, '.zcode', 'agents'))
-    && fs.existsSync(path.join(TREE_ROOT, '.zcode', 'commands'));
+  const provisioned = fs.existsSync(path.join(TREE_ROOT, '.zcode', 'commands'));
   assertReal(provisioned,
-    'G0: the generated .zcode/agents and .zcode/commands trees exist after sync --write');
+    'G0: the generated .zcode/commands tree exists after sync --write');
   if (!provisioned) {
     console.error('FATAL: sync --write reported success but produced no tree at '
       + path.join(TREE_ROOT, '.zcode') + ' — nothing below can be tested.');
     process.exit(1);
   }
-  assertReal(canonAgents.length > 0 && canonCommandNames.length > 0,
-    'G0-roster: the canonical agents/ inventory and routing-registry command surfaces are both non-empty');
+  assertReal(canonAgents.length === 7 && canonCommandNames.length > 0,
+    'G0-roster: the canonical agents/ inventory is exactly the seven #1062 roles '
+    + 'and routing-registry command surfaces are non-empty — agents='
+    + JSON.stringify(canonAgents));
   assertReal(canonAgents.includes('knowledge-lookup'),
     'G0-roster: knowledge-lookup is in the canonical agents/*.md inventory');
-  assertReal(canonRosters.standard.length > 0,
-    'G0-roster: canonical sonnet/standard model class derives a non-empty standard roster');
-  assertReal(canonRosters.reasoning.length > 0,
-    'G0-roster: canonical opus/reasoning model class derives a non-empty reasoning roster');
-  assertReal(canonRosters.heavy.length > 0,
-    'G0-roster: canonical fable/heavy model class derives a non-empty heavy roster '
-    + '(the fable thoughtLevel=max pin must have an agent to pin) — heavy='
-    + JSON.stringify(canonRosters.heavy));
-  assertReal(canonRosters.heavy.includes('planner') && canonRosters.heavy.includes('code-architect'),
-    'G0-roster: planner-class (planner, code-architect) is the heavy (fable) roster — heavy='
-    + JSON.stringify(canonRosters.heavy));
-  assertReal(canonRosters.unknown.length === 0,
-    'G0-roster: every canonical agent model belongs to the known sonnet/opus/fable classes — unknown='
-    + JSON.stringify(canonRosters.unknown));
-  assertReal(JSON.stringify(ZCODE_ADAPTER).includes('GLM-5.3'),
-    'G0-adapter: runtime-capabilities.json owns the rendered ZCode model identifier GLM-5.3');
-  assertReal(!/const\s+ZCODE_MODEL_CLASS_PINS\b|function\s+zcodeModelPin\b/.test(ZCODE_SYNC_SRC),
-    'G0-adapter: sync-zcode-edition carries no executable hardcoded model/thought table; '
-    + 'runtime-capabilities.json is the sole runtime identifier authority');
+  const delegation = ZCODE_ADAPTER && ZCODE_ADAPTER.capabilities
+    && ZCODE_ADAPTER.capabilities.delegation_guidance;
+  assertReal(ZCODE_ADAPTER && ZCODE_ADAPTER.capabilities
+    && ZCODE_ADAPTER.capabilities.role_dispatch === 'native_only',
+    'G0-adapter: runtime-capabilities.json declares zcode role_dispatch native_only');
+  assertReal(!!delegation && typeof delegation.native_routes === 'string'
+    && delegation.native_routes.length > 0,
+    'G0-adapter: the zcode adapter records its native routes as delegation guidance');
+  for (const forbidden of ['subagent_default', 'profile_lookup', 'dispatch_carrier', 'tool_boundary']) {
+    assertReal(!Object.prototype.hasOwnProperty.call(ZCODE_ADAPTER.capabilities, forbidden)
+      && !Object.prototype.hasOwnProperty.call(delegation || {}, forbidden),
+      'G0-adapter: native_only zcode adapter carries no ' + forbidden + ' capability');
+  }
+  assertReal(!/GLM-5\.3|thoughtLevel/.test(JSON.stringify(delegation || {})),
+    'G0-adapter: native_only zcode delegation guidance carries no retired GLM/thoughtLevel pin');
+  assertReal(!/const\s+ZCODE_MODEL_CLASS_PINS\b|function\s+zcodeModelPin\b|function\s+renderAgent\b/.test(ZCODE_SYNC_SRC),
+    'G0-adapter: sync-zcode-edition carries no agent-profile renderer or model/thought table; '
+    + 'ZCode installs no Kaola role profiles');
 }
 
-// An unrecognised canonical class must be rejected by the subject rather than
-// silently inventing a fallback roster or emitting an unpinned agent.
+// A role render request against a native_only runtime must fail closed rather
+// than silently emitting a profile the runtime cannot dispatch by name.
 {
-  const unknownCanonical = [
-    '---',
-    'name: zcode-unknown-class-probe',
-    'description: unknown class probe',
-    'model: unsupported-class-token',
-    '---',
-    '',
-    'probe',
-    '',
-  ].join('\n');
   let rejected = false;
   try {
-    if (typeof syncMod.renderAgent === 'function') syncMod.renderAgent(unknownCanonical, 'zcode-unknown-class-probe');
+    reviewerGenerator.renderRuntimeRole('zcode', 'implementer', {});
   } catch (_) {
     rejected = true;
   }
   assertReal(rejected,
-    'G0-roster: renderAgent rejects an unsupported canonical model token (fail closed; no invented roster)');
+    'G0-native_only: renderRuntimeRole("zcode", …) refuses to emit a Kaola role profile (fail closed)');
+  assertReal(typeof syncMod.renderAgent !== 'function',
+    'G0-native_only: sync-zcode-edition exports no renderAgent — ZCode renders no agent profiles');
 }
 
-// The heavy/fable tier must render with the max thoughtLevel pin.
-{
-  const fableCanonical = [
-    '---',
-    'name: planner',
-    'description: fable class probe',
-    'model: fable',
-    '---',
-    '',
-    'probe',
-    '',
-  ].join('\n');
-  let rendered = '';
-  let accepted = false;
-  try {
-    rendered = syncMod.renderAgent(fableCanonical, 'planner');
-    accepted = true;
-  } catch (e) {
-    accepted = false;
-    rendered = String(e && e.message || e);
-  }
-  assertReal(accepted,
-    'G0-fable: renderAgent accepts fable (must not silently classify as standard) — ' + rendered);
-  assertReal(/^model: GLM-5\.3$/m.test(rendered) && /^thoughtLevel: max$/m.test(rendered),
-    'G0-fable: renderAgent pins fable as model: GLM-5.3 + thoughtLevel: max — got '
-    + String(rendered).slice(0, 200));
-}
-
-function agentRel(name, forge) {
-  return treeLabel(forge || DEFAULT_FORGE) + '/agents/' + name + '.md';
-}
 function commandRel(name, forge) {
   return treeLabel(forge || DEFAULT_FORGE) + '/commands/' + name + '.md';
 }
 
 // ---------------------------------------------------------------------------
-// G1: agents — exact set = canonical agents/*.md. knowledge-lookup MUST be
-// present. Frontmatter: name, description, model: GLM-5.3, and exactly ONE
-// thoughtLevel: pinned by the canonical tier. FORBIDDEN fields: effort:,
-// reasoning_effort:, reasoningEffort:, readonly:, model: inherit.
+// G1: no generated agent profiles. The .zcode/agents directory must be absent
+// from the rendered tree — under #1062 any file there is a retired surface the
+// sync prunes, never a render product.
 // ---------------------------------------------------------------------------
 {
   const dir = path.join(TREE_ROOT, '.zcode', 'agents');
-  const gen = fs.readdirSync(dir).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
-  assertReal(JSON.stringify(gen) === JSON.stringify(canonAgents),
-    'G1: .zcode/agents set == canonical agents/*.md — canonical=' + JSON.stringify(canonAgents)
-    + ' generated=' + JSON.stringify(gen));
-  assertReal(gen.includes('knowledge-lookup'),
-    'G1: knowledge-lookup MUST be present under .zcode/agents/');
+  const gen = fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort()
+    : [];
+  assertReal(gen.length === 0,
+    'G1: native_only zcode renders zero agent profiles — generated=' + JSON.stringify(gen));
   for (const name of canonAgents) {
-    const rel = agentRel(name);
-    assertReal(exists(rel), 'G1[' + name + ']: generated agent exists');
-    if (!exists(rel)) continue;
-    const content = read(rel);
-    const { fm, raw } = parseFrontmatter(content);
-    assertReal(fm.name === name, 'G1[' + name + ']: frontmatter name is the role — got ' + JSON.stringify(fm.name));
-    assertReal(typeof fm.description === 'string' && fm.description.trim().length > 0,
-      'G1[' + name + ']: frontmatter has a non-empty description');
-    const canonical = canonicalAgentClass(name);
-    assertReal(canonical.tier !== 'unknown',
-      'G1[' + name + ']: canonical model class is known — got ' + JSON.stringify(canonical.model));
-    const modelLines = raw.split(/\r?\n/).filter(line => /^\s*model\s*:/.test(line));
-    assertReal(modelLines.length === 1 && modelLines[0] === 'model: ' + canonical.pin.model,
-      'G1[' + name + ']: model line is exactly "model: ' + canonical.pin.model + '" — got '
-      + JSON.stringify(modelLines));
-    const thoughtLines = raw.split(/\r?\n/).filter(line => /^\s*thoughtLevel\s*:/.test(line));
-    assertReal(thoughtLines.length === 1 && thoughtLines[0] === 'thoughtLevel: ' + canonical.pin.thoughtLevel,
-      'G1[' + name + ']: exactly one thoughtLevel line, pinned by canonical tier '
-      + canonical.tier + ' ("thoughtLevel: ' + canonical.pin.thoughtLevel + '") — got '
-      + JSON.stringify(thoughtLines));
-    assertReal(!/^\s*effort\s*:/m.test(raw),
-      'G1[' + name + ']: NO effort: field (the ZCode key is thoughtLevel)');
-    assertReal(!/^\s*reasoning_effort\s*:/m.test(raw) && !/^\s*reasoningEffort\s*:/m.test(raw),
-      'G1[' + name + ']: NO reasoning_effort / reasoningEffort field (the ZCode key is thoughtLevel)');
-    assertReal(!/^\s*readonly\s*:/m.test(raw),
-      'G1[' + name + ']: NO readonly field (ZCode has no such agent field)');
-    assertReal(!/^\s*model\s*:\s*inherit\b/m.test(raw),
-      'G1[' + name + ']: model is never "inherit" (pinned to ' + canonical.pin.model + ')');
-    let tools = null;
-    try { tools = JSON.parse(fm.tools); } catch (_) { tools = null; }
-    const expectedTools = expectedNativeTools(name);
-    assertReal((raw.match(/^tools\s*:/gm) || []).length === 1 && Array.isArray(tools),
-      'G1[' + name + ']: frontmatter carries exactly one executable tools allowlist');
-    assertReal(Array.isArray(tools) && JSON.stringify(tools) === JSON.stringify(expectedTools),
-      'G1[' + name + ']: tools allowlist derives from behavior capabilities — expected '
-      + JSON.stringify(expectedTools) + ' got ' + JSON.stringify(tools));
-    if (!behaviorContracts[name].capability_requirements.includes('command_execution')) {
-      assertReal(Array.isArray(tools) && !tools.includes('Bash'),
-        'G1[' + name + ']: a no-shell role lacks Bash in its enforced tools allowlist');
-    }
+    assertReal(!fs.existsSync(path.join(dir, name + '.md')),
+      'G1[' + name + ']: no .zcode/agents/' + name + '.md is rendered');
   }
 }
 
-// G1-declaration: ZCODE_RUNTIME_NATIVE.frontmatter_thought_level_pin exists and
-// states the measured tier mapping; the generated tree matches it.
+// G1-declaration: ZCODE_RUNTIME_NATIVE.native_only_design exists and states the
+// native_only posture; the generated tree matches it.
 {
-  const KEY = 'frontmatter_thought_level_pin';
+  const KEY = 'native_only_design';
   const reason = ZCODE_RUNTIME_NATIVE[KEY];
   assertReal(typeof reason === 'string' && reason.trim().length >= 20,
     'G1-declaration: ZCODE_RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason');
-  assertReal(/frontmatter/i.test(reason) && /thoughtLevel/i.test(reason)
-    && /GLM-5\.3/i.test(reason) && /high/i.test(reason) && /max/i.test(reason)
-    && /standard/i.test(reason) && /reasoning/i.test(reason) && /heavy|fable/i.test(reason)
-    && /NOT\s+reasoningEffort/i.test(reason),
-    'G1-declaration: the "' + KEY + '" reason must state GLM-5.3 with thoughtLevel '
-    + 'high/max/max for standard/reasoning/heavy and that the key is thoughtLevel, NOT reasoningEffort');
-  for (const name of canonAgents) {
-    const rel = agentRel(name);
-    if (!exists(rel)) continue;
-    const { raw } = parseFrontmatter(read(rel));
-    const canonical = canonicalAgentClass(name);
-    assertReal(raw.split(/\r?\n/).includes('model: ' + canonical.pin.model),
-      'G1-declaration: ' + rel + ' carries the canonical model pin "model: ' + canonical.pin.model + '"');
-    assertReal(raw.split(/\r?\n/).includes('thoughtLevel: ' + canonical.pin.thoughtLevel),
-      'G1-declaration: ' + rel + ' carries the canonical tier thoughtLevel pin "thoughtLevel: '
-      + canonical.pin.thoughtLevel + '"');
-  }
+  assertReal(/native_only/i.test(reason) && /no Kaola role profiles/i.test(reason)
+    && /Roles/i.test(reason) && /Subagent default/i.test(reason),
+    'G1-declaration: the "' + KEY + '" reason must state the native_only posture '
+    + '(no Kaola role profiles, no **Roles:** roster, no **Subagent default:**)');
+  const dir = path.join(TREE_ROOT, '.zcode', 'agents');
+  const leftover = fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter(f => f.endsWith('.md')) : [];
+  assertReal(leftover.length === 0,
+    'G1-declaration: the generated .zcode tree matches the native_only declaration — leftover='
+    + JSON.stringify(leftover));
 }
 
 // ---------------------------------------------------------------------------
@@ -611,19 +489,38 @@ function commandRel(name, forge) {
       'G2[' + name + ']: no sibling-runtime Task( / spawn_subagent( dispatch wording');
     assertReal(!/\bmodel\s*=\s*["']/.test(content),
       'G2[' + name + ']: generated command stays free of per-call model dispatch');
-    // The compressed routing cards no longer carry a static Agent(...) sample.
-    // Preserve the named-role contract by comparing the generated roster that
-    // the canonical runtime-delegation slot actually publishes.
+    // Native_only under #1062: the ZCode render must carry no Kaola role
+    // dispatch surface at all — no `**Roles:**` roster, no `**Subagent
+    // default:**`, and no `subagent_type="<kaola role>"` card. The canonical
+    // named-role contract stays asserted against the canonical source below.
     const canonHits = namedRolesIn(canon);
+    const kaolaRoleCall = new RegExp('subagent_type\\s*[:=]\\s*["\']?(?:'
+      + reviewerGenerator.ROLES.join('|') + ')\\b');
+    assertReal(!kaolaRoleCall.test(content),
+      'G2[' + name + ']: native_only render names no Kaola role as a subagent_type dispatch target');
     if (name === 'kaola-workflow-finalize') {
       canonicalFinalizeRoles = canonHits;
       assertReal(!lineStartCall(content),
         'G2[kaola-workflow-finalize]: native ZCode guidance has no static Agent( or Task( call card');
       assertReal(staticDispatchFields(content).length === 0,
         'G2[kaola-workflow-finalize]: no invented static subagent_type= or description= fields escape into the ZCode render');
+      assertReal(/installs no Kaola role profiles by design/i.test(content),
+        'G2[kaola-workflow-finalize]: delegation block states the native_only design sentence');
+      assertReal(!/\*\*Roles:\*\*/.test(content),
+        'G2[kaola-workflow-finalize]: native_only render carries no **Roles:** roster');
+      assertReal(!/\*\*Subagent default:\*\*/.test(content),
+        'G2[kaola-workflow-finalize]: native_only render carries no **Subagent default:** binding');
+      // Surviving Kaola role names may appear only as suggested-route prose
+      // that always offers an inline/native alternative ("or yourself",
+      // "when useful", "a native route") — never as a dispatchable profile,
+      // which the subagent_type/Agent( asserts above already forbid.
       for (const role of canonHits) {
-        assertReal(content.includes(role),
-          'G2[kaola-workflow-finalize]: native prose preserves the canonical dispatch role ' + role);
+        for (const para of content.split(/\n\s*\n/)) {
+          if (!rolePattern(role).test(para)) continue;
+          assertReal(/or yourself|when useful|native route|work inline/i.test(para),
+            'G2[kaola-workflow-finalize]: `' + role + '` appears only as a suggested route '
+            + 'with an inline/native alternative, not as a dispatchable profile');
+        }
       }
       for (const [boundary, pattern] of [
         ['outcome', /outcome/i],
@@ -635,9 +532,12 @@ function commandRel(name, forge) {
         assertReal(pattern.test(content),
           'G2[kaola-workflow-finalize]: native prose preserves the ' + boundary + ' brief boundary');
       }
-      assertReal(/automatic selection/i.test(content) && /@<role>|@.*role/i.test(content)
-        && /live schema/i.test(content),
-      'G2[kaola-workflow-finalize]: native prose keeps automatic/@role routing and defers optional Agent fields to the live schema');
+      assertReal(/automatic selection/i.test(content) && /@/.test(content)
+        && /general-purpose/.test(content) && /Explore/.test(content),
+      'G2[kaola-workflow-finalize]: native prose keeps the real ZCode routes '
+      + '(automatic selection / @, general-purpose, read-only Explore)');
+      assertReal(/live schema wins|live schema/i.test(content),
+        'G2[kaola-workflow-finalize]: native prose defers optional fields to the live schema');
     }
     if (name === 'workflow-init') {
       assertReal(typeof fm['argument-hint'] === 'string' && fm['argument-hint'].length > 0,
@@ -730,14 +630,14 @@ function generatedTreeRelFiles(label) {
   assertReal(ok.status === 0,
     'G3: sync-zcode-edition --check exits 0 against the tree --write just produced'
     + (ok.status !== 0 ? ' — ' + String(ok.stderr || ok.stdout).split('\n')[0] : ''));
-  const probe = path.join(TREE_ROOT, '.zcode', 'agents', 'implementer.md');
-  assertReal(fs.existsSync(probe), 'G3: implementer.md exists to plant drift against');
+  const probe = path.join(TREE_ROOT, '.zcode', 'commands', 'workflow-next.md');
+  assertReal(fs.existsSync(probe), 'G3: workflow-next.md exists to plant drift against');
   const orig = fs.existsSync(probe) ? fs.readFileSync(probe, 'utf8') : '';
   try {
     fs.appendFileSync(probe, '\n<!-- zcode-edition drift probe -->\n');
     const drifted = runGeneratorCli(['--check']);
     assertReal(drifted.status !== 0,
-      'G3: --check exits non-zero on a drifted generated agent (got ' + drifted.status + ')');
+      'G3: --check exits non-zero on a drifted generated command (got ' + drifted.status + ')');
   } finally {
     try { fs.writeFileSync(probe, orig); } catch (_) { /* restore best-effort */ }
   }
@@ -746,39 +646,17 @@ function generatedTreeRelFiles(label) {
 }
 
 // ---------------------------------------------------------------------------
-// G4: reviewer roles keep behavior_contract_version/hash + a restamped
-// resolved_profile_hash (opencode/kimi/cursor discipline).
+// G4: native_only — no role renders for zcode. The canonical roles keep their
+// behavior identity on the binding runtimes; for zcode the protection is that
+// every role render request fails closed and no profile file exists.
 // ---------------------------------------------------------------------------
 for (const role of reviewerGenerator.ROLES) {
-  const canonical = reviewerGenerator.behaviorIdentityFromCore(read('agents/' + role + '.md'));
-  const zcodeText = read(agentRel(role));
-  let zcode = null;
-  try { zcode = reviewerGenerator.behaviorIdentityFromCore(zcodeText); } catch (e) {
-    assertReal(false, 'G4-reviewer[' + role + ']: the generated agent still carries an extractable behavior core — ' + e.message);
-    zcode = { role: null, behavior_contract_version: null, behavior_contract_hash: null, core: null };
-  }
-  assertReal(zcode.role === canonical.role
-    && zcode.behavior_contract_version === canonical.behavior_contract_version
-    && zcode.behavior_contract_hash === canonical.behavior_contract_hash,
-    'G4-reviewer[' + role + ']: zcode agent retains normalized reviewer behavior identity');
-  assertReal(zcode.core === canonical.core,
-    'G4-reviewer[' + role + ']: zcode render preserves reviewer behavior-core bytes');
-  const zcodeHash = (zcodeText.match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
-  assertReal(zcodeHash && /^[0-9a-f]{64}$/.test(zcodeHash),
-    'G4-reviewer[' + role + ']: zcode agent carries a resolved_profile_hash');
-  assertReal((zcodeText.match(/^resolved_profile_hash\s*:\s*[0-9a-f]{64}\s*$/gm) || []).length === 1,
-    'G4-reviewer[' + role + ']: zcode agent carries EXACTLY ONE resolved_profile_hash line');
-  let zcodeHashVerifies = true;
-  try { reviewerGenerator.verifyResolvedProfileHash(zcodeText); } catch (_) { zcodeHashVerifies = false; }
-  assertReal(zcodeHashVerifies,
-    'G4-reviewer[' + role + ']: resolved_profile_hash verifies over the zcode bytes (zeroed-self sha256)');
-  const clHash = (read('agents/' + role + '.md').match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
-  assertReal(zcodeHash !== clHash,
-    'G4-reviewer[' + role + ']: zcode hash is re-stamped over zcode bytes (not the reused Claude render hash)');
-  assertReal(new RegExp('^behavior_contract_version:\\s*' + canonical.behavior_contract_version + '\\s*$', 'm').test(zcodeText),
-    'G4-reviewer[' + role + ']: zcode agent preserves the canonical behavior_contract_version line');
-  assertReal(new RegExp('^behavior_contract_hash:\\s*' + canonical.behavior_contract_hash + '\\s*$', 'm').test(zcodeText),
-    'G4-reviewer[' + role + ']: zcode agent preserves the canonical behavior_contract_hash line');
+  let rejected = false;
+  try { reviewerGenerator.renderRuntimeRole('zcode', role, {}); } catch (_) { rejected = true; }
+  assertReal(rejected,
+    'G4-native_only[' + role + ']: renderRuntimeRole refuses a zcode profile for ' + role);
+  assertReal(!fs.existsSync(path.join(TREE_ROOT, '.zcode', 'agents', role + '.md')),
+    'G4-native_only[' + role + ']: no .zcode/agents/' + role + '.md exists in the generated tree');
 }
 
 // ---------------------------------------------------------------------------
@@ -899,8 +777,9 @@ for (const role of reviewerGenerator.ROLES) {
     const agents = fs.existsSync(agentDir)
       ? fs.readdirSync(agentDir).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort()
       : [];
-    assertReal(JSON.stringify(agents) === JSON.stringify(canonAgents),
-      'G7[' + forge + ']: agent set is the canonical roster, including knowledge-lookup');
+    assertReal(agents.length === 0,
+      'G7[' + forge + ']: native_only sibling tree renders zero agent profiles — got '
+      + JSON.stringify(agents));
     const c = runGeneratorCli(['--forge=' + forge, '--check']);
     assertReal(c.status === 0,
       'G7[' + forge + ']: --check is green after --write (got ' + c.status + ')');
@@ -1060,8 +939,10 @@ for (const role of reviewerGenerator.ROLES) {
         || fs.readdirSync(projectHooksDir).filter(f => /\.(?:sh|command)$/.test(f)).length === 0,
         'G8-project: no executable Kaola hook shell is staged in the project');
       for (const name of canonAgents) {
-        assertReal(fs.existsSync(path.join(r.zcodeHome, 'agents', name + '.md')),
-          'G8-project[' + name + ']: authoritative agent installed under $ZCODE_HOME/agents/');
+        assertReal(!fs.existsSync(path.join(r.zcodeHome, 'agents', name + '.md')),
+          'G8-project[' + name + ']: native_only install deploys no agent under $ZCODE_HOME/agents/');
+        assertReal(!fs.existsSync(path.join(r.dest, '.zcode', 'agents', name + '.md')),
+          'G8-project[' + name + ']: native_only install stages no agent under <target>/.zcode/agents/');
       }
       assertReal(fs.existsSync(path.join(r.zcodeHome, 'kaola-workflow', 'scripts')),
         'G8-project: support scripts land at $ZCODE_HOME/kaola-workflow/scripts');
@@ -1120,7 +1001,8 @@ for (const role of reviewerGenerator.ROLES) {
       }
     }
 
-    // --global: agents/commands land under ZCODE_HOME, un-nested.
+    // --global: commands land under ZCODE_HOME, un-nested; a native_only
+    // runtime deploys no Kaola agent profiles at any scope.
     {
       const homeDecoy = JSON.stringify({ home_decoy: 'must-stay-byte-identical' }, null, 2) + '\n';
       const globalUserConfigBytes = jsonBytes(userConfigSeed());
@@ -1131,8 +1013,8 @@ for (const role of reviewerGenerator.ROLES) {
       assertReal(r.status === 0,
         'G8-global: install-zcode.sh --global exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
       for (const name of canonAgents) {
-        assertReal(fs.existsSync(path.join(r.zcodeHome, 'agents', name + '.md')),
-          'G8-global[' + name + ']: agent deployed under $ZCODE_HOME/agents/ (un-nested)');
+        assertReal(!fs.existsSync(path.join(r.zcodeHome, 'agents', name + '.md')),
+          'G8-global[' + name + ']: native_only --global deploys no agent under $ZCODE_HOME/agents/');
       }
       for (const name of canonCommandNames) {
         assertReal(fs.existsSync(path.join(r.zcodeHome, 'commands', name + '.md')),
@@ -1251,8 +1133,8 @@ for (const role of reviewerGenerator.ROLES) {
       const r = runInstaller(['--no-scripts'], { beforeRun: seedUserConfig });
       assertReal(r.status === 0,
         'G8-noscripts: --no-scripts exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
-      assertReal(fs.existsSync(path.join(r.zcodeHome, 'agents', 'knowledge-lookup.md')),
-        'G8-noscripts: authoritative user-scope agents still deploy');
+      assertReal(!fs.existsSync(path.join(r.zcodeHome, 'agents', 'knowledge-lookup.md')),
+        'G8-noscripts: native_only install still deploys no user-scope agent');
       assertReal(fs.existsSync(path.join(r.dest, '.zcode', 'commands', 'workflow-next.md')),
         'G8-noscripts: commands still deploy');
       assertReal(!fs.existsSync(path.join(r.zcodeHome, 'kaola-workflow', 'scripts')),
@@ -1270,15 +1152,37 @@ for (const role of reviewerGenerator.ROLES) {
     }
 
     // --uninstall removes only kaola-deployed names: user agents in
-    // ~/.zcode/agents and foreign config keys/entries survive.
+    // ~/.zcode/agents and foreign config keys/entries survive. The retired
+    // sweep requires the managed marker: a managed retired-role file is
+    // removed, while a user-authored file — even one named like a Kaola
+    // role — is never touched.
     {
       const r = runInstaller([], { beforeRun: fixture => {
         seedUserConfig(fixture);
         const seeded = JSON.parse(fs.readFileSync(liveConfigPath(fixture), 'utf8'));
         seeded.model = 'GLM-5.3-user';
         fs.writeFileSync(liveConfigPath(fixture), JSON.stringify(seeded, null, 2) + '\n');
+        const agentsDir = path.join(fixture.zcodeHome, 'agents');
+        fs.mkdirSync(agentsDir, { recursive: true });
+        fs.writeFileSync(path.join(agentsDir, 'planner.md'),
+          '---\nname: planner\n---\n<!-- ' + KAOLA_MANAGED_MARKER + ' -->\nretired roster file\n');
+        fs.writeFileSync(path.join(agentsDir, 'implementer.md'),
+          '---\nname: implementer\n---\nuser-authored profile, no managed marker\n');
+        fs.mkdirSync(path.join(fixture.dest, '.zcode', 'agents'), { recursive: true });
+        fs.writeFileSync(path.join(fixture.dest, '.zcode', 'agents', 'planner.md'),
+          '---\nname: planner\n---\n<!-- ' + KAOLA_MANAGED_MARKER + ' -->\nretired staged file\n');
+        fs.writeFileSync(path.join(fixture.dest, '.zcode', 'agents', 'implementer.md'),
+          '---\nname: implementer\n---\nuser-authored staged profile, no managed marker\n');
       } });
       assertReal(r.status === 0, 'G8-uninstall: seed install exits 0');
+      assertReal(!fs.existsSync(path.join(r.zcodeHome, 'agents', 'planner.md')),
+        'G8-uninstall: install sweeps the managed retired-role file from $ZCODE_HOME/agents/');
+      assertReal(fs.existsSync(path.join(r.zcodeHome, 'agents', 'implementer.md')),
+        'G8-uninstall: install preserves a user-authored role-named file without the managed marker');
+      assertReal(!fs.existsSync(path.join(r.dest, '.zcode', 'agents', 'planner.md')),
+        'G8-uninstall: install sweeps the managed retired-role file from <target>/.zcode/agents/');
+      assertReal(fs.existsSync(path.join(r.dest, '.zcode', 'agents', 'implementer.md')),
+        'G8-uninstall: install preserves a staged user-authored file without the managed marker');
       const userAgent = path.join(r.zcodeHome, 'agents', 'user-notes.md');
       fs.mkdirSync(path.dirname(userAgent), { recursive: true });
       fs.writeFileSync(userAgent, 'user-owned, not kaola-deployed\n');
@@ -1305,11 +1209,19 @@ for (const role of reviewerGenerator.ROLES) {
       assertReal(ru.status === 0,
         'G8-uninstall: --uninstall exits 0 (got ' + ru.status + ' — ' + firstLine(ru) + ')');
       for (const name of canonAgents) {
-        assertReal(!fs.existsSync(path.join(r.zcodeHome, 'agents', name + '.md')),
-          'G8-uninstall[' + name + ']: kaola agent copy removed from ~/.zcode/agents/');
-        assertReal(!fs.existsSync(path.join(r.dest, '.zcode', 'agents', name + '.md')),
-          'G8-uninstall[' + name + ']: staged kaola agent removed from <target>/.zcode/agents/');
+        assertReal(!fs.existsSync(path.join(r.zcodeHome, 'agents', name + '.md'))
+          || name === 'implementer',
+          'G8-uninstall[' + name + ']: no kaola-managed agent copy in ~/.zcode/agents/');
+        assertReal(!fs.existsSync(path.join(r.dest, '.zcode', 'agents', name + '.md'))
+          || name === 'implementer',
+          'G8-uninstall[' + name + ']: no kaola-managed staged agent in <target>/.zcode/agents/');
       }
+      assertReal(!fs.existsSync(path.join(r.zcodeHome, 'agents', 'planner.md'))
+        && !fs.existsSync(path.join(r.dest, '.zcode', 'agents', 'planner.md')),
+        'G8-uninstall: managed retired-role files stay removed after uninstall');
+      assertReal(fs.existsSync(path.join(r.zcodeHome, 'agents', 'implementer.md'))
+        && fs.existsSync(path.join(r.dest, '.zcode', 'agents', 'implementer.md')),
+        'G8-uninstall: user-authored role-named files survive uninstall at both scopes');
       for (const name of canonCommandNames) {
         assertReal(!fs.existsSync(path.join(r.dest, '.zcode', 'commands', name + '.md')),
           'G8-uninstall[' + name + ']: kaola-deployed command is removed');
@@ -1688,7 +1600,7 @@ for (const role of reviewerGenerator.ROLES) {
 
 // ---------------------------------------------------------------------------
 // D2 — docs existence asserts (read-only). docs/zcode-edition.md carries the
-// measured tier mapping, the 1M-context/no-hook rationale, and the honest
+// native_only posture, the 1M-context/no-hook rationale, and the honest
 // live-dispatch boundary; the indexes name zcode; CHANGELOG has an entry.
 // ---------------------------------------------------------------------------
 {
@@ -1697,14 +1609,10 @@ for (const role of reviewerGenerator.ROLES) {
     'D2: docs/zcode-edition.md exists');
   if (fs.existsSync(docPath)) {
     const doc = fs.readFileSync(docPath, 'utf8');
-    assertReal(/GLM-5\.3/.test(doc),
-      'D2: docs/zcode-edition.md names GLM-5.3');
-    assertReal(/thoughtLevel/i.test(doc) && /high/i.test(doc) && /max/i.test(doc),
-      'D2: docs/zcode-edition.md carries the measured thoughtLevel high/max/max tier mapping');
-    assertReal(/standard/i.test(doc) && /reasoning/i.test(doc) && /heavy|fable/i.test(doc),
-      'D2: docs/zcode-edition.md names the standard/reasoning/heavy tier mapping');
-    assertReal(/thoughtLevel/i.test(doc) && /NOT reasoningEffort/i.test(doc),
-      'D2: docs/zcode-edition.md notes the frontmatter key is thoughtLevel, NOT reasoningEffort');
+    assertReal(/native_only|installs no Kaola role profiles|no `?\.zcode\/agents/i.test(doc),
+      'D2: docs/zcode-edition.md states the native_only posture (no Kaola role profiles)');
+    assertReal(/managed[\s-]?marker/i.test(doc),
+      'D2: docs/zcode-edition.md records that the retired-agent sweep requires the managed marker');
     assertReal(/3\.10\.1/.test(doc),
       'D2: docs/zcode-edition.md mentions the ZCode 3.10.1 measurement');
     assertReal(/(?:1[,.]?000[,.]?000|1\s*million|1M)\b/i.test(doc),

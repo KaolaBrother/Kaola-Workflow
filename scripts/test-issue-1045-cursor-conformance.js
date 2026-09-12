@@ -40,14 +40,14 @@ function main() {
     }));
     for (const surface of rendered) {
       assert.match(surface.text,
-        /exact-tier[^.]*post-resolution assertion/i,
-        surface.name + ': exact-tier policy must be a post-resolution assertion');
+        /exact-binding[^.]*post-resolution assertion/i,
+        surface.name + ': exact-binding policy must be a post-resolution assertion');
       assert.match(surface.text,
         /flat `subagent_type(?::[^`]+)?`[^.]*MUST omit[^.]*per-call `model`/i,
         surface.name + ': named call uses the flat field and forbids a model override');
       assert.match(surface.text,
         /generic[^.]*model enum[^.]*not[^.]*capability gap/i,
-        surface.name + ': generic model enum cannot disprove a named profile tier');
+        surface.name + ': generic model enum cannot disprove a named profile binding');
       assert.match(surface.text,
         /`providerOptions\.cursor\.modelName`[^.]*provider evidence/i,
         surface.name + ': resolved child model has an explicit evidence carrier');
@@ -83,7 +83,7 @@ function main() {
     assert.strictEqual(report.execution_host, 'local');
     assert.match(report.dispatch_contract.call_shape, /subagent_type/);
     assert.strictEqual(report.dispatch_contract.named_model_field, 'omit');
-    assert.strictEqual(report.dispatch_contract.exact_tier, 'post_resolution_assertion');
+    assert.strictEqual(report.dispatch_contract.exact_binding, 'post_resolution_assertion');
     assert.strictEqual(report.dispatch_contract.provider_model_evidence,
       'providerOptions.cursor.modelName');
 

@@ -107,7 +107,7 @@ for (const phrase of [
     'A1: Next carries the failure-frontier procedure (moved out of the global essay)');
   ok(/carrier decides where work runs|tool and custody boundaries/i.test(dispatchN + ' ' + nextN),
     'A1: dispatch/Next carry carrier (moved out of the global essay)');
-  ok(/implementer may not delete, weaken, or reinterpret that acceptance/i.test(nextN),
+  ok(/implementer (?:may not|does not) delete, weaken, or reinterpret/i.test(nextN),
     'A1: Next keeps independent acceptance duty reachable');
   // "A1: role contracts keep independent test custody" DELETED per owner ruling (19:03
   // heartbeat, #1054): this assertion checked only whether one of a few known phrasings of

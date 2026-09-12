@@ -22,10 +22,10 @@ const initialCodexVersion = process.env.KAOLA_CODEX_VERSION;
 const codexProfileInstaller = require('../plugins/kaola-workflow/scripts/install-codex-agent-profiles');
 const codexPreflight = require('./kaola-workflow-codex-preflight');
 const agentGenerator = require('./generate-agent-profiles');
-const REVIEWER_ROLES = Object.freeze(['code-reviewer', 'adversarial-verifier', 'security-reviewer']);
+const REVIEWER_ROLES = Object.freeze(['code-reviewer']);
 const behaviorContracts = agentGenerator.loadBehaviorContracts(root);
 const runtimeAdapters = agentGenerator.loadRuntimeAdapters(root);
-const claudeIntentMapping = runtimeAdapters.runtimes.claude.capabilities.intent_mapping;
+const claudeSubagentDefault = runtimeAdapters.runtimes.claude.capabilities.subagent_default.model;
 // Loaded for its ROLE REGISTRY ONLY (see EXPECTED_ROLE_MODELS): the tiers this file asserts are
 // resolved by SPAWNING the resolver against an installed tree, never by calling it in-process.
 const resolver = require('./kaola-workflow-resolve-agent-model.js');
@@ -55,8 +55,8 @@ function claudeFinalizeDefaultGaps(text) {
   const blocks = agentCallBlocks(text);
   const gaps = [];
   if (!blocks.some(candidate =>
-    /\bsubagent_type\s*=\s*["']build-error-resolver["']/.test(candidate))) {
-    gaps.push('build-error-resolver-call');
+    /\bsubagent_type\s*=\s*["']implementer["']/.test(candidate))) {
+    gaps.push('implementer-call');
   }
   for (const block of blocks) {
     const roleMatch = block.match(/\bsubagent_type\s*=\s*["']([^"']+)["']/);
@@ -64,12 +64,8 @@ function claudeFinalizeDefaultGaps(text) {
     const role = roleMatch[1];
     const contract = behaviorContracts.roles[role];
     if (!contract) continue;
-    const tier = contract && contract.intent_class;
-    const expectedModel = claudeIntentMapping[tier];
-    if (!expectedModel
-        || !new RegExp(`^\\s*model\\s*=\\s*["']${expectedModel}["']\\s*,?\\s*$`, 'm').test(block)) {
-      gaps.push(`${role}-default-model`);
-    }
+    // The named profile carries the single subagent binding; the call must not re-pin a model.
+    if (/^\s*model\s*=/m.test(block)) gaps.push(`${role}-model-pin`);
     if (/^\s*(?:reasoning_)?effort\s*=/m.test(block)) gaps.push(`${role}-claude-effort-pin`);
   }
   const prose = String(text || '').replace(/\s+/g, ' ').toLowerCase();
@@ -112,8 +108,10 @@ function mutateAgentCall(text, role, mutate) {
   assert(!/model_reasoning_effort\s*=/.test(initSkel),
     '#1047: workflow-init carries no runtime model-configuration tutorial');
 
-  const PLANNER_CLASS = ['planner', 'code-architect'];
-  const REVIEWER_CLASS = [...REVIEWER_ROLES];
+  // #1018 / ADR 0019 pins replaced by #1062's single subagent binding: every Claude profile
+  // renders the same `model: sonnet` binding — no role-carried tier axis remains.
+  const RETIRED_ROLE_NAMES = ['planner', 'code-architect', 'synthesizer', 'build-error-resolver',
+    'metric-optimizer', 'adversarial-verifier', 'security-reviewer'];
   const extractFmModel = (rel) => {
     const text = fs.readFileSync(path.join(root, rel), 'utf8');
     const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -121,25 +119,26 @@ function mutateAgentCall(text, role, mutate) {
     const row = m[1].split(/\r?\n/).find(line => /^model\s*:/.test(line));
     return row ? row.replace(/^model\s*:\s*/, '').trim() : '';
   };
-  for (const role of PLANNER_CLASS) {
-    const fm = extractFmModel('agents/' + role + '.md');
-    assert.strictEqual(fm, 'fable',
-      '#1018 AC-1: agents/' + role + '.md source frontmatter must be model: fable; got ' + JSON.stringify(fm));
-    assert.strictEqual(resolver.DEFAULT_AGENT_MODELS[role], 'fable',
-      '#1018 AC-1: DEFAULT_AGENT_MODELS[' + role + '] must be fable (byte-equal to source frontmatter); got '
-      + JSON.stringify(resolver.DEFAULT_AGENT_MODELS[role]));
+  for (const role of RETIRED_ROLE_NAMES) {
+    assert(!fs.existsSync(path.join(root, 'agents', role + '.md')),
+      '#1062: agents/' + role + '.md must not exist — the role is retired');
+    assert.strictEqual(resolver.DEFAULT_AGENT_MODELS[role], undefined,
+      '#1062: DEFAULT_AGENT_MODELS[' + role + '] must not exist — the role is retired');
   }
+  assert.strictEqual(Object.keys(resolver.DEFAULT_AGENT_MODELS).length, 7,
+    '#1062: the resolver registry covers exactly the 7-role catalog');
+  assert.strictEqual(claudeSubagentDefault, 'sonnet',
+    '#1062: the Claude adapter declares exactly one subagent_default binding (sonnet)');
   for (const [role, model] of Object.entries(resolver.DEFAULT_AGENT_MODELS)) {
-    if (PLANNER_CLASS.includes(role)) continue;
-    assert.notStrictEqual(model, 'fable',
-      '#1018 AC-1: ' + role + ' must keep its current tier and must not become fable; got ' + model);
+    assert.strictEqual(model, 'sonnet',
+      '#1062: ' + role + ' renders the single Claude subagent binding (sonnet); got ' + model);
     const fm = extractFmModel('agents/' + role + '.md');
     assert.strictEqual(fm, model,
-      '#1018 AC-1: ' + role + ' source frontmatter (' + fm + ') must stay byte-equal to DEFAULT_AGENT_MODELS (' + model + ')');
+      '#1062: ' + role + ' source frontmatter (' + fm + ') must stay byte-equal to DEFAULT_AGENT_MODELS (' + model + ')');
   }
-  for (const role of REVIEWER_CLASS) {
-    assert.strictEqual(resolver.DEFAULT_AGENT_MODELS[role], 'opus',
-      '#1018 AC-1: reviewer-class ' + role + ' stays reasoning (opus); got '
+  for (const role of REVIEWER_ROLES) {
+    assert.strictEqual(resolver.DEFAULT_AGENT_MODELS[role], 'sonnet',
+      '#1062: ' + role + ' renders the single subagent binding (sonnet); got '
       + JSON.stringify(resolver.DEFAULT_AGENT_MODELS[role]));
   }
 
@@ -544,18 +543,26 @@ function enableMultiAgentV2(homeRoot) {
   }
 }
 
-// The supported inheritance representation is omission, while an exact historical full pin is
-// stale migration input rather than fresh schema input.
+// The supported binding is the single gpt-5.6-luna/max pin on every generated profile; an exact
+// historical Sol/medium pair is stale migration input rather than fresh schema input, and a
+// profile with no pin at all is now schema-invalid.
 {
-  const inherited = fs.readFileSync(path.join(root, 'plugins/kaola-workflow/agents/implementer.toml'), 'utf8');
-  const pinned = inherited.replace(/^developer_instructions/m,
-    'model = "gpt-5.6-sol"\nmodel_reasoning_effort = "medium"\ndeveloper_instructions');
-  assert.deepStrictEqual(codexProfileInstaller.validateProfileText(inherited, 'implementer'), [],
-    'an unpinned inherited profile must satisfy the source schema');
+  const current = fs.readFileSync(path.join(root, 'plugins/kaola-workflow/agents/implementer.toml'), 'utf8');
+  const legacyPinned = current
+    .replace(/^model = "gpt-5\.6-luna"$/m, 'model = "gpt-5.6-sol"')
+    .replace(/^model_reasoning_effort = "max"$/m, 'model_reasoning_effort = "medium"');
+  assert.deepStrictEqual(codexProfileInstaller.validateProfileText(current, 'implementer'), [],
+    'a profile carrying the single pinned binding must satisfy the source schema');
+  assert(codexProfileInstaller.validateProfileText(
+    current.replace(/^model = "gpt-5\.6-luna"$\n/m, '')
+      .replace(/^model_reasoning_effort = "max"$\n/m, ''), 'implementer').length > 0,
+    'an unpinned profile must FAIL the source schema — omission is no longer the binding');
   assert.strictEqual(typeof codexProfileInstaller.classifyProfilePinPosture, 'function',
     'installer exports the profile pin migration classifier');
-  assert.strictEqual(codexProfileInstaller.classifyProfilePinPosture(pinned), 'legacy_pinned',
+  assert.strictEqual(codexProfileInstaller.classifyProfilePinPosture(legacyPinned), 'legacy_pinned',
     'an exact historical Sol/medium pair is stale migration input, not fresh');
+  assert.strictEqual(codexProfileInstaller.classifyProfilePinPosture(current), 'malformed',
+    'the current gpt-5.6-luna/max pin is not a legacy migration pair');
 }
 
 // A previous manifest proves stale ownership only when it still binds the exact
@@ -1355,7 +1362,7 @@ function enableMultiAgentV2(homeRoot) {
       label: 'cross-role existing config_file',
       mutate: text => text.replace(
         'config_file = "./agents/kaola-workflow/code-reviewer.toml"',
-        'config_file = "./agents/kaola-workflow/security-reviewer.toml"'),
+        'config_file = "./agents/kaola-workflow/doc-updater.toml"'),
     },
     {
       label: 'absolute config_file',
@@ -1738,7 +1745,7 @@ function enableMultiAgentV2(homeRoot) {
     const rootProjectConfig = path.join(projectRoot, '.codex', 'config.toml');
     fs.writeFileSync(rootProjectConfig, fs.readFileSync(rootProjectConfig, 'utf8').replace(
       'config_file = "./agents/kaola-workflow/code-reviewer.toml"',
-      'config_file = "./agents/kaola-workflow/security-reviewer.toml"'));
+      'config_file = "./agents/kaola-workflow/doc-updater.toml"'));
     // spawn-class: environment
     result = spawnSync(process.execPath,
       [preflightPath, '--project-root', nested, '--home', homeRoot, '--no-autofix', '--json'],
@@ -2875,7 +2882,7 @@ function enableMultiAgentV2(homeRoot) {
       label: 'indented model override with valid self-hash',
       text: resignCodexReviewer(reviewer.replace(/^developer_instructions/m,
         '  model = "gpt-5.6-sol"\ndeveloper_instructions')),
-      code: 'codex_role_field_forbidden',
+      code: 'codex_role_top_level_field_duplicate',
     },
     {
       label: 'commented foreign table before instructions with valid self-hash',
@@ -3098,8 +3105,8 @@ try {
 
   const finalize = readInstalledCommand('kaola-workflow-finalize.md');
 
-  // Installed Claude profiles deliberately use `model: inherit`, so every concrete finalize call
-  // must carry the default selected by that role's behavior-contract intent tier. ADR 0019 leaves
+  // Installed Claude profiles deliberately use `model: inherit`, so a concrete finalize call
+  // names only the role — the named profile carries the single subagent binding. #1062 keeps
   // Claude effort unpinned and keeps task-sensitive native overrides available.
   assert(
     // Anchor on a heading the surface actually carries; `## Steps` was the anchor until the
@@ -3110,22 +3117,22 @@ try {
   assert.deepStrictEqual(claudeFinalizeDefaultGaps(finalize), [],
     'installed Claude finalize calls must apply behavior-derived role defaults, omit Claude effort pins, and preserve task-sensitive overrides');
 
-  const missingDefault = mutateAgentCall(finalize, 'build-error-resolver', block =>
-    block.replace(/^\s*model\s*=.*\n/m, ''));
-  assert(missingDefault.changed
-    && claudeFinalizeDefaultGaps(missingDefault.output).includes('build-error-resolver-default-model'),
-  '#1035 mutation: removing the concrete routed-role default from finalize is detected');
+  const missingRole = mutateAgentCall(finalize, 'implementer', block =>
+    block.replace(/subagent_type="implementer"/, 'subagent_type="unregistered-role"'));
+  assert(missingRole.changed
+    && claudeFinalizeDefaultGaps(missingRole.output).includes('implementer-call'),
+  '#1035 mutation: losing the routed implementer call from finalize is detected');
 
-  const wrongTier = mutateAgentCall(finalize, 'build-error-resolver', block =>
-    block.replace(/^\s*model\s*=.*$/m, '  model="sonnet",'));
-  assert(wrongTier.changed
-    && claudeFinalizeDefaultGaps(wrongTier.output).includes('build-error-resolver-default-model'),
-  '#1035 mutation: routing a reasoning role with the standard model is detected');
+  const addedModel = mutateAgentCall(finalize, 'implementer', block =>
+    block.replace(/(^\s*subagent_type\s*=.*$)/m, '$1\n  model="opus",'));
+  assert(addedModel.changed
+    && claudeFinalizeDefaultGaps(addedModel.output).includes('implementer-model-pin'),
+  '#1035 mutation: re-pinning a per-call model the named profile already binds is detected');
 
-  const pinnedEffort = mutateAgentCall(finalize, 'build-error-resolver', block =>
-    block.replace(/(^\s*model\s*=.*$)/m, '$1\n  effort="high",'));
+  const pinnedEffort = mutateAgentCall(finalize, 'implementer', block =>
+    block.replace(/(^\s*subagent_type\s*=.*$)/m, '$1\n  effort="high",'));
   assert(pinnedEffort.changed
-    && claudeFinalizeDefaultGaps(pinnedEffort.output).includes('build-error-resolver-claude-effort-pin'),
+    && claudeFinalizeDefaultGaps(pinnedEffort.output).includes('implementer-claude-effort-pin'),
   '#1035 mutation: adding an ADR-forbidden Claude effort pin is detected');
 
   const allCommands = fs.readdirSync(path.join(tmp, '.claude', 'commands'))
@@ -3182,61 +3189,34 @@ try {
     'Claude installer must state the filesystem-only proof boundary without claiming private prompt loading');
 
   // #794: the install-time model axis is retired. A fresh install must (a) write NO
-  // .kaola-agent-models.json, and (b) resolve EVERY registered role through the three-step chain
-  // (plan column -> frontmatter -> DEFAULT_AGENT_MODELS) to the pinned tier below — the surface the
-  // adaptive dispatch path actually reads.
+  // .kaola-agent-models.json, and (b) resolve EVERY registered role through the chain
+  // (frontmatter -> DEFAULT_AGENT_MODELS) to the pinned binding below — the surface the
+  // dispatch path actually reads.
   //
-  // THE PINNED TABLE IS THE ACCEPTANCE EVIDENCE, and its required value is FIXED: it is the exact
-  // per-role resolution a default install produced BEFORE the axis was removed, carried forward
-  // through every deliberate re-tiering since. Retiring a selector must not re-tier a single role,
-  // so every entry here is a behavioural pin, not a preference — the retired default was
-  // `--profile=higher`, so the three roles that had a `higher` variant (code-architect,
-  // code-reviewer, security-reviewer) pin to the reasoning tier and every other role pins to
-  // whatever its source frontmatter already declared.
-  //
-  // #935 (owner-ruled) moved build-error-resolver and adversarial-verifier from the standard tier
-  // to the reasoning tier. #1018 (owner-ruled, ADR 0019) then re-tiered the planner class
-  // (planner, code-architect) from reasoning (`opus`) to heavy-reasoning (`fable`). Those are
-  // the ONLY entries that have moved, and each moved by an explicit ruling — a decision, never
-  // a green-suite convenience. Reviewer-class stays `opus`.
+  // THE PINNED TABLE IS THE ACCEPTANCE EVIDENCE, and its required value is FIXED by #1062:
+  // every surviving role renders the single Claude subagent binding (`sonnet`), and the seven
+  // retired role names resolve to nothing.
   //
   // This table is INDEPENDENTLY DERIVED from DEFAULT_AGENT_MODELS — do not "fix" a failure here by
   // editing this table to match the resolver. The two agreeing is the whole assertion; if they
-  // disagree with no ruling behind the move, the resolver re-tiered a role and that is the bug.
-  //
-  // #943: "EVERY registered role" was, until now, a claim this table could not deliver. The loop
-  // below iterates the PINNED TABLE — the one direction that structurally cannot notice a missing
-  // key — so a role absent from it is never passed to resolveRole and its installed tier is
-  // asserted NOWHERE. `investigator` entered the registry in #798, after the paragraphs above were
-  // written, and went unpinned: a coherent re-tier of it (frontmatter + every carrier moved
-  // together) passed a full, unwaived four-chain run, while the same re-tier of any pinned role
-  // reds here. Its entry is derived the way every other one is — from what a fresh install RENDERS
-  // (`sonnet`, corroborated by the agents/investigator.md frontmatter and the README tier column),
-  // never by copying the resolver map.
+  // disagree with no ruling behind the move, the resolver re-bound a role and that is the bug.
   const EXPECTED_ROLE_MODELS = {
     'code-explorer': 'sonnet',
+    'code-reviewer': 'sonnet',
+    'doc-updater': 'sonnet',
+    implementer: 'sonnet',
     investigator: 'sonnet',
     'knowledge-lookup': 'sonnet',
-    planner: 'fable',
-    'code-architect': 'fable',
-    'tdd-guide': 'sonnet',
-    implementer: 'sonnet',
-    'build-error-resolver': 'opus',
-    'code-reviewer': 'opus',
-    'security-reviewer': 'opus',
-    'doc-updater': 'sonnet',
-    'adversarial-verifier': 'opus',
-    synthesizer: 'opus',
-    'metric-optimizer': 'sonnet'
+    'tdd-guide': 'sonnet'
   };
   // The coverage half of the pin, in BOTH directions: a role registered with no entry here is a
-  // tier nothing asserts, and an entry here for a role the registry dropped is a pin guarding
+  // binding nothing asserts, and an entry here for a role the registry dropped is a pin guarding
   // nothing. KEYS ONLY — comparing values would make the table a restatement of the resolver and
   // destroy the independence the paragraphs above depend on.
   assert.deepStrictEqual(
     Object.keys(EXPECTED_ROLE_MODELS).sort(),
     Object.keys(resolver.DEFAULT_AGENT_MODELS).sort(),
-    'the pinned install-tier table must cover exactly the resolver role registry'
+    'the pinned install-binding table must cover exactly the resolver role registry'
   );
   // spawn-class: environment
   const resolveRole = (agentDir, role) => execFileSync('node',
@@ -3256,10 +3236,10 @@ try {
         const got = resolveRole(agentDir, role);
         assert(got === expected, 'fresh install must resolve ' + role + ' -> ' + expected + '; got ' + got);
       }
-      // A planted manifest in the installed agent dir is INERT — precedence is provably three-step.
+      // A planted manifest in the installed agent dir is INERT — precedence is provably two-step.
       fs.writeFileSync(path.join(agentDir, '.kaola-agent-models.json'),
-        JSON.stringify({ implementer: 'opus', 'code-reviewer': 'haiku', planner: 'haiku' }));
-      for (const role of ['implementer', 'code-reviewer', 'planner']) {
+        JSON.stringify({ implementer: 'opus', 'code-reviewer': 'haiku', investigator: 'haiku' }));
+      for (const role of ['implementer', 'code-reviewer', 'investigator']) {
         const got = resolveRole(agentDir, role);
         assert(got === EXPECTED_ROLE_MODELS[role],
           'a planted .kaola-agent-models.json must not affect ' + role + ' (expected '
@@ -3596,9 +3576,10 @@ try {
         fs.readFileSync(path.join(root, 'plugins', 'kaola-workflow', 'agents', 'code-reviewer.toml'))),
       '#reviewer-contract: project autofix must restore exact selected source bytes');
       const legacyProfilePath = path.join(projectAgentsDir, 'implementer.toml');
-      const inheritedProfile = fs.readFileSync(legacyProfilePath, 'utf8');
-      fs.writeFileSync(legacyProfilePath, inheritedProfile.replace(/^developer_instructions/m,
-        'model = "gpt-5.6-sol"\nmodel_reasoning_effort = "medium"\ndeveloper_instructions'));
+      const currentProfile = fs.readFileSync(legacyProfilePath, 'utf8');
+      fs.writeFileSync(legacyProfilePath, currentProfile
+        .replace(/^model = "gpt-5\.6-luna"$/m, 'model = "gpt-5.6-sol"')
+        .replace(/^model_reasoning_effort = "max"$/m, 'model_reasoning_effort = "medium"'));
       const configBeforeMigration = fs.readFileSync(projectConfigPath, 'utf8');
       // spawn-class: environment
       const staleLegacy = spawnSync(process.execPath,
@@ -3616,8 +3597,11 @@ try {
       assert.strictEqual(migratedLegacy.status, 0, 'default project preflight migrates a legacy full pin: ' + migratedLegacy.stderr);
       assert.strictEqual(JSON.parse(migratedLegacy.stdout).autofixed, true, 'legacy migration reports autofixed');
       const migratedProfile = fs.readFileSync(legacyProfilePath, 'utf8');
-      assert(!/^model\s*=/m.test(migratedProfile) && !/^model_reasoning_effort\s*=/m.test(migratedProfile),
-        'legacy migration installs the inherited omission posture');
+      assert.strictEqual(migratedProfile, currentProfile,
+        'legacy migration restores the current pinned-binding source bytes');
+      assert(/^model\s*=\s*"gpt-5\.6-luna"$/m.test(migratedProfile)
+        && /^model_reasoning_effort\s*=\s*"max"$/m.test(migratedProfile),
+        'legacy migration installs the single gpt-5.6-luna/max subagent binding');
       assert.strictEqual(fs.readFileSync(projectConfigPath, 'utf8'), configBeforeMigration,
         'profile migration does not rewrite the root-level user-owned dispatch posture');
       // #775 (Codex 0.145 re-baseline): dispatch mode is binary now — the whole 0.142/0.144
@@ -3884,8 +3868,8 @@ try {
       const sourceProfile = fs.readFileSync(path.join(root, 'plugins', 'kaola-workflow', 'agents', 'implementer.toml'), 'utf8');
       const mixedProfile = sourceProfile
         .replace(/^name = "implementer"$/m, 'name = "wrong-role"')
-        .replace(/^developer_instructions/m,
-          'model = "gpt-5.6-sol"\nmodel_reasoning_effort = "medium"\ndeveloper_instructions');
+        .replace(/^model = "gpt-5\.6-luna"$/m, 'model = "gpt-5.6-sol"')
+        .replace(/^model_reasoning_effort = "max"$/m, 'model_reasoning_effort = "medium"');
       fs.writeFileSync(path.join(mixedAgentsDir, 'implementer.toml'), mixedProfile);
       const inspection = preflightMod.inspectScope({
         codexDir: mixedLegacyScope,

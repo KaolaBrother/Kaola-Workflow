@@ -3080,7 +3080,7 @@ function testGiteaPreflight266() {
           'explicitRequestOnly', '#775 gt effort INSIDE the [agents] table is not a valid TOML root key -> ignored');
 
         fs.writeFileSync(configPath, origConfig);
-        const staleConfig = origConfig.replace('[agents.planner]', '[agents.STALE-planner]');
+        const staleConfig = origConfig.replace('[agents.implementer]', '[agents.STALE-implementer]');
         fs.writeFileSync(configPath, staleConfig);
 
     const staleResult = spawnSync(process.execPath,
@@ -3091,8 +3091,8 @@ function testGiteaPreflight266() {
     const staleJson = JSON.parse(staleResult.stdout);
     assert.strictEqual(staleJson.status, 'config_stale',
       '#266 gt case1: must return config_stale, got ' + staleJson.status);
-    assert.ok(Array.isArray(staleJson.missing_roles) && staleJson.missing_roles.includes('planner'),
-      '#266 gt case1: missing_roles must include planner, got ' + JSON.stringify(staleJson.missing_roles));
+    assert.ok(Array.isArray(staleJson.missing_roles) && staleJson.missing_roles.includes('implementer'),
+      '#266 gt case1: missing_roles must include implementer, got ' + JSON.stringify(staleJson.missing_roles));
 
     // --- Case 1 GREEN (autofix): ---
     const autofixRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-266-preflight-autofix-'));
@@ -3121,7 +3121,7 @@ function testGiteaPreflight266() {
     fs.writeFileSync(configPath, origConfig);
 
     // --- Case 2 RED: remove a profile toml file → profiles_missing ---
-    const wpToml = path.join(root, '.codex', 'agents', 'kaola-workflow', 'planner.toml');
+    const wpToml = path.join(root, '.codex', 'agents', 'kaola-workflow', 'implementer.toml');
     const savedToml = fs.readFileSync(wpToml);
     fs.unlinkSync(wpToml);
 
@@ -3133,8 +3133,8 @@ function testGiteaPreflight266() {
     const missingJson = JSON.parse(missingResult.stdout);
     assert.strictEqual(missingJson.status, 'profiles_missing',
       '#266 gt case2: must return profiles_missing, got ' + missingJson.status);
-    assert.ok(Array.isArray(missingJson.missing_roles) && missingJson.missing_roles.includes('planner'),
-      '#266 gt case2: missing_roles must include planner');
+    assert.ok(Array.isArray(missingJson.missing_roles) && missingJson.missing_roles.includes('implementer'),
+      '#266 gt case2: missing_roles must include implementer');
 
     // Restore toml
     fs.writeFileSync(wpToml, savedToml);
@@ -3287,7 +3287,7 @@ function testGiteaPreflight571() {
     });
     assert.strictEqual(setupC.status, 0, '#571 gt test(c): setup install must exit 0');
     fs.unlinkSync(
-      path.join(tempHome571c, '.codex', 'agents', 'kaola-workflow', 'planner.toml'));
+      path.join(tempHome571c, '.codex', 'agents', 'kaola-workflow', 'implementer.toml'));
 
     const emptyProject571c = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-571c-proj-'));
     try {
@@ -3313,8 +3313,8 @@ function testGiteaPreflight571() {
     assert.strictEqual(globalFlagInstall.status, 0,
       '#571 gt test(a2): --global flag install must exit 0: ' + globalFlagInstall.stderr);
     assert.ok(
-      fs.existsSync(path.join(tempHome571flag, '.codex', 'agents', 'kaola-workflow', 'planner.toml')),
-      '#571 gt test(a2): --global flag must write planner.toml to tempHome/.codex');
+      fs.existsSync(path.join(tempHome571flag, '.codex', 'agents', 'kaola-workflow', 'implementer.toml')),
+      '#571 gt test(a2): --global flag must write implementer.toml to tempHome/.codex');
   } finally {
     fs.rmSync(tempHome571flag, { recursive: true, force: true });
   }
@@ -3610,10 +3610,10 @@ function testForbiddenOnly341() {
       '#341 gt: forbidden-only must report "contains forbidden reference"');
 
     // clean file → exit 0, sentinel. issue-scout.toml (the original #328 leak regression
-    // lock) is retired (#789); metric-optimizer.toml is an equally permanent, GitLab-vocabulary-free
+    // lock) is retired (#789); implementer.toml is an equally permanent, GitLab-vocabulary-free
     // agent profile. Root-relative path resolves from any cwd.
     const cleanRun = spawnSync(process.execPath,
-      [validatorScript, '--forbidden-only', 'plugins/kaola-workflow-gitea/agents/metric-optimizer.toml'],
+      [validatorScript, '--forbidden-only', 'plugins/kaola-workflow-gitea/agents/implementer.toml'],
       { encoding: 'utf8' });
     assert.strictEqual(cleanRun.status, 0,
       '#341 gt: clean file must exit 0 (stderr: ' + (cleanRun.stderr || '') + ')');

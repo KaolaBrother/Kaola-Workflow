@@ -12,21 +12,15 @@ const schema = require('./kaola-workflow-adaptive-schema.js');
 const behavior = require('../templates/agents/behavior-contracts.json');
 
 // The behavior authority, not a resolver-local hand list, owns role membership. Runtime bindings
-// may differ, but every profile/routing surface must start from this one standard/reasoning/heavy
-// classification.
-const BEHAVIOR_ROLES_BY_TIER = Object.freeze(['standard', 'reasoning', 'heavy'].reduce((out, tier) => {
-  out[tier] = Object.entries(behavior.roles)
-    .filter(([, contract]) => contract.intent_class === tier)
-    .map(([role]) => role)
-    .sort();
-  return out;
-}, {}));
-assert.deepStrictEqual(
-  [...BEHAVIOR_ROLES_BY_TIER.standard, ...BEHAVIOR_ROLES_BY_TIER.reasoning,
-    ...BEHAVIOR_ROLES_BY_TIER.heavy].sort(),
-  Object.keys(behavior.roles).sort(),
-  'behavior authority assigns every supported role to exactly one declared intent tier'
-);
+// may differ, but every profile/routing surface must start from this one roster. #1062 retired
+// the tier axis: no role may carry an intent_class field.
+const BEHAVIOR_ROLES = Object.freeze(Object.keys(behavior.roles).sort());
+assert.strictEqual(BEHAVIOR_ROLES.length, 7,
+  'behavior authority declares exactly the 7-role catalog');
+for (const [role, contract] of Object.entries(behavior.roles)) {
+  assert.ok(!('intent_class' in contract),
+    `behavior authority must not carry a retired intent_class on ${role}`);
+}
 
 assert.strictEqual(resolver.isCodexPluginScriptDir(), false, 'root resolver is not inside a Codex plugin');
 assert.strictEqual(codexResolver.isCodexPluginScriptDir(), true, 'plugin resolver detects .codex-plugin in source/cache shape');
@@ -40,101 +34,73 @@ try {
   fs.rmSync(stableHookHome, { recursive: true, force: true });
 }
 
-// Every installed Kaola role has declarative standard / reasoning / heavy default metadata.
-// A blank plan cell resolves through this map before dispatch.
-assert.ok(Array.isArray(schema.CODEX_PINNED_HEAVY_ROLES) && schema.CODEX_PINNED_HEAVY_ROLES.length > 0,
-  'Codex profile coverage is standard ∪ reasoning ∪ heavy; production must export CODEX_PINNED_HEAVY_ROLES');
-const heavyRoles = schema.CODEX_PINNED_HEAVY_ROLES;
-assert.deepStrictEqual([...schema.CODEX_PINNED_STANDARD_ROLES].sort(), BEHAVIOR_ROLES_BY_TIER.standard,
-  'schema standard roster is derived from behavior-contract intent_class membership');
-assert.deepStrictEqual([...schema.CODEX_PINNED_REASONING_ROLES].sort(), BEHAVIOR_ROLES_BY_TIER.reasoning,
-  'schema reasoning roster is derived from behavior-contract intent_class membership');
-assert.deepStrictEqual([...heavyRoles].sort(), BEHAVIOR_ROLES_BY_TIER.heavy,
-  'schema heavy roster is derived from behavior-contract intent_class membership');
+// Every installed Kaola role is on the one Codex pinned-role catalog, and the catalog declares
+// the single subagent binding. A blank plan cell resolves through this map before dispatch.
+assert.ok(Array.isArray(schema.CODEX_PINNED_ROLES) && schema.CODEX_PINNED_ROLES.length === 7,
+  'production must export the 7-role CODEX_PINNED_ROLES catalog');
+assert.deepStrictEqual([...schema.CODEX_PINNED_ROLES].sort(), BEHAVIOR_ROLES,
+  'Codex pinned-role catalog is derived from the behavior authority roster');
+assert.strictEqual(schema.CODEX_PINNED_MODEL, 'gpt-5.6-luna',
+  'the single Codex subagent binding pins model gpt-5.6-luna');
+assert.strictEqual(schema.CODEX_PINNED_EFFORT, 'max',
+  'the single Codex subagent binding pins effort max');
 assert.deepStrictEqual(
-  [...schema.CODEX_PINNED_STANDARD_ROLES, ...schema.CODEX_PINNED_REASONING_ROLES, ...heavyRoles].sort(),
+  [...schema.CODEX_PINNED_ROLES].sort(),
   Object.keys(resolver.DEFAULT_AGENT_MODELS).sort(),
-  'Codex profile classes must cover exactly the resolver role registry (standard ∪ reasoning ∪ heavy)'
+  'the Codex pinned-role catalog must cover exactly the resolver role registry'
 );
 
-// TOTAL AGREEMENT between the Claude dispatch tier and the Codex declarative class.
-//
 // The two tables answer different questions:
-//   - DEFAULT_AGENT_MODELS is the Claude DISPATCH TIER — a real `model=` parameter on the spawn.
-//   - CODEX_PINNED_*_ROLES is a Codex DECLARATIVE CLASS — a label and wait-budget default. On Codex
-//     the child inherits the parent session's pair, so the class never selects a model at all.
-//
-// #1018 / ADR 0019 adds a third Claude token (`fable` = heavy-reasoning) for the planner class
-// only. Standard class <-> sonnet, remaining reasoning class <-> opus, planner-class <-> fable.
-// On Codex the same planner-class is the HEAVY roster (sol/high), not the reasoning roster
-// (sol/medium). A re-tiering on either side alone fails here.
-const PLANNER_CLASS = new Set(['planner', 'code-architect']);
-assert.deepStrictEqual([...schema.CODEX_PINNED_REASONING_ROLES].sort(), BEHAVIOR_ROLES_BY_TIER.reasoning,
-  'Codex reasoning membership stays reachable from the common behavior authority');
-for (const role of PLANNER_CLASS) {
-  assert.ok(heavyRoles.includes(role),
-    `${role} is planner-class and must be on CODEX_PINNED_HEAVY_ROLES`);
-  assert.ok(!schema.CODEX_PINNED_REASONING_ROLES.includes(role),
-    `${role} must not remain on CODEX_PINNED_REASONING_ROLES`);
-}
-
+//   - DEFAULT_AGENT_MODELS is the Claude binding — every role ships the one `model: sonnet` pin.
+//   - CODEX_PINNED_ROLES is the Codex role catalog — every TOML carries the one
+//     gpt-5.6-luna/max subagent binding declared by CODEX_PINNED_MODEL/EFFORT.
 for (const [role, model] of Object.entries(resolver.DEFAULT_AGENT_MODELS)) {
-  assert.ok(model === 'opus' || model === 'sonnet' || model === 'fable',
-    `${role} must default to standard, reasoning, or heavy-reasoning`);
-  const pinned = schema.CODEX_PINNED_STANDARD_ROLES.includes(role);
-  const reasoning = schema.CODEX_PINNED_REASONING_ROLES.includes(role);
-  const heavy = heavyRoles.includes(role);
-  assert.strictEqual([pinned, reasoning, heavy].filter(Boolean).length, 1,
-    `${role} must belong to exactly one Codex profile class`);
-  if (PLANNER_CLASS.has(role)) {
-    assert.strictEqual(model, 'fable', `${role} is planner-class and must default to fable`);
-    assert.ok(heavy, `${role} is planner-class and must be the Codex heavy membership`);
-  } else {
-    assert.strictEqual(model, pinned ? 'sonnet' : 'opus',
-      `${role} declarative tier must match its Codex profile class`);
-  }
+  assert.strictEqual(model, 'sonnet',
+    `${role} must default to the single Claude subagent binding (sonnet)`);
+  assert.ok(schema.CODEX_PINNED_ROLES.includes(role),
+    `${role} must belong to the Codex pinned-role catalog`);
 }
 
-// Unknown-role / no-policy checks in preflight and the Codex installer must accept the third
-// list once it exists. Do not keep a two-list (standard ∪ reasoning) closed universe.
+// Unknown-role / no-policy checks in preflight and the Codex installer must accept the single
+// catalog. Do not keep a tier-partitioned closed universe.
 const preflight = require('./kaola-workflow-codex-preflight.js');
 const installer = require('../plugins/kaola-workflow/scripts/install-codex-agent-profiles.js');
-assert.ok(Array.isArray(preflight.CODEX_PINNED_HEAVY_ROLES),
-  'preflight must export CODEX_PINNED_HEAVY_ROLES');
-assert.ok(Array.isArray(installer.CODEX_PINNED_HEAVY_ROLES),
-  'installer must export CODEX_PINNED_HEAVY_ROLES');
-assert.deepStrictEqual([...preflight.CODEX_PINNED_HEAVY_ROLES].sort(), [...heavyRoles].sort(),
-  'preflight heavy roster must match schema');
-assert.deepStrictEqual([...installer.CODEX_PINNED_HEAVY_ROLES].sort(), [...heavyRoles].sort(),
-  'installer heavy roster must match schema');
+assert.ok(Array.isArray(preflight.CODEX_PINNED_ROLES),
+  'preflight must export CODEX_PINNED_ROLES');
+assert.ok(Array.isArray(installer.CODEX_PINNED_ROLES),
+  'installer must export CODEX_PINNED_ROLES');
+assert.deepStrictEqual([...preflight.CODEX_PINNED_ROLES].sort(), [...schema.CODEX_PINNED_ROLES].sort(),
+  'preflight pinned-role catalog must match schema');
+assert.deepStrictEqual([...installer.CODEX_PINNED_ROLES].sort(), [...schema.CODEX_PINNED_ROLES].sort(),
+  'installer pinned-role catalog must match schema');
 // #1054 item 29 (TEST-AUTHOR EDIT, not implementer): `validateProfileText` and the
-// CODEX_PINNED_* constants (including the unknown-role / "no Codex profile-tier policy" check)
+// CODEX_PINNED_* constants (including the unknown-role / "no Codex profile policy" check)
 // moved to the one forge-neutral authoring source, scripts/kaola-workflow-adaptive-schema.js (4
 // byte-identical kernel copies) — preflight and the installer now `require()` them from the
 // kernel instead of each declaring their own copy, so the check text is absent from those two
-// files BY DESIGN. Repoint the probe: assert the kernel carries the check once (still accepting
-// CODEX_PINNED_HEAVY_ROLES), and that each consumer requires the kernel rather than redeclaring
+// files BY DESIGN. Repoint the probe: assert the kernel carries the check once (over
+// CODEX_PINNED_ROLES), and that each consumer requires the kernel rather than redeclaring
 // the constant locally.
 const kernelSource = fs.readFileSync(path.join(__dirname, 'kaola-workflow-adaptive-schema.js'), 'utf8');
 {
-  const idx = kernelSource.indexOf('no Codex profile-tier policy');
+  const idx = kernelSource.indexOf('no Codex profile policy');
   assert.ok(idx >= 0, 'kaola-workflow-adaptive-schema.js still has the unknown-role / no-policy check');
-  assert.strictEqual(kernelSource.indexOf('no Codex profile-tier policy', idx + 1), -1,
+  assert.strictEqual(kernelSource.indexOf('no Codex profile policy', idx + 1), -1,
     'kaola-workflow-adaptive-schema.js carries the unknown-role / no-policy check exactly once');
   const window = kernelSource.slice(Math.max(0, idx - 500), idx + 80);
-  assert.ok(/CODEX_PINNED_HEAVY_ROLES/.test(window),
-    'kernel unknown-role check must accept CODEX_PINNED_HEAVY_ROLES');
-  assert.ok(/module\.exports\s*=\s*{[\s\S]*\bCODEX_PINNED_HEAVY_ROLES\b/.test(kernelSource),
-    'kernel exports CODEX_PINNED_HEAVY_ROLES');
+  assert.ok(/CODEX_PINNED_ROLES/.test(window),
+    'kernel unknown-role check must accept CODEX_PINNED_ROLES');
+  assert.ok(/module\.exports\s*=\s*{[\s\S]*\bCODEX_PINNED_ROLES\b/.test(kernelSource),
+    'kernel exports CODEX_PINNED_ROLES');
 }
 function unknownRoleCheckSourcedFromKernel(src, label) {
-  assert.ok(!/const\s+CODEX_PINNED_HEAVY_ROLES\s*=/.test(src),
-    `${label} must not declare its own CODEX_PINNED_HEAVY_ROLES — it requires the kernel instead`);
-  assert.ok(!src.includes('no Codex profile-tier policy'),
+  assert.ok(!/const\s+CODEX_PINNED_ROLES\s*=/.test(src),
+    `${label} must not declare its own CODEX_PINNED_ROLES — it requires the kernel instead`);
+  assert.ok(!src.includes('no Codex profile policy'),
     `${label} must not carry its own copy of the unknown-role / no-policy check text — the kernel is the one authoring source`);
   assert.ok(/require\((['"])\.?\/?(?:\.\.\/)*kaola-workflow-adaptive-schema\1\)/.test(src)
-      && /CODEX_PINNED_HEAVY_ROLES/.test(src),
-    `${label} must require CODEX_PINNED_HEAVY_ROLES from the kernel (./kaola-workflow-adaptive-schema)`);
+      && /CODEX_PINNED_ROLES/.test(src),
+    `${label} must require CODEX_PINNED_ROLES from the kernel (./kaola-workflow-adaptive-schema)`);
 }
 unknownRoleCheckSourcedFromKernel(
   fs.readFileSync(path.join(__dirname, 'kaola-workflow-codex-preflight.js'), 'utf8'),
@@ -143,20 +109,20 @@ unknownRoleCheckSourcedFromKernel(
   fs.readFileSync(path.join(__dirname, '../plugins/kaola-workflow/scripts/install-codex-agent-profiles.js'), 'utf8'),
   'install-codex');
 
-// INSTALL-INVARIANT TIER. The installer rewrites every installed agent's frontmatter to
+// INSTALL-INVARIANT BINDING. The installer rewrites every installed agent's frontmatter to
 // `model: inherit`, so the resolver's frontmatter step can never fire for an installed agent and
-// DEFAULT_AGENT_MODELS alone decides its tier. The source frontmatter still governs one case — an
-// ad-hoc dispatch pointed at the source tree — so the two must agree or the SAME role runs at
-// different tiers depending only on which directory it was dispatched from. This is the check that
-// makes the retired install-time model axis unrecoverable: with the manifest gone there is no third
-// carrier left to paper over a disagreement.
+// DEFAULT_AGENT_MODELS alone decides its binding. The source frontmatter still governs one case —
+// an ad-hoc dispatch pointed at the source tree — so the two must agree or the SAME role runs at
+// different bindings depending only on which directory it was dispatched from. This is the check
+// that makes the retired install-time model axis unrecoverable: with the manifest gone there is
+// no third carrier left to paper over a disagreement.
 for (const [role, model] of Object.entries(resolver.DEFAULT_AGENT_MODELS)) {
   const source = path.join(__dirname, '..', 'agents', `${role}.md`);
   assert.ok(fs.existsSync(source), `registered role ${role} must have a source agent file`);
   const frontmatter = resolver.extractFrontmatterModel(fs.readFileSync(source, 'utf8'));
   assert.strictEqual(frontmatter, model,
-    `${role} source frontmatter (${frontmatter || 'none'}) must equal its DEFAULT_AGENT_MODELS tier (${model}) — `
-      + 'installed agents resolve through the default map alone, so a divergence silently re-tiers the role');
+    `${role} source frontmatter (${frontmatter || 'none'}) must equal its DEFAULT_AGENT_MODELS binding (${model}) — `
+      + 'installed agents resolve through the default map alone, so a divergence silently re-binds the role');
 }
 
 function writeAgent(dir, name, model) {
@@ -184,9 +150,9 @@ function plantRetiredManifest(dir, obj) {
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-'));
 try {
   assert.strictEqual(resolver.resolveAgentModel('tdd-guide', { agentDir: tmp }), 'sonnet');
-  // #634: the metric-optimizer default resolves to the standard tier (sonnet) — no agent file, no
-  // manifest, so it falls through to DEFAULT_AGENT_MODELS. It is NOT a reasoning-floor role.
-  assert.strictEqual(resolver.resolveAgentModel('metric-optimizer', { agentDir: tmp }), 'sonnet');
+  // #1062: metric-optimizer is retired — not in DEFAULT_AGENT_MODELS, so the resolver returns the
+  // empty string (unknown role), not a fabricated binding.
+  assert.strictEqual(resolver.resolveAgentModel('metric-optimizer', { agentDir: tmp }), '');
 
   writeAgent(tmp, 'code-reviewer', 'opus');
   assert.strictEqual(resolver.resolveAgentModel('code-reviewer', { agentDir: tmp }), 'opus');
@@ -196,9 +162,9 @@ try {
   assert.strictEqual(resolver.resolveAgentModel('doc-updater', { agentDir: tmp }), 'haiku');
 
   // NEW CASE 3: inherit frontmatter + no manifest entry → falls through to DEFAULT_AGENT_MODELS
-  // (old behavior returned ''; new behavior returns the DEFAULT value 'opus')
-  writeAgent(tmp, 'planner', 'inherit');
-  assert.strictEqual(resolver.resolveAgentModel('planner', { agentDir: tmp }), 'fable');
+  // (old behavior returned ''; new behavior returns the DEFAULT value 'sonnet')
+  writeAgent(tmp, 'investigator', 'inherit');
+  assert.strictEqual(resolver.resolveAgentModel('investigator', { agentDir: tmp }), 'sonnet');
   assert.strictEqual(resolver.formatAgentArgument(''), '');
 
   assert.strictEqual(resolver.extractFrontmatterModel('no frontmatter'), '');
@@ -213,25 +179,25 @@ try {
 const tmpManifest = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-manifest-'));
 try {
   plantRetiredManifest(tmpManifest, {
-    'code-architect': 'haiku',       // would LOWER if honored
-    'security-reviewer': 'haiku',    // would LOWER if honored
+    'code-reviewer': 'haiku',        // would LOWER if honored
+    investigator: 'haiku',           // would LOWER if honored
     'code-explorer': 'opus',         // would RAISE if honored
     implementer: 'opus',             // would RAISE if honored
-    planner: 'haiku'                 // would LOWER if honored
+    'doc-updater': 'haiku'           // would LOWER if honored
   });
   // inherit frontmatter + planted manifest -> the static default answers, not the manifest
-  writeAgent(tmpManifest, 'code-architect', 'inherit');
-  assert.strictEqual(resolver.resolveAgentModel('code-architect', { agentDir: tmpManifest }), 'fable');
-  writeAgent(tmpManifest, 'security-reviewer', 'inherit');
-  assert.strictEqual(resolver.resolveAgentModel('security-reviewer', { agentDir: tmpManifest }), 'opus');
+  writeAgent(tmpManifest, 'code-reviewer', 'inherit');
+  assert.strictEqual(resolver.resolveAgentModel('code-reviewer', { agentDir: tmpManifest }), 'sonnet');
+  writeAgent(tmpManifest, 'investigator', 'inherit');
+  assert.strictEqual(resolver.resolveAgentModel('investigator', { agentDir: tmpManifest }), 'sonnet');
   // no agent file at all + planted manifest -> still the static default
   assert.strictEqual(resolver.resolveAgentModel('code-explorer', { agentDir: tmpManifest }), 'sonnet');
   assert.strictEqual(resolver.resolveAgentModel('implementer', { agentDir: tmpManifest }), 'sonnet');
   // a real frontmatter value still wins over the static default, and the manifest is still inert
-  writeAgent(tmpManifest, 'planner', 'opus');
-  assert.strictEqual(resolver.resolveAgentModel('planner', { agentDir: tmpManifest }), 'opus');
+  writeAgent(tmpManifest, 'doc-updater', 'opus');
+  assert.strictEqual(resolver.resolveAgentModel('doc-updater', { agentDir: tmpManifest }), 'opus');
   // Codex static-defaults mode is likewise unaffected.
-  assert.strictEqual(resolver.resolveAgentModel('code-architect', { agentDir: tmpManifest, staticDefaults: true }), 'fable');
+  assert.strictEqual(resolver.resolveAgentModel('code-reviewer', { agentDir: tmpManifest, staticDefaults: true }), 'sonnet');
   assert.strictEqual(resolver.resolveAgentModel('code-explorer', { agentDir: tmpManifest, staticDefaults: true }), 'sonnet');
 } finally {
   fs.rmSync(tmpManifest, { recursive: true, force: true });
@@ -240,8 +206,8 @@ try {
 // No manifest file at all → frontmatter/DEFAULT without throwing.
 const tmpNoManifest = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-nomf-'));
 try {
-  assert.doesNotThrow(() => resolver.resolveAgentModel('planner', { agentDir: tmpNoManifest }));
-  assert.strictEqual(resolver.resolveAgentModel('planner', { agentDir: tmpNoManifest }), 'fable');
+  assert.doesNotThrow(() => resolver.resolveAgentModel('implementer', { agentDir: tmpNoManifest }));
+  assert.strictEqual(resolver.resolveAgentModel('implementer', { agentDir: tmpNoManifest }), 'sonnet');
 } finally {
   fs.rmSync(tmpNoManifest, { recursive: true, force: true });
 }
@@ -251,13 +217,13 @@ const tmpBadManifest = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-
 try {
   fs.mkdirSync(tmpBadManifest, { recursive: true });
   fs.writeFileSync(path.join(tmpBadManifest, '.kaola-agent-models.json'), 'NOT VALID JSON }{');
-  assert.doesNotThrow(() => resolver.resolveAgentModel('planner', { agentDir: tmpBadManifest }));
-  assert.strictEqual(resolver.resolveAgentModel('planner', { agentDir: tmpBadManifest }), 'fable');
+  assert.doesNotThrow(() => resolver.resolveAgentModel('implementer', { agentDir: tmpBadManifest }));
+  assert.strictEqual(resolver.resolveAgentModel('implementer', { agentDir: tmpBadManifest }), 'sonnet');
 } finally {
   fs.rmSync(tmpBadManifest, { recursive: true, force: true });
 }
 
-// STANDARD-TIER ROLE: no agent file → DEFAULT fallback must return 'sonnet'.
+// REGISTERED ROLE: no agent file → DEFAULT fallback must return 'sonnet'.
 const tmpStandardDefault = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-standard-'));
 try {
   assert.strictEqual(resolver.resolveAgentModel('implementer', { agentDir: tmpStandardDefault }), 'sonnet');

@@ -1209,13 +1209,16 @@ function testInstallSchemaPruneManifest332() {
       const body = fs.readFileSync(path.join(agentsDir, f), 'utf8');
       const m = body.match(NAME_RE);
       assert(m && m[1] === role, '#332 AC3: ' + f + ' must have name = "' + role + '"');
-      const standard = profilePolicy.CODEX_PINNED_STANDARD_ROLES.includes(role);
-      const reasoning = profilePolicy.CODEX_PINNED_REASONING_ROLES.includes(role);
-      const heavy = profilePolicy.CODEX_PINNED_HEAVY_ROLES.includes(role);
-      assert([standard, reasoning, heavy].filter(Boolean).length === 1,
-        '#332 AC3: ' + role + ' must belong to exactly one profile class');
-      assert(!/^model\s*=/m.test(body) && !/^model_reasoning_effort\s*=/m.test(body),
-        '#332 AC3: ' + role + ' must inherit the parent session by omitting both runtime keys');
+      assert(profilePolicy.CODEX_PINNED_ROLES.includes(role),
+        '#332 AC3 (#1062): ' + role + ' must belong to the single pinned role roster');
+      const codexSchema = require(path.join(pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+      assert(codexSchema.CODEX_PINNED_MODEL === 'gpt-5.6-luna'
+        && codexSchema.CODEX_PINNED_EFFORT === 'max',
+        '#332 AC3 (#1062): the single subagent binding pins gpt-5.6-luna at max effort');
+      assert((body.match(/^model = "gpt-5\.6-luna"$/gm) || []).length === 1
+        && (body.match(/^model_reasoning_effort = "max"$/gm) || []).length === 1,
+        '#332 AC3 (#1062): ' + role + ' carries exactly one model = "gpt-5.6-luna" and one '
+          + 'model_reasoning_effort = "max" top-level line');
     }
     const manifestPath = path.join(agentsDir, manifestBase);
     assert(fs.existsSync(manifestPath), '#332 AC3: manifest must be written');

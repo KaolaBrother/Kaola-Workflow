@@ -13,19 +13,12 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const ROLE_NAMES = Object.freeze([
-  'adversarial-verifier',
-  'build-error-resolver',
-  'code-architect',
   'code-explorer',
   'code-reviewer',
   'doc-updater',
   'implementer',
   'investigator',
   'knowledge-lookup',
-  'metric-optimizer',
-  'planner',
-  'security-reviewer',
-  'synthesizer',
   'tdd-guide',
 ]);
 const RUNTIME_NAMES = Object.freeze([
@@ -186,17 +179,6 @@ function normalizedProse(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
-function rolesByIntent(roleContracts) {
-  const rosters = { standard: [], reasoning: [], heavy: [] };
-  for (const [role, contract] of Object.entries(roleContracts || {})) {
-    if (Object.prototype.hasOwnProperty.call(rosters, contract && contract.intent_class)) {
-      rosters[contract.intent_class].push(role);
-    }
-  }
-  for (const tier of Object.keys(rosters)) rosters[tier].sort();
-  return rosters;
-}
-
 function roleNamesIn(text) {
   const prose = String(text || '').toLowerCase();
   return ROLE_NAMES.filter(role => new RegExp(`(?:^|[^a-z0-9-])${role}(?:$|[^a-z0-9-])`).test(prose));
@@ -204,17 +186,14 @@ function roleNamesIn(text) {
 
 // Role membership is derived once from behavior-contracts.json. It is a shared authority check,
 // not a requirement that every runtime adapter or every generated carrier repeat the full roster.
-function tierRosterGaps(text, expected) {
-  const prose = normalizedProse(text).toLowerCase();
-  const roster = prose.match(/\brole roster:\s*(.*?)(?=\.(?:\s|$)|$)/);
-  const gaps = [];
-  for (const [tier, roles] of Object.entries(expected)) {
-    const segment = roster && roster[1].match(
-      new RegExp(`\\b${tier}\\s+[—-]\\s*(.*?)(?=;\\s*(?:standard|reasoning|heavy)\\s+[—-]|$)`));
-    const found = segment ? roleNamesIn(segment[1]).sort() : [];
-    if (JSON.stringify(found) !== JSON.stringify(roles)) gaps.push(`${tier}-role-roster`);
-  }
-  return gaps;
+// #1062 — the tier axis is retired: binding surfaces carry one `**Roles:**` line naming exactly
+// the seven surviving roles; native-only surfaces carry no roster at all.
+function roleRosterGaps(text) {
+  const roster = String(text || '').match(/\*\*Roles:\*\*([^\n]*)/);
+  if (!roster) return ['role-roster'];
+  const found = roleNamesIn(roster[1]).sort();
+  if (JSON.stringify(found) !== JSON.stringify(sorted(ROLE_NAMES))) return ['role-roster'];
+  return [];
 }
 
 const RETIRED_RUN_WIDE_INLINE = /if\s+the\s+runtime\s+cannot\s+spawn\s+(?:an?\s+)?role\s+agent[\s\S]{0,100}?keep\s+the\s+work\s+inline/i;
@@ -236,14 +215,10 @@ function codexV2FieldHits(text) {
     .filter(line => /^\s*(?:task_name|agent_type|message|reasoning_effort|fork_turns)\s*=/.test(line));
 }
 
-// #1049 — Codex tier defaults are a dispatch contract carried by each Codex forge adapter and
-// rendered into Next, Finalize, and compact-recovery surfaces. Profiles still inherit the host
-// model by omission; these defaults describe the explicit dispatch fields only.
-const CODEX_TIER_DEFAULTS = Object.freeze({
-  standard: Object.freeze({ model: 'gpt-5.6-luna', effort: 'max' }),
-  reasoning: Object.freeze({ model: 'gpt-6-astra', effort: 'medium' }),
-  heavy: Object.freeze({ model: 'gpt-6-astra', effort: 'high' }),
-});
+// #1049 — the Codex child binding is a dispatch contract carried by each Codex forge adapter and
+// rendered into Next, Finalize, and compact-recovery surfaces. Under #1062 there is exactly one
+// binding: every TOML profile pins `gpt-5.6-luna`/`max` and calls omit per-call model and effort.
+const CODEX_BINDING = Object.freeze({ model: 'gpt-5.6-luna', effort: 'max' });
 
 function regexEscape(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -253,50 +228,38 @@ function hasToken(text, token) {
   return new RegExp(`(?:^|[^a-z0-9])${regexEscape(token)}(?:$|[^a-z0-9])`, 'i').test(text);
 }
 
-function codexTierDefaultGaps(text) {
+function codexBindingGaps(text) {
   const prose = normalizedProse(text);
   const gaps = [];
-  for (const [tier, binding] of Object.entries(CODEX_TIER_DEFAULTS)) {
-    const match = prose.match(new RegExp(
-      `\\b${tier}\\s*(?:→|—|-)\\s*([\\s\\S]*?)(?=;\\s*(?:standard|reasoning|heavy)\\s*(?:→|—|-)\\s*|$)`,
-      'i'));
-    const segment = match ? match[1] : '';
-    if (!hasToken(segment, binding.model) || !hasToken(segment, binding.effort)) gaps.push(tier);
-  }
+  const match = prose.match(/\*\*Subagent default:\*\*([\s\S]*?)(?=\*\*[A-Z]|$)/);
+  const segment = match ? match[1] : '';
+  if (!match) gaps.push('subagent-default');
+  if (!hasToken(segment, CODEX_BINDING.model)) gaps.push('binding-model');
+  if (!hasToken(segment, CODEX_BINDING.effort)) gaps.push('binding-effort');
   return gaps;
 }
 
-const CODEX_TIER_FIXTURE = [
-  '**Tier defaults:** standard — standard → `gpt-5.6-luna` with reasoning effort `max`;',
-  'reasoning — reasoning → `gpt-6-astra` with reasoning effort `medium`;',
-  'heavy — heavy → `gpt-6-astra` with reasoning effort `high`.',
+const CODEX_BINDING_FIXTURE = [
+  '**Subagent default:** every installed Kaola TOML profile pins `model = "gpt-5.6-luna"`',
+  'and `model_reasoning_effort = "max"`; file values take precedence.',
 ].join(' ');
-assert(codexTierDefaultGaps(CODEX_TIER_FIXTURE).length === 0,
-  'A1049/oracle: decimal model versions and the requested three tier pairs parse as valid');
-assert(codexTierDefaultGaps(CODEX_TIER_FIXTURE.replaceAll('gpt-6-astra', 'gpt-5.6-sol'))
-    .includes('reasoning')
-    && codexTierDefaultGaps(CODEX_TIER_FIXTURE.replaceAll('gpt-6-astra', 'gpt-5.6-sol'))
-      .includes('heavy'),
-  'A1049/oracle RED: the historical Sol reasoning/heavy pair is rejected');
-assert(codexTierDefaultGaps(CODEX_TIER_FIXTURE.replace('effort `high`', 'effort `xhigh`'))
-    .includes('heavy'),
-  'A1049/oracle RED: heavy high does not accept the stronger xhigh token');
+assert(codexBindingGaps(CODEX_BINDING_FIXTURE).length === 0,
+  'A1049/oracle: the single Luna/max binding parses as valid');
+assert(codexBindingGaps(CODEX_BINDING_FIXTURE.replaceAll('gpt-5.6-luna', 'gpt-5.6-sol'))
+    .includes('binding-model'),
+  'A1049/oracle RED: the historical Sol model is rejected');
+assert(codexBindingGaps(CODEX_BINDING_FIXTURE.replace('effort = "max"', 'effort = "xhigh"'))
+    .includes('binding-effort'),
+  'A1049/oracle RED: max effort does not accept the stronger xhigh token');
+assert(codexBindingGaps('**Roles:** `implementer`.').includes('subagent-default'),
+  'A1049/oracle RED: a surface without the subagent-default declaration is rejected');
 
 function dispatchBinding(runtime, role, roleContracts) {
-  const expected = {
-    claude: {
-      standard: { model: 'sonnet' },
-      reasoning: { model: 'opus' },
-      heavy: { model: 'fable' },
-    },
-    codex: {
-      standard: CODEX_TIER_DEFAULTS.standard,
-      reasoning: CODEX_TIER_DEFAULTS.reasoning,
-      heavy: CODEX_TIER_DEFAULTS.heavy,
-    },
-  }[runtime];
-  const tier = roleContracts[role] && roleContracts[role].intent_class;
-  return expected && expected[tier] ? expected[tier] : null;
+  // #1062 — one binding per adapter carried by the installed profile: dispatch calls name the
+  // role and omit per-call model/effort, which the profile pins. Returns truthy when the role is
+  // a registered Kaola role for this binding runtime, null otherwise.
+  if (runtime !== 'claude' && runtime !== 'codex') return null;
+  return Object.prototype.hasOwnProperty.call(roleContracts, role) ? { omitCallFields: true } : null;
 }
 
 function dispatchDefaultGaps(runtime, text, roleContracts) {
@@ -312,10 +275,10 @@ function dispatchDefaultGaps(runtime, text, roleContracts) {
       continue;
     }
     const binding = dispatchBinding(runtime, role, roleContracts);
-    if (!binding || quotedCallField(block, 'model') !== binding.model) {
+    if (!binding || quotedCallField(block, 'model') !== null) {
       gaps.push(`${callLabel}-default-model`);
     }
-    if (runtime === 'codex' && (!binding || quotedCallField(block, 'reasoning_effort') !== binding.effort)) {
+    if (runtime === 'codex' && (!binding || quotedCallField(block, 'reasoning_effort') !== null)) {
       gaps.push(`${callLabel}-default-effort`);
     }
     if (runtime === 'codex') {
@@ -394,7 +357,8 @@ function dispatchContractGaps(text) {
   if (!(prose.includes('capability_gap') && prose.includes('specific'))) {
     gaps.push('specific-capability-gap');
   }
-  if (!(/generic route\s+impersonat\w*.*named role/.test(prose)
+  if (!(/generic route\s+claim\s+a\s+named role'?s?\s+identity/.test(prose)
+      || /generic route\s+impersonat\w*.*named role/.test(prose)
       || /(?:never|not)\s+.*impersonat\w*.*named role/.test(prose))) {
     gaps.push('no-impersonation');
   }
@@ -446,53 +410,42 @@ function runtimeDelegationGaps(runtime, text) {
   // fallback, capability-gap, and no-impersonation contract is checked once in the marked shared
   // dispatch block below; requiring every adapter paragraph to repeat it was both redundant and
   // incompatible with the compact generated surfaces.
-  // Lookup scope, dispatch carrier, and the three tier bindings are runtime facts. ADR 0019 is the
-  // oracle for the tier cells; these tokens deliberately specify results, not sentence wording.
+  // Lookup scope, dispatch carrier, and the one subagent binding are runtime facts. #1062 retired
+  // the tier axis: binding runtimes carry one `**Subagent default:**` line plus a `**Roles:**`
+  // roster of exactly seven; native_only runtimes carry the design sentence and no roster.
   const runtimeNeeds = {
     claude: [
       ['lookup', [/\.claude\/agents\//]],
       ['carrier', [/\bagent\b.*subagent_type|subagent_type.*\bagent\b/]],
-      ['standard-tier', [/standard.*sonnet|sonnet.*standard/]],
-      ['reasoning-tier', [/reasoning.*opus|opus.*reasoning/]],
-      ['heavy-tier', [/heavy.*fable|fable.*heavy/]],
-      ['effort-boundary', [/runtime(?:'s)? default effort|effort.*not pinned|no .*effort pin/]],
+      ['binding-model', [/subagent default:[\s\S]*model: sonnet|model: sonnet[\s\S]*subagent default/]],
+      ['effort-boundary', [/runtime(?:'s)? default effort|effort is not pinned|effort.*not pinned|no .*effort pin/]],
     ],
     codex: [
       ['registration-lookup', [/\.codex\/config\.toml/]],
       ['profile-lookup', [/\.codex\/agents\/kaola-workflow\/<role>\.toml/]],
       ['carrier', [/spawn_agent.*agent_type|agent_type.*spawn_agent/]],
-      ['standard-tier', [/standard.*gpt-5\.6-luna.*max|gpt-5\.6-luna.*max.*standard/]],
-      ['reasoning-tier', [/reasoning.*gpt-6-astra.*medium|gpt-6-astra.*medium.*reasoning/]],
-      ['heavy-tier', [/heavy.*gpt-6-astra.*high|gpt-6-astra.*high.*heavy/]],
+      ['binding-model', [/gpt-5\.6-luna/]],
+      ['binding-effort', [/gpt-5\.6-luna[\s\S]*max|max[\s\S]*gpt-5\.6-luna/]],
     ],
     opencode: [
-      ['lookup', [/\.opencode\/agents\//]],
-      ['carrier', [/\btask\b.*subagent_type|subagent_type.*\btask\b/]],
-      ['standard-tier', [/standard.*session model|session model.*standard/]],
-      ['reasoning-tier', [/reasoning.*per-role override|per-role override.*reasoning/]],
-      ['heavy-tier', [/heavy.*classif(?:y|ies|ied).*reasoning|reasoning.*heavy/]],
+      ['native-only-design', [/installs no kaola role profiles by design/]],
+      ['native-routes', [/native routes/]],
     ],
     kimi: [
-      ['lookup', [/\.kimi-code\/agents\//, /kimi_code_home.*agents/]],
-      ['carrier', [/\bagent(?:swarm)?\b.*subagent_type|subagent_type.*\bagent(?:swarm)?\b/]],
-      ['standard-tier', [/standard.*session inherit|session inherit.*standard/]],
-      ['reasoning-tier', [/reasoning.*session inherit|session inherit.*reasoning/]],
-      ['heavy-tier', [/heavy.*session inherit|session inherit.*heavy/]],
+      ['native-only-design', [/installs no kaola role profiles by design/]],
+      ['native-routes', [/native routes/]],
     ],
     grok: [
       ['lookup', [/\.grok\/agents\//]],
       ['carrier', [/spawn_subagent.*subagent_type|subagent_type.*spawn_subagent/]],
-      ['standard-tier', [/standard.*inherit.*medium|medium.*inherit.*standard/]],
-      ['reasoning-tier', [/reasoning.*inherit.*high|high.*inherit.*reasoning/]],
-      ['heavy-tier', [/heavy.*inherit.*xhigh|xhigh.*inherit.*heavy/]],
+      ['binding-model', [/grok-4\.6/]],
+      ['binding-effort', [/grok-4\.6[\s\S]*medium|medium[\s\S]*grok-4\.6/]],
     ],
     cursor: [
       ['lookup', [/\.cursor\/agents\//]],
       ['carrier', [/task.*flat [`]?subagent_type|flat [`]?subagent_type.*task/]],
-      ['standard-tier', [/standard.*grok-4\.6.*medium|grok-4\.6.*medium.*standard/]],
-      ['reasoning-tier', [/reasoning.*grok-4\.6.*high|grok-4\.6.*high.*reasoning/]],
-      ['heavy-tier', [/heavy.*grok-4\.6.*xhigh|grok-4\.6.*xhigh.*heavy/]],
-      ['exact-tier-post-resolution', [/exact-tier requirement.*post-resolution assertion/]],
+      ['binding-model', [/grok-4\.6\[effort=medium\]/]],
+      ['exact-binding-post-resolution', [/exact-binding requirement.*post-resolution assertion/]],
       ['generic-model-not-gap', [/generic task model enum.*not a named-profile capability gap/]],
       ['provider-evidence', [/provideroptions\.cursor\.modelname.*provider evidence/]],
       ['provider-not-call-shape', [/subagenttype\.custom\.name.*provider encoding.*not controller call shape/]],
@@ -505,15 +458,23 @@ function runtimeDelegationGaps(runtime, text) {
       ['named-catalog-evidence', [/app 3\.17\.21.*saved cloud build.*all 14 names.*implementer/]],
     ],
     zcode: [
-      ['lookup', [/(?:~\/|\$\{?zcode_home[^ ]*).*\.zcode\/agents\//,
-        /zcode_home.*agents\//, /user.scope.*\.zcode\/agents\//]],
-      ['carrier', [/\bagent\b.*subagent_type|subagent_type.*\bagent\b/, /\bagent\b.*@.*dispatch/]],
-      ['standard-tier', [/standard.*glm-5\.3.*thoughtlevel.*high|glm-5\.3.*high.*standard/]],
-      ['reasoning-tier', [/reasoning.*glm-5\.3.*thoughtlevel.*max|glm-5\.3.*max.*reasoning/]],
-      ['heavy-tier', [/heavy.*glm-5\.3.*thoughtlevel.*max|glm-5\.3.*max.*heavy/]],
+      ['native-only-design', [/installs no kaola role profiles by design/]],
+      ['native-routes', [/native routes/]],
+    ],
+    devin: [
+      ['native-only-design', [/installs no kaola role profiles by design/]],
+      ['native-routes', [/native routes/]],
     ],
   };
   for (const [name, alternatives] of runtimeNeeds[runtime] || []) needs(name, alternatives);
+  const nativeOnlyRuntimes = ['opencode', 'kimi', 'zcode', 'devin'];
+  if (nativeOnlyRuntimes.includes(runtime)) {
+    if (/\*\*roles:\*\*/.test(prose)) gaps.push('native-only-roles-roster');
+    if (/\*\*subagent default:\*\*/.test(prose)) gaps.push('native-only-subagent-default');
+  } else {
+    gaps.push(...roleRosterGaps(text));
+    if (!/\*\*subagent default:\*\*/.test(prose)) gaps.push('subagent-default');
+  }
   if (runtime === 'codex' && /installed\s+`?agents\.toml`?|find[^.]{0,120}\bagents\.toml\b/.test(prose)) {
     gaps.push('retired-agents-toml-lookup');
   }
@@ -674,7 +635,7 @@ assert(!/KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(initSource),
       && !/Do not return `BLOCKED` merely because/i.test(n);
   };
   const teachesTestOwnerRepair = text =>
-    /(?:implementer|test author) may delete, weaken, or reinterpret that acceptance to pass/i.test(norm(text));
+    /(?:implementer|test author) may delete, weaken, or reinterpret (?:that acceptance|them) to pass/i.test(norm(text));
   assert(surfaces.every(text => !teachesSelectorAsMission(text)),
     'A3[mission-granularity]: shipped guidance does not teach one selector as a mission');
   assert(!teachesImmediateBlocked(nextSource),
@@ -688,8 +649,8 @@ assert(!/KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(initSource),
     'return `BLOCKED` merely because')),
   'A3[mission-granularity] mutation RED: requiring immediate BLOCKED on same-custody work is detected');
   assert(teachesTestOwnerRepair(norm(nextSource).replace(
-    /An implementer may not delete, weaken, or reinterpret that acceptance to pass\./,
-    'An implementer may delete, weaken, or reinterpret that acceptance to pass.')),
+    /the implementer does not delete, weaken, or reinterpret them to pass/i,
+    'the implementer may delete, weaken, or reinterpret them to pass')),
   'A3[mission-granularity] mutation RED: silent production repair by the test/implementer owner is detected');
 
   const retired = /Repair or re-review work (?:must append|appends) (?:a )?new mission(?: rather than rewriting the closed item)?\./i;
@@ -865,13 +826,16 @@ if (generator) {
 
 const roleContracts = behavior && behavior.roles && typeof behavior.roles === 'object'
   ? behavior.roles : {};
-const intentRosters = rolesByIntent(roleContracts);
 assert(JSON.stringify(sorted(Object.keys(roleContracts))) === JSON.stringify(ROLE_NAMES),
-  'A5: exactly the 14 supported roles have one behavior authority — got '
+  'A5: exactly the 7 supported roles have one behavior authority — got '
   + JSON.stringify(sorted(Object.keys(roleContracts))));
+for (const [role, contract] of Object.entries(roleContracts)) {
+  assert(!Object.prototype.hasOwnProperty.call(contract, 'intent_class'),
+    `A5[${role}]: behavior authority carries no retired intent_class field`);
+}
 if (generator && Array.isArray(generator.ROLES)) {
   assert(JSON.stringify(sorted(generator.ROLES)) === JSON.stringify(ROLE_NAMES),
-    'A5: generator role coverage equals the complete 14-role authority');
+    'A5: generator role coverage equals the complete 7-role authority');
 }
 
 for (const role of ROLE_NAMES) {
@@ -940,15 +904,17 @@ assert(Array.isArray(profiles), 'A6: generator returns a profile list');
 const outputKeys = profiles.map(profileKey);
 assert(new Set(outputKeys).size === outputKeys.length,
   'A6: every generated runtime profile has one unique output identity');
+// #1062 — binding runtimes render the seven-role catalog (codex once per forge); native_only
+// runtimes render no Kaola role profiles by design.
 const expectedCounts = {
-  claude: 14,
-  codex: 42,
-  opencode: 14,
-  kimi: 14,
-  grok: 14,
-  cursor: 14,
-  zcode: 14,
-  devin: 14,
+  claude: 7,
+  codex: 21,
+  opencode: 0,
+  kimi: 0,
+  grok: 7,
+  cursor: 7,
+  zcode: 0,
+  devin: 0,
 };
 for (const runtime of RUNTIME_NAMES) {
   const runtimeProfiles = profiles.filter(profile => profile.runtime === runtime);
@@ -956,8 +922,9 @@ for (const runtime of RUNTIME_NAMES) {
     `A6[${runtime}]: generator renders ${expectedCounts[runtime]} native profiles — got `
     + runtimeProfiles.length);
   const roles = new Set(runtimeProfiles.map(profile => profile.role));
-  assert(JSON.stringify(sorted(roles)) === JSON.stringify(ROLE_NAMES),
-    `A6[${runtime}]: native output covers all 14 roles`);
+  assert(JSON.stringify(sorted(roles))
+      === JSON.stringify(expectedCounts[runtime] === 0 ? [] : ROLE_NAMES),
+    `A6[${runtime}]: native output covers the ${expectedCounts[runtime] === 0 ? 'zero-profile native_only' : 'seven-role'} catalog`);
 }
 
 if (generator && behavior && adapters && profiles.length > 0) {
@@ -997,7 +964,7 @@ for (const role of ROLE_NAMES) {
 // mechanical retirement of a test that pinned a body shape #1054's authority explicitly retires,
 // not a change to what #1054 accepts.
 
-// #1049 — the requested Codex tier change is source-owned and must reach every tracked carrier.
+// #1049/#1062 — the Codex child binding is source-owned and must reach every tracked carrier.
 // Keep this proof on the generated subject: a copied fixture or a source-only assertion would
 // allow stale Next, Finalize, or compact files to ship while the adapter map looks correct.
 {
@@ -1007,30 +974,35 @@ for (const role of ROLE_NAMES) {
         === JSON.stringify(['codex-gitea', 'codex-github', 'codex-gitlab']),
     'A1049/source: exactly the GitHub, GitLab, and Gitea Codex adapters are covered');
 
-  const sourceTierGaps = codexEntries.flatMap(entry => {
+  const sourceBindingGaps = codexEntries.flatMap(entry => {
     const capabilities = capabilityObject(entry.adapter) || {};
-    const guidance = capabilities.delegation_guidance || {};
-    const tiers = guidance.tiers && typeof guidance.tiers === 'object' ? guidance.tiers : {};
-    const tierText = Object.values(tiers).join('; ');
-    const gaps = codexTierDefaultGaps(tierText);
-    for (const tier of Object.keys(CODEX_TIER_DEFAULTS)) {
-      if (!capabilities.intent_mapping || capabilities.intent_mapping[tier] !== 'inherit') {
-        gaps.push(`${tier}-inheritance`);
-      }
+    const binding = capabilities.subagent_default;
+    const gaps = [];
+    if (!binding || binding.model !== CODEX_BINDING.model || binding.effort !== CODEX_BINDING.effort) {
+      gaps.push('subagent-default');
+    }
+    if (Object.prototype.hasOwnProperty.call(capabilities, 'intent_mapping')
+        || (capabilities.delegation_guidance
+            && Object.prototype.hasOwnProperty.call(capabilities.delegation_guidance, 'tiers'))) {
+      gaps.push('retired-tier-axis');
     }
     return gaps.map(gap => `${entry.name}/${gap}`);
   });
-  assert(sourceTierGaps.length === 0,
-    'A1049/source: Codex adapters carry Luna/max, Astra/medium, Astra/high and inherit model — gaps '
-      + JSON.stringify(sourceTierGaps));
+  assert(sourceBindingGaps.length === 0,
+    'A1049/source: every Codex adapter carries exactly one subagent_default of Luna/max and no tier axis — gaps '
+      + JSON.stringify(sourceBindingGaps));
 
-  const explicitModelProfiles = profiles
+  const unpinnedCodexProfiles = profiles
     .filter(profile => profile.runtime === 'codex')
-    .filter(profile => /^\s*model\s*[:=]/mi.test(String(profile.content || '')))
+    .filter(profile => {
+      const content = String(profile.content || '');
+      return (content.match(/^model\s*=\s*"gpt-5\.6-luna"\s*$/gm) || []).length !== 1
+        || (content.match(/^model_reasoning_effort\s*=\s*"max"\s*$/gm) || []).length !== 1;
+    })
     .map(profileKey);
-  assert(explicitModelProfiles.length === 0,
-    'A1049/profiles: all 42 Codex role profiles remain model-free and inherit the native host model — '
-      + JSON.stringify(explicitModelProfiles));
+  assert(unpinnedCodexProfiles.length === 0,
+    'A1049/profiles: all 21 Codex role profiles pin exactly one model = "gpt-5.6-luna" and one '
+      + 'model_reasoning_effort = "max" — gaps ' + JSON.stringify(unpinnedCodexProfiles));
 
   let routing = null;
   let freshOperationCarriers = [];
@@ -1048,32 +1020,32 @@ for (const role of ROLE_NAMES) {
   }
 
   const operationGaps = freshOperationCarriers.flatMap(carrier =>
-    codexTierDefaultGaps(carrier.content).map(gap => `${carrier.label}/${gap}`));
+    codexBindingGaps(carrier.content).map(gap => `${carrier.label}/${gap}`));
   assert(freshOperationCarriers.length === 6 && operationGaps.length === 0,
-    'A1049/render: fresh Codex next/finalize carriers across all three forges carry the requested '
-      + 'tier defaults — gaps ' + JSON.stringify(operationGaps));
+    'A1049/render: fresh Codex next/finalize carriers across all three forges carry the single '
+      + 'subagent binding — gaps ' + JSON.stringify(operationGaps));
 
   // #1054 item 25 (TEST-AUTHOR EDIT, not implementer), the global-recovery dedupe: codex is not
   // an always-loaded dispatch carrier (RECOVERY_FULL_DISPATCH_RUNTIMES — grok and cursor only;
   // fall back to that pinned pair when the generator does not yet export it, so this still runs
   // pre-#1054), so its compact-recovery render now points at the full Next/Finalize reload
-  // instead of restating the tier defaults a second time. Assert that deferred pointer instead of
-  // requiring the tier text to be duplicated here.
+  // instead of restating the binding a second time. Assert that deferred pointer instead of
+  // requiring the binding text to be duplicated here.
   const codexKeepsDispatch = (Array.isArray(routing && routing.RECOVERY_FULL_DISPATCH_RUNTIMES)
     ? routing.RECOVERY_FULL_DISPATCH_RUNTIMES : ['grok', 'cursor']).includes('codex');
   if (codexKeepsDispatch) {
     const compactGaps = freshCompactCarriers.flatMap(carrier =>
-      codexTierDefaultGaps(carrier.content).map(gap => `${carrier.label}/${gap}`));
+      codexBindingGaps(carrier.content).map(gap => `${carrier.label}/${gap}`));
     assert(freshCompactCarriers.length === 3 && compactGaps.length === 0,
-      'A1049/render: fresh Codex compact carriers across all three forges carry the requested tier '
-        + 'defaults — gaps ' + JSON.stringify(compactGaps));
+      'A1049/render: fresh Codex compact carriers across all three forges carry the single '
+        + 'subagent binding — gaps ' + JSON.stringify(compactGaps));
   } else {
     const deferredGaps = freshCompactCarriers
       .filter(carrier => !/already carries the full runtime dispatch contract|does not restate/i.test(carrier.content))
       .map(carrier => carrier.label);
     assert(freshCompactCarriers.length === 3 && deferredGaps.length === 0,
       'A1049/render: fresh Codex compact carriers across all three forges point at the full '
-        + 'reload instead of restating tier defaults — gaps ' + JSON.stringify(deferredGaps));
+        + 'reload instead of restating the subagent binding — gaps ' + JSON.stringify(deferredGaps));
   }
 
   const trackedOperationRows = routing
@@ -1086,19 +1058,19 @@ for (const role of ROLE_NAMES) {
   const trackedOperationGaps = trackedOperationRows.flatMap(row => {
     const content = read(row.path);
     if (typeof content !== 'string') return [`${row.path}/missing`];
-    return codexTierDefaultGaps(content).map(gap => `${row.path}/${gap}`);
+    return codexBindingGaps(content).map(gap => `${row.path}/${gap}`);
   });
   assert(trackedOperationRows.length === 6 && trackedOperationGaps.length === 0,
     'A1049/tracked: generated Codex next/finalize bytes across all three forges carry the '
-      + 'requested tier defaults — gaps ' + JSON.stringify(trackedOperationGaps));
+      + 'single subagent binding — gaps ' + JSON.stringify(trackedOperationGaps));
   // #1054 item 25 (TEST-AUTHOR EDIT, not implementer), the global-recovery dedupe: the tracked
   // Codex compact-recovery files are the committed form of the same deferred render checked above
   // — require the deferred pointer when codex is not an always-loaded dispatch carrier, and the
-  // tier defaults otherwise.
+  // subagent binding otherwise.
   const trackedRecoveryGaps = trackedRecoveryRows.flatMap(row => {
     const content = read(row.path);
     if (typeof content !== 'string') return [`${row.path}/missing`];
-    if (codexKeepsDispatch) return codexTierDefaultGaps(content).map(gap => `${row.path}/${gap}`);
+    if (codexKeepsDispatch) return codexBindingGaps(content).map(gap => `${row.path}/${gap}`);
     return /already carries the full runtime dispatch contract|does not restate/i.test(content)
       ? [] : [`${row.path}/deferred-note-missing`];
   });
@@ -1158,9 +1130,12 @@ if (generator && behavior && adapters && roleContracts['code-reviewer'] && profi
   assert(JSON.stringify(changed) === JSON.stringify(expectedRoleKeys),
     'A9: a code-reviewer behavior mutation changes every and only code-reviewer runtime render — changed '
     + JSON.stringify(changed));
+  // #1062 — profiles exist only on the four binding runtime families; native_only runtimes render
+  // no Kaola role profiles by design, so the mutation reaches exactly those four.
+  const BINDING_RUNTIME_NAMES = Object.freeze(['claude', 'codex', 'cursor', 'grok']);
   assert(JSON.stringify(sorted(new Set(changedProfiles.map(profile => profile.runtime))))
-      === JSON.stringify(SORTED_RUNTIME_NAMES),
-  'A9: shared behavior mutation reaches all eight runtime families');
+      === JSON.stringify(sorted(BINDING_RUNTIME_NAMES)),
+  'A9: shared behavior mutation reaches every binding runtime family');
 }
 
 // A10 — mutation proof: a valid adapter change is isolated, and deleting that required capability
@@ -1211,12 +1186,13 @@ if (generator && behavior && adapters && profiles.length > 0) {
 }
 
 // A10-native-carriers — runtime-specific model and effort identifiers are adapter data. A
-// renderer may understand a carrier shape, but it must not know Cursor's model family or ZCode's
-// model name as a literal. Mutating either identifier must change every and only the target
-// runtime's profiles.
+// renderer may understand a carrier shape, but it must not know Cursor's or Grok's model family
+// as a literal. Mutating either identifier must change every and only the target runtime's
+// profiles. #1062 — the binding lives in the adapter's single `subagent_default`; ZCode is
+// native_only now, so Grok is the second effort-carrier witness.
 if (generator && behavior && adapters && profiles.length > 0) {
   const generatorSource = read(generatorPath) || '';
-  for (const runtime of ['cursor', 'zcode']) {
+  for (const runtime of ['cursor', 'grok']) {
     const entry = adapterView.entries.find(candidate => candidate.runtime === runtime);
     const runtimeProfiles = runtimeProfilesFor(profiles, runtime);
     const renderedModels = sorted(new Set(runtimeProfiles.map(profile => {
@@ -1239,7 +1215,14 @@ if (generator && behavior && adapters && profiles.length > 0) {
 
     const replacement = `kw-${runtime}-model-mutation-1033`;
     const stats = { replacements: 0 };
-    const mutatedAdapters = replaceExactScalar(clone(adapters), modelIdentifier, replacement, stats);
+    // #1062 — Cursor and Grok share the grok-4.6 model family, so the mutation is scoped to the
+    // target adapter entry; a whole-map scalar replace would leak across runtimes and no longer
+    // proves per-runtime isolation.
+    const mutatedAdapters = clone(adapters);
+    const mutatedView = adapterEntries(mutatedAdapters);
+    const mutationEntry = mutatedView.entries.find(candidate => candidate.runtime === runtime);
+    mutatedView.root[mutationEntry.name] = replaceExactScalar(
+      mutatedView.root[mutationEntry.name], modelIdentifier, replacement, stats);
     assert(stats.replacements > 0,
       `A10-native[${runtime}]: model mutation changed adapter data rather than renderer source`);
     if (stats.replacements === 0) continue;
@@ -1258,34 +1241,32 @@ if (generator && behavior && adapters && profiles.length > 0) {
       && targetOutputs.every(profile => profile.content.includes(replacement)),
     `A10-native[${runtime}]: mutated adapter model reaches all ${expected.length} native carriers`);
 
-    const intentMutation = clone(adapters);
-    const intentEntry = adapterEntries(intentMutation).entries.find(candidate => candidate.runtime === runtime);
-    const originalIntent = intentEntry.adapter.capabilities.intent_mapping.standard;
-    const replacementIntent = ['reasoning', 'heavy']
-      .map(intent => intentEntry.adapter.capabilities.intent_mapping[intent])
-      .find(value => value !== originalIntent);
-    assert(!!replacementIntent,
+    const effortMutation = clone(adapters);
+    const effortEntry = adapterEntries(effortMutation).entries.find(candidate => candidate.runtime === runtime);
+    const binding = effortEntry.adapter.capabilities.subagent_default || {};
+    const originalEffort = binding.effort;
+    const replacementEffort = ['high', 'max', 'low'].find(value => value !== originalEffort);
+    assert(!!replacementEffort,
       `A10-native[${runtime}]: adapter exposes a second valid effort value for mutation`);
-    if (!replacementIntent) continue;
-    intentEntry.adapter.capabilities.intent_mapping.standard = replacementIntent;
-    let intentProfiles = [];
-    try { intentProfiles = generator.renderProfiles(clone(behavior), intentMutation); }
+    if (!replacementEffort) continue;
+    effortEntry.adapter.capabilities.subagent_default.effort = replacementEffort;
+    let effortProfiles = [];
+    try { effortProfiles = generator.renderProfiles(clone(behavior), effortMutation); }
     catch (error) {
       assert(false, `A10-native[${runtime}]: adapter-owned effort mutation renders — ${error.message}`);
     }
-    const intentChanged = changedProfileKeys(profiles, intentProfiles);
-    assert(JSON.stringify(intentChanged) === JSON.stringify(expected),
-      `A10-native[${runtime}]: standard effort mutation changes every and only target runtime profiles — changed `
-      + JSON.stringify(intentChanged));
-    const mutatedStandard = intentProfiles.filter(profile => profile.runtime === runtime
-      && roleContracts[profile.role].intent_class === 'standard');
-    assert(mutatedStandard.length > 0 && mutatedStandard.every(profile => {
+    const effortChanged = changedProfileKeys(profiles, effortProfiles);
+    assert(JSON.stringify(effortChanged) === JSON.stringify(expected),
+      `A10-native[${runtime}]: subagent_default effort mutation changes every and only target runtime profiles — changed `
+      + JSON.stringify(effortChanged));
+    const mutatedOutputs = effortProfiles.filter(profile => profile.runtime === runtime);
+    assert(mutatedOutputs.length > 0 && mutatedOutputs.every(profile => {
       const fields = parseFrontmatter(profile.content).fields;
       return runtime === 'cursor'
-        ? String(fields.model || '').includes(`effort=${replacementIntent}`)
-        : fields.thoughtLevel === replacementIntent;
+        ? String(fields.model || '').includes(`effort=${replacementEffort}`)
+        : fields.effort === replacementEffort;
     }),
-    `A10-native[${runtime}]: adapter-owned standard effort reaches every standard native carrier`);
+    `A10-native[${runtime}]: adapter-owned subagent_default effort reaches every native carrier`);
   }
 }
 
@@ -1293,7 +1274,9 @@ if (generator && behavior && adapters && profiles.length > 0) {
 // native frontmatter. Prose restrictions cannot substitute for the carrier: the allowlist must be
 // present exactly once and roles without a capability must lack its native tools.
 if (generator && behavior && adapters && profiles.length > 0) {
-  const profileToolRuntimes = ['kimi', 'grok', 'zcode'];
+  // #1062 — Kimi and ZCode are native_only (no profiles to enforce); Claude and Grok remain the
+  // profile_tools runtimes. expectedNativeTools's `kimi` FetchURL variant is unreachable now.
+  const profileToolRuntimes = ['claude', 'grok'];
   for (const runtime of profileToolRuntimes) {
     const entry = adapterView.entries.find(candidate => candidate.runtime === runtime);
     assert(!!entry && capabilityObject(entry.adapter).tool_binding === 'profile_tools',
@@ -1393,7 +1376,7 @@ if (generator && behavior && adapters && profiles.length > 0) {
       guidanceByAdapter.set(entry.name, guidance);
       const gaps = runtimeDelegationGaps(entry.runtime, guidance);
       assert(guidance.length > 0 && gaps.length === 0,
-        `A10-delegation/adapter[${entry.name}]: guidance names its runtime-specific lookup scope, native carrier, and ADR 0019 tier facts — missing ${JSON.stringify(gaps)}`);
+        `A10-delegation/adapter[${entry.name}]: guidance names its runtime-specific lookup scope, native carrier, and subagent-binding facts — missing ${JSON.stringify(gaps)}`);
 
       // Mutation reachability without freezing the adapter's field names. Find the longest
       // adapter-owned string that the production guidance actually consumes, replace that scalar
@@ -1455,17 +1438,16 @@ if (generator && behavior && adapters && profiles.length > 0) {
       'A10-delegation/codex-lookup-mutation: replacing effective config/profile locators with source-only agents.toml fails discovery acceptance');
     }
 
-    // One adapter render is enough to prove that the generator derives the three tier rosters from
+    // One adapter render is enough to prove that the generator derives the seven-role roster from
     // the shared behavior authority. Do not demand that every runtime repeat these role names.
-    const rosterWitness = guidanceByAdapter.values().next().value || '';
-    const rosterGaps = tierRosterGaps(rosterWitness, intentRosters);
+    const rosterWitness = guidanceByAdapter.get('claude') || '';
+    const rosterGaps = roleRosterGaps(rosterWitness);
     assert(rosterGaps.length === 0,
-      `A10-delegation/common-roster: one shared adapter render carries behavior-authority standard/reasoning/heavy membership — missing ${JSON.stringify(rosterGaps)}`);
+      `A10-delegation/common-roster: one shared adapter render carries the behavior-authority seven-role roster — missing ${JSON.stringify(rosterGaps)}`);
     if (rosterGaps.length === 0) {
-      const missingStandardRole = intentRosters.standard[0];
-      const mutatedRoster = rosterWitness.replaceAll(missingStandardRole, 'missing-standard-role');
-      assert(tierRosterGaps(mutatedRoster, intentRosters).includes('standard-role-roster'),
-        'A10-delegation/roster-mutation RED: deleting one behavior-authority member from the shared tier roster is detected');
+      const mutatedRoster = rosterWitness.replaceAll(ROLE_NAMES[0], 'missing-role');
+      assert(roleRosterGaps(mutatedRoster).includes('role-roster'),
+        'A10-delegation/roster-mutation RED: deleting one behavior-authority member from the shared role roster is detected');
     }
 
   }
@@ -1485,7 +1467,7 @@ if (generator && behavior && adapters && profiles.length > 0) {
     assert(contractGaps.length === 0,
       `A10-delegation/contract[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: fresh render carries one complete marked dispatch contract — missing ${JSON.stringify(contractGaps)}`);
     assert(gaps.length === 0,
-      `A10-delegation/carrier[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: ${carrier.label} states runtime-specific lookup/carrier/tier semantics — missing ${JSON.stringify(gaps)}`);
+      `A10-delegation/carrier[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: ${carrier.label} states runtime-specific lookup/carrier/binding semantics — missing ${JSON.stringify(gaps)}`);
     if (carrier.topic === 'next') {
       assert(!RETIRED_RUN_WIDE_INLINE.test(carrier.content),
         `A10-delegation/next-whole-surface[${carrier.runtime}/${carrier.forge}]: ${carrier.label} rejects the retired run-wide "cannot spawn a role agent -> inline" fallback anywhere in the render`);
@@ -1523,7 +1505,7 @@ if (generator && behavior && adapters && profiles.length > 0) {
     'A10-delegation/capability-gap-mutation RED: removing the specific capability_gap fallback is detected');
 
     const withoutIdentityBoundary = dispatchWitness.content.replace(
-      /Never let a generic route\s+impersonate a\s+custody-bearing named role\./i,
+      /Never let a generic route\s+claim a\s+named role's identity\./i,
       'Use a generic route whenever it is convenient.');
     assert(withoutIdentityBoundary !== dispatchWitness.content
       && dispatchContractGaps(withoutIdentityBoundary).includes('no-impersonation'),
@@ -1552,10 +1534,10 @@ if (generator && behavior && adapters && profiles.length > 0) {
     }
   }
 
-  // Concrete-call mutation bites are conditional on the subject becoming compliant: corrupt one
-  // role's call-carried default while leaving the tier table and prose untouched. This catches the
-  // review's believable near miss where guidance describes the right default but the executable
-  // call still inherits or selects the wrong child configuration.
+  // Concrete-call mutation bites are conditional on the subject becoming compliant: inject a
+  // per-call model/effort field into one role's dispatch call while leaving the binding prose
+  // untouched. This catches the believable near miss where guidance describes the right binding
+  // but the executable call still carries a retired per-call override.
   for (const runtime of ['claude', 'codex']) {
     const subject = carriers.find(carrier => carrier.runtime === runtime
       && carrier.forge === 'github' && carrier.topic === 'finalize');
@@ -1566,19 +1548,15 @@ if (generator && behavior && adapters && profiles.length > 0) {
     });
     if (!target) continue;
     const role = quotedCallField(target, runtime === 'codex' ? 'agent_type' : 'subagent_type');
-    const binding = dispatchBinding(runtime, role, roleContracts);
-    const corrupted = runtime === 'claude'
-      ? subject.content.replace(target, target.replace(
-        new RegExp(`model\\s*=\\s*["']${binding.model.replace(/\./g, '\\.') }["']`),
-        `model="${binding.model === 'sonnet' ? 'opus' : 'sonnet'}"`))
-      : subject.content.replace(target, target.replace(
-        new RegExp(`reasoning_effort\\s*=\\s*["']${binding.effort}["']`),
-        `reasoning_effort="${binding.effort === 'max' ? 'low' : 'max'}"`));
+    const corrupted = subject.content.replace(target, target.replace(
+      /\n(\s*)\)/, runtime === 'claude'
+        ? '\n$1  model="opus",\n$1)'
+        : '\n$1  reasoning_effort="low",\n$1)'));
     const corruptedGaps = dispatchDefaultGaps(runtime, corrupted, roleContracts);
     assert(corrupted !== subject.content
       && corruptedGaps.some(gap => gap.endsWith(runtime === 'claude'
         ? '-default-model' : '-default-effort')),
-    `A10-delegation/finalize-default-mutation[${runtime}/${role}]: corrupting an actual call-carried default fails even when the surrounding tier table remains correct`);
+    `A10-delegation/finalize-default-mutation[${runtime}/${role}]: injecting a per-call field into an actual dispatch call fails even when the binding prose remains correct`);
   }
 
   // Subject-byte mutations: remove the two observed distinctions from an otherwise-correct common

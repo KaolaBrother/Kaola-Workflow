@@ -35,35 +35,23 @@ assert.strictEqual(devinAdapter.capabilities.nesting, 1, 'Devin nesting is 1');
 assert.strictEqual(devinAdapter.capabilities.hot_reload, false, 'Devin hot_reload is false');
 assert.strictEqual(devinAdapter.capabilities.rules_survive_compaction, false, 'Devin rules_survive_compaction is false');
 assert.deepStrictEqual(devinAdapter.compact_protocol.events, ['UserPromptSubmit'], 'Devin compact protocol uses UserPromptSubmit');
-for (const tier of ['standard', 'reasoning', 'heavy']) {
-  assert.strictEqual(devinAdapter.capabilities.intent_mapping[tier], 'host_router');
-}
+assert.strictEqual(devinAdapter.capabilities.role_dispatch, 'native_only',
+  'Devin is native_only — it installs no Kaola role profiles');
+assert.strictEqual(devinAdapter.capabilities.named_roles, false, 'Devin exposes no named Kaola roles');
+assert.strictEqual(devinAdapter.capabilities.deterministic_profiles, false,
+  'Devin renders no deterministic profiles');
+assert(devinAdapter.capabilities.delegation_guidance
+  && devinAdapter.capabilities.delegation_guidance.native_routes
+  && devinAdapter.capabilities.delegation_guidance.availability,
+  'Devin adapter declares native_routes + availability delegation guidance');
+assert(!('subagent_default' in (devinAdapter.capabilities.delegation_guidance || {})),
+  'native_only Devin declares NO subagent_default binding');
 
-const expectedTools = role => {
-  const req = new Set(contracts[role].capability_requirements);
-  const out = ['read', 'grep', 'glob'];
-  if (req.has('scoped_write')) out.push('edit', 'write');
-  if (req.has('command_execution')) out.push('exec');
-  if (req.has('external_research')) out.push('web_search', 'webfetch');
-  return out;
-};
-assert(contracts['knowledge-lookup'].capability_requirements.includes('external_research'),
-  'knowledge-lookup contract requires external_research (guards the Devin web tool mapping below)');
-
-for (const role of agents.ROLES) {
-  const text = sync.renderAgent('', role);
-  const fmMatch = text.match(/^---\n([\s\S]*?)\n---/);
-  assert(fmMatch, role + ' frontmatter present');
-  const fm = fmMatch[1];
-  const keys = fm.split('\n').map(x => x.split(':')[0]);
-  assert.deepStrictEqual(keys, ['name', 'description', 'allowed-tools'], role + ' frontmatter keys');
-  assert(!/\b(model|subagent|agent)\s*:/i.test(fm), role + ' frontmatter has no model/subagent/agent');
-  assert.deepStrictEqual(
-    JSON.parse(fm.match(/^allowed-tools:\s*(.*)$/m)[1]),
-    expectedTools(role),
-    role + ' allowed-tools');
-  assert(text.includes('runtime: devin'), role + ' appendix marks runtime: devin');
-}
+assert.strictEqual(agents.ROLES.length, 7, 'the canonical catalog is exactly 7 roles');
+assert.strictEqual(typeof sync.renderAgent, 'undefined',
+  'sync-devin-edition exposes no agent renderer — Devin is native_only');
+assert.strictEqual(typeof sync.renderSkill, 'function',
+  'sync-devin-edition still renders the native command skills');
 
 const claudeTokens = /(CLAUDE_PLUGIN_ROOT|\.claude\/kaola-workflow|--runtime claude|subagent_type:\s*"<role>")/;
 const commandNames = ['workflow-init', 'workflow-next', 'kaola-workflow-finalize'];
@@ -164,7 +152,12 @@ try {
 
   const homeRoot = path.join(fixture.home, '.config', 'devin');
   assert(fs.existsSync(path.join(homeRoot, 'AGENTS.md')), 'global AGENTS.md carrier installed');
-  assert(fs.existsSync(path.join(homeRoot, 'agents', 'implementer.md')), 'global implementer profile installed');
+  assert(!fs.existsSync(path.join(homeRoot, 'agents')),
+    'global install deploys NO agents dir — Devin is native_only');
+  for (const role of agents.ROLES) {
+    assert(!fs.existsSync(path.join(homeRoot, 'agents', role + '.md')),
+      'global install deploys no profile for ' + role);
+  }
   for (const name of commandNames) {
     assert(fs.existsSync(path.join(homeRoot, 'skills', name, 'SKILL.md')),
       'global skill installed: ' + name);
@@ -208,7 +201,8 @@ try {
   // spawn-class: environment
   let r = spawnSync(process.execPath, [path.join(REPO, 'scripts/sync-devin-edition.js'), '--tree-root=' + tmp, '--write'], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stderr);
-  assert(fs.existsSync(path.join(tmp, '.devin', 'agents', 'implementer.md')), 'sync writes agent');
+  assert(!fs.existsSync(path.join(tmp, '.devin', 'agents')),
+    'sync writes NO .devin/agents tree — Devin is native_only');
   for (const name of commandNames) {
     assert(fs.existsSync(path.join(tmp, '.devin', 'skills', name, 'SKILL.md')), 'sync writes skill: ' + name);
   }
