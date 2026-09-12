@@ -2,6 +2,12 @@
 
 Status: Accepted · Date: 2026-08-27 · Issue: #1035
 
+**Accepted successor (2026-09-12, Yanlei / #1062):** the "exactly three intent classes" clause and
+the three-row default-binding matrix are accepted as superseded by ADR 0025 (single
+`subagent_default` on Claude / Codex ×3 / Grok / Cursor; `role_dispatch: native_only` on
+OpenCode / Kimi / ZCode / Devin). Surfaces still ship the three-class matrix until that run.
+Per-item dispatch-or-inline judgment, honest fallback, and "defaults are not a ban" remain.
+
 ## Context
 
 ADR 0020 made `AGENTS.md` and the role behavior contracts runtime-neutral, but the accompanying
@@ -22,6 +28,8 @@ Claude-shaped transform.
 ### Common judgment, native mechanism
 
 The universal contract keeps exactly three intent classes: `standard`, `reasoning`, and `heavy`.
+*(#1062 / ADR 0025, accepted 2026-09-12, not yet landed.)* That sentence is superseded by a single
+subagent default binding; the per-item dispatch principle in the next sentence stays.
 It also keeps one execution principle: choose dispatch or inline again for every mission item. A
 missing exact named role is evidence about that route for that item; it is not evidence that all
 native dispatch is unavailable, and it cannot establish a run-wide inline posture.
@@ -129,8 +137,10 @@ its statements that intent expresses no default per-spawn binding, that routing 
 model/effort pair, and that restoring runtime-native default routing is categorically rejected.
 
 ADR 0019's three intent classes and owner-approved runtime binding matrix remain active as the
-default dispatch policy, while this ADR replaces its Claude-shaped rendering details. ADR 0017's
-mission-list architecture and ADR 0018's forge-as-backlog decision remain unchanged.
+default dispatch policy **on the current tree**, while this ADR replaces its Claude-shaped
+rendering details. ADR 0017's mission-list architecture and ADR 0018's forge-as-backlog
+decision remain unchanged. #1062 / ADR 0025, once landed, supersede the three-class matrix;
+they do not touch 0017 or 0018.
 
 ## Rejected alternatives
 

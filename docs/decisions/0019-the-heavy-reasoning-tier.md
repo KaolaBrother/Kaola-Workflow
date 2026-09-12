@@ -6,8 +6,15 @@
   **retired**. Surfaces already dropped that wording in #1032 (`7e116d6c`); this ADR now records
   the retirement formally rather than describing escalation as current behavior. The Heavy tier
   itself — planner/code-architect defaults and the standard/reasoning/heavy intent mapping —
-  remains Accepted and unchanged.
-- **Date:** 2026-08-24 (escalation retirement noted 2026-09-11)
+  remains Accepted and unchanged **on the current tree**.
+  **Accepted successor (2026-09-12, Yanlei / #1062):** the remaining three-tier axis, the 14-role
+  roster, and Heavy as planner-class default are accepted as retired. Surfaces still ship that
+  inventory until #1062 lands as ADR 0025
+  (`docs/decisions/0025-lean-orchestrator-single-subagent-binding.md`, 12.0.0). §1's observed
+  failure (top-tier reviewers overthink) remains the evidence basis for the
+  cheaper, scope-clamped reviewer. This file stays the historical record of the three-tier model
+  and the live description of the current tree; do not rewrite the matrices below until that run.
+- **Date:** 2026-08-24 (escalation retirement noted 2026-09-11; successor accepted 2026-09-12)
 - **Extends:** the two-tier role classification (`sonnet`/standard, `opus`/reasoning) — the plan
   vocabulary #610 fixed and every edition derives from. Does not supersede any prior ADR.
 - **Owner decisions (recorded 2026-08-24, in conversation):** codex standard tier unchanged;

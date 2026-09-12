@@ -46,7 +46,12 @@ moments.
 guidance; ADR 0022 moves universal behavior to a machine-global contract and compact-safe native
 carriers; ADR 0023 makes repository instructions an Agent-maintained outcome; ADR 0024 retires
 finalize's parsing of the orchestrator's own records and rewrites role bodies around positioning,
-deliverable, custody, and stop condition. ADR 0017 remains the Mission List design of record. Most
+deliverable, custody, and stop condition. ADR 0017 remains the Mission List design of record.
+[#1062](https://github.com/KaolaBrother/Kaola-Workflow/issues/1062) is the accepted successor
+to ADR 0019's remaining three-tier axis and ADR 0021's three intent classes (lean orchestrator,
+7 roles, one `subagent_default` on binding runtimes); ADR 0025
+(`docs/decisions/0025-lean-orchestrator-single-subagent-binding.md`) lands with that run.
+Surfaces still ship 14 roles / ten adapters / 140 renders until then. Most
 older records describe the node/DAG executor retired by ADR 0017 or project-prompt ownership
 retired by ADR 0023.
 
@@ -67,6 +72,9 @@ retired by ADR 0023.
 - **[0021 — Runtime-native orchestration guidance](decisions/0021-runtime-native-orchestration-guidance.md)**
   — common per-item judgment, honest fallback, adapter-rendered native capability exposure, and
   owner-approved default tier bindings without a Kaola scheduler or invented runtime limits.
+  The "exactly three intent classes" clause is accepted as superseded by
+  [#1062](https://github.com/KaolaBrother/Kaola-Workflow/issues/1062) / forthcoming ADR 0025;
+  live surfaces still ship the three-class matrix until that run.
 
 - **[0022 — Machine-global workflow contract](decisions/0022-machine-global-workflow-contract.md)**
   — one universal source, ten measured host adapters, batch-safe installation, subtractive project
@@ -86,7 +94,10 @@ retired by ADR 0023.
   former Claude-only bounded `fable` reviewer escalation is **retired** (2026-09-11 / #1059;
   surfaces cleared in #1032) — when more power is needed the orchestrator does the work itself.
   ADR 0020 supersedes its Claude-shaped role-source details; ADR 0021 retains the runtime binding
-  matrix as default dispatch policy while replacing the old rendering mechanism.
+  matrix as default dispatch policy while replacing the old rendering mechanism. The remaining
+  three-tier axis, 14-role roster, and Heavy as planner-class default are accepted as retired by
+  [#1062](https://github.com/KaolaBrother/Kaola-Workflow/issues/1062) (forthcoming ADR 0025);
+  this file remains the live description of the current tree until that run.
 
 - **[0017 — The mission list: four fields where the DAG was](decisions/0017-the-mission-list.md)** — the
   design of record. A run is one file of `item` / `status` / `dispatched` / `result`, written at three

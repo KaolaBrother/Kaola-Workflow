@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Point live ADRs at #1062 as the accepted successor to the three-tier model.** ADR 0019,
+  ADR 0021, and D-687-01 now record that Yanlei accepted the lean-orchestrator subtraction on
+  2026-09-12 (7 roles, one `subagent_default` on binding runtimes, Codex TOML pins
+  `gpt-5.6-luna` / `max`). Surfaces still ship 14 roles / ten adapters / 140 renders until
+  that issue lands as ADR 0025 / 12.0.0. `docs/README.md` names the forthcoming ADR.
+
 ## [11.1.1] - 2026-09-11
 
 ### Changed
