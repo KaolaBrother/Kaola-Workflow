@@ -1,0 +1,465 @@
+{
+  "headSha": "a153c215ec5cdb3c03814222e161eba9155fd330",
+  "workTreeHash": "clean",
+  "codeTreeHash": "d0152213968f354379119d2518e3c2373091f7fe45e89598c8b6598cb3580124",
+  "validationTestConsumes": [],
+  "startedAt": "2026-09-12T17:06:52.974Z",
+  "completedAt": "2026-09-12T17:15:22.263Z",
+  "source": "npm-default",
+  "scope": {
+    "decision": "all-four",
+    "reason": "edition_coupling",
+    "base": "2b1af448ba5aebbe13bde6deef130a84b409b67e",
+    "touchedEditionPaths": [
+      "README.md",
+      "docs/README.md",
+      "docs/api.md",
+      "docs/architecture.md",
+      "docs/devin-edition.md",
+      "docs/runtime-capabilities.md",
+      "install.sh",
+      "package.json",
+      "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js",
+      "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-closure-audit.js",
+      "plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-sink-merge.js",
+      "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js",
+      "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-closure-audit.js",
+      "plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-sink-merge.js",
+      "plugins/kaola-workflow/scripts/kaola-workflow-claim.js",
+      "plugins/kaola-workflow/scripts/kaola-workflow-closure-audit.js",
+      "plugins/kaola-workflow/scripts/kaola-workflow-sink-merge.js",
+      "scripts/kaola-workflow-claim.js",
+      "scripts/kaola-workflow-closure-audit.js",
+      "scripts/kaola-workflow-sink-merge.js"
+    ],
+    "changedFileCount": 24,
+    "chains": [
+      "claude",
+      "codex",
+      "gitlab",
+      "gitea"
+    ]
+  },
+  "preamble": {
+    "steps": [
+      {
+        "command": "node scripts/edition-sync.js --materialize-kernel",
+        "duration_ms": 21,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/validate-script-sync.js",
+        "duration_ms": 60,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/validate-vendored-agents.js",
+        "duration_ms": 26,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-issue-1056-default-branch-env-contract.js",
+        "duration_ms": 406,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-forge-finalize-findings.js",
+        "duration_ms": 11391,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-forge-archive-scoping.js",
+        "duration_ms": 6277,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-forge-claim-rollback-scoping.js",
+        "duration_ms": 994,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-forge-claim-reserved-project.js",
+        "duration_ms": 2194,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/test-active-folders-field-parity.js",
+        "duration_ms": 31,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/generate-routing-surfaces.js --check",
+        "duration_ms": 25,
+        "exitCode": 0
+      },
+      {
+        "command": "node scripts/edition-sync.js --check",
+        "duration_ms": 44,
+        "exitCode": 0
+      }
+    ]
+  },
+  "chains": [
+    {
+      "name": "claude",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:claude",
+      "duration_ms": 486768,
+      "accepted_red": false,
+      "accepted_red_issue": null,
+      "attempts": 1,
+      "retried_transient": false,
+      "timed_out": false,
+      "signal": null,
+      "steps": [
+        {
+          "command": "node scripts/test-validate-script-sync.js",
+          "duration_ms": 362,
+          "exitCode": 0
+        },
+        {
+          "command": "bash -n install.sh uninstall.sh install-all.sh install-devin.sh",
+          "duration_ms": 8,
+          "exitCode": 0
+        },
+        {
+          "command": "node -e \"JSON.parse(require('fs').readFileSync('package.json', 'utf8'))\"",
+          "duration_ms": 19,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-agent-model-resolver.js",
+          "duration_ms": 394,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-install-model-rendering.js",
+          "duration_ms": 13687,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-install-upgrade-rewrite.js",
+          "duration_ms": 7884,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-install-manifest-single-source.js",
+          "duration_ms": 174,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-validation-runner.js",
+          "duration_ms": 9767,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-install-adaptive-config.js",
+          "duration_ms": 7860,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-uninstall-forge-branches.js",
+          "duration_ms": 2586,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-probe-memo.js",
+          "duration_ms": 61,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-oracle-kernel.js",
+          "duration_ms": 534,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-kernel-conformance.js",
+          "duration_ms": 216135,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-outcome-recorder.js",
+          "duration_ms": 757,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-finalize-door.js",
+          "duration_ms": 62516,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-suite-registration.js",
+          "duration_ms": 49,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-bundle-state.js",
+          "duration_ms": 715,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-bundle-claim.js",
+          "duration_ms": 13058,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-priority-list-open.js",
+          "duration_ms": 663,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-forge-bundle-lane.js",
+          "duration_ms": 1645,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-bundle-finalize.js",
+          "duration_ms": 11584,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-parallel.js --self-test",
+          "duration_ms": 57,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-edition-sync.js",
+          "duration_ms": 23,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-release-surface-drift.js",
+          "duration_ms": 21,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-release.js",
+          "duration_ms": 34312,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-gap-sweep.js",
+          "duration_ms": 1159,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-ledger-compare.js",
+          "duration_ms": 155,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-validation-allowband.js",
+          "duration_ms": 22,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-route-reachability.js",
+          "duration_ms": 182,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-1044-prompt-bundle.js",
+          "duration_ms": 26,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-1044-runtime-adapters.js",
+          "duration_ms": 75,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-1045-cursor-conformance.js",
+          "duration_ms": 466,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-1046-global-contract.js",
+          "duration_ms": 296,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-1051-global-contract.js",
+          "duration_ms": 24,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-1052-cursor-cli-startup-prep.js",
+          "duration_ms": 23964,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-1053-next-task-quality.js",
+          "duration_ms": 84,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-1054-mission-list-carriers.js",
+          "duration_ms": 4243,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-1054-ledger-guard.js",
+          "duration_ms": 5089,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-1054-finalize-record-simplification.js",
+          "duration_ms": 1582,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-1054-role-redesign.js",
+          "duration_ms": 29,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-1055-render-subtraction-oracle.js",
+          "duration_ms": 134,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-issue-1067-archive-identity.js",
+          "duration_ms": 1276,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-zcode-install-trust.js",
+          "duration_ms": 1483,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/generate-agent-profiles.js --check",
+          "duration_ms": 25,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-runtime-agent-architecture.js",
+          "duration_ms": 125,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/validate-workflow-contracts.js",
+          "duration_ms": 294,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-bash-block-guards.js",
+          "duration_ms": 718,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-spawn-classification.js",
+          "duration_ms": 60,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/simulate-workflow-walkthrough.js --shard auto/12",
+          "duration_ms": 5780,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-relative-tmpdir-escape.js",
+          "duration_ms": 4732,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-generate-routing-surfaces.js",
+          "duration_ms": 420,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-install-all.js",
+          "duration_ms": 25764,
+          "exitCode": 0
+        },
+        {
+          "command": "node scripts/test-fixture-sandbox.js",
+          "duration_ms": 23690,
+          "exitCode": 0
+        }
+      ]
+    },
+    {
+      "name": "codex",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:codex",
+      "duration_ms": 7501,
+      "accepted_red": false,
+      "accepted_red_issue": null,
+      "attempts": 1,
+      "retried_transient": false,
+      "timed_out": false,
+      "signal": null,
+      "steps": [
+        {
+          "command": "node scripts/validate-kaola-workflow-contracts.js",
+          "duration_ms": 100,
+          "exitCode": 0
+        },
+        {
+          "command": "node plugins/kaola-workflow/scripts/simulate-kaola-workflow-walkthrough.js",
+          "duration_ms": 7401,
+          "exitCode": 0
+        }
+      ]
+    },
+    {
+      "name": "gitlab",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:gitlab",
+      "duration_ms": 93779,
+      "accepted_red": false,
+      "accepted_red_issue": null,
+      "attempts": 1,
+      "retried_transient": false,
+      "timed_out": false,
+      "signal": null,
+      "steps": [
+        {
+          "command": "node plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js",
+          "duration_ms": 97,
+          "exitCode": 0
+        },
+        {
+          "command": "node plugins/kaola-workflow-gitlab/scripts/simulate-gitlab-workflow-walkthrough.js",
+          "duration_ms": 53167,
+          "exitCode": 0
+        },
+        {
+          "command": "node plugins/kaola-workflow-gitlab/scripts/simulate-gitlab-codex-workflow-walkthrough.js",
+          "duration_ms": 40515,
+          "exitCode": 0
+        }
+      ]
+    },
+    {
+      "name": "gitea",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:gitea",
+      "duration_ms": 93691,
+      "accepted_red": false,
+      "accepted_red_issue": null,
+      "attempts": 1,
+      "retried_transient": false,
+      "timed_out": false,
+      "signal": null,
+      "steps": [
+        {
+          "command": "node plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js",
+          "duration_ms": 91,
+          "exitCode": 0
+        },
+        {
+          "command": "node plugins/kaola-workflow-gitea/scripts/simulate-gitea-workflow-walkthrough.js",
+          "duration_ms": 53502,
+          "exitCode": 0
+        },
+        {
+          "command": "node plugins/kaola-workflow-gitea/scripts/simulate-gitea-codex-workflow-walkthrough.js",
+          "duration_ms": 40098,
+          "exitCode": 0
+        }
+      ]
+    }
+  ]
+}
