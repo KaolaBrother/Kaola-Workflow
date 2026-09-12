@@ -5,28 +5,25 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// WHAT THIS MAP ANSWERS FOR: each role's declarative tier, and the effective tier for consumers
-// that use it as metadata/defaults — the Codex tier classes and the opencode reasoning-role list.
+// WHAT THIS MAP ANSWERS FOR: each role's installed-profile model — the single subagent binding
+// consumers read as metadata/defaults.
 //
 // IT DOES NOT DECIDE A CLAUDE CODE `Agent(...)` DISPATCH. There the explicit `model=` argument wins,
 // and its absence means `inherit` — the spawning conversation's model. Nothing on that path consults
-// this map, so dropping a `model=` does not fall back to the tier declared here.
+// this map, so dropping a `model=` does not fall back to the model declared here.
 //
 // Within this script's own resolution the map IS the last word for an installed agent: the installer
 // rewrites each installed agent's frontmatter to `model: inherit`, so the frontmatter step below can
 // never fire for one. Keep an entry byte-equal to its source `agents/<role>.md` frontmatter: the two
-// are one declaration seen from two sides, and a divergence silently re-tiers the role on every
-// install.
+// are one declaration seen from two sides, and a divergence silently re-points the role at a
+// different model on every install.
 //
 // GENERATED (#29 audit): the block below is written by `node scripts/generate-agent-profiles.js
-// --write` (drift reported by `--check`) from the SAME two-step derivation that writes each
-// agents/<role>.md `model:` frontmatter line — templates/agents/behavior-contracts.json's declared
-// `intent_class` per role, resolved through templates/agents/runtime-capabilities.json's claude
-// `intent_mapping` (standard->sonnet, reasoning->opus, heavy->fable) — so this map and that
-// frontmatter can never independently drift again. The per-role rationale for why a given role sits
-// at standard/reasoning/heavy (e.g. the adversarial verifier's reasoning-class judgment, or the
-// synthesizer's write-overlap intent resolution) lives in git history and in
-// templates/agents/behavior-contracts.json, not here.
+// --write` (drift reported by `--check`) from the SAME derivation that writes each
+// agents/<role>.md `model:` frontmatter line — the claude adapter's `subagent_default.model`
+// in templates/agents/runtime-capabilities.json — so this map and that
+// frontmatter can never independently drift again. The per-role rationale for a given role's
+// model lives in git history and in templates/agents/behavior-contracts.json, not here.
 // GENERATED: DEFAULT_AGENT_MODELS (do not edit; source: templates/agents)
 const DEFAULT_AGENT_MODELS = {
   'code-explorer': 'sonnet',
@@ -248,7 +245,7 @@ function modelFromFile(agentName, agentDir) {
 //
 // The chain used to have a THIRD step in front of these two — a per-node `model` cell the caller
 // read off the frozen plan and applied before asking this function. That cell is gone: an item on
-// the mission list carries no role and no model, and the orchestrator decides the tier at the
+// the mission list carries no role and no model, and the orchestrator decides the model at the
 // moment it dispatches. A caller may still pass an explicit model; it simply no longer comes from
 // a declaration made before the work was understood.
 //
@@ -258,7 +255,7 @@ function modelFromFile(agentName, agentDir) {
 // governs exactly one case: an ad-hoc dispatch pointed at the SOURCE tree
 // (`--agent-dir <repo>/agents`), where the frontmatter has not been neutralized. That is why
 // DEFAULT_AGENT_MODELS must stay byte-equal to the source frontmatter — the two are the same
-// declaration read from two directories, and only their agreement makes the tier install-invariant.
+// declaration read from two directories, and only their agreement makes the binding install-invariant.
 function resolveAgentModelRaw(name, dir, options = {}) {
   // Keep Codex declarative role defaults independent of whatever a co-installed runtime
   // wrote into its own agent dir: the static map alone answers for the Codex plugin.

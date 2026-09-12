@@ -44,7 +44,7 @@ moments.
 ## Decisions
 
 - **[0025 — Lean orchestrator; one subagent binding per runtime; seven roles](decisions/0025-lean-orchestrator-single-subagent-binding.md)**
-  — the orchestrator holds judgment and acceptance; the standard/reasoning/heavy intent axis and
+  — the orchestrator holds judgment and acceptance; the per-role intent axis and
   the 14-role roster are retired in favor of seven roles; every profile-installing adapter
   declares exactly one `subagent_default` (Claude `sonnet`; Codex `gpt-5.6-luna` / `max` pinned in
   the TOML; Grok `grok-4.6` / `effort: medium`; Cursor `grok-4.6[effort=medium]`); OpenCode, Kimi,
@@ -94,10 +94,10 @@ retired by ADR 0023.
   retains the routing refinements.
 
 - **[0019 — The heavy-reasoning tier](decisions/0019-the-heavy-reasoning-tier.md)** — historical
-  basis for the accepted
-  standard/reasoning/heavy axis: planner and code-architect are canonical heavy roles; Codex uses
-  Luna/max, Sol/medium, and Sol/high; Grok and Cursor carry heavy effort pins; OpenCode classifies
-  `fable` with reasoning and Kimi remains session-inherited. Reviewers rest at reasoning; the
+  basis for the retired
+  three-tier axis: planner and code-architect were its canonical heavy roles; Codex used
+  Luna/max, Sol/medium, and Sol/high; Grok and Cursor carried heavy effort pins; OpenCode classified
+  `fable` with reasoning and Kimi remained session-inherited. Reviewers rested at reasoning; the
   former Claude-only bounded `fable` reviewer escalation is **retired** (2026-09-11 / #1059;
   surfaces cleared in #1032) — when more power is needed the orchestrator does the work itself.
   ADR 0020 supersedes its Claude-shaped role-source details; ADR 0021 retains the runtime binding

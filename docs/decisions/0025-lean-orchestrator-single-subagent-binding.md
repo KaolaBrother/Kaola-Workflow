@@ -129,7 +129,8 @@ children", and this ADR does not pretend to have that number.
    | ZCode | none | vendor harness (`general-purpose` / `Explore`); children follow the main Agent |
 
    Binding adapters keep `role_dispatch: "named_profile"` and gain `subagent_default`; Codex and
-   Grok `model_carrier` become `profile_model_effort`. The four others carry
+   Grok `model_carrier` become `profile_model_effort`, the value Cursor already carried. The four
+   others carry
    `role_dispatch: "native_only"`, `named_roles: false`, `deterministic_profiles: false`, no
    `subagent_default`, and a `delegation_guidance` of exactly `native_routes` and `availability`.
    On those four, the absence of a named Kaola role is design, not a `capability_gap`; the rendered

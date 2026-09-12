@@ -56,7 +56,7 @@ its real identity; inline applies only to that item when no route fits.
 
 The roster derives from the seven-role `ROLES` list backed by
 `templates/agents/behavior-contracts.json`; `renderRuntimeDelegationGuidance()` places it
-beside the runtime adapter's `subagent_default`. The retired `rolesByIntent()` export is gone with
+beside the runtime adapter's `subagent_default`. The per-tier roster export is gone with
 the intent axis (ADR 0025).
 
 `generate-agent-profiles.js` exports the routing interface:
@@ -1721,7 +1721,7 @@ retired `parallel_mode`) is ignored, never rewritten.
 
 ### Agent model resolution
 
-The `intent_class` field and the `standard` / `reasoning` / `heavy` axis are retired (ADR 0025,
+The per-role intent field and the three-tier axis are retired (ADR 0025,
 #1062). `templates/agents/runtime-capabilities.json` classifies each adapter as
 `role_dispatch: "named_profile"` (binding) or `"native_only"`. A binding adapter declares exactly
 one `subagent_default` (`model`, optional `effort`, one-sentence `summary`); a `native_only`
@@ -1739,8 +1739,8 @@ a `delegation_guidance` of `native_routes` plus `availability`:
   session model or a vendor router owns the choice, so dispatch goes through the vendor harness.
 
 The kernel anchor `kaola-workflow-adaptive-schema.js` exports `CODEX_PINNED_ROLES`,
-`CODEX_PINNED_MODEL` (`gpt-5.6-luna`), and `CODEX_PINNED_EFFORT` (`max`) — replacing the retired
-`CODEX_PINNED_STANDARD_ROLES` / `CODEX_PINNED_REASONING_ROLES` / `CODEX_PINNED_HEAVY_ROLES` — and
+`CODEX_PINNED_MODEL` (`gpt-5.6-luna`), and `CODEX_PINNED_EFFORT` (`max`) — replacing the three
+retired per-tier roster constants — and
 `validateProfileText`, which now requires exactly one `model = "gpt-5.6-luna"` and one
 `model_reasoning_effort = "max"` top-level line in every Codex TOML (the pre-#1062 rule required
 both keys omitted).

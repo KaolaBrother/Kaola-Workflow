@@ -86,8 +86,8 @@ override of the inheritance above rather than a repair of it, and no observed
 failure forced it to exist. `docs/investigations/2026-08-03-opencode-inherited-effort-tiers-design.md`
 records the design, what it measured, and why it was removed.
 
-> Historical: older releases also offered an opt-in scaffold (`KAOLA_OPENCODE_STANDARD_MODEL` /
-> `KAOLA_OPENCODE_REASONING_MODEL`) that seeded a commented-out `model` /
+> Historical: older releases also offered an opt-in scaffold (two `KAOLA_OPENCODE_*_MODEL`
+> environment variables) that seeded a commented-out `model` /
 > `agent.<role>.model` tier pin into `opencode.json`. That scaffold retired with the profile
 > inventory under #1062; the installer no longer writes `opencode.json` at all, and any
 > `agent.<role>.model` entry an old release seeded is left untouched as user content.
