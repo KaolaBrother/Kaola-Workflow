@@ -16,7 +16,10 @@ Each runtime that installs Kaola role profiles declares one subagent default bin
 profiles pin `model: sonnet`; Codex TOML profiles pin `model = "gpt-5.6-luna"` and
 `model_reasoning_effort = "max"`; Grok pins `model: grok-4.6` / `effort: medium`; Cursor pins
 `grok-4.6[effort=medium]`. OpenCode, Kimi Code, ZCode, and Devin CLI install no Kaola role
-profiles and dispatch through the vendor's native harness.
+profiles and dispatch through the vendor's native harness. A rendered profile carries only its
+behavior body; the receipt digests that verify it (`behavior_sha256`,
+`adapter_capabilities_sha256`, `resolved_profile_sha256`) live in
+`agents/generated-agent-manifest.json`, never in agent-visible text.
 
 ## Why it exists
 
