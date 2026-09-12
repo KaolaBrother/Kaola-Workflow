@@ -234,9 +234,12 @@ const RETIRED_ROLES = ['code-explorer', 'knowledge-lookup', 'planner', 'code-arc
 for (const scope of ['project', 'global']) {
   const fixture = makeFixture(scope);
   try {
-    // Seed one retired Kaola roster file at user scope; upgrade must remove it.
+    // Seed a managed retired Kaola roster file at user scope — upgrade must remove
+    // it — beside a user-authored role-name collision that must survive.
     write(path.join(fixture.zcodeHome, 'agents', 'planner.md'),
-      '---\nname: planner\n---\nretired roster file\n');
+      '---\nname: planner\n---\n<!-- kaola-workflow-managed-agent: true -->\nretired roster file\n');
+    write(path.join(fixture.zcodeHome, 'agents', 'implementer.md'),
+      '---\nname: implementer\n---\nuser-authored profile, no managed marker\n');
     const result = runInstaller(fixture, { global: scope === 'global' });
     const projectConfig = configIfPresent(projectConfigPath(fixture));
     assertReal(result.status === 0,
@@ -259,10 +262,13 @@ for (const scope of ['project', 'global']) {
     }
     const agentsDir = path.join(fixture.zcodeHome, 'agents');
     const leftover = fs.existsSync(agentsDir)
-      ? fs.readdirSync(agentsDir).filter(f => RETIRED_ROLES.includes(f.replace(/\.md$/, '')))
+      ? fs.readdirSync(agentsDir).filter(f => RETIRED_ROLES.includes(f.replace(/\.md$/, ''))
+        && fs.readFileSync(path.join(agentsDir, f), 'utf8').includes('kaola-workflow-managed-agent: true'))
       : [];
     assertReal(leftover.length === 0,
       scope + ': no Kaola agent roster remains deployed' + (leftover.length ? ' — ' + leftover.join(',') : ''));
+    assertReal(fs.existsSync(path.join(agentsDir, 'implementer.md')),
+      scope + ': user-authored agent without the managed marker survives the retired sweep');
     const commandRoot = scope === 'global'
       ? path.join(fixture.zcodeHome, 'commands')
       : path.join(fixture.project, '.zcode', 'commands');
