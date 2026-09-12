@@ -14,6 +14,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const { createHash } = require('crypto');
 
 // OFFLINE is captured as a module-level constant in the classifier. Remove it from the
 // environment before requiring any workflow module so that withForge stubs are reachable
@@ -3354,14 +3355,10 @@ function testInstallSchemaPruneManifest332Gitea() {
       const installedBytes = fs.readFileSync(path.join(agentsDir, file));
       assert.ok(sourceBytes.equals(installedBytes),
         'agent contract: installed ' + file + ' must byte-match the selected source');
-      const text = installedBytes.toString('utf8');
-      assert.deepStrictEqual(manifest.profile_contracts[file], {
-        role,
-        behavior_contract_version: Number(text.match(/^behavior_contract_version: (\d+)$/m)[1]),
-        behavior_contract_hash: text.match(/^behavior_contract_hash: ([0-9a-f]{64})$/m)[1],
-        adapter_capabilities_hash: text.match(/^adapter_capabilities_hash: ([0-9a-f]{64})$/m)[1],
-        resolved_profile_hash: text.match(/^resolved_profile_hash: ([0-9a-f]{64})$/m)[1],
-      }, 'agent contract: manifest must bind behavior/adapter/profile identity for ' + file);
+      assert.ok(manifest.files[file] === 'sha256:' + createHash('sha256').update(installedBytes).digest('hex'),
+        'agent contract: manifest must record the installed file digest for ' + file);
+      assert.ok(!('profile_contracts' in manifest),
+        'agent contract: manifest must not carry retired in-body contract identity');
     }
     assert.strictEqual(r.stdout.trim().split('\n').pop(), 'status: ok', '#332 gt AC3: stdout must end with status: ok');
   } finally {

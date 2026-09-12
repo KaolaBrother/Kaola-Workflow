@@ -21,7 +21,7 @@ const actualAgents = fs.readdirSync(path.join(root, 'agents'))
   .sort();
 const expectedAgents = generator.ROLES.map(role => role + '.md').sort();
 assert(JSON.stringify(actualAgents) === JSON.stringify(expectedAgents),
-  'agents directory must contain exactly the 14 generated role profiles');
+  'agents directory must contain exactly the ' + generator.ROLES.length + ' generated role profiles');
 
 const drift = generator.checkGeneratedProfiles(root);
 assert(drift.length === 0, 'generated agent profiles must be current: ' + drift.join('; '));
@@ -34,11 +34,11 @@ for (const role of generator.ROLES) {
   assert(content.includes(`name: ${role}`), relativePath + ' must carry its role name');
   assert(content.includes('kaola-workflow-managed-agent: true'),
     relativePath + ' must carry the managed installation marker');
-  assert(content.includes('<!-- runtime-adapter:start -->')
-    && content.includes('runtime: claude')
-    && content.includes('<!-- runtime-adapter:end -->'),
-  relativePath + ' must carry the Claude native adapter');
-  generator.verifyResolvedProfileHash(content);
+  assert(!/[0-9a-f]{64}/.test(content) && !content.includes('runtime-adapter'),
+    relativePath + ' must not carry receipt hashes in agent-visible text');
+  assert(generator.sha256(content)
+      === generator.manifestProfileEntry('claude', role, root).resolved_profile_sha256,
+    relativePath + ' must match its generated manifest sidecar digest');
   const identity = generator.behaviorIdentityFromCore(content, root);
   assert(identity.role === role, relativePath + ' must bind its canonical behavior role');
   assert(provenance.roles[role], relativePath + ' must have external provenance metadata');
@@ -62,8 +62,8 @@ assert(installScript.includes('.kaola-workflow-agent-manifest'),
   'install.sh must track managed agent hashes');
 assert(installScript.includes('generate-agent-profiles.js" --check'),
   'install.sh must reject stale all-role sources before writing agents');
-assert(installScript.includes('refresh_agent_resolved_profile_hash'),
-  'install.sh must recompute every installed role self-hash after model inheritance rewrite');
+assert(installScript.includes('manifestProfileEntry'),
+  'install.sh must verify every role source against the generated manifest sidecar');
 assert(installScript.includes('agent_manifest_metadata'),
   'install.sh must persist every role behavior, adapter, and resolved-profile identity');
 assert(installScript.includes('filesystem bytes only; runtime prompt loading is not attested'),

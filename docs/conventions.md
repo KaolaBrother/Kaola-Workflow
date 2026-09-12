@@ -271,7 +271,7 @@ complete registration surface:
 | `templates/agents/behavior-contracts.json` | exactly one complete behavior record and intent class per role |
 | `templates/agents/provenance.json` | exactly one `source_kind` and, where one applies, a `history` origin record per role |
 | `scripts/generate-agent-profiles.js` | exact role set, schema, native rendering, three Codex registries, and output manifest |
-| `agents/generated-agent-manifest.json` | 9 renders per role and the behavior/render hashes |
+| `agents/generated-agent-manifest.json` | 6 renders per role and the receipt triple (`behavior_sha256`, `adapter_capabilities_sha256`, `resolved_profile_sha256`) |
 | installers and preflight | selected-source, managed-set, installed-byte, and pruning proof from the generated inventory |
 | additive edition suites | native carrier/discovery, mutation reachability, and install/uninstall behavior |
 | `README.md` and `docs/agents-source.md` | human role/intent catalog and source classification |
@@ -307,8 +307,9 @@ All 7 roles follow one workflow:
    profile-installing adapters; an
    adapter mutation must remain isolated to one runtime family.
 
-`behavior_contract_hash` establishes deterministic runtime-neutral contract equivalence.
-`resolved_profile_hash` establishes deterministic complete-render byte identity. Neither proves
+`behavior_sha256` establishes deterministic runtime-neutral contract equivalence.
+`resolved_profile_sha256` establishes deterministic complete-render byte identity. Both live in the
+generated manifest sidecar, never in profile bodies. Neither proves
 stochastic output identity or private prompt-load attestation. Installer/preflight checks may claim
 only exact selected-source, installed-file, manifest, and plugin-cache bytes.
 

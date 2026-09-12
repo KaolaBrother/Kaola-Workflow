@@ -190,8 +190,9 @@ Devin render commands, skills, hooks, and the global contract only, because a Ka
 cost lever there (children inherit the session model, or a vendor router owns it).
 
 With 7 roles on six profile-installing adapters, that produces 42 deterministic renders.
-`behavior_contract_hash` identifies the
-runtime-neutral role contract; `resolved_profile_hash` identifies one native render. A shared
+`behavior_sha256` identifies the
+runtime-neutral role contract; `resolved_profile_sha256` identifies one native render (both
+recorded in `agents/generated-agent-manifest.json`, not in the profile text). A shared
 behavior mutation must reach every variant for that role. An adapter mutation must affect only its
 runtime family. Equal behavior hashes do not promise equal natural-language outputs.
 
@@ -201,7 +202,7 @@ receive Claude guidance, forge-matched skills receive Codex guidance, and each a
 replaces the marked block with its own runtime render — the `**Subagent default:**` binding plus a
 `**Roles:**` line on binding adapters, or the native-only sentence on the other four. `workflow-init` intentionally has no dispatch
 block. Routing-only guidance is excluded from the adapter hash, so explaining an already-supported
-route does not churn `resolved_profile_hash` or the 42 role profiles.
+route does not churn `resolved_profile_sha256` or the 42 role profiles.
 
 ## First-party evidence
 

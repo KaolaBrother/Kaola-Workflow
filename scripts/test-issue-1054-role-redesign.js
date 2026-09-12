@@ -144,20 +144,18 @@ function duplicateParagraphGroups(bodiesByRole) {
       + JSON.stringify(dupes.map(d => ({ roles: d.roles, chars: d.paragraph.length, sample: d.paragraph.slice(0, 60) }))));
 }
 
-// Defense in depth: the same measurement over the CLAUDE native render's body slice (between the
-// managed-agent marker and the shared runtime-adapter appendix, which is intentionally identical
-// across all roles and must be excluded or every role would trivially "duplicate" the
-// appendix). This proves the dedupe reaches generated output, not only the authority.
+// Defense in depth: the same measurement over the CLAUDE native render's body slice (from the
+// end of the managed-agent marker to the end of the content). This proves the dedupe reaches
+// generated output, not only the authority.
 function renderedBodySlice(content) {
   const markerEnd = content.indexOf('kaola-workflow-managed-agent: true -->');
-  const appendixStart = content.indexOf('<!-- runtime-adapter:start -->');
-  if (markerEnd < 0 || appendixStart < 0 || appendixStart <= markerEnd) return '';
-  return content.slice(markerEnd + 'kaola-workflow-managed-agent: true -->'.length, appendixStart);
+  if (markerEnd < 0) return '';
+  return content.slice(markerEnd + 'kaola-workflow-managed-agent: true -->'.length);
 }
 {
   const renderedByRole = Object.fromEntries(ROLES.map(role => [role, renderedBodySlice(claudeRender(role))]));
   assert(Object.values(renderedByRole).every(text => text.trim().length > 0),
-    'A/render setup: the managed-agent marker and runtime-adapter appendix bound a non-empty body slice for every role');
+    'A/render setup: the managed-agent marker bounds a non-empty body slice for every role');
   const renderDupes = duplicateParagraphGroups(renderedByRole);
   assert(renderDupes.length === 0,
     'A/render: no >=200 char paragraph is repeated verbatim across native Claude renders — found '

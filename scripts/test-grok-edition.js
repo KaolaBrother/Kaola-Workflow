@@ -538,8 +538,9 @@ function commandRel(name, forge) {
 }
 
 // ---------------------------------------------------------------------------
-// G4: reviewer roles keep behavior_contract_version/hash + a restamped
-// resolved_profile_hash (opencode/kimi discipline).
+// G4: reviewer roles keep their behavior identity and carry no in-body receipt
+// hashes — the generated-agent-manifest.json sidecar records the digest of the
+// exact rendered bytes.
 // ---------------------------------------------------------------------------
 for (const role of reviewerGenerator.ROLES) {
   const canonical = reviewerGenerator.behaviorIdentityFromCore(read('agents/' + role + '.md'));
@@ -555,22 +556,14 @@ for (const role of reviewerGenerator.ROLES) {
     'G4-reviewer[' + role + ']: grok agent retains normalized reviewer behavior identity');
   assert(grok.core === canonical.core,
     'G4-reviewer[' + role + ']: grok render preserves reviewer behavior-core bytes');
-  const grokHash = (grokText.match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
-  assert(grokHash && /^[0-9a-f]{64}$/.test(grokHash),
-    'G4-reviewer[' + role + ']: grok agent carries a resolved_profile_hash');
-  assert((grokText.match(/^resolved_profile_hash\s*:\s*[0-9a-f]{64}\s*$/gm) || []).length === 1,
-    'G4-reviewer[' + role + ']: grok agent carries EXACTLY ONE resolved_profile_hash line');
-  let grokHashVerifies = true;
-  try { reviewerGenerator.verifyResolvedProfileHash(grokText); } catch (_) { grokHashVerifies = false; }
-  assert(grokHashVerifies,
-    'G4-reviewer[' + role + ']: resolved_profile_hash verifies over the grok bytes (zeroed-self sha256)');
-  const clHash = (read('agents/' + role + '.md').match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
-  assert(grokHash !== clHash,
-    'G4-reviewer[' + role + ']: grok hash is re-stamped over grok bytes (not the reused Claude render hash)');
-  assert(new RegExp('^behavior_contract_version:\\s*' + canonical.behavior_contract_version + '\\s*$', 'm').test(grokText),
-    'G4-reviewer[' + role + ']: grok agent preserves the canonical behavior_contract_version line');
-  assert(new RegExp('^behavior_contract_hash:\\s*' + canonical.behavior_contract_hash + '\\s*$', 'm').test(grokText),
-    'G4-reviewer[' + role + ']: grok agent preserves the canonical behavior_contract_hash line');
+  assert(reviewerGenerator.sha256(grokText)
+      === reviewerGenerator.manifestProfileEntry('grok', role).resolved_profile_sha256,
+    'G4-reviewer[' + role + ']: grok agent matches its generated manifest sidecar digest');
+  assert(!/[0-9a-f]{64}/.test(grokText) && !grokText.includes('runtime-adapter'),
+    'G4-reviewer[' + role + ']: grok agent carries no receipt hashes in agent-visible text');
+  assert(reviewerGenerator.manifestProfileEntry('grok', role).resolved_profile_sha256
+      !== reviewerGenerator.manifestProfileEntry('claude', role).resolved_profile_sha256,
+    'G4-reviewer[' + role + ']: grok sidecar digest is stamped over grok bytes (not the Claude render)');
 }
 
 // ---------------------------------------------------------------------------

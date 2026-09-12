@@ -26,7 +26,6 @@ const CODEX_CONFIG_PATHS = Object.freeze([
 const RESOLVER_MODELS_PATH = 'scripts/kaola-workflow-resolve-agent-model.js';
 const RESOLVER_MODELS_START = '// GENERATED: DEFAULT_AGENT_MODELS (do not edit; source: templates/agents)';
 const RESOLVER_MODELS_END = '// END GENERATED';
-const ZERO_HASH = '0'.repeat(64);
 const ROLES = Object.freeze([
   'code-explorer',
   'code-reviewer',
@@ -357,34 +356,6 @@ function nativeTools(contract, runtime = 'claude') {
   return tools;
 }
 
-function runtimeAppendix(runtime, adapter, contract, behaviorSha) {
-  const lines = ['<!-- runtime-adapter:start -->', 'runtime: ' + runtime];
-  // Claude alone already carries behavior_contract_version/hash and resolved_profile_hash as
-  // machine-readable YAML frontmatter (markdownFrontmatter, `runtime === 'claude'` branch);
-  // no installer, preflight, or test reads a second copy from this prose appendix, and nothing
-  // reads adapter_capabilities_hash for Claude at all (that field's only real consumer is the
-  // Codex preflight/installer, which has no frontmatter and needs it here). Repeating hashes a
-  // model does not need to interpret was audit item "同根因补充" (hash appendix carrier); every
-  // other runtime keeps the full block below because the appendix is its only machine carrier.
-  if (runtime !== 'claude') {
-    const capabilitySha = adapterHash(adapter);
-    lines.push(
-      'behavior_contract_version: ' + contract.behavior_contract_version,
-      'behavior_contract_hash: ' + behaviorSha,
-      'adapter_capabilities_hash: ' + capabilitySha,
-      'resolved_profile_hash: ' + ZERO_HASH,
-    );
-  }
-  lines.push('',
-    '## Runtime adapter',
-    '',
-    '- Follow the native carrier and capability boundary declared for this runtime.',
-    '- If a required capability is unavailable, stop without mutation and report `capability_gap: <missing capability> — <required action>`.',
-    '<!-- runtime-adapter:end -->',
-  );
-  return lines.join('\n');
-}
-
 function markdownFrontmatter(runtime, role, contract, adapter) {
   const subagentDefault = adapter.capabilities.subagent_default;
   const lines = [
@@ -398,9 +369,6 @@ function markdownFrontmatter(runtime, role, contract, adapter) {
     }
     lines.push('tools: ' + JSON.stringify(nativeTools(contract, runtime)));
     lines.push('model: ' + subagentDefault.model);
-    lines.push('behavior_contract_version: ' + contract.behavior_contract_version);
-    lines.push('behavior_contract_hash: ' + behaviorHash(contract));
-    lines.push('resolved_profile_hash: ' + ZERO_HASH);
   } else if (runtime === 'grok') {
     lines.push('promptMode: full');
     lines.push('model: ' + subagentDefault.model);
@@ -416,12 +384,9 @@ function markdownFrontmatter(runtime, role, contract, adapter) {
 }
 
 function renderMarkdown(runtime, role, contract, adapter) {
-  const behaviorSha = behaviorHash(contract);
-  const zeroed = markdownFrontmatter(runtime, role, contract, adapter)
+  return markdownFrontmatter(runtime, role, contract, adapter)
     + '<!-- kaola-workflow-managed-agent: true -->\n\n'
-    + contract.body.trim() + '\n\n'
-    + runtimeAppendix(runtime, adapter, contract, behaviorSha) + '\n';
-  return normalizeResolvedProfileHash(zeroed).replace(ZERO_HASH, sha256(normalizeResolvedProfileHash(zeroed)));
+    + contract.body.trim() + '\n';
 }
 
 function tomlArray(values) {
@@ -429,12 +394,10 @@ function tomlArray(values) {
 }
 
 function renderCodex(role, contract, adapter) {
-  const behaviorSha = behaviorHash(contract);
   const subagentDefault = adapter.capabilities.subagent_default;
-  const zeroedInstructions = contract.body.trim() + '\n\n'
-    + runtimeAppendix('codex', adapter, contract, behaviorSha) + '\n';
-  if (zeroedInstructions.includes("'''")) throw new Error(role + ': TOML literal delimiter in behavior');
-  const zeroed = [
+  const developerInstructions = contract.body.trim();
+  if (developerInstructions.includes("'''")) throw new Error(role + ': TOML literal delimiter in behavior');
+  return [
     'name = ' + JSON.stringify(role),
     'description = ' + JSON.stringify(contract.description),
     ...((contract.nickname_candidates || []).length > 0
@@ -442,11 +405,10 @@ function renderCodex(role, contract, adapter) {
     'model = ' + JSON.stringify(subagentDefault.model),
     'model_reasoning_effort = ' + JSON.stringify(subagentDefault.effort),
     "developer_instructions = '''",
-    zeroedInstructions.trimEnd(),
+    developerInstructions,
     "'''",
     '',
   ].join('\n');
-  return normalizeResolvedProfileHash(zeroed).replace(ZERO_HASH, sha256(normalizeResolvedProfileHash(zeroed)));
 }
 
 function profilePath(adapterName, runtime, role) {
@@ -477,16 +439,13 @@ function renderProfiles(behavior, adapters) {
         path: profilePath(name, adapter.runtime, role),
         behavior_contract_version: contract.behavior_contract_version,
         behavior_sha256: behaviorHash(contract),
+        adapter_capabilities_sha256: adapterHash(adapter),
         resolved_profile_sha256: sha256(content),
         content,
       });
     }
   }
   return profiles;
-}
-
-function normalizeResolvedProfileHash(content) {
-  return String(content).replace(/(resolved_profile_hash:\s*)[a-f0-9]{64}/g, '$1' + ZERO_HASH);
 }
 
 function roleFromProfile(content) {
@@ -500,24 +459,26 @@ function behaviorIdentityFromCore(content, root = ROOT) {
   const role = roleFromProfile(content);
   const contract = loadBehaviorContracts(root).roles[role];
   if (!contract) throw new Error('behavior_contract_role_unknown: ' + (role || '<absent>'));
-  const version = String(content).match(/^behavior_contract_version:\s*(\d+)\s*$/m);
-  const hash = String(content).match(/^behavior_contract_hash:\s*([a-f0-9]{64})\s*$/m);
-  if (!version || !hash) throw new Error('behavior_contract_identity_missing: ' + role);
+  const core = contract.body.trim();
+  if (!String(content).includes(core)) {
+    throw new Error('behavior_contract_core_mismatch: ' + role);
+  }
   return {
     role,
-    behavior_contract_version: Number(version[1]),
-    behavior_contract_hash: hash[1],
-    core: contract.body.trim(),
+    behavior_contract_version: contract.behavior_contract_version,
+    behavior_contract_hash: behaviorHash(contract),
+    core,
   };
 }
 
-function verifyResolvedProfileHash(content) {
-  const matches = [...String(content).matchAll(/^resolved_profile_hash:\s*([a-f0-9]{64})\s*$/gm)];
-  if (matches.length !== 1) throw new Error('resolved_profile_hash_count: ' + matches.length);
-  const normalized = normalizeResolvedProfileHash(content);
-  const expected = sha256(normalized);
-  if (matches[0][1] !== expected) throw new Error('resolved_profile_hash_mismatch');
-  return true;
+function manifestProfileEntry(runtime, role, root = ROOT, variant = runtime === 'codex' ? 'codex-github' : runtime) {
+  const manifest = readJson(root, MANIFEST_PATH);
+  const entry = (manifest.profiles || []).find(profile =>
+    profile.runtime === runtime && profile.variant === variant && profile.role === role);
+  if (!entry) {
+    throw new Error('manifest_profile_entry_missing: ' + runtime + '/' + variant + '/' + role);
+  }
+  return entry;
 }
 
 function trackedProfiles(profiles) {
@@ -553,6 +514,7 @@ function manifestFor(profiles) {
       path: profile.path,
       behavior_contract_version: profile.behavior_contract_version,
       behavior_sha256: profile.behavior_sha256,
+      adapter_capabilities_sha256: profile.adapter_capabilities_sha256,
       resolved_profile_sha256: profile.resolved_profile_sha256,
     })),
   };
@@ -706,12 +668,12 @@ module.exports = {
   RUNTIMES,
   BINDING_RUNTIMES,
   isBindingAdapter,
-  ZERO_HASH,
   RETIRED_VOCABULARY_BAN,
   sha256,
-  normalizeResolvedProfileHash,
+  adapterHash,
+  MANIFEST_PATH,
+  manifestProfileEntry,
   behaviorIdentityFromCore,
-  verifyResolvedProfileHash,
   loadBehaviorContracts,
   loadRuntimeAdapters,
   loadProvenance,

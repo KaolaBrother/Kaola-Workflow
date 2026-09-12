@@ -1,7 +1,7 @@
 {
   "tool": "kaola-workflow-issue-1055-render-subtraction-oracle",
   "schema": 1,
-  "captured_at_commit": "64d6b57e10b2bb4546d456ae40df0d58ffb0d7e0",
+  "captured_at_commit": "2b1af448ba5aebbe13bde6deef130a84b409b67e",
   "runtimes": [
     "grok",
     "kimi",
@@ -40,7 +40,7 @@
       "kind": "agent",
       "name": "code-explorer",
       "lineEnding": "n/a",
-      "hash": "62435beffd4d76d7809552afeaa78d781282bc357906ee0685f3a6cbafaacf0d"
+      "hash": "e18e09cc67fecb2c70eb79ed23fbc46757a6a6f213cb842e1f8ea7186e487174"
     },
     {
       "runtime": "cursor",
@@ -48,7 +48,7 @@
       "kind": "agent",
       "name": "code-reviewer",
       "lineEnding": "n/a",
-      "hash": "8119845468d8ed156a4d5e2a69aeb4ab116dfe832ae6e1825aead43847144184"
+      "hash": "d29412d4743d80c0ce665837cebb26097e15f06e666608b2e4b94d948858ea10"
     },
     {
       "runtime": "cursor",
@@ -56,7 +56,7 @@
       "kind": "agent",
       "name": "doc-updater",
       "lineEnding": "n/a",
-      "hash": "6b3700e390ab83783a15c10fb03dcf79de5647daefe815edf2aa9ded130fb9a4"
+      "hash": "2adc891fee85317f4d154c1de8c3ce7b21f00a78688e77a0c019dc7744067cb5"
     },
     {
       "runtime": "cursor",
@@ -64,7 +64,7 @@
       "kind": "agent",
       "name": "implementer",
       "lineEnding": "n/a",
-      "hash": "263b2aa580436719b04829ac75f896fd62d9aaa0498685c3ead503e374cb692c"
+      "hash": "424abe5c7eb142cda55ef4aeca64577264df17d5c07de38ddce9f4ce13bdd4e5"
     },
     {
       "runtime": "cursor",
@@ -72,7 +72,7 @@
       "kind": "agent",
       "name": "investigator",
       "lineEnding": "n/a",
-      "hash": "208ae5d58db4f28bd0fe52c76204cb54f0d67964c0bef1711a68051fdf55003e"
+      "hash": "eb1a43868d0e7773410461df6481338603684e85715f3bdac6be31f19dc3261a"
     },
     {
       "runtime": "cursor",
@@ -80,7 +80,7 @@
       "kind": "agent",
       "name": "knowledge-lookup",
       "lineEnding": "n/a",
-      "hash": "64a66c3c9ed3f373c8341ec65f2a2f476d5bd6b046755bab119462f66f652a79"
+      "hash": "b4af580d4ae317a092cb4c562af7a754a9045504289b8d959f1c894dc3c7f691"
     },
     {
       "runtime": "cursor",
@@ -88,7 +88,7 @@
       "kind": "agent",
       "name": "tdd-guide",
       "lineEnding": "n/a",
-      "hash": "f93b35ff1ca01f0b8631eb6f9ba0debc451f271692cd447bc924536c41d8492b"
+      "hash": "50020d30ee49ae2dea809b80fa56535d21885c22698bb2934ae5de8521d62853"
     },
     {
       "runtime": "cursor",
@@ -144,7 +144,7 @@
       "kind": "agent",
       "name": "code-explorer",
       "lineEnding": "n/a",
-      "hash": "62435beffd4d76d7809552afeaa78d781282bc357906ee0685f3a6cbafaacf0d"
+      "hash": "e18e09cc67fecb2c70eb79ed23fbc46757a6a6f213cb842e1f8ea7186e487174"
     },
     {
       "runtime": "cursor",
@@ -152,7 +152,7 @@
       "kind": "agent",
       "name": "code-reviewer",
       "lineEnding": "n/a",
-      "hash": "8119845468d8ed156a4d5e2a69aeb4ab116dfe832ae6e1825aead43847144184"
+      "hash": "d29412d4743d80c0ce665837cebb26097e15f06e666608b2e4b94d948858ea10"
     },
     {
       "runtime": "cursor",
@@ -160,7 +160,7 @@
       "kind": "agent",
       "name": "doc-updater",
       "lineEnding": "n/a",
-      "hash": "6b3700e390ab83783a15c10fb03dcf79de5647daefe815edf2aa9ded130fb9a4"
+      "hash": "2adc891fee85317f4d154c1de8c3ce7b21f00a78688e77a0c019dc7744067cb5"
     },
     {
       "runtime": "cursor",
@@ -168,7 +168,7 @@
       "kind": "agent",
       "name": "implementer",
       "lineEnding": "n/a",
-      "hash": "263b2aa580436719b04829ac75f896fd62d9aaa0498685c3ead503e374cb692c"
+      "hash": "424abe5c7eb142cda55ef4aeca64577264df17d5c07de38ddce9f4ce13bdd4e5"
     },
     {
       "runtime": "cursor",
@@ -176,7 +176,7 @@
       "kind": "agent",
       "name": "investigator",
       "lineEnding": "n/a",
-      "hash": "208ae5d58db4f28bd0fe52c76204cb54f0d67964c0bef1711a68051fdf55003e"
+      "hash": "eb1a43868d0e7773410461df6481338603684e85715f3bdac6be31f19dc3261a"
     },
     {
       "runtime": "cursor",
@@ -184,7 +184,7 @@
       "kind": "agent",
       "name": "knowledge-lookup",
       "lineEnding": "n/a",
-      "hash": "64a66c3c9ed3f373c8341ec65f2a2f476d5bd6b046755bab119462f66f652a79"
+      "hash": "b4af580d4ae317a092cb4c562af7a754a9045504289b8d959f1c894dc3c7f691"
     },
     {
       "runtime": "cursor",
@@ -192,7 +192,7 @@
       "kind": "agent",
       "name": "tdd-guide",
       "lineEnding": "n/a",
-      "hash": "f93b35ff1ca01f0b8631eb6f9ba0debc451f271692cd447bc924536c41d8492b"
+      "hash": "50020d30ee49ae2dea809b80fa56535d21885c22698bb2934ae5de8521d62853"
     },
     {
       "runtime": "cursor",
@@ -248,7 +248,7 @@
       "kind": "agent",
       "name": "code-explorer",
       "lineEnding": "n/a",
-      "hash": "62435beffd4d76d7809552afeaa78d781282bc357906ee0685f3a6cbafaacf0d"
+      "hash": "e18e09cc67fecb2c70eb79ed23fbc46757a6a6f213cb842e1f8ea7186e487174"
     },
     {
       "runtime": "cursor",
@@ -256,7 +256,7 @@
       "kind": "agent",
       "name": "code-reviewer",
       "lineEnding": "n/a",
-      "hash": "8119845468d8ed156a4d5e2a69aeb4ab116dfe832ae6e1825aead43847144184"
+      "hash": "d29412d4743d80c0ce665837cebb26097e15f06e666608b2e4b94d948858ea10"
     },
     {
       "runtime": "cursor",
@@ -264,7 +264,7 @@
       "kind": "agent",
       "name": "doc-updater",
       "lineEnding": "n/a",
-      "hash": "6b3700e390ab83783a15c10fb03dcf79de5647daefe815edf2aa9ded130fb9a4"
+      "hash": "2adc891fee85317f4d154c1de8c3ce7b21f00a78688e77a0c019dc7744067cb5"
     },
     {
       "runtime": "cursor",
@@ -272,7 +272,7 @@
       "kind": "agent",
       "name": "implementer",
       "lineEnding": "n/a",
-      "hash": "263b2aa580436719b04829ac75f896fd62d9aaa0498685c3ead503e374cb692c"
+      "hash": "424abe5c7eb142cda55ef4aeca64577264df17d5c07de38ddce9f4ce13bdd4e5"
     },
     {
       "runtime": "cursor",
@@ -280,7 +280,7 @@
       "kind": "agent",
       "name": "investigator",
       "lineEnding": "n/a",
-      "hash": "208ae5d58db4f28bd0fe52c76204cb54f0d67964c0bef1711a68051fdf55003e"
+      "hash": "eb1a43868d0e7773410461df6481338603684e85715f3bdac6be31f19dc3261a"
     },
     {
       "runtime": "cursor",
@@ -288,7 +288,7 @@
       "kind": "agent",
       "name": "knowledge-lookup",
       "lineEnding": "n/a",
-      "hash": "64a66c3c9ed3f373c8341ec65f2a2f476d5bd6b046755bab119462f66f652a79"
+      "hash": "b4af580d4ae317a092cb4c562af7a754a9045504289b8d959f1c894dc3c7f691"
     },
     {
       "runtime": "cursor",
@@ -296,7 +296,7 @@
       "kind": "agent",
       "name": "tdd-guide",
       "lineEnding": "n/a",
-      "hash": "f93b35ff1ca01f0b8631eb6f9ba0debc451f271692cd447bc924536c41d8492b"
+      "hash": "50020d30ee49ae2dea809b80fa56535d21885c22698bb2934ae5de8521d62853"
     },
     {
       "runtime": "cursor",
@@ -352,7 +352,7 @@
       "kind": "agent",
       "name": "code-explorer",
       "lineEnding": "n/a",
-      "hash": "7b79de8270b16f5f21f002b0aab0e850bbddac76751dcb5cc9ec8f9203616803"
+      "hash": "9c01303e7c3096f6828229a219231b7830ca8764f8faa0b8e592486bb2b7aad2"
     },
     {
       "runtime": "grok",
@@ -360,7 +360,7 @@
       "kind": "agent",
       "name": "code-reviewer",
       "lineEnding": "n/a",
-      "hash": "7118db33e43a7923d5bb62e4ac59dd424df6b500c835e38e88629d5af88d993e"
+      "hash": "b010a947bbf4bb1444a369bc45e7a6da7248f750efe8da88358bf0a53374c25d"
     },
     {
       "runtime": "grok",
@@ -368,7 +368,7 @@
       "kind": "agent",
       "name": "doc-updater",
       "lineEnding": "n/a",
-      "hash": "807f863876e6ffa14c6709ae30070f8ccb31c300e733aafe7e5148b6bb28a080"
+      "hash": "95ff18c8da10871f2041023cf1ce76718621c4ecd8fe8da2a67ade2602effcda"
     },
     {
       "runtime": "grok",
@@ -376,7 +376,7 @@
       "kind": "agent",
       "name": "implementer",
       "lineEnding": "n/a",
-      "hash": "abcea691493b62a20b49fafdcd24a064f37e877204d663027e423aaa4f8b6c90"
+      "hash": "25273e689e894c5512649743d3fe7fd9b18591937aa83a6b97a08ffa4b4d53e3"
     },
     {
       "runtime": "grok",
@@ -384,7 +384,7 @@
       "kind": "agent",
       "name": "investigator",
       "lineEnding": "n/a",
-      "hash": "b196098489893b2e83ea2111edcb4c81551be2dc0f0d938fb9e818230ea12a09"
+      "hash": "025b7759a892c4f054aebf473a3756b8198fbfd07757376e3098defe6cd2ce36"
     },
     {
       "runtime": "grok",
@@ -392,7 +392,7 @@
       "kind": "agent",
       "name": "knowledge-lookup",
       "lineEnding": "n/a",
-      "hash": "818e3d0c41462d8a43cb3d6220310be5752630f29f74ec52d545266d29e4e0aa"
+      "hash": "37eef768d9182176c44954838a2b4577e1131a641039d4017e4324e8291e57f5"
     },
     {
       "runtime": "grok",
@@ -400,7 +400,7 @@
       "kind": "agent",
       "name": "tdd-guide",
       "lineEnding": "n/a",
-      "hash": "23f2dce243961c069f07b574cdad94f7c0dbe0ec1accf305dc70445218ee8d05"
+      "hash": "7cf6d03aae87be4fbbf45934218043cec47b8ca2acb068fedc159df54df6d5ab"
     },
     {
       "runtime": "grok",
@@ -456,7 +456,7 @@
       "kind": "agent",
       "name": "code-explorer",
       "lineEnding": "n/a",
-      "hash": "7b79de8270b16f5f21f002b0aab0e850bbddac76751dcb5cc9ec8f9203616803"
+      "hash": "9c01303e7c3096f6828229a219231b7830ca8764f8faa0b8e592486bb2b7aad2"
     },
     {
       "runtime": "grok",
@@ -464,7 +464,7 @@
       "kind": "agent",
       "name": "code-reviewer",
       "lineEnding": "n/a",
-      "hash": "7118db33e43a7923d5bb62e4ac59dd424df6b500c835e38e88629d5af88d993e"
+      "hash": "b010a947bbf4bb1444a369bc45e7a6da7248f750efe8da88358bf0a53374c25d"
     },
     {
       "runtime": "grok",
@@ -472,7 +472,7 @@
       "kind": "agent",
       "name": "doc-updater",
       "lineEnding": "n/a",
-      "hash": "807f863876e6ffa14c6709ae30070f8ccb31c300e733aafe7e5148b6bb28a080"
+      "hash": "95ff18c8da10871f2041023cf1ce76718621c4ecd8fe8da2a67ade2602effcda"
     },
     {
       "runtime": "grok",
@@ -480,7 +480,7 @@
       "kind": "agent",
       "name": "implementer",
       "lineEnding": "n/a",
-      "hash": "abcea691493b62a20b49fafdcd24a064f37e877204d663027e423aaa4f8b6c90"
+      "hash": "25273e689e894c5512649743d3fe7fd9b18591937aa83a6b97a08ffa4b4d53e3"
     },
     {
       "runtime": "grok",
@@ -488,7 +488,7 @@
       "kind": "agent",
       "name": "investigator",
       "lineEnding": "n/a",
-      "hash": "b196098489893b2e83ea2111edcb4c81551be2dc0f0d938fb9e818230ea12a09"
+      "hash": "025b7759a892c4f054aebf473a3756b8198fbfd07757376e3098defe6cd2ce36"
     },
     {
       "runtime": "grok",
@@ -496,7 +496,7 @@
       "kind": "agent",
       "name": "knowledge-lookup",
       "lineEnding": "n/a",
-      "hash": "818e3d0c41462d8a43cb3d6220310be5752630f29f74ec52d545266d29e4e0aa"
+      "hash": "37eef768d9182176c44954838a2b4577e1131a641039d4017e4324e8291e57f5"
     },
     {
       "runtime": "grok",
@@ -504,7 +504,7 @@
       "kind": "agent",
       "name": "tdd-guide",
       "lineEnding": "n/a",
-      "hash": "23f2dce243961c069f07b574cdad94f7c0dbe0ec1accf305dc70445218ee8d05"
+      "hash": "7cf6d03aae87be4fbbf45934218043cec47b8ca2acb068fedc159df54df6d5ab"
     },
     {
       "runtime": "grok",
@@ -560,7 +560,7 @@
       "kind": "agent",
       "name": "code-explorer",
       "lineEnding": "n/a",
-      "hash": "7b79de8270b16f5f21f002b0aab0e850bbddac76751dcb5cc9ec8f9203616803"
+      "hash": "9c01303e7c3096f6828229a219231b7830ca8764f8faa0b8e592486bb2b7aad2"
     },
     {
       "runtime": "grok",
@@ -568,7 +568,7 @@
       "kind": "agent",
       "name": "code-reviewer",
       "lineEnding": "n/a",
-      "hash": "7118db33e43a7923d5bb62e4ac59dd424df6b500c835e38e88629d5af88d993e"
+      "hash": "b010a947bbf4bb1444a369bc45e7a6da7248f750efe8da88358bf0a53374c25d"
     },
     {
       "runtime": "grok",
@@ -576,7 +576,7 @@
       "kind": "agent",
       "name": "doc-updater",
       "lineEnding": "n/a",
-      "hash": "807f863876e6ffa14c6709ae30070f8ccb31c300e733aafe7e5148b6bb28a080"
+      "hash": "95ff18c8da10871f2041023cf1ce76718621c4ecd8fe8da2a67ade2602effcda"
     },
     {
       "runtime": "grok",
@@ -584,7 +584,7 @@
       "kind": "agent",
       "name": "implementer",
       "lineEnding": "n/a",
-      "hash": "abcea691493b62a20b49fafdcd24a064f37e877204d663027e423aaa4f8b6c90"
+      "hash": "25273e689e894c5512649743d3fe7fd9b18591937aa83a6b97a08ffa4b4d53e3"
     },
     {
       "runtime": "grok",
@@ -592,7 +592,7 @@
       "kind": "agent",
       "name": "investigator",
       "lineEnding": "n/a",
-      "hash": "b196098489893b2e83ea2111edcb4c81551be2dc0f0d938fb9e818230ea12a09"
+      "hash": "025b7759a892c4f054aebf473a3756b8198fbfd07757376e3098defe6cd2ce36"
     },
     {
       "runtime": "grok",
@@ -600,7 +600,7 @@
       "kind": "agent",
       "name": "knowledge-lookup",
       "lineEnding": "n/a",
-      "hash": "818e3d0c41462d8a43cb3d6220310be5752630f29f74ec52d545266d29e4e0aa"
+      "hash": "37eef768d9182176c44954838a2b4577e1131a641039d4017e4324e8291e57f5"
     },
     {
       "runtime": "grok",
@@ -608,7 +608,7 @@
       "kind": "agent",
       "name": "tdd-guide",
       "lineEnding": "n/a",
-      "hash": "23f2dce243961c069f07b574cdad94f7c0dbe0ec1accf305dc70445218ee8d05"
+      "hash": "7cf6d03aae87be4fbbf45934218043cec47b8ca2acb068fedc159df54df6d5ab"
     },
     {
       "runtime": "grok",

@@ -1393,8 +1393,9 @@ function commandRel(name, forge) {
 }
 
 // ---------------------------------------------------------------------------
-// G4: reviewer roles keep behavior_contract_version/hash + a restamped
-// resolved_profile_hash (opencode/kimi discipline).
+// G4: reviewer roles keep their behavior identity and carry no in-body receipt
+// hashes — the generated-agent-manifest.json sidecar records the digest of the
+// exact rendered bytes.
 // ---------------------------------------------------------------------------
 for (const role of reviewerGenerator.ROLES) {
   const canonical = reviewerGenerator.behaviorIdentityFromCore(read('agents/' + role + '.md'));
@@ -1410,22 +1411,14 @@ for (const role of reviewerGenerator.ROLES) {
     'G4-reviewer[' + role + ']: cursor agent retains normalized reviewer behavior identity');
   assert(cursor.core === canonical.core,
     'G4-reviewer[' + role + ']: cursor render preserves reviewer behavior-core bytes');
-  const cursorHash = (cursorText.match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
-  assert(cursorHash && /^[0-9a-f]{64}$/.test(cursorHash),
-    'G4-reviewer[' + role + ']: cursor agent carries a resolved_profile_hash');
-  assert((cursorText.match(/^resolved_profile_hash\s*:\s*[0-9a-f]{64}\s*$/gm) || []).length === 1,
-    'G4-reviewer[' + role + ']: cursor agent carries EXACTLY ONE resolved_profile_hash line');
-  let cursorHashVerifies = true;
-  try { reviewerGenerator.verifyResolvedProfileHash(cursorText); } catch (_) { cursorHashVerifies = false; }
-  assert(cursorHashVerifies,
-    'G4-reviewer[' + role + ']: resolved_profile_hash verifies over the cursor bytes (zeroed-self sha256)');
-  const clHash = (read('agents/' + role + '.md').match(/^resolved_profile_hash\s*:\s*([0-9a-f]{64})\s*$/m) || [])[1];
-  assert(cursorHash !== clHash,
-    'G4-reviewer[' + role + ']: cursor hash is re-stamped over cursor bytes (not the reused Claude render hash)');
-  assert(new RegExp('^behavior_contract_version:\\s*' + canonical.behavior_contract_version + '\\s*$', 'm').test(cursorText),
-    'G4-reviewer[' + role + ']: cursor agent preserves the canonical behavior_contract_version line');
-  assert(new RegExp('^behavior_contract_hash:\\s*' + canonical.behavior_contract_hash + '\\s*$', 'm').test(cursorText),
-    'G4-reviewer[' + role + ']: cursor agent preserves the canonical behavior_contract_hash line');
+  assert(reviewerGenerator.sha256(cursorText)
+      === reviewerGenerator.manifestProfileEntry('cursor', role).resolved_profile_sha256,
+    'G4-reviewer[' + role + ']: cursor agent matches its generated manifest sidecar digest');
+  assert(!/[0-9a-f]{64}/.test(cursorText) && !cursorText.includes('runtime-adapter'),
+    'G4-reviewer[' + role + ']: cursor agent carries no receipt hashes in agent-visible text');
+  assert(reviewerGenerator.manifestProfileEntry('cursor', role).resolved_profile_sha256
+      !== reviewerGenerator.manifestProfileEntry('claude', role).resolved_profile_sha256,
+    'G4-reviewer[' + role + ']: cursor sidecar digest is stamped over cursor bytes (not the Claude render)');
 }
 
 // ---------------------------------------------------------------------------
