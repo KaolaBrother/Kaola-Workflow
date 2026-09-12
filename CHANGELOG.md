@@ -45,6 +45,13 @@ binding runtimes and a native route on native-only runtimes.
   decision and its evidence; ADR 0019 (three-tier model), ADR 0021 ("exactly three intent
   classes"), and D-687-01 (unpinned Codex profiles) are annotated as superseded without
   rewriting their historical matrices.
+- **`AGENTS.md` carries local facts only (#1072, owner-authorized).** The root project
+  instructions no longer restate the Mission List four-field/three-write rule, the
+  forge-is-backlog-truth rule, the "design of record" narrative, the instruction-file editing
+  meta-rule, or the read-before-edit and never-claim-unexecuted reminders — every one of those
+  loads from the machine-global contract on each runtime. `AGENTS.md` shrinks from 75 to 60 lines
+  and keeps the seven pinned tokens; `CLAUDE.md` drops its bridge narration line and keeps the
+  single `@AGENTS.md` import.
 
 ### Fixed
 
