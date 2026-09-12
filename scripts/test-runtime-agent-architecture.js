@@ -1166,7 +1166,15 @@ if (generator && behavior && adapters && profiles.length > 0) {
       let mutatedProfiles = [];
       try { mutatedProfiles = generator.renderProfiles(clone(behavior), mutatedAdapters); }
       catch (error) { assert(false, 'A10: valid cursor adapter mutation renders — ' + error.message); }
-      const changed = changedProfileKeys(profiles, mutatedProfiles);
+      // The adapter capability may not reach agent-visible bytes at all: its measured carrier is
+      // the adapter_capabilities_sha256 field the manifest sidecar records, so the isolation
+      // comparison covers content AND that digest.
+      const sidecarKey = profile => JSON.stringify([
+        String(profile.content || ''), profile.adapter_capabilities_sha256 || '']);
+      const beforeSidecar = new Map(profiles.map(profile => [profileKey(profile), sidecarKey(profile)]));
+      const changed = sorted(mutatedProfiles
+        .filter(profile => beforeSidecar.get(profileKey(profile)) !== sidecarKey(profile))
+        .map(profile => profileKey(profile)));
       const changedRuntimeSet = sorted(new Set(mutatedProfiles
         .filter(profile => changed.includes(profileKey(profile)))
         .map(profile => profile.runtime)));

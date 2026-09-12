@@ -60,7 +60,9 @@ capability becomes an explicit `capability_gap`, not a broadened permission or s
 
 `behavior_contract_hash` binds runtime-neutral behavior. `resolved_profile_hash` binds one complete
 native render. Cross-runtime proof is semantic reachability plus adapter isolation, not sentence or
-byte equality. True forge-neutral twins remain byte-identical.
+byte equality. True forge-neutral twins remain byte-identical. Superseded in part by #1073: the
+digests are recorded in `agents/generated-agent-manifest.json` and no longer rendered into profile
+text.
 
 ### Provenance
 

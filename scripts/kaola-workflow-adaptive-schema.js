@@ -82,13 +82,7 @@ const CODEX_PINNED_EFFORT = 'max';
 // Codex agent-profile schema (issue #332; #29 audit convergence). ONE authoring source for the
 // TOML shape rules `kaola-workflow-codex-preflight.js` (read-only validation, all 4 trees) and
 // `install-codex-agent-profiles.js` (write-time validation + install, the 3 plugin trees) both
-// need. Before this convergence the two files hand-duplicated this whole block; they were
-// byte-identical except two cosmetic differences (an unguarded vs `String(value)`-guarded
-// `escapeRegExp`, and one stray blank line in `agentProfileContract`) — resolved here in favor of
-// the more defensive `escapeRegExp` and the tighter formatting, since both were functionally the
-// same logic, not distinct check semantics. `sha256Hex` is NOT re-declared: `agentProfileContract`
-// below uses the `sha256Hex` already exported by this module (identical
-// `crypto.createHash('sha256').update(x).digest('hex')` logic).
+// need. Before this convergence the two files hand-duplicated this whole block.
 //
 // MANIFEST_BASENAME — ownership record written inside the managed agents dir so a
 //   future installer can distinguish stale Kaola-generated files from user-owned ones.
@@ -257,52 +251,6 @@ function genericShapeReasons(shape) {
   });
 }
 
-function agentProfileContract(text, role) {
-  const reasons = [];
-  const source = String(text || '');
-  const instructionMatch = source.match(/^developer_instructions\s*=\s*'''([\s\S]*?)'''\s*$/m)
-    || source.match(/^developer_instructions\s*=\s*"""([\s\S]*?)"""\s*$/m);
-  const instructionText = instructionMatch ? instructionMatch[1] : '';
-  if (!instructionMatch) reasons.push('agent_developer_instructions_missing');
-  const startCount = instructionText.split('<!-- runtime-adapter:start -->').length - 1;
-  const endCount = instructionText.split('<!-- runtime-adapter:end -->').length - 1;
-  if (startCount !== 1 || endCount !== 1) {
-    reasons.push(`agent_runtime_adapter_invalid: starts=${startCount} ends=${endCount}`);
-  }
-  const fields = {};
-  for (const field of ['runtime', 'behavior_contract_version', 'behavior_contract_hash',
-    'adapter_capabilities_hash', 'resolved_profile_hash']) {
-    const matches = [...instructionText.matchAll(new RegExp(`^${field}:\\s*([^\\r\\n]+)\\s*$`, 'gm'))];
-    if (matches.length !== 1) reasons.push(`agent_${field}_not_unique: count=${matches.length}`);
-    else fields[field] = matches[0][1].trim();
-  }
-  if (fields.runtime && fields.runtime !== 'codex') reasons.push(`agent_runtime_mismatch: ${fields.runtime}`);
-  if (fields.behavior_contract_version && !/^\d+$/.test(fields.behavior_contract_version)) {
-    reasons.push('agent_behavior_contract_version_invalid');
-  }
-  for (const field of ['behavior_contract_hash', 'adapter_capabilities_hash', 'resolved_profile_hash']) {
-    if (fields[field] && !/^[0-9a-f]{64}$/.test(fields[field])) reasons.push(`agent_${field}_invalid`);
-  }
-  if (fields.resolved_profile_hash && /^[0-9a-f]{64}$/.test(fields.resolved_profile_hash)) {
-    const normalized = source.replace(
-      /(resolved_profile_hash:\s*)[0-9a-f]{64}/g,
-      '$1' + '0'.repeat(64),
-    );
-    const expected = sha256Hex(normalized);
-    if (fields.resolved_profile_hash !== expected) {
-      reasons.push(`agent_resolved_profile_hash_mismatch: expected=${expected} got=${fields.resolved_profile_hash}`);
-    }
-  }
-  const identity = reasons.length === 0 ? {
-    role,
-    behavior_contract_version: Number(fields.behavior_contract_version),
-    behavior_contract_hash: fields.behavior_contract_hash,
-    adapter_capabilities_hash: fields.adapter_capabilities_hash,
-    resolved_profile_hash: fields.resolved_profile_hash,
-  } : null;
-  return { reasons: [...new Set(reasons)], identity };
-}
-
 // #332 schema check — inline regex, no TOML lib. The ONE validator both the preflight
 // (read-only) and the installer (write-time) call — same semantics, real callers differ only in
 // WHEN they invoke it and what they do with a non-empty result (installer refuses the write;
@@ -372,8 +320,6 @@ function validateProfileText(text, role, expectedMeta = null) {
     // Neither exists under a mission list: the orchestrator decides at dispatch time where a result
     // should land, so a profile cannot be required to promise a path nobody has chosen yet.
   }
-
-  reasons.push(...agentProfileContract(text, role).reasons);
 
   return [...new Set(reasons)];
 }
@@ -1952,7 +1898,6 @@ module.exports = {
   tomlKeyLabel,
   profileTopLevelShape,
   genericShapeReasons,
-  agentProfileContract,
   validateProfileText,
   isPlainObject,
   canonicalJson,

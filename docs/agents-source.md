@@ -12,7 +12,7 @@ ZCode, and Devin install no Kaola role profiles (native-only runtimes, ADR 0025)
 | `templates/agents/runtime-capabilities.json` | Evidence-backed instruction loading, native carriers, dispatch, model/effort mapping, tool binding, hook scope, and ten closed adapter variants | Universal role behavior or arbitrary prompt extensions |
 | `templates/agents/provenance.json` | Source classification (`source_kind`) for all seven roles, plus an optional `history` record — origin, pinned commit, license, copyright, upstream path/blob/content hashes, and measurement — for roles that carry one | Agent-facing prompt content or runtime behavior |
 | `scripts/generate-agent-profiles.js` | Schema validation, deterministic composition, behavior/render hashes, native profile rendering, generated manifest, and check/write modes | Project migration, installation policy, release mutation, or a second behavior source |
-| `agents/generated-agent-manifest.json` | The 7-role, six-adapter, 42-render inventory and source/output hashes | Provenance prose or independent policy |
+| `agents/generated-agent-manifest.json` | The 7-role, six-adapter, 42-render inventory and the per-render receipt triple (`behavior_sha256`, `adapter_capabilities_sha256`, `resolved_profile_sha256`) | Provenance prose or independent policy |
 
 The inventory spans eight runtime families through ten adapter variants: Claude; Codex for GitHub,
 GitLab, and Gitea; and one each for opencode, Kimi, Grok, Cursor, ZCode, and Devin. Six adapters
@@ -23,28 +23,29 @@ are forge-neutral for role behavior and render byte-identical profile bodies.
 
 ## Identity and proof boundary
 
-`behavior_contract_hash` is calculated from the deterministic runtime-neutral role record. It
+`behavior_sha256` is calculated from the deterministic runtime-neutral role record. It
 excludes the adapter, package version, forge, and provenance. Every runtime render of one role must
 therefore carry the same behavior identity.
 
-`resolved_profile_hash` binds one complete native render after its own hash field is normalized to
-64 zeroes. It changes when native frontmatter, permissions, model/effort values, or presentation
-bytes change. The two hashes prove deterministic source and filesystem artifacts; they do not prove
-that a proprietary runtime loaded private prompt bytes or that stochastic executions produce the
-same prose or verdict.
+`resolved_profile_sha256` is the SHA-256 of one complete native render's bytes. It changes when
+native frontmatter, permissions, model/effort values, or presentation bytes change. Together with
+`adapter_capabilities_sha256` (the runtime's profile-relevant capability record) the three digests
+prove deterministic source and filesystem artifacts; they do not prove that a proprietary runtime
+loaded private prompt bytes or that stochastic executions produce the same prose or verdict.
 
 Shared-contract mutation tests require a role change to reach all six profile-installing
 adapters. Adapter mutation
 tests require a runtime-only change to remain isolated to that runtime family. This semantic and
 native-render proof replaces cross-runtime sentence-paraphrase equality.
 
-Claude's native render already carries `behavior_contract_version`, `behavior_contract_hash`, and
-`resolved_profile_hash` in YAML frontmatter, so its runtime-adapter appendix
-(`scripts/generate-agent-profiles.js`, `runtimeAppendix`) records only `runtime: claude` plus the
-capability-boundary prose. No installer, preflight, or test reads a second copy from that appendix
-for Claude. Every other runtime has no frontmatter equivalent, so its appendix carries the full
-block instead: `behavior_contract_version`, `behavior_contract_hash`, `adapter_capabilities_hash`,
-and `resolved_profile_hash`.
+Since #1073 no digest is rendered into agent-visible text. The receipt triple lives only in
+`agents/generated-agent-manifest.json`, keyed by `runtime`, `variant`, and `role`; a profile body is
+the managed marker (Markdown renders) plus the behavior contract body, and Codex
+`developer_instructions` carry the body alone. `install.sh` verifies each Claude source against
+its sidecar digest before the `model: inherit` rewrite and records the installed digest in
+`.kaola-workflow-agent-manifest`; the Codex installer records installed-file digests in
+`.kaola-managed-profiles.json`, and the Codex preflight fails closed on `profile_bytes_mismatch` /
+`manifest_file_hash_mismatch` when an installed profile differs from the bundled source.
 
 ## Source classification
 

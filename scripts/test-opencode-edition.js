@@ -391,7 +391,7 @@ for (const file of canonCommands) {
 // ---------------------------------------------------------------------------
 // A6-agent / A6-body / A6-reviewer — DELETED WITH THEIR SUBJECT (#1062). OpenCode renders no
 // role profiles, so there is no generated agent body for a canonical contract to survive into,
-// no reviewer profile to carry a re-stamped resolved_profile_hash, and no renderAgent to be
+// no reviewer profile to carry a sidecar digest check, and no renderAgent to be
 // deterministic. The render-determinism claim survives on the command surface below.
 // ---------------------------------------------------------------------------
 

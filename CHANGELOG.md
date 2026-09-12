@@ -45,6 +45,19 @@ binding runtimes and a native route on native-only runtimes.
   decision and its evidence; ADR 0019 (three-tier model), ADR 0021 ("exactly three intent
   classes"), and D-687-01 (unpinned Codex profiles) are annotated as superseded without
   rewriting their historical matrices.
+- **Role-profile receipt hashes moved out of agent-visible text (#1073).** Generated profiles no
+  longer render the `<!-- runtime-adapter -->` appendix (three 64-hex digests plus two boundary
+  bullets the always-loaded global contract already carries), and Claude frontmatter drops its
+  `behavior_contract_version` / `behavior_contract_hash` / `resolved_profile_hash` lines — about
+  330 bytes per role per dispatch that no child could act on. The receipt triple now lives only
+  in `agents/generated-agent-manifest.json` as `behavior_sha256`, `adapter_capabilities_sha256`,
+  and `resolved_profile_sha256` (a plain digest of the render bytes; the zeroed-self slot is
+  gone). `install.sh` verifies every Claude source against the sidecar before the `model:
+  inherit` rewrite and drops `refresh_agent_resolved_profile_hash`; the Codex kernel retires
+  `agentProfileContract`, the installed `.kaola-managed-profiles.json` drops `profile_contracts`,
+  and corruption of an installed profile still fails closed through the retained
+  `profile_bytes_mismatch` / `manifest_file_hash_mismatch` path. Existing installs show
+  `profiles_stale` until `./install-all.sh --yes` re-deploys the shorter profiles.
 
 ### Fixed
 

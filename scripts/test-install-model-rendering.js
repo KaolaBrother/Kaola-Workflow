@@ -155,41 +155,7 @@ function mutateAgentCall(text, role, mutate) {
 
 
 function renderClaudeInstalledReviewer(source) {
-  let rendered = source.replace(/^model:\s*\S+\s*$/m, 'model: inherit');
-  const matches = [...rendered.matchAll(/^resolved_profile_hash:\s*([0-9a-f]{64})\s*$/gm)];
-  assert.strictEqual(matches.length, 1, 'generated Claude reviewer must carry one resolved_profile_hash');
-  const actual = matches[0][1];
-  const offset = matches[0].index + matches[0][0].indexOf(actual);
-  const normalized = rendered.slice(0, offset) + '0'.repeat(64) + rendered.slice(offset + 64);
-  const next = agentGenerator.sha256(normalized);
-  return rendered.slice(0, offset) + next + rendered.slice(offset + 64);
-}
-
-function parseCodexAgentIdentity(source) {
-  const role = source.match(/^name\s*=\s*"([^"]+)"$/m);
-  const behaviorVersion = source.match(/^behavior_contract_version:\s*(\d+)$/m);
-  const behaviorHash = source.match(/^behavior_contract_hash:\s*([0-9a-f]{64})$/m);
-  const adapterHash = source.match(/^adapter_capabilities_hash:\s*([0-9a-f]{64})$/m);
-  const profileHash = source.match(/^resolved_profile_hash:\s*([0-9a-f]{64})$/m);
-  assert(role && behaviorVersion && behaviorHash && adapterHash && profileHash,
-    'generated Codex agent must keep its complete identity inside developer_instructions');
-  return {
-    role: role[1],
-    behavior_contract_version: Number(behaviorVersion[1]),
-    behavior_contract_hash: behaviorHash[1],
-    adapter_capabilities_hash: adapterHash[1],
-    resolved_profile_hash: profileHash[1],
-  };
-}
-
-function resignCodexReviewer(source) {
-  const matches = [...String(source).matchAll(/^resolved_profile_hash:\s*([0-9a-f]{64})\s*$/gm)];
-  assert.strictEqual(matches.length, 1, 'Codex reviewer mutation must carry one resolved hash field');
-  const actual = matches[0][1];
-  const offset = matches[0].index + matches[0][0].indexOf(actual);
-  const normalized = source.slice(0, offset) + '0'.repeat(64) + source.slice(offset + 64);
-  const digest = agentGenerator.sha256(normalized);
-  return normalized.slice(0, offset) + digest + normalized.slice(offset + 64);
+  return source.replace(/^model:\s*\S+\s*$/m, 'model: inherit');
 }
 
 function runCodexInstaller(installerPath, projectRoot, homeRoot) {
@@ -1294,11 +1260,9 @@ function enableMultiAgentV2(homeRoot) {
     const projectAgents = path.join(projectRoot, '.codex', 'agents', 'kaola-workflow');
     const profilePath = path.join(projectAgents, 'code-reviewer.toml');
     const canonical = fs.readFileSync(profilePath, 'utf8');
-    const mutated = resignCodexReviewer(canonical.replace(
-      'Follow the native carrier and capability boundary declared for this runtime.',
-      'Follow the native carrier and declared capability boundary for this runtime.'));
+    const mutated = canonical.replace('# Code Reviewer', '# Code Reviewer\n\nProject note.');
     assert.notStrictEqual(mutated, canonical,
-      'project override fixture must change parse-valid runtime-adapter policy bytes');
+      'project override fixture must change parse-valid body bytes');
     assert.deepStrictEqual(codexPreflight.validateProfileText(mutated, 'code-reviewer'), [],
       'project override fixture remains schema/identity valid so exact provenance is the deciding gate');
     fs.writeFileSync(profilePath, mutated);
@@ -1306,7 +1270,6 @@ function enableMultiAgentV2(homeRoot) {
     const manifestPath = path.join(projectAgents, '.kaola-managed-profiles.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     manifest.files['code-reviewer.toml'] = 'sha256:' + agentGenerator.sha256(mutated);
-    manifest.profile_contracts['code-reviewer.toml'] = parseCodexAgentIdentity(mutated);
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 
     // spawn-class: environment
@@ -2819,37 +2782,10 @@ function enableMultiAgentV2(homeRoot) {
 
   const cases = [
     {
-      label: 'missing behavior contract version',
-      text: replaceOnce(reviewer, /^behavior_contract_version: \d+\n/m, ''),
-      code: 'agent_behavior_contract_version_not_unique',
-    },
-    {
-      label: 'unsupported behavior contract version',
-      // `1` is a deliberately wrong version, not the live one: the guard accepts exactly the
-      // current contract version, and replaceOnce reds if a bump ever made these two coincide.
-      text: replaceOnce(reviewer, /^behavior_contract_version: \d+$/m,
-        'behavior_contract_version: invalid'),
-      code: 'agent_behavior_contract_version_invalid',
-    },
-    {
-      label: 'malformed behavior hash',
-      text: reviewer.replace(/^behavior_contract_hash: [0-9a-f]{64}$/m,
-        'behavior_contract_hash: malformed'),
-      code: 'agent_behavior_contract_hash_invalid',
-    },
-    {
       label: 'unsupported top-level reviewer metadata',
       text: reviewer.replace(/^developer_instructions =/m,
         'behavior_contract_version = 2\ndeveloper_instructions ='),
       code: 'codex_role_field_forbidden',
-    },
-    {
-      label: 'resolved profile hash mismatch',
-      // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live description prefix (see
-      // "description metadata drift" above) — the old substring no longer exists in `reviewer`.
-      text: reviewer.replace('Code reviewer. Independently examines',
-        'Code-reviewer. Independently examines'),
-      code: 'agent_resolved_profile_hash_mismatch',
     },
     {
       label: 'foreign adapter field',
@@ -2873,85 +2809,60 @@ function enableMultiAgentV2(homeRoot) {
       code: 'codex_role_field_forbidden',
     },
     {
-      label: 'quoted retired reviewer metadata with valid self-hash',
-      text: resignCodexReviewer(reviewer.replace(/^developer_instructions/m,
-        '"behavior_contract_version" = 2\ndeveloper_instructions')),
+      label: 'quoted retired reviewer metadata',
+      text: reviewer.replace(/^developer_instructions/m,
+        '"behavior_contract_version" = 2\ndeveloper_instructions'),
       code: 'codex_role_field_forbidden',
     },
     {
-      label: 'indented model override with valid self-hash',
-      text: resignCodexReviewer(reviewer.replace(/^developer_instructions/m,
-        '  model = "gpt-5.6-sol"\ndeveloper_instructions')),
+      label: 'indented model override',
+      text: reviewer.replace(/^developer_instructions/m,
+        '  model = "gpt-5.6-sol"\ndeveloper_instructions'),
       code: 'codex_role_top_level_field_duplicate',
     },
     {
-      label: 'commented foreign table before instructions with valid self-hash',
-      text: resignCodexReviewer(reviewer.replace(/^developer_instructions/m,
-        '[shadow] # valid TOML table\ndeveloper_instructions')),
+      label: 'commented foreign table before instructions',
+      text: reviewer.replace(/^developer_instructions/m,
+        '[shadow] # valid TOML table\ndeveloper_instructions'),
       code: 'codex_role_table_forbidden',
     },
     {
-      label: 'duplicate canonical top-level field with valid self-hash',
-      text: resignCodexReviewer(reviewer.replace(/^description/m,
-        'name = "code-reviewer"\ndescription')),
+      label: 'duplicate canonical top-level field',
+      text: reviewer.replace(/^description/m,
+        'name = "code-reviewer"\ndescription'),
       code: 'codex_role_top_level_field_duplicate',
-    },
-    {
-      label: 'duplicate behavior version before the marked core',
-      text: resignCodexReviewer(reviewer.replace(/^developer_instructions = '''$/m,
-        "developer_instructions = '''\nbehavior_contract_version: 1")),
-      code: 'agent_behavior_contract_version_not_unique',
-    },
-    {
-      label: 'duplicate behavior hash before the marked core',
-      text: resignCodexReviewer(reviewer.replace(/^developer_instructions = '''$/m,
-        `developer_instructions = '''\nbehavior_contract_hash: ${'f'.repeat(64)}`)),
-      code: 'agent_behavior_contract_hash_not_unique',
-    },
-    {
-      label: 'duplicate runtime inside the adapter',
-      text: resignCodexReviewer(reviewer.replace('runtime: codex',
-        'runtime: codex\nruntime: codex')),
-      code: 'agent_runtime_not_unique',
-    },
-    {
-      label: 'resolved hash without its identity markers',
-      text: resignCodexReviewer(reviewer
-        .replace('<!-- runtime-adapter:start -->\n', '')
-        .replace('<!-- runtime-adapter:end -->\n', '')),
-      code: 'agent_runtime_adapter_invalid',
     },
     {
       label: 'invalid TOML escape inside reviewer instructions',
       // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live body's opening heading
       // (measured: `# Code Reviewer` in plugins/kaola-workflow/agents/code-reviewer.toml) — the
       // old `## Prompt defense` heading no longer exists, so this mutation was a no-op.
-      text: resignCodexReviewer(reviewer.replace('# Code Reviewer',
-        '# Code Reviewer\n\n- invalid TOML escape: \\q')),
+      text: reviewer.replace('# Code Reviewer',
+        '# Code Reviewer\n\n- invalid TOML escape: \\q'),
       code: 'codex_role_instruction_toml_backslash_forbidden',
     },
     {
       label: 'invalid TOML escape inside reviewer description',
-      text: resignCodexReviewer(reviewer.replace(/^description = .*$/m,
-        'description = "Bad \\q"')),
+      text: reviewer.replace(/^description = .*$/m,
+        'description = "Bad \\q"'),
       code: 'codex_role_toml_backslash_forbidden',
     },
     {
       label: 'invalid TOML escape inside reviewer nickname array',
-      text: resignCodexReviewer(reviewer.replace(/^nickname_candidates = .*$/m,
-        'nickname_candidates = ["Bad \\q"]')),
+      text: reviewer.replace(/^nickname_candidates = .*$/m,
+        'nickname_candidates = ["Bad \\q"]'),
       code: 'codex_role_toml_backslash_forbidden',
     },
     {
       label: 'raw control character in reviewer TOML comment',
-      text: resignCodexReviewer(`# raw control \u0001\n${reviewer}`),
+      text: `# raw control \u0001\n${reviewer}`,
       code: 'codex_role_toml_control_character_forbidden',
     },
     {
       label: 'bare carriage return inside reviewer instructions',
       // #1054 (TEST-AUTHOR EDIT, not implementer): repointed at the live body's opening heading
       // (see "invalid TOML escape inside reviewer instructions" above).
-      text: resignCodexReviewer(reviewer.replace('# Code Reviewer', '# Code Reviewer\rX')),
+      text: reviewer.replace('# Code Reviewer', '# Code Reviewer\rX'),
       code: 'codex_role_toml_line_endings_forbidden',
     },
   ];
@@ -2964,6 +2875,16 @@ function enableMultiAgentV2(homeRoot) {
       'preflight: ' + fixture.label + ' must fail with ' + fixture.code
         + '; got ' + JSON.stringify(preflightReasons));
   }
+
+  const reviewerEntry = agentGenerator.manifestProfileEntry('codex', 'code-reviewer', root, 'codex-github');
+  assert.strictEqual(agentGenerator.sha256(reviewer), reviewerEntry.resolved_profile_sha256,
+    'the Codex reviewer source must match its generated manifest sidecar digest');
+  assert.notStrictEqual(
+    agentGenerator.sha256(reviewer.replace('# Code Reviewer', '# Code reviewer')),
+    reviewerEntry.resolved_profile_sha256,
+    'one changed byte in a Codex profile body must break its sidecar digest');
+  assert(!/[0-9a-f]{64}/.test(reviewer) && !reviewer.includes('runtime-adapter'),
+    'the Codex reviewer profile carries no receipt hashes in agent-visible text');
 
   const ordinary = fs.readFileSync(path.join(pluginRoot, 'agents', 'implementer.toml'), 'utf8');
   const ordinaryMutations = [
@@ -3160,8 +3081,11 @@ try {
       const expectedInstalled = renderClaudeInstalledReviewer(fs.readFileSync(selectedSource, 'utf8'));
       assert.strictEqual(installed, expectedInstalled,
         agent + ' installed bytes must equal the selected generated source after the documented inherit rewrite');
-      assert.doesNotThrow(() => agentGenerator.verifyResolvedProfileHash(installed),
-        agent + ' installed resolved_profile_hash must bind the complete installed bytes');
+      assert.strictEqual(agentGenerator.sha256(fs.readFileSync(selectedSource, 'utf8')),
+        agentGenerator.manifestProfileEntry('claude', agent, root).resolved_profile_sha256,
+        agent + ' source bytes must match its generated manifest sidecar digest');
+      assert(!/[0-9a-f]{64}/.test(installed),
+        agent + ' installed bytes must carry no receipt hashes in agent-visible text');
       assert.strictEqual(agentGenerator.behaviorIdentityFromCore(installed).core,
         agentGenerator.behaviorIdentityFromCore(fs.readFileSync(selectedSource, 'utf8')).core,
       agent + ' installed behavior core must byte-match the generated source core');
@@ -3180,10 +3104,13 @@ try {
     // instead of leaving a hand-edit site here. It is not a restatement of the source profile:
     // this column is what the INSTALLER recorded about the bytes it wrote, so a writer that
     // reports a version it did not verify still reds.
-    const sourceIdentity = agentGenerator.behaviorIdentityFromCore(
-      fs.readFileSync(path.join(root, 'agents', role + '.md'), 'utf8'));
-    assert.strictEqual(columns[2], String(sourceIdentity.behavior_contract_version),
+    const sidecar = agentGenerator.manifestProfileEntry('claude', role, root);
+    assert.strictEqual(columns[2], String(sidecar.behavior_contract_version),
       'Claude managed-agent manifest must record the role behavior contract version for ' + role);
+    assert.strictEqual(columns[3], sidecar.behavior_sha256,
+      'Claude managed-agent manifest must record the role behavior digest for ' + role);
+    assert.strictEqual(columns[4], sidecar.resolved_profile_sha256,
+      'Claude managed-agent manifest must record the role source profile digest for ' + role);
   }
   assert(installOutput.includes('filesystem bytes only; runtime prompt loading is not attested'),
     'Claude installer must state the filesystem-only proof boundary without claiming private prompt loading');
@@ -3409,10 +3336,11 @@ try {
         const installedBytes = fs.readFileSync(path.join(projectAgentsDir, file));
         assert(sourceBytes.equals(installedBytes),
           '#reviewer-contract: installed ' + file + ' must byte-match its selected source');
-        const text = installedBytes.toString('utf8');
-        assert.deepStrictEqual(installedProfileManifest.profile_contracts[file],
-          parseCodexAgentIdentity(text),
-          '#agent-contract: manifest must bind behavior/adapter/profile identity for ' + file);
+        assert.strictEqual(installedProfileManifest.files[file],
+          'sha256:' + agentGenerator.sha256(installedBytes),
+          '#agent-contract: manifest must record the installed file digest for ' + file);
+        assert(!('profile_contracts' in installedProfileManifest),
+          '#agent-contract: manifest must not carry retired in-body contract identity for ' + file);
       }
 
       // AC2: managed [agents.*] block in the positional-form project's .codex/config.toml

@@ -15,7 +15,6 @@ const {
   escapeRegExp,
   parseStringArrayLine,
   profileTopLevelShape,
-  agentProfileContract,
   validateProfileText,
 } = require('./kaola-workflow-adaptive-schema');
 
@@ -60,7 +59,7 @@ const MANAGED_HOOK_ID_PREFIX = 'kaola-workflow:';
 // issue #332: schema + prune + manifest constants (MANIFEST_BASENAME, RETIRED_PROFILE_FILES,
 // EFFORT_VALUES) and the TOML shape validation (escapeRegExp / parseTopLevelString /
 // parseStringArrayLine / sameStringArray / profileTopLevelShape / genericShapeReasons /
-// agentProfileContract / validateProfileText) are now required from the forge-neutral kernel
+// validateProfileText) are now required from the forge-neutral kernel
 // above — its one authoring source, shared with kaola-workflow-codex-preflight.js (#29 audit).
 // Agent profile TOMLs also carry the user-facing role `description` and `nickname_candidates`
 // from config/agents.toml so standalone Codex profiles expose the same identity metadata as the
@@ -175,7 +174,7 @@ function validateInstallTargets(templateEntries) {
 }
 
 // #332 schema validation: escapeRegExp / parseTopLevelString / parseStringArrayLine /
-// sameStringArray / profileTopLevelShape / genericShapeReasons / agentProfileContract /
+// sameStringArray / profileTopLevelShape / genericShapeReasons /
 // validateProfileText are all required from the kernel above (#29 audit) — the one authoring
 // source shared with kaola-workflow-codex-preflight.js.
 
@@ -497,7 +496,6 @@ function validateSourceProfiles(rootDir) {
     const text = read(file);
     entry.sourceText = text;
     entry.sourceSha256 = sha256(Buffer.from(text, 'utf8'));
-    entry.profileContract = agentProfileContract(text, entry.role).identity;
     const reasons = validateProfileText(text, entry.role, entry);
     for (const r of reasons) errors.push(`agents/${entry.basename}: ${r}`);
   }
@@ -606,17 +604,12 @@ function writeManifest(agentsDir, { pluginRoot: srcRoot, copiedFiles, removed })
   }
 
   const files = {};
-  const profileContracts = {};
   const roles = [];
   for (const name of copiedFiles.slice().sort()) {
     const role = name.replace(/\.toml$/, '');
     const bytes = fs.readFileSync(path.join(agentsDir, name));
     roles.push(role);
     files[name] = sha256(bytes);
-    const contract = agentProfileContract(bytes.toString('utf8'), role);
-    assert(contract.reasons.length === 0 && contract.identity,
-      `cannot manifest invalid generated agent profile ${name}: ${contract.reasons.join('; ')}`);
-    profileContracts[name] = contract.identity;
   }
 
   const manifest = {
@@ -627,7 +620,6 @@ function writeManifest(agentsDir, { pluginRoot: srcRoot, copiedFiles, removed })
     source_plugin_root: srcRoot,
     roles,
     files,
-    profile_contracts: profileContracts,
     retired_files_removed: removed
       .filter(r => r.reason === 'retired')
       .map(r => r.file)
@@ -2532,7 +2524,6 @@ module.exports = {
   copyHookScripts,
   copyAgentProfiles,
   validateProfileText,
-  agentProfileContract,
   classifyProfilePinPosture,
   validateSourceProfiles,
   installTargetPathProblem,

@@ -1235,16 +1235,10 @@ function testInstallSchemaPruneManifest332() {
       const installedBytes = fs.readFileSync(path.join(agentsDir, file));
       assert(sourceBytes.equals(installedBytes),
         'agent contract: installed ' + file + ' must byte-match the selected source');
-      const text = installedBytes.toString('utf8');
-      const expectedIdentity = {
-        role,
-        behavior_contract_version: Number(text.match(/^behavior_contract_version: (\d+)$/m)[1]),
-        behavior_contract_hash: text.match(/^behavior_contract_hash: ([0-9a-f]{64})$/m)[1],
-        adapter_capabilities_hash: text.match(/^adapter_capabilities_hash: ([0-9a-f]{64})$/m)[1],
-        resolved_profile_hash: text.match(/^resolved_profile_hash: ([0-9a-f]{64})$/m)[1],
-      };
-      assert(JSON.stringify(manifest.profile_contracts[file]) === JSON.stringify(expectedIdentity),
-        'agent contract: manifest must bind behavior/adapter/profile identity for ' + file);
+      assert(manifest.files[file] === 'sha256:' + createHash('sha256').update(installedBytes).digest('hex'),
+        'agent contract: manifest must record the installed file digest for ' + file);
+      assert(!('profile_contracts' in manifest),
+        'agent contract: manifest must not carry retired in-body contract identity');
     }
     const lastLine = r.stdout.trim().split('\n').pop();
     assert(lastLine === 'status: ok', '#332 AC3: installer stdout must end with `status: ok`, got: ' + lastLine);

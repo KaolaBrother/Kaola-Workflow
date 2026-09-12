@@ -566,9 +566,9 @@ const KIMI_RUNTIME_NATIVE = Object.freeze({
 }
 
 // K6 — DELETED WITH ITS CARRIER. It pinned all-role behavior identity through the kimi
-// profile render (role / behavior_contract_version / behavior_contract_hash / behavior-core
-// bytes / re-stamped resolved_profile_hash); #1062 renders no Kimi profiles, so there is no
-// render left whose identity could drift.
+// profile render (role / behavior contract identity / behavior-core bytes — the digest now
+// lives in the generated-agent-manifest sidecar); #1062 renders no Kimi profiles, so there is
+// no render left whose identity could drift.
 
 // ---------------------------------------------------------------------------
 // K7: Kimi intentionally emits no compact or tool-use hook. The generated tree
@@ -1792,8 +1792,8 @@ for (const script of sync.HOOK_SCRIPTS) {
   // `review_profile_unavailable` rather than falling through silently. The resolver lived in the
   // node executor and went with it, along with the review receipts whose identity it bound.
   //
-  // WHAT IS NOW COVERED EARLIER: every native agent profile is generated and its re-stamped
-  // `resolved_profile_hash` is verified against the bytes, but the
+  // WHAT IS NOW COVERED EARLIER: every native agent profile is generated and its digest is
+  // verified against the generated-agent-manifest sidecar, but the
   // runtime-DETECTION half — that a kimi install reads as kimi and not as opencode — has no
   // consumer left and therefore no test. If a reviewer-identity resolver returns, that
   // no-swallow case is the one worth restoring first: it was a real defect, not a hypothetical.

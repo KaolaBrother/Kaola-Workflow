@@ -498,18 +498,21 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
     pluginRoot + ' profile source contract failed: ' + sourceCheck.errors.join('; '));
   for (const role of generator.ROLES) {
     const entry = sourceCheck.entries.find(candidate => candidate.role === role);
-    assert(entry && entry.profileContract
-      && Number.isInteger(entry.profileContract.behavior_contract_version),
-    pluginRoot + ' must expose an agent contract version for ' + role);
-    assert(/^[0-9a-f]{64}$/.test(entry.profileContract.behavior_contract_hash)
-      && /^[0-9a-f]{64}$/.test(entry.profileContract.adapter_capabilities_hash)
-      && /^[0-9a-f]{64}$/.test(entry.profileContract.resolved_profile_hash),
-    pluginRoot + ' must bind behavior, adapter, and resolved profile hashes for ' + role);
+    assert(entry && entry.sourceText,
+    pluginRoot + ' must expose generated agent source for ' + role);
+    const sidecar = generator.manifestProfileEntry('codex', role, root, 'codex-gitlab');
+    assert(generator.sha256(entry.sourceText) === sidecar.resolved_profile_sha256,
+      pluginRoot + ' profile source must match its generated manifest sidecar digest for ' + role);
+    assert(/^[0-9a-f]{64}$/.test(sidecar.behavior_sha256)
+      && /^[0-9a-f]{64}$/.test(sidecar.adapter_capabilities_sha256)
+      && /^[0-9a-f]{64}$/.test(sidecar.resolved_profile_sha256),
+    pluginRoot + ' must bind behavior, adapter, and resolved profile digests for ' + role);
+    assert(!/[0-9a-f]{64}/.test(entry.sourceText) && !entry.sourceText.includes('runtime-adapter'),
+      pluginRoot + ' must not carry receipt hashes in agent-visible text for ' + role);
     assert(/^model\s*=\s*"gpt-5\.6-luna"\s*$/m.test(entry.sourceText)
       && /^model_reasoning_effort\s*=\s*"max"\s*$/m.test(entry.sourceText),
       pluginRoot + ' pinned profiles must carry the gpt-5.6-luna/max subagent binding');
   }
-  assertIncludes(installerFile, 'profile_contracts');
   assertIncludes(installerFile, 'profile_source_repair');
 
   const preflightFile = pluginRoot + '/scripts/kaola-workflow-codex-preflight.js';

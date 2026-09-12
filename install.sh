@@ -241,28 +241,6 @@ sha256_file() {
   fi
 }
 
-refresh_agent_resolved_profile_hash() {
-  local dest="$1"
-  node - "$SCRIPT_DIR/scripts/generate-agent-profiles.js" "$dest" <<'NODE'
-const fs = require('fs');
-const generator = require(process.argv[2]);
-const file = process.argv[3];
-const text = fs.readFileSync(file, 'utf8');
-const normalized = generator.normalizeResolvedProfileHash(text);
-const digest = generator.sha256(normalized);
-const updated = normalized.replace(
-  /^(resolved_profile_hash:\s*)0{64}(\s*)$/m,
-  (_, prefix, suffix) => prefix + digest + suffix
-);
-if (updated === normalized) {
-  throw new Error('resolved_profile_hash_zero_slot_missing');
-}
-const tmp = `${file}.tmp-${process.pid}`;
-fs.writeFileSync(tmp, updated, { encoding: 'utf8', mode: fs.statSync(file).mode });
-fs.renameSync(tmp, file);
-NODE
-}
-
 agent_manifest_metadata() {
   local role="$1"; local source="$2"; local dest="$3"
   node - "$SCRIPT_DIR/scripts/generate-agent-profiles.js" "$role" "$source" "$dest" <<'NODE'
@@ -271,35 +249,21 @@ const generator = require(process.argv[2]);
 const role = process.argv[3];
 const source = fs.readFileSync(process.argv[4], 'utf8');
 const installed = fs.readFileSync(process.argv[5], 'utf8');
-
-const sourceIdentity = generator.behaviorIdentityFromCore(source);
-const installedIdentity = generator.behaviorIdentityFromCore(installed);
-if (sourceIdentity.role !== role || installedIdentity.role !== role) {
+if (generator.behaviorIdentityFromCore(source).role !== role) {
   throw new Error(`agent_role_mismatch: expected ${role}`);
 }
-if (sourceIdentity.behavior_contract_version !== installedIdentity.behavior_contract_version) {
-  throw new Error(`agent_contract_version_mismatch: ${role}`);
+const entry = generator.manifestProfileEntry('claude', role);
+if (generator.sha256(source) !== entry.resolved_profile_sha256) {
+  throw new Error(`agent_source_digest_mismatch: ${role}`);
 }
-if (sourceIdentity.behavior_contract_hash !== installedIdentity.behavior_contract_hash
-    || sourceIdentity.core !== installedIdentity.core) {
-  throw new Error(`agent_behavior_contract_mismatch: ${role}`);
-}
-
-const rewritten = source.replace(/^model:\s*\S+\s*$/m, 'model: inherit');
-const normalized = generator.normalizeResolvedProfileHash(rewritten);
-const resolvedHash = generator.sha256(normalized);
-const expected = normalized.replace(
-  /^(resolved_profile_hash:\s*)0{64}(\s*)$/m,
-  (_, prefix, suffix) => prefix + resolvedHash + suffix
-);
-generator.verifyResolvedProfileHash(installed);
+const expected = source.replace(/^model:\s*\S+\s*$/m, 'model: inherit');
 if (installed !== expected) {
   throw new Error(`agent_installed_bytes_mismatch: ${role}`);
 }
 process.stdout.write([
-  installedIdentity.behavior_contract_version,
-  installedIdentity.behavior_contract_hash,
-  resolvedHash,
+  entry.behavior_contract_version,
+  entry.behavior_sha256,
+  entry.resolved_profile_sha256,
 ].join('\t'));
 NODE
 }
@@ -494,7 +458,6 @@ install_agent_files() {
       exit 1
     fi
 
-    refresh_agent_resolved_profile_hash "$dest"
     local agent_metadata
     agent_metadata="$(agent_manifest_metadata "$agent" "$source_file" "$dest")"
     printf '%s\t%s\t%s\n' "$file_name" "$(sha256_file "$dest")" "$agent_metadata" >> "$manifest_tmp"

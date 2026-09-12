@@ -540,15 +540,16 @@ conditions, and capability requirements. It contains no
 runtime, vendor, native model, tool syntax, home path, or hook vocabulary. Adapters own those native
 differences and may not carry arbitrary universal prompt prose.
 
-Every render carries a shared `behavior_contract_hash` and a render-specific
-`resolved_profile_hash`. Shared-behavior mutation must reach all six profile-installing adapters
+Every render is recorded in `agents/generated-agent-manifest.json` with a shared `behavior_sha256`
+and a render-specific `resolved_profile_sha256`; no digest is rendered into agent-visible profile
+text (#1073). Shared-behavior mutation must reach all six profile-installing adapters
 for that role;
 adapter mutation must stay inside one runtime family. Byte identity remains required for true
 forge-neutral twins, but cross-runtime sentence equality is not the oracle.
 
 `delegation_guidance` is routing-only adapter data and is deliberately excluded from the adapter
 hash used by native profiles. A wording or capability-exposure correction regenerates the marked
-next/finalize blocks without churning `resolved_profile_hash` values for unchanged profile
+next/finalize blocks without churning `resolved_profile_sha256` values for unchanged profile
 bytes. Runtime-guidance reachability has its own structural and mutation checks.
 
 Provenance is a separate axis in `templates/agents/provenance.json` and

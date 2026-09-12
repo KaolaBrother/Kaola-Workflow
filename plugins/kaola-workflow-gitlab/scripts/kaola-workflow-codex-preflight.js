@@ -69,7 +69,6 @@ const {
   escapeRegExp,
   parseStringArrayLine,
   profileTopLevelShape,
-  agentProfileContract,
   validateProfileText,
   sha256Hex,
 } = require('./kaola-workflow-adaptive-schema');
@@ -1532,7 +1531,6 @@ function readTemplateRoles(scriptDir) {
     entry.sourcePath = sourcePath;
     entry.sourceText = sourceText;
     entry.sourceSha256 = 'sha256:' + sha256Hex(Buffer.from(sourceText, 'utf8'));
-    entry.profileContract = agentProfileContract(sourceText, entry.role).identity;
     for (const reason of validateProfileText(sourceText, entry.role, entry)) {
       sourceErrors.push(`agents/${entry.basename}: ${reason}`);
     }
@@ -1820,8 +1818,7 @@ function inspectScope({
         const sourceDrift = !!(expected && typeof expected.sourceText === 'string' && txt !== expected.sourceText);
         if (posture === 'legacy_pinned' || posture === 'inherit') {
           const nonPinReasons = reasons.filter(reason =>
-            !LEGACY_PIN_ONLY_REASONS.has(reason)
-            && !reason.startsWith('agent_resolved_profile_hash_mismatch:'));
+            !LEGACY_PIN_ONLY_REASONS.has(reason));
           if (nonPinReasons.length === 0) legacyPinnedProfiles.push({ role, file: name });
           else malformed.push({ role, file: name, reasons: nonPinReasons });
         } else if (reasons.length > 0) {
@@ -1841,14 +1838,6 @@ function inspectScope({
           if (recordedFileHash !== actualFileHash) {
             addStaleProfile(role, name,
               `manifest_file_hash_mismatch: expected=${actualFileHash} got=${recordedFileHash || 'missing'}`);
-          }
-          {
-            const actualIdentity = agentProfileContract(txt, role).identity;
-            const recordedIdentity = manifest.profile_contracts && manifest.profile_contracts[name];
-            if (!actualIdentity || JSON.stringify(recordedIdentity) !== JSON.stringify(actualIdentity)) {
-              addStaleProfile(role, name, 'manifest_profile_contract_mismatch');
-              manifestStatus = 'outdated';
-            }
           }
         }
       } else if (manifestFiles.has(name) || RETIRED_PROFILE_FILES.includes(name)) {
@@ -3639,7 +3628,6 @@ module.exports = {
   checkManagedBlock,
   checkProfiles,
   validateProfileText,
-  agentProfileContract,
   classifyProfilePinPosture,
   inspectScope,
   readManifest,

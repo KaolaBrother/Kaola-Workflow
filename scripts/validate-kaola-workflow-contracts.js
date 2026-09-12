@@ -542,16 +542,22 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
     const sourceCheck = installer.validateSourceProfiles(path.join(root, edition));
     assert(sourceCheck.ok, edition + ' agent profile source contract failed: ' + sourceCheck.errors.join('; '));
     assert(sourceCheck.repair === null, edition + ' current source must not carry a repair command');
+    const forge = edition === 'plugins/kaola-workflow'
+      ? 'github'
+      : edition.replace('plugins/kaola-workflow-', '');
     for (const role of generator.ROLES) {
       const entry = sourceCheck.entries.find(candidate => candidate.role === role);
-      assert(entry && entry.profileContract,
-        edition + ' must expose generated agent identity for ' + role);
-      assert(Number.isInteger(entry.profileContract.behavior_contract_version),
-        edition + ' must bind an integer behavior contract version for ' + role);
-      assert(/^[0-9a-f]{64}$/.test(entry.profileContract.behavior_contract_hash)
-        && /^[0-9a-f]{64}$/.test(entry.profileContract.adapter_capabilities_hash)
-        && /^[0-9a-f]{64}$/.test(entry.profileContract.resolved_profile_hash),
-      edition + ' must bind behavior and resolved profile hashes for ' + role);
+      assert(entry && entry.sourceText,
+        edition + ' must expose generated agent source for ' + role);
+      const sidecar = generator.manifestProfileEntry('codex', role, root, 'codex-' + forge);
+      assert(generator.sha256(entry.sourceText) === sidecar.resolved_profile_sha256,
+        edition + ' profile source must match its generated manifest sidecar digest for ' + role);
+      assert(/^[0-9a-f]{64}$/.test(sidecar.behavior_sha256)
+        && /^[0-9a-f]{64}$/.test(sidecar.adapter_capabilities_sha256)
+        && /^[0-9a-f]{64}$/.test(sidecar.resolved_profile_sha256),
+      edition + ' must bind behavior, adapter, and resolved profile digests for ' + role);
+      assert(!/[0-9a-f]{64}/.test(entry.sourceText) && !entry.sourceText.includes('runtime-adapter'),
+        edition + ' must not carry receipt hashes in agent-visible text for ' + role);
       assert(/^model\s*=\s*"gpt-5\.6-luna"\s*$/m.test(entry.sourceText)
         && /^model_reasoning_effort\s*=\s*"max"\s*$/m.test(entry.sourceText),
         edition + ' pinned profiles must carry the gpt-5.6-luna/max subagent binding');
