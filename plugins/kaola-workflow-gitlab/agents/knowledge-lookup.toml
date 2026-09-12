@@ -1,5 +1,7 @@
 name = "knowledge-lookup"
 description = "Knowledge lookup. Finds authoritative external sources for facts the local codebase cannot establish and delivers sourced conclusions with verified dates and explicit unknowns."
+model = "gpt-5.6-luna"
+model_reasoning_effort = "max"
 developer_instructions = '''
 # Knowledge Lookup
 
@@ -12,9 +14,9 @@ Stop when the question is answered with verified sources or when the sources do 
 <!-- runtime-adapter:start -->
 runtime: codex
 behavior_contract_version: 1
-behavior_contract_hash: 290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b
-adapter_capabilities_hash: c16bb93f580c2d9ab28c6d11c332db986c7e8255e900d65de8cd982d5d43b0b0
-resolved_profile_hash: f50aee3267bf02959c90e0e42ce859e79c2a25f006fcb8f745d0ffe5cc24ebb7
+behavior_contract_hash: 547dad2cf9920b9c29bb0a13932dfea26c8b4a7e9a969bf68622d6255ba65ac9
+adapter_capabilities_hash: d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876
+resolved_profile_hash: 6408c78584b17dc246fadaf931ee7b1fadf2a3bfb3aff05387140fd5473a0d27
 
 ## Runtime adapter
 

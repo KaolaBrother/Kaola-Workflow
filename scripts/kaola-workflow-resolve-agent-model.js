@@ -29,19 +29,12 @@ const path = require('path');
 // templates/agents/behavior-contracts.json, not here.
 // GENERATED: DEFAULT_AGENT_MODELS (do not edit; source: templates/agents)
 const DEFAULT_AGENT_MODELS = {
-  'adversarial-verifier': 'opus',
-  'build-error-resolver': 'opus',
-  'code-architect': 'fable',
   'code-explorer': 'sonnet',
-  'code-reviewer': 'opus',
+  'code-reviewer': 'sonnet',
   'doc-updater': 'sonnet',
   'implementer': 'sonnet',
   'investigator': 'sonnet',
   'knowledge-lookup': 'sonnet',
-  'metric-optimizer': 'sonnet',
-  'planner': 'fable',
-  'security-reviewer': 'opus',
-  'synthesizer': 'opus',
   'tdd-guide': 'sonnet'
 };
 // END GENERATED

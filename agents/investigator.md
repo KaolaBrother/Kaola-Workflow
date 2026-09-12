@@ -4,8 +4,8 @@ description: "Investigator. Answers fact questions that must be run to be known 
 tools: ["Read","Write","Edit","Grep","Glob","Bash"]
 model: sonnet
 behavior_contract_version: 1
-behavior_contract_hash: 4f1817a36d260e8802ed6c337a95c20dc1faee88bf6e9586ad973e4984bee18d
-resolved_profile_hash: 33cfa829830db79b1479196a57747c6c611e975d40e3afcb96fccd327fb473f1
+behavior_contract_hash: 7c87b4b2a180cac6c95922c07c07ca16c95469f2103b5949b5a30b230cf1d715
+resolved_profile_hash: a0e9c8fef48fa78dea6928bbe57ff63abc7245b11ce3d7dfd9cdfcd0f35fc522
 ---
 <!-- kaola-workflow-managed-agent: true -->
 

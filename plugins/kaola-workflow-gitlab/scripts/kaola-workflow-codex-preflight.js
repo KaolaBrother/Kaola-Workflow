@@ -35,7 +35,7 @@
 // (kaola-workflow-adaptive-schema.js, a sibling in every tree — see KERNEL_COPIES in
 // validate-script-sync.js). No require() of edition-specific scripts: the kernel is the one
 // exception because it is itself byte-identical in all four trees, so requiring it adds no
-// edition-specific bytes. The CODEX_PINNED_*_ROLES classification and the #332 Codex
+// edition-specific bytes. The CODEX_PINNED_ROLES catalog and the #332 Codex
 // agent-profile schema (MANIFEST_BASENAME, RETIRED_PROFILE_FILES, EFFORT_VALUES,
 // validateProfileText + its helpers) are BOTH sourced from the kernel now — its one authoring
 // source, per #29 audit convergence — instead of being hand-duplicated from
@@ -55,16 +55,14 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-// #29 audit: the standard/reasoning/heavy role classification AND the #332 Codex agent-profile
+// #29 audit: the pinned role catalog AND the #332 Codex agent-profile
 // schema (constants + validateProfileText + its helpers) have ONE authoring source, the
 // forge-neutral kernel — required here rather than re-declared, same as every other 4-tree
 // byte-identical script that needs it (e.g. kaola-workflow-validation-runner.js). `crypto` is no
 // longer required at top level: this file's own `sha256Hex` retired in favor of the kernel's
 // (identical logic), which this file now calls directly for its own source/file-hash checks too.
 const {
-  CODEX_PINNED_STANDARD_ROLES,
-  CODEX_PINNED_REASONING_ROLES,
-  CODEX_PINNED_HEAVY_ROLES,
+  CODEX_PINNED_ROLES,
   MANIFEST_BASENAME,
   RETIRED_PROFILE_FILES,
   EFFORT_VALUES,
@@ -1390,10 +1388,8 @@ function classifyProfilePinPosture(text) {
 }
 
 const LEGACY_PIN_ONLY_REASONS = new Set([
-  'codex_role_field_forbidden: model',
-  'codex_role_field_forbidden: model_reasoning_effort',
-  "top-level 'model' must be omitted to inherit the parent session",
-  "top-level 'model_reasoning_effort' must be omitted to inherit the parent session"
+  "top-level 'model' must be present and equal \"gpt-5.6-luna\"",
+  "top-level 'model_reasoning_effort' must be present and equal \"max\""
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1822,7 +1818,7 @@ function inspectScope({
         const expected = metaByRole.get(role) || null;
         const reasons = validateProfileText(txt, role, expected);
         const sourceDrift = !!(expected && typeof expected.sourceText === 'string' && txt !== expected.sourceText);
-        if (posture === 'legacy_pinned') {
+        if (posture === 'legacy_pinned' || posture === 'inherit') {
           const nonPinReasons = reasons.filter(reason =>
             !LEGACY_PIN_ONLY_REASONS.has(reason)
             && !reason.startsWith('agent_resolved_profile_hash_mismatch:'));
@@ -3650,9 +3646,7 @@ module.exports = {
   RETIRED_PROFILE_FILES,
   MANIFEST_BASENAME,
   EFFORT_VALUES,
-  CODEX_PINNED_STANDARD_ROLES,
-  CODEX_PINNED_REASONING_ROLES,
-  CODEX_PINNED_HEAVY_ROLES,
+  CODEX_PINNED_ROLES,
   CODEX_ORCHESTRATION_ROLES,
   CODEX_STANDARD_MODEL,
   CODEX_STANDARD_EFFORT,

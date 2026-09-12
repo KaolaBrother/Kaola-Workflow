@@ -186,19 +186,13 @@
         "model_carrier": "profile_model",
         "tool_binding": "profile_tools",
         "hook_scope": "user_and_project",
-        "intent_mapping": {
-          "standard": "sonnet",
-          "reasoning": "opus",
-          "heavy": "fable"
+        "subagent_default": {
+          "model": "sonnet",
+          "summary": "every installed Kaola profile pins `model: sonnet`; effort is not pinned and follows the runtime default; omit the per-call model unless the item needs a stronger child"
         },
         "delegation_guidance": {
           "profile_lookup": "Find named profiles in project `.claude/agents/`, user `~/.claude/agents/`, plugin `agents/`, managed settings, or the current session's `--agents`; managed/session/project/user/plugin precedence remains Claude-owned, and the Kaola installer uses the user directory by default.",
-          "dispatch_carrier": "Dispatch with `Agent` and `subagent_type: \"<role>\"`; installed Kaola profiles use `model: inherit`, so pass the role tier's model on the call when preserving its default tier.",
-          "tiers": {
-            "standard": "standard → `sonnet`; effort is not pinned and uses the runtime's default effort",
-            "reasoning": "reasoning → `opus`; effort is not pinned and uses the runtime's default effort",
-            "heavy": "heavy → `fable`; effort is not pinned and uses the runtime's default effort"
-          },
+          "dispatch_carrier": "Dispatch with `Agent` and `subagent_type: \"<role>\"`; installed Kaola profiles pin `model: sonnet`, so omit the per-call model unless the item needs a stronger child.",
           "tool_boundary": "The named profile's native `tools` allowlist carries the role tool boundary.",
           "native_routes": "Native alternatives include the full `general-purpose` agent, read-only `Explore` and `Plan`, catch-all `claude`, background or isolated children, and optional agent teams; use only the route whose real capability fits the current item.",
           "availability": "Inspect the current Agent/Task type catalog and effective precedence. Claude currently permits recursive subagents to its native depth limit, which can be configured by the host; do not infer total child unavailability from one missing custom name."
@@ -231,22 +225,17 @@
         "instruction_loading": "direct",
         "profile_format": "toml",
         "role_dispatch": "named_profile",
-        "model_carrier": "inherit_by_omission",
+        "model_carrier": "profile_model_effort",
         "tool_binding": "host_policy",
         "hook_scope": "plugin_runtime",
-        "intent_mapping": {
-          "standard": "inherit",
-          "reasoning": "inherit",
-          "heavy": "inherit"
+        "subagent_default": {
+          "model": "gpt-5.6-luna",
+          "effort": "max",
+          "summary": "every installed Kaola TOML profile pins `model = \"gpt-5.6-luna\"` and `model_reasoning_effort = \"max\"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`"
         },
         "delegation_guidance": {
           "profile_lookup": "Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.",
-          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; on hosts that expose them, supply `model` and `reasoning_effort` when selecting the role's default tier, while preserving supported `fork_turns` and service-tier choices.",
-          "tiers": {
-            "standard": "standard → `gpt-5.6-luna` with reasoning effort `max`",
-            "reasoning": "reasoning → `gpt-6-astra` with reasoning effort `medium`",
-            "heavy": "heavy → `gpt-6-astra` with reasoning effort `high`"
-          },
+          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; omit per-call `model` and `reasoning_effort` because the TOML profile pins `gpt-5.6-luna` / `max` and file values take precedence, while preserving supported `fork_turns` and service-tier choices.",
           "tool_boundary": "The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.",
           "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
           "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
@@ -279,22 +268,17 @@
         "instruction_loading": "direct",
         "profile_format": "toml",
         "role_dispatch": "named_profile",
-        "model_carrier": "inherit_by_omission",
+        "model_carrier": "profile_model_effort",
         "tool_binding": "host_policy",
         "hook_scope": "plugin_runtime",
-        "intent_mapping": {
-          "standard": "inherit",
-          "reasoning": "inherit",
-          "heavy": "inherit"
+        "subagent_default": {
+          "model": "gpt-5.6-luna",
+          "effort": "max",
+          "summary": "every installed Kaola TOML profile pins `model = \"gpt-5.6-luna\"` and `model_reasoning_effort = \"max\"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`"
         },
         "delegation_guidance": {
           "profile_lookup": "Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.",
-          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; on hosts that expose them, supply `model` and `reasoning_effort` when selecting the role's default tier, while preserving supported `fork_turns` and service-tier choices.",
-          "tiers": {
-            "standard": "standard → `gpt-5.6-luna` with reasoning effort `max`",
-            "reasoning": "reasoning → `gpt-6-astra` with reasoning effort `medium`",
-            "heavy": "heavy → `gpt-6-astra` with reasoning effort `high`"
-          },
+          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; omit per-call `model` and `reasoning_effort` because the TOML profile pins `gpt-5.6-luna` / `max` and file values take precedence, while preserving supported `fork_turns` and service-tier choices.",
           "tool_boundary": "The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.",
           "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
           "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
@@ -327,22 +311,17 @@
         "instruction_loading": "direct",
         "profile_format": "toml",
         "role_dispatch": "named_profile",
-        "model_carrier": "inherit_by_omission",
+        "model_carrier": "profile_model_effort",
         "tool_binding": "host_policy",
         "hook_scope": "plugin_runtime",
-        "intent_mapping": {
-          "standard": "inherit",
-          "reasoning": "inherit",
-          "heavy": "inherit"
+        "subagent_default": {
+          "model": "gpt-5.6-luna",
+          "effort": "max",
+          "summary": "every installed Kaola TOML profile pins `model = \"gpt-5.6-luna\"` and `model_reasoning_effort = \"max\"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`"
         },
         "delegation_guidance": {
           "profile_lookup": "Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.",
-          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; on hosts that expose them, supply `model` and `reasoning_effort` when selecting the role's default tier, while preserving supported `fork_turns` and service-tier choices.",
-          "tiers": {
-            "standard": "standard → `gpt-5.6-luna` with reasoning effort `max`",
-            "reasoning": "reasoning → `gpt-6-astra` with reasoning effort `medium`",
-            "heavy": "heavy → `gpt-6-astra` with reasoning effort `high`"
-          },
+          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; omit per-call `model` and `reasoning_effort` because the TOML profile pins `gpt-5.6-luna` / `max` and file values take precedence, while preserving supported `fork_turns` and service-tier choices.",
           "tool_boundary": "The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.",
           "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
           "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
@@ -369,31 +348,15 @@
         "opencode_instructions"
       ],
       "capabilities": {
-        "named_roles": true,
-        "deterministic_profiles": true,
+        "named_roles": false,
+        "deterministic_profiles": false,
         "capability_gap": "explicit",
         "instruction_loading": "direct",
-        "profile_format": "markdown_yaml",
-        "role_dispatch": "named_profile",
-        "model_carrier": "profile_or_inherit",
-        "tool_binding": "profile_permissions",
+        "role_dispatch": "native_only",
         "hook_scope": "plugin_runtime",
-        "intent_mapping": {
-          "standard": "inherit",
-          "reasoning": "inherit",
-          "heavy": "inherit"
-        },
         "delegation_guidance": {
-          "profile_lookup": "Find named profiles in project `.opencode/agents/`, user `~/.config/opencode/agents/`, or `opencode.json`; use the runtime's effective merged configuration rather than assuming a same-name Markdown collision rule.",
-          "dispatch_carrier": "Dispatch with the `task` tool and `subagent_type: \"<role>\"`; the task call has no per-call model or effort field.",
-          "tiers": {
-            "standard": "standard → session model and session effort, unless the user configured the optional standard model pin",
-            "reasoning": "reasoning → the per-role override list when configured, otherwise session model and session effort",
-            "heavy": "heavy → classifies as reasoning for that optional per-role override, otherwise session model and session effort"
-          },
-          "tool_boundary": "Native profile permission denials carry the role's edit, shell, and web capability boundary.",
-          "native_routes": "Native alternatives include broad `general`, read-only local `explore`, and read-only external-research `scout`; direct `@name` invocation, `task_id` resume, and experimental background work remain runtime-owned options.",
-          "availability": "Read the current task type catalog, permissions, and user configuration. OpenCode defaults to one child depth unless the user raises it; inherited session settings and optional pins remain user-owned capabilities."
+          "native_routes": "Native routes are broad `general`, read-only local `explore`, and read-only external-research `scout`; direct `@name` invocation, `task_id` resume, and experimental background work remain runtime-owned options.",
+          "availability": "Read the current task type catalog, permissions, and user configuration. OpenCode defaults to one child depth unless the user raises it; children inherit the session model and variant."
         }
       },
       "compact_protocol": {
@@ -418,31 +381,15 @@
         "kimi_global_named_profile_20260827"
       ],
       "capabilities": {
-        "named_roles": true,
-        "deterministic_profiles": true,
+        "named_roles": false,
+        "deterministic_profiles": false,
         "capability_gap": "explicit",
         "instruction_loading": "direct",
-        "profile_format": "markdown_yaml",
-        "role_dispatch": "named_profile",
-        "model_carrier": "session_inherit",
-        "tool_binding": "profile_tools",
+        "role_dispatch": "native_only",
         "hook_scope": "user_and_project",
-        "intent_mapping": {
-          "standard": "inherit",
-          "reasoning": "inherit",
-          "heavy": "inherit"
-        },
         "delegation_guidance": {
-          "profile_lookup": "Find native profiles in project `.kimi-code/agents/` or `.agents/agents/`, or in `$KIMI_CODE_HOME/agents/` / `~/.agents/agents/`; Kaola role names use `kaola-role-<role>`.",
-          "dispatch_carrier": "Dispatch with `Agent` or `AgentSwarm` and `subagent_type: \"kaola-role-<role>\"`; Agent supports resume/background, while AgentSwarm exposes up to 128 parallel items.",
-          "tiers": {
-            "standard": "standard → session inherit for model and thinking",
-            "reasoning": "reasoning → session inherit for model and thinking",
-            "heavy": "heavy → session inherit for model and thinking"
-          },
-          "tool_boundary": "The named profile's native `tools` allowlist carries the role tool boundary.",
-          "native_routes": "Native alternatives are full writable `coder`, read-only `explore`, and non-shell `plan`, plus custom Agent or AgentSwarm routes; use each under its actual boundary.",
-          "availability": "Honor native project/user precedence and the current Agent catalog. Ordinary profiles ignore model fields and inherit session model plus effort; the optional experimental secondary-model pool is user-owned. Built-ins are leaves, while custom profiles may allowlist deeper subagents."
+          "native_routes": "Native routes are full writable `coder`, read-only `explore`, and non-shell `plan`, dispatched with `Agent` (resume/background) or `AgentSwarm` (up to 128 parallel items); use each under its actual boundary.",
+          "availability": "Honor the current Agent catalog. Children inherit the session model and effort; the optional experimental secondary-model pool is user-owned. Built-ins are leaves."
         }
       },
       "compact_protocol": {
@@ -472,22 +419,17 @@
         "instruction_loading": "direct",
         "profile_format": "markdown_yaml",
         "role_dispatch": "named_profile",
-        "model_carrier": "session_inherit_plus_profile_effort",
+        "model_carrier": "profile_model_effort",
         "tool_binding": "profile_tools",
         "hook_scope": "user_and_project",
-        "intent_mapping": {
-          "standard": "medium",
-          "reasoning": "high",
-          "heavy": "xhigh"
+        "subagent_default": {
+          "model": "grok-4.6",
+          "effort": "medium",
+          "summary": "every installed Kaola profile pins `model: grok-4.6` with `effort: medium`; omit per-call model and effort because the profile pins both"
         },
         "delegation_guidance": {
           "profile_lookup": "Find named profiles in the project `.grok/agents/` directory or the user `~/.grok/agents/` directory.",
-          "dispatch_carrier": "Dispatch with `spawn_subagent` and `subagent_type: \"<role>\"`; preserve native background, isolation, resume, cwd, and optional per-call model choices, but omit per-call effort because the profile carries it.",
-          "tiers": {
-            "standard": "standard → inherit the session model with profile effort `medium`",
-            "reasoning": "reasoning → inherit the session model with profile effort `high`",
-            "heavy": "heavy → inherit the session model with profile effort `xhigh`"
-          },
+          "dispatch_carrier": "Dispatch with `spawn_subagent` and `subagent_type: \"<role>\"`; preserve native background, isolation, resume, and cwd options, but omit per-call model and effort because the profile pins both.",
           "tool_boundary": "The named profile's native `tools` allowlist carries the role tool boundary.",
           "native_routes": "Native alternatives include full `general-purpose`, read/shell `explore`, and read/shell `plan`, plus background and isolated children; use the closest truthful contract.",
           "availability": "Respect the current `spawn_subagent` catalog and its native options. Grok children cannot spawn descendants, but Kaola does not narrow the root runtime's capabilities."
@@ -529,32 +471,26 @@
         "model_carrier": "profile_model_effort",
         "tool_binding": "readonly_flag",
         "hook_scope": "user_and_project",
-        "model": "grok-4.6",
-        "intent_mapping": {
-          "standard": "medium",
-          "reasoning": "high",
-          "heavy": "xhigh"
+        "subagent_default": {
+          "model": "grok-4.6",
+          "effort": "medium",
+          "summary": "every installed Kaola profile pins `model: grok-4.6[effort=medium]`; a custom subagent that omits `model` inherits the parent, so the pin is what selects the cheaper child; omit the per-call `model`"
         },
         "dispatch_conformance": {
           "call_shape": "Task with flat subagent_type",
           "named_model_field": "omit",
-          "exact_tier": "post_resolution_assertion",
+          "exact_binding": "post_resolution_assertion",
           "generic_model_enum": "not_named_profile_capability",
           "provider_model_evidence": "providerOptions.cursor.modelName",
           "tui_child_transcript": "insufficient"
         },
         "delegation_guidance": {
           "profile_lookup": "Find custom profiles in project `.cursor/agents/` or user `~/.cursor/agents/`; a file on disk is not discovery proof, so inspect the live catalog. CLI, App local, and App Cloud are separate hosts. Materialize the selected project explicitly. Cloud requires installation in its environment setup, a tested and user-saved Build, then a new top-level Agent in the same repository; local install never deploys Cloud.",
-          "dispatch_carrier": "Inspect the current `Task` schema and send only fields it exposes. If the exact Kaola role is present and its materialized profile receipt is valid, call `Task` with the live flat `subagent_type: \"<role>\"` field and MUST omit the per-call `model`; an exact-tier requirement is a post-resolution assertion, never authorization to populate that field. Absence of medium/high from the generic Task model enum is not a named-profile capability gap. Verify an exact tier from `providerOptions.cursor.modelName` provider evidence when the host exposes it; a TUI child transcript alone is insufficient. Internal `subagentType.custom.name` is provider encoding, not controller call shape, and must not be sent. In a built-in-only enum, omit-model is the parent, not a profile pin.",
-          "tiers": {
-            "standard": "standard → profile `grok-4.6[effort=medium]`",
-            "reasoning": "reasoning → profile `grok-4.6[effort=high]`",
-            "heavy": "heavy → profile `grok-4.6[effort=xhigh]`"
-          },
+          "dispatch_carrier": "Inspect the current `Task` schema and send only fields it exposes. If the exact Kaola role is present and its materialized profile receipt is valid, call `Task` with the live flat `subagent_type: \"<role>\"` field and MUST omit the per-call `model`; an exact-binding requirement is a post-resolution assertion, never authorization to populate that field. Absence of medium/high from the generic Task model enum is not a named-profile capability gap. Verify the exact binding from `providerOptions.cursor.modelName` provider evidence when the host exposes it; a TUI child transcript alone is insufficient. Internal `subagentType.custom.name` is provider encoding, not controller call shape, and must not be sent. In a built-in-only enum, omit-model is the parent, not a profile pin.",
           "tool_boundary": "The named profile's native `readonly` flag carries its write boundary.",
           "native_routes": "Inspect the live Task catalog. Measured hosts exposed writable `generalPurpose` and host-specific built-ins; some hosts document scoped `Explore`, `Bash`, or `Browser`. Use only a route this host reports, under its real identity and capability.",
-          "fallback_search": "If the exact name is absent, first distinguish an uninstalled or unsaved host carrier from a capability gap. Then inspect real alternatives for this item; a custody-bearing miss inlines only that item and records the specific `capability_gap`.",
-          "availability": "The live Task catalog is authoritative. CLI build 2026.08.25-3e8eec8 proved project `implementer` dispatch and resolved `cursor-grok-4.6-medium`; App 3.17.21 and the saved Cloud Build each proved all 14 names plus exact `implementer`, but did not expose the child model carrier. CLI profile reload was observed after reopening the process; same-process hot load remains unknown."
+          "fallback_search": "If the exact name is absent, first distinguish an uninstalled or unsaved host carrier from a capability gap. Then inspect real alternatives for this item; a miss that the item's brief cannot absorb inlines only that item and records the specific `capability_gap`.",
+          "availability": "The live Task catalog is authoritative. CLI build 2026.08.25-3e8eec8 proved project `implementer` dispatch and resolved `cursor-grok-4.6-medium`; App 3.17.21 and the saved Cloud Build each proved all 14 names plus exact `implementer` (the catalog then held 14 roles; 7 remain after #1062), but did not expose the child model carrier. CLI profile reload was observed after reopening the process; same-process hot load remains unknown."
         }
       },
       "surfaces": {
@@ -629,7 +565,7 @@
         "reload": "Cursor includes alwaysApply Rules in every model context. V2 therefore completely reloads Workflow Next or Finalization after compact on CLI, App local, and Cloud even though Cloud lacks sessionStart and preCompact cannot inject context.",
         "tool": "No preToolUse or postToolUse prompt-lifecycle hook is installed; ordinary tools add zero Kaola recovery context and start zero Kaola recovery subprocesses.",
         "stop": "No stop prompt-lifecycle hook is installed.",
-        "fast": "Fast is prohibited for named Kaola dispatch and cannot override the canonical model/effort mapping.",
+        "fast": "Fast is prohibited for named Kaola dispatch and cannot override the profile's pinned model and effort.",
         "Explore": "Built-in Explore is a truthful read-only route only when the live Cursor catalog exposes it; it cannot impersonate a missing Kaola role."
       }
     },
@@ -639,32 +575,15 @@
         "zcode_instructions"
       ],
       "capabilities": {
-        "named_roles": true,
-        "deterministic_profiles": true,
+        "named_roles": false,
+        "deterministic_profiles": false,
         "capability_gap": "explicit",
         "instruction_loading": "direct_workspace_root",
-        "profile_format": "markdown_yaml_thought",
-        "role_dispatch": "named_profile",
-        "model_carrier": "profile_model_thought",
-        "tool_binding": "profile_tools",
+        "role_dispatch": "native_only",
         "hook_scope": "user_only",
-        "model": "GLM-5.3",
-        "intent_mapping": {
-          "standard": "high",
-          "reasoning": "max",
-          "heavy": "max"
-        },
         "delegation_guidance": {
-          "profile_lookup": "Find the runtime-loaded user-scope profile in `${ZCODE_HOME:-~/.zcode}/agents/`; project `.zcode/agents/` is staging that the installer syncs to user scope.",
-          "dispatch_carrier": "Use automatic selection or native `@<role>` dispatch; if this session exposes an `Agent` call with `subagent_type`, follow that live schema rather than inventing unpublished fields, and omit a per-call model because the profile carries it.",
-          "tiers": {
-            "standard": "standard → profile `model: GLM-5.3` with `thoughtLevel: high`",
-            "reasoning": "reasoning → profile `model: GLM-5.3` with `thoughtLevel: max`",
-            "heavy": "heavy → profile `model: GLM-5.3` with `thoughtLevel: max`"
-          },
-          "tool_boundary": "The named profile's native `tools` allowlist carries the role tool boundary.",
-          "native_routes": "Native alternatives include full `general-purpose` and read-only `Explore`, reached through automatic selection or `@`; foreground/background choice remains runtime-owned.",
-          "availability": "Profiles are user-scope and load on the next session; project `.zcode/agents/` is only installer staging. Subagents cannot spawn children, but the root runtime's other native routes remain available."
+          "native_routes": "Native routes are full `general-purpose` and read-only `Explore`, reached through automatic selection or `@`; foreground/background choice remains runtime-owned.",
+          "availability": "Children follow the main Agent's model. Subagents cannot spawn children, but the root runtime's other native routes remain available."
         }
       },
       "compact_protocol": {
@@ -689,27 +608,18 @@
         "devin_f8", "devin_f9", "devin_f10", "devin_f11", "devin_f12", "devin_f13", "devin_f14"
       ],
       "capabilities": {
-        "named_roles": true,
-        "deterministic_profiles": true,
+        "named_roles": false,
+        "deterministic_profiles": false,
         "capability_gap": "explicit",
         "instruction_loading": "direct",
-        "profile_format": "markdown_yaml",
-        "role_dispatch": "named_profile",
-        "model_carrier": "host_router",
-        "tool_binding": "allowed-tools",
+        "role_dispatch": "native_only",
         "hook_scope": "user_and_project",
         "nesting": 1,
         "hot_reload": false,
         "rules_survive_compaction": false,
-        "intent_mapping": {"standard": "host_router", "reasoning": "host_router", "heavy": "host_router"},
         "delegation_guidance": {
-          "profile_lookup": "Find profiles in project `.devin/agents/` or user `~/.config/devin/agents/`; the catalog is fixed at session start, so restart the session after installation.",
-          "dispatch_carrier": "Dispatch with `run_subagent(profile, is_background, resume)` / `read_subagent` using an exact profile from the session-start catalog; no model, subagent, or agent field is pinned by Kaola.",
-          "tiers": {"standard": "standard → `host_router`", "reasoning": "reasoning → `host_router`", "heavy": "heavy → `host_router`"},
-          "tool_boundary": "The profile `allowed-tools` list uses Devin-native `read`, `grep`, `glob`, `edit`, `write`, `exec`, `web_search`, and `webfetch` names and carries the role capability boundary.",
-          "native_routes": "Use foreground, background, or resume through the live `run_subagent` schema; the Devin host router owns role routing.",
-          "availability": "The profile catalog is fixed at session start. Rules may drop after compaction, so the single UserPromptSubmit carrier reloads the global contract and Devin adapter before routing continues.",
-          "fallback_search": "If an exact profile is absent from the session-start catalog, use only a live native route that satisfies custody and capability requirements; otherwise work inline and report the capability gap."
+          "native_routes": "Native routes are `run_subagent(profile, is_background, resume)` / `read_subagent` with the built-in `subagent_general` (inherits the parent model) or any user-owned profile present in the session-start catalog.",
+          "availability": "The profile catalog is fixed at session start. Rules may drop after compaction, so the single UserPromptSubmit carrier reloads the global contract and Devin adapter before routing continues."
         }
       },
       "compact_protocol": {

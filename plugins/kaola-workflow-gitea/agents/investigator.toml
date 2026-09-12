@@ -1,5 +1,7 @@
 name = "investigator"
 description = "Investigator. Answers fact questions that must be run to be known — builds, tests, reproductions, measurements, bisects, and A/B legs — and delivers reviewable measurements; never edits tracked files and never chooses the fix."
+model = "gpt-5.6-luna"
+model_reasoning_effort = "max"
 developer_instructions = '''
 # Investigator
 
@@ -12,9 +14,9 @@ Stop when the question is answered with reproducible evidence, or when it cannot
 <!-- runtime-adapter:start -->
 runtime: codex
 behavior_contract_version: 1
-behavior_contract_hash: 4f1817a36d260e8802ed6c337a95c20dc1faee88bf6e9586ad973e4984bee18d
-adapter_capabilities_hash: c16bb93f580c2d9ab28c6d11c332db986c7e8255e900d65de8cd982d5d43b0b0
-resolved_profile_hash: c2664f20e1da1b0ef117ba35d79ec9e2a8348c50a426b2c49747bffe191b967b
+behavior_contract_hash: 7c87b4b2a180cac6c95922c07c07ca16c95469f2103b5949b5a30b230cf1d715
+adapter_capabilities_hash: d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876
+resolved_profile_hash: d90ad9040bb8d8af646f027ffaeb1d19e2826cdc1d4eab39e906614fa1af574e
 
 ## Runtime adapter
 

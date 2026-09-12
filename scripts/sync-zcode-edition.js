@@ -7,23 +7,15 @@
 // ZCode (measured against ZCode 3.10.1) is a coding-agent RUNTIME (like
 // opencode/Kimi/Grok/Cursor), not a git forge, and it does NOT ride the
 // install.sh --forge= machinery or edition-sync.js. It is delivered the
-// ZCode-native way: named agents under `.zcode/agents/<role>.md` (Agent
-// dispatch types), flat commands under `.zcode/commands/<name>.md`, an empty
+// ZCode-native way: flat commands under `.zcode/commands/<name>.md`, an empty
 // generated config, and support scripts under `.zcode/kaola-workflow/scripts`.
 // It installs no prompt-lifecycle hooks.
 // Deterministic, idempotent, parity-checked by test-zcode-edition.js.
 //
-// ZCode discovers subagents only at user scope, so the installer additionally syncs the staged
-// agent roster. Receipt-aware hook helpers remain only to remove exact rows and shells emitted by
+// ZCode installs no Kaola role profiles by design (#1062): the edition renders
+// command surfaces only, and dispatch cards become native-route instructions.
+// Receipt-aware hook helpers remain only to remove exact rows and shells emitted by
 // the retired interim design; they never create a current declaration.
-//
-// Canonical model classes drive the generated agent tier pins (measured on
-// ZCode 3.10.1): every agent renders `model: GLM-5.3` plus exactly one
-// camelCase `thoughtLevel:` field — sonnet/standard (standard tier) → high,
-// opus/reasoning (reasoning tier) → max, fable/heavy (heavy tier) → max.
-// The frontmatter key is `thoughtLevel`, NOT `reasoningEffort`/`effort`, and
-// it only takes effect together with an explicit `model`. Agent dispatch
-// cards stay model-free: the tier travels with the named type.
 //
 // FORGE AXIS (--forge=github|gitlab|gitea, default github). github writes
 // `.zcode/`; a forge writes `.zcode-<forge>/`. Command sources come from the
@@ -55,7 +47,6 @@ function treeLabel(forge) {
   return '.zcode' + forgeLayout.outSuffix(forge || DEFAULT_FORGE);
 }
 
-const MANAGED_ROLES = new Set(agentGen.ROLES);
 const HOOK_RECEIPT_SCHEMA = 'kaola-workflow-zcode-hooks-v1';
 let atomicSequence = 0;
 
@@ -71,7 +62,7 @@ const ZCODE_HOOK_EVENTS = Object.freeze([
   'PostToolUse', 'PostToolUseFailure', 'Stop',
 ]);
 
-const { parseFrontmatter, yamlScalar, listCanonAgents } = forgeLayout;
+const { parseFrontmatter, yamlScalar } = forgeLayout;
 
 function listCanonCommands(forge) {
   return forgeLayout.listCanonCommands(forge || DEFAULT_FORGE);
@@ -79,11 +70,6 @@ function listCanonCommands(forge) {
 
 function canonCommandPath(basename, forge) {
   return forgeLayout.canonCommandPath(basename, forge || DEFAULT_FORGE);
-}
-
-function renderAgent(canonContent, agentName, forge) {
-  if (!MANAGED_ROLES.has(agentName)) throw new Error('sync-zcode-edition: unknown role ' + agentName);
-  return agentGen.renderRuntimeRole('zcode', agentName).content;
 }
 
 const ZCODE_KAOLA_SCRIPT =
@@ -99,16 +85,17 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + zcodeKaolaScript(forge));
 }
 
+// ZCode installs no Kaola role profiles by design (#1062): a canonical dispatch card becomes a
+// native-route instruction, naming no Kaola role as dispatchable.
 function zcodeNativeDispatchProse(card) {
   if (card.includes('doc-updater')) {
-    return 'Use automatic selection or native `@doc-updater` for documentation work. Put the '
-      + 'changed files, checklist, working directory, and custody boundary in the brief; if this '
-      + 'session exposes an Agent tool, follow only its live schema.\n';
+    return 'Use a native route or work inline for documentation work — full `general-purpose` or '
+      + 'read-only `Explore` as the item\'s boundary requires. Put the changed files, checklist, '
+      + 'working directory, and custody boundary in the brief.\n';
   }
-  const role = card.includes('build-error-resolver') ? 'build-error-resolver' : 'tdd-guide';
-  return 'Use automatic selection or native `@' + role + '` for this routed fix. Put the failure '
-    + 'command, evidence path, working directory, and custody boundary in the brief; if this '
-    + 'session exposes an Agent tool, follow only its live schema.\n';
+  return 'Use a native route or work inline for this routed fix — full `general-purpose` or '
+    + 'read-only `Explore` as the item\'s boundary requires. Put the failure command, evidence '
+    + 'path, working directory, and custody boundary in the brief.\n';
 }
 
 function transformCommandBody(body, forge, label) {
@@ -488,9 +475,6 @@ function ensureDir(d) {
   fs.mkdirSync(d, { recursive: true });
 }
 
-function agentRel(name, forge) {
-  return treeLabel(forge) + '/agents/' + name + '.md';
-}
 function commandRel(name, forge) {
   return forgeLayout.commandRel(treeLabel, name, forge);
 }
@@ -498,9 +482,6 @@ function configRel(forge) {
   return treeLabel(forge) + '/config.json';
 }
 
-function expectedAgentFiles(forge) {
-  return listCanonAgents();
-}
 function expectedCommandFiles(forge) {
   return listCanonCommands(forge).map(f => f.slice(0, -3));
 }
@@ -518,9 +499,8 @@ function manifestSupportScripts(forge) {
 function retiredAgentFiles(forge) {
   const dir = treePath(path.join(treeLabel(forge), 'agents'));
   if (!fs.existsSync(dir)) return [];
-  const expected = new Set(expectedAgentFiles(forge).map(n => n + '.md'));
   return fs.readdirSync(dir, { withFileTypes: true })
-    .filter(e => e.isFile() && e.name.endsWith('.md') && !expected.has(e.name))
+    .filter(e => e.isFile() && e.name.endsWith('.md'))
     .map(e => e.name)
     .sort();
 }
@@ -580,23 +560,6 @@ function pruneTree(forge) {
     removed++;
   }
   return removed;
-}
-
-function writeAgents(forge) {
-  let wrote = 0;
-  for (const name of listCanonAgents()) {
-    const canon = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
-    const out = renderAgent(canon, name, forge);
-    const rel = agentRel(name, forge);
-    const dest = treePath(rel);
-    if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
-      ensureDir(path.dirname(dest));
-      fs.writeFileSync(dest, out);
-      console.log('generated  ' + rel);
-      wrote++;
-    }
-  }
-  return wrote;
 }
 
 function writeCommands(forge) {
@@ -660,18 +623,17 @@ function writeConfig(forge) {
 
 function runWrite(forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
-  const a = writeAgents(forge);
   const c = writeCommands(forge);
   const e = writeEditionDir(forge);
   const j = writeConfig(forge);
   const p = pruneTree(forge);
-  const total = a + c + e + j + p;
+  const total = c + e + j + p;
   console.log('sync-zcode-edition[' + forge + ']: write complete (' + total + ' file(s) updated'
     + (total === 0 ? ' — tree already in sync' : '') + ').');
 }
 
 function refreshOne(forge) {
-  return writeAgents(forge) + writeCommands(forge) + writeEditionDir(forge)
+  return writeCommands(forge) + writeEditionDir(forge)
     + writeConfig(forge) + pruneTree(forge);
 }
 
@@ -701,15 +663,6 @@ function runCheck(forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
   const tree = treeLabel(forge);
   const mismatches = [];
-  for (const name of listCanonAgents()) {
-    const canon = read('agents/' + name + '.md');
-    const rel = agentRel(name, forge);
-    if (!fs.existsSync(treePath(rel))) {
-      mismatches.push({ rel, reason: 'missing generated agent' });
-      continue;
-    }
-    if (readTree(rel) !== renderAgent(canon, name, forge)) mismatches.push({ rel, reason: 'stale — regenerate' });
-  }
   for (const file of listCanonCommands(forge)) {
     const name = file.slice(0, -3);
     const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
@@ -749,7 +702,7 @@ function runCheck(forge) {
     }
   }
   for (const f of retiredAgentFiles(forge)) {
-    mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
+    mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired surface — ZCode installs no Kaola role profiles; prune (--write removes it)' });
   }
   for (const f of retiredCommandFiles(forge)) {
     mismatches.push({ rel: tree + '/commands/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
@@ -764,9 +717,8 @@ function runCheck(forge) {
     process.exitCode = 1;
     return;
   }
-  const na = listCanonAgents().length;
   const nc = listCanonCommands(forge).length;
-  console.log('sync-zcode-edition[' + forge + ']: ' + na + ' agent(s) + ' + nc + ' command(s) + '
+  console.log('sync-zcode-edition[' + forge + ']: ' + nc + ' command(s) + '
     + (expectedHookFiles().length + expectedPromptFiles().length + manifestSupportScripts(forge).length)
     + ' support/hook/prompt file(s) in parity with canonical.');
 }
@@ -777,7 +729,7 @@ function usage() {
     + ' [--forge=github|gitlab|gitea]\n'
     + '  --forge=<f>  which forge to render (default github). github writes .zcode/;\n'
     + '               gitlab/gitea write .zcode-<forge>/\n'
-    + '  --write   regenerate the forge tree agents + commands + hooks from canonical\n'
+    + '  --write   regenerate the forge tree commands + hooks from canonical\n'
     + '  --refresh-present  regenerate every forge tree that already exists; create none (ignores --forge)\n'
     + '  --check   assert the generated tree is in byte-parity with a fresh render\n'
     + '  --print-tree-root  print the directory the generated trees land in; write nothing\n'
@@ -828,20 +780,20 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-  renderAgent, renderCommand, transformCommandBody,
+  renderCommand, transformCommandBody,
   rewriteClaudeScriptPaths, ZCODE_KAOLA_SCRIPT, zcodeKaolaScript,
   renderZcodeConfigJson, rewriteConfigJsonForGlobal, mergeDestHooks, stripDestHooks,
   renderRuntimeHookWrapper, RUNTIME_WRAPPER,
   expectedPromptFiles,
   adaptHookForZcode, HOOK_ADAPTATIONS,
   renderSupportLauncher, manifestSupportScripts,
-  treeLabel, agentRel, commandRel, configRel, canonCommandPath, runCheck, runWrite,
+  treeLabel, commandRel, configRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   ZCODE_HOOK_EVENTS,
   HOOK_RECEIPT_SCHEMA, defaultReceiptPath, atomicWriteFile,
   expectedHookFiles, retiredHookFiles: retiredEditionFiles, retiredAgentFiles, retiredCommandFiles,
   parseFrontmatter, yamlScalar,
-  listCanonAgents, listCanonCommands,
+  listCanonCommands,
   CANON_AGENTS_DIR, CANON_HOOKS_DIR,
   REPO,
   HOOK_SHELLS,

@@ -4,8 +4,8 @@ description: "Test author. Holds custody of the acceptance tests: writes tests t
 tools: ["Read","Write","Edit","Grep","Glob","Bash"]
 model: sonnet
 behavior_contract_version: 1
-behavior_contract_hash: 0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20
-resolved_profile_hash: c5fed98e9bba99a509f23f2e784d3d4f20d219cce53c3278959b57745798f7ec
+behavior_contract_hash: 76b895f9de63596592cacc620f0d04a7257b5d022f3de76a9ae1575b462bd272
+resolved_profile_hash: d49e021889244ad53dd6629b6ea87909c7dae24b38931f186c3eaf67189c7a8a
 ---
 <!-- kaola-workflow-managed-agent: true -->
 

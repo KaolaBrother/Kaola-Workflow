@@ -51,16 +51,14 @@ promised output, not the worker.
 Host: Claude. If the running host is not Claude, ignore this adapter section entirely and use the Kaola adapter installed for the actual host; if none is installed, record `capability_gap: no Kaola adapter for host <name>` and work inline.
 
 Find named profiles in project `.claude/agents/`, user `~/.claude/agents/`, plugin `agents/`, managed settings, or the current session's `--agents`; managed/session/project/user/plugin precedence remains Claude-owned, and the Kaola installer uses the user directory by default.
-Dispatch with `Agent` and `subagent_type: "<role>"`; installed Kaola profiles use `model: inherit`, so pass the role tier's model on the call when preserving its default tier.
+Dispatch with `Agent` and `subagent_type: "<role>"`; installed Kaola profiles pin `model: sonnet`, so omit the per-call model unless the item needs a stronger child.
 
-**Tier defaults:** standard — standard → `sonnet`; effort is not pinned and uses the runtime's default effort; reasoning — reasoning → `opus`; effort is not pinned and uses the runtime's default effort; heavy — heavy → `fable`; effort is not pinned and uses the runtime's default effort.
-**Role roster:** standard — `code-explorer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `metric-optimizer`, `tdd-guide`; reasoning — `adversarial-verifier`, `build-error-resolver`, `code-reviewer`, `security-reviewer`, `synthesizer`; heavy — `code-architect`, `planner`.
+**Subagent default:** every installed Kaola profile pins `model: sonnet`; effort is not pinned and follows the runtime default; omit the per-call model unless the item needs a stronger child.
+**Roles:** `code-explorer`, `code-reviewer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `tdd-guide`.
 
 The named profile's native `tools` allowlist carries the role tool boundary.
 Native alternatives include the full `general-purpose` agent, read-only `Explore` and `Plan`, catch-all `claude`, background or isolated children, and optional agent teams; use only the route whose real capability fits the current item.
 Inspect the current Agent/Task type catalog and effective precedence. Claude currently permits recursive subagents to its native depth limit, which can be configured by the host; do not infer total child unavailability from one missing custom name.
-
-
 <!-- KW-RUNTIME-DELEGATION-END -->
 
 <!-- KW-RUNTIME-DISPATCH-END -->

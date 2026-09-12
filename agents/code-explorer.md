@@ -4,8 +4,8 @@ description: "Code explorer. Explains how specified code works and locates its i
 tools: ["Read","Write","Edit","Grep","Glob"]
 model: sonnet
 behavior_contract_version: 1
-behavior_contract_hash: 52b32679a8a45971ef7473befceccaadc57208ab90075deb5c206994e0b43b9a
-resolved_profile_hash: 5aa6dec400a0e6c4bad9804e78f4a0bc2c2b90162bea1b479b3064616c5b45c3
+behavior_contract_hash: 374525f1e24a7827312807c78ee6c61853ce699f91407eedee3c7f502647043d
+resolved_profile_hash: 585cf3c3e27fd48da65f89225b2e0a05b7d05dd97a36056a045145be3f61a5aa
 ---
 <!-- kaola-workflow-managed-agent: true -->
 

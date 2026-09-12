@@ -7,7 +7,7 @@
 // opencode is a coding-agent RUNTIME (like Codex), not a git forge, so it does
 // NOT ride the install.sh --forge= (github/gitlab/gitea) machinery. It is
 // delivered the opencode-native way: a project `opencode.json` plus a generated
-// `.opencode/agents/*.md` + `.opencode/commands/*.md` tree. This script is the
+// `.opencode/commands/*.md` tree. This script is the
 // generate-from-canonical twin of edition-sync.js: deterministic, idempotent,
 // and parity-checked by test-opencode-edition.js.
 //
@@ -25,28 +25,20 @@
 //
 //   --forge=<f>          github (default) | gitlab | gitea — which forge's command
 //                         surfaces to render from, and which tree to write.
-//   --write              regenerate .opencode/agents + .opencode/commands + plugins from canonical;
+//   --write              regenerate .opencode/commands + plugins from canonical;
 //                         seed opencode.json only if absent (use --write-config to force).
 //   --write-config       (re)write this repo's opencode.json from the template.
 //   --write-config-to P  write the template opencode.json to path P (installer use).
-//   --check              assert generated agents/commands are in parity with canonical.
+//   --check              assert generated commands are in parity with canonical.
 //
-// Pin a tier to a specific model (opt-in; otherwise every role inherits the session model):
-//   KAOLA_OPENCODE_STANDARD_MODEL   pin the standard tier to a provider/model
-//   KAOLA_OPENCODE_REASONING_MODEL  pin the reasoning tier to a provider/model
+// OpenCode installs no Kaola role profiles by design (#1062): the edition renders command
+// surfaces only, and dispatch cards become native-route instructions.
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
 const path = require('path');
-// #708: the reviewer-profile generator owns the deterministic resolved_profile_hash stamping
-// (sha256 of the file with the hash field zeroed). The opencode transform rewrites the
-// frontmatter, so the Claude hash no longer binds these bytes; we re-stamp a fresh hash over
-// the opencode bytes so the stamp binds the profile that actually ships. The runtime resolver
-// that once read it back to bind a review receipt retired with the node executor; the stamp is
-// kept because test-opencode-edition.js verifies it against canonical, not for a runtime reader.
 const agentGen = require('./generate-agent-profiles');
 const forgeLayout = require('./runtime-edition-forge');
-const MANAGED_ROLES = new Set(agentGen.ROLES);
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -99,7 +91,6 @@ function outDirs(forge) {
     plugins: path.join(root, 'plugins'),
   };
 }
-const OUT_AGENT_DIR = outDirs(DEFAULT_FORGE).agent;
 const OUT_COMMAND_DIR = outDirs(DEFAULT_FORGE).command;
 const OPENCODE_JSON = path.join(REPO, 'opencode.json');
 
@@ -112,44 +103,8 @@ const HOOK_SCRIPTS = [];
 // retired compact reader from generated trees.
 const PLUGIN_SCRIPTS = [];
 
-// Model pins are OPT-IN. Unset → no pin → both tiers inherit whatever model the
-// user is already using in opencode. Set the env var only to pin a specific
-// provider/model for that tier at seed time.
-const ENV_STANDARD_MODEL = process.env.KAOLA_OPENCODE_STANDARD_MODEL || '';
-const ENV_REASONING_MODEL = process.env.KAOLA_OPENCODE_REASONING_MODEL || '';
-
 // --- minimal frontmatter parser (only the flat key: value surface we need) ---
 const { parseFrontmatter, parseTools } = forgeLayout;
-
-// Canonical tool → the opencode permission axis that governs it. A generated agent's restrictions
-// are DERIVED from its canonical profile's `tools:` list: an axis is denied when canonical grants
-// none of the tools that axis governs. The profile is the source of truth; there is no role list
-// here to drift from it.
-//
-// This replaces a "neither Write nor Edit" predicate that NO role satisfied — all 14 canonical
-// roles carry Write (every role writes its own findings), so the restriction branch never fired and
-// all 14 generated agents shipped unrestricted. The emitter was fine; the predicate was the defect.
-//
-// DECLARED DIVERGENCE — `edit`: opencode has no `write` permission of its own. Its write tool asks
-// the `edit` permission, so denying `edit` also removes the ability to create a file. A role granted
-// Write but not Edit therefore CANNOT have Edit denied here without losing Write, and keeps the edit
-// tool on opencode. That is a coupling in the runtime, not an incidental choice in this generator.
-const PERMISSION_AXES = Object.freeze([
-  { axis: 'edit', tools: ['write', 'edit'] },
-  { axis: 'bash', tools: ['bash'] },
-]);
-
-// The axes to deny for a canonical tool set — those granting none of their governed tools.
-function deniedPermissionAxes(toolSet) {
-  return PERMISSION_AXES.filter(a => !a.tools.some(t => toolSet.has(t))).map(a => a.axis);
-}
-
-// Runtime-neutral behavior intent is the only tier input. Claude model tokens are an adapter
-// rendering detail and must never change OpenCode's roster when that adapter evolves.
-function roleTier(intentClass) {
-  const token = String(intentClass || '').toLowerCase();
-  return (token === 'reasoning' || token === 'heavy') ? 'reasoning' : 'standard';
-}
 
 const { listCanonAgents } = forgeLayout;
 
@@ -168,20 +123,6 @@ function canonCommandPath(basename, forge) {
 }
 
 // --- renderers (pure; exported for parity test) ---
-
-// opencode-edition-only body suffixes: empty for every role — every agent body ships as the
-// verbatim canonical body. The only non-empty branch belonged to the retired workflow-planner (an
-// effort-tier addendum, itself since removed), and the roster is readdirSync-derived, so no
-// surviving agent reaches a suffix. Kept and exported because renderAgent and the parity test
-// consume the empty contract.
-function opencodeAgentSuffix() {
-  return '';
-}
-
-function renderAgent(canonContent, agentName, forge) {
-  if (!MANAGED_ROLES.has(agentName)) throw new Error('sync-opencode-edition: unknown role ' + agentName);
-  return agentGen.renderRuntimeRole('opencode', agentName).content;
-}
 
 const OPENCODE_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _oc="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_oc/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_oc/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
@@ -215,6 +156,19 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + opencodeKaolaScript(forge));
 }
 
+// OpenCode installs no Kaola role profiles by design (#1062): a canonical dispatch card becomes a
+// native-route instruction, naming no Kaola role as dispatchable.
+function opencodeNativeDispatchProse(card) {
+  if (card.includes('doc-updater')) {
+    return 'Use a native route or work inline for documentation work — broad `general`, read-only '
+      + '`explore`, or read-only external-research `scout` as the item\'s boundary requires. Put '
+      + 'the changed files, checklist, working directory, and custody boundary in the brief.\n';
+  }
+  return 'Use a native route or work inline for this routed fix — broad `general`, read-only '
+    + '`explore`, or read-only external-research `scout` as the item\'s boundary requires. Put '
+    + 'the failure command, evidence path, working directory, and custody boundary in the brief.\n';
+}
+
 // The canonical section this transform substitutes at — the TRIGGER, never a heading it emits.
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
@@ -222,12 +176,10 @@ function transformCommandBody(body, forge, label) {
   if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
     text = agentGen.replaceRuntimeDelegationGuidance(text, 'opencode', forge);
   }
-  // Dispatch-card `Agent(` openings → the opencode `task` form. Scoped to the literal opening
-  // (a line that is exactly `Agent(` immediately followed by an indented `subagent_type=` line)
-  // so it rewrites ONLY the dispatch invocation and never prose mentions of the word "agent"
-  // or inline `Agent(...)` code spans.
-  text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'task(\n$1');
-  text = text.replace(/^\s+model="[^"]+",?\n/gm, '');
+  // Dispatch-card `Agent(...)` blocks → native-route instructions. Scoped to a whole card
+  // (a line that is exactly `Agent(` through its closing `)` line) so it rewrites ONLY the
+  // dispatch invocation and never prose mentions of the word "agent" or inline `Agent(...)`.
+  text = text.replace(/^Agent\(\n[\s\S]*?^\)\n?/gm, opencodeNativeDispatchProse);
   // Tidy trailing whitespace left behind on affected lines.
   text = text.replace(/[ \t]+\n/g, '\n');
   // #F6: the former adapt repair-loop strip (`text.replace(/downgrade to full path \/\s*/g,'')`)
@@ -262,83 +214,21 @@ function renderCommand(canonContent, forge, label) {
   return lines.join('\n') + '\n';
 }
 
-function reasoningRoles() {
-  const contracts = agentGen.loadBehaviorContracts(REPO);
-  return Object.entries(contracts.roles)
-    .map(([name, contract]) => ({ name, tier: roleTier(contract.intent_class) }))
-    .filter(r => r.tier === 'reasoning')
-    .map(r => r.name)
-    .sort();
+// The opencode config this edition seeds. OpenCode installs no Kaola role profiles (#1062), so
+// there is nothing per-role to configure: the file carries only the schema pointer and the
+// default agent. Children inherit the session model and variant.
+function renderOpencodeJson() {
+  return renderNeutralConfig();
 }
 
-// The opencode config this edition seeds. Every role runs the model and reasoning effort of the
-// session that dispatched it — opencode's task tool hands a subagent the parent's model and variant
-// whenever the role pins no model, so there is nothing per-role to configure and nothing to keep in
-// sync when the session's model changes. The only thing this file can still express is the opt-in
-// model PIN, which is a different feature: see renderNeutralConfig.
-function renderOpencodeJson(opts) {
-  return renderNeutralConfig(opts || {});
-}
-
-function renderNeutralConfig(opts) {
-  opts = opts || {};
-  // Explicit opts win; otherwise fall back to the env-derived pins. Empty/blank
-  // ⇒ no pin ⇒ that tier inherits the user's opencode default model.
-  const pinStandard = opts.standardModel !== undefined ? opts.standardModel : ENV_STANDARD_MODEL;
-  const pinReasoning = opts.reasoningModel !== undefined ? opts.reasoningModel : ENV_REASONING_MODEL;
-  const reasoning = reasoningRoles();
-  const std = String(pinStandard || '').trim();
-  const rea = String(pinReasoning || '').trim();
-  // Commas keep this strict-JSON-valid (the parity test parses with JSON.parse
-  // after stripping // comments): a property gets a trailing comma only if a
-  // REAL property follows it — commented-out lines are stripped, so they don't
-  // count as a following property.
-  const hasStd = !!std;
-  const hasRea = !!rea;
-  const commaDefault = (hasStd || hasRea) ? ',' : '';
-  const commaModel = hasRea ? ',' : '';
-
-  const lines = [];
-  lines.push('{');
-  lines.push('  "$schema": "https://opencode.ai/config.json",');
-  lines.push('  "default_agent": "build"' + commaDefault);
-  lines.push('');
-  lines.push('  // Kaola-Workflow · opencode edition — TWO model tiers:');
-  lines.push('  //   普通模型 (standard tier)  → top-level "model".');
-  lines.push('  //   推理模型 (reasoning tier) → "agent.<role>.model" overrides for');
-  lines.push('  //                               the reasoning roles: ' + reasoning.join(', ') + '.');
-  lines.push('  // DEFAULT: nothing is pinned, so BOTH tiers inherit the model you are');
-  lines.push('  // already using in opencode. To pin a tier, uncomment & set it below');
-  lines.push('  // (any provider/model works, e.g. "anthropic/claude-sonnet-4-5",');
-  lines.push('  // "openai/gpt-4o", "google/gemini-2.5-pro"). This file is user-owned:');
-  lines.push('  // re-running `node scripts/sync-opencode-edition.js --write` regenerates');
-  lines.push('  // agents/commands but preserves your model choices here.');
-
-  if (std) {
-    lines.push('  "model": "' + std + '"' + commaModel);
-  } else {
-    lines.push('  // "model": "<inherits your opencode default>",');
-  }
-
-  if (rea) {
-    lines.push('');
-    lines.push('  "agent": {');
-    for (let i = 0; i < reasoning.length; i++) {
-      const comma = i < reasoning.length - 1 ? ',' : '';
-      lines.push('    "' + reasoning[i] + '": { "model": "' + rea + '" }' + comma);
-    }
-    lines.push('  }');
-  } else {
-    lines.push('  // Pin the reasoning tier only to put it on a different model:');
-    lines.push('  // "agent": {');
-    for (let i = 0; i < reasoning.length; i++) {
-      const comma = i < reasoning.length - 1 ? ',' : '';
-      lines.push('  //   "' + reasoning[i] + '": { "model": "<inherits your opencode default>" }' + comma);
-    }
-    lines.push('  // }');
-  }
-  lines.push('}');
-  return lines.join('\n') + '\n';
+function renderNeutralConfig() {
+  return [
+    '{',
+    '  "$schema": "https://opencode.ai/config.json",',
+    '  "default_agent": "build"',
+    '}',
+    '',
+  ].join('\n');
 }
 
 // --- IO helpers ---
@@ -363,23 +253,6 @@ function ensureDir(d) {
 // '.opencode-gitlab'), so a multi-forge run says which tree it wrote.
 function treeLabel(forge) {
   return '.opencode' + forgeLayout.outSuffix(forge);
-}
-
-function writeAgents(forge) {
-  const out_dir = outDirs(forge).agent;
-  ensureDir(out_dir);
-  let wrote = 0;
-  for (const name of listCanonAgents()) {
-    const canon = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
-    const out = renderAgent(canon, name, forge);
-    const dest = path.join(out_dir, name + '.md');
-    if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
-      fs.writeFileSync(dest, out);
-      console.log('generated  ' + treeLabel(forge) + '/agents/' + name + '.md');
-      wrote++;
-    }
-  }
-  return wrote;
 }
 
 function writeCommands(forge) {
@@ -496,7 +369,7 @@ function pruneRetired(forge) {
     console.log('pruned     ' + treeLabel(forge) + '/commands/' + f + ' (retired surface)');
     removed++;
   }
-  const agents = retiredMdFiles(dirs.agent, listCanonAgents());
+  const agents = retiredMdFiles(dirs.agent, []);
   for (const f of agents) {
     fs.rmSync(path.join(dirs.agent, f), { force: true });
     console.log('pruned     ' + treeLabel(forge) + '/agents/' + f + ' (retired surface)');
@@ -522,13 +395,12 @@ function pruneRetired(forge) {
 
 function runWrite(configForce, forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
-  const a = writeAgents(forge);
   const c = writeCommands(forge);
   const h = writeHooks(forge);
   const p = writePlugin(forge);
   const j = writeConfig(configForce);
   const pr = pruneRetired(forge);
-  const total = a + c + h + p + j + pr;
+  const total = c + h + p + j + pr;
   console.log('sync-opencode-edition[' + forge + ']: write complete (' + total + ' file(s) updated'
     + (total === 0 ? ' — tree already in sync' : '') + ').');
 }
@@ -548,7 +420,6 @@ function runRefreshPresent() {
   let changed = 0;
   for (const forge of forgeLayout.FORGES) {
     if (!fs.existsSync(outDirs(forge).root)) continue;
-    changed += writeAgents(forge);
     changed += writeCommands(forge);
     changed += writeHooks(forge);
     changed += writePlugin(forge);
@@ -595,9 +466,8 @@ function runRefreshPresent() {
   }
 }
 
-// Installer entrypoint: write the template opencode.json to an arbitrary path
-// (honors the KAOLA_OPENCODE_*_MODEL pin env vars). The installer guards the
-// "preserve existing" semantics; this unconditionally writes the target.
+// Installer entrypoint: write the template opencode.json to an arbitrary path.
+// The installer guards the "preserve existing" semantics; this unconditionally writes the target.
 function runWriteConfigTo(target) {
   fs.writeFileSync(target, renderOpencodeJson());
   console.log('seeded     ' + target);
@@ -649,16 +519,6 @@ function runCheck(forge) {
   const tree = treeLabel(forge);
   const dirs = outDirs(forge);
   const mismatches = [];
-  for (const name of listCanonAgents()) {
-    const canon = read('agents/' + name + '.md');
-    const rel = tree + '/agents/' + name + '.md';
-    if (!fs.existsSync(treePath(rel))) {
-      mismatches.push({ rel, reason: 'missing generated agent', remedy: REMEDY.WRITE });
-      continue;
-    }
-    const expected = renderAgent(canon, name, forge);
-    if (readTree(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate', remedy: REMEDY.WRITE });
-  }
   for (const file of listCanonCommands(forge)) {
     const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
     const rel = tree + '/commands/' + file;
@@ -712,8 +572,8 @@ function runCheck(forge) {
   for (const f of retiredMdFiles(dirs.command, listCanonCommands(forge).map(x => x.slice(0, -3)))) {
     mismatches.push({ rel: tree + '/commands/' + f, reason: 'retired surface not in canonical — prune (--write removes it)', remedy: REMEDY.WRITE });
   }
-  for (const f of retiredMdFiles(dirs.agent, listCanonAgents())) {
-    mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired surface not in canonical — prune (--write removes it)', remedy: REMEDY.WRITE });
+  for (const f of retiredMdFiles(dirs.agent, [])) {
+    mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired surface — OpenCode installs no Kaola role profiles; prune (--write removes it)', remedy: REMEDY.WRITE });
   }
   for (const legacyName of ['agent', 'command']) {
     const legacyDir = path.join(dirs.root, legacyName);
@@ -748,10 +608,9 @@ function runCheck(forge) {
     process.exitCode = 1;
     return;
   }
-  const na = listCanonAgents().length;
   const nc = listCanonCommands(forge).length;
   const np = PLUGIN_SCRIPTS.length;
-  console.log('sync-opencode-edition[' + forge + ']: ' + na + ' agent(s) + ' + nc + ' command(s) + ' + np + ' plugin(s) in parity with canonical.');
+  console.log('sync-opencode-edition[' + forge + ']: ' + nc + ' command(s) + ' + np + ' plugin(s) in parity with canonical.');
 }
 
 function usage() {
@@ -760,7 +619,7 @@ function usage() {
     + ' | --refresh-present | --check) [--forge=github|gitlab|gitea]\n'
     + '  --forge=<f>          which forge to render (default github). github writes .opencode/;\n'
     + '                       gitlab/gitea write .opencode-<forge>/\n'
-    + '  --write              regenerate the forge tree agent + command; seed opencode.json if absent\n'
+    + '  --write              regenerate the forge tree commands; seed opencode.json if absent\n'
     + '  --refresh-present    regenerate every forge tree that already exists; create none (ignores\n'
     + '                       --forge, and leaves opencode.json alone)\n'
     + '  --write-config       (re)write this repo opencode.json from the template (clobbers edits)\n'
@@ -802,16 +661,14 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-  renderAgent, renderCommand, renderOpencodeJson, renderNeutralConfig,
-  transformCommandBody, opencodeAgentSuffix, rewriteClaudeScriptPaths, OPENCODE_KAOLA_SCRIPT,
+  renderCommand, renderOpencodeJson, renderNeutralConfig,
+  transformCommandBody, rewriteClaudeScriptPaths, OPENCODE_KAOLA_SCRIPT,
   opencodeKaolaScript, outDirs, treeLabel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
-  parseFrontmatter, parseTools, roleTier, reasoningRoles,
-  PERMISSION_AXES, deniedPermissionAxes,
+  parseFrontmatter, parseTools,
   listCanonAgents, listCanonCommands,
-  ENV_STANDARD_MODEL, ENV_REASONING_MODEL,
   CANON_AGENTS_DIR, CANON_HOOKS_DIR, CANON_PLUGINS_DIR,
-  OUT_AGENT_DIR, OUT_COMMAND_DIR, OPENCODE_JSON, REPO,
+  OUT_COMMAND_DIR, OPENCODE_JSON, REPO,
   HOOK_SCRIPTS, PLUGIN_SCRIPTS,
   writePlugin, retiredMdFiles, retiredCopiedFiles, pruneRetired,
 };

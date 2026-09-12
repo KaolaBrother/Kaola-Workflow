@@ -1,5 +1,7 @@
 name = "doc-updater"
 description = "Documentation updater. Makes the project documentation state the real behavior and usage after a change, transcribing actual signatures, commands, and outputs, following the project's existing documentation conventions."
+model = "gpt-5.6-luna"
+model_reasoning_effort = "max"
 developer_instructions = '''
 # Documentation Updater
 
@@ -12,9 +14,9 @@ Stop when every affected document is accurate and the project's documentation ch
 <!-- runtime-adapter:start -->
 runtime: codex
 behavior_contract_version: 1
-behavior_contract_hash: c0ecdd974909f9d5dcfabf0f2090cba1ee35884f741b3d7685ea227c53c1f6c5
-adapter_capabilities_hash: c16bb93f580c2d9ab28c6d11c332db986c7e8255e900d65de8cd982d5d43b0b0
-resolved_profile_hash: c42d006588169ee629b8ffc64fa40fc577fcd6d5ea4118865ee506fa8d223753
+behavior_contract_hash: 91a8ccd836198c0038ff801e760b7e0e0a139fd6a08d7e70ce4257a94028b805
+adapter_capabilities_hash: d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876
+resolved_profile_hash: 36e55279776c44f7a959f5020bee996aa288ffb3df2d6f07102dae4e70b68ede
 
 ## Runtime adapter
 

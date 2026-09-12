@@ -15,11 +15,9 @@
 // generate-from-canonical twin of sync-opencode-edition.js: deterministic,
 // idempotent, and parity-checked by test-kimi-edition.js.
 //
-// ONE model tier: there is NO Reasoning/Standard split on Kimi. The 14 canonical
-// roles ship as Kimi custom-agent profiles named `kaola-role-<role>` and dispatch
-// directly by that native name. Each profile inherits the session model while its
-// tool allow-list is rendered from the shared behavior contract through the Kimi
-// adapter. The canonical model tier is therefore intentionally omitted.
+// Kimi installs no Kaola role profiles by design (#1062): the edition renders
+// command skills and hooks only, and dispatch cards become native-route
+// instructions.
 //
 // FORGE AXIS (--forge=github|gitlab|gitea, default github). The runtime is not a
 // forge, but the workflow PROSE is forge-shaped (`gh` vs `glab` vs `tea`, PR vs
@@ -87,21 +85,13 @@ function treeLabel(forge) {
   return '.kimi' + forgeLayout.outSuffix(forge || DEFAULT_FORGE);
 }
 
-// Reviewer gate roles (code-reviewer, adversarial-verifier, security-reviewer) carry their
-// schema-2 identity through the kimi render: behavior_contract_version / behavior_contract_hash
-// are preserved from canonical, and a fresh resolved_profile_hash is re-stamped over the final
-// kimi bytes (the canonical Claude hash never binds post-transform bytes — the same discipline
-// as the opencode renderAgent). The fields ship in a body HTML comment block at column zero so
-// the Skill frontmatter stays name+description only.
-const MANAGED_ROLES = new Set(agentGen.ROLES);
-
 // No compact or tool-use hook is active in the Kimi edition. Its million-token runtime profile does
 // not justify a second prompt lifecycle; the generator retains ownership of hooks/ only to prune
 // retired managed artifacts.
 const HOOK_SCRIPTS = [];
 
 // --- minimal frontmatter parser (only the flat key: value surface we need) ---
-const { parseFrontmatter, listCanonAgents } = forgeLayout;
+const { parseFrontmatter } = forgeLayout;
 
 // The command surfaces this edition renders FROM, for a forge. Sourced from the
 // routing-surface registry rather than a directory listing, so the forge variants
@@ -118,15 +108,9 @@ function canonCommandPath(basename, forge) {
 
 // --- renderers (pure; exported for parity test) ---
 
-function renderAgent(canonContent, agentName, forge) {
-  if (!MANAGED_ROLES.has(agentName)) throw new Error('sync-kimi-edition: unknown role ' + agentName);
-  return agentGen.renderRuntimeRole('kimi', agentName).content;
-}
-
-// The edition's ONE answer to the canonical model-dispatch instruction. Canonical states that
-// instruction as PROSE ("… carries an explicit `model=` line … never omit it"); Kimi has no
-// per-dispatch model override at all, so every such sentence is restated as this single wording.
-const KIMI_MODEL_DISPATCH_GUIDANCE = 'Never pass a per-call model override; sub-agents inherit the session model.';
+// The edition's ONE answer to the canonical model-dispatch instruction. Kimi installs no Kaola
+// role profiles (#1062), so dispatch becomes a native route and children inherit the session model.
+const KIMI_MODEL_DISPATCH_GUIDANCE = 'Use a native route or work inline per item; children inherit the session model.';
 
 // The instruction's stable signature: a `model=` mention in PROSE. Card placeholders sit alone on
 // their own line inside a dispatch card and are handled by the native routing renderer, so this
@@ -145,8 +129,8 @@ function kimiKaolaScript(forge) {
 }
 
 // Rewrite the Claude script-path surface to kimi-native (kimi twin of the opencode
-// rewriteClaudeScriptPaths). Applied to BOTH command bodies (via transformCommandBody)
-// and agent bodies (via renderAgent) so the committed .kimi/ tree has ZERO
+// rewriteClaudeScriptPaths). Applied to command bodies (via transformCommandBody)
+// so the committed .kimi/ tree has ZERO
 // `$CLAUDE_PLUGIN_ROOT` / `$HOME/.claude/kaola-workflow` tokens. Canonical sources are
 // NEVER touched (additive D-530-02) — only the generated outputs. ONE replacement remains,
 // and it mirrors the opencode version replacement-for-replacement: whole `kaola_script(){
@@ -165,6 +149,19 @@ function rewriteClaudeScriptPaths(text, forge) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + kimiKaolaScript(forge));
 }
 
+// Kimi installs no Kaola role profiles by design (#1062): a canonical dispatch card becomes a
+// native-route instruction, naming no Kaola role as dispatchable.
+function kimiNativeDispatchProse(card) {
+  if (card.includes('doc-updater')) {
+    return 'Use a native route or work inline for documentation work — full writable `coder`, '
+      + 'read-only `explore`, or non-shell `plan` as the item\'s boundary requires. Put the '
+      + 'changed files, checklist, working directory, and custody boundary in the brief.\n';
+  }
+  return 'Use a native route or work inline for this routed fix — full writable `coder`, '
+    + 'read-only `explore`, or non-shell `plan` as the item\'s boundary requires. Put the '
+    + 'failure command, evidence path, working directory, and custody boundary in the brief.\n';
+}
+
 // The canonical section this transform strips at — the TRIGGER, never a heading it emits (kimi
 // drops the heading with the section and leaves the one-line guidance in its place).
 function transformCommandBody(body, forge, label) {
@@ -173,32 +170,10 @@ function transformCommandBody(body, forge, label) {
   if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
     text = agentGen.replaceRuntimeDelegationGuidance(text, 'kimi', forge);
   }
-  // Dispatch-card rewrite (kimi-specific). Canonical dispatch cards name a kaola ROLE
-  // in subagent_type plus an install-time model= placeholder:
-  //   Agent(
-  //     subagent_type="tdd-guide",
-  //     model="{TDD_GUIDE_MODEL}",
-  //     description="...",
-  //     prompt="..."
-  //   )
-  // Kimi Code discovers custom profiles under its native agents directory. Rewrite the
-  // canonical role name to this edition's collision-resistant `kaola-role-*` profile name
-  // and dispatch it directly. Scoped to the literal card opening
-  // (`Agent(` + indented subagent_type= line) and to roles present in the canonical
-  // map — prose mentions of `Agent(...)` and unknown role names pass through
-  // untouched. Runs BEFORE the generic {X_MODEL} strip below, which then collapses
-  // the now-orphaned model= line (and its comma) exactly as on opencode.
-  const roles = new Set(listCanonAgents());
-  text = text.replace(
-    /Agent\(\n(\s+)subagent_type="([^"]+)",([\s\S]*?)prompt="/g,
-    (m, indent, role, mid) => {
-      if (!roles.has(role)) return m;
-      return 'Agent(\n' + indent + 'subagent_type="kaola-role-' + role + '",' + mid + 'prompt="';
-    }
-  );
-  text = text.replace(/^\s+model="[^"]+",?\n/gm, '');
-  // Card placeholder lines. The prose forms are already restated by rewriteModelDispatchInstructions
-  // above, so this only ever sees a card.
+  // Dispatch-card `Agent(...)` blocks → native-route instructions. Scoped to a whole card
+  // (a line that is exactly `Agent(` through its closing `)` line) so it rewrites ONLY the
+  // dispatch invocation and never prose mentions of the word "agent" or inline `Agent(...)`.
+  text = text.replace(/^Agent\(\n[\s\S]*?^\)\n?/gm, kimiNativeDispatchProse);
   // Tidy trailing whitespace left behind on affected lines.
   text = text.replace(/[ \t]+\n/g, '\n');
   // The canonical workflow-next dispatch emits a claim invocation carrying the
@@ -259,10 +234,6 @@ function skillRel(dirName, forge) {
   return treeLabel(forge) + '/skills/' + dirName + '/SKILL.md';
 }
 
-function agentRel(role, forge) {
-  return treeLabel(forge) + '/agents/' + role + '.md';
-}
-
 // The EXACT set of skill directories a fresh render produces: one `<command>` per
 // canonical command. Roles use native custom-agent profiles under `agents/`. Anything else in
 // .kimi/skills/ is a retired surface (e.g. the deleted fast/full `kaola-workflow-fast`
@@ -278,9 +249,8 @@ function expectedSkillDirs(forge) {
 function retiredAgentFiles(forge) {
   const dir = treePath(path.join(treeLabel(forge), 'agents'));
   if (!fs.existsSync(dir)) return [];
-  const expected = new Set(listCanonAgents().map(name => name + '.md'));
   return fs.readdirSync(dir, { withFileTypes: true })
-    .filter(entry => entry.isFile() && entry.name.endsWith('.md') && !expected.has(entry.name))
+    .filter(entry => entry.isFile() && entry.name.endsWith('.md'))
     .map(entry => entry.name)
     .sort();
 }
@@ -337,23 +307,6 @@ function pruneSkills(forge) {
     removed++;
   }
   return removed;
-}
-
-function writeAgents(forge) {
-  let wrote = 0;
-  for (const name of listCanonAgents()) {
-    const canon = fs.readFileSync(path.join(CANON_AGENTS_DIR, name + '.md'), 'utf8');
-    const out = renderAgent(canon, name, forge);
-    const rel = agentRel(name, forge);
-    const dest = treePath(rel);
-    if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
-      ensureDir(path.dirname(dest));
-      fs.writeFileSync(dest, out);
-      console.log('generated  ' + rel);
-      wrote++;
-    }
-  }
-  return wrote;
 }
 
 function writeCommands(forge) {
@@ -419,11 +372,10 @@ function writeHooks(forge) {
 
 function runWrite(forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
-  const a = writeAgents(forge);
   const c = writeCommands(forge);
   const h = writeHooks(forge);
   const p = pruneSkills(forge);
-  const total = a + c + h + p;
+  const total = c + h + p;
   console.log('sync-kimi-edition[' + forge + ']: write complete (' + total + ' file(s) updated'
     + (total === 0 ? ' — tree already in sync' : '') + ').');
 }
@@ -439,7 +391,6 @@ function runRefreshPresent() {
   let changed = 0;
   for (const forge of forgeLayout.FORGES) {
     if (!fs.existsSync(treePath(treeLabel(forge)))) continue;
-    changed += writeAgents(forge);
     changed += writeCommands(forge);
     changed += writeHooks(forge);
     changed += pruneSkills(forge);
@@ -490,16 +441,6 @@ function runCheck(forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
   const tree = treeLabel(forge);
   const mismatches = [];
-  for (const name of listCanonAgents()) {
-    const canon = read('agents/' + name + '.md');
-    const rel = agentRel(name, forge);
-    if (!fs.existsSync(treePath(rel))) {
-      mismatches.push({ rel, reason: 'missing generated native agent profile' });
-      continue;
-    }
-    const expected = renderAgent(canon, name, forge);
-    if (readTree(rel) !== expected) mismatches.push({ rel, reason: 'stale — regenerate' });
-  }
   for (const file of listCanonCommands(forge)) {
     const name = file.slice(0, -3);
     const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
@@ -523,7 +464,7 @@ function runCheck(forge) {
     mismatches.push({ rel: tree + '/skills/' + name, reason: 'retired surface not in canonical — prune (--write removes it)' });
   }
   for (const f of retiredAgentFiles(forge)) {
-    mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
+    mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired surface — Kimi installs no Kaola role profiles; prune (--write removes it)' });
   }
   // Same for the byte-copied hooks: one this generator no longer emits is retired, and --check
   // called such a tree green until it was reported here.
@@ -537,9 +478,8 @@ function runCheck(forge) {
     process.exitCode = 1;
     return;
   }
-  const na = listCanonAgents().length;
   const nc = listCanonCommands(forge).length;
-  console.log('sync-kimi-edition[' + forge + ']: ' + na + ' native agent profile(s) + ' + nc + ' command skill(s) + '
+  console.log('sync-kimi-edition[' + forge + ']: ' + nc + ' command skill(s) + '
     + HOOK_SCRIPTS.length + ' hook file(s) in parity with canonical.');
 }
 
@@ -581,15 +521,15 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-  renderAgent, renderCommand, transformCommandBody,
+  renderCommand, transformCommandBody,
   rewriteClaudeScriptPaths, KIMI_KAOLA_SCRIPT, kimiKaolaScript,
   KIMI_MODEL_DISPATCH_GUIDANCE,
-  renderKimiHooksToml, treeLabel, skillRel, agentRel, canonCommandPath, runCheck, runWrite,
+  renderKimiHooksToml, treeLabel, skillRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   adaptHookForKimi, HOOK_ADAPTATIONS,
   expectedHookFiles, retiredHookFiles,
   parseFrontmatter,
-  listCanonAgents, listCanonCommands,
+  listCanonCommands,
   CANON_AGENTS_DIR, CANON_HOOKS_DIR,
   REPO,
   HOOK_SCRIPTS,

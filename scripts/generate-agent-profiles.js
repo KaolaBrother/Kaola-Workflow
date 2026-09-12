@@ -16,49 +16,54 @@ const CODEX_CONFIG_PATHS = Object.freeze([
   'plugins/kaola-workflow-gitea/config/agents.toml',
 ]);
 // #29 audit: DEFAULT_AGENT_MODELS in kaola-workflow-resolve-agent-model.js is a GENERATED block —
-// the SAME derivation (behavior-contracts intent_class -> runtime-capabilities claude
-// intent_mapping) that writes each agents/<role>.md `model:` frontmatter line, so the two can never
-// independently drift. The resolver itself stays require()-free of this generator and of
-// templates/agents (installed runtimes have no schema sibling on disk); only `--write`/`--check`
-// here ever read the marked region. Canonical target only — edition-sync.js propagates the write to
-// the other 3 byte-identical resolver-module-copies trees (it is not itself a template/render).
+// the SAME value (runtime-capabilities claude `subagent_default.model`, the one subagent binding
+// every installed Kaola profile pins) that writes each agents/<role>.md `model:` frontmatter line,
+// so the two can never independently drift. The resolver itself stays require()-free of this
+// generator and of templates/agents (installed runtimes have no schema sibling on disk); only
+// `--write`/`--check` here ever read the marked region. Canonical target only — edition-sync.js
+// propagates the write to the other 3 byte-identical resolver-module-copies trees (it is not
+// itself a template/render).
 const RESOLVER_MODELS_PATH = 'scripts/kaola-workflow-resolve-agent-model.js';
 const RESOLVER_MODELS_START = '// GENERATED: DEFAULT_AGENT_MODELS (do not edit; source: templates/agents)';
 const RESOLVER_MODELS_END = '// END GENERATED';
 const ZERO_HASH = '0'.repeat(64);
 const ROLES = Object.freeze([
-  'adversarial-verifier',
-  'build-error-resolver',
-  'code-architect',
   'code-explorer',
   'code-reviewer',
   'doc-updater',
   'implementer',
   'investigator',
   'knowledge-lookup',
-  'metric-optimizer',
-  'planner',
-  'security-reviewer',
-  'synthesizer',
   'tdd-guide',
 ]);
 const RUNTIMES = Object.freeze(['claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin']);
+// Adapters that still install Kaola role profiles and therefore render one subagent binding each.
+const BINDING_RUNTIMES = Object.freeze(['claude', 'codex', 'grok', 'cursor']);
 const REQUIRED_COVERAGE = Object.freeze([
   'purpose', 'inputs', 'authority_custody', 'writes', 'deliverable', 'verification', 'stop_conditions',
 ]);
 const REQUIRED_CAPABILITIES = Object.freeze([
-  'named_roles',
-  'deterministic_profiles',
   'capability_gap',
   'instruction_loading',
-  'profile_format',
   'role_dispatch',
-  'model_carrier',
-  'tool_binding',
   'hook_scope',
-  'intent_mapping',
   'delegation_guidance',
 ]);
+const BINDING_CAPABILITIES = Object.freeze([
+  'named_roles',
+  'deterministic_profiles',
+  'profile_format',
+  'model_carrier',
+  'tool_binding',
+  'subagent_default',
+]);
+const BINDING_GUIDANCE_KEYS = Object.freeze([
+  'profile_lookup', 'dispatch_carrier', 'tool_boundary', 'native_routes', 'availability',
+]);
+const NATIVE_ONLY_FORBIDDEN_CAPABILITIES = Object.freeze([
+  'subagent_default', 'intent_mapping', 'model_carrier', 'profile_format', 'tool_binding',
+]);
+const NATIVE_ONLY_GUIDANCE_KEYS = Object.freeze(['native_routes', 'availability']);
 const DELEGATION_GUIDANCE_START = '<!-- KW-RUNTIME-DELEGATION-START -->';
 const DELEGATION_GUIDANCE_END = '<!-- KW-RUNTIME-DELEGATION-END -->';
 const RETIRED_VOCABULARY_BAN = /\bnode-id\b|\bgate_effect\b|\bgate_mode\b|\bgate_aggregation\b|\bchange_gate\b|\breplicated_majority\b|\bpartitioned_all\b|\bexecution_status\b|\bclaim_outcome\b|\breview_scope_expanded\b|\bdomain_outcome:/;
@@ -108,9 +113,11 @@ function validateBehaviorContracts(source) {
   if (forbidden) throw new Error('behavior-contracts: runtime-specific token ' + forbidden[0]);
   for (const role of ROLES) {
     const contract = source.roles[role];
+    if (Object.prototype.hasOwnProperty.call(contract, 'intent_class')) {
+      throw new Error('behavior-contracts: intent_class retired by #1062');
+    }
     if (!Number.isInteger(contract.behavior_contract_version)
-        || !contract.description || !contract.body
-        || !['standard', 'reasoning', 'heavy'].includes(contract.intent_class)) {
+        || !contract.description || !contract.body) {
       throw new Error('behavior-contracts: incomplete role ' + role);
     }
     if (!contract.coverage || REQUIRED_COVERAGE.some(key => !contract.coverage[key])) {
@@ -143,31 +150,44 @@ function validateRuntimeAdapters(source) {
       !Object.prototype.hasOwnProperty.call(adapter.capabilities, key))) {
       throw new Error('runtime-capabilities: incomplete capabilities for ' + name);
     }
-    const mapping = adapter.capabilities.intent_mapping;
-    if (!mapping || ['standard', 'reasoning', 'heavy'].some(intent => !mapping[intent])) {
-      throw new Error('runtime-capabilities: incomplete intent mapping for ' + name);
-    }
+    const dispatch = adapter.capabilities.role_dispatch;
     const guidance = adapter.capabilities.delegation_guidance;
-    if (!guidance || typeof guidance.profile_lookup !== 'string'
-        || typeof guidance.dispatch_carrier !== 'string'
-        || typeof guidance.tool_boundary !== 'string'
-        || typeof guidance.native_routes !== 'string'
-        || typeof guidance.availability !== 'string'
-        || !guidance.tiers
-        || ['standard', 'reasoning', 'heavy'].some(intent =>
-          typeof guidance.tiers[intent] !== 'string' || !guidance.tiers[intent].trim())) {
-      throw new Error('runtime-capabilities: incomplete delegation guidance for ' + name);
-    }
-    if (['cursor', 'zcode'].includes(adapter.runtime)
-        && (typeof adapter.capabilities.model !== 'string' || !adapter.capabilities.model.trim())) {
-      throw new Error('runtime-capabilities: model carrier missing for ' + name);
+    if (dispatch === 'named_profile') {
+      if (BINDING_CAPABILITIES.some(key =>
+        !Object.prototype.hasOwnProperty.call(adapter.capabilities, key))) {
+        throw new Error('runtime-capabilities: incomplete binding capabilities for ' + name);
+      }
+      const subagentDefault = adapter.capabilities.subagent_default;
+      if (!subagentDefault || typeof subagentDefault !== 'object'
+          || typeof subagentDefault.model !== 'string' || !subagentDefault.model.trim()
+          || typeof subagentDefault.summary !== 'string' || !subagentDefault.summary.trim()
+          || (subagentDefault.effort !== undefined
+            && (typeof subagentDefault.effort !== 'string' || !subagentDefault.effort.trim()))) {
+        throw new Error('runtime-capabilities: incomplete subagent_default for ' + name);
+      }
+      if (!guidance || BINDING_GUIDANCE_KEYS.some(key => typeof guidance[key] !== 'string')) {
+        throw new Error('runtime-capabilities: incomplete delegation guidance for ' + name);
+      }
+    } else if (dispatch === 'native_only') {
+      if (NATIVE_ONLY_FORBIDDEN_CAPABILITIES.some(key =>
+        Object.prototype.hasOwnProperty.call(adapter.capabilities, key))) {
+        throw new Error('runtime-capabilities: binding-only capability present on native_only ' + name);
+      }
+      if (!guidance
+          || JSON.stringify(Object.keys(guidance).sort())
+            !== JSON.stringify([...NATIVE_ONLY_GUIDANCE_KEYS].sort())
+          || NATIVE_ONLY_GUIDANCE_KEYS.some(key => typeof guidance[key] !== 'string')) {
+        throw new Error('runtime-capabilities: native_only delegation guidance must be exactly native_routes and availability for ' + name);
+      }
+    } else {
+      throw new Error('runtime-capabilities: unknown role_dispatch for ' + name);
     }
     if (adapter.runtime === 'cursor') {
       const conformance = adapter.capabilities.dispatch_conformance;
       if (!conformance
           || conformance.call_shape !== 'Task with flat subagent_type'
           || conformance.named_model_field !== 'omit'
-          || conformance.exact_tier !== 'post_resolution_assertion'
+          || conformance.exact_binding !== 'post_resolution_assertion'
           || conformance.generic_model_enum !== 'not_named_profile_capability'
           || conformance.provider_model_evidence !== 'providerOptions.cursor.modelName'
           || conformance.tui_child_transcript !== 'insufficient') {
@@ -234,13 +254,9 @@ function adapterHash(adapter) {
   })));
 }
 
-function rolesByIntent(behaviorSource = loadBehaviorContracts()) {
-  const rosters = { standard: [], reasoning: [], heavy: [] };
-  for (const [role, contract] of Object.entries(behaviorSource.roles)) {
-    rosters[contract.intent_class].push(role);
-  }
-  for (const tier of Object.keys(rosters)) rosters[tier].sort();
-  return rosters;
+function isBindingAdapter(adapter) {
+  return !!(adapter && adapter.capabilities
+    && adapter.capabilities.role_dispatch === 'named_profile');
 }
 
 function runtimeHostName(runtime) {
@@ -260,8 +276,24 @@ function renderRuntimeDelegationGuidance(adapter, behaviorSource = loadBehaviorC
   }
   const guidance = adapter.capabilities.delegation_guidance;
   if (!guidance) throw new Error('runtime delegation guidance missing for ' + adapter.runtime);
-  const rosters = rolesByIntent(behaviorSource);
-  return [
+  if (!isBindingAdapter(adapter)) {
+    return [
+      DELEGATION_GUIDANCE_START,
+      '## Runtime adapter facts',
+      '',
+      runtimeHostGuard(adapter.runtime),
+      '',
+      'This runtime installs no Kaola role profiles by design; the absence of a named Kaola role'
+        + ' is not a `capability_gap`. Choose a native route or work inline per item, as the'
+        + ' dispatch contract directs.',
+      '',
+      guidance.native_routes,
+      guidance.availability,
+      DELEGATION_GUIDANCE_END,
+    ].join('\n');
+  }
+  const subagentDefault = adapter.capabilities.subagent_default;
+  const lines = [
     DELEGATION_GUIDANCE_START,
     '## Runtime adapter facts',
     '',
@@ -270,19 +302,16 @@ function renderRuntimeDelegationGuidance(adapter, behaviorSource = loadBehaviorC
     guidance.profile_lookup,
     guidance.dispatch_carrier,
     '',
-    '**Tier defaults:** standard — ' + guidance.tiers.standard + '; reasoning — '
-      + guidance.tiers.reasoning + '; heavy — ' + guidance.tiers.heavy + '.',
-    '**Role roster:** standard — ' + rosters.standard.map(role => '`' + role + '`').join(', ')
-      + '; reasoning — ' + rosters.reasoning.map(role => '`' + role + '`').join(', ')
-      + '; heavy — ' + rosters.heavy.map(role => '`' + role + '`').join(', ') + '.',
+    '**Subagent default:** ' + subagentDefault.summary + '.',
+    '**Roles:** ' + ROLES.map(role => '`' + role + '`').join(', ') + '.',
     '',
     guidance.tool_boundary,
     guidance.native_routes,
     guidance.availability,
-    '',
-    guidance.fallback_search,
-    DELEGATION_GUIDANCE_END,
-  ].join('\n');
+  ];
+  if (guidance.fallback_search) lines.push('', guidance.fallback_search);
+  lines.push(DELEGATION_GUIDANCE_END);
+  return lines.join('\n');
 }
 
 function runtimeAdapter(runtime, forge = 'github', root = ROOT) {
@@ -319,18 +348,11 @@ function yamlScalar(value) {
 
 function nativeTools(contract, runtime = 'claude') {
   const required = new Set(contract.capability_requirements);
-  if (runtime === 'devin') {
-    const tools = ['read', 'grep', 'glob'];
-    if (required.has('scoped_write')) tools.push('edit', 'write');
-    if (required.has('command_execution')) tools.push('exec');
-    if (required.has('external_research')) tools.push('web_search', 'webfetch');
-    return tools;
-  }
   const tools = ['Read', 'Grep', 'Glob'];
   if (required.has('scoped_write')) tools.splice(1, 0, 'Write', 'Edit');
   if (required.has('command_execution')) tools.push('Bash');
   if (required.has('external_research')) {
-    tools.push('WebSearch', runtime === 'kimi' ? 'FetchURL' : 'WebFetch');
+    tools.push('WebSearch', 'WebFetch');
   }
   return tools;
 }
@@ -364,11 +386,10 @@ function runtimeAppendix(runtime, adapter, contract, behaviorSha) {
 }
 
 function markdownFrontmatter(runtime, role, contract, adapter) {
-  const capabilities = adapter.capabilities;
-  const intent = capabilities.intent_mapping[contract.intent_class];
+  const subagentDefault = adapter.capabilities.subagent_default;
   const lines = [
     '---',
-    'name: ' + (runtime === 'kimi' ? 'kaola-role-' + role : role),
+    'name: ' + role,
     'description: ' + yamlScalar(contract.description),
   ];
   if (runtime === 'claude') {
@@ -376,53 +397,26 @@ function markdownFrontmatter(runtime, role, contract, adapter) {
       lines.push('nickname_candidates: ' + JSON.stringify(contract.nickname_candidates));
     }
     lines.push('tools: ' + JSON.stringify(nativeTools(contract, runtime)));
-    lines.push('model: ' + intent);
+    lines.push('model: ' + subagentDefault.model);
     lines.push('behavior_contract_version: ' + contract.behavior_contract_version);
     lines.push('behavior_contract_hash: ' + behaviorHash(contract));
     lines.push('resolved_profile_hash: ' + ZERO_HASH);
-  } else if (runtime === 'opencode') {
-    lines.push('mode: subagent');
-    const denied = [];
-    if (!contract.capability_requirements.includes('scoped_write')) denied.push('edit');
-    if (!contract.capability_requirements.includes('command_execution')) denied.push('bash');
-    if (!contract.capability_requirements.includes('external_research')) denied.push('webfetch');
-    if (denied.length > 0) {
-      lines.push('permission:');
-      for (const capability of denied) lines.push('  ' + capability + ': deny');
-    }
-  } else if (runtime === 'kimi') {
-    lines.push('tools: ' + JSON.stringify(nativeTools(contract, runtime)));
   } else if (runtime === 'grok') {
     lines.push('promptMode: full');
-    lines.push('model: inherit');
-    lines.push('effort: ' + intent);
+    lines.push('model: ' + subagentDefault.model);
+    lines.push('effort: ' + subagentDefault.effort);
     lines.push('agentsMd: true');
     lines.push('tools: ' + JSON.stringify(nativeTools(contract, runtime)));
   } else if (runtime === 'cursor') {
-    lines.push('model: ' + capabilities.model + '[effort=' + intent + ']');
+    lines.push('model: ' + subagentDefault.model + '[effort=' + subagentDefault.effort + ']');
     lines.push('readonly: ' + (contract.capability_requirements.includes('scoped_write') ? 'false' : 'true'));
-  } else if (runtime === 'zcode') {
-    lines.push('model: ' + capabilities.model);
-    lines.push('thoughtLevel: ' + intent);
-    lines.push('tools: ' + JSON.stringify(nativeTools(contract, runtime)));
-  } else if (runtime === 'devin') {
-    lines.push('allowed-tools: ' + JSON.stringify(nativeTools(contract, runtime)));
   }
   lines.push('---', '');
   return lines.join('\n');
 }
 
 function runtimeRestrictions(runtime, contract) {
-  const restrictions = [];
-  if (runtime === 'kimi') {
-    if (!contract.capability_requirements.includes('scoped_write')) {
-      restrictions.push('- Runtime capability restriction: this role may not edit project files.');
-    }
-    if (!contract.capability_requirements.includes('command_execution')) {
-      restrictions.push('- Runtime capability restriction: this role may not run shell commands.');
-    }
-  }
-  return restrictions.length > 0 ? restrictions.join('\n') + '\n\n' : '';
+  return '';
 }
 
 function renderMarkdown(runtime, role, contract, adapter) {
@@ -441,6 +435,7 @@ function tomlArray(values) {
 
 function renderCodex(role, contract, adapter) {
   const behaviorSha = behaviorHash(contract);
+  const subagentDefault = adapter.capabilities.subagent_default;
   const zeroedInstructions = contract.body.trim() + '\n\n'
     + runtimeAppendix('codex', adapter, contract, behaviorSha) + '\n';
   if (zeroedInstructions.includes("'''")) throw new Error(role + ': TOML literal delimiter in behavior');
@@ -449,6 +444,8 @@ function renderCodex(role, contract, adapter) {
     'description = ' + JSON.stringify(contract.description),
     ...((contract.nickname_candidates || []).length > 0
       ? ['nickname_candidates = ' + tomlArray(contract.nickname_candidates)] : []),
+    'model = ' + JSON.stringify(subagentDefault.model),
+    'model_reasoning_effort = ' + JSON.stringify(subagentDefault.effort),
     "developer_instructions = '''",
     zeroedInstructions.trimEnd(),
     "'''",
@@ -472,6 +469,7 @@ function renderProfiles(behavior, adapters) {
   validateRuntimeAdapters(adapters);
   const profiles = [];
   for (const { name, adapter } of adapterEntries(adapters)) {
+    if (!isBindingAdapter(adapter)) continue;
     for (const role of ROLES) {
       const contract = behavior.roles[role];
       const content = adapter.runtime === 'codex'
@@ -551,7 +549,8 @@ function manifestFor(profiles) {
     adapter_source: ADAPTER_SOURCE,
     provenance_source: PROVENANCE_SOURCE,
     roles: [...ROLES],
-    runtimes: [...RUNTIMES],
+    runtimes: [...BINDING_RUNTIMES],
+    native_only_runtimes: RUNTIMES.filter(runtime => !BINDING_RUNTIMES.includes(runtime)),
     profiles: profiles.map(profile => ({
       runtime: profile.runtime,
       variant: profile.variant,
@@ -564,15 +563,14 @@ function manifestFor(profiles) {
   };
 }
 
-// The Claude dispatch tier for every role: behavior-contracts' declared `intent_class`
-// (standard/reasoning/heavy) resolved through runtime-capabilities' claude `intent_mapping`
-// (standard->sonnet, reasoning->opus, heavy->fable) — the identical two-step lookup
-// `markdownFrontmatter` uses above to write each agents/<role>.md `model:` line.
+// The Claude subagent binding for every role: runtime-capabilities' claude `subagent_default.model`
+// — the identical value `markdownFrontmatter` uses above to write each agents/<role>.md `model:`
+// line. One binding covers the whole roster; there is no per-role class.
 function defaultAgentModelsMap(behaviorSource = loadBehaviorContracts(), adapterSource = loadRuntimeAdapters()) {
-  const intentMapping = adapterSource.runtimes.claude.capabilities.intent_mapping;
+  const model = adapterSource.runtimes.claude.capabilities.subagent_default.model;
   const out = {};
   for (const role of [...ROLES].sort()) {
-    out[role] = intentMapping[behaviorSource.roles[role].intent_class];
+    out[role] = model;
   }
   return out;
 }
@@ -675,6 +673,9 @@ function writeGeneratedProfiles(root = ROOT) {
 function renderRuntimeRole(runtime, role, root = ROOT) {
   if (!RUNTIMES.includes(runtime)) throw new Error('unknown runtime ' + runtime);
   if (!ROLES.includes(role)) throw new Error('unknown role ' + role);
+  if (!BINDING_RUNTIMES.includes(runtime)) {
+    throw new Error('runtime ' + runtime + ' is native_only and installs no Kaola role profiles');
+  }
   return renderProfiles(loadBehaviorContracts(root), loadRuntimeAdapters(root))
     .find(profile => profile.runtime === runtime && profile.role === role);
 }
@@ -687,7 +688,7 @@ function main(argv) {
   }
   if (mode === '--write') {
     const profiles = writeGeneratedProfiles(ROOT);
-    console.log('generated ' + profiles.length + ' native role profiles across eight runtimes');
+    console.log('generated ' + profiles.length + ' native role profiles across six adapters');
     return;
   }
   const output = expected(ROOT);
@@ -700,7 +701,7 @@ function main(argv) {
     console.error('agent profile drift:\n' + drift.map(file => '- ' + file).join('\n'));
     process.exit(1);
   }
-  console.log('agent profiles current: 14 roles, eight runtimes, 140 native renders');
+  console.log('agent profiles current: 7 roles, four runtimes (six adapters), 42 native renders');
 }
 
 module.exports = {
@@ -708,6 +709,8 @@ module.exports = {
   BEHAVIOR_SOURCE,
   ROLES,
   RUNTIMES,
+  BINDING_RUNTIMES,
+  isBindingAdapter,
   ZERO_HASH,
   RETIRED_VOCABULARY_BAN,
   sha256,
@@ -719,7 +722,6 @@ module.exports = {
   loadProvenance,
   renderProfiles,
   renderRuntimeRole,
-  rolesByIntent,
   renderRuntimeDelegationGuidance,
   renderRuntimeDelegationGuidanceForRuntime,
   replaceRuntimeDelegationGuidance,

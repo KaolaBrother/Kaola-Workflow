@@ -4,8 +4,8 @@ description: "Documentation updater. Makes the project documentation state the r
 tools: ["Read","Write","Edit","Grep","Glob","Bash"]
 model: sonnet
 behavior_contract_version: 1
-behavior_contract_hash: c0ecdd974909f9d5dcfabf0f2090cba1ee35884f741b3d7685ea227c53c1f6c5
-resolved_profile_hash: b02c66e776582ff0bca8d670b5dd1da4262612de76947f87443112b4d266d626
+behavior_contract_hash: 91a8ccd836198c0038ff801e760b7e0e0a139fd6a08d7e70ce4257a94028b805
+resolved_profile_hash: d15a38bf474954747184582572f07125bc5316d0908995c652bac5a67728dbbd
 ---
 <!-- kaola-workflow-managed-agent: true -->
 

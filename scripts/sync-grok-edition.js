@@ -11,11 +11,10 @@
 // The global-contract transaction owns the complete compact-safe Rule. Deterministic,
 // idempotent, and parity-checked by test-grok-edition.js.
 //
-// The session supplies the model, while each generated agent carries an effort
-// derived from its canonical model class: sonnet/standard → medium,
-// opus/reasoning → high, and fable/heavy → xhigh. The spawn tool accepts an optional `model` and no
-// per-call effort; generated command surfaces omit the model override while
-// generated agents retain `model: inherit` plus their role effort pin.
+// Every generated agent carries the adapter's single subagent binding:
+// `model: grok-4.6` with `effort: medium`. The spawn tool accepts an optional `model` and no
+// per-call effort; generated command surfaces omit the model override because the profile pins
+// both.
 //
 // FORGE AXIS (--forge=github|gitlab|gitea, default github). github writes `.grok/`;
 // a forge writes `.grok-<forge>/`. Command sources come from the routing-surface
@@ -70,17 +69,13 @@ function renderAgent(canonContent, agentName, forge) {
 }
 
 const GROK_MODEL_DISPATCH_GUIDANCE =
-  'Omit a per-call model override; sub-agents inherit the session model. '
-  + 'Their effort follows the canonical role class: sonnet/standard roles use medium, '
-  + 'opus/reasoning roles use high, and fable/heavy roles use xhigh.';
+  'Omit per-call model and effort overrides; the named profile pins grok-4.6 at medium.';
 
 const GROK_MODEL_DISPATCH_BLOCK = [
-  '## Model is inherited; effort follows the role',
+  '## The named profile pins model and effort',
   '',
-  'A subagent inherits the session model, while its effort follows the canonical role class.',
-  'Generated agents pin effort: medium for sonnet/standard roles, high for opus/reasoning',
-  'roles, and xhigh for fable/heavy roles. Planner-class is the heavy roster. Omit `model` on',
-  '`spawn_subagent`; choose the named role and its pinned effort.',
+  'Every generated agent pins `model: grok-4.6` with `effort: medium`. Omit `model` on',
+  '`spawn_subagent`; choose the named role and its pinned binding.',
   '',
   'Dispatch a role with `spawn_subagent` using `subagent_type: "<role>"`.',
   '',
@@ -106,6 +101,10 @@ function transformCommandBody(body, forge, label) {
     text = agentGen.replaceRuntimeDelegationGuidance(text, 'grok', forge);
   }
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'spawn_subagent(\n$1');
+  // Retired roles (#1062): a canonical card that names one reroutes to the surviving
+  // custody-bearing fix role, `implementer`.
+  text = text.replace(/subagent_type="(adversarial-verifier|build-error-resolver|code-architect|metric-optimizer|planner|security-reviewer|synthesizer)"/g,
+    'subagent_type="implementer"');
   text = text.replace(/^\s+model="[^"]+",?\n/gm, '');
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime grok');

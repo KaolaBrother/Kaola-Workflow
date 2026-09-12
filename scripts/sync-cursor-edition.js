@@ -13,13 +13,11 @@
 // Deterministic, idempotent, and parity-checked
 // by test-cursor-edition.js.
 //
-// Canonical model classes drive the generated agent tier pins: sonnet/standard
-// render the raw `model: grok-4.6[effort=medium]` line, opus/reasoning
-// render `model: grok-4.6[effort=high]`, and fable/heavy render
-// `model: grok-4.6[effort=xhigh]`. Named-profile Task cards omit per-dispatch model overrides so
-// the profile carries its tier. A built-in-only catalog-miss path uses live members as themselves
-// and may use only a resolver-listed live model slug as an effort lever; the one-family allowlist
-// applies to generated profile pins, not that live-schema fallback.
+// Every generated agent renders the adapter's single subagent binding:
+// `model: grok-4.6[effort=medium]`. Named-profile Task cards omit per-dispatch model overrides so
+// the profile carries its binding. A built-in-only catalog-miss path uses live members as
+// themselves and may use only a resolver-listed live model slug as an effort lever; the
+// one-family allowlist applies to generated profile pins, not that live-schema fallback.
 //
 // FORGE AXIS (--forge=github|gitlab|gitea, default github). github writes `.cursor/`;
 // a forge writes `.cursor-<forge>/`. Command sources come from the routing-surface
@@ -95,9 +93,9 @@ function renderAgent(canonContent, agentName, forge) {
 
 const CURSOR_MODEL_DISPATCH_GUIDANCE =
   'Inspect the live Task enum first. Named Cursor agents carry generated frontmatter that pins '
-  + 'standard, reasoning, or fable/heavy at medium, high, or xhigh (fable is grok-4.6[effort=xhigh]) '
-  + 'only when that name is in the enum; omit per-call model then. A built-in-only enum uses those '
-  + 'members as themselves. Do not claim IDE children display distinct effort.';
+  + 'the single subagent binding grok-4.6[effort=medium] when that name is in the enum; omit '
+  + 'per-call model then. A built-in-only enum uses those members as themselves. Do not claim '
+  + 'IDE children display distinct effort.';
 
 const CURSOR_KAOLA_SCRIPT =
   'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _gh="${CURSOR_HOME:-$HOME/.cursor}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_gh/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_gh/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
@@ -116,16 +114,17 @@ function cursorNativeDispatchProse(card) {
   if (card.includes('doc-updater')) {
     return 'Use exact `doc-updater` from the current Task catalog through the live Task schema '
       + 'when that name is present. Put the changed files, checklist, working directory, and custody '
-      + 'boundary in its brief; omit model so the named profile carries its tier. If the live enum '
-      + 'is built-in-only, do not impersonate `doc-updater`: dispatch `generalPurpose` only as itself '
-      + 'for generic docs, or inline that item and record capability_gap.\n';
+      + 'boundary in its brief; omit model so the named profile carries its binding. If the live '
+      + 'enum is built-in-only, do not impersonate `doc-updater`: dispatch `generalPurpose` only '
+      + 'as itself for generic docs, or inline that item and record capability_gap.\n';
   }
-  const role = card.includes('build-error-resolver') ? 'build-error-resolver' : 'tdd-guide';
+  const role = 'implementer';
   return 'Use exact `' + role + '` from the current Task catalog through the live Task schema '
     + 'when that name is present. Put the failure command, evidence path, working directory, and '
-    + 'custody boundary in its brief; omit model so the named profile carries its tier. If the live '
-    + 'enum is built-in-only, do not impersonate `' + role + '`: inline custody-bearing work and '
-    + 'record capability_gap, or dispatch a live built-in only as itself when its real boundary fits.\n';
+    + 'custody boundary in its brief; omit model so the named profile carries its binding. If the '
+    + 'live enum is built-in-only, do not impersonate `' + role + '`: inline custody-bearing work '
+    + 'and record capability_gap, or dispatch a live built-in only as itself when its real '
+    + 'boundary fits.\n';
 }
 
 function cursorCliSharedHostAndFailClosedProse() {

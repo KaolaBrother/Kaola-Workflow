@@ -51,16 +51,14 @@ promised output, not the worker.
 Host: Codex. If the running host is not Codex, ignore this adapter section entirely and use the Kaola adapter installed for the actual host; if none is installed, record `capability_gap: no Kaola adapter for host <name>` and work inline.
 
 Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.
-Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: "<role>"`; on hosts that expose them, supply `model` and `reasoning_effort` when selecting the role's default tier, while preserving supported `fork_turns` and service-tier choices.
+Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: "<role>"`; omit per-call `model` and `reasoning_effort` because the TOML profile pins `gpt-5.6-luna` / `max` and file values take precedence, while preserving supported `fork_turns` and service-tier choices.
 
-**Tier defaults:** standard — standard → `gpt-5.6-luna` with reasoning effort `max`; reasoning — reasoning → `gpt-6-astra` with reasoning effort `medium`; heavy — heavy → `gpt-6-astra` with reasoning effort `high`.
-**Role roster:** standard — `code-explorer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `metric-optimizer`, `tdd-guide`; reasoning — `adversarial-verifier`, `build-error-resolver`, `code-reviewer`, `security-reviewer`, `synthesizer`; heavy — `code-architect`, `planner`.
+**Subagent default:** every installed Kaola TOML profile pins `model = "gpt-5.6-luna"` and `model_reasoning_effort = "max"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`.
+**Roles:** `code-explorer`, `code-reviewer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `tdd-guide`.
 
 The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.
 Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.
 Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes.
-
-
 <!-- KW-RUNTIME-DELEGATION-END -->
 
 <!-- KW-RUNTIME-DISPATCH-END -->

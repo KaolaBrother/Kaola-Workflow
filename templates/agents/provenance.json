@@ -12,37 +12,6 @@
     }
   },
   "roles": {
-    "adversarial-verifier": {
-      "source_kind": "kaola_authored"
-    },
-    "build-error-resolver": {
-      "source_kind": "kaola_authored",
-      "history": {
-        "origin": "everything_claude_code",
-        "upstream_path": "agents/build-error-resolver.md",
-        "upstream_url": "https://github.com/affaan-m/everything-claude-code/blob/922d2d8f8b64f4e50936e24465cb3bcac81ac0e1/agents/build-error-resolver.md",
-        "source_commit": "922d2d8f8b64f4e50936e24465cb3bcac81ac0e1",
-        "source_blob_sha": "2ab19ac35497ae2e1b7a33f238a6953867fc5572",
-        "source_sha256": "57e8d92be91812bafae1240cf628f39e5910e6e3c69a78edb51db764192e7afc",
-        "derived_through": "kaola-workflow v10.5.0 (behavior-contracts.json before #1054)",
-        "retired_by": "#1054",
-        "measurement": "rewritten body (#1054) shares 0 eight-word shingles with the pinned upstream file (longest shared run 4 words); the pre-#1054 body shared 73.1% of its eight-word shingles (longest shared run 400 words); method and table in the #1054 run record, .cache/source-classification.md"
-      }
-    },
-    "code-architect": {
-      "source_kind": "kaola_authored",
-      "history": {
-        "origin": "everything_claude_code",
-        "upstream_path": "agents/code-architect.md",
-        "upstream_url": "https://github.com/affaan-m/everything-claude-code/blob/922d2d8f8b64f4e50936e24465cb3bcac81ac0e1/agents/code-architect.md",
-        "source_commit": "922d2d8f8b64f4e50936e24465cb3bcac81ac0e1",
-        "source_blob_sha": "e99b3c718087e3be05c1763182cf904b8b25edb4",
-        "source_sha256": "bb981dc0e80fea545f22c4613f1b1e4af4f8ee03b17333264804d36864b2e9d4",
-        "derived_through": "kaola-workflow v10.5.0 (behavior-contracts.json before #1054)",
-        "retired_by": "#1054",
-        "measurement": "rewritten body (#1054) shares 0 eight-word shingles with the pinned upstream file (longest shared run 0 words); the pre-#1054 body shared 40.2% of its eight-word shingles (longest shared run 139 words); method and table in the #1054 run record, .cache/source-classification.md"
-      }
-    },
     "code-explorer": {
       "source_kind": "kaola_authored",
       "history": {
@@ -81,29 +50,6 @@
       "source_kind": "kaola_authored"
     },
     "knowledge-lookup": {
-      "source_kind": "kaola_authored"
-    },
-    "metric-optimizer": {
-      "source_kind": "kaola_authored"
-    },
-    "planner": {
-      "source_kind": "kaola_authored",
-      "history": {
-        "origin": "everything_claude_code",
-        "upstream_path": "agents/planner.md",
-        "upstream_url": "https://github.com/affaan-m/everything-claude-code/blob/922d2d8f8b64f4e50936e24465cb3bcac81ac0e1/agents/planner.md",
-        "source_commit": "922d2d8f8b64f4e50936e24465cb3bcac81ac0e1",
-        "source_blob_sha": "c311f492bd1d3bae077c86716163966789eefae2",
-        "source_sha256": "2c53525c1ad9c20b8cd20823e6cac8964797dc753001813e438a078bb0b62f14",
-        "derived_through": "kaola-workflow v10.5.0 (behavior-contracts.json before #1054)",
-        "retired_by": "#1054",
-        "measurement": "rewritten body (#1054) shares 0 eight-word shingles with the pinned upstream file (longest shared run 0 words); the pre-#1054 body shared 60.1% of its eight-word shingles (longest shared run 283 words); method and table in the #1054 run record, .cache/source-classification.md"
-      }
-    },
-    "security-reviewer": {
-      "source_kind": "kaola_authored"
-    },
-    "synthesizer": {
       "source_kind": "kaola_authored"
     },
     "tdd-guide": {

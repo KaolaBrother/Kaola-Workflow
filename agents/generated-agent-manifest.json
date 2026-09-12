@@ -4,28 +4,23 @@
   "adapter_source": "templates/agents/runtime-capabilities.json",
   "provenance_source": "templates/agents/provenance.json",
   "roles": [
-    "adversarial-verifier",
-    "build-error-resolver",
-    "code-architect",
     "code-explorer",
     "code-reviewer",
     "doc-updater",
     "implementer",
     "investigator",
     "knowledge-lookup",
-    "metric-optimizer",
-    "planner",
-    "security-reviewer",
-    "synthesizer",
     "tdd-guide"
   ],
   "runtimes": [
     "claude",
     "codex",
+    "grok",
+    "cursor"
+  ],
+  "native_only_runtimes": [
     "opencode",
     "kimi",
-    "grok",
-    "cursor",
     "zcode",
     "devin"
   ],
@@ -33,47 +28,20 @@
     {
       "runtime": "claude",
       "variant": "claude",
-      "role": "adversarial-verifier",
-      "path": "agents/adversarial-verifier.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "37fae3cbfe32775728cb1e6fe93b087bad719955e78d6d555011db36f4b992c8",
-      "resolved_profile_sha256": "ec7341724137fd2605db9da08c690fa5de888dd8f026f14adc78294d4f26cace"
-    },
-    {
-      "runtime": "claude",
-      "variant": "claude",
-      "role": "build-error-resolver",
-      "path": "agents/build-error-resolver.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4bdb9d11c0d523d6bbec5962cf05429d31da544f182779aab4592ae8d5f3cd09",
-      "resolved_profile_sha256": "bec5af7a37337174e944e9bd91d5c46930ca0cbee82cd6e40abfe7c6bcef3878"
-    },
-    {
-      "runtime": "claude",
-      "variant": "claude",
-      "role": "code-architect",
-      "path": "agents/code-architect.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "6962dea4a4db50669fe3cd44efe730fc6bc54489ebf0082ea3d4eed37200b81b",
-      "resolved_profile_sha256": "ab1ca7cc8bc31ce34d6c7d70866b1c0ee516affa4c57286b0641ea07766d4c1b"
-    },
-    {
-      "runtime": "claude",
-      "variant": "claude",
       "role": "code-explorer",
       "path": "agents/code-explorer.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "52b32679a8a45971ef7473befceccaadc57208ab90075deb5c206994e0b43b9a",
-      "resolved_profile_sha256": "3f7be7ca12eedeabb5558b39e970064d6ceef012030d00532bb3e5fb6eee9044"
+      "behavior_sha256": "374525f1e24a7827312807c78ee6c61853ce699f91407eedee3c7f502647043d",
+      "resolved_profile_sha256": "b66e0078d2f50ea79021f58330ad7724dbff75088d4a113f8d199ed49cf3392b"
     },
     {
       "runtime": "claude",
       "variant": "claude",
       "role": "code-reviewer",
       "path": "agents/code-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "7f746ba03195b08c0929fd3f7818f081a7fbc250af10823ef44ce5ba8fe209b8",
-      "resolved_profile_sha256": "46c15e830da3fb9b56ea8082d5c92ab26274976ca1231d3dba93fc6468aa626d"
+      "behavior_contract_version": 4,
+      "behavior_sha256": "ed38928fee228b6ae0923439c26f3e6edde6f831cc2422147ab46e73ecb15aec",
+      "resolved_profile_sha256": "4222099a3772fbcbadda994c914035c6b432028aeb942392a9de4a50431e37e1"
     },
     {
       "runtime": "claude",
@@ -81,17 +49,17 @@
       "role": "doc-updater",
       "path": "agents/doc-updater.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "c0ecdd974909f9d5dcfabf0f2090cba1ee35884f741b3d7685ea227c53c1f6c5",
-      "resolved_profile_sha256": "7126cc5fc54d44a6b909def112ca28970dd1b8ef50c6fa4a504f722afefbbaff"
+      "behavior_sha256": "91a8ccd836198c0038ff801e760b7e0e0a139fd6a08d7e70ce4257a94028b805",
+      "resolved_profile_sha256": "39b73dcf07e015b10403d8cd81dc8237ca2b11f6d332b29910f43729725ffe54"
     },
     {
       "runtime": "claude",
       "variant": "claude",
       "role": "implementer",
       "path": "agents/implementer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "92031ae1aeb5a31affabe2c85bb1bada4881d0460bcab978fb4105c85356ce46",
-      "resolved_profile_sha256": "111a0bc7ac03eb513078c008a81f6f402652a0e554e3bd68b3151c42f6f41f35"
+      "behavior_contract_version": 2,
+      "behavior_sha256": "f1bf58a9727f7109faaae348b4fe9f0d5607329973b65e6579f0384f75cac037",
+      "resolved_profile_sha256": "43eaa44099c02e9beb68486eace5fd6447dee9e44b0f59d8b9e757071a0f0104"
     },
     {
       "runtime": "claude",
@@ -99,8 +67,8 @@
       "role": "investigator",
       "path": "agents/investigator.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "4f1817a36d260e8802ed6c337a95c20dc1faee88bf6e9586ad973e4984bee18d",
-      "resolved_profile_sha256": "2d858cc7550001e6fce688d897505d4d23da7bf45ef90f1d2c4e9e048f134cb4"
+      "behavior_sha256": "7c87b4b2a180cac6c95922c07c07ca16c95469f2103b5949b5a30b230cf1d715",
+      "resolved_profile_sha256": "b2ba7e0faa0125ffca6642cf58af9d2569d73eef739df08c1dab9d3de8319ddf"
     },
     {
       "runtime": "claude",
@@ -108,44 +76,8 @@
       "role": "knowledge-lookup",
       "path": "agents/knowledge-lookup.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b",
-      "resolved_profile_sha256": "3cf7fd97dfd84ed2cd27220da3d505339fdcf0f85e7891dcde68eff8ec6ce147"
-    },
-    {
-      "runtime": "claude",
-      "variant": "claude",
-      "role": "metric-optimizer",
-      "path": "agents/metric-optimizer.md",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "4f5215b795f7657a2b1a6bb5325b133b61c48bbda47fa0211dd6e1069d1164f0",
-      "resolved_profile_sha256": "db14dad93e54e48a1122d1746dd0c9b198cac60dc61a12f768aa9e8856103312"
-    },
-    {
-      "runtime": "claude",
-      "variant": "claude",
-      "role": "planner",
-      "path": "agents/planner.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "a9f0d2031fe9fbdd53b200e7d5b18207ff038b6f8c597e07134ca77701118672",
-      "resolved_profile_sha256": "a1b44be795c88e68ed2f2a113baeed2d926c6b5857cb2f9446cd45ce0c9cfa4e"
-    },
-    {
-      "runtime": "claude",
-      "variant": "claude",
-      "role": "security-reviewer",
-      "path": "agents/security-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "87a4f1589fef43645bea2c47e2dc627a118b572240e3e1c62b2c9b8ec21ed125",
-      "resolved_profile_sha256": "2c69e5c83da23309154261d6584865a0638c62320fa0f520f876c7fd19466fe8"
-    },
-    {
-      "runtime": "claude",
-      "variant": "claude",
-      "role": "synthesizer",
-      "path": "agents/synthesizer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "b2a428191f21997ceab865bd1ed05265dc2a7c86007817093a67084756334e7a",
-      "resolved_profile_sha256": "31bf395f7f1cc5690fa3fbfc1d9822c24ac49fe1b3c85bd20277f49d947f00e5"
+      "behavior_sha256": "547dad2cf9920b9c29bb0a13932dfea26c8b4a7e9a969bf68622d6255ba65ac9",
+      "resolved_profile_sha256": "87ccc54bd8bc71cc0a039dcc68526c4046660fe892da2e7136fdd3f6027ecd37"
     },
     {
       "runtime": "claude",
@@ -153,35 +85,8 @@
       "role": "tdd-guide",
       "path": "agents/tdd-guide.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20",
-      "resolved_profile_sha256": "5c044feb69b9394e3883318c2c79e9b749360b026bf1199c5204b7fb5ed96275"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-github",
-      "role": "adversarial-verifier",
-      "path": "plugins/kaola-workflow/agents/adversarial-verifier.toml",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "37fae3cbfe32775728cb1e6fe93b087bad719955e78d6d555011db36f4b992c8",
-      "resolved_profile_sha256": "f3a6293c3158a96fb0e6320ea0bd1e8dbabf4bca5c10bd444ea7f20c1c7ddd70"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-github",
-      "role": "build-error-resolver",
-      "path": "plugins/kaola-workflow/agents/build-error-resolver.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4bdb9d11c0d523d6bbec5962cf05429d31da544f182779aab4592ae8d5f3cd09",
-      "resolved_profile_sha256": "1f9ffc92f9bc83c9f9d27b5606f2f0d1272174c6abdae13587fd15c789207745"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-github",
-      "role": "code-architect",
-      "path": "plugins/kaola-workflow/agents/code-architect.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "6962dea4a4db50669fe3cd44efe730fc6bc54489ebf0082ea3d4eed37200b81b",
-      "resolved_profile_sha256": "22beda98e9dc11ca511eba26987c6f6dc10791ac26901e776ee66fddcb5b5a84"
+      "behavior_sha256": "76b895f9de63596592cacc620f0d04a7257b5d022f3de76a9ae1575b462bd272",
+      "resolved_profile_sha256": "c90233b8d990254f66d04412ec341d6916da579692ad516c975a4081a0caeb07"
     },
     {
       "runtime": "codex",
@@ -189,17 +94,17 @@
       "role": "code-explorer",
       "path": "plugins/kaola-workflow/agents/code-explorer.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "52b32679a8a45971ef7473befceccaadc57208ab90075deb5c206994e0b43b9a",
-      "resolved_profile_sha256": "7e5f08c31232dcdfc962c40cc40d73d817af783df92c470486ddadaff46889e3"
+      "behavior_sha256": "374525f1e24a7827312807c78ee6c61853ce699f91407eedee3c7f502647043d",
+      "resolved_profile_sha256": "0a65d8b8fde6ef66e5de0a0034ade79e7dd72b4e42be1a15ea1db5279f7160b9"
     },
     {
       "runtime": "codex",
       "variant": "codex-github",
       "role": "code-reviewer",
       "path": "plugins/kaola-workflow/agents/code-reviewer.toml",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "7f746ba03195b08c0929fd3f7818f081a7fbc250af10823ef44ce5ba8fe209b8",
-      "resolved_profile_sha256": "259db4caf5f0fdfdfc92b35965f6394b04e1af19313a5cb12fa318a36ba04c0b"
+      "behavior_contract_version": 4,
+      "behavior_sha256": "ed38928fee228b6ae0923439c26f3e6edde6f831cc2422147ab46e73ecb15aec",
+      "resolved_profile_sha256": "051610d36e52c19dca7bcf277025f4619dd13e4099348ef1f111a137dfb38ef7"
     },
     {
       "runtime": "codex",
@@ -207,17 +112,17 @@
       "role": "doc-updater",
       "path": "plugins/kaola-workflow/agents/doc-updater.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "c0ecdd974909f9d5dcfabf0f2090cba1ee35884f741b3d7685ea227c53c1f6c5",
-      "resolved_profile_sha256": "e70b2e0c2b37df3732d172f8c839df604663c3f125af3b9224dede99997faca0"
+      "behavior_sha256": "91a8ccd836198c0038ff801e760b7e0e0a139fd6a08d7e70ce4257a94028b805",
+      "resolved_profile_sha256": "381e1a952ee653b3e2c2fc214497a8d274bd4477c5a5428059c23cfbbb1a22e1"
     },
     {
       "runtime": "codex",
       "variant": "codex-github",
       "role": "implementer",
       "path": "plugins/kaola-workflow/agents/implementer.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "92031ae1aeb5a31affabe2c85bb1bada4881d0460bcab978fb4105c85356ce46",
-      "resolved_profile_sha256": "6fd4fd962fd60c002e0b44e0fad07e823601d322c97c976b0111464f5a93f031"
+      "behavior_contract_version": 2,
+      "behavior_sha256": "f1bf58a9727f7109faaae348b4fe9f0d5607329973b65e6579f0384f75cac037",
+      "resolved_profile_sha256": "d5bd49445dce3de86386c3c4c40e7c56e1788d9e53528725dfdf5ad5343fa1f6"
     },
     {
       "runtime": "codex",
@@ -225,8 +130,8 @@
       "role": "investigator",
       "path": "plugins/kaola-workflow/agents/investigator.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "4f1817a36d260e8802ed6c337a95c20dc1faee88bf6e9586ad973e4984bee18d",
-      "resolved_profile_sha256": "729b0720c2f557613a0b04d8ff880f6429f7a0e2e1cc2b47b3ce835cb953e5ba"
+      "behavior_sha256": "7c87b4b2a180cac6c95922c07c07ca16c95469f2103b5949b5a30b230cf1d715",
+      "resolved_profile_sha256": "c670c82643825817039691fb6fd6c1f1aa74dc558df5d0bd972b36459e39bc8d"
     },
     {
       "runtime": "codex",
@@ -234,44 +139,8 @@
       "role": "knowledge-lookup",
       "path": "plugins/kaola-workflow/agents/knowledge-lookup.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b",
-      "resolved_profile_sha256": "0b08ae1a328524945c41ed84886b383ff222cbc61207c915ba72f91132778bac"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-github",
-      "role": "metric-optimizer",
-      "path": "plugins/kaola-workflow/agents/metric-optimizer.toml",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "4f5215b795f7657a2b1a6bb5325b133b61c48bbda47fa0211dd6e1069d1164f0",
-      "resolved_profile_sha256": "1997eda5769a891427168640b7d20a5fda9752d6c218a686dd50d679bc34d237"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-github",
-      "role": "planner",
-      "path": "plugins/kaola-workflow/agents/planner.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "a9f0d2031fe9fbdd53b200e7d5b18207ff038b6f8c597e07134ca77701118672",
-      "resolved_profile_sha256": "6c682bf5e2882f143c58a9750ac997d206ae778d411b86fff0182ffc2a422e7f"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-github",
-      "role": "security-reviewer",
-      "path": "plugins/kaola-workflow/agents/security-reviewer.toml",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "87a4f1589fef43645bea2c47e2dc627a118b572240e3e1c62b2c9b8ec21ed125",
-      "resolved_profile_sha256": "c93fca72c0e153d0b98dca5e47428011bcdcb999105e7b4515f0429e72ffc623"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-github",
-      "role": "synthesizer",
-      "path": "plugins/kaola-workflow/agents/synthesizer.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "b2a428191f21997ceab865bd1ed05265dc2a7c86007817093a67084756334e7a",
-      "resolved_profile_sha256": "1f881ab969c40b9aa94a84fda0223f4125e6dffb0647daf6fd7245e1b6d98c74"
+      "behavior_sha256": "547dad2cf9920b9c29bb0a13932dfea26c8b4a7e9a969bf68622d6255ba65ac9",
+      "resolved_profile_sha256": "e9c6bc77c287f84a271dd8bda06ad82b47a356364035d2b02e4ccf456406066f"
     },
     {
       "runtime": "codex",
@@ -279,35 +148,8 @@
       "role": "tdd-guide",
       "path": "plugins/kaola-workflow/agents/tdd-guide.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20",
-      "resolved_profile_sha256": "4d47ed5d784a54c7c4532a3f42e51b92f8f04371c9f47dbf6d32829a53155490"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitlab",
-      "role": "adversarial-verifier",
-      "path": "plugins/kaola-workflow-gitlab/agents/adversarial-verifier.toml",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "37fae3cbfe32775728cb1e6fe93b087bad719955e78d6d555011db36f4b992c8",
-      "resolved_profile_sha256": "f3a6293c3158a96fb0e6320ea0bd1e8dbabf4bca5c10bd444ea7f20c1c7ddd70"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitlab",
-      "role": "build-error-resolver",
-      "path": "plugins/kaola-workflow-gitlab/agents/build-error-resolver.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4bdb9d11c0d523d6bbec5962cf05429d31da544f182779aab4592ae8d5f3cd09",
-      "resolved_profile_sha256": "1f9ffc92f9bc83c9f9d27b5606f2f0d1272174c6abdae13587fd15c789207745"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitlab",
-      "role": "code-architect",
-      "path": "plugins/kaola-workflow-gitlab/agents/code-architect.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "6962dea4a4db50669fe3cd44efe730fc6bc54489ebf0082ea3d4eed37200b81b",
-      "resolved_profile_sha256": "22beda98e9dc11ca511eba26987c6f6dc10791ac26901e776ee66fddcb5b5a84"
+      "behavior_sha256": "76b895f9de63596592cacc620f0d04a7257b5d022f3de76a9ae1575b462bd272",
+      "resolved_profile_sha256": "293a38bd6c076f9785b5be816424deb1e9b3f46e67a392ac8086cf8156a4d526"
     },
     {
       "runtime": "codex",
@@ -315,17 +157,17 @@
       "role": "code-explorer",
       "path": "plugins/kaola-workflow-gitlab/agents/code-explorer.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "52b32679a8a45971ef7473befceccaadc57208ab90075deb5c206994e0b43b9a",
-      "resolved_profile_sha256": "7e5f08c31232dcdfc962c40cc40d73d817af783df92c470486ddadaff46889e3"
+      "behavior_sha256": "374525f1e24a7827312807c78ee6c61853ce699f91407eedee3c7f502647043d",
+      "resolved_profile_sha256": "0a65d8b8fde6ef66e5de0a0034ade79e7dd72b4e42be1a15ea1db5279f7160b9"
     },
     {
       "runtime": "codex",
       "variant": "codex-gitlab",
       "role": "code-reviewer",
       "path": "plugins/kaola-workflow-gitlab/agents/code-reviewer.toml",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "7f746ba03195b08c0929fd3f7818f081a7fbc250af10823ef44ce5ba8fe209b8",
-      "resolved_profile_sha256": "259db4caf5f0fdfdfc92b35965f6394b04e1af19313a5cb12fa318a36ba04c0b"
+      "behavior_contract_version": 4,
+      "behavior_sha256": "ed38928fee228b6ae0923439c26f3e6edde6f831cc2422147ab46e73ecb15aec",
+      "resolved_profile_sha256": "051610d36e52c19dca7bcf277025f4619dd13e4099348ef1f111a137dfb38ef7"
     },
     {
       "runtime": "codex",
@@ -333,17 +175,17 @@
       "role": "doc-updater",
       "path": "plugins/kaola-workflow-gitlab/agents/doc-updater.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "c0ecdd974909f9d5dcfabf0f2090cba1ee35884f741b3d7685ea227c53c1f6c5",
-      "resolved_profile_sha256": "e70b2e0c2b37df3732d172f8c839df604663c3f125af3b9224dede99997faca0"
+      "behavior_sha256": "91a8ccd836198c0038ff801e760b7e0e0a139fd6a08d7e70ce4257a94028b805",
+      "resolved_profile_sha256": "381e1a952ee653b3e2c2fc214497a8d274bd4477c5a5428059c23cfbbb1a22e1"
     },
     {
       "runtime": "codex",
       "variant": "codex-gitlab",
       "role": "implementer",
       "path": "plugins/kaola-workflow-gitlab/agents/implementer.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "92031ae1aeb5a31affabe2c85bb1bada4881d0460bcab978fb4105c85356ce46",
-      "resolved_profile_sha256": "6fd4fd962fd60c002e0b44e0fad07e823601d322c97c976b0111464f5a93f031"
+      "behavior_contract_version": 2,
+      "behavior_sha256": "f1bf58a9727f7109faaae348b4fe9f0d5607329973b65e6579f0384f75cac037",
+      "resolved_profile_sha256": "d5bd49445dce3de86386c3c4c40e7c56e1788d9e53528725dfdf5ad5343fa1f6"
     },
     {
       "runtime": "codex",
@@ -351,8 +193,8 @@
       "role": "investigator",
       "path": "plugins/kaola-workflow-gitlab/agents/investigator.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "4f1817a36d260e8802ed6c337a95c20dc1faee88bf6e9586ad973e4984bee18d",
-      "resolved_profile_sha256": "729b0720c2f557613a0b04d8ff880f6429f7a0e2e1cc2b47b3ce835cb953e5ba"
+      "behavior_sha256": "7c87b4b2a180cac6c95922c07c07ca16c95469f2103b5949b5a30b230cf1d715",
+      "resolved_profile_sha256": "c670c82643825817039691fb6fd6c1f1aa74dc558df5d0bd972b36459e39bc8d"
     },
     {
       "runtime": "codex",
@@ -360,44 +202,8 @@
       "role": "knowledge-lookup",
       "path": "plugins/kaola-workflow-gitlab/agents/knowledge-lookup.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b",
-      "resolved_profile_sha256": "0b08ae1a328524945c41ed84886b383ff222cbc61207c915ba72f91132778bac"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitlab",
-      "role": "metric-optimizer",
-      "path": "plugins/kaola-workflow-gitlab/agents/metric-optimizer.toml",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "4f5215b795f7657a2b1a6bb5325b133b61c48bbda47fa0211dd6e1069d1164f0",
-      "resolved_profile_sha256": "1997eda5769a891427168640b7d20a5fda9752d6c218a686dd50d679bc34d237"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitlab",
-      "role": "planner",
-      "path": "plugins/kaola-workflow-gitlab/agents/planner.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "a9f0d2031fe9fbdd53b200e7d5b18207ff038b6f8c597e07134ca77701118672",
-      "resolved_profile_sha256": "6c682bf5e2882f143c58a9750ac997d206ae778d411b86fff0182ffc2a422e7f"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitlab",
-      "role": "security-reviewer",
-      "path": "plugins/kaola-workflow-gitlab/agents/security-reviewer.toml",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "87a4f1589fef43645bea2c47e2dc627a118b572240e3e1c62b2c9b8ec21ed125",
-      "resolved_profile_sha256": "c93fca72c0e153d0b98dca5e47428011bcdcb999105e7b4515f0429e72ffc623"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitlab",
-      "role": "synthesizer",
-      "path": "plugins/kaola-workflow-gitlab/agents/synthesizer.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "b2a428191f21997ceab865bd1ed05265dc2a7c86007817093a67084756334e7a",
-      "resolved_profile_sha256": "1f881ab969c40b9aa94a84fda0223f4125e6dffb0647daf6fd7245e1b6d98c74"
+      "behavior_sha256": "547dad2cf9920b9c29bb0a13932dfea26c8b4a7e9a969bf68622d6255ba65ac9",
+      "resolved_profile_sha256": "e9c6bc77c287f84a271dd8bda06ad82b47a356364035d2b02e4ccf456406066f"
     },
     {
       "runtime": "codex",
@@ -405,35 +211,8 @@
       "role": "tdd-guide",
       "path": "plugins/kaola-workflow-gitlab/agents/tdd-guide.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20",
-      "resolved_profile_sha256": "4d47ed5d784a54c7c4532a3f42e51b92f8f04371c9f47dbf6d32829a53155490"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitea",
-      "role": "adversarial-verifier",
-      "path": "plugins/kaola-workflow-gitea/agents/adversarial-verifier.toml",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "37fae3cbfe32775728cb1e6fe93b087bad719955e78d6d555011db36f4b992c8",
-      "resolved_profile_sha256": "f3a6293c3158a96fb0e6320ea0bd1e8dbabf4bca5c10bd444ea7f20c1c7ddd70"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitea",
-      "role": "build-error-resolver",
-      "path": "plugins/kaola-workflow-gitea/agents/build-error-resolver.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4bdb9d11c0d523d6bbec5962cf05429d31da544f182779aab4592ae8d5f3cd09",
-      "resolved_profile_sha256": "1f9ffc92f9bc83c9f9d27b5606f2f0d1272174c6abdae13587fd15c789207745"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitea",
-      "role": "code-architect",
-      "path": "plugins/kaola-workflow-gitea/agents/code-architect.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "6962dea4a4db50669fe3cd44efe730fc6bc54489ebf0082ea3d4eed37200b81b",
-      "resolved_profile_sha256": "22beda98e9dc11ca511eba26987c6f6dc10791ac26901e776ee66fddcb5b5a84"
+      "behavior_sha256": "76b895f9de63596592cacc620f0d04a7257b5d022f3de76a9ae1575b462bd272",
+      "resolved_profile_sha256": "293a38bd6c076f9785b5be816424deb1e9b3f46e67a392ac8086cf8156a4d526"
     },
     {
       "runtime": "codex",
@@ -441,17 +220,17 @@
       "role": "code-explorer",
       "path": "plugins/kaola-workflow-gitea/agents/code-explorer.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "52b32679a8a45971ef7473befceccaadc57208ab90075deb5c206994e0b43b9a",
-      "resolved_profile_sha256": "7e5f08c31232dcdfc962c40cc40d73d817af783df92c470486ddadaff46889e3"
+      "behavior_sha256": "374525f1e24a7827312807c78ee6c61853ce699f91407eedee3c7f502647043d",
+      "resolved_profile_sha256": "0a65d8b8fde6ef66e5de0a0034ade79e7dd72b4e42be1a15ea1db5279f7160b9"
     },
     {
       "runtime": "codex",
       "variant": "codex-gitea",
       "role": "code-reviewer",
       "path": "plugins/kaola-workflow-gitea/agents/code-reviewer.toml",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "7f746ba03195b08c0929fd3f7818f081a7fbc250af10823ef44ce5ba8fe209b8",
-      "resolved_profile_sha256": "259db4caf5f0fdfdfc92b35965f6394b04e1af19313a5cb12fa318a36ba04c0b"
+      "behavior_contract_version": 4,
+      "behavior_sha256": "ed38928fee228b6ae0923439c26f3e6edde6f831cc2422147ab46e73ecb15aec",
+      "resolved_profile_sha256": "051610d36e52c19dca7bcf277025f4619dd13e4099348ef1f111a137dfb38ef7"
     },
     {
       "runtime": "codex",
@@ -459,17 +238,17 @@
       "role": "doc-updater",
       "path": "plugins/kaola-workflow-gitea/agents/doc-updater.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "c0ecdd974909f9d5dcfabf0f2090cba1ee35884f741b3d7685ea227c53c1f6c5",
-      "resolved_profile_sha256": "e70b2e0c2b37df3732d172f8c839df604663c3f125af3b9224dede99997faca0"
+      "behavior_sha256": "91a8ccd836198c0038ff801e760b7e0e0a139fd6a08d7e70ce4257a94028b805",
+      "resolved_profile_sha256": "381e1a952ee653b3e2c2fc214497a8d274bd4477c5a5428059c23cfbbb1a22e1"
     },
     {
       "runtime": "codex",
       "variant": "codex-gitea",
       "role": "implementer",
       "path": "plugins/kaola-workflow-gitea/agents/implementer.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "92031ae1aeb5a31affabe2c85bb1bada4881d0460bcab978fb4105c85356ce46",
-      "resolved_profile_sha256": "6fd4fd962fd60c002e0b44e0fad07e823601d322c97c976b0111464f5a93f031"
+      "behavior_contract_version": 2,
+      "behavior_sha256": "f1bf58a9727f7109faaae348b4fe9f0d5607329973b65e6579f0384f75cac037",
+      "resolved_profile_sha256": "d5bd49445dce3de86386c3c4c40e7c56e1788d9e53528725dfdf5ad5343fa1f6"
     },
     {
       "runtime": "codex",
@@ -477,8 +256,8 @@
       "role": "investigator",
       "path": "plugins/kaola-workflow-gitea/agents/investigator.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "4f1817a36d260e8802ed6c337a95c20dc1faee88bf6e9586ad973e4984bee18d",
-      "resolved_profile_sha256": "729b0720c2f557613a0b04d8ff880f6429f7a0e2e1cc2b47b3ce835cb953e5ba"
+      "behavior_sha256": "7c87b4b2a180cac6c95922c07c07ca16c95469f2103b5949b5a30b230cf1d715",
+      "resolved_profile_sha256": "c670c82643825817039691fb6fd6c1f1aa74dc558df5d0bd972b36459e39bc8d"
     },
     {
       "runtime": "codex",
@@ -486,44 +265,8 @@
       "role": "knowledge-lookup",
       "path": "plugins/kaola-workflow-gitea/agents/knowledge-lookup.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b",
-      "resolved_profile_sha256": "0b08ae1a328524945c41ed84886b383ff222cbc61207c915ba72f91132778bac"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitea",
-      "role": "metric-optimizer",
-      "path": "plugins/kaola-workflow-gitea/agents/metric-optimizer.toml",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "4f5215b795f7657a2b1a6bb5325b133b61c48bbda47fa0211dd6e1069d1164f0",
-      "resolved_profile_sha256": "1997eda5769a891427168640b7d20a5fda9752d6c218a686dd50d679bc34d237"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitea",
-      "role": "planner",
-      "path": "plugins/kaola-workflow-gitea/agents/planner.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "a9f0d2031fe9fbdd53b200e7d5b18207ff038b6f8c597e07134ca77701118672",
-      "resolved_profile_sha256": "6c682bf5e2882f143c58a9750ac997d206ae778d411b86fff0182ffc2a422e7f"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitea",
-      "role": "security-reviewer",
-      "path": "plugins/kaola-workflow-gitea/agents/security-reviewer.toml",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "87a4f1589fef43645bea2c47e2dc627a118b572240e3e1c62b2c9b8ec21ed125",
-      "resolved_profile_sha256": "c93fca72c0e153d0b98dca5e47428011bcdcb999105e7b4515f0429e72ffc623"
-    },
-    {
-      "runtime": "codex",
-      "variant": "codex-gitea",
-      "role": "synthesizer",
-      "path": "plugins/kaola-workflow-gitea/agents/synthesizer.toml",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "b2a428191f21997ceab865bd1ed05265dc2a7c86007817093a67084756334e7a",
-      "resolved_profile_sha256": "1f881ab969c40b9aa94a84fda0223f4125e6dffb0647daf6fd7245e1b6d98c74"
+      "behavior_sha256": "547dad2cf9920b9c29bb0a13932dfea26c8b4a7e9a969bf68622d6255ba65ac9",
+      "resolved_profile_sha256": "e9c6bc77c287f84a271dd8bda06ad82b47a356364035d2b02e4ccf456406066f"
     },
     {
       "runtime": "codex",
@@ -531,287 +274,8 @@
       "role": "tdd-guide",
       "path": "plugins/kaola-workflow-gitea/agents/tdd-guide.toml",
       "behavior_contract_version": 1,
-      "behavior_sha256": "0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20",
-      "resolved_profile_sha256": "4d47ed5d784a54c7c4532a3f42e51b92f8f04371c9f47dbf6d32829a53155490"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "adversarial-verifier",
-      "path": "logical/opencode/agents/adversarial-verifier.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "37fae3cbfe32775728cb1e6fe93b087bad719955e78d6d555011db36f4b992c8",
-      "resolved_profile_sha256": "dc201ce579a1ea57af2b15533994932d53019f9fd98f92109bdbe5b5045ba5a5"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "build-error-resolver",
-      "path": "logical/opencode/agents/build-error-resolver.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4bdb9d11c0d523d6bbec5962cf05429d31da544f182779aab4592ae8d5f3cd09",
-      "resolved_profile_sha256": "05717445ffb0887c13838a2545a700c5541d9304e2a7c85c0488e84b8a1692ad"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "code-architect",
-      "path": "logical/opencode/agents/code-architect.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "6962dea4a4db50669fe3cd44efe730fc6bc54489ebf0082ea3d4eed37200b81b",
-      "resolved_profile_sha256": "43569aa5abab965ee67dfaf761b8f0d1bcc45d0feb72392fbae7217af2fed3fa"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "code-explorer",
-      "path": "logical/opencode/agents/code-explorer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "52b32679a8a45971ef7473befceccaadc57208ab90075deb5c206994e0b43b9a",
-      "resolved_profile_sha256": "a255cd0ecb2f0a8b85adaedb4cf403fd57ec9e18159420af47e4d6f1bd75f211"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "code-reviewer",
-      "path": "logical/opencode/agents/code-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "7f746ba03195b08c0929fd3f7818f081a7fbc250af10823ef44ce5ba8fe209b8",
-      "resolved_profile_sha256": "b972fea523e31a282a568be184f6f7260426251223054f1e204216a1fa427710"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "doc-updater",
-      "path": "logical/opencode/agents/doc-updater.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "c0ecdd974909f9d5dcfabf0f2090cba1ee35884f741b3d7685ea227c53c1f6c5",
-      "resolved_profile_sha256": "cb9a7aa40567d95825b0a416b017b6974badad097d72b2d47accf2f9db787a3a"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "implementer",
-      "path": "logical/opencode/agents/implementer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "92031ae1aeb5a31affabe2c85bb1bada4881d0460bcab978fb4105c85356ce46",
-      "resolved_profile_sha256": "34b5f94b8779e228e0139a4b0a6bc94b952da28a66d400ac62b0d53f8e3c1deb"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "investigator",
-      "path": "logical/opencode/agents/investigator.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4f1817a36d260e8802ed6c337a95c20dc1faee88bf6e9586ad973e4984bee18d",
-      "resolved_profile_sha256": "3866c2a5d051d4004897cb87f22c00e35f574f508a91cfaf2017a3c929a71919"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "knowledge-lookup",
-      "path": "logical/opencode/agents/knowledge-lookup.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b",
-      "resolved_profile_sha256": "430287d61d8d9726c59bd7b8e82a53de9a1ca61c9bce9be0a9b47754f28934b3"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "metric-optimizer",
-      "path": "logical/opencode/agents/metric-optimizer.md",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "4f5215b795f7657a2b1a6bb5325b133b61c48bbda47fa0211dd6e1069d1164f0",
-      "resolved_profile_sha256": "a969bbf4560e518bbdcc397c8d1c8b22ecd699a7c85a791ebeb8dc2d0505e295"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "planner",
-      "path": "logical/opencode/agents/planner.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "a9f0d2031fe9fbdd53b200e7d5b18207ff038b6f8c597e07134ca77701118672",
-      "resolved_profile_sha256": "5a3b054c1b3ca76bff0515aff2f1da3c903a678bd7d6eb14dfde955ca1696cae"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "security-reviewer",
-      "path": "logical/opencode/agents/security-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "87a4f1589fef43645bea2c47e2dc627a118b572240e3e1c62b2c9b8ec21ed125",
-      "resolved_profile_sha256": "03a70cbccbcbfe697d9321d1b47a15bcb406bf1f5cb19bc50d9df7aea257518f"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "synthesizer",
-      "path": "logical/opencode/agents/synthesizer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "b2a428191f21997ceab865bd1ed05265dc2a7c86007817093a67084756334e7a",
-      "resolved_profile_sha256": "ce1bab48d6427ead0f74dcb71d4efeefe80c83a0f1fe1214b7878b38b58df6aa"
-    },
-    {
-      "runtime": "opencode",
-      "variant": "opencode",
-      "role": "tdd-guide",
-      "path": "logical/opencode/agents/tdd-guide.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20",
-      "resolved_profile_sha256": "476073e7bc17e4184977389b3af86bf4bdd679143fde5f115ea79a13ea8ebd3a"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "adversarial-verifier",
-      "path": "logical/kimi/agents/adversarial-verifier.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "37fae3cbfe32775728cb1e6fe93b087bad719955e78d6d555011db36f4b992c8",
-      "resolved_profile_sha256": "e46b61ed6cbd5c2c4ef096ff5baed906fa0bbc2b2aa42e464d83b000b425a0d9"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "build-error-resolver",
-      "path": "logical/kimi/agents/build-error-resolver.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4bdb9d11c0d523d6bbec5962cf05429d31da544f182779aab4592ae8d5f3cd09",
-      "resolved_profile_sha256": "3338495785d65c59e532bf549b1d58709ec42fcd63a545a6cc264a534f517e15"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "code-architect",
-      "path": "logical/kimi/agents/code-architect.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "6962dea4a4db50669fe3cd44efe730fc6bc54489ebf0082ea3d4eed37200b81b",
-      "resolved_profile_sha256": "ba604bd81a501e1c75cbae8d02bd82481504ce1d16cb10dfbab5992f7aa44a05"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "code-explorer",
-      "path": "logical/kimi/agents/code-explorer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "52b32679a8a45971ef7473befceccaadc57208ab90075deb5c206994e0b43b9a",
-      "resolved_profile_sha256": "6674e091b3a51cbd78a285768a132b79f8642bad755d90c51043beeac4bc366f"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "code-reviewer",
-      "path": "logical/kimi/agents/code-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "7f746ba03195b08c0929fd3f7818f081a7fbc250af10823ef44ce5ba8fe209b8",
-      "resolved_profile_sha256": "2b467cc0279cf7e7b8b141d72dff9a5ebb24a7c3a61d9bc31e5ecf659fd14760"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "doc-updater",
-      "path": "logical/kimi/agents/doc-updater.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "c0ecdd974909f9d5dcfabf0f2090cba1ee35884f741b3d7685ea227c53c1f6c5",
-      "resolved_profile_sha256": "bb167301dcb7a1efbbf0a607c285c39f7192601369063df4cf9430299a0cce2d"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "implementer",
-      "path": "logical/kimi/agents/implementer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "92031ae1aeb5a31affabe2c85bb1bada4881d0460bcab978fb4105c85356ce46",
-      "resolved_profile_sha256": "7dbf587ee1f5ae63044b7261a3e91bedddadc846b424e90f944746cf68cbef8d"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "investigator",
-      "path": "logical/kimi/agents/investigator.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4f1817a36d260e8802ed6c337a95c20dc1faee88bf6e9586ad973e4984bee18d",
-      "resolved_profile_sha256": "143348928b765d9c79cbdb9479cc139d12b0fb35aeadecf463a8a69ede5b92c3"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "knowledge-lookup",
-      "path": "logical/kimi/agents/knowledge-lookup.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b",
-      "resolved_profile_sha256": "899fbb2e7921d16c4e424751ebfa35528ce564bf95f56d192f310a3d4ad8d449"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "metric-optimizer",
-      "path": "logical/kimi/agents/metric-optimizer.md",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "4f5215b795f7657a2b1a6bb5325b133b61c48bbda47fa0211dd6e1069d1164f0",
-      "resolved_profile_sha256": "2a4c973103453920a17c709f72e319ee617e9b5c5dd86687c2fa9e9cd98361ce"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "planner",
-      "path": "logical/kimi/agents/planner.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "a9f0d2031fe9fbdd53b200e7d5b18207ff038b6f8c597e07134ca77701118672",
-      "resolved_profile_sha256": "e74d450c7a465dc2a204ba0119eee737ce02149c86d8c1f8e93a4e800252cca5"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "security-reviewer",
-      "path": "logical/kimi/agents/security-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "87a4f1589fef43645bea2c47e2dc627a118b572240e3e1c62b2c9b8ec21ed125",
-      "resolved_profile_sha256": "957c2bf16829e008eb5ccda4571bf558fccc999c972f463d27bdedc47bfba294"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "synthesizer",
-      "path": "logical/kimi/agents/synthesizer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "b2a428191f21997ceab865bd1ed05265dc2a7c86007817093a67084756334e7a",
-      "resolved_profile_sha256": "ae2d40339eaa03b3a161eeacaa0aae10966463bda235aee096bb5193b48769a1"
-    },
-    {
-      "runtime": "kimi",
-      "variant": "kimi",
-      "role": "tdd-guide",
-      "path": "logical/kimi/agents/tdd-guide.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20",
-      "resolved_profile_sha256": "bbc7063c9b4d8149687cf16dcd5157c1a290a1437792d267ec7e85e1e1a9f1ca"
-    },
-    {
-      "runtime": "grok",
-      "variant": "grok",
-      "role": "adversarial-verifier",
-      "path": "logical/grok/agents/adversarial-verifier.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "37fae3cbfe32775728cb1e6fe93b087bad719955e78d6d555011db36f4b992c8",
-      "resolved_profile_sha256": "2e5f74dcab6672f0c076b58e63f63d7c4ff5a8e0e0a2b73811eb7e3a4906b637"
-    },
-    {
-      "runtime": "grok",
-      "variant": "grok",
-      "role": "build-error-resolver",
-      "path": "logical/grok/agents/build-error-resolver.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4bdb9d11c0d523d6bbec5962cf05429d31da544f182779aab4592ae8d5f3cd09",
-      "resolved_profile_sha256": "307f4b58d5865360420895f53bbcc884ac0343f106ad5d42034d1f17cb7b0f07"
-    },
-    {
-      "runtime": "grok",
-      "variant": "grok",
-      "role": "code-architect",
-      "path": "logical/grok/agents/code-architect.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "6962dea4a4db50669fe3cd44efe730fc6bc54489ebf0082ea3d4eed37200b81b",
-      "resolved_profile_sha256": "c1d2a627ea5a87a230c5315903d5873ac1bb2d41770c2f8a70801e678a3188f9"
+      "behavior_sha256": "76b895f9de63596592cacc620f0d04a7257b5d022f3de76a9ae1575b462bd272",
+      "resolved_profile_sha256": "293a38bd6c076f9785b5be816424deb1e9b3f46e67a392ac8086cf8156a4d526"
     },
     {
       "runtime": "grok",
@@ -819,17 +283,17 @@
       "role": "code-explorer",
       "path": "logical/grok/agents/code-explorer.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "52b32679a8a45971ef7473befceccaadc57208ab90075deb5c206994e0b43b9a",
-      "resolved_profile_sha256": "9f2904cbed9aed599a163fb058c3eeffafdbb6c368bc96b3d010a1ff50805f9f"
+      "behavior_sha256": "374525f1e24a7827312807c78ee6c61853ce699f91407eedee3c7f502647043d",
+      "resolved_profile_sha256": "7b79de8270b16f5f21f002b0aab0e850bbddac76751dcb5cc9ec8f9203616803"
     },
     {
       "runtime": "grok",
       "variant": "grok",
       "role": "code-reviewer",
       "path": "logical/grok/agents/code-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "7f746ba03195b08c0929fd3f7818f081a7fbc250af10823ef44ce5ba8fe209b8",
-      "resolved_profile_sha256": "c99fe16b90573cdf711259475b3eec7976fcf118b7037b6fb23ab8c21802baf8"
+      "behavior_contract_version": 4,
+      "behavior_sha256": "ed38928fee228b6ae0923439c26f3e6edde6f831cc2422147ab46e73ecb15aec",
+      "resolved_profile_sha256": "7118db33e43a7923d5bb62e4ac59dd424df6b500c835e38e88629d5af88d993e"
     },
     {
       "runtime": "grok",
@@ -837,17 +301,17 @@
       "role": "doc-updater",
       "path": "logical/grok/agents/doc-updater.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "c0ecdd974909f9d5dcfabf0f2090cba1ee35884f741b3d7685ea227c53c1f6c5",
-      "resolved_profile_sha256": "b9de78d9996280c39931dfc1ce69be997bb79b62f060fe3655dd25729d97115d"
+      "behavior_sha256": "91a8ccd836198c0038ff801e760b7e0e0a139fd6a08d7e70ce4257a94028b805",
+      "resolved_profile_sha256": "807f863876e6ffa14c6709ae30070f8ccb31c300e733aafe7e5148b6bb28a080"
     },
     {
       "runtime": "grok",
       "variant": "grok",
       "role": "implementer",
       "path": "logical/grok/agents/implementer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "92031ae1aeb5a31affabe2c85bb1bada4881d0460bcab978fb4105c85356ce46",
-      "resolved_profile_sha256": "c7e5bd5bf4954bb30250a70cf8591afa1af3b78168edb1a2d365601ceca834bd"
+      "behavior_contract_version": 2,
+      "behavior_sha256": "f1bf58a9727f7109faaae348b4fe9f0d5607329973b65e6579f0384f75cac037",
+      "resolved_profile_sha256": "abcea691493b62a20b49fafdcd24a064f37e877204d663027e423aaa4f8b6c90"
     },
     {
       "runtime": "grok",
@@ -855,8 +319,8 @@
       "role": "investigator",
       "path": "logical/grok/agents/investigator.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "4f1817a36d260e8802ed6c337a95c20dc1faee88bf6e9586ad973e4984bee18d",
-      "resolved_profile_sha256": "9ab9be79ffd5808c8387794864d39fd8ab458e2b63e58668f18c99f947d87bde"
+      "behavior_sha256": "7c87b4b2a180cac6c95922c07c07ca16c95469f2103b5949b5a30b230cf1d715",
+      "resolved_profile_sha256": "b196098489893b2e83ea2111edcb4c81551be2dc0f0d938fb9e818230ea12a09"
     },
     {
       "runtime": "grok",
@@ -864,44 +328,8 @@
       "role": "knowledge-lookup",
       "path": "logical/grok/agents/knowledge-lookup.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b",
-      "resolved_profile_sha256": "eac72a702d82cc3e111f7b1c7f83a8640c33e180bf4926d6cd2697d0c04070d0"
-    },
-    {
-      "runtime": "grok",
-      "variant": "grok",
-      "role": "metric-optimizer",
-      "path": "logical/grok/agents/metric-optimizer.md",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "4f5215b795f7657a2b1a6bb5325b133b61c48bbda47fa0211dd6e1069d1164f0",
-      "resolved_profile_sha256": "2b6ab2fc35542307c7dee7d6fc42d780a37cb2f6ee537b850b7e0c223cbcb688"
-    },
-    {
-      "runtime": "grok",
-      "variant": "grok",
-      "role": "planner",
-      "path": "logical/grok/agents/planner.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "a9f0d2031fe9fbdd53b200e7d5b18207ff038b6f8c597e07134ca77701118672",
-      "resolved_profile_sha256": "a78f7422bb5624c28739ad7656f7ca948468131bc3ada349013686f6d9bdde98"
-    },
-    {
-      "runtime": "grok",
-      "variant": "grok",
-      "role": "security-reviewer",
-      "path": "logical/grok/agents/security-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "87a4f1589fef43645bea2c47e2dc627a118b572240e3e1c62b2c9b8ec21ed125",
-      "resolved_profile_sha256": "fa53a64be48741dc18099d7485674b13c31188dcef1ac11f6ffbb0fad467845e"
-    },
-    {
-      "runtime": "grok",
-      "variant": "grok",
-      "role": "synthesizer",
-      "path": "logical/grok/agents/synthesizer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "b2a428191f21997ceab865bd1ed05265dc2a7c86007817093a67084756334e7a",
-      "resolved_profile_sha256": "4edd4bdea3be84a341bc98a94991e7f25e0b1833e3062456eb88589f1c6e883a"
+      "behavior_sha256": "547dad2cf9920b9c29bb0a13932dfea26c8b4a7e9a969bf68622d6255ba65ac9",
+      "resolved_profile_sha256": "818e3d0c41462d8a43cb3d6220310be5752630f29f74ec52d545266d29e4e0aa"
     },
     {
       "runtime": "grok",
@@ -909,35 +337,8 @@
       "role": "tdd-guide",
       "path": "logical/grok/agents/tdd-guide.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20",
-      "resolved_profile_sha256": "ee31c55290b8dc52ebf9fe617d68b495521189d81e54002f7f4331568a83fa3a"
-    },
-    {
-      "runtime": "cursor",
-      "variant": "cursor",
-      "role": "adversarial-verifier",
-      "path": "logical/cursor/agents/adversarial-verifier.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "37fae3cbfe32775728cb1e6fe93b087bad719955e78d6d555011db36f4b992c8",
-      "resolved_profile_sha256": "b661c6520ea522f0b1a1c5dc8946ffb4a678fb78959817eced33ca8df9280864"
-    },
-    {
-      "runtime": "cursor",
-      "variant": "cursor",
-      "role": "build-error-resolver",
-      "path": "logical/cursor/agents/build-error-resolver.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4bdb9d11c0d523d6bbec5962cf05429d31da544f182779aab4592ae8d5f3cd09",
-      "resolved_profile_sha256": "738edf49247e3068989647c20c5cb63e16e6a522bf920d3a7841102fe213258c"
-    },
-    {
-      "runtime": "cursor",
-      "variant": "cursor",
-      "role": "code-architect",
-      "path": "logical/cursor/agents/code-architect.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "6962dea4a4db50669fe3cd44efe730fc6bc54489ebf0082ea3d4eed37200b81b",
-      "resolved_profile_sha256": "e5ff1e87c6c11445f6433d9572ee41db3b7bca894f83c080b8b71493b9b666a4"
+      "behavior_sha256": "76b895f9de63596592cacc620f0d04a7257b5d022f3de76a9ae1575b462bd272",
+      "resolved_profile_sha256": "23f2dce243961c069f07b574cdad94f7c0dbe0ec1accf305dc70445218ee8d05"
     },
     {
       "runtime": "cursor",
@@ -945,17 +346,17 @@
       "role": "code-explorer",
       "path": "logical/cursor/agents/code-explorer.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "52b32679a8a45971ef7473befceccaadc57208ab90075deb5c206994e0b43b9a",
-      "resolved_profile_sha256": "8cda12d588f8bb2d93510cc4120a63608a8a2527c29c4735e55c2f600d509f23"
+      "behavior_sha256": "374525f1e24a7827312807c78ee6c61853ce699f91407eedee3c7f502647043d",
+      "resolved_profile_sha256": "62435beffd4d76d7809552afeaa78d781282bc357906ee0685f3a6cbafaacf0d"
     },
     {
       "runtime": "cursor",
       "variant": "cursor",
       "role": "code-reviewer",
       "path": "logical/cursor/agents/code-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "7f746ba03195b08c0929fd3f7818f081a7fbc250af10823ef44ce5ba8fe209b8",
-      "resolved_profile_sha256": "a0e42279f488edc1841d9af7a7747a48ef3c53c138da5864b2204dcc01289302"
+      "behavior_contract_version": 4,
+      "behavior_sha256": "ed38928fee228b6ae0923439c26f3e6edde6f831cc2422147ab46e73ecb15aec",
+      "resolved_profile_sha256": "8119845468d8ed156a4d5e2a69aeb4ab116dfe832ae6e1825aead43847144184"
     },
     {
       "runtime": "cursor",
@@ -963,17 +364,17 @@
       "role": "doc-updater",
       "path": "logical/cursor/agents/doc-updater.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "c0ecdd974909f9d5dcfabf0f2090cba1ee35884f741b3d7685ea227c53c1f6c5",
-      "resolved_profile_sha256": "0a5147fe7612191df9abdd88dd5c616d41745049e8ff904f03b61540094ecd37"
+      "behavior_sha256": "91a8ccd836198c0038ff801e760b7e0e0a139fd6a08d7e70ce4257a94028b805",
+      "resolved_profile_sha256": "6b3700e390ab83783a15c10fb03dcf79de5647daefe815edf2aa9ded130fb9a4"
     },
     {
       "runtime": "cursor",
       "variant": "cursor",
       "role": "implementer",
       "path": "logical/cursor/agents/implementer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "92031ae1aeb5a31affabe2c85bb1bada4881d0460bcab978fb4105c85356ce46",
-      "resolved_profile_sha256": "36ae6cf5b78059097e9bf34e0d00d6f93b179bb58ee9b94282d7474f8b852ad9"
+      "behavior_contract_version": 2,
+      "behavior_sha256": "f1bf58a9727f7109faaae348b4fe9f0d5607329973b65e6579f0384f75cac037",
+      "resolved_profile_sha256": "263b2aa580436719b04829ac75f896fd62d9aaa0498685c3ead503e374cb692c"
     },
     {
       "runtime": "cursor",
@@ -981,8 +382,8 @@
       "role": "investigator",
       "path": "logical/cursor/agents/investigator.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "4f1817a36d260e8802ed6c337a95c20dc1faee88bf6e9586ad973e4984bee18d",
-      "resolved_profile_sha256": "65b01cf1ae9e28512fbc5fe279130a3ca58a2474c97af95be7c9d140879b29ed"
+      "behavior_sha256": "7c87b4b2a180cac6c95922c07c07ca16c95469f2103b5949b5a30b230cf1d715",
+      "resolved_profile_sha256": "208ae5d58db4f28bd0fe52c76204cb54f0d67964c0bef1711a68051fdf55003e"
     },
     {
       "runtime": "cursor",
@@ -990,44 +391,8 @@
       "role": "knowledge-lookup",
       "path": "logical/cursor/agents/knowledge-lookup.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b",
-      "resolved_profile_sha256": "2af57644634c44287a28ba8b423136b23fc7e35f1a95c5baf27aca4ffaa7f790"
-    },
-    {
-      "runtime": "cursor",
-      "variant": "cursor",
-      "role": "metric-optimizer",
-      "path": "logical/cursor/agents/metric-optimizer.md",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "4f5215b795f7657a2b1a6bb5325b133b61c48bbda47fa0211dd6e1069d1164f0",
-      "resolved_profile_sha256": "1ff0fd72d5dcd19faff278a6416eb9afdf67d2ce6297e77a8c788ce9f2988ec3"
-    },
-    {
-      "runtime": "cursor",
-      "variant": "cursor",
-      "role": "planner",
-      "path": "logical/cursor/agents/planner.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "a9f0d2031fe9fbdd53b200e7d5b18207ff038b6f8c597e07134ca77701118672",
-      "resolved_profile_sha256": "62ef5194544b8dbec704685194c573989eb501d3e6d78dfcb50a930ac124df99"
-    },
-    {
-      "runtime": "cursor",
-      "variant": "cursor",
-      "role": "security-reviewer",
-      "path": "logical/cursor/agents/security-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "87a4f1589fef43645bea2c47e2dc627a118b572240e3e1c62b2c9b8ec21ed125",
-      "resolved_profile_sha256": "3fe7ad309626211ba38c6c330f667bddaf1b9cd7ee487c96127fada14e0264f0"
-    },
-    {
-      "runtime": "cursor",
-      "variant": "cursor",
-      "role": "synthesizer",
-      "path": "logical/cursor/agents/synthesizer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "b2a428191f21997ceab865bd1ed05265dc2a7c86007817093a67084756334e7a",
-      "resolved_profile_sha256": "28c1373b4d60ddef176cfc5ba1910e23b8291f29a3859d1d31f18c2007ed771d"
+      "behavior_sha256": "547dad2cf9920b9c29bb0a13932dfea26c8b4a7e9a969bf68622d6255ba65ac9",
+      "resolved_profile_sha256": "64a66c3c9ed3f373c8341ec65f2a2f476d5bd6b046755bab119462f66f652a79"
     },
     {
       "runtime": "cursor",
@@ -1035,260 +400,8 @@
       "role": "tdd-guide",
       "path": "logical/cursor/agents/tdd-guide.md",
       "behavior_contract_version": 1,
-      "behavior_sha256": "0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20",
-      "resolved_profile_sha256": "ce66aeb1e912e55a118e596cef7d2a4afd431023ef6d24c4150fb3b9ee705545"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "adversarial-verifier",
-      "path": "logical/zcode/agents/adversarial-verifier.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "37fae3cbfe32775728cb1e6fe93b087bad719955e78d6d555011db36f4b992c8",
-      "resolved_profile_sha256": "6cbc99cdce9250e8495d5cc4aa698d59d18e80aa8e2ee10f1d59b11026884794"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "build-error-resolver",
-      "path": "logical/zcode/agents/build-error-resolver.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4bdb9d11c0d523d6bbec5962cf05429d31da544f182779aab4592ae8d5f3cd09",
-      "resolved_profile_sha256": "3385e08e28f079552bd441e723115ba509e2e724b0573c3f369f9d252d57543c"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "code-architect",
-      "path": "logical/zcode/agents/code-architect.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "6962dea4a4db50669fe3cd44efe730fc6bc54489ebf0082ea3d4eed37200b81b",
-      "resolved_profile_sha256": "c00330bf6de5fe5198521791cba9765c12677705e45764448bc7ef05e942ee14"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "code-explorer",
-      "path": "logical/zcode/agents/code-explorer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "52b32679a8a45971ef7473befceccaadc57208ab90075deb5c206994e0b43b9a",
-      "resolved_profile_sha256": "d7fdd52169b5ef4687ed6f4ba595982081dda3dbe0318e107fe7df6974dcb071"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "code-reviewer",
-      "path": "logical/zcode/agents/code-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "7f746ba03195b08c0929fd3f7818f081a7fbc250af10823ef44ce5ba8fe209b8",
-      "resolved_profile_sha256": "8ed55d37ae197ad961fd3e06491acee04cfed112071a704b751027aeb172a10c"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "doc-updater",
-      "path": "logical/zcode/agents/doc-updater.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "c0ecdd974909f9d5dcfabf0f2090cba1ee35884f741b3d7685ea227c53c1f6c5",
-      "resolved_profile_sha256": "047a601ad170cb4d171672a46ac7d8bc0034600f48b33460427cffefe0f07b2f"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "implementer",
-      "path": "logical/zcode/agents/implementer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "92031ae1aeb5a31affabe2c85bb1bada4881d0460bcab978fb4105c85356ce46",
-      "resolved_profile_sha256": "384c9854b0ce846abce68135b81ddb0bf092810a6daac897965606a5aec2b714"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "investigator",
-      "path": "logical/zcode/agents/investigator.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4f1817a36d260e8802ed6c337a95c20dc1faee88bf6e9586ad973e4984bee18d",
-      "resolved_profile_sha256": "7ee2295bb46a086c7e1359a1e332ef43ac78bbc0e407331642579834d21724b8"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "knowledge-lookup",
-      "path": "logical/zcode/agents/knowledge-lookup.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b",
-      "resolved_profile_sha256": "4e4075c1b692abaeb3dc928a6457badf44101a4198d572d13217250a321c697b"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "metric-optimizer",
-      "path": "logical/zcode/agents/metric-optimizer.md",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "4f5215b795f7657a2b1a6bb5325b133b61c48bbda47fa0211dd6e1069d1164f0",
-      "resolved_profile_sha256": "bac98dc916ab1c9ae3081548a17c244c569bada581ad7e43788eb432dcca6b48"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "planner",
-      "path": "logical/zcode/agents/planner.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "a9f0d2031fe9fbdd53b200e7d5b18207ff038b6f8c597e07134ca77701118672",
-      "resolved_profile_sha256": "83aec5c38fe678435467b7c517f4f0d6d714e675d916bd004193c0762688fe77"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "security-reviewer",
-      "path": "logical/zcode/agents/security-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "87a4f1589fef43645bea2c47e2dc627a118b572240e3e1c62b2c9b8ec21ed125",
-      "resolved_profile_sha256": "7668a1b9e0929536d2f4cf418f1aff61ea5e5126174a0150c4ef88944d2810ec"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "synthesizer",
-      "path": "logical/zcode/agents/synthesizer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "b2a428191f21997ceab865bd1ed05265dc2a7c86007817093a67084756334e7a",
-      "resolved_profile_sha256": "12edac58d06db988d3716f01098e7a2c3a47a22e8c408ad56e57df2385bbb861"
-    },
-    {
-      "runtime": "zcode",
-      "variant": "zcode",
-      "role": "tdd-guide",
-      "path": "logical/zcode/agents/tdd-guide.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20",
-      "resolved_profile_sha256": "48fc2ffb5588a079b59b3693e14194618e7227757e8901c9c2803f7f44f411e5"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "adversarial-verifier",
-      "path": "logical/devin/agents/adversarial-verifier.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "37fae3cbfe32775728cb1e6fe93b087bad719955e78d6d555011db36f4b992c8",
-      "resolved_profile_sha256": "ca04e15114657c5feefe5fcec7174dc19e8bca1caaa2139fb3ac2a4400c14c3b"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "build-error-resolver",
-      "path": "logical/devin/agents/build-error-resolver.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4bdb9d11c0d523d6bbec5962cf05429d31da544f182779aab4592ae8d5f3cd09",
-      "resolved_profile_sha256": "42e8ac8ac3871df7ed2c290d386b1435afdf85ade6bc7dd00b4b9c458d78cd77"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "code-architect",
-      "path": "logical/devin/agents/code-architect.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "6962dea4a4db50669fe3cd44efe730fc6bc54489ebf0082ea3d4eed37200b81b",
-      "resolved_profile_sha256": "28c28578d0c69a400539423093bff3152d079f15d98439910d33b29d917409ce"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "code-explorer",
-      "path": "logical/devin/agents/code-explorer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "52b32679a8a45971ef7473befceccaadc57208ab90075deb5c206994e0b43b9a",
-      "resolved_profile_sha256": "554a9bb4888b506e7ad2bb54961d9b84b3d0fbbc356fec06073545a4248f08d8"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "code-reviewer",
-      "path": "logical/devin/agents/code-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "7f746ba03195b08c0929fd3f7818f081a7fbc250af10823ef44ce5ba8fe209b8",
-      "resolved_profile_sha256": "0af9c24fd7a0daa9ad4c705e390c3290ed894fc76a12b600c2b84ac298e317b1"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "doc-updater",
-      "path": "logical/devin/agents/doc-updater.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "c0ecdd974909f9d5dcfabf0f2090cba1ee35884f741b3d7685ea227c53c1f6c5",
-      "resolved_profile_sha256": "b698e57d747704f8c070989f0d21830ec140cf91afee76b5bc9bf8ac495f43c6"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "implementer",
-      "path": "logical/devin/agents/implementer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "92031ae1aeb5a31affabe2c85bb1bada4881d0460bcab978fb4105c85356ce46",
-      "resolved_profile_sha256": "b40eedf145bfd551fa4b684e4fb0b53c4240190507f9513d75dabf96ab20d800"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "investigator",
-      "path": "logical/devin/agents/investigator.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "4f1817a36d260e8802ed6c337a95c20dc1faee88bf6e9586ad973e4984bee18d",
-      "resolved_profile_sha256": "a00164febf551228d660361f0b11a47ad3fdee0390a0b7ea44b1194f9f251cbe"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "knowledge-lookup",
-      "path": "logical/devin/agents/knowledge-lookup.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b",
-      "resolved_profile_sha256": "2e9541d20fac7c7c657898b7d2c4edee852caa30e944b5ee9aba28db0c8b974d"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "metric-optimizer",
-      "path": "logical/devin/agents/metric-optimizer.md",
-      "behavior_contract_version": 2,
-      "behavior_sha256": "4f5215b795f7657a2b1a6bb5325b133b61c48bbda47fa0211dd6e1069d1164f0",
-      "resolved_profile_sha256": "8df9733db3dddb5ec16da7a11c5b489566f84bd632130adad3a880d54efd6622"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "planner",
-      "path": "logical/devin/agents/planner.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "a9f0d2031fe9fbdd53b200e7d5b18207ff038b6f8c597e07134ca77701118672",
-      "resolved_profile_sha256": "5dc989adec73befcba11453258016f26c9855d3bf6b943896b29bb9d7c53b4d3"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "security-reviewer",
-      "path": "logical/devin/agents/security-reviewer.md",
-      "behavior_contract_version": 3,
-      "behavior_sha256": "87a4f1589fef43645bea2c47e2dc627a118b572240e3e1c62b2c9b8ec21ed125",
-      "resolved_profile_sha256": "d18a2d2b3242b1ac1b62e6535817f094596091095c83578d146aef5c5d4fb567"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "synthesizer",
-      "path": "logical/devin/agents/synthesizer.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "b2a428191f21997ceab865bd1ed05265dc2a7c86007817093a67084756334e7a",
-      "resolved_profile_sha256": "0202b82388ab1554f5b2503525fb69b8b4319512b4dfef11c02cc98357647ff5"
-    },
-    {
-      "runtime": "devin",
-      "variant": "devin",
-      "role": "tdd-guide",
-      "path": "logical/devin/agents/tdd-guide.md",
-      "behavior_contract_version": 1,
-      "behavior_sha256": "0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20",
-      "resolved_profile_sha256": "53c1eba63fa055d34367df5b9dabea632b601dc8c243a13fd5acb80ba0f976d3"
+      "behavior_sha256": "76b895f9de63596592cacc620f0d04a7257b5d022f3de76a9ae1575b462bd272",
+      "resolved_profile_sha256": "f93b35ff1ca01f0b8631eb6f9ba0debc451f271692cd447bc924536c41d8492b"
     }
   ]
 }

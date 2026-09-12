@@ -64,28 +64,20 @@ const MISSION_LIST_FILE = 'mission-list.md';
 // a legacy project folder that carries one, and nothing authors it any more.
 const PLAN_FILE = 'workflow-plan.md';
 
-// Codex role profile policy. Every known profile omits runtime-strength keys and inherits the parent
-// pair. The standard / reasoning / heavy classes remain declarative metadata and wait defaults.
-const CODEX_PINNED_STANDARD_ROLES = Object.freeze([
+// Codex role profile policy. Every known profile pins exactly one top-level `model` /
+// `model_reasoning_effort` pair — the single subagent binding every installed Kaola TOML
+// profile carries; file values take precedence over spawn parameters and the parent session.
+const CODEX_PINNED_ROLES = Object.freeze([
   'code-explorer',
+  'code-reviewer',
+  'doc-updater',
+  'implementer',
   'investigator',
   'knowledge-lookup',
   'tdd-guide',
-  'implementer',
-  'doc-updater',
-  'metric-optimizer',
 ]);
-const CODEX_PINNED_REASONING_ROLES = Object.freeze([
-  'build-error-resolver',
-  'code-reviewer',
-  'security-reviewer',
-  'adversarial-verifier',
-  'synthesizer',
-]);
-const CODEX_PINNED_HEAVY_ROLES = Object.freeze([
-  'planner',
-  'code-architect',
-]);
+const CODEX_PINNED_MODEL = 'gpt-5.6-luna';
+const CODEX_PINNED_EFFORT = 'max';
 
 // Codex agent-profile schema (issue #332; #29 audit convergence). ONE authoring source for the
 // TOML shape rules `kaola-workflow-codex-preflight.js` (read-only validation, all 4 trees) and
@@ -121,10 +113,20 @@ const RETIRED_PROFILE_FILES = [
   // transaction, so the bookkeeping role retired. Pruned on upgrade so a previously-installed
   // profile cannot linger and shadow.
   'contractor.toml',
+  // #1062: the role catalog narrowed from fourteen to seven. Pruned on upgrade so a
+  // previously-installed retired profile cannot linger and shadow.
+  'adversarial-verifier.toml',
+  'build-error-resolver.toml',
+  'code-architect.toml',
+  'metric-optimizer.toml',
+  'planner.toml',
+  'security-reviewer.toml',
+  'synthesizer.toml',
 ];
 const EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'];
 const CODEX_ROLE_TOP_LEVEL_FIELDS = Object.freeze([
-  'name', 'description', 'nickname_candidates', 'developer_instructions',
+  'name', 'description', 'nickname_candidates', 'model', 'model_reasoning_effort',
+  'developer_instructions',
 ]);
 
 function escapeRegExp(value) {
@@ -346,11 +348,17 @@ function validateProfileText(text, role, expectedMeta = null) {
 
   const modelLines = shape.fields.filter(field => field === 'model');
   const effortLines = shape.fields.filter(field => field === 'model_reasoning_effort');
-  if (!CODEX_PINNED_STANDARD_ROLES.includes(role) && !CODEX_PINNED_REASONING_ROLES.includes(role) && !CODEX_PINNED_HEAVY_ROLES.includes(role)) {
-    reasons.push(`role "${role}" has no Codex profile-tier policy`);
+  if (!CODEX_PINNED_ROLES.includes(role)) {
+    reasons.push(`role "${role}" has no Codex profile policy`);
   }
-  if (modelLines.length > 0) reasons.push("top-level 'model' must be omitted to inherit the parent session");
-  if (effortLines.length > 0) reasons.push("top-level 'model_reasoning_effort' must be omitted to inherit the parent session");
+  const modelValues = [...top.matchAll(/^model\s*=\s*"([^"]*)"\s*$/gm)].map(m => m[1]);
+  const effortValues = [...top.matchAll(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/gm)].map(m => m[1]);
+  if (modelLines.length !== 1 || modelValues.length !== 1 || modelValues[0] !== CODEX_PINNED_MODEL) {
+    reasons.push(`top-level 'model' must be present and equal "${CODEX_PINNED_MODEL}"`);
+  }
+  if (effortLines.length !== 1 || effortValues.length !== 1 || effortValues[0] !== CODEX_PINNED_EFFORT) {
+    reasons.push(`top-level 'model_reasoning_effort' must be present and equal "${CODEX_PINNED_EFFORT}"`);
+  }
 
   const instrMatch = shape.instructionMatch;
   if (!instrMatch) {
@@ -1928,9 +1936,9 @@ module.exports = {
   NEXT_COMMAND,
   NEXT_SKILL,
   PLAN_FILE,
-  CODEX_PINNED_STANDARD_ROLES,
-  CODEX_PINNED_REASONING_ROLES,
-  CODEX_PINNED_HEAVY_ROLES,
+  CODEX_PINNED_ROLES,
+  CODEX_PINNED_MODEL,
+  CODEX_PINNED_EFFORT,
   // Codex agent-profile schema (issue #332; #29 audit convergence) — the one authority for the
   // preflight (read-only) and installer (write-time) TOML shape checks.
   MANIFEST_BASENAME,

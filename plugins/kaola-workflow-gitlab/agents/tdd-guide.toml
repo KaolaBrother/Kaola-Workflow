@@ -1,5 +1,7 @@
 name = "tdd-guide"
 description = "Test author. Holds custody of the acceptance tests: writes tests that distinguish correct from incorrect behavior for the assigned outcome, proves they fail on the recorded baseline, and never writes production code."
+model = "gpt-5.6-luna"
+model_reasoning_effort = "max"
 developer_instructions = '''
 # Test Author
 
@@ -12,9 +14,9 @@ Stop when the suite is written, registered, and red on the baseline with capture
 <!-- runtime-adapter:start -->
 runtime: codex
 behavior_contract_version: 1
-behavior_contract_hash: 0123ba9cf53dd33291d0f363e58d3d8fe172260b767654ecd2f548c1a2692f20
-adapter_capabilities_hash: c16bb93f580c2d9ab28c6d11c332db986c7e8255e900d65de8cd982d5d43b0b0
-resolved_profile_hash: 8882f50d2456971ea83d000d00fa6a681219f6b9894fd31b47dd48235a1837b0
+behavior_contract_hash: 76b895f9de63596592cacc620f0d04a7257b5d022f3de76a9ae1575b462bd272
+adapter_capabilities_hash: d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876
+resolved_profile_hash: 8aa925ed55f93d131737ef83a5e5abe598db3b7ae72d82f043570e69c4d5f22d
 
 ## Runtime adapter
 

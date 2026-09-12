@@ -4,8 +4,8 @@ description: "Knowledge lookup. Finds authoritative external sources for facts t
 tools: ["Read","Write","Edit","Grep","Glob","WebSearch","WebFetch"]
 model: sonnet
 behavior_contract_version: 1
-behavior_contract_hash: 290d63c32fb12f2537e60f47704ef646067403a791f88f4a3e30be30c7bab24b
-resolved_profile_hash: c357c22b2c470a0a2956c2b998d99a54e1bb7598af1c0d9fbb2100464cce4613
+behavior_contract_hash: 547dad2cf9920b9c29bb0a13932dfea26c8b4a7e9a969bf68622d6255ba65ac9
+resolved_profile_hash: 0b9413bedbdd4214b8b873b6346eac76734d4bf6a049808d0f6fa9a5598bc4f1
 ---
 <!-- kaola-workflow-managed-agent: true -->
 

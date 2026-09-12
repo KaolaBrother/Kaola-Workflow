@@ -27,20 +27,30 @@ function rewriteClaudeScriptPaths(text) {
   return text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + devinKaolaScript());
 }
 
+// Devin installs no Kaola role profiles by design (#1062): a canonical dispatch card becomes a
+// native-route instruction, naming no Kaola role as dispatchable.
+function devinNativeDispatchProse(card) {
+  if (card.includes('doc-updater')) {
+    return 'Use a native route or work inline for documentation work — `run_subagent` with the '
+      + 'built-in `subagent_general` or a user-owned profile from the session-start catalog. Put '
+      + 'the changed files, checklist, working directory, and custody boundary in the brief.\n';
+  }
+  return 'Use a native route or work inline for this routed fix — `run_subagent` with the built-in '
+    + '`subagent_general` or a user-owned profile from the session-start catalog. Put the failure '
+    + 'command, evidence path, working directory, and custody boundary in the brief.\n';
+}
+
 function transformCommandBody(body, forge) {
   forge = forge || DEFAULT_FORGE;
   let text = body.split(/\r?\n/).join('\n');
   if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
     text = agentGen.replaceRuntimeDelegationGuidance(text, 'devin', forge);
   }
+  text = text.replace(/^Agent\(\n[\s\S]*?^\)\n?/gm, devinNativeDispatchProse);
   text = rewriteClaudeScriptPaths(text);
   text = text.replace(/--runtime claude\b/g, '--runtime devin');
   text = text.replace(/[ \t]+\n/g, '\n');
   return text;
-}
-
-function renderAgent(_canon, role) {
-  return agentGen.renderRuntimeRole('devin', role).content;
 }
 
 // Devin keeps skill descriptions in context across compaction (#1058 F11), so the description
@@ -71,9 +81,6 @@ function renderSkill(canon, name, forge = DEFAULT_FORGE) {
 function expected(forge) {
   const files = new Map();
   const label = treeLabel(forge);
-  for (const role of agentGen.ROLES) {
-    files.set(label + '/agents/' + role + '.md', renderAgent('', role));
-  }
   for (const source of forgeLayout.commandSources(forge)) {
     const name = source.basename.replace(/\.md$/, '');
     files.set(skillRel(name, forge), renderSkill(fs.readFileSync(source.absPath, 'utf8'), name, forge));
@@ -118,4 +125,4 @@ function main(argv) {
 
 if (require.main === module) main(process.argv.slice(2));
 
-module.exports = { renderAgent, renderSkill, transformCommandBody, expected, sync, treeLabel, skillRel };
+module.exports = { renderSkill, transformCommandBody, expected, sync, treeLabel, skillRel };

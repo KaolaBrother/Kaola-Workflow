@@ -3,14 +3,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-// #29 audit: the standard/reasoning/heavy role classification AND the #332 Codex agent-profile
+// #29 audit: the pinned role catalog AND the #332 Codex agent-profile
 // schema (constants + validateProfileText + its helpers) have ONE authoring source, the
 // forge-neutral kernel — required here rather than re-declared. The kernel is a sibling in
 // this tree (see KERNEL_COPIES in scripts/validate-script-sync.js).
 const {
-  CODEX_PINNED_STANDARD_ROLES,
-  CODEX_PINNED_REASONING_ROLES,
-  CODEX_PINNED_HEAVY_ROLES,
+  CODEX_PINNED_ROLES,
   MANIFEST_BASENAME,
   RETIRED_PROFILE_FILES,
   EFFORT_VALUES,
@@ -89,8 +87,8 @@ if (process.argv.some(a => a === '--enable-adaptive' || a.startsWith('--enable-a
   console.warn('Kaola-Workflow Codex installer: --enable-adaptive is retired (#538); adaptive is the unconditional default. Ignoring.');
 }
 
-// Named profiles omit model/effort so every role inherits the current parent session. The role lists
-// retain only declarative standard/reasoning/heavy metadata classes; no variant generation occurs.
+// Named profiles pin the single subagent binding (model / model_reasoning_effort) in their TOML
+// bytes, so file values take precedence over spawn parameters and the parent session.
 // no adaptive-schema require here.
 
 function assert(condition, message) {
@@ -2545,9 +2543,7 @@ module.exports = {
   RETIRED_PROFILE_FILES,
   MANIFEST_BASENAME,
   EFFORT_VALUES,
-  CODEX_PINNED_STANDARD_ROLES,
-  CODEX_PINNED_REASONING_ROLES,
-  CODEX_PINNED_HEAVY_ROLES,
+  CODEX_PINNED_ROLES,
   CODEX_ORCHESTRATION_ROLES,
   CODEX_STANDARD_MODEL,
   CODEX_STANDARD_EFFORT,
