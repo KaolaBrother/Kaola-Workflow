@@ -982,6 +982,16 @@ all four byte-identical copies. Nothing keeps the two spellings in step.
   exemption is scoped to this project on a segment boundary (a sibling project's tree, and a
   project-name prefix look-alike, both still refuse) and is classification-only — no exempted path is
   ever removed.
+- Preflight does **not** count a verified co-active sibling run's live claim folder as foreign
+  dirt (issue #1075): untracked paths under `kaola-workflow/<sibling>/` are exempt when the
+  sibling's own `workflow-state.md` reads `status: active`, its `main_root` realpath-equals this
+  main checkout, and its `worktree_path` realpath resolves to a worktree registered in this
+  repository (`git worktree list`) checked out on the claim's own branch — never the main
+  checkout, never this sink's own project or branch, neither folder nor state file a symlink,
+  and at most one folder certified per registered worktree (two folders claiming the same
+  worktree certify neither). The match is a full segment — `<sibling>` is exactly one path
+  component — and the exemption is classification-only: exempted bytes are never staged,
+  touched, or removed, and anything failing verification stays foreign dirt.
 - `.cache/sink-receipt.json` tracks each step so a re-run resumes from the last incomplete one
   without double-applying.
 - **The `finalize` step's archive is confirmed, not assumed.** `archiveProjectDir` is judged by what it

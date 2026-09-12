@@ -70,6 +70,17 @@ binding runtimes and a native route on native-only runtimes.
   retired `agents/<role>.md` only when the file still carries the
   `kaola-workflow-managed-agent: true` marker the generator embedded, so a user-authored
   same-name profile (e.g. `~/.zcode/agents/implementer.md`) survives.
+- **Merge sink proceeds beside verified co-active worktree runs (#1075).** A sibling run's
+  untracked live claim folder `kaola-workflow/<sibling>/…` at the main root is no longer foreign
+  dirt when its own state file reads `status: active`, its `main_root` realpath-equals this
+  checkout, and its `worktree_path` realpath resolves to a worktree registered in this repository
+  on the claim's own branch — not the main checkout, not this sink's branch, with neither the
+  folder nor the state file a symlink, at most one folder certified per registered worktree, and
+  the match scoped to a full path segment. The exemption is classification-only (`continue`,
+  nothing staged or removed); anything failing verification still refuses as bucket-3 foreign
+  dirt. Also fixed: the #893 own-archive exemption's "carried and byte-equal → exempt" outcome
+  works again — its content read had referenced `archiveKey`, a variable removed in `3973af23`,
+  so the read always threw and every branch-carried path fell through to foreign dirt.
 
 ## [11.1.1] - 2026-09-11
 

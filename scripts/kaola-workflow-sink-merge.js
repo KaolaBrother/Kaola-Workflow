@@ -1801,6 +1801,50 @@ function repoWideIgnoredNames(root, rels) {
   } catch (_) { return new Set(); }
 }
 
+// #1075: the SIBLING-run verifier behind the live-claim-folder exemption in sinkPreflight. Two
+// worktree-posture runs claimed on the same main root each leave their own untracked
+// kaola-workflow/<project>/ live folder at the main checkout; bucket 3 refused a sibling's as
+// foreign dirt, so co-active runs blocked each other's sink. A folder name is not proof of a
+// sibling, though — the exemption set is computed HERE, once, from VERIFIED co-activity:
+//   status 'active' in the sibling's own workflow-state.md;
+//   main_root realpath-equal to THIS main root (a foreign repo's claim cannot borrow the exemption);
+//   worktree_path realpath resolves, differs from the main checkout, and is a worktree REGISTERED
+//     in this repository (`git worktree list --porcelain`) checked out on the claim's OWN branch —
+//     so a stale or fabricated worktree_path, or one pointing at a worktree on a different branch,
+//     cannot self-certify;
+//   neither the project dir nor the state file is a symlink (no out-of-repo authority by reference);
+//   and never THIS sink's own project or branch (those keep their existing bucket-2/bucket-3 path);
+//   and a registered worktree certifies at most ONE folder — two folders claiming the same
+//     registered worktree certify neither.
+// Any verification fault — unreadable state, dead symlink, unresolvable path — skips the folder:
+// unverifiable is not verified, and the path stays bucket-3 foreign dirt. Pure fs plus the
+// already-collected worktree list; readActiveFolders (excludeClosedIssues:false) does no forge
+// calls and already skips 'archive', dot-dirs, unsafe names, and symlinked project dirs.
+function coActiveSiblingProjects(mainRoot, project, branch, registeredWorktrees) {
+  const out = new Set();
+  let mainReal;
+  try { mainReal = fs.realpathSync(mainRoot); } catch (_) { return out; }
+  let folders = [];
+  try { folders = readActiveFolders(mainRoot, { excludeClosedIssues: false }); } catch (_) { return out; }
+  const candidates = [];
+  for (const f of folders) {
+    if (f.project === project || f.status !== 'active') continue;
+    if (!f.main_root || !f.branch || !f.worktree_path || f.branch === branch) continue;
+    try {
+      if (fs.lstatSync(f.project_dir).isSymbolicLink() || fs.lstatSync(f.state_file).isSymbolicLink()) continue;
+      if (fs.realpathSync(f.main_root) !== mainReal) continue;
+      const wtReal = fs.realpathSync(f.worktree_path);
+      if (wtReal === mainReal) continue;
+      if (!registeredWorktrees.some(w => w.real === wtReal && w.branch === f.branch)) continue;
+      candidates.push({ project: f.project, wtReal });
+    } catch (_) { continue; }
+  }
+  for (const c of candidates) {
+    if (candidates.filter(x => x.wtReal === c.wtReal).length === 1) out.add(c.project);
+  }
+  return out;
+}
+
 // #429: preflight — classify the dirty tree into two buckets and handle them. ADR 0018 §5 retired
 // the third (a claim-time roadmap source, auto-stashed): no production code writes into
 // kaola-workflow/.roadmap/ any more.
@@ -1829,7 +1873,11 @@ function sinkPreflight(mainRoot, project, branch) {
 
   // Collect registered worktree paths so we can exclude them from foreign-dirt classification.
   // Registered worktrees show up as untracked dirs in git status -uall if not gitignored.
+  // #1075: the same parse also records each registered worktree's realpath and branch for
+  // coActiveSiblingProjects — the sibling-exemption verifier needs the repository's own registry,
+  // not a claim file's say-so, to certify a worktree_path.
   const worktreePaths = new Set();
+  const registeredWorktrees = [];
   try {
     const list = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
     for (const block of list.split(/\n\n+/)) {
@@ -1842,9 +1890,21 @@ function sinkPreflight(mainRoot, project, branch) {
           // Only track paths that are inside the main root (sibling worktrees are outside)
           if (!rel.startsWith('..')) worktreePaths.add(rel.replace(/\\/g, '/'));
         } catch (_) {}
+        let real = null;
+        try { real = fs.realpathSync(absWt); } catch (_) {}
+        const bm = block.match(/^branch refs\/heads\/(.+)$/m);
+        registeredWorktrees.push({ real, branch: bm ? bm[1] : '' });
       }
     }
   } catch (_) {}
+
+  // #1075: SIBLING live claim folders that are VERIFIED co-active runs of THIS main root — the
+  // exemption set for the arm below. Computed once, before classification, because membership is a
+  // property of the sibling's claim (status, main_root, registered worktree on its own branch — see
+  // the helper), not of any single dirty path. Classification-only: members are `continue`d, never
+  // staged, touched, or removed; a folder that fails verification is simply absent and its paths
+  // stay bucket-3 foreign dirt.
+  const coActiveSiblings = coActiveSiblingProjects(mainRoot, project, branch, registeredWorktrees);
 
   // Two buckets. ADR 0018 §5 retired the third (auto-stash of a claim-time roadmap source): no
   // production code writes into kaola-workflow/.roadmap/ any more, so there is nothing left to
@@ -1954,7 +2014,7 @@ function sinkPreflight(mainRoot, project, branch) {
       if (!branchHasPath) continue;
       let branchBytes = null;
       try {
-        branchBytes = execFileSync('git', ['-C', mainRoot, 'show', archiveKey + ':' + filePath],
+        branchBytes = execFileSync('git', ['-C', mainRoot, 'show', branch + ':' + filePath],
           { maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
       } catch (_) {}
       let workBytes = null;
@@ -1964,6 +2024,27 @@ function sinkPreflight(mainRoot, project, branch) {
       // divergent — no continue: both stay foreign dirt below.
       if (branchBytes !== null && workBytes !== null && branchBytes.equals(workBytes)) continue;
     }
+
+    // #1075: a VERIFIED co-active SIBLING run's live claim folder — kaola-workflow/<sibling>/… —
+    // left untracked at the main checkout by a worktree-posture run claimed on this same root. Two
+    // such runs each see the other's folder as bucket-3 foreign dirt and block each other's sink;
+    // exempting the verified ones restores the parallel-issue contract. Membership comes from
+    // coActiveSiblingProjects, computed once above: the sibling's own state file must read
+    // status 'active', its main_root must realpath-equal THIS main root, its worktree_path must
+    // realpath to a worktree REGISTERED in this repository checked out on the claim's own branch
+    // (and must not be the main checkout or this sink's branch), and neither the folder nor the
+    // state file may be a symlink. The match is a full SEGMENT — <sibling> is exactly one path
+    // component bounded by '/' — so a name-prefix look-alike (<sibling>x/…) is not exempted, and
+    // 'archive' can never be in the set (readActiveFolders skips it). THIS sink's own project is
+    // never in the set either, so own-folder paths keep their existing bucket-2/bucket-3 flow.
+    // CLASSIFICATION-ONLY — `continue`, like the #715 receipt arm: this sink never stages, touches,
+    // or removes the sibling's bytes (the never-touches-another-project invariant is about
+    // mutation; not-refusing is not mutation), and on a refusal nothing here has mutated anything.
+    // Untracked (??) only: a tracked modification under a sibling folder is a local edit to
+    // committed content, not a live claim. Anything under kaola-workflow/<seg>/ that fails the
+    // helper's verification stays bucket-3 foreign dirt exactly as before.
+    const siblingSeg = filePath.match(/^kaola-workflow\/([^/]+)\//);
+    if (xy === '??' && siblingSeg && coActiveSiblings.has(siblingSeg[1])) continue;
 
     // Exclude registered linked worktrees — they appear as untracked dirs in git status -uall
     // but are managed by git and not owned by any issue. Their presence is expected during a

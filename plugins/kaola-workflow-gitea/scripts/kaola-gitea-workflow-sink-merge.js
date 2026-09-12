@@ -1852,6 +1852,41 @@ function repoWideIgnoredNames(root, rels) {
   } catch (_) { return new Set(); }
 }
 
+// #1075: SIBLING live-claim-folder exemption verifier — the set of projects whose untracked
+// kaola-workflow/<project>/ folder at this main root is a VERIFIED co-active run, not foreign dirt.
+// Verified: status 'active' in the sibling's own state file; main_root realpath-equal to THIS main
+// root; worktree_path realpath resolves, differs from the main checkout, and is a worktree
+// REGISTERED in this repository on the claim's OWN branch; neither project dir nor state file a
+// symlink; never this sink's own project or branch; and a registered worktree certifies at most
+// ONE folder — two folders claiming the same registered worktree certify neither. Any verification
+// fault skips the folder — unverifiable is not verified, and its paths stay bucket-3 foreign dirt.
+// Pure fs plus the already-collected worktree list; readActiveFolders (excludeClosedIssues:false)
+// makes no forge calls and already skips 'archive', dot-dirs, unsafe names, and symlinked dirs.
+function coActiveSiblingProjects(mainRoot, project, branch, registeredWorktrees) {
+  const out = new Set();
+  let mainReal;
+  try { mainReal = fs.realpathSync(mainRoot); } catch (_) { return out; }
+  let folders = [];
+  try { folders = readActiveFolders(mainRoot, { excludeClosedIssues: false }); } catch (_) { return out; }
+  const candidates = [];
+  for (const f of folders) {
+    if (f.project === project || f.status !== 'active') continue;
+    if (!f.main_root || !f.branch || !f.worktree_path || f.branch === branch) continue;
+    try {
+      if (fs.lstatSync(f.project_dir).isSymbolicLink() || fs.lstatSync(f.state_file).isSymbolicLink()) continue;
+      if (fs.realpathSync(f.main_root) !== mainReal) continue;
+      const wtReal = fs.realpathSync(f.worktree_path);
+      if (wtReal === mainReal) continue;
+      if (!registeredWorktrees.some(w => w.real === wtReal && w.branch === f.branch)) continue;
+      candidates.push({ project: f.project, wtReal });
+    } catch (_) { continue; }
+  }
+  for (const c of candidates) {
+    if (candidates.filter(x => x.wtReal === c.wtReal).length === 1) out.add(c.project);
+  }
+  return out;
+}
+
 function sinkPreflight(mainRoot, project, branch) {
   // #562: worktree-clean data-loss guard — the --sink merge step force-removes the linked worktree with
   // NO clean precondition, so a dirty worktree's uncommitted work would be destroyed. Mirror the legacy
@@ -1868,6 +1903,10 @@ function sinkPreflight(mainRoot, project, branch) {
   const ownArchiveDir = currentArchiveDir(mainRoot, project, branch);
   const ownArchivePrefix = ownArchiveDir ? path.relative(mainRoot, ownArchiveDir).split(path.sep).join('/') + '/' : 'kaola-workflow/archive/' + project + '/';
   const worktreePaths = new Set();
+  // #1075: the same parse also records each registered worktree's realpath and branch for
+  // coActiveSiblingProjects — the sibling verifier needs the repository's own registry, not a
+  // claim file's say-so, to certify a worktree_path.
+  const registeredWorktrees = [];
   try {
     const list = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
     for (const block of list.split(/\n\n+/)) {
@@ -1877,9 +1916,17 @@ function sinkPreflight(mainRoot, project, branch) {
           const rel = path.relative(mainRoot, m[1]);
           if (!rel.startsWith('..')) worktreePaths.add(rel.replace(/\\/g, '/'));
         } catch (_) {}
+        let real = null;
+        try { real = fs.realpathSync(m[1]); } catch (_) {}
+        const bm = block.match(/^branch refs\/heads\/(.+)$/m);
+        registeredWorktrees.push({ real, branch: bm ? bm[1] : '' });
       }
     }
   } catch (_) {}
+  // #1075: VERIFIED co-active sibling live-claim folders — computed once before classification;
+  // members are `continue`d below (classification-only, never staged/touched/removed), and a folder
+  // that fails verification is absent so its paths stay bucket-3 foreign dirt.
+  const coActiveSiblings = coActiveSiblingProjects(mainRoot, project, branch, registeredWorktrees);
   // ADR 0018 §5 retired the bucket-1 auto-stash of a claim-time roadmap source: no production code
   // writes into kaola-workflow/.roadmap/ any more, so there is nothing left to catch here.
   const projDuplicates = [], foreignDirt = [];
@@ -1946,6 +1993,17 @@ function sinkPreflight(mainRoot, project, branch) {
       // branchBytes null and can never satisfy it, so unverifiable falls through with divergent.
       if (branchBytes !== null && workBytes !== null && branchBytes.equals(workBytes)) continue;
     }
+    // #1075: a VERIFIED co-active SIBLING run's live claim folder — kaola-workflow/<sibling>/… —
+    // left untracked at the main checkout by a worktree-posture run on this same root; two such runs
+    // otherwise refuse each other's folder as foreign dirt and deadlock. Membership comes from
+    // coActiveSiblingProjects above (status active, same main_root realpath, worktree_path realpath
+    // REGISTERED in this repo on the claim's own branch, not the main checkout, not this sink's
+    // branch, no symlinked folder/state file). The match is a full SEGMENT bounded by '/', so a
+    // prefix look-alike (<sibling>x/…) is not exempted; 'archive' and this sink's own project can
+    // never be in the set. CLASSIFICATION-ONLY — `continue` like the #715 receipt arm: never
+    // staged/touched/removed; ?? only; anything failing verification stays bucket-3 foreign dirt.
+    const siblingSeg = filePath.match(/^kaola-workflow\/([^/]+)\//);
+    if (xy === '??' && siblingSeg && coActiveSiblings.has(siblingSeg[1])) continue;
     const isWorktreePath = worktreePaths.has(filePath) || Array.from(worktreePaths).some(wt => filePath === wt + '/' || filePath.startsWith(wt + '/'));
     if (isWorktreePath) continue;
     foreignDirt.push(filePath);

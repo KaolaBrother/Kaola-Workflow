@@ -978,6 +978,172 @@ function plantWorktreeUntracked973(wtPath, opts) {
   }
 })();
 
+// --------------------------------------------------------------------------- (1075a)–(1075b) #1075
+
+// A SIBLING run's live workflow-state.md in the worktree-posture shape: status, branch,
+// worktree_path, and main_root are the four fields coActiveSiblingProjects verifies.
+function siblingClaimState(project, opts) {
+  return [
+    '# Kaola-Workflow State', '',
+    '## Project', 'name: ' + project, 'status: ' + (opts.status || 'active'), '',
+    '## Sink',
+    'branch: ' + opts.branch,
+    'issue_number: ' + opts.issue,
+    'sink: merge',
+    'run_posture: worktree',
+    'main_root: ' + opts.mainRoot,
+    'worktree_path: ' + opts.worktreePath,
+    'claim_ts: ' + new Date().toISOString(),
+  ].join('\n') + '\n';
+}
+// Plant kaola-workflow/<project>/<rel> content at the main checkout, untracked.
+function plantLiveFolder(tmpRoot, project, files) {
+  for (const rel of Object.keys(files)) {
+    const abs = path.join(tmpRoot, 'kaola-workflow', project, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, files[rel]);
+  }
+}
+
+// (1075a) POSITIVE — a verified co-active sibling's live claim folder must NOT block this sink and
+// stays byte-untouched.
+(function testCoActiveSiblingLiveFolderDoesNotBlock() {
+  console.log('Test (#1075 a): a verified co-active sibling run\'s untracked live claim folder must NOT block this sink — classification-only exemption, sibling bytes untouched');
+  const project = 'issue-107500';
+  const issue = 107500;
+  const fx = buildSoleArchiverFixture(project, issue, {});
+  fx.projectName = project;
+  try {
+    // A REAL registered linked worktree for the sibling, on its own branch, inside the root.
+    const sibWt = path.join(fx.tmpRoot, '.kw', 'worktrees', 'sibling-107501');
+    const wr = git(fx.tmpRoot, ['worktree', 'add', '-b', 'workflow/sibling-107501', sibWt, 'main']);
+    assert(wr.status === 0, '#1075 a: sibling worktree add failed: ' + wr.stderr);
+    const sibFiles = {
+      'workflow-state.md': siblingClaimState('sibling-107501', {
+        issue: 107501, branch: 'workflow/sibling-107501', mainRoot: fx.tmpRoot, worktreePath: sibWt }),
+      'mission-list.md': '# sibling-107501\n\n### item: sib work\nstatus: in_progress\n',
+      '.cache/origin/selection-record.json': JSON.stringify({ project: 'sibling-107501', selected: [107501] }) + '\n',
+    };
+    plantLiveFolder(fx.tmpRoot, 'sibling-107501', sibFiles);
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status === 0, '#1075 a: sink must complete past the verified sibling folder; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#1075 a: status must be sinked; got ' + JSON.stringify(out && out.status));
+    const dirt = (out && out.foreign_dirt) || [];
+    for (const rel of Object.keys(sibFiles)) {
+      assert(!dirt.includes('kaola-workflow/sibling-107501/' + rel),
+        '#1075 a: verified sibling path must not be foreign dirt: kaola-workflow/sibling-107501/' + rel);
+    }
+    for (const rel of Object.keys(sibFiles)) {
+      const abs = path.join(fx.tmpRoot, 'kaola-workflow', 'sibling-107501', rel);
+      assert(fs.existsSync(abs) && fs.readFileSync(abs, 'utf8') === sibFiles[rel],
+        '#1075 a: sibling file must remain byte-identical after the sink: ' + rel);
+    }
+    const wtList = git(fx.tmpRoot, ['worktree', 'list', '--porcelain']).stdout || '';
+    const sibWtReal = fs.realpathSync(sibWt);
+    assert(wtList.includes('worktree ' + sibWt) || wtList.includes('worktree ' + sibWtReal),
+      '#1075 a: sibling worktree must still be registered; got ' + wtList);
+  } finally {
+    try { git(fx.tmpRoot, ['worktree', 'remove', '--force', path.join(fx.tmpRoot, '.kw', 'worktrees', 'sibling-107501')]); } catch (_) {}
+    cleanup(fx);
+  }
+})();
+
+// (1075b) NEGATIVE — every look-alike that fails one verification leg stays bucket-3 foreign dirt,
+// and the refusal mutates nothing (porcelain byte-identical before/after).
+(function testSiblingLookAlikesRemainForeignDirt() {
+  console.log('Test (#1075 b): sibling look-alikes that fail verification must still refuse as foreign dirt — one planted set, each path named, zero mutation');
+  const project = 'issue-107510';
+  const issue = 107510;
+  const fx = buildSoleArchiverFixture(project, issue, {});
+  fx.projectName = project;
+  try {
+    // A real registered worktree per worktree-bearing shape, each on its own branch.
+    const wtPrefix = path.join(fx.tmpRoot, '.kw', 'worktrees', 'prefix-107507');
+    const wtOther = path.join(fx.tmpRoot, '.kw', 'worktrees', 'other-107509');
+    const wtSame = path.join(fx.tmpRoot, '.kw', 'worktrees', 'same-107508');
+    const wtDup = path.join(fx.tmpRoot, '.kw', 'worktrees', 'dup-107511');
+    for (const spec of [
+      ['worktree', 'add', '-b', 'workflow/prefix-107507', wtPrefix, 'main'],
+      ['worktree', 'add', '-b', 'workflow/other-107509', wtOther, 'main'],
+      ['worktree', 'add', wtSame, fx.branch],
+      ['worktree', 'add', '-b', 'workflow/dup-107511', wtDup, 'main'],
+    ]) {
+      const wr = git(fx.tmpRoot, spec);
+      assert(wr.status === 0, '#1075 b: worktree add failed (' + spec.join(' ') + '): ' + wr.stderr);
+    }
+    // prefix-107507 is a fully VERIFIED co-active sibling — its own folder must stay exempt while
+    // the prefix look-alike prefix-107507x is refused (segment boundary).
+    plantLiveFolder(fx.tmpRoot, 'prefix-107507', {
+      'workflow-state.md': siblingClaimState('prefix-107507', {
+        issue: 107507, branch: 'workflow/prefix-107507', mainRoot: fx.tmpRoot, worktreePath: wtPrefix }),
+      'mission-list.md': '# prefix-107507\n',
+    });
+
+    const foreignMainRoot = makeTmpRoot();
+    const unregisteredWt = path.join(fx.tmpRoot, '.kw', 'worktrees', 'unregistered-107503');
+    fs.mkdirSync(unregisteredWt, { recursive: true });
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1075-linked-'));
+    fs.writeFileSync(path.join(outsideDir, 'workflow-state.md'), siblingClaimState('linked-107506', {
+      issue: 107506, branch: 'workflow/linked-107506', mainRoot: fx.tmpRoot, worktreePath: outsideDir }));
+    fs.symlinkSync(outsideDir, path.join(fx.tmpRoot, 'kaola-workflow', 'linked-107506'));
+
+    const cases = [
+      // 1: registered worktree, wrong main_root.
+      ['nomain-107502', { issue: 107502, branch: 'workflow/other-107509', mainRoot: foreignMainRoot, worktreePath: wtOther }],
+      // 2: correct main_root, worktree_path a real dir NOT registered as a worktree.
+      ['unregistered-107503', { issue: 107503, branch: 'workflow/unregistered-107503', mainRoot: fx.tmpRoot, worktreePath: unregisteredWt }],
+      // 3: registered worktree, but branch: names a different branch than the worktree is on.
+      ['wrongbranch-107504', { issue: 107504, branch: 'workflow/wrongbranch-107504', mainRoot: fx.tmpRoot, worktreePath: wtOther }],
+      // 4: fully valid registration but status: closed.
+      ['closed-107505', { issue: 107505, status: 'closed', branch: 'workflow/prefix-107507', mainRoot: fx.tmpRoot, worktreePath: wtPrefix }],
+      // 6: name-prefix look-alike of the verified sibling — a bare claim that verifies nothing,
+      //    so it must not inherit the exemption through a shared name prefix.
+      ['prefix-107507x', { bare: true }],
+      // 7: valid shape but branch: equals THIS sink's own branch.
+      ['samebranch-107508', { issue: 107508, branch: fx.branch, mainRoot: fx.tmpRoot, worktreePath: wtSame }],
+      // 8: TWO folders whose claims both point at the SAME registered worktree+branch — a
+      //    worktree certifies at most one folder, so both certify neither.
+      ['dup-107511', { issue: 107511, branch: 'workflow/dup-107511', mainRoot: fx.tmpRoot, worktreePath: wtDup }],
+      ['dupcopy-107512', { issue: 107512, branch: 'workflow/dup-107511', mainRoot: fx.tmpRoot, worktreePath: wtDup }],
+    ];
+    for (const [name, opts] of cases) {
+      plantLiveFolder(fx.tmpRoot, name, {
+        'workflow-state.md': opts.bare ? 'status: active\n' : siblingClaimState(name, opts) });
+    }
+
+    const porcelainBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+    const porcelainAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+
+    assert(result.status !== 0, '#1075 b: sink must refuse on the look-alike set; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.reason === 'sink_blocked', '#1075 b: reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
+    const dirt = (out && out.foreign_dirt) || [];
+    for (const [name] of cases) {
+      const rel = 'kaola-workflow/' + name + '/workflow-state.md';
+      assert(dirt.includes(rel), '#1075 b: foreign_dirt must list ' + rel + '; got ' + JSON.stringify(dirt));
+    }
+    assert(dirt.includes('kaola-workflow/linked-107506'),
+      '#1075 b: foreign_dirt must list the symlinked folder itself kaola-workflow/linked-107506; got ' + JSON.stringify(dirt));
+    assert(!dirt.includes('kaola-workflow/prefix-107507/workflow-state.md'),
+      '#1075 b: the VERIFIED sibling prefix-107507 state file must not be foreign dirt; got ' + JSON.stringify(dirt));
+    assert(!dirt.includes('kaola-workflow/prefix-107507/mission-list.md'),
+      '#1075 b: the VERIFIED sibling prefix-107507 mission list must not be foreign dirt; got ' + JSON.stringify(dirt));
+    assert(porcelainAfter === porcelainBefore,
+      '#1075 b: a refusal must mutate nothing — git status --porcelain -uall byte-identical before/after');
+    try { fs.rmSync(foreignMainRoot, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(outsideDir, { recursive: true, force: true }); } catch (_) {}
+  } finally {
+    for (const wt of ['prefix-107507', 'other-107509', 'same-107508', 'dup-107511']) {
+      try { git(fx.tmpRoot, ['worktree', 'remove', '--force', path.join(fx.tmpRoot, '.kw', 'worktrees', wt)]); } catch (_) {}
+    }
+    cleanup(fx);
+  }
+})();
+
 // --------------------------------------------------------------------------- (w1)–(w10) #893
 
 // The archive tree `cmdFinalize --project P --keep-worktree` leaves in the MAIN checkout. The file
@@ -1206,6 +1372,50 @@ function buildKeepWorktreeArchiveMirrorFixture(project, issue, opts) {
       '#893 w4: the conflicting main copy must be left byte-untouched — an exemption that removed it would resolve the divergence by deleting one side');
     const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
     assert(statusBefore === statusAfter, '#893 w4: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) + '\nafter: ' + JSON.stringify(statusAfter));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// (w11) The BYTE-EQUAL half of (w4)'s three-way rule, observed on the refusal listing the way (w2)
+// observes the plain mirror: a mirrored file the branch carries at the SAME bytes is a duplicate of
+// what the branch already has, not a divergence — it must not appear in foreign_dirt. (Driven to
+// refusal with a genuinely foreign file, as in (w2): letting preflight pass instead lands the
+// untracked duplicate in front of `git checkout`, which refuses to overwrite it — a transaction
+// abort past preflight, outside what this test measures.) This is the arm whose content read was
+// dead code since 3973af23 removed the `archiveKey` const but left `git show archiveKey:...`
+// behind: the ReferenceError is swallowed by the catch, branchBytes stays null, byte-equality can
+// never be observed, and every branch-carried path falls through to bucket 3 — the case (w11)
+// exists to lock.
+(function testByteEqualBranchCopyRemainsExempt() {
+  console.log('Test (#893 w11): a mirrored file the BRANCH carries at byte-equal content must NOT be listed as foreign dirt — carried and byte-equal is a duplicate');
+  const project = 'issue-89311';
+  const issue = 89311;
+  const mirror = archiveMirrorFiles(project, issue);
+  const equalRel = 'kaola-workflow/archive/' + project + '/mission-list.md';
+  const foreignRel = 'kaola-workflow/foreign-89311/workflow-state.md';
+  const fx = buildKeepWorktreeArchiveMirrorFixture(project, issue, {
+    // The branch carries THE SAME mission list at the same path main holds untracked.
+    branchArchive: { 'mission-list.md': mirror['mission-list.md'] },
+    plant: Object.assign(mirrorPlant(project, mirror), { [foreignRel]: 'status: active\n' }),
+  });
+  fx.projectName = project;
+  try {
+    const statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+
+    assert(result.status !== 0, '#893 w11: sink must refuse on the planted foreign file; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.reason === 'sink_blocked', '#893 w11: reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
+    assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(foreignRel),
+      '#893 w11: foreign_dirt must still list the genuinely foreign file; got ' + JSON.stringify(out && out.foreign_dirt));
+    assert(out && Array.isArray(out.foreign_dirt) && !out.foreign_dirt.includes(equalRel),
+      '#893 w11: ' + equalRel + ' is byte-equal to the branch copy and must NOT be listed as foreign dirt; got ' + JSON.stringify(out && out.foreign_dirt));
+    const abs = path.join(fx.tmpRoot, equalRel);
+    assert(fs.existsSync(abs) && fs.readFileSync(abs, 'utf8') === mirror['mission-list.md'],
+      '#893 w11: ' + equalRel + ' must be byte-untouched after a refusal (the exemption is classification-only)');
+    const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    assert(statusBefore === statusAfter, '#893 w11: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) + '\nafter: ' + JSON.stringify(statusAfter));
   } finally {
     cleanup(fx);
   }
