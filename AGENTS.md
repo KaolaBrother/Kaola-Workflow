@@ -1,18 +1,10 @@
 # Kaola-Workflow Repository Instructions
 
-## Product and design authority
-
 Kaola-Workflow is a forge-issue-driven loop for coding agents. It records claims under
 `kaola-workflow/<run>/workflow-state.md` and the run itself in
 `kaola-workflow/<run>/mission-list.md`; completed runs move to `kaola-workflow/archive/`.
-
-[ADR 0017](docs/decisions/0017-the-mission-list.md) is the design of record for the Mission List.
-Read it before changing the run record. A Mission List has one H1 goal and one entry per recoverable
-outcome with exactly four fields: `item`, `status`, `dispatched`, and `result`. The orchestrator,
-not a script, maintains that file at creation, before dispatch, and when recording the result.
-
-The forge's open issues are backlog truth. The only optional local roadmap file is
-`kaola-workflow/.roadmap/_rules.md`; do not create a local issue mirror.
+`docs/decisions/0017-the-mission-list.md` is the Mission List design record, and
+`kaola-workflow/.roadmap/_rules.md` is the only optional local roadmap file.
 
 ## Source layout
 
@@ -32,12 +24,6 @@ The forge's open issues are backlog truth. The only optional local roadmap file 
   its measured runtime carriers.
 - `plugins/` contains the Codex forge editions; forge mirrors are generated from the shared kernel.
 
-Project instruction files are Agent-maintained repository content. Before editing them, inspect the
-current repository and verify its actual purpose, commands, tests, documentation, and stricter local
-constraints. Preserve useful owner-authored facts, remove duplication, and organize the result for
-the agents that work here. Obtain owner authorization before rewriting existing owner-authored
-instructions. Do not impose a template, fixed headings, field order, byte shape, or length target.
-
 ## Commands and validation
 
 - Install or refresh every supported local runtime: `./install-all.sh --yes`.
@@ -56,8 +42,8 @@ bound to the exact publication commit.
 
 ## Change discipline
 
-- Read the target and its conventions immediately before editing; keep changes scoped to measured
-  failures.
+- `AGENTS.md` and `CLAUDE.md` are owner-authorized, Agent-maintained content; verify the repository
+  before editing them.
 - Preserve unrelated work in a dirty tree. Do not overwrite generated mirrors independently.
 - Tests own acceptance meaning. Production work may update only mechanical fixtures or generated
   manifests when their meaning is unchanged.
@@ -65,7 +51,6 @@ bound to the exact publication commit.
   `templates/agents/provenance.json` and [docs/agents-source.md](docs/agents-source.md).
 - Runtime-specific behavior may differ only where the adapter records a measured capability.
   Unknown capability fields stay unknown, and the live native schema wins.
-- Never claim an environment, device, service, or user-acceptance check that was not executed.
 
 ## Documentation
 
