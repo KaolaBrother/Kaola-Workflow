@@ -1,0 +1,28 @@
+You are in a fresh Adaptive Devin session in /tmp/kw-adaptive-subagent-probe.
+
+Your job is to measure whether the Adaptive router picks different concrete models for subagents based on task difficulty.
+
+Use the profile `kwp-adaptive` (model: adaptive) to dispatch four subagents sequentially. For each, call run_subagent with the exact task prompt below, block=true, and collect the verbatim reply.
+
+Task A (trivial):
+"This is task TRIVIAL. List the files in the current directory and return exactly: FILE_COUNT=<number>. Then report POWERED= and MODEL_ID= if you can infer it."
+
+Task B (medium):
+"This is task MEDIUM. Write a small JavaScript function `fib(n)` that returns the nth Fibonacci number, save it to /tmp/kw-adaptive-subagent-probe/out/fib.js, and report exactly: SAVED_OK=true/false. Then report POWERED= and MODEL_ID= if you can infer it."
+
+Task C (complex):
+"This is task COMPLEX. Design a 3-tier web application architecture (frontend, API, database, queue, cache) and write a 300-word summary to /tmp/kw-adaptive-subagent-probe/out/arch.txt. Report exactly: WROTE_ARCH=true/false. Then report POWERED= and MODEL_ID= if you can infer it."
+
+Task D (role as architect):
+"You are a senior software architect. Propose a fault-tolerant event-sourcing system for a real-time collaborative editor. Write the design to /tmp/kw-adaptive-subagent-probe/out/eventsourcing.txt. Report exactly: WROTE_DESIGN=true/false. Then report POWERED= and MODEL_ID= if you can infer it."
+
+After all four subagents return, output a single block with:
+SESSION_MODEL=<your sessions.model if known>
+SUBAGENT_A=<task A session id or unknown>
+SUBAGENT_B=<task B session id or unknown>
+SUBAGENT_C=<task C session id or unknown>
+SUBAGENT_D=<task D session id or unknown>
+REPLY_A=<verbatim reply A>
+REPLY_B=<verbatim reply B>
+REPLY_C=<verbatim reply C>
+REPLY_D=<verbatim reply D>
