@@ -49,37 +49,36 @@ Everything under `.grok/` is **generated from canonical** by
 
 | Canonical source | grok edition output | Notes |
 | ---------------- | ------------------- | ----- |
-| `templates/agents/behavior-contracts.json` + Grok adapter | `.grok/agents/<name>.md` | 14 native profiles with `name`, `description`, native camelCase `promptMode` / `agentsMd`, `model: inherit`, intent-derived `effort: medium\|high\|xhigh`, an explicit capability-derived `tools` allowlist, shared behavior identity, and render-specific hash. Kaola does not emit `permissionMode: plan`: `plan` is not a legal value of the official enum and permission mode is not the tool-boundary carrier. |
-| `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. The marked next/finalize block becomes Grok-native profile, `spawn_subagent`, tier, route, and limit guidance; any concrete Claude dispatch cards are adapted. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
+| `templates/agents/behavior-contracts.json` + Grok adapter | `.grok/agents/<name>.md` | 7 native profiles with `name`, `description`, native camelCase `promptMode` / `agentsMd`, `model: grok-4.6` + `effort: medium` (the adapter's single `subagent_default`), an explicit capability-derived `tools` allowlist, shared behavior identity, and render-specific hash. Kaola does not emit `permissionMode: plan`: `plan` is not a legal value of the official enum and permission mode is not the tool-boundary carrier. |
+| `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. The marked next/finalize block becomes Grok-native profile, `spawn_subagent`, subagent-default, route, and limit guidance; any concrete Claude dispatch cards are adapted. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
 | global contract + compact skeleton + Grok adapter | `$GROK_HOME/rules/kaola-workflow-global.md` | The global transaction renders one V2 native Rule carrying the universal contract, complete operation reload route, mandatory dispatch contract, and Grok adapter. The edition emits no second Rule or compact hook. |
 
-Generated agents are deliberately model-agnostic. Regenerating the tree never
+Regenerating the tree never
 overwrites a user's `[subagents.models]` or `[subagents.roles.*]` in
 `$GROK_HOME/config.toml`.
 
-## Three effort tiers — every subagent inherits the session model
+## One pinned binding — `model: grok-4.6` / `effort: medium`
 
-Generated agents remain model-inheriting: every frontmatter keeps `model: inherit`, so the session
-supplies the model. Runtime-neutral intent maps only in the Grok adapter: `standard` emits
-`effort: medium`, `reasoning` emits `effort: high`, and `heavy` emits `effort: xhigh`. Native effort
+Since ADR 0025 (#1062) generated agents pin the adapter's single `subagent_default`: every
+frontmatter carries `model: grok-4.6` plus `effort: medium`. `AgentDefinition.model` accepts a
+concrete id, so the former `model: inherit` is retired. The three-effort-tier mapping it replaced
+(`medium`/`high`/`xhigh` by intent class) is retired with the intent axis. Native effort
 syntax never enters the shared behavior source.
 
 `spawn_subagent` has no effort parameter, so effort belongs on each generated
 `.grok/agents/<role>.md`. Command cards continue to omit `model=`; they name only
-`subagent_type`, and the child inherits the parent session's model. User
+`subagent_type`, and the profile pin selects the cheaper child. User
 `$GROK_HOME/config.toml` is not seeded or rewritten.
 
-**Declared runtime divergence.** The `tiered_effort_pin` entry in the
-`GROK_RUNTIME_NATIVE` table in `scripts/test-grok-edition.js` declares the
-effort tiers. Independently, the suite asserts that every generated agent
-retains `model: inherit`, emits the effort for its canonical class
-(`medium` for standard, `high` for reasoning, and `xhigh` for heavy), and that
+**Declared runtime divergence.** The suite asserts that every generated agent
+pins `model: grok-4.6` plus `effort: medium`, that no profile retains
+`model: inherit`, and that
 command cards carry no per-call `model=` override.
 
-The #1018 live probe verified that a generated `effort: xhigh` planner reaches a
+The #1018 live probe verified that a generated `effort: xhigh` planner (a pre-#1062 role) reached a
 child at `reasoning_effort: xhigh` on Grok CLI 1.0.5. `spawn_subagent` has no
-per-call effort override, so Grok reviewers remain on their static generated
-effort (`high` for reasoning-class). The former Claude-only reviewer→heavy
+per-call effort override, so children remain on their static generated
+effort (`medium` under the single binding). The former Claude-only reviewer→heavy
 re-dispatch carve-out is retired for every runtime (ADR 0019 / #1059); there is
 no workflow-owned fable escalation to omit or mirror here.
 
@@ -88,13 +87,15 @@ actual `tdd-guide` at `medium` and `code-reviewer` at `high` from an `xhigh`
 parent. Three A/B legs using the literal `implementer` name still recorded
 `high`, even when its native profile or a minimal inline definition pinned
 `model: inherit` plus `effort: medium`. This is a runtime limitation/inference,
-not a generator failure: the generator emits `effort: medium` correctly. No
+not a generator failure. It remains an open, non-blocking re-measure item under
+the new pin (does a child pinned `model: grok-4.6` / `effort: medium` still land at `high` under an
+xhigh parent?). No
 config seeding, per-call override, or second pin path is added.
 
-An opt-in pin that routes the reasoning-class roster to a different *model* is
+An opt-in pin that routes a roster to a different *model* is
 recorded on #1008 and is not part of this edition's first close.
 
-All 14 role bodies come from `templates/agents/behavior-contracts.json` through
+All 7 role bodies come from `templates/agents/behavior-contracts.json` through
 `generate-agent-profiles.js`; `sync-grok-edition.js` requests the Grok render and only owns edition
 layout, commands, hooks, and install packaging. Reviewer roles have no separate source or transform.
 

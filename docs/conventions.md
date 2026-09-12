@@ -54,15 +54,17 @@ affected failure frontier before freezing a candidate and reviewing that exact h
 Codex subagent dispatch uses a native role-dispatch packet, not Claude call syntax. When the main
 Codex session invokes a role, it names the installed role, supplies the task prompt and working
 directory, and follows the `spawn_agent` schema exposed by that host. The runtime block exposes the
-default bindings — Luna/max for standard, Sol/medium for reasoning, and Sol/high for heavy — while a
+single subagent default binding — `model = "gpt-5.6-luna"` and
+`model_reasoning_effort = "max"`, pinned in every installed TOML profile — while a
 host-supported task-sensitive model, effort, service-tier, or history-fork choice remains valid.
-Profile omission keeps host policy authoritative; the defaults do not become scheduler state or a
+Because the profile pins both keys, dispatch omits per-call `model` and `reasoning_effort`; the
+default does not become scheduler state or a
 fixed reviewer pipeline.
 
 Resolve role registration from the effective project or user `.codex/config.toml`: its managed
 `[agents.<role>]` entry points to `.codex/agents/kaola-workflow/<role>.toml`. Bundled `agents.toml`
-is installer input, not an installed lookup path. Finalize's Codex examples pass the default model
-and `reasoning_effort` on `spawn_agent`; they remain examples, not a ban on task-sensitive or
+is installer input, not an installed lookup path. Finalize's Codex dispatch example names
+`implementer` with no per-call model or effort; it remains an example, not a ban on task-sensitive or
 supported inherited choices.
 
 Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
@@ -292,7 +294,7 @@ architecture mutation suite, every additive edition suite, and the producer-sele
 
 ## Generated role profiles and proof boundaries
 
-All 14 roles follow one workflow:
+All 7 roles follow one workflow:
 
 1. Edit `templates/agents/behavior-contracts.json` for runtime-neutral behavior,
    `templates/agents/runtime-capabilities.json` for an evidence-backed native difference, or
@@ -301,7 +303,8 @@ All 14 roles follow one workflow:
 3. Run `node scripts/generate-agent-profiles.js --write`, then `--check`. Never hand-edit a generated
    Claude Markdown, Codex TOML, additive runtime profile, Codex registry, or manifest.
 4. Run `node scripts/test-runtime-agent-architecture.js` and
-   `npm run test:kaola-workflow:editions`. A behavior mutation must reach all ten variants; an
+   `npm run test:kaola-workflow:editions`. A behavior mutation must reach all six
+   profile-installing adapters; an
    adapter mutation must remain isolated to one runtime family.
 
 `behavior_contract_hash` establishes deterministic runtime-neutral contract equivalence.
@@ -321,7 +324,7 @@ never pass. It is self-contained and depends on no hosted pipeline.
 
 Cross-runtime equivalence is source identity plus semantic mutation, not prose parity. Every role
 has one behavior record; every native render records that behavior hash and its own complete-render
-hash. The generated manifest pins the closed 140-render inventory. The three Codex forge profiles
+hash. The generated manifest pins the closed 42-render inventory. The three Codex forge profiles
 for a role remain byte-identical because forge identity does not change role behavior.
 
 **`config/hooks.json` family (#418.1).** The three plugin-tree `config/hooks.json` files

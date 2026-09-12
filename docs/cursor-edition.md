@@ -92,25 +92,23 @@ Everything under `.cursor/` is **generated from canonical** by
 
 | Canonical source | cursor edition output | Notes |
 | ---------------- | --------------------- | ----- |
-| `templates/agents/behavior-contracts.json` + Cursor adapter | `.cursor/agents/<name>.md` | 14 native profiles with `name`, `description`, intent-mapped `model: grok-4.6[effort=…]`, capability-derived `readonly`, shared behavior identity, and render-specific hash |
-| `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). The marked next/finalize block becomes Cursor-native profile, live-schema/catalog, tier, route, and limit guidance; any concrete Claude dispatch cards are adapted. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
+| `templates/agents/behavior-contracts.json` + Cursor adapter | `.cursor/agents/<name>.md` | 7 native profiles with `name`, `description`, the single `subagent_default` pin `model: grok-4.6[effort=medium]`, capability-derived `readonly`, shared behavior identity, and render-specific hash |
+| `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). The marked next/finalize block becomes Cursor-native profile, live-schema/catalog, subagent-default, route, and limit guidance; any concrete Claude dispatch cards are adapted. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
 | global contract + compact skeleton + Cursor adapter | local `$CURSOR_HOME/rules/kaola-workflow-global.mdc`; Cloud `.cursor/rules/kaola-workflow-global.mdc` | One `alwaysApply: true` V2 Rule contains the universal contract, complete operation reload route, mandatory dispatch contract, and Cursor adapter. The global transaction owns it; the edition emits no duplicate Rule. |
 | mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). Kaola emits an empty mapping and removes receipt-owned legacy prompt hooks; foreign hook entries survive merge. |
 
-Generated agents carry a model-and-effort pin derived from the runtime-neutral intent class.
-`standard`, `reasoning`, and `heavy` are the behavior-source values; only the Cursor adapter maps
-them to the raw, unquoted `grok-4.6[effort=medium]`, `grok-4.6[effort=high]`, and
-`grok-4.6[effort=xhigh]` frontmatter values.
+Generated agents carry one model-and-effort pin (ADR 0025, #1062): the intent axis is retired, so
+every profile receives the same raw, unquoted `grok-4.6[effort=medium]` frontmatter value.
 
-## Three-tier frontmatter pins — host-split native dispatch
+## One frontmatter pin — host-split native dispatch
 
-The behavior source's `standard` roles receive the unquoted
-`model: grok-4.6[effort=medium]` line, `reasoning` roles receive
-`model: grok-4.6[effort=high]`, and `heavy` roles receive the raw, unquoted
-`model: grok-4.6[effort=xhigh]`. Unknown intent tokens fail closed; the generator does not invent a
-fallback roster. Generated dispatch guidance inspects the live Task enum first. When that enum contains a Kaola
+Every generated role receives the unquoted
+`model: grok-4.6[effort=medium]` line — the adapter's single `subagent_default`. Cursor's official
+semantic is that a custom subagent that omits `model` inherits the parent, so the pin is what
+selects the cheaper child; without it a child would ride the (usually stronger) parent model.
+Generated dispatch guidance inspects the live Task enum first. When that enum contains a Kaola
 role name and the materialization receipt is valid, construct the call only from the live schema's
-flat `subagent_type` field and omit per-call `model`. An exact-tier policy remains a post-resolution
+flat `subagent_type` field and omit per-call `model`. An exact-model policy remains a post-resolution
 assertion: it does not authorize filling the generic model field, and absence of medium/high from
 that enum is not evidence against a named profile pin. When the host exposes
 `providerOptions.cursor.modelName`, that value is provider evidence for the resolved child; the TUI
@@ -120,7 +118,7 @@ enum is built-in-only, use only those members as themselves while establishing w
 real carrier was installed and reloaded: writable `generalPurpose` for generic production/docs/tests the parent may
 delegate, `explore` when this host reports it for read-heavy search, `cursor-guide` for Cursor
 product questions. Never prompt a child to impersonate `implementer`, `tdd-guide`, or another
-custody-bearing role. A resolver-listed live-schema model slug is then an effort lever, not a
+Kaola role. A resolver-listed live-schema model slug is then an effort lever, not a
 violation of unpublished-field discipline; omit-model follows the parent and is not a profile pin.
 Missing standalone-CLI project agents want `install-cursor.sh --target` then a new CLI session.
 Missing Cloud names require a confirmed Cloud environment-setup Agent to install both the remote
@@ -136,10 +134,10 @@ miss ends all dispatch. IDE documentation describes scoped `Explore`, `Bash`, an
 supported Cursor CLI probe below instead exposed writable `generalPurpose` plus specialist and
 project custom types, and did not expose those scoped types. Cloud negative controls exposed
 `explore` without Kaola names; the saved environment whose Build materialized the selected
-repository exposed all 14. The
+repository exposed all 14 (the pre-#1062 roster). The
 live catalog wins. A generic or
 specialist child remains itself and is never prompted to impersonate `implementer`, `tdd-guide`, or
-another custody-bearing role. Explicit, automatic, parallel, and resume-by-agent-ID paths remain
+another Kaola role. Explicit, automatic, parallel, and resume-by-agent-ID paths remain
 runtime-owned options.
 
 For each mission item, use the exact custom route when present, otherwise use a catalog route only
@@ -161,7 +159,8 @@ isolated user carrier and a disposable project explicitly materialized by the cu
   consumer remained unchanged.
 
 Earlier same-day CLI probes established the wider native boundary: writable `generalPurpose`
-appeared as `subagentType.unspecified`; specialist built-ins and all 14 project roles were
+appeared as `subagentType.unspecified`; specialist built-ins and all 14 project roles (pre-#1062
+roster) were
 present; medium/high/xhigh tier resolution, parallel Tasks, and one descendant dispatch generation
 worked. A user profile alone was not visible in an empty project, while project materialization was
 the reachable carrier. Reopening the CLI process with the same chat discovered an added project
@@ -171,7 +170,7 @@ profile; same-process hot load remains unknown.
 
 Cursor App `3.17.21` (`8f2a112cb2845a97b75fd932ea5c470579ca4060`) separately started a
 `This Mac` Agent with project profiles already present. The live catalog exposed the built-ins and
-all 14 Kaola types. Exact `implementer` dispatch succeeded without a per-call model override and
+all 14 Kaola types (pre-#1062 roster). Exact `implementer` dispatch succeeded without a per-call model override and
 without tracked repository mutation. The App result did not expose the child model, effort, or
 profile source, so App global discovery, project-materialization necessity, reload, and
 profile-to-model binding remain unknown.
@@ -179,7 +178,8 @@ profile-to-model binding remain unknown.
 ### Cloud saved-environment live probe
 
 On 2026-08-27 two earlier Cursor Cloud parents (`cursor-grok-4.6-xhigh`) were measured. Neither
-catalog included Kaola role names. The consumer already had 14 git-tracked project profiles; the
+catalog included Kaola role names. The consumer already had 14 git-tracked project profiles
+(pre-#1062 inventory); the
 producer new chat had none. Both used live built-ins as themselves: `generalPurpose`
 (omit-model, `inherit`, and resolver-listed `cursor-grok-4.6-high-fast`) and `explore`.
 `cursor-grok-4.6-high` was resolver-rejected.
@@ -187,15 +187,15 @@ producer new chat had none. Both used live built-ins as themselves: `generalPurp
 The fresh App-started Cloud negative control selected
 `probe/cursor-cloud-1041-20260827a` at
 `ead40c2741f4cae7e0a0cb473bba8a8a4a80c7a6` before send. That commit already tracked all 14
-profiles. The new Cloud Task enum still contained only `generalPurpose`, `explore`,
+profiles (pre-#1062). The new Cloud Task enum still contained only `generalPurpose`, `explore`,
 `computerUse`, `videoReview`, `cursor-guide`, `bugbot`, `security-review`, and
 `best-of-n-runner`. Exact `implementer` was absent, so the probe dispatched no substitute and
 made no repository change. This proves that a catalog present in the branch but not installed by
 the environment Build is insufficient; it does not prove a runtime capability gap.
 
-A historical saved Build exposed all 14 Kaola names, but its released-10.0.1 installer also wrote
+A historical saved Build exposed all 14 pre-#1062 Kaola names, but its released-10.0.1 installer also wrote
 an ambient project catalog and therefore did not isolate user-global discovery. Clean candidate
-Build `bld-20260827-1fd163c3-a8f2-475d-9603-7da988673ee3` then installed 14 current user-global
+Build `bld-20260827-1fd163c3-a8f2-475d-9603-7da988673ee3` then installed 14 then-current user-global
 profiles without a project catalog; its exact-Build parent stayed built-in-only. User-global Cloud
 discovery alone is therefore unsupported on this measured host.
 
@@ -203,13 +203,14 @@ The final environment-setup run installed candidate
 `101250f293a5439ed73e8ee2127c7501fba9e883` for the remote machine and explicitly materialized the
 selected repository. The user manually saved Build
 `bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2`. New top-level same-repository parent
-`bc-3e6bd3bd-f310-47cd-a9cb-358cf802f16d` visibly used that Build, exposed all 14 Kaola names in
+`bc-3e6bd3bd-f310-47cd-a9cb-358cf802f16d` visibly used that Build, exposed all 14 then-current Kaola
+names in
 its 23-type live Task catalog, and exact `implementer` child
 `bc-7d00ddad-23f3-5e69-8f9a-1c326b051a49` returned exactly
 `PROBE_OK_CURSOR_CLOUD_FINAL_SAVED_REPO_IMPLEMENTER` with no substitute or per-call model override.
 The Cloud child model/profile source remains unobservable.
 
-All 14 role bodies come from `templates/agents/behavior-contracts.json` through
+All 7 role bodies come from `templates/agents/behavior-contracts.json` through
 `generate-agent-profiles.js`; `sync-cursor-edition.js` requests Cursor renders and owns only edition
 layout, commands, hooks, and install packaging. Reviewer roles have no separate source or transform.
 
@@ -268,10 +269,12 @@ and explicitly materializes the Cloud selected-repository Rule. There is no `ses
 materializer and no `--global` dual-write.
 
 The official model contract is likewise bounded: `model` is either `inherit` or an exact model ID,
-and bracket parameters carry options such as effort. Team policy, legacy-plan settings, or plan
+and bracket parameters carry options such as effort; a custom subagent that omits `model` inherits
+the parent. Team policy, legacy-plan settings, or plan
 availability may force a compatible fallback. On Path A, where the live enum contains the named
 profile, generated dispatch guidance omits a per-call model and that profile is the model/effort
-carrier. On Path B, a built-in-only enum has no profile pin: omit-model follows the parent, while a
+carrier — which is why Kaola pins `grok-4.6[effort=medium]` in the profile rather than relying on
+inheritance. On Path B, a built-in-only enum has no profile pin: omit-model follows the parent, while a
 resolver-listed live-schema model slug is the effort lever.
 
 Compact recovery is Rule behavior. CLI catalog bytes are prepared at Workflow startup/resume from
@@ -288,7 +291,7 @@ materialization is not live Task-catalog proof.
 
 On the cursor edition, the router routes directly to the adaptive workflow. Generated commands
 adapt the dispatch call syntax; Path A named-profile dispatch omits per-call model arguments so the
-profile pin carries its tier, while Path B may use only a resolver-listed live-schema model slug.
+profile pin carries the binding, while Path B may use only a resolver-listed live-schema model slug.
 Canonical `commands/*.md` is never touched. There is no canonical model-dispatch section to
 substitute.
 
@@ -303,7 +306,10 @@ does not run through `install.sh --forge`.
 > leg of its eight-runtime sequence, with a per-runtime PASS/FAIL summary.
 > `--global` inherits this installer's user-home-only Cursor layout: it is not
 > permission to update every consumer repository. Project `.cursor` catalogs
-> need an explicit `--target` or `install-all.sh --project`. It never installs or
+> need an explicit `--target` or `install-all.sh --project`. Upgrading to 12.0.0 removes the seven
+> retired profiles and installs the seven-role catalog locally, but Cursor Cloud must rebuild its
+> saved environment before the new catalog takes effect there — an old Build keeps serving the
+> retired 14-role catalog. It never installs or
 > updates Cursor Cloud; that path begins only inside a confirmed Cursor Cloud
 > environment-setup Agent and uses the installer directly. It stays a thin
 > orchestrator — it does **not** fold Cursor into

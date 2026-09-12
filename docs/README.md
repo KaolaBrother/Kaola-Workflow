@@ -12,46 +12,54 @@ moments.
   Cloud lifecycle, update, verification, and uninstall.
 - [Runtime Capabilities](runtime-capabilities.md) — first-party evidence for direct `AGENTS.md`
   loading or Claude's thin bridge, plus native profile discovery, dispatch and fallback routes,
-  default tier carriers, runtime limits, hooks, paths, precedence, and known unknowns for all eight
-  runtimes.
+  the per-adapter subagent default binding, runtime limits, hooks, paths, precedence, and known
+  unknowns for all eight runtime families.
 - [API](api.md) — script CLIs, envelopes, and external contracts.
 - [Task Quality](task-quality.md) — how to express a task's outcome and acceptance basis in a forge
   issue so the Next route can proceed without a fixed requirement template.
 - [Conventions](conventions.md) — coding, testing, Git, and review rules.
 - [Workflow State Contract](workflow-state-contract.md) — durable state, and why the forge, not a
   local file, is the backlog.
-- [Agent Behavior Sources and Provenance](agents-source.md) — the 14-role behavioral authority,
-  ten adapter variants, 140-render manifest, source classification with historical origin record,
-  and how to add or change a role.
+- [Agent Behavior Sources and Provenance](agents-source.md) — the seven-role behavioral authority,
+  six profile-installing adapters, 42-render manifest, source classification with historical
+  origin record, and how to add or change a role.
 
 ## Runtime editions
 
-- [opencode Edition](opencode-edition.md) — direct `AGENTS.md`, native generated profiles, session
-  inheritance, permissions, hooks, and installer behavior.
-- [Kimi Edition](kimi-edition.md) — direct chained `AGENTS.md`, native custom-agent profiles,
-  session-owned model/thinking, hooks, and installer behavior.
-- [Grok Edition](grok-edition.md) — direct root-to-cwd `AGENTS.md`, generated named agents,
-  session-inherited model with native effort pins, and hooks.
-- [Cursor Edition](cursor-edition.md) — direct root/nested `AGENTS.md`, generated named agents,
-  CLI vs App product surfaces (App local IDE vs saved Cloud environments), live-enum routing,
-  host-specific install/reload carriers, and hooks.
-- [ZCode Edition](zcode-edition.md) — direct user-plus-workspace `AGENTS.md`, user-scope generated
-  agents, `thoughtLevel`, known hook limits, and explicit version/relocation unknowns.
-- [Devin CLI Edition](devin-edition.md) — host-routed unpinned agents, inline skills, managed global
-  contract, and UserPromptSubmit recovery after compaction drops rules.
+- [opencode Edition](opencode-edition.md) — direct `AGENTS.md`, vendor-native dispatch (no Kaola
+  role profiles), session inheritance, permissions, hooks, and installer behavior.
+- [Kimi Edition](kimi-edition.md) — direct chained `AGENTS.md`, vendor-native dispatch (no Kaola
+  role profiles), session-owned model/thinking, hooks, and installer behavior.
+- [Grok Edition](grok-edition.md) — direct root-to-cwd `AGENTS.md`, generated named agents pinned
+  to `grok-4.6` / `effort: medium`, and hooks.
+- [Cursor Edition](cursor-edition.md) — direct root/nested `AGENTS.md`, generated named agents
+  pinned to `grok-4.6[effort=medium]`, CLI vs App product surfaces (App local IDE vs saved Cloud
+  environments), live-enum routing, host-specific install/reload carriers, and hooks.
+- [ZCode Edition](zcode-edition.md) — direct user-plus-workspace `AGENTS.md`, vendor-native
+  dispatch (no Kaola role profiles), known hook limits, and explicit version/relocation unknowns.
+- [Devin CLI Edition](devin-edition.md) — vendor-harness `run_subagent` dispatch (no Kaola role
+  profiles), inline skills, managed global contract, and UserPromptSubmit recovery after
+  compaction drops rules.
 
 ## Decisions
+
+- **[0025 — Lean orchestrator; one subagent binding per runtime; seven roles](decisions/0025-lean-orchestrator-single-subagent-binding.md)**
+  — the orchestrator holds judgment and acceptance; the standard/reasoning/heavy intent axis and
+  the 14-role roster are retired in favor of seven roles; every profile-installing adapter
+  declares exactly one `subagent_default` (Claude `sonnet`; Codex `gpt-5.6-luna` / `max` pinned in
+  the TOML; Grok `grok-4.6` / `effort: medium`; Cursor `grok-4.6[effort=medium]`); OpenCode, Kimi,
+  ZCode, and Devin are `native_only` — no Kaola role profiles, vendor-harness dispatch.
 
 [`decisions/`](decisions/) holds the full catalog. ADR 0021 adds runtime-native next/finalize
 guidance; ADR 0022 moves universal behavior to a machine-global contract and compact-safe native
 carriers; ADR 0023 makes repository instructions an Agent-maintained outcome; ADR 0024 retires
 finalize's parsing of the orchestrator's own records and rewrites role bodies around positioning,
 deliverable, custody, and stop condition. ADR 0017 remains the Mission List design of record.
-[#1062](https://github.com/KaolaBrother/Kaola-Workflow/issues/1062) is the accepted successor
-to ADR 0019's remaining three-tier axis and ADR 0021's three intent classes (lean orchestrator,
-7 roles, one `subagent_default` on binding runtimes); ADR 0025
-(`docs/decisions/0025-lean-orchestrator-single-subagent-binding.md`) lands with that run.
-Surfaces still ship 14 roles / ten adapters / 140 renders until then. Most
+[ADR 0025](decisions/0025-lean-orchestrator-single-subagent-binding.md)
+([#1062](https://github.com/KaolaBrother/Kaola-Workflow/issues/1062)) is the landed successor
+to ADR 0019's remaining three-tier axis and ADR 0021's three intent classes: lean orchestrator,
+7 roles, one `subagent_default` per binding adapter, and `native_only` on OpenCode / Kimi / ZCode /
+Devin. Most
 older records describe the node/DAG executor retired by ADR 0017 or project-prompt ownership
 retired by ADR 0023.
 
@@ -71,10 +79,9 @@ retired by ADR 0023.
 
 - **[0021 — Runtime-native orchestration guidance](decisions/0021-runtime-native-orchestration-guidance.md)**
   — common per-item judgment, honest fallback, adapter-rendered native capability exposure, and
-  owner-approved default tier bindings without a Kaola scheduler or invented runtime limits.
-  The "exactly three intent classes" clause is accepted as superseded by
-  [#1062](https://github.com/KaolaBrother/Kaola-Workflow/issues/1062) / forthcoming ADR 0025;
-  live surfaces still ship the three-class matrix until that run.
+  owner-approved default bindings without a Kaola scheduler or invented runtime limits.
+  The "exactly three intent classes" clause is superseded by ADR 0025: one `subagent_default`
+  per binding adapter; `native_only` adapters declare none.
 
 - **[0022 — Machine-global workflow contract](decisions/0022-machine-global-workflow-contract.md)**
   — one universal source, ten measured host adapters, batch-safe installation, subtractive project
@@ -95,9 +102,9 @@ retired by ADR 0023.
   surfaces cleared in #1032) — when more power is needed the orchestrator does the work itself.
   ADR 0020 supersedes its Claude-shaped role-source details; ADR 0021 retains the runtime binding
   matrix as default dispatch policy while replacing the old rendering mechanism. The remaining
-  three-tier axis, 14-role roster, and Heavy as planner-class default are accepted as retired by
-  [#1062](https://github.com/KaolaBrother/Kaola-Workflow/issues/1062) (forthcoming ADR 0025);
-  this file remains the live description of the current tree until that run.
+  three-tier axis, 14-role roster, and Heavy as planner-class default are retired as of ADR 0025
+  ([#1062](https://github.com/KaolaBrother/Kaola-Workflow/issues/1062), 12.0.0);
+  this file remains the historical record of the three-tier model.
 
 - **[0017 — The mission list: four fields where the DAG was](decisions/0017-the-mission-list.md)** — the
   design of record. A run is one file of `item` / `status` / `dispatched` / `result`, written at three

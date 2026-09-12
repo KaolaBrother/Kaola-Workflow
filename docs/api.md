@@ -47,15 +47,17 @@ role's profile remains authoritative for universal behavior; the existing owner 
 and the final verdict. There is no handoff field schema, ordering rule, parser, or linter.
 
 The separate, marked `KW-RUNTIME-DELEGATION` region is generated adapter data. It exposes native
-profile discovery, the dispatch carrier, all three default tier bindings, tool boundary, honest
-named/built-in alternatives, and runtime availability/limits. The common fallback remains per-item:
+profile discovery, the dispatch carrier, the adapter's single `**Subagent default:**` binding plus
+a `**Roles:**` line naming the seven roles, tool boundary, honest
+named/built-in alternatives, and runtime availability/limits — or, on a `native_only` adapter, the
+sentence that this runtime installs no Kaola role profiles by design. The common fallback remains per-item:
 an absent exact role triggers a search of other adequate native child routes; a generic route keeps
 its real identity; inline applies only to that item when no route fits.
 
-`rolesByIntent()` derives the standard/reasoning/heavy role-membership roster from
-`templates/agents/behavior-contracts.json`; `renderRuntimeDelegationGuidance()` places that roster
-beside the runtime adapter's carrier-specific defaults. The adapter therefore cannot silently
-reclassify a role by maintaining a second list.
+The roster derives from the seven-role `ROLES` list backed by
+`templates/agents/behavior-contracts.json`; `renderRuntimeDelegationGuidance()` places it
+beside the runtime adapter's `subagent_default`. The retired `rolesByIntent()` export is gone with
+the intent axis (ADR 0025).
 
 `generate-agent-profiles.js` exports the routing interface:
 
@@ -1668,15 +1670,15 @@ The `--release-check` step is the gate documented above. `--prepare` bumps the v
 
 | Script | Contract |
 |---|---|
-| `generate-agent-profiles.js --check\|--write\|--print-manifest` | validates the complete 14-role behavior, runtime-capability, and provenance authorities; composes eight runtime families through ten adapter variants; writes/checks the 14 Claude profiles, 42 Codex profiles, three Codex registries, and the 140-render manifest; exposes logical profile renders to the six additive edition generators; and renders/replaces runtime-native next/finalize guidance through the API above. `delegation_guidance` is routing-only and excluded from the native-profile adapter hash, so its change does not churn unchanged profile hashes. `--check` exits non-zero on tracked output drift. Generated prompts exclude provenance. |
+| `generate-agent-profiles.js --check\|--write\|--print-manifest` | validates the complete 7-role behavior, runtime-capability, and provenance authorities; composes the profile-installing adapters (Claude, Codex ×3, Grok, Cursor — 42 renders: 7 Claude profiles, 21 Codex TOMLs, three Codex registries, 7 Grok and 7 Cursor profiles) and the manifest's `runtimes` / `native_only_runtimes` fields; exposes logical profile renders to the additive edition generators; and renders/replaces runtime-native next/finalize guidance through the API above. `delegation_guidance` is routing-only and excluded from the native-profile adapter hash, so its change does not churn unchanged profile hashes. `--check` exits non-zero on tracked output drift and prints `agent profiles current: 7 roles, four runtimes (six adapters), 42 native renders` on success. Generated prompts exclude provenance. The module also exports `BINDING_RUNTIMES` and `isBindingAdapter()` for the profile-installing set. |
 | `kaola-workflow-global-contract.js install\|check\|uninstall --json [--nonce VALUE]` | registry-derived local batch transaction. It discovers the nine local surfaces, deduplicates shared physical carriers, preflights every path/owner/schema before the first write, preserves managed owner bytes, atomically writes or rolls back, and receipts source/render/install hashes plus all ten rows (Cursor Cloud reports `REMOTE_REQUIRED`). `check` exits 3 on drift. Uninstall re-derives every receipt target from the current registry before removing unchanged owned bytes. |
 | `kaola-workflow-global-contract.js install-cloud\|check-cloud\|uninstall-cloud --target REPO --json [--nonce VALUE]` | explicit Cursor Cloud selected-repository transaction. Requires an initialized Git repository, writes the one `.cursor/rules/kaola-workflow-global.mdc` plus a project receipt, and never runs as a side effect of local install-all. |
 | `run-edition-tests.js <scripts/test-*.js>...` | executes every explicitly declared additive edition suite, even after a prior failure; prints child output, retains every failed suite in the final summary, and exits non-zero after all attempts when any child failed. The package script declares opencode, Kimi, Grok, Cursor, ZCode, and Devin explicitly so suite registration can see the full lane. |
 | `kaola-workflow-install-manifest.js --forge=<github\|gitlab\|gitea> (--scripts\|--hooks)` | the single source of the support-file list an installer copies. Prints one name per line. Exits 2 on an unknown argument, a missing flag, or an **empty** list — an empty manifest would copy zero support files, so it refuses rather than silently installing nothing. Exports `SUPPORT_SCRIPTS`, `SUPPORT_HOOKS`, `FORGES`, `supportScripts`, `supportHooks`, `renameIfPorted` |
 | `edition-sync.js (--check \| --write \| --materialize-kernel)` | materializes the rename-normalized edition copies from the canonical tree and the byte-identical kernel into each edition. `--check` is the read-only verdict |
 | `validate-script-sync.js` | enforces cross-edition parity, including `BYTE_IDENTICAL_GROUPS`, which auto-expands when a new `.toml` is added to the codex tree |
-| `sync-opencode-edition.js` / `sync-kimi-edition.js` / `sync-grok-edition.js` / `sync-cursor-edition.js` / `sync-zcode-edition.js` / `sync-devin-edition.js` | additive runtime editions outside `npm test` and the forge chains. Each requests native role bytes and its marked next/finalize guidance from `generate-agent-profiles.js`; none parses Claude role prose as semantic input. `workflow-init` has no runtime dispatch block and is not replaced. `--refresh-present` regenerates every edition tree already on the machine and creates none — it is what the routing generator's `--write` calls, so a routing-prose change leaves no present tree stale. `--print-tree-root` prints the single absolute generated-tree root and writes nothing. Cursor additionally accepts `--write --tree-root=<absolute empty real directory>` for installer-owned isolated staging and refuses relative, missing, symlink, or occupied roots; its normal installer never regenerates the repository tree. Other installers resolve their source from `--print-tree-root`, including from a linked worktree. A cross-checkout refresh reports changed trees and the editions check on stderr without contaminating stdout. #1055: `parseFrontmatter`, `parseTools`, `yamlScalar`, `listCanonAgents`, `listCanonCommands`, `canonCommandPath`, and `commandRel` are exported once by `runtime-edition-forge.js` (the module the five then-existing additive sync scripts already required) rather than restated per script; each script keeps a thin wrapper only where the shared body needs a runtime-specific `DEFAULT_FORGE` or `treeLabel` as an explicit argument. `treeLabel`, `runCheck`, and `runWrite` remain fully per-script. Devin's later `sync-devin-edition.js` also consumes that shared helper. |
-| `install-zcode.sh` | additive ZCode installer (project `--target` / `--global`, forge axis, regenerate/uninstall/no-scripts/yes). Project installs stage agents/commands and sync profiles to user scope; global installs write the user carrier. Issue #1044 installs no prompt-lifecycle hooks or prompt components. Upgrade/uninstall remove only receipt-owned legacy project/user Kaola declarations and preserve foreign config. |
+| `sync-opencode-edition.js` / `sync-kimi-edition.js` / `sync-grok-edition.js` / `sync-cursor-edition.js` / `sync-zcode-edition.js` / `sync-devin-edition.js` | additive runtime editions outside `npm test` and the forge chains. Only the binding adapters (Grok, Cursor) request native role bytes from `generate-agent-profiles.js`; the `native_only` runtimes (OpenCode, Kimi, ZCode, Devin) render commands, skills, hooks, and guidance but no agent profiles. Each takes its marked next/finalize guidance from `generate-agent-profiles.js`; none parses Claude role prose as semantic input. `workflow-init` has no runtime dispatch block and is not replaced. `--refresh-present` regenerates every edition tree already on the machine and creates none — it is what the routing generator's `--write` calls, so a routing-prose change leaves no present tree stale. `--print-tree-root` prints the single absolute generated-tree root and writes nothing. Cursor additionally accepts `--write --tree-root=<absolute empty real directory>` for installer-owned isolated staging and refuses relative, missing, symlink, or occupied roots; its normal installer never regenerates the repository tree. Other installers resolve their source from `--print-tree-root`, including from a linked worktree. A cross-checkout refresh reports changed trees and the editions check on stderr without contaminating stdout. #1055: `parseFrontmatter`, `parseTools`, `yamlScalar`, `listCanonAgents`, `listCanonCommands`, `canonCommandPath`, and `commandRel` are exported once by `runtime-edition-forge.js` (the module the five then-existing additive sync scripts already required) rather than restated per script; each script keeps a thin wrapper only where the shared body needs a runtime-specific `DEFAULT_FORGE` or `treeLabel` as an explicit argument. `treeLabel`, `runCheck`, and `runWrite` remain fully per-script. Devin's later `sync-devin-edition.js` also consumes that shared helper. |
+| `install-zcode.sh` | additive ZCode installer (project `--target` / `--global`, forge axis, regenerate/uninstall/no-scripts/yes). ZCode is `native_only`: installs deploy commands and support scripts only — no Kaola role profiles at any scope. Issue #1044 installs no prompt-lifecycle hooks or prompt components. Upgrade sweeps the fourteen retired managed-marker profiles from project staging and `${ZCODE_HOME:-~/.zcode}/agents/`; uninstall removes only receipt-owned legacy project/user Kaola declarations and preserves foreign config. |
 | `install-all.sh` | current-machine orchestrator. Before any edition installer writes, it runs the whole local global-contract transaction; a blocked carrier prevents a partial runtime batch. It has no Cursor Cloud deployment mode. |
 | `install-cursor.sh` | additive Cursor edition installer (`--target DIR` / `--global`, forge axis, regenerate/uninstall/no-scripts/yes/doctor). It writes receipt-owned agents/commands and the doctor capability registry, merges an empty hook mapping, and retires the old duplicate recovery Rule. The separate global-contract transaction owns the local/Cloud Rule. |
 | `kaola-workflow-cursor-surface.js --doctor [--json] [--target DIR] [--product cli\|app\|unknown] [--host local\|cloud\|unknown] [--forge=...]` | Cursor filesystem/evidence reporter; reads the receipt-owned adapter registry and receipt state without a source checkout or sibling-host inference. Unqualified current `runtime_build` and `named_catalog` remain `unknown` absent live observation; `evidence_stamp` and `selected_host` carry historical measured facts. `dispatch_contract` reports the flat `subagent_type` call shape, per-call model omission, exact-tier post-resolution boundary, generic-enum scope, and `providerOptions.cursor.modelName` evidence carrier. |
@@ -1719,29 +1721,39 @@ retired `parallel_mode`) is ignored, never rewritten.
 
 ### Agent model resolution
 
-`templates/agents/behavior-contracts.json` assigns every role one runtime-neutral `intent_class`:
-`standard`, `reasoning`, or `heavy`. It contains no vendor or model identifier. The selected entry in
-`templates/agents/runtime-capabilities.json` maps that intent to a native carrier or inheritance:
+The `intent_class` field and the `standard` / `reasoning` / `heavy` axis are retired (ADR 0025,
+#1062). `templates/agents/runtime-capabilities.json` classifies each adapter as
+`role_dispatch: "named_profile"` (binding) or `"native_only"`. A binding adapter declares exactly
+one `subagent_default` (`model`, optional `effort`, one-sentence `summary`); a `native_only`
+adapter declares none and carries only `named_roles: false`, `deterministic_profiles: false`, and
+a `delegation_guidance` of `native_routes` plus `availability`:
 
-- Claude defaults are `sonnet` / `opus` / `fable` with runtime-default effort; installed profiles
-  inherit and the dispatch guidance carries the default selection;
-- Codex profiles omit a fixed model under host policy, while dispatch defaults are
-  `gpt-5.6-luna`/max, `gpt-6-astra`/medium, and `gpt-6-astra`/high;
-- opencode and Kimi inherit the session model/effort under the documented adapter boundary;
-- Grok carries native effort while inheriting the session model;
-- Cursor carries the native model/effort parameter in generated profile frontmatter; omit-model
-  dispatch is the named-catalog carrier on CLI, local App, and correctly saved Cloud environments;
-- ZCode carries an explicit model plus camelCase `thoughtLevel`.
+- Claude profiles pin `model: sonnet`; effort is not pinned;
+- Codex TOML profiles pin `model = "gpt-5.6-luna"` and `model_reasoning_effort = "max"`; file
+  values take precedence over spawn parameters and the parent session, so dispatch omits both;
+- Grok profiles pin `model: grok-4.6` + `effort: medium`;
+- Cursor profiles pin `model: grok-4.6[effort=medium]`; omit-model dispatch is the named-catalog
+  carrier on CLI, local App, and correctly saved Cloud environments (a custom subagent that omits
+  `model` inherits the parent, which is why the pin selects the cheaper child);
+- OpenCode, Kimi, ZCode, and Devin are `native_only`: no Kaola role profiles; children inherit the
+  session model or a vendor router owns the choice, so dispatch goes through the vendor harness.
 
-The exact current mappings are machine data and are summarized in `runtime-capabilities.md`.
-Next/finalize expose them as default dispatch bindings, not as mission-list state, a fixed pipeline,
+The kernel anchor `kaola-workflow-adaptive-schema.js` exports `CODEX_PINNED_ROLES`,
+`CODEX_PINNED_MODEL` (`gpt-5.6-luna`), and `CODEX_PINNED_EFFORT` (`max`) — replacing the retired
+`CODEX_PINNED_STANDARD_ROLES` / `CODEX_PINNED_REASONING_ROLES` / `CODEX_PINNED_HEAVY_ROLES` — and
+`validateProfileText`, which now requires exactly one `model = "gpt-5.6-luna"` and one
+`model_reasoning_effort = "max"` top-level line in every Codex TOML (the pre-#1062 rule required
+both keys omitted).
+
+The exact current bindings are machine data and are summarized in `runtime-capabilities.md`.
+Next/finalize expose them as the `**Subagent default:**` binding, not as mission-list state, a
+fixed pipeline,
 or a ban on runtime-supported task-sensitive choices. A missing required native capability yields a
 specific per-item `capability_gap`; it is not emulated by granting wider tools, impersonating a
 named role, silently dropping the restriction, or declaring the rest of the run inline.
 
-Finalize carries executable-shaped defaults for its validation and documentation handoffs: Claude
-examples pass the tier model and retain runtime-default effort; Codex examples pass the tier model
-and `reasoning_effort`. A task-sensitive override or supported inherited pair remains valid. Codex
+Finalize's dispatch example names `implementer` with no `model=` field, because the installed
+profile already carries the adapter's pin. A task-sensitive override or supported inherited pair remains valid. Codex
 lookup starts at the effective project or user `.codex/config.toml`: its managed
 `[agents.<role>]` registration references `.codex/agents/kaola-workflow/<role>.toml`, while bundled
 `agents.toml` is only installer source.

@@ -14,74 +14,58 @@ first-party discovery source and the warning-only 32 KiB recommendation are link
 
 ## Native carriers
 
-The edition uses two distinct Kimi carriers:
+Since ADR 0025 (#1062) the Kimi adapter is `role_dispatch: "native_only"`: this edition installs no
+Kaola role profiles. Kimi's custom-agent `model` field is ignored by the runtime, so a Kaola
+profile has no cost lever — children inherit the session model and thinking either way, and the
+vendor's own harness is the dispatch route.
+
+The edition uses one Kimi carrier:
 
 | Purpose | Generated source tree | Live project path | Live global path |
 | --- | --- | --- | --- |
 | workflow slash commands | `.kimi/skills/<command>/SKILL.md` | `<project>/.kimi-code/skills/<command>/SKILL.md` | `$KIMI_CODE_HOME/skills/<command>/SKILL.md` |
-| 14 named roles | `.kimi/agents/<role>.md` | `<project>/.kimi-code/agents/<role>.md` | `$KIMI_CODE_HOME/agents/<role>.md` |
 
-`$KIMI_CODE_HOME` defaults to `~/.kimi-code`. Kimi also documents the generic compatibility
-profile directories `<project>/.agents/agents/` and `~/.agents/agents/`; Kaola installs to the
-branded `.kimi-code` / `$KIMI_CODE_HOME` locations so one managed layout has an unambiguous owner.
+`$KIMI_CODE_HOME` defaults to `~/.kimi-code`.
 
 The command Skills keep their canonical basenames, so `/workflow-init`, `/workflow-next`, and
-`/kaola-workflow-finalize` remain the three entrypoints. Roles are **not Skills**. Each role is a
-native Markdown/YAML custom-agent profile whose frontmatter name is
-`kaola-role-<role>`. A generated command dispatches it directly with
-`subagent_type="kaola-role-<role>"` when that exact profile is available; it does not ask a built-in
-agent to load or impersonate a role-contract Skill. Built-ins remain honest item-local fallback
-routes under the runtime-native guidance below.
+`/kaola-workflow-finalize` remain the three entrypoints. Dispatch goes through Kimi's built-in
+agents (`coder`, `explore`, `plan`, `AgentSwarm`) under their real identities — no Kaola
+`kaola-role-*` profile is installed or impersonated.
 
-This matches Kimi's documented custom-agent surface:
+Kimi's documented custom-agent surface remains available to the user:
 [Custom agents](https://moonshotai.github.io/kimi-code/en/customization/agents.html). The documented
 project locations are `.kimi-code/agents/` and `.agents/agents/`; the user locations are
-`$KIMI_CODE_HOME/agents/` and `~/.agents/agents/`.
+`$KIMI_CODE_HOME/agents/` and `~/.agents/agents/`. Kaola writes none of them.
 
 ## One role behavior source
 
-`scripts/generate-agent-profiles.js` combines
-`templates/agents/behavior-contracts.json` with the Kimi adapter. It produces one native profile
-for every role and carries the same `behavior_contract_hash` used by other runtimes plus a
-Kimi-render-specific `resolved_profile_hash`. `scripts/sync-kimi-edition.js` owns only the edition
-layout, command transformation, hooks, and install packaging; it does not parse a Claude profile or
-maintain a reviewer-only transform.
-
-Every Kimi profile has an explicit native `tools` allowlist derived from the role's capability
-requirements:
-
-- every role receives `Read`, `Grep`, and `Glob`;
-- `scoped_write` adds `Write` and `Edit`;
-- `command_execution` adds `Bash`;
-- `external_research` adds `WebSearch` and `FetchURL`.
-
-These fields are runtime-enforced capability boundaries, not prose suggestions. A missing required
-native capability is reported as `capability_gap`; the adapter does not silently grant a broader
-toolset.
+`scripts/sync-kimi-edition.js` renders only the command Skills and the global contract for this
+adapter; it requests no role profiles from `generate-agent-profiles.js`. The seven-role behavior
+authority in `templates/agents/behavior-contracts.json` still governs the shared contract prose.
 
 ## Model and thinking
 
-Kimi's current custom-agent `model` field is ignored. Kaola therefore emits no `model` field and no
-per-call model override. The session model and thinking configuration own normal routing, and every
-named Kaola child inherits them. The runtime-neutral `standard`, `reasoning`, and `heavy` intent
-classes remain in the behavior source, but the Kimi adapter maps all three to session inheritance.
+Kimi's current custom-agent `model` field is ignored — the measured reason the adapter is
+`native_only`. Kaola emits no `model` field and no
+per-call model override. The session model and thinking configuration own routing, and every
+child inherits them.
 
 Kimi documents an experimental secondary-model pool for subagents. Kaola does not enable, seed, or
 rewrite that user-owned experiment. Only a user who explicitly opts in may select its pool aliases
-for newly spawned children; the normal Kaola default remains session model/thinking inheritance for
-all three intent classes.
+for newly spawned children; the normal default remains session model/thinking inheritance.
 
 ## Runtime-native orchestration guidance
 
-The two execution commands expose Kimi's full relevant native surface: project and user custom-agent
-paths, direct `Agent` dispatch, `AgentSwarm` parallel lists up to 128 items, resume/background
+The two execution commands expose Kimi's full relevant native surface: direct `Agent` dispatch,
+`AgentSwarm` parallel lists up to 128 items, resume/background
 options, and the writable `coder`, read-only `explore`, and non-shell `plan` built-ins. Built-ins are leaves;
 custom profiles may allowlist deeper agents. Kaola neither disables those routes nor silently
 enables the experimental secondary-model pool.
 
-If `kaola-role-<role>` is absent, the orchestrator evaluates these routes for the current item. A
+A missing named Kaola role is design, not a `capability_gap`: the orchestrator evaluates these
+routes for the current item. A
 built-in remains honestly identified and must satisfy the actual task, custody, evidence, and stop
-boundaries; it is not renamed into the missing role. Inline applies only when no adequate route
+boundaries; it is not renamed into a role. Inline applies only when no adequate route
 exists, and the next mission item is reconsidered independently.
 
 ## Forge axis
@@ -129,17 +113,17 @@ the Kimi-native resolver and carry no `$CLAUDE_PLUGIN_ROOT` or `~/.claude/kaola-
 ./install-kimi.sh --uninstall             # remove this scope's managed edition
 ```
 
-Project installs write command Skills and agents below `<project>/.kimi-code/`. Global installs
+Project installs write command Skills below `<project>/.kimi-code/`. Global installs
 write them directly below `$KIMI_CODE_HOME`. Support scripts remain user-scoped in both
 cases.
 
-Every generated native agent is recorded in a filename-plus-SHA manifest; the visible marker alone
-is never ownership proof. Install refuses an unmanaged or owner-modified same-name agent and any
-non-directory agent carrier or non-regular profile/manifest carrier—including symlinks, directories,
-and FIFOs—before writing. Reinstall updates only hash-proven managed profiles and is idempotent. The
-migration removes an older `kaola-role-*` Skill directory
-only when its complete one-file bytes match an exact profile shipped by v9.17.2; modified and
-unknown role-shaped Skills remain. Uninstall removes only manifest/exact-byte-proven agents, the
+On upgrade the installer removes the fourteen `kaola-role-*` artifacts earlier releases deployed —
+the custom-agent profiles and the older role-shaped Skill directories — but only under exact
+ownership proof: a manifest-recorded, managed-marker, hash-matching agent file, or a `kaola-role-*`
+Skill directory whose complete one-file bytes match the exact profile shipped by v9.17.2.
+A user-authored, modified, or unknown same-name file survives; a candidate that fails its
+ownership check fails the install closed rather than being deleted. Reinstall is idempotent.
+Uninstall removes only ownership-proven artifacts, the
 three reserved Kaola command Skills, managed support files, and the retired managed config block. It
 preserves the user's other agents, Skills, config content, and the shared
 `~/.config/kaola-workflow/config.json`.
@@ -154,9 +138,10 @@ node scripts/sync-kimi-edition.js --check
 node scripts/test-kimi-edition.js
 ```
 
-The suite proves the separate carrier inventories, all-role behavior reachability, native tool
-allowlists, direct named dispatch, model inheritance, generated-tree determinism, zero Claude-path
+The suite proves the separate carrier inventories, the native-only invariant (no role profiles
+rendered or installed, no `kaola-role-*` dispatch in rendered surfaces), role behavior reachability
+in shared prose, model inheritance, generated-tree determinism, zero Claude-path
 leakage, forge variants, project/global installation, unmanaged-collision refusal, idempotent
-reinstall, legacy role-Skill retirement, and ownership-safe uninstall. It proves tracked and
+reinstall, ownership-gated legacy role-Skill and role-agent retirement, and ownership-safe uninstall. It proves tracked and
 sandboxed filesystem behavior, not private prompt-loader attestation or identical stochastic model
 output.

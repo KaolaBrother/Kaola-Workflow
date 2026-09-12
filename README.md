@@ -12,9 +12,11 @@ The workflow supports **Claude Code, Codex, OpenCode, Kimi Code, Grok CLI, Curso
 **GitHub, GitLab, and Gitea**. Runtime-specific model, dispatch, hook, and installation behavior is
 measured rather than flattened into a lowest-common-denominator abstraction.
 
-Codex dispatch defaults are `gpt-5.6-luna`/max for standard work and `gpt-6-astra`/medium or
-`gpt-6-astra`/high for reasoning or heavy work. Codex role profiles omit a fixed model and inherit
-the active host policy; other runtimes keep their native mappings.
+Each runtime that installs Kaola role profiles declares one subagent default binding: Claude
+profiles pin `model: sonnet`; Codex TOML profiles pin `model = "gpt-5.6-luna"` and
+`model_reasoning_effort = "max"`; Grok pins `model: grok-4.6` / `effort: medium`; Cursor pins
+`grok-4.6[effort=medium]`. OpenCode, Kimi Code, ZCode, and Devin CLI install no Kaola role
+profiles and dispatch through the vendor's native harness.
 
 ## Why it exists
 
@@ -33,8 +35,9 @@ decomposition, runtime routing, product judgment, review, and the final done ver
 ## What ships
 
 - Resumable single-issue and multi-issue runs with collision-safe claims and optional worktrees.
-- Fourteen role behaviors — each with its own positioning, deliverable, unique custody, and stop
-  condition — rendered into native profiles for every supported runtime.
+- Seven role behaviors — each with its own positioning, deliverable, unique custody, and stop
+  condition — rendered into native profiles on the runtimes where a Kaola profile carries a real
+  cost lever (Claude, Codex, Grok, Cursor).
 - GitHub, GitLab, and Gitea claim, closure, merge-sink, and PR/MR fallback surfaces.
 - Local, candidate-bound validation receipts and an exact-commit release transaction.
 - Runtime-native compact recovery for the measured compact-risk hosts, without pre/post tool prompt
@@ -78,6 +81,12 @@ git pull --ff-only
 ./install-all.sh --yes --forge=github
 ./install-all.sh --check
 ```
+
+Upgrading to 12.0.0 (the lean-orchestrator release) requires this reinstall on **every** machine:
+the 14-role roster and the per-tier model bindings are retired, so only the new install removes
+the seven retired profiles and deploys the new adapter blocks. Cursor Cloud is not covered by a
+local reinstall — its saved environment must be rebuilt before the new catalog takes effect
+there.
 
 `install-all.sh` refreshes Kaola-Workflow runtime carriers. The terminal npm Codex CLI is a separate
 installation: update it with `npm install --global @openai/codex`, then verify with `codex --version`.
@@ -142,14 +151,14 @@ The complete durable-state and bundle contracts are in
 
 | Runtime | Native workflow carrier | Install entry |
 |---|---|---|
-| Claude Code | commands, `CLAUDE.md` bridge, native agents | `./install.sh` |
-| Codex | skills, direct `AGENTS.md`, native agents | matching plugin plus profile installer |
-| OpenCode | commands and native agents | `./install-opencode.sh` |
-| Kimi Code | skills and native agents | `./install-kimi.sh` |
-| Grok CLI | commands, named agents, persistent recovery Rule | `./install-grok.sh` |
-| Cursor CLI/App/Cloud | commands, named agents, persistent recovery Rule | `./install-cursor.sh` |
-| ZCode | commands and named agents | `./install-zcode.sh` |
-| Devin CLI | inline skills, named agents, UserPromptSubmit recovery | `./install-devin.sh` |
+| Claude Code | commands, `CLAUDE.md` bridge, seven named agents | `./install.sh` |
+| Codex | skills, direct `AGENTS.md`, seven TOML agents per plugin | matching plugin plus profile installer |
+| OpenCode | commands; vendor-native dispatch (no Kaola role profiles) | `./install-opencode.sh` |
+| Kimi Code | skills; vendor-native dispatch (no Kaola role profiles) | `./install-kimi.sh` |
+| Grok CLI | commands, seven named agents, persistent recovery Rule | `./install-grok.sh` |
+| Cursor CLI/App/Cloud | commands, seven named agents, persistent recovery Rule | `./install-cursor.sh` |
+| ZCode | commands; vendor-native dispatch (no Kaola role profiles) | `./install-zcode.sh` |
+| Devin CLI | inline skills; `run_subagent` via the vendor harness (no Kaola role profiles) | `./install-devin.sh` |
 
 All forge-aware installers accept `--forge=github|gitlab|gitea`. Codex chooses the forge through
 the installed plugin entry. For measured profile discovery, model/effort carriers, dispatch schema,
@@ -211,6 +220,6 @@ release transaction are documented in [API](docs/api.md) and [Conventions](docs/
 
 ## License
 
-Kaola-Workflow is released under the MIT License; see [LICENSE](LICENSE). The fourteen role
+Kaola-Workflow is released under the MIT License; see [LICENSE](LICENSE). The seven role
 contracts are Kaola-authored; their sources and history are described in
 [Agent Sources](docs/agents-source.md).

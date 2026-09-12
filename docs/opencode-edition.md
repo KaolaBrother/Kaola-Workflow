@@ -3,8 +3,8 @@
 The opencode edition makes Kaola-Workflow runnable from
 [opencode](https://opencode.ai), the same way the Codex edition makes it runnable
 from Codex. opencode is a coding-agent **runtime** (like Codex), not a git forge,
-so this edition is delivered the opencode-native way — a project `opencode.json`
-plus a generated `.opencode/` tree — and is fully **additive**: it touches none of
+so this edition is delivered the opencode-native way — a generated `.opencode/`
+tree of commands and a hooks plugin — and is fully **additive**: it touches none of
 the existing `claude`/`codex`/`gitlab`/`gitea` edition machinery.
 
 opencode reads root `AGENTS.md` directly; Kaola does not route it through `CLAUDE.md`. Official
@@ -47,102 +47,71 @@ Everything under `.opencode/` is **generated from canonical** by
 
 | Canonical source        | opencode edition output       | Notes |
 | ----------------------- | ----------------------------- | ----- |
-| `templates/agents/behavior-contracts.json` + opencode adapter | `.opencode/agents/<name>.md` | one native render for each of the 14 roles; `mode: subagent`, capability-derived permission denials, session-inherited model, shared behavior hash, and render-specific hash |
-| `commands/<file>.md`    | `.opencode/commands/<file>.md` | The marked next/finalize capability block is replaced with OpenCode-native lookup, `task`, tier-inheritance, route, and limit guidance; any concrete Claude dispatch cards become OpenCode calls. The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
+| `commands/<file>.md`    | `.opencode/commands/<file>.md` | The marked next/finalize capability block is replaced with OpenCode-native `native_only` guidance — no Kaola role profiles, vendor-harness `task`/`@name` routes, and limit guidance; any concrete Claude dispatch cards become OpenCode calls. The canonical Path Intent prose is also stripped (see [Path selection](#path-selection) below). |
 | `templates/opencode/plugins/*.js` | `.opencode/plugins/kaola-workflow-hooks.js` | Hook adapter plugin; byte-copied from the tracked canonical source by `sync-opencode-edition.js --write` (verified by `--check`; see [Hooks](#hooks)). |
 
-One file is **authored** (not generated) and verified present by the test:
+Since ADR 0025 (#1062) the opencode adapter is `role_dispatch: "native_only"`: no Kaola role
+profiles are rendered or installed. A subagent inherits the session's model and variant, so a
+Kaola profile has no cost lever — the vendor's own harness is the dispatch route, and the upgrade
+path removes the fourteen profiles an earlier release installed (see
+[Install](#install-into-a-project)).
 
-- `opencode.json` — the user-owned config (seeded once, then preserved; an install names any
-  stale per-role effort entries it still carries and rewrites it only under `--adopt-config`).
-
-Generated agents are deliberately model-agnostic, so regenerating the tree never
-overwrites a user's model choices — those live only in the user-owned
-`opencode.json`.
+`opencode.json` is **user-owned and never written by this installer** — including the
+`agent.<role>.model` scaffold entries older releases seeded.
 
 ## Role behavior derivation
 
-`scripts/sync-opencode-edition.js` requests every role through
-`generate-agent-profiles.js`'s opencode adapter. It does not parse or transform a Claude role file.
-The adapter combines the shared role contract with opencode-native frontmatter and permission
-denials. There is no second reviewer path: reviewer roles and the other eleven roles use the same
-source, renderer, hashes, and manifest.
-
-Every profile carries `behavior_contract_version`, `behavior_contract_hash`, and
-`resolved_profile_hash`. The behavior identity is shared across runtimes; the resolved hash binds
-the complete opencode bytes. This proves deterministic filesystem equivalence, not identical
-stochastic output or private runtime prompt-load attestation.
+`scripts/sync-opencode-edition.js` renders only commands, the hooks plugin, and the global
+contract for this adapter; it requests no role profiles from
+`generate-agent-profiles.js` (the adapter declares `native_only`). The seven-role behavior
+authority in `templates/agents/behavior-contracts.json` still governs the shared contract prose.
 
 ## Model and effort — inherited from the session
 
 **A subagent runs the model and the reasoning effort of the session that dispatched it.** Nothing
 is configured per role, and there is nothing to pass: opencode's `task` tool takes a
 `subagent_type`, a `prompt` and a `description`, and has no model or effort parameter at all. To
-make a dispatched role think harder, raise the session's own effort — every role you dispatch
+make a dispatched child think harder, raise the session's own effort — every child you dispatch
 follows it.
 
-This is opencode's own behaviour, not something this edition arranges: `TaskTool` hands a subagent
-the parent's variant whenever the role pins no model, and this edition pins none. It was measured
+This is opencode's own behaviour and the measured reason the adapter is `native_only`: `TaskTool`
+hands a subagent the parent's variant whenever it pins no model. It was measured
 rather than assumed — with no `agent` block and the plugin hook inert, changing only the parent
 session's effort moved both subagents with it (parent at `nothink` → 0 / 0 / 0 reasoning tokens;
 parent at `think` → 26 / 560 / 641).
 
 The edition previously seeded a per-role effort tier — a `provider.*.variants` block and an
-`agent.<role>.variant` or `.options` entry for each role. That is **removed**, not merely
-deprecated: it was an override of the inheritance above rather than a repair of it, and no observed
+`agent.<role>.variant` or `.options` entry for each role. That was removed earlier: it was an
+override of the inheritance above rather than a repair of it, and no observed
 failure forced it to exist. `docs/investigations/2026-08-03-opencode-inherited-effort-tiers-design.md`
-records the design, what it measured, and why it was removed. A config written by an older install
-still carries those entries; the installer names them (see [Config
-drift](#config-drift-and---adopt-config)) and `--adopt-config` regenerates the file.
+records the design, what it measured, and why it was removed.
 
-The **model**-pin path below is a different, opt-in feature and is unaffected.
+> Historical: older releases also offered an opt-in scaffold (`KAOLA_OPENCODE_STANDARD_MODEL` /
+> `KAOLA_OPENCODE_REASONING_MODEL`) that seeded a commented-out `model` /
+> `agent.<role>.model` tier pin into `opencode.json`. That scaffold retired with the profile
+> inventory under #1062; the installer no longer writes `opencode.json` at all, and any
+> `agent.<role>.model` entry an old release seeded is left untouched as user content.
 
-### Opt-in: pin the standard and reasoning model classes
-
-Effort is inherited and not configurable per role, but the **model** still is. If you want the
-reasoning-tier roles on a different model from the rest, pin via env (or hand-edit
-`opencode.json`):
-
-- `KAOLA_OPENCODE_STANDARD_MODEL` — pin the standard tier to a `provider/model`
-- `KAOLA_OPENCODE_REASONING_MODEL` — pin the reasoning tier to a `provider/model`
-
-The canonical `fable` heavy class is deliberately classified as reasoning by
-`sync-opencode-edition.js`, so planner and code-architect are included in the
-reasoning-role override list. There is no separate heavy effort or model pin:
-the session supplies effort for every role.
-
-The seeded `opencode.json` carries this as a commented-out scaffold: a top-level `model` for the
-standard tier and `agent.<role>.model` overrides for the reasoning-tier roles. That roster is
-derived from the `model:` tier in `agents/*.md` and written into the scaffold, never hand-listed
-here — read the current roles from the scaffold comment itself. With nothing set, every role
-inherits the model you already use.
-
-> A role that pins a model no longer inherits the session's effort either — that is opencode's
-> coupling, not this edition's, and it is the trade this opt-in makes.
-
-opencode's `task` tool has no per-call model or effort parameter; reviewers
-follow the session and any user-owned model pin that applies to their classified
-role. The former Claude-only reviewer→heavy re-dispatch carve-out is retired for
+opencode's `task` tool has no per-call model or effort parameter; children
+follow the session. The former Claude-only reviewer→heavy re-dispatch carve-out is retired for
 every runtime (ADR 0019 / #1059); there is no workflow-owned fable escalation to
 omit or mirror here.
 
 ## Runtime-native orchestration guidance
 
 `workflow-next` and `kaola-workflow-finalize` receive an OpenCode adapter block rather than Claude
-spawn prose. It tells the orchestrator to inspect project `.opencode/agents/`, user config agents,
-and `opencode.json`, then dispatch a named role with `task` and `subagent_type` or direct `@name`.
-It also exposes the broad `general`, read-only local `explore`, and read-only external-research `scout` routes,
+spawn prose. It states that this runtime installs no Kaola role profiles by design and routes
+through the vendor harness: the broad `general`, read-only local `explore`, and read-only external-research `scout` routes via
+`task`/`subagent_type` or direct `@name`, plus
 `task_id` resume, experimental background work, effective permissions, and the default one-child
 depth. These are OpenCode capabilities, not Kaola mandates; user configuration may change or hide
 them.
 
-An absent exact role is resolved for the current item. A built-in may be used when its actual
-capability meets the task, custody, evidence, and stop boundaries, but remains that built-in rather
-than impersonating the missing role. Inline is the item-local fallback only when no adequate route
-exists. The generated block repeats all three tier outcomes—session inheritance, with the existing
-optional standard/reasoning model pins—and never invents per-call model or effort fields.
+A missing named Kaola role is design, not a `capability_gap`: dispatch a native route per item when
+its actual task, custody, evidence, and stop boundaries fit, or work inline. The generated block
+never invents per-call model or effort fields.
 
-> `opencode.json` is **user-owned**: `--write` regenerates agents/commands but
+> `opencode.json` is **user-owned**: `--write` regenerates commands/plugins but
 > **preserves** this file. Use `--write-config` to reset it from the template.
 
 ## Path selection
@@ -251,57 +220,34 @@ Claude resolver to this opencode form at generation time; canonical `commands/*.
 
 
 ```bash
-./install-opencode.sh                         # deploy into the current project (.opencode/ + opencode.json)
+./install-opencode.sh                         # deploy into the current project (.opencode/)
 ./install-opencode.sh --target /path/to/repo  # deploy into a specific project
-./install-opencode.sh --global                # agents+commands → ~/.config/opencode (un-nested)
+./install-opencode.sh --global                # commands+plugin+hooks → ~/.config/opencode (un-nested)
 ./install-opencode.sh --regenerate            # refresh in-repo .opencode/ from canonical
 ./install-opencode.sh --no-scripts            # skip the support-script copy (see Script resolution)
-./install-opencode.sh --adopt-config          # replace an existing opencode.json (see Config drift)
 ./install-opencode.sh --uninstall             # remove the kaola-deployed edition (see Uninstall)
 ```
 
-The install deploys the workflow command set — finalize, workflow-init, workflow-next.
-It writes no configuration: the shared `~/.config/kaola-workflow/config.json` is user-owned
-and no installer creates or edits it.
+The install deploys the workflow command set — finalize, workflow-init, workflow-next — plus the
+hooks plugin. It writes no configuration: `opencode.json` and the shared
+`~/.config/kaola-workflow/config.json` are user-owned
+and no installer creates or edits them.
 
-### Config drift and `--adopt-config`
-
-`opencode.json` is user-owned, so an install preserves an existing one — which is also how it goes
-stale, and nothing looked. A file written by an older install pins per-role reasoning effort
-(`agent.<role>.options`, or `agent.<role>.variant` from before that); those settings no longer do
-anything, because a subagent runs the model and effort of the session that dispatched it. Every
-install **names the entries still carrying them** and changes nothing:
-
-```
-⚠ Config drift: it pins per-role reasoning effort, which no longer does anything.
-    3 role entry(ies) carrying an inert effort setting: contractor, issue-scout, planner
-    A subagent runs the model and reasoning effort of the session that dispatched it, so
-    these are left over from an older install. An entry that only pins a model is yours
-    and is not counted here.
-```
-
-That last line is the deliberate exclusion: an `agent.<role>` entry carrying **only** a `model` is
-the opt-in model pin, which is yours and still works, so it is never named.
-
-`--adopt-config` is the explicit opt-in that takes the regenerated config. It **regenerates the
-whole file rather than merging into it** — the output is exactly what a fresh seed would write, so
-hand edits and model pins are gone from the live config. The file it replaces is copied to
-`<config>.<timestamp>.bak` first and the install prints that path; if the backup cannot be written
-the install fails and the config is left alone. So the previous file is recoverable, but recovering
-a pin means putting it back by hand.
-
-An unreadable or non-JSON config is not this installer's to diagnose: it says nothing and never
-fails the install.
+On upgrade the installer removes the fourteen role profiles earlier releases deployed, using the
+plural-directory ownership manifest (see below): only a profile the previous install's manifest
+recorded with a matching hash is removed — a user-authored, modified, or symlinked same-name file
+survives, and a manifest-listed file that fails its ownership check fails the install closed
+rather than deleting it.
 
 ### Deploy layout — project vs global (scope-dependent)
 
-opencode resolves agents/commands/plugins **differently by scope**, so the installer
+opencode resolves commands/plugins **differently by scope**, so the installer
 deploys to a scope-correct location (`copy_tree`'s `layout_root`):
 
-| Scope | Deploy root for agents/commands/plugins/hooks | `opencode.json` |
+| Scope | Deploy root for commands/plugins/hooks | `opencode.json` |
 | --- | --- | --- |
-| `--target` (project, default `$PWD`) | `<project>/.opencode/{agents,commands,plugins,hooks}/` | `<project>/opencode.json` |
-| `--global` | `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/{agents,commands,plugins,hooks}/` — **directly** under the config root | `<config>/opencode.json` |
+| `--target` (project, default `$PWD`) | `<project>/.opencode/{commands,plugins,hooks}/` | `<project>/opencode.json` (never written) |
+| `--global` | `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/{commands,plugins,hooks}/` — **directly** under the config root | `<config>/opencode.json` (never written) |
 
 The config dir **is** opencode's global ".opencode equivalent", so a `--global` install
 writes its subdirs **directly** there — **not** a nested `~/.config/opencode/.opencode/`
@@ -332,14 +278,15 @@ cleanup considers only regular non-link profiles, so a hash-equal symlink remain
 ./install-opencode.sh --uninstall --global        # remove the global ~/.config/opencode install
 ```
 
-`--uninstall` removes **only** kaola-deployed artifacts from the resolved scope. Native profiles are
+`--uninstall` removes **only** kaola-deployed artifacts from the resolved scope. Previously
+installed role profiles (including the fourteen a pre-12.0.0 release deployed) are
 removed through the plural-directory ownership manifest or exact current-source bytes; unrelated,
 modified, and symlinked plural profiles and all unowned or modified singular-directory files
 survive. Commands and hooks are removed by
 source-tree filename plus the names the edition retired on purpose (`RETIRED_WORKFLOW_COMMANDS`,
 `RETIRED_HOOKS`, `RETIRED_SUPPORT_SCRIPTS` — a retired name is absent from the source tree and from
 the install manifest, so without those lists it would linger forever; never a blind `rm` of a dir you
-may share): the deployed agents/commands/plugin/hooks and the opencode-native support scripts
+may share): the deployed commands/plugin/hooks and the opencode-native support scripts
 under `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/`. The shared
 `~/.config/kaola-workflow/config.json` is user-owned and untouched, so a co-installed
 Claude/Codex edition is unaffected. Your own `opencode.json` (model/permission
@@ -353,11 +300,10 @@ uninstall byte-intact, because a namespace sweep of that directory would reintro
 > not touch opencode — opencode is an additive runtime, not a forge (D-530-02), so its
 > removal lives in `install-opencode.sh --uninstall`, which owns the deploy layout.
 
-It seeds `opencode.json` only if absent — otherwise it preserves the file and names any stale
-per-role effort entries it still carries (see [Config
-drift](#config-drift-and---adopt-config)). The seeded file pins no model, so every role runs the
-model and effort of the session that dispatched it; pin a tier to a different model with the
-`KAOLA_OPENCODE_*_MODEL` env vars. Then in opencode:
+The installer never writes `opencode.json`. Any `agent.<role>` entries an older release seeded —
+model pins or inert per-role effort settings — are yours and are left untouched (a subagent runs
+the model and effort of the session that dispatched it, so the old effort entries simply do
+nothing). Then in opencode:
 
 ```
 /workflow-init
@@ -372,7 +318,7 @@ node scripts/generate-agent-profiles.js --check
 node scripts/sync-opencode-edition.js --write              # regenerate .opencode/ + seed config
 node scripts/sync-opencode-edition.js --write-config       # re-render opencode.json from the template
 node scripts/sync-opencode-edition.js --refresh-present    # regenerate every tree that already exists; create none (ignores --forge)
-node scripts/sync-opencode-edition.js --check              # parity assert: agents + commands + hooks + opencode.json
+node scripts/sync-opencode-edition.js --check              # parity assert: commands + hooks + opencode.json
 node scripts/test-opencode-edition.js                      # full structural + parity + route-reachability suite
 ```
 
@@ -405,7 +351,7 @@ one that would exit 0 having repaired nothing:
 
 ```text
 sync-opencode-edition[github]: PARITY FAILED (3 file(s)):
-  - .opencode/agents/doc-updater.md — stale — regenerate
+  - .opencode/commands/doc-stale.md — stale — regenerate
   - templates/opencode/plugins/probe-unregistered.js — unregistered plugin 'probe-unregistered.js' present in templates/opencode/plugins/ but absent from PLUGIN_SCRIPTS — add it to the allowlist
   - opencode.json — stale — regenerate via --write-config
 Fix: node scripts/sync-opencode-edition.js --forge=github --write-config
@@ -419,24 +365,23 @@ The named flag always carries the `--forge=` the check ran under. Exit code is 1
 
 | Aspect | Codex edition | opencode edition |
 | --- | --- | --- |
-| Delivery | plugin (`.codex-plugin/` + `skills/` + `agents/*.toml`) | `opencode.json` + `.opencode/agents` + `.opencode/commands` |
-| Agent format | TOML profiles | Markdown (frontmatter + prompt body) |
+| Delivery | plugin (`.codex-plugin/` + `skills/` + `agents/*.toml`) | `.opencode/commands` + hooks plugin (no Kaola role profiles) |
+| Agent format | TOML profiles | none — `native_only`; vendor harness routes |
 | Forge coupling | shares the forge edition machinery (github/gitlab/gitea) | `--forge` flag; variants generated from the routing registry, outside the edition machinery |
-| Models | baked per-agent | **inherited** — a subagent runs the model and reasoning effort of the session that dispatched it; standard/reasoning model pins are opt-in, with `fable` classified as reasoning |
+| Models | baked per-agent (`gpt-5.6-luna` / `max` TOML pins) | **inherited** — a subagent runs the model and reasoning effort of the session that dispatched it, which is why Kaola installs no profiles |
 
 ## Verification
 
-The edition is covered by `scripts/test-opencode-edition.js`: all-role/command presence and
-frontmatter, model-agnostic invariant (no `model:` in generated agents), behavior-source reachability,
-adapter isolation, complete-render hashes,
+The edition is covered by `scripts/test-opencode-edition.js`: command presence and the
+native-only invariant (no Kaola role profiles rendered or installed, no `subagent_type="kaola-*"`
+in rendered surfaces), the ownership-aware retired-profile sweep, behavior-source reachability,
+adapter isolation,
 `opencode.json` JSONC validity,
 **plugin load shape** (A29: the module exports exactly `["default"]`, and a harness walks it the
 way opencode's loader does — `Object.values(mod)`, calling every exported value as a plugin
 factory — so a named export beside the default, which once threw on every load, fails here instead
-of silently killing every hook in the file), **config drift** (A27: an install names the entries
-still pinning per-role effort and names the opt-in flag, which actually regenerates the file;
-A27-neg / A27-quiet: a config the generator just wrote, and the inputs on which the check must say
-nothing, report nothing), **model-prose consistency** (no contradictory "pass `model=`"
+of silently killing every hook in the file), **config preservation** (the installer never writes
+`opencode.json`, so user `agent.<role>.model` pins survive), **model-prose consistency** (no contradictory "pass `model=`"
 instructions),
 **path-flip** (A22: no Path Intent section / auto-fallback prose on the opencode
 surface), route-reachability (every receipt-emitted command target resolves

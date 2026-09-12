@@ -1,6 +1,12 @@
 # Devin CLI edition
 
-The Devin edition follows Devin’s native routing rather than pinning models. The main orchestrator uses the model selected by the user, including Adaptive. Generated Kaola role profiles contain no `model:` field, so custom subagents use Devin’s organization-governable default subagent router. All three Kaola intent classes therefore map to `host_router`.
+Under ADR 0025 (#1062) the Devin edition installs **no Kaola role profiles**: dispatch goes through
+Devin's own `run_subagent` / `read_subagent` vendor harness — the built-in `subagent_general` (which
+inherits the parent model) or a user-owned profile from the session-start catalog. Kaola pins no
+model because it has no lever on that axis: Devin's "Default subagent model" setting routes every
+unpinned subagent through an organization router — measured to land on SWE-1.6 today (vendor
+documentation fetched 2026-09-12; #1061) — so a Kaola `model:` field could not select a cheaper
+child anyway. The main orchestrator uses the model selected by the user, including Adaptive.
 
 ## Install
 
@@ -9,25 +15,29 @@ The Devin edition follows Devin’s native routing rather than pinning models. T
 ./install-devin.sh --check --forge=github
 ```
 
-Use `--forge=gitlab` or `--forge=gitea` for another forge. Use `--project=/absolute/repository/path` for project-local profiles and skills. A new Devin session is required after profile installation because the live catalog is fixed at session start.
+Use `--forge=gitlab` or `--forge=gitea` for another forge. Use `--project=/absolute/repository/path` for project-local skills. A new Devin session is required after installation because the live catalog is fixed at session start.
 
 The installer writes under the Devin user config directory `~/.config/devin`:
 
-- user profiles to `agents/<role>.md`, or project profiles to `.devin/agents/<role>.md`;
 - inline skills to `skills/<name>/SKILL.md` with `triggers: [user, model]` and no model or subagent override;
 - forge-selected support scripts to `kaola-workflow/scripts`;
 - the managed global contract to `AGENTS.md`;
 - exactly one Kaola-owned `UserPromptSubmit` command hook in `config.json`.
 
-Existing non-Kaola hooks are preserved. `--check` compares installed bytes with generated sources and, when `devin` is available, requires `devin doctor --json` to report all 14 role names.
+It installs nothing under `agents/` or `.devin/agents/`. On upgrade it removes the fourteen role
+profiles earlier releases deployed to `~/.config/devin/agents/` and `.devin/agents/` — but only
+files still carrying the `kaola-workflow-managed-agent: true` marker the generator embedded in
+every profile it rendered. A user-authored or marker-stripped same-name file survives untouched.
+
+Existing non-Kaola hooks are preserved. `--check` compares installed bytes with generated sources.
 
 The global-contract step is the same machine-wide transaction `install-all.sh` runs: it refreshes the Kaola global carrier of every runtime detected on the machine, not only Devin, and both `install` and `--check` report the `devin-local` target status when that transaction is not `CURRENT`. Set `DEVIN_CONFIG_DIR` only to relocate a hermetic install (tests, sandboxes): Devin does not read that variable. Devin resolves its own user config directory from `XDG_CONFIG_HOME` (measured on `devin 3000.10.21`) or `%APPDATA%\devin` on Windows, so a relocated install is invisible to a normal Devin session.
 
 ## Dispatch and model ownership
 
-The live carrier is `run_subagent(profile, is_background, resume)`, with `read_subagent` used to reconcile background results. Exact named roles are available only when present in the session-start catalog. An absent exact role is a capability gap only when the mission needs that role’s custody; otherwise the orchestrator may use an adequate native route or work inline.
+The live carrier is `run_subagent(profile, is_background, resume)`, with `read_subagent` used to reconcile background results. Only profiles present in the session-start catalog are dispatchable: the built-in `subagent_general` (parent-model) and any user-owned profiles. A missing named Kaola role is design, not a `capability_gap` — the orchestrator uses an adequate native route or works inline per item.
 
-Profiles use Devin-native `allowed-tools` names: `read`, `grep`, `glob`, `edit`, `write`, `exec`, `web_search`, and `webfetch`, selected from each shared behavior contract (`knowledge-lookup` is the role whose `external_research` requirement adds the two web tools). Read-only work may run in the background. Write-capable work runs in the foreground unless the required write scope was already approved, because background agents automatically deny tools that require new approval. Children cannot spawn descendants in the measured default configuration.
+Read-only work may run in the background. Write-capable work runs in the foreground unless the required write scope was already approved, because background agents automatically deny tools that require new approval. Children cannot spawn descendants in the measured default configuration.
 
 ## Compact recovery and host guards
 

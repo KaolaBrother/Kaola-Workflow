@@ -1,7 +1,8 @@
 # Kaola-Workflow · ZCode Edition
 
-ZCode is a coding-agent runtime, not a git forge. Its generated commands and 14 role profiles come
-from the same routing and behavior authorities as the other runtime editions. The focused suite is
+ZCode is a coding-agent runtime, not a git forge. Its generated commands come
+from the same routing and behavior authorities as the other runtime editions; under ADR 0025
+(#1062) ZCode is `native_only` and installs no Kaola role profiles. The focused suite is
 `node scripts/test-zcode-edition.js`.
 
 ZCode loads user-global `~/.zcode/AGENTS.md` and workspace-root `AGENTS.md` directly. `CLAUDE.md` is
@@ -44,7 +45,7 @@ ZCode documents automatic subagent selection and native `@` dispatch. If a live 
 exposes an Agent call with named types, its schema wins. The public documentation does not publish
 one complete JSON call schema, so the adapter names no unverified call fields. `general-purpose`
 and read-only `Explore` remain truthful alternatives when the live catalog exposes them; neither
-may impersonate a missing custody-bearing Kaola role. ZCode children cannot spawn descendants.
+may impersonate a Kaola role. ZCode children cannot spawn descendants.
 
 ## Discovery and installation
 

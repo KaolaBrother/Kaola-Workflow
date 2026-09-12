@@ -2,13 +2,60 @@
 
 ## [Unreleased]
 
+**Upgrade note — this is a major release (next version 12.0.0).** After updating the checkout,
+every machine must rerun `./install-all.sh --yes`; Cursor Cloud must rebuild its saved
+environment before the new catalog takes effect there. Consumers that dispatch a retired role
+name (`planner`, `code-architect`, `synthesizer`, `build-error-resolver`, `metric-optimizer`,
+`adversarial-verifier`, `security-reviewer`) fall into the inline `capability_gap` path on
+binding runtimes and a native route on native-only runtimes.
+
 ### Changed
 
-- **Point live ADRs at #1062 as the accepted successor to the three-tier model.** ADR 0019,
-  ADR 0021, and D-687-01 now record that Yanlei accepted the lean-orchestrator subtraction on
-  2026-09-12 (7 roles, one `subagent_default` on binding runtimes, Codex TOML pins
-  `gpt-5.6-luna` / `max`). Surfaces still ship 14 roles / ten adapters / 140 renders until
-  that issue lands as ADR 0025 / 12.0.0. `docs/README.md` names the forthcoming ADR.
+- **Lean orchestrator: 14 roles → 7, tier axis retired, one `subagent_default` per binding
+  adapter (#1062, ADR 0025).** The orchestrator now holds judgment and acceptance itself, and a
+  subagent exists to do token-heavy work on a cheaper model — so the
+  `standard`/`reasoning`/`heavy` intent axis is retired entirely rather than collapsed to one
+  value. Retained roles: `implementer`, `tdd-guide`, `doc-updater`, `investigator`,
+  `code-explorer`, `knowledge-lookup`, `code-reviewer`. Retired capabilities survive as brief
+  modes: `adversarial-verifier` / `security-reviewer` → a `code-reviewer` brief focus;
+  `build-error-resolver` / `metric-optimizer` → an `implementer` brief; `synthesizer` /
+  `planner` / `code-architect` → the orchestrator.
+- **One subagent default binding per profile-installing adapter.** The generator renders
+  7 × 6 = 42 native profiles (was 14 × 10 = 140): Claude pins `model: sonnet`; Codex TOMLs pin
+  `model = "gpt-5.6-luna"` + `model_reasoning_effort = "max"` (file values take precedence, so
+  dispatch omits per-call `model`/`reasoning_effort`; the kernel validator flips from "both keys
+  omitted" to "both required" and `CODEX_PINNED_STANDARD/REASONING/HEAVY_ROLES` becomes
+  `CODEX_PINNED_ROLES` + `CODEX_PINNED_MODEL` + `CODEX_PINNED_EFFORT`); Grok pins
+  `model: grok-4.6` + `effort: medium` (`model: inherit` retired); Cursor pins
+  `grok-4.6[effort=medium]` (a custom subagent that omits `model` inherits the parent, so the pin
+  selects the cheaper child).
+- **OpenCode, Kimi, ZCode, and Devin are `native_only`.** Kaola has no cost lever on those
+  runtimes — children inherit the session model or a vendor router owns it — so they install no
+  Kaola role profiles and dispatch through the vendor harness (`general`/`explore`/`scout`;
+  `coder`/`explore`/`plan` + `AgentSwarm`; `general-purpose`/`Explore`; `run_subagent` +
+  `subagent_general`). Their installers remove the fourteen profiles earlier releases deployed,
+  recognising Kaola ownership by the managed marker and, where a manifest exists, its recorded
+  hash; user-authored files are never touched.
+- **Routing prose puts judgment with the orchestrator.** `dispatch-contract.md`,
+  `next.skeleton.md`, and `finalize.skeleton.md` now describe subagents as clean-context
+  executors whose handback is evidence; dispatch examples name `implementer` with no `model=`
+  field, no role dispatch is mandatory, and finalize's failure routes are suggested
+  (`tdd-guide` or yourself; `implementer` or yourself).
+- **ADR 0025 lands; historical ADRs carry status notes.** `docs/decisions/0025-…` records the
+  decision and its evidence; ADR 0019 (three-tier model), ADR 0021 ("exactly three intent
+  classes"), and D-687-01 (unpinned Codex profiles) are annotated as superseded without
+  rewriting their historical matrices.
+
+### Fixed
+
+- **Kimi retired-sweep requires exact v9.17.2 bytes (#1062).** `install-kimi.sh` no longer
+  deletes `kaola-role-*` role Skills by bare name on install or uninstall; a role-shaped Skill
+  directory is removed only when it is a one-file directory whose `SKILL.md` matches the exact
+  bytes v9.17.2 shipped, so a user-authored `kaola-role-<name>` skill survives.
+- **ZCode retired-agent sweep requires the managed marker (#1062).** `install-zcode.sh` removes a
+  retired `agents/<role>.md` only when the file still carries the
+  `kaola-workflow-managed-agent: true` marker the generator embedded, so a user-authored
+  same-name profile (e.g. `~/.zcode/agents/implementer.md`) survives.
 
 ## [11.1.1] - 2026-09-11
 

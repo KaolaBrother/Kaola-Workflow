@@ -8,12 +8,11 @@
   itself — planner/code-architect defaults and the standard/reasoning/heavy intent mapping —
   remains Accepted and unchanged **on the current tree**.
   **Accepted successor (2026-09-12, Yanlei / #1062):** the remaining three-tier axis, the 14-role
-  roster, and Heavy as planner-class default are accepted as retired. Surfaces still ship that
-  inventory until #1062 lands as ADR 0025
+  roster, and Heavy as planner-class default are retired as of ADR 0025
   (`docs/decisions/0025-lean-orchestrator-single-subagent-binding.md`, 12.0.0). §1's observed
   failure (top-tier reviewers overthink) remains the evidence basis for the
-  cheaper, scope-clamped reviewer. This file stays the historical record of the three-tier model
-  and the live description of the current tree; do not rewrite the matrices below until that run.
+  cheaper, scope-clamped reviewer. The matrices below stay as the historical record of the
+  three-tier model; they no longer describe the current tree.
 - **Date:** 2026-08-24 (escalation retirement noted 2026-09-11; successor accepted 2026-09-12)
 - **Extends:** the two-tier role classification (`sonnet`/standard, `opus`/reasoning) — the plan
   vocabulary #610 fixed and every edition derives from. Does not supersede any prior ADR.

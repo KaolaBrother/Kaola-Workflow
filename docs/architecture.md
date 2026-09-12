@@ -388,19 +388,21 @@ the command and skill surfaces.
 
 That common brief is separate from a generated runtime capability block. Both `workflow-next` and
 `kaola-workflow-finalize` contain one marked `runtime-delegation` slot. The generator derives the
-standard/reasoning/heavy role-membership roster from the common behavior-contract authority; the
-runtime adapter supplies only the native carrier and default binding for each tier. The slot renders
+seven-role roster from the common behavior-contract authority; the
+runtime adapter supplies the native carrier and its single `subagent_default` binding. The slot renders
 Claude's native block for commands and the forge-matched Codex block for skills; each additive
 edition replaces the same marked region with its own adapter render. The block exposes profile
-lookup, native dispatch carrier, the generated roster and three default tier bindings, tool
-boundary, honest named/built-in routes, and relevant availability/session limits. `workflow-init`
+lookup, native dispatch carrier, the generated `**Roles:**` roster and `**Subagent default:**`
+binding, tool
+boundary, honest named/built-in routes, and relevant availability/session limits; a `native_only`
+adapter instead renders the sentence that this runtime installs no Kaola role profiles. `workflow-init`
 has no dispatch teaching.
 
 The flow is one directional authority chain:
 
 ```text
-templates/agents/behavior-contracts.json → role intent roster
-templates/agents/runtime-capabilities.json → native carrier/default bindings
+templates/agents/behavior-contracts.json → role roster
+templates/agents/runtime-capabilities.json → native carrier/subagent default binding
     → generate-agent-profiles.js routing guidance renderer
     → templates/routing/slots.js: runtime-delegation
     → next/finalize skeletons
@@ -518,29 +520,35 @@ does not impose a Kaola concurrency cap or lowest-common-denominator runtime.
 
 Runtimes and forges remain independent axes. The closed role inventory has eight runtime families
 and ten adapter variants: one Claude, three Codex forge variants, and one each for opencode, Kimi,
-Grok, Cursor, ZCode, and Devin. Additive installers still take `--forge` to select routing/forge prose; that
+Grok, Cursor, ZCode, and Devin. Six of those adapters install Kaola role profiles; the OpenCode,
+Kimi, ZCode, and Devin adapters are `native_only` — Kaola has no cost lever there (children inherit
+the session model or a vendor router chooses it), so they install no profiles and dispatch through
+the vendor harness. Additive installers still take `--forge` to select routing/forge prose; that
 does not create another role-behavior adapter.
 
 ### Agent behavior and native profiles
 
-`templates/agents/behavior-contracts.json` is the only behavioral authority for all 14 roles.
-`scripts/generate-agent-profiles.js` composes each role with the selected native adapter, producing
-140 deterministic renders. Root `agents/*.md`, the 42 Codex TOMLs, and additive runtime profiles are
+`templates/agents/behavior-contracts.json` is the only behavioral authority for all 7 roles.
+`scripts/generate-agent-profiles.js` composes each role with the selected profile-installing
+adapter, producing
+42 deterministic renders. Root `agents/*.md`, the 21 Codex TOMLs, and the Grok and Cursor profiles
+are
 outputs. No output is edited as a semantic source.
 
 The behavior source owns purpose, inputs, authority/custody, writes, deliverable, verification, stop
-conditions, capability requirements, and `standard` / `reasoning` / `heavy` intent. It contains no
+conditions, and capability requirements. It contains no
 runtime, vendor, native model, tool syntax, home path, or hook vocabulary. Adapters own those native
 differences and may not carry arbitrary universal prompt prose.
 
 Every render carries a shared `behavior_contract_hash` and a render-specific
-`resolved_profile_hash`. Shared-behavior mutation must reach all ten variants for that role;
+`resolved_profile_hash`. Shared-behavior mutation must reach all six profile-installing adapters
+for that role;
 adapter mutation must stay inside one runtime family. Byte identity remains required for true
 forge-neutral twins, but cross-runtime sentence equality is not the oracle.
 
 `delegation_guidance` is routing-only adapter data and is deliberately excluded from the adapter
 hash used by native profiles. A wording or capability-exposure correction regenerates the marked
-next/finalize blocks without churning 126 `resolved_profile_hash` values for unchanged profile
+next/finalize blocks without churning `resolved_profile_hash` values for unchanged profile
 bytes. Runtime-guidance reachability has its own structural and mutation checks.
 
 Provenance is a separate axis in `templates/agents/provenance.json` and
@@ -554,17 +562,20 @@ The effective project or user `.codex/config.toml` is the installed registration
 managed `[agents.<role>]` blocks point to `.codex/agents/kaola-workflow/<role>.toml`. Bundled
 `agents.toml` remains installer source and is not an installed profile-discovery path.
 
-### Model intent
+### Subagent default binding
 
-Role intent is only `standard`, `reasoning`, or `heavy`. The selected adapter maps that intent to a
-native default model/effort value or session inheritance, and next/finalize exposes that binding at
+The `standard` / `reasoning` / `heavy` intent axis is retired (ADR 0025, #1062); no mission-list
+field records a model pair. Each adapter that installs profiles declares exactly one
+`subagent_default` — Claude `model: sonnet`; Codex `model = "gpt-5.6-luna"` /
+`model_reasoning_effort = "max"` pinned in the TOML; Grok `model: grok-4.6` / `effort: medium`;
+Cursor `model: grok-4.6[effort=medium]` — and next/finalize exposes that binding at
 the point of dispatch. It remains a default rather than scheduler state or a prohibition on native
-task-sensitive choices. No mission-list field records a model pair, and Kaola does not add runtime
+task-sensitive choices. Kaola does not add runtime
 limits on automatic, background, parallel, resume, nesting, history, or service-tier behavior.
-Finalize's operational examples pass the Claude tier model while retaining runtime-default effort,
-or the Codex tier model plus `reasoning_effort`; a task-sensitive override, supported inheritance,
+Finalize's dispatch example names `implementer` with no `model=` field; a task-sensitive override,
+supported inheritance,
 and other runtime-owned choices remain valid.
-Current mappings and limitations are documented in
+Current bindings and limitations are documented in
 [`runtime-capabilities.md`](runtime-capabilities.md) and each additive edition guide.
 
 Execution choice is equally local: one missing exact role causes a search of the active runtime's

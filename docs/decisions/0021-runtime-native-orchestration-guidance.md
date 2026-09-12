@@ -2,10 +2,10 @@
 
 Status: Accepted · Date: 2026-08-27 · Issue: #1035
 
-**Accepted successor (2026-09-12, Yanlei / #1062):** the "exactly three intent classes" clause and
-the three-row default-binding matrix are accepted as superseded by ADR 0025 (single
-`subagent_default` on Claude / Codex ×3 / Grok / Cursor; `role_dispatch: native_only` on
-OpenCode / Kimi / ZCode / Devin). Surfaces still ship the three-class matrix until that run.
+**Accepted successor (2026-09-12, Yanlei / #1062, landed as ADR 0025 / 12.0.0):** the "exactly
+three intent classes" clause and the three-row default-binding matrix are superseded — one
+`subagent_default` per binding adapter (Claude / Codex ×3 / Grok / Cursor) and no binding at all
+on `native_only` adapters (OpenCode / Kimi / ZCode / Devin).
 Per-item dispatch-or-inline judgment, honest fallback, and "defaults are not a ban" remain.
 
 ## Context
@@ -28,8 +28,9 @@ Claude-shaped transform.
 ### Common judgment, native mechanism
 
 The universal contract keeps exactly three intent classes: `standard`, `reasoning`, and `heavy`.
-*(#1062 / ADR 0025, accepted 2026-09-12, not yet landed.)* That sentence is superseded by a single
-subagent default binding; the per-item dispatch principle in the next sentence stays.
+*(Superseded by ADR 0025, landed 12.0.0.)* That sentence is replaced by a single
+subagent default binding per binding adapter; the per-item dispatch principle in the next
+sentence stays.
 It also keeps one execution principle: choose dispatch or inline again for every mission item. A
 missing exact named role is evidence about that route for that item; it is not evidence that all
 native dispatch is unavailable, and it cannot establish a run-wide inline posture.
