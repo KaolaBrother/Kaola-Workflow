@@ -111,57 +111,36 @@ function rewriteClaudeScriptPaths(text, forge) {
 }
 
 function cursorNativeDispatchProse(card) {
-  if (card.includes('doc-updater')) {
-    return 'Use exact `doc-updater` from the current Task catalog through the live Task schema '
-      + 'when that name is present. Put the changed files, checklist, working directory, and custody '
-      + 'boundary in its brief; omit model so the named profile carries its binding. If the live '
-      + 'enum is built-in-only, do not impersonate `doc-updater`: dispatch `generalPurpose` only '
-      + 'as itself for generic docs, or inline that item and record capability_gap.\n';
-  }
-  const role = 'implementer';
-  return 'Use exact `' + role + '` from the current Task catalog through the live Task schema '
-    + 'when that name is present. Put the failure command, evidence path, working directory, and '
-    + 'custody boundary in its brief; omit model so the named profile carries its binding. If the '
-    + 'live enum is built-in-only, do not impersonate `' + role + '`: inline that work '
-    + 'and record capability_gap, or dispatch a live built-in only as itself when its real '
-    + 'boundary fits.\n';
-}
-
-function cursorCliSharedHostAndFailClosedProse() {
-  return [
-    'Apply this check only when the current execution product is the standalone Cursor CLI on the',
-    'local host. Do not enter this branch merely because a sibling CLI binary exists. Cursor App',
-    'local IDE Agent and App-started Cloud are separate hosts: inspect their live Task catalog and',
-    'do not apply or infer this CLI materialization rule for either App host.',
-  ].join('\n');
-}
-
-function cursorCliFailClosedRepairProse() {
-  return [
-    'Missing or stale global authority, an unmanaged canonical-name collision, a symlink or',
-    'nonregular carrier, invalid/copied receipt, or modified receipt-owned bytes fails closed before',
-    'project mutation. Report the exact diagnostic and the explicit global-install or owner-file',
-    'repair; never substitute an ambient cwd copier or a sessionStart materializer.',
-  ].join('\n');
+  const role = card.includes('doc-updater') ? 'doc-updater' : 'implementer';
+  const call = card.trimEnd().replace('Agent(', 'Task(');
+  return call + '\n\n'
+    + 'Use the exact name only when the live Task catalog lists it and omit `model` so the named '
+    + 'profile carries its binding; if the enum is built-in-only, do not impersonate `' + role
+    + '` — inline the item and record `capability_gap`, or dispatch a live built-in only as '
+    + 'itself.\n';
 }
 
 function cursorCliStartupResumePrepProse() {
   return [
     '## Cursor standalone CLI startup and resume Repo role prep',
     '',
-    cursorCliSharedHostAndFailClosedProse(),
+    'Apply only when the product is the standalone Cursor CLI on the local host; sibling binary is',
+    'not evidence. Cursor App local IDE Agent and App-started Cloud are separate hosts:',
+    'inspect their live Task catalog and',
+    'do not apply or infer this CLI materialization rule for either App host.',
     '',
-    'Workflow startup and resume execute Repo role prep through the installed',
+    'Startup and resume run Repo role prep through the installed',
     '`${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts/kaola-workflow-cursor-surface.js`',
-    '`--ensure-target` transaction. Explicit `--cursor-workspace` is the CLI workspace locator;',
-    'resume uses the recorded `main_root` as the ensure locator when `--cursor-workspace` is absent.',
-    'File-ready on-disk materialization is distinct from live Task catalog visibility: bytes on',
-    'disk do not prove the live Task catalog, enum, or visibility has loaded those roles.',
-    'Missing named or missing project roles are not a capability_gap for omitting this prep.',
-    'A `status: current` result is a byte-level no-write; claim or resume proceeds. A',
-    '`status: materialized` result reports restart_boundary `new_process_same_chat` and requires a',
-    'new Cursor CLI process with the same chat. Do not claim live-loaded or same-process hot load.',
-    cursorCliFailClosedRepairProse(),
+    '`--ensure-target` transaction. Explicit locator `--cursor-workspace`; resume falls back to',
+    'recorded `main_root`.',
+    'Missing named or project roles are not a capability_gap for omitting this prep.',
+    '`status: current` is a byte-level no-write. The claim or resume output reports `cursor_prep` with',
+    'the transaction `status`; `status: materialized` carries restart_boundary',
+    '`new_process_same_chat`: start a new Cursor CLI process with the same chat.',
+    'Missing or stale global authority, an unmanaged canonical-name collision, a symlink or nonregular',
+    'carrier, invalid/copied receipt, or modified receipt-owned bytes fails closed before project',
+    'mutation; report the exact diagnostic and the global-install or owner-file repair;',
+    'never substitute an ambient cwd copier or a sessionStart materializer.',
   ].join('\n');
 }
 
@@ -180,10 +159,10 @@ function cursorCliMaterializationProse(forge) {
   return [
     '## Cursor standalone CLI pre-dispatch materialization',
     '',
-    cursorCliSharedHostAndFailClosedProse(),
-    '',
-    'Immediately before the first named Kaola child dispatch, run the installed transaction with',
-    'the current workspace as an explicit target:',
+    "Standalone Cursor CLI on the local host only; the Next command's Repo role prep section",
+    'carries the host boundary and the fail-closed conditions, and App hosts do not apply this',
+    'rule. Immediately before the first named Kaola child dispatch, run the installed transaction on',
+    'this workspace:',
     '',
     '```sh',
     'CURSOR_MATERIALIZER="${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts/kaola-workflow-cursor-surface.js"',
@@ -191,11 +170,10 @@ function cursorCliMaterializationProse(forge) {
     'node "$CURSOR_MATERIALIZER" --ensure-target "$PWD" --forge=' + forge + ' --json',
     '```',
     '',
-    'A `status: current` result is a no-op; continue by inspecting the live Task enum. A',
-    '`status: materialized` result means safe project bytes or their receipt changed: stop named',
-    'dispatch, start a new Cursor CLI process with the same chat at this workspace, and re-run the',
-    'command before dispatch. The measured reload boundary is a new process, not same-process hot',
-    'load. ' + cursorCliFailClosedRepairProse(),
+    '`status: current` is a no-op; inspect the live Task enum. `status: materialized` means bytes',
+    'or receipt changed: stop named dispatch, start a new Cursor CLI process with the same',
+    "chat at this workspace, and re-run before dispatch. Any other result fails closed; repair per",
+    "the Next section's diagnostic list.",
   ].join('\n');
 }
 
@@ -203,7 +181,7 @@ function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   let text = body.split(/\r?\n/).join('\n');
   text = agentGen.deferRuntimeDispatchBlock(text);
-  text = text.replace(/^Agent\(\n[\s\S]*?^\)\n?/gm, cursorNativeDispatchProse);
+  text = text.replace(/^```text\nAgent\(\n[\s\S]*?^\)\n```\n?/gm, cursorNativeDispatchProse);
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime cursor');
   text = rewriteClaudeScriptPaths(text, forge);

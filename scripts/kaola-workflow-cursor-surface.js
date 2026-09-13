@@ -127,8 +127,13 @@ function loadCursorAdapter() {
 }
 
 function loadVersion() {
+  // The installed copy under $CURSOR_HOME/kaola-workflow has no package.json; a missing file means
+  // "no package version to compare", not a stale one — the receipt's own recorded version stands.
+  let raw = null;
+  try { raw = fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'); }
+  catch (_) { return null; }
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    const pkg = JSON.parse(raw);
     return typeof pkg.version === 'string' && pkg.version.trim() ? pkg.version : 'unknown';
   } catch (_) { return 'unknown'; }
 }
@@ -513,7 +518,10 @@ function inspectAuthority(forge, expectedVersion) {
   };
   if (info.reason) result.reason = info.reason;
   if (info.status !== 'valid') return { info, result };
-  const requiredVersion = expectedVersion === undefined ? loadVersion() : expectedVersion;
+  const packageVersion = loadVersion();
+  const requiredVersion = expectedVersion === undefined ? packageVersion : expectedVersion;
+  result.version_source = expectedVersion === undefined && packageVersion != null
+    ? 'package_json' : 'installed_receipt';
   if (requiredVersion != null && info.receipt.kaola_workflow_version !== requiredVersion) {
     result.freshness = 'stale_version';
   }

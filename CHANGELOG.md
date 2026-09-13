@@ -31,6 +31,17 @@ binding runtimes and a native route on native-only runtimes.
   `Contract schema: 1` moved off carrier bytes into `global-contract-receipt.json` as
   `contract_schema_version`. Existing installs keep a stale global carrier until
   `./install-all.sh --yes`.
+- **Compress the Cursor CLI materialization trailers (#1074).** The generated Next "startup and
+  resume Repo role prep" and Finalize "pre-dispatch materialization" trailers drop from a measured
+  449 to 300 words combined (171 + 129): Finalize keeps one applicability line plus a pointer to
+  the Next section's host boundary and fail-closed fault list, and the canonical dispatch example
+  renders as a compact fenced `Task(...)` call — the same fields, tool renamed — with one "do not
+  impersonate" sentence. Corrected facts: `--ensure-target --json` reports only
+  status/scope/root/target/receipt/files (no `restart_boundary`); `restart_boundary:
+  new_process_same_chat` is reported by the claim/resume `cursor_prep` output and `--doctor`. The
+  installed helper also no longer reports a false `stale_version`: the installed copy has no
+  `package.json`, so `loadVersion()` returns `null`, the version compare is skipped, and the doctor
+  authority block reports `version_source` (`installed_receipt` vs `package_json`).
 - **Retire historical negation pins from the Finalize/Next surfaces (#1070).** The retired tokens
   (`It does not refuse`, `Nothing compares that list against a`, `This is not "merge anyway and
   report."`, `who is accountable for the branch ending up right`, `not a workflow judging your

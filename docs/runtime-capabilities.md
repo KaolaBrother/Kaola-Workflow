@@ -84,8 +84,9 @@ Claim.js target is `--cursor-workspace` when set, else recorded `main_root` on r
 invoking `getRoot()` (`git rev-parse --show-toplevel`) on first claim — not nested cwd and not the
 write-worktree unless they are that demonstrated opened dir. Independently entered Finalize still
 runs `--ensure-target "$PWD"` immediately before named dispatch. The helper derives
-bytes from the receipt-verified global authority, is a no-op when `status: current`, reports
-`restart_boundary: "new_process_same_chat"` when `status: materialized`, and fails before writing
+bytes from the receipt-verified global authority, is a no-op when `status: current`, and returns
+`materialized` when it writes (the claim/resume `cursor_prep` report carries
+`restart_boundary: "new_process_same_chat"`); it fails before writing
 on missing/stale authority, collision, symlink, or modified ownership. File-ready bytes are not live
 Task catalog proof or same-process hot-load proof. Cursor App local and Cloud
 do not inherit that CLI rule. There is no `sessionStart` materializer and no `--global` dual-write.

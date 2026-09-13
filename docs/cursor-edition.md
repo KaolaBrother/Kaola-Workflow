@@ -257,9 +257,12 @@ Those claim.js no longer `unknown_flag`. `--forge` is not a claim.js flag. Claim
 resume, else invoking `getRoot()` (`git rev-parse --show-toplevel`) on first claim — not nested
 cwd and not the write-worktree unless they are that demonstrated opened dir. Independently entered
 Finalize still appends `## Cursor standalone CLI pre-dispatch materialization` and invokes
-`--ensure-target "$PWD"` immediately before named dispatch. The helper derives project bytes only
+`--ensure-target "$PWD"` immediately before named dispatch; that trailer defers the shared host
+boundary and fail-closed fault list to the Next section above instead of restating them. The helper
+derives project bytes only
 from the receipt-verified global authority, returns `current` without writing when already fresh,
-returns `materialized` with restart_boundary `new_process_same_chat` when it safely writes, and
+returns `materialized` when it safely writes (the claim/resume `cursor_prep` report carries
+restart_boundary `new_process_same_chat`), and
 fails before mutation on missing/stale authority, collision, symlink, invalid receipt, or modified
 ownership. File-ready `materialized` bytes are not live Task catalog proof or same-process hot-load
 proof. Cursor App local IDE and App-started Cloud do not inherit that CLI rule. Cloud uses the

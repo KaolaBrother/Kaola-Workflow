@@ -451,10 +451,6 @@ function cursorCliMaterializationVerdict(text, forge, surface) {
     if (!/(?:must not|do not|never)\s+treat missing named.{0,100}capability_gap|(?:missing named|missing project).{0,120}(?:not|never).{0,80}capability_gap/i.test(block)) {
       errors.push('Next does not forbid treating missing named roles as capability_gap that skips Repo prep');
     }
-    if (!/live Task (?:catalog|enum|visibility)/i.test(block)
-        || !/(?:file-ready|on-disk|materializ(?:e|ed|ation))/i.test(block)) {
-      errors.push('Next does not distinguish file-ready project bytes from live Task visibility');
-    }
     if (!/new_process_same_chat|new Cursor CLI process/i.test(block)) {
       errors.push('Next does not report the measured CLI restart-required boundary');
     }
@@ -481,7 +477,12 @@ function cursorCliMaterializationVerdict(text, forge, surface) {
   if (!/CURSOR_MATERIALIZER=.*\$\{CURSOR_HOME:-\$HOME\/\.cursor\}\/kaola-workflow\/scripts\/kaola-workflow-cursor-surface\.js/.test(block)) {
     errors.push('materializer is not resolved from the installed global Cursor authority');
   }
-  cursorCliSharedHostNegatives(block, errors);
+  // #1074: the Finalize trailer is a pointer into the Next Repo-prep section —
+  // the shared host boundary and fail-closed fault list live there once.
+  if (!/standalone Cursor CLI on the local host only/i.test(block)
+      || !/Next command['’]s Repo role prep section/i.test(block)) {
+    errors.push('Finalize does not scope itself to standalone local CLI and defer the host boundary to Next');
+  }
   if (!/Immediately before the first named Kaola child dispatch/i.test(block)) {
     errors.push('installed helper is not required immediately before named dispatch');
   }
@@ -495,7 +496,10 @@ function cursorCliMaterializationVerdict(text, forge, surface) {
       && stopAt > materializedAt && restartAt > stopAt)) {
     errors.push('current/materialized outcomes do not preserve no-op versus restart behavior');
   }
-  cursorCliFailClosedInstallFaults(block, errors);
+  if (!/fails closed/i.test(block)
+      || !/Next section['’]s diagnostic list/i.test(block)) {
+    errors.push('Finalize does not fail closed via the Next section diagnostic list');
+  }
   return { ok: errors.length === 0, errors, block, ensureCalls };
 }
 
@@ -959,8 +963,8 @@ function commandRel(name, forge) {
 
 // ---------------------------------------------------------------------------
 // G2: commands — exact set = routing-registry commandSources() for the forge,
-// not a hand list. Finalize follows the live Cursor Task schema/current catalog; it must not
-// mechanically translate portable Agent cards into an invented static Task field list.
+// not a hand list. Finalize keeps the canonical dispatch example as a compact fenced Task( card —
+// the same fields with the tool renamed — and must not grow invented static call cards beyond it.
 // Compact recovery is carried by the global transaction's always-applied Rule, not by a command hook or
 // a runtime stamp in generated command prose. No CLAUDE_PLUGIN_ROOT, no ~/.claude/kaola-workflow.
 // No model="{...}" placeholders, no per-call model=" overrides, and no vendor model dispatch
@@ -993,10 +997,22 @@ function commandRel(name, forge) {
     assert(!/\bmodel\s*=\s*["']/.test(content),
       'G2[' + name + ']: generated command stays free of per-call model dispatch');
     if (name === 'kaola-workflow-finalize') {
-      assert(!lineStartCall(content),
-        'G2[kaola-workflow-finalize]: live-schema Cursor guidance has no static Agent( or Task( call card');
-      assert(staticDispatchFields(content).length === 0,
-        'G2[kaola-workflow-finalize]: no invented static subagent_type= or description= fields escape into the Cursor render');
+      // #1074: the canonical example renders as a compact fenced Task( card —
+      // same fields, tool renamed — not a prose paragraph or an invented card.
+      const canonicalCard = (canon.match(/```text\nAgent\(\n[\s\S]*?^\)\n```/m) || [null])[0];
+      assert(canonicalCard && content.includes(canonicalCard.replace('Agent(', 'Task(')),
+        'G2[kaola-workflow-finalize]: the canonical dispatch example renders as the same fenced '
+        + 'card with Agent( renamed to Task(');
+      const callCards = content.match(/^(?:Agent|Task)\(/gm) || [];
+      assert(callCards.length === 1 && callCards[0] === 'Task(',
+        'G2[kaola-workflow-finalize]: exactly one line-start call card, renamed to Task( — got '
+        + JSON.stringify(callCards));
+      const outsideCard = canonicalCard
+        ? content.replace(canonicalCard.replace('Agent(', 'Task('), '')
+        : content;
+      assert(staticDispatchFields(outsideCard).length === 0,
+        'G2[kaola-workflow-finalize]: no invented static subagent_type= or description= fields '
+        + 'escape outside the canonical Task( card');
       const recoveryRel = '.cursor/rules/' + CURSOR_RECOVERY_RULE;
       const recovery = renderedGlobalRule();
       const recoveryVerdict = recoveryRuleVerdict(recovery);
@@ -1024,6 +1040,8 @@ function commandRel(name, forge) {
       'G2[' + name + ']: generated command carries the always-loaded-carrier pointer once, no dispatch block');
     assert(/CLI, App local, and App Cloud are separate hosts/i.test(cursorRule),
       'G2[' + name + ']: Cursor CLI, App local, and App Cloud remain distinct surfaces/hosts (in the always-loaded Rule)');
+    assert(/a file on disk is not discovery proof/i.test(cursorRule),
+      'G2[' + name + ']: the always-loaded Rule still warns that on-disk bytes are not live-catalog proof');
     assert(/MUST omit the per-call `model`/i.test(cursorRule)
       && /exact-binding requirement is a post-resolution assertion/i.test(cursorRule),
       'G2[' + name + ']: named-profile binding owns model resolution even under exact-binding policy (in the always-loaded Rule)');
@@ -1089,14 +1107,18 @@ function commandRel(name, forge) {
           + ambientVerdict.errors.join(' | '));
       }
 
-      const appScoped = content.replace(
-        'do not apply or infer this CLI materialization rule for either App host',
-        'apply this CLI materialization rule for both App hosts');
-      const appVerdict = cursorCliMaterializationVerdict(appScoped, DEFAULT_FORGE, surface);
-      assert(appScoped !== content && !appVerdict.ok
-        && appVerdict.errors.some(error => /negative CLI-rule boundary/.test(error)),
-      'G2-cli-materialization-mutation[' + name + ']: applying the CLI rule to App local/Cloud is rejected — '
-        + appVerdict.errors.join(' | '));
+      // #1074: only the Next trailer still carries the shared App-host
+      // negative; Finalize points at it.
+      if (surface === 'next') {
+        const appScoped = content.replace(
+          'do not apply or infer this CLI materialization rule for either App host',
+          'apply this CLI materialization rule for both App hosts');
+        const appVerdict = cursorCliMaterializationVerdict(appScoped, DEFAULT_FORGE, surface);
+        assert(appScoped !== content && !appVerdict.ok
+          && appVerdict.errors.some(error => /negative CLI-rule boundary/.test(error)),
+        'G2-cli-materialization-mutation[' + name + ']: applying the CLI rule to App local/Cloud is rejected — '
+          + appVerdict.errors.join(' | '));
+      }
 
       if (surface === 'next') {
         const gapSkip = content + '\nTreat missing named Kaola roles as capability_gap and skip Repo role prep.\n';
@@ -1154,6 +1176,46 @@ function commandRel(name, forge) {
           + extraUnguardedVerdict.errors.join(' | '));
       }
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// G2-trailer (#1074): the two compressed Cursor CLI trailers state each shared
+// policy sentence exactly once across both surfaces, Finalize carries the
+// compact Task call with one "do not impersonate", and the combined trailer
+// stays within the measured word budget.
+// ---------------------------------------------------------------------------
+{
+  const TRAILER_HEADINGS = {
+    'workflow-next': '## Cursor standalone CLI startup and resume Repo role prep',
+    'kaola-workflow-finalize': '## Cursor standalone CLI pre-dispatch materialization',
+  };
+  for (const forge of syncMod.FORGES || ['github', 'gitlab', 'gitea']) {
+    const trailers = {};
+    const surfaces = {};
+    for (const name of ['workflow-next', 'kaola-workflow-finalize']) {
+      const canon = fs.readFileSync(syncMod.canonCommandPath(name + '.md', forge), 'utf8');
+      const rendered = syncMod.renderCommand(canon, name, forge);
+      const start = rendered.indexOf(TRAILER_HEADINGS[name]);
+      assert(start >= 0,
+        'G2-trailer[' + forge + '/' + name + ']: compressed Cursor CLI trailer heading is present');
+      trailers[name] = start >= 0 ? rendered.slice(start) : '';
+      surfaces[name] = rendered;
+    }
+    const combined = (trailers['workflow-next'] + '\n' + trailers['kaola-workflow-finalize'])
+      .replace(/\s+/g, ' ');
+    for (const sentence of [
+      'never substitute an ambient cwd copier or a sessionStart materializer',
+      'do not apply or infer this CLI materialization rule',
+    ]) {
+      assert(combined.split(sentence).length - 1 === 1,
+        'G2-trailer[' + forge + ']: "' + sentence.slice(0, 48) + '…" occurs exactly once across the two trailers');
+    }
+    assert(surfaces['kaola-workflow-finalize'].split('do not impersonate').length - 1 === 1,
+      'G2-trailer[' + forge + ']: Finalize carries "do not impersonate" exactly once (compact Task call)');
+    const words = combined.split(/\s+/).filter(Boolean).length;
+    assert(words <= 300,
+      'G2-trailer[' + forge + ']: combined Cursor CLI trailers stay within 300 words (got ' + words + ')');
   }
 }
 
@@ -1931,6 +1993,22 @@ for (const role of reviewerGenerator.ROLES) {
           assert(untargeted.status !== 0 && !fs.existsSync(path.join(ambient, '.cursor')),
             'G8-installed-helper-no-target: missing explicit target fails without ambient cwd materialization — '
             + firstLine(untargeted));
+
+          // #1074: the installed copy has no package.json at its root, so there is
+          // no package version to compare — the receipt's recorded version stands
+          // and --doctor must not report a false stale_version.
+          const doctorResult = runHelper(['--doctor', '--json'], fresh);
+          let doctorBody = null;
+          try { doctorBody = JSON.parse(doctorResult.stdout); } catch (_) { /* asserted below */ }
+          assert(doctorResult.status === 0 && doctorBody && doctorBody.authority
+            && doctorBody.authority.freshness === 'current',
+            'G8-installed-helper-doctor: installed helper (no package.json) reports the authority '
+            + 'current, not a false stale_version — ' + firstLine(doctorResult));
+          assert(doctorBody && doctorBody.authority
+            && doctorBody.authority.version_source === 'installed_receipt',
+            'G8-installed-helper-doctor: version_source names the installed receipt as the version '
+            + 'reference — ' + JSON.stringify(doctorBody && doctorBody.authority
+              && doctorBody.authority.version_source));
 
           const stale = makeTarget('stale-authority');
           const globalAgentBytes = fs.readFileSync(globalAgent);
