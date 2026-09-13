@@ -107,9 +107,10 @@ The generated V2 prompt contains the exact global contract once, tells the runti
 `kaola-workflow/{project}/mission-list.md` (run), then completely reloads installed Workflow Next
 without intake or claim while work remains, or Finalization when all missions are done. A successor
 reloads those complete execution rules, recognizes done, in-flight, and remaining work, and does
-not re-claim or re-dispatch work still in flight. It also carries the mandatory dispatch contract
-and measured adapter. Compact time performs no state parsing, operation binding, or prompt
-composition.
+not re-claim or re-dispatch work still in flight. On Claude and Codex the reloaded prompt also
+carries the mandatory dispatch contract and measured adapter; on Grok, Cursor, and Devin the
+always-loaded rule carries them and the prompt points to it (#1069). Compact time performs no state
+parsing, operation binding, or prompt composition.
 
 Claude and Codex hooks execute only `cat` on their installed V2 prompt. Grok calls no hook: the
 machine-global transaction installs one native Rule because passive hook stdout is ignored. Cursor
