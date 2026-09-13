@@ -160,7 +160,11 @@ background/parallel/resume limits, hook behavior, instruction precedence, and kn
 
 Cursor CLI host detection and profile preparation are documented in the
 [Cursor edition guide](docs/cursor-edition.md). CLI, App, and Cloud retain their native setup and
-reload boundaries.
+reload boundaries. Cursor CLI `workflow-next` `startup` and `resume` share one
+`.cursor/commands` file: on the CLI/local (`product=cli`) route claim.js verifies a CLI-shaped
+ancestor with `--workspace` sharing git identity, then runs installed `--ensure-target` against
+that dir; a generic `--workspace` on an unrelated tool skips ensure. `--worker-dir` present, with
+or without `--workspace`, is App-like and skips ensure — App/Cloud do not receive the CLI ensure.
 
 ## Why it exists
 
