@@ -117,7 +117,10 @@ caps to runtime-owned automatic, parallel, background, resume, nesting, or task-
 ## Prompt recovery across compact
 
 `workflow-next` and `kaola-workflow-finalize` always load the runtime dispatch contract before an
-execution-shape decision. Author universal dispatch wording once in
+execution-shape decision: on the always-loaded-carrier runtimes (Grok, Cursor, Devin) the persistent
+Rule/global carrier holds the contract and adapter facts and the command render carries one pointer
+sentence instead; other runtimes embed the contract in the command itself. Author universal dispatch
+wording once in
 `templates/routing/dispatch-contract.md`; operation skeletons and
 `compact-recovery.skeleton.md` consume that slot. Runtime adapters add only measured capability
 differences, and generation produces the complete per-runtime prompt. Edit sources, never rendered

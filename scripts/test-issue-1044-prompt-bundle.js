@@ -155,6 +155,46 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
   assert(!operation.includes('<!-- SLOT:'), `${rel}: generated operation has no unresolved slot`);
 }
 
+{
+  // #1069 (group D2): on the always-loaded-carrier runtimes the generated
+  // Next/Finalize command renders carry ONE pointer sentence; the dispatch
+  // contract and adapter facts stay in the always-loaded rule/global carrier.
+  const agentGen = require('./generate-agent-profiles.js');
+  const POINTER = agentGen.ALWAYS_LOADED_DISPATCH_POINTER;
+  const DISPATCH_HEADING = 'Runtime dispatch contract (always loaded)';
+  const EDITION_RENDERERS = {
+    grok: require('./sync-grok-edition.js').renderCommand,
+    cursor: require('./sync-cursor-edition.js').renderCommand,
+    devin: require('./sync-devin-edition.js').renderSkill,
+  };
+  for (const runtime of Object.keys(EDITION_RENDERERS)) {
+    const render = EDITION_RENDERERS[runtime];
+    for (const forge of FORGES) {
+      for (const name of ['workflow-next', 'kaola-workflow-finalize']) {
+        const source = forge === 'github'
+          ? read('commands/' + name + '.md')
+          : read('plugins/kaola-workflow-' + forge + '/commands/' + name + '.md');
+        const command = render(source, name, forge);
+        assert(count(command, DISPATCH_START) === 0 && count(command, DISPATCH_END) === 0,
+          `D2[${runtime}/${forge}/${name}]: generated command carries no dispatch markers`);
+        assert(count(command, POINTER) === 1,
+          `D2[${runtime}/${forge}/${name}]: command carries the always-loaded-carrier pointer exactly once`);
+        assert(!command.includes(DISPATCH_HEADING),
+          `D2[${runtime}/${forge}/${name}]: full dispatch heading is absent from the command`);
+        assert(count(routing.renderCompactRecoveryPrompt(runtime, forge), DISPATCH_HEADING) === 1,
+          `D2[${runtime}/${forge}/${name}]: always-loaded carrier keeps the dispatch contract heading exactly once`);
+      }
+    }
+  }
+  const cursorNext = EDITION_RENDERERS.cursor(
+    read('commands/workflow-next.md'), 'workflow-next', 'github');
+  const cursorNextWords = cursorNext.split(/\s+/).filter(Boolean).length;
+  console.log(`D2: cursor github workflow-next render measures ${cursorNextWords} words ` +
+    `(baseline 2671 at 2b1af448, bound < 1900)`);
+  assert(cursorNextWords < 1900,
+    `D2: cursor github Next render stays below 1900 words (got ${cursorNextWords})`);
+}
+
 for (const rel of [
   'scripts/kaola-workflow-compact-context.js',
   'plugins/kaola-workflow/scripts/kaola-workflow-compact-context.js',

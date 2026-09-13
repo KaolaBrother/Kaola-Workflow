@@ -163,6 +163,9 @@ for (const target of registry.targets) {
     `A3[${target.id}]: adapter render carries the live nonce`);
   same(rendered.toString('utf8').split(nonce).length - 1, 1,
     `A3[${target.id}]: adapter render carries the nonce once`);
+  // #1069: the contract schema version moved off carrier bytes into the receipt.
+  ok(!/^Contract schema:/m.test(rendered.toString('utf8')),
+    `A3[${target.id}]: carrier bytes carry no Contract schema line`);
 }
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1046-contract-'));
@@ -210,6 +213,8 @@ try {
 
   const receipt = installed.receipt_path;
   ok(fs.existsSync(receipt), 'A4: batch receipt exists');
+  same(JSON.parse(fs.readFileSync(receipt, 'utf8')).contract_schema_version, 1,
+    'A4: receipt carries contract_schema_version (moved off carrier bytes for #1069)');
   const before = new Map([...ownerFiles, ...dedicated, receipt]
     .map(file => [file, sha(fs.readFileSync(file))]));
   const checked = run(['check', '--json', '--nonce', nonce], env).json;

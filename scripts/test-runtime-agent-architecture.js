@@ -1449,11 +1449,31 @@ if (generator && behavior && adapters && profiles.length > 0) {
     return adapterView.entries.find(entry => entry.runtime === carrier.runtime);
   }
 
+  // #1069: on always-loaded-carrier runtimes the marked dispatch region lives in the rule /
+  // compact-recovery carrier; the command render carries only the pointer. Everything that proved
+  // contract completeness is therefore measured against the recovery render for those runtimes.
+  const routingMod = require(path.join(ROOT, 'scripts', 'generate-routing-surfaces.js'));
+  const FULL_DISPATCH = routingMod.RECOVERY_FULL_DISPATCH_RUNTIMES;
+  const dispatchPointer = generator.ALWAYS_LOADED_DISPATCH_POINTER;
+  const dispatchPointerHolds = content => !/<!--\s*KW-RUNTIME-DISPATCH-(?:START|END)\s*-->/.test(content)
+    && content.split(dispatchPointer).length - 1 === 1
+    && !/Runtime dispatch contract \(always loaded\)/.test(content);
   for (const carrier of carriers) {
-    const gaps = runtimeDelegationGaps(carrier.runtime, carrier.content);
-    assert(choiceContract(carrier.content) === common,
+    const fullDispatchCarrier = FULL_DISPATCH.includes(carrier.runtime);
+    const subject = fullDispatchCarrier
+      ? routingMod.renderCompactRecoveryPrompt(carrier.runtime, carrier.forge)
+      : carrier.content;
+    if (fullDispatchCarrier) {
+      assert(dispatchPointerHolds(carrier.content),
+        `A10-delegation/pointer[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: command render carries the pointer once, no dispatch markers, no restated contract heading`);
+      const pointerless = carrier.content.replace(dispatchPointer, '');
+      assert(!dispatchPointerHolds(pointerless),
+        `A10-delegation/pointer-mutation RED[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: deleting the pointer fails the pointer assertion`);
+    }
+    const gaps = runtimeDelegationGaps(carrier.runtime, subject);
+    assert(choiceContract(subject) === common,
       `A10-delegation/carrier[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: fresh render carries the one common item-local decision contract`);
-    const contractGaps = dispatchContractGaps(carrier.content);
+    const contractGaps = dispatchContractGaps(subject);
     assert(contractGaps.length === 0,
       `A10-delegation/contract[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: fresh render carries one complete marked dispatch contract — missing ${JSON.stringify(contractGaps)}`);
     assert(gaps.length === 0,
@@ -1475,7 +1495,7 @@ if (generator && behavior && adapters && profiles.length > 0) {
       const entry = adapterForCarrier(carrier);
       const guidance = entry ? guidanceByAdapter.get(entry.name) : '';
       assert(!!entry && guidance.length > 0
-        && normalizedProse(carrier.content).includes(normalizedProse(guidance)),
+        && normalizedProse(subject).includes(normalizedProse(guidance)),
       `A10-delegation/carrier-source[${carrier.runtime}/${carrier.forge}/${carrier.topic}]: fresh carrier includes its exact adapter-rendered native guidance`);
     }
   }

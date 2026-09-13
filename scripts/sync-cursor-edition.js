@@ -202,9 +202,7 @@ function cursorCliMaterializationProse(forge) {
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   let text = body.split(/\r?\n/).join('\n');
-  if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
-    text = agentGen.replaceRuntimeDelegationGuidance(text, 'cursor', forge);
-  }
+  text = agentGen.deferRuntimeDispatchBlock(text);
   text = text.replace(/^Agent\(\n[\s\S]*?^\)\n?/gm, cursorNativeDispatchProse);
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime cursor');

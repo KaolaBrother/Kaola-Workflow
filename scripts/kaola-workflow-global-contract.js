@@ -81,10 +81,9 @@ function renderContract({ source, target, nonce = '' }) {
     ? routing.renderCompactRecoveryPrompt(target.runtime, 'github', { globalContract: sourceText })
     : sourceText;
   const meta = [
-    `Contract schema: 1`,
     ...(nonce ? [`Contract nonce: ${nonce}`] : []),
   ].join('\n');
-  const body = `${contractText.trimEnd()}\n\n${meta}\n`;
+  const body = `${contractText.trimEnd()}${meta ? '\n\n' + meta : ''}\n`;
   if (target.carrier.format === 'mdc') {
     return Buffer.from([
       '---',
@@ -403,10 +402,10 @@ function materializeRows(rows, plans, status, priorReceipt = null) {
 }
 
 function makeReceipt({ rows, source, registryBytes, nonce, kind = 'local_batch', candidateSha = null,
-  installedAt = null }) {
+  installedAt = null, contractSchemaVersion = 1 }) {
   return {
     schema_version: RECEIPT_SCHEMA,
-    contract_schema_version: 1,
+    contract_schema_version: contractSchemaVersion,
     kind,
     status: 'CURRENT',
     source_sha256: sha256(source),
@@ -511,7 +510,8 @@ function execute(options = {}) {
   const projectedRows = materializeRows(planned.rows, plans, 'INSTALLED', priorReceipt);
   const expectedReceipt = makeReceipt({ rows: projectedRows, source, registryBytes, nonce,
     kind: onlyCloud ? 'cursor_cloud' : 'local_batch', candidateSha: candidateSha(env),
-    installedAt: priorReceipt && priorReceipt.installed_at });
+    installedAt: priorReceipt && priorReceipt.installed_at,
+    contractSchemaVersion: registry.contract_schema_version });
 
   if (baseMode === 'check') {
     let current = !!priorReceipt
@@ -537,7 +537,8 @@ function execute(options = {}) {
   const rows = projectedRows;
   const receipt = makeReceipt({ rows, source, registryBytes, nonce,
     kind: onlyCloud ? 'cursor_cloud' : 'local_batch', candidateSha: candidateSha(env),
-    installedAt: priorReceipt && priorReceipt.installed_at });
+    installedAt: priorReceipt && priorReceipt.installed_at,
+    contractSchemaVersion: registry.contract_schema_version });
   const writes = plans.map(plan => ({ path: plan.path, bytes: plan.after }));
   writes.push({ path: receiptFile, bytes: Buffer.from(JSON.stringify(receipt, null, 2) + '\n') });
   commitWrites(writes);

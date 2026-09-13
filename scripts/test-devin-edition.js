@@ -67,8 +67,16 @@ for (const forge of ['github', 'gitlab', 'gitea']) {
       forge + '/' + name + ' skill contains no Claude path/token');
     assert(!/^\s*(model|subagent|agent):/mi.test(skill),
       forge + '/' + name + ' skill has no model/subagent/agent frontmatter');
-    if (skill.includes('KW-RUNTIME-DELEGATION')) {
-      assert(skill.includes('Host: Devin.'), forge + '/' + name + ' skill contains Devin host guard');
+    // #1069: Devin is an always-loaded carrier — generated Next/Finalize
+    // skills carry the pointer once, no marked dispatch region, no adapter
+    // facts (workflow-init carries no dispatch region at all).
+    if (name !== 'workflow-init') {
+      assert(!/KW-RUNTIME-DISPATCH-(?:START|END)/.test(skill)
+        && !/KW-RUNTIME-DELEGATION-(?:START|END)/.test(skill)
+        && !/Runtime dispatch contract \(always loaded\)/i.test(skill),
+        forge + '/' + name + ' skill carries no dispatch block (the always-loaded carrier owns it)');
+      assert(skill.split(agents.ALWAYS_LOADED_DISPATCH_POINTER).length - 1 === 1,
+        forge + '/' + name + ' skill carries the always-loaded-carrier pointer exactly once');
     }
     assert(skill.includes('triggers:\n  - user\n  - model'),
       forge + '/' + name + ' skill triggers are user+model');

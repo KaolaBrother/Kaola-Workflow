@@ -22,6 +22,15 @@ binding runtimes and a native route on native-only runtimes.
   duplicates, dispatch rationale, finalize duplicates and undefined terms, the three value-ordering
   First Principles ("Correct first", "save human time", "spend as little"), and read/verify/honesty
   reminders. The rationale lives in `docs/decisions/0017`, `0024`, and `0025`.
+- **One dispatch-contract carrier per always-loaded runtime (#1069).** On Grok, Cursor, and Devin —
+  the always-loaded-carrier runtimes — the persistent Rule/global carrier remains the sole carrier
+  of the runtime dispatch contract and adapter facts. Their generated Workflow Next and Finalization
+  commands now carry one pointer sentence ("The always-loaded Kaola rule already carries the runtime
+  dispatch contract and adapter facts; this prompt does not restate them.") in place of the marked
+  dispatch region, cutting the Cursor GitHub Next render from 2671 to 1650 words (~1020 fewer).
+  `Contract schema: 1` moved off carrier bytes into `global-contract-receipt.json` as
+  `contract_schema_version`. Existing installs keep a stale global carrier until
+  `./install-all.sh --yes`.
 - **Retire historical negation pins from the Finalize/Next surfaces (#1070).** The retired tokens
   (`It does not refuse`, `Nothing compares that list against a`, `This is not "merge anyway and
   report."`, `who is accountable for the branch ending up right`, `not a workflow judging your

@@ -43,9 +43,7 @@ function devinNativeDispatchProse(card) {
 function transformCommandBody(body, forge) {
   forge = forge || DEFAULT_FORGE;
   let text = body.split(/\r?\n/).join('\n');
-  if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
-    text = agentGen.replaceRuntimeDelegationGuidance(text, 'devin', forge);
-  }
+  text = agentGen.deferRuntimeDispatchBlock(text);
   text = text.replace(/^Agent\(\n[\s\S]*?^\)\n?/gm, devinNativeDispatchProse);
   text = rewriteClaudeScriptPaths(text);
   text = text.replace(/--runtime claude\b/g, '--runtime devin');

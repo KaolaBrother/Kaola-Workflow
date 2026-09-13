@@ -429,9 +429,12 @@ function commandRel(name, forge) {
       'G2[' + name + ']: generated command keeps the complete compact recovery block');
     const grokBlock = grokStart >= 0 && grokEnd > grokStart
       ? content.slice(grokStart, grokEnd + COMPACT_END.length) : '';
+    // #1069: the dispatch contract moved to the always-loaded Rule; the command carries the
+    // pointer once and no marked dispatch region.
     const dispatchNeedle = /Runtime dispatch contract \(always loaded\)/i;
-    assert(dispatchNeedle.test(grokBlock) && grokBlock.includes(DISPATCH_END),
-      'G2[' + name + ']: generated compact block carries a bounded always-loaded dispatch contract');
+    assert(!dispatchNeedle.test(content) && !content.includes(DISPATCH_END)
+      && content.split(reviewerGenerator.ALWAYS_LOADED_DISPATCH_POINTER).length - 1 === 1,
+      'G2[' + name + ']: generated command carries the always-loaded-carrier pointer once, no dispatch block');
     assert(!/^Agent\(/m.test(content),
       'G2[' + name + ']: no stale line-start Agent( example card remains in the generated surface');
   }

@@ -38,13 +38,32 @@ function main() {
       name,
       text: fs.readFileSync(path.join(renderRoot, '.cursor', 'commands', name), 'utf8'),
     }));
+    // #1069: the dispatch-carrier wording now rides the always-loaded Rule; the
+    // generated commands carry the pointer only.
+    const agentGen = require(path.join(ROOT, 'scripts', 'generate-agent-profiles.js'));
+    const gc = require(path.join(ROOT, 'scripts', 'kaola-workflow-global-contract.js'));
+    const registry = JSON.parse(fs.readFileSync(
+      path.join(ROOT, 'templates', 'global', 'runtime-contract-adapters.json'), 'utf8'));
+    const rule = gc.renderContract({
+      source: fs.readFileSync(
+        path.join(ROOT, 'templates', 'global', 'kaola-workflow-global.md'), 'utf8'),
+      target: registry.targets.find(row => row.id === 'cursor-cli-local'),
+    }).toString('utf8');
+    assert.match(rule,
+      /exact-binding[^.]*post-resolution assertion/i,
+      'always-loaded Rule: exact-binding policy must be a post-resolution assertion');
+    assert.match(rule,
+      /flat `subagent_type(?::[^`]+)?`[^.]*MUST omit[^.]*per-call `model`/i,
+      'always-loaded Rule: named call uses the flat field and forbids a model override');
+    assert.doesNotMatch(rule,
+      /(?:call|dispatch|construct)[^.]{0,180}`subagentType\.custom\.name`/i,
+      'always-loaded Rule: provider encoding must not be a controller call instruction');
     for (const surface of rendered) {
-      assert.match(surface.text,
-        /exact-binding[^.]*post-resolution assertion/i,
-        surface.name + ': exact-binding policy must be a post-resolution assertion');
-      assert.match(surface.text,
-        /flat `subagent_type(?::[^`]+)?`[^.]*MUST omit[^.]*per-call `model`/i,
-        surface.name + ': named call uses the flat field and forbids a model override');
+      assert.strictEqual(
+        surface.text.split(agentGen.ALWAYS_LOADED_DISPATCH_POINTER).length - 1, 1,
+        surface.name + ': command carries the always-loaded-carrier pointer exactly once');
+      assert.doesNotMatch(surface.text, /KW-RUNTIME-DISPATCH-(?:START|END)/,
+        surface.name + ': command carries no dispatch markers');
       assert.doesNotMatch(surface.text,
         /(?:call|dispatch|construct)[^.]{0,180}`subagentType\.custom\.name`/i,
         surface.name + ': provider encoding must not be a controller call instruction');

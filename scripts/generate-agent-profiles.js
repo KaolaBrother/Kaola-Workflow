@@ -328,6 +328,17 @@ function renderRuntimeDelegationGuidanceForRuntime(runtime, forge = 'github', ro
     runtimeAdapter(runtime, forge, root), loadBehaviorContracts(root));
 }
 
+const ALWAYS_LOADED_DISPATCH_POINTER = 'The always-loaded Kaola rule already carries the runtime dispatch contract and adapter facts; this prompt does not restate them.';
+
+// Replace the whole marked dispatch region (markers included) with the pointer. A consumer that
+// keys on the KW-RUNTIME-DISPATCH markers must not read the pointer as the contract, so the
+// markers go with the block (same rule as generate-routing-surfaces' deferred recovery render).
+function deferRuntimeDispatchBlock(content) {
+  return String(content).replace(
+    /^<!-- KW-RUNTIME-DISPATCH-START -->\n[\s\S]*?<!-- KW-RUNTIME-DISPATCH-END -->\n/m,
+    ALWAYS_LOADED_DISPATCH_POINTER + '\n');
+}
+
 function replaceRuntimeDelegationGuidance(content, runtime, forge = 'github', root = ROOT) {
   const text = String(content);
   const start = text.indexOf(DELEGATION_GUIDANCE_START);
@@ -682,6 +693,8 @@ module.exports = {
   renderRuntimeDelegationGuidance,
   renderRuntimeDelegationGuidanceForRuntime,
   replaceRuntimeDelegationGuidance,
+  ALWAYS_LOADED_DISPATCH_POINTER,
+  deferRuntimeDispatchBlock,
   runtimeAdapter,
   DELEGATION_GUIDANCE_START,
   DELEGATION_GUIDANCE_END,

@@ -500,11 +500,30 @@ function cursorCliMaterializationVerdict(text, forge, surface) {
 }
 
 // A child mode lets the mutation fixture exercise this same generated-byte
-// oracle without recursively running the full edition suite.
+// oracle without recursively running the full edition suite. #1069: the
+// relation rides the always-loaded Rule (the global contract render), not the
+// command bytes, so the oracle renders the rule from the tree under test.
 if (process.argv.includes('--path-b-oracle')) {
-  const verdict = inspectPathBConsumers(TREE_ROOT);
-  if (!verdict.ok) {
-    for (const error of verdict.errors) console.error('PATH-B-ORACLE RED: ' + error);
+  let ruleText = null;
+  try {
+    const gc = require(path.join(TREE_ROOT, 'scripts', 'kaola-workflow-global-contract.js'));
+    const registry = JSON.parse(fs.readFileSync(
+      path.join(TREE_ROOT, 'templates', 'global', 'runtime-contract-adapters.json'), 'utf8'));
+    const target = registry.targets.find(row => row.id === 'cursor-cli-local');
+    const source = fs.readFileSync(
+      path.join(TREE_ROOT, 'templates', 'global', 'kaola-workflow-global.md'), 'utf8');
+    ruleText = gc.renderContract({ source, target }).toString('utf8');
+  } catch (e) {
+    console.error('PATH-B-ORACLE RED: kaola-workflow-global rule: render failed — ' + e.message);
+    process.exit(1);
+  }
+  const rows = pathBRelations(ruleText);
+  if (rows.length !== 1 || rows[0].positive !== 'parent' || rows[0].negative !== 'profile pin') {
+    console.error('PATH-B-ORACLE RED: kaola-workflow-global rule: expected exactly one '
+      + 'omit-model → parent / not → profile pin relation, found '
+      + JSON.stringify(rows.map(r => ({
+        lineNumber: r.lineNumber, positive: r.positive, negative: r.negative,
+      }))));
     process.exit(1);
   }
   console.log('PATH-B-ORACLE GREEN: built-in-only omit-model carries the parent, not a profile pin');
@@ -994,19 +1013,34 @@ function commandRel(name, forge) {
         'G2[workflow-init]: preserves $ARGUMENTS');
     }
   }
+  // #1069: the dispatch contract and adapter facts live in the always-loaded Rule; the command
+  // renders carry the pointer once and no marked dispatch region.
+  const cursorRule = renderedGlobalRule();
   for (const name of ['workflow-next', 'kaola-workflow-finalize']) {
     const content = exists(commandRel(name)) ? read(commandRel(name)) : '';
-    assert(/CLI, App local, and App Cloud are separate hosts/i.test(content),
-      'G2[' + name + ']: Cursor CLI, App local, and App Cloud remain distinct surfaces/hosts');
-    assert(/MUST omit the per-call `model`/i.test(content)
-      && /exact-binding requirement is a post-resolution assertion/i.test(content),
-      'G2[' + name + ']: named-profile binding owns model resolution even under exact-binding policy');
+    assert(!/<!--\s*KW-RUNTIME-DISPATCH-(?:START|END)\s*-->/.test(content)
+      && !/Runtime dispatch contract \(always loaded\)/i.test(content)
+      && content.split(reviewerGenerator.ALWAYS_LOADED_DISPATCH_POINTER).length - 1 === 1,
+      'G2[' + name + ']: generated command carries the always-loaded-carrier pointer once, no dispatch block');
+    assert(/CLI, App local, and App Cloud are separate hosts/i.test(cursorRule),
+      'G2[' + name + ']: Cursor CLI, App local, and App Cloud remain distinct surfaces/hosts (in the always-loaded Rule)');
+    assert(/MUST omit the per-call `model`/i.test(cursorRule)
+      && /exact-binding requirement is a post-resolution assertion/i.test(cursorRule),
+      'G2[' + name + ']: named-profile binding owns model resolution even under exact-binding policy (in the always-loaded Rule)');
   }
 
+  // #1069: the built-in-only omit-model relation moved into the always-loaded Rule with the rest
+  // of the adapter facts; the command renders carry none of it.
   const pathBVerdict = inspectPathBConsumers(TREE_ROOT);
-  assert(pathBVerdict.ok,
-    'G2-path-b: generated workflow-next and finalize carry the built-in-only omit-model relation '
-    + '(parent, not profile pin)' + (pathBVerdict.ok ? '' : ' — ' + pathBVerdict.errors.join(' | ')));
+  const ruleRelations = pathBRelations(cursorRule);
+  const commandsCarryNone = Object.values(pathBVerdict.relations).every(found => found.length === 0);
+  assert(pathBVerdict.ok === false || commandsCarryNone,
+    'G2-path-b: generated workflow-next and finalize commands carry no dispatch-contract relation');
+  assert(commandsCarryNone && ruleRelations.length === 1
+    && ruleRelations[0].positive === 'parent' && ruleRelations[0].negative === 'profile pin',
+    'G2-path-b: the always-loaded Rule carries the built-in-only omit-model relation '
+    + '(parent, not profile pin) exactly once'
+    + (commandsCarryNone ? '' : ' — commands: ' + pathBVerdict.errors.join(' | ')));
 
   const nativeBoundary = 'Use the live Task schema for tdd-guide with task, custody, evidence, and stop boundaries.';
   assert(!lineStartCall(nativeBoundary) && staticDispatchFields(nativeBoundary).length === 0,
@@ -1194,19 +1228,15 @@ function commandRel(name, forge) {
               + generated.status + ' — ' + generatedOutput.split('\n').slice(0, 3).join(' | '));
 
             if (generated.status === 0) {
+              // #1069: the adapter relation no longer reaches the generated
+              // commands at all — they carry the pointer. The reversal must
+              // reach the always-loaded Rule instead.
               const mutatedVerdict = inspectPathBConsumers(scratch);
-              const oppositeReached = PATH_B_COMMANDS.every(name => {
-                const rows = mutatedVerdict.relations[name] || [];
-                return rows.length === 1
-                  && rows[0].positive === 'profile pin'
-                  && rows[0].negative === 'parent';
-              });
-              assert(oppositeReached,
-                'G2-path-b-mutation: adapter reversal reaches both generated consumers with the '
-                + 'opposite profile-pin/not-parent relation — ' + JSON.stringify(mutatedVerdict.relations));
-              assert(!mutatedVerdict.ok && mutatedVerdict.errors.length === PATH_B_COMMANDS.length,
-                'G2-path-b-mutation: generated semantic reversal is rejected for both consumers — '
-                + mutatedVerdict.errors.join(' | '));
+              const commandsClean = PATH_B_COMMANDS.every(name =>
+                (mutatedVerdict.relations[name] || []).length === 0);
+              assert(commandsClean,
+                'G2-path-b-mutation: generated commands carry no dispatch relation after '
+                + 'adapter reversal — ' + JSON.stringify(mutatedVerdict.relations));
 
               // spawn-class: environment
               const probe = spawnSync(process.execPath,
@@ -1215,11 +1245,10 @@ function commandRel(name, forge) {
                 });
               const probeOutput = String(probe.stdout || '') + String(probe.stderr || '');
               assert(probe.status !== 0,
-                'G2-path-b-mutation RED: the focused generated-consumer oracle exits non-zero on the '
+                'G2-path-b-mutation RED: the focused carrier oracle exits non-zero on the '
                 + 'reversed adapter relation (got ' + probe.status + ')');
-              assert(/PATH-B-ORACLE RED: workflow-next:/.test(probeOutput)
-                && /PATH-B-ORACLE RED: kaola-workflow-finalize:/.test(probeOutput),
-              'G2-path-b-mutation RED: oracle names both contradictory generated consumers — '
+              assert(/PATH-B-ORACLE RED: kaola-workflow-global rule:/.test(probeOutput),
+              'G2-path-b-mutation RED: oracle names the contradictory always-loaded carrier — '
                 + JSON.stringify(probeOutput.trim()));
             }
           }
@@ -1243,13 +1272,17 @@ function commandRel(name, forge) {
     commandRel('kaola-workflow-finalize'),
   ]);
 
+  // #1069: the runtime-delegation block now lives only in the always-loaded
+  // Rule; generated commands carry the pointer and must carry no vendor slug.
   function vendorSlugScope(rel, content) {
-    if (!TIER_GUIDANCE_COMMANDS.has(rel)) {
-      return VENDOR_SLUG.test(content)
-        ? { ok: false, reason: 'vendor model slug outside an allowed command' }
-        : { ok: true, reason: '' };
+    if (VENDOR_SLUG.test(content)) {
+      return { ok: false, reason: 'vendor model slug on generated command bytes '
+        + '(the binding block lives in the always-loaded Rule)' };
     }
+    return { ok: true, reason: '' };
+  }
 
+  function vendorSlugScopeOnRule(content) {
     const startCount = content.split(DELEGATION_START).length - 1;
     const endCount = content.split(DELEGATION_END).length - 1;
     const start = content.indexOf(DELEGATION_START);
@@ -1302,6 +1335,10 @@ function commandRel(name, forge) {
   }
   const recoveryRel = '.cursor/rules/' + CURSOR_RECOVERY_RULE;
   const recovery = renderedGlobalRule();
+  const ruleScope = vendorSlugScopeOnRule(recovery);
+  assert(ruleScope.ok,
+    'G2-leak: always-loaded Rule confines the binding slug to the unique runtime-delegation block — '
+    + ruleScope.reason);
   const recoveryVerdict = recoveryRuleVerdict(recovery);
   assert(recoveryVerdict.ok,
     'G2: compact recovery and always-loaded dispatch contract are carried by the global transaction render — '
@@ -1318,7 +1355,7 @@ function commandRel(name, forge) {
     }
     const mutated = read(rel) + '\nOutside-block mutation: grok-4.6\n';
     const scope = vendorSlugScope(rel, mutated);
-    assert(!scope.ok && scope.reason === 'vendor model slug escaped the runtime-delegation block',
+    assert(!scope.ok && /vendor model slug/.test(scope.reason),
       'G2-leak-mutation: ' + rel + ': vendor slug outside the marked block still fails');
   }
 }

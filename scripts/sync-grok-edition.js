@@ -97,9 +97,7 @@ function rewriteClaudeScriptPaths(text, forge) {
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   let text = body.split(/\r?\n/).join('\n');
-  if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
-    text = agentGen.replaceRuntimeDelegationGuidance(text, 'grok', forge);
-  }
+  text = agentGen.deferRuntimeDispatchBlock(text);
   text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'spawn_subagent(\n$1');
   text = text.replace(/^\s+model="[^"]+",?\n/gm, '');
   text = text.replace(/[ \t]+\n/g, '\n');
