@@ -159,14 +159,12 @@ const REQUIRED_BLOCKS = [
       'absent fields are simply absent',
       'before the work goes',
       'dispatched: self',
-      'mission, not a specification',
       '| `item` | the mission — one line of prose, hints and facts | at creation |',
       '| `status` | `todo` \\| `in-flight` \\| `done` | on change |',
       '| `dispatched` | what went out and to whom, and **where the output was to land** | at dispatch |',
       '| `result` | where the outcome landed — a path, or a few lines inline | at close |',
       'completed item and its result are immutable',
       'one dispatch has one result',
-      'not a specification, selector',
       'Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class.',
       'recoverable outcome',
       'does not by itself create a mission',
@@ -209,7 +207,7 @@ const REQUIRED_BLOCKS = [
   },
   {
     // The claim survives, and it is bookkeeping: it records the issue, the
-    // branch and the worktree, and it answers rather than judging.
+    // branch and the worktree.
     block_id: 'nx-claim-is-bookkeeping',
     topic: 'next',
     runtime_tag: 'both',
@@ -219,7 +217,6 @@ const REQUIRED_BLOCKS = [
       'workflow-state.md',
       '--target-issue',
       '--target-issues',
-      'reports a fact about the target rather than a verdict',
     ],
   },
   {
@@ -248,8 +245,6 @@ const REQUIRED_BLOCKS = [
     //     the part that rots silently, because a pointer that no longer points
     //     still reads fine.
     //   - the axioms are an ORDER; without that they are a list.
-    //   - recording the derivation is optional. A pointer that made it a proof
-    //     obligation would be a new gate wearing a pointer's name.
     // Each of the five is absent from a `next` surface once the paragraph is
     // removed and appears exactly once while it is there — measured on all
     // twelve — so none is satisfied from elsewhere on the surface.
@@ -263,7 +258,6 @@ const REQUIRED_BLOCKS = [
       'loaded machine-global workflow contract',
       'Project `AGENTS.md` adds only local facts',
       'applied in priority order',
-      'useful and never required',
     ],
   },
 
@@ -278,7 +272,6 @@ const REQUIRED_BLOCKS = [
     surface_type_tag: 'both',
     content_tokens: [
       '**measures** the receipt and **reports** what it found',
-      'It does not refuse',
       'under `validation`',
       '## Validation',
       'finalization-summary.md',
@@ -296,7 +289,6 @@ const REQUIRED_BLOCKS = [
     content_tokens: [
       '`changed_paths`',
       '## Changed Paths',
-      'Nothing compares that list against a',
     ],
   },
   {
@@ -331,40 +323,33 @@ const REQUIRED_BLOCKS = [
   // scripts/test-issue-1054-finalize-record-simplification.js Group D pins the retirement from the
   // test side). No replacement block: there is no successor grammar to require.
   {
-    // R3's replacement, and the reason the refusal could go: the sink reports,
-    // and the orchestrator is accountable for the branch ending up right. All
-    // three resolutions are named, because "merge anyway and report" is the
-    // misreading this block exists to prevent.
+    // R3's replacement: the sink reports, and all three resolutions are named
+    // so the branch ends up right.
     block_id: 'fn-sink-reports-orchestrator-owns',
     topic: 'finalize',
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
       '<!-- PIN: sink-reports-orchestrator-owns -->',
-      // The sink DOES still stop — four operational refusals survive, and a converted finding stops
-      // without merging. What it no longer does is judge the work. The old token asserted a
-      // categorical "does not refuse" that the code never implemented; these two pin the two halves
-      // of the true contract instead, so a relapse in either direction is caught.
+      // The sink DOES still stop — a converted finding stops without merging. What it does not do
+      // is judge the work; these two pin the two halves of that contract.
       'does not judge your work',
       'stops without merging',
-      'This is not "merge anyway and report."',
       'get the merge correct',
       'resynchronize',
       'request instead',
       'clean up after the sink',
-      'who is accountable for the branch ending up right',
     ],
   },
   {
-    // The one hard stop left in the phase, and the reason it is not a gate: an
-    // operation refusing to destroy data is not a workflow judging work.
+    // The one hard stop left in the phase: an operation refusing to destroy
+    // data is not a gate.
     block_id: 'fn-archive-loses-nothing',
     topic: 'finalize',
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
       'fails loudly if it would lose a file',
-      'not a workflow judging your work',
       'kaola-workflow/archive/',
     ],
   },

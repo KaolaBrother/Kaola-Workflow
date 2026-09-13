@@ -23,8 +23,7 @@ frontier, and transition to Kaola-Workflow Finalization only when every mission 
 **First Principles.** When nothing already settles a situation, break the tie by the numbered First
 Principles in the loaded machine-global workflow contract, applied in priority order. Project
 `AGENTS.md` adds only local facts and constraints; a project exception must state its scope and
-must not weaken higher-priority instructions or host safety boundaries. Recording a derivation is
-useful and never required.
+must not weaken higher-priority instructions or host safety boundaries.
 
 <!-- PIN: consent-in-conversation -->
 **Consent.** Irreversible and value-laden calls belong to the user — ask, in conversation, before
@@ -90,8 +89,8 @@ comma-separated set, then claim it (use `--target-issue N` for a singleton):
 <!-- SPLICE:nx-claim-run -->
 ```
 
-The claim is bookkeeping: `workflow-state.md` records issues, branch, and worktree. Its typed output
-reports a fact about the target rather than a verdict. `owned`/`acquired` continues; an existing active folder resumes; user
+The claim is bookkeeping: `workflow-state.md` records issues, branch, and worktree.
+`owned`/`acquired` continues; an existing active folder resumes; user
 dirt or an irreversible choice goes back to the user. Never adopt an unrelated active folder.
 
 ## Resume
@@ -117,8 +116,7 @@ Three writes only: create with `status: todo`; before the work goes out, set `in
 the locator; close with `done` and result. Inline work uses `dispatched: self`. A completed item and
 its result are immutable; one dispatch has one result, including FAIL/BLOCKED.
 
-An item is a mission, not a specification, selector, assertion, command, review round, role,
-model, dependency edge, or write set. A failed command, intermediate finding, repair attempt,
+An item is a mission — a recoverable outcome. A failed command, intermediate finding, repair attempt,
 or review round does not by itself create a mission. Keep working within the current promised
 outcome while custody and causal boundary remain unchanged. Append a mission only for a new
 recoverable outcome that changes custody or for a newly discovered independent causal class. Do

@@ -130,7 +130,7 @@ Agent(
 )
 ```
 
-The runner **measures** the receipt and **reports** what it found. It does not refuse; you own the
+The runner **measures** the receipt and **reports** what it found; you own the
 verdict. Record its typed result under `validation` in `finalization-summary.md`; preserve
 `chain-receipt.json` and `final-validation.md`. Fix meaningful
 findings, re-freeze, then rerun affected evidence.
@@ -150,9 +150,8 @@ transcribe real signatures, JSON/help/schema or return BLOCK, never invent field
 evidence file, `.cache/doc-docking.md`, with checked files, fixes/no-impact reasons, and
 `DOCKED`/`BLOCKED`; continue only when docked.
 
-The finalize transaction reports `changed_paths`. Put it under `## Changed Paths`; Nothing compares
-that list against a guessed write set. `## Validation` and `## Changed Paths` are where the finalize
-transaction's own findings land.
+The finalize transaction reports `changed_paths`. Put it under `## Changed Paths`. `## Validation`
+and `## Changed Paths` are where the finalize transaction's own findings land.
 
 ## Card: summary
 
@@ -245,10 +244,9 @@ Keep-open is whole-run and merge-only. Close/archive/sink truth belongs to their
 Mission List. Journals are never deliverables and successful cleanup removes only this lane.
 
 <!-- PIN: sink-reports-orchestrator-owns -->
-The sink does not judge your work; it is a reporting mechanism, not a workflow judging your work.
+The sink reports; it does not judge your work.
 It reports validation, ancestry, publication, closure, and
-cleanup findings and stops without merging when it cannot preserve truth. This is not "merge anyway
-and report." You remain the person who is accountable for the branch ending up right: get the merge
+cleanup findings and stops without merging when it cannot preserve truth; get the merge
 correct, resynchronize, or publish a review request instead. Then clean up after the sink; never
 touch another session's branch/worktree/folder, and ask on real content conflict.
 <!-- /PIN -->

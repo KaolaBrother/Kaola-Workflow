@@ -256,9 +256,9 @@ for (const file of nextSurfaces) {
   assertIncludes(file, 'State the selection aloud before you claim it');
   // Everything before the claim is free, and the claim itself is bookkeeping rather than a door.
   assertIncludes(file, 'Everything before the claim is free');
-  // #1054 item 27 (nx-claim-is-bookkeeping): 'The claim is bookkeeping', 'reports a fact about the
-  // target rather than a verdict', '--target-issue', and '--target-issues' were proven duplicate by
-  // subtraction against required-blocks.js — see .cache/implementation-validators.md.
+  // #1054 item 27 (nx-claim-is-bookkeeping): 'The claim is bookkeeping', '--target-issue', and
+  // '--target-issues' were proven duplicate by subtraction against required-blocks.js — see
+  // .cache/implementation-validators.md.
 
   // THE MISSION LIST. It is the run's only coordination record, so the surface must name the file,
   // carry the format itself rather than pointing at it, and carry the three write moments. The
@@ -542,8 +542,8 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'issue_action');
 assertIncludes('commands/kaola-workflow-finalize.md', '--keep-issue-open');
 assertIncludes('commands/kaola-workflow-finalize.md', 'merge-sink-only');
 // #1054 item 27 (audit groups fn-validation-report, fn-changed-paths-report,
-// fn-archive-loses-nothing): the six content pins that used to live here (the validation-report
-// prose 'It does not refuse'/'under `validation`'/'## Validation', the changed-paths prose
+// fn-archive-loses-nothing): the content pins that used to live here (the validation-report
+// prose 'under `validation`'/'## Validation', the changed-paths prose
 // '`changed_paths`'/'## Changed Paths', and the archive hard-stop 'fails loudly if it would lose a
 // file') were ALL proven duplicate by subtraction against required-blocks.js — removing any one of
 // them from commands/kaola-workflow-finalize.md independently reds test-route-reachability's own

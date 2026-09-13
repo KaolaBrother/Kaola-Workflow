@@ -11,6 +11,15 @@ binding runtimes and a native route on native-only runtimes.
 
 ### Changed
 
+- **Retire historical negation pins from the Finalize/Next surfaces (#1070).** The retired tokens
+  (`It does not refuse`, `Nothing compares that list against a`, `This is not "merge anyway and
+  report."`, `who is accountable for the branch ending up right`, `not a workflow judging your
+  work`, `mission, not a specification`, `not a specification, selector`, `reports a fact about the
+  target rather than a verdict`, `useful and never required`) are recorded in
+  `docs/decisions/0024-finalize-measures-roles-state-one-authority.md` instead of pinned on the
+  surface. The behaviour pins remain: `stops without merging`, `get the merge correct`,
+  `resynchronize`, `request instead`, `clean up after the sink`, `## Validation`,
+  `## Changed Paths`, `recoverable outcome`, `does not by itself create a mission`.
 - **Remove unused command model-placeholder rendering (#1066).** `install.sh` copies the
   generated commands verbatim; agent-profile bindings and command installation remain intact.
 - **Clarify dispatch evidence limits (#1065).** Native tool events establish a dispatch;

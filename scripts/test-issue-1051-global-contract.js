@@ -117,7 +117,7 @@ function teachesLifecycleOutsideList(text) {
   return /Finalization, issue closure, archive, and sink are not Mission List items/i.test(text);
 }
 function teachesMissionEnumeration(text) {
-  return /not a specification, selector/i.test(text)
+  return /An item is a mission — a recoverable outcome/i.test(text)
     && /independent causal class/i.test(text);
 }
 function teachesIndependentAcceptance(text) {

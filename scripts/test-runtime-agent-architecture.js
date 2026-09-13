@@ -682,7 +682,7 @@ assert(!/KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(initSource),
   };
   const nextMissionEnumeration = text => {
     const n = norm(text);
-    return /not a specification, selector/i.test(n)
+    return /An item is a mission — a recoverable outcome/i.test(n)
       && /Append a mission only for a new recoverable outcome/i.test(n)
       && /independent causal class/i.test(n);
   };
@@ -714,8 +714,8 @@ assert(!/KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(initSource),
     'A3[issue-1042] mutation RED: one mission per repair/re-review attempt is rejected');
   const compactRecoveryMutationSubject = compactRecoverySources[0] || '';
   assert(!nextMissionEnumeration(nextSource.replace(
-    /not a specification(?:, selector)?/i, 'a specification and selector')),
-  'A3[issue-1042] next mutation RED: selector-level mission teaching is rejected');
+    /An item is a mission — a recoverable outcome/i, 'An item is a specification and selector')),
+  'A3[issue-1042] next mutation RED: mission enumeration teaching is rejected');
   assert(!/Finalization, issue closure, archive, and sink are not Mission List items/i.test(
     compactRecoveryMutationSubject.replace('are not Mission List items', 'are Mission List items')),
   'A3[issue-1042] compact-prompt mutation RED: finalization inside Mission List is rejected');

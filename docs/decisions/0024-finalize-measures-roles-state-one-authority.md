@@ -188,3 +188,13 @@ rewritten test — is archived at `kaola-workflow/archive/bundle-1054/.cache/` a
   solves a compatibility problem this issue does not have — every consumer in this repository is built
   and shipped together; a single authoring source with a propagator is simpler and already the pattern
   every other forge-neutral constant in `kaola-workflow-adaptive-schema.js` uses.
+
+## Addendum — 2026-09-13 (#1070)
+
+The historical negation pins are retired from the Finalize/Next surfaces and recorded here instead:
+"the runner does not refuse", "nothing compares the changed_paths list against a guessed write
+set", "this is not merge anyway and report", and the "you remain accountable for the branch ending
+up right" sentence. The behaviour they guarded is unchanged and still pinned: `stops without
+merging`, `get the merge correct`, `resynchronize`, `request instead`, `clean up after the sink`,
+`## Validation`, `## Changed Paths`, `recoverable outcome`, and `does not by itself create a
+mission`.
