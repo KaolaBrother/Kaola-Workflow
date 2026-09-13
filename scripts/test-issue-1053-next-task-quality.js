@@ -99,18 +99,17 @@ function conceptPresent(text, fragments) {
 // fragments do not anticipate) can still slip through. Where that residual risk could not be
 // closed cheaply, it is left as a known limitation rather than chased with an ever-larger regex.
 const ADDITION_1_CLAUSES = {
-  'a_continue_when_clear_no_fixed_format': {
+  // #1071: the "do not demand a fixed requirement format" clause was retired; the surviving
+  // sentence is "When the intended outcome and its acceptance basis are already clear and
+  // authorized, continue." and the detector now pins that continue-unconditionally contract.
+  'a_continue_when_clear': {
     fragments: [
       /already\s+(?:clear|settled|known|established|determined)/i,
       /authoriz/i,
       /\bcontinue\b/i,
-      // Negation attached to its governed target within one clause (no '.', '?', '!', ';'
-      // between them) — "do not"/"never"/"need not" IMMEDIATELY governing the format/rewrite
-      // clause, not merely present somewhere else in the sentence.
-      /\b(?:do(?:es)?\s+not|never|need\s+not)\b[^.?!;]{0,60}(?:fixed\s+requirement\s+format|rewrite\s+the\s+issue)/i,
     ],
-    boundary: 'When the outcome and its acceptance basis are already clear and authorized, continue: do not demand a fixed requirement format.',
-    nearMiss: 'When the outcome and its acceptance basis are already clear and authorized, continue by restating the requirement in the standard format.',
+    boundary: 'When the outcome and its acceptance basis are already clear and authorized, continue.',
+    nearMiss: 'When the outcome and its acceptance basis are already clear and authorized, pause for a fixed requirement format.',
   },
   'b_investigate_before_asking': {
     fragments: [
@@ -196,8 +195,8 @@ assert(!conceptPresent(ADDITION_2.nearMiss, ADDITION_2.fragments), 'mutation RED
   // FALSE-RED probes: legitimate synonymous rewrites of the real landed clauses must still match.
   const synonymRewrites = [
     ['a: "already settled" instead of "already clear"',
-      'When the intended outcome and its acceptance basis are already settled and authorized, continue: do not demand a fixed requirement format or rewrite the issue to restate it.',
-      ADDITION_1_CLAUSES.a_continue_when_clear_no_fixed_format.fragments],
+      'When the intended outcome and its acceptance basis are already settled and authorized, continue.',
+      ADDITION_1_CLAUSES.a_continue_when_clear.fragments],
     ['b: "consult the documentation" instead of "look it up"',
       'When a fact is missing, consult the documentation first; implementation detail inside an authorized scope is your own judgment.',
       ADDITION_1_CLAUSES.b_investigate_before_asking.fragments],
@@ -218,9 +217,9 @@ assert(!conceptPresent(ADDITION_2.nearMiss, ADDITION_2.fragments), 'mutation RED
   // FALSE-GREEN probes: an inverted/adversarial sentence that merely contains the fragment WORDS
   // (elsewhere, unattached to the negation) must NOT match.
   const adversarialInversions = [
-    ['a: unrelated "no" elsewhere in the sentence',
-      'When the outcome is already clear and authorized, continue: no other option remains except to demand a fixed requirement format and rewrite the issue every time.',
-      ADDITION_1_CLAUSES.a_continue_when_clear_no_fixed_format.fragments],
+    ['a: authorized clause detached from continue',
+      'When the outcome is already clear and authorized, escalate for a decision before work proceeds.',
+      ADDITION_1_CLAUSES.a_continue_when_clear.fragments],
     ['e: supervisor example — polarity flipped to DOES authorize',
       'A research or design request DOES authorize implementation, forge writes, and a claim.',
       ADDITION_1_CLAUSES.e_research_design_scope_only.fragments],
@@ -401,7 +400,7 @@ for (const edition of EDITIONS) {
 // to say so and not pin what is not true.
 {
   const claudeRecovery = gen.renderCompactRecoveryPrompt('claude', 'github');
-  assert(!conceptPresent(claudeRecovery, ADDITION_1_CLAUSES.a_continue_when_clear_no_fixed_format.fragments),
+  assert(!conceptPresent(claudeRecovery, ADDITION_1_CLAUSES.a_continue_when_clear.fragments),
     'compact-recovery prompt does NOT embed the Next addition passages (confirms it is a separate skeleton, not a gap in coverage)');
 }
 
@@ -555,8 +554,8 @@ eq(Object.keys(gen.TOPICS).sort().join(','), 'finalize,init,next', 'TOPICS stays
   const globalContractPath = path.join(REPO, 'templates', 'global', 'kaola-workflow-global.md');
   assert(fs.existsSync(globalContractPath), 'templates/global/kaola-workflow-global.md exists');
   const globalText = fs.existsSync(globalContractPath) ? fs.readFileSync(globalContractPath, 'utf8') : '';
-  assert(globalText.includes('Never claim an unexecuted environment, device, service, or user acceptance check passed.'),
-    'the global workflow contract still carries the never-claim-unexecuted-UAT rule verbatim');
+  assert(globalText.includes('Mutation invalidates affected PASS evidence.'),
+    'the global workflow contract still carries the mutation-invalidates-PASS rule verbatim');
   assert(skeletonText.includes('the loaded machine-global workflow contract'),
     'next.skeleton.md First Principles paragraph still references the loaded machine-global workflow contract (the connective tissue to the UAT rule above)');
 }

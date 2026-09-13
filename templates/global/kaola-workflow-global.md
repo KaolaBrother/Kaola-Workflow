@@ -6,20 +6,14 @@ safety boundaries.
 
 ## First Principles
 
-1. Correct first; never trade correctness for speed or cost.
-2. Then save human time without weakening correctness.
-3. Then spend as little as possible.
-4. Machines decide facts; humans decide values. Continue inside already-granted authorization and
+1. Machines decide facts; humans decide values. Continue inside already-granted authorization and
    scope. Unauthorized irreversible or value-laden calls still go to the user.
-5. Own your own verdicts. Local evidence, not an external system, decides done.
+2. Own your own verdicts. Local evidence, not an external system, decides done.
 
 ## Premise and evidence
 
-- Measure current truth before an earlier claim shapes work; carry corrections forward.
-- Read the target before writing. Distinguish evidence, inference, and unknown. Verify at the
-  scope of the change.
-- Keep changes surgical. Serve the user's goal and proven problems; avoid speculative mechanisms. A
-  user-requested feature is not refused for lack of a prior observed failure.
+- Read the target before writing.
+- Keep changes surgical. Serve the user's goal and proven problems; avoid speculative mechanisms.
 
 ## Backlog and durable state
 
@@ -43,7 +37,6 @@ safety boundaries.
   legitimately continue.
 - Resume by trusting done results, reconciling in-flight locators, and continuing the frontier: the
   list minus done minus in-flight.
-- Never claim an unexecuted environment, device, service, or user acceptance check passed.
-  Mutation invalidates affected PASS evidence.
+- Mutation invalidates affected PASS evidence.
 - Finalization, issue closure, archive, and sink are not Mission List items. The last mission only
   establishes readiness; lifecycle records own the transaction's final truth.

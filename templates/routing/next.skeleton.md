@@ -6,12 +6,9 @@
 <!-- KW-COMPACT-RECOVERY-START -->
 ## Workflow Next operation authority
 
-Recovery marker: `KW-COMPACT-RECOVERY-V2`. This complete prompt owns Workflow Next procedure.
-After compact, the native V2 carrier restores global contract and dispatch, rereads durable state,
-then completely reloads this prompt; no tool-use hook injects it. Read project `AGENTS.md`; it
-supplements verified local facts and constraints. A project exception must state its scope and
-must not weaken higher-priority instructions or host safety boundaries. Resume the recorded
-frontier, and transition to Kaola-Workflow Finalization only when every mission is done.
+Recovery marker: `KW-COMPACT-RECOVERY-V2`. This complete prompt owns Workflow Next procedure. Read
+project `AGENTS.md`. Resume the recorded frontier, and transition to Kaola-Workflow Finalization
+only when every mission is done.
 
 <!-- KW-RUNTIME-DISPATCH-START -->
 <!-- SLOT:runtime-dispatch-common -->
@@ -45,7 +42,7 @@ State the selection aloud before you claim it, including any skipped frontier it
 before the claim is free**: perform read-only measurement or ask when the pick is genuinely ambiguous.
 
 **Task clarity.** When the intended outcome and its acceptance basis are already clear and
-authorized, continue: do not demand a fixed requirement format or rewrite the issue to restate it.
+authorized, continue.
 When a fact is missing, read the code, reproduce, or look it up first; implementation detail inside
 an authorized scope is your own judgment. Ask the user only about an unresolved choice that would
 change scope, authorization, or the meaning of acceptance, and keep doing the investigation that
@@ -127,19 +124,16 @@ not return `BLOCKED` merely because work remains;
 
 Read list minus done minus in-flight and choose one frontier item. The orchestrator holds issue
 selection and decomposition, design, the reading of acceptance meaning, the final verdict on a
-candidate it has read (diff and findings, not the `result` prose), and finalization; subagents
-execute and report. Custody answers who may decide meaning. Failure frontier, then freeze: focused
-acceptance, affected inventory, causal repair, exact-candidate review; any mutation invalidates prior
-PASS evidence for changed bytes. When a `tdd-guide` holds the acceptance tests, the implementer does
-not delete, weaken, or reinterpret them to pass; when you wrote the tests yourself, you hold that
-meaning. Writing the tests, implementing, and reviewing yourself are all legitimate paths; an
-independent review is an optional clean-context check on a frozen candidate whose findings come back
-to you for the verdict. Decide how much to explain by what communication needs, and how much to
-verify by behavioral impact and the existing requirements; a short explanation or a small change
-never lowers acceptance, and sufficient existing evidence may be cited rather than reproduced.
-Finalization, closure, archive, and sink are never mission items. No dispatch count, cap,
-disjointness proof, justification, approval, or fallback stigma attaches to the judgment. Subagents
-and worktrees are tools, offered and declinable.
+candidate it has read, and finalization; subagents execute and report. Custody answers who may
+decide meaning. Failure frontier, then freeze: focused acceptance, affected inventory, causal
+repair, exact-candidate review; any mutation invalidates prior PASS evidence for changed bytes. When
+a `tdd-guide` holds the acceptance tests, the implementer does not delete, weaken, or reinterpret
+them to pass; when you wrote the tests yourself, you hold that meaning. Writing the tests,
+implementing, and reviewing yourself are all legitimate paths; an independent review is an optional
+clean-context check on a frozen candidate whose findings come back to you for the verdict. Decide
+how much to explain by what communication needs, and how much to verify by behavioral impact and the
+existing requirements; a short explanation or a small change never lowers acceptance, and sufficient
+existing evidence may be cited rather than reproduced.
 
 When all items are done, transition explicitly to:
 

@@ -9,12 +9,8 @@ argument-hint: <project name>
 <!-- KW-COMPACT-RECOVERY-START -->
 ## Finalization operation authority
 
-Recovery marker: `KW-COMPACT-RECOVERY-V2`. This complete prompt owns Finalization procedure. After
-compact, the native V2 carrier restores global contract and dispatch, rereads durable state, then
-completely reloads this prompt; no tool-use hook injects it. Read project `AGENTS.md`; it
-supplements verified local facts and constraints. A project exception must state its scope and
-must not weaken higher-priority instructions or host safety boundaries. Then resume from
-existing finalization receipts.
+Recovery marker: `KW-COMPACT-RECOVERY-V2`. This complete prompt owns Finalization procedure.
+Read project `AGENTS.md`. Then resume from existing finalization receipts.
 
 <!-- KW-RUNTIME-DISPATCH-START -->
 ## Delegation
@@ -33,21 +29,12 @@ judgment.
 
 A subagent is an executor in a clean context, not a judge; where Kaola installs profiles it runs the
 subagent default binding. Its handback is evidence. You hold the verdict, and you reach it by reading
-the candidate — the diff, the findings, the command output — never the `result` prose alone. The
-subagent burns its own narrow context, which is cheap; what you read back burns the main context,
-which is the most expensive one there is and the one compaction eats. So ask for small, structured
-handbacks rather than fanning out and reading everything. Fan out where breadth pays and every
-handback stays small: exploring, measuring, refuting one stated claim, reviewing the same frozen
-diff along different cuts (correctness, test custody, trust boundary), or producing candidates you
-then choose between. Do not fan out to write the same production surface in parallel, and do not
-ask the same question again expecting a different answer; more dispatch changes the cut, not the
-count. When the cheaper child keeps failing an item, take it over and finish it inline; there is no
-escalation ladder.
-
-Treat the active runtime adapter below as fact authority. Inspect its effective profile discovery
-and precedence, live call schema and verified fields, the subagent default binding,
-model/effort/thought carrier or inheritance, tool and custody boundaries, and native background,
-parallel, resume, nesting, reload, and session limits. Unknown fields stay unknown; live schema wins.
+the candidate — the diff, the findings, the command output — never the `result` prose alone. Ask for
+small, structured handbacks rather than fanning out and reading everything. Fan out where breadth
+pays and every handback stays small: exploring, measuring, refuting one stated claim, reviewing the
+same frozen diff along different cuts (correctness, test custody, trust boundary), or producing
+candidates you then choose between. When the cheaper child keeps failing an item, take it over and
+finish it inline.
 
 Use named, built-in, and generic routes only under their real identities. The subagent default
 binding guides selection but never disables a task-sensitive override the host actually exposes. If
@@ -57,9 +44,8 @@ re-evaluate the next item. Never let a generic route claim a named role's identi
 that installs no Kaola role profiles, the absence of a named role is design, not a capability gap;
 choose a native route or work inline per item.
 
-Before dispatch, write the mission's `dispatched` locator. Send a bounded, self-sufficient brief
-naming the outcome, evidence, worktree or commit, custody, and stop condition. Reconcile the
-promised output, not the worker.
+Send a bounded, self-sufficient brief naming the outcome, evidence, worktree or commit, custody, and
+stop condition.
 
 <!-- KW-RUNTIME-DELEGATION-START -->
 ## Runtime adapter facts
@@ -87,17 +73,17 @@ resolving real content conflicts require the proposal, reason, and user's answer
 <!-- /PIN -->
 
 Finalization validates, docks docs, writes terminal records, settles closure, archives, commits, and
-sinks. It is not a Mission List item. Read `workflow-state.md` and `mission-list.md`; completed
-mission results are immutable. The last mission establishes readiness, while the summary, closure,
-archive, and sink receipts own terminal truth.
+sinks. It is not a Mission List item. Read `workflow-state.md` and `mission-list.md`. The last
+mission establishes readiness, while the summary, closure, archive, and sink receipts own terminal
+truth.
 
 ## Card: validation, acceptance, and documentation
 
-Read the claim and Mission List. Finalization is a transaction, never a mission item. A failed
-command, intermediate finding, repair attempt, or review round does not by itself create a mission.
+Read the claim and Mission List. A failed command, intermediate finding, repair attempt, or review
+round does not by itself create a mission.
 Freeze a candidate; mutation invalidates prior PASS evidence for changed bytes.
 
-On this self-host, run producer-selected diff-scoped chains after the candidate is frozen:
+Run the producer-selected diff-scoped chains after the candidate is frozen:
 
 ```bash
 kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
@@ -130,23 +116,21 @@ Agent(
 )
 ```
 
-The runner **measures** the receipt and **reports** what it found; you own the
-verdict. Record its typed result under `validation` in `finalization-summary.md`; preserve
-`chain-receipt.json` and `final-validation.md`. Fix meaningful
-findings, re-freeze, then rerun affected evidence.
+The runner **measures** the receipt and **reports** what it found; you own the verdict. Record its
+typed result under `validation` in `finalization-summary.md`; preserve `chain-receipt.json` and
+`final-validation.md`. Fix meaningful findings, re-freeze, then rerun affected evidence.
 
-Summarize acceptance honestly: automated/local/manual/UAT legs, exact commands, outputs, commit,
-and anything unexecuted. Do not claim unavailable service, device, or physical UAT. A user may own
-an explicit acceptance exception; record its boundary.
+Record the acceptance legs — automated/local/manual/UAT — with exact commands, outputs, commit, and
+anything unexecuted. A user may own an explicit acceptance exception; record its boundary.
 
 Walk the issue statement for every claimed member and name what satisfies each part: a covering
 test, validation receipt, or prose evidence, judged in context. Mission results record the run's
 answers, but there is no mechanical match; a part you cannot satisfy is a blocker, not a footnote.
 
 Review AGENTS.md's documentation checklist against changed public behavior — APIs, setup,
-architecture, environment, validation, README, API docs, architecture docs, changelog, and examples
-— and follow it; do not relist its files here. Dispatch `doc-updater` when useful; it must
-transcribe real signatures, JSON/help/schema or return BLOCK, never invent fields. Write one docking
+architecture, environment, validation, README, API docs, architecture docs, changelog, and examples.
+Dispatch `doc-updater` when useful; it must transcribe real signatures, JSON/help/schema or return
+BLOCK, never invent fields. Write one docking
 evidence file, `.cache/doc-docking.md`, with checked files, fixes/no-impact reasons, and
 `DOCKED`/`BLOCKED`; continue only when docked.
 
@@ -239,8 +223,7 @@ case "$SINK_KIND" in
 esac
 ```
 
-Keep-open is whole-run and merge-only. Close/archive/sink truth belongs to their receipts, not the
-Mission List. Journals are never deliverables and successful cleanup removes only this lane.
+Keep-open is whole-run and merge-only.
 
 <!-- PIN: sink-reports-orchestrator-owns -->
 The sink reports; it does not judge your work.

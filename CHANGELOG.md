@@ -11,6 +11,11 @@ binding runtimes and a native route on native-only runtimes.
 
 ### Changed
 
+- **Lean Next/Finalize/dispatch-contract skeletons and global contract (#1071).** Removed:
+  operation-authority narration, the duplicated project-exception sentence, Next↔dispatch
+  duplicates, dispatch rationale, finalize duplicates and undefined terms, the three value-ordering
+  First Principles ("Correct first", "save human time", "spend as little"), and read/verify/honesty
+  reminders. The rationale lives in `docs/decisions/0017`, `0024`, and `0025`.
 - **Retire historical negation pins from the Finalize/Next surfaces (#1070).** The retired tokens
   (`It does not refuse`, `Nothing compares that list against a`, `This is not "merge anyway and
   report."`, `who is accountable for the branch ending up right`, `not a workflow judging your

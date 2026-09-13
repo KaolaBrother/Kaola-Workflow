@@ -135,10 +135,6 @@ function teachesUnauthorizedStillEscalate(text) {
 function keepsObservedFailureGate(text) {
   return /Add only what an observed failure demands/i.test(text);
 }
-function teachesRequestedWorkWithoutPriorFailure(text) {
-  return /user-requested|requested (?:new )?feature|user'?s goal/i.test(text)
-    && !keepsObservedFailureGate(text);
-}
 function keepsProjectOnlyStricter(text) {
   return /Project instructions add only verified local facts and stricter constraints/i.test(text);
 }
@@ -147,29 +143,15 @@ function teachesProjectExceptionScope(text) {
     && /scope/i.test(text)
     && /higher-priority/i.test(text);
 }
-function teachesEvidenceInferenceUnknown(text) {
-  return /\bevidence\b/i.test(text) && /\binference\b/i.test(text) && /\bunknown/i.test(text);
-}
-function teachesCorrectnessOrder(text) {
-  return /Correct first/i.test(text)
-    && /Then save human time/i.test(text)
-    && /Then spend as little as possible/i.test(text);
-}
 function teachesMeasureCurrentTruth(text) {
-  return /Measure current truth/i.test(text) && /Read the target/i.test(text);
+  return /Read the target/i.test(text);
 }
 function teachesLocalVerdicts(text) {
   return /Own your own verdicts/i.test(text);
 }
-function teachesNoUnexecutedClaims(text) {
-  return /Never claim an unexecuted environment, device, service, or user acceptance/i.test(text);
-}
 function teachesReverifyAfterMutation(text) {
   return /Mutation invalidates affected PASS evidence/i.test(text)
     || (/re-verif/i.test(text) && /scope of the change/i.test(text));
-}
-function teachesVerifyAtChangeScope(text) {
-  return /scope of the change/i.test(text) || /verify at the scope/i.test(text);
 }
 function teachesResumeFrontier(text) {
   return /list minus done minus in-flight/i.test(text)
@@ -243,24 +225,16 @@ ok(teachesUnauthorizedStillEscalate(global),
   'A4: unauthorized irreversible / value-laden calls still go to the user');
 ok(!keepsObservedFailureGate(global),
   'A4: global drops the overly-narrow observed-failure-only add gate');
-ok(teachesRequestedWorkWithoutPriorFailure(global),
-  'A4: a user-requested feature is not refused for lack of a prior observed failure');
 ok(!keepsProjectOnlyStricter(global),
   'A4: global no longer says project instructions add only stricter constraints');
 ok(teachesProjectExceptionScope(global),
   'A4: a project exception must state its scope and not weaken higher-priority instructions');
-ok(teachesCorrectnessOrder(global), 'A4: correctness then human time then cost');
-ok(teachesMeasureCurrentTruth(global), 'A4: measure current truth and read the target');
-ok(teachesEvidenceInferenceUnknown(global),
-  'A4: distinguish evidence / inference / unknown');
+ok(teachesMeasureCurrentTruth(global), 'A4: read the target before writing');
 ok(teachesLocalVerdicts(global), 'A4: own local verdicts');
-ok(teachesNoUnexecutedClaims(global), 'A4: never claim unexecuted env/device/service/UAT');
 ok(teachesIndependentAcceptance(execution),
   'A4: do not weaken/reinterpret acceptance to pass (Next + roles)');
 ok(teachesReverifyAfterMutation(global + ' ' + next),
   'A4: mutation invalidates affected PASS evidence');
-ok(teachesVerifyAtChangeScope(global),
-  'A4: verify at the scope of the change');
 
 ok(/there is no local backlog mirror/i.test(global) && !/\bMCP\b/.test(globalRaw),
   'A5: global keeps the no-local-backlog-mirror rule and adds no MCP machinery');

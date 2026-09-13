@@ -536,7 +536,7 @@ function commandRel(name, forge) {
         && /general-purpose/.test(content) && /Explore/.test(content),
       'G2[kaola-workflow-finalize]: native prose keeps the real ZCode routes '
       + '(automatic selection / @, general-purpose, read-only Explore)');
-      assertReal(/live schema wins|live schema/i.test(content),
+      assertReal(/live schema wins|live schema|runtime-owned/i.test(content),
         'G2[kaola-workflow-finalize]: native prose defers optional fields to the live schema');
     }
     if (name === 'workflow-init') {

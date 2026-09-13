@@ -12,12 +12,9 @@ reading one file.
 <!-- KW-COMPACT-RECOVERY-START -->
 ## Workflow Next operation authority
 
-Recovery marker: `KW-COMPACT-RECOVERY-V2`. This complete prompt owns Workflow Next procedure.
-After compact, the native V2 carrier restores global contract and dispatch, rereads durable state,
-then completely reloads this prompt; no tool-use hook injects it. Read project `AGENTS.md`; it
-supplements verified local facts and constraints. A project exception must state its scope and
-must not weaken higher-priority instructions or host safety boundaries. Resume the recorded
-frontier, and transition to Kaola-Workflow Finalization only when every mission is done.
+Recovery marker: `KW-COMPACT-RECOVERY-V2`. This complete prompt owns Workflow Next procedure. Read
+project `AGENTS.md`. Resume the recorded frontier, and transition to Kaola-Workflow Finalization
+only when every mission is done.
 
 <!-- KW-RUNTIME-DISPATCH-START -->
 ## Delegation
@@ -36,21 +33,12 @@ judgment.
 
 A subagent is an executor in a clean context, not a judge; where Kaola installs profiles it runs the
 subagent default binding. Its handback is evidence. You hold the verdict, and you reach it by reading
-the candidate — the diff, the findings, the command output — never the `result` prose alone. The
-subagent burns its own narrow context, which is cheap; what you read back burns the main context,
-which is the most expensive one there is and the one compaction eats. So ask for small, structured
-handbacks rather than fanning out and reading everything. Fan out where breadth pays and every
-handback stays small: exploring, measuring, refuting one stated claim, reviewing the same frozen
-diff along different cuts (correctness, test custody, trust boundary), or producing candidates you
-then choose between. Do not fan out to write the same production surface in parallel, and do not
-ask the same question again expecting a different answer; more dispatch changes the cut, not the
-count. When the cheaper child keeps failing an item, take it over and finish it inline; there is no
-escalation ladder.
-
-Treat the active runtime adapter below as fact authority. Inspect its effective profile discovery
-and precedence, live call schema and verified fields, the subagent default binding,
-model/effort/thought carrier or inheritance, tool and custody boundaries, and native background,
-parallel, resume, nesting, reload, and session limits. Unknown fields stay unknown; live schema wins.
+the candidate — the diff, the findings, the command output — never the `result` prose alone. Ask for
+small, structured handbacks rather than fanning out and reading everything. Fan out where breadth
+pays and every handback stays small: exploring, measuring, refuting one stated claim, reviewing the
+same frozen diff along different cuts (correctness, test custody, trust boundary), or producing
+candidates you then choose between. When the cheaper child keeps failing an item, take it over and
+finish it inline.
 
 Use named, built-in, and generic routes only under their real identities. The subagent default
 binding guides selection but never disables a task-sensitive override the host actually exposes. If
@@ -60,9 +48,8 @@ re-evaluate the next item. Never let a generic route claim a named role's identi
 that installs no Kaola role profiles, the absence of a named role is design, not a capability gap;
 choose a native route or work inline per item.
 
-Before dispatch, write the mission's `dispatched` locator. Send a bounded, self-sufficient brief
-naming the outcome, evidence, worktree or commit, custody, and stop condition. Reconcile the
-promised output, not the worker.
+Send a bounded, self-sufficient brief naming the outcome, evidence, worktree or commit, custody, and
+stop condition.
 
 <!-- KW-RUNTIME-DELEGATION-START -->
 ## Runtime adapter facts
@@ -107,7 +94,7 @@ State the selection aloud before you claim it, including any skipped frontier it
 before the claim is free**: perform read-only measurement or ask when the pick is genuinely ambiguous.
 
 **Task clarity.** When the intended outcome and its acceptance basis are already clear and
-authorized, continue: do not demand a fixed requirement format or rewrite the issue to restate it.
+authorized, continue.
 When a fact is missing, read the code, reproduce, or look it up first; implementation detail inside
 an authorized scope is your own judgment. Ask the user only about an unresolved choice that would
 change scope, authorization, or the meaning of acceptance, and keep doing the investigation that
@@ -188,19 +175,16 @@ not return `BLOCKED` merely because work remains;
 
 Read list minus done minus in-flight and choose one frontier item. The orchestrator holds issue
 selection and decomposition, design, the reading of acceptance meaning, the final verdict on a
-candidate it has read (diff and findings, not the `result` prose), and finalization; subagents
-execute and report. Custody answers who may decide meaning. Failure frontier, then freeze: focused
-acceptance, affected inventory, causal repair, exact-candidate review; any mutation invalidates prior
-PASS evidence for changed bytes. When a `tdd-guide` holds the acceptance tests, the implementer does
-not delete, weaken, or reinterpret them to pass; when you wrote the tests yourself, you hold that
-meaning. Writing the tests, implementing, and reviewing yourself are all legitimate paths; an
-independent review is an optional clean-context check on a frozen candidate whose findings come back
-to you for the verdict. Decide how much to explain by what communication needs, and how much to
-verify by behavioral impact and the existing requirements; a short explanation or a small change
-never lowers acceptance, and sufficient existing evidence may be cited rather than reproduced.
-Finalization, closure, archive, and sink are never mission items. No dispatch count, cap,
-disjointness proof, justification, approval, or fallback stigma attaches to the judgment. Subagents
-and worktrees are tools, offered and declinable.
+candidate it has read, and finalization; subagents execute and report. Custody answers who may
+decide meaning. Failure frontier, then freeze: focused acceptance, affected inventory, causal
+repair, exact-candidate review; any mutation invalidates prior PASS evidence for changed bytes. When
+a `tdd-guide` holds the acceptance tests, the implementer does not delete, weaken, or reinterpret
+them to pass; when you wrote the tests yourself, you hold that meaning. Writing the tests,
+implementing, and reviewing yourself are all legitimate paths; an independent review is an optional
+clean-context check on a frozen candidate whose findings come back to you for the verdict. Decide
+how much to explain by what communication needs, and how much to verify by behavioral impact and the
+existing requirements; a short explanation or a small change never lowers acceptance, and sufficient
+existing evidence may be cited rather than reproduced.
 
 When all items are done, transition explicitly to:
 

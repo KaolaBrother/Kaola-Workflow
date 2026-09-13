@@ -6,12 +6,8 @@
 <!-- KW-COMPACT-RECOVERY-START -->
 ## Finalization operation authority
 
-Recovery marker: `KW-COMPACT-RECOVERY-V2`. This complete prompt owns Finalization procedure. After
-compact, the native V2 carrier restores global contract and dispatch, rereads durable state, then
-completely reloads this prompt; no tool-use hook injects it. Read project `AGENTS.md`; it
-supplements verified local facts and constraints. A project exception must state its scope and
-must not weaken higher-priority instructions or host safety boundaries. Then resume from
-existing finalization receipts.
+Recovery marker: `KW-COMPACT-RECOVERY-V2`. This complete prompt owns Finalization procedure.
+Read project `AGENTS.md`. Then resume from existing finalization receipts.
 
 <!-- KW-RUNTIME-DISPATCH-START -->
 <!-- SLOT:runtime-dispatch-common -->
@@ -28,17 +24,17 @@ resolving real content conflicts require the proposal, reason, and user's answer
 <!-- /PIN -->
 
 Finalization validates, docks docs, writes terminal records, settles closure, archives, commits, and
-sinks. It is not a Mission List item. Read `workflow-state.md` and `mission-list.md`; completed
-mission results are immutable. The last mission establishes readiness, while the summary, closure,
-archive, and sink receipts own terminal truth.
+sinks. It is not a Mission List item. Read `workflow-state.md` and `mission-list.md`. The last
+mission establishes readiness, while the summary, closure, archive, and sink receipts own terminal
+truth.
 
 ## Card: validation, acceptance, and documentation
 
-Read the claim and Mission List. Finalization is a transaction, never a mission item. A failed
-command, intermediate finding, repair attempt, or review round does not by itself create a mission.
+Read the claim and Mission List. A failed command, intermediate finding, repair attempt, or review
+round does not by itself create a mission.
 Freeze a candidate; mutation invalidates prior PASS evidence for changed bytes.
 
-On this self-host, run producer-selected diff-scoped chains after the candidate is frozen:
+Run the producer-selected diff-scoped chains after the candidate is frozen:
 
 ```bash
 <!-- SLOT:fz-scripts-resolver -->
@@ -71,23 +67,21 @@ Agent(
 ```
 <!-- /REGION -->
 
-The runner **measures** the receipt and **reports** what it found; you own the
-verdict. Record its typed result under `validation` in `finalization-summary.md`; preserve
-`chain-receipt.json` and `final-validation.md`. Fix meaningful
-findings, re-freeze, then rerun affected evidence.
+The runner **measures** the receipt and **reports** what it found; you own the verdict. Record its
+typed result under `validation` in `finalization-summary.md`; preserve `chain-receipt.json` and
+`final-validation.md`. Fix meaningful findings, re-freeze, then rerun affected evidence.
 
-Summarize acceptance honestly: automated/local/manual/UAT legs, exact commands, outputs, commit,
-and anything unexecuted. Do not claim unavailable service, device, or physical UAT. A user may own
-an explicit acceptance exception; record its boundary.
+Record the acceptance legs — automated/local/manual/UAT — with exact commands, outputs, commit, and
+anything unexecuted. A user may own an explicit acceptance exception; record its boundary.
 
 Walk the issue statement for every claimed member and name what satisfies each part: a covering
 test, validation receipt, or prose evidence, judged in context. Mission results record the run's
 answers, but there is no mechanical match; a part you cannot satisfy is a blocker, not a footnote.
 
 Review AGENTS.md's documentation checklist against changed public behavior — APIs, setup,
-architecture, environment, validation, README, API docs, architecture docs, changelog, and examples
-— and follow it; do not relist its files here. Dispatch `doc-updater` when useful; it must
-transcribe real signatures, JSON/help/schema or return BLOCK, never invent fields. Write one docking
+architecture, environment, validation, README, API docs, architecture docs, changelog, and examples.
+Dispatch `doc-updater` when useful; it must transcribe real signatures, JSON/help/schema or return
+BLOCK, never invent fields. Write one docking
 evidence file, `.cache/doc-docking.md`, with checked files, fixes/no-impact reasons, and
 `DOCKED`/`BLOCKED`; continue only when docked.
 
@@ -178,8 +172,7 @@ case "$SINK_KIND" in
 esac
 ```
 
-Keep-open is whole-run and merge-only. Close/archive/sink truth belongs to their receipts, not the
-Mission List. Journals are never deliverables and successful cleanup removes only this lane.
+Keep-open is whole-run and merge-only.
 
 <!-- PIN: sink-reports-orchestrator-owns -->
 The sink reports; it does not judge your work.

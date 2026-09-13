@@ -92,7 +92,6 @@ const nextSource = fs.readFileSync(path.join(ROOT, 'templates', 'routing', 'next
 const dispatchSource = fs.readFileSync(path.join(ROOT, 'templates', 'routing', 'dispatch-contract.md'), 'utf8');
 const roleContracts = fs.readFileSync(path.join(ROOT, 'templates', 'agents', 'behavior-contracts.json'), 'utf8');
 for (const phrase of [
-  'Correct first', 'Then save human time', 'Then spend as little as possible',
   'Machines decide facts; humans decide values', 'Own your own verdicts',
   'item', 'status', 'dispatched', 'result', 'three write moments',
   'Finalization, issue closure, archive, and sink are not Mission List items',
@@ -105,7 +104,7 @@ for (const phrase of [
     'A1: Next carries custody-of-meaning (moved out of the global essay)');
   ok(/Failure frontier/i.test(nextN),
     'A1: Next carries the failure-frontier procedure (moved out of the global essay)');
-  ok(/carrier decides where work runs|tool and custody boundaries/i.test(dispatchN + ' ' + nextN),
+  ok(/carrier decides where work runs|custody, evidence, and stop boundaries|tool and custody boundaries/i.test(dispatchN + ' ' + nextN),
     'A1: dispatch/Next carry carrier (moved out of the global essay)');
   ok(/implementer (?:may not|does not) delete, weaken, or reinterpret/i.test(nextN),
     'A1: Next keeps independent acceptance duty reachable');

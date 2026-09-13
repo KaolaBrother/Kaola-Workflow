@@ -275,7 +275,6 @@ for (const file of nextSurfaces) {
   // nothing stops a proof obligation from being reintroduced as "just a small check".
   assertIncludes(file, 'No dispatch count, cap, disjointness proof');
   assertIncludes(file, 'justification, approval, or fallback stigma');
-  assertIncludes(file, 'Subagents and worktrees are tools, offered and declinable');
 
   // RESUME. The property the whole design was sized to, and the rule that makes it work.
   assertIncludes(file, 'Look for the work, not for the worker');
