@@ -680,7 +680,7 @@ for (const target of emittedCommandTargets) {
     'A25 (#645): opencode workflow-next keeps the complete dispatch carrier inside the marked compact block');
   // The companion tighten-only clause ("never cite one to skip a typed gate") is RETIRED with the
   // typed gates it protected: there is no gate an axiom could be cited to skip. What replaced it —
-  // the derivation being useful and never required — is not a tighten-only rule and is not pinned
+  // the derivation being optional — is not a tighten-only rule and is not pinned
   // as one.
   // A26 (#646, updated #789): the {ISSUE_SCOUT_MODEL} placeholder and the issue-scout dispatch it
   // named are retired entirely — the no-target survey folded into the workflow-planner (dispatched

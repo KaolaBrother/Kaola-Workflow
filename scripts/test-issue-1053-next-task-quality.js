@@ -557,7 +557,7 @@ eq(Object.keys(gen.TOPICS).sort().join(','), 'finalize,init,next', 'TOPICS stays
   assert(globalText.includes('Mutation invalidates affected PASS evidence.'),
     'the global workflow contract still carries the mutation-invalidates-PASS rule verbatim');
   assert(skeletonText.includes('the loaded machine-global workflow contract'),
-    'next.skeleton.md First Principles paragraph still references the loaded machine-global workflow contract (the connective tissue to the UAT rule above)');
+    'next.skeleton.md First Principles paragraph still references the loaded machine-global workflow contract (the connective tissue to the mutation-invalidates-PASS rule above)');
 }
 
 // docs/task-quality.md itself restates the PASS-invalidation and never-claim-unexecuted-UAT rules

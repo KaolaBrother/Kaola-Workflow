@@ -286,6 +286,7 @@ const {
   GENERATED_SURFACES: ROUTING_SURFACES,
   COMMAND_EDITIONS: ROUTING_COMMAND_EDITIONS,
   SKILL_EDITIONS: ROUTING_SKILL_EDITIONS,
+  RECOVERY_FULL_DISPATCH_RUNTIMES,
 } = require('./generate-routing-surfaces.js');
 
 // The additive runtime editions, as (id, per-forge surface-path builder) pairs.
@@ -484,13 +485,22 @@ function deriveObligated(block, editions, topicBasename) {
   else if (rt === 'codex-live') types = ['skill'];
   else types = st === 'both' ? ['command', 'skill'] : [st];
   const files = [];
+  const fullDispatch = block.deferred_on_full_dispatch
+    ? new Set(RECOVERY_FULL_DISPATCH_RUNTIMES || [])
+    : null;
   for (const stype of types) {
     const base = topicBasename[block.topic][stype];
     // Each edition owns its own path shape (flat `<dir>/<base>.md` vs directory-
     // form `<dir>/<base>/SKILL.md`); the LANE picks the basename, the edition
     // picks the layout. Asking the edition is what lets one lane hold surfaces of
     // both shapes — which the kimi trees are.
-    for (const ed of (editions[stype] || [])) files.push(ed.surface(base));
+    for (const ed of (editions[stype] || [])) {
+      // A deferred block's tokens ride the always-loaded rule on the
+      // full-dispatch runtimes, so their generated command/skill surfaces are
+      // not obligated (additive edition ids are `<runtime>-<forge>`).
+      if (fullDispatch && fullDispatch.has(ed.id.split('-')[0])) continue;
+      files.push(ed.surface(base));
+    }
   }
   return { error: null, files };
 }

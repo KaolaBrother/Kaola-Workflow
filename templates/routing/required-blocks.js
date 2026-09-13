@@ -198,6 +198,11 @@ const REQUIRED_BLOCKS = [
     topic: 'next',
     runtime_tag: 'both',
     surface_type_tag: 'both',
+    // #1069: these tokens live in the shared dispatch contract. On the
+    // always-loaded-carrier runtimes (RECOVERY_FULL_DISPATCH_RUNTIMES) the
+    // generated command carries only the pointer, so the obligation is scoped
+    // to the command surfaces that embed the block.
+    deferred_on_full_dispatch: true,
     content_tokens: [
       'Choose dispatch or inline per item',
       'Dispatch when it materially reduces main-context residue',

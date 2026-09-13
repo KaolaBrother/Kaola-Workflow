@@ -91,17 +91,17 @@ forge-reorganization action and why; wait. Everything checkable remains yours to
   set when the frontier offers it.
 
 State the selection aloud before you claim it, including any skipped frontier item. **Everything
-before the claim is free**: perform read-only measurement or ask when the pick is genuinely ambiguous.
+before the claim is free**: perform read-only measurement or ask when the pick is genuinely
+ambiguous.
 
 **Task clarity.** When the intended outcome and its acceptance basis are already clear and
-authorized, continue.
-When a fact is missing, read the code, reproduce, or look it up first; implementation detail inside
-an authorized scope is your own judgment. Ask the user only about an unresolved choice that would
-change scope, authorization, or the meaning of acceptance, and keep doing the investigation that
-does not depend on the answer. When authorized to maintain the issue, express the observable outcome
-and its verification basis in plain language, and cite what is already sufficient instead of
-restating it. A research or design request authorizes research or design only; it does not
-authorize product implementation, forge writes, or a claim.
+authorized, continue. When a fact is missing, read the code, reproduce, or look it up first;
+implementation detail inside an authorized scope is your own judgment. Ask the user only about an
+unresolved choice that would change scope, authorization, or the meaning of acceptance, and keep
+doing the investigation that does not depend on the answer. When authorized to maintain the issue,
+express the observable outcome and its verification basis in plain language, and cite what is
+already sufficient instead of restating it. A research or design request authorizes research or
+design only; it does not authorize product implementation, forge writes, or a claim.
 
 <!-- PIN: forge-is-the-backlog -->
 Establish freshness with status, fetch/prune, and upstream divergence. Continue when synchronized,
@@ -140,15 +140,15 @@ node "$CLAIM_JS" startup --runtime claude --target-issues "$KAOLA_TARGET_ISSUES"
 ```
 
 The claim is bookkeeping: `workflow-state.md` records issues, branch, and worktree.
-`owned`/`acquired` continues; an existing active folder resumes; user
-dirt or an irreversible choice goes back to the user. Never adopt an unrelated active folder.
+`owned`/`acquired` continues; an existing active folder resumes; user dirt or an irreversible
+choice goes back to the user.
 
 ## Resume
 
-On resume, read `mission-list.md` top to bottom. Done results are known, todo items are the frontier,
-and in-flight locators must be reconciled. Look for the work, not for the worker. Check the locator:
-if the output the dispatch promised has landed, close it; otherwise re-dispatch, unless you can
-positively show the dispatch is alive.
+On resume, read `mission-list.md` top to bottom. Done results are known, todo items are the
+frontier, and in-flight locators must be reconciled. Look for the work, not for the worker. Check
+the locator: if the output the dispatch promised has landed, close it; otherwise re-dispatch,
+unless you can positively show the dispatch is alive.
 
 ## Write the mission list
 
@@ -165,13 +165,12 @@ entries. Items are positional; nothing depends on a stable ID, and absent fields
 Three writes only: create with `status: todo`; before the work goes out, set `in-flight` and write
 the locator; close with `done` and result. Inline work uses `dispatched: self`. A completed item and
 its result are immutable; one dispatch has one result, including FAIL/BLOCKED.
-
-An item is a mission — a recoverable outcome. A failed command, intermediate finding, repair attempt,
-or review round does not by itself create a mission. Keep working within the current promised
-outcome while custody and causal boundary remain unchanged. Append a mission only for a new
-recoverable outcome that changes custody or for a newly discovered independent causal class. Do
-not return `BLOCKED` merely because work remains;
-`BLOCKED` means the current owner cannot safely or legitimately continue.
+An item is a mission — a recoverable outcome. A failed command, intermediate finding, repair
+attempt, or review round does not by itself create a mission. Keep working within the current
+promised outcome while custody and causal boundary remain unchanged. Append a mission only for a
+new recoverable outcome that changes custody or for a newly discovered independent causal class. Do
+not return `BLOCKED` merely because work remains; `BLOCKED` means the current owner cannot safely
+or legitimately continue.
 
 ## Run it
 
@@ -207,9 +206,8 @@ Next: {the next command, or the frontier item you are opening}
 ## Co-active Folders
 
 Distinct active folders have separate state, branches, and worktrees. Keep their commits separate,
-and never touch another session's branch, worktree, folder, or issues.
-
-After finalization closes the whole set and archives the folder, stop and await explicit
-redirection; never auto-route. Multi-issue closure is all-or-nothing.
+and never touch another session's branch, worktree, folder, or issues. After finalization closes
+the whole set and archives the folder, stop and await explicit redirection; never auto-route.
+Multi-issue closure is all-or-nothing.
 
 <!-- KW-COMPACT-RECOVERY-END -->

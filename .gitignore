@@ -15,6 +15,7 @@ node_modules/
 .grok-*/
 .cursor-*/
 .zcode-*/
+.devin-*/
 kaola-workflow/.locks/
 kaola-workflow/.sessions/
 kaola-workflow/.tickers/

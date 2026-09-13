@@ -1468,7 +1468,7 @@ function claimExplicitBundle(root, args) {
 // before anything is claimed, and what it decided is worth keeping. So the record is PERSISTED and
 // DIGESTED on every claim, and that is the whole of the mechanism.
 //
-// It does not refuse, and there is nothing here that can. Claiming is bookkeeping — an agent that
+// Nothing here refuses. Claiming is bookkeeping — an agent that
 // should not hold this claim re-states its reason and claims something else — so a commitment point
 // that would not proceed is a stop nobody can act on. What the caller supplied is REPORTED on the
 // emitted envelope (`selection_record_note`) and the claim proceeds:

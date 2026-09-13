@@ -582,7 +582,7 @@
         "role_dispatch": "native_only",
         "hook_scope": "user_only",
         "delegation_guidance": {
-          "native_routes": "Native routes are full `general-purpose` and read-only `Explore`, reached through automatic selection or `@`; foreground/background choice remains runtime-owned.",
+          "native_routes": "Native routes are full `general-purpose` and read-only `Explore`, reached through automatic selection or `@`; foreground/background choice remains runtime-owned, and optional call fields follow the live Agent schema — the live schema wins.",
           "availability": "Children follow the main Agent's model. Subagents cannot spawn children, but the root runtime's other native routes remain available."
         }
       },

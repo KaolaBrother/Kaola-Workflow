@@ -67,9 +67,8 @@ Inspect the current Agent/Task type catalog and effective precedence. Claude cur
 
 <!-- PIN: consent-in-conversation -->
 **Consent.** Irreversible and value-laden calls belong to the user — ask, in conversation, before
-taking one.
-Closing issues with open work, reorganizing forge work, force-pushing, rewriting history, and
-resolving real content conflicts require the proposal, reason, and user's answer.
+taking one. Closing issues with open work, reorganizing forge work, force-pushing, rewriting
+history, and resolving real content conflicts require the proposal, reason, and user's answer.
 <!-- /PIN -->
 
 Finalization validates, docks docs, writes terminal records, settles closure, archives, commits, and
@@ -120,19 +119,18 @@ The runner **measures** the receipt and **reports** what it found; you own the v
 typed result under `validation` in `finalization-summary.md`; preserve `chain-receipt.json` and
 `final-validation.md`. Fix meaningful findings, re-freeze, then rerun affected evidence.
 
-Record the acceptance legs — automated/local/manual/UAT — with exact commands, outputs, commit, and
-anything unexecuted. A user may own an explicit acceptance exception; record its boundary.
+Record the acceptance legs — automated/local/manual/UAT — with exact commands, outputs, commit,
+and anything unexecuted. A user may own an explicit acceptance exception; record its boundary.
 
 Walk the issue statement for every claimed member and name what satisfies each part: a covering
 test, validation receipt, or prose evidence, judged in context. Mission results record the run's
 answers, but there is no mechanical match; a part you cannot satisfy is a blocker, not a footnote.
 
 Review AGENTS.md's documentation checklist against changed public behavior — APIs, setup,
-architecture, environment, validation, README, API docs, architecture docs, changelog, and examples.
-Dispatch `doc-updater` when useful; it must transcribe real signatures, JSON/help/schema or return
-BLOCK, never invent fields. Write one docking
-evidence file, `.cache/doc-docking.md`, with checked files, fixes/no-impact reasons, and
-`DOCKED`/`BLOCKED`; continue only when docked.
+architecture, environment, validation, README, API docs, architecture docs, changelog, and
+examples. Dispatch `doc-updater` when useful; it must transcribe real signatures, JSON/help/schema
+or return BLOCK, never invent fields. Write one docking evidence file, `.cache/doc-docking.md`,
+with checked files, fixes/no-impact reasons, and `DOCKED`/`BLOCKED`; continue only when docked.
 
 The finalize transaction reports `changed_paths`. Put it under `## Changed Paths`. `## Validation`
 and `## Changed Paths` are where the finalize transaction's own findings land.
@@ -140,11 +138,10 @@ and `## Changed Paths` are where the finalize transaction's own findings land.
 ## Card: summary
 
 Create `finalization-summary.md` with Delivered, Files Changed, Test Coverage, `## Validation`,
-`## Changed Paths`, Documentation Docking, Follow-Up Items, and final readiness status.
-
-Scan all run records for deferred items, partial work, conflicts, review follow-ups, and user value
-decisions. Ask before reorganizing forge work. A run may intentionally keep the whole issue set open
-only through the recorded closure decision; never silently mix per-member outcomes.
+`## Changed Paths`, Documentation Docking, Follow-Up Items, and final readiness status. Scan all
+run records for deferred items, partial work, conflicts, review follow-ups, and user value
+decisions. Ask before reorganizing forge work. A run may intentionally keep the whole issue set
+open only through the recorded closure decision; never silently mix per-member outcomes.
 
 ## Card: file or correct run-discovered work
 
@@ -224,14 +221,11 @@ case "$SINK_KIND" in
 esac
 ```
 
-Keep-open is whole-run and merge-only.
-
 <!-- PIN: sink-reports-orchestrator-owns -->
-The sink reports; it does not judge your work.
-It reports validation, ancestry, publication, closure, and
-cleanup findings and stops without merging when it cannot preserve truth; get the merge
-correct, resynchronize, or publish a review request instead. Then clean up after the sink; never
-touch another session's branch/worktree/folder, and ask on real content conflict.
+The sink reports; it does not judge your work. It reports validation, ancestry, publication,
+closure, and cleanup findings and stops without merging when it cannot preserve truth;
+get the merge correct, resynchronize, or publish a review request instead. Then clean up after the
+sink; never touch another session's branch/worktree/folder, and ask on real content conflict.
 <!-- /PIN -->
 
 <!-- PIN: closure-audit -->
