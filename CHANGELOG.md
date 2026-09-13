@@ -54,7 +54,7 @@ binding runtimes and a native route on native-only runtimes.
 - **Remove unused command model-placeholder rendering (#1066).** `install.sh` copies the
   generated commands verbatim; agent-profile bindings and command installation remain intact.
 - **Clarify dispatch evidence limits (#1065).** Native tool events establish a dispatch;
-  findings and artifacts establish its outcome. The retained #1063 summary does not replace
+  findings and artifacts establish its outcome. The retained issue-1063 summary does not replace
   raw session exports, and simulated replies do not explain a real tool rejection. No new gate
   or Mission List field is introduced. Devin guidance follows the live schema, including the
   measured Fusion `sidekick` route alongside earlier profile-based sessions.
