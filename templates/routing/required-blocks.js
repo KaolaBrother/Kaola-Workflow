@@ -163,12 +163,9 @@ const REQUIRED_BLOCKS = [
       '| `status` | `todo` \\| `in-flight` \\| `done` | on change |',
       '| `dispatched` | what went out and to whom, and **where the output was to land** | at dispatch |',
       '| `result` | where the outcome landed — a path, or a few lines inline | at close |',
-      'completed item and its result are immutable',
-      'one dispatch has one result',
       'Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class.',
       'recoverable outcome',
       'does not by itself create a mission',
-      '`BLOCKED` means the current owner cannot safely',
       'Do not return `BLOCKED` merely',
       'Custody answers who may decide meaning',
       'Failure frontier, then freeze',
@@ -318,7 +315,6 @@ const REQUIRED_BLOCKS = [
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
-      'A failed command, intermediate finding, repair attempt, or review round does not by itself create a mission.',
       'invalidates prior PASS evidence for changed bytes',
     ],
   },
@@ -469,7 +465,7 @@ const REQUIRED_BLOCKS = [
       'an issue filed without a `P0`–`P3` label sorts **last** on the open list, beneath every tiered issue',
       'post that correction as a comment on the issue before it closes.',
       'Never close quietly against text now known to be wrong.',
-      'A correction is not a follow-up: a follow-up is new work with its own `filed: #N`; a correction is the record of what this issue turned out to be, and it lands on the issue it corrects.',
+      'A correction is not a follow-up — it records what this issue turned out to be and lands on the issue it corrects.',
       // The typed body: the section that carries only observation, the stamping duty
       // that makes it observation, the section unconfirmed attributions default into,
       // the label the optional remedy must wear, and the duplicate probe.

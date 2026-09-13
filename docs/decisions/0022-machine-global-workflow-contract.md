@@ -77,3 +77,10 @@ Issue #1051 later changed the global project-instruction rule: project instructi
 verified local facts and constraints; a project exception must state its scope and must not weaken
 higher-priority instructions or host safety boundaries. That update does not reopen this ADR's
 carrier, transaction, or compact-recovery decisions.
+
+Issue #1076 applied decision 1 to the operation prompts themselves: the Next and Finalize skeletons
+stopped restating rules the loaded global contract already carries (project-exception scope,
+Mission List write/result invariants, recoverable-outcome and lifecycle boundaries, the frontier
+definition, and the BLOCKED definition). Operation-unique procedure and the clauses pinned by
+behavioral mutation checks stayed. The subtraction changed no runtime mechanism and reopened none
+of this ADR's decisions.

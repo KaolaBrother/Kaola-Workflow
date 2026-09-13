@@ -72,14 +72,10 @@ history, and resolving real content conflicts require the proposal, reason, and 
 <!-- /PIN -->
 
 Finalization validates, docks docs, writes terminal records, settles closure, archives, commits, and
-sinks. It is not a Mission List item. Read `workflow-state.md` and `mission-list.md`. The last
-mission establishes readiness, while the summary, closure, archive, and sink receipts own terminal
-truth.
+sinks. It is not a Mission List item. Read `workflow-state.md` and `mission-list.md`.
 
 ## Card: validation, acceptance, and documentation
 
-Read the claim and Mission List. A failed command, intermediate finding, repair attempt, or review
-round does not by itself create a mission.
 Freeze a candidate; mutation invalidates prior PASS evidence for changed bytes.
 
 Run the producer-selected diff-scoped chains after the candidate is frozen:
@@ -153,9 +149,8 @@ After filing, confirm the issue exists and its body is non-empty, and record tha
 finalize-transaction record — never in a completed Mission's result, which stays immutable.
 
 When evidence corrects the current issue, post that correction as a comment on the issue before it
-closes. Never close quietly against text now known to be wrong. A correction is not a follow-up: a
-follow-up is new work with its own `filed: #N`; a correction is the record of what this issue turned
-out to be, and it lands on the issue it corrects.
+closes. Never close quietly against text now known to be wrong. A correction is not a follow-up — it
+records what this issue turned out to be and lands on the issue it corrects.
 <!-- /PIN -->
 
 If the project links issues, close every Gitea issue in the set — but only

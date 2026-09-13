@@ -457,11 +457,11 @@ eq(Object.keys(gen.TOPICS).sort().join(','), 'finalize,init,next', 'TOPICS stays
 // — already a standing step in both `test:kaola-workflow:claude` and `:claude:full` — is the
 // correct, history-independent guard should a role ever drift from its own authority.
 
-// No new Mission List field: the four-field table and "Three writes only" remain in the skeleton.
+// No new Mission List field: the four-field table and the write-moment sequence remain in the skeleton.
 {
   const missionSection = section(skeletonText, 'Write the mission list');
   assert(missionSection !== null, 'skeleton: "## Write the mission list" section is present');
-  const required = ['| field | content | written |', '| `item`', '| `status`', '| `dispatched`', '| `result`', 'Three writes only'];
+  const required = ['| field | content | written |', '| `item`', '| `status`', '| `dispatched`', '| `result`', 'before the work goes'];
   for (const token of required) {
     assert(missionSection !== null && missionSection.includes(token),
       'Mission List section still carries: ' + JSON.stringify(token));

@@ -71,8 +71,7 @@ Honor the current session's multi-agent exposure, V1/V2 call schema, type catalo
 
 **First Principles.** When nothing already settles a situation, break the tie by the numbered First
 Principles in the loaded machine-global workflow contract, applied in priority order. Project
-`AGENTS.md` adds only local facts and constraints; a project exception must state its scope and
-must not weaken higher-priority instructions or host safety boundaries.
+`AGENTS.md` adds only local facts and constraints.
 
 <!-- PIN: consent-in-conversation -->
 **Consent.** Irreversible and value-laden calls belong to the user — ask, in conversation, before
@@ -137,16 +136,15 @@ CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$C
 node "$CLAIM_JS" startup --runtime codex --target-issues "$KAOLA_TARGET_ISSUES"
 ```
 
-The claim is bookkeeping: `workflow-state.md` records issues, branch, and worktree.
+The claim is bookkeeping — `workflow-state.md` carries it.
 `owned`/`acquired` continues; an existing active folder resumes; user dirt or an irreversible
 choice goes back to the user.
 
 ## Resume
 
-On resume, read `mission-list.md` top to bottom. Done results are known, todo items are the
-frontier, and in-flight locators must be reconciled. Look for the work, not for the worker. Check
-the locator: if the output the dispatch promised has landed, close it; otherwise re-dispatch,
-unless you can positively show the dispatch is alive.
+On resume, read `mission-list.md` top to bottom and reconcile in-flight locators.
+Look for the work, not for the worker. Check the locator: if the output the dispatch promised has
+landed, close it; otherwise re-dispatch, unless you can positively show the dispatch is alive.
 
 ## Write the mission list
 
@@ -160,30 +158,28 @@ entries. Items are positional; nothing depends on a stable ID, and absent fields
 | `dispatched` | what went out and to whom, and **where the output was to land** | at dispatch |
 | `result` | where the outcome landed — a path, or a few lines inline | at close |
 
-Three writes only: create with `status: todo`; before the work goes out, set `in-flight` and write
-the locator; close with `done` and result. Inline work uses `dispatched: self`. A completed item and
-its result are immutable; one dispatch has one result, including FAIL/BLOCKED.
+Create with `status: todo`; before the work goes out, set `in-flight` and write the locator; close
+with `done` and result. Inline work uses `dispatched: self`.
 An item is a mission — a recoverable outcome. A failed command, intermediate finding, repair
 attempt, or review round does not by itself create a mission. Keep working within the current
 promised outcome while custody and causal boundary remain unchanged. Append a mission only for a
 new recoverable outcome that changes custody or for a newly discovered independent causal class. Do
-not return `BLOCKED` merely because work remains; `BLOCKED` means the current owner cannot safely
-or legitimately continue.
+not return `BLOCKED` merely because work remains.
 
 ## Run it
 
-Read list minus done minus in-flight and choose one frontier item. The orchestrator holds issue
-selection and decomposition, design, the reading of acceptance meaning, the final verdict on a
-candidate it has read, and finalization; subagents execute and report. Custody answers who may
-decide meaning. Failure frontier, then freeze: focused acceptance, affected inventory, causal
-repair, exact-candidate review; any mutation invalidates prior PASS evidence for changed bytes. When
-a `tdd-guide` holds the acceptance tests, the implementer does not delete, weaken, or reinterpret
-them to pass; when you wrote the tests yourself, you hold that meaning. Writing the tests,
-implementing, and reviewing yourself are all legitimate paths; an independent review is an optional
-clean-context check on a frozen candidate whose findings come back to you for the verdict. Decide
-how much to explain by what communication needs, and how much to verify by behavioral impact and the
-existing requirements; a short explanation or a small change never lowers acceptance, and sufficient
-existing evidence may be cited rather than reproduced.
+Choose one frontier item. The orchestrator holds issue selection and decomposition, design, the
+reading of acceptance meaning, the final verdict on a candidate it has read, and finalization.
+Custody answers who may decide meaning. Failure frontier, then freeze: focused acceptance, affected
+inventory, causal repair, exact-candidate review; any mutation invalidates prior PASS evidence for
+changed bytes.
+When a `tdd-guide` holds the acceptance tests, the implementer does not delete, weaken, or
+reinterpret them to pass; when you wrote the tests yourself, you hold that meaning. Writing the
+tests, implementing, and reviewing yourself are all legitimate paths; an independent review is an
+optional clean-context check on a frozen candidate whose findings come back to you for the verdict.
+Decide how much to explain by what communication needs, and how much to verify by behavioral impact
+and the existing requirements; a short explanation or a small change never lowers acceptance, and
+sufficient existing evidence may be cited rather than reproduced.
 
 When all items are done, transition explicitly to:
 

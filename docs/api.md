@@ -98,6 +98,17 @@ complete direct prompt from `compact-recovery.skeleton.md`, the single
 paragraph and a verification-scope sentence — and no new CLI, flag, envelope, or contract. See
 [task-quality.md](task-quality.md) for the guide these passages support.
 
+### Skeleton vs global-contract authority (#1076)
+
+`#1076` removed residual re-carrying from `next.skeleton.md` and `finalize.skeleton.md`: rules the
+machine-global contract already owns (project-exception scope, write-moment/immutable-result/
+one-dispatch invariants, recoverable-outcome boundary, frontier definition, lifecycle-receipt
+ownership, BLOCKED meaning) are no longer restated on the operation prompts. The skeletons keep only
+operation-unique procedure — field tables, executable blocks, locator reconciliation, custody and
+acceptance-test boundaries — plus the short `BLOCKED` and mission-granularity clauses guarded by
+behavioral mutation checks. Independently runnable script-resolution blocks still repeat by design:
+each fenced block must run alone.
+
 Commands render Claude and skills render forge-matched Codex through the routing slot. Additive
 edition sync scripts replace only this marker in next/finalize; workflow-init is outside the
 interface. Cursor and ZCode call fields not published by those runtimes are not serialized here:
