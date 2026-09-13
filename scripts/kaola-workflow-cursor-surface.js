@@ -522,6 +522,7 @@ function inspectAuthority(forge, expectedVersion) {
   const requiredVersion = expectedVersion === undefined ? packageVersion : expectedVersion;
   result.version_source = expectedVersion === undefined && packageVersion != null
     ? 'package_json' : 'installed_receipt';
+  result.receipt_version = info.receipt.kaola_workflow_version;
   if (requiredVersion != null && info.receipt.kaola_workflow_version !== requiredVersion) {
     result.freshness = 'stale_version';
   }

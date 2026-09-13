@@ -2009,6 +2009,11 @@ for (const role of reviewerGenerator.ROLES) {
             'G8-installed-helper-doctor: version_source names the installed receipt as the version '
             + 'reference — ' + JSON.stringify(doctorBody && doctorBody.authority
               && doctorBody.authority.version_source));
+          assert(doctorBody && doctorBody.authority
+            && doctorBody.authority.receipt_version === receipt.kaola_workflow_version,
+            'G8-installed-helper-doctor: receipt_version echoes the version the installed receipt '
+            + 'recorded — ' + JSON.stringify(doctorBody && doctorBody.authority
+              && doctorBody.authority.receipt_version));
 
           const stale = makeTarget('stale-authority');
           const globalAgentBytes = fs.readFileSync(globalAgent);
