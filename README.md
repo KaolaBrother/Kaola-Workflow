@@ -209,9 +209,7 @@ On resume, trust completed `result` entries. For an in-flight dispatch, look for
 close the mission if it landed; otherwise redispatch unless the original worker is demonstrably
 alive. Finalization, issue closure, archive, and sink are lifecycle records, not Mission List items.
 
-The generated Next and Finalize prompts carry only operation-unique procedure; the shared rules
-they reference live once in the installed machine-global contract. The complete durable-state and
-bundle contracts are in
+The complete durable-state and bundle contracts are in
 [Workflow State Contract](docs/workflow-state-contract.md); the rationale is
 [ADR 0017 — The Mission List](docs/decisions/0017-the-mission-list.md).
 

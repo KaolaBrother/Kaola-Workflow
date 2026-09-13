@@ -8,6 +8,17 @@
   with reproducible raw word counts and clear exclusions. Reorganize the README around installation,
   quick start, runtime support, and durable state; link detailed Cursor behavior to its edition guide.
 
+### Changed
+
+- **Next/Finalize skeletons stop restating global-contract rules (#1076).** Removed from the
+  operation prompts: the project-exception scope clause, the `workflow-state.md` field
+  enumeration, the done/frontier resume restatement, the "Three writes only" count and
+  immutable-result/one-dispatch sentences, the BLOCKED definition, the frontier formula in "Run
+  it", the executor/reporting clause, Finalize's readiness/terminal-truth sentence, the duplicate
+  claim/Mission-List read, and the follow-up tautology. Each removed line's meaning survives in the
+  loaded machine-global contract or the same prompt; behavioral mutation checks, consent text,
+  custody/acceptance rules, and independently runnable script-resolution blocks are unchanged.
+
 ## [12.0.0] - 2026-09-13
 
 **Upgrade note — this is a major release (next version 12.0.0).** After updating the checkout,
@@ -19,14 +30,6 @@ binding runtimes and a native route on native-only runtimes.
 
 ### Changed
 
-- **Next/Finalize skeletons stop restating global-contract rules (#1076).** Removed from the
-  operation prompts: the project-exception scope clause, the `workflow-state.md` field
-  enumeration, the done/frontier resume restatement, the "Three writes only" count and
-  immutable-result/one-dispatch sentences, the BLOCKED definition, the frontier formula in "Run
-  it", the executor/reporting clause, Finalize's readiness/terminal-truth sentence, the duplicate
-  claim/Mission-List read, and the follow-up tautology. Each removed line's meaning survives in the
-  loaded machine-global contract or the same prompt; behavioral mutation checks, consent text,
-  custody/acceptance rules, and independently runnable script-resolution blocks are unchanged.
 - **Cursor adapter guidance carries instructions only (#1068).** Measurement history moved out of
   the prompt: build IDs, app versions, the 14-role era, the Cloud install lifecycle, and the
   `providerOptions.cursor.modelName` / TUI transcript / `subagentType.custom.name` / medium-high
