@@ -998,15 +998,9 @@ function commandRel(name, forge) {
     const content = exists(commandRel(name)) ? read(commandRel(name)) : '';
     assert(/CLI, App local, and App Cloud are separate hosts/i.test(content),
       'G2[' + name + ']: Cursor CLI, App local, and App Cloud remain distinct surfaces/hosts');
-    assert(/Cloud requires installation in its environment setup, a tested and user-saved Build, then a new top-level Agent in the same repository/i.test(content),
-      'G2[' + name + ']: Cloud gap verdict follows confirmed setup, machine-plus-repository install, Save, and same-repository new parent');
     assert(/MUST omit the per-call `model`/i.test(content)
       && /exact-binding requirement is a post-resolution assertion/i.test(content),
       'G2[' + name + ']: named-profile binding owns model resolution even under exact-binding policy');
-    assert(/App 3\.17\.21 and the saved Cloud Build each proved all 14 names plus exact `implementer`/i.test(content),
-      'G2[' + name + ']: saved Cloud environment exposes all 14 Kaola types through its project catalog');
-    assert(/send only fields it exposes/i.test(content),
-      'G2[' + name + ']: live Task schema forbids invented dispatch fields');
   }
 
   const pathBVerdict = inspectPathBConsumers(TREE_ROOT);

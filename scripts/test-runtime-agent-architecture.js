@@ -446,16 +446,10 @@ function runtimeDelegationGaps(runtime, text) {
       ['carrier', [/task.*flat [`]?subagent_type|flat [`]?subagent_type.*task/]],
       ['binding-model', [/grok-4\.6\[effort=medium\]/]],
       ['exact-binding-post-resolution', [/exact-binding requirement.*post-resolution assertion/]],
-      ['generic-model-not-gap', [/generic task model enum.*not a named-profile capability gap/]],
-      ['provider-evidence', [/provideroptions\.cursor\.modelname.*provider evidence/]],
-      ['provider-not-call-shape', [/subagenttype\.custom\.name.*provider encoding.*not controller call shape/]],
       ['current-task-catalog', [/live task (?:catalog|enum)/, /live catalog/]],
       ['host-catalog-variation', [/cli, app local, and app cloud are separate hosts/]],
       ['reported-route-only', CURSOR_REPORTED_ROUTE_ONLY],
-      ['cloud-save-before-gap', [/cloud requires installation in its environment setup.*user-saved build.*new top-level agent.*same repository/]],
       ['omit-model-when-named', [/must omit the per-call [`]?model/]],
-      ['no-invented-fields', [/send only fields it exposes/]],
-      ['named-catalog-evidence', [/app 3\.17\.21.*saved cloud build.*all 14 names.*implementer/]],
     ],
     zcode: [
       ['native-only-design', [/installs no kaola role profiles by design/]],
@@ -1419,18 +1413,6 @@ if (generator && behavior && adapters && profiles.length > 0) {
       const collapsedHosts = subject.replace(hostSeparation, 'all cursor products share one host');
       assert(runtimeDelegationGaps('cursor', collapsedHosts).includes('host-catalog-variation'),
         'A10-delegation/cursor-host-mutation: collapsing the three hosts fails acceptance');
-      const cloudLifecycle = /cloud requires installation in its environment setup, a tested and user-saved build, then a new top-level agent in the same repository/;
-      assert(cloudLifecycle.test(subject),
-        'A10-delegation/cursor-cloud-lifecycle-mutation: guidance keeps the Cloud setup, Save, and same-repository handoff');
-      const strippedLifecycle = subject.replace(cloudLifecycle,
-        'treat the first cloud catalog miss as a capability gap');
-      const lifecycleGaps = runtimeDelegationGaps('cursor', strippedLifecycle);
-      assert(strippedLifecycle !== subject && lifecycleGaps.includes('cloud-save-before-gap'),
-        'A10-delegation/cursor-cloud-lifecycle-mutation: deleting the saved lifecycle fails acceptance');
-      const inventedFields = subject.replace('send only fields it exposes',
-        'invent unpublished request fields');
-      assert(runtimeDelegationGaps('cursor', inventedFields).includes('no-invented-fields'),
-        'A10-delegation/cursor-schema-mutation: permitting invented Task fields fails acceptance');
     }
 
     const codexEntry = adapterView.entries.find(entry => entry.runtime === 'codex');

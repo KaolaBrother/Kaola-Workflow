@@ -53,7 +53,7 @@
       "kind": "runtime_probe",
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/pull/1041",
       "observed_at": "2026-08-27T00:00:00Z",
-      "claim": "Authenticated standalone Cursor CLI build 2026.08.25-3e8eec8 discovered an explicit project materialization and dispatched the exact custom implementer type. The parent omitted a model override; the Task carrier resolved cursor-grok-4.6-medium and the child returned the requested read-only probe token."
+      "claim": "Authenticated standalone Cursor CLI build 2026.08.25-3e8eec8 discovered an explicit project materialization and dispatched the exact custom implementer type. The parent omitted a model override; the Task carrier resolved cursor-grok-4.6-medium and the child returned the requested read-only probe token. Exact binding is verified from `providerOptions.cursor.modelName` provider evidence when the host exposes it; a TUI child transcript alone is insufficient, and internal `subagentType.custom.name` is provider encoding, not controller call shape."
     },
     "cursor_app_local_named_profile_20260827": {
       "kind": "runtime_probe",
@@ -77,7 +77,7 @@
       "kind": "runtime_probe",
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/pull/1041",
       "observed_at": "2026-08-28T00:00:00Z",
-      "claim": "Cursor Cloud environment setup confirmed candidate 101250f293a5439ed73e8ee2127c7501fba9e883, installed the remote machine authority and explicitly materialized the selected repository, and passed current receipt, authority-binding, 14-agent, collision, and byte-idempotence checks. The user manually saved exact Build bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2. New top-level same-repository parent bc-3e6bd3bd-f310-47cd-a9cb-358cf802f16d visibly used that Build, exposed nine native plus all 14 Kaola Task types, and exact implementer child bc-7d00ddad-23f3-5e69-8f9a-1c326b051a49 returned PROBE_OK_CURSOR_CLOUD_FINAL_SAVED_REPO_IMPLEMENTER with no substitute or per-call model override. Child model and profile-source carriers remained unobservable."
+      "claim": "Cursor Cloud environment setup confirmed candidate 101250f293a5439ed73e8ee2127c7501fba9e883, installed the remote machine authority and explicitly materialized the selected repository, and passed current receipt, authority-binding, 14-agent, collision, and byte-idempotence checks. The user manually saved exact Build bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2. New top-level same-repository parent bc-3e6bd3bd-f310-47cd-a9cb-358cf802f16d visibly used that Build, exposed nine native plus all 14 Kaola Task types, and exact implementer child bc-7d00ddad-23f3-5e69-8f9a-1c326b051a49 returned PROBE_OK_CURSOR_CLOUD_FINAL_SAVED_REPO_IMPLEMENTER with no substitute or per-call model override. Child model and profile-source carriers remained unobservable. Cloud requires installation in its environment setup, a tested and user-saved Build, then a new top-level Agent in the same repository; local install never deploys Cloud."
     },
     "zcode_instructions": {
       "kind": "official_docs",
@@ -485,12 +485,12 @@
           "tui_child_transcript": "insufficient"
         },
         "delegation_guidance": {
-          "profile_lookup": "Find custom profiles in project `.cursor/agents/` or user `~/.cursor/agents/`; a file on disk is not discovery proof, so inspect the live catalog. CLI, App local, and App Cloud are separate hosts. Materialize the selected project explicitly. Cloud requires installation in its environment setup, a tested and user-saved Build, then a new top-level Agent in the same repository; local install never deploys Cloud.",
-          "dispatch_carrier": "Inspect the current `Task` schema and send only fields it exposes. If the exact Kaola role is present and its materialized profile receipt is valid, call `Task` with the live flat `subagent_type: \"<role>\"` field and MUST omit the per-call `model`; an exact-binding requirement is a post-resolution assertion, never authorization to populate that field. Absence of medium/high from the generic Task model enum is not a named-profile capability gap. Verify the exact binding from `providerOptions.cursor.modelName` provider evidence when the host exposes it; a TUI child transcript alone is insufficient. Internal `subagentType.custom.name` is provider encoding, not controller call shape, and must not be sent. In a built-in-only enum, omit-model is the parent, not a profile pin.",
+          "profile_lookup": "Find custom profiles in project `.cursor/agents/` or user `~/.cursor/agents/`; a file on disk is not discovery proof, so inspect the live catalog. CLI, App local, and App Cloud are separate hosts. Materialize the selected project explicitly.",
+          "dispatch_carrier": "If the exact Kaola role is present and its materialized profile receipt is valid, call `Task` with the live flat `subagent_type: \"<role>\"` field and MUST omit the per-call `model`; an exact-binding requirement is a post-resolution assertion, never authorization to populate that field. In a built-in-only enum, omit-model is the parent, not a profile pin.",
           "tool_boundary": "The named profile's native `readonly` flag carries its write boundary.",
           "native_routes": "Inspect the live Task catalog. Measured hosts exposed writable `generalPurpose` and host-specific built-ins; some hosts document scoped `Explore`, `Bash`, or `Browser`. Use only a route this host reports, under its real identity and capability.",
           "fallback_search": "If the exact name is absent, first distinguish an uninstalled or unsaved host carrier from a capability gap. Then inspect real alternatives for this item; a miss that the item's brief cannot absorb inlines only that item and records the specific `capability_gap`.",
-          "availability": "The live Task catalog is authoritative. CLI build 2026.08.25-3e8eec8 proved project `implementer` dispatch and resolved `cursor-grok-4.6-medium`; App 3.17.21 and the saved Cloud Build each proved all 14 names plus exact `implementer` (the catalog then held 14 roles; 7 remain after #1062), but did not expose the child model carrier. CLI profile reload was observed after reopening the process; same-process hot load remains unknown."
+          "availability": "The live Task catalog is authoritative; CLI profile reload requires a new process."
         }
       },
       "surfaces": {

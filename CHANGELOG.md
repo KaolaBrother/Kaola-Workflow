@@ -11,6 +11,12 @@ binding runtimes and a native route on native-only runtimes.
 
 ### Changed
 
+- **Cursor adapter guidance carries instructions only (#1068).** Measurement history moved out of
+  the prompt: build IDs, app versions, the 14-role era, the Cloud install lifecycle, and the
+  `providerOptions.cursor.modelName` / TUI transcript / `subagentType.custom.name` / medium-high
+  sentences. Those facts now live in `templates/agents/runtime-capabilities.json` evidence entries
+  (`cursor_cli_named_profile_20260827`, `cursor_cloud_environment_setup_20260828`) and
+  `docs/cursor-edition.md`.
 - **Lean Next/Finalize/dispatch-contract skeletons and global contract (#1071).** Removed:
   operation-authority narration, the duplicated project-exception sentence, Next↔dispatch
   duplicates, dispatch rationale, finalize duplicates and undefined terms, the three value-ordering

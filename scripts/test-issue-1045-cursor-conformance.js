@@ -45,12 +45,6 @@ function main() {
       assert.match(surface.text,
         /flat `subagent_type(?::[^`]+)?`[^.]*MUST omit[^.]*per-call `model`/i,
         surface.name + ': named call uses the flat field and forbids a model override');
-      assert.match(surface.text,
-        /generic[^.]*model enum[^.]*not[^.]*capability gap/i,
-        surface.name + ': generic model enum cannot disprove a named profile binding');
-      assert.match(surface.text,
-        /`providerOptions\.cursor\.modelName`[^.]*provider evidence/i,
-        surface.name + ': resolved child model has an explicit evidence carrier');
       assert.doesNotMatch(surface.text,
         /(?:call|dispatch|construct)[^.]{0,180}`subagentType\.custom\.name`/i,
         surface.name + ': provider encoding must not be a controller call instruction');
