@@ -1,8 +1,8 @@
 # Prompt size measurement
 
 The [README token table](../README.md#token-usage-at-a-glance) is a static planning estimate, not a
-runtime quota, billed-token report, or promised task cost. Baseline: post-12.0.0 `#1076`
-deduplication candidate on branch `workflow/issue-1076` (2026-09-13), measured after release
+runtime quota, billed-token report, or promised task cost. Baseline: release
+`kaola-workflow--v12.0.1` (2026-09-13), which carries the `#1076` deduplication on top of
 `kaola-workflow--v12.0.0` at publication commit `9dbec6724735f9da64f01c767451d19e5e36c6dc`.
 
 ## Raw word counts

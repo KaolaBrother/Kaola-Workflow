@@ -16,8 +16,8 @@ measured rather than flattened into a lowest-common-denominator abstraction.
 ## Token usage at a glance
 
 Workflow prompts use part of your context before task work begins. The table below estimates that
-**static prompt footprint on the post-12.0.0 #1076 candidate**, so you can compare runtimes when
-planning your token budget.
+**static prompt footprint for v12.0.1**, so you can compare runtimes when planning your token
+budget.
 
 | Runtime | Workflow Next | Finalize | Global rule | Combined, one copy each |
 |---|---:|---:|---:|---:|
