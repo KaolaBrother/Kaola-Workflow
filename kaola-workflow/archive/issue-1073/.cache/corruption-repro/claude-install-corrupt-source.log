@@ -1,0 +1,7 @@
+Kaola-Workflow — installer
+Forge: github
+
+agent profile drift:
+- agents/code-reviewer.md
+Agent source profile verification failed.
+Repair: node scripts/generate-agent-profiles.js --write && node scripts/generate-agent-profiles.js --check

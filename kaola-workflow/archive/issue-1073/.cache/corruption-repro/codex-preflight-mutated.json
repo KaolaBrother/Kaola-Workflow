@@ -1,0 +1,30 @@
+{
+  "status": "profiles_stale",
+  "stale_profiles": [
+    {
+      "role": "code-reviewer",
+      "file": "code-reviewer.toml",
+      "reasons": [
+        "profile_bytes_mismatch: installed profile differs from bundled source",
+        "manifest_file_hash_mismatch: expected=sha256:529f7087d5741dbf5fe4c98b6116178b451536ba3439c69f3daf816665ea130a got=sha256:0559d2c443e3158c43984a5d8f1b799e35669ec419de1be40bf36b8afdf84b30"
+      ]
+    }
+  ],
+  "manifest": "present",
+  "extra_unmanaged": [],
+  "stale": true,
+  "repair": "node /Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-1073/plugins/kaola-workflow/scripts/install-codex-agent-profiles.js /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-project.ol8ftA",
+  "safe_autofix": true,
+  "dispatch_mode": "v2-task-name",
+  "multi_agent_v2_enabled": true,
+  "dispatch_posture": "explicitRequestOnly",
+  "model_reasoning_effort": null,
+  "multi_agent_enabled": true,
+  "dispatch_posture_warning": "Codex is not configured for proactive sub-agent delegation (dispatch_posture: explicitRequestOnly). To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), set model_reasoning_effort = \"ultra\" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.",
+  "max_concurrent_threads_per_session": 4,
+  "max_concurrent_threads_per_session_source": "observed_default",
+  "effective_subagent_width": 3,
+  "min_wait_timeout_ms": null,
+  "max_wait_timeout_ms": null,
+  "default_wait_timeout_ms": null
+}

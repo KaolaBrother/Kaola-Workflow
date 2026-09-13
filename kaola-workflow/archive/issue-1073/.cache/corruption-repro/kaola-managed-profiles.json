@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "plugin": "kaola-workflow",
+  "plugin_version": "11.1.1",
+  "installed_at": "2026-09-12T23:11:25.999Z",
+  "source_plugin_root": "/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-1073/plugins/kaola-workflow",
+  "roles": [
+    "code-explorer",
+    "code-reviewer",
+    "doc-updater",
+    "implementer",
+    "investigator",
+    "knowledge-lookup",
+    "tdd-guide"
+  ],
+  "files": {
+    "code-explorer.toml": "sha256:f1e1a9ea9201c8fb8e9dc53fd146bbc6a15ae3e8a4ea421417a4d7cb56e54d23",
+    "code-reviewer.toml": "sha256:0559d2c443e3158c43984a5d8f1b799e35669ec419de1be40bf36b8afdf84b30",
+    "doc-updater.toml": "sha256:594607b60a93b386af57c3cedc1d3fcbed4730bd9e0b9a56174eccec1e16293d",
+    "implementer.toml": "sha256:49e034704e9a9311b9bfb47fdeacfa7ff9bac6b637752098da994b622854341f",
+    "investigator.toml": "sha256:e906748b8fcb5b8e0ebb3c2aaac541345cd48ce4bcb417c23bb2d8aadd4c94d5",
+    "knowledge-lookup.toml": "sha256:25d291f45b151d9f3b18497d524e31bc7fe7de937c9c22a206d79128932d3389",
+    "tdd-guide.toml": "sha256:9cb94d2e7643626a8782a19610e63d76190a7a0f6c963ec884c101c482c8458e"
+  },
+  "retired_files_removed": []
+}

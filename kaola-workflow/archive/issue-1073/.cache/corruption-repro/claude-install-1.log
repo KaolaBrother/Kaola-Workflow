@@ -1,0 +1,51 @@
+Kaola-Workflow — installer
+Forge: github
+
+agent profiles current: 7 roles, four runtimes (six adapters), 42 native renders
+Installed agent: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/agents/code-explorer.md
+Installed agent: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/agents/code-reviewer.md
+Installed agent: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/agents/doc-updater.md
+Installed agent: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/agents/implementer.md
+Installed agent: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/agents/investigator.md
+Installed agent: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/agents/knowledge-lookup.md
+Installed agent: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/agents/tdd-guide.md
+Verified managed Kaola-Workflow agents.
+Agent installation proof covers filesystem bytes only; runtime prompt loading is not attested.
+Installed: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/commands/kaola-workflow-finalize.md
+Installed: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/commands/workflow-init.md
+Installed: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/commands/workflow-next.md
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-claim.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-active-folders.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-closure-audit.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-closure-contract.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-validation-runner.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-sink-merge.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-sink-pr.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-classifier.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-resolve-agent-model.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-codex-preflight.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-ledger-compare.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-gap-sweep.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-run-chains.js
+Installed support script: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/scripts/kaola-workflow-telemetry-report.js
+Installed compact-recovery prompt: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/hooks/kaola-workflow-compact-recovery.md
+Installed hooks config: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/hooks/hooks.json
+Verified Kaola-Workflow install files.
+
+Open any Claude Code session and run:  /workflow-init
+Then run implementation cycles with:  /workflow-next
+
+Kaola-Workflow Claude dispatch posture:
+  claude_dispatch_posture: classic
+  Classic subagents (the Task tool) are always available — this needs no setup.
+  Agent teams is an experimental Claude Code capability; to enable teammate-mode
+  orchestration, set CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 in your shell environment,
+  or in a settings "env" block (~/.claude/settings.json, project .claude/settings.json,
+  or .claude/settings.local.json).
+
+Hooks installed to: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/hooks/hooks.json
+Auto-merge skipped (--no-settings-merge). To enable hooks, merge the block
+into your ~/.claude/settings.json by hand. Quick view:
+  cat /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.9WXd10/.claude/kaola-workflow/hooks/hooks.json
+

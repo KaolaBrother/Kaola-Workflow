@@ -1,0 +1,26 @@
+{
+  "status": "ok",
+  "roles_checked": [
+    "code-explorer",
+    "code-reviewer",
+    "doc-updater",
+    "implementer",
+    "investigator",
+    "knowledge-lookup",
+    "tdd-guide"
+  ],
+  "extra_unmanaged": [],
+  "autofixed": true,
+  "dispatch_mode": "v2-task-name",
+  "multi_agent_v2_enabled": true,
+  "dispatch_posture": "explicitRequestOnly",
+  "model_reasoning_effort": null,
+  "multi_agent_enabled": true,
+  "dispatch_posture_warning": "Codex is not configured for proactive sub-agent delegation (dispatch_posture: explicitRequestOnly). To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), set model_reasoning_effort = \"ultra\" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.",
+  "max_concurrent_threads_per_session": 4,
+  "max_concurrent_threads_per_session_source": "observed_default",
+  "effective_subagent_width": 3,
+  "min_wait_timeout_ms": null,
+  "max_wait_timeout_ms": null,
+  "default_wait_timeout_ms": null
+}

@@ -1,0 +1,25 @@
+Kaola-Workflow agent profiles: copied 7 profiles
+Kaola-Workflow agent profiles: config updated at .codex/config.toml
+- .codex/agents/kaola-workflow/code-explorer.toml
+- .codex/agents/kaola-workflow/code-reviewer.toml
+- .codex/agents/kaola-workflow/doc-updater.toml
+- .codex/agents/kaola-workflow/implementer.toml
+- .codex/agents/kaola-workflow/investigator.toml
+- .codex/agents/kaola-workflow/knowledge-lookup.toml
+- .codex/agents/kaola-workflow/tdd-guide.toml
+Kaola-Workflow Codex hooks: unchanged at ~/.codex/hooks.json
+Kaola-Workflow Codex hooks: copied 1 hook script(s) into stable home ~/.codex/kaola-workflow (swept 1 stale)
+run /hooks once in Codex to review and trust these command hooks (or codex exec --dangerously-bypass-hook-trust for automation)
+Kaola-Workflow agent profiles: removed 0 stale managed profile(s)
+Kaola-Workflow agent profiles: manifest written at .codex/agents/kaola-workflow/.kaola-managed-profiles.json
+Kaola-Workflow Codex dispatch posture: none (model_reasoning_effort unset)
+Kaola-Workflow Codex dispatch posture: Kaola-Workflow cannot attest its required V2 task-name dispatch path because features.multi_agent_v2.enabled is absent or false. multi_agent_v2 is opt-in and off by default in Codex >=0.145.0 (only V1 multi_agent is on by default), so it must be set explicitly. Add it, start a new Codex session, then explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of Codex >=0.145.0 — check the /model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.
+Kaola-Workflow Codex dispatch posture: effort-gated multi-agent dispatch posture is Codex CLI runtime behavior observed on codex-tui 0.142.5 and not re-verified on Codex >=0.145.0; it may change in a future Codex release.
+Kaola-Workflow Codex multi_agent_v2: NOT enabled (see codex_multi_agent_v2_required at preflight)
+Kaola-Workflow Codex multi_agent_v2: Recommended [features.multi_agent_v2] config for Kaola-Workflow dispatch: set max_concurrent_threads_per_session high enough for the intended fan-out width plus 1 (the budget INCLUDES the orchestrator thread) and max_wait_timeout_ms near the longest expected node runtime so long-poll joins are not capped short. Example:
+[features.multi_agent_v2]
+enabled = true
+max_concurrent_threads_per_session = 5
+max_wait_timeout_ms = 1800000
+Effective subagent width and the default budget of 4 (width 3) when max_concurrent_threads_per_session is absent are Codex >=0.145.0 SOURCE behavior, verified at tag rust-v0.145.0 in codex-rs/core/src/config/mod.rs (DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION = 4; effective_agent_max_threads uses saturating_sub(1)) and introduced by PR #19792 — source-verified, not documented: the public configuration reference does not carry multi_agent_v2 at all. The wait-timeout bounds have no independently verified default and are read only when explicitly configured. Do NOT set agents.max_threads alongside it: that is a separate [agents] key, NOT an alias for max_concurrent_threads_per_session, and it does not raise the MultiAgentV2 cap — that comes from features.multi_agent_v2.max_concurrent_threads_per_session alone. Codex 0.145.0 accepts the key rather than complaining (a config carrying both loads clean), so a stray max_threads leaves the cap where it was instead of erroring.
+status: ok

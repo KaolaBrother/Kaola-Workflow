@@ -1,0 +1,59 @@
+worktree=/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-1073
+head=08a3767642a6e88940a0be334cbc7c3493646a75
+status=1 dirty paths
+HOME_ROOT=/var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.MNflO8
+PROJECT_ROOT=/var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-project.sNecPa
+node=v24.14.0
+2026-09-13T01:30:31Z
+
+### codex-1 install global+project into isolated HOME
+OK   codex-install-global: exit=0 (expected 0)
+OK   codex-install-project: exit=0 (expected 0)
+installed_profile=/var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-project.sNecPa/.codex/agents/kaola-workflow/code-reviewer.toml
+OK   codex-installed-profile-has-no-64hex-line (grep -c exit 1 == zero matches): exit=1 (expected 1)
+OK   codex-manifest-has-no-profile_contracts: exit=0 (expected 0)
+
+### codex-2 baseline preflight on pristine install
+OK   codex-preflight-baseline: exit=0 (expected 0)
+
+### codex-3 mutate one byte in the installed body (R -> r in '# Code Reviewer')
+OK   codex-mutation-applied: exit=0 (expected 0)
+OK   codex-mutated-differs-from-canonical (cmp exit 1): exit=1 (expected 1)
+
+### codex-4 preflight must fail closed (expected exit 1, status profiles_stale, both reasons)
+OK   codex-preflight-mutated: exit=1 (expected 1)
+status=profiles_stale
+reasons=["profile_bytes_mismatch: installed profile differs from bundled source","manifest_file_hash_mismatch: expected=sha256:529f7087d5741dbf5fe4c98b6116178b451536ba3439c69f3daf816665ea130a got=sha256:0559d2c443e3158c43984a5d8f1b799e35669ec419de1be40bf36b8afdf84b30"]
+OK   codex-preflight-mutated-reasons: exit=0 (expected 0)
+
+### codex-5 default preflight (autofix) restores canonical bytes
+OK   codex-preflight-autofix: exit=0 (expected 0)
+OK   codex-autofix-restored-canonical: exit=0 (expected 0)
+
+### claude-1 install into isolated HOME
+OK   claude-install-1: exit=0 (expected 0)
+installed_profile=/var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.MNflO8/.claude/agents/code-reviewer.md
+OK   claude-installed-profile-has-no-64hex-line (grep -c exit 1 == zero matches): exit=1 (expected 1)
+OK   claude-proof-boundary-line: exit=0 (expected 0)
+tsv_installed_sha256=d9a830586613a1ae2f2778bb52c64ce070c8d35bb70bf8f279b9d289af18f73f
+tsv_version=4
+tsv_behavior_sha256=ed38928fee228b6ae0923439c26f3e6edde6f831cc2422147ab46e73ecb15aec
+tsv_source_sha256=774fd4df0a41ce0a5fc4eef80492f178b300f7c6aac5230806c011e15a70a350
+OK   claude-tsv-binds-installed-and-sidecar: exit=0 (expected 0)
+
+### claude-2 mutate one byte in the installed body; reinstall must NOT overwrite (user-owned/modified preserved)
+OK   claude-mutation-applied: exit=0 (expected 0)
+OK   claude-install-2: exit=0 (expected 0)
+Skipped agent with existing user-owned or modified file: /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.MNflO8/.claude/agents/code-reviewer.md
+OK   claude-modified-profile-skipped: exit=0 (expected 0)
+OK   claude-modified-bytes-preserved: exit=0 (expected 0)
+
+### claude-3 corrupted SOURCE must fail closed at install (agent_source_digest_mismatch)
+OK   claude-source-mutation-applied: exit=0 (expected 0)
+OK   claude-install-corrupt-source (non-zero): exit=nonzero (expected nonzero)
+agent profile drift:
+Agent source profile verification failed.
+OK   claude-corrupt-source-reason-logged: exit=0 (expected 0)
+
+isolated roots (left in place for inspection): /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home.MNflO8 /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-project.sNecPa /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-src.Spife0 /var/folders/j6/8368yp9j35597_g9_f148lz00000gn/T/kaola-1073-home2.hfLPbY
+overall=PASS
