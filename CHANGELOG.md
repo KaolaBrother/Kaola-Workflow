@@ -7,6 +7,9 @@
 - Expose per-runtime Next, Finalize, and global-rule token estimates near the top of the README,
   with reproducible raw word counts and clear exclusions. Reorganize the README around installation,
   quick start, runtime support, and durable state; link detailed Cursor behavior to its edition guide.
+- Re-measure the token table and `docs/prompt-size.md` raw word counts on the post-12.0.0 `#1076`
+  candidate so the published figures already include this issue's prompt reductions; method and
+  exclusions unchanged.
 
 ### Changed
 

@@ -1,8 +1,9 @@
 # Prompt size measurement
 
 The [README token table](../README.md#token-usage-at-a-glance) is a static planning estimate, not a
-runtime quota, billed-token report, or promised task cost. Baseline: release `kaola-workflow--v12.0.0`,
-publication commit `9dbec6724735f9da64f01c767451d19e5e36c6dc` (2026-09-13).
+runtime quota, billed-token report, or promised task cost. Baseline: post-12.0.0 `#1076`
+deduplication candidate on branch `workflow/issue-1076` (2026-09-13), measured after release
+`kaola-workflow--v12.0.0` at publication commit `9dbec6724735f9da64f01c767451d19e5e36c6dc`.
 
 ## Raw word counts
 
@@ -13,14 +14,14 @@ components. This heuristic has not been calibrated against every supported model
 
 | Runtime | Next words | Finalize words | Global words | Total words |
 |---|---:|---:|---:|---:|
-| Claude Code | 1907 | 2148 | 324 | 4379 |
-| Codex | 1873 | 2055 | 324 | 4252 |
-| Cursor | 1586 | 1759 | 1034 | 4379 |
-| Grok CLI | 1336 | 1581 | 915 | 3832 |
-| Devin CLI | 1355 | 1620 | 892 | 3867 |
-| Kimi Code | 1808 | 2071 | 324 | 4203 |
-| OpenCode | 1810 | 2075 | 324 | 4209 |
-| ZCode | 1820 | 2076 | 324 | 4220 |
+| Claude Code | 1838 | 2095 | 324 | 4257 |
+| Codex | 1804 | 2002 | 324 | 4130 |
+| Cursor | 1517 | 1706 | 1034 | 4257 |
+| Grok CLI | 1267 | 1528 | 915 | 3710 |
+| Devin CLI | 1286 | 1567 | 892 | 3745 |
+| Kimi Code | 1739 | 2018 | 324 | 4081 |
+| OpenCode | 1741 | 2022 | 324 | 4087 |
+| ZCode | 1751 | 2023 | 324 | 4098 |
 
 No Init, child-role profiles, separate compact recovery, project rules, vendor prompts, history,
 tool traffic, reasoning, or model output is counted. The three components need not be freshly

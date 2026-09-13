@@ -16,18 +16,19 @@ measured rather than flattened into a lowest-common-denominator abstraction.
 ## Token usage at a glance
 
 Workflow prompts use part of your context before task work begins. The table below estimates that
-**static prompt footprint for v12.0.0**, so you can compare runtimes when planning your token budget.
+**static prompt footprint on the post-12.0.0 #1076 candidate**, so you can compare runtimes when
+planning your token budget.
 
 | Runtime | Workflow Next | Finalize | Global rule | Combined, one copy each |
 |---|---:|---:|---:|---:|
-| Claude Code | 2,860 | 3,220 | 490 | 6,570 |
-| Codex | 2,810 | 3,080 | 490 | 6,380 |
-| Cursor | 2,380 | 2,640 | 1,550 | 6,570 |
-| Grok CLI | 2,000 | 2,370 | 1,370 | 5,740 |
-| Devin CLI | 2,030 | 2,430 | 1,340 | 5,800 |
-| Kimi Code | 2,710 | 3,110 | 490 | 6,310 |
-| OpenCode | 2,720 | 3,110 | 490 | 6,320 |
-| ZCode | 2,730 | 3,110 | 490 | 6,330 |
+| Claude Code | 2,760 | 3,140 | 490 | 6,390 |
+| Codex | 2,710 | 3,000 | 490 | 6,200 |
+| Cursor | 2,280 | 2,560 | 1,550 | 6,390 |
+| Grok CLI | 1,900 | 2,290 | 1,370 | 5,560 |
+| Devin CLI | 1,930 | 2,350 | 1,340 | 5,620 |
+| Kimi Code | 2,610 | 3,030 | 490 | 6,130 |
+| OpenCode | 2,610 | 3,030 | 490 | 6,130 |
+| ZCode | 2,630 | 3,030 | 490 | 6,150 |
 
 **Approximate tokens, not a hard budget or measured task consumption.** We count whitespace-separated
 words in the generated GitHub edition, multiply by **1.5**, and round each component to the nearest
