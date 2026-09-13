@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [12.0.0] - 2026-09-13
 
 **Upgrade note — this is a major release (next version 12.0.0).** After updating the checkout,
 every machine must rerun `./install-all.sh --yes`; Cursor Cloud must rebuild its saved
