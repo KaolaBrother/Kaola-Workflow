@@ -35,14 +35,14 @@ Use a disposable independent clone at the baseline tag, because rendering writes
 Run these existing generators from that clone's root:
 
 ```bash
-node scripts/generate-agent-profiles.js
-node scripts/generate-routing-surfaces.js
-node scripts/sync-cursor-edition.js
-node scripts/sync-grok-edition.js
-node scripts/sync-devin-edition.js
-node scripts/sync-kimi-edition.js
-node scripts/sync-opencode-edition.js
-node scripts/sync-zcode-edition.js
+node scripts/generate-agent-profiles.js --write
+node scripts/generate-routing-surfaces.js --write
+node scripts/sync-cursor-edition.js --write
+node scripts/sync-grok-edition.js --write
+node scripts/sync-devin-edition.js --write
+node scripts/sync-kimi-edition.js --write
+node scripts/sync-opencode-edition.js --write
+node scripts/sync-zcode-edition.js --write
 ```
 
 Then run this read-only measurement from the same root (Node.js, no extra dependency):

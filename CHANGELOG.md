@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Documentation
+
+- Fix the `docs/prompt-size.md` reproduction example: every listed generator requires `--write`
+  to emit the generated trees (`--check` or no mode only verifies/refuses), so the commands as
+  previously printed could not produce the measured carriers.
+
 ## [12.0.1] - 2026-09-13
 
 ### Documentation
