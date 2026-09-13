@@ -6,6 +6,8 @@ moments.
 
 ## Core
 
+- [Prompt size](prompt-size.md) — per-runtime static token estimates, raw counts, and reproduction.
+
 - [Architecture](architecture.md) — system structure and data flow, including the AGENTS-first
   authority graph and generated-role boundary.
 - [Installation](installation.md) — shortest correct all-runtime setup, per-runtime scopes, Cursor

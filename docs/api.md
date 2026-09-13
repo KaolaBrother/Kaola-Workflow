@@ -19,6 +19,13 @@ archives, journal placement, and durable findings. Unrelated or divergent files 
 Scoped closure audit resolves live state first, then a unique claimed archive; historical archive
 findings remain visible outside that scope. No new run-record field is introduced (#1067).
 
+## Prompt size estimates
+
+The [README token table](../README.md#token-usage-at-a-glance) exposes the static Next, Finalize,
+and global-rule footprint by runtime. [Measurement details](prompt-size.md) specify the baseline,
+raw word counts, exclusions, and reproducible estimate. These figures introduce no runtime token
+limit or new command API.
+
 ## Command surface
 
 Three commands ship. Everything below is invoked by them or by hand.

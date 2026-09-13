@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Documentation
+
+- Expose per-runtime Next, Finalize, and global-rule token estimates near the top of the README,
+  with reproducible raw word counts and clear exclusions. Reorganize the README around installation,
+  quick start, runtime support, and durable state; link detailed Cursor behavior to its edition guide.
+
 ## [12.0.0] - 2026-09-13
 
 **Upgrade note — this is a major release (next version 12.0.0).** After updating the checkout,
