@@ -10942,8 +10942,9 @@ function testSinkTransactionCleanEndToEnd() {
 
 // #645/#1033/#1047: templates/axioms.md remains a non-empty source for operation-level
 // decision guidance, while the compatible machine-global contract is the runtime carrier for
-// universal principles. Project instructions, README, the Claude bridge, and all runtime/init
-// surfaces must not copy the complete canonical block.
+// universal principles. #1071 cut the contract's First Principles to the custody/autonomy pair;
+// the operational trio lives only in axioms.md. Project instructions, README, the Claude bridge,
+// and all runtime/init surfaces must not copy the complete canonical block.
 function testAxiomBlockByteIdentity() {
   const routing = require('./generate-routing-surfaces.js');
   const opencodeSync = require('./sync-opencode-edition.js');
@@ -10960,14 +10961,19 @@ function testAxiomBlockByteIdentity() {
   const globalContract = read(path.join(repoRoot, 'templates', 'global',
     'kaola-workflow-global.md'));
   for (const principle of [
-    'Correct first; never trade correctness for speed or cost.',
-    'Then save human time without weakening correctness.',
-    'Then spend as little as possible.',
     'Machines decide facts; humans decide values.',
     'Own your own verdicts.',
   ]) {
     assert(globalContract.includes(principle),
       'the machine-global contract carries universal principle: ' + principle);
+  }
+  for (const retired of [
+    'Correct first; never trade correctness for speed or cost.',
+    'Then save human time without weakening correctness.',
+    'Then spend as little as possible.',
+  ]) {
+    assert(!globalContract.includes(retired),
+      'the machine-global contract stays lean of the axioms-only principle: ' + retired);
   }
 
   const INIT_TOPIC = 'init';
