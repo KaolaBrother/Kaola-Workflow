@@ -4,6 +4,10 @@
 
 ### Documentation
 
+- Reorganize the README around project purpose, delivery, optional Project Runner collaboration,
+  setup, runtime support, and recovery. Add Mermaid diagrams for delivery, cross-runtime
+  communication, and resume; retain token estimates and move setup exceptions into references or
+  collapsible details. Refresh the project description to reflect eight supported runtimes.
 - Fix the `docs/prompt-size.md` reproduction example: every listed generator requires `--write`
   to emit the generated trees (`--check` or no mode only verifies/refuses), so the commands as
   previously printed could not produce the measured carriers.

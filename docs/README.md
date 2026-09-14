@@ -6,6 +6,8 @@ moments.
 
 ## Core
 
+- [Project Runner synergy](../README.md#project-runner-synergy) — optional cross-runtime
+  communication, Workflow installation boundaries, and agent-supervised delivery.
 - [Prompt size](prompt-size.md) — per-runtime static token estimates, raw counts, and reproduction.
 
 - [Architecture](architecture.md) — system structure and data flow, including the AGENTS-first

@@ -26,6 +26,22 @@ and global-rule footprint by runtime. [Measurement details](prompt-size.md) spec
 raw word counts, exclusions, and reproducible estimate. These figures introduce no runtime token
 limit or new command API.
 
+## Project Runner integration
+
+[Kaola Project Runner](https://github.com/KaolaBrother/kaola-project-runner) is an optional
+communication layer: a controlling agent loads a Runner Skill to send instructions to a target
+CLI over ACP or PTY and read back replies and runtime evidence. Workflow must be installed for
+that target runtime before the agent asks it to use the Workflow entries below.
+
+The projects have independent installation and runtime coverage. Starting a Runner session does
+not invoke Workflow, claim an issue, or create run records. The agent selects the task and supervises
+execution and finalization; Runner observations do not establish task completion. Repository
+changes, validation evidence, and forge state establish the delivered result, with PR/MR delivery
+distinct from merge. This composition adds no Workflow CLI or shared state schema.
+
+See the [README collaboration diagram](../README.md#project-runner-synergy) for the two projects'
+responsibilities and the Runner repository for its transport, ownership, and recovery contracts.
+
 ## Command surface
 
 Three commands ship. Everything below is invoked by them or by hand.
