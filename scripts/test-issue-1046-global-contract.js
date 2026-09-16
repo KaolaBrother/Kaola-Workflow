@@ -15,6 +15,7 @@ const CLI = path.join(ROOT, 'scripts', 'kaola-workflow-global-contract.js');
 const EXPECTED_SURFACES = [
   'claude-local', 'codex-local', 'opencode-local', 'kimi-local', 'grok-local',
   'cursor-cli-local', 'cursor-app-local', 'cursor-cloud', 'devin-local', 'zcode-local',
+  'droid-local',
 ];
 
 let passed = 0;
@@ -57,7 +58,7 @@ function makeEnvironment(root, { installed = true } = {}) {
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(bin, { recursive: true });
   if (installed) {
-    for (const command of ['claude', 'codex', 'opencode', 'kimi', 'grok', 'agent', 'devin']) {
+    for (const command of ['claude', 'codex', 'opencode', 'kimi', 'grok', 'agent', 'devin', 'droid']) {
       fakeExecutable(bin, command);
     }
   }
@@ -78,6 +79,7 @@ function makeEnvironment(root, { installed = true } = {}) {
     GROK_HOME: path.join(home, '.grok'),
     CURSOR_HOME: path.join(home, '.cursor'),
     ZCODE_HOME: path.join(home, '.zcode'),
+    DROID_HOME: path.join(home, '.factory'),
     KAOLA_CURSOR_APP_PATH: cursorApp,
     KAOLA_ZCODE_APP_PATH: zcodeApp,
   };
@@ -124,9 +126,9 @@ ok(source.split(/\r?\n/).length < 120, 'A1: universal contract stays concise');
 
 const registry = JSON.parse(fs.readFileSync(REGISTRY, 'utf8'));
 same(registry.targets.map(target => target.id), EXPECTED_SURFACES,
-  'A2: live matrix is derived from the closed nine-surface registry');
-same(new Set(registry.targets.map(target => target.runtime)).size, 8,
-  'A2: ten surfaces cover eight runtime families');
+  'A2: live matrix is derived from the closed eleven-surface registry');
+same(new Set(registry.targets.map(target => target.runtime)).size, 9,
+  'A2: eleven surfaces cover nine runtime families');
 for (const target of registry.targets) {
   ok(target.discovery && target.carrier && target.precedence && target.reload,
     `A2[${target.id}]: discovery, carrier, precedence, and reload are measured`);
@@ -142,6 +144,7 @@ const reloadPatterns = {
   'cursor-cloud': /Save the Environment Build.*new top-level Agent/,
   'devin-local': /UserPromptSubmit.*compaction/,
   'zcode-local': /new task/,
+  'droid-local': /new session/,
 };
 for (const target of registry.targets) {
   ok(reloadPatterns[target.id].test(target.reload),
@@ -176,6 +179,7 @@ try {
     path.join(env.OPENCODE_CONFIG_DIR, 'AGENTS.md'),
     path.join(env.KIMI_CODE_HOME, 'AGENTS.md'),
     path.join(env.ZCODE_HOME, 'AGENTS.md'),
+    path.join(env.DROID_HOME, 'AGENTS.md'),
   ];
   for (const file of ownerFiles) write(file, '# Owner instructions\n\nKeep this byte.\n');
 
@@ -184,7 +188,7 @@ try {
   same(installed.targets.map(row => row.id), EXPECTED_SURFACES,
     'A4: receipt retains every registry row, including remote Cloud');
   const localRows = installed.targets.filter(row => row.status === 'INSTALLED');
-  same(localRows.length, 9, 'A4: all nine installed local surfaces are current');
+  same(localRows.length, 10, 'A4: all ten installed local surfaces are current');
   same(installed.targets.find(row => row.id === 'cursor-cloud').status, 'REMOTE_REQUIRED',
     'A4: Cursor Cloud remains an explicit independent target');
   for (const row of localRows) {
@@ -298,7 +302,7 @@ try {
   const absentRoot = path.join(sandbox, 'not-installed');
   const absentEnv = makeEnvironment(absentRoot, { installed: false });
   const absent = run(['install', '--json', '--nonce', nonce], absentEnv).json;
-  same(absent.targets.filter(row => row.status === 'NOT_INSTALLED').length, 9,
+  same(absent.targets.filter(row => row.status === 'NOT_INSTALLED').length, 10,
     'A8: every absent local surface is reported NOT_INSTALLED');
   same(absent.targets.find(row => row.id === 'cursor-cloud').status, 'REMOTE_REQUIRED',
     'A8: missing local runtimes never erase the Cloud row');

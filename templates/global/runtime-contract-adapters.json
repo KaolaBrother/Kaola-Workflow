@@ -111,6 +111,17 @@
       "precedence": "User global instructions are appended first and workspace instructions are the primary project source.",
       "reload": "A new task reads the user and current workspace instruction files.",
       "compatibility_reads": ["workspace AGENTS.md"]
+    },
+    {
+      "id": "droid-local",
+      "runtime": "droid",
+      "host": "local",
+      "discovery": { "kind": "command", "commands": ["droid"] },
+      "carrier_group": "droid-global-agents",
+      "carrier": { "kind": "managed_region", "format": "markdown", "root_env": "DROID_HOME", "default_root": ".factory", "relative_path": "AGENTS.md" },
+      "precedence": "Personal AGENTS.md from DROID_HOME is always-loaded context; project AGENTS.md from repository root to cwd appears later and may add stricter local rules, with CLAUDE.md read as a compatibility entry point.",
+      "reload": "A new session discovers personal and project instruction files; post-compaction reload of the personal carrier is not measured for Droid in this scope.",
+      "compatibility_reads": ["project CLAUDE.md", "project AGENTS.md"]
     }
   ]
 }
