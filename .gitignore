@@ -8,6 +8,7 @@ node_modules/
 .cursor/
 .zcode/
 .devin/
+.factory/
 # Per-forge generated trees for the additive runtime editions (.opencode-gitlab,
 # .kimi-gitea, .grok-gitlab, .cursor-gitlab, …). Same generated-artifact posture as the bare trees above.
 .opencode-*/
@@ -16,6 +17,7 @@ node_modules/
 .cursor-*/
 .zcode-*/
 .devin-*/
+.factory-*/
 kaola-workflow/.locks/
 kaola-workflow/.sessions/
 kaola-workflow/.tickers/
