@@ -17,7 +17,7 @@ moments.
 - [Runtime Capabilities](runtime-capabilities.md) — first-party evidence for direct `AGENTS.md`
   loading or Claude's thin bridge, plus native profile discovery, dispatch and fallback routes,
   the per-adapter subagent default binding, runtime limits, hooks, paths, precedence, and known
-  unknowns for all eight runtime families.
+  unknowns for all nine runtime families.
 - [API](api.md) — script CLIs, envelopes, and external contracts.
 - [Task Quality](task-quality.md) — how to express a task's outcome and acceptance basis in a forge
   issue so the Next route can proceed without a fixed requirement template.
@@ -44,6 +44,8 @@ moments.
 - [Devin CLI Edition](devin-edition.md) — live-schema vendor-harness dispatch (no Kaola role
   profiles), inline skills, managed global contract, and UserPromptSubmit recovery after
   compaction drops rules.
+- [Droid CLI Edition](droid-edition.md) — live-schema native Task dispatch (no Kaola role
+  profiles), inline skills, managed global contract, and no hooks or other harness additions.
 
 ## Decisions
 
@@ -52,7 +54,7 @@ moments.
   the 14-role roster are retired in favor of seven roles; every profile-installing adapter
   declares exactly one `subagent_default` (Claude `sonnet`; Codex `gpt-5.6-luna` / `max` pinned in
   the TOML; Grok `grok-4.6` / `effort: medium`; Cursor `grok-4.6[effort=medium]`); OpenCode, Kimi,
-  ZCode, and Devin are `native_only` — no Kaola role profiles, vendor-harness dispatch.
+  ZCode, Devin, and Droid are `native_only` — no Kaola role profiles, vendor-harness dispatch.
 
 [`decisions/`](decisions/) holds the full catalog. ADR 0021 adds runtime-native next/finalize
 guidance; ADR 0022 moves universal behavior to a machine-global contract and compact-safe native
@@ -63,7 +65,7 @@ deliverable, custody, and stop condition. ADR 0017 remains the Mission List desi
 ([#1062](https://github.com/KaolaBrother/Kaola-Workflow/issues/1062)) is the landed successor
 to ADR 0019's remaining three-tier axis and ADR 0021's three intent classes: lean orchestrator,
 7 roles, one `subagent_default` per binding adapter, and `native_only` on OpenCode / Kimi / ZCode /
-Devin. Most
+Devin / Droid. Most
 older records describe the node/DAG executor retired by ADR 0017 or project-prompt ownership
 retired by ADR 0023.
 

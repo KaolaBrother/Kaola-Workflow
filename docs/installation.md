@@ -37,7 +37,7 @@ summary. Useful controls:
 ```
 
 `--check` is read-only. `--global` is the default for OpenCode, Codex profiles, Kimi, Grok, Cursor,
-ZCode, and Devin; Claude has one runtime-wide install. `--project[=DIR]` selects project scope where the
+ZCode, Devin, and Droid; Claude has one runtime-wide install. `--project[=DIR]` selects project scope where the
 runtime supports it. Run `./install-all.sh --help` for the current option contract.
 
 The wrapper does not create or update a Cursor Cloud environment. It also cannot choose a first
@@ -103,9 +103,9 @@ enabled = true
 max_concurrent_threads_per_session = 5
 ```
 
-### OpenCode, Kimi, Grok, Cursor, ZCode, and Devin
+### OpenCode, Kimi, Grok, Cursor, ZCode, Devin, and Droid
 
-Each additive installer accepts a forge, global or project scope, and non-interactive mode. The established OpenCode, Kimi, Grok, Cursor, and ZCode installers also expose removal; Devin removal is not yet a standalone installer mode:
+Each additive installer accepts a forge, global or project scope, and non-interactive mode. The established OpenCode, Kimi, Grok, Cursor, ZCode, and Droid installers also expose removal; Devin removal is not yet a standalone installer mode:
 
 ```bash
 ./install-opencode.sh --global --yes --forge=github
@@ -114,6 +114,7 @@ Each additive installer accepts a forge, global or project scope, and non-intera
 ./install-cursor.sh   --global --yes --forge=github
 ./install-zcode.sh    --global --yes --forge=github
 ./install-devin.sh    --global --yes --forge=github
+./install-droid.sh    --global --yes --forge=github
 ```
 
 For project scope, use `--target /absolute/repository/path`. Cursor intentionally requires explicit
@@ -128,6 +129,7 @@ Carrier, configuration, hook, scope, precedence, and upgrade details:
 - [Cursor edition](cursor-edition.md)
 - [ZCode edition](zcode-edition.md)
 - [Devin edition](devin-edition.md)
+- [Droid edition](droid-edition.md)
 
 ## Cursor Cloud
 
@@ -200,6 +202,7 @@ Remove an additive runtime from the same scope in which it was installed:
 ./install-grok.sh     --global --uninstall
 ./install-cursor.sh   --global --uninstall
 ./install-zcode.sh    --global --uninstall
+./install-droid.sh    --global --uninstall
 ```
 
 Use `--target /absolute/repository/path --uninstall` for project scope. These uninstallers remove

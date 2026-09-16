@@ -2,7 +2,7 @@
 
 This document describes the capability boundary behind Kaola-Workflow's runtime adapters. The
 machine-readable authority is `templates/agents/runtime-capabilities.json`; this page explains its
-operational consequences and records the first-party evidence used through 2026-08-30. The current
+operational consequences and records the first-party evidence used through 2026-09-16. The current
 Codex mapping update is the dated #1049 source change, not a new runtime capability measurement.
 
 ## One repository authority
@@ -17,7 +17,7 @@ the machine-global contract.
 
 Claude Code is the only supported runtime that needs a bridge. Root `CLAUDE.md` begins with
 `@AGENTS.md`, then contains only the Claude-specific overlay. Codex, opencode, Kimi Code, Grok,
-Cursor, ZCode, and Devin have direct `AGENTS.md` support.
+Cursor, ZCode, Devin, and Droid have direct `AGENTS.md` support.
 
 ## Capability map
 
@@ -31,6 +31,7 @@ Cursor, ZCode, and Devin have direct `AGENTS.md` support.
 | Cursor | Documented project/user `.cursor/agents/` plus compatibility paths; explicit `/role`, natural-language routing, or the live Task schema. CLI and App are separate product surfaces; App local vs Cloud are different hosts. Standalone CLI reached an explicit project `implementer`; local App and a new same-repository Cloud parent from a saved environment each exposed all 14 Kaola types (pre-#1062 roster) and dispatched exact `implementer` | Host-dependent: local App, CLI, and correctly saved Cloud environments expose different native routes beside the Kaola catalog; checked-in-only and saved-user-global-only Cloud negative controls exposed native routes only | The current Task catalog is authoritative. CLI uses explicit safe project materialization. Cloud requires an Agent-confirmed environment setup to install its remote authority plus selected repository, followed by manual Save and a new same-repository parent. `install-all.sh` is local-only and never deploys Cloud |
 | ZCode | `native_only` — no Kaola role profiles (ADR 0025); automatic selection, native `@role`, or the live Agent schema against the runtime's own catalog | Full `general-purpose` and read-only `Explore`; foreground/background stays native | Profiles load in a new session and children cannot spawn; children follow the main Agent's model |
 | Devin CLI | `native_only` — no Kaola role profiles (ADR 0025); live schema: profile-based `run_subagent` / `read_subagent`, or the measured Fusion `sidekick` route | `subagent_explore`, parent-model `subagent_general`, and unpinned custom profiles routed by the host | Catalog fixed at session start; default nesting is one; background tools needing new approval are denied; Kaola pins no model |
+| Droid CLI | `native_only` — no Kaola role profiles (ADR 0025); live `Task` schema with built-in `worker` / `explorer` routes or user-defined custom droids | General-purpose `worker`, read-only `explorer`, and custom droids from `~/.factory/droids/`; sibling Task calls can run in parallel | The live schema owns model and session fields; spawned routes cannot spawn descendants; background and resume remain runtime-owned |
 
 Cursor and ZCode do not publish one complete Task/Agent call schema. Their generated guidance names
 the verified routes, then tells the orchestrator to use the current session's exposed schema and
@@ -56,6 +57,7 @@ catalogs. Unknown stays `unknown`; a documented path is not a live named-role PA
 | Kimi Code | `${KIMI_CODE_HOME:-~/.kimi-code}` | no | no | `native_only` — no Kaola profile catalog installed (pre-#1062: live `kaola-role-implementer` lookup from two unrelated empty repositories) |
 | Grok CLI | `${GROK_HOME:-~/.grok}` | no | no | documented user `~/.grok/agents/` |
 | ZCode | `${ZCODE_HOME:-~/.zcode}` | no | no | `native_only` — no Kaola profile catalog installed |
+| Droid CLI | `${DROID_HOME:-~/.factory}` | no | no | `native_only` — no Kaola profile catalog installed; Droid 0.220.0 direct-load probe |
 | Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/{agents,commands}` (un-nested) | **no** | yes (explicit `--target`; all four claim trees spawn installed `--ensure-target` after `applyDemonstratedCursorCliHost` when identity is `cursor`/`cli`/`local`: explicit argv, or omitted product/host plus a living CLI-shaped ancestor `…/YYYY.MM.DD-<hash>/index.js` or `cursor-agent` **and** `--workspace` sharing git identity with cwd; generic `--workspace` on an unrelated tool skips; `--worker-dir` present with or without `--workspace` skips; no `--workspace` skips; Darwin unquoted `ps args=` remainder until next `--<flag>` reconstitutes paths with spaces, Linux `/proc` NUL cmdline unchanged; `--cursor-workspace` when set, else recorded `main_root` on resume, else claim.js `getRoot()` on first claim; independently entered Finalize still ensures `"$PWD"` immediately before named dispatch) | live project `implementer`; raw Task carrier resolved `cursor-grok-4.6-medium` |
 | Cursor App / local IDE | same documented user carrier; App is not inferred from a CLI binary | **no** | `unknown` | live project catalog with all 14 pre-#1062 Kaola types; exact `implementer` succeeded |
 | Cursor App / Cloud host | saved remote environment managed by Cursor | **no** | yes; a confirmed environment-setup Agent materializes the selected repository before Save | live exact-Build 23-type catalog with all 14 pre-#1062 Kaola names; exact `implementer` succeeded from a new same-repository parent |
@@ -114,6 +116,7 @@ contract. No runtime needs Kaola context before or after every tool.
 | Kimi | No Kaola prompt lifecycle; upgrade removes the retired managed PostCompact block. |
 | ZCode | No prompt lifecycle; the measured 1,000,000-token session and a live PreToolUse self-lock argue against a speculative compact gate. |
 | Devin CLI | One `UserPromptSubmit` command hook injects a short pointer to the managed global carrier only when V2 is absent. This carrier is used because measured compaction drops AGENTS/rules and `PostCompaction` does not inject `additionalContext`. |
+| Droid CLI | No Kaola prompt-lifecycle hook is installed. The personal `~/.factory/AGENTS.md` carrier and invoked skill are the authority; post-compaction reload is unmeasured, so recovery re-invokes the skill and resumes from durable state. |
 
 Across all families, ordinary tool use adds 0 Kaola recovery bytes and starts 0 Kaola recovery
 subprocesses. Recovery-enabled runtimes receive an already-generated artifact, reread durable state,
@@ -139,6 +142,7 @@ both `workflow-next` and `kaola-workflow-finalize`:
 | native_only | Kimi | no Kaola profiles; vendor harness (`coder` / `explore` / `plan`, `AgentSwarm`), session-inherited model |
 | native_only | ZCode | no Kaola profiles; vendor harness (`general-purpose` / `Explore`), follows the main Agent |
 | native_only | Devin | no Kaola profiles; live-schema native dispatch (profile routes or Fusion `sidekick`), host router owns the model; see [measured evidence](devin-edition.md#dispatch-and-model-ownership) |
+| native_only | Droid | no Kaola profiles; live-schema `Task` dispatch (`worker` / `explorer` / custom droids), host owns model routing |
 
 This is not a Kaola scheduler or a blanket prohibition on task-sensitive runtime choices. Codex
 profile TOML values take precedence over spawn parameters and the parent session, so dispatch omits
@@ -179,15 +183,16 @@ documentation, and review remain separately dispatchable.
 
 ## Adapter inventory
 
-The closed inventory contains eight runtime families and ten adapter variants:
+The closed inventory contains nine runtime families and eleven adapter variants:
 
 - one Claude adapter;
 - three forge-neutral Codex variants (`codex-github`, `codex-gitlab`, `codex-gitea`);
-- one each for opencode, Kimi, Grok, Cursor, ZCode, and Devin.
+- one each for opencode, Kimi, Grok, Cursor, ZCode, Devin, and Droid.
 
 Six of those adapters install Kaola role profiles (`role_dispatch: "named_profile"`: Claude, the
-three Codex variants, Grok, Cursor); the other four are `native_only` — OpenCode, Kimi, ZCode, and
-Devin render commands, skills, hooks, and the global contract only, because a Kaola profile has no
+three Codex variants, Grok, Cursor); the other five are `native_only` — OpenCode, Kimi, ZCode,
+Devin, and Droid render commands, skills, hooks, and the global contract only, because a Kaola
+profile has no
 cost lever there (children inherit the session model, or a vendor router owns it).
 
 With 7 roles on six profile-installing adapters, that produces 42 deterministic renders.
@@ -351,6 +356,22 @@ in its 23-type Task catalog. Exact `implementer` child
 `bc-7d00ddad-23f3-5e69-8f9a-1c326b051a49` returned
 `PROBE_OK_CURSOR_CLOUD_FINAL_SAVED_REPO_IMPLEMENTER` with no substitute or per-call model override.
 The selected child model and profile source remained unobservable.
+
+### Droid CLI
+
+- [AGENTS.md discovery](https://docs.factory.ai/harness/agents-md) documents repository
+  `AGENTS.md` loading plus personal carriers under `~/.factory/`, `~/.agents/`, and `~/.agent/`.
+- [Skills](https://docs.factory.ai/harness/skills) documents `.factory/skills/<name>/SKILL.md`,
+  user/model invocation, and the personal `~/.factory/skills/` scope.
+- [Subagents](https://docs.factory.ai/harness/subagents) documents native `Task` dispatch,
+  built-in `worker` / `explorer` routes, and custom droids under `.factory/droids/` or
+  `~/.factory/droids/`.
+- [Hooks](https://docs.factory.ai/harness/hooks) documents the available hook files and lifecycle
+  events. This edition deliberately installs none.
+- **Live probe (2026-09-16, issue #1078).** Droid CLI `0.220.0` loaded this repository's
+  `AGENTS.md` and `CLAUDE.md` at session start and exposed `~/.factory` as the personal carrier
+  home. Post-compaction carrier reload remains unmeasured; the adapter therefore records it as
+  `unknown` and uses skill re-invocation for recovery.
 
 ### ZCode
 

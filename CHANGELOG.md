@@ -7,10 +7,15 @@
 - Reorganize the README around project purpose, delivery, optional Project Runner collaboration,
   setup, runtime support, and recovery. Add Mermaid diagrams for delivery, cross-runtime
   communication, and resume; retain token estimates and move setup exceptions into references or
-  collapsible details. Refresh the project description to reflect eight supported runtimes.
+  collapsible details. Refresh the project description to reflect nine supported runtimes.
 - Fix the `docs/prompt-size.md` reproduction example: every listed generator requires `--write`
   to emit the generated trees (`--check` or no mode only verifies/refuses), so the commands as
   previously printed could not produce the measured carriers.
+- **Droid CLI runtime edition (#1078).** Add Droid as the ninth additive `native_only` runtime:
+  generated inline skills, native `Task` worker/explorer routing, a managed `~/.factory/AGENTS.md`
+  carrier, forge-selected support scripts, install/check/uninstall flows, capability evidence, and
+  documentation. The edition deliberately adds no Kaola role profiles, hooks, settings, custom
+  droids, commands, or MCP configuration.
 
 ## [12.0.1] - 2026-09-13
 

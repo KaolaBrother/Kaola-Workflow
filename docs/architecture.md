@@ -168,7 +168,7 @@ all. `readActiveFolders` follows the same pattern: sink-merge imports it from
 `clearAdvisoryClaim`, `resolveProjectSlug`, `worktreePathFor`, `archiveProjectDir`) stay owned by
 `kaola-workflow-claim.js` and are still consumed by sink-merge from there — a dedicated
 closure/archive service module was weighed and declined, since it would add an installed file to
-eight runtimes and two hand-ported forges for a single external consumer.
+nine runtimes and two hand-ported forges for a single external consumer.
 
 `classifyLane(lane, ctx)` (`kaola-workflow-classifier.js`) is a pure function partitioning an
 active-folder lane into `mine` / `live` / `stale` / `ambiguous`, driven by three claim-time fields
@@ -367,15 +367,16 @@ plus `scripts/validate-script-sync.js` enforce that. `kaola-workflow-adaptive-sc
 file held **byte-identical** across all four trees: it is the cross-edition drift anchor, and every
 constant shared between a producer and a consumer lives there so the two cannot disagree.
 
-**Six additive runtime editions** — opencode, Kimi, Grok, Cursor, ZCode, and Devin — are runtimes, not forges. They are not wired
+**Seven additive runtime editions** — opencode, Kimi, Grok, Cursor, ZCode, Devin, and Droid — are runtimes, not forges. They are not wired
 into `npm test`, `edition-sync.js`, `install.sh`, or the routing generator's render targets, but
 their sync scripts derive their command surfaces from that same routing registry (via
 `runtime-edition-forge.js`), so the `generate-routing-surfaces.js --write` that a routing-surface
-change already mandates also brings every `.opencode`/`.kimi`/`.grok`/`.cursor`/`.zcode`/`.devin` tree already on the machine back into
+change already mandates also brings every `.opencode`/`.kimi`/`.grok`/`.cursor`/`.zcode`/`.devin`/`.factory` tree already on the machine back into
 parity — always the main checkout's trees, and never creating one that is absent. They carry their
-own suites (`test-opencode-edition.js`, `test-kimi-edition.js`, `test-grok-edition.js`, `test-cursor-edition.js`, `test-zcode-edition.js`, `test-devin-edition.js`). See
-`opencode-edition.md`, `kimi-edition.md`, `grok-edition.md`, `cursor-edition.md`, `zcode-edition.md`, and `devin-edition.md`.
-`runtime-edition-forge.js` also holds the generator helpers the six sync scripts render frontmatter
+own suites (`test-opencode-edition.js`, `test-kimi-edition.js`, `test-grok-edition.js`, `test-cursor-edition.js`, `test-zcode-edition.js`, `test-devin-edition.js`, `test-droid-edition.js`). See
+`opencode-edition.md`, `kimi-edition.md`, `grok-edition.md`, `cursor-edition.md`, `zcode-edition.md`,
+`devin-edition.md`, and `droid-edition.md`.
+`runtime-edition-forge.js` also holds the generator helpers the seven sync scripts render frontmatter
 and command trees with (`parseFrontmatter`, `parseTools`, `yamlScalar`, `listCanonAgents`,
 `listCanonCommands`, `canonCommandPath`, `commandRel`), shared once instead of restated per script
 (#1055); a per-script wrapper still supplies the one runtime-specific value (`DEFAULT_FORGE` or
@@ -523,10 +524,10 @@ Its routing-only guidance additionally exposes built-in/generic routes and nativ
 parallel, resume, nesting, history, or cold-start boundaries where evidence establishes them. It
 does not impose a Kaola concurrency cap or lowest-common-denominator runtime.
 
-Runtimes and forges remain independent axes. The closed role inventory has eight runtime families
-and ten adapter variants: one Claude, three Codex forge variants, and one each for opencode, Kimi,
-Grok, Cursor, ZCode, and Devin. Six of those adapters install Kaola role profiles; the OpenCode,
-Kimi, ZCode, and Devin adapters are `native_only` — Kaola has no cost lever there (children inherit
+Runtimes and forges remain independent axes. The closed role inventory has nine runtime families
+and eleven adapter variants: one Claude, three Codex forge variants, and one each for opencode, Kimi,
+Grok, Cursor, ZCode, Devin, and Droid. Six of those adapters install Kaola role profiles; the OpenCode,
+Kimi, ZCode, Devin, and Droid adapters are `native_only` — Kaola has no cost lever there (children inherit
 the session model or a vendor router chooses it), so they install no profiles and dispatch through
 the vendor harness. Additive installers still take `--forge` to select routing/forge prose; that
 does not create another role-behavior adapter.

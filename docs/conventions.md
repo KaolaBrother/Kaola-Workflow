@@ -689,7 +689,7 @@ Design-rationale provenance — issue refs, decision IDs, invariant tags, ADR ci
 The full set across all four forge editions plus opencode, Kimi, Grok, Cursor, ZCode, and Devin:
 
 - **Agent definitions** — every profile recorded in `agents/generated-agent-manifest.json`, including
-  Claude Markdown, Codex TOML, and native additive runtime renders. The six additive sync scripts
+Claude Markdown, Codex TOML, and native additive runtime renders. The seven additive sync scripts
   consume `generate-agent-profiles.js`; none authors behavior.
 - **Commands** — `commands/*.md` (github-claude), `plugins/kaola-workflow-gitlab/commands/`, `plugins/kaola-workflow-gitea/commands/`, Codex `skills/kaola-workflow-*/SKILL.md` (including the two forge-codex SKILL packs), opencode generated command mirrors, kimi generated command skills (`.kimi/skills/<command>/SKILL.md`), grok `.grok/commands/*.md`, cursor `.cursor/commands/*.md`
 - **Skills** — `plugins/*/skills/*/SKILL.md` across all three plugin editions

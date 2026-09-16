@@ -36,7 +36,7 @@ bindings on every runtime adapter. Three facts, measured on 2026-09-12 against t
    `tdd-guide`/`implementer` split are tools the orchestrator may pick up, not structural
    requirements. On a runtime where a subagent cannot be made cheaper — because children inherit the
    session model (OpenCode, Kimi, ZCode) or because a vendor router chooses the child model and a
-   Kaola profile has no lever on that axis (Devin) — Kaola installs no role profiles at all and the
+   Kaola profile has no lever on that axis (Devin, Droid) — Kaola installs no role profiles at all and the
    orchestrator dispatches through the vendor's native harness. Owner's words: "if subagents cannot
    save cost on an agent runtime, just use the vendor's own harness."
 
@@ -124,6 +124,7 @@ children", and this ADR does not pretend to have that number.
    | Grok Build | 7 | `model: grok-4.6` + `effort: medium` (`model: inherit` retired; `AgentDefinition.model` accepts a concrete id) |
    | Cursor | 7 | `model: grok-4.6[effort=medium]`; the call omits `model` because a custom subagent that omits it inherits the parent and is not routed by Auto |
    | Devin | none | vendor harness: `run_subagent` / `read_subagent` with built-in `subagent_general` or user-owned profiles; an unpinned custom profile would be routed by the organization's Default subagent model router, a lever Kaola does not own |
+   | Droid | none | native Task harness (`worker` / `explorer` / custom droids); the host owns model routing |
    | OpenCode | none | vendor harness (`general` / `explore` / `scout`); children inherit the session model and variant; the `KAOLA_OPENCODE_*_MODEL` scaffold retired |
    | Kimi Code | none | vendor harness (`coder` / `explore` / `plan`, `AgentSwarm`); children inherit the session |
    | ZCode | none | vendor harness (`general-purpose` / `Explore`); children follow the main Agent |
@@ -131,11 +132,11 @@ children", and this ADR does not pretend to have that number.
    Binding adapters keep `role_dispatch: "named_profile"` and gain `subagent_default`; Codex and
    Grok `model_carrier` become `profile_model_effort`, the value Cursor already carried. The four
    others carry
-   `role_dispatch: "native_only"`, `named_roles: false`, `deterministic_profiles: false`, no
+  `role_dispatch: "native_only"`, `named_roles: false`, `deterministic_profiles: false`, no
    `subagent_default`, and a `delegation_guidance` of exactly `native_routes` and `availability`.
    On those four, the absence of a named Kaola role is design, not a `capability_gap`; the rendered
    adapter block says so and points at the dispatch contract's per-item choice. The generator renders
-   7 × 6 = 42 native profiles (was 14 × 10 = 140); the four native_only editions render commands,
+  7 × 6 = 42 native profiles (was 14 × 10 = 140); the five native_only editions render commands,
    skills, hooks, and the global contract only, and their installers remove the fourteen profiles an
    earlier release deployed, recognising Kaola ownership by the managed marker (and, where a manifest
    exists, its recorded hash) and never touching a user-owned file.
@@ -156,14 +157,14 @@ children", and this ADR does not pretend to have that number.
 
 - Always-loaded carriers (`~/.claude/commands`, the Codex SessionStart carrier, `~/.grok/rules`,
   `~/.cursor/rules/kaola-workflow-global.mdc`, `~/.config/devin/AGENTS.md`, the OpenCode / Kimi /
-  ZCode global carriers) render `**Subagent default:**` / `**Roles:**` or the native_only sentence
+  ZCode / Droid global carriers) render `**Subagent default:**` / `**Roles:**` or the native_only sentence
   only after reinstall; until then a machine runs the 11.1.1 blocks. Devin's profile catalog is fixed
   at session start, so the removal takes effect on the next session.
 - A cheaper reviewer may miss finer defects; the mitigation is structural — the orchestrator reads the
   diff itself and the reviewer is a second signal, never the verdict.
 - Consumer repositories that hard-coded a retired role name in a brief dispatch inline with a
-  `capability_gap` on the six binding runtimes, and use a native route on the four native_only ones.
-- On OpenCode, Kimi, ZCode, and Devin, Kaola no longer offers a clean-context named role at all; the
+  `capability_gap` on the six binding runtimes, and use a native route on the five native_only ones.
+- On OpenCode, Kimi, ZCode, Devin, and Droid, Kaola no longer offers a clean-context named role at all; the
   vendor's own general/explore routes are the clean context. This is the Owner's stated trade-off,
   not a defect.
 - A one-off, bounded before/after cost comparison from provider usage panels is Owner-owned and is
@@ -179,7 +180,7 @@ children", and this ADR does not pretend to have that number.
 
 Recorded so they are not silently re-proposed: automatic escalation, dispatch counters, caps,
 parallel schedulers, or checkers; a review gate or machine-parsed reviewer protocol (ADR 0024);
-any Kaola role profile or model scaffold on OpenCode / Kimi / ZCode / Devin; a swarm that writes the
+any Kaola role profile or model scaffold on OpenCode / Kimi / ZCode / Devin / Droid; a swarm that writes the
 same surface in parallel; a run-cost ledger; recording Grok Build's built-in
 `/workflow review-changes` / `/deep-research` as `native_routes` (Owner decision, no follow-up
 issue); a single-valued tier axis kept "for later".

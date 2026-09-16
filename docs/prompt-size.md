@@ -19,13 +19,14 @@ components. This heuristic has not been calibrated against every supported model
 | Cursor | 1517 | 1706 | 1034 | 4257 |
 | Grok CLI | 1267 | 1528 | 915 | 3710 |
 | Devin CLI | 1286 | 1567 | 892 | 3745 |
+| Droid CLI | 1286 | 1570 | 928 | 3784 |
 | Kimi Code | 1739 | 2018 | 324 | 4081 |
 | OpenCode | 1741 | 2022 | 324 | 4087 |
 | ZCode | 1751 | 2023 | 324 | 4098 |
 
 No Init, child-role profiles, separate compact recovery, project rules, vendor prompts, history,
 tool traffic, reasoning, or model output is counted. The three components need not be freshly
-injected together on every turn. The global dispatch guidance on Cursor/Grok/Devin is counted in
+injected together on every turn. The global dispatch guidance on Cursor/Grok/Devin/Droid is counted in
 its global carrier; it is not added again to their command columns. GitLab and Gitea copies are
 excluded. Tokenizer differences and runtime caching require actual usage reports for cost analysis.
 
@@ -40,6 +41,7 @@ node scripts/generate-routing-surfaces.js --write
 node scripts/sync-cursor-edition.js --write
 node scripts/sync-grok-edition.js --write
 node scripts/sync-devin-edition.js --write
+node scripts/sync-droid-edition.js --write
 node scripts/sync-kimi-edition.js --write
 node scripts/sync-opencode-edition.js --write
 node scripts/sync-zcode-edition.js --write
@@ -59,6 +61,7 @@ const carriers = {
   cursor: ['.cursor/commands/workflow-next.md', '.cursor/commands/kaola-workflow-finalize.md'],
   grok: ['.grok/commands/workflow-next.md', '.grok/commands/kaola-workflow-finalize.md'],
   devin: ['.devin/skills/workflow-next/SKILL.md', '.devin/skills/kaola-workflow-finalize/SKILL.md'],
+  droid: ['.factory/skills/workflow-next/SKILL.md', '.factory/skills/kaola-workflow-finalize/SKILL.md'],
   kimi: ['.kimi/skills/workflow-next/SKILL.md', '.kimi/skills/kaola-workflow-finalize/SKILL.md'],
   opencode: ['.opencode/commands/workflow-next.md', '.opencode/commands/kaola-workflow-finalize.md'],
   zcode: ['.zcode/commands/workflow-next.md', '.zcode/commands/kaola-workflow-finalize.md'],

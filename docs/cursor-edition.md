@@ -306,7 +306,7 @@ does not run through `install.sh --forge`.
 > The Cursor runtime is also covered by the top-level **`./install-all.sh`**
 > ("install/refresh every runtime on this computer" — see [README](../README.md#installation)),
 > which invokes this installer unchanged (`--global` by default) as the sixth
-> leg of its eight-runtime sequence, with a per-runtime PASS/FAIL summary.
+> leg of its nine-runtime sequence, with a per-runtime PASS/FAIL summary.
 > `--global` inherits this installer's user-home-only Cursor layout: it is not
 > permission to update every consumer repository. Project `.cursor` catalogs
 > need an explicit `--target` or `install-all.sh --project`. Upgrading to 12.0.0 removes the seven
