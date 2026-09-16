@@ -69,4 +69,7 @@ workflow contract above the adapter remains host-neutral.
 
 The runtime measurements and the six evidence entries (five official Droid docs locators plus a
 live probe of Droid CLI 0.220.0) are recorded in `templates/agents/runtime-capabilities.json` and
-issue #1078.
+issue #1078. On the measured machine, `install-droid.sh --global --yes --forge=github` installed
+the three skills, support scripts, and the global carrier; `--check` passed; and a read-only
+`droid exec` probe reported `kaola-workflow-finalize`, `workflow-init`, `workflow-next`, and the
+loaded machine-global `AGENTS.md` carrier.

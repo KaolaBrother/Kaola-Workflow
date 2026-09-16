@@ -203,7 +203,7 @@
       "kind": "runtime_probe",
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1078",
       "observed_at": "2026-09-16T00:00:00Z",
-      "claim": "Droid CLI 0.220.0 at /usr/local/bin/droid loaded this repository's AGENTS.md and CLAUDE.md at session start, and a ~/.factory machine directory exists as the home of the personal AGENTS.md carrier and personal skills."
+      "claim": "Droid CLI 0.220.0 at /usr/local/bin/droid loaded this repository's AGENTS.md and CLAUDE.md at session start. After install-droid.sh --global --yes --forge=github, install-droid.sh --check passed, and a read-only droid exec probe reported the three Kaola skills (kaola-workflow-finalize, workflow-init, workflow-next) plus the machine-global AGENTS.md carrier."
     }
   },
   "runtimes": {

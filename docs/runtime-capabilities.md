@@ -370,7 +370,9 @@ The selected child model and profile source remained unobservable.
   events. This edition deliberately installs none.
 - **Live probe (2026-09-16, issue #1078).** Droid CLI `0.220.0` loaded this repository's
   `AGENTS.md` and `CLAUDE.md` at session start and exposed `~/.factory` as the personal carrier
-  home. Post-compaction carrier reload remains unmeasured; the adapter therefore records it as
+  home. The measured global install passed `--check`, and a read-only `droid exec` probe reported
+  `kaola-workflow-finalize`, `workflow-init`, `workflow-next`, and the loaded machine-global
+  carrier. Post-compaction carrier reload remains unmeasured; the adapter therefore records it as
   `unknown` and uses skill re-invocation for recovery.
 
 ### ZCode
