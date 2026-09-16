@@ -168,6 +168,42 @@
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
       "observed_at": "2026-09-10T00:00:00Z",
       "claim": "F14: `devin doctor` is present in this build and does not validate `model` values; it accepted both `adaptive` and `inherit`."
+    },
+    "droid_agents_md": {
+      "kind": "official_docs",
+      "locator": "https://docs.factory.ai/harness/agents-md",
+      "observed_at": "2026-09-16T00:00:00Z",
+      "claim": "AGENTS.md (with CLAUDE.md as a compatibility entry point) is discovered from the current directory up through the repository root, and personally from ~/.factory/, ~/.agents/, and ~/.agent/ if present."
+    },
+    "droid_skills": {
+      "kind": "official_docs",
+      "locator": "https://docs.factory.ai/harness/skills",
+      "observed_at": "2026-09-16T00:00:00Z",
+      "claim": "A skill is a directory whose SKILL.md entry point carries a name and description in its frontmatter; skills are discovered from project .factory/skills/ and personal ~/.factory/skills/, are user-invocable (/name) and model-invocable by default, and the invoked skill's SKILL.md body is injected into context."
+    },
+    "droid_commands": {
+      "kind": "official_docs",
+      "locator": "https://docs.factory.ai/harness/custom-slash-commands",
+      "observed_at": "2026-09-16T00:00:00Z",
+      "claim": "A .factory/commands/<name>.md file registers a custom slash command; this edition ships skills, not commands, so the surface stays uninstrumented."
+    },
+    "droid_subagents": {
+      "kind": "official_docs",
+      "locator": "https://docs.factory.ai/harness/subagents",
+      "observed_at": "2026-09-16T00:00:00Z",
+      "claim": "Custom droids are authored as markdown in .factory/droids/ and ~/.factory/droids/ and run through the Task tool; the built-in worker and explorer are the native Task routes. This edition installs no droids."
+    },
+    "droid_hooks": {
+      "kind": "official_docs",
+      "locator": "https://docs.factory.ai/harness/hooks",
+      "observed_at": "2026-09-16T00:00:00Z",
+      "claim": "Hooks are declared in ~/.factory/hooks.json and .factory/hooks.json with lifecycle events such as SessionStart(compact) and UserPromptSubmit; this edition installs no hook files."
+    },
+    "droid_live_probe_20260916": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1078",
+      "observed_at": "2026-09-16T00:00:00Z",
+      "claim": "Droid CLI 0.220.0 at /usr/local/bin/droid loaded this repository's AGENTS.md and CLAUDE.md at session start, and a ~/.factory machine directory exists as the home of the personal AGENTS.md carrier and personal skills."
     }
   },
   "runtimes": {
@@ -630,6 +666,34 @@
         "tool": "No per-tool Kaola hook is installed.",
         "stop": "No Kaola stop hook is installed.",
         "rules_survive_compaction": false
+      },
+      "install_scope": {"global_discovery": "supported", "required_project_materialization": "no", "ambient_repository_write": false, "evidence_status": "documented"}
+    },
+    "droid": {
+      "runtime": "droid",
+      "evidence": [
+        "droid_agents_md", "droid_skills", "droid_commands", "droid_subagents", "droid_hooks",
+        "droid_live_probe_20260916"
+      ],
+      "capabilities": {
+        "named_roles": false,
+        "deterministic_profiles": false,
+        "capability_gap": "explicit",
+        "instruction_loading": "direct",
+        "role_dispatch": "native_only",
+        "hook_scope": "user_and_project",
+        "delegation_guidance": {
+          "native_routes": "Native routes follow the live Task schema: the built-in `worker` (general-purpose, all tools) and read-only `explorer` routes run in their own context window, plus any user-defined custom droids from ~/.factory/droids/; background execution and resume remain runtime-owned options — the live schema wins.",
+          "availability": "Sibling Task calls run in parallel with their own context windows; a spawned route resolves its model from the invoking route plus the parent's complexity routing and inherits the parent when unpinned, and it cannot spawn further descendants. On a runtime that deliberately installs no role profiles, the absence of a named role is design, not a capability gap."
+        }
+      },
+      "compact_protocol": {
+        "events": [],
+        "pending": "none — this edition installs no Droid hook, so no prompt-lifecycle compact state exists.",
+        "session": "The always-loaded machine-global carrier in ~/.factory/AGENTS.md plus the invoked skill body remain the prompt authority for this adapter.",
+        "reload": "Post-compaction AGENTS.md and skill-carrier reload is not measured for Droid in this scope; recovery is re-invoking the skill, which resumes from the durable mission list and workflow state.",
+        "tool": "No PreToolUse or PostToolUse Kaola hook is installed, so ordinary tools add zero Kaola context and start zero Kaola subprocesses.",
+        "stop": "No Kaola Stop hook is installed."
       },
       "install_scope": {"global_discovery": "supported", "required_project_materialization": "no", "ambient_repository_write": false, "evidence_status": "documented"}
     }

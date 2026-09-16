@@ -35,7 +35,7 @@ const ROLES = Object.freeze([
   'knowledge-lookup',
   'tdd-guide',
 ]);
-const RUNTIMES = Object.freeze(['claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin']);
+const RUNTIMES = Object.freeze(['claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin', 'droid']);
 // Adapters that still install Kaola role profiles and therefore render one subagent binding each.
 const BINDING_RUNTIMES = Object.freeze(['claude', 'codex', 'grok', 'cursor']);
 const REQUIRED_COVERAGE = Object.freeze([
