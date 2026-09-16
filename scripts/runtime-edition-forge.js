@@ -22,8 +22,8 @@
 //     install.sh consumes.
 //
 // Neither of those sources is modified by this module: it reads them. The
-// additive runtime editions (opencode, Kimi, Grok, Cursor) and their installers consume
-// it, so adding a forge or a topic is a zero-edit change here.
+// additive runtime editions (opencode, Kimi, Grok, Cursor, ZCode, Devin, Droid) and their
+// installers consume it, so adding a forge or a topic is a zero-edit change here.
 //
 // CLI (used by the installers, which cannot require() a node module inline):
 //   --forge=<f> --scripts-dir    absolute dir holding that forge's support scripts
@@ -108,7 +108,7 @@ function commandSources(forge) {
   }));
 }
 
-// --- helpers shared by the runtime-edition sync scripts (grok/kimi/cursor/opencode/zcode) ---
+// --- helpers shared by the runtime-edition sync scripts (grok/kimi/cursor/opencode/zcode/devin/droid) ---
 // Each was byte-identical across every script that defined it; moved here once so no per-edition
 // copy can drift from the others. `treeLabel` and the DEFAULT_FORGE fallback stay per-script (each
 // edition's own tree namer / default), so any helper below that needs one takes it as an explicit
