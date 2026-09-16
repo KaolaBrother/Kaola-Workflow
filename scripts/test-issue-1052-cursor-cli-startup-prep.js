@@ -1164,38 +1164,40 @@ try {
   }
 
   {
-    assert(process.platform === 'darwin',
-      '#1052-c2-spaced-darwin-host: spaced --workspace pin requires this Darwin host (got '
-      + process.platform + ')');
-    const commentWorkspace = '/tmp/kaola workspace with spaces';
-    const sleeper = path.join(sandbox.tmp, 'ps-sleeper.js');
-    fs.writeFileSync(sleeper, 'setInterval(function () {}, 1000);\n');
-    const child = spawn(process.execPath, [sleeper, '--workspace', commentWorkspace], {
-      cwd: sandbox.tmp,
-      env: sandbox.env,
-      stdio: 'ignore',
-    });
-    // spawn-class: environment
-    const listed = spawnSync('ps', ['-ww', '-p', String(child.pid), '-o', 'args='], {
-      encoding: 'utf8',
-      timeout: 3000,
-    });
-    const psLine = String(listed.stdout || '').trim();
-    try { child.kill('SIGKILL'); } catch (_) { /* probe only */ }
-    const naiveWorkspace = parseWorkspaceFlagFromTokens(tokenizePsCommandLineLikeProduction(psLine));
-    console.error('MEASURED Darwin ps -ww -p PID -o args=: ' + psLine);
-    console.error('MEASURED tokenizePsCommandLine+parseDemonstratedCursorParentArgv workspace=: '
-      + naiveWorkspace);
-    assert(psLine.length > 0 && psLine.indexOf(commentWorkspace) >= 0,
-      '#1052-c2-spaced-ps-contains-full: host ps args= must contain the full opened path (line='
-      + JSON.stringify(psLine) + ')');
-    assert(psLine.indexOf("'" + commentWorkspace + "'") < 0
-      && psLine.indexOf('"' + commentWorkspace + '"') < 0,
-      '#1052-c2-spaced-ps-unquoted: this Darwin ps args= must not insert quotes around the spaced path (line='
-      + JSON.stringify(psLine) + ')');
-    assert(naiveWorkspace === '/tmp/kaola',
-      '#1052-c2-spaced-naive-truncate: unquoted ps + whitespace tokenize must return /tmp/kaola (got '
-      + JSON.stringify(naiveWorkspace) + ' line=' + JSON.stringify(psLine) + ')');
+    if (process.platform !== 'darwin') {
+      console.error('SKIP #1052-c2-spaced-darwin-host: Darwin ps args= semantics are not measurable on '
+        + process.platform);
+    } else {
+      const commentWorkspace = '/tmp/kaola workspace with spaces';
+      const sleeper = path.join(sandbox.tmp, 'ps-sleeper.js');
+      fs.writeFileSync(sleeper, 'setInterval(function () {}, 1000);\n');
+      const child = spawn(process.execPath, [sleeper, '--workspace', commentWorkspace], {
+        cwd: sandbox.tmp,
+        env: sandbox.env,
+        stdio: 'ignore',
+      });
+      // spawn-class: environment
+      const listed = spawnSync('ps', ['-ww', '-p', String(child.pid), '-o', 'args='], {
+        encoding: 'utf8',
+        timeout: 3000,
+      });
+      const psLine = String(listed.stdout || '').trim();
+      try { child.kill('SIGKILL'); } catch (_) { /* probe only */ }
+      const naiveWorkspace = parseWorkspaceFlagFromTokens(tokenizePsCommandLineLikeProduction(psLine));
+      console.error('MEASURED Darwin ps -ww -p PID -o args=: ' + psLine);
+      console.error('MEASURED tokenizePsCommandLine+parseDemonstratedCursorParentArgv workspace=: '
+        + naiveWorkspace);
+      assert(psLine.length > 0 && psLine.indexOf(commentWorkspace) >= 0,
+        '#1052-c2-spaced-ps-contains-full: host ps args= must contain the full opened path (line='
+        + JSON.stringify(psLine) + ')');
+      assert(psLine.indexOf("'" + commentWorkspace + "'") < 0
+        && psLine.indexOf('"' + commentWorkspace + '"') < 0,
+        '#1052-c2-spaced-ps-unquoted: this Darwin ps args= must not insert quotes around the spaced path (line='
+        + JSON.stringify(psLine) + ')');
+      assert(naiveWorkspace === '/tmp/kaola',
+        '#1052-c2-spaced-naive-truncate: unquoted ps + whitespace tokenize must return /tmp/kaola (got '
+        + JSON.stringify(naiveWorkspace) + ' line=' + JSON.stringify(psLine) + ')');
+    }
   }
 
   for (const port of NAMED_FORGE_PORTS) {
