@@ -129,12 +129,16 @@ for (const runtime of RUNTIMES) {
   // itself (that specificity lives only in the full Next/Finalize reload, covered elsewhere), so
   // asserting they render byte-IDENTICAL prompts is the correct positive claim, not a relaxation.
   const deferredGroup = RUNTIMES.filter(r => !FULL_DISPATCH_RUNTIMES.includes(r));
-  assert(new Set(FULL_DISPATCH_RUNTIMES.map(runtime => rendered.get(runtime + ':github'))).size
-      === FULL_DISPATCH_RUNTIMES.length,
+  // This suite renders only RUNTIMES (the four measured prompt-lifecycle runtimes); a
+  // full-dispatch runtime outside RUNTIMES (devin, droid) is never rendered here, so the
+  // pairwise-difference claim is scoped to the rendered intersection, not the whole set.
+  const fullDispatchRendered = FULL_DISPATCH_RUNTIMES.filter(r => RUNTIMES.includes(r));
+  assert(new Set(fullDispatchRendered.map(runtime => rendered.get(runtime + ':github'))).size
+      === fullDispatchRendered.length,
     'C2: always-loaded-carrier runtime prompts differ where measured adapter capabilities differ');
   assert(new Set(deferredGroup.map(runtime => rendered.get(runtime + ':github'))).size === 1,
     'C2: deferred-dispatch runtimes render byte-identical recovery prompts (no runtime-specific content lives in the deferred path)');
-  for (const full of FULL_DISPATCH_RUNTIMES) {
+  for (const full of fullDispatchRendered) {
     for (const deferred of deferredGroup) {
       assert(rendered.get(full + ':github') !== rendered.get(deferred + ':github'),
         `C2: ${full} (always-loaded carrier) differs from ${deferred} (deferred)`);

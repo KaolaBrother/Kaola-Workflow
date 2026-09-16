@@ -22,7 +22,7 @@ const ROLE_NAMES = Object.freeze([
   'tdd-guide',
 ]);
 const RUNTIME_NAMES = Object.freeze([
-  'claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin',
+  'claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin', 'droid',
 ]);
 const SORTED_RUNTIME_NAMES = Object.freeze(sorted(RUNTIME_NAMES));
 const COVERAGE_FIELDS = Object.freeze({
@@ -459,9 +459,13 @@ function runtimeDelegationGaps(runtime, text) {
       ['native-only-design', [/installs no kaola role profiles by design/]],
       ['native-routes', [/native routes/]],
     ],
+    droid: [
+      ['native-only-design', [/installs no kaola role profiles by design/]],
+      ['native-routes', [/native routes/]],
+    ],
   };
   for (const [name, alternatives] of runtimeNeeds[runtime] || []) needs(name, alternatives);
-  const nativeOnlyRuntimes = ['opencode', 'kimi', 'zcode', 'devin'];
+  const nativeOnlyRuntimes = ['opencode', 'kimi', 'zcode', 'devin', 'droid'];
   if (nativeOnlyRuntimes.includes(runtime)) {
     if (/\*\*roles:\*\*/.test(prose)) gaps.push('native-only-roles-roster');
     if (/\*\*subagent default:\*\*/.test(prose)) gaps.push('native-only-subagent-default');
@@ -857,7 +861,7 @@ assert(!behaviorVendor,
 const adapterView = adapterEntries(adapters);
 const declaredRuntimes = sorted(new Set(adapterView.entries.map(entry => entry.runtime).filter(Boolean)));
 assert(JSON.stringify(declaredRuntimes) === JSON.stringify(SORTED_RUNTIME_NAMES),
-  'A6: adapters declare all eight runtime families exactly — got ' + JSON.stringify(declaredRuntimes));
+  'A6: adapters declare all nine runtime families exactly — got ' + JSON.stringify(declaredRuntimes));
 for (const runtime of RUNTIME_NAMES) {
   const entries = adapterView.entries.filter(entry => entry.runtime === runtime);
   assert(entries.length > 0, `A6[${runtime}]: a declared runtime adapter exists`);
@@ -909,6 +913,7 @@ const expectedCounts = {
   cursor: 7,
   zcode: 0,
   devin: 0,
+  droid: 0,
 };
 for (const runtime of RUNTIME_NAMES) {
   const runtimeProfiles = profiles.filter(profile => profile.runtime === runtime);

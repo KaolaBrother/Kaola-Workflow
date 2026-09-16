@@ -10953,6 +10953,7 @@ function testAxiomBlockByteIdentity() {
   const cursorSync = require('./sync-cursor-edition.js');
   const zcodeSync = require('./sync-zcode-edition.js');
   const devinSync = require('./sync-devin-edition.js');
+  const droidSync = require('./sync-droid-edition.js');
 
   const axioms = read(path.join(repoRoot, 'templates', 'axioms.md'));
   assert(axioms.startsWith('## First Principles') && axioms.trim().length > 100,
@@ -11001,6 +11002,8 @@ function testAxiomBlockByteIdentity() {
       body: zcodeSync.renderCommand(canonical, basename, forge) });
     surfaces.push({ id: devinSync.skillRel(basename, forge),
       body: devinSync.renderSkill(canonical, basename, forge) });
+    surfaces.push({ id: droidSync.skillRel(basename, forge),
+      body: droidSync.renderSkill(canonical, basename, forge) });
   }
 
   for (const relativePath of ['AGENTS.md', 'README.md', 'CLAUDE.md']) {

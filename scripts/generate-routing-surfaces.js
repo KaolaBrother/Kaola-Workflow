@@ -320,14 +320,14 @@ function renderSurface(row, ir) {
 // hooks/*compact-recovery*.md), and that reload already carries the dispatch contract and
 // runtime adapter — repeating them in the recovery render itself would load them twice, so
 // those two runtimes get a one-sentence pointer instead of the full blocks.
-const RECOVERY_FULL_DISPATCH_RUNTIMES = ['grok', 'cursor', 'devin'];
+const RECOVERY_FULL_DISPATCH_RUNTIMES = ['grok', 'cursor', 'devin', 'droid'];
 
 const RECOVERY_DISPATCH_DEFERRED_NOTE = 'The Next or Finalization reload above already ' +
   'carries the full runtime dispatch contract and runtime adapter facts, so this recovery ' +
   'step does not restate them.';
 
 function renderCompactRecoveryPrompt(runtime, forge = 'github', options = {}) {
-  if (!['claude', 'codex', 'grok', 'cursor', 'devin'].includes(runtime)) {
+  if (!['claude', 'codex', 'grok', 'cursor', 'devin', 'droid'].includes(runtime)) {
     throw new Error('compact recovery prompt is not enabled for runtime ' + runtime);
   }
   if (!FORGES.includes(forge)) throw new Error('unknown compact-recovery forge ' + forge);
