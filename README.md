@@ -210,12 +210,12 @@ For removal, use the [scope-specific uninstall instructions](docs/installation.m
 
 Maintained by the release transaction:
 
-- Codex `kaola-workflow` plugin manifest: `12.0.1`
-- Codex `kaola-workflow-gitlab` plugin manifest: `12.0.1`
-- Codex `kaola-workflow-gitea` plugin manifest: `12.0.1`
-- Claude Code command install, GitHub edition: `12.0.1`
-- Claude Code command install, GitLab edition: `12.0.1`
-- Claude Code command install, Gitea edition: `12.0.1`
+- Codex `kaola-workflow` plugin manifest: `12.1.0`
+- Codex `kaola-workflow-gitlab` plugin manifest: `12.1.0`
+- Codex `kaola-workflow-gitea` plugin manifest: `12.1.0`
+- Claude Code command install, GitHub edition: `12.1.0`
+- Claude Code command install, GitLab edition: `12.1.0`
+- Claude Code command install, Gitea edition: `12.1.0`
 
 </details>
 
