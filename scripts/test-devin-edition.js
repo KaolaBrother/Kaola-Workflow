@@ -230,7 +230,7 @@ assert(installAll.includes('install-devin.sh') && /RUNTIMES=\([^)]*devin/.test(i
   'install-all.sh includes devin runtime and installer');
 
 const claimSrc = fs.readFileSync(path.join(REPO, 'scripts/kaola-workflow-claim.js'), 'utf8');
-assert(claimSrc.includes('--runtime claude|codex|opencode|kimi|grok|zcode|devin'),
-  'claim.js USAGE includes devin runtime');
+assert(claimSrc.includes('--runtime claude|codex|opencode|kimi|grok|zcode|devin|droid'),
+  'claim.js USAGE includes devin and droid runtimes');
 
 console.log('devin-edition test passed');

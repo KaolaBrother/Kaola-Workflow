@@ -221,7 +221,7 @@ const KAOLA_MANAGED_MARKER = 'kaola-workflow-managed-agent: true';
 }
 
 // ---------------------------------------------------------------------------
-// B0-claim — claim help USAGE runtime enum ends with |devin. The mirror copies
+// B0-claim — claim help USAGE runtime enum ends with |droid. The mirror copies
 // under plugins/kaola-workflow*/scripts/ carry the same enum. cursor is
 // intentionally absent there — that drift is NOT to be fixed here.
 // ---------------------------------------------------------------------------
@@ -249,10 +249,10 @@ const KAOLA_MANAGED_MARKER = 'kaola-workflow-managed-agent: true';
   for (const abs of claimCopies) {
     const rel = path.relative(REPO, abs);
     const src = fs.readFileSync(abs, 'utf8');
-    const usage = src.match(/--runtime claude\|codex\|opencode\|kimi\|grok(\|cursor)?(\|zcode)?\|?/);
-    assertReal(src.includes('--runtime claude|codex|opencode|kimi|grok|zcode|devin'),
-      'B0-claim[' + rel + ']: USAGE runtime enum ends with |devin '
-      + '(--runtime claude|codex|opencode|kimi|grok|zcode|devin)');
+    const usage = src.match(/--runtime claude\|codex\|opencode\|kimi\|grok(\|cursor)?(\|zcode)?(\|devin)?(\|droid)?\|?/);
+    assertReal(src.includes('--runtime claude|codex|opencode|kimi|grok|zcode|devin|droid'),
+      'B0-claim[' + rel + ']: USAGE runtime enum ends with |droid '
+      + '(--runtime claude|codex|opencode|kimi|grok|zcode|devin|droid)');
   }
 }
 
