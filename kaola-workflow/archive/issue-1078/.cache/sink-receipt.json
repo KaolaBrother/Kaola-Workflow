@@ -1,0 +1,38 @@
+{
+  "project": "issue-1078",
+  "branch": "workflow/issue-1078",
+  "issue_number": 1078,
+  "issue_numbers": [
+    1078
+  ],
+  "resolved_default_branch": "main",
+  "branch_head": "90d03af7663792ff52b9c2b622b552e1c5a13049",
+  "keep_open_requested": false,
+  "claim_ts": "2026-09-16T15:06:36.492Z",
+  "started_at": "2026-09-16T16:09:53.245Z",
+  "updated_at": "2026-09-16T16:11:31.906Z",
+  "removed_duplicates": [],
+  "archived_paths": [
+    "kaola-workflow/archive/issue-1078/.cache/chain-receipt.json",
+    "kaola-workflow/archive/issue-1078/.cache/mirror-digest.json",
+    "kaola-workflow/archive/issue-1078/.cache/origin/selection-record.json",
+    "kaola-workflow/archive/issue-1078/finalization-summary.md",
+    "kaola-workflow/archive/issue-1078/mission-list.md",
+    "kaola-workflow/archive/issue-1078/workflow-state.md"
+  ],
+  "steps": {
+    "preflight": "done",
+    "push_upstream": "done",
+    "merge": "done",
+    "finalize": "done",
+    "stash_restore": "done",
+    "archive_commit": "done",
+    "push_main": "done",
+    "closure": "pending"
+  },
+  "push_upstream": "failed",
+  "post_rebase_tests": "skipped",
+  "remote_closed_after_publish": "verified",
+  "published_head": "90d03af7663792ff52b9c2b622b552e1c5a13049",
+  "remote_issue_closed": "partial"
+}
