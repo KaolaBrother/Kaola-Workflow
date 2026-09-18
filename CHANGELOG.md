@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Finalize residue-mirror overwrite guard (#1077).** The Step-8a residue mirror copied every
+  uncommitted non-`kaola-workflow/` file from the main checkout into the linked worktree
+  unconditionally, so an unrelated main edit to a file the run had itself changed was committed
+  under `chore: finalize` and only then read back as a stale receipt. The mirror now decides by
+  content, like the `#1054` record guard: a worktree copy that differs from main's copy and from
+  the merge-base (or that the run created) refuses `mirror_sync_failed` zero-write on both sides,
+  from `finalize --check` (`checks.mirror: sync_failed`, `checks.residue_conflicts`) and from the
+  transaction (`residue_conflicts` on the refusal envelope, both absolute copies in `detail`).
+  Untouched base files and byte-identical copies mirror exactly as before, and the main file is
+  preserved in main. Applied to all three forge claim copies; `#837`'s classified-never-enforced
+  receipt posture is unchanged.
+
 ## [12.1.0] - 2026-09-16
 
 ### Documentation

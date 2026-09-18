@@ -3315,9 +3315,87 @@ function listResidueOutsideProject(mainRoot) {
   return rels;
 }
 
-function mirrorResidueOutsideProject(mainRoot, root) {
+// #1077: the residue mirror's destruction guard. The project-folder mirror below decides by CONTENT
+// identity whether its copy would discard what the worktree already has (#1054); this copy never
+// did — it overwrote every main-dirty path with a bare `copyFileSync`. Measured live on 2026-09-14
+// (KaolaBrother/kaola-project-runner #44): an uncommitted main edit to a file the run's own PR had
+// changed was copied over the worktree's copy, committed under `chore: finalize`, and only then
+// read back as `final_validation_stale`. The path was NOT foreign — the finalize commit's directory
+// attribution (#975) admitted it correctly, because the run had authored it. What was foreign was
+// main's EDIT. So the rule is not "does this path belong to the run" (git status cannot answer
+// that) but "would this copy replace bytes the run authored": a worktree copy that differs from
+// main's dirty copy AND from the merge-base — or that the run created outright — is the run's work,
+// and the copy is refused before anything is written. A worktree copy identical to the base is
+// untouched by the run, so main's edit is the orchestrator's legitimate forward residue (the #816
+// CHANGELOG case) and copies as before; a byte-identical copy is a no-op and is listed as authored.
+// An ownership the probe cannot establish (no merge-base, unreadable base blob) fails CLOSED for a
+// differing copy: the refusal is zero-write and recoverable, the overwrite is neither.
+//   { copy: [<rel>…], conflicts: [{ path, reason, main_copy, worktree_copy }…] }
+//   reason ∈ 'worktree_authored' | 'worktree_created' | 'base_unavailable' | 'worktree_not_file'
+// null = absent, undefined = present but not a regular file (a copy over it is never a plain
+// overwrite, so it is a conflict too).
+function readRegularFileOrNull(p) {
+  let st = null;
+  try { st = fs.lstatSync(p); } catch (_) { return null; }
+  if (!st.isFile()) return undefined;
+  try { return fs.readFileSync(p); } catch (_) { return undefined; }
+}
+function residueMirrorPlan(mainRoot, root) {
+  const plan = { copy: [], conflicts: [] };
+  const rels = listResidueOutsideProject(mainRoot);
+  if (!rels.length) return plan;
+  const gitOut = (cwd, args, encoding) => execFileSync('git', ['-C', cwd].concat(args),
+    { encoding, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: GIT_MAX_BUFFER });
+  let baseSha = null;
+  try {
+    const mainHead = String(gitOut(mainRoot, ['rev-parse', '--verify', 'HEAD'], 'utf8')).trim();
+    baseSha = String(gitOut(root, ['merge-base', 'HEAD', mainHead], 'utf8')).trim() || null;
+  } catch (_) { baseSha = null; }
+  for (const rel of rels) {
+    const src = readRegularFileOrNull(path.join(mainRoot, rel));
+    if (!src) continue;
+    const dest = readRegularFileOrNull(path.join(root, rel));
+    if (dest === null || (dest && dest.equals(src))) { plan.copy.push(rel); continue; }
+    const conflict = { path: rel, reason: null, main_copy: path.join(mainRoot, rel), worktree_copy: path.join(root, rel) };
+    if (dest === undefined) conflict.reason = 'worktree_not_file';
+    else if (!baseSha) conflict.reason = 'base_unavailable';
+    else {
+      // null = absent at the base (the run created it); undefined = the probe itself failed.
+      let atBase = null;
+      try {
+        if (String(gitOut(root, ['ls-tree', baseSha, '--', rel], 'utf8')).trim()) {
+          atBase = gitOut(root, ['show', baseSha + ':' + rel], 'buffer');
+        }
+      } catch (_) { atBase = undefined; }
+      if (atBase === undefined) conflict.reason = 'base_unavailable';
+      else if (atBase === null) conflict.reason = 'worktree_created';
+      else if (atBase.equals(dest)) { plan.copy.push(rel); continue; }
+      else conflict.reason = 'worktree_authored';
+    }
+    plan.conflicts.push(conflict);
+  }
+  return plan;
+}
+// The refusal's `detail`: every conflicting path with its reason and both absolute copies, bounded.
+const RESIDUE_CONFLICT_DETAIL_LIMIT = 20;
+function residueConflictDetail(conflicts) {
+  const shown = conflicts.slice(0, RESIDUE_CONFLICT_DETAIL_LIMIT);
+  return 'the residue mirror would overwrite ' + conflicts.length + ' file(s) this run authored with the '
+    + 'main checkout\'s uncommitted copy — '
+    + shown.map(c => c.path + ' (' + c.reason + '; main copy: ' + c.main_copy + '; worktree copy: '
+      + c.worktree_copy + ')').join('; ')
+    + (conflicts.length > shown.length ? '; … ' + (conflicts.length - shown.length) + ' more' : '')
+    + '. Nothing was copied or committed. Commit, stash or revert that edit in the main checkout, or '
+    + 'fold it into the worktree by hand (the Main Orchestrator owns which side is current), then rerun '
+    + '`finalize --check`.';
+}
+
+// Copies exactly `plan.copy`; a caller that already holds the plan passes it so the copy and the
+// refusal decision were taken over the same listing.
+function mirrorResidueOutsideProject(mainRoot, root, plan) {
   const authored = [];
-  for (const rel of listResidueOutsideProject(mainRoot)) {
+  const rels = plan && Array.isArray(plan.copy) ? plan.copy : residueMirrorPlan(mainRoot, root).copy;
+  for (const rel of rels) {
     const to = path.join(root, rel);
     try {
       fs.mkdirSync(path.dirname(to), { recursive: true });
@@ -3347,9 +3425,11 @@ function mirrorResidueOutsideProject(mainRoot, root) {
 // Returns one of:
 //   { mirror: 'not_needed' | 'source_absent' | 'skipped_post_archive' | 'mirrored',
 //     ledger_compare: <token>, mirrored_paths: [<rel>…] }
-//   { refused: true, inner_reason: 'mirror_sync_failed', detail }
+//   { refused: true, inner_reason: 'mirror_sync_failed', detail[, residue_conflicts] }
 // `mirrored_paths` names ONLY the non-`kaola-workflow/` residue this function authored in the
 // worktree — the caller must treat those paths as its own, never as operator dirt.
+// #1077: `residue_conflicts` is present on the refusal the residue guard raises (see
+// `residueMirrorPlan`); that refusal is taken before ANY branch below writes.
 // `mirrored_paths` names ONLY the non-`kaola-workflow/` residue this function authored in the
 // worktree — the caller must treat those paths as its own, never as operator dirt.
 function mirrorFinalizationArtifacts(root, project) {
@@ -3358,6 +3438,18 @@ function mirrorFinalizationArtifacts(root, project) {
     mainRoot = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
     if (mainRoot === fs.realpathSync(root)) return { mirror: 'not_needed', ledger_compare: 'not_needed', mirrored_paths: [] };
   } catch (_) { return { mirror: 'not_needed', ledger_compare: 'not_needed', mirrored_paths: [] }; }
+  // #1077: the residue plan is taken FIRST, so the refusal precedes every write below — the
+  // post-archive resume mirrors residue too, and the project-folder copy must not land beside a
+  // refusal either. Zero-write on both sides.
+  const residuePlan = residueMirrorPlan(mainRoot, root);
+  if (residuePlan.conflicts.length) {
+    return {
+      refused: true,
+      inner_reason: 'mirror_sync_failed',
+      residue_conflicts: residuePlan.conflicts,
+      detail: residueConflictDetail(residuePlan.conflicts)
+    };
+  }
   const srcDir = path.join(mainRoot, 'kaola-workflow', project);
   const destDir = path.join(root, 'kaola-workflow', project);
   // Crash-resume: once the archive step has run, the live folder is GONE on purpose. Re-mirroring
@@ -3371,7 +3463,7 @@ function mirrorFinalizationArtifacts(root, project) {
     return {
       mirror: 'skipped_post_archive',
       ledger_compare: 'not_needed',
-      mirrored_paths: mirrorResidueOutsideProject(mainRoot, root)
+      mirrored_paths: mirrorResidueOutsideProject(mainRoot, root, residuePlan)
     };
   }
   if (!fs.existsSync(srcDir)) return { mirror: 'source_absent', ledger_compare: 'not_needed', mirrored_paths: [] };
@@ -3444,7 +3536,7 @@ function mirrorFinalizationArtifacts(root, project) {
   return {
     mirror: 'mirrored',
     ledger_compare: ledgerCompare,
-    mirrored_paths: mirrorResidueOutsideProject(mainRoot, root)
+    mirrored_paths: mirrorResidueOutsideProject(mainRoot, root, residuePlan)
   };
 }
 
@@ -3689,12 +3781,18 @@ function emitFinalizeCommitFailure(project, step, committed, finalizeTx) {
 // RETIRED — the transaction no longer attempts that repair (see the doc comment above
 // `mirrorFinalizationArtifacts`), so a diverged compare is unconditionally `sync_failed` here too:
 // the prediction must agree with what the transaction will actually do, and it will always refuse.
+// #1077: `residue_plan` is what the residue mirror WILL copy and what it will refuse over, from
+// the same `residueMirrorPlan` the transaction reads. Conflicts are `sync_failed` here for the
+// same reason a diverged record is: the transaction will always refuse them, and the prediction
+// must agree. `residue_conflicts` is set beside the state only then.
 function probeFinalizeMirror(root, project) {
   let mainRoot = null;
+  const noPlan = { copy: [], conflicts: [] };
   try {
     mainRoot = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
-    if (mainRoot === fs.realpathSync(root)) return { state: 'not_needed', mainRoot: null, destAuthorityAbsent: false };
-  } catch (_) { return { state: 'not_needed', mainRoot: null, destAuthorityAbsent: false }; }
+    if (mainRoot === fs.realpathSync(root)) return { state: 'not_needed', mainRoot: null, destAuthorityAbsent: false, residue_plan: noPlan };
+  } catch (_) { return { state: 'not_needed', mainRoot: null, destAuthorityAbsent: false, residue_plan: noPlan }; }
+  const residuePlan = residueMirrorPlan(mainRoot, root);
   const srcDir = path.join(mainRoot, 'kaola-workflow', project);
   const destDir = path.join(root, 'kaola-workflow', project);
   // The DIRECTORY bit is local to the crash-resume branch below, which mirrors
@@ -3702,16 +3800,19 @@ function probeFinalizeMirror(root, project) {
   // the prediction reads is a different question, and is the one that leaves this function.
   const destAbsent = !fs.existsSync(destDir);
   const destAuthorityAbsent = !fs.existsSync(path.join(destDir, 'workflow-state.md'));
+  if (residuePlan.conflicts.length) {
+    return { state: 'sync_failed', mainRoot, destAuthorityAbsent, residue_plan: residuePlan, residue_conflicts: residuePlan.conflicts };
+  }
   if (destAbsent && findArchiveAuthorities(root, project).length > 0
       && !mainClaimNeedsMirror(srcDir, root, project)) {
-    return { state: 'skipped_post_archive', mainRoot, destAuthorityAbsent };
+    return { state: 'skipped_post_archive', mainRoot, destAuthorityAbsent, residue_plan: residuePlan };
   }
-  if (!fs.existsSync(srcDir)) return { state: 'source_absent', mainRoot, destAuthorityAbsent };
+  if (!fs.existsSync(srcDir)) return { state: 'source_absent', mainRoot, destAuthorityAbsent, residue_plan: residuePlan };
   // What 'ready' promises: mergeCopyDir mkdirs destDir and copies into it. Probed once, here, so
   // every 'ready' return below carries the same answer.
   const ready = mirrorDestWritable(destDir) ? 'ready' : 'sync_failed';
   const srcRecord = path.join(srcDir, adaptiveSchema.MISSION_LIST_FILE);
-  if (!fs.existsSync(srcRecord)) return { state: ready, mainRoot, destAuthorityAbsent };
+  if (!fs.existsSync(srcRecord)) return { state: ready, mainRoot, destAuthorityAbsent, residue_plan: residuePlan };
   try {
     const { compareLedgers } = require('./kaola-workflow-ledger-compare.js');
     let destText = null;
@@ -3724,14 +3825,14 @@ function probeFinalizeMirror(root, project) {
     const verdict = compareLedgers(fs.readFileSync(srcRecord, 'utf8'), destText, {
       priorDigest: priorDigest ? priorDigest[adaptiveSchema.MISSION_LIST_FILE] : undefined
     });
-    if (verdict.safe) return { state: ready, mainRoot, destAuthorityAbsent };
+    if (verdict.safe) return { state: ready, mainRoot, destAuthorityAbsent, residue_plan: residuePlan };
     // #1054: a content-diverged (or diff-unavailable) verdict is always a machine stop — the
     // transaction never attempts an automatic repair for it (see `mirrorFinalizationArtifacts`), so
     // the prediction must always agree: `sync_failed`, regardless of writability.
-    return { state: 'sync_failed', mainRoot, destAuthorityAbsent };
+    return { state: 'sync_failed', mainRoot, destAuthorityAbsent, residue_plan: residuePlan };
   } catch (e) {
     if (e instanceof TypeError || e instanceof ReferenceError) throw e;
-    return { state: ready, mainRoot, destAuthorityAbsent };
+    return { state: ready, mainRoot, destAuthorityAbsent, residue_plan: residuePlan };
   }
 }
 
@@ -4018,6 +4119,9 @@ function persistChangedPathsToSummary(projectDir, changed, probe) {
 //   checks.staging_guard         — 'ok' or the guard's reason
 //   checks.validation            — the validation CLASSIFICATION ('chains_green' when green)
 //   checks.dirty_paths           — uncommitted non-`kaola-workflow/` paths in the run root
+//   checks.residue_conflicts     — #1077: the main-dirty files the residue mirror REFUSES to copy
+//                                  because the worktree's copy is this run's own work; absent when
+//                                  there are none (then `checks.mirror` is also `sync_failed`)
 //   checks.stale_paths,          — the culprits a `chains_stale` finding named, verbatim; all three
 //     .stale_kind,                 absent unless the finding carried them
 //     .stale_paths_truncated
@@ -4055,7 +4159,10 @@ function evaluateFinalizePreconditions(root, project, opts) {
   // Dirt the transaction's own Step-8a residue mirror WILL manufacture in the worktree. Subtracted
   // before anything is read as operator dirt: state the workflow produces by its own commit policy
   // is a repair obligation it already discharged, never evidence against the operator.
-  const wouldMirror = mirror.mainRoot ? listResidueOutsideProject(mirror.mainRoot) : [];
+  // #1077: only what the mirror WILL copy is manufactured dirt. A path the guard refuses is copied
+  // by nothing, so it stays visible as whatever it is — and the conflict is reported by name.
+  const wouldMirror = mirror.residue_plan ? mirror.residue_plan.copy : [];
+  if (mirror.residue_conflicts && mirror.residue_conflicts.length) checks.residue_conflicts = mirror.residue_conflicts;
   const authored = new Set(wouldMirror);
   try {
     const status = execFileSync('git', ['-C', root, 'status', '--porcelain'],
@@ -4257,11 +4364,16 @@ function cmdFinalize() {
         inner_reason: mirror.inner_reason,
         project: args.project,
         detail: mirror.detail,
+        residue_conflicts: mirror.residue_conflicts || undefined,
         operator_hint: 'The transaction mirrors the run record ONE way, from the main checkout down '
-          + 'into the linked worktree, and could not complete it. `detail` names which of two causes: '
+          + 'into the linked worktree, and could not complete it. `detail` names which of three causes: '
           + 'either the main and worktree copies have genuinely diverged — read `detail` for both '
           + 'absolute paths (and the diff, when available), reconcile by hand since only the Main '
           + 'Orchestrator can judge which side is current, then re-run `finalize --check`; or the '
+          + 'main checkout holds an uncommitted edit to a file THIS RUN authored, which the residue '
+          + 'mirror refuses to copy over the run\'s copy — `residue_conflicts` names each path with '
+          + 'both absolute copies; commit, stash or revert that edit in main, or fold it into the '
+          + 'worktree by hand, then re-run `finalize --check`; or the '
           + 'worktree destination could not be written to — make that tree writable, then re-run '
           + 'finalize. Never hand-copy a staler main ledger over the worktree. No archive or closure '
           + 'side effect was made. The claim is still held. Fixing this and re-running finalize is how '

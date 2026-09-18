@@ -1800,6 +1800,163 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     } finally { cleanup816(fxd); }
   }
 
+  // --- #1077: the residue mirror must never overwrite what the run authored --------------------
+  //
+  // Measured live (KaolaBrother/kaola-project-runner #44, 2026-09-14): main held an uncommitted
+  // edit to a file the run's own PR had changed; the Step-8a residue mirror copied it over the
+  // worktree's copy, `chore: finalize` committed it, and only then did the receipt read
+  // `final_validation_stale`. The path was the run's OWN — directory attribution (#975) admitted
+  // it correctly — and main's EDIT was the foreign thing. So the pin is by CONTENT: a worktree copy
+  // that differs from main's dirty copy and from the merge-base (or that the run created) refuses
+  // `mirror_sync_failed` zero-write from both `--check` and the transaction, naming the path under
+  // `residue_conflicts`; an untouched base copy or a byte-identical copy still mirrors exactly as
+  // #816 T6d pins. Each leg drives the REAL finalize process on the #816 fixture.
+  {
+    const rebind816 = (fx, sha) => {
+      const p = path.join(fx.wtCacheDir, 'chain-receipt.json');
+      const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+      j.headSha = sha;
+      fs.writeFileSync(p, JSON.stringify(j) + '\n');
+    };
+    const checkOf = r => (r.json && r.json.checks) || {};
+
+    // (a) a base file the run edited and committed; main holds a DIFFERENT uncommitted edit.
+    const fxa = mk816('issue-1077a');
+    try {
+      const wtPkg = path.join(fxa.wtRoot, 'package.json');
+      const mainPkg = path.join(fxa.mainRoot, 'package.json');
+      fs.writeFileSync(wtPkg, fs.readFileSync(wtPkg, 'utf8').replace('"scripts"', '"name":"run-edit","scripts"'));
+      g816(fxa.wtRoot, ['add', '-A']);
+      g816(fxa.wtRoot, ['commit', '-m', 'feat: run edits package.json']);
+      const headA = gOut816(fxa.wtRoot, ['rev-parse', 'HEAD']);
+      rebind816(fxa, headA);
+      fs.writeFileSync(mainPkg, fs.readFileSync(mainPkg, 'utf8').replace('"scripts"', '"description":"main dirt","scripts"'));
+      const wtBytes = fs.readFileSync(wtPkg);
+      const mainBytes = fs.readFileSync(mainPkg);
+      assert(!wtBytes.equals(mainBytes), '#1077(a) precondition: the two copies differ');
+
+      const chk = runFinalize816(fxa, ['--check', '--json']);
+      const ca = checkOf(chk);
+      assert(chk.json && chk.json.ok === false,
+        '#1077(a): --check must not answer finalize-ready over a copy the mirror will refuse, got '
+        + JSON.stringify(chk.json));
+      assert(ca.mirror === 'sync_failed',
+        '#1077(a): checks.mirror is sync_failed, got ' + JSON.stringify(ca.mirror));
+      assert(chk.json && Array.isArray(chk.json.reasons) && chk.json.reasons.indexOf('mirror_sync_failed') >= 0,
+        '#1077(a): reasons carries mirror_sync_failed, got ' + JSON.stringify(chk.json && chk.json.reasons));
+      const rca = ca.residue_conflicts;
+      assert(Array.isArray(rca) && rca.length === 1 && rca[0].path === 'package.json'
+        && rca[0].reason === 'worktree_authored',
+        '#1077(a): checks.residue_conflicts names the path as worktree_authored, got ' + JSON.stringify(rca));
+      assert(rca && rca[0].main_copy === mainPkg && rca[0].worktree_copy === wtPkg,
+        '#1077(a): the conflict carries both absolute copies, got ' + JSON.stringify(rca));
+      assert(Array.isArray(ca.dirty_paths) && ca.dirty_paths.length === 0,
+        '#1077(a): a committed worktree copy is not operator dirt, got ' + JSON.stringify(ca.dirty_paths));
+      assert(fs.readFileSync(wtPkg).equals(wtBytes) && fs.readFileSync(mainPkg).equals(mainBytes),
+        '#1077(a): --check wrote nothing on either side');
+
+      const r = runFinalize816(fxa);
+      assert(r.status !== 0 && r.json && r.json.result === 'refuse'
+        && r.json.reason === 'finalize_mirror_refused' && r.json.inner_reason === 'mirror_sync_failed',
+        '#1077(a): the transaction refuses finalize_mirror_refused/mirror_sync_failed, got status='
+        + r.status + ' json=' + JSON.stringify(r.json));
+      assert(r.json && Array.isArray(r.json.residue_conflicts) && r.json.residue_conflicts.length === 1
+        && r.json.residue_conflicts[0].path === 'package.json'
+        && r.json.residue_conflicts[0].reason === 'worktree_authored',
+        '#1077(a): the refusal envelope carries residue_conflicts, got ' + JSON.stringify(r.json && r.json.residue_conflicts));
+      assert(r.json && typeof r.json.detail === 'string'
+        && r.json.detail.indexOf('package.json (worktree_authored; main copy: ' + mainPkg + '; worktree copy: ' + wtPkg + ')') >= 0
+        && r.json.detail.indexOf('Nothing was copied or committed') >= 0,
+        '#1077(a): detail names the path, the reason and both absolute copies, got ' + JSON.stringify(r.json && r.json.detail));
+      assert(r.json && typeof r.json.operator_hint === 'string' && r.json.operator_hint.indexOf('residue_conflicts') >= 0,
+        '#1077(a): the operator hint names the residue cause');
+      assert(fs.readFileSync(wtPkg).equals(wtBytes),
+        '#1077(a): the worktree copy is byte-unchanged after the refusal');
+      assert(fs.readFileSync(mainPkg).equals(mainBytes),
+        '#1077(a): the main copy is byte-unchanged after the refusal (preserved in main, never deleted)');
+      assert(gOut816(fxa.wtRoot, ['rev-parse', 'HEAD']) === headA,
+        '#1077(a): no commit was made');
+      assert(!fs.existsSync(path.join(fxa.wtRoot, 'kaola-workflow', 'archive', fxa.project))
+        && !fs.existsSync(path.join(fxa.mainRoot, 'kaola-workflow', 'archive', fxa.project)),
+        '#1077(a): nothing was archived');
+      assert(fs.existsSync(path.join(fxa.wtProjDir, 'workflow-state.md')),
+        '#1077(a): the live run folder is preserved for repair');
+      assert(gOut816(fxa.mainRoot, ['status', '--porcelain']).indexOf('package.json') >= 0,
+        '#1077(a): the main checkout still holds its dirt');
+
+      // Reconciling main is what clears it — the same rerun-`--check` remedy the hint gives.
+      g816(fxa.mainRoot, ['checkout', '--', 'package.json']);
+      const again = runFinalize816(fxa, ['--check', '--json']);
+      const cagain = checkOf(again);
+      assert(again.json && again.json.ok === true && cagain.mirror !== 'sync_failed'
+        && !('residue_conflicts' in cagain),
+        '#1077(a): reverting the main edit clears the refusal, got ' + JSON.stringify(again.json));
+    } finally { cleanup816(fxa); }
+
+    // (b) a file the run CREATED (absent at the base); main holds a different uncommitted one.
+    const fxb = mk816('issue-1077b');
+    try {
+      const wtImpl = path.join(fxb.wtRoot, 'impl.txt');
+      fs.writeFileSync(path.join(fxb.mainRoot, 'impl.txt'), 'main dirt\n');
+      const chk = runFinalize816(fxb, ['--check', '--json']);
+      const cb = checkOf(chk);
+      assert(cb.mirror === 'sync_failed' && Array.isArray(cb.residue_conflicts)
+        && cb.residue_conflicts.length === 1 && cb.residue_conflicts[0].path === 'impl.txt'
+        && cb.residue_conflicts[0].reason === 'worktree_created',
+        '#1077(b): a run-created file reads worktree_created, got ' + JSON.stringify(chk.json));
+      const r = runFinalize816(fxb);
+      assert(r.status !== 0 && r.json && r.json.reason === 'finalize_mirror_refused'
+        && r.json.inner_reason === 'mirror_sync_failed',
+        '#1077(b): the transaction refuses, got ' + JSON.stringify(r.json));
+      assert(fs.readFileSync(wtImpl, 'utf8') === 'implementation\n',
+        '#1077(b): the run-created file is byte-unchanged');
+      assert(gOut816(fxb.wtRoot, ['rev-parse', 'HEAD']) === fxb.headSha,
+        '#1077(b): no commit was made');
+    } finally { cleanup816(fxb); }
+
+    // (c) CONTROL: a byte-identical dirty main copy is a no-op, and a file absent from the worktree
+    // is the #816 forward residue — both still mirror, and `--check` still answers ready.
+    const fxc2 = mk816('issue-1077c');
+    try {
+      fs.writeFileSync(path.join(fxc2.mainRoot, 'impl.txt'), 'implementation\n');
+      fs.writeFileSync(path.join(fxc2.mainRoot, 'CHANGELOG.md'), '# Changelog\n\n- finalize residue\n');
+      const chk = runFinalize816(fxc2, ['--check', '--json']);
+      const cc = checkOf(chk);
+      assert(chk.json && chk.json.ok === true && cc.mirror !== 'sync_failed' && !('residue_conflicts' in cc),
+        '#1077(c): identical + forward residue is not a conflict, got ' + JSON.stringify(chk.json));
+      assert(Array.isArray(cc.dirty_paths) && cc.dirty_paths.length === 0,
+        '#1077(c): what the mirror will copy is subtracted from dirt, got ' + JSON.stringify(cc.dirty_paths));
+      const r = runFinalize816(fxc2);
+      const tx = r.json && r.json.finalize_transaction;
+      assert(r.status === 0 && tx && tx.residue_mirrored === 2 && tx.finalize_commit === 'committed',
+        '#1077(c): both paths mirror and land in chore: finalize, got status=' + r.status + ' tx=' + JSON.stringify(tx));
+      assert(fs.readFileSync(path.join(fxc2.wtRoot, 'CHANGELOG.md'), 'utf8') === '# Changelog\n\n- finalize residue\n'
+        && fs.readFileSync(path.join(fxc2.wtRoot, 'impl.txt'), 'utf8') === 'implementation\n',
+        '#1077(c): the residue reached the worktree and the identical copy is unchanged');
+      assert(gOut816(fxc2.wtRoot, ['log', '--format=%s', '-1', '--', 'CHANGELOG.md']) === 'chore: finalize ' + fxc2.project,
+        '#1077(c): the residue is carried by chore: finalize');
+    } finally { cleanup816(fxc2); }
+
+    // (d) CONTROL: a base file the run never touched; main's uncommitted edit to it is the
+    // orchestrator's legitimate forward residue and copies as before (worktree copy == base).
+    const fxd2 = mk816('issue-1077d');
+    try {
+      const mainPkg = path.join(fxd2.mainRoot, 'package.json');
+      const edited = fs.readFileSync(mainPkg, 'utf8').replace('"scripts"', '"description":"orchestrator residue","scripts"');
+      fs.writeFileSync(mainPkg, edited);
+      const chk = runFinalize816(fxd2, ['--check', '--json']);
+      const cd = checkOf(chk);
+      assert(chk.json && chk.json.ok === true && cd.mirror !== 'sync_failed' && !('residue_conflicts' in cd),
+        '#1077(d): an untouched base copy is not a conflict, got ' + JSON.stringify(chk.json));
+      const r = runFinalize816(fxd2);
+      const tx = r.json && r.json.finalize_transaction;
+      assert(r.status === 0 && tx && tx.residue_mirrored === 1 && tx.finalize_commit === 'committed',
+        '#1077(d): the forward edit mirrors and lands, got status=' + r.status + ' tx=' + JSON.stringify(tx));
+      assert(fs.readFileSync(path.join(fxd2.wtRoot, 'package.json'), 'utf8') === edited,
+        '#1077(d): the worktree now carries main\'s edit');
+    } finally { cleanup816(fxd2); }
+  }
+
   // DELETED: #816 T6e — "a receipt left behind by a REAL code commit must still refuse
   // chains_stale, before any commit". The bookkeeping-advance DISCRIMINATION it protected is intact
   // and still classifies that case `chains_stale`; what is gone is the refusal that followed the

@@ -457,6 +457,29 @@ state, not a run record — it rides into the archive unexcluded, like `.cache/c
 (`probeFinalizeMirror` passes `priorDigest` too, and never writes it), so the prediction and the
 transaction agree on the `prior_mirror` case as well as on a genuine divergence.
 
+**`#1077`** applied the same content-identity rule to the mirror's *other* copy: the Finalization
+residue outside `kaola-workflow/` (CHANGELOG, docs, …) that Step 8a carries from the main checkout
+into the linked worktree so the `chore: finalize` commit can hand it to the sink. That copy used to
+overwrite every main-dirty path unconditionally; on 2026-09-14 it copied an uncommitted main edit
+over a file the run's own PR had changed, committed it, and only then read the receipt as stale. The
+path was the run's own — the commit's directory attribution admitted it correctly — and main's
+*edit* was the foreign thing, which no path-ownership test can see. `residueMirrorPlan` now
+classifies each main-dirty file by content: absent from the worktree or byte-identical → copied
+(and listed in `mirrored_paths`); identical to the merge-base → the run never touched it, so main's
+edit is legitimate forward residue and is copied; differing from both main's copy and the base,
+created by the run, not a regular file in the worktree, or of an ownership git cannot establish → a
+conflict. Any conflict refuses `mirror_sync_failed` before anything is written — before the
+post-archive residue copy and before the project-folder copy — and the refusal envelope carries
+`residue_conflicts` (`path`, `reason` ∈ `worktree_authored` | `worktree_created` |
+`worktree_not_file` | `base_unavailable`, `main_copy`, `worktree_copy`) beside a `detail` naming
+each one. The main file is preserved in main, never deleted; the remedy is to commit, stash or
+revert that edit there, or fold it into the worktree by hand, then rerun `finalize --check`. The
+read-only prediction reads the same plan: `checks.mirror` is `sync_failed`, `reasons` carries
+`mirror_sync_failed`, `checks.residue_conflicts` names the paths, and only the paths the mirror will
+actually copy are subtracted from `dirty_paths`. A stale receipt is still classified and never
+enforced, exactly as `#837` left it; what changed is that the transaction can no longer stale its
+own green receipt through this copy.
+
 ### `finalize --check` — one read-only pass
 
 Evaluates **every** precondition in one pass and reports all of them together, so N unmet
@@ -467,7 +490,8 @@ preconditions come back from one invocation instead of one per re-run. Zero side
 ```
 
 `checks` carries `mirror`, `workflow_state`, `implementation_commit`, `staging_guard`, `validation`,
-`changed_paths`, `dirty_paths`, and — only when a `chains_stale` finding named them — `stale_paths`,
+`changed_paths`, `dirty_paths`, — only when the residue mirror would refuse (`#1077`) —
+`residue_conflicts`, and — only when a `chains_stale` finding named them — `stale_paths`,
 `stale_kind` and `stale_paths_truncated`. `validation` is the bare classification token; the three
 stale fields sit beside it rather than inside it, so a reader can tell a prose edit from a code
 change without re-deriving the hashes. They are the finding's own values, verbatim, and absent when
