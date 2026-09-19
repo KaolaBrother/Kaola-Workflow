@@ -282,6 +282,7 @@ const cursorSync = require('./sync-cursor-edition.js');
 const zcodeSync = require('./sync-zcode-edition.js');
 const devinSync = require('./sync-devin-edition.js');
 const droidSync = require('./sync-droid-edition.js');
+const dshSync = require('./sync-dsh-edition.js');
 const {
   FORGES: ROUTING_FORGES,
   GENERATED_SURFACES: ROUTING_SURFACES,
@@ -322,6 +323,10 @@ const RUNTIME_EDITIONS = [
   {
     id: 'droid',
     surfaceFor: forge => base => droidSync.skillRel(base, forge),
+  },
+  {
+    id: 'dsh',
+    surfaceFor: forge => base => dshSync.skillRel(base, forge),
   },
 ];
 
@@ -416,6 +421,7 @@ const GENERATED_SURFACE_CONTENT = (() => {
       map.set(zcodeSync.commandRel(base, forge), zcodeSync.renderCommand(canon, base, forge));
       map.set(devinSync.skillRel(base, forge), devinSync.renderSkill(canon, base, forge));
       map.set(droidSync.skillRel(base, forge), droidSync.renderSkill(canon, base, forge));
+      map.set(dshSync.skillRel(base, forge), dshSync.renderSkill(canon, base, forge));
     }
   }
   return map;
@@ -666,8 +672,8 @@ function checkGlobalContract({ blocks, globalContract }) {
     const everyTree = MANIFEST_EDITIONS.command.length + MANIFEST_EDITIONS.skill.length;
     assert(!error && files.length === everyTree,
       `INIT-CARRIER: carrier must reach all ${everyTree} init surfaces, got ${files.length}${error ? ' (' + error + ')' : ''}`);
-    assert(files.length === 27,
-      `INIT-CARRIER: expected 27 runtime/forge init surfaces; got ${files.length}. Verify every new surface before changing the literal`);
+    assert(files.length === 30,
+      `INIT-CARRIER: expected 30 runtime/forge init surfaces; got ${files.length}. Verify every new surface before changing the literal`);
 
     const duplicated = [];
     for (const file of files) {
@@ -830,7 +836,7 @@ function checkGlobalContract({ blocks, globalContract }) {
     //     It is a two-place edit on purpose: a fourth forge, or a third additive runtime, reds this
     //     line, and the correct response is to confirm the NEW surfaces carry the pointer and then
     //     move the number — never to move the number first.
-    const NEXT_SURFACES = 27;   // 3 forges x (claude command + codex skill + opencode + kimi + grok + cursor + zcode + devin + droid)
+    const NEXT_SURFACES = 30;   // 3 forges x (claude command + codex skill + opencode + kimi + grok + cursor + zcode + devin + droid + dsh)
     assert(files.length === NEXT_SURFACES,
       `axiom pointer: the axiom pointer is obligated on ${files.length} next surface(s), expected `
       + `${NEXT_SURFACES}. If the surface universe legitimately changed, verify the pointer is on `

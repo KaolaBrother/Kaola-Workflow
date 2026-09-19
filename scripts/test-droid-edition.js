@@ -141,7 +141,7 @@ for (const forge of ['github', 'gitlab', 'gitea']) {
 
 // Host guard is present in every generated runtime adapter block.
 function hostGuardFor(runtime) {
-  const host = runtime.charAt(0).toUpperCase() + runtime.slice(1);
+  const host = agents.runtimeHostName(runtime);
   return 'Host: ' + host + '. If the running host is not ' + host;
 }
 for (const runtime of agents.RUNTIMES) {
@@ -265,7 +265,7 @@ assert(installAll.includes('install-droid.sh') && /RUNTIMES=\([^)]*droid/.test(i
   'install-all.sh includes droid runtime and installer');
 
 const claimSrc = fs.readFileSync(path.join(REPO, 'scripts/kaola-workflow-claim.js'), 'utf8');
-assert(claimSrc.includes('--runtime claude|codex|opencode|kimi|grok|zcode|devin|droid'),
-  'claim.js USAGE includes devin and droid runtimes');
+assert(claimSrc.includes('--runtime claude|codex|opencode|kimi|grok|zcode|devin|droid|dsh'),
+  'claim.js USAGE includes droid and dsh runtimes');
 
 console.log('droid-edition test passed');

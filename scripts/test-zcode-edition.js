@@ -250,9 +250,9 @@ const KAOLA_MANAGED_MARKER = 'kaola-workflow-managed-agent: true';
     const rel = path.relative(REPO, abs);
     const src = fs.readFileSync(abs, 'utf8');
     const usage = src.match(/--runtime claude\|codex\|opencode\|kimi\|grok(\|cursor)?(\|zcode)?(\|devin)?(\|droid)?\|?/);
-    assertReal(src.includes('--runtime claude|codex|opencode|kimi|grok|zcode|devin|droid'),
-      'B0-claim[' + rel + ']: USAGE runtime enum ends with |droid '
-      + '(--runtime claude|codex|opencode|kimi|grok|zcode|devin|droid)');
+    assertReal(src.includes('--runtime claude|codex|opencode|kimi|grok|zcode|devin|droid|dsh'),
+      'B0-claim[' + rel + ']: USAGE runtime enum ends with |dsh '
+      + '(--runtime claude|codex|opencode|kimi|grok|zcode|devin|droid|dsh)');
   }
 }
 
