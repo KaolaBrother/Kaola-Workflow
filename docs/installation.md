@@ -103,7 +103,7 @@ enabled = true
 max_concurrent_threads_per_session = 5
 ```
 
-### OpenCode, Kimi, Grok, Cursor, ZCode, Devin, and Droid
+### OpenCode, Kimi, Grok, Cursor, ZCode, Devin, Droid, and DSH
 
 Each additive installer accepts a forge, global or project scope, and non-interactive mode. The established OpenCode, Kimi, Grok, Cursor, ZCode, and Droid installers also expose removal; Devin removal is not yet a standalone installer mode:
 
@@ -115,6 +115,7 @@ Each additive installer accepts a forge, global or project scope, and non-intera
 ./install-zcode.sh    --global --yes --forge=github
 ./install-devin.sh    --global --yes --forge=github
 ./install-droid.sh    --global --yes --forge=github
+./install-dsh.sh      --global --yes --forge=github
 ```
 
 For project scope, use `--target /absolute/repository/path`. Cursor intentionally requires explicit
@@ -130,6 +131,7 @@ Carrier, configuration, hook, scope, precedence, and upgrade details:
 - [ZCode edition](zcode-edition.md)
 - [Devin edition](devin-edition.md)
 - [Droid edition](droid-edition.md)
+- [DSH edition](dsh-edition.md)
 
 ## Cursor Cloud
 
@@ -203,6 +205,7 @@ Remove an additive runtime from the same scope in which it was installed:
 ./install-cursor.sh   --global --uninstall
 ./install-zcode.sh    --global --uninstall
 ./install-droid.sh    --global --uninstall
+./install-dsh.sh      --global --uninstall
 ```
 
 Use `--target /absolute/repository/path --uninstall` for project scope. These uninstallers remove

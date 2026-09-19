@@ -2,22 +2,22 @@
 
 Kaola-Workflow has one runtime-neutral behavioral authority for every installed role. Native Claude,
 Codex, Grok, and Cursor role profiles are generated outputs, not authoring surfaces; OpenCode, Kimi,
-ZCode, Devin, and Droid install no Kaola role profiles (native-only runtimes, ADR 0025).
+ZCode, Devin, Droid, and DSH install no Kaola role profiles (native-only runtimes, ADR 0025).
 
 ## Canonical source graph
 
 | Source | Owns | Must not own |
 | --- | --- | --- |
 | `templates/agents/behavior-contracts.json` | The complete seven-role inventory; purpose, inputs, authority/custody, writes, deliverable, verification, stop conditions, and capability requirements | Runtime brands, native model names, tool syntax, home paths, hooks, or provenance narration |
-| `templates/agents/runtime-capabilities.json` | Evidence-backed instruction loading, native carriers, dispatch, model/effort mapping, tool binding, hook scope, and eleven closed adapter variants | Universal role behavior or arbitrary prompt extensions |
+| `templates/agents/runtime-capabilities.json` | Evidence-backed instruction loading, native carriers, dispatch, model/effort mapping, tool binding, hook scope, and twelve closed adapter variants | Universal role behavior or arbitrary prompt extensions |
 | `templates/agents/provenance.json` | Source classification (`source_kind`) for all seven roles, plus an optional `history` record — origin, pinned commit, license, copyright, upstream path/blob/content hashes, and measurement — for roles that carry one | Agent-facing prompt content or runtime behavior |
 | `scripts/generate-agent-profiles.js` | Schema validation, deterministic composition, behavior/render hashes, native profile rendering, generated manifest, and check/write modes | Project migration, installation policy, release mutation, or a second behavior source |
 | `agents/generated-agent-manifest.json` | The 7-role, six-adapter, 42-render inventory and the per-render receipt triple (`behavior_sha256`, `adapter_capabilities_sha256`, `resolved_profile_sha256`) | Provenance prose or independent policy |
 
-The inventory spans nine runtime families through eleven adapter variants: Claude; Codex for GitHub,
-GitLab, and Gitea; and one each for opencode, Kimi, Grok, Cursor, ZCode, Devin, and Droid. Six adapters
-install role profiles (Claude, the three Codex plugins, Grok, Cursor); the five `native_only`
-adapters (OpenCode, Kimi, ZCode, Devin, Droid) render commands, skills, hooks, and the global contract
+The inventory spans ten runtime families through twelve adapter variants: Claude; Codex for GitHub,
+GitLab, and Gitea; and one each for opencode, Kimi, Grok, Cursor, ZCode, Devin, Droid, and DSH. Six adapters
+install role profiles (Claude, the three Codex plugins, Grok, Cursor); the six `native_only`
+adapters (OpenCode, Kimi, ZCode, Devin, Droid, DSH) render commands, skills, hooks, and the global contract
 only. The three Codex variants
 are forge-neutral for role behavior and render byte-identical profile bodies.
 

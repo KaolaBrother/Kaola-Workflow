@@ -3,7 +3,7 @@
 **A recoverable engineering workflow for coding agents, from issue to verified delivery.**
 
 Kaola-Workflow connects issue claims, a resumable Mission List, validation evidence, and delivery
-records across **nine coding runtimes** and **GitHub, GitLab, and Gitea**. The agent plans,
+records across **ten coding runtimes** and **GitHub, GitLab, and Gitea**. The agent plans,
 executes, reviews, and judges completion; Workflow records the run and provides the scripts for
 claiming, validation, finalization, and delivery.
 
@@ -73,7 +73,7 @@ validation evidence, supervises finalization, and stops that session when finish
 
 Runner reports CLI observations; the agent decides whether the task is complete. Starting Runner
 alone does not install or invoke Workflow. Runner currently provides **seven target CLI Skills**;
-Workflow additionally supports **ZCode and Droid** as native CLI editions. Transport and recovery
+Workflow additionally supports **ZCode, Droid, and DSH** as native CLI editions. Transport and recovery
 capabilities vary by target.
 See [Runner setup and support](https://github.com/KaolaBrother/kaola-project-runner#agent-runtime-support).
 The projects have [separate licenses](https://github.com/KaolaBrother/kaola-project-runner#license-and-use).
@@ -124,6 +124,7 @@ A research or design request does not authorize implementation. See [Task Qualit
 | ZCode | Commands | Native dispatch | `./install-zcode.sh` |
 | Devin CLI | Inline skills | Native `run_subagent` | `./install-devin.sh` |
 | Droid CLI | Inline skills | Native Task `worker`/`explorer` | `./install-droid.sh` |
+| DSH (DeepSeek Harness) | Inline skills | Native `subagent` / `subagent_fork` | `./install-dsh.sh` |
 
 All forge-aware installers accept `--forge=github|gitlab|gitea`; Codex selects its forge through the
 installed plugin. Models, dispatch, hooks, and recovery retain each runtime's measured capabilities.
@@ -180,6 +181,7 @@ Approximate **static prompt footprint for v12.0.1**, using the generated GitHub 
 | Grok CLI | 1,900 | 2,290 | 1,370 | 5,560 |
 | Devin CLI | 1,930 | 2,350 | 1,340 | 5,620 |
 | Droid CLI | 1,930 | 2,360 | 1,390 | 5,680 |
+| DSH | 1,920 | 2,340 | 1,330 | 5,590 |
 | Kimi Code | 2,610 | 3,030 | 490 | 6,130 |
 | OpenCode | 2,610 | 3,030 | 490 | 6,130 |
 | ZCode | 2,630 | 3,030 | 490 | 6,150 |

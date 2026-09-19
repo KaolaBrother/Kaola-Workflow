@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **DSH (DeepSeek Harness) runtime edition (#1081).** Add DSH as the tenth additive `native_only`
+  runtime: generated inline skills under `$DSH_HOME/skills/` (default `~/.dsh/skills/`) or
+  `<project>/.dsh/skills/`, native `subagent` / `subagent_fork` routing, a managed
+  `$DSH_HOME/AGENTS.md` carrier, forge-selected support scripts, install/check/uninstall flows,
+  capability evidence, and documentation. The edition installs no Kaola role profiles or hooks and
+  never writes user DSH `settings.yaml`, `.env`, credentials, or model/provider config. Skip with
+  `./install-all.sh --skip=dsh`.
+
 ## [12.1.1] - 2026-09-18
 
 ### Fixed

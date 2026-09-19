@@ -168,7 +168,7 @@ all. `readActiveFolders` follows the same pattern: sink-merge imports it from
 `clearAdvisoryClaim`, `resolveProjectSlug`, `worktreePathFor`, `archiveProjectDir`) stay owned by
 `kaola-workflow-claim.js` and are still consumed by sink-merge from there — a dedicated
 closure/archive service module was weighed and declined, since it would add an installed file to
-nine runtimes and two hand-ported forges for a single external consumer.
+ten runtimes and two hand-ported forges for a single external consumer.
 
 `classifyLane(lane, ctx)` (`kaola-workflow-classifier.js`) is a pure function partitioning an
 active-folder lane into `mine` / `live` / `stale` / `ambiguous`, driven by three claim-time fields
@@ -524,10 +524,10 @@ Its routing-only guidance additionally exposes built-in/generic routes and nativ
 parallel, resume, nesting, history, or cold-start boundaries where evidence establishes them. It
 does not impose a Kaola concurrency cap or lowest-common-denominator runtime.
 
-Runtimes and forges remain independent axes. The closed role inventory has nine runtime families
-and eleven adapter variants: one Claude, three Codex forge variants, and one each for opencode, Kimi,
-Grok, Cursor, ZCode, Devin, and Droid. Six of those adapters install Kaola role profiles; the OpenCode,
-Kimi, ZCode, Devin, and Droid adapters are `native_only` — Kaola has no cost lever there (children inherit
+Runtimes and forges remain independent axes. The closed role inventory has ten runtime families
+and twelve adapter variants: one Claude, three Codex forge variants, and one each for opencode, Kimi,
+Grok, Cursor, ZCode, Devin, Droid, and DSH. Six of those adapters install Kaola role profiles; the OpenCode,
+Kimi, ZCode, Devin, Droid, and DSH adapters are `native_only` — Kaola has no cost lever there (children inherit
 the session model or a vendor router chooses it), so they install no profiles and dispatch through
 the vendor harness. Additive installers still take `--forge` to select routing/forge prose; that
 does not create another role-behavior adapter.

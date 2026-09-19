@@ -17,7 +17,7 @@ the machine-global contract.
 
 Claude Code is the only supported runtime that needs a bridge. Root `CLAUDE.md` begins with
 `@AGENTS.md`, then contains only the Claude-specific overlay. Codex, opencode, Kimi Code, Grok,
-Cursor, ZCode, Devin, and Droid have direct `AGENTS.md` support.
+Cursor, ZCode, Devin, Droid, and DSH have direct `AGENTS.md` support.
 
 ## Capability map
 
@@ -32,6 +32,7 @@ Cursor, ZCode, Devin, and Droid have direct `AGENTS.md` support.
 | ZCode | `native_only` — no Kaola role profiles (ADR 0025); automatic selection, native `@role`, or the live Agent schema against the runtime's own catalog | Full `general-purpose` and read-only `Explore`; foreground/background stays native | Profiles load in a new session and children cannot spawn; children follow the main Agent's model |
 | Devin CLI | `native_only` — no Kaola role profiles (ADR 0025); live schema: profile-based `run_subagent` / `read_subagent`, or the measured Fusion `sidekick` route | `subagent_explore`, parent-model `subagent_general`, and unpinned custom profiles routed by the host | Catalog fixed at session start; default nesting is one; background tools needing new approval are denied; Kaola pins no model |
 | Droid CLI | `native_only` — no Kaola role profiles (ADR 0025); live `Task` schema with built-in `worker` / `explorer` routes or user-defined custom droids | General-purpose `worker`, read-only `explorer`, and custom droids from `~/.factory/droids/`; sibling Task calls can run in parallel | The live schema owns model and session fields; spawned routes cannot spawn descendants; background and resume remain runtime-owned |
+| DSH | `native_only` — no Kaola role profiles (ADR 0025); live `subagent` / `subagent_fork` tools | Fresh `subagent` (no parent conversation) and `subagent_fork`; background and child model fields follow the live schema | User DSH config is owner-owned; this edition writes no settings, `.env`, credentials, or hooks; post-compaction AGENTS.md reload is unmeasured |
 
 Cursor and ZCode do not publish one complete Task/Agent call schema. Their generated guidance names
 the verified routes, then tells the orchestrator to use the current session's exposed schema and
@@ -58,6 +59,7 @@ catalogs. Unknown stays `unknown`; a documented path is not a live named-role PA
 | Grok CLI | `${GROK_HOME:-~/.grok}` | no | no | documented user `~/.grok/agents/` |
 | ZCode | `${ZCODE_HOME:-~/.zcode}` | no | no | `native_only` — no Kaola profile catalog installed |
 | Droid CLI | `${DROID_HOME:-~/.factory}` | no | no | `native_only` — no Kaola profile catalog installed; Droid 0.220.0 direct-load probe |
+| DSH | `${DSH_HOME:-~/.dsh}` | no | no | `native_only` — no Kaola profile catalog installed; DSH 0.1.5-rc.2 CLI/dump-config probe |
 | Cursor CLI / local | `${CURSOR_HOME:-~/.cursor}/{agents,commands}` (un-nested) | **no** | yes (explicit `--target`; all four claim trees spawn installed `--ensure-target` after `applyDemonstratedCursorCliHost` when identity is `cursor`/`cli`/`local`: explicit argv, or omitted product/host plus a living CLI-shaped ancestor `…/YYYY.MM.DD-<hash>/index.js` or `cursor-agent` **and** `--workspace` sharing git identity with cwd; generic `--workspace` on an unrelated tool skips; `--worker-dir` present with or without `--workspace` skips; no `--workspace` skips; Darwin unquoted `ps args=` remainder until next `--<flag>` reconstitutes paths with spaces, Linux `/proc` NUL cmdline unchanged; `--cursor-workspace` when set, else recorded `main_root` on resume, else claim.js `getRoot()` on first claim; independently entered Finalize still ensures `"$PWD"` immediately before named dispatch) | live project `implementer`; raw Task carrier resolved `cursor-grok-4.6-medium` |
 | Cursor App / local IDE | same documented user carrier; App is not inferred from a CLI binary | **no** | `unknown` | live project catalog with all 14 pre-#1062 Kaola types; exact `implementer` succeeded |
 | Cursor App / Cloud host | saved remote environment managed by Cursor | **no** | yes; a confirmed environment-setup Agent materializes the selected repository before Save | live exact-Build 23-type catalog with all 14 pre-#1062 Kaola names; exact `implementer` succeeded from a new same-repository parent |
@@ -143,6 +145,7 @@ both `workflow-next` and `kaola-workflow-finalize`:
 | native_only | ZCode | no Kaola profiles; vendor harness (`general-purpose` / `Explore`), follows the main Agent |
 | native_only | Devin | no Kaola profiles; live-schema native dispatch (profile routes or Fusion `sidekick`), host router owns the model; see [measured evidence](devin-edition.md#dispatch-and-model-ownership) |
 | native_only | Droid | no Kaola profiles; live-schema `Task` dispatch (`worker` / `explorer` / custom droids), host owns model routing |
+| native_only | DSH | no Kaola profiles; live-schema `subagent` / `subagent_fork`, host owns model routing |
 
 This is not a Kaola scheduler or a blanket prohibition on task-sensitive runtime choices. Codex
 profile TOML values take precedence over spawn parameters and the parent session, so dispatch omits
@@ -183,15 +186,15 @@ documentation, and review remain separately dispatchable.
 
 ## Adapter inventory
 
-The closed inventory contains nine runtime families and eleven adapter variants:
+The closed inventory contains ten runtime families and twelve adapter variants:
 
 - one Claude adapter;
 - three forge-neutral Codex variants (`codex-github`, `codex-gitlab`, `codex-gitea`);
-- one each for opencode, Kimi, Grok, Cursor, ZCode, Devin, and Droid.
+- one each for opencode, Kimi, Grok, Cursor, ZCode, Devin, Droid, and DSH.
 
 Six of those adapters install Kaola role profiles (`role_dispatch: "named_profile"`: Claude, the
-three Codex variants, Grok, Cursor); the other five are `native_only` — OpenCode, Kimi, ZCode,
-Devin, and Droid render commands, skills, hooks, and the global contract only, because a Kaola
+three Codex variants, Grok, Cursor); the other six are `native_only` — OpenCode, Kimi, ZCode,
+Devin, Droid, and DSH render commands, skills, hooks, and the global contract only, because a Kaola
 profile has no
 cost lever there (children inherit the session model, or a vendor router owns it).
 
@@ -374,6 +377,27 @@ The selected child model and profile source remained unobservable.
   `kaola-workflow-finalize`, `workflow-init`, `workflow-next`, and the loaded machine-global
   carrier. Post-compaction carrier reload remains unmeasured; the adapter therefore records it as
   `unknown` and uses skill re-invocation for recovery.
+
+### DSH (DeepSeek Harness)
+
+- [CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md) documents
+  the `dsh` launcher, profiles under `$DSH_HOME/profiles`, headless one-shot, web UI, and
+  `--dump-config` / `--dump-default-config`.
+- [Home paths](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/util/home-paths/README.md)
+  documents `$DSH_HOME` over `~/.dsh`.
+- [Agent instructions](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/context/agent-instructions/README.md)
+  documents user-global `$DSH_HOME/AGENTS.md` plus the project `AGENTS.md`/`CLAUDE.md` chain.
+- [Skills](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/skill/skill-filesystem/README.md)
+  documents `<project>/.dsh/skills`, `$DSH_HOME/skills`, kebab-case `name`/`description`, and
+  `/name` invocation.
+- [Subagent tool](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/subagent/tool-subagent/README.md)
+  documents the live `subagent` tool. Shipped profiles also mount `subagent_fork`.
+- **Live probe (2026-09-19, issue #1081).** DSH CLI `0.1.5-rc.2` answered `--version`,
+  `--profile headless --help`, and `--profile web --dump-default-config`. Both dumped trees
+  include agent-instructions, skill-filesystem, tool-skill, and tool-subagent. A hermetic
+  `DSH_HOME` install of this edition writes skills, support scripts, and `AGENTS.md` only.
+  User `settings.yaml`, `.env`, and credentials were not opened. Post-compaction carrier reload
+  and a live LLM catalog remain unmeasured.
 
 ### ZCode
 
