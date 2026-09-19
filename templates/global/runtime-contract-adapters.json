@@ -122,6 +122,17 @@
       "precedence": "Personal AGENTS.md from DROID_HOME is always-loaded context; project AGENTS.md from repository root to cwd appears later and may add stricter local rules, with CLAUDE.md read as a compatibility entry point.",
       "reload": "A new session discovers personal and project instruction files; post-compaction reload of the personal carrier is not measured for Droid in this scope.",
       "compatibility_reads": ["project CLAUDE.md", "project AGENTS.md"]
+    },
+    {
+      "id": "dsh-local",
+      "runtime": "dsh",
+      "host": "local",
+      "discovery": { "kind": "command", "commands": ["dsh"] },
+      "carrier_group": "dsh-global-agents",
+      "carrier": { "kind": "managed_region", "format": "markdown", "root_env": "DSH_HOME", "default_root": ".dsh", "relative_path": "AGENTS.md" },
+      "precedence": "User-global $DSH_HOME/AGENTS.md loads first; the project AGENTS.md/CLAUDE.md chain from the git root to cwd follows, and more specific files take precedence.",
+      "reload": "A new session loads user-global and project instruction files at the first request; post-compaction reload of the personal carrier is not measured for DSH in this scope.",
+      "compatibility_reads": ["project AGENTS.md", "project CLAUDE.md"]
     }
   ]
 }

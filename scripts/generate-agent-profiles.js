@@ -35,7 +35,7 @@ const ROLES = Object.freeze([
   'knowledge-lookup',
   'tdd-guide',
 ]);
-const RUNTIMES = Object.freeze(['claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin', 'droid']);
+const RUNTIMES = Object.freeze(['claude', 'codex', 'opencode', 'kimi', 'grok', 'cursor', 'zcode', 'devin', 'droid', 'dsh']);
 // Adapters that still install Kaola role profiles and therefore render one subagent binding each.
 const BINDING_RUNTIMES = Object.freeze(['claude', 'codex', 'grok', 'cursor']);
 const REQUIRED_COVERAGE = Object.freeze([
@@ -208,7 +208,7 @@ function validateRuntimeAdapters(source) {
     }
   }
   if (JSON.stringify([...runtimeSet].sort()) !== JSON.stringify([...RUNTIMES].sort())) {
-    throw new Error('runtime-capabilities: expected all eight runtime families');
+    throw new Error('runtime-capabilities: expected all ' + RUNTIMES.length + ' runtime families');
   }
   if (adapterEntries(source).filter(entry => entry.adapter.runtime === 'codex').length !== 3) {
     throw new Error('runtime-capabilities: expected three forge-neutral Codex adapters');
@@ -259,6 +259,7 @@ function isBindingAdapter(adapter) {
 }
 
 function runtimeHostName(runtime) {
+  if (runtime === 'dsh') return 'DSH';
   return runtime.charAt(0).toUpperCase() + runtime.slice(1);
 }
 
@@ -678,6 +679,7 @@ module.exports = {
   ROLES,
   RUNTIMES,
   BINDING_RUNTIMES,
+  runtimeHostName,
   isBindingAdapter,
   RETIRED_VOCABULARY_BAN,
   sha256,

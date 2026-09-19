@@ -204,6 +204,42 @@
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1078",
       "observed_at": "2026-09-16T00:00:00Z",
       "claim": "Droid CLI 0.220.0 at /usr/local/bin/droid loaded this repository's AGENTS.md and CLAUDE.md at session start. After install-droid.sh --global --yes --forge=github, install-droid.sh --check passed, and a read-only droid exec probe reported the three Kaola skills (kaola-workflow-finalize, workflow-init, workflow-next) plus the machine-global AGENTS.md carrier."
+    },
+    "dsh_cli": {
+      "kind": "official_docs",
+      "locator": "https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md",
+      "observed_at": "2026-09-19T00:00:00Z",
+      "claim": "The dsh command is the DeepSeek Harness launcher. Profiles live under $DSH_HOME/profiles; headless runs one task and exits; web serves the browser UI; --dump-config and --dump-default-config inspect the composed tree without booting it."
+    },
+    "dsh_home": {
+      "kind": "official_docs",
+      "locator": "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/util/home-paths/README.md",
+      "observed_at": "2026-09-19T00:00:00Z",
+      "claim": "An explicit path wins over $DSH_HOME, which wins over ~/.dsh; blank environment values are ignored. All harness user data derives from that one root."
+    },
+    "dsh_instructions": {
+      "kind": "official_docs",
+      "locator": "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/context/agent-instructions/README.md",
+      "observed_at": "2026-09-19T00:00:00Z",
+      "claim": "The first request includes user-global $DSH_HOME/AGENTS.md followed by the project AGENTS.md/CLAUDE.md chain from the git root to cwd. dsh-base enables this with a 65536-byte budget. The baseline remains until compaction; post-compaction reload is not claimed here."
+    },
+    "dsh_skills": {
+      "kind": "official_docs",
+      "locator": "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/skill/skill-filesystem/README.md",
+      "observed_at": "2026-09-19T00:00:00Z",
+      "claim": "Skills are directory bundles <name>/SKILL.md or flat <name>.md with required kebab-case name and description. Default roots in rank order: <project>/.dsh/skills, <project>/.agents/skills, customSkillDirs, $DSH_HOME/skills, ~/.agents/skills. Users invoke with /name; the model loads via the skill tool."
+    },
+    "dsh_subagents": {
+      "kind": "official_docs",
+      "locator": "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/subagent/tool-subagent/README.md",
+      "observed_at": "2026-09-19T00:00:00Z",
+      "claim": "The model-facing delegation tool is named subagent by default (subagent_fork is a second instance on shipped profiles). Background, depth, and child model fields follow the live schema. This edition installs no Kaola role profiles."
+    },
+    "dsh_live_probe_20260919": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1081",
+      "observed_at": "2026-09-19T00:00:00Z",
+      "claim": "DSH CLI 0.1.5-rc.2 (`dsh` on PATH) answered --version, --profile headless --help, and --profile web --dump-default-config. The dumped headless and web trees include dsh-agent-instructions, dsh-skill-filesystem, dsh-tool-skill, and dsh-tool-subagent (toolName subagent and subagent_fork). A hermetic DSH_HOME install of this edition writes skills plus AGENTS.md and support scripts only; user ~/.dsh/.env, settings.yaml, and credentials were not opened."
     }
   },
   "runtimes": {
@@ -692,6 +728,34 @@
         "pending": "none — this edition installs no Droid hook, so no prompt-lifecycle compact state exists.",
         "session": "The always-loaded machine-global carrier in ~/.factory/AGENTS.md plus the invoked skill body remain the prompt authority for this adapter.",
         "reload": "Post-compaction AGENTS.md and skill-carrier reload is not measured for Droid in this scope; recovery is re-invoking the skill, which resumes from the durable mission list and workflow state.",
+        "tool": "No PreToolUse or PostToolUse Kaola hook is installed, so ordinary tools add zero Kaola context and start zero Kaola subprocesses.",
+        "stop": "No Kaola Stop hook is installed."
+      },
+      "install_scope": {"global_discovery": "supported", "required_project_materialization": "no", "ambient_repository_write": false, "evidence_status": "documented"}
+    },
+    "dsh": {
+      "runtime": "dsh",
+      "evidence": [
+        "dsh_cli", "dsh_home", "dsh_instructions", "dsh_skills", "dsh_subagents",
+        "dsh_live_probe_20260919"
+      ],
+      "capabilities": {
+        "named_roles": false,
+        "deterministic_profiles": false,
+        "capability_gap": "explicit",
+        "instruction_loading": "direct",
+        "role_dispatch": "native_only",
+        "hook_scope": "none",
+        "delegation_guidance": {
+          "native_routes": "Native routes follow the live schema: shipped profiles expose `subagent` and `subagent_fork`; background execution, depth, and child model fields remain runtime-owned options — the live schema wins.",
+          "availability": "A child does not see the parent conversation unless the fork provider is used. On a runtime that deliberately installs no role profiles, the absence of a named role is design, not a capability gap."
+        }
+      },
+      "compact_protocol": {
+        "events": [],
+        "pending": "none — this edition installs no DSH hook, so no prompt-lifecycle compact state exists.",
+        "session": "The always-loaded machine-global carrier in $DSH_HOME/AGENTS.md plus the invoked skill body remain the prompt authority for this adapter.",
+        "reload": "Post-compaction AGENTS.md and skill-carrier reload is not measured for DSH in this scope; recovery is re-invoking the skill, which resumes from the durable mission list and workflow state.",
         "tool": "No PreToolUse or PostToolUse Kaola hook is installed, so ordinary tools add zero Kaola context and start zero Kaola subprocesses.",
         "stop": "No Kaola Stop hook is installed."
       },
