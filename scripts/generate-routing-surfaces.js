@@ -320,14 +320,14 @@ function renderSurface(row, ir) {
 // hooks/*compact-recovery*.md), and that reload already carries the dispatch contract and
 // runtime adapter — repeating them in the recovery render itself would load them twice, so
 // those two runtimes get a one-sentence pointer instead of the full blocks.
-const RECOVERY_FULL_DISPATCH_RUNTIMES = ['grok', 'cursor', 'devin', 'droid'];
+const RECOVERY_FULL_DISPATCH_RUNTIMES = ['grok', 'cursor', 'devin', 'droid', 'dsh'];
 
 const RECOVERY_DISPATCH_DEFERRED_NOTE = 'The Next or Finalization reload above already ' +
   'carries the full runtime dispatch contract and runtime adapter facts, so this recovery ' +
   'step does not restate them.';
 
 function renderCompactRecoveryPrompt(runtime, forge = 'github', options = {}) {
-  if (!['claude', 'codex', 'grok', 'cursor', 'devin', 'droid'].includes(runtime)) {
+  if (!['claude', 'codex', 'grok', 'cursor', 'devin', 'droid', 'dsh'].includes(runtime)) {
     throw new Error('compact recovery prompt is not enabled for runtime ' + runtime);
   }
   if (!FORGES.includes(forge)) throw new Error('unknown compact-recovery forge ' + forge);
@@ -439,7 +439,7 @@ function cmdCheck(ir) {
 function refreshPresentEditionTrees() {
   const { spawnSync } = require('child_process');
   let failed = 0;
-  for (const script of ['sync-opencode-edition.js', 'sync-kimi-edition.js', 'sync-grok-edition.js', 'sync-cursor-edition.js', 'sync-zcode-edition.js', 'sync-devin-edition.js', 'sync-droid-edition.js']) {
+  for (const script of ['sync-opencode-edition.js', 'sync-kimi-edition.js', 'sync-grok-edition.js', 'sync-cursor-edition.js', 'sync-zcode-edition.js', 'sync-devin-edition.js', 'sync-droid-edition.js', 'sync-dsh-edition.js']) {
     const abs = path.join(__dirname, script);
     if (!fs.existsSync(abs)) continue; // a checkout that does not carry the edition generators
     const r = spawnSync(process.execPath, [abs, '--refresh-present'], { cwd: REPO, stdio: 'inherit' });
