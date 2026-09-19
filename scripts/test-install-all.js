@@ -95,6 +95,7 @@ const KNOWN_INSTALLERS = [
   { runtime: 'zcode',    file: 'install-zcode.sh',                                             ref: 'install-zcode.sh' },
   { runtime: 'devin',    file: 'install-devin.sh',                                             ref: 'install-devin.sh' },
   { runtime: 'droid',    file: 'install-droid.sh',                                             ref: 'install-droid.sh' },
+  { runtime: 'dsh',      file: 'install-dsh.sh',                                               ref: 'install-dsh.sh' },
 ];
 
 // ---- tree-derived installer set (so the list above can never go stale) ----
@@ -383,6 +384,7 @@ function stubRoot(opts) {
     zcode:    writeStub(root, 'install-zcode.sh',       'bash', codes.zcode ?? 0, '.ran-zcode'),
     devin:    writeStub(root, 'install-devin.sh',       'bash', codes.devin ?? 0, '.ran-devin'),
     droid:    writeStub(root, 'install-droid.sh',       'bash', codes.droid ?? 0, '.ran-droid'),
+    dsh:      writeStub(root, 'install-dsh.sh',         'bash', codes.dsh ?? 0, '.ran-dsh'),
   };
   // #1046: install-all now gates every runtime installer behind one read-only
   // preflight / atomic global-contract transaction. This stub keeps the wrapper
