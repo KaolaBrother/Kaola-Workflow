@@ -245,6 +245,12 @@ install_support_scripts() {
   mkdir -p "$dest"
   local name src
   local deployed=()
+  # Read the manifest list in one command substitution, not a live process-
+  # substitution producer: under a harness whose stdin never reaches EOF the
+  # `< <(...)` child intermittently deadlocked on a full self-pipe (chain
+  # timeout), so the producer/consumer pipe is removed here entirely.
+  local kw_script_names
+  kw_script_names="$(node "$manifest" --forge="$FORGE" --scripts 2>/dev/null)" || true
   while IFS= read -r name || [[ -n "$name" ]]; do
     [[ -n "$name" ]] || continue
     src="$FORGE_SCRIPTS_DIR/$name"
@@ -256,7 +262,7 @@ install_support_scripts() {
     cp "$src" "$dest/$name"
     chmod +x "$dest/$name"
     deployed+=("$name")
-  done < <(node "$manifest" --forge="$FORGE" --scripts 2>/dev/null)
+  done <<< "$kw_script_names"
   if [[ ${#deployed[@]} -gt 0 ]]; then
     local stale_file stale_name is_current
     for stale_file in "$dest"/*.js; do
@@ -513,7 +519,8 @@ uninstall_edition() {
   local hooks_dir="$home/kaola-workflow/hooks"
   local manifest="$SCRIPT_DIR/scripts/kaola-workflow-install-manifest.js"
   if [[ -f "$manifest" && -d "$scripts_dir" ]]; then
-    local name
+    local name kw_script_names
+    kw_script_names="$(node "$manifest" --forge="$FORGE" --scripts 2>/dev/null)" || true
     while IFS= read -r name || [[ -n "$name" ]]; do
       [[ -n "$name" ]] || continue
       if ! is_plain_basename "$name"; then
@@ -521,7 +528,7 @@ uninstall_edition() {
         continue
       fi
       rm -f "$scripts_dir/$name"
-    done < <(node "$manifest" --forge="$FORGE" --scripts 2>/dev/null)
+    done <<< "$kw_script_names"
   fi
   if [[ -d "$hooks_dir" && -d "$SOURCE_TREE/kaola-workflow/hooks" ]]; then
     local hook
