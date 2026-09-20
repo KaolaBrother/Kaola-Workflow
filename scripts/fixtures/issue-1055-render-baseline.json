@@ -1,7 +1,7 @@
 {
   "tool": "kaola-workflow-issue-1055-render-subtraction-oracle",
   "schema": 1,
-  "captured_at_commit": "d8a59cdcff43c15e0653db0a928870f68af42766",
+  "captured_at_commit": "151aeba212d6ffa2309024f7372de9850141e15b",
   "runtimes": [
     "grok",
     "kimi",
@@ -112,7 +112,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "e6bf805f7a84e1ab794a8719d47e316c08009209105cfd16adee4bc3c982d1fe"
+      "hash": "59c877af82a8fc8d8ea6317516e725b835670ca0cd9b724569bbbf4286f35972"
     },
     {
       "runtime": "cursor",
@@ -120,7 +120,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "e6bf805f7a84e1ab794a8719d47e316c08009209105cfd16adee4bc3c982d1fe"
+      "hash": "59c877af82a8fc8d8ea6317516e725b835670ca0cd9b724569bbbf4286f35972"
     },
     {
       "runtime": "cursor",
@@ -216,7 +216,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "9758e1ebd0a3435684f2fb6a76646db917911440978795a226737129c0e086e3"
+      "hash": "a30983623cc52af98719817d7eb9a2e976903aa79f441821bafe7465beb3cea3"
     },
     {
       "runtime": "cursor",
@@ -224,7 +224,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "9758e1ebd0a3435684f2fb6a76646db917911440978795a226737129c0e086e3"
+      "hash": "a30983623cc52af98719817d7eb9a2e976903aa79f441821bafe7465beb3cea3"
     },
     {
       "runtime": "cursor",
@@ -320,7 +320,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "27289f5ac450faf8c947786f2f48ea2ffcf21031e3e99e75236bae7e75e12ba5"
+      "hash": "c5f45f136b1474aa49b3acb9de65172b1b0584f589da97313ecb30c86e6a17ab"
     },
     {
       "runtime": "cursor",
@@ -328,7 +328,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "27289f5ac450faf8c947786f2f48ea2ffcf21031e3e99e75236bae7e75e12ba5"
+      "hash": "c5f45f136b1474aa49b3acb9de65172b1b0584f589da97313ecb30c86e6a17ab"
     },
     {
       "runtime": "cursor",
@@ -424,7 +424,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "6c8387cb59df1f352600088da0721c31aa5bb9660691c3977fd3a1f4807a9b5d"
+      "hash": "4856a70d3acd7f3afaaf5b8a066e75f73c09ba030333aee5d88b4e4f126ccfb4"
     },
     {
       "runtime": "grok",
@@ -432,7 +432,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "6c8387cb59df1f352600088da0721c31aa5bb9660691c3977fd3a1f4807a9b5d"
+      "hash": "4856a70d3acd7f3afaaf5b8a066e75f73c09ba030333aee5d88b4e4f126ccfb4"
     },
     {
       "runtime": "grok",
@@ -528,7 +528,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "d10dada5936fca5b1b011ab0f7d5ae7267be76d0ff1bf1e5a157ec90ac7e5694"
+      "hash": "f41328fc90f00379e2c7d7dd32a688422614d084be799d82ab0747b014af4808"
     },
     {
       "runtime": "grok",
@@ -536,7 +536,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "d10dada5936fca5b1b011ab0f7d5ae7267be76d0ff1bf1e5a157ec90ac7e5694"
+      "hash": "f41328fc90f00379e2c7d7dd32a688422614d084be799d82ab0747b014af4808"
     },
     {
       "runtime": "grok",
@@ -632,7 +632,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "3ce4e5288e4cc8dfa58b8b89aaf24158f845e674d843b1be853c3bb8076ee759"
+      "hash": "a56f955853c6479eb65426b02bc7fd9e4be9eec660698ded46269ca68863b0a4"
     },
     {
       "runtime": "grok",
@@ -640,7 +640,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "3ce4e5288e4cc8dfa58b8b89aaf24158f845e674d843b1be853c3bb8076ee759"
+      "hash": "a56f955853c6479eb65426b02bc7fd9e4be9eec660698ded46269ca68863b0a4"
     },
     {
       "runtime": "grok",
@@ -680,7 +680,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "840715dda1ba0c33f7ed3d7da5c8353280f878d93f779cd1011c0d5b4ffb542c"
+      "hash": "3b39ea2730366aa00d1ce902803fb89d4b9bfdfdae6c6e1423586bf49257e282"
     },
     {
       "runtime": "kimi",
@@ -688,7 +688,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "840715dda1ba0c33f7ed3d7da5c8353280f878d93f779cd1011c0d5b4ffb542c"
+      "hash": "3b39ea2730366aa00d1ce902803fb89d4b9bfdfdae6c6e1423586bf49257e282"
     },
     {
       "runtime": "kimi",
@@ -728,7 +728,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "585f7f74a625853767f54302e81d8d8e6200cee8a4579ac7c3898648718af132"
+      "hash": "91f0543000da53d922a92488237b4e35d46ab75626ba5ed06ff9a5cf7e509532"
     },
     {
       "runtime": "kimi",
@@ -736,7 +736,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "585f7f74a625853767f54302e81d8d8e6200cee8a4579ac7c3898648718af132"
+      "hash": "91f0543000da53d922a92488237b4e35d46ab75626ba5ed06ff9a5cf7e509532"
     },
     {
       "runtime": "kimi",
@@ -776,7 +776,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "b6079bb8c59523ac845137d5f06b0f56b0af0ffc760c489f0626bde135071c2a"
+      "hash": "c1e5d6a1a03b673a03a4a1c4b135adf3c00ae68e6c0b551a17ce284a643f3cdd"
     },
     {
       "runtime": "kimi",
@@ -784,7 +784,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "b6079bb8c59523ac845137d5f06b0f56b0af0ffc760c489f0626bde135071c2a"
+      "hash": "c1e5d6a1a03b673a03a4a1c4b135adf3c00ae68e6c0b551a17ce284a643f3cdd"
     },
     {
       "runtime": "kimi",
@@ -824,7 +824,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "35264c67b4271b007f2ec5627a73fe073a6ccaf26c5490e11ca67d1fa57388f0"
+      "hash": "ff24f2bde5491a16490e65b308dbbdded61b4a460b735fb4445fac900c8d0812"
     },
     {
       "runtime": "opencode",
@@ -832,7 +832,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "35264c67b4271b007f2ec5627a73fe073a6ccaf26c5490e11ca67d1fa57388f0"
+      "hash": "ff24f2bde5491a16490e65b308dbbdded61b4a460b735fb4445fac900c8d0812"
     },
     {
       "runtime": "opencode",
@@ -872,7 +872,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "0c1b52c11d92e4a32244d7e53cbd78a12f264fa934302a1cc788b2a59bb5039a"
+      "hash": "740421b1a1f2919e4e67386edeee72db58164ea216479da9c0bac9256818e351"
     },
     {
       "runtime": "opencode",
@@ -880,7 +880,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "0c1b52c11d92e4a32244d7e53cbd78a12f264fa934302a1cc788b2a59bb5039a"
+      "hash": "740421b1a1f2919e4e67386edeee72db58164ea216479da9c0bac9256818e351"
     },
     {
       "runtime": "opencode",
@@ -920,7 +920,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "1d780785d17b115f61a52d6be21600f60dd16758c9c59f92fb805011a153a5d1"
+      "hash": "9bcefe0371851ba4bc8ec86132d0a2321d5249f03d48be9112da99aca1d2d501"
     },
     {
       "runtime": "opencode",
@@ -928,7 +928,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "1d780785d17b115f61a52d6be21600f60dd16758c9c59f92fb805011a153a5d1"
+      "hash": "9bcefe0371851ba4bc8ec86132d0a2321d5249f03d48be9112da99aca1d2d501"
     },
     {
       "runtime": "opencode",
@@ -968,7 +968,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "e6bf805f7a84e1ab794a8719d47e316c08009209105cfd16adee4bc3c982d1fe"
+      "hash": "59c877af82a8fc8d8ea6317516e725b835670ca0cd9b724569bbbf4286f35972"
     },
     {
       "runtime": "zcode",
@@ -976,7 +976,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "e6bf805f7a84e1ab794a8719d47e316c08009209105cfd16adee4bc3c982d1fe"
+      "hash": "59c877af82a8fc8d8ea6317516e725b835670ca0cd9b724569bbbf4286f35972"
     },
     {
       "runtime": "zcode",
@@ -1016,7 +1016,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "9758e1ebd0a3435684f2fb6a76646db917911440978795a226737129c0e086e3"
+      "hash": "a30983623cc52af98719817d7eb9a2e976903aa79f441821bafe7465beb3cea3"
     },
     {
       "runtime": "zcode",
@@ -1024,7 +1024,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "9758e1ebd0a3435684f2fb6a76646db917911440978795a226737129c0e086e3"
+      "hash": "a30983623cc52af98719817d7eb9a2e976903aa79f441821bafe7465beb3cea3"
     },
     {
       "runtime": "zcode",
@@ -1064,7 +1064,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "27289f5ac450faf8c947786f2f48ea2ffcf21031e3e99e75236bae7e75e12ba5"
+      "hash": "c5f45f136b1474aa49b3acb9de65172b1b0584f589da97313ecb30c86e6a17ab"
     },
     {
       "runtime": "zcode",
@@ -1072,7 +1072,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "27289f5ac450faf8c947786f2f48ea2ffcf21031e3e99e75236bae7e75e12ba5"
+      "hash": "c5f45f136b1474aa49b3acb9de65172b1b0584f589da97313ecb30c86e6a17ab"
     },
     {
       "runtime": "zcode",
