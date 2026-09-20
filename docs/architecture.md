@@ -570,8 +570,13 @@ and behavior/render hashes.
 Codex profile readiness remains an install-time boundary. The profile installer verifies source,
 manifest, writes, pruning, hooks, and installed bytes; `kaola-workflow-codex-preflight.js --doctor`
 is an explicit diagnostic. Live next/finalize surfaces do not turn it into an entry gate.
-The effective project or user `.codex/config.toml` is the installed registration authority: its
-managed `[agents.<role>]` blocks point to `.codex/agents/kaola-workflow/<role>.toml`. Bundled
+Codex 0.155.1 resolves custom roles through two live paths into one shared namespace: recursive
+directory discovery of standalone role TOML files under `~/.codex/agents/` (user) and
+`.codex/agents/` (project), where the `name` field is the role identity; and `[agents.<role>]`
+blocks with `config_file` in the effective project or user `.codex/config.toml`. Kaola installs the
+seven role files inside the discovery root and additionally declares managed `[agents.<role>]`
+blocks pointing at `.codex/agents/kaola-workflow/<role>.toml` — the declaration the installer prunes
+against. Bundled
 `agents.toml` remains installer source and is not an installed profile-discovery path.
 
 ### Subagent default binding

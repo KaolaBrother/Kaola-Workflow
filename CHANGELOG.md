@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Runtime-capability copy refresh from the Pink class 2 live verification (#1085).** Kimi's
+  `[secondary_model]` section measured GA on Kimi Code 2.0.2 — a registered first-class config
+  section (`default_model` / `[secondary_model.models]` pool / `force`, env `KIMI_SECONDARY_MODEL`
+  and `KIMI_SECONDARY_EFFORT`) with no experimental gate and an inherit-primary unset default
+  (live probe: a spawned worker ran on `kimi-code/kimi-for-coding` @ `max`, `modelSource:
+  "inherited"`); `docs/kimi-edition.md`, `docs/runtime-capabilities.md`, ADR 0021's dated note, and
+  the kimi `availability` in `templates/agents/runtime-capabilities.json` now say optional and
+  user-owned instead of experimental, with semantics unchanged. Codex 0.155.1 resolves custom agent
+  roles through recursive directory discovery of standalone role TOML files under
+  `~/.codex/agents/` (user) and `.codex/agents/` (project) with the `name` field as identity, in
+  addition to `[agents.<role>]` blocks with `config_file` in the effective `config.toml`;
+  `docs/architecture.md`, `docs/conventions.md`, `docs/api.md`, and `docs/runtime-capabilities.md`
+  now describe both paths (bundled `agents.toml` stays installer source, never a lookup path —
+  re-confirmed). `templates/agents/runtime-capabilities.json` gains the two measured evidence
+  entries `kimi_secondary_model_ga_20260921` and `codex_agents_dir_discovery_20260921`. The Grok
+  `explore` "read-only without shell" desk claim measured false on grok 1.0.34 (bundled definition,
+  user guide, and shipped-binary embedded doc all grant `run_terminal_cmd`); that copy is unchanged.
+
 ## [12.2.1] - 2026-09-20
 
 ### Fixed

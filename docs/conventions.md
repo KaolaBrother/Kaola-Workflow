@@ -61,8 +61,10 @@ Because the profile pins both keys, dispatch omits per-call `model` and `reasoni
 default does not become scheduler state or a
 fixed reviewer pipeline.
 
-Resolve role registration from the effective project or user `.codex/config.toml`: its managed
-`[agents.<role>]` entry points to `.codex/agents/kaola-workflow/<role>.toml`. Bundled `agents.toml`
+Resolve roles from Codex's two live paths: recursive discovery of standalone role TOML files under
+`~/.codex/agents/` (user) and `.codex/agents/` (project), with the `name` field as identity, plus
+the effective project or user `.codex/config.toml`, whose managed `[agents.<role>]` entries point to
+`.codex/agents/kaola-workflow/<role>.toml` and are what the installer prunes against. Bundled `agents.toml`
 is installer input, not an installed lookup path. Finalize's Codex dispatch example names
 `implementer` with no per-call model or effort; it remains an example, not a ban on task-sensitive or
 supported inherited choices.

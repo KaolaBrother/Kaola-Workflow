@@ -1846,7 +1846,8 @@ named role, silently dropping the restriction, or declaring the rest of the run 
 
 Finalize's dispatch example names `implementer` with no `model=` field, because the installed
 profile already carries the adapter's pin. A task-sensitive override or supported inherited pair remains valid. Codex
-lookup starts at the effective project or user `.codex/config.toml`: its managed
+resolves roles through recursive directory discovery (`~/.codex/agents/` user, `.codex/agents/`
+project, `name` as identity) and the effective project or user `.codex/config.toml`, whose managed
 `[agents.<role>]` registration references `.codex/agents/kaola-workflow/<role>.toml`, while bundled
 `agents.toml` is only installer source.
 

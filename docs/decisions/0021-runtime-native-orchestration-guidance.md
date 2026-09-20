@@ -68,6 +68,9 @@ ADR 0019's owner-approved matrix remains the default dispatch binding:
 Codex profiles continue to omit a fixed model, and all other runtime rows retain their native
 bindings.
 
+**Measured refresh (2026-09-21, #1085).** Kimi's `[secondary_model]` section measured GA on 2.0.2
+with no experimental gate; the opt-in and inherit-primary semantics above are unchanged.
+
 These are defaults and capability facts, not a hard ban on a runtime-supported task-sensitive
 choice. The carrier is runtime-native: Claude and Codex may select the default on a call; OpenCode
 has no per-call model/effort field; ordinary Kimi profiles inherit unless the user explicitly opts

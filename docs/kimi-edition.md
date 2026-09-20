@@ -50,9 +50,11 @@ Kimi's current custom-agent `model` field is ignored — the measured reason the
 per-call model override. The session model and thinking configuration own routing, and every
 child inherits them.
 
-Kimi documents an experimental secondary-model pool for subagents. Kaola does not enable, seed, or
-rewrite that user-owned experiment. Only a user who explicitly opts in may select its pool aliases
-for newly spawned children; the normal default remains session model/thinking inheritance.
+Kimi ships an optional, user-owned `[secondary_model]` config section for subagents (measured GA on
+2.0.2: keys `default_model` / `[secondary_model.models]` pool / `force`, env `KIMI_SECONDARY_MODEL`
+and `KIMI_SECONDARY_EFFORT`, no experimental gate). Kaola does not enable, seed, or rewrite it. Only
+a user who explicitly opts in selects its pool aliases for newly spawned children; the unset default
+is inheritance of the session model and thinking effort.
 
 ## Runtime-native orchestration guidance
 
@@ -60,7 +62,7 @@ The two execution commands expose Kimi's full relevant native surface: direct `A
 `AgentSwarm` parallel lists up to 128 items, resume/background
 options, and the writable `coder`, read-only `explore`, and non-shell `plan` built-ins. Built-ins are leaves;
 custom profiles may allowlist deeper agents. Kaola neither disables those routes nor silently
-enables the experimental secondary-model pool.
+enables the secondary-model section.
 
 A missing named Kaola role is design, not a `capability_gap`: the orchestrator evaluates these
 routes for the current item. A

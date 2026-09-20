@@ -21,6 +21,12 @@
       "observed_at": "2026-08-27T00:00:00Z",
       "claim": "AGENTS.md is discovered from repository root to the current working directory."
     },
+    "codex_agents_dir_discovery_20260921": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1085",
+      "observed_at": "2026-09-21T00:00:00Z",
+      "claim": "codex-cli 0.155.1 resolves custom agent roles through two live paths into one namespace: recursive discovery of standalone role TOML files under $CODEX_HOME/agents/ (the name field is the role identity; scratch probes read four files including two nested levels with zero [agents.*] config, and two unregistered files sharing name dup collided as duplicate agent role name discovered in <agents dir>), plus [agents.<role>] blocks with config_file in config.toml (a dangling path warns and is ignored; a cross-path collision reports declared in the same config layer). A literal $CODEX_HOME/agents.toml produced zero startup warnings and is never read. The live ~/.codex carries the seven managed blocks and kaola-workflow role files with no duplicate warning."
+    },
     "opencode_instructions": {
       "kind": "official_docs",
       "locator": "https://opencode.ai/docs/rules/",
@@ -38,6 +44,12 @@
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/pull/1041",
       "observed_at": "2026-08-27T00:00:00Z",
       "claim": "Kimi Code 0.38.0 selected the user-global kaola-role-implementer profile from each of two unrelated empty Git repositories with no project Kimi or .agents catalog. Both read-only prompt-mode calls returned the exact requested token and left the repositories empty."
+    },
+    "kimi_secondary_model_ga_20260921": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1085",
+      "observed_at": "2026-09-21T00:00:00Z",
+      "claim": "Kimi Code 2.0.2: [secondary_model] is a registered first-class config section (defaultModel, models pool table, force, default_effort; env KIMI_SECONDARY_MODEL and KIMI_SECONDARY_EFFORT; settings UI shows Not set (inherit primary)) with no experimental gate — [experimental] is a bare record(string, boolean) with no flag naming it. With no section configured, a live spawned worker ran on kimi-code/kimi-for-coding at effort max with modelSource inherited, byte-identical to the session default_model and [thinking] effort."
     },
     "grok_instructions": {
       "kind": "official_docs",
@@ -303,7 +315,8 @@
     "codex-github": {
       "runtime": "codex",
       "evidence": [
-        "codex_instructions"
+        "codex_instructions",
+        "codex_agents_dir_discovery_20260921"
       ],
       "capabilities": {
         "named_roles": true,
@@ -346,7 +359,8 @@
     "codex-gitlab": {
       "runtime": "codex",
       "evidence": [
-        "codex_instructions"
+        "codex_instructions",
+        "codex_agents_dir_discovery_20260921"
       ],
       "capabilities": {
         "named_roles": true,
@@ -389,7 +403,8 @@
     "codex-gitea": {
       "runtime": "codex",
       "evidence": [
-        "codex_instructions"
+        "codex_instructions",
+        "codex_agents_dir_discovery_20260921"
       ],
       "capabilities": {
         "named_roles": true,
@@ -465,7 +480,8 @@
       "runtime": "kimi",
       "evidence": [
         "kimi_instructions",
-        "kimi_global_named_profile_20260827"
+        "kimi_global_named_profile_20260827",
+        "kimi_secondary_model_ga_20260921"
       ],
       "capabilities": {
         "named_roles": false,
@@ -476,7 +492,7 @@
         "hook_scope": "user_and_project",
         "delegation_guidance": {
           "native_routes": "Native routes are full writable `coder`, read-only `explore`, and non-shell `plan`, dispatched with `Agent` (resume/background) or `AgentSwarm` (up to 128 parallel items); use each under its actual boundary.",
-          "availability": "Honor the current Agent catalog. Children inherit the session model and effort; the optional experimental secondary-model pool is user-owned. Built-ins are leaves."
+          "availability": "Honor the current Agent catalog. Children inherit the session model and effort; the optional user-owned `[secondary_model]` section (GA, no experimental gate) stays opt-in. Built-ins are leaves."
         }
       },
       "compact_protocol": {

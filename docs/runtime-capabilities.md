@@ -29,7 +29,7 @@ Grok, Cursor, ZCode, Devin, Droid, and DSH have direct `AGENTS.md` support.
 | Runtime | Profile lookup and native dispatch | Honest native alternatives | Native limits that affect routing |
 | --- | --- | --- | --- |
 | Claude Code | Project `.claude/agents/`, user `~/.claude/agents/`, plugin `agents/`, managed/session definitions; `Agent` with named `subagent_type` | Full `general-purpose`; read-only `Explore` and `Plan`; catch-all `claude`; background, isolation, and agent-team options | Effective precedence and the live Agent/Task catalog decide availability; recursive depth remains runtime/configuration owned |
-| Codex | The effective project or user `.codex/config.toml` owns managed `[agents.<role>]` registration and points to `.codex/agents/kaola-workflow/<role>.toml`; the current host's `spawn_agent` schema supplies named `agent_type`. Bundled `agents.toml` is installer source, not an installed lookup path | General `default`, implementation-owning `worker`, read-heavy `explorer`, and other types reported by the host | V1/V2 fields, history forking, service tier, nesting, and concurrency are host/version gated; Kaola invents none |
+| Codex | Recursive role-TOML discovery under `~/.codex/agents/` (user) and `.codex/agents/` (project), `name` field as identity, plus managed `[agents.<role>]` blocks with `config_file` in the effective project or user `.codex/config.toml` pointing to `.codex/agents/kaola-workflow/<role>.toml`; the current host's `spawn_agent` schema supplies named `agent_type`. Bundled `agents.toml` is installer source, not an installed lookup path | General `default`, implementation-owning `worker`, read-heavy `explorer`, and other types reported by the host | V1/V2 fields, history forking, service tier, nesting, and concurrency are host/version gated; Kaola invents none |
 | OpenCode | `native_only` — no Kaola role profiles (ADR 0025); `task` with a named `subagent_type`, or direct `@name`, against the runtime's own catalog | Broad `general`, read-only local `explore`, read-only external-research `scout`; `task_id` resume and experimental background | Default child depth is one unless user configuration raises it; task permissions and effective merged config may hide a route; children inherit the session model |
 | Kimi Code | `native_only` — no Kaola role profiles (ADR 0025); `Agent`/`AgentSwarm` against the runtime's own catalog | Writable `coder`, read-only `explore`, non-shell `plan`; custom agents and AgentSwarm lists up to 128 items | Built-ins are leaves; children inherit the session model. Resume/background remain native options |
 | Grok Build | Project `.grok/agents/` or user `~/.grok/agents/`; `spawn_subagent` with named `subagent_type` | Full `general-purpose`; read/shell `explore` and `plan`; background, isolation, resume, cwd, and optional per-call model | Children cannot spawn descendants; the root runtime's other choices remain available |
@@ -155,8 +155,9 @@ both `workflow-next` and `kaola-workflow-finalize`:
 This is not a Kaola scheduler or a blanket prohibition on task-sensitive runtime choices. Codex
 profile TOML values take precedence over spawn parameters and the parent session, so dispatch omits
 per-call `model`/`reasoning_effort`; a Cursor custom subagent that omits `model` inherits the
-parent, so the profile pin is what selects the cheaper child. Kimi's experimental
-secondary-model pool is used only when the user explicitly opts into it.
+parent, so the profile pin is what selects the cheaper child. Kimi's optional, user-owned
+`[secondary_model]` section is used only when the user explicitly opts into it; unset, children
+inherit the session model and effort.
 On a Cursor catalog-miss host there is no profile pin; omit-model follows the parent. Native
 automatic, background, parallel, resume,
 nesting, history, service-tier, and model choices stay available wherever the runtime actually
@@ -265,7 +266,12 @@ route does not churn `resolved_profile_sha256` or the 42 role profiles.
   and [hooks](https://moonshotai.github.io/kimi-code/en/customization/hooks.html) document the
   remaining scope and event behavior.
 - [Configuration files](https://www.kimi.com/code/docs/en/kimi-code-cli/configuration/config-files.html)
-  documents the optional experimental secondary-model pool. Kaola does not enable it.
+  documents the optional secondary-model section. Kaola does not enable it.
+- **Live subagent model inheritance (2026-09-21).** Kimi Code `2.0.2` served a spawned worker on
+  `kimi-code/kimi-for-coding` @ effort `max` — byte-identical to the session `default_model` and
+  `[thinking]` effort — with `modelSource: "inherited"`, because no `[secondary_model]` section is
+  configured. `[secondary_model]` is a registered first-class section (no experimental gate) whose
+  unset default is inherit-primary.
 - **Live global lookup (2026-08-27).** Kimi Code `0.38.0` selected
   `kaola-role-implementer` from the user-global carrier in two unrelated empty Git repositories
   with no project `.kimi-code` or `.agents` catalog. Both prompt-mode calls returned the exact
