@@ -10999,8 +10999,8 @@ function testAxiomBlockByteIdentity() {
       body: grokSync.renderCommand(canonical, basename, forge) });
     surfaces.push({ id: cursorSync.commandRel(basename, forge),
       body: cursorSync.renderCommand(canonical, basename, forge) });
-    surfaces.push({ id: zcodeSync.commandRel(basename, forge),
-      body: zcodeSync.renderCommand(canonical, basename, forge) });
+    surfaces.push({ id: zcodeSync.skillRel(zcodeSync.skillNameForCommandBase(basename), forge),
+      body: zcodeSync.renderSkill(canonical, zcodeSync.skillNameForCommandBase(basename), forge) });
     surfaces.push({ id: devinSync.skillRel(basename, forge),
       body: devinSync.renderSkill(canonical, basename, forge) });
     surfaces.push({ id: droidSync.skillRel(basename, forge),

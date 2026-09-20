@@ -4,16 +4,20 @@
 // ---------------------------------------------------------------------------
 // sync-zcode-edition.js — generate the ZCode runtime edition from canonical.
 //
-// ZCode (measured against ZCode 3.10.1) is a coding-agent RUNTIME (like
+// ZCode (measured against ZCode 3.12.3, issue #1079) is a coding-agent RUNTIME (like
 // opencode/Kimi/Grok/Cursor), not a git forge, and it does NOT ride the
 // install.sh --forge= machinery or edition-sync.js. It is delivered the
-// ZCode-native way: flat commands under `.zcode/commands/<name>.md`, an empty
+// ZCode-native way: directory-form skills under `.zcode/skills/<name>/SKILL.md`
+// (frontmatter `name:` + `description:` — the natively discovered shape), an empty
 // generated config, and support scripts under `.zcode/kaola-workflow/scripts`.
+// `/kaola-workflow-next` and `/kaola-workflow-finalize` invoke as native Skill tool
+// calls, and a real `/compact` leaves both a fresh Skill re-invocation and the
+// AGENTS.md managed region intact, so recovery reloads the full prompt natively.
 // It installs no prompt-lifecycle hooks.
 // Deterministic, idempotent, parity-checked by test-zcode-edition.js.
 //
 // ZCode installs no Kaola role profiles by design (#1062): the edition renders
-// command surfaces only, and dispatch cards become native-route instructions.
+// skill surfaces only, and dispatch cards become native-route instructions.
 // Receipt-aware hook helpers remain only to remove exact rows and shells emitted by
 // the retired interim design; they never create a current declaration.
 //
@@ -30,6 +34,7 @@ const fs = require('fs');
 const path = require('path');
 const agentGen = require('./generate-agent-profiles');
 const forgeLayout = require('./runtime-edition-forge');
+const routing = require('./generate-routing-surfaces.js');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -101,26 +106,51 @@ function zcodeNativeDispatchProse(card) {
 function transformCommandBody(body, forge, label) {
   forge = forge || DEFAULT_FORGE;
   let text = body.split(/\r?\n/).join('\n');
+  // zcode is an always-loaded-carrier runtime (#1079): the ~/.zcode/AGENTS.md managed
+  // region survives compaction, so the generated skill carries only the pointer to it.
+  text = agentGen.deferRuntimeDispatchBlock(text);
   if (text.includes(agentGen.DELEGATION_GUIDANCE_START)) {
     text = agentGen.replaceRuntimeDelegationGuidance(text, 'zcode', forge);
   }
   text = text.replace(/^Agent\(\n[\s\S]*?^\)\n?/gm, zcodeNativeDispatchProse);
   text = text.replace(/[ \t]+\n/g, '\n');
   text = text.replace(/--runtime claude\b/g, '--runtime zcode');
+  // ZCode invokes skills, not commands: the two asymmetric command routes rename to
+  // their skill basenames (finalize is already symmetric).
+  text = text.replace(/\/workflow-next\b/g, '/kaola-workflow-next');
+  text = text.replace(/\/workflow-init\b/g, '/kaola-workflow-init');
   text = rewriteClaudeScriptPaths(text, forge);
   return text;
 }
 
-function renderCommand(canonContent, commandName, forge) {
+// skillBasename — the `.zcode/skills/<name>/` directory name for one canonical
+// command surface, from the routing registry's own topic table (the asymmetric
+// command→skill basename mapping is authored there once, never restated here).
+function skillBasename(topic) {
+  const cfg = routing.TOPICS[topic];
+  if (!cfg || !cfg.skill_basename) throw new Error('no skill basename for topic ' + topic);
+  return cfg.skill_basename;
+}
+
+// skillNameForCommandBase — the same mapping addressed by command basename, for
+// consumers (reachability, walkthrough, architecture suites) that iterate the
+// registry's command surfaces and hold only the basename.
+function skillNameForCommandBase(base) {
+  for (const cfg of Object.values(routing.TOPICS)) {
+    if (cfg.command_basename === base) return cfg.skill_basename;
+  }
+  throw new Error('no skill basename for command surface ' + base);
+}
+
+function renderSkill(canonContent, skillName, forge) {
   forge = forge || DEFAULT_FORGE;
   const { fm, body } = parseFrontmatter(canonContent);
   const lines = ['---'];
-  lines.push('name: ' + commandName);
+  lines.push('name: ' + skillName);
   lines.push('description: ' + yamlScalar(fm.description || ''));
-  if (fm['argument-hint']) lines.push('argument-hint: ' + fm['argument-hint']);
   lines.push('---');
   lines.push('');
-  lines.push(transformCommandBody(body, forge, commandRel(commandName, forge)).trim().replace(/\s+$/, ''));
+  lines.push(transformCommandBody(body, forge, skillRel(skillName, forge)).trim().replace(/\s+$/, ''));
   return lines.join('\n') + '\n';
 }
 
@@ -478,12 +508,26 @@ function ensureDir(d) {
 function commandRel(name, forge) {
   return forgeLayout.commandRel(treeLabel, name, forge);
 }
+function skillRel(name, forge) {
+  return treeLabel(forge) + '/skills/' + name + '/SKILL.md';
+}
 function configRel(forge) {
   return treeLabel(forge) + '/config.json';
 }
 
-function expectedCommandFiles(forge) {
-  return listCanonCommands(forge).map(f => f.slice(0, -3));
+// skillSources — one row per canonical command surface: { topic, skillName, absPath }.
+// Derived from the routing registry (via runtime-edition-forge) + the topic table's
+// skill basenames, so the edition holds no command list or basename mapping of its own.
+function skillSources(forge) {
+  return forgeLayout.commandSources(forge || DEFAULT_FORGE).map(source => ({
+    topic: source.topic,
+    skillName: skillBasename(source.topic),
+    absPath: source.absPath,
+  }));
+}
+
+function expectedSkillDirs(forge) {
+  return new Set(skillSources(forge).map(source => source.skillName));
 }
 function expectedHookFiles() {
   return [];
@@ -505,12 +549,25 @@ function retiredAgentFiles(forge) {
     .sort();
 }
 
+// The commands lane retired with #1079: every Markdown file under .zcode/commands/
+// is a legacy surface the installer/generator removes, never a render target.
 function retiredCommandFiles(forge) {
   const dir = treePath(path.join(treeLabel(forge), 'commands'));
   if (!fs.existsSync(dir)) return [];
-  const expected = new Set(expectedCommandFiles(forge).map(n => n + '.md'));
   return fs.readdirSync(dir, { withFileTypes: true })
-    .filter(e => e.isFile() && e.name.endsWith('.md') && !expected.has(e.name))
+    .filter(e => e.isFile() && e.name.endsWith('.md'))
+    .map(e => e.name)
+    .sort();
+}
+
+// Anything under .zcode/skills/ that a fresh render would not produce is a retired
+// surface (e.g. a pre-#1079 experiment) that a deterministic mirror must remove.
+function retiredSkillDirs(forge) {
+  const dir = treePath(path.join(treeLabel(forge), 'skills'));
+  if (!fs.existsSync(dir)) return [];
+  const expected = expectedSkillDirs(forge);
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter(e => e.isDirectory() && !expected.has(e.name))
     .map(e => e.name)
     .sort();
 }
@@ -554,6 +611,17 @@ function pruneTree(forge) {
     console.log('pruned     ' + treeLabel(forge) + '/commands/' + f + ' (retired surface)');
     removed++;
   }
+  // The commands lane itself retired with #1079: once empty, the directory goes too.
+  const commandsDir = treePath(path.join(treeLabel(forge), 'commands'));
+  if (fs.existsSync(commandsDir) && fs.readdirSync(commandsDir).length === 0) {
+    fs.rmdirSync(commandsDir);
+    console.log('pruned     ' + treeLabel(forge) + '/commands/ (retired lane)');
+  }
+  for (const name of retiredSkillDirs(forge)) {
+    fs.rmSync(treePath(path.join(treeLabel(forge), 'skills', name)), { recursive: true, force: true });
+    console.log('pruned     ' + treeLabel(forge) + '/skills/' + name + ' (retired surface)');
+    removed++;
+  }
   for (const f of retiredEditionFiles(forge)) {
     fs.rmSync(treePath(path.join(treeLabel(forge), 'kaola-workflow', f)), { force: true });
     console.log('pruned     ' + treeLabel(forge) + '/kaola-workflow/' + f + ' (retired artifact)');
@@ -562,13 +630,12 @@ function pruneTree(forge) {
   return removed;
 }
 
-function writeCommands(forge) {
+function writeSkills(forge) {
   let wrote = 0;
-  for (const file of listCanonCommands(forge)) {
-    const name = file.slice(0, -3);
-    const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
-    const out = renderCommand(canon, name, forge);
-    const rel = commandRel(name, forge);
+  for (const source of skillSources(forge)) {
+    const canon = fs.readFileSync(source.absPath, 'utf8');
+    const out = renderSkill(canon, source.skillName, forge);
+    const rel = skillRel(source.skillName, forge);
     const dest = treePath(rel);
     if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== out) {
       ensureDir(path.dirname(dest));
@@ -623,7 +690,7 @@ function writeConfig(forge) {
 
 function runWrite(forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
-  const c = writeCommands(forge);
+  const c = writeSkills(forge);
   const e = writeEditionDir(forge);
   const j = writeConfig(forge);
   const p = pruneTree(forge);
@@ -633,7 +700,7 @@ function runWrite(forge) {
 }
 
 function refreshOne(forge) {
-  return writeCommands(forge) + writeEditionDir(forge)
+  return writeSkills(forge) + writeEditionDir(forge)
     + writeConfig(forge) + pruneTree(forge);
 }
 
@@ -663,15 +730,14 @@ function runCheck(forge) {
   forge = forgeLayout.assertForge(forge || DEFAULT_FORGE);
   const tree = treeLabel(forge);
   const mismatches = [];
-  for (const file of listCanonCommands(forge)) {
-    const name = file.slice(0, -3);
-    const canon = fs.readFileSync(canonCommandPath(file, forge), 'utf8');
-    const rel = commandRel(name, forge);
+  for (const source of skillSources(forge)) {
+    const canon = fs.readFileSync(source.absPath, 'utf8');
+    const rel = skillRel(source.skillName, forge);
     if (!fs.existsSync(treePath(rel))) {
-      mismatches.push({ rel, reason: 'missing generated command' });
+      mismatches.push({ rel, reason: 'missing generated skill' });
       continue;
     }
-    if (readTree(rel) !== renderCommand(canon, name, forge)) mismatches.push({ rel, reason: 'stale — regenerate' });
+    if (readTree(rel) !== renderSkill(canon, source.skillName, forge)) mismatches.push({ rel, reason: 'stale — regenerate' });
   }
   for (const script of HOOK_SHELLS) {
     const rel = tree + '/kaola-workflow/hooks/' + script;
@@ -705,7 +771,10 @@ function runCheck(forge) {
     mismatches.push({ rel: tree + '/agents/' + f, reason: 'retired surface — ZCode installs no Kaola role profiles; prune (--write removes it)' });
   }
   for (const f of retiredCommandFiles(forge)) {
-    mismatches.push({ rel: tree + '/commands/' + f, reason: 'retired surface not in canonical — prune (--write removes it)' });
+    mismatches.push({ rel: tree + '/commands/' + f, reason: 'retired surface — #1079 ships skills, not commands; prune (--write removes it)' });
+  }
+  for (const name of retiredSkillDirs(forge)) {
+    mismatches.push({ rel: tree + '/skills/' + name, reason: 'retired surface not in canonical — prune (--write removes it)' });
   }
   for (const f of retiredEditionFiles(forge)) {
     mismatches.push({ rel: tree + '/kaola-workflow/' + f, reason: 'retired artifact no longer emitted — prune (--write removes it)' });
@@ -717,8 +786,8 @@ function runCheck(forge) {
     process.exitCode = 1;
     return;
   }
-  const nc = listCanonCommands(forge).length;
-  console.log('sync-zcode-edition[' + forge + ']: ' + nc + ' command(s) + '
+  const nc = skillSources(forge).length;
+  console.log('sync-zcode-edition[' + forge + ']: ' + nc + ' skill(s) + '
     + (expectedHookFiles().length + expectedPromptFiles().length + manifestSupportScripts(forge).length)
     + ' support/hook/prompt file(s) in parity with canonical.');
 }
@@ -729,7 +798,7 @@ function usage() {
     + ' [--forge=github|gitlab|gitea]\n'
     + '  --forge=<f>  which forge to render (default github). github writes .zcode/;\n'
     + '               gitlab/gitea write .zcode-<forge>/\n'
-    + '  --write   regenerate the forge tree commands + hooks from canonical\n'
+    + '  --write   regenerate the forge tree skills + hooks from canonical\n'
     + '  --refresh-present  regenerate every forge tree that already exists; create none (ignores --forge)\n'
     + '  --check   assert the generated tree is in byte-parity with a fresh render\n'
     + '  --print-tree-root  print the directory the generated trees land in; write nothing\n'
@@ -780,18 +849,18 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-  renderCommand, transformCommandBody,
+  renderSkill, skillBasename, skillNameForCommandBase, skillSources, transformCommandBody,
   rewriteClaudeScriptPaths, ZCODE_KAOLA_SCRIPT, zcodeKaolaScript,
   renderZcodeConfigJson, rewriteConfigJsonForGlobal, mergeDestHooks, stripDestHooks,
   renderRuntimeHookWrapper, RUNTIME_WRAPPER,
   expectedPromptFiles,
   adaptHookForZcode, HOOK_ADAPTATIONS,
   renderSupportLauncher, manifestSupportScripts,
-  treeLabel, commandRel, configRel, canonCommandPath, runCheck, runWrite,
+  treeLabel, commandRel, skillRel, configRel, canonCommandPath, runCheck, runWrite,
   FORGES: forgeLayout.FORGES, DEFAULT_FORGE,
   ZCODE_HOOK_EVENTS,
   HOOK_RECEIPT_SCHEMA, defaultReceiptPath, atomicWriteFile,
-  expectedHookFiles, retiredHookFiles: retiredEditionFiles, retiredAgentFiles, retiredCommandFiles,
+  expectedHookFiles, expectedSkillDirs, retiredHookFiles: retiredEditionFiles, retiredAgentFiles, retiredCommandFiles, retiredSkillDirs,
   parseFrontmatter, yamlScalar,
   listCanonCommands,
   CANON_AGENTS_DIR, CANON_HOOKS_DIR,

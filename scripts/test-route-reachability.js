@@ -314,7 +314,7 @@ const RUNTIME_EDITIONS = [
   },
   {
     id: 'zcode',
-    surfaceFor: forge => base => zcodeSync.commandRel(base, forge),
+    surfaceFor: forge => base => zcodeSync.skillRel(zcodeSync.skillNameForCommandBase(base), forge),
   },
   {
     id: 'devin',
@@ -418,7 +418,8 @@ const GENERATED_SURFACE_CONTENT = (() => {
       map.set(kimiSync.skillRel(base, forge), kimiSync.renderCommand(canon, base, forge));
       map.set(grokSync.commandRel(base, forge), grokSync.renderCommand(canon, base, forge));
       map.set(cursorSync.commandRel(base, forge), cursorSync.renderCommand(canon, base, forge));
-      map.set(zcodeSync.commandRel(base, forge), zcodeSync.renderCommand(canon, base, forge));
+      map.set(zcodeSync.skillRel(zcodeSync.skillNameForCommandBase(base), forge),
+        zcodeSync.renderSkill(canon, zcodeSync.skillNameForCommandBase(base), forge));
       map.set(devinSync.skillRel(base, forge), devinSync.renderSkill(canon, base, forge));
       map.set(droidSync.skillRel(base, forge), droidSync.renderSkill(canon, base, forge));
       map.set(dshSync.skillRel(base, forge), dshSync.renderSkill(canon, base, forge));

@@ -6,7 +6,9 @@
 // ZCode 3.10.1 has a 1,000,000-token context in the measured installation, and
 // the live hook experiment could self-lock Workflow Next by intercepting the
 // model's compatibility bind. Compact-only prompt recovery belongs to Cursor
-// and Grok. The ZCode installer therefore deploys commands/support
+// and Grok; #1079 instead recovers through the compaction-surviving global
+// AGENTS.md carrier plus native Skill re-invocation. The ZCode installer
+// therefore deploys skills/support
 // files, but declares no Kaola hook at project scope or global scope. Legacy
 // hook rows are removable only with their exact ownership receipt; foreign
 // configuration and foreign shells are never a cleanup casualty.
@@ -270,9 +272,10 @@ for (const scope of ['project', 'global']) {
     assertReal(fs.existsSync(path.join(agentsDir, 'implementer.md')),
       scope + ': user-authored agent without the managed marker survives the retired sweep');
     const commandRoot = scope === 'global'
-      ? path.join(fixture.zcodeHome, 'commands')
-      : path.join(fixture.project, '.zcode', 'commands');
-    assertReal(fs.existsSync(commandRoot), scope + ': command surface is still deployed');
+      ? path.join(fixture.zcodeHome, 'skills')
+      : path.join(fixture.project, '.zcode', 'skills');
+    assertReal(fs.existsSync(path.join(commandRoot, 'kaola-workflow-next', 'SKILL.md')),
+      scope + ': skill surface is still deployed');
   } finally {
     cleanup(fixture);
   }

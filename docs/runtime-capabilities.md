@@ -121,7 +121,7 @@ contract. No runtime needs Kaola context before or after every tool.
 | Cursor CLI / App local / App Cloud | One V2 `alwaysApply` Rule: local CLI/App share the user carrier; Cloud explicitly materializes identical bytes in the selected repository. Cloud has no `sessionStart`, and `preCompact` cannot inject. Cursor hooks stay empty. |
 | OpenCode | No new Issue #1044 prompt lifecycle; the initial command remains authority and the existing compact-state behavior is unchanged. |
 | Kimi | No Kaola prompt lifecycle; upgrade removes the retired managed PostCompact block. |
-| ZCode | No prompt lifecycle; the measured 1,000,000-token session and a live PreToolUse self-lock argue against a speculative compact gate. |
+| ZCode | No prompt lifecycle; the measured 1,000,000-token session and a live PreToolUse self-lock argue against a speculative compact gate. Under #1079 the `${ZCODE_HOME:-~/.zcode}/AGENTS.md` managed region renders the full compact-recovery prompt (its prefix survives compaction, KPR #75), and recovery re-invokes `/kaola-workflow-next` or `/kaola-workflow-finalize` as a native Skill tool call (ZCode 3.12.3 + KPR ACP 0.3.3). |
 | Devin CLI | One `UserPromptSubmit` command hook injects a short pointer to the managed global carrier only when V2 is absent. This carrier is used because measured compaction drops AGENTS/rules and `PostCompaction` does not inject `additionalContext`. |
 | Droid CLI | No Kaola prompt-lifecycle hook is installed. The personal `~/.factory/AGENTS.md` carrier and invoked skill are the authority; post-compaction reload is unmeasured, so recovery re-invokes the skill and resumes from durable state. |
 
@@ -429,6 +429,15 @@ Kaola hook declaration, strips receipt-owned legacy project/user rows, and prese
 configuration. Ordinary tool use therefore has exactly 0 Kaola prompt-recovery hook invocations and
 0 injected recovery bytes. The installed App/schema is verified; live named-subagent dispatch is
 not.
+
+**Native Skill measurement (2026-09-19, issue #1079).** ZCode 3.12.3 + GLM-5.3 via the KPR ACP
+adapter 0.3.3 ([kaola-project-runner#94](https://github.com/KaolaBrother/kaola-project-runner/pull/94)):
+workspace `.zcode/skills/<name>/SKILL.md` with `name:` + `description:` frontmatter is natively
+discovered, and `/<name>` produces an ACP `tool_call title=Skill` that loads the body (unique-marker
+verified; `/$<name>` also routes). A real `/compact` completes; a previously-uninvoked Skill and a
+re-invoked Skill both emit fresh Skill tool calls after it, and ZCode's AGENTS.md prefix survives
+compaction (KPR #75). `~/.zcode/skills/` user scope resolves the same way. ACP exposes no
+`available_commands_update`; a real 1M auto-compact leg was not run and stays unverified.
 
 ## Explicit unknowns
 

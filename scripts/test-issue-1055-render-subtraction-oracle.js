@@ -82,12 +82,17 @@ function renderAgentFor(runtime, role, forge) {
 }
 
 // renderCommand's argument order is NOT uniform: opencode's is
-// (canonContent, forge, label) while the other four are (canonContent, commandName, forge).
+// (canonContent, forge, label) while grok/kimi/cursor are (canonContent, commandName, forge),
+// and zcode (#1079) renders a skill as (canonContent, skillName, forge) — the command→skill
+// basename mapping comes from the generator itself.
 function renderCommandFor(runtime, canonContent, commandName, forge) {
   const mod = MODULES[runtime];
   if (runtime === 'opencode') {
     const label = mod.treeLabel(forge) + '/commands/' + commandName + '.md';
     return mod.renderCommand(canonContent, forge, label);
+  }
+  if (runtime === 'zcode') {
+    return mod.renderSkill(canonContent, mod.skillNameForCommandBase(commandName), forge);
   }
   return mod.renderCommand(canonContent, commandName, forge);
 }

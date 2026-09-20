@@ -507,7 +507,9 @@ function freshRoutingCarriers(topic) {
     for (const [runtime, edition] of Object.entries(additive)) {
       const rendered = runtime === 'opencode'
         ? edition.renderCommand(content, row.forge, `${runtime}/${row.forge}/${basename}`)
-        : edition.renderCommand(content, basename, row.forge);
+        : runtime === 'zcode'
+          ? edition.renderSkill(content, edition.skillNameForCommandBase(basename), row.forge)
+          : edition.renderCommand(content, basename, row.forge);
       carriers.push({
         runtime,
         forge: row.forge,

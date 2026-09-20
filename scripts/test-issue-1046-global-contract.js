@@ -144,7 +144,7 @@ const reloadPatterns = {
   'cursor-app-local': /alwaysApply.*each model context/,
   'cursor-cloud': /Save the Environment Build.*new top-level Agent/,
   'devin-local': /UserPromptSubmit.*compaction/,
-  'zcode-local': /new task/,
+  'zcode-local': /survives compaction.*Skill invocation/s,
   'droid-local': /new session/,
   'dsh-local': /new session/,
 };
@@ -152,7 +152,7 @@ for (const target of registry.targets) {
   ok(reloadPatterns[target.id].test(target.reload),
     `A2[${target.id}]: reload text matches the measured lifecycle class`);
 }
-for (const id of ['opencode-local', 'kimi-local', 'zcode-local']) {
+for (const id of ['opencode-local', 'kimi-local']) {
   const target = registry.targets.find(row => row.id === id);
   ok(!/compact|hook/i.test(target.reload),
     `A2[${id}]: registry does not invent an unmeasured compact lifecycle`);

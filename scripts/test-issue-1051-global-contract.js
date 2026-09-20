@@ -208,9 +208,9 @@ ok(/tdd-guide/i.test(roles) && /implementer/i.test(roles),
   'A2: tdd-guide and implementer role contracts remain present');
 
 const routing = require(path.join(ROOT, 'scripts', 'generate-routing-surfaces.js'));
-const compactPrompts = ['claude', 'codex', 'grok', 'cursor']
+const compactPrompts = ['claude', 'codex', 'grok', 'cursor', 'zcode']
   .map(runtime => routing.renderCompactRecoveryPrompt(runtime, 'github'));
-ok(compactPrompts.length === 4 && compactPrompts.every(Boolean),
+ok(compactPrompts.length === 5 && compactPrompts.every(Boolean),
   'A3: measured compact-capable runtimes still render recovery prompts');
 ok(compactPrompts.every(text => text.split(globalRaw.trim()).length - 1 === 1),
   'A3: every compact prompt embeds the exact global contract once');

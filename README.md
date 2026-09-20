@@ -121,7 +121,7 @@ A research or design request does not authorize implementation. See [Task Qualit
 | Grok CLI | Commands and persistent recovery Rule | Seven named agents | `./install-grok.sh` |
 | OpenCode | Commands | Native dispatch | `./install-opencode.sh` |
 | Kimi Code | Skills | Native dispatch | `./install-kimi.sh` |
-| ZCode | Commands | Native dispatch | `./install-zcode.sh` |
+| ZCode | Skills | Native dispatch | `./install-zcode.sh` |
 | Devin CLI | Inline skills | Native `run_subagent` | `./install-devin.sh` |
 | Droid CLI | Inline skills | Native Task `worker`/`explorer` | `./install-droid.sh` |
 | DSH (DeepSeek Harness) | Inline skills | Native `subagent` / `subagent_fork` | `./install-dsh.sh` |

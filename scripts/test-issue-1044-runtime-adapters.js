@@ -117,7 +117,7 @@ const expectedEvents = {
   cursor: ['machine-global alwaysApply rule'],
   opencode: [],
   kimi: [],
-  zcode: [],
+  zcode: ['machine-global AGENTS.md managed region'],
 };
 for (const [runtime, expected] of Object.entries(expectedEvents)) {
   const protocol = caps[runtime] && caps[runtime].compact_protocol;

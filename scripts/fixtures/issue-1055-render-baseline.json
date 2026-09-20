@@ -1,7 +1,7 @@
 {
   "tool": "kaola-workflow-issue-1055-render-subtraction-oracle",
   "schema": 1,
-  "captured_at_commit": "151aeba212d6ffa2309024f7372de9850141e15b",
+  "captured_at_commit": "c1a77d608bf855bc1deef95e11cac599433123dc",
   "runtimes": [
     "grok",
     "kimi",
@@ -96,7 +96,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "4b4d15d49c90f6a7a0af59d69bb9b45b1127038baa63e618a49ca8137c68727e"
+      "hash": "3ee863d19ba28cf74fcc3177cd3c0c961201513a82adeb8f81dcbd39b1a8448f"
     },
     {
       "runtime": "cursor",
@@ -104,7 +104,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "4b4d15d49c90f6a7a0af59d69bb9b45b1127038baa63e618a49ca8137c68727e"
+      "hash": "3ee863d19ba28cf74fcc3177cd3c0c961201513a82adeb8f81dcbd39b1a8448f"
     },
     {
       "runtime": "cursor",
@@ -200,7 +200,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "1f71018ccea95acfcc0afe760f06505c2598862961a141524b6fbe9e49c738b7"
+      "hash": "50a7f88334a35a38caebdad56b66ac30db130be17e74e7f743b20771ea7458e5"
     },
     {
       "runtime": "cursor",
@@ -208,7 +208,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "1f71018ccea95acfcc0afe760f06505c2598862961a141524b6fbe9e49c738b7"
+      "hash": "50a7f88334a35a38caebdad56b66ac30db130be17e74e7f743b20771ea7458e5"
     },
     {
       "runtime": "cursor",
@@ -304,7 +304,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "4c93cd2e207e94128860f7a90c0fba6dbfa54b6d81b9543dd9a1ad30a7f5d943"
+      "hash": "ea3d0ec792c6f669b3382e4b344a983123fc9e3042ec5966df23ca35678be1fc"
     },
     {
       "runtime": "cursor",
@@ -312,7 +312,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "4c93cd2e207e94128860f7a90c0fba6dbfa54b6d81b9543dd9a1ad30a7f5d943"
+      "hash": "ea3d0ec792c6f669b3382e4b344a983123fc9e3042ec5966df23ca35678be1fc"
     },
     {
       "runtime": "cursor",
@@ -408,7 +408,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "d20e898c2e6dcd83b6a408da365e35c625eaf89441f3ef3fbe7e0d0948aef557"
+      "hash": "8b80399267cbeab0eec9ccced16bf22f335b52243ae2b29deea90e5e40f18a7c"
     },
     {
       "runtime": "grok",
@@ -416,7 +416,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "d20e898c2e6dcd83b6a408da365e35c625eaf89441f3ef3fbe7e0d0948aef557"
+      "hash": "8b80399267cbeab0eec9ccced16bf22f335b52243ae2b29deea90e5e40f18a7c"
     },
     {
       "runtime": "grok",
@@ -512,7 +512,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "25bd5959ae4390e6baa0dd9a37f503dc67aaeab0919a195de269e789f54de8de"
+      "hash": "423af53c638e48a0d70916ae014842b7f69ee43f5fe42c5b5f7206d53b36641f"
     },
     {
       "runtime": "grok",
@@ -520,7 +520,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "25bd5959ae4390e6baa0dd9a37f503dc67aaeab0919a195de269e789f54de8de"
+      "hash": "423af53c638e48a0d70916ae014842b7f69ee43f5fe42c5b5f7206d53b36641f"
     },
     {
       "runtime": "grok",
@@ -616,7 +616,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "907acbb6bf7e1546dca16d991df312b9edf7353a3cb71d0c8e4efe342ebc3264"
+      "hash": "db60674d1bcc489da9b4c929de66d35d4fd5e69b6f85595e1ad36dfa1555bd49"
     },
     {
       "runtime": "grok",
@@ -624,7 +624,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "907acbb6bf7e1546dca16d991df312b9edf7353a3cb71d0c8e4efe342ebc3264"
+      "hash": "db60674d1bcc489da9b4c929de66d35d4fd5e69b6f85595e1ad36dfa1555bd49"
     },
     {
       "runtime": "grok",
@@ -664,7 +664,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "57169dc9da761525b7b99d4938ddf3700cb7cfab1fc19f5d7486c79a4baac076"
+      "hash": "aa13ccc71d2d9f6758049e6a7108d01a143a35860ed641ed75c1a85dfd5ff228"
     },
     {
       "runtime": "kimi",
@@ -672,7 +672,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "57169dc9da761525b7b99d4938ddf3700cb7cfab1fc19f5d7486c79a4baac076"
+      "hash": "aa13ccc71d2d9f6758049e6a7108d01a143a35860ed641ed75c1a85dfd5ff228"
     },
     {
       "runtime": "kimi",
@@ -712,7 +712,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "31137b955f22e4f334c597235b48a8cb6a005f84f1e7da5a56ad21bba42bc666"
+      "hash": "a533b520ce6a9b7d998b1bc6e9c1a197294f9c7a0d39e49ef48ae3393861ffe5"
     },
     {
       "runtime": "kimi",
@@ -720,7 +720,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "31137b955f22e4f334c597235b48a8cb6a005f84f1e7da5a56ad21bba42bc666"
+      "hash": "a533b520ce6a9b7d998b1bc6e9c1a197294f9c7a0d39e49ef48ae3393861ffe5"
     },
     {
       "runtime": "kimi",
@@ -760,7 +760,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "0c496f86bcfd6a3f816400794376abeee6e2278acdda9f63e079cbd367e9b994"
+      "hash": "25d8a2a4f6f136d8d9ec9680ed3743d5443d3e22256b027e1e50722a9b96144c"
     },
     {
       "runtime": "kimi",
@@ -768,7 +768,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "0c496f86bcfd6a3f816400794376abeee6e2278acdda9f63e079cbd367e9b994"
+      "hash": "25d8a2a4f6f136d8d9ec9680ed3743d5443d3e22256b027e1e50722a9b96144c"
     },
     {
       "runtime": "kimi",
@@ -808,7 +808,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "4cb4083bf77d9bd3a837d255c297edc8b82cb795e99e6c2dd6ce438c0fca5f06"
+      "hash": "9ebbce7aed01d652e542164058b99d5bffc4dcc17b60415135fbb1e3b5971eb7"
     },
     {
       "runtime": "opencode",
@@ -816,7 +816,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "4cb4083bf77d9bd3a837d255c297edc8b82cb795e99e6c2dd6ce438c0fca5f06"
+      "hash": "9ebbce7aed01d652e542164058b99d5bffc4dcc17b60415135fbb1e3b5971eb7"
     },
     {
       "runtime": "opencode",
@@ -856,7 +856,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "ee64d7685ae8730885e0c18295ddc2db614be277d7d6db882525b6995e26587e"
+      "hash": "f89ee1e1154a4c20205b1a63ea4b45327948d82518baf59e6bbc4ea781e417e9"
     },
     {
       "runtime": "opencode",
@@ -864,7 +864,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "ee64d7685ae8730885e0c18295ddc2db614be277d7d6db882525b6995e26587e"
+      "hash": "f89ee1e1154a4c20205b1a63ea4b45327948d82518baf59e6bbc4ea781e417e9"
     },
     {
       "runtime": "opencode",
@@ -904,7 +904,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "287362c5c79d9cb6e97b9e8a725e67bff6484caa8ca3abf90d349f1e7746c947"
+      "hash": "815191a93bc2b5e2dbe28c30e508b6f52a3001422fbf6c8330a83d0feefe9a92"
     },
     {
       "runtime": "opencode",
@@ -912,7 +912,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "287362c5c79d9cb6e97b9e8a725e67bff6484caa8ca3abf90d349f1e7746c947"
+      "hash": "815191a93bc2b5e2dbe28c30e508b6f52a3001422fbf6c8330a83d0feefe9a92"
     },
     {
       "runtime": "opencode",
@@ -952,7 +952,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "bc8377e2f714b0bf5f8c6850618c49de828e01b2c0f7aba258d39ffe19e070f0"
+      "hash": "56c4e91fc38da22a6b98e6adb002ffeffd05b2001865870eb99a78b583c40160"
     },
     {
       "runtime": "zcode",
@@ -960,7 +960,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "bc8377e2f714b0bf5f8c6850618c49de828e01b2c0f7aba258d39ffe19e070f0"
+      "hash": "56c4e91fc38da22a6b98e6adb002ffeffd05b2001865870eb99a78b583c40160"
     },
     {
       "runtime": "zcode",
@@ -968,7 +968,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "59c877af82a8fc8d8ea6317516e725b835670ca0cd9b724569bbbf4286f35972"
+      "hash": "5db0b17934ea081c084c0e83eda1c8579a4f7698cc33ba0dca64853424449086"
     },
     {
       "runtime": "zcode",
@@ -976,7 +976,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "59c877af82a8fc8d8ea6317516e725b835670ca0cd9b724569bbbf4286f35972"
+      "hash": "5db0b17934ea081c084c0e83eda1c8579a4f7698cc33ba0dca64853424449086"
     },
     {
       "runtime": "zcode",
@@ -984,7 +984,7 @@
       "kind": "command",
       "name": "workflow-next",
       "lineEnding": "CRLF",
-      "hash": "d07dee5c4c8a57d0b2d089dc4023a3587ae0f6217613d29c5d8ec25c7bd2e21d"
+      "hash": "9ecd1acc3ef05fc8952762accfe9f2229f9cecacad81664a805e6f7e054d22cd"
     },
     {
       "runtime": "zcode",
@@ -992,7 +992,7 @@
       "kind": "command",
       "name": "workflow-next",
       "lineEnding": "LF",
-      "hash": "d07dee5c4c8a57d0b2d089dc4023a3587ae0f6217613d29c5d8ec25c7bd2e21d"
+      "hash": "9ecd1acc3ef05fc8952762accfe9f2229f9cecacad81664a805e6f7e054d22cd"
     },
     {
       "runtime": "zcode",
@@ -1000,7 +1000,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "593d47bf635f61bed6579846300e961e7ea03d5f7c7c1d50ce328d6d47c9cbb5"
+      "hash": "fa4a2e4d113422da95a3b12ed628b4bd603fab72e6e9a22fd749f480006c7488"
     },
     {
       "runtime": "zcode",
@@ -1008,7 +1008,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "593d47bf635f61bed6579846300e961e7ea03d5f7c7c1d50ce328d6d47c9cbb5"
+      "hash": "fa4a2e4d113422da95a3b12ed628b4bd603fab72e6e9a22fd749f480006c7488"
     },
     {
       "runtime": "zcode",
@@ -1016,7 +1016,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "a30983623cc52af98719817d7eb9a2e976903aa79f441821bafe7465beb3cea3"
+      "hash": "a7d0b89920b71d043f4b0874b1d16c79a9af3894cd8e0bd4de91a185343ea837"
     },
     {
       "runtime": "zcode",
@@ -1024,7 +1024,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "a30983623cc52af98719817d7eb9a2e976903aa79f441821bafe7465beb3cea3"
+      "hash": "a7d0b89920b71d043f4b0874b1d16c79a9af3894cd8e0bd4de91a185343ea837"
     },
     {
       "runtime": "zcode",
@@ -1032,7 +1032,7 @@
       "kind": "command",
       "name": "workflow-next",
       "lineEnding": "CRLF",
-      "hash": "701868f85250514872520c90ad4645ba0f0e11bd3f7f56a69a3d5c78aa820ffc"
+      "hash": "a134758fba2e4f690ee4c4711543b73daff378c81b6007ff571d1779fd6c2fa1"
     },
     {
       "runtime": "zcode",
@@ -1040,7 +1040,7 @@
       "kind": "command",
       "name": "workflow-next",
       "lineEnding": "LF",
-      "hash": "701868f85250514872520c90ad4645ba0f0e11bd3f7f56a69a3d5c78aa820ffc"
+      "hash": "a134758fba2e4f690ee4c4711543b73daff378c81b6007ff571d1779fd6c2fa1"
     },
     {
       "runtime": "zcode",
@@ -1048,7 +1048,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "CRLF",
-      "hash": "aa4458848f58aa24bcf52e01a872a7b24b15a7e20121d8577bbae6e2735c629d"
+      "hash": "ff9dbd50445c171cf9b0030d07f3feb68972dde79694ded155f0d5844a13d32f"
     },
     {
       "runtime": "zcode",
@@ -1056,7 +1056,7 @@
       "kind": "command",
       "name": "kaola-workflow-finalize",
       "lineEnding": "LF",
-      "hash": "aa4458848f58aa24bcf52e01a872a7b24b15a7e20121d8577bbae6e2735c629d"
+      "hash": "ff9dbd50445c171cf9b0030d07f3feb68972dde79694ded155f0d5844a13d32f"
     },
     {
       "runtime": "zcode",
@@ -1064,7 +1064,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "CRLF",
-      "hash": "c5f45f136b1474aa49b3acb9de65172b1b0584f589da97313ecb30c86e6a17ab"
+      "hash": "c9b73ae4b2c909a84d39d279f21cd622a005d8c449c41367affcc9f0c93c9816"
     },
     {
       "runtime": "zcode",
@@ -1072,7 +1072,7 @@
       "kind": "command",
       "name": "workflow-init",
       "lineEnding": "LF",
-      "hash": "c5f45f136b1474aa49b3acb9de65172b1b0584f589da97313ecb30c86e6a17ab"
+      "hash": "c9b73ae4b2c909a84d39d279f21cd622a005d8c449c41367affcc9f0c93c9816"
     },
     {
       "runtime": "zcode",
@@ -1080,7 +1080,7 @@
       "kind": "command",
       "name": "workflow-next",
       "lineEnding": "CRLF",
-      "hash": "a2a54fc190871f749e12bbba54049504cc8d5da5943effa33458eb01d0420c56"
+      "hash": "c675b7a8dd1d4533a8ec37d47aec62d93a728f9e9af7f445f6c9755f7a66a039"
     },
     {
       "runtime": "zcode",
@@ -1088,7 +1088,7 @@
       "kind": "command",
       "name": "workflow-next",
       "lineEnding": "LF",
-      "hash": "a2a54fc190871f749e12bbba54049504cc8d5da5943effa33458eb01d0420c56"
+      "hash": "c675b7a8dd1d4533a8ec37d47aec62d93a728f9e9af7f445f6c9755f7a66a039"
     }
   ]
 }

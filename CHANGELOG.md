@@ -29,6 +29,18 @@
   and never creates one. `runtime-capabilities.json` carries the v2.1.277 version floor and the
   2026-09-19 two-token probe; `claude-local.compatibility_reads` is `["project AGENTS.md"]`. ADR 0026
   records the single surface and supersedes ADR 0020's thin-bridge clause and ADR 0023 decision 5.
+- **ZCode workflow surfaces ship as native Skills with compact-safe recovery (#1079).** The ZCode
+  edition now renders `.zcode/skills/{kaola-workflow-next,kaola-workflow-init,kaola-workflow-finalize}/SKILL.md`
+  (frontmatter `name:` + `description:`) from the canonical routing surfaces, retiring the flat
+  `.zcode/commands/` lane; `/kaola-workflow-next` and `/kaola-workflow-finalize` invoke as native
+  Skill tool calls (measured on ZCode 3.12.3 + the KPR ACP adapter 0.3.3). ZCode joins the
+  always-loaded-carrier runtimes: the managed region in `${ZCODE_HOME:-~/.zcode}/AGENTS.md` renders
+  the full compact-recovery prompt, its prefix survives compaction (KPR #75), and recovery
+  re-invokes the operation Skill natively — never a manual `read`. `install-zcode.sh` deploys the
+  skills to project or `${ZCODE_HOME}/skills/` (`--global`) scope and retires the three legacy
+  command basenames from the resolved scope on install and uninstall, preserving user-owned files.
+  No hook, plugin, or second state system is added; the Codex compact hook path is unchanged. A
+  real 1M auto-compact leg was not run and is explicitly unverified.
 
 ## [12.2.0] - 2026-09-19
 

@@ -356,7 +356,7 @@ const EDITIONS = [
   { name: 'kimi', mod: './sync-kimi-edition.js', call: (sync, canon, forge) => sync.renderCommand(canon, 'workflow-next', forge) },
   { name: 'grok', mod: './sync-grok-edition.js', call: (sync, canon, forge) => sync.renderCommand(canon, 'workflow-next', forge) },
   { name: 'cursor', mod: './sync-cursor-edition.js', call: (sync, canon, forge) => sync.renderCommand(canon, 'workflow-next', forge) },
-  { name: 'zcode', mod: './sync-zcode-edition.js', call: (sync, canon, forge) => sync.renderCommand(canon, 'workflow-next', forge) },
+  { name: 'zcode', mod: './sync-zcode-edition.js', call: (sync, canon, forge) => sync.renderSkill(canon, 'kaola-workflow-next', forge) },
 ];
 const FORGES = ['github', 'gitlab', 'gitea'];
 const nextCommandCanon = {};

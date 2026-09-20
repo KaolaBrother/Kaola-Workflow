@@ -109,7 +109,7 @@
       "carrier_group": "zcode-global-agents",
       "carrier": { "kind": "managed_region", "format": "markdown", "root_env": "ZCODE_HOME", "default_root": ".zcode", "relative_path": "AGENTS.md" },
       "precedence": "User global instructions are appended first and workspace instructions are the primary project source.",
-      "reload": "A new task reads the user and current workspace instruction files.",
+      "reload": "The user-global AGENTS.md prefix survives compaction, so the managed region keeps routing recovery to a native /kaola-workflow-next or /kaola-workflow-finalize Skill invocation, which reloads the full prompt after compact; a new task also reads the user and current workspace instruction files.",
       "compatibility_reads": ["workspace AGENTS.md"]
     },
     {

@@ -93,6 +93,12 @@
       "observed_at": "2026-08-27T00:00:00Z",
       "claim": "User-global and workspace-root AGENTS.md files are supported directly."
     },
+    "zcode_native_skill_20260919": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/kaola-project-runner/pull/94",
+      "observed_at": "2026-09-19T00:00:00Z",
+      "claim": "ZCode 3.12.3 + GLM-5.3 via the KPR ACP adapter 0.3.3: workspace `.zcode/skills/<name>/SKILL.md` (frontmatter `name:` + `description:`) is natively discovered, and `/<name>` produces an ACP `tool_call title=Skill` (pending to in_progress to completed) that loads the body, unique-marker verified; `/$<name>` also routes natively. A real `/compact` completes, and a previously-uninvoked Skill and a re-invoked Skill both emit fresh `Skill` tool calls after it. `~/.zcode/skills/` user scope resolves the same way. KPR #75 measured that ZCode's AGENTS.md prefix survives compaction. ACP exposes no `available_commands_update`; real GLM 1M auto-compact was not run."
+    },
     "devin_f1": {
       "kind": "runtime_probe",
       "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1058",
@@ -653,7 +659,8 @@
     "zcode": {
       "runtime": "zcode",
       "evidence": [
-        "zcode_instructions"
+        "zcode_instructions",
+        "zcode_native_skill_20260919"
       ],
       "capabilities": {
         "named_roles": false,
@@ -664,16 +671,17 @@
         "hook_scope": "user_only",
         "delegation_guidance": {
           "native_routes": "Native routes are full `general-purpose` and read-only `Explore`, reached through automatic selection or `@`; foreground/background choice remains runtime-owned, and optional call fields follow the live Agent schema — the live schema wins.",
-          "availability": "Children follow the main Agent's model. Subagents cannot spawn children, but the root runtime's other native routes remain available."
+          "availability": "Children follow the main Agent's model. Subagents cannot spawn children, but the root runtime's other native routes remain available. Compact recovery reloads the operation prompt through ZCode's native Skill invocation — `/kaola-workflow-next` or `/kaola-workflow-finalize` emits a fresh Skill tool call after compact and loads the full body — never a manual `read` of the skill file."
         }
       },
       "compact_protocol": {
-        "events": [],
-        "pending": "none — Issue #1044 installs no ZCode prompt-lifecycle hooks.",
-        "session": "The initial command remains the prompt authority for the measured one-million-token ZCode session.",
-        "reload": "No compact recovery is productized for ZCode in this measured scope; receipt-owned legacy user and project declarations are removed on upgrade.",
+        "events": ["machine-global AGENTS.md managed region"],
+        "pending": "none — Issue #1044 installs no ZCode prompt-lifecycle hooks, and #1079 adds none: recovery is one persistent managed instruction region plus native Skill re-invocation, not a hook state machine.",
+        "session": "The user-global ~/.zcode/AGENTS.md managed region contains the global contract, operation reload route, mandatory dispatch contract, and ZCode adapter.",
+        "reload": "ZCode's AGENTS.md prefix survives compaction (KPR #75), so the managed region stays in context and routes recovery to a native `/kaola-workflow-next` or `/kaola-workflow-finalize` Skill invocation, which emits a fresh Skill tool call and reloads the full prompt after compact; never a manual `read`.",
         "tool": "No PreToolUse or PostToolUse Kaola hook is installed, so ordinary tools add zero Kaola context and start zero Kaola subprocesses.",
-        "stop": "No Kaola Stop hook is installed."
+        "stop": "No Kaola Stop hook is installed.",
+        "rules_survive_compaction": true
       },
       "install_scope": {
         "global_discovery": "supported",
