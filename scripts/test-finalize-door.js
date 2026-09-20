@@ -580,9 +580,11 @@ function assertNoPlanAnywhere(repo, label) {
 // freezing; a conversion that emits a verdict and drops the state is a DELETION, not a conversion.
 // So the durable write is asserted, not only the envelope field.
 //
-// `src/orphan.js` is a code path no record describes. `docs/note.md` and `CHANGELOG.md` are
-// bookkeeping paths the sweep must DROP (isBookkeepingPath), so their presence in the diff proves
-// the filter runs rather than the list being an unfiltered `git diff`.
+// `src/orphan.js` is a code path no record describes. `docs/note.md` and `CHANGELOG.md` are prose
+// the sweep must REPORT (VRPCadCore#952 — they can be the deliverable, and dropping them left the
+// card's summary-vs-changed_paths reconciliation vacuous for documentation), while
+// `kaola-workflow/{project}/` run state stays dropped, so the diff still proves the run-state
+// filter runs rather than the list being an unfiltered `git diff`.
 // ---------------------------------------------------------------------------
 (function T4_unattributedDiffReportsRatherThanRefuses() {
   console.log('T4: a diff no record describes PASSES, reports changed_paths, and lands durably');
@@ -626,14 +628,14 @@ function assertNoPlanAnywhere(repo, label) {
     const cp = (out && Array.isArray(out.changed_paths)) ? out.changed_paths.map(String) : [];
     assert(cp.includes('src/orphan.js'),
       'T4: changed_paths reports the undescribed code path; got ' + JSON.stringify(cp));
-    // The raw `git diff main...HEAD` for this fixture is exactly
-    // [CHANGELOG.md, docs/note.md, src/orphan.js], so each negative below distinguishes a
-    // bookkeeping-FILTERED list from an unfiltered diff. `cp.length > 0` is folded into each so
-    // none of them can pass vacuously on an empty (or absent) list.
-    assert(cp.length > 0 && !cp.includes('docs/note.md'),
-      'T4: bookkeeping docs/** is dropped from changed_paths; got ' + JSON.stringify(cp));
-    assert(cp.length > 0 && !cp.includes('CHANGELOG.md'),
-      'T4: repo-root CHANGELOG.md is dropped from changed_paths; got ' + JSON.stringify(cp));
+    // The raw `git diff main...HEAD` for this fixture is [CHANGELOG.md, docs/note.md,
+    // src/orphan.js] plus the run's own kaola-workflow/issue-9004/** state, so the two positives
+    // below distinguish a REPORTED prose path from a silently dropped one (the #952 regression
+    // shape) and the negative distinguishes a run-state-FILTERED list from an unfiltered diff.
+    assert(cp.includes('docs/note.md'),
+      'T4: docs/** is REPORTED in changed_paths (VRPCadCore#952 — prose can be the deliverable); got ' + JSON.stringify(cp));
+    assert(cp.includes('CHANGELOG.md'),
+      'T4: repo-root CHANGELOG.md is REPORTED in changed_paths; got ' + JSON.stringify(cp));
     assert(cp.length > 0 && !cp.some(p => p.startsWith('kaola-workflow/' + project + '/')),
       'T4: the active project tree is dropped from changed_paths; got ' + JSON.stringify(cp));
 
@@ -3461,7 +3463,7 @@ function headingSequence(text) {
     try {
       initSelfHostRepo(repo);
       // Diverge from main so `## Changed Paths` has a real path to report rather than the
-      // "none outside the run-state and documentation bands." sentence, which a hand-written
+      // "none outside the kaola-workflow/ run-state band." sentence, which a hand-written
       // section could plausibly resemble.
       G.checkout(repo, 'workflow/' + project, { create: true });
       fs.writeFileSync(path.join(repo, 'src', 'orphan.js'), 'module.exports = "orphan";\n');
@@ -3629,7 +3631,7 @@ function headingSequence(text) {
     // The writer's own opening line is unique to persistChangedPathsToSummary, so its absence
     // anywhere in the file is the sharpest available statement that this section was not restated —
     // including restated into a second copy of the heading somewhere else.
-    assert(!text.includes('Files this branch changed outside the run-state and documentation bands:'),
+    assert(!text.includes('Files this branch changed outside the kaola-workflow/ run-state band:'),
       'T17c: ...and its own rendering of that list appears NOWHERE in the summary — not under the '
       + 'operator\'s heading, and not under a second copy of it appended lower down'
       + '\n----- summary -----\n' + text);

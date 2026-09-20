@@ -256,10 +256,11 @@ and drops the state the refusal was freezing is a deletion, not a conversion:
 
 - **`validation`** → `## Validation`: the typed chain-receipt finding above.
 - **`changed_paths`** → `## Changed Paths`: `git diff <base>...HEAD --name-only` with the
-  bookkeeping band removed (`docs/**`, repo-root `CHANGELOG.md` / `README.md`, and
-  `kaola-workflow/**`). Nothing compares that list against a declaration, because there is no
-  declaration to compare it to. It is there so a reader can see what moved and notice what does not
-  belong.
+  run-state band removed (`kaola-workflow/**`). Prose paths (`docs/**`, repo-root `CHANGELOG.md` /
+  `README.md`) are work product and stay in the list — dropping them left the card's
+  summary-vs-`changed_paths` reconciliation vacuous for documentation (VRPCadCore#952). Nothing
+  compares that list against a declaration, because there is no declaration to compare it to. It is
+  there so a reader can see what moved and notice what does not belong.
 
 `#1054` retired a third measurement that used to sit beside these two, `mission_list` → `## Mission
 List` — a count of the run's own missions and which carried an outcome while not `done`. Finalize no

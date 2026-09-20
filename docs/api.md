@@ -536,7 +536,7 @@ that emits a finding and drops the state the refusal was freezing is a deletion,
 | Envelope field | Durable heading | Content |
 |---|---|---|
 | `validation` | `## Validation` | the typed chain-receipt finding from `adaptiveSchema.evaluateChainReceipt`, computed **in process** — no subprocess, no plan file |
-| `changed_paths` | `## Changed Paths` | `adaptiveSchema.changedPathsSinceBase(root, base, project)` — `git diff <base>...HEAD --name-only` minus the bookkeeping band |
+| `changed_paths` | `## Changed Paths` | `adaptiveSchema.changedPathsSinceBase(root, base, project)` — `git diff <base>...HEAD --name-only` minus the `kaola-workflow/` run-state band |
 
 #1054: a third measurement, `mission_list` / `## Mission List` (a count of the run's own missions and
 which carried an outcome while not `done`), used to sit beside these two. It is retired — the

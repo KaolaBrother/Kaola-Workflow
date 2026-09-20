@@ -4105,9 +4105,9 @@ function persistChangedPathsToSummary(projectDir, changed, probe) {
   if (probe === 'unavailable') {
     lines.push('not measured — the branch diff could not be enumerated.');
   } else if (!changed || !changed.length) {
-    lines.push('none outside the run-state and documentation bands.');
+    lines.push('none outside the kaola-workflow/ run-state band.');
   } else {
-    lines.push('Files this branch changed outside the run-state and documentation bands:', '');
+    lines.push('Files this branch changed outside the kaola-workflow/ run-state band:', '');
     for (const rel of changed) lines.push('- ' + rel);
   }
   return appendSummarySection(projectDir, '## Changed Paths', lines);
@@ -4496,7 +4496,7 @@ function cmdFinalize() {
   //   validation    — SELF-HOST (npm): the chain receipt over THIS tree. CONSUMER (non-npm): the
   //                   agent-recorded .cache/final-validation.md, bound to the candidate it
   //                   validated. Classified, never enforced.
-  //   changed_paths — what this branch touched outside the run-state and documentation bands.
+  //   changed_paths — what this branch touched outside the kaola-workflow/ run-state band.
   // NONE refuses, and none is allowed to: a finalize whose receipt is stale, red or missing still
   // completes, carrying the finding where the orchestrator will read it. That party owns the
   // outcome — re-run the chains, fix the red, or proceed knowingly.
@@ -5276,8 +5276,9 @@ function cmdFinalize() {
   // flushed no-ops here — and it must run BEFORE the emit below, which carries finalizeTx.findings.
   flushFinalizeFindings();
   // `validation` and `changed_paths` are MEASUREMENTS on the envelope, never verdicts: what this
-  // repo's own chains said about this tree, and what this branch touched outside the run-state and
-  // documentation bands. Nothing compares either to anything, and neither can fail the finalize.
+  // repo's own chains said about this tree, and what this branch touched outside the
+  // kaola-workflow/ run-state band. Nothing compares either to anything, and neither can fail the
+  // finalize.
   // Both are durable in the archived finalization-summary.md under `## Validation` /
   // `## Changed Paths` — the envelope copies are for whoever is reading the run right now.
   const finalizeEmit = Object.assign({ status: 'closed' }, result, {
