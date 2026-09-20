@@ -121,7 +121,8 @@ examples. Dispatch `doc-updater` when useful; it must transcribe real signatures
 or return BLOCK, never invent fields. Write one docking evidence file, `.cache/doc-docking.md`,
 with checked files, fixes/no-impact reasons, and `DOCKED`/`BLOCKED`; continue only when docked.
 
-The finalize transaction reports `changed_paths`. Put it under `## Changed Paths`. `## Validation`
+The finalize transaction reports `changed_paths` — every path the branch changed outside
+`kaola-workflow/` run state. Put it under `## Changed Paths`. `## Validation`
 and `## Changed Paths` are where the finalize transaction's own findings land.
 
 ## Card: summary

@@ -1829,6 +1829,14 @@ function evaluateReleaseReceipt(root, opts) {
 // re-invent the declaration this design removed. So the comparison goes and the measurement stays:
 // the caller reports these paths and records them durably, and a reader decides whether they belong.
 // A git failure yields null (unknown), which is reported as such — it is not a verdict either way.
+//
+// The band is `kaola-workflow/**` run state ONLY — the one tree the transaction machinery itself
+// writes. Prose (docs/**, root CHANGELOG.md, root README.md) is WORK PRODUCT: the bookkeeping band
+// exists so a doc edit does not invalidate a validation receipt (isValidationInvisible), and
+// reusing it here emptied this measurement of exactly the paths a documentation-heavy run delivers
+// — VRPCadCore#952 measured a 93-path commit reporting 91 with zero docs/ entries, leaving the
+// card's summary-vs-changed_paths reconciliation vacuous for documentation. `project` is retained
+// for signature stability; no remaining exclusion is project-scoped.
 function changedPathsSinceBase(root, base, project) {
   const { execFileSync } = require('child_process');
   let diffOut;
@@ -1842,7 +1850,7 @@ function changedPathsSinceBase(root, base, project) {
     const rel = String(raw || '').trim();
     if (!rel || seen.has(rel)) continue;
     seen.add(rel);
-    if (isBookkeepingPath(rel, project) || /^kaola-workflow\//.test(rel)) continue;
+    if (/^kaola-workflow\//.test(rel)) continue;
     out.push(rel);
   }
   out.sort();

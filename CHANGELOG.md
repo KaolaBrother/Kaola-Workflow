@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Finalize `changed_paths` reports prose the run authored (VRPCadCore#952).** The measurement
+  reused the validation bookkeeping band (`isBookkeepingPath`), which drops `docs/**`, repo-root
+  `CHANGELOG.md`, and repo-root `README.md` — so a run whose deliverable was documentation reported
+  a changed set containing none of it, and the card's summary-vs-`changed_paths` reconciliation was
+  vacuous for exactly those paths. The band is now `kaola-workflow/` run state only — the one tree
+  the transaction machinery itself writes; every other changed path is reported. Validation
+  invisibility (`isValidationInvisible`) is unchanged: a doc edit still does not invalidate a chain
+  receipt. The measurement fix lives once in the shared `changedPathsSinceBase`; the `## Changed
+  Paths` wording update is applied to all four claim trees.
+
 ## [12.2.0] - 2026-09-19
 
 ### Added
