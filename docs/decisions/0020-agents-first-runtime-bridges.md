@@ -1,7 +1,7 @@
 # ADR 0020 — AGENTS-first runtime bridges
 
-Status: Superseded in part by ADR 0023; role/adaptor clauses remain active and orchestration/model
-routing is refined by ADR 0021 · Date: 2026-08-27 · Issues: #1033, #1034
+Status: Superseded in part by ADR 0023 and ADR 0026; role/adaptor clauses remain active and
+orchestration/model routing is refined by ADR 0021 · Date: 2026-08-27 · Issues: #1033, #1034
 
 ## Context
 
@@ -31,6 +31,11 @@ workflow, validation, documentation, and release behavior. Universal managed con
 Root `CLAUDE.md` is a thin native bridge and overlay. It begins with `@AGENTS.md`; its managed region
 contains only Claude-specific discovery, profile, and local-chain facts. No universal rule is copied
 into it.
+
+*(Supersession note, 2026-09-20 / ADR 0026.)* This thin-bridge clause is superseded. Claude Code
+v2.1.277 reads `AGENTS.md` directly when no repository `CLAUDE.md` shadows it, so root `AGENTS.md` is
+the only repository-level instruction surface and no root `CLAUDE.md` ships. The historical paragraph
+above is not rewritten.
 
 Every other runtime reads root `AGENTS.md` directly according to its documented discovery scope.
 If a future runtime cannot, it must add the smallest native bridge. A bridge is never a second

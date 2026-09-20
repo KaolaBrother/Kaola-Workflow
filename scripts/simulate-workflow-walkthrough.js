@@ -11009,7 +11009,7 @@ function testAxiomBlockByteIdentity() {
       body: dshSync.renderSkill(canonical, basename, forge) });
   }
 
-  for (const relativePath of ['AGENTS.md', 'README.md', 'CLAUDE.md']) {
+  for (const relativePath of ['AGENTS.md', 'README.md']) {
     const absolutePath = path.join(repoRoot, relativePath);
     assert(fs.existsSync(absolutePath), 'named project surface exists: ' + relativePath);
     surfaces.push({ id: relativePath, body: read(absolutePath) });
@@ -11017,18 +11017,15 @@ function testAxiomBlockByteIdentity() {
 
   const runtimeEditionCount = fs.readdirSync(path.join(repoRoot, 'scripts'))
     .filter(fileName => /^sync-[a-z0-9-]+-edition\.js$/.test(fileName)).length;
-  const expected = routing.FORGES.length * (2 + runtimeEditionCount) + 3;
+  const expected = routing.FORGES.length * (2 + runtimeEditionCount) + 2;
   assert(surfaces.length === expected,
-    'axiom-duplication sweep covers every runtime x forge init surface plus three named project '
+    'axiom-duplication sweep covers every runtime x forge init surface plus two named project '
       + 'surfaces — expected ' + expected + ', got ' + surfaces.length);
 
   const duplicates = surfaces.filter(surface => surface.body.includes(axioms)).map(surface => surface.id);
   assert(duplicates.length === 0,
     'project/runtime surfaces must not duplicate the canonical First Principles block: '
       + duplicates.join(', '));
-  assert(read(path.join(repoRoot, 'CLAUDE.md')).split(/\r?\n/)
-    .filter(line => line.trim() === '@AGENTS.md').length === 1,
-  'root CLAUDE.md keeps exactly one effective project-instruction bridge');
 
   console.log('testAxiomBlockByteIdentity: PASSED (' + surfaces.length + ' non-authoring surfaces)');
 }

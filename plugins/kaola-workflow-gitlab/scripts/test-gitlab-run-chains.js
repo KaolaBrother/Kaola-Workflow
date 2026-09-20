@@ -181,7 +181,7 @@ function makeScopeRepo() {
     'test:kaola-workflow:gitlab': A + ' && ' + D,
     'test:kaola-workflow:gitea': A + ' && ' + E,
   } }, null, 2) + '\n');
-  // A genuinely non-edition (claude-only) source file (README.md / CLAUDE.md / commands/ / agents/ /
+  // A genuinely non-edition (claude-only) source file (README.md / commands/ / agents/ /
   // .agents/ / docs/ are ROOT cross-edition READ surfaces the non-claude validators assert on — G7).
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'src', 'app.js'), 'exports.x = 1;\n');
@@ -241,7 +241,7 @@ function chainNames(rc) { return (rc && rc.chains ? rc.chains.map(c => c.name) :
   const rootReadSurfaces = [
     'commands/workflow-init.md', 'commands/kaola-workflow-plan-run.md',
     '.agents/plugins/marketplace.json', 'agents/workflow-planner.md',
-    'CLAUDE.md', 'README.md', 'docs/api.md', 'docs/workflow-state-contract.md',
+    'README.md', 'docs/api.md', 'docs/workflow-state-contract.md',
     'install.sh', 'uninstall.sh',
   ];
   for (const rel of rootReadSurfaces) {

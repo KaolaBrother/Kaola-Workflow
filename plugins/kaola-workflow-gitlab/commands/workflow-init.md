@@ -1,5 +1,5 @@
 ---
-description: Initialize a project for Kaola-Workflow with CLAUDE.md guidance, docs structure, and Git/GitLab issue conventions.
+description: Initialize a project for Kaola-Workflow with AGENTS.md guidance, docs structure, and Git/GitLab issue conventions.
 argument-hint: (optional project context)
 ---
 
@@ -26,8 +26,11 @@ pwd
 git rev-parse --is-inside-work-tree
 git status --short --branch
 git remote -v
-for file in AGENTS.md CLAUDE.md; do
+for file in AGENTS.md; do
   test ! -f "$file" || { printf '\n--- %s ---\n' "$file"; cat "$file"; }
+done
+for file in CLAUDE.md .claude/CLAUDE.md CLAUDE.local.md; do
+  test ! -f "$file" || printf '\nSHADOWING INSTRUCTION FILE (hides AGENTS.md from Claude Code): %s\n' "$file"
 done
 find docs -maxdepth 2 -type f 2>/dev/null | sort
 test -d kaola-workflow && find kaola-workflow -maxdepth 3 -type f | sort
@@ -59,9 +62,13 @@ result.
 
 Preserve valid owner content. Before changing an existing user-authored or owner-authored instruction file,
 show the minimal diff and obtain consent.
-Keep one project-fact authority such as `AGENTS.md`; keep a runtime-native first-read file only as a
-thin bridge plus genuine runtime-only facts. Do not copy the global workflow or dispatch contract
-into the repository.
+Keep `AGENTS.md` as the single project-fact authority for every supported runtime. Claude Code
+(≥ 2.1.277) reads it directly, so do not create a `CLAUDE.md`, `.claude/CLAUDE.md`, or
+`CLAUDE.local.md`: any repository `CLAUDE.md` shadows `AGENTS.md` for Claude Code. If the inspection
+reported one, treat it as a shadowing file — when it holds only an `@AGENTS.md` import, propose
+deleting it; when it holds owner content, propose moving the Claude-specific facts into `AGENTS.md`
+and deleting it. Both proposals need owner authorization before the write. Do not copy the global
+workflow or dispatch contract into the repository.
 
 An active run is a reload warning, not a prompt-write lock. Reconcile in-flight custody before a
 meaning-changing edit. After an edit, use a fresh top-level Agent/session for reliable validation

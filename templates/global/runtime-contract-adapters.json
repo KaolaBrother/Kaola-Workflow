@@ -11,7 +11,7 @@
       "carrier": { "kind": "dedicated", "format": "markdown", "root_env": "CLAUDE_CONFIG_DIR", "default_root": ".claude", "relative_path": "rules/kaola-workflow-global.md" },
       "precedence": "User rules load before project instructions; closer project instructions may add stricter local rules.",
       "reload": "A new session loads the user rule; SessionStart(source=compact) directly reprints static V2 before the next model turn.",
-      "compatibility_reads": ["project CLAUDE.md", "project @AGENTS.md bridge"]
+      "compatibility_reads": ["project AGENTS.md"]
     },
     {
       "id": "codex-local",

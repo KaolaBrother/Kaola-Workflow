@@ -1266,7 +1266,7 @@ function makeScopeRepo() {
   }, null, 2) + '\n');
   // A genuinely non-edition (claude-only) source file: read by NO forge/codex contract validator
   // and mirrored into no edition tree, so a change to it must scope to the claude chain alone.
-  // (README.md / CLAUDE.md / commands/ / agents/ / .agents/ / docs/ are ROOT cross-edition READ
+  // (README.md / commands/ / agents/ / .agents/ / docs/ are ROOT cross-edition READ
   // surfaces the non-claude validators assert on — see T38 — so they are NOT claude-only.)
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'src', 'app.js'), 'exports.x = 1;\n');
@@ -1511,7 +1511,6 @@ function chainNames(rc) { return (rc && rc.chains ? rc.chains.map(c => c.name) :
     'commands/kaola-workflow-plan-run.md', // codex plan-run SKILL content parity
     '.agents/plugins/marketplace.json',    // Codex marketplace registry (all three non-claude validators)
     'agents/workflow-planner.md',          // Claude agent role — forge validators assert its concepts
-    'CLAUDE.md',                           // codex validator: length notice + durable-state concept
     'README.md',                           // codex validator content assertion
     'docs/api.md',                         // codex validator: closure-contract concept
     'docs/workflow-state-contract.md',     // codex validator: durable-state concept

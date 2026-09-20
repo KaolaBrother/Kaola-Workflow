@@ -522,7 +522,6 @@ function freshRoutingCarriers(topic) {
 
 // A1 — root project instructions are Agent-owned local facts, not a universal runtime template.
 const agentsRoot = read('AGENTS.md') || '';
-const claudeRoot = read('CLAUDE.md') || '';
 for (const [label, token] of [
   ['project identity', 'Kaola-Workflow'],
   ['Mission List design record', 'docs/decisions/0017-the-mission-list.md'],
@@ -539,24 +538,23 @@ assert(!/READ CLAUDE\.md|single canonical source[^\n]*CLAUDE\.md|only to direct 
 assert(!/KW-AGENTS-MANAGED|^##\s+First Principles\s*$/mi.test(agentsRoot),
   'A1: root AGENTS.md has no managed wrapper or duplicated machine-global First Principles');
 
-assert(claudeRoot.split(/\r?\n/).filter(line => line.trim() === '@AGENTS.md').length === 1
-    && /\bClaude\b/i.test(claudeRoot),
-  'A2: root CLAUDE.md is a Claude overlay that explicitly bridges to AGENTS.md');
-const duplicatedUniversalSections = [
-  'Project Overview', 'Mission List', 'Durable State Contract', 'First Principles',
-  'Non-Negotiable Rules',
-].filter(heading => new RegExp('^##\\s+' + heading.replace(/ /g, '\\s+'), 'mi').test(claudeRoot));
-assert(duplicatedUniversalSections.length === 0,
-  'A2: CLAUDE.md duplicates no universal section — duplicated '
-  + JSON.stringify(duplicatedUniversalSections));
-assert(!/KW-CLAUDE-OVERLAY-MANAGED/.test(claudeRoot),
-  'A2: CLAUDE.md has no script-owned overlay wrapper');
+// A2 — root project instructions are a single repository-level surface. #1080: Claude Code
+// (>= 2.1.277) reads AGENTS.md directly, but any root CLAUDE.md / .claude/CLAUDE.md /
+// CLAUDE.local.md shadows it. The repository ships none; this negative pin replaces the retired
+// "exactly one @AGENTS.md bridge" assertion.
+for (const shadowing of ['CLAUDE.md', '.claude/CLAUDE.md', 'CLAUDE.local.md']) {
+  assert(!fs.existsSync(path.join(ROOT, shadowing)),
+    'A2: no root ' + shadowing + ' — AGENTS.md is the only repository-level instruction surface');
+}
 
 // A3 — workflow-init is a project-only consumer of a compatible global contract.
 const initSource = read('templates/routing/init.skeleton.md') || '';
-assert(/for file in AGENTS\.md CLAUDE\.md/.test(initSource)
+assert(/for file in AGENTS\.md; do/.test(initSource)
+    && /for file in CLAUDE\.md \.claude\/CLAUDE\.md CLAUDE\.local\.md; do/.test(initSource)
+    && /SHADOWING INSTRUCTION FILE/.test(initSource)
     && !/git ls-files|find \. -name AGENTS\.md/.test(initSource),
-  'A3: workflow-init reads root owner instructions without Git-index or repository-wide discovery');
+  'A3: workflow-init reads root AGENTS.md and reports shadowing repository CLAUDE.md files '
+    + 'without Git-index or repository-wide discovery');
 for (const [label, pattern] of [
   ['user ownership', /user-authored/i],
   ['Agent ownership', /Agent owns the meaning and prose of project instructions/i],

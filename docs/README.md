@@ -62,14 +62,21 @@ moments.
 guidance; ADR 0022 moves universal behavior to a machine-global contract and compact-safe native
 carriers; ADR 0023 makes repository instructions an Agent-maintained outcome; ADR 0024 retires
 finalize's parsing of the orchestrator's own records and rewrites role bodies around positioning,
-deliverable, custody, and stop condition. ADR 0017 remains the Mission List design of record.
+deliverable, custody, and stop condition; ADR 0026 makes root `AGENTS.md` the only repository-level
+instruction surface. ADR 0017 remains the Mission List design of record.
 [ADR 0025](decisions/0025-lean-orchestrator-single-subagent-binding.md)
 ([#1062](https://github.com/KaolaBrother/Kaola-Workflow/issues/1062)) is the landed successor
 to ADR 0019's remaining three-tier axis and ADR 0021's three intent classes: lean orchestrator,
 7 roles, one `subagent_default` per binding adapter, and `native_only` on OpenCode / Kimi / ZCode /
 Devin / Droid / DSH. Most
 older records describe the node/DAG executor retired by ADR 0017 or project-prompt ownership
-retired by ADR 0023.
+retired by ADR 0023 and ADR 0026.
+
+- **[0026 — AGENTS.md is the only repository-level instruction surface](decisions/0026-agents-md-single-instruction-surface.md)**
+  — Claude Code v2.1.277 reads `AGENTS.md` directly, and any repository `CLAUDE.md` shadows it, so
+  this repository ships none; `workflow-init` reports shadowing files and never creates one; the
+  measured capability record carries the version floor and the two-token probe. Supersedes ADR
+  0020's thin-bridge clause and ADR 0023 decision 5.
 
 - **[0024 — Finalize measures; roles state positioning; one authority per constant](decisions/0024-finalize-measures-roles-state-one-authority.md)**
   — finalize keeps two durable measurements (`## Validation`, `## Changed Paths`) and stops parsing

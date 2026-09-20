@@ -729,7 +729,7 @@ The following forms are runtime identifiers or structural placeholders, not desi
 | Git commit messages | Traceability link from code change to issue/decision |
 | `docs/conventions.md` (this file) | Durable policy rules — may cite issues and decision records by number |
 | `AGENTS.md` | Verified project facts and stricter local constraints — may reference this file by path |
-| `CLAUDE.md` and other runtime overlays | Native bridge/configuration only; no copied provenance or machine-global contract |
+| Other runtime-native overlay files | Native configuration only; no copied provenance or machine-global contract |
 
 ### Enforcement
 
@@ -852,9 +852,9 @@ testAxiomBlockByteIdentity`, which prints it, rather than from this sentence. Th
 scenario, comparing the canonical file’s content against every surface it constructed — the six tracked
 workflow-init command/skill files read from disk, the additive-runtime init surfaces rendered in memory
 via the same sync scripts that generate them (one `sync-*-edition.js` per runtime, currently
-opencode, kimi, grok, cursor, and zcode), and root `CLAUDE.md` and `README.md`. Those last two
-are **hand-maintained, not generated**: `generate-routing-surfaces.js --write` does not touch them,
-so an axiom edit must update both by hand or the guard reds the printed set. Each surface is
+opencode, kimi, grok, cursor, and zcode), and root `README.md`. That last one
+is **hand-maintained, not generated**: `generate-routing-surfaces.js --write` does not touch it,
+so an axiom edit must update it by hand or the guard reds the printed set. Each surface is
 mutation-proven to fail on its own. The `next` routing surfaces carry a short reference
 pointer to the block rather than the block itself. That pointer **is** a `required-blocks.js` entry
 (`nx-first-principles`), checked by `scripts/test-route-reachability.js` inside `npm test`: it was

@@ -463,12 +463,13 @@ const KIMI_RUNTIME_NATIVE = Object.freeze({
 // opencode S2/A scans): no $CLAUDE_PLUGIN_ROOT, no capitalized proper-noun
 // "Opus"/"Sonnet" (case-sensitive, whole-word — the B1 lowercase `opus`/
 // `sonnet` plan-ledger tier tokens are the portable cross-edition contract and
-// are never matched), and no `.claude` token ANYWHERE — with ONE scoped
-// exemption: .kimi/skills/workflow-init/SKILL.md keeps the canonical
+// are never matched), and no `.claude` token ANYWHERE — with TWO scoped
+// exemptions: .kimi/skills/workflow-init/SKILL.md keeps the canonical
 // `.claude/rules/` scaffold references (target-project CLAUDE.md semantics the
 // canonical command teaches verbatim; the opencode edition preserves the same
-// lines). Every `.claude` match in that one file must be the exempt
-// `.claude/rules/` form. Positive side: every generated kaola_script()
+// lines) and the `.claude/CLAUDE.md` shadowing-file inspection reference (#1080).
+// Every `.claude` match in that one file must be one of the exempt
+// forms. Positive side: every generated kaola_script()
 // resolver is the kimi-native form resolving under ${KIMI_CODE_HOME:-$HOME/
 // .kimi-code}/kaola-workflow/scripts.
 // ---------------------------------------------------------------------------
@@ -489,9 +490,10 @@ const KIMI_RUNTIME_NATIVE = Object.freeze({
       'K4: ' + rel + ': no $CLAUDE_PLUGIN_ROOT (Claude plugin path leak)');
     if (rel === '.kimi/skills/workflow-init/SKILL.md') {
       const all = (content.match(/\.claude/g) || []).length;
-      const exempt = (content.match(/\.claude\/rules\//g) || []).length;
+      const exempt = (content.match(/\.claude\/rules\/|\.claude\/CLAUDE\.md/g) || []).length;
       assert(all === exempt,
         'K4: workflow-init keeps ONLY the exempt `.claude/rules/` canonical scaffold references ' +
+        'and the `.claude/CLAUDE.md` shadowing-file inspection reference ' +
         '(found ' + all + ' `.claude` token(s), ' + exempt + ' exempt) — any other .claude form is a leak');
     } else {
       assert(!/\.claude/.test(content),

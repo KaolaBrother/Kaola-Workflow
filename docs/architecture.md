@@ -19,7 +19,8 @@ claim ──► write the mission list ──► run it ──► finalize ─�
 ```
 
 - **`/workflow-init`** — consumes the runtime-loaded global contract, reads the repository, and asks the
-  Agent to maintain project instructions, the smallest required native bridge, docs structure, and
+  Agent to maintain `AGENTS.md` as the single project authority (reporting any shadowing `CLAUDE.md`
+  and never creating one), docs structure, and
   issue conventions from current repository facts. Run once per project and again when those facts
   need reconciliation. It also
   reconciles: a repository still carrying the retired
@@ -445,9 +446,12 @@ start no recovery subprocess.
 
 ### Project instruction authority
 
-One Kaola-formatted repository has one project instruction authority: root `AGENTS.md`. Codex,
-OpenCode, Kimi, Grok, Cursor, and ZCode consume it directly within their documented scopes. Claude
-Code enters through a thin root `CLAUDE.md` containing one `@AGENTS.md` import plus Claude-only facts.
+One Kaola-formatted repository has one project instruction authority: root `AGENTS.md`. Every
+supported runtime consumes it directly within its documented scope, Claude Code included from
+v2.1.277. Any repository `CLAUDE.md`, `.claude/CLAUDE.md`, or `CLAUDE.local.md` counts as a project
+instruction file and shadows `AGENTS.md` unless it imports it, so this repository ships none and
+`workflow-init` never creates one. A consumer that must also support sessions that cannot read
+`AGENTS.md` may keep an owner-chosen `CLAUDE.md` containing `@AGENTS.md` as a stated exception.
 
 The Agent owns the result. `workflow-init` consumes the global contract already loaded by the
 runtime, inspects the repository, establishes actual purpose, commands, tests, documentation, and
@@ -462,8 +466,8 @@ not model semantic compatibility for the Agent.
 An unmarked, owner-authored `AGENTS.md` is therefore the normal converged state. A subsequent init
 reads it as project content and changes it only when current repository evidence or owner direction
 requires a different outcome. The machine-global receipt remains installer-owned evidence, not a
-license to mutate repository prompts. ADR 0023 records this boundary; ADR 0020's project-prompt
-migration clauses remain historical.
+license to mutate repository prompts. ADR 0023 records this boundary; ADR 0026 records the single
+`AGENTS.md` surface; ADR 0020's project-prompt migration clauses remain historical.
 
 Runtime installation is a separate owner from that portable repository result. `workflow-init`
 does not install, refresh, or choose runtime catalogs, commands, skills, hooks, or adapters; the

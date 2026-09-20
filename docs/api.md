@@ -48,15 +48,20 @@ Three commands ship. Everything below is invoked by them or by hand.
 
 | Command | Owns |
 |---|---|
-| `/workflow-init` | consume the runtime-loaded global contract, inspect repository facts, and have the Agent maintain project instructions that supplement verified local facts and constraints (a scoped exception must not weaken higher-priority instructions or host safety) plus the smallest required native bridge; existing owner-authored instructions require authorization before rewrite |
+| `/workflow-init` | consume the runtime-loaded global contract, inspect repository facts, and have the Agent maintain `AGENTS.md` as the single project authority that supplements verified local facts and constraints (a scoped exception must not weaken higher-priority instructions or host safety); it reports shadowing `CLAUDE.md` files and never creates one; existing owner-authored instructions require authorization before rewrite |
 | `/workflow-next` | select, claim, write the mission list, run it |
 | `/kaola-workflow-finalize` | validate, dock docs, summarize, close, archive, commit, sink |
 
 ## Project instruction boundary
 
 Project prompt maintenance has no script API. `workflow-init` consumes the global contract already
-loaded by the runtime, then the Agent reads the repository and maintains `AGENTS.md` and any
-necessary thin runtime bridge as ordinary project content. It does not locate or execute installer
+loaded by the runtime, then the Agent reads the repository and maintains `AGENTS.md` as the single
+project instruction surface for every supported runtime, Claude Code included from v2.1.277. It
+reports any repository `CLAUDE.md`, `.claude/CLAUDE.md`, or `CLAUDE.local.md` as a shadowing file: a
+file holding only an `@AGENTS.md` import is proposed for deletion, owner content is proposed to move
+into `AGENTS.md` before deletion, and both outcomes need owner authorization. It never creates one.
+A consumer that must also support sessions that cannot read `AGENTS.md` may keep an owner-chosen
+bridge containing `@AGENTS.md` as a stated exception. It does not locate or execute installer
 internals. An absent or inconsistent global authority preserves project rules and routes a separate
 release-tree installation check. Repository purpose, commands, tests, documentation, and local
 facts are semantic facts; no CLI classifies or renders them.

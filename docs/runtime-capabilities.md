@@ -2,7 +2,7 @@
 
 This document describes the capability boundary behind Kaola-Workflow's runtime adapters. The
 machine-readable authority is `templates/agents/runtime-capabilities.json`; this page explains its
-operational consequences and records the first-party evidence used through 2026-09-16. The current
+operational consequences and records the first-party evidence used through 2026-09-19. The current
 Codex mapping update is the dated #1049 source change, not a new runtime capability measurement.
 
 ## One repository authority
@@ -10,14 +10,19 @@ Codex mapping update is the dated #1049 source change, not a new runtime capabil
 Root `AGENTS.md` is the repository's project-instruction authority. An Agent maintains it so that
 project instructions supplement verified local facts and constraints; a project exception must
 state its scope and must not weaken higher-priority instructions or host safety boundaries.
-Universal Workflow behavior is supplied by the machine-global carrier. A runtime either reads `AGENTS.md` directly within its documented scope
-or reaches it through the smallest native entrypoint bridge. Runtime-specific files may add native
+Universal Workflow behavior is supplied by the machine-global carrier. A runtime reads `AGENTS.md` directly within its documented scope; a runtime that cannot may keep the smallest native entrypoint bridge. Runtime-specific files may add native
 profile syntax, tools, permissions, model/effort settings, hooks, and install paths, but do not copy
 the machine-global contract.
 
-Claude Code is the only supported runtime that needs a bridge. Root `CLAUDE.md` begins with
-`@AGENTS.md`, then contains only the Claude-specific overlay. Codex, opencode, Kimi Code, Grok,
-Cursor, ZCode, Devin, Droid, and DSH have direct `AGENTS.md` support.
+Claude Code reads `AGENTS.md` directly from v2.1.277, so no runtime needs a repository bridge on the
+normal path. Any repository `CLAUDE.md`, `.claude/CLAUDE.md`, or `CLAUDE.local.md` counts as a project
+instruction file and shadows `AGENTS.md` unless it only imports it, so this repository ships none.
+Sessions that cannot read `AGENTS.md` (older versions; Amazon Bedrock / Vertex / third-party
+providers or telemetry disabled, which do not fetch the feature flag; the first session after an
+install or upgrade; or the `claude-md` / `managed-only` project-instructions setting) may keep an
+owner-chosen `CLAUDE.md` containing `@AGENTS.md` as a stated exception. The workflow states that
+environment requirement and does not provision or maintain the file. Codex, opencode, Kimi Code,
+Grok, Cursor, ZCode, Devin, Droid, and DSH have direct `AGENTS.md` support.
 
 ## Capability map
 
@@ -217,12 +222,19 @@ route does not churn `resolved_profile_sha256` or the 42 role profiles.
 
 ### Claude Code
 
-- [Memory and instruction discovery](https://code.claude.com/docs/en/memory) documents
-  `CLAUDE.md`, `@AGENTS.md`, hierarchy, imports, and the under-200-lines recommendation.
+- [Memory and instruction discovery](https://code.claude.com/docs/en/memory) documents direct
+  `AGENTS.md` reading from v2.1.277, the rule that any repository `CLAUDE.md` shadows it unless the
+  file imports `@AGENTS.md`, hierarchy, imports, and the under-200-lines recommendation.
 - [Custom subagents](https://code.claude.com/docs/en/sub-agents) documents profile paths, dispatch,
   and model inheritance.
 - [Hooks](https://code.claude.com/docs/en/hooks) and
   [settings](https://code.claude.com/docs/en/settings) document events and configuration scopes.
+- **Live probe (2026-09-19, issue #1080).** Claude Code `2.1.277`, asked via
+  `claude -p --model haiku --max-turns 1` in a fresh `git init` directory to quote any probe token in
+  its project instructions, answered `KAOLA-AGENTS-ONLY-7731` when only `AGENTS.md` carried it. With
+  a `CLAUDE.md` carrying `KAOLA-CLAUDE-OVERLAY-4402` and no import beside the same `AGENTS.md`, it
+  answered `KAOLA-CLAUDE-OVERLAY-4402` only. The shadowing rule is real, so this repository ships no
+  root `CLAUDE.md`.
 
 ### Codex
 

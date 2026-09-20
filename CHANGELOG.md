@@ -14,6 +14,22 @@
   receipt. The measurement fix lives once in the shared `changedPathsSinceBase`; the `## Changed
   Paths` wording update is applied to all four claim trees.
 
+### Removed
+
+- **Retire the root `CLAUDE.md` bridge (#1080).** Root `AGENTS.md` is now the only repository-level
+  instruction surface. Claude Code v2.1.277 reads `AGENTS.md` directly, while any `CLAUDE.md`,
+  `.claude/CLAUDE.md`, or `CLAUDE.local.md` in the working directory or above it shadows that file
+  unless it imports `@AGENTS.md`. The root `CLAUDE.md` is deleted and a fast-chain validator fails if
+  any of the three shadowing files appears.
+
+### Changed
+
+- `workflow-init` reads `AGENTS.md` and additionally reports any shadowing `CLAUDE.md` file by name,
+  proposes deleting an import-only file or moving owner content into `AGENTS.md` before deletion,
+  and never creates one. `runtime-capabilities.json` carries the v2.1.277 version floor and the
+  2026-09-19 two-token probe; `claude-local.compatibility_reads` is `["project AGENTS.md"]`. ADR 0026
+  records the single surface and supersedes ADR 0020's thin-bridge clause and ADR 0023 decision 5.
+
 ## [12.2.0] - 2026-09-19
 
 ### Added

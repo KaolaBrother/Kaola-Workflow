@@ -42,8 +42,10 @@ bound to the exact publication commit.
 
 ## Change discipline
 
-- `AGENTS.md` and `CLAUDE.md` are owner-authorized, Agent-maintained content; verify the repository
-  before editing them.
+- `AGENTS.md` is owner-authorized, Agent-maintained content; verify the repository before editing it.
+  Claude Code ≥ 2.1.277 reads this file directly as the repository-level instruction surface. The
+  repository ships no root `CLAUDE.md` (nor `.claude/CLAUDE.md` / `CLAUDE.local.md`): any of those
+  shadows `AGENTS.md` for Claude Code.
 - Preserve unrelated work in a dirty tree. Do not overwrite generated mirrors independently.
 - Tests own acceptance meaning. Production work may update only mechanical fixtures or generated
   manifests when their meaning is unchanged.

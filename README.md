@@ -115,7 +115,7 @@ A research or design request does not authorize implementation. See [Task Qualit
 
 | Runtime | Native workflow carrier | Kaola role profiles | Install entry |
 |---|---|---|---|
-| Claude Code | Commands and `CLAUDE.md` bridge | Seven named agents | `./install.sh` |
+| Claude Code | Commands and root `AGENTS.md` (direct from v2.1.277) | Seven named agents | `./install.sh` |
 | Codex | Skills and `AGENTS.md` | Seven TOML agents per plugin | Matching plugin + profile installer |
 | Cursor CLI/App/Cloud | Commands and persistent recovery Rule | Seven named agents | `./install-cursor.sh` |
 | Grok CLI | Commands and persistent recovery Rule | Seven named agents | `./install-grok.sh` |

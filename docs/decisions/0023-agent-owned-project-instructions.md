@@ -67,6 +67,11 @@ This decision supersedes ADR 0020's project managed-region and consumer-migratio
 direct-discovery, thin-bridge, role-behavior, adapter, and provenance decisions remain active. ADR
 0022's machine-global contract, transaction, and compact-recovery design remain active.
 
+*(Supersession note, 2026-09-20 / ADR 0026.)* Decision 5 is superseded. Claude Code v2.1.277 reads
+`AGENTS.md` directly when no repository `CLAUDE.md` shadows it, so root `AGENTS.md` is the single
+repository-level instruction surface and a consumer `CLAUDE.md` is only an owner-authorized exception
+for sessions that cannot read `AGENTS.md`. Decisions 1–4 and 6–7 remain active.
+
 Issue #1051 later changed the universal project-instruction rule. Decision 1 remains the typical
 Agent-maintained content for this producer repository (verified facts and stricter local
 constraints). The global contract now permits a scoped project exception: the exception must state

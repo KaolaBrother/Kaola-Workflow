@@ -330,8 +330,7 @@ for (const file of [
   'hooks/hooks.json',
   'install.sh',
   'README.md',
-  'AGENTS.md',
-  'CLAUDE.md'
+  'AGENTS.md'
 ]) {
   for (const token of retired) assertNotIncludes(file, token);
 }
@@ -431,10 +430,15 @@ assert(exists('AGENTS.md'), 'AGENTS.md must exist at repo root as the project au
 assertNotIncludes('AGENTS.md', 'READ CLAUDE.md BEFORE ANY ACTION');
 assertNotIncludes('AGENTS.md', ['KW', 'AGENTS', 'MANAGED'].join('-'));
 assertNotIncludes('AGENTS.md', 'Correct first; never trade correctness for speed or cost');
-assert(read('CLAUDE.md').split(/\r?\n/).filter(line => line.trim() === '@AGENTS.md').length === 1,
-  'CLAUDE.md must carry exactly one effective @AGENTS.md bridge');
-assertNotIncludes('CLAUDE.md', ['KW', 'CLAUDE', 'OVERLAY', 'MANAGED'].join('-'));
-assertNotIncludes('CLAUDE.md', '## The mission list');
+// #1080: AGENTS.md is the ONLY repository-level instruction surface. Claude Code (>= 2.1.277)
+// reads AGENTS.md directly, but ANY CLAUDE.md / .claude/CLAUDE.md / CLAUDE.local.md at the
+// repository root counts as a project instruction file and shadows AGENTS.md. The pin is a
+// filesystem-absence check, not a git-index check: a present untracked file shadows too.
+for (const shadowing of ['CLAUDE.md', '.claude/CLAUDE.md', 'CLAUDE.local.md']) {
+  assert(!exists(shadowing),
+    'AGENTS.md is the only repository-level instruction surface; remove ' + shadowing
+      + ' (any repository CLAUDE.md shadows AGENTS.md for Claude Code)');
+}
 assertAgentOwnedInit('commands/workflow-init.md');
 
 // #1047: runtime dispatch posture belongs to installed adapters and diagnostics, not project init.

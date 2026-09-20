@@ -4,8 +4,16 @@
     "claude_instructions": {
       "kind": "official_docs",
       "locator": "https://code.claude.com/docs/en/memory",
-      "observed_at": "2026-08-27T00:00:00Z",
-      "claim": "The native project entrypoint is CLAUDE.md and @AGENTS.md is the documented bridge."
+      "observed_at": "2026-09-19T00:00:00Z",
+      "version_floor": "2.1.277",
+      "claim": "Claude Code reads AGENTS.md directly as the repository-level project instruction file from v2.1.277, but only when no CLAUDE.md, .claude/CLAUDE.md, or CLAUDE.local.md counts in the working directory or above it; a root CLAUDE.md containing @AGENTS.md is the documented compatibility bridge for sessions that cannot read AGENTS.md directly."
+    },
+    "claude_agents_md_native_20260919": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1080",
+      "observed_at": "2026-09-19T00:00:00Z",
+      "version_floor": "2.1.277",
+      "claim": "Claude Code 2.1.277 on this machine, asked via `claude -p --model haiku --max-turns 1` in a fresh `git init` directory to quote any probe token in its project instructions, answered KAOLA-AGENTS-ONLY-7731 when only AGENTS.md carried it, and answered KAOLA-CLAUDE-OVERLAY-4402 only (not KAOLA-AGENTS-ONLY-7731) once a CLAUDE.md carrying KAOLA-CLAUDE-OVERLAY-4402 with no import sat beside the same AGENTS.md. Any repository CLAUDE.md shadows AGENTS.md unless it imports it; this repository therefore ships none."
     },
     "codex_instructions": {
       "kind": "official_docs",
@@ -246,7 +254,8 @@
     "claude": {
       "runtime": "claude",
       "evidence": [
-        "claude_instructions"
+        "claude_instructions",
+        "claude_agents_md_native_20260919"
       ],
       "capabilities": {
         "named_roles": true,

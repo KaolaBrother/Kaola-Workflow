@@ -7,7 +7,7 @@ so this edition is delivered the opencode-native way — a generated `.opencode/
 tree of commands and a hooks plugin — and is fully **additive**: it touches none of
 the existing `claude`/`codex`/`gitlab`/`gitea` edition machinery.
 
-opencode reads root `AGENTS.md` directly; Kaola does not route it through `CLAUDE.md`. Official
+opencode reads root `AGENTS.md` directly; no runtime bridge is involved. Official
 discovery, fallback, and nesting behavior is recorded in
 [runtime capabilities](runtime-capabilities.md#opencode). Runtime-specific profile frontmatter and
 permissions come from the opencode adapter and do not duplicate universal repository or role rules.

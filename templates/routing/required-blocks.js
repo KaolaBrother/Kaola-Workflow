@@ -380,7 +380,7 @@ const REQUIRED_BLOCKS = [
   // ==== forge-is-the-backlog: one marker, three topics ====
   //
   // "The forge's open list is the backlog truth" (docs/workflow-state-contract.md /
-  // this repo's own CLAUDE.md) has no other durable carrier on a shipped surface: a
+  // this repo's own AGENTS.md) has no other durable carrier on a shipped surface: a
   // reader in a consumer repo cannot resolve either doc, so the rule is restated on
   // each topic that touches backlog selection, the priority-tier sorter, or the
   // gap-sweep filing/correction step. Same shape as consent-in-conversation — one

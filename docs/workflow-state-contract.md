@@ -1,7 +1,7 @@
 # Workflow State Contract
 
-This map is the detailed state inventory for Kaola-Workflow. Keep root memory files such as
-`CLAUDE.md` and `AGENTS.md` limited to durable invariants and link here for the full contract.
+This map is the detailed state inventory for Kaola-Workflow. Keep the root memory file `AGENTS.md`
+limited to durable invariants and link here for the full contract.
 
 A run's durable state is **two files plus evidence**: `kaola-workflow/{project}/mission-list.md`
 (the coordination record — see `decisions/0017-the-mission-list.md` for its derivation) and

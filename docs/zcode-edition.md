@@ -5,8 +5,8 @@ from the same routing and behavior authorities as the other runtime editions; un
 (#1062) ZCode is `native_only` and installs no Kaola role profiles. The focused suite is
 `node scripts/test-zcode-edition.js`.
 
-ZCode loads user-global `~/.zcode/AGENTS.md` and workspace-root `AGENTS.md` directly. `CLAUDE.md` is
-onboarding migration input, not an ongoing bridge. The locally measured product was ZCode App
+ZCode loads user-global `~/.zcode/AGENTS.md` and workspace-root `AGENTS.md` directly and needs no
+bridge. The locally measured product was ZCode App
 `3.10.1` / build `3.10.1.6272`; its bundled CLI was available through the App, while a standalone
 ZCode executable or binary was absent from `PATH`. Live named-subagent/model resolution remains
 **unknown**.

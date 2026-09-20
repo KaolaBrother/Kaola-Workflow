@@ -707,9 +707,9 @@ function forgeReferencedScripts(scripts) {
 //   - .agents/   : the Codex marketplace registry + agent profiles (read by all three validators)
 //   - docs/      : root docs the codex validator content-asserts (api / workflow-state-contract / conventions)
 const ROOT_EDITION_READ_PREFIXES = ['.agents/', 'commands/', 'agents/', 'docs/'];
-//   - CLAUDE.md / README.md      : content-asserted by the codex validator
+//   - README.md                  : content-asserted by the codex validator
 //   - install.sh / uninstall.sh  : run / read by the gitlab / gitea validators
-const ROOT_EDITION_READ_FILES = new Set(['CLAUDE.md', 'README.md', 'install.sh', 'uninstall.sh']);
+const ROOT_EDITION_READ_FILES = new Set(['README.md', 'install.sh', 'uninstall.sh']);
 
 // #725 (B1): does this changed path couple to a non-claude edition (so the diff needs all four)? Any
 // path under plugins/ (the codex twin + both forge trees), package.json (the chain definitions), a
