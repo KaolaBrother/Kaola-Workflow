@@ -35,7 +35,7 @@
   `.zcode/commands/` lane; `/kaola-workflow-next` and `/kaola-workflow-finalize` invoke as native
   Skill tool calls (measured on ZCode 3.12.3 + the KPR ACP adapter 0.3.3). ZCode joins the
   always-loaded-carrier runtimes: the managed region in `${ZCODE_HOME:-~/.zcode}/AGENTS.md` renders
-  the full compact-recovery prompt, its prefix survives compaction (KPR #75), and recovery
+  the full compact-recovery prompt, its prefix survives compaction (KPR issue 75), and recovery
   re-invokes the operation Skill natively — never a manual `read`. `install-zcode.sh` deploys the
   skills to project or `${ZCODE_HOME}/skills/` (`--global`) scope and retires the three legacy
   command basenames from the resolved scope on install and uninstall, preserving user-owned files.
