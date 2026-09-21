@@ -41,9 +41,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Test seam ONLY (scripts/test-install-all.js points it at stub installers);
 # production always resolves to this script's own directory.
 ROOT="${KAOLA_INSTALL_ALL_ROOT:-$SCRIPT_DIR}"
-# One batch transaction owns the universal machine-global contract. The test seam
-# points at a hermetic stub beside the runtime-installer stubs; production resolves
-# from the same release tree as every installer below.
+# Each runtime installer installs its OWN machine-global contract carrier as its last step
+# (per-target global-contract mode, #1087), so this wrapper never writes a carrier itself.
+# --check asks the same CLI, one runtime at a time, whether that runtime's carrier is
+# current. The test seam points at a hermetic stub beside the runtime-installer stubs;
+# production resolves from the same release tree as every installer below.
 GLOBAL_CONTRACT_CLI="${KAOLA_GLOBAL_CONTRACT_CLI:-$ROOT/scripts/kaola-workflow-global-contract.js}"
 
 # The temp base every mktemp below writes under. `${TMPDIR:-/tmp}` guards an EMPTY
@@ -124,9 +126,9 @@ Options:
   --yes                         Non-interactive; forward -y to every interactive installer
   --skip=RUNTIME[,RUNTIME...]   Skip named runtimes (claude,opencode,codex,kimi,grok,cursor,zcode,devin,droid,dsh) — logged loudly
   --strict                      Fail-fast: stop at the first failing runtime
-  --check                       Read-only verification: require the installed global contract to
-                                be CURRENT, print each runtime command, and report pending Codex
-                                plugin convergence; no changes
+  --check                       Read-only verification: check each runtime's own global-contract
+                                carrier (one line per runtime), print each runtime command, and
+                                report pending Codex plugin convergence; no changes
   -h, --help                    Show this help
 
 This command never installs or updates a Cursor Cloud environment. In Cursor
@@ -150,6 +152,10 @@ checkout the marketplace points at, not necessarily the one you ran this from. E
 difference refreshes the plugin (remove + add), and what was refreshed is re-read to
 prove it took; a comparison that cannot be completed is reported, never assumed.
 
+Global contract: every runtime installer installs only its own carrier, last, so a conflict
+or drift in one runtime's carrier never blocks another runtime, and --skip=RUNTIME also
+skips that runtime's carrier.
+
 Summary statuses:
   PASS     installer succeeded and (for codex) the marketplace plugin serves what its
            source installs, OR that check does not apply here (no codex CLI installed) — an
@@ -158,7 +164,9 @@ Summary statuses:
   PARTIAL  installer succeeded but a check that DOES apply could not be completed
            (reason printed); never a bare PASS, never a wrapper failure
   SKIP     skipped via --skip
-  PLAN     --check dry run
+  PLAN     --check dry run; the note carries that runtime's own carrier state. A runtime
+           that is not on PATH keeps its ownership record as DORMANT and its carrier
+           state is advisory only
   NOT-RUN  not reached (--strict aborted earlier)
 
 Absent tooling is NOT a detected mismatch: with no `codex` CLI on PATH there is no
@@ -244,6 +252,39 @@ print_summary() {
   return "$any_fail"
 }
 
+# One runtime's own carrier state from the per-target global-contract check (#1087).
+# Prints "VERDICT<TAB>note" where VERDICT is OK, ADVISORY, or FAIL. Only a runtime that is
+# detected on PATH can FAIL: a runtime that is not detected keeps its ownership record as
+# DORMANT and its carrier state is reported as advisory, never as another runtime's failure.
+carrier_state() {
+  local name="$1" output rc=0
+  if [[ ! -f "$GLOBAL_CONTRACT_CLI" ]]; then
+    printf 'FAIL\tglobal contract CLI missing: %s\n' "$GLOBAL_CONTRACT_CLI"
+    return 0
+  fi
+  output="$(node "$GLOBAL_CONTRACT_CLI" check --runtime "$name" --json 2>&1)" || rc=$?
+  node -e '
+    const [rc, output] = process.argv.slice(1);
+    let doc = null;
+    try { doc = JSON.parse(output); } catch (_) { /* reported below */ }
+    const say = (verdict, note) => { process.stdout.write(verdict + "\t" + note + "\n"); };
+    if (!doc) { say("FAIL", "carrier check failed (exit " + rc + ")"); process.exit(0); }
+    const rows = Array.isArray(doc.targets) ? doc.targets : [];
+    const detected = rows.length === 0 || rows.some(row => row.detected !== false);
+    const reason = rows.map(row => row.reason || row.error).filter(Boolean)[0];
+    const status = doc.status || "UNKNOWN";
+    if (status === "CURRENT") {
+      const absent = rows.length > 0 && rows.every(row => row.status === "NOT_INSTALLED");
+      say("OK", absent ? "carrier not installed (runtime not detected)" : "carrier CURRENT");
+    } else if (!detected) {
+      say("ADVISORY", "carrier " + status + (reason ? ": " + reason : "")
+        + " (runtime not on PATH; record DORMANT, advisory)");
+    } else {
+      say("FAIL", "carrier " + status + (reason ? ": " + reason : ""));
+    }
+  ' "$rc" "$output"
+}
+
 run_one() {
   local name="$1"; shift
   if is_skipped "$name"; then
@@ -255,7 +296,14 @@ run_one() {
   echo ""
   echo ">>> [$name] $*"
   if [[ "$CHECK" == "1" ]]; then
-    R_STATUS+=("PLAN"); R_CODE+=("-"); R_NOTE+=("")
+    local verdict note
+    IFS=$'\t' read -r verdict note < <(carrier_state "$name")
+    echo "    [global-contract] $name: $note"
+    if [[ "$verdict" == "FAIL" ]]; then
+      R_STATUS+=("FAIL"); R_CODE+=("-"); R_NOTE+=("$note")
+    else
+      R_STATUS+=("PLAN"); R_CODE+=("-"); R_NOTE+=("$note")
+    fi
     return 0
   fi
   local logf rc
@@ -643,26 +691,9 @@ converge_codex_plugin() {
 echo "install-all: reinstalling Kaola-Workflow runtimes from $HEAD_SHA"
 echo "install-all: root=$ROOT scope=$SCOPE forge=$FORGE$( [[ "$YES" == "1" ]] && echo ' yes' )$( [[ "$CHECK" == "1" ]] && echo ' (dry-run)' )"
 
-# The global contract is a whole-batch precondition. Its transaction discovers the
-# installed runtime surfaces from the registry, preflights every physical carrier,
-# and writes nothing when any owner, symlink, duplicate, or future-schema conflict
-# exists. Run it before the first edition installer so a blocked contract can never
-# leave an arbitrarily half-updated runtime set.
-if [[ ! -f "$GLOBAL_CONTRACT_CLI" ]]; then
-  echo "install-all: global contract transaction missing: $GLOBAL_CONTRACT_CLI" >&2
-  exit 1
-fi
-GLOBAL_CONTRACT_MODE="install"
-[[ "$CHECK" == "1" ]] && GLOBAL_CONTRACT_MODE="check"
-echo ""
-echo ">>> [global-contract] node $GLOBAL_CONTRACT_CLI $GLOBAL_CONTRACT_MODE --json"
-GLOBAL_CONTRACT_OUTPUT="$(node "$GLOBAL_CONTRACT_CLI" "$GLOBAL_CONTRACT_MODE" --json 2>&1)"
-GLOBAL_CONTRACT_RC=$?
-printf '%s\n' "$GLOBAL_CONTRACT_OUTPUT"
-if [[ "$GLOBAL_CONTRACT_RC" -ne 0 ]]; then
-  echo "install-all: global contract $GLOBAL_CONTRACT_MODE failed before runtime installation (exit $GLOBAL_CONTRACT_RC)" >&2
-  exit 1
-fi
+# No whole-batch global-contract precondition (#1087): each runtime installer installs
+# its own carrier as its last step, so one runtime's carrier conflict, symlink, or drift
+# fails only that runtime's row and never stops the other runtimes from installing.
 
 # Per-runtime scope flags for the additive runtimes (install.sh has no
 # global/project concept, so it never receives them).

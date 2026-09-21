@@ -651,6 +651,21 @@ copy_skills "$SKILLS_DEST"
 install_support_scripts
 merge_hooks_config
 
+# Machine-global contract carrier (#1087). The LAST install step installs ONLY this runtime's own
+# adapter target through the per-target global-contract CLI: no other runtime's home is written,
+# no install order is assumed, and a carrier conflict blocks only this runtime.
+install_global_carrier() {
+  local output rc=0
+  output="$(node "$SCRIPT_DIR/scripts/kaola-workflow-global-contract.js" install --runtime kimi --json 2>&1)" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    echo "Install error: kimi global contract carrier not installed (exit $rc)" >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+  fi
+  echo "Installed kimi global contract carrier (per-target record under ~/.config/kaola-workflow)"
+}
+install_global_carrier
+
 echo ""
 echo "Next: open the project in Kimi Code and run a workflow command, e.g.:"
 echo "  /workflow-init"
