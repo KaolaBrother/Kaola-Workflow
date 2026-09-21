@@ -35,9 +35,9 @@ moments.
 - [Kimi Edition](kimi-edition.md) — direct chained `AGENTS.md`, vendor-native dispatch (no Kaola
   role profiles), session-owned model/thinking, hooks, and installer behavior.
 - [Grok Edition](grok-edition.md) — direct root-to-cwd `AGENTS.md`, generated named agents pinned
-  to `grok-4.6` / `effort: medium`, and hooks.
+  to `grok-4.7` / `effort: medium`, and hooks.
 - [Cursor Edition](cursor-edition.md) — direct root/nested `AGENTS.md`, generated named agents
-  pinned to `grok-4.6[effort=medium]`, CLI vs App product surfaces (App local IDE vs saved Cloud
+  pinned to `grok-4.7[effort=medium]`, CLI vs App product surfaces (App local IDE vs saved Cloud
   environments), live-enum routing, host-specific install/reload carriers, and hooks.
 - [ZCode Edition](zcode-edition.md) — direct user-plus-workspace `AGENTS.md`, vendor-native
   dispatch (no Kaola role profiles), known hook limits, and explicit version/relocation unknowns.
@@ -55,7 +55,7 @@ moments.
   — the orchestrator holds judgment and acceptance; the per-role intent axis and
   the 14-role roster are retired in favor of seven roles; every profile-installing adapter
   declares exactly one `subagent_default` (Claude `sonnet`; Codex `gpt-5.6-luna` / `max` pinned in
-  the TOML; Grok `grok-4.6` / `effort: medium`; Cursor `grok-4.6[effort=medium]`); OpenCode, Kimi,
+  the TOML; Grok `grok-4.7` / `effort: medium`; Cursor `grok-4.7[effort=medium]`); OpenCode, Kimi,
   ZCode, Devin, Droid, and DSH are `native_only` — no Kaola role profiles, vendor-harness dispatch.
 
 [`decisions/`](decisions/) holds the full catalog. ADR 0021 adds runtime-native next/finalize

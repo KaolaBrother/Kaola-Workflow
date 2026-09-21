@@ -49,7 +49,7 @@ Everything under `.grok/` is **generated from canonical** by
 
 | Canonical source | grok edition output | Notes |
 | ---------------- | ------------------- | ----- |
-| `templates/agents/behavior-contracts.json` + Grok adapter | `.grok/agents/<name>.md` | 7 native profiles with `name`, `description`, native camelCase `promptMode` / `agentsMd`, `model: grok-4.6` + `effort: medium` (the adapter's single `subagent_default`), an explicit capability-derived `tools` allowlist, shared behavior identity, and render-specific hash. Kaola does not emit `permissionMode: plan`: `plan` is not a legal value of the official enum and permission mode is not the tool-boundary carrier. |
+| `templates/agents/behavior-contracts.json` + Grok adapter | `.grok/agents/<name>.md` | 7 native profiles with `name`, `description`, native camelCase `promptMode` / `agentsMd`, `model: grok-4.7` + `effort: medium` (the adapter's single `subagent_default`), an explicit capability-derived `tools` allowlist, shared behavior identity, and render-specific hash. Kaola does not emit `permissionMode: plan`: `plan` is not a legal value of the official enum and permission mode is not the tool-boundary carrier. |
 | `commands/<file>.md` | `.grok/commands/<file>.md` | Flat slash command. The marked next/finalize block becomes Grok-native profile, `spawn_subagent`, subagent-default, route, and limit guidance; any concrete Claude dispatch cards are adapted. `--runtime claude` becomes `--runtime grok`. Script resolver points at `${GROK_HOME:-$HOME/.grok}/kaola-workflow/scripts`. |
 | global contract + compact skeleton + Grok adapter | `$GROK_HOME/rules/kaola-workflow-global.md` | The global transaction renders one V2 native Rule carrying the universal contract, complete operation reload route, mandatory dispatch contract, and Grok adapter. The edition emits no second Rule or compact hook. |
 
@@ -57,13 +57,17 @@ Regenerating the tree never
 overwrites a user's `[subagents.models]` or `[subagents.roles.*]` in
 `$GROK_HOME/config.toml`.
 
-## One pinned binding — `model: grok-4.6` / `effort: medium`
+## One pinned binding — `model: grok-4.7` / `effort: medium`
 
 Since ADR 0025 (#1062) generated agents pin the adapter's single `subagent_default`: every
-frontmatter carries `model: grok-4.6` plus `effort: medium`. `AgentDefinition.model` accepts a
+frontmatter carries `model: grok-4.7` plus `effort: medium`. `AgentDefinition.model` accepts a
 concrete id, so the former `model: inherit` is retired. The three-effort-tier mapping it replaced
 (`medium`/`high`/`xhigh` by intent class) is retired with the intent axis. Native effort
 syntax never enters the shared behavior source.
+
+The id moved from `grok-4.6` to `grok-4.7` on 2026-09-22 (#1088) after Grok CLI `1.0.40`'s model
+catalog listed `grok-4.7` with `xhigh` / `high` / `medium` / `low` efforts. That swap is a catalog
+read; a pinned child's resolved model and effort were not re-probed.
 
 `spawn_subagent` has no effort parameter, so effort belongs on each generated
 `.grok/agents/<role>.md`. Command cards continue to omit `model=`; they name only
@@ -71,7 +75,7 @@ syntax never enters the shared behavior source.
 `$GROK_HOME/config.toml` is not seeded or rewritten.
 
 **Declared runtime divergence.** The suite asserts that every generated agent
-pins `model: grok-4.6` plus `effort: medium`, that no profile retains
+pins `model: grok-4.7` plus `effort: medium`, that no profile retains
 `model: inherit`, and that
 command cards carry no per-call `model=` override.
 
@@ -88,7 +92,7 @@ parent. Three A/B legs using the literal `implementer` name still recorded
 `high`, even when its native profile or a minimal inline definition pinned
 `model: inherit` plus `effort: medium`. This is a runtime limitation/inference,
 not a generator failure. It remains an open, non-blocking re-measure item under
-the new pin (does a child pinned `model: grok-4.6` / `effort: medium` still land at `high` under an
+the new pin (does a child pinned `model: grok-4.7` / `effort: medium` still land at `high` under an
 xhigh parent?). No
 config seeding, per-call override, or second pin path is added.
 

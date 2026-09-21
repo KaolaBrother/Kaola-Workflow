@@ -18,7 +18,7 @@
 // transaction owns the one always-applied Rule; this edition owns no duplicate
 // project Rule, hook declaration, or hook subprocess.
 // One canonical subagent binding (#1062): every generated
-// agent carries the unquoted Grok 4.6 frontmatter pin grok-4.6[effort=medium]. Named-profile
+// agent carries the unquoted Grok 4.7 frontmatter pin grok-4.7[effort=medium]. Named-profile
 // command cards carry no static per-dispatch model override; a built-in-only catalog-miss path may
 // use only a resolver-listed live model slug. Compact recovery is carried by the global transaction
 // for standalone CLI, App local, and Cloud materialization; ordinary tool use has no Kaola injection.
@@ -661,7 +661,7 @@ const CURSOR_ADAPTER_CAPS = JSON.parse(fs.readFileSync(
   path.join(REPO, 'templates', 'agents', 'runtime-capabilities.json'), 'utf8')).runtimes.cursor.capabilities;
 // Hardcoded independently of the adapter file so a mutation to the adapter's own
 // subagent_default values is caught rather than compared against itself.
-const CURSOR_REAL_BINDING_PIN = 'grok-4.6[effort=medium]';
+const CURSOR_REAL_BINDING_PIN = 'grok-4.7[effort=medium]';
 
 function canonicalAgentClass() {
   const binding = (CURSOR_ADAPTER_CAPS.subagent_default) || {};
@@ -677,7 +677,7 @@ function canonicalAgentClass() {
 // ---------------------------------------------------------------------------
 const CURSOR_RUNTIME_NATIVE = Object.freeze({
   frontmatter_binding_pin:
-    'Cursor generated agent frontmatter pins the one subagent binding as unquoted grok-4.6[effort=medium]; command cards omit per-call model dispatch.',
+    'Cursor generated agent frontmatter pins the one subagent binding as unquoted grok-4.7[effort=medium]; command cards omit per-call model dispatch.',
   machine_global_recovery_rule:
     'Cursor standalone CLI, App local, and App-started Cloud receive one machine-global alwaysApply Rule; no tool-use hook or Kaola hook subprocess is installed, so ordinary tool use adds zero context.',
 });
@@ -826,10 +826,10 @@ const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
       'G0-roster: retired role ' + retired + ' is absent from the canonical inventory');
   }
   assert(CURSOR_ADAPTER_CAPS.subagent_default
-      && CURSOR_ADAPTER_CAPS.subagent_default.model === 'grok-4.6'
+      && CURSOR_ADAPTER_CAPS.subagent_default.model === 'grok-4.7'
       && CURSOR_ADAPTER_CAPS.subagent_default.effort === 'medium',
     'G0-binding: templates/agents/runtime-capabilities.json cursor subagent_default is '
-    + 'grok-4.6/medium — got ' + JSON.stringify(CURSOR_ADAPTER_CAPS.subagent_default));
+    + 'grok-4.7/medium — got ' + JSON.stringify(CURSOR_ADAPTER_CAPS.subagent_default));
   assert(!CURSOR_ADAPTER_CAPS.intent_mapping,
     'G0-binding: cursor adapter carries no retired intent_mapping tier axis');
   {
@@ -883,8 +883,8 @@ const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
   assert(rejected,
     'G0-roster: renderAgent rejects the retired role planner (fail closed; #1062 catalog) — got no throw');
   const rendered = syncMod.renderAgent('probe', 'implementer');
-  assert(/model: grok-4\.6\[effort=medium\]/.test(rendered),
-    'G0-binding: renderAgent pins every surviving role as grok-4.6[effort=medium] — got '
+  assert(/model: grok-4\.7\[effort=medium\]/.test(rendered),
+    'G0-binding: renderAgent pins every surviving role as grok-4.7[effort=medium] — got '
     + rendered.slice(0, 200));
 }
 
@@ -1415,7 +1415,7 @@ function commandRel(name, forge) {
       assert(false, 'G2-leak-mutation: ' + rel + ': generated consumer exists for the mutation oracle');
       continue;
     }
-    const mutated = read(rel) + '\nOutside-block mutation: grok-4.6\n';
+    const mutated = read(rel) + '\nOutside-block mutation: grok-4.7\n';
     const scope = vendorSlugScope(rel, mutated);
     assert(!scope.ok && /vendor model slug/.test(scope.reason),
       'G2-leak-mutation: ' + rel + ': vendor slug outside the marked block still fails');
@@ -1431,9 +1431,9 @@ function commandRel(name, forge) {
   const reason = CURSOR_RUNTIME_NATIVE[KEY];
   assert(typeof reason === 'string' && reason.trim().length >= 20,
     'G2-declaration: CURSOR_RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason');
-  assert(/frontmatter/i.test(reason) && /grok-4\.6/i.test(reason)
+  assert(/frontmatter/i.test(reason) && /grok-4\.7/i.test(reason)
     && /medium/i.test(reason) && /unquoted/i.test(reason),
-    'G2-declaration: the "' + KEY + '" reason must state the unquoted grok-4.6[effort=medium] frontmatter pin');
+    'G2-declaration: the "' + KEY + '" reason must state the unquoted grok-4.7[effort=medium] frontmatter pin');
   const resumeKey = 'machine_global_recovery_rule';
   const resumeReason = CURSOR_RUNTIME_NATIVE[resumeKey];
   assert(typeof resumeReason === 'string' && resumeReason.trim().length >= 20,

@@ -99,6 +99,20 @@
       "observed_at": "2026-08-28T00:00:00Z",
       "claim": "Cursor Cloud environment setup confirmed candidate 101250f293a5439ed73e8ee2127c7501fba9e883, installed the remote machine authority and explicitly materialized the selected repository, and passed current receipt, authority-binding, 14-agent, collision, and byte-idempotence checks. The user manually saved exact Build bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2. New top-level same-repository parent bc-3e6bd3bd-f310-47cd-a9cb-358cf802f16d visibly used that Build, exposed nine native plus all 14 Kaola Task types, and exact implementer child bc-7d00ddad-23f3-5e69-8f9a-1c326b051a49 returned PROBE_OK_CURSOR_CLOUD_FINAL_SAVED_REPO_IMPLEMENTER with no substitute or per-call model override. Child model and profile-source carriers remained unobservable. Cloud requires installation in its environment setup, a tested and user-saved Build, then a new top-level Agent in the same repository; local install never deploys Cloud."
     },
+    "grok_model_catalog_20260922": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1088",
+      "observed_at": "2026-09-22T00:00:00Z",
+      "version_floor": "1.0.40",
+      "claim": "Grok CLI 1.0.40's authenticated model catalog (GROK_HOME models_cache.json, fetched 2026-09-21 from cli-chat-proxy.grok.com/v1/models) lists id grok-4.7 (name Grok 4.7) with reasoning_efforts xhigh, high (default), medium, and low, beside grok-4.7-build-fast, grok-4.6, and grok-4.5. The subagent_default pin moved from grok-4.6 to grok-4.7 on this catalog read; a pinned child's resolved model and effort were not re-probed."
+    },
+    "cursor_model_catalog_20260922": {
+      "kind": "runtime_probe",
+      "locator": "https://github.com/KaolaBrother/Kaola-Workflow/issues/1088",
+      "observed_at": "2026-09-22T00:00:00Z",
+      "version_floor": "2026.09.15-d2fe57e",
+      "claim": "Cursor CLI 2026.09.15-d2fe57e `cursor-agent models` lists grok-4.7-low, grok-4.7-medium, grok-4.7-high, and grok-4.7-xhigh, each with a -fast twin, without the cursor- prefix the grok-4.6 slugs carry; its help documents quoted bracket overrides on parameterized models. The subagent_default pin moved from grok-4.6[effort=medium] to grok-4.7[effort=medium] on this catalog read; the resolver mapping of that bracket value to a provider slug was not re-probed."
+    },
     "zcode_instructions": {
       "kind": "official_docs",
       "locator": "https://zcode.z.ai/en/docs/agents",
@@ -513,7 +527,8 @@
     "grok": {
       "runtime": "grok",
       "evidence": [
-        "grok_instructions"
+        "grok_instructions",
+        "grok_model_catalog_20260922"
       ],
       "capabilities": {
         "named_roles": true,
@@ -526,9 +541,9 @@
         "tool_binding": "profile_tools",
         "hook_scope": "user_and_project",
         "subagent_default": {
-          "model": "grok-4.6",
+          "model": "grok-4.7",
           "effort": "medium",
-          "summary": "every installed Kaola profile pins `model: grok-4.6` with `effort: medium`; omit per-call model and effort because the profile pins both"
+          "summary": "every installed Kaola profile pins `model: grok-4.7` with `effort: medium`; omit per-call model and effort because the profile pins both"
         },
         "delegation_guidance": {
           "profile_lookup": "Find named profiles in the project `.grok/agents/` directory or the user `~/.grok/agents/` directory.",
@@ -562,7 +577,8 @@
         "cursor_app_local_named_profile_20260827",
         "cursor_cloud_preboot_catalog_20260827",
         "cursor_cloud_saved_environment_20260827",
-        "cursor_cloud_environment_setup_20260828"
+        "cursor_cloud_environment_setup_20260828",
+        "cursor_model_catalog_20260922"
       ],
       "capabilities": {
         "named_roles": true,
@@ -575,9 +591,9 @@
         "tool_binding": "readonly_flag",
         "hook_scope": "user_and_project",
         "subagent_default": {
-          "model": "grok-4.6",
+          "model": "grok-4.7",
           "effort": "medium",
-          "summary": "every installed Kaola profile pins `model: grok-4.6[effort=medium]`; a custom subagent that omits `model` inherits the parent, so the pin is what selects the cheaper child; omit the per-call `model`"
+          "summary": "every installed Kaola profile pins `model: grok-4.7[effort=medium]`; a custom subagent that omits `model` inherits the parent, so the pin is what selects the cheaper child; omit the per-call `model`"
         },
         "dispatch_conformance": {
           "call_shape": "Task with flat subagent_type",

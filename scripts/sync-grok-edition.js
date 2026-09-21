@@ -12,7 +12,7 @@
 // idempotent, and parity-checked by test-grok-edition.js.
 //
 // Every generated agent carries the adapter's single subagent binding:
-// `model: grok-4.6` with `effort: medium`. The spawn tool accepts an optional `model` and no
+// `model: grok-4.7` with `effort: medium`. The spawn tool accepts an optional `model` and no
 // per-call effort; generated command surfaces omit the model override because the profile pins
 // both.
 //
@@ -69,12 +69,12 @@ function renderAgent(canonContent, agentName, forge) {
 }
 
 const GROK_MODEL_DISPATCH_GUIDANCE =
-  'Omit per-call model and effort overrides; the named profile pins grok-4.6 at medium.';
+  'Omit per-call model and effort overrides; the named profile pins grok-4.7 at medium.';
 
 const GROK_MODEL_DISPATCH_BLOCK = [
   '## The named profile pins model and effort',
   '',
-  'Every generated agent pins `model: grok-4.6` with `effort: medium`. Omit `model` on',
+  'Every generated agent pins `model: grok-4.7` with `effort: medium`. Omit `model` on',
   '`spawn_subagent`; choose the named role and its pinned binding.',
   '',
   'Dispatch a role with `spawn_subagent` using `subagent_type: "<role>"`.',

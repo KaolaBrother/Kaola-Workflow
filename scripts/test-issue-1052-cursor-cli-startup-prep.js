@@ -1427,7 +1427,7 @@ try {
     }
 
     function cliWorkspaceArgv(opened) {
-      return ['--workspace', opened, '--model', 'cursor-grok-4.6-xhigh'];
+      return ['--workspace', opened, '--model', 'grok-4.7-xhigh'];
     }
 
     function appWorkerArgv() {
@@ -1549,7 +1549,7 @@ try {
       const bothRun = runDemonstratedFence(firstClaimFence, bothWs, {
         KAOLA_TARGET_ISSUES: '12577',
         PWD: bothWs,
-      }, ['--workspace', bothWs, '--worker-dir', workerDir, '--model', 'cursor-grok-4.6-xhigh']);
+      }, ['--workspace', bothWs, '--worker-dir', workerDir, '--model', 'grok-4.7-xhigh']);
       const bothLog = readArgvLog();
       const bothJson = lastJson(bothRun.stdout) || lastJson(bothRun.stderr);
       const bothPrep = cursorPrep(bothJson);

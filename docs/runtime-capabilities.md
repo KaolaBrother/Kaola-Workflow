@@ -143,14 +143,21 @@ both `workflow-next` and `kaola-workflow-finalize`:
 | --- | --- | --- |
 | binding | Claude | profile `model: sonnet`; effort not pinned |
 | binding | Codex (GitHub / GitLab / Gitea) | TOML `model = "gpt-5.6-luna"` + `model_reasoning_effort = "max"` |
-| binding | Grok | `model: grok-4.6` + `effort: medium` |
-| binding | Cursor | `model: grok-4.6[effort=medium]` |
+| binding | Grok | `model: grok-4.7` + `effort: medium` |
+| binding | Cursor | `model: grok-4.7[effort=medium]` |
 | native_only | OpenCode | no Kaola profiles; vendor harness (`general` / `explore` / `scout`), session-inherited model |
 | native_only | Kimi | no Kaola profiles; vendor harness (`coder` / `explore` / `plan`, `AgentSwarm`), session-inherited model |
 | native_only | ZCode | no Kaola profiles; vendor harness (`general-purpose` / `Explore`), follows the main Agent |
 | native_only | Devin | no Kaola profiles; live-schema native dispatch (profile routes or Fusion `sidekick`), host router owns the model; see [measured evidence](devin-edition.md#dispatch-and-model-ownership) |
 | native_only | Droid | no Kaola profiles; live-schema `Task` dispatch (`worker` / `explorer` / custom droids), host owns model routing |
 | native_only | DSH | no Kaola profiles; live-schema `subagent` / `subagent_fork`, host owns model routing |
+
+**Measured id swap (2026-09-22, #1088).** The Grok and Cursor pins moved from Grok 4.6 to Grok 4.7
+on a catalog read, not on a dispatch probe. Grok CLI `1.0.40` lists `grok-4.7` with `xhigh` /
+`high` / `medium` / `low` efforts; Cursor CLI `2026.09.15-d2fe57e` lists `grok-4.7-{low,medium,high,xhigh}`
+(each with a `-fast` twin, and without the `cursor-` prefix the 4.6 slugs carry). A pinned child's
+resolved model and effort were not re-probed. The dated 2026-08 measurements below keep the 4.6
+slugs they observed.
 
 This is not a Kaola scheduler or a blanket prohibition on task-sensitive runtime choices. Codex
 profile TOML values take precedence over spawn parameters and the parent session, so dispatch omits

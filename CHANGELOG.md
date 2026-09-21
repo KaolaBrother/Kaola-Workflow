@@ -24,6 +24,13 @@
   released. `CONFIG_BLOCK_ID` (`kaola-config`) is the only spelling of that block id. After
   upgrading, run `./install-all.sh --yes` (or reinstall each runtime) so runtimes installed before
   this change get their references (see `docs/installation.md`, Shared blocks and references).
+- **Grok and Cursor subagent pins move to Grok 4.7 (#1088).** Generated Grok profiles now pin
+  `model: grok-4.7` + `effort: medium`, and generated Cursor profiles pin
+  `model: grok-4.7[effort=medium]`; the binding policy is unchanged. Grok CLI 1.0.40 lists
+  `grok-4.7` with `xhigh` / `high` / `medium` / `low` efforts, and Cursor CLI 2026.09.15-d2fe57e
+  lists `grok-4.7-{low,medium,high,xhigh}` (no `cursor-` prefix). Both were read from the model
+  catalogs; a pinned child's resolved model was not re-probed. Dated 2026-08 measurements keep the
+  4.6 ids they observed. Run `./install-all.sh --yes` to refresh installed Grok and Cursor profiles.
 
 ## [12.2.2] - 2026-09-21
 

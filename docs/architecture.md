@@ -584,8 +584,8 @@ against. Bundled
 The `standard` / `reasoning` / `heavy` intent axis is retired (ADR 0025, #1062); no mission-list
 field records a model pair. Each adapter that installs profiles declares exactly one
 `subagent_default` — Claude `model: sonnet`; Codex `model = "gpt-5.6-luna"` /
-`model_reasoning_effort = "max"` pinned in the TOML; Grok `model: grok-4.6` / `effort: medium`;
-Cursor `model: grok-4.6[effort=medium]` — and next/finalize exposes that binding at
+`model_reasoning_effort = "max"` pinned in the TOML; Grok `model: grok-4.7` / `effort: medium`;
+Cursor `model: grok-4.7[effort=medium]` — and next/finalize exposes that binding at
 the point of dispatch. It remains a default rather than scheduler state or a prohibition on native
 task-sensitive choices. Kaola does not add runtime
 limits on automatic, background, parallel, resume, nesting, history, or service-tier behavior.

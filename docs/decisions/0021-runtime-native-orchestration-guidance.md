@@ -59,9 +59,9 @@ ADR 0019's owner-approved matrix remains the default dispatch binding:
 
 | intent | Claude | Codex | OpenCode | Kimi | Grok | Cursor | ZCode |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| standard | `sonnet`, runtime effort | `gpt-5.6-luna` / `max` | session; optional standard model pin | session model/thinking | inherited model + profile `medium` | profile `grok-4.6[effort=medium]` | profile `GLM-5.3` / `thoughtLevel: high` |
-| reasoning | `opus`, runtime effort | `gpt-6-astra` / `medium` | optional reasoning-role model pin, otherwise session | session model/thinking | inherited model + profile `high` | profile `grok-4.6[effort=high]` | profile `GLM-5.3` / `thoughtLevel: max` |
-| heavy | `fable`, runtime effort | `gpt-6-astra` / `high` | classifies with reasoning for the optional pin, otherwise session | session model/thinking | inherited model + profile `xhigh` | profile `grok-4.6[effort=xhigh]` | profile `GLM-5.3` / `thoughtLevel: max` |
+| standard | `sonnet`, runtime effort | `gpt-5.6-luna` / `max` | session; optional standard model pin | session model/thinking | inherited model + profile `medium` | profile `grok-4.7[effort=medium]` | profile `GLM-5.3` / `thoughtLevel: high` |
+| reasoning | `opus`, runtime effort | `gpt-6-astra` / `medium` | optional reasoning-role model pin, otherwise session | session model/thinking | inherited model + profile `high` | profile `grok-4.7[effort=high]` | profile `GLM-5.3` / `thoughtLevel: max` |
+| heavy | `fable`, runtime effort | `gpt-6-astra` / `high` | classifies with reasoning for the optional pin, otherwise session | session model/thinking | inherited model + profile `xhigh` | profile `grok-4.7[effort=xhigh]` | profile `GLM-5.3` / `thoughtLevel: max` |
 
 **Current mapping note (2026-09-05, #1049).** Codex reasoning now uses `gpt-6-astra` with
 `medium` effort and heavy uses `gpt-6-astra` with `high`; standard remains `gpt-5.6-luna`/`max`.
@@ -70,6 +70,10 @@ bindings.
 
 **Measured refresh (2026-09-21, #1085).** Kimi's `[secondary_model]` section measured GA on 2.0.2
 with no experimental gate; the opt-in and inherit-primary semantics above are unchanged.
+
+**Measured refresh (2026-09-22, #1088).** The Cursor column moved from `grok-4.6` to `grok-4.7`
+after Cursor CLI `2026.09.15-d2fe57e` listed `grok-4.7-{low,medium,high,xhigh}`; the bracket
+grammar is unchanged.
 
 These are defaults and capability facts, not a hard ban on a runtime-supported task-sensitive
 choice. The carrier is runtime-native: Claude and Codex may select the default on a call; OpenCode

@@ -438,13 +438,13 @@ function runtimeDelegationGaps(runtime, text) {
     grok: [
       ['lookup', [/\.grok\/agents\//]],
       ['carrier', [/spawn_subagent.*subagent_type|subagent_type.*spawn_subagent/]],
-      ['binding-model', [/grok-4\.6/]],
-      ['binding-effort', [/grok-4\.6[\s\S]*medium|medium[\s\S]*grok-4\.6/]],
+      ['binding-model', [/grok-4\.7/]],
+      ['binding-effort', [/grok-4\.7[\s\S]*medium|medium[\s\S]*grok-4\.7/]],
     ],
     cursor: [
       ['lookup', [/\.cursor\/agents\//]],
       ['carrier', [/task.*flat [`]?subagent_type|flat [`]?subagent_type.*task/]],
-      ['binding-model', [/grok-4\.6\[effort=medium\]/]],
+      ['binding-model', [/grok-4\.7\[effort=medium\]/]],
       ['exact-binding-post-resolution', [/exact-binding requirement.*post-resolution assertion/]],
       ['current-task-catalog', [/live task (?:catalog|enum)/, /live catalog/]],
       ['host-catalog-variation', [/cli, app local, and app cloud are separate hosts/]],
@@ -1227,7 +1227,7 @@ if (generator && behavior && adapters && profiles.length > 0) {
 
     const replacement = `kw-${runtime}-model-mutation-1033`;
     const stats = { replacements: 0 };
-    // #1062 — Cursor and Grok share the grok-4.6 model family, so the mutation is scoped to the
+    // #1062 — Cursor and Grok share the grok-4.7 model family, so the mutation is scoped to the
     // target adapter entry; a whole-map scalar replace would leak across runtimes and no longer
     // proves per-runtime isolation.
     const mutatedAdapters = clone(adapters);

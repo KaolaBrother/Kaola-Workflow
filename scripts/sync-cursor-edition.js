@@ -14,7 +14,7 @@
 // by test-cursor-edition.js.
 //
 // Every generated agent renders the adapter's single subagent binding:
-// `model: grok-4.6[effort=medium]`. Named-profile Task cards omit per-dispatch model overrides so
+// `model: grok-4.7[effort=medium]`. Named-profile Task cards omit per-dispatch model overrides so
 // the profile carries its binding. A built-in-only catalog-miss path uses live members as
 // themselves and may use only a resolver-listed live model slug as an effort lever; the
 // one-family allowlist applies to generated profile pins, not that live-schema fallback.
@@ -93,7 +93,7 @@ function renderAgent(canonContent, agentName, forge) {
 
 const CURSOR_MODEL_DISPATCH_GUIDANCE =
   'Inspect the live Task enum first. Named Cursor agents carry generated frontmatter that pins '
-  + 'the single subagent binding grok-4.6[effort=medium] when that name is in the enum; omit '
+  + 'the single subagent binding grok-4.7[effort=medium] when that name is in the enum; omit '
   + 'per-call model then. A built-in-only enum uses those members as themselves. Do not claim '
   + 'IDE children display distinct effort.';
 

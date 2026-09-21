@@ -121,8 +121,8 @@ children", and this ADR does not pretend to have that number.
    |---|---|---|
    | Claude Code | 7 | profile frontmatter `model: sonnet`; effort not pinned |
    | Codex (GitHub, GitLab, Gitea plugins) | 7 TOML each | TOML pins `model = "gpt-5.6-luna"` and `model_reasoning_effort = "max"`; file values take precedence over spawn parameters and the parent session, so dispatch omits per-call `model`/`reasoning_effort` |
-   | Grok Build | 7 | `model: grok-4.6` + `effort: medium` (`model: inherit` retired; `AgentDefinition.model` accepts a concrete id) |
-   | Cursor | 7 | `model: grok-4.6[effort=medium]`; the call omits `model` because a custom subagent that omits it inherits the parent and is not routed by Auto |
+   | Grok Build | 7 | `model: grok-4.7` + `effort: medium` (`model: inherit` retired; `AgentDefinition.model` accepts a concrete id) |
+   | Cursor | 7 | `model: grok-4.7[effort=medium]`; the call omits `model` because a custom subagent that omits it inherits the parent and is not routed by Auto |
    | Devin | none | vendor harness: `run_subagent` / `read_subagent` with built-in `subagent_general` or user-owned profiles; an unpinned custom profile would be routed by the organization's Default subagent model router, a lever Kaola does not own |
    | Droid | none | native Task harness (`worker` / `explorer` / custom droids); the host owns model routing |
    | OpenCode | none | vendor harness (`general` / `explore` / `scout`); children inherit the session model and variant; the `KAOLA_OPENCODE_*_MODEL` scaffold retired |
@@ -173,8 +173,8 @@ children", and this ADR does not pretend to have that number.
 - Open, non-blocking follow-ups recorded in #1062 §10: Codex issues openai/codex #33667 / #33881
   report TOML `model`/`model_reasoning_effort` being ignored on some builds (verify one child's
   `turn_context` on the Owner's machine); Grok CLI 1.0.5 recorded a pinned-medium child at `high`
-  under an xhigh parent (re-measure with `model: grok-4.6` pinned); whether Cursor
-  `grok-4.6[effort=medium]` lands on Fast pricing (read `providerOptions.cursor.modelName`).
+  under an xhigh parent (re-measure with `model: grok-4.7` pinned); whether Cursor
+  `grok-4.7[effort=medium]` lands on Fast pricing (read `providerOptions.cursor.modelName`).
 
 ## Not built
 

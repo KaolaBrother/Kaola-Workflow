@@ -51,14 +51,19 @@ surface exists.
 
 | tier | claude | codex | grok | cursor | opencode | kimi | zcode |
 |---|---|---|---|---|---|---|---|
-| standard | `sonnet` | `gpt-5.6-luna` / `max` | inherit + `effort: medium` | `grok-4.6[effort=medium]` | session model | session model | `GLM-5.3` / `thoughtLevel: high` |
-| reasoning | `opus` | `gpt-5.6-sol` / `medium` | inherit + `effort: high` | `grok-4.6[effort=high]` | per-role override list | session model | `GLM-5.3` / `thoughtLevel: max` |
-| heavy | `fable` | `gpt-5.6-sol` / `high` | inherit + `effort: xhigh` | `grok-4.6[effort=xhigh]` | classifies as reasoning | session model | `GLM-5.3` / `thoughtLevel: max` |
+| standard | `sonnet` | `gpt-5.6-luna` / `max` | inherit + `effort: medium` | `grok-4.7[effort=medium]` | session model | session model | `GLM-5.3` / `thoughtLevel: high` |
+| reasoning | `opus` | `gpt-5.6-sol` / `medium` | inherit + `effort: high` | `grok-4.7[effort=high]` | per-role override list | session model | `GLM-5.3` / `thoughtLevel: max` |
+| heavy | `fable` | `gpt-5.6-sol` / `high` | inherit + `effort: xhigh` | `grok-4.7[effort=xhigh]` | classifies as reasoning | session model | `GLM-5.3` / `thoughtLevel: max` |
 
 **Current mapping note (2026-09-05, #1049).** The historical matrix above and the measurements in
 §4 remain unchanged. Current Codex dispatch uses `gpt-5.6-luna`/`max` for standard,
 `gpt-6-astra`/`medium` for reasoning, and `gpt-6-astra`/`high` for heavy; role profiles omit a
 fixed model and inherit the active host policy.
+
+**Grok id note (2026-09-22, #1088).** The Cursor column now names `grok-4.7`: Cursor CLI
+`2026.09.15-d2fe57e` lists `grok-4.7-{low,medium,high,xhigh}`, and Grok CLI `1.0.40` lists
+`grok-4.7` with `xhigh` / `high` / `medium` / `low` efforts. The §4 measurements keep the 4.6 ids
+and the `models/grok-4-6` source they were taken against.
 
 Claude aliases are unversioned on purpose (owner): they float with model updates. Claude effort is
 **not** pinned — all three tiers run the runtime's default effort. A per-subagent `effort` key
@@ -98,6 +103,13 @@ tier; it is not a reviewer escalation target.
 | cursor grok-4.6 effort levels | verified: `xhigh`, `high` (default), `medium`, `low` | cursor.com/docs `models/grok-4-6` |
 | cursor frontmatter bracket grammar `model: <id>[effort=…]` | verified as grammar; the literal `grok-4.6[effort=xhigh]` string appears in no doc | cursor.com/docs `subagents` |
 | cursor Task dispatch can override model/effort per call | no such mechanism documented | cursor.com/docs `subagents` |
+
+Re-measured 2026-09-22 (#1088) for Grok 4.7, by catalog read only:
+
+| claim | verdict | source |
+|---|---|---|
+| grok-4.7 accepts `xhigh` / `high` / `medium` / `low` reasoning effort | listed (default `high`); not re-probed at the session flag | Grok CLI 1.0.40 `models_cache.json` |
+| cursor grok-4.7 effort levels | listed: `grok-4.7-low` / `-medium` / `-high` / `-xhigh`, each with `-fast`, no `cursor-` prefix | Cursor CLI 2026.09.15-d2fe57e `cursor-agent models` |
 
 The #1018 live probe closed the Grok heavy cell: a generated planner carrying
 `effort: xhigh` reached a child with `reasoning_effort: xhigh` on Grok CLI 1.0.5. The

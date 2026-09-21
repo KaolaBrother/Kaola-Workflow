@@ -17,7 +17,7 @@
 // way: named agents under `.grok/agents/<role>.md` (spawn_subagent types),
 // flat commands under `.grok/commands/<name>.md`, and one `.grok/rules/`
 // compact-safe prompt. ONE canonical binding (#1062): every generated Grok
-// agent pins model: grok-4.6 with effort: medium.
+// agent pins model: grok-4.7 with effort: medium.
 //
 // Outside `npm test`, the forge chains, and the fast gate: an additive
 // runtime edition is not a forge. The script exists so the suite is
@@ -142,7 +142,7 @@ function canonicalAgentClass() {
 // ---------------------------------------------------------------------------
 const GROK_RUNTIME_NATIVE = Object.freeze({
   single_subagent_binding:
-    'Grok generated agents pin the one subagent binding model: grok-4.6 with effort: medium; per-call model and effort are omitted because the profile pins both.',
+    'Grok generated agents pin the one subagent binding model: grok-4.7 with effort: medium; per-call model and effort are omitted because the profile pins both.',
 });
 
 const GROK_SYNC_SRC = fs.readFileSync(path.join(REPO, 'scripts', 'sync-grok-edition.js'), 'utf8');
@@ -292,8 +292,8 @@ const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
     assert(!canonAgents.includes(retired),
       'G0-roster: retired role ' + retired + ' is absent from the canonical inventory');
   }
-  assert(GROK_SUBAGENT_DEFAULT.model === 'grok-4.6' && GROK_SUBAGENT_DEFAULT.effort === 'medium',
-    'G0-binding: runtime adapter subagent_default is model grok-4.6 / effort medium — got '
+  assert(GROK_SUBAGENT_DEFAULT.model === 'grok-4.7' && GROK_SUBAGENT_DEFAULT.effort === 'medium',
+    'G0-binding: runtime adapter subagent_default is model grok-4.7 / effort medium — got '
     + JSON.stringify(GROK_SUBAGENT_DEFAULT));
   assert(!/const\s+GROK_MODEL_EFFORTS\b|function\s+effortForModelToken\b/.test(GROK_SYNC_SRC),
     'G0-adapter: sync-grok-edition carries no executable hardcoded effort table; '
@@ -326,7 +326,7 @@ function commandRel(name, forge) {
 // ---------------------------------------------------------------------------
 // G1: agents — exact set = canonical agents/*.md. knowledge-lookup MUST be
 // present. Frontmatter: name, description, and the single adapter binding
-// model: grok-4.6 with effort: medium (#1062 — one subagent binding per
+// model: grok-4.7 with effort: medium (#1062 — one subagent binding per
 // adapter, no tier axis). `reasoning_effort:` is not a Grok agent field. Frontmatter `tools:`
 // is the enforced native allowlist derived from the role capability contract; prose-only
 // restrictions do not satisfy this contract. Body examples may still name MCP tool ids.
@@ -348,8 +348,8 @@ function commandRel(name, forge) {
     assert(fm.name === name, 'G1[' + name + ']: frontmatter name is the role — got ' + JSON.stringify(fm.name));
     assert(typeof fm.description === 'string' && fm.description.trim().length > 0,
       'G1[' + name + ']: frontmatter has a non-empty description');
-    assert(fm.model === 'grok-4.6',
-      'G1[' + name + ']: frontmatter model is the single binding grok-4.6 — got ' + JSON.stringify(fm.model));
+    assert(fm.model === 'grok-4.7',
+      'G1[' + name + ']: frontmatter model is the single binding grok-4.7 — got ' + JSON.stringify(fm.model));
     assert(fm.promptMode === 'full',
       'G1[' + name + ']: native camelCase promptMode is full — got ' + JSON.stringify(fm.promptMode));
     assert(!Object.prototype.hasOwnProperty.call(fm, 'permissionMode'),
@@ -361,7 +361,7 @@ function commandRel(name, forge) {
     assert(!/^(?:prompt_mode|permission_mode|agents_md)\s*:/m.test(raw),
       'G1[' + name + ']: frontmatter contains no ignored snake_case spellings for Grok native fields');
     const canonical = canonicalAgentClass();
-    assert(canonical.model === 'grok-4.6' && canonical.effort === 'medium',
+    assert(canonical.model === 'grok-4.7' && canonical.effort === 'medium',
       'G1[' + name + ']: adapter binding is known — got ' + JSON.stringify(canonical));
     const expectedEffort = canonical.effort;
     assert(fm.effort === expectedEffort,
@@ -445,7 +445,7 @@ function commandRel(name, forge) {
 {
   const B2_MODEL_NOUN = /\b(Opus|Sonnet)\b/;
   const VENDOR_SLUG = /\bgrok-4\.\d\b|\bgrok-build\b/;
-  // #1062 — the binding legitimately names grok-4.6 on profile `model:`/`effort:` lines and on
+  // #1062 — the binding legitimately names grok-4.7 on profile `model:`/`effort:` lines and on
   // the `**Subagent default:**` declaration; the slug is banned everywhere else.
   const stripBindingLines = content => content.split('\n')
     .filter(line => !/^\s*(?:model|effort)\s*:/.test(line) && !line.includes('**Subagent default:**'))
@@ -485,7 +485,7 @@ function commandRel(name, forge) {
 
 // ---------------------------------------------------------------------------
 // G2-declaration: GROK_RUNTIME_NATIVE.single_subagent_binding exists, names the
-// one binding, and the generated tree matches it. The separate model: grok-4.6
+// one binding, and the generated tree matches it. The separate model: grok-4.7
 // assertion below must remain even if this declaration changes.
 // ---------------------------------------------------------------------------
 {
@@ -493,15 +493,15 @@ function commandRel(name, forge) {
   const reason = GROK_RUNTIME_NATIVE[KEY];
   assert(typeof reason === 'string' && reason.trim().length >= 20,
     'G2-declaration: GROK_RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason');
-  assert(/grok-4\.6/i.test(reason) && /medium/i.test(reason),
-    'G2-declaration: the "' + KEY + '" reason must state the grok-4.6 / medium binding');
+  assert(/grok-4\.7/i.test(reason) && /medium/i.test(reason),
+    'G2-declaration: the "' + KEY + '" reason must state the grok-4.7 / medium binding');
   for (const name of canonAgents) {
     const rel = agentRel(name);
     if (!exists(rel)) continue;
     const { fm, raw } = parseFrontmatter(read(rel));
     const canonical = canonicalAgentClass();
-    assert(/^\s*model\s*:\s*grok-4\.6\s*$/m.test(raw),
-      'G2-declaration: ' + rel + ' independently carries model: grok-4.6 (the model contract is '
+    assert(/^\s*model\s*:\s*grok-4\.7\s*$/m.test(raw),
+      'G2-declaration: ' + rel + ' independently carries model: grok-4.7 (the model contract is '
       + 'separate from ' + KEY + ')');
     assert(fm.effort === canonical.effort,
       'G2-declaration: ' + rel + ' carries effort: ' + canonical.effort
@@ -661,8 +661,8 @@ for (const role of reviewerGenerator.ROLES) {
       const content = exists(rel) ? read(rel) : '';
       const { fm } = parseFrontmatter(content);
       const canonical = canonicalAgentClass();
-      assert(fm.model === 'grok-4.6',
-        'G7[' + forge + '][' + name + ']: generated model is the single binding grok-4.6');
+      assert(fm.model === 'grok-4.7',
+        'G7[' + forge + '][' + name + ']: generated model is the single binding grok-4.7');
       assert(fm.effort === canonical.effort,
         'G7[' + forge + '][' + name + ']: generated effort follows the single subagent binding'
         + ' — expected ' + canonical.effort + ' got ' + JSON.stringify(fm.effort));

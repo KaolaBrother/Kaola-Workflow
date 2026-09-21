@@ -1825,8 +1825,8 @@ a `delegation_guidance` of `native_routes` plus `availability`:
 - Claude profiles pin `model: sonnet`; effort is not pinned;
 - Codex TOML profiles pin `model = "gpt-5.6-luna"` and `model_reasoning_effort = "max"`; file
   values take precedence over spawn parameters and the parent session, so dispatch omits both;
-- Grok profiles pin `model: grok-4.6` + `effort: medium`;
-- Cursor profiles pin `model: grok-4.6[effort=medium]`; omit-model dispatch is the named-catalog
+- Grok profiles pin `model: grok-4.7` + `effort: medium`;
+- Cursor profiles pin `model: grok-4.7[effort=medium]`; omit-model dispatch is the named-catalog
   carrier on CLI, local App, and correctly saved Cloud environments (a custom subagent that omits
   `model` inherits the parent, which is why the pin selects the cheaper child);
 - OpenCode, Kimi, ZCode, Devin, and Droid are `native_only`: no Kaola role profiles; children inherit the

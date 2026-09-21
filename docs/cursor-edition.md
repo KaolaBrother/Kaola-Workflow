@@ -92,18 +92,22 @@ Everything under `.cursor/` is **generated from canonical** by
 
 | Canonical source | cursor edition output | Notes |
 | ---------------- | --------------------- | ----- |
-| `templates/agents/behavior-contracts.json` + Cursor adapter | `.cursor/agents/<name>.md` | 7 native profiles with `name`, `description`, the single `subagent_default` pin `model: grok-4.6[effort=medium]`, capability-derived `readonly`, shared behavior identity, and render-specific hash |
+| `templates/agents/behavior-contracts.json` + Cursor adapter | `.cursor/agents/<name>.md` | 7 native profiles with `name`, `description`, the single `subagent_default` pin `model: grok-4.7[effort=medium]`, capability-derived `readonly`, shared behavior identity, and render-specific hash |
 | `commands/<file>.md` | `.cursor/commands/<file>.md` | Flat slash **command** (not a Skill — Skills lack `$ARGUMENTS`, and `workflow-init` uses `$ARGUMENTS`). The marked next/finalize block becomes Cursor-native profile, live-schema/catalog, subagent-default, route, and limit guidance; any concrete Claude dispatch cards are adapted. `--runtime claude` becomes `--runtime cursor`. Script resolver points at `${CURSOR_HOME:-$HOME/.cursor}/kaola-workflow/scripts`. `argument-hint` is preserved. |
 | global contract + compact skeleton + Cursor adapter | local `$CURSOR_HOME/rules/kaola-workflow-global.mdc`; Cloud `.cursor/rules/kaola-workflow-global.mdc` | One `alwaysApply: true` V2 Rule contains the universal contract, complete operation reload route, mandatory dispatch contract, and Cursor adapter. The global transaction owns it; the edition emits no duplicate Rule. |
 | mapping | `.cursor/hooks.json` | Cursor loads this path (not `hooks/hooks.json`). Kaola emits an empty mapping and removes receipt-owned legacy prompt hooks; foreign hook entries survive merge. |
 
 Generated agents carry one model-and-effort pin (ADR 0025, #1062): the intent axis is retired, so
-every profile receives the same raw, unquoted `grok-4.6[effort=medium]` frontmatter value.
+every profile receives the same raw, unquoted `grok-4.7[effort=medium]` frontmatter value.
+The id moved from `grok-4.6` to `grok-4.7` on 2026-09-22 (#1088): Cursor CLI `2026.09.15-d2fe57e`
+`cursor-agent models` lists `grok-4.7-{low,medium,high,xhigh}` and their `-fast` twins, without the
+`cursor-` prefix the 4.6 slugs carry. The resolver mapping of the bracket value was not re-probed;
+the dated 2026-08 probes below keep the 4.6 slugs they observed.
 
 ## One frontmatter pin — host-split native dispatch
 
 Every generated role receives the unquoted
-`model: grok-4.6[effort=medium]` line — the adapter's single `subagent_default`. Cursor's official
+`model: grok-4.7[effort=medium]` line — the adapter's single `subagent_default`. Cursor's official
 semantic is that a custom subagent that omits `model` inherits the parent, so the pin is what
 selects the cheaper child; without it a child would ride the (usually stronger) parent model.
 Generated dispatch guidance inspects the live Task enum first. When that enum contains a Kaola
@@ -276,7 +280,7 @@ and bracket parameters carry options such as effort; a custom subagent that omit
 the parent. Team policy, legacy-plan settings, or plan
 availability may force a compatible fallback. On Path A, where the live enum contains the named
 profile, generated dispatch guidance omits a per-call model and that profile is the model/effort
-carrier — which is why Kaola pins `grok-4.6[effort=medium]` in the profile rather than relying on
+carrier — which is why Kaola pins `grok-4.7[effort=medium]` in the profile rather than relying on
 inheritance. On Path B, a built-in-only enum has no profile pin: omit-model follows the parent, while a
 resolver-listed live-schema model slug is the effort lever.
 
