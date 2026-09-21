@@ -322,6 +322,23 @@ retire_duplicate_recovery_rule() {
   rmdir "$(dirname "$retired_prompt")" 2>/dev/null || true
 }
 
+# #1087 (#1086 F3): a global-scope uninstall strips this runtime's OWN global-contract carrier
+# through its own per-target record and releases that record's shared-block reference. A carrier
+# the owner edited since install is refused (OWNER_CONFLICT) and left in place; no other runtime's
+# carrier or record is read for removal. A project-scope uninstall leaves the machine-global carrier.
+uninstall_global_carrier() {
+  [[ "$GLOBAL" -eq 1 ]] || return 0
+  local output rc=0 status
+  output="$(node "$SCRIPT_DIR/scripts/kaola-workflow-global-contract.js" uninstall --runtime grok --json 2>&1)" || rc=$?
+  status="$(node -e 'try { console.log(JSON.parse(process.argv[1]).status || "UNKNOWN"); } catch (_) { console.log("UNKNOWN"); }' "$output")"
+  if [[ "$rc" -eq 0 ]]; then
+    echo "grok global contract carrier: $status"
+  else
+    echo "warning: grok global contract carrier left in place ($status, exit $rc)" >&2
+    printf '%s\n' "$output" >&2
+  fi
+}
+
 # #1087 (#1086 F2): release this runtime's reference on the shared ~/.config/kaola-workflow block.
 # The registry keeps the block while any other runtime (or another scope of this one) holds a
 # reference and removes it only when this was the last one.
@@ -329,7 +346,7 @@ release_shared_config_ref() {
   local scope_args=(--scope global) out
   if [[ "$GLOBAL" -ne 1 ]]; then scope_args=(--scope project --target "${TARGET:-$PWD}"); fi
   if out="$(node "$SCRIPT_DIR/scripts/kaola-workflow-shared-refs.js" deregister \
-      --block kaola-config --runtime grok "${scope_args[@]}")"; then
+      --runtime grok "${scope_args[@]}")"; then
     echo "Released shared config reference (grok): $out"
   else
     echo "warning: shared config reference not released ($out); ~/.config/kaola-workflow left in place." >&2
@@ -420,6 +437,7 @@ uninstall_edition() {
   rmdir "$prompts_dir" 2>/dev/null || true
   rmdir "$home/kaola-workflow" 2>/dev/null || true
   echo "Removed deployed support scripts + hook scripts + retired compact artifacts."
+  uninstall_global_carrier
   release_shared_config_ref
   echo "Uninstall complete. A fresh ./install-grok.sh now deploys the workflow edition."
 }

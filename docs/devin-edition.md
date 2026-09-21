@@ -31,6 +31,11 @@ every profile it rendered. A user-authored or marker-stripped same-name file sur
 
 Existing non-Kaola hooks are preserved. `--check` compares installed bytes with generated sources.
 
+`install-devin.sh` has no `--uninstall` yet; this is a known gap. To strip only the Devin carrier
+through its own per-target record, run
+`node scripts/kaola-workflow-global-contract.js uninstall --runtime devin --json`. The skills,
+support scripts, and hook entry must be removed by hand.
+
 The global-contract step is the installer's last step and runs in per-target mode (`--runtime devin`). It installs and checks only the `devin-local` carrier, never writes another runtime's home, and cannot be failed by another runtime's carrier conflict or drift. Both `install` and `--check` report the `devin-local` target status when it is not `CURRENT`. Set `DEVIN_CONFIG_DIR` only to relocate a hermetic install (tests, sandboxes): Devin does not read that variable. Devin resolves its own user config directory from `XDG_CONFIG_HOME` (measured on `devin 3000.10.21`) or `%APPDATA%\devin` on Windows, so a relocated install is invisible to a normal Devin session.
 
 ## Dispatch and model ownership

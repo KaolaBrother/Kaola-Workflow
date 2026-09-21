@@ -446,6 +446,23 @@ copy_tree() {
   echo "Installed workflow commands+plugin+hooks → $layout_root/"
 }
 
+# #1087 (#1086 F3): a global-scope uninstall strips this runtime's OWN global-contract carrier
+# through its own per-target record and releases that record's shared-block reference. A carrier
+# the owner edited since install is refused (OWNER_CONFLICT) and left in place; no other runtime's
+# carrier or record is read for removal. A project-scope uninstall leaves the machine-global carrier.
+uninstall_global_carrier() {
+  [[ "$GLOBAL" -eq 1 ]] || return 0
+  local output rc=0 status
+  output="$(node "$SCRIPT_DIR/scripts/kaola-workflow-global-contract.js" uninstall --runtime opencode --json 2>&1)" || rc=$?
+  status="$(node -e 'try { console.log(JSON.parse(process.argv[1]).status || "UNKNOWN"); } catch (_) { console.log("UNKNOWN"); }' "$output")"
+  if [[ "$rc" -eq 0 ]]; then
+    echo "opencode global contract carrier: $status"
+  else
+    echo "warning: opencode global contract carrier left in place ($status, exit $rc)" >&2
+    printf '%s\n' "$output" >&2
+  fi
+}
+
 # #1087 (#1086 F2): release this runtime's reference on the shared ~/.config/kaola-workflow block.
 # The registry keeps the block while any other runtime (or another scope of this one) holds a
 # reference and removes it only when this was the last one.
@@ -453,7 +470,7 @@ release_shared_config_ref() {
   local scope_args=(--scope global) out
   if [[ "$GLOBAL" -ne 1 ]]; then scope_args=(--scope project --target "${TARGET:-$PWD}"); fi
   if out="$(node "$SCRIPT_DIR/scripts/kaola-workflow-shared-refs.js" deregister \
-      --block kaola-config --runtime opencode "${scope_args[@]}")"; then
+      --runtime opencode "${scope_args[@]}")"; then
     echo "Released shared config reference (opencode): $out"
   else
     echo "warning: shared config reference not released ($out); ~/.config/kaola-workflow left in place." >&2
@@ -584,6 +601,7 @@ uninstall_edition() {
   if [[ -f "$dest_root/opencode.json" ]]; then
     echo "Preserved $dest_root/opencode.json (user-owned model/permission config)."
   fi
+  uninstall_global_carrier
   release_shared_config_ref
   echo "Uninstall complete. A fresh ./install-opencode.sh now deploys the workflow edition."
 }

@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Runtimes are decoupled at install and uninstall (#1087, design #1086).** Each runtime installer
+  now owns its own lifecycle. Its last install step installs only its own global-contract carrier
+  through the new per-target mode (`kaola-workflow-global-contract.js install|check|uninstall
+  --runtime <name> --json`). Ownership is recorded in one record per target under
+  `~/.config/kaola-workflow/global-contract-targets/`, and each carrier is planned and committed on its
+  own, so one runtime's conflict or drift cannot fail another runtime. A runtime that is not detected
+  on `PATH` keeps its record as `DORMANT` and checks against it when it returns, instead of hitting
+  `OWNER_CONFLICT`. `install-all.sh` is now a pure orchestrator: it writes no carrier, `--skip=<rt>`
+  skips that runtime's carrier too, and `--check` prints one `[global-contract]` line per runtime.
+  Each uninstaller removes only what its own installer wrote. `uninstall.sh` no longer touches Codex,
+  and Codex removal moved to `install-codex-agent-profiles.js --uninstall`. A global-scope uninstall
+  (`uninstall.sh`, `install-codex-agent-profiles.js --global --uninstall`, and `--global --uninstall` on
+  the OpenCode, Kimi, Grok, Cursor, ZCode, Droid, and DSH installers) also strips the runtime's own
+  carrier through its own record, and refuses an owner-edited one. Devin still has no uninstaller.
+  The shared `~/.config/kaola-workflow/config.json` is now reference-counted by the new
+  `kaola-workflow-shared-refs.js` registry. The carrier step registers a runtime's `global` reference,
+  each uninstaller releases its own reference, and the file is removed only when the last reference is
+  released. `CONFIG_BLOCK_ID` (`kaola-config`) is the only spelling of that block id.
+
 ## [12.2.2] - 2026-09-21
 
 ### Changed

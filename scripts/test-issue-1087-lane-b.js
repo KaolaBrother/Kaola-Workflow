@@ -25,6 +25,8 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const CLI = path.join(ROOT, 'scripts', 'kaola-workflow-global-contract.js');
+// The one exported block id (#1087 integration): the registry module owns the spelling.
+const { CONFIG_BLOCK_ID } = require('./kaola-workflow-shared-refs.js');
 const TMP = path.isAbsolute(os.tmpdir()) ? os.tmpdir() : '/tmp';
 const START = '<!-- KW-GLOBAL-CONTRACT-MANAGED-START -->';
 
@@ -252,6 +254,7 @@ function row(envelope, id) { return envelope.targets.find(item => item.id === id
       "const fs = require('fs');",
       `const log = ${JSON.stringify(log)};`,
       'module.exports = {',
+      `  CONFIG_BLOCK_ID: ${JSON.stringify(CONFIG_BLOCK_ID)},`,
       "  registerSharedRef(block, runtime, meta) { fs.appendFileSync(log, JSON.stringify(['register', block, runtime, meta]) + '\\n'); },",
       "  deregisterSharedRef(block, runtime) { fs.appendFileSync(log, JSON.stringify(['deregister', block, runtime]) + '\\n'); return { remaining: ['codex'] }; },",
       '  listRefs() { return []; },',
@@ -274,8 +277,8 @@ function row(envelope, id) { return envelope.targets.find(item => item.id === id
       'refs: kimi deregistration reports the remaining references');
     const calls = read(log).trim().split('\n').map(line => JSON.parse(line));
     same(calls.map(call => call.slice(0, 3)), [
-      ['register', 'kaola-config-dir', 'kimi'], ['register', 'kaola-config-dir', 'codex'],
-      ['deregister', 'kaola-config-dir', 'kimi'],
+      ['register', CONFIG_BLOCK_ID, 'kimi'], ['register', CONFIG_BLOCK_ID, 'codex'],
+      ['deregister', CONFIG_BLOCK_ID, 'kimi'],
     ], 'refs: registry calls are keyed by runtime id on the shared config block');
     same(calls[0][3].target_ids, ['kimi-local'], 'refs: register meta names the runtime targets');
 

@@ -209,7 +209,7 @@ fi
 # #1087 (#1086 F1/F2): this uninstaller owns only what install.sh wrote under ~/.claude. Codex's
 # global hooks, hook home and profiles belong to `install-codex-agent-profiles.js --uninstall`.
 # The runtime-neutral ~/.config/kaola-workflow/config.json is a shared block: once no Claude
-# edition remains, release the claude-code reference; the registry removes the block only when that
+# edition remains, release the claude reference; the registry removes the block only when that
 # was the last reference any runtime held.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SHARED_REFS="$SCRIPT_DIR/scripts/kaola-workflow-shared-refs.js"
@@ -219,8 +219,18 @@ for edition in kaola-workflow kaola-workflow-gitlab kaola-workflow-gitea; do
 done
 if [[ "$claude_editions_left" -eq 0 ]]; then
   if [[ -f "$SHARED_REFS" ]] && command -v node >/dev/null 2>&1; then
-    if deregistered="$(node "$SHARED_REFS" deregister --block kaola-config --runtime claude-code)"; then
-      echo "Released shared config reference (claude-code): $deregistered"
+    # #1087 (#1086 F3): strip Claude's OWN global-contract carrier through its own per-target
+    # record first; a carrier the owner edited since install is refused and left in place.
+    carrier_rc=0
+    carrier_out="$(node "$SCRIPT_DIR/scripts/kaola-workflow-global-contract.js" uninstall --runtime claude --json 2>&1)" || carrier_rc=$?
+    if [[ "$carrier_rc" -eq 0 ]]; then
+      echo "Claude global contract carrier: $(node -e 'try { console.log(JSON.parse(process.argv[1]).status || "UNKNOWN"); } catch (_) { console.log("UNKNOWN"); }' "$carrier_out")"
+    else
+      echo "warning: Claude global contract carrier left in place (exit $carrier_rc)" >&2
+      printf '%s\n' "$carrier_out" >&2
+    fi
+    if deregistered="$(node "$SHARED_REFS" deregister --runtime claude)"; then
+      echo "Released shared config reference (claude): $deregistered"
     else
       echo "warning: shared config reference not released ($deregistered); ~/.config/kaola-workflow left in place." >&2
     fi

@@ -2367,13 +2367,14 @@ function deriveMultiAgentV2Bounds(configContent, v2Enabled) {
 // step, through the per-target global-contract CLI (--runtime codex writes only ~/.codex/AGENTS.md
 // plus its own target record). The CLI and the universal contract source live in the checkout
 // this plugin tree sits in; a plugin-cache copy has neither, so that source reports UNAVAILABLE
-// (never a silent success) and a checkout install owns the carrier.
-function installGlobalCarrier() {
+// (never a silent success) and a checkout install owns the carrier. `--global --uninstall` runs the
+// same CLI in uninstall mode, stripping only the carrier its own per-target record proves.
+function runGlobalCarrier(mode) {
   const cli = path.resolve(pluginRoot, '..', '..', 'scripts', 'kaola-workflow-global-contract.js');
   if (!fs.existsSync(cli)) return { status: 'UNAVAILABLE', cli };
   // spawn-class: cli-contract
   const result = require('child_process').spawnSync(process.execPath,
-    [cli, 'install', '--runtime', 'codex', '--json'], { encoding: 'utf8', env: process.env });
+    [cli, mode, '--runtime', 'codex', '--json'], { encoding: 'utf8', env: process.env });
   let doc = null;
   try { doc = JSON.parse(String(result.stdout || '').trim()); } catch (_) { /* reported below */ }
   const row = doc && Array.isArray(doc.targets) ? doc.targets.find(t => t.id === 'codex-local') : null;
@@ -2384,6 +2385,9 @@ function installGlobalCarrier() {
     detail: doc && doc.error ? doc.error : String(result.stderr || result.stdout || '').trim(),
   };
 }
+
+function installGlobalCarrier() { return runGlobalCarrier('install'); }
+function uninstallGlobalCarrier() { return runGlobalCarrier('uninstall'); }
 
 function main() {
 
@@ -2658,7 +2662,20 @@ function uninstallMain() {
     }
   }
 
-  // 4. Shared config block: release this scope's reference.
+  // 4. Codex's own machine-global contract carrier (global scope only), through its own
+  //    per-target record; a carrier the owner edited since install is refused and left in place.
+  if (GLOBAL) {
+    const carrier = uninstallGlobalCarrier();
+    if (carrier.status === 'UNAVAILABLE') {
+      report.push(`Kaola-Workflow Codex global contract: UNAVAILABLE from this install source (${carrier.cli} absent); run --global --uninstall from a Kaola-Workflow checkout to remove ~/.codex/AGENTS.md's managed region`);
+    } else if (carrier.status === 'UNINSTALLED' || carrier.status === 'NOT_INSTALLED') {
+      report.push(`Kaola-Workflow Codex global contract: ${carrier.status}`);
+    } else {
+      report.push(`warning: Kaola-Workflow Codex global contract left in place (${carrier.status}, exit ${carrier.exit}): ${carrier.detail}`);
+    }
+  }
+
+  // 5. Shared config block: release this scope's reference.
   try {
     const { deregisterSharedRef, CONFIG_BLOCK_ID } = require('./kaola-workflow-shared-refs');
     const result = deregisterSharedRef(CONFIG_BLOCK_ID, 'codex', {
@@ -2684,6 +2701,7 @@ if (require.main === module) {
 module.exports = {
   uninstallMain,
   installGlobalCarrier,
+  uninstallGlobalCarrier,
   buildManagedHooks,
   mergeHooks,
   updateHooks,

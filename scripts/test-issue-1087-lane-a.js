@@ -88,12 +88,27 @@ function snapshot(dir) {
 
 const REGISTRY_REL = path.join('.config', 'kaola-workflow', 'shared-refs.json');
 const CONFIG_REL = path.join('.config', 'kaola-workflow', 'config.json');
+const RECORDS_REL = path.join('.config', 'kaola-workflow', 'global-contract-targets');
+const recordRel = id => path.join(RECORDS_REL, `${id}.json`);
+const START_MARKER = '<!-- KW-GLOBAL-CONTRACT-MANAGED-START -->';
+
+// #1087 integration: a global uninstall strips the runtime's OWN global-contract carrier through
+// its own per-target record. The record is gone, and the carrier is gone (dedicated) or no longer
+// carries the managed region (managed_region).
+function carrierStripped(home, carrierRel, targetIds) {
+  const file = path.join(home, carrierRel);
+  const carrierGone = !fs.existsSync(file) || !fs.readFileSync(file, 'utf8').includes(START_MARKER);
+  return carrierGone && targetIds.every(id => !exists(home, recordRel(id)));
+}
 
 // Every path that changed between two snapshots and is NOT under one of `ownRoots` (nor the
-// registry file, which the uninstaller legitimately rewrites to drop its own reference).
-function foreignChanges(before, after, ownRoots) {
+// registry file, which the uninstaller legitimately rewrites to drop its own reference, nor the
+// runtime's OWN per-target global-contract records named by `ownTargets`).
+function foreignChanges(before, after, ownRoots, ownTargets = []) {
   const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-  const owned = rel => rel === REGISTRY_REL
+  // The record store directory itself goes only when this runtime's records were its last entries.
+  const owned = rel => rel === REGISTRY_REL || ownTargets.some(id => rel === recordRel(id))
+    || (ownTargets.length > 0 && rel === RECORDS_REL)
     || ownRoots.some(r => rel === r || rel.startsWith(r + path.sep));
   return [...keys].filter(k => before[k] !== after[k] && !owned(k)).sort();
 }
@@ -144,7 +159,7 @@ try {
     // Deregistering a runtime that never held a reference cleans nothing (legacy machines).
     const legacy = makeHome('registry-legacy');
     seedConfig(legacy);
-    r = refs.deregisterSharedRef(refs.CONFIG_BLOCK_ID, 'claude-code', { home: legacy });
+    r = refs.deregisterSharedRef(refs.CONFIG_BLOCK_ID, 'claude', { home: legacy });
     check(!r.released && !r.cleaned && exists(legacy, CONFIG_REL), 'no registry record: deregistration never removes the block');
 
     // Operator override ignores references.
@@ -180,7 +195,7 @@ try {
     runOk('bash', [path.join(root, 'install.sh'), '--yes', '--forge=github', '--no-settings-merge'], home, 'install.sh');
     runOk('node', [CODEX_INSTALLER, '--global'], home, 'codex install');
     const config = seedConfig(home);
-    refs.registerSharedRef(refs.CONFIG_BLOCK_ID, 'claude-code', {}, { home });
+    refs.registerSharedRef(refs.CONFIG_BLOCK_ID, 'claude', {}, { home });
     refs.registerSharedRef(refs.CONFIG_BLOCK_ID, 'codex', { scope: 'global' }, { home });
     const codexHooks = fs.readFileSync(path.join(home, '.codex', 'hooks.json'));
     check(codexHooks.includes('kaola-workflow:'), 'fixture: codex install wrote managed hook entries');
@@ -192,22 +207,26 @@ try {
     check(fs.readFileSync(path.join(home, '.codex', 'hooks.json')).equals(codexHooks), '(ii) codex hooks.json byte-identical after Claude uninstall');
     check(exists(home, '.codex/kaola-workflow/hooks'), '(ii) codex hook home intact after Claude uninstall');
     check(fs.readFileSync(path.join(home, CONFIG_REL)).equals(config), '(ii) config.json byte-identical (pr_auto_merge kept) while codex holds a reference');
-    check(Object.keys(refs.listRefs(refs.CONFIG_BLOCK_ID, { home })).join() === 'codex', 'uninstall.sh released only the claude-code reference');
-    const foreign = foreignChanges(before, after, ['.claude']);
+    check(Object.keys(refs.listRefs(refs.CONFIG_BLOCK_ID, { home })).join() === 'codex', 'uninstall.sh released only the claude reference');
+    check(carrierStripped(home, path.join('.claude', 'rules', 'kaola-workflow-global.md'), ['claude-local']),
+      'uninstall.sh stripped the Claude global-contract carrier through its own record');
+    const foreign = foreignChanges(before, after, ['.claude'], ['claude-local']);
     check(foreign.length === 0, `(iv) uninstall.sh wrote outside ~/.claude: ${foreign.join(', ')}`);
 
     // Partial: with another Claude edition still installed, no reference is released.
     const partial = makeHome('claude-partial');
     runOk('bash', [path.join(root, 'install.sh'), '--yes', '--forge=github', '--no-settings-merge'], partial, 'install.sh github');
     runOk('bash', [path.join(root, 'install.sh'), '--yes', '--forge=gitlab', '--no-settings-merge'], partial, 'install.sh gitlab');
-    refs.registerSharedRef(refs.CONFIG_BLOCK_ID, 'claude-code', {}, { home: partial });
+    refs.registerSharedRef(refs.CONFIG_BLOCK_ID, 'claude', {}, { home: partial });
     runOk('bash', [path.join(root, 'uninstall.sh'), '--forge=gitlab'], partial, 'uninstall.sh gitlab');
-    check(Object.keys(refs.listRefs(refs.CONFIG_BLOCK_ID, { home: partial })).join() === 'claude-code',
-      'a partial forge uninstall keeps the claude-code reference while an edition remains');
+    check(Object.keys(refs.listRefs(refs.CONFIG_BLOCK_ID, { home: partial })).join() === 'claude',
+      'a partial forge uninstall keeps the claude reference while an edition remains');
 
     // Legacy machine (no registry): the shared config survives a Claude uninstall.
     const legacy = makeHome('claude-legacy');
     runOk('bash', [path.join(root, 'install.sh'), '--yes', '--forge=github', '--no-settings-merge'], legacy, 'install.sh');
+    // install.sh now registers through its carrier step; a pre-registry machine has no registry.
+    fs.rmSync(path.join(legacy, REGISTRY_REL), { force: true });
     const legacyConfig = seedConfig(legacy);
     runOk('bash', [path.join(root, 'uninstall.sh')], legacy, 'uninstall.sh');
     check(fs.readFileSync(path.join(legacy, CONFIG_REL)).equals(legacyConfig), 'no registry: uninstall.sh keeps config.json');
@@ -229,7 +248,7 @@ try {
     const profiles = fs.readdirSync(agentsDir).filter(n => n.endsWith('.toml')).sort();
     fs.appendFileSync(path.join(agentsDir, profiles[0]), '# user edit\n');
     const config = seedConfig(home);
-    refs.registerSharedRef(refs.CONFIG_BLOCK_ID, 'claude-code', {}, { home });
+    refs.registerSharedRef(refs.CONFIG_BLOCK_ID, 'claude', {}, { home });
     refs.registerSharedRef(refs.CONFIG_BLOCK_ID, 'codex', { scope: 'global' }, { home });
     const claudeBefore = snapshot(path.join(home, '.claude'));
     const before = snapshot(home);
@@ -245,9 +264,11 @@ try {
     check(!toml.includes('# BEGIN kaola-workflow agents') && toml.includes('model = "user-model"'), 'codex --uninstall stripped only the managed config block');
     check(fs.readdirSync(agentsDir).join() === profiles[0], 'codex --uninstall removed unmodified profiles and preserved the modified one');
     check(/preserved modified profile/.test(r.stdout), 'codex --uninstall reports the preserved profile');
-    check(fs.readFileSync(path.join(home, CONFIG_REL)).equals(config), '(ii) config.json byte-identical while claude-code holds a reference');
+    check(fs.readFileSync(path.join(home, CONFIG_REL)).equals(config), '(ii) config.json byte-identical while claude holds a reference');
     check(JSON.stringify(snapshot(path.join(home, '.claude'))) === JSON.stringify(claudeBefore), '(ii) Claude surfaces untouched by codex --uninstall');
-    const foreign = foreignChanges(before, after, ['.codex']);
+    check(carrierStripped(home, path.join('.codex', 'AGENTS.md'), ['codex-local']),
+      'codex --global --uninstall stripped its global-contract managed region through its own record');
+    const foreign = foreignChanges(before, after, ['.codex'], ['codex-local']);
     check(foreign.length === 0, `(iv) codex --uninstall wrote outside ~/.codex: ${foreign.join(', ')}`);
 
     // (iii) last referencing runtime: Claude's uninstall now cleans the block and the registry.
@@ -271,13 +292,16 @@ try {
 
   // ---- 4. Additive runtimes: --global --uninstall ---------------------------------------------
   const ADDITIVE = [
-    { id: 'opencode', script: 'install-opencode.sh', own: [path.join('.config', 'opencode')] },
-    { id: 'kimi', script: 'install-kimi.sh', own: ['.kimi-code'] },
-    { id: 'grok', script: 'install-grok.sh', own: ['.grok'] },
-    { id: 'cursor', script: 'install-cursor.sh', own: ['.cursor'] },
-    { id: 'zcode', script: 'install-zcode.sh', own: ['.zcode'] },
-    { id: 'droid', script: 'install-droid.sh', own: ['.factory'] },
-    { id: 'dsh', script: 'install-dsh.sh', own: ['.dsh'] },
+    { id: 'opencode', script: 'install-opencode.sh', own: [path.join('.config', 'opencode')],
+      targets: ['opencode-local'], carrier: path.join('.config', 'opencode', 'AGENTS.md') },
+    { id: 'kimi', script: 'install-kimi.sh', own: ['.kimi-code'], targets: ['kimi-local'], carrier: path.join('.kimi-code', 'AGENTS.md') },
+    { id: 'grok', script: 'install-grok.sh', own: ['.grok'], targets: ['grok-local'],
+      carrier: path.join('.grok', 'rules', 'kaola-workflow-global.md') },
+    { id: 'cursor', script: 'install-cursor.sh', own: ['.cursor'], targets: ['cursor-cli-local', 'cursor-app-local'],
+      carrier: path.join('.cursor', 'rules', 'kaola-workflow-global.mdc') },
+    { id: 'zcode', script: 'install-zcode.sh', own: ['.zcode'], targets: ['zcode-local'], carrier: path.join('.zcode', 'AGENTS.md') },
+    { id: 'droid', script: 'install-droid.sh', own: ['.factory'], targets: ['droid-local'], carrier: path.join('.factory', 'AGENTS.md') },
+    { id: 'dsh', script: 'install-dsh.sh', own: ['.dsh'], targets: ['dsh-local'], carrier: path.join('.dsh', 'AGENTS.md') },
   ];
   for (const rt of ADDITIVE) {
     const home = makeHome(rt.id);
@@ -294,7 +318,8 @@ try {
     const after = snapshot(home);
     check(fs.readFileSync(path.join(home, CONFIG_REL)).equals(config), `(ii) ${rt.id}: config.json byte-identical while codex holds a reference`);
     check(Object.keys(refs.listRefs(refs.CONFIG_BLOCK_ID, { home })).join() === 'codex', `${rt.id}: released only its own reference`);
-    const foreign = foreignChanges(before, after, rt.own);
+    check(carrierStripped(home, rt.carrier, rt.targets), `${rt.id} --uninstall stripped its own global-contract carrier`);
+    const foreign = foreignChanges(before, after, rt.own, rt.targets);
     check(foreign.length === 0, `(iv) ${rt.id} --uninstall wrote outside ${rt.own.join(', ')}: ${foreign.join(', ')}`);
 
     // (iii): this runtime as the last holder. Codex leaves first (not last: nothing is cleaned).

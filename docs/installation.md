@@ -58,10 +58,12 @@ Ownership is recorded per target in
 `~/.config/kaola-workflow/global-contract-targets/<target-id>.json` (carrier path, install hash, and
 the owner bytes around a managed region). Each target is planned and written on its own, so a
 hand-edited, symlinked, malformed, or drifted carrier fails only its own runtime's install or
-`--check`. Other runtimes are not affected.
+`--check`. Other runtimes are not affected. A successful per-target install also registers the
+runtime's `global`-scope reference on the shared config block (see
+[Shared blocks and references](#shared-blocks-and-references)); a per-target uninstall releases it.
 
 When a runtime's program is not detected on `PATH`, its record is kept and shown as `DORMANT`. This
-does not release the reference. When the runtime comes back, even after the contract text has
+does not release the reference: only that runtime's own uninstaller removes a record. When the runtime comes back, even after the contract text has
 changed, it checks its carrier against its own record. If the hash matches, the carrier is refreshed.
 If it does not match, `OWNER_CONFLICT` is reported for that runtime only. In
 `install-all.sh --check`, a `DORMANT` runtime's carrier state is an advisory line, not a failure.
@@ -235,6 +237,21 @@ Remove an additive runtime from the same scope in which it was installed:
 Use `--target /absolute/repository/path --uninstall` for project scope. These uninstallers remove
 only Kaola-owned, provenance-safe artifacts and preserve foreign or modified owner bytes.
 
+A global-scope uninstall also strips that runtime's own global-contract carrier through its own
+per-target record (`kaola-workflow-global-contract.js uninstall --runtime <runtime> --json`): the
+dedicated Rule file is deleted, or the managed region is cut out of `AGENTS.md` with the owner bytes
+around it restored. The record goes with it, and the runtime's reference on the shared config block
+is released. A carrier edited since install is refused with `OWNER_CONFLICT`, left in place, and
+reported as a warning; no other runtime's carrier or record is touched. A project-scope uninstall
+leaves the machine-global carrier alone. `uninstall.sh` removes Claude's carrier
+(`~/.claude/rules/kaola-workflow-global.md`) once no Claude edition remains, and
+`install-codex-agent-profiles.js --global --uninstall` removes Codex's managed region in
+`~/.codex/AGENTS.md`.
+
+Devin has no uninstaller yet. To remove only its carrier, run
+`node scripts/kaola-workflow-global-contract.js uninstall --runtime devin --json`; its skills,
+support scripts, and hook entry must be removed by hand.
+
 Remove Codex with its own profile installer, then remove the plugin through its native command.
 `--global --uninstall` removes the global profiles, the managed `[agents.*]` block in
 `~/.codex/config.toml`, the `kaola-workflow:` entries in `~/.codex/hooks.json` (other entries and the
@@ -255,14 +272,15 @@ a shared block. `scripts/kaola-workflow-shared-refs.js` records which runtimes r
 `~/.config/kaola-workflow/shared-refs.json`, keyed by runtime id. A reinstall never adds a second
 reference, and a runtime installed in several scopes (`global`, `project:<abs path>`) holds one
 reference carrying its scopes. Each uninstaller above releases its own reference (`uninstall.sh`
-releases `claude-code` once no Claude edition remains). The config file is removed only when the
+releases `claude` once no Claude edition remains). Installs register through their carrier step,
+which holds the `global` scope. The config file is removed only when the
 last reference is released, and the registry itself is removed after every block reaches zero.
 A machine with no registry record is left alone, because no uninstaller can prove it is the last user.
 
 ```bash
 node scripts/kaola-workflow-shared-refs.js list --block kaola-config
-node scripts/kaola-workflow-shared-refs.js register   --block kaola-config --runtime <id> --scope global
-node scripts/kaola-workflow-shared-refs.js deregister --block kaola-config --runtime <id> --scope project --target <dir>
+node scripts/kaola-workflow-shared-refs.js register   --runtime <id> --scope global
+node scripts/kaola-workflow-shared-refs.js deregister --runtime <id> --scope project --target <dir>
 node scripts/kaola-workflow-shared-refs.js remove-all --operator-override   # machine-wide removal; ignores references
 ```
 
@@ -271,7 +289,9 @@ The module exports `registerSharedRef(blockId, runtimeId, meta?, opts?)`,
 registryRemoved }`), `listRefs(blockId?, opts?)`, `onZeroRefs(blockId, fn)`,
 `operatorRemoveAll({ operatorOverride: true })`, the install-side helper
 `installSharedConfigBlock(runtimeId, meta?, opts?)` (registers only; never creates or rewrites the
-config file), `registryPath(home?)`, and `CONFIG_BLOCK_ID` (`kaola-config`).
+config file), `registryPath(home?)`, and `CONFIG_BLOCK_ID` (`kaola-config`). `CONFIG_BLOCK_ID` is
+the only spelling of the block id: the CLI uses it when `--block` is omitted, and the global-contract
+transaction imports it for its per-target references.
 
 Cursor Cloud Build deactivation or deletion is an external environment decision and is not performed
 by the local uninstaller.

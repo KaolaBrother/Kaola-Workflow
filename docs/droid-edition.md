@@ -35,8 +35,11 @@ touch, matching the "additive, no harness additions" posture of the Devin editio
 writes under `agents/` or `.factory/agents/`.
 
 `--uninstall` removes only the Kaola-deployed skills and support scripts (by their rendered and
-manifest names — never a blind deletion) and never the machine-global `~/.factory/AGENTS.md`, which
-is shared transaction state owned by `kaola-workflow-global-contract.js`. `--check` compares
+manifest names — never a blind deletion). A global-scope uninstall (the default) also strips this
+runtime's own managed region in `~/.factory/AGENTS.md` through its own per-target record
+(`kaola-workflow-global-contract.js uninstall --runtime droid`). The record is deleted and the runtime's
+shared config reference is released. An owner-edited carrier is refused and left in place, and a
+`--project` uninstall leaves the carrier alone. `--check` compares
 installed bytes with generated sources.
 
 The global-contract step is the installer's last step and runs in per-target mode

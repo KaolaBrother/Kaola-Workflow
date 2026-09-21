@@ -31,6 +31,10 @@
 #   <DIR>/.devin/skills/<name>/SKILL.md
 #   plus the global recovery carrier above in ~/.config/devin.
 #
+# Uninstall: this edition ships no --uninstall (a documented gap). Its own global carrier can be
+# stripped through its per-target record with
+#   node scripts/kaola-workflow-global-contract.js uninstall --runtime devin --json
+#
 # Retired agents: older releases wrote managed profiles into .devin/agents/ and
 # ~/.config/devin/agents/. A file still carrying the kaola-workflow-managed-agent marker
 # is Kaola-owned and is removed on install; anything without it is user-owned and stays.

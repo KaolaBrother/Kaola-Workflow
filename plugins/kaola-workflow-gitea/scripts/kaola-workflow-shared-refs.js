@@ -15,9 +15,12 @@
 // held. A block nobody ever registered (a machine installed before this registry existed) is never
 // cleaned by a deregistration — without a record no uninstaller can prove it is the last user.
 //
+// CONFIG_BLOCK_ID is the one spelling of the config block's id: JS callers import it, and the CLI
+// uses it whenever --block is omitted, so no caller repeats the literal.
+//
 // CLI (for shell uninstallers):
-//   node kaola-workflow-shared-refs.js register   --block <id> --runtime <id> [--scope global|project --target DIR]
-//   node kaola-workflow-shared-refs.js deregister --block <id> --runtime <id> [--scope global|project --target DIR]
+//   node kaola-workflow-shared-refs.js register   [--block <id>] --runtime <id> [--scope global|project --target DIR]
+//   node kaola-workflow-shared-refs.js deregister [--block <id>] --runtime <id> [--scope global|project --target DIR]
 //   node kaola-workflow-shared-refs.js list       [--block <id>]
 //   node kaola-workflow-shared-refs.js remove-all --operator-override
 // Every command prints one JSON object and exits 0; a refused command exits 1 with {error}.
@@ -269,6 +272,7 @@ function parseCli(argv) {
 
 function cli(argv) {
   const args = parseCli(argv);
+  if (args.command !== 'list' && args.block === undefined) args.block = CONFIG_BLOCK_ID;
   switch (args.command) {
     case 'register':
       return registerSharedRef(args.block, args.runtime, args.scope ? { scope: args.scope } : {});

@@ -627,9 +627,6 @@ function execute(options = {}) {
 
 const RECORD_SCHEMA = 1;
 const RECORD_KIND = 'global_contract_target';
-// Shared block the per-target records live in; registered through the shared-reference
-// registry (scripts/kaola-workflow-shared-refs.js) keyed by runtime id.
-const SHARED_BLOCK_ID = 'kaola-config-dir';
 const FAILURE_STATUSES = new Set(['OWNER_CONFLICT', 'PREFLIGHT_BLOCKED']);
 
 function recordsDir(env) {
@@ -683,10 +680,22 @@ function loadSharedRefs(options, env) {
   return require(file);
 }
 
-function sharedRefCall(refs, method, args) {
-  if (!refs || typeof refs[method] !== 'function') return { status: 'UNAVAILABLE' };
+// The per-target records live in the shared ~/.config/kaola-workflow block, so each runtime holds a
+// reference on it keyed by runtime id. The block id is the registry's own CONFIG_BLOCK_ID (never
+// re-spelled here), and the reference carries the 'global' scope because every carrier this mode
+// writes is machine-global: a project-scope uninstall of the same runtime cannot release it.
+const SHARED_REF_SCOPE = 'global';
+
+// The registry is addressed through this transaction's env.HOME, never the process home, so an
+// in-process caller with a sandboxed env cannot write the operator's real registry.
+function sharedRefCall(refs, method, runtime, env, meta) {
+  if (!refs || typeof refs[method] !== 'function' || typeof refs.CONFIG_BLOCK_ID !== 'string') {
+    return { status: 'UNAVAILABLE' };
+  }
   try {
-    const result = refs[method](...args);
+    const result = method === 'registerSharedRef'
+      ? refs.registerSharedRef(refs.CONFIG_BLOCK_ID, runtime, { ...meta, scope: SHARED_REF_SCOPE }, { home: env.HOME })
+      : refs.deregisterSharedRef(refs.CONFIG_BLOCK_ID, runtime, { scope: SHARED_REF_SCOPE, home: env.HOME });
     return { status: method === 'registerSharedRef' ? 'REGISTERED' : 'DEREGISTERED',
       ...(result && typeof result === 'object' ? result : {}) };
   } catch (error) {
@@ -914,12 +923,14 @@ function executeTargets(options) {
     });
   }
 
+  // An emptied record store goes with its last record, so the shared directory can empty too.
+  if (mode === 'uninstall') { try { fs.rmdirSync(recordsDir(env)); } catch (_) { /* absent or still holds records */ } }
   const sharedRefs = {};
   for (const [runtime, ids] of runtimesDone) {
     sharedRefs[runtime] = mode === 'install'
-      ? sharedRefCall(refs, 'registerSharedRef', [SHARED_BLOCK_ID, runtime,
-        { surface: 'global-contract', target_ids: ids, records: recordsDir(env) }])
-      : sharedRefCall(refs, 'deregisterSharedRef', [SHARED_BLOCK_ID, runtime]);
+      ? sharedRefCall(refs, 'registerSharedRef', runtime, env,
+        { surface: 'global-contract', target_ids: ids, records: recordsDir(env) })
+      : sharedRefCall(refs, 'deregisterSharedRef', runtime, env);
   }
 
   const order = new Map(targets.map((target, index) => [target.id, index]));
@@ -1001,7 +1012,7 @@ function main(argv) {
 }
 
 module.exports = {
-  START, END, SOURCE_PATH, DEFAULT_REGISTRY_PATH, SHARED_BLOCK_ID,
+  START, END, SOURCE_PATH, DEFAULT_REGISTRY_PATH,
   renderContract, managedRegion, execute, loadRegistry, recordsDir, recordPath,
 };
 

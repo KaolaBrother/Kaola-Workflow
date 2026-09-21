@@ -37,8 +37,10 @@
 #
 # Uninstall: --uninstall removes ONLY Kaola-deployed artifacts — the skills by rendered
 # directory name (never a blind rm of the skills dir) and the support scripts by manifest
-# name. The machine-global ~/.factory/AGENTS.md carrier is shared transaction state owned
-# by kaola-workflow-global-contract.js, not this edition, and is never removed here.
+# name. A global-scope uninstall (the default) also strips this runtime's OWN managed region
+# in ~/.factory/AGENTS.md through its own per-target record (kaola-workflow-global-contract.js
+# uninstall --runtime droid); an owner-edited carrier is refused and left in place. A --project
+# uninstall leaves the machine-global carrier alone.
 
 set -euo pipefail
 
@@ -57,14 +59,16 @@ Usage: ./install-droid.sh [--global] [--project[=DIR]] [--forge=github|gitlab|gi
   --project[=DIR]   install project skills into DIR/.factory (default: CWD)
   --forge F         github (default), gitlab, or gitea
   --check           verify installed artifacts without mutating
-  --uninstall       remove only Kaola-deployed skills and support scripts, then exit
+  --uninstall       remove only Kaola-deployed skills, support scripts, and (global scope)
+                    this runtime's own global-contract carrier, then exit
   -y, --yes         non-interactive (ignored; accepted for install-all compatibility)
   -h, --help        show this help
 
 Uninstall removes ONLY Kaola-deployed artifacts from the resolved scope: the deployed
 skills (by source-tree directory name — never a blind rm of a dir), and the support
-scripts (by manifest name). The machine-global ~/.factory/AGENTS.md carrier is owned by
-the shared global-contract transaction and is NOT removed by this edition uninstall.
+scripts (by manifest name). A global-scope uninstall also strips this runtime's own
+managed region in ~/.factory/AGENTS.md through its own per-target global-contract record
+(an owner-edited carrier is refused and left in place); --project leaves that carrier.
 EOF
 }
 
@@ -187,6 +191,23 @@ check_artifacts() {
   return "$bad"
 }
 
+# #1087 (#1086 F3): a global-scope uninstall strips this runtime's OWN global-contract carrier
+# through its own per-target record and releases that record's shared-block reference. A carrier
+# the owner edited since install is refused (OWNER_CONFLICT) and left in place; no other runtime's
+# carrier or record is read for removal. A project-scope uninstall leaves the machine-global carrier.
+uninstall_global_carrier() {
+  [[ "$GLOBAL" -eq 1 ]] || return 0
+  local output rc=0 status
+  output="$(node "$SCRIPT_DIR/scripts/kaola-workflow-global-contract.js" uninstall --runtime droid --json 2>&1)" || rc=$?
+  status="$(node -e 'try { console.log(JSON.parse(process.argv[1]).status || "UNKNOWN"); } catch (_) { console.log("UNKNOWN"); }' "$output")"
+  if [[ "$rc" -eq 0 ]]; then
+    echo "droid global contract carrier: $status"
+  else
+    echo "warning: droid global contract carrier left in place ($status, exit $rc)" >&2
+    printf '%s\n' "$output" >&2
+  fi
+}
+
 # #1087 (#1086 F2): release this runtime's reference on the shared ~/.config/kaola-workflow block.
 # The registry keeps the block while any other runtime (or another scope of this one) holds a
 # reference and removes it only when this was the last one.
@@ -194,7 +215,7 @@ release_shared_config_ref() {
   local scope_args=(--scope global) out
   if [[ "$GLOBAL" -ne 1 ]]; then scope_args=(--scope project --target "${TARGET:-$PWD}"); fi
   if out="$(node "$SCRIPT_DIR/scripts/kaola-workflow-shared-refs.js" deregister \
-      --block kaola-config --runtime droid "${scope_args[@]}")"; then
+      --runtime droid "${scope_args[@]}")"; then
     echo "Released shared config reference (droid): $out"
   else
     echo "warning: shared config reference not released ($out); ~/.config/kaola-workflow left in place." >&2
@@ -230,8 +251,9 @@ uninstall_edition() {
     # Zero-residue: drop the emptied kaola-workflow parent dir too.
     rmdir "$(dirname "$SUPPORT_DEST")" 2>/dev/null || true
   fi
+  uninstall_global_carrier
   release_shared_config_ref
-  echo "Droid edition uninstalled (machine-global ~/.factory/AGENTS.md carrier untouched — shared transaction state)."
+  echo "Droid edition uninstalled."
   return "$bad"
 }
 
