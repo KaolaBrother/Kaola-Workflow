@@ -313,9 +313,11 @@ function row(envelope, id) { return envelope.targets.find(item => item.id === id
         `#!/bin/bash\nnode ${JSON.stringify(CLI)} install --runtime ${runtime} --json >/dev/null\n`, 0o755);
     }
     write(path.join(stubRoot, 'plugins', 'kaola-workflow', 'scripts', 'install-codex-agent-profiles.js'),
+      // spawn-class: cli-contract
       `const r = require('child_process').spawnSync(process.execPath, [${JSON.stringify(CLI)}, 'install', '--runtime', 'codex', '--json']);\nprocess.exit(r.status);\n`);
     const allEnv = { ...box.env, KAOLA_INSTALL_ALL_ROOT: stubRoot, KAOLA_GLOBAL_CONTRACT_CLI: CLI,
       KAOLA_CODEX_BIN: path.join(box.root, 'no-codex-cli') };
+    // spawn-class: environment
     const runAll = args => spawnSync('bash', [path.join(ROOT, 'install-all.sh'), '--yes', ...args], {
       cwd: box.root, env: allEnv, encoding: 'utf8', timeout: 120000,
     });

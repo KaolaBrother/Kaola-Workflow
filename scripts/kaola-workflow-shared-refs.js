@@ -82,12 +82,11 @@ function readStore(home) {
   return store;
 }
 
+// The store is published through the repository's one owned atomic replace (exclusive temp,
+// fsync, same-directory rename, directory fsync), never written in place.
 function writeStore(home, store) {
-  const file = registryPath(home);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(store, null, 2) + '\n');
-  fs.renameSync(tmp, file);
+  require('./kaola-workflow-adaptive-schema').writeFileAtomicReplace(
+    registryPath(home), JSON.stringify(store, null, 2) + '\n');
 }
 
 function holdersOf(store, blockId) {
