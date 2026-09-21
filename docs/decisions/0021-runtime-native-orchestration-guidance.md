@@ -74,11 +74,11 @@ with no experimental gate; the opt-in and inherit-primary semantics above are un
 These are defaults and capability facts, not a hard ban on a runtime-supported task-sensitive
 choice. The carrier is runtime-native: Claude and Codex may select the default on a call; OpenCode
 has no per-call model/effort field; ordinary Kimi profiles inherit unless the user explicitly opts
-into its experimental secondary-model pool; Grok effort and Cursor/ZCode tiers live in profiles when
+into its optional `[secondary_model]` section; Grok effort and Cursor/ZCode tiers live in profiles when
 those profiles are in the active catalog. On a Cursor catalog-miss host there is no profile pin:
 omit-model follows the parent, and a resolver-listed live-schema model slug is the effort lever;
 the orchestrator must still distinguish a missing host carrier from a capability gap.
-Kaola does not silently enable a user-owned experimental feature or overwrite a runtime choice.
+Kaola does not silently enable a user-owned opt-in feature or overwrite a runtime choice.
 
 ### Honest fallback
 
