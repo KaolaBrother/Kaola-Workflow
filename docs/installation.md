@@ -190,7 +190,8 @@ Local `install-all.sh` correctly reports that remote target as `REMOTE_REQUIRED`
 
 ## Uninstall
 
-Remove all Claude forge editions:
+Each runtime has its own uninstaller, and it writes only to that runtime's surfaces. Remove the
+Claude forge editions (only what `install.sh` wrote under `~/.claude`):
 
 ```bash
 ./uninstall.sh --forge=all
@@ -211,22 +212,43 @@ Remove an additive runtime from the same scope in which it was installed:
 Use `--target /absolute/repository/path --uninstall` for project scope. These uninstallers remove
 only Kaola-owned, provenance-safe artifacts and preserve foreign or modified owner bytes.
 
-Remove a Codex plugin through its native command. The shared Kaola uninstaller removes the global
-hook home and removes Codex profiles/config from the directory scope in which it runs. Run it from
-the project root for project scope, or from `$HOME` for the default global profile scope; it also
-removes the corresponding Claude install, so use this only when that shared cleanup is intended:
+Remove Codex with its own profile installer, then remove the plugin through its native command.
+`--global --uninstall` removes the global profiles, the managed `[agents.*]` block in
+`~/.codex/config.toml`, the `kaola-workflow:` entries in `~/.codex/hooks.json` (other entries and the
+file itself stay), and the hook home `~/.codex/kaola-workflow`. A project-scope uninstall removes only
+that project's profiles and config block; the global hooks serve every Codex scope and stay until the
+global uninstall. A profile whose bytes no longer match the recorded hash is preserved and reported:
 
 ```bash
+node ~/kaola-workflow/plugins/kaola-workflow/scripts/install-codex-agent-profiles.js --global --uninstall
+node ~/kaola-workflow/plugins/kaola-workflow/scripts/install-codex-agent-profiles.js <project-root> --uninstall
 codex plugin remove kaola-workflow@<marketplace>
-
-# Project-scoped Codex profiles plus shared Claude/Codex assets.
-cd <project-root>
-~/kaola-workflow/uninstall.sh --forge=all
-
-# Or global Codex profiles plus shared Claude/Codex assets.
-cd "$HOME"
-~/kaola-workflow/uninstall.sh --forge=all
 ```
+
+### Shared blocks and references
+
+`~/.config/kaola-workflow/config.json` (for example `pr_auto_merge`) is read by every runtime, so it is
+a shared block. `scripts/kaola-workflow-shared-refs.js` records which runtimes reference it in
+`~/.config/kaola-workflow/shared-refs.json`, keyed by runtime id. A reinstall never adds a second
+reference, and a runtime installed in several scopes (`global`, `project:<abs path>`) holds one
+reference carrying its scopes. Each uninstaller above releases its own reference (`uninstall.sh`
+releases `claude-code` once no Claude edition remains). The config file is removed only when the
+last reference is released, and the registry itself is removed after every block reaches zero.
+A machine with no registry record is left alone, because no uninstaller can prove it is the last user.
+
+```bash
+node scripts/kaola-workflow-shared-refs.js list --block kaola-config
+node scripts/kaola-workflow-shared-refs.js register   --block kaola-config --runtime <id> --scope global
+node scripts/kaola-workflow-shared-refs.js deregister --block kaola-config --runtime <id> --scope project --target <dir>
+node scripts/kaola-workflow-shared-refs.js remove-all --operator-override   # machine-wide removal; ignores references
+```
+
+The module exports `registerSharedRef(blockId, runtimeId, meta?, opts?)`,
+`deregisterSharedRef(blockId, runtimeId, opts?)` (returns `{ remaining, holders, released, cleaned,
+registryRemoved }`), `listRefs(blockId?, opts?)`, `onZeroRefs(blockId, fn)`,
+`operatorRemoveAll({ operatorOverride: true })`, the install-side helper
+`installSharedConfigBlock(runtimeId, meta?, opts?)` (registers only; never creates or rewrites the
+config file), `registryPath(home?)`, and `CONFIG_BLOCK_ID` (`kaola-config`).
 
 Cursor Cloud Build deactivation or deletion is an external environment decision and is not performed
 by the local uninstaller.

@@ -23,7 +23,7 @@
 // never hardcoded), and a changed `FORGE` default — none of which a text pin can see reliably.
 //
 // SAFETY: the uninstaller really deletes directories. Every install/uninstall child runs with HOME
-// (and $PWD, which uninstall.sh uses for its project-local Codex cleanup) inside one mkdtemp
+// (and $PWD, so no uninstaller path can resolve against the checkout) inside one mkdtemp
 // sandbox; `assertSandboxed` refuses to spawn otherwise, `KAOLA_*` env vars are scrubbed so
 // `KAOLA_AGENT_DIR` cannot redirect a child at the real home, and a tripwire asserts no top-level
 // entry of the developer's real ~/.claude disappeared.
@@ -80,7 +80,7 @@ function runScript(script, args, home) {
   assertSandboxed(home);
   // spawn-class: environment
   return spawnSync('bash', [script].concat(args), {
-    cwd: path.join(home, 'cwd'), // uninstall.sh's Codex cleanup is $PWD-relative
+    cwd: path.join(home, 'cwd'), // keep any $PWD-relative path inside the sandbox
     env: childEnv(home),
     encoding: 'utf8'
   });
