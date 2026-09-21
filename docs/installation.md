@@ -25,9 +25,10 @@ Install or refresh every detected local runtime for GitHub:
 ./install-all.sh --yes --forge=github
 ```
 
-Change the forge to `gitlab` or `gitea` as needed. The wrapper installs the machine-global contract
-before edition surfaces, continues through independent failures by default, and prints a per-runtime
-summary. Useful controls:
+Change the forge to `gitlab` or `gitea` as needed. The wrapper calls each runtime installer in turn,
+continues through independent failures by default, and prints a per-runtime summary. It writes no
+global-contract carrier itself: every runtime installer installs its own carrier as its last step
+(see [Global contract carriers](#global-contract-carriers)). Useful controls:
 
 ```bash
 ./install-all.sh --check
@@ -36,12 +37,34 @@ summary. Useful controls:
 ./install-all.sh --project=/absolute/repository/path --yes
 ```
 
-`--check` is read-only. `--global` is the default for OpenCode, Codex profiles, Kimi, Grok, Cursor,
+`--check` is read-only and prints one `[global-contract] <runtime>: …` line per runtime. `--global` is the default for OpenCode, Codex profiles, Kimi, Grok, Cursor,
 ZCode, Devin, and Droid; Claude has one runtime-wide install. `--project[=DIR]` selects project scope where the
 runtime supports it. Run `./install-all.sh --help` for the current option contract.
 
 The wrapper does not create or update a Cursor Cloud environment. It also cannot choose a first
 Codex marketplace plugin for the user; Codex forge selection belongs to the installed plugin entry.
+
+
+### Global contract carriers
+
+Each runtime installer — `install.sh` and the Codex profile installer included — installs only its
+own global-contract carrier, as its last step, through
+`node scripts/kaola-workflow-global-contract.js install --runtime <runtime> --json`. A standalone
+install is therefore complete on its own, and no install order matters. `install-all.sh` produces
+exactly what the standalone installers would, and `--skip=<runtime>` also skips that runtime's
+carrier.
+
+Ownership is recorded per target in
+`~/.config/kaola-workflow/global-contract-targets/<target-id>.json` (carrier path, install hash, and
+the owner bytes around a managed region). Each target is planned and written on its own, so a
+hand-edited, symlinked, malformed, or drifted carrier fails only its own runtime's install or
+`--check`. Other runtimes are not affected.
+
+When a runtime's program is not detected on `PATH`, its record is kept and shown as `DORMANT`. This
+does not release the reference. When the runtime comes back, even after the contract text has
+changed, it checks its carrier against its own record. If the hash matches, the carrier is refreshed.
+If it does not match, `OWNER_CONFLICT` is reported for that runtime only. In
+`install-all.sh --check`, a `DORMANT` runtime's carrier state is an advisory line, not a failure.
 
 ## Runtime-specific installation
 

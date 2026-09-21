@@ -39,10 +39,10 @@ manifest names — never a blind deletion) and never the machine-global `~/.fact
 is shared transaction state owned by `kaola-workflow-global-contract.js`. `--check` compares
 installed bytes with generated sources.
 
-The global-contract step is the same machine-wide transaction `install-all.sh` runs: it refreshes
-the Kaola global carrier of every runtime detected on the machine, not only Droid, and both
-`install` and `--check` report the `droid-local` target status when that transaction is not
-`CURRENT`.
+The global-contract step is the installer's last step and runs in per-target mode
+(`--runtime droid`). It installs and checks only the `droid-local` carrier, never writes another
+runtime's home, and cannot be failed by another runtime's carrier conflict or drift. Both `install`
+and `--check` report the `droid-local` target status when it is not `CURRENT`.
 
 ## Dispatch and model ownership
 
