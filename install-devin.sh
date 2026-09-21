@@ -20,8 +20,8 @@
 # Global layout:
 #   ~/.config/devin/skills/<name>/SKILL.md
 #   ~/.config/devin/AGENTS.md   (managed global contract, via kaola-workflow-global-contract.js —
-#                                the machine-wide transaction shared with install-all.sh; it
-#                                refreshes every detected runtime's carrier, not only Devin's)
+#                                per-target: --runtime devin installs/checks ONLY this runtime's own carrier,
+#                                as the LAST install step; no other runtime's home is written)
 #   ~/.config/devin/config.json (one Kaola UserPromptSubmit hook)
 #
 # DEVIN_CONFIG_DIR relocates this install for hermetic tests only. Devin itself does not read
@@ -122,14 +122,13 @@ ups_command() {
     "$HOOK_MARKER"
 }
 
-# Install or refresh the managed global AGENTS.md carrier through the shared
-# global-contract CLI, which follows the same receipt/ownership rules as the
-# other runtimes. That CLI is one machine-wide transaction: it refreshes the
-# carrier of every runtime it detects on this machine, not only Devin.
+# Install or check the managed global AGENTS.md carrier through the per-target
+# global-contract CLI (#1087): --runtime devin selects ONLY the devin-local target, so
+# another runtime's carrier conflict or drift can never fail this installer.
 # Both modes report the devin-local target instead of discarding the CLI exit code.
 global_contract() {
   local mode="$1" output rc=0
-  output="$(node "$SCRIPT_DIR/scripts/kaola-workflow-global-contract.js" "$mode" --json 2>&1)" || rc=$?
+  output="$(node "$SCRIPT_DIR/scripts/kaola-workflow-global-contract.js" "$mode" --runtime devin --json 2>&1)" || rc=$?
   node - "$mode" "$rc" "$HOME_ROOT/AGENTS.md" "$output" <<'NODE'
 const [mode, rcText, carrierPath, output] = process.argv.slice(2);
 const rc = Number(rcText);
@@ -139,10 +138,10 @@ const target = doc && Array.isArray(doc.targets) ? doc.targets.find(t => t.id ==
 const overall = doc && doc.status ? doc.status : 'UNKNOWN';
 const devin = target ? target.status : 'ABSENT';
 if (rc === 0) process.exit(0);
-console.error(`${mode}: global contract ${overall} (exit ${rc}); devin-local carrier ${devin} at ${carrierPath}`);
+console.error(`${mode}: devin global contract ${overall} (exit ${rc}); devin-local carrier ${devin} at ${carrierPath}`);
 if (!doc) console.error(output);
 else if (doc.error) console.error(`${mode}: ${doc.error}`);
-if (mode === 'check') console.error('check: run ./install-all.sh --yes (or ./install-devin.sh) to refresh the machine-global contract');
+if (mode === 'check') console.error('check: run ./install-devin.sh to refresh the devin global contract carrier');
 process.exit(1);
 NODE
 }
@@ -273,7 +272,6 @@ if [[ "$CHECK" == 1 ]]; then
   exit 0
 fi
 
-install_global_carrier
 manage_config_hook "$HOME_ROOT/config.json" install
 install_support_scripts
 
@@ -287,5 +285,8 @@ if [[ -d "$SOURCE_TREE/skills" ]]; then
     cp "$src/SKILL.md" "$SKILLS_DEST/$name/SKILL.md"
   done
 fi
+
+# Last step (#1087): this runtime's own global-contract carrier.
+install_global_carrier
 
 echo "Installed Devin edition ($FORGE) — skills: $SKILLS_DEST, support scripts: $SUPPORT_DEST, global carrier: $HOME_ROOT/AGENTS.md"

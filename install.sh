@@ -807,6 +807,21 @@ if [[ ( "$FORGE" = "gitlab" || "$FORGE" = "gitea" ) && "$installed" -eq 0 ]]; th
   echo "${FORGE^} edition skeleton installed; runtime commands arrive in follow-up issues."
 fi
 
+# Machine-global contract carrier (#1087). The LAST install step installs ONLY this runtime's own
+# adapter target through the per-target global-contract CLI: no other runtime's home is written,
+# no install order is assumed, and a carrier conflict blocks only this runtime.
+install_global_carrier() {
+  local output rc=0
+  output="$(node "$SCRIPT_DIR/scripts/kaola-workflow-global-contract.js" install --runtime claude --json 2>&1)" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    echo "Install error: claude global contract carrier not installed (exit $rc)" >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+  fi
+  echo "Installed claude global contract carrier (per-target record under ~/.config/kaola-workflow)"
+}
+install_global_carrier
+
 echo ""
 echo "Open any Claude Code session and run:  /workflow-init"
 echo "Then run implementation cycles with:  /workflow-next"

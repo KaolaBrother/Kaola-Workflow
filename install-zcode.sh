@@ -642,5 +642,20 @@ NODE
 
 report_hook_diagnostics
 
+# Machine-global contract carrier (#1087). The LAST install step installs ONLY this runtime's own
+# adapter target through the per-target global-contract CLI: no other runtime's home is written,
+# no install order is assumed, and a carrier conflict blocks only this runtime.
+install_global_carrier() {
+  local output rc=0
+  output="$(node "$SCRIPT_DIR/scripts/kaola-workflow-global-contract.js" install --runtime zcode --json 2>&1)" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    echo "Install error: zcode global contract carrier not installed (exit $rc)" >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+  fi
+  echo "Installed zcode global contract carrier (per-target record under ~/.config/kaola-workflow)"
+}
+install_global_carrier
+
 echo ""
 echo "Next: open the project in ZCode and run /kaola-workflow-init or /kaola-workflow-next."

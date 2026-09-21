@@ -1825,8 +1825,12 @@ for (const role of reviewerGenerator.ROLES) {
       const transactionRule = path.join(r.cursorHome, 'rules', CURSOR_GLOBAL_RULE);
       assert(!fs.existsSync(globalRule),
         'G8-global: edition installer retires the old recovery Rule');
-      assert(!fs.existsSync(transactionRule),
-        'G8-global: edition installer does not impersonate the install-all global transaction');
+      // #1087 (F5): every runtime installer installs its OWN global-contract carrier as its last
+      // step, through the per-target global-contract CLI — the cursor-local Rule plus its record.
+      assert(fs.existsSync(transactionRule)
+        && fs.existsSync(path.join(r.home, '.config', 'kaola-workflow', 'global-contract-targets',
+          'cursor-cli-local.json')),
+        'G8-global: edition installer installs its own global-contract Rule through the per-target transaction');
       assert(fs.readdirSync(stagingParent).length === 0,
         'G8-global: isolated generated source is removed after the install transaction');
       clean(r);

@@ -2360,6 +2360,28 @@ function deriveMultiAgentV2Bounds(configContent, v2Enabled) {
   };
 }
 
+// #1087 F5: the Codex installer installs its OWN machine-global contract carrier as its last
+// step, through the per-target global-contract CLI (--runtime codex writes only ~/.codex/AGENTS.md
+// plus its own target record). The CLI and the universal contract source live in the checkout
+// this plugin tree sits in; a plugin-cache copy has neither, so that source reports UNAVAILABLE
+// (never a silent success) and a checkout install owns the carrier.
+function installGlobalCarrier() {
+  const cli = path.resolve(pluginRoot, '..', '..', 'scripts', 'kaola-workflow-global-contract.js');
+  if (!fs.existsSync(cli)) return { status: 'UNAVAILABLE', cli };
+  // spawn-class: cli-contract
+  const result = require('child_process').spawnSync(process.execPath,
+    [cli, 'install', '--runtime', 'codex', '--json'], { encoding: 'utf8', env: process.env });
+  let doc = null;
+  try { doc = JSON.parse(String(result.stdout || '').trim()); } catch (_) { /* reported below */ }
+  const row = doc && Array.isArray(doc.targets) ? doc.targets.find(t => t.id === 'codex-local') : null;
+  return {
+    status: result.status === 0 && doc ? doc.status : 'FAILED',
+    exit: result.status,
+    path: row && row.path,
+    detail: doc && doc.error ? doc.error : String(result.stderr || result.stdout || '').trim(),
+  };
+}
+
 function main() {
 
   assert(fs.existsSync(sourceAgentsDir), `missing source agents directory: ${sourceAgentsDir}`);
@@ -2506,6 +2528,18 @@ function main() {
   }
   console.log(`Kaola-Workflow Codex multi_agent_v2: ${MULTI_AGENT_V2_BOUNDS_NOTE}`);
 
+  // Last install step (#1087): this runtime's own global-contract carrier. A failure is fatal —
+  // a Codex install without its carrier is not complete; an unavailable CLI is reported loudly.
+  const carrier = installGlobalCarrier();
+  if (carrier.status === 'UNAVAILABLE') {
+    console.log(`Kaola-Workflow Codex global contract: UNAVAILABLE from this install source (${carrier.cli} absent); run this installer from a Kaola-Workflow checkout to install ~/.codex/AGENTS.md`);
+  } else if (carrier.status !== 'INSTALLED') {
+    process.stderr.write(`global_contract_failed: codex carrier ${carrier.status} (exit ${carrier.exit}): ${carrier.detail}\n`);
+    process.exit(1);
+  } else {
+    console.log(`Kaola-Workflow Codex global contract: INSTALLED at ${carrier.path}`);
+  }
+
   console.log('status: ok');
 }
 
@@ -2517,6 +2551,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  installGlobalCarrier,
   buildManagedHooks,
   mergeHooks,
   updateHooks,
