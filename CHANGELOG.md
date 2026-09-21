@@ -21,7 +21,9 @@
   The shared `~/.config/kaola-workflow/config.json` is now reference-counted by the new
   `kaola-workflow-shared-refs.js` registry. The carrier step registers a runtime's `global` reference,
   each uninstaller releases its own reference, and the file is removed only when the last reference is
-  released. `CONFIG_BLOCK_ID` (`kaola-config`) is the only spelling of that block id.
+  released. `CONFIG_BLOCK_ID` (`kaola-config`) is the only spelling of that block id. After
+  upgrading, run `./install-all.sh --yes` (or reinstall each runtime) so runtimes installed before
+  this change get their references (see `docs/installation.md`, Shared blocks and references).
 
 ## [12.2.2] - 2026-09-21
 

@@ -277,6 +277,15 @@ which holds the `global` scope. The config file is removed only when the
 last reference is released, and the registry itself is removed after every block reaches zero.
 A machine with no registry record is left alone, because no uninstaller can prove it is the last user.
 
+**Upgrading from a release before #1087.** Runtimes installed before this change hold no reference
+record. Run `./install-all.sh --yes` (or reinstall each runtime) to seed their references. Until
+then, uninstalling every re-registered runtime may remove the shared config block that an older,
+non-reinstalled runtime still reads.
+
+A refused carrier release (`OWNER_CONFLICT`, because the carrier was edited since install) is
+reported as a warning. It does not fail the uninstall, which exits 0 once its own surfaces are
+removed.
+
 ```bash
 node scripts/kaola-workflow-shared-refs.js list --block kaola-config
 node scripts/kaola-workflow-shared-refs.js register   --runtime <id> --scope global
