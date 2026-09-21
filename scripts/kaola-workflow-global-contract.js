@@ -270,7 +270,41 @@ function rowForPath(receipt, file) {
   return receipt.targets.find(row => row && row.path === file && row.install_sha256) || null;
 }
 
-function planTargets({ registry, source, env, nonce, cloudRoot = null, onlyCloud = false }) {
+// Ownership evidence for one carrier path: the legacy batch receipt row plus every per-target
+// record that names the same path. A carrier is owned when ANY of them hashes to its bytes, so a
+// batch run and a per-target run never read each other's last write as a foreign edit.
+function evidenceForPath(receipt, records, file) {
+  const out = [];
+  const row = rowForPath(receipt, file);
+  if (row) out.push(row);
+  for (const record of records || []) {
+    if (record && record.path === file && record.install_sha256) out.push(record);
+  }
+  return out;
+}
+
+function ownerFor(evidence, bytes) {
+  const digest = sha256(bytes || Buffer.alloc(0));
+  return evidence.find(row => row.install_sha256 === digest) || evidence[0] || null;
+}
+
+function dormantRow(target, evidence) {
+  const kept = evidence.find(row => row && row.path && row.install_sha256);
+  if (!kept) return null;
+  return {
+    id: target.id, runtime: target.runtime, host: target.host, status: 'DORMANT',
+    path: kept.path, carrier: target.carrier.kind, carrier_group: target.carrier_group,
+    precedence: target.precedence, reload: target.reload,
+    ...(kept.source_sha256 ? { source_sha256: kept.source_sha256 } : {}),
+    ...(kept.render_sha256 ? { render_sha256: kept.render_sha256 } : {}),
+    install_sha256: kept.install_sha256,
+    ...(kept.before_sha256 ? { before_sha256: kept.before_sha256 } : {}),
+    ...(kept.managed_origin ? { managed_origin: kept.managed_origin } : {}),
+  };
+}
+
+function planTargets({ registry, source, env, nonce, cloudRoot = null, onlyCloud = false,
+  priorReceipt = null, records = [] }) {
   const rows = [];
   const physical = new Map();
   const selected = onlyCloud
@@ -285,6 +319,12 @@ function planTargets({ registry, source, env, nonce, cloudRoot = null, onlyCloud
     }
     const installed = onlyCloud || isInstalled(target, env);
     if (!installed) {
+      // F4: a runtime that is merely not detected keeps its ownership evidence as DORMANT.
+      // Dropping it would turn the runtime's own stale carrier into OWNER_CONFLICT on return.
+      const priorById = (priorReceipt && priorReceipt.targets || []).filter(row => row && row.id === target.id);
+      const recordById = records.filter(record => record && record.id === target.id);
+      const dormant = dormantRow(target, [...recordById, ...priorById]);
+      if (dormant) { rows.push(dormant); continue; }
       rows.push({ id: target.id, runtime: target.runtime, host: target.host, status: 'NOT_INSTALLED',
         carrier: target.carrier.kind, precedence: target.precedence, reload: target.reload });
       continue;
@@ -311,7 +351,7 @@ function planTargets({ registry, source, env, nonce, cloudRoot = null, onlyCloud
   return { rows, physical };
 }
 
-function buildPhysicalPlans({ physical, priorReceipt }) {
+function buildPhysicalPlans({ physical, priorReceipt, records = [] }) {
   const plans = [];
   for (const item of physical.values()) {
     assertSafePath(item.path, item.root);
@@ -320,7 +360,7 @@ function buildPhysicalPlans({ physical, priorReceipt }) {
       throw new TransactionError('PREFLIGHT_BLOCKED', `unsafe carrier topology at ${item.path}`);
     }
     const before = state.bytes || Buffer.alloc(0);
-    const priorRow = rowForPath(priorReceipt, item.path);
+    const priorRow = ownerFor(evidenceForPath(priorReceipt, records, item.path), before);
     let after;
     let managedOrigin = null;
     if (item.carrier === 'managed_region') {
@@ -433,6 +473,9 @@ function execute(options = {}) {
   const nonce = options.nonce || '';
   const source = readAuthority(SOURCE_PATH, 'global contract source');
   const { registry, bytes: registryBytes } = loadRegistry(env);
+  if ((options.targetIds && options.targetIds.length > 0) || (options.runtimes && options.runtimes.length > 0)) {
+    return executeTargets({ ...options, mode, env, nonce, source, registry });
+  }
   const onlyCloud = mode.endsWith('-cloud') || mode === 'install-cloud';
   const baseMode = mode.replace(/-cloud$/, '').replace(/^install-cloud$/, 'install');
   const cloudRoot = options.target ? path.resolve(options.target) : null;
@@ -448,9 +491,10 @@ function execute(options = {}) {
   const receiptBoundary = onlyCloud ? cloudRoot : path.dirname(receiptFile);
   assertSafePath(receiptFile, receiptBoundary);
   const priorReceipt = loadReceipt(receiptFile);
+  const records = onlyCloud ? [] : loadAllRecords(env);
 
   if (baseMode === 'uninstall') {
-    if (!priorReceipt) {
+    if (!priorReceipt && records.length === 0) {
       return { schema_version: 1, status: 'NOT_INSTALLED', receipt_path: receiptFile, targets: [] };
     }
     const allowed = new Map();
@@ -465,8 +509,8 @@ function execute(options = {}) {
       });
     }
     const unique = new Map();
-    for (const row of priorReceipt.targets) {
-      if (!row || row.status !== 'INSTALLED') continue;
+    for (const row of priorReceipt ? priorReceipt.targets : []) {
+      if (!row || (row.status !== 'INSTALLED' && row.status !== 'DORMANT')) continue;
       const expected = allowed.get(row.id);
       if (!expected || row.path !== expected.path || row.carrier !== expected.carrier
           || row.carrier_group !== expected.carrier_group) {
@@ -487,6 +531,21 @@ function execute(options = {}) {
       }
       unique.set(row.path, row);
     }
+    for (const record of records) {
+      const expected = allowed.get(record.id);
+      if (!expected || record.path !== expected.path || record.carrier !== expected.carrier
+          || record.carrier_group !== expected.carrier_group) {
+        throw new TransactionError('OWNER_CONFLICT',
+          `target record no longer matches the runtime registry: ${record.id || '<missing>'}`);
+      }
+      assertSafePath(record.path, expected.root);
+      const existing = unique.get(record.path);
+      const state = inspect(record.path);
+      const digest = state.topology === 'regular' ? sha256(state.bytes) : null;
+      if (!existing || (existing.install_sha256 !== digest && record.install_sha256 === digest)) {
+        unique.set(record.path, record);
+      }
+    }
     const writes = [];
     for (const row of unique.values()) {
       const state = inspect(row.path);
@@ -500,13 +559,15 @@ function execute(options = {}) {
       }
     }
     writes.push({ path: receiptFile, remove: true });
+    // The batch uninstall is the machine-wide removal: per-target records go with the carriers.
+    for (const record of records) writes.push({ path: recordPath(env, record.id), remove: true });
     commitWrites(writes);
     return { schema_version: 1, status: 'UNINSTALLED', receipt_path: receiptFile,
-      targets: priorReceipt.targets };
+      targets: priorReceipt ? priorReceipt.targets : records };
   }
 
-  const planned = planTargets({ registry, source, env, nonce, cloudRoot, onlyCloud });
-  const plans = buildPhysicalPlans({ physical: planned.physical, priorReceipt });
+  const planned = planTargets({ registry, source, env, nonce, cloudRoot, onlyCloud, priorReceipt, records });
+  const plans = buildPhysicalPlans({ physical: planned.physical, priorReceipt, records });
   const projectedRows = materializeRows(planned.rows, plans, 'INSTALLED', priorReceipt);
   const expectedReceipt = makeReceipt({ rows: projectedRows, source, registryBytes, nonce,
     kind: onlyCloud ? 'cursor_cloud' : 'local_batch', candidateSha: candidateSha(env),
@@ -524,8 +585,10 @@ function execute(options = {}) {
       if (row.status !== 'INSTALLED') return row;
       const before = plans.find(plan => plan.path === row.path).before;
       const prior = priorById.get(row.id);
+      const digest = sha256(before);
       const rowCurrent = before.equals(plans.find(plan => plan.path === row.path).after)
-        && prior && prior.install_sha256 === sha256(before);
+        && ((prior && prior.install_sha256 === digest)
+          || evidenceForPath(null, records, row.path).some(record => record.install_sha256 === digest));
       if (!rowCurrent) current = false;
       return { ...row, status: rowCurrent ? 'CURRENT' : 'DRIFT' };
     });
@@ -553,13 +616,349 @@ function execute(options = {}) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Per-target mode (#1087, F3/F4/F5). Each runtime installer installs, checks, and removes ONLY
+// its own adapter target. Ownership lives in one record file per target beside the legacy batch
+// receipt, written by that runtime's install and removed by its uninstall. Every carrier is
+// planned and committed on its own, so one target's conflict never aborts another target.
+// A record whose runtime is not detected on PATH stays as DORMANT evidence: the returning
+// runtime re-validates its carrier against its own record instead of hitting OWNER_CONFLICT.
+// ---------------------------------------------------------------------------
+
+const RECORD_SCHEMA = 1;
+const RECORD_KIND = 'global_contract_target';
+// Shared block the per-target records live in; registered through the shared-reference
+// registry (scripts/kaola-workflow-shared-refs.js) keyed by runtime id.
+const SHARED_BLOCK_ID = 'kaola-config-dir';
+const FAILURE_STATUSES = new Set(['OWNER_CONFLICT', 'PREFLIGHT_BLOCKED']);
+
+function recordsDir(env) {
+  return path.join(path.dirname(receiptPath(env)), 'global-contract-targets');
+}
+
+function recordPath(env, id) {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(String(id || ''))) {
+    throw new TransactionError('PREFLIGHT_BLOCKED', `invalid target id: ${id}`);
+  }
+  return path.join(recordsDir(env), `${id}.json`);
+}
+
+function loadRecord(file) {
+  const state = inspect(file);
+  if (state.topology === 'missing') return null;
+  if (state.topology !== 'regular') {
+    throw new TransactionError('PREFLIGHT_BLOCKED', `target record is not a regular file: ${file}`);
+  }
+  let record;
+  try { record = JSON.parse(state.bytes.toString('utf8')); }
+  catch (error) { throw new TransactionError('PREFLIGHT_BLOCKED', `invalid target record ${file}: ${error.message}`); }
+  if (!record || !Number.isInteger(record.schema_version) || record.schema_version > RECORD_SCHEMA) {
+    throw new TransactionError('PREFLIGHT_BLOCKED', `unsupported target record schema: ${file}`);
+  }
+  if (record.kind !== RECORD_KIND || typeof record.id !== 'string' || typeof record.path !== 'string'
+      || typeof record.install_sha256 !== 'string') {
+    throw new TransactionError('PREFLIGHT_BLOCKED', `malformed target record: ${file}`);
+  }
+  return record;
+}
+
+function loadAllRecords(env) {
+  const dir = recordsDir(env);
+  const state = inspect(dir);
+  if (state.topology === 'missing') return [];
+  if (state.topology !== 'non_regular' || !state.stat.isDirectory()) {
+    throw new TransactionError('PREFLIGHT_BLOCKED', `target record store is not a directory: ${dir}`);
+  }
+  return fs.readdirSync(dir).filter(name => name.endsWith('.json')).sort()
+    .map(name => loadRecord(path.join(dir, name))).filter(Boolean);
+}
+
+function loadSharedRefs(options, env) {
+  if (options.sharedRefs !== undefined) return options.sharedRefs;
+  // KAOLA_SHARED_REFS_MODULE is a hermetic-test seam only; production resolves the sibling module.
+  const file = env.KAOLA_SHARED_REFS_MODULE
+    ? path.resolve(env.KAOLA_SHARED_REFS_MODULE)
+    : path.join(__dirname, 'kaola-workflow-shared-refs.js');
+  if (!fs.existsSync(file)) return null;
+  return require(file);
+}
+
+function sharedRefCall(refs, method, args) {
+  if (!refs || typeof refs[method] !== 'function') return { status: 'UNAVAILABLE' };
+  try {
+    const result = refs[method](...args);
+    return { status: method === 'registerSharedRef' ? 'REGISTERED' : 'DEREGISTERED',
+      ...(result && typeof result === 'object' ? result : {}) };
+  } catch (error) {
+    return { status: 'ERROR', error: error.message };
+  }
+}
+
+function selectTargets(registry, { targetIds = [], runtimes = [] }) {
+  const selected = new Map();
+  for (const id of targetIds) {
+    const target = registry.targets.find(row => row.id === id);
+    if (!target) throw new TransactionError('PREFLIGHT_BLOCKED', `unknown target id: ${id}`);
+    if (target.carrier.kind === 'cloud_project_rule') {
+      throw new TransactionError('PREFLIGHT_BLOCKED', `${id} uses the explicit Cloud modes, not --target-id`);
+    }
+    selected.set(target.id, target);
+  }
+  for (const runtime of runtimes) {
+    const matches = registry.targets.filter(row => row.runtime === runtime
+      && row.carrier.kind !== 'cloud_project_rule');
+    if (matches.length === 0) throw new TransactionError('PREFLIGHT_BLOCKED', `unknown runtime: ${runtime}`);
+    for (const target of matches) selected.set(target.id, target);
+  }
+  if (selected.size === 0) throw new TransactionError('PREFLIGHT_BLOCKED', 'no target selected');
+  return [...selected.values()];
+}
+
+function targetDigest(target) {
+  return sha256(Buffer.from(JSON.stringify(target)));
+}
+
+function baseRow(target, extra = {}) {
+  return { id: target.id, runtime: target.runtime, host: target.host, carrier: target.carrier.kind,
+    carrier_group: target.carrier_group, precedence: target.precedence, reload: target.reload, ...extra };
+}
+
+function makeRecord({ target, group, detected, after, before, origin, prior, source, nonce, env }) {
+  const converged = prior && prior.install_sha256 === sha256(before) && before.equals(after);
+  return {
+    schema_version: RECORD_SCHEMA,
+    kind: RECORD_KIND,
+    id: target.id,
+    runtime: target.runtime,
+    host: target.host,
+    status: detected ? 'INSTALLED' : 'DORMANT',
+    path: group.path,
+    carrier: target.carrier.kind,
+    carrier_group: target.carrier_group,
+    source_sha256: sha256(source),
+    target_sha256: targetDigest(target),
+    render_sha256: sha256(group.rendered),
+    install_sha256: sha256(after),
+    before_sha256: converged && prior.before_sha256 ? prior.before_sha256 : sha256(before),
+    ...(origin ? { managed_origin: converged && prior.managed_origin ? prior.managed_origin : origin } : {}),
+    nonce: nonce || null,
+    candidate_sha: candidateSha(env),
+    installed_at: prior && prior.installed_at ? prior.installed_at : new Date().toISOString(),
+  };
+}
+
+function planGroup({ group, env, legacy, source, nonce, mode }) {
+  const records = group.targets.map(target => ({ target, file: recordPath(env, target.id) }));
+  for (const item of records) item.record = loadRecord(item.file);
+  const boundary = path.dirname(receiptPath(env));
+  for (const item of records) assertSafePath(item.file, boundary);
+  const evidence = evidenceForPath(legacy, records.map(item => item.record).filter(Boolean), group.path);
+  const staleRecords = records.filter(item => item.record && item.record.path !== group.path);
+  assertSafePath(group.path, group.root);
+  const state = inspect(group.path);
+  if (state.topology === 'symbolic_link' || state.topology === 'non_regular') {
+    throw new TransactionError('PREFLIGHT_BLOCKED', `unsafe carrier topology at ${group.path}`);
+  }
+  const before = state.bytes || Buffer.alloc(0);
+  const detected = group.targets.map(target => isInstalled(target, env));
+  const owner = ownerFor(evidence, before);
+  const owned = evidence.some(row => row.install_sha256 === sha256(before));
+  if (mode === 'uninstall') return { records, evidence, state, before, detected, owner, owned, staleRecords };
+  let after;
+  let origin = null;
+  if (group.carrier === 'managed_region') {
+    const built = buildManaged(before, group.rendered, owner);
+    after = built.after;
+    origin = built.origin;
+  } else {
+    if (state.topology === 'regular' && !before.equals(group.rendered) && !owned) {
+      throw new TransactionError('OWNER_CONFLICT', `dedicated carrier contains owner bytes: ${group.path}`);
+    }
+    after = group.rendered;
+  }
+  return { records, evidence, state, before, after, origin, detected, owner, owned, staleRecords, source, nonce };
+}
+
+function executeTargets(options) {
+  const { mode, env, nonce, source, registry } = options;
+  if (!['install', 'check', 'uninstall'].includes(mode)) {
+    throw new TransactionError('PREFLIGHT_BLOCKED', `--target-id is only valid with install, check, or uninstall: ${mode}`);
+  }
+  const targets = selectTargets(registry, { targetIds: options.targetIds || [], runtimes: options.runtimes || [] });
+  const advisories = [];
+  let legacy = null;
+  try { legacy = loadReceipt(receiptPath(env)); }
+  catch (error) {
+    // Another row's broken batch receipt is not this target's failure: it is only evidence.
+    advisories.push({ kind: 'legacy_receipt_unreadable', error: error.message });
+  }
+
+  const groups = new Map();
+  const rows = [];
+  for (const target of targets) {
+    let resolved;
+    let rendered;
+    try {
+      resolved = resolveCarrier(target, env);
+      rendered = renderContract({ source, target, nonce });
+    } catch (error) {
+      rows.push(baseRow(target, { status: error.status || 'PREFLIGHT_BLOCKED', error: error.message }));
+      continue;
+    }
+    const existing = groups.get(resolved.path);
+    if (existing) {
+      if (existing.group !== target.carrier_group || !existing.rendered.equals(rendered)) {
+        existing.conflict = `duplicate physical carrier has conflicting owners: ${resolved.path}`;
+      }
+      existing.targets.push(target);
+    } else {
+      groups.set(resolved.path, { path: resolved.path, root: resolved.root, group: target.carrier_group,
+        carrier: target.carrier.kind, rendered, targets: [target] });
+    }
+  }
+
+  const refs = mode === 'check' ? null : loadSharedRefs(options, env);
+  const runtimesDone = new Map();
+  for (const group of groups.values()) {
+    const fail = (status, message) => {
+      for (const target of group.targets) {
+        rows.push(baseRow(target, { status, path: group.path, error: message }));
+      }
+    };
+    if (group.conflict) { fail('PREFLIGHT_BLOCKED', group.conflict); continue; }
+    let plan;
+    try { plan = planGroup({ group, env, legacy, source, nonce, mode }); }
+    catch (error) {
+      if (mode === 'check' && error.status === 'OWNER_CONFLICT') {
+        fail('OWNER_CONFLICT', error.message);
+      } else {
+        fail(error.status || 'PREFLIGHT_BLOCKED', error.message);
+      }
+      continue;
+    }
+    const anyDetected = plan.detected.some(Boolean);
+    const hasRecord = plan.records.some(item => item.record);
+
+    if (mode === 'check') {
+      const nothing = plan.state.topology === 'missing' && plan.evidence.length === 0 && !anyDetected;
+      const current = plan.before.equals(plan.after) && plan.owned;
+      group.targets.forEach((target, index) => {
+        const item = plan.records[index];
+        rows.push(baseRow(target, {
+          status: nothing ? 'NOT_INSTALLED' : (current ? 'CURRENT' : 'DRIFT'),
+          path: group.path,
+          detected: plan.detected[index],
+          record_status: item.record ? (plan.detected[index] ? 'INSTALLED' : 'DORMANT') : null,
+          ...(current || nothing ? {} : { reason: plan.state.topology === 'missing' ? 'carrier missing'
+            : (!plan.owned ? 'no matching ownership record' : 'contract render changed') }),
+        }));
+      });
+      continue;
+    }
+
+    if (mode === 'uninstall') {
+      const writes = [];
+      const region = plan.state.topology === 'regular' && group.carrier === 'managed_region'
+        ? managedRegion(plan.before) : null;
+      const carrierGone = plan.state.topology === 'missing' || (region && region.kind === 'absent');
+      if (!carrierGone) {
+        if (!plan.owned) {
+          fail('OWNER_CONFLICT', `receipt-owned carrier changed: ${group.path}`);
+          continue;
+        }
+        const owner = plan.evidence.find(row => row.install_sha256 === sha256(plan.before));
+        try {
+          writes.push(group.carrier === 'managed_region'
+            ? { path: group.path, bytes: stripManaged(plan.before, owner) }
+            : { path: group.path, remove: true });
+        } catch (error) { fail(error.status || 'PREFLIGHT_BLOCKED', error.message); continue; }
+      }
+      for (const item of plan.records) if (item.record) writes.push({ path: item.file, remove: true });
+      const ids = new Set(group.targets.map(target => target.id));
+      if (legacy && legacy.targets.some(row => row && ids.has(row.id) && row.path)) {
+        const next = { ...legacy, targets: legacy.targets.map(row => (row && ids.has(row.id) && row.path
+          ? { id: row.id, runtime: row.runtime, host: row.host, status: 'NOT_INSTALLED', carrier: row.carrier,
+            precedence: row.precedence, reload: row.reload } : row)) };
+        writes.push({ path: receiptPath(env), bytes: Buffer.from(JSON.stringify(next, null, 2) + '\n') });
+      }
+      try { commitWrites(writes); }
+      catch (error) { fail(error.status || 'PREFLIGHT_BLOCKED', error.message); continue; }
+      const status = carrierGone && !hasRecord ? 'NOT_INSTALLED' : 'UNINSTALLED';
+      for (const target of group.targets) {
+        rows.push(baseRow(target, { status, path: group.path }));
+        runtimesDone.set(target.runtime, (runtimesDone.get(target.runtime) || []).concat(target.id));
+      }
+      continue;
+    }
+
+    // install
+    const writes = [];
+    if (!(plan.state.topology === 'regular' && plan.before.equals(plan.after))) {
+      writes.push({ path: group.path, bytes: plan.after });
+    }
+    const built = group.targets.map((target, index) => {
+      const item = plan.records[index];
+      const prior = item.record && item.record.path === group.path ? item.record : plan.owner;
+      const record = makeRecord({ target, group, detected: plan.detected[index], after: plan.after,
+        before: plan.before, origin: plan.origin, prior, source, nonce, env });
+      writes.push({ path: item.file, bytes: Buffer.from(JSON.stringify(record, null, 2) + '\n') });
+      return record;
+    });
+    try { commitWrites(writes); }
+    catch (error) { fail(error.status || 'PREFLIGHT_BLOCKED', error.message); continue; }
+    group.targets.forEach((target, index) => {
+      rows.push(baseRow(target, { status: built[index].status, path: group.path,
+        detected: plan.detected[index], install_sha256: built[index].install_sha256,
+        refreshed: writes.some(write => write.path === group.path) }));
+      runtimesDone.set(target.runtime, (runtimesDone.get(target.runtime) || []).concat(target.id));
+    });
+  }
+
+  const sharedRefs = {};
+  for (const [runtime, ids] of runtimesDone) {
+    sharedRefs[runtime] = mode === 'install'
+      ? sharedRefCall(refs, 'registerSharedRef', [SHARED_BLOCK_ID, runtime,
+        { surface: 'global-contract', target_ids: ids, records: recordsDir(env) }])
+      : sharedRefCall(refs, 'deregisterSharedRef', [SHARED_BLOCK_ID, runtime]);
+  }
+
+  const order = new Map(targets.map((target, index) => [target.id, index]));
+  rows.sort((a, b) => order.get(a.id) - order.get(b.id));
+  const failure = rows.find(row => FAILURE_STATUSES.has(row.status));
+  let status;
+  if (failure) status = failure.status;
+  else if (mode === 'check') status = rows.every(row => row.status === 'CURRENT' || row.status === 'NOT_INSTALLED')
+    ? 'CURRENT' : 'DRIFT';
+  else if (mode === 'install') status = 'INSTALLED';
+  else status = rows.every(row => row.status === 'NOT_INSTALLED') ? 'NOT_INSTALLED' : 'UNINSTALLED';
+  return {
+    schema_version: 1,
+    scope: 'target',
+    status,
+    records_dir: recordsDir(env),
+    source_sha256: sha256(source),
+    targets: rows,
+    ...(Object.keys(sharedRefs).length ? { shared_refs: sharedRefs } : {}),
+    ...(advisories.length ? { advisories } : {}),
+  };
+}
+
 function parseArgs(argv) {
   const mode = argv[2];
   const json = argv.includes('--json');
   let nonce = '';
   let target = null;
+  const targetIds = [];
+  const runtimes = [];
+  const list = value => String(value).split(',').map(part => part.trim()).filter(Boolean);
   for (let i = 3; i < argv.length; i += 1) {
     if (argv[i] === '--json') continue;
+    if (argv[i] === '--target-id' && argv[i + 1] && !argv[i + 1].startsWith('--')) {
+      targetIds.push(...list(argv[++i])); continue;
+    }
+    if (argv[i] === '--runtime' && argv[i + 1] && !argv[i + 1].startsWith('--')) {
+      runtimes.push(...list(argv[++i])); continue;
+    }
     if (argv[i] === '--nonce' && argv[i + 1] && !argv[i + 1].startsWith('--')) {
       nonce = argv[++i]; continue;
     }
@@ -570,14 +969,19 @@ function parseArgs(argv) {
   }
   if (!json || !['install', 'check', 'uninstall', 'install-cloud', 'check-cloud', 'uninstall-cloud'].includes(mode)) {
     throw new TransactionError('PREFLIGHT_BLOCKED',
-      'usage: kaola-workflow-global-contract.js install|check|uninstall|install-cloud|check-cloud|uninstall-cloud --json [--nonce VALUE] [--target REPO]');
+      'usage: kaola-workflow-global-contract.js install|check|uninstall|install-cloud|check-cloud|uninstall-cloud --json [--nonce VALUE] [--target REPO] [--target-id ID[,ID]] [--runtime NAME[,NAME]]');
+  }
+  const perTarget = targetIds.length > 0 || runtimes.length > 0;
+  if (perTarget && !['install', 'check', 'uninstall'].includes(mode)) {
+    throw new TransactionError('PREFLIGHT_BLOCKED', '--target-id/--runtime are only valid with install, check, or uninstall');
   }
   if (mode.endsWith('-cloud') || mode === 'install-cloud') {
     if (!target) throw new TransactionError('PREFLIGHT_BLOCKED', `${mode} requires --target REPO`);
   } else if (target) {
     throw new TransactionError('PREFLIGHT_BLOCKED', '--target is only valid for Cursor Cloud modes');
   }
-  return { mode, nonce, target };
+  return { mode, nonce, target,
+    ...(perTarget ? { targetIds: targetIds.length ? targetIds : [], runtimes } : {}) };
 }
 
 function main(argv) {
@@ -586,6 +990,7 @@ function main(argv) {
   try {
     envelope = execute(parseArgs(argv));
     if (envelope.status === 'DRIFT') exitCode = 3;
+    else if (FAILURE_STATUSES.has(envelope.status)) exitCode = 2;
   } catch (error) {
     const status = error instanceof TransactionError ? error.status : 'PREFLIGHT_BLOCKED';
     envelope = { schema_version: 1, status, error: error.message, details: error.details || [] };
@@ -596,8 +1001,8 @@ function main(argv) {
 }
 
 module.exports = {
-  START, END, SOURCE_PATH, DEFAULT_REGISTRY_PATH,
-  renderContract, managedRegion, execute, loadRegistry,
+  START, END, SOURCE_PATH, DEFAULT_REGISTRY_PATH, SHARED_BLOCK_ID,
+  renderContract, managedRegion, execute, loadRegistry, recordsDir, recordPath,
 };
 
 if (require.main === module) main(process.argv);
