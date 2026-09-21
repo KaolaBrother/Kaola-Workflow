@@ -23,11 +23,11 @@ Host 认领（bundle-1087，branch workflow/bundle-1087）。双车道并行，�
   result: 提交 79ae109f（合并，唯一冲突 codex installer exports 双行为保留）→ 478c5635（per-target carrier 卸载接线全部卸载器；CONFIG_BLOCK_ID='kaola-config' 统一，GC 从模块读、8 shell 调用方走 CLI 默认；registry 生产真实化，KAOLA_SHARED_REFS_MODULE 仅测试；registry 经事务 env.HOME 沙箱安全）→ d0b3c483（registry 改仓库原子写助手过 kernel-conformance；lane-B spawn 站点补标签）→ 16755cc4（docs 升级注记：#1087 前装 runtime 无引用记录，install-all --yes 播种；卸载 OWNER_CONFLICT 警告语义；CHANGELOG 补句）。收据绑定 16755cc4：四 forge 链全绿无豁免（claude 55 步含 #1055 oracle 绿）+ walkthrough 过 + lane-a 93/lane-b 181 断言复跑绿。Host 两项裁决：零引用删除保留（#1086 F2 语义）、卸载警告不失败保留。已知留白：plugin-cache Codex carrier UNAVAILABLE（设计内）、Devin 无卸载器（先在缺口）。席位验收停置。
 
 - item: Finalize/Sink：验收后 finalize（归档）、sink 合并关单 #1087
-  status: in-flight
+  status: done
   dispatched: self（Host）
-  result:
+  result: doc-docking DOCKED + finalization-summary 落档；finalize --check ok → 事务 closed/archived（四链绿绑定 16755cc4）；sink 首次因网络在 closure 步拒（sink_incomplete），重试成功 status=sinked——main @ 29c7d4c4（archive 提交）含全部实现 8 提交，origin 平权，#1087 CLOSED（核验）；laneB worktree/branch 清理；暂存目录恢复归位（一次 mv 目标参数失误散落 workspace，已全部还原核对）。
 
 - item: 发版门（Yanlei 钉死）：本仓 open issues 清零（含 P3）后，仅最小 patch 升级，Fable 终审后切版；不带尾巴发版
-  status: todo
-  dispatched: 待 #1087 收口后评估（若届时无其他 open issue）
+  status: in-flight
+  dispatched: self（Host）核查（open issues=0 已核）+ Fable 终审席 claude-code-KW-i1087-release-review（--tier upgrade）
   result:
