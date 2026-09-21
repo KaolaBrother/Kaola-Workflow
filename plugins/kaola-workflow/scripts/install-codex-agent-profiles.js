@@ -23,6 +23,9 @@ const pluginRoot = path.resolve(__dirname, '..');
 // Position-robust: the flag is matched anywhere in argv. The positional projectRoot form ("$PWD" /
 // "$HOME") still works: take the first non-flag argv, never a leading --flag.
 const GLOBAL = process.argv.includes('--global');
+// #1087 (#1086 F1): Codex owns its own removal. `--uninstall` removes only what this installer
+// wrote, under the same provenance rules as the additive runtimes' --uninstall (see uninstallMain).
+const UNINSTALL = process.argv.includes('--uninstall');
 const firstPositional = process.argv.slice(2).find(a => !a.startsWith('--'));
 const projectRoot = GLOBAL
   ? os.homedir()
@@ -2509,14 +2512,143 @@ function main() {
   console.log('status: ok');
 }
 
+// #1087 (#1086 F1/F2): remove ONLY what this installer wrote, then release Codex's reference on the
+// shared ~/.config/kaola-workflow block. Provenance rules, as for the additive runtimes:
+//   - profiles: a manifest-listed profile is removed only while its bytes still match the recorded
+//     hash (a modified one is preserved and reported); named retired profiles are removed by name;
+//     unknown TOMLs are never touched;
+//   - config.toml: only the single canonical managed [agents.*] block is stripped; an ambiguous
+//     marker layout is left for manual repair;
+//   - hooks.json: only `kaola-workflow:`-id entries (the installer's own sweep rule) are removed; the
+//     user's other entries, events and description stay, and the file itself is kept;
+//   - the version-less hook home ~/.codex/kaola-workflow is Kaola-namespaced and wholly installer-owned.
+// The global hooks and hook home serve every Codex scope, so they are removed by `--global
+// --uninstall` only; a project-scope uninstall removes that project's profiles and config block.
+// Nothing outside the Codex scope roots and this runtime's shared-config reference is written.
+function uninstallMain() {
+  const unsafe = validateInstallTargets([]);
+  if (unsafe) {
+    process.stderr.write(`uninstall_target_unsafe: ${unsafe}\n`);
+    process.exit(1);
+  }
+  const report = [];
+
+  // 1. Profiles + manifest.
+  const manifest = readManifest(targetAgentsDir);
+  if (manifest && typeof manifest.schema_version === 'number'
+      && manifest.schema_version > MANIFEST_SCHEMA_VERSION) {
+    process.stderr.write(`manifest_schema_unsupported: ${manifestPath(targetAgentsDir)} has schema_version `
+      + `${manifest.schema_version}; this installer supports ${MANIFEST_SCHEMA_VERSION} — upgrade kaola-workflow\n`);
+    process.exit(1);
+  }
+  if (fs.existsSync(targetAgentsDir)) {
+    const recorded = (manifest && manifest.files && typeof manifest.files === 'object') ? manifest.files : {};
+    const isPlainBasename = n => typeof n === 'string' && n !== '' && n !== '.' && n !== '..'
+      && path.basename(n) === n && !n.includes('/') && !n.includes('\\');
+    const removed = [];
+    const preserved = [];
+    for (const name of Object.keys(recorded).sort()) {
+      if (!isPlainBasename(name)) {
+        process.stderr.write(`kaola-workflow uninstall: skipping unsafe managed-profile entry: ${JSON.stringify(name)}\n`);
+        continue;
+      }
+      const file = path.join(targetAgentsDir, name);
+      const stat = lstatIfPresent(file);
+      if (!stat) continue;
+      if (stat.isFile() && sha256(fs.readFileSync(file)) === recorded[name]) {
+        fs.unlinkSync(file);
+        removed.push(name);
+      } else {
+        preserved.push(name);
+      }
+    }
+    for (const name of RETIRED_PROFILE_FILES) {
+      const file = path.join(targetAgentsDir, name);
+      const stat = lstatIfPresent(file);
+      if (stat && stat.isFile()) {
+        fs.unlinkSync(file);
+        removed.push(name);
+      }
+    }
+    if (lstatIfPresent(manifestPath(targetAgentsDir))) fs.unlinkSync(manifestPath(targetAgentsDir));
+    try { fs.rmdirSync(targetAgentsDir); } catch (_) { /* user files remain: keep the dir */ }
+    report.push(`Kaola-Workflow agent profiles: removed ${removed.length} managed profile(s)`);
+    if (preserved.length > 0) {
+      report.push(`Kaola-Workflow agent profiles: preserved modified profile(s): ${preserved.join(', ')}`);
+    }
+  }
+
+  // 2. Managed [agents.*] block in config.toml.
+  if (fs.existsSync(targetConfig)) {
+    const content = read(targetConfig);
+    const range = managedMarkerRange(content);
+    if (range.state === 'present') {
+      fs.writeFileSync(targetConfig, content.slice(0, range.start) + content.slice(range.end));
+      report.push(`Kaola-Workflow agent profiles: removed managed agents block from ${targetConfig}`);
+    } else if (range.state === 'invalid') {
+      report.push(`Kaola-Workflow agent profiles: managed_block_ambiguous — ${targetConfig} left unchanged; repair it manually`);
+    }
+  }
+
+  // 3. Global hooks + hook home (global scope only).
+  if (GLOBAL) {
+    if (fs.existsSync(targetHooks)) {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(read(targetHooks));
+        validateExistingHooksSchema(parsed);
+      } catch (error) {
+        report.push(`Kaola-Workflow Codex hooks: ${targetHooks} left unchanged (${error.message})`);
+        parsed = null;
+      }
+      if (parsed) {
+        const hooks = isPlainJsonObject(parsed.hooks) ? parsed.hooks : {};
+        let changed = false;
+        for (const event of Object.keys(hooks)) {
+          const kept = hooks[event].filter(e => !(e && typeof e.id === 'string' && e.id.startsWith(MANAGED_HOOK_ID_PREFIX)));
+          if (kept.length === hooks[event].length) continue;
+          changed = true;
+          if (kept.length > 0) hooks[event] = kept;
+          else delete hooks[event];
+        }
+        if (changed) {
+          fs.writeFileSync(targetHooks, JSON.stringify({ ...parsed, hooks }, null, 2) + '\n');
+          report.push(`Kaola-Workflow Codex hooks: removed managed entries from ${targetHooks}`);
+        }
+      }
+    }
+    const stableStat = lstatIfPresent(targetStableDir);
+    if (stableStat && stableStat.isDirectory() && !stableStat.isSymbolicLink()) {
+      fs.rmSync(targetStableDir, { recursive: true, force: true });
+      report.push(`Kaola-Workflow Codex hooks: removed hook home ${targetStableDir}`);
+    }
+  }
+
+  // 4. Shared config block: release this scope's reference.
+  try {
+    const { deregisterSharedRef, CONFIG_BLOCK_ID } = require('./kaola-workflow-shared-refs');
+    const result = deregisterSharedRef(CONFIG_BLOCK_ID, 'codex', {
+      scope: GLOBAL ? 'global' : 'project:' + path.resolve(projectRoot),
+    });
+    report.push(`Released shared config reference (codex): ${JSON.stringify(result)}`);
+  } catch (error) {
+    report.push(`warning: shared config reference not released (${error.message}); ~/.config/kaola-workflow left in place`);
+  }
+
+  for (const line of report) console.log(line);
+  console.log('status: ok');
+}
+
 // #325: export the pure helpers for unit tests; only run the installer when invoked directly
 // (require() must not run main()). pluginRoot derives from __dirname, not argv, so R1/R3 are only
 // reachable by require()ing these helpers — the require.main guard makes that possible.
 if (require.main === module) {
-  main();
+  if (UNINSTALL) uninstallMain();
+  else main();
 }
 
 module.exports = {
+  uninstallMain,
   buildManagedHooks,
   mergeHooks,
   updateHooks,

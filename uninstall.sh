@@ -92,12 +92,6 @@ if rm -f "$AGENT_MODEL_MANIFEST" 2>/dev/null; then
   echo "Removed agent model manifest: $AGENT_MODEL_MANIFEST"
 fi
 
-# Uninstall clears the shared config so reset = uninstall -> reinstall.
-KAOLA_CONFIG_FILE="$HOME/.config/kaola-workflow/config.json"
-if [[ -f "$KAOLA_CONFIG_FILE" ]]; then
-  rm -f "$KAOLA_CONFIG_FILE" && echo "Removed $KAOLA_CONFIG_FILE"
-fi
-
 COMMANDS=(
   "$HOME/.claude/commands/workflow-next"*.md
   "$HOME/.claude/commands/kaola-workflow.md"
@@ -212,157 +206,27 @@ PY
   fi
 fi
 
-# Strip Kaola-Workflow-managed hook entries from the GLOBAL ~/.codex/hooks.json
-# written by install-codex-agent-profiles.js.
-#
-# #447: install writes hooks GLOBALLY into ~/.codex/hooks.json (not project-local).
-# Profiles and config stay project-local; only the hook cleanup targets $HOME/.codex.
-CODEX_HOOKS_FILE="$HOME/.codex/hooks.json"
-if [[ -f "$CODEX_HOOKS_FILE" ]] && command -v python3 >/dev/null 2>&1; then
-  if python3 - "$CODEX_HOOKS_FILE" <<'PY'; then
-import json, os, sys
-hooks_path = sys.argv[1]
-
-try:
-    with open(hooks_path) as f:
-        data = json.load(f)
-except json.JSONDecodeError:
-    print(f"warning: {hooks_path} is not valid JSON; leaving hooks in place.", file=sys.stderr)
-    sys.exit(0)
-
-def is_managed(entry):
-    if not isinstance(entry, dict):
-        return False
-    eid = entry.get("id", "")
-    if isinstance(eid, str) and eid.startswith("kaola-workflow:"):
-        return True
-    for inner in entry.get("hooks", []) or []:
-        if isinstance(inner, dict):
-            cmd = inner.get("command", "")
-            if isinstance(cmd, str) and "kaola-workflow" in cmd:
-                return True
-    return False
-
-changed = False
-hooks = data.get("hooks")
-if isinstance(hooks, dict):
-    for event, entries in list(hooks.items()):
-        if not isinstance(entries, list):
-            continue
-        cleaned = [e for e in entries if not is_managed(e)]
-        if len(cleaned) != len(entries):
-            changed = True
-            if cleaned:
-                hooks[event] = cleaned
-            else:
-                del hooks[event]
-
-    if not hooks:
-        data.pop("hooks", None)
-
-if changed:
-    with open(hooks_path, "w") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-    print(f"Removed Kaola-Workflow hook entries from {hooks_path}")
-PY
-    :
+# #1087 (#1086 F1/F2): this uninstaller owns only what install.sh wrote under ~/.claude. Codex's
+# global hooks, hook home and profiles belong to `install-codex-agent-profiles.js --uninstall`.
+# The runtime-neutral ~/.config/kaola-workflow/config.json is a shared block: once no Claude
+# edition remains, release the claude-code reference; the registry removes the block only when that
+# was the last reference any runtime held.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SHARED_REFS="$SCRIPT_DIR/scripts/kaola-workflow-shared-refs.js"
+claude_editions_left=0
+for edition in kaola-workflow kaola-workflow-gitlab kaola-workflow-gitea; do
+  if [[ -d "$HOME/.claude/$edition" ]]; then claude_editions_left=1; fi
+done
+if [[ "$claude_editions_left" -eq 0 ]]; then
+  if [[ -f "$SHARED_REFS" ]] && command -v node >/dev/null 2>&1; then
+    if deregistered="$(node "$SHARED_REFS" deregister --block kaola-config --runtime claude-code)"; then
+      echo "Released shared config reference (claude-code): $deregistered"
+    else
+      echo "warning: shared config reference not released ($deregistered); ~/.config/kaola-workflow left in place." >&2
+    fi
+  else
+    echo "warning: node or $SHARED_REFS unavailable; shared config reference not released." >&2
   fi
-fi
-
-# Remove the version-less stable hook home written by
-# install-codex-agent-profiles.js (~/.codex/kaola-workflow/{hooks,scripts}).
-# The stable home is GLOBAL at $HOME/.codex.
-# Bounded to the Kaola-owned subtree; never touches anything else under .codex.
-CODEX_STABLE_HOME="$HOME/.codex/kaola-workflow"
-if [[ -d "$CODEX_STABLE_HOME" ]]; then
-  rm -rf "$CODEX_STABLE_HOME"
-  echo "Removed Kaola-Workflow Codex hook home: $CODEX_STABLE_HOME"
-fi
-
-# Remove Kaola-Workflow-managed agent profiles + the managed
-# [agents.*] block from the project-local .codex written by
-# install-codex-agent-profiles.js. Same $PWD asymmetry as the hooks cleanup above.
-# Only manifest-listed + the named stale profile files are removed; unknown user TOMLs
-# are never touched.
-CODEX_AGENTS_DIR="$PWD/.codex/agents/kaola-workflow"
-CODEX_CONFIG_FILE="$PWD/.codex/config.toml"
-if { [[ -d "$CODEX_AGENTS_DIR" ]] || [[ -f "$CODEX_CONFIG_FILE" ]]; } && command -v python3 >/dev/null 2>&1; then
-  python3 - "$CODEX_AGENTS_DIR" "$CODEX_CONFIG_FILE" <<'PY'
-import json, os, sys
-
-agents_dir = sys.argv[1]
-config_file = sys.argv[2]
-
-MANIFEST_BASENAME = ".kaola-managed-profiles.json"
-STALE_PROFILE_FILES = ["docs-lookup.toml"]
-BEGIN_MARKER = "# BEGIN kaola-workflow agents"
-END_MARKER = "# END kaola-workflow agents"
-
-removed_files = []
-
-if os.path.isdir(agents_dir):
-    manifest_path = os.path.join(agents_dir, MANIFEST_BASENAME)
-    managed = []
-    if os.path.isfile(manifest_path):
-        try:
-            with open(manifest_path) as f:
-                manifest = json.load(f)
-            files = manifest.get("files")
-            if isinstance(files, dict):
-                managed = list(files.keys())
-        except (json.JSONDecodeError, OSError):
-            managed = []
-    # Remove manifest-listed + named stale profile files (never unknown user TOMLs).
-    # The manifest is attacker-influenceable input to a DELETE path, so a name is only
-    # ever a plain basename: anything carrying a separator, a parent ref, or an absolute
-    # root would escape agents_dir via os.path.join and delete outside the managed tree.
-    def is_plain_basename(n):
-        return bool(n) and n not in (".", "..") and os.path.basename(n) == n \
-            and "/" not in n and "\\" not in n and not os.path.isabs(n)
-
-    for name in sorted(set(managed) | set(STALE_PROFILE_FILES)):
-        if not is_plain_basename(name):
-            print("kaola-workflow uninstall: skipping unsafe managed-profile entry: %r" % (name,),
-                  file=sys.stderr)
-            continue
-        p = os.path.join(agents_dir, name)
-        if os.path.isfile(p):
-            os.remove(p)
-            removed_files.append(name)
-    # Remove the manifest itself.
-    if os.path.isfile(manifest_path):
-        os.remove(manifest_path)
-        removed_files.append(MANIFEST_BASENAME)
-    # Remove the dir if now empty.
-    try:
-        if not os.listdir(agents_dir):
-            os.rmdir(agents_dir)
-    except OSError:
-        pass
-
-# Strip ONLY the managed [agents.*] block from .codex/config.toml; preserve all else.
-if os.path.isfile(config_file):
-    try:
-        with open(config_file) as f:
-            text = f.read()
-        b = text.find(BEGIN_MARKER)
-        e = text.find(END_MARKER)
-        if b != -1 and e != -1 and b < e:
-            e_end = e + len(END_MARKER)
-            # swallow a single trailing newline after the END marker, if present
-            if e_end < len(text) and text[e_end] == "\n":
-                e_end += 1
-            new_text = text[:b] + text[e_end:]
-            with open(config_file, "w") as f:
-                f.write(new_text)
-            print(f"Removed Kaola-Workflow managed agents block from {config_file}")
-    except OSError:
-        pass
-
-if removed_files:
-    print("Removed Kaola-Workflow managed agent profiles: " + ", ".join(removed_files))
-PY
 fi
 
 if [[ "$removed" -eq 0 ]]; then

@@ -187,6 +187,20 @@ check_artifacts() {
   return "$bad"
 }
 
+# #1087 (#1086 F2): release this runtime's reference on the shared ~/.config/kaola-workflow block.
+# The registry keeps the block while any other runtime (or another scope of this one) holds a
+# reference and removes it only when this was the last one.
+release_shared_config_ref() {
+  local scope_args=(--scope global) out
+  if [[ "$GLOBAL" -ne 1 ]]; then scope_args=(--scope project --target "${TARGET:-$PWD}"); fi
+  if out="$(node "$SCRIPT_DIR/scripts/kaola-workflow-shared-refs.js" deregister \
+      --block kaola-config --runtime dsh "${scope_args[@]}")"; then
+    echo "Released shared config reference (dsh): $out"
+  else
+    echo "warning: shared config reference not released ($out); ~/.config/kaola-workflow left in place." >&2
+  fi
+}
+
 # Remove only Kaola-deployed artifacts: rendered skill dirs by source-tree directory
 # name (never a blind rm of the skills dir) and support scripts by manifest name.
 uninstall_edition() {
@@ -211,6 +225,7 @@ uninstall_edition() {
     rmdir "$SUPPORT_DEST" 2>/dev/null || true
     rmdir "$(dirname "$SUPPORT_DEST")" 2>/dev/null || true
   fi
+  release_shared_config_ref
   echo "DSH edition uninstalled (machine-global ~/.dsh/AGENTS.md carrier untouched — shared transaction state)."
   return "$bad"
 }

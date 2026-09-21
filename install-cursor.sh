@@ -89,8 +89,8 @@ and contains no Kaola event.
 UNINSTALL: --uninstall removes ONLY receipt-proven, byte-unchanged Kaola artifacts
 from the resolved scope. Modified, unmanaged, symlink, and nonregular paths remain;
 only receipt-recorded Kaola entries are removed from hooks.json.
-The SHARED ~/.config/kaola-workflow/config.json is kept for any co-installed
-Claude/Codex/opencode/kimi/grok edition.
+The SHARED ~/.config/kaola-workflow/config.json is reference-counted: uninstall
+releases this runtime's reference and the file is removed only when no runtime holds one.
 EOF
 }
 
@@ -201,6 +201,20 @@ else
   echo "Deploying into project ($FORGE) → $DEST_ROOT"
 fi
 
+# #1087 (#1086 F2): release this runtime's reference on the shared ~/.config/kaola-workflow block.
+# The registry keeps the block while any other runtime (or another scope of this one) holds a
+# reference and removes it only when this was the last one.
+release_shared_config_ref() {
+  local scope_args=(--scope global) out
+  if [[ "$GLOBAL" -ne 1 ]]; then scope_args=(--scope project --target "${TARGET:-$PWD}"); fi
+  if out="$(node "$SCRIPT_DIR/scripts/kaola-workflow-shared-refs.js" deregister \
+      --block kaola-config --runtime cursor "${scope_args[@]}")"; then
+    echo "Released shared config reference (cursor): $out"
+  else
+    echo "warning: shared config reference not released ($out); ~/.config/kaola-workflow left in place." >&2
+  fi
+}
+
 transaction_args=(--forge "$FORGE")
 if [[ "$GLOBAL" -eq 1 ]]; then
   transaction_args+=(--scope global)
@@ -211,6 +225,7 @@ fi
 
 if [[ "$UNINSTALL" -eq 1 ]]; then
   node "$SCRIPT_DIR/scripts/kaola-workflow-cursor-surface.js" --uninstall "${transaction_args[@]}"
+  release_shared_config_ref
   echo "Uninstall complete; only receipt-proven unchanged bytes were removed."
   exit 0
 fi

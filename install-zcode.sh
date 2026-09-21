@@ -427,6 +427,20 @@ preflight_hook_carriers() {
   fi
 }
 
+# #1087 (#1086 F2): release this runtime's reference on the shared ~/.config/kaola-workflow block.
+# The registry keeps the block while any other runtime (or another scope of this one) holds a
+# reference and removes it only when this was the last one.
+release_shared_config_ref() {
+  local scope_args=(--scope global) out
+  if [[ "$GLOBAL" -ne 1 ]]; then scope_args=(--scope project --target "${TARGET:-$PWD}"); fi
+  if out="$(node "$SCRIPT_DIR/scripts/kaola-workflow-shared-refs.js" deregister \
+      --block kaola-config --runtime zcode "${scope_args[@]}")"; then
+    echo "Released shared config reference (zcode): $out"
+  else
+    echo "warning: shared config reference not released ($out); ~/.config/kaola-workflow left in place." >&2
+  fi
+}
+
 uninstall_edition() {
   local home layout
   home="$(zcode_home)"
@@ -549,6 +563,7 @@ uninstall_edition() {
   rmdir "$hooks_dir" 2>/dev/null || true
   rmdir "$home/kaola-workflow" 2>/dev/null || true
   echo "Removed deployed support scripts + hook shells; stripped receipt-owned project/legacy hooks."
+  release_shared_config_ref
   echo "Uninstall complete. A fresh ./install-zcode.sh now deploys the workflow edition."
 }
 

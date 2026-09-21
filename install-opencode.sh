@@ -104,7 +104,8 @@ UNINSTALL: --uninstall removes ONLY kaola-deployed artifacts from the resolved s
 the deployed commands/plugin/hooks and any previously-deployed agents (agents by deploy
 manifest — never a blind rm of a dir; the manifest is what lets an agent RETIRED since the
 last install still be removed) and the opencode-native support scripts.
-The SHARED ~/.config/kaola-workflow/config.json is kept for any co-installed Claude/Codex edition.
+The SHARED ~/.config/kaola-workflow/config.json is reference-counted: it is removed only when no
+runtime still holds a reference.
 Your own opencode.json (model/permission config) is PRESERVED. A subsequent bare install
 then deploys the workflow edition.
 EOF
@@ -445,10 +446,24 @@ copy_tree() {
   echo "Installed workflow commands+plugin+hooks → $layout_root/"
 }
 
+# #1087 (#1086 F2): release this runtime's reference on the shared ~/.config/kaola-workflow block.
+# The registry keeps the block while any other runtime (or another scope of this one) holds a
+# reference and removes it only when this was the last one.
+release_shared_config_ref() {
+  local scope_args=(--scope global) out
+  if [[ "$GLOBAL" -ne 1 ]]; then scope_args=(--scope project --target "${TARGET:-$PWD}"); fi
+  if out="$(node "$SCRIPT_DIR/scripts/kaola-workflow-shared-refs.js" deregister \
+      --block kaola-config --runtime opencode "${scope_args[@]}")"; then
+    echo "Released shared config reference (opencode): $out"
+  else
+    echo "warning: shared config reference not released ($out); ~/.config/kaola-workflow left in place." >&2
+  fi
+}
+
 # Remove ONLY kaola-deployed artifacts from the resolved scope, by source-tree filename plus the
 # names this edition retired on purpose (never a blind rm of a dir the user may share). Preserves
-# the user-owned opencode.json and the SHARED ~/.config/kaola-workflow/config.json (kept for any
-# co-installed Claude/Codex edition).
+# the user-owned opencode.json; the SHARED ~/.config/kaola-workflow/config.json is released by
+# reference (release_shared_config_ref), never deleted here.
 uninstall_edition() {
   local dest_root layout_root
   if [[ "$GLOBAL" -eq 1 ]]; then
@@ -569,6 +584,7 @@ uninstall_edition() {
   if [[ -f "$dest_root/opencode.json" ]]; then
     echo "Preserved $dest_root/opencode.json (user-owned model/permission config)."
   fi
+  release_shared_config_ref
   echo "Uninstall complete. A fresh ./install-opencode.sh now deploys the workflow edition."
 }
 

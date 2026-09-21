@@ -70,8 +70,8 @@ compact-safe recovery live in one install-all-managed Grok Rule.
 UNINSTALL: --uninstall removes ONLY kaola-deployed artifacts from the resolved
 scope: the deployed agents, commands, and recovery Rule (by source-tree filename),
 plus shared support scripts + hook scripts under the grok home.
-The SHARED ~/.config/kaola-workflow/config.json is kept for any co-installed
-Claude/Codex/opencode/kimi edition.
+The SHARED ~/.config/kaola-workflow/config.json is reference-counted: uninstall
+releases this runtime's reference and the file is removed only when no runtime holds one.
 EOF
 }
 
@@ -322,6 +322,20 @@ retire_duplicate_recovery_rule() {
   rmdir "$(dirname "$retired_prompt")" 2>/dev/null || true
 }
 
+# #1087 (#1086 F2): release this runtime's reference on the shared ~/.config/kaola-workflow block.
+# The registry keeps the block while any other runtime (or another scope of this one) holds a
+# reference and removes it only when this was the last one.
+release_shared_config_ref() {
+  local scope_args=(--scope global) out
+  if [[ "$GLOBAL" -ne 1 ]]; then scope_args=(--scope project --target "${TARGET:-$PWD}"); fi
+  if out="$(node "$SCRIPT_DIR/scripts/kaola-workflow-shared-refs.js" deregister \
+      --block kaola-config --runtime grok "${scope_args[@]}")"; then
+    echo "Released shared config reference (grok): $out"
+  else
+    echo "warning: shared config reference not released ($out); ~/.config/kaola-workflow left in place." >&2
+  fi
+}
+
 uninstall_edition() {
   local home layout
   home="$(grok_home)"
@@ -406,6 +420,7 @@ uninstall_edition() {
   rmdir "$prompts_dir" 2>/dev/null || true
   rmdir "$home/kaola-workflow" 2>/dev/null || true
   echo "Removed deployed support scripts + hook scripts + retired compact artifacts."
+  release_shared_config_ref
   echo "Uninstall complete. A fresh ./install-grok.sh now deploys the workflow edition."
 }
 

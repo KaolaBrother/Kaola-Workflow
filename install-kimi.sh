@@ -84,7 +84,7 @@ UNINSTALL: --uninstall removes ONLY kaola-deployed artifacts from the resolved s
 the deployed skills (by source-tree directory name — never a blind rm of a dir), the
 support scripts + hook scripts under the kimi home, and the managed hooks block in config.toml
 (the rest of the file is preserved). The SHARED ~/.config/kaola-workflow/config.json is
-kept for any co-installed Claude/Codex/opencode edition. A
+reference-counted: it is removed only when no runtime still holds a reference. A
 subsequent bare install then deploys the workflow edition.
 EOF
 }
@@ -505,10 +505,24 @@ strip_hooks_config() {
   fi
 }
 
+# #1087 (#1086 F2): release this runtime's reference on the shared ~/.config/kaola-workflow block.
+# The registry keeps the block while any other runtime (or another scope of this one) holds a
+# reference and removes it only when this was the last one.
+release_shared_config_ref() {
+  local scope_args=(--scope global) out
+  if [[ "$GLOBAL" -ne 1 ]]; then scope_args=(--scope project --target "${TARGET:-$PWD}"); fi
+  if out="$(node "$SCRIPT_DIR/scripts/kaola-workflow-shared-refs.js" deregister \
+      --block kaola-config --runtime kimi "${scope_args[@]}")"; then
+    echo "Released shared config reference (kimi): $out"
+  else
+    echo "warning: shared config reference not released ($out); ~/.config/kaola-workflow left in place." >&2
+  fi
+}
+
 # Remove ONLY kaola-deployed artifacts from the resolved scope, by source-tree directory name
 # (never a blind rm of a dir the user may share). Strips the managed hooks block from
 # config.toml (preserving the rest). The SHARED ~/.config/kaola-workflow/config.json is
-# kept for any co-installed Claude/Codex/opencode edition.
+# released by reference (release_shared_config_ref), never deleted here.
 uninstall_edition() {
   local home skills_dest agents_dest
   home="$(kimi_home)"
@@ -590,6 +604,7 @@ uninstall_edition() {
   rmdir "$home/kaola-workflow" 2>/dev/null || true
   echo "Removed deployed support scripts + hook scripts."
   strip_hooks_config
+  release_shared_config_ref
   echo "Uninstall complete. A fresh ./install-kimi.sh now deploys the workflow edition."
 }
 

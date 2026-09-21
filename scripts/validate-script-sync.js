@@ -205,6 +205,17 @@ const BYTE_IDENTICAL_GROUPS = [
     ],
   },
   {
+    // #1087: the shared reference registry. Root copy serves the shell uninstallers; the plugin
+    // copies serve install-codex-agent-profiles.js --uninstall, which may not require across trees.
+    label: 'shared reference registry copies',
+    files: [
+      'scripts/kaola-workflow-shared-refs.js',
+      'plugins/kaola-workflow/scripts/kaola-workflow-shared-refs.js',
+      'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-shared-refs.js',
+      'plugins/kaola-workflow-gitea/scripts/kaola-workflow-shared-refs.js',
+    ],
+  },
+  {
     // issue #332: the Codex agent-profile installer ships in the 3 plugin trees only
     // (no root copy) and must not fork — schema validation + prune + manifest logic
     // is shared. Reference = codex tree.
