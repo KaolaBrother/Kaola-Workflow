@@ -14,7 +14,8 @@
   claim creates the directory and adds `ledger_path` to its envelope, plus
   `ledger_finding: "ledger_not_gitignored: ..."` when the path is not ignored (claim never edits
   `.gitignore`). Archive moves the file to `kaola-workflow/archive/<project>/mission-ledger.jsonl`
-  (tracked) and reports `ledger: 'moved' | 'absent' | 'failed: <msg>'`. The closure receipt's
+  (tracked) and reports `ledger: 'moved' | 'absent' | 'failed: <msg>'`, also carried on
+  finalize's `closure_receipt.mission_ledger`. The closure receipt's
   `goal_declared_source` is now `'env' | 'ledger' | null` (was `'plan'`). New kernel exports:
   `LEDGER_DIR_REL`, `LEDGER_GITIGNORE_LINE`, `ARCHIVED_LEDGER_FILE`, `LEDGER_KEYS`,
   `LEDGER_STATUSES`, `ledgerPath`, `validateLedger`, `serializeLedger`; new claim exports:

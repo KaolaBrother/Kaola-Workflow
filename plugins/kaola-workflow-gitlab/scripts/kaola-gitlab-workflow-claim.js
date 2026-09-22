@@ -4833,6 +4833,9 @@ function cmdFinalize() {
   closureReceipt.goal_declared = goalDeclaration.declared;
   closureReceipt.goal_declared_source = goalDeclaration.source;
   closureReceipt.goal_declared_probed = goalDeclaration.probed;
+  // #1089: the ledger move's own outcome (moved | absent | failed: <message>). A failed move after a
+  // complete archive is the one non-crash route to a ledger beside its archive, so it is never silent.
+  if (result.ledger) closureReceipt.mission_ledger = result.ledger;
   const invariantResult = checkClosureInvariants(root, closureReceipt, result.dest);
   // #333: disposition is DECISION-derived on cmdFinalize (the orchestrator closes the issue after
   // sink-merge, so the default merge lane is honestly close-pending, never a false `closed`).

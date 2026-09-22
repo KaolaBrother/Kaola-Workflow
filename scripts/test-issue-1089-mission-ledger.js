@@ -192,6 +192,39 @@ function runEdition(edName) {
       check(!fs.existsSync(path.join(wt, 'kaola-workflow/archive/issue-12', schema.ARCHIVED_LEDGER_FILE)), tag + 'linked archive: nothing under the worktree archive');
       check(findLedgerDirs(path.join(main, '.kw')).length === 0, tag + 'still no .ledger under .kw after linked archive');
     });
+    // Amendment §6 (issuecomment-5770350020): the move sits inside the archive transaction, after
+    // verifyArchiveComplete, so a ledger beside its archive is reachable only by a crash — or by a
+    // failed move, which must then be reported, never silent.
+    step(tag + '§6 refused archive keeps the ledger live', () => {
+      const lf = expected(15);
+      claim.writeMissionLedger(lf, [{ name: 'lane', details: '', status: 'done' }]);
+      const bytes = fs.readFileSync(lf);
+      write(path.join(wt, 'kaola-workflow/issue-15/workflow-state.md'),
+        stateText(15, 'run_posture: worktree\nworktree_path: ' + wt + '\nbranch: workflow/issue-15\n'));
+      // main's live copy holds a file the worktree's lacks -> verifyArchiveComplete refuses.
+      write(path.join(mainReal, 'kaola-workflow/issue-15/main-only-evidence.md'), '# only in main\n');
+      const r = claim.archiveProjectDir(wt, 'issue-15', 'closed');
+      check(r && r.archived === false && r.archive_incomplete === true, tag + '§6 fixture refuses: ' + JSON.stringify(r));
+      check(r && !('ledger' in r), tag + '§6 refused archive attempts no ledger move: ' + JSON.stringify(r));
+      check(fs.existsSync(lf) && fs.readFileSync(lf).equals(bytes), tag + '§6 refused archive leaves .ledger/issue-15.jsonl byte-identical');
+      check(!!r.dest && !fs.existsSync(path.join(r.dest, schema.ARCHIVED_LEDGER_FILE)), tag + '§6 refused archive carries no mission-ledger.jsonl');
+    });
+    step(tag + '§6 failed move is reported, ledger kept', () => {
+      const lf = expected(16);
+      claim.writeMissionLedger(lf, [{ name: 'lane', details: '', status: 'done' }]);
+      write(path.join(main, 'kaola-workflow/issue-16/workflow-state.md'), stateText(16));
+      // a directory at the archived-ledger name makes the rename fail after a complete archive.
+      write(path.join(main, 'kaola-workflow/issue-16', schema.ARCHIVED_LEDGER_FILE, 'blocker'), 'x');
+      const r = claim.archiveProjectDir(main, 'issue-16', 'closed');
+      check(r && r.archived === true && /^failed: /.test(String(r.ledger)), tag + '§6 failed move returns ledger: failed: …, got ' + JSON.stringify(r));
+      check(fs.existsSync(lf), tag + '§6 failed move leaves the live ledger in place');
+      const src = read(path.join(ed.dir, ed.claim));
+      check(/if \(result\.ledger\) closureReceipt\.mission_ledger = result\.ledger;/.test(src),
+        tag + '§6 cmdFinalize carries the move outcome on closure_receipt.mission_ledger');
+      const iMove = src.indexOf('const ledger = moveMissionLedger(');
+      const iVerify = src.indexOf('const v = verifyArchiveComplete(src, dest);');
+      check(iVerify > 0 && iMove > iVerify, tag + '§6 the move follows verifyArchiveComplete in archiveProjectDir');
+    });
     step(tag + '7. goal declaration', () => {
       let g = claim.computeGoalDeclaration([arch2]);
       check(g.declared === true && g.source === 'ledger', tag + 'goal from archived ledger: ' + JSON.stringify(g));

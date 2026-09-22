@@ -1338,6 +1338,8 @@ A successful `archiveProjectDir` result also carries `ledger` (`#1089`) when the
 `kaola-workflow/.ledger/issue-<N>.jsonl` was renamed to `<dest>/mission-ledger.jsonl`), `'absent'`
 (no live ledger), or `'failed: <message>'`. The move runs after the completeness proof and is
 fail-soft: a failed move is reported, never a rollback, and does not change `archiveSucceeded`.
+Finalize carries the same value on `closure_receipt.mission_ledger`. A refused archive
+(`archive_incomplete`) never attempts the move, so the live ledger stays in `.ledger/`.
 Finalize, release/discard, and merged/closed PR/MR watch callers must pass this post-call predicate
 before remote issue or label disposition, worktree/branch/claim cleanup, terminal receipt stamping,
 or success output. Thrown errors, `archive_incomplete`, missing fields, and every other result shape
