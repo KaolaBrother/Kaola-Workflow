@@ -5225,11 +5225,11 @@ function testStaleDiagnosticsPortedToAllEditions1002() {
 
 // #1004: `appendSummarySection` must FILL a heading whose body is empty and LEAVE a heading whose
 // body carries content exactly as written. The shipped writer declines on ANY existing heading, and
-// the finalize Step 6 surface tells the orchestrator to pre-create `## Validation`,
-// `## Changed Paths` and `## Mission List` — so on an obedient run all three of the finalize
-// transaction's own findings are computed and then dropped. Measured over this repository's own
-// archive: 15 empty `## Validation`, 17 empty `## Changed Paths`, 3 empty `## Mission List` in 157
-// summaries.
+// the finalize Step 6 surface names `## Validation` and `## Changed Paths` as where the finalize
+// transaction's own findings land — so on an obedient run that pre-creates them, those findings are
+// computed and then dropped. Measured over this repository's own archive when this guard landed
+// (the skeleton then also named `## Mission List`): 15 empty `## Validation`, 17 empty
+// `## Changed Paths`, 3 empty `## Mission List` in 157 summaries.
 //
 // SAME CLASS AS THE #832 AND #1002 PORT GUARDS ABOVE, and here for the same reason: claim.js is a
 // DIVERGENT HAND-PORT on gitlab and gitea. `edition-sync.js` excludes it by design,
