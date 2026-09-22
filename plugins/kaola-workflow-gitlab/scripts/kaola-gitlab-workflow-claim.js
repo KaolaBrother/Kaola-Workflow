@@ -4828,7 +4828,7 @@ function cmdFinalize() {
   // for a crash-resume where the archive did not complete.
   const goalDeclaration = computeGoalDeclaration([
     result.dest ? path.join(result.dest, adaptiveSchema.ARCHIVED_LEDGER_FILE) : null,
-    liveLedgerPath(root, issueNumber)
+    liveLedgerPath(root, issueIid)
   ]);
   closureReceipt.goal_declared = goalDeclaration.declared;
   closureReceipt.goal_declared_source = goalDeclaration.source;
