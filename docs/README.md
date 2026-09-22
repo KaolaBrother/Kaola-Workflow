@@ -2,7 +2,8 @@
 
 **Start here: [The mission list](decisions/0017-the-mission-list.md)** — the design record for the
 convention that *is* the workflow, and why it is one file per run, four fields per item, three write
-moments.
+moments. Its carrier is [the mission ledger](decisions/0027-the-mission-ledger.md):
+`kaola-workflow/.ledger/issue-<N>.jsonl` in the main checkout.
 
 ## Core
 
@@ -63,7 +64,8 @@ guidance; ADR 0022 moves universal behavior to a machine-global contract and com
 carriers; ADR 0023 makes repository instructions an Agent-maintained outcome; ADR 0024 retires
 finalize's parsing of the orchestrator's own records and rewrites role bodies around positioning,
 deliverable, custody, and stop condition; ADR 0026 makes root `AGENTS.md` the only repository-level
-instruction surface. ADR 0017 remains the Mission List design of record.
+instruction surface. ADR 0017 remains the Mission List design of record; ADR 0027 replaces its
+carrier with the mission ledger.
 [ADR 0025](decisions/0025-lean-orchestrator-single-subagent-binding.md)
 ([#1062](https://github.com/KaolaBrother/Kaola-Workflow/issues/1062)) is the landed successor
 to ADR 0019's remaining three-tier axis and ADR 0021's three intent classes: lean orchestrator,
@@ -71,6 +73,13 @@ to ADR 0019's remaining three-tier axis and ADR 0021's three intent classes: lea
 Devin / Droid / DSH. Most
 older records describe the node/DAG executor retired by ADR 0017 or project-prompt ownership
 retired by ADR 0023 and ADR 0026.
+
+- **[0027 — The mission ledger](decisions/0027-the-mission-ledger.md)** (#1089) — replaces ADR 0017's
+  carrier only: one gitignored JSONL file per run at `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`,
+  keys exactly `n` / `name` / `details` / `status`, main checkout only, moved to
+  `archive/<project>/mission-ledger.jsonl` at archive. Retires `mission-list.md`, the Step-8a
+  record-regression compare, and its mirror receipt. Carries the Workflow ↔ Runner read contract
+  (KaolaBrother/kaola-project-runner#133).
 
 - **[0026 — AGENTS.md is the only repository-level instruction surface](decisions/0026-agents-md-single-instruction-surface.md)**
   — Claude Code v2.1.277 reads `AGENTS.md` directly, and any repository `CLAUDE.md` shadows it, so
@@ -123,7 +132,7 @@ retired by ADR 0023 and ADR 0026.
 
 - **[0017 — The mission list: four fields where the DAG was](decisions/0017-the-mission-list.md)** — the
   design of record. A run is one file of `item` / `status` / `dispatched` / `result`, written at three
-  moments, with no script required. Concurrency carries no machinery. The sink reports and the
+  moments, with no script required (carrier replaced by ADR 0027). Concurrency carries no machinery. The sink reports and the
   orchestrator owns the outcome; the refusal count in the run design is zero. Derived additively from
   an observed bare-session run, not by subtracting from the DAG.
 - **[0018 — The forge is the backlog](decisions/0018-the-forge-is-the-backlog.md)** — the local backlog

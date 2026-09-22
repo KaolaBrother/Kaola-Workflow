@@ -145,7 +145,7 @@ read the github tree and stay green.
 opencode's hook model is **plugin-based** (TS/JS modules), not the shell +
 `settings.json` model Claude Code uses. The opencode edition ships an adapter
 plugin — `.opencode/plugins/kaola-workflow-hooks.js` — that adds compact-resume
-context inline from claim facts and the Mission List. `throw` = deny (opencode's
+context inline from claim facts and the mission ledger. `throw` = deny (opencode's
 documented pattern).
 
 The adapter plugin has a tracked canonical source at
@@ -167,7 +167,7 @@ silently drift when a future second plugin is added. Enforced by `A11-allowlist`
 
 | Claude/Codex hook | opencode plugin mapping | Script |
 | --- | --- | --- |
-| `SessionStart` compact (resume state) | `experimental.session.compacting` | inline (reads claim facts and the Mission List) |
+| `SessionStart` compact (resume state) | `experimental.session.compacting` | inline (reads claim facts and the mission ledger) |
 
 Fail-open everywhere (a missing script, malformed payload, or non-git cwd never
 breaks the session); only an explicit exit-2 deny throws.

@@ -291,7 +291,8 @@ when set, else recorded `main_root` on resume; first-claim fallback in claim.js 
 `getRoot()`). The documented generated CLI-positive fence stays unstamped `--runtime cursor`.
 Independently entered Finalize still prepares immediately before named dispatch with explicit
 `$PWD`. The Rule supplies model-visible operation and dispatch instructions;
-`mission-list.md` remains durable run authority after a local, CLI, or Cloud restart. On-disk
+the main checkout's mission ledger (`kaola-workflow/.ledger/issue-<N>.jsonl`) remains durable run
+authority after a local, CLI, or Cloud restart. On-disk
 materialization is not live Task-catalog proof.
 
 ## Path selection

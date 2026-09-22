@@ -58,7 +58,7 @@ Read-only work may run in the background. Write-capable work runs in the foregro
 Measured Devin CLI sessions drop AGENTS and imported always-on rule blocks after `/compact`. `PostCompaction` runs but does not inject `additionalContext`; `UserPromptSubmit` does. The installed hook therefore injects only this short recovery instruction on each user prompt:
 
 ```text
-Kaola-Workflow: if KW-COMPACT-RECOVERY-V2 is not in your context, read <the installed root, normally ~/.config/devin>/AGENTS.md and the active kaola-workflow/*/workflow-state.md and mission-list.md before acting.
+Kaola-Workflow: if KW-COMPACT-RECOVERY-V2 is not in your context, read <the installed root, normally ~/.config/devin>/AGENTS.md and the active kaola-workflow/*/workflow-state.md and its kaola-workflow/.ledger/issue-<N>.jsonl mission ledger before acting.
 ```
 
 Every generated runtime adapter begins with a host guard. A foreign Cursor or Claude carrier imported by Devin is inert rather than teaching Devin a nonexistent `Task`, model, or field schema. The universal workflow contract above the adapter remains host-neutral.

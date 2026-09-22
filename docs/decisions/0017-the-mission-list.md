@@ -8,6 +8,9 @@
   0016, which it completes, nor the four durable records, which survive as fields in one file.
 - **Resolves:** ADR 0016's standing *"keep merging; R3 survives permanently"* ruling. R3 becomes a
   report; the orchestrator owns the sink's outcome. **The refusal count reaches zero.**
+- **Carrier superseded by:** [ADR 0027 — The mission ledger](0027-the-mission-ledger.md) (#1089).
+  The file name, format, and location below (`mission-list.md`, the goal header line) are replaced
+  by `kaola-workflow/.ledger/issue-<N>.jsonl`; the four meanings and three write moments stand.
 
 ## What ADR 0016 started and this finishes
 

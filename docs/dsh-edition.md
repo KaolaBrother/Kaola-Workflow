@@ -80,8 +80,8 @@ contract lives in the always-loaded machine-global carrier.
 
 DSH loads `$DSH_HOME/AGENTS.md` plus the project `AGENTS.md`/`CLAUDE.md` chain at the first
 request. This edition installs no hook. Post-compaction reload of that baseline is not measured
-in this scope; recovery is re-invoking the skill, which resumes from the durable mission list
-and workflow state.
+in this scope; recovery is re-invoking the skill, which resumes from the durable mission ledger
+(`kaola-workflow/.ledger/issue-<N>.jsonl` in the main checkout) and workflow state.
 
 Every generated runtime adapter begins with a host guard. A foreign carrier imported by DSH is
 inert rather than teaching DSH a nonexistent profile, model, or field schema.

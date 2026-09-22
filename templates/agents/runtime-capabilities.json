@@ -776,7 +776,7 @@
         "events": [],
         "pending": "none — this edition installs no Droid hook, so no prompt-lifecycle compact state exists.",
         "session": "The always-loaded machine-global carrier in ~/.factory/AGENTS.md plus the invoked skill body remain the prompt authority for this adapter.",
-        "reload": "Post-compaction AGENTS.md and skill-carrier reload is not measured for Droid in this scope; recovery is re-invoking the skill, which resumes from the durable mission list and workflow state.",
+        "reload": "Post-compaction AGENTS.md and skill-carrier reload is not measured for Droid in this scope; recovery is re-invoking the skill, which resumes from the durable mission ledger and workflow state.",
         "tool": "No PreToolUse or PostToolUse Kaola hook is installed, so ordinary tools add zero Kaola context and start zero Kaola subprocesses.",
         "stop": "No Kaola Stop hook is installed."
       },
@@ -804,7 +804,7 @@
         "events": [],
         "pending": "none — this edition installs no DSH hook, so no prompt-lifecycle compact state exists.",
         "session": "The always-loaded machine-global carrier in $DSH_HOME/AGENTS.md plus the invoked skill body remain the prompt authority for this adapter.",
-        "reload": "Post-compaction AGENTS.md and skill-carrier reload is not measured for DSH in this scope; recovery is re-invoking the skill, which resumes from the durable mission list and workflow state.",
+        "reload": "Post-compaction AGENTS.md and skill-carrier reload is not measured for DSH in this scope; recovery is re-invoking the skill, which resumes from the durable mission ledger and workflow state.",
         "tool": "No PreToolUse or PostToolUse Kaola hook is installed, so ordinary tools add zero Kaola context and start zero Kaola subprocesses.",
         "stop": "No Kaola Stop hook is installed."
       },

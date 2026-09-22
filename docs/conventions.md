@@ -2,8 +2,8 @@
 
 Document coding style, testing rules, Git practices, naming, and review expectations.
 
-**The workflow itself is the mission list; `docs/decisions/0017-the-mission-list.md` is its design
-record.** Nothing here restates it. These are the rules for building, testing, and releasing *this
+**The workflow itself is the mission ledger; `docs/decisions/0017-the-mission-list.md` is its design
+record and `docs/decisions/0027-the-mission-ledger.md` its carrier.** Nothing here restates it. These are the rules for building, testing, and releasing *this
 repository* and the surfaces it ships.
 
 ## Project instruction maintenance
@@ -30,7 +30,8 @@ project-prompt bytes into a new template by another name.
 
 The orchestrator dispatches subagents, judges what comes back, and runs the finalize transaction
 itself. There is no bookkeeping role and no mandatory planning agent — the run's coordination state
-is `kaola-workflow/{project}/mission-list.md`, written by whoever is orchestrating. The vendored role
+is the mission ledger `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`, written by the run's Main
+Orchestrator. The vendored role
 agents are dispatchable tools reached for by name at the moment they are needed, never pre-assigned
 to a schedule.
 
@@ -100,8 +101,8 @@ the requested result or question, relevant evidence and authority/custody, the e
 locator, and the stop condition. The existing owner remains responsible for the converged candidate;
 review findings go back to that owner, and repaired findings or new claims may be re-reviewed. The
 role profile supplies universal behavior. There is no fixed label order, handoff schema, required
-block, parser, linter, grader, score, or approval gate. The Mission List remains the recovery index:
-one H1 plus `item`, `status`, `dispatched`, and `result` for each item.
+block, parser, linter, grader, score, or approval gate. The mission ledger remains the recovery index:
+one JSON line per mission with `n`, `name`, `details`, and `status`.
 
 Next/finalize also carry a generated runtime-native capability block. Read it before deciding that a
 role is unavailable: inspect the live named, built-in, and generic routes for this item, including
@@ -147,7 +148,7 @@ dispatch optional or erasing a runtime capability difference.
 
 Dispatching a subagent does not end at the spawn call, but nothing prescribes the join: how long to
 wait, when to nudge, when to interrupt, and when to re-dispatch are the orchestrator's judgment,
-made against the `dispatched` locator recorded in the mission list. **Look for the work, not for the
+made against the dispatch locator recorded in the mission ledger's `details`. **Look for the work, not for the
 worker** — if the output the dispatch promised has landed, close the item; if it has not,
 re-dispatch unless the dispatch is positively still alive.
 
@@ -456,15 +457,17 @@ product, whatever its file extension.
 
 ## Goal declaration — `KAOLA_GOAL` and `goal_declared` (#441, #874)
 
-A run's goal is the H1 of its `mission-list.md`; `KAOLA_GOAL` is the operator-side env var for the
-same text. Key properties:
+A run's goal is its issue; the mission ledger carries no goal line. `KAOLA_GOAL` is the operator-side
+env var for a goal text. Key properties:
 
 - **Reader-only, no gate** — a run with no declared goal is entirely valid. Nothing branches on it.
 - **Subagent shells do NOT inherit env vars across the spawn boundary**, so a goal that must reach a
   dispatched agent travels in the dispatch prompt. The orchestrator owns placing it there.
 - **Advisory declaration, never satisfaction** — `cmdFinalize` in `kaola-workflow-claim.js` writes
-  `goal_declared: true|false` into the closure receipt, with `goal_declared_source` (`env`|`plan`|null)
-  and `goal_declared_probed` (the exact paths examined). It records only that a goal was DECLARED;
+  `goal_declared: true|false` into the closure receipt, with `goal_declared_source` (`env`|`ledger`|null)
+  and `goal_declared_probed` (the exact paths examined). A goal is declared by a non-empty
+  `KAOLA_GOAL` or by the run's ledger existing non-empty (archived `mission-ledger.jsonl` first,
+  then the live `.ledger/issue-<N>.jsonl`). It records only that a goal was DECLARED;
   **nothing in this workflow checks whether a goal was achieved**, so nothing may read these fields as
   success. It replaces the retired `goal_check: satisfied|unsatisfied|absent`, whose negative case was
   unreachable and whose `satisfied` was documented as "AC verified" while no acceptance-criteria check

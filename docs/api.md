@@ -3,9 +3,9 @@
 CLI surfaces, JSON envelopes, schemas, and integration contracts for the scripts that ship.
 
 Structure: this document covers the surviving script surface. The run itself — how work is
-decomposed, dispatched and recorded — is the mission list, which has no CLI at all: see
-`decisions/0017-the-mission-list.md` for the design record and `architecture.md` for how it fits
-together.
+decomposed, dispatched and recorded — is the mission ledger, which has no CLI at all: see
+`decisions/0017-the-mission-list.md` for the design record, `decisions/0027-the-mission-ledger.md`
+for its carrier, and `architecture.md` for how it fits together.
 
 ## Same-name archive resolution
 
@@ -49,7 +49,7 @@ Three commands ship. Everything below is invoked by them or by hand.
 | Command | Owns |
 |---|---|
 | `/workflow-init` | consume the runtime-loaded global contract, inspect repository facts, and have the Agent maintain `AGENTS.md` as the single project authority that supplements verified local facts and constraints (a scoped exception must not weaken higher-priority instructions or host safety); it reports shadowing `CLAUDE.md` files and never creates one; existing owner-authored instructions require authorization before rewrite |
-| `/workflow-next` | select, claim, write the mission list, run it |
+| `/workflow-next` | select, claim, write the mission ledger, run it |
 | `/kaola-workflow-finalize` | validate, dock docs, summarize, close, archive, commit, sink |
 
 ## Project instruction boundary
@@ -142,8 +142,8 @@ carrier was loaded.
 ### Compact recovery — generated direct prompt
 
 The generated V2 prompt contains the exact global contract once, tells the runtime to reread root
-`AGENTS.md`, `kaola-workflow/{project}/workflow-state.md` (claim), and
-`kaola-workflow/{project}/mission-list.md` (run), then completely reloads installed Workflow Next
+`AGENTS.md`, `kaola-workflow/{project}/workflow-state.md` (claim), and the mission ledger
+`<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl` (run), then completely reloads installed Workflow Next
 without intake or claim while work remains, or Finalization when all missions are done. A successor
 reloads those complete execution rules, recognizes done, in-flight, and remaining work, and does
 not re-claim or re-dispatch work still in flight. On Claude and Codex the reloaded prompt also
@@ -419,6 +419,21 @@ Discriminator:
 - `worktree_path: ''`, no `worktree_error`, `base_branch` present → `NATIVE=0` in-place branch.
 - `worktree_path: ''` and `worktree_error` present → provisioning was attempted and failed.
 
+### Mission ledger at claim (#1089)
+
+An acquiring claim (single-issue and bundle) runs `prepareMissionLedger`, which creates
+`kaola-workflow/.ledger/` in the main checkout (never in the worktree) and adds to the envelope:
+
+| Field | Content |
+|---|---|
+| `ledger_path` | absolute `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`; `N` is the issue number, or a bundle's primary (first) issue |
+| `ledger_finding` | present only when `git check-ignore` reports the path not ignored: a string starting `ledger_not_gitignored:` that names the `kaola-workflow/.ledger/` line to add to the repository's `.gitignore` (claim reports it; it never edits `.gitignore`) |
+
+Both are absent when the issue number is not a positive integer. Preparation is best-effort: a
+failure costs the finding, never the claim. The claim creates the directory, not the file; the
+run's Main Orchestrator writes the file right after the claim. Shape and writer rules are in
+`workflow-state-contract.md` § Durable Sources and ADR 0027.
+
 ### Durable-field guards
 
 `writeState` / `patch-branch` refuse a newline or CR in any durable field value (typed throw) — a
@@ -439,28 +454,12 @@ call resumes at whichever step it stopped on — and the emit names every step i
 
 It never authors the implementation commit (if implementation-shaped changes are uncommitted,
 author the commit and re-run), and it owns the project-folder sync itself in **one** direction —
-main→worktree. `#1054` retired the worktree→main "repair" that used to run when the two copies
-diverged: on `content_diverged` (or `diff_unavailable`), `compareLedgers`'s verdict, the transaction
-now refuses `mirror_sync_failed` fail-closed and zero-write on both sides instead of guessing that
-the worktree side is the more current one. `detail` names both absolute paths (the main copy and the
-worktree copy) plus a bounded diff, and tells the Main Orchestrator — the party that owns which side
-is current — to reconcile by hand and rerun `finalize --check`. An unwritable destination for the
-one remaining (main→worktree) copy fails the same way, under the same `mirror_sync_failed` reason.
-
-**`#1054` R1** narrowed what counts as a divergence worth refusing. After every successful copy the
-mirror writes its own receipt, `.cache/mirror-digest.json` in the linked worktree's project folder
-(basename → sha256 of the bytes it just copied; missing or unparsable degrades silently to the
-pre-R1 comparison, never a throw). The next mirror invocation reads that receipt and hands its digest
-to `compareLedgers` as `opts.priorDigest`: if the worktree copy's current bytes still hash to exactly
-what this same mirror wrote last time, nothing but the mirror has touched it since, so a source that
-has legitimately moved on is the mirror's own forward progress, not an operator conflict —
-`compareLedgers` returns `{ safe: true, reason: 'prior_mirror' }` and the copy proceeds. A worktree
-copy that hashes to anything else (independently edited, or no receipt present) still falls straight
-through to the ordinary content comparison and refuses exactly as before. The receipt is transaction
-state, not a run record — it rides into the archive unexcluded, like `.cache/chain-receipt.json`.
-`finalize --check`'s read-only prediction reads the same receipt through the same helper
-(`probeFinalizeMirror` passes `priorDigest` too, and never writes it), so the prediction and the
-transaction agree on the `prior_mirror` case as well as on a genuine divergence.
+main→worktree. The mission ledger is not part of that copy (`#1089`): it lives only in the main
+checkout's `kaola-workflow/.ledger/`, so there is no second copy to diverge. The `#1054`
+record-regression guard (`compareLedgers`), its `.cache/mirror-digest.json` receipt, and the
+envelope's `ledger_compare` field are retired. The mirror still copies the rest of the project
+folder (`finalization-summary.md` and the other run artifacts). An unwritable destination for that
+copy refuses `mirror_sync_failed` fail-closed, with a `detail` naming the destination.
 
 **`#1077`** applied the same content-identity rule to the mirror's *other* copy: the Finalization
 residue outside `kaola-workflow/` (CHANGELOG, docs, …) that Step 8a carries from the main checkout
@@ -511,12 +510,9 @@ stopped being a verdict.
 in `reasons` is an operator obligation. A token that appears only in `checks` is state the transaction
 settles itself: `workflow_state: 'pending_mirror'` is the case — an authority absent from this working
 tree that the mirror step will construct from the main checkout. `pending_mirror` never enters
-`reasons` and never makes `ok` false. `#1054` retired `sync_required`: a divergent record mirror is no
-longer a self-settling state, because the transaction no longer repairs it automatically. `checks.mirror`
-now reads `sync_failed` for that same case, and it also lands in `reasons` as `mirror_sync_failed` — an
-operator obligation, since only the Main Orchestrator, reading both copies and the diff, can decide
-which side is current. The prediction reads the mirror receipt described above through the same
-helper as the transaction, so the `prior_mirror` case is reported as passable by both. The reserved
+`reasons` and never makes `ok` false. `checks.mirror` reads `sync_failed` when the mirror would
+refuse (the `#1077` residue conflicts above), and it also lands in `reasons` as `mirror_sync_failed` —
+an operator obligation, since only the Main Orchestrator can decide which side is current. The reserved
 `archive_authority_missing` is unchanged and still lands in both, because it names a condition
 execution cannot repair.
 
@@ -545,9 +541,9 @@ that emits a finding and drops the state the refusal was freezing is a deletion,
 
 #1054: a third measurement, `mission_list` / `## Mission List` (a count of the run's own missions and
 which carried an outcome while not `done`), used to sit beside these two. It is retired — the
-orchestrator reads `mission-list.md` and the run's evidence directly, and Finalization is not a
-Mission List item; a completed Mission's `result` stays immutable and is never a landing place for
-the finalize transaction's own findings.
+orchestrator reads the mission ledger and the run's evidence directly, and Finalization is not a
+mission; a `done` ledger line stays immutable and is never a landing place for the finalize
+transaction's own findings.
 
 **The durable write is fill-if-empty, and it never overwrites prose.** Both land through one writer,
 `appendSummarySection`, and what it does turns on what the heading already holds: absent, and the
@@ -565,7 +561,7 @@ either way.
 
 **Nothing compares `changed_paths` against a declaration, because there is no declaration.** This
 used to be an attribution sweep against declared write sets that refused the remainder. Declared
-write sets are gone, and a mission-list `result` is free text, not a path set — parsing one back
+write sets are gone, and a mission ledger's `details` is free text, not a path set — parsing one back
 into one would re-invent the declaration. The comparison went; the measurement stayed, so a reader
 can see what moved and notice what does not belong.
 
@@ -726,14 +722,17 @@ goal was met.
 
 ```
 goal_declared:        true | false
-goal_declared_source: 'env' | 'plan' | null
-goal_declared_probed: [ '<abs>/mission-list.md', ... ]
+goal_declared_source: 'env' | 'ledger' | null
+goal_declared_probed: [ '<abs>/kaola-workflow/archive/<project>/mission-ledger.jsonl',
+                        '<abs>/kaola-workflow/.ledger/issue-<N>.jsonl' ]
 ```
 
-`computeGoalDeclaration()` resolves `KAOLA_GOAL` first (non-empty after trim → `source: 'env'`,
-`probed: []`), then reads the H1 of `mission-list.md` in the archive destination, then in the live
-folder (`source: 'plan'`). A folder carrying no mission list declares nothing, which is the honest
-answer. Advisory: recorded for audit, never blocking.
+`computeGoalDeclaration(ledgerFiles)` resolves `KAOLA_GOAL` first (non-empty after trim →
+`source: 'env'`, `probed: []`), then checks the archived `mission-ledger.jsonl` in the archive
+destination, then the live `.ledger/issue-<N>.jsonl` for a crash-resume where the move did not
+complete. The first that is a file with non-blank content declares the goal (`source: 'ledger'`).
+The ledger carries no goal line — the goal is the issue — so a run that recorded missions has
+declared what it set out to do, and a run with no ledger declares nothing. Advisory: recorded for audit, never blocking.
 
 **This replaced the retired `goal_check`**, whose enum (`satisfied | unsatisfied | absent`) rendered
 a presence check as a verdict: the negative case was unreachable and the positive case named an
@@ -892,6 +891,25 @@ must not read as bound); a mismatch is `final_validation_stale`, with both hashe
 reader can check the claim rather than take it on trust. The producer of all three fields is
 `kaola-workflow-validation-runner.js record` below — the field the gate requires is the one an
 agent writing the file by hand is likeliest to omit, and both remediation hints name that verb.
+
+### Kernel mission-ledger exports — `kaola-workflow-adaptive-schema.js` (#1089)
+
+| Export | Contract |
+|---|---|
+| `LEDGER_DIR_REL` | `'kaola-workflow/.ledger'` |
+| `LEDGER_GITIGNORE_LINE` | `'kaola-workflow/.ledger/'` |
+| `ARCHIVED_LEDGER_FILE` | `'mission-ledger.jsonl'`, the archived name under `kaola-workflow/archive/<project>/` |
+| `LEDGER_KEYS` | frozen `['n', 'name', 'details', 'status']` |
+| `LEDGER_STATUSES` | frozen `['todo', 'in-flight', 'done', 'failed', 'blocked']` |
+| `ledgerPath(mainRoot, issueNumber)` | pure path join `<mainRoot>/kaola-workflow/.ledger/issue-<N>.jsonl`; `null` unless `issueNumber` is a positive integer |
+| `validateLedger(text)` | pure shape rule: every line parses to an object with keys exactly `LEDGER_KEYS` in order, `n` runs 1..k with no gap, `name` one non-empty line, `details` a string, `status` in `LEDGER_STATUSES`. Returns `{ ok, missions, errors }`; `missions` holds every line that parsed |
+| `serializeLedger(missions)` | canonical bytes: one line per mission, fixed key order, `n` = index + 1 (never the caller's), trailing newline |
+
+`MISSION_LIST_FILE` and `parseGoal` are retired with `mission-list.md`. In `claim.js`,
+`writeMissionLedger(file, missions)` is the reference writer: it serializes, refuses a result that
+does not validate (throws `mission ledger invalid: …`), and replaces the file atomically.
+`liveLedgerPath(root, issueNumber)` resolves `ledgerPath` against the main checkout from any
+worktree, and `moveMissionLedger(root, issueNumber, dest)` is archive's move.
 
 ### Kernel path-stream decoders — `kaola-workflow-adaptive-schema.js`
 
@@ -1315,6 +1333,11 @@ shared `buildClosureReceipt()` helper (issue #164) and emits `closure_receipt` p
 
 **Fail-closed archive result boundary.** The shared `archiveSucceeded(result)` predicate returns
 true only for `{ archived: true }` or the idempotent retry result `{ skipped: "source-missing" }`.
+A successful `archiveProjectDir` result also carries `ledger` (`#1089`) when the run's
+`workflow-state.md` has an `issue_number`: `'moved'` (the live
+`kaola-workflow/.ledger/issue-<N>.jsonl` was renamed to `<dest>/mission-ledger.jsonl`), `'absent'`
+(no live ledger), or `'failed: <message>'`. The move runs after the completeness proof and is
+fail-soft: a failed move is reported, never a rollback, and does not change `archiveSucceeded`.
 Finalize, release/discard, and merged/closed PR/MR watch callers must pass this post-call predicate
 before remote issue or label disposition, worktree/branch/claim cleanup, terminal receipt stamping,
 or success output. Thrown errors, `archive_incomplete`, missing fields, and every other result shape
@@ -1840,7 +1863,7 @@ retired per-tier roster constants — and
 both keys omitted).
 
 The exact current bindings are machine data and are summarized in `runtime-capabilities.md`.
-Next/finalize expose them as the `**Subagent default:**` binding, not as mission-list state, a
+Next/finalize expose them as the `**Subagent default:**` binding, not as mission-ledger state, a
 fixed pipeline,
 or a ban on runtime-supported task-sensitive choices. A missing required native capability yields a
 specific per-item `capability_gap`; it is not emulated by granting wider tools, impersonating a
@@ -1921,7 +1944,9 @@ Test-only. Do not use in production.
 worktree. Also exports `mainRootFromCoord`, `resolveMainRoot`, `resolveSessionMarker`,
 `claimProject`, `claimExplicitTarget`, `claimExplicitBundle`, `buildClosureReceipt`,
 `checkClosureInvariants`, `verifyArchiveComplete`, `archiveProjectDir`, `appendClosureBlock`,
-`removeWorktree`, `provisionWorktree`, `readActiveFolders`,
+`removeWorktree`, `provisionWorktree`, `readActiveFolders`, the mission-ledger helpers
+(`liveLedgerPath`, `prepareMissionLedger`, `writeMissionLedger`, `moveMissionLedger`,
+`computeGoalDeclaration`; `#1089`),
 `readPriorityConfig`, `treeDirty`, `commitDiscardArchive`, and the label/worktree maintenance
 commands. `defaultBranch(root)` (#1055: defined in `kaola-workflow-adaptive-schema.js`, re-exported
 here as the same function object) resolves the repository's default branch through a three-stage
@@ -1943,32 +1968,6 @@ primitives.
 `resolveChains`, `resolveTimeoutMs`, `resolveConcurrency`, `resolveChainRetry`, `runChainWithRetry`,
 `resolveOutputPath`, `getGitTopLevel`, `classifyScope`, `resolveDiffBase`, `computeChangedFiles`,
 `forgeReferencedScripts`, `isEditionCouplingPath`.
-
-**`scripts/kaola-workflow-ledger-compare.js`** — `compareLedgers(srcText, destText, opts?)`. Record-
-regression guard for the finalize Step-8a artifact mirror, re-derived under #1054 to decide by
-**content**, not by counting how much work either side records as done: a `status: done` line-count
-read zero on a table-form Mission List and reported a copy SAFE that would have erased finished
-rows, because both sides counted zero. Returns `{ safe, reason, diff? }`.
-
-**Module API — five reasons.** `reason` is `first_sync` (destination absent/empty), `identical`
-(destination byte-identical to source), `prior_mirror` (`#1054` R1: `opts.priorDigest` is supplied
-and the destination's current bytes hash to it — the destination is exactly what a prior mirror
-wrote and nothing else has touched it since, so a source that has moved on is that mirror's own
-forward progress, not a conflict), `content_diverged` (destination carries content the copy would
-discard/overwrite, with a bounded `diff`), or `diff_unavailable` (content diverges but neither
-`diff` nor `git diff --no-index` could produce output, `diff: ''`); `safe` is true only for the
-first three. `opts.priorDigest` is checked after `first_sync`/`identical` and before the diff
-comparison. Required by `kaola-workflow-claim.js`, the only production caller that supplies
-`priorDigest` (read from `.cache/mirror-digest.json`, written by the same call after
-every successful copy).
-
-**CLI (`--source`/`--dest`/`--json`/`--help`) — four reachable reasons.** The script's CLI builds no
-`opts` and has no digest flag, so `prior_mirror` cannot fire from it: exit 0 is reached only via
-`first_sync`/`identical`, exit 3 only via `content_diverged`/`diff_unavailable`. `--help` names
-`prior_mirror` too, but only as an explanatory aside marking it as a programmatic-caller-only,
-not-reachable-from-this-CLI outcome — it does not add a fifth CLI exit code or JSON reason the
-script itself can emit. `prior_mirror` is a module-API-only outcome, reached solely through the
-direct function call `mirrorFinalizationArtifacts` makes with a real `priorDigest`.
 
 ### GitLab edition
 

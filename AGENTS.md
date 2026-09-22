@@ -1,10 +1,11 @@
 # Kaola-Workflow Repository Instructions
 
 Kaola-Workflow is a forge-issue-driven loop for coding agents. It records claims under
-`kaola-workflow/<run>/workflow-state.md` and the run itself in
-`kaola-workflow/<run>/mission-list.md`; completed runs move to `kaola-workflow/archive/`.
-`docs/decisions/0017-the-mission-list.md` is the Mission List design record, and
-`kaola-workflow/.roadmap/_rules.md` is the only optional local roadmap file.
+`kaola-workflow/<run>/workflow-state.md` and the run itself in the gitignored mission ledger
+`kaola-workflow/.ledger/issue-<N>.jsonl` (main checkout only); completed runs move to
+`kaola-workflow/archive/`, the ledger becoming `archive/<run>/mission-ledger.jsonl`.
+`docs/decisions/0017-the-mission-list.md` and `docs/decisions/0027-the-mission-ledger.md` are its
+design records, and `kaola-workflow/.roadmap/_rules.md` is the only optional local roadmap file.
 
 ## Source layout
 

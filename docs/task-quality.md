@@ -77,5 +77,7 @@ personal-memory write, and no routine "anything to remember?" prompt in init or 
 
 - [ADR 0017 — the Mission List](decisions/0017-the-mission-list.md): the design of record for how a
   claimed run is decomposed into recoverable items.
+- [ADR 0027 — the mission ledger](decisions/0027-the-mission-ledger.md): the carrier those items are
+  recorded in, `kaola-workflow/.ledger/issue-<N>.jsonl` in the main checkout.
 - [ADR 0023 — Agent-owned project instructions](decisions/0023-agent-owned-project-instructions.md):
   how durable project facts are maintained without a fixed template.

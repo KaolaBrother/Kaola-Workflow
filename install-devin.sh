@@ -114,7 +114,7 @@ else
 fi
 
 # The exact additionalContext text used by the UserPromptSubmit hook.
-UPS_TEXT="Kaola-Workflow: if KW-COMPACT-RECOVERY-V2 is not in your context, read $HOME_ROOT/AGENTS.md and the active kaola-workflow/*/workflow-state.md and mission-list.md before acting."
+UPS_TEXT="Kaola-Workflow: if KW-COMPACT-RECOVERY-V2 is not in your context, read $HOME_ROOT/AGENTS.md and the active kaola-workflow/*/workflow-state.md and its kaola-workflow/.ledger/issue-<N>.jsonl mission ledger before acting."
 # Marker that lets us identify and replace only the Kaola-owned hook entry.
 HOOK_MARKER='# kaola-workflow-userpromptsubmit-hook'
 

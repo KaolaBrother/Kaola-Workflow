@@ -2,7 +2,7 @@
 
 **A recoverable engineering workflow for coding agents, from issue to verified delivery.**
 
-Kaola-Workflow connects issue claims, a resumable Mission List, validation evidence, and delivery
+Kaola-Workflow connects issue claims, a resumable mission ledger, validation evidence, and delivery
 records across **ten coding runtimes** and **GitHub, GitLab, and Gitea**. The agent plans,
 executes, reviews, and judges completion; Workflow records the run and provides the scripts for
 claiming, validation, finalization, and delivery.
@@ -15,7 +15,7 @@ claiming, validation, finalization, and delivery.
 ```mermaid
 flowchart LR
     I["Forge issue(s)"] --> C["Claim work"]
-    C --> M["Record Mission List"]
+    C --> M["Record mission ledger"]
     M --> W["Implement and review"]
     W --> V["Validate candidate"]
     V --> F["Finalize and archive"]
@@ -32,12 +32,12 @@ outcome. **A delivered PR/MR is distinct from a merged change.**
 | Capability | What it gives you |
 |---|---|
 | Claims and worktrees | Single-issue or multi-issue runs, collision-safe claims, optional isolated worktrees |
-| Recoverable execution | One Mission List records outcomes, in-flight work, and where evidence should land |
+| Recoverable execution | One mission ledger records outcomes, in-flight work, and where evidence should land |
 | Native agent collaboration | Seven focused role behaviors on profile-supporting runtimes; native dispatch elsewhere |
 | Verifiable delivery | Candidate-bound validation receipts, closure records, archive, and merge/sync or PR/MR delivery |
 | Consistent instructions | A shared global contract, project-specific instructions, and runtime-specific recovery carriers |
 
-The agent chooses decomposition and dispatch. The Mission List preserves those decisions across
+The agent chooses decomposition and dispatch. The mission ledger preserves those decisions across
 interruptions; it introduces no scheduler or execution graph.
 
 ## Project Runner synergy
@@ -59,7 +59,7 @@ flowchart TB
     R -->|"Send instructions via ACP or PTY"| B
     B -->|"Replies and runtime evidence"| R
     R -->|"Read back"| A
-    K --> E["Changes · Mission List · Validation · Delivery records"]
+    K --> E["Changes · Mission ledger · Validation · Delivery records"]
     A -->|"Inspect results and decide next steps"| E
 ```
 
@@ -100,7 +100,7 @@ Open your project in the installed runtime, then use its native command or Skill
 | Entry | When to use it | Result |
 |---|---|---|
 | `workflow-init` | First setup, or when project facts change | Repository instructions based on verified local facts; existing owner-authored rules require authorization to rewrite |
-| `workflow-next` | Start or resume an issue or issue bundle | Claim, Mission List, execution, and evidence |
+| `workflow-next` | Start or resume an issue or issue bundle | Claim, mission ledger, execution, and evidence |
 | `kaola-workflow-finalize` | All missions are complete | Final validation, documentation, closure, archive, and delivery |
 
 ```text
@@ -146,28 +146,38 @@ ensure; App/Cloud do not receive CLI preparation. See the [Cursor guide](docs/cu
 
 ```text
 kaola-workflow/
+├── .ledger/                # gitignored, main checkout only
+│   └── issue-<N>.jsonl     # mission ledger: n / name / details / status
 ├── <run>/
 │   ├── workflow-state.md   # claim, branch, worktree, closure, delivery
-│   ├── mission-list.md     # item / status / dispatched / result
 │   └── .cache/             # run-selected evidence
-└── archive/                # completed runs
+└── archive/                # completed runs; <run>/mission-ledger.jsonl
 ```
+
+The mission ledger has one JSON line per mission, keys exactly `n`, `name`, `details`, `status`
+(`todo` | `in-flight` | `done` | `failed` | `blocked`). It lives only in the main checkout, never in
+a worktree; archive moves it to `archive/<run>/mission-ledger.jsonl`. A Runner Host reads it
+read-only (`jq -c '{n,status}'`): progress is `done` lines over total, and an absent file is
+`unknown`.
 
 ```mermaid
 flowchart LR
-    R["Resume run"] --> D["Read claim and Mission List"]
+    R["Resume run"] --> D["Read claim and mission ledger"]
     D --> C["Keep completed results"]
     C --> I["Reconcile in-flight work
 with its promised output"]
     I --> N["Continue remaining missions"]
 ```
 
-Each mission is written at creation, before dispatch (including the output location), and when its
-result lands. Completed results are immutable; changes to validated content invalidate affected
+The run's Main Orchestrator is the only writer. Each mission line is written at creation (`todo`),
+before dispatch (`in-flight`; `details` gains where it went and where output lands), and when its
+result lands (terminal status; `details` gains where the outcome landed). `done` and `failed` lines
+are immutable; changes to validated content invalidate affected
 PASS evidence. Finalization, closure, archive, and delivery are recorded separately from missions.
 
 See [Workflow State Contract](docs/workflow-state-contract.md) for resume and archive identity rules,
-and [The Mission List](docs/decisions/0017-the-mission-list.md) for the design.
+[The Mission List](docs/decisions/0017-the-mission-list.md) for the design, and
+[The mission ledger](docs/decisions/0027-the-mission-ledger.md) for its carrier.
 
 ## Token usage at a glance
 

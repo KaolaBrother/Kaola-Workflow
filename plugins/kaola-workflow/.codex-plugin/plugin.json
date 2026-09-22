@@ -1,7 +1,7 @@
 {
   "name": "kaola-workflow",
   "version": "12.2.3",
-  "description": "Kaola-Workflow for Codex, driven by an adaptive, resumable mission list, using GitHub issues, pull requests, gh, and repo-backed workflow artifacts.",
+  "description": "Kaola-Workflow for Codex, driven by an adaptive, resumable mission ledger, using GitHub issues, pull requests, gh, and repo-backed workflow artifacts.",
   "author": {
     "name": "KaolaBrother",
     "url": "https://github.com/KaolaBrother"
@@ -25,8 +25,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Kaola-Workflow for Codex",
-    "shortDescription": "Adaptive mission-list Kaola-Workflow for Codex",
-    "longDescription": "Kaola-Workflow for Codex exposes repo-backed skills and Codex-native agent profiles for project initialization, workflow-init, and adaptive, resumable execution: the orchestrator writes a mission list of items, reads the frontier, dispatches subagents when useful, and closes items as their results land, through research, planning, TDD execution, review, documentation docking, and finalization.",
+    "shortDescription": "Adaptive mission-ledger Kaola-Workflow for Codex",
+    "longDescription": "Kaola-Workflow for Codex exposes repo-backed skills and Codex-native agent profiles for project initialization, workflow-init, and adaptive, resumable execution: the orchestrator writes a mission ledger of items, reads the frontier, dispatches subagents when useful, and closes items as their results land, through research, planning, TDD execution, review, documentation docking, and finalization.",
     "developerName": "KaolaBrother",
     "category": "Coding",
     "capabilities": [

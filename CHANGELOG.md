@@ -1,5 +1,38 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **The mission ledger replaces the Markdown Mission List (#1089, ADR 0027).** A run's
+  coordination record is now `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl` (`N` =
+  `workflow-state.md` `issue_number`; a bundle uses its primary issue): one JSON object per line,
+  keys exactly `n`, `name`, `details`, `status` (`todo` | `in-flight` | `done` | `failed` |
+  `blocked`), no header or goal line. It lives only in the main checkout, is gitignored
+  (`kaola-workflow/.ledger/`), and is never mirrored into a worktree. The Main Orchestrator is the
+  only writer, at the three ADR 0017 write moments; `done` and `failed` lines are immutable. A
+  claim creates the directory and adds `ledger_path` to its envelope, plus
+  `ledger_finding: "ledger_not_gitignored: ..."` when the path is not ignored (claim never edits
+  `.gitignore`). Archive moves the file to `kaola-workflow/archive/<project>/mission-ledger.jsonl`
+  (tracked) and reports `ledger: 'moved' | 'absent' | 'failed: <msg>'`. The closure receipt's
+  `goal_declared_source` is now `'env' | 'ledger' | null` (was `'plan'`). New kernel exports:
+  `LEDGER_DIR_REL`, `LEDGER_GITIGNORE_LINE`, `ARCHIVED_LEDGER_FILE`, `LEDGER_KEYS`,
+  `LEDGER_STATUSES`, `ledgerPath`, `validateLedger`, `serializeLedger`; new claim exports:
+  `liveLedgerPath`, `prepareMissionLedger`, `writeMissionLedger`, `moveMissionLedger`. The Runner
+  Host reads the file read-only (absent = `unknown`; progress = `done` lines / total); see
+  KaolaBrother/kaola-project-runner issue 133. Add `kaola-workflow/.ledger/` to a consumer repository's
+  `.gitignore`.
+
+### Removed
+
+- **`mission-list.md` and its mirror machinery (#1089).** No dual format, legacy reader, or
+  fallback. Retired: `MISSION_LIST_FILE`, `parseGoal`, the finalize Step-8a record-regression guard
+  `compareLedgers` and `scripts/kaola-workflow-ledger-compare.js` (all four trees), the
+  `.cache/mirror-digest.json` receipt, the finalize transaction field `ledger_compare`, and the
+  suites `test-ledger-compare.js`, `test-issue-1054-ledger-guard.js`, and
+  `test-issue-1054-mission-list-carriers.js`. The Step-8a mirror of the other run artifacts
+  (`finalization-summary.md` and the rest) remains.
+
 ## [12.2.3] - 2026-09-21
 
 ### Changed

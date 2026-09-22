@@ -14,8 +14,8 @@ Kaola-Workflow is bookkeeping for an orchestrating agent. It does not schedule t
 inspect its decomposition, or judge its output. One command carries a run end to end:
 
 ```text
-claim ──► write the mission list ──► run it ──► finalize ──► sink
-(script)   (agent, one file)          (agent)    (script tx)  (script tx)
+claim ──► write the mission ledger ──► run it ──► finalize ──► sink
+(script)   (agent, one file)            (agent)    (script tx)  (script tx)
 ```
 
 - **`/workflow-init`** — consumes the runtime-loaded global contract, reads the repository, and asks the
@@ -26,8 +26,8 @@ claim ──► write the mission list ──► run it ──► finalize ─�
   reconciles: a repository still carrying the retired
   local backlog layer (`ROADMAP.md`, `.roadmap/issue-*.md`) is diagnosed and reported, and migrated
   only on the owner's answer — never as a side effect of installing or upgrading.
-- **`/workflow-next`** — the whole workflow. Selects the target, claims it, writes
-  `kaola-workflow/{project}/mission-list.md`, and runs it.
+- **`/workflow-next`** — the whole workflow. Selects the target, claims it, writes the mission ledger
+  `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`, and runs it.
 - **`/kaola-workflow-finalize`** — validates, docks documentation, writes the summary, settles
   closure, archives, commits, and sinks.
 
@@ -35,7 +35,7 @@ Everything between the claim and finalization is the orchestrator's. It decides 
 what to dispatch, at what width, and in what order, with the frontier in front of it — and nothing
 inspects that decision. There is no plan grammar, no freeze, no gate, no disjointness proof, no
 fan-out cap, and no refusal in the run design. See `decisions/0017-the-mission-list.md` for the
-derivation.
+derivation and `decisions/0027-the-mission-ledger.md` for the carrier.
 
 ## Global behavior, local facts
 
@@ -69,27 +69,36 @@ contains the global contract, a thin durable-state router that completely reload
 Finalization, the mandatory dispatch contract, and the measured runtime adapter. Inference runs no
 prompt-composition script, and ordinary tool use injects nothing.
 
-## The mission list
+## The mission ledger
 
-One file per run at `kaola-workflow/{project}/mission-list.md`. An H1 carrying the goal, then one
-entry per mission with four fields:
+One file per run at `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`, where `N` is the run's
+`workflow-state.md` `issue_number` (a bundle uses its primary issue). The directory is gitignored
+and exists only in the main checkout; the file is never mirrored into a worktree. One JSON object per
+line, one line per mission, keys exactly in this order, and no header or goal line (the goal is the
+issue):
 
-| Field | Content | Written |
+| Key | Content | Written |
 |---|---|---|
-| `item` | the mission — one line of prose, hints and facts | at creation |
-| `status` | `todo` \| `in-flight` \| `done` | on change |
-| `dispatched` | what went out and to whom, and **where the output was to land** | at dispatch |
-| `result` | where the outcome landed — a path, or a few lines inline | at close |
+| `n` | positional integer, 1..k, never renumbered | at creation |
+| `name` | the mission, one line | at creation |
+| `details` | hints and facts; gains what went out, to whom, and **where the output was to land** at dispatch, then where the outcome landed at close | at each write moment |
+| `status` | `todo` \| `in-flight` \| `done` \| `failed` \| `blocked` | on change |
 
-No script writes it; the orchestrator does, at three moments. Work the orchestrator does itself is
-still an item, with `dispatched: self`.
+The run's Main Orchestrator is the only writer, at three moments: create (`todo`), dispatch
+(`in-flight`), result (terminal status). Each write rewrites the whole file (temp file + rename, or
+an in-place edit). `done` and `failed` lines are immutable; `blocked` means the current owner cannot
+safely or legitimately continue and may return to `in-flight` after a ruling. Work the orchestrator
+does itself is still a mission, with `dispatched: self` in `details`. Claim creates the directory
+(`prepareMissionLedger`) and reports `ledger_path`; archive moves the file to
+`kaola-workflow/archive/{project}/mission-ledger.jsonl`, which is tracked. A Runner Host reads the
+live file read-only: absent is `unknown`, present is progress = `done` lines / total.
 
 A failed command, intermediate finding, repair attempt, or review round does not by itself create a
 mission. Keep working within the current promised outcome while custody and causal boundary remain
 unchanged. Append a mission only for a new recoverable outcome that changes custody or for a newly
 discovered independent causal class.
 
-Finalization, Issue closure, archive, and sink are not Mission List items. The last run mission
+Finalization, Issue closure, archive, and sink are not missions. The last run mission
 establishes readiness for finalization. The finalization summary, closure evidence, archive state,
 and sink receipt own the transaction's truth.
 
@@ -97,10 +106,10 @@ The frontier is not computed — it is the list minus done minus in-flight, visi
 item carries no role, no write set, no dependency edge, no model, no cardinality and no shape,
 because all of that is decided when the item is reached, with everything learned by then.
 
-**Resuming** is reading the file top to bottom: the H1 is the goal, `done` items and their `result`
-are what is known, `todo` items are what remains, and `in-flight` items are the only decision. The
-rule there is *look for the work, not for the worker*: `dispatched` records what went out, not
-whether it is still running, so check the locator — if the promised output landed, close the item;
+**Resuming** is reading the file top to bottom: the issue is the goal, `done` lines and their
+`details` are what is known, `todo` lines are what remains, and `in-flight` lines are the only
+decision. The rule there is *look for the work, not for the worker*: the dispatch locator in
+`details` records what went out, not whether it is still running, so check the locator — if the promised output landed, close the item;
 if not, re-dispatch unless the dispatch is positively still alive.
 
 This design exists because of one observed failure: an orchestrator running six concurrent subagents
@@ -265,17 +274,17 @@ and drops the state the refusal was freezing is a deletion, not a conversion:
 
 `#1054` retired a third measurement that used to sit beside these two, `mission_list` → `## Mission
 List` — a count of the run's own missions and which carried an outcome while not `done`. Finalize no
-longer parses the Mission List or any other orchestrator-authored record as a machine interface: the
-orchestrator reads `mission-list.md` and the run's evidence directly, and a completed Mission's
-`result` stays immutable, never a landing place for the finalize transaction's own findings.
+longer parses the mission record or any other orchestrator-authored record as a machine interface:
+the orchestrator reads the mission ledger and the run's evidence directly, and a `done` line stays
+immutable, never a landing place for the finalize transaction's own findings.
 
 The transaction never authors the implementation commit, and it owns the main→worktree project
-folder sync itself — the one direction the transaction performs. It decides by content identity, not
-a count, plus a self-written receipt (`.cache/mirror-digest.json`, `#1054` R1) that lets it recognize
-its own prior copy: a worktree copy still hashing to what this same mirror last wrote is the mirror's
-own forward progress when main has since advanced, not a conflict. A worktree copy that genuinely
-diverged instead refuses `mirror_sync_failed` for the Main Orchestrator to reconcile by hand, with no
-automatic repair in the other direction. The archive still fails loudly if it would lose a
+folder sync itself — the one direction the transaction performs. The mission ledger is not part of
+that copy: it lives only in the main checkout, so there is no second copy to diverge and no
+record-regression compare (`#1089` retired the `#1054` guard and its receipt). A residue copy that
+would overwrite a file the run authored, or a destination it cannot write, refuses
+`mirror_sync_failed` for the Main Orchestrator to reconcile by hand, with no automatic repair in the
+other direction. The archive still fails loudly if it would lose a
 file — an operation refusing to destroy data, which is the one hard stop left in this phase.
 
 ### Merge sink (default)
@@ -581,7 +590,7 @@ against. Bundled
 
 ### Subagent default binding
 
-The `standard` / `reasoning` / `heavy` intent axis is retired (ADR 0025, #1062); no mission-list
+The `standard` / `reasoning` / `heavy` intent axis is retired (ADR 0025, #1062); no mission-ledger
 field records a model pair. Each adapter that installs profiles declares exactly one
 `subagent_default` — Claude `model: sonnet`; Codex `model = "gpt-5.6-luna"` /
 `model_reasoning_effort = "max"` pinned in the TOML; Grok `model: grok-4.7` / `effort: medium`;

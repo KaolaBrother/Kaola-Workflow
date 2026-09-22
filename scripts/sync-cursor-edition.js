@@ -191,9 +191,9 @@ function transformCommandBody(body, forge, label) {
     // then `node "$CLAIM_JS" resume --runtime cursor`. Claim.js stamps identity
     // in-process from demonstrated CLI ancestor `--workspace`.
     text = text.replace(
-      /^## Resume\n\nOn resume, read `mission-list\.md`/m,
+      /^## Resume\n\nOn resume, read the mission ledger/m,
       '## Resume\n\n' + cursorCliResumeRecoveryFence(forge)
-        + '\n\nOn resume, read `mission-list.md`'
+        + '\n\nOn resume, read the mission ledger'
     );
     text = text.trimEnd() + '\n\n' + cursorCliStartupResumePrepProse() + '\n';
   } else if (basename === 'kaola-workflow-finalize.md') {

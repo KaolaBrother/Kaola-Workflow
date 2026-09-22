@@ -63,8 +63,8 @@ Droid loads the personal `AGENTS.md` from `~/.factory` (and `~/.agents/`, `~/.ag
 AGENTS.md from repository root to cwd on every session, so the machine-global carrier is the
 always-loaded compact-recovery authority. This edition installs no hook, so there is no
 prompt-lifecycle event to reload it; post-compaction reload of the carrier is not measured in this
-scope, and recovery is re-invoking the skill, which resumes from the durable mission list and
-workflow state.
+scope, and recovery is re-invoking the skill, which resumes from the durable mission ledger
+(`kaola-workflow/.ledger/issue-<N>.jsonl` in the main checkout) and workflow state.
 
 Every generated runtime adapter begins with a host guard. A foreign carrier imported by Droid is
 inert rather than teaching Droid a nonexistent profile, model, or field schema. The universal

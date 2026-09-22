@@ -3,16 +3,17 @@
 This map is the detailed state inventory for Kaola-Workflow. Keep the root memory file `AGENTS.md`
 limited to durable invariants and link here for the full contract.
 
-A run's durable state is **two files plus evidence**: `kaola-workflow/{project}/mission-list.md`
-(the coordination record — see `decisions/0017-the-mission-list.md` for its derivation) and
-`kaola-workflow/{project}/workflow-state.md` (the claim record, written by the claim scripts).
-Everything else under the project folder is evidence, telemetry, or a journal.
+A run's durable state is **two files plus evidence**: the mission ledger
+`<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl` (the coordination record — see
+`decisions/0017-the-mission-list.md` for its derivation and `decisions/0027-the-mission-ledger.md`
+for its carrier) and `kaola-workflow/{project}/workflow-state.md` (the claim record, written by the
+claim scripts). Everything else under the project folder is evidence, telemetry, or a journal.
 
 ## Layer-0 Durable-Artifact Ruling
 
-The durable kernel is deliberately small: the Mission List is the coordination record, while
+The durable kernel is deliberately small: the mission ledger is the coordination record, while
 `workflow-state.md` is only the claim/sink/liveness record. A successor asks what remains from the
-Mission List and where the run lives from claim facts; receipts and sink artifacts prove what reached
+ledger and where the run lives from claim facts; receipts and sink artifacts prove what reached
 the outside world. No progress pointer, scheduler record, evidence breadcrumb, or replacement state
 schema is needed.
 
@@ -40,11 +41,10 @@ at the end exist to catch what the named rows do not.
 
 | Artifact | Ruling | Record | Writer | Why — the derivation, the loss-safety argument, or the question it answers |
 | --- | --- | --- | --- | --- |
-| `mission-list.md` | record | plan | agent | the goal in its H1 and, per item, the mission / status / dispatched / result — decomposition and position in one file |
+| `mission-ledger.jsonl` | record | plan | agent | the archived mission ledger (#1089): per mission n / name / details / status — moved here from kaola-workflow/.ledger/issue-<N>.jsonl at archive |
 | `workflow-state.md` | record | claim/sink | script | issue and claim identity, status, branch/worktree, sink/run posture, liveness markers, and genuine closure facts |
 | `.cache/chain-receipt.json` | record | evidence | script | the tests-green oracle receipt (npm repo kind), candidate-bound |
 | `.cache/run-gaps.json` | record | evidence | script | the run-gap sweep result; its writer refuses to overwrite a prior cycle, so it is durable gap evidence |
-| `.cache/mirror-digest.json` | record | evidence | script | #1054 R1: the Step-8a artifact mirror's own prior-write receipt (sha256 of the bytes it last copied); lets the next mirror recognize an untouched dest as its own forward copy instead of refusing a legitimately advanced source as a conflict |
 | `.cache/origin/selection-record.json` | record | evidence | script | the gate-validated selection record; the degenerate form exists so "explicit target" is distinguishable from "record lost" |
 | `/^\.cache\/validation-vectors\/[^/]+\.json$/` | record | evidence | script | local validation-runner receipts: exact command, environment digests, repeated results, bound candidate |
 | `.cache/final-validation.md` | record | evidence | agent | the tests-green oracle receipt (consumer repo kind), candidate-hash bound; recorded by the agent, not a producer script |
@@ -61,16 +61,17 @@ at the end exist to catch what the named rows do not.
 | `/^\.cache\/\.cache\//` | preference | — | agent | historical double-nested .cache residue from a fixed path-join defect; no writer, no reader |
 | `/^\.cache\/origin\//` | record | evidence | agent | pre-claim reconnaissance folded into the project at claim time |
 | `/^\.cache\/[^/]+\.(?:md\|log\|txt\|json\|jsonl\|diff\|patch)$/` | record | evidence | agent | the free-form evidence band: per-item evidence and the attachments it cites — what was produced, how verified, where it lives |
-| `/^[^/]+\.md$/` | record | evidence | agent | the project-root prose band: agent-authored run reports docked beside the mission list |
+| `/^[^/]+\.md$/` | record | evidence | agent | the project-root prose band: agent-authored run reports docked beside workflow-state.md |
 
 ### What the registry no longer rules, and why
 
-Every plan-record row except the mission list is gone with the node/DAG executor: the frozen
+Every plan-record row except the mission ledger is gone with the node/DAG executor: the frozen
 `workflow-plan.md` and its `## Node Ledger`, the ledger chain, epoch snapshots and re-plan
 transaction files, the review-attempt journal, per-node barrier baselines, the running set, and the
 scheduler lock. They were durable because a scheduler had to resume mid-schedule; there is no
-schedule to resume. The mission list carries decomposition and position together, and a successor
-reads it top to bottom.
+schedule to resume. The mission ledger carries decomposition and position together, and a successor
+reads it top to bottom. The live ledger sits outside the project folder, in the main checkout's
+gitignored `kaola-workflow/.ledger/`, so the registry rules only its archived copy.
 
 Two derivable rows went with them (`run-progress.json`, `workflow-tasks.json`) — both were
 projections of the Node Ledger.
@@ -101,19 +102,29 @@ file but is only as complete as its own source walk.
 - `kaola-workflow/.roadmap/_rules.md` is the one optional local file that survives: standing
   project-local rules, read directly by the pick step. Nothing else is generated or tracked under
   `kaola-workflow/.roadmap/`.
-- `kaola-workflow/{project}/mission-list.md` is the run's coordination record: the goal in its H1
-  and one entry per mission with `item` / `status` / `dispatched` / `result`. No script writes it —
-  the orchestrator does, at three moments (created, dispatched, closed). It is the one file a
-  zero-context successor needs; see `decisions/0017-the-mission-list.md` for the derivation.
+- `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl` is the run's coordination record (the
+  mission ledger; `N` is `workflow-state.md` `issue_number`, a bundle uses its primary issue). One
+  JSON object per line, keys exactly `n`, `name`, `details`, `status` in that order; `n` runs 1..k;
+  `status` is `todo` | `in-flight` | `done` | `failed` | `blocked`; no header or goal line. It lives
+  only in the main checkout, is gitignored (`kaola-workflow/.ledger/`), and is never mirrored into a
+  worktree. The run's Main Orchestrator is the only writer, at three moments (create `todo`;
+  dispatch `in-flight`, `details` gains where it went and where output lands; result, terminal
+  status, `details` gains where the outcome landed), rewriting the whole file each time; `done` and
+  `failed` lines are immutable, and `blocked` may return to `in-flight` after a ruling. Claim creates
+  the directory and reports its path; archive moves the file to
+  `kaola-workflow/archive/{project}/mission-ledger.jsonl` (tracked), so presence under `.ledger/`
+  means a live run. A Runner Host reads it read-only: absent is `unknown`, present is progress =
+  `done` lines / total (`jq -c '{n,status}'`). See `decisions/0017-the-mission-list.md` for the
+  derivation and `decisions/0027-the-mission-ledger.md` for the carrier.
 - `kaola-workflow/{project}/workflow-state.md` is the claim/sink/liveness record. It records issue
   identity, status, branch/worktree, sink and run posture, `main_root`, `session_marker`, `claim_ts`,
   and genuine closure facts. It does not carry a progress pointer or executable resume policy. See
   Workflow State Fields below.
 - `kaola-workflow/{project}/finalization-summary.md` is the terminal artifact, and the only place
   the finalize transaction's own two measurements survive the process that took them
-  (`## Validation` and `## Changed Paths`). Finalize does not parse `mission-list.md` or any other
-  orchestrator-authored record as a machine interface — it reads it, but does not gate on it or
-  land its own findings there (`#1054`).
+  (`## Validation` and `## Changed Paths`). Finalize does not parse the mission ledger or any other
+  orchestrator-authored record as a machine interface — it does not gate on it or land its own
+  findings there (`#1054`); it reads the ledger only for the closure receipt's goal declaration.
 - A `fast-summary.md` on disk is read only tolerantly: the classifier's defensive `## Scope` parse
   (feeding in-flight write-set overlap detection) and the router's active-folder detection both
   recognize such a marker. It is never newly authored, so these parses do not fire for a freshly
@@ -200,12 +211,11 @@ existing reader keeps the answer it had; a reader needing the distinction subtra
 one source walk, one call and one answer. `'<root>'` and `'<dest>'` are sentinels for the source or
 destination directory itself being unreadable or absent.
 
-The evidence floor that survives an unreadable source subtree is named by four fixed filenames —
-`mission-list.md`, `workflow-plan.md`, `workflow-state.md`, `finalization-summary.md`, each required
-in the destination when the source holds it. The first two are read from the kernel's own constants
-in every edition rather than hand-typed per port: the GitLab and Gitea ports listed only three, so
-`mission-list.md`, the run record itself, was absent from that floor and a main-only entry by that
-name was destroyed at exit 0 on those two editions.
+The evidence floor that survives an unreadable source subtree is named by three fixed filenames —
+`workflow-plan.md`, `workflow-state.md`, `finalization-summary.md`, each required in the destination
+when the source holds it. `workflow-plan.md` is read from the kernel's own constant in every edition
+rather than hand-typed per port. The mission ledger is not in this floor: it never sits in the
+project folder, and archive moves it into the destination after the completeness proof.
 
 `closure-audit` reports an `archive_content_incomplete` drift class (report-only in both modes, and
 identical offline).
@@ -255,9 +265,9 @@ progress journal or execution plan. Its live blocks are:
 Fresh state contains only these claim/sink/liveness facts and genuine closure data. Older state files
 may still contain retired progress, evidence, or timestamp residue; `removeLegacyStateBlocks` strips
 that residue on active writes, and no reader uses it to resume or close a run. In particular, legacy
-path/command execution policy is inert and never drives an active resume. The Mission List remains
-the sole coordination record: its H1 is the goal and each mission has `item`, `status`, `dispatched`,
-and `result`, with three write moments and immutable completed results.
+path/command execution policy is inert and never drives an active resume. The mission ledger remains
+the sole coordination record: each line has `n`, `name`, `details`, and `status`, with three write
+moments and immutable `done` / `failed` lines.
 
 Legacy or transitional coordination folders such as `.locks/`, `.sessions/`, and `.tickers/`, plus a
 `fast-summary.md` marker, are tolerated only for old evidence and are not permanent workflow state.
@@ -286,8 +296,8 @@ resumable. An `ambiguous` lane, or more than one candidate, triggers the resume-
 Execution shape is a per-mission judgment, not persisted workflow state. Dispatch is appropriate
 when it materially reduces main-context residue, supplies independent judgment, or enables genuine
 parallelism. Inline execution or one production owner is appropriate for cohesive feed-forward work
-when handoff and integration cost dominate. Both are first-class, and the Mission List's
-`dispatched` field records the chosen locator (`self` for inline work) without a gate, count, cap, or
+when handoff and integration cost dominate. Both are first-class, and the mission ledger's
+`details` records the chosen dispatch locator (`self` for inline work) without a gate, count, cap, or
 fallback stigma. Tier classifications, role profiles, and runtime-native defaults remain metadata;
 task-sensitive model/effort overrides or omission are valid.
 
