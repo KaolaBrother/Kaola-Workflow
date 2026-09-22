@@ -462,13 +462,11 @@ function testKeepOpenArchiveStamp333() {
       'session_marker: walkthrough-333',
       'claim_ts: 2020-01-01T00:00:00.000Z', ''
     ].join('\n'));
-    fs.writeFileSync(path.join(projDir, 'mission-list.md'), [
-      '# Keep-open closure', '',
-      '- item: archive the finished claim while leaving the issue open',
-      '  status: done',
-      '  dispatched: main orchestrator',
-      '  result: closure disposition recorded', ''
-    ].join('\n'));
+    // #1089: the run's mission ledger lives in the main checkout's gitignored .ledger/.
+    fs.mkdirSync(path.join(root, 'kaola-workflow', '.ledger'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'kaola-workflow', '.ledger', 'issue-333.jsonl'),
+      JSON.stringify({ n: 1, name: 'archive the finished claim while leaving the issue open',
+        details: 'dispatched: main orchestrator | result: closure disposition recorded', status: 'done' }) + '\n');
     seedAdaptiveFinalizeFixture(root, 'issue-333');
     const result = runClaim(['finalize', '--project', 'issue-333', '--keep-open'], root);
     assert(result.status === 'closed', '#333: keep-open finalize should report closed');
@@ -478,6 +476,12 @@ function testKeepOpenArchiveStamp333() {
     assert(archived.length === 1, '#333: keep-open finalize should archive folder');
     const st = fs.readFileSync(path.join(root, 'kaola-workflow', 'archive', archived[0], 'workflow-state.md'), 'utf8');
     assert(st.includes('status: closed'), '#333: keep-open archived state must be closed');
+    assert(result.closure_receipt && result.closure_receipt.mission_ledger === 'moved',
+      '#1089: finalize must report the ledger move on closure_receipt.mission_ledger, got: '
+      + JSON.stringify(result.closure_receipt && result.closure_receipt.mission_ledger));
+    assert(fs.existsSync(path.join(root, 'kaola-workflow', 'archive', archived[0], 'mission-ledger.jsonl'))
+      && !fs.existsSync(path.join(root, 'kaola-workflow', '.ledger', 'issue-333.jsonl')),
+      '#1089: finalize must move the live ledger into the archive');
     assert(st.includes('session_marker: walkthrough-333') && st.includes('claim_ts: 2020-01-01T00:00:00.000Z'),
       '#333: keep-open archive must preserve claim liveness identity, got: ' + st);
     assert(/^## Closure$/m.test(st), '#333: keep-open archived state must carry a ## Closure block');
