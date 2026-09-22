@@ -369,7 +369,9 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', "reason: '
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'staging_guard_foreign_archive');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'staging_guard_multi_project');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', "reason: 'finalize_mirror_refused',");
-assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'if (!verdict.safe) {');
+// #1089: the Step-8a record-regression guard is retired with mission-list.md — pinned ABSENT.
+assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'compareLedgers');
+assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'mirror-digest');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'finalize_transaction');
 // Dispatch-log attestation is retired on the claim/author seam too. It asked whether a
 // `workflow-planner` subagent had been spawned before the plan was frozen; there is no planner
