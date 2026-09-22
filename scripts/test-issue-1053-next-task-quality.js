@@ -15,7 +15,7 @@
 // it pins the producer -> consumer seam rather than a private copy of the wording.
 //
 // Non-goal guards (negative pins) are scoped to the exact named artifact: the GENERATED_SURFACES
-// registry, the Mission List four-field table, the init/finalize skeletons' absence of any "what
+// registry, the mission ledger four-key table, the init/finalize skeletons' absence of any "what
 // to remember" step, and claim.js's CLI-flag surface. This suite does NOT pin the
 // behavior-contracts.json role roster against a historical commit (a prior revision did, via
 // `git show <baseline-sha>:...`, and a supervisor review correctly flagged that as wrong for a
@@ -457,18 +457,18 @@ eq(Object.keys(gen.TOPICS).sort().join(','), 'finalize,init,next', 'TOPICS stays
 // — already a standing step in both `test:kaola-workflow:claude` and `:claude:full` — is the
 // correct, history-independent guard should a role ever drift from its own authority.
 
-// No new Mission List field: the four-field table and the write-moment sequence remain in the skeleton.
+// No new mission ledger key (#1089): the four-key table and the write-moment sequence remain in the skeleton.
 {
-  const missionSection = section(skeletonText, 'Write the mission list');
-  assert(missionSection !== null, 'skeleton: "## Write the mission list" section is present');
-  const required = ['| field | content | written |', '| `item`', '| `status`', '| `dispatched`', '| `result`', 'before the work goes'];
+  const missionSection = section(skeletonText, 'Write the mission ledger');
+  assert(missionSection !== null, 'skeleton: "## Write the mission ledger" section is present');
+  const required = ['| key | content |', '| `n`', '| `name`', '| `details`', '| `status`', 'before the work'];
   for (const token of required) {
     assert(missionSection !== null && missionSection.includes(token),
-      'Mission List section still carries: ' + JSON.stringify(token));
+      'mission ledger section still carries: ' + JSON.stringify(token));
   }
-  // Exactly four field rows — no fifth field snuck in.
-  const fieldRows = (missionSection || '').split('\n').filter(l => /^\|\s*`(?:item|status|dispatched|result)`/.test(l.trim()));
-  eq(fieldRows.length, 4, 'Mission List table has exactly four field rows (item, status, dispatched, result)');
+  // Exactly four key rows — no fifth key snuck in (any backticked first cell counts).
+  const keyRows = (missionSection || '').split('\n').filter(l => /^\|\s*`[^`]+`\s*\|/.test(l.trim()));
+  eq(keyRows.length, 4, 'mission ledger table has exactly four key rows (n, name, details, status)');
 }
 
 // No new required step in init.skeleton.md or finalize.skeleton.md about "what to remember".

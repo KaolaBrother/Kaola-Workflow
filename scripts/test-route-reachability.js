@@ -116,8 +116,9 @@ for (const ed of codexEditions) {
   const n = norm(fs.readFileSync(path.join(REPO, next), 'utf8'));
   assert(f.includes('issue_numbers') && f.includes('--issue-numbers'),
     `T4[${ed.name}]: finalize SKILL wires the multi-issue member-set flag (--issue-numbers)`);
-  assert(n.includes('kaola-workflow/{project}/mission-list.md') && n.includes(norm('nothing depends on a stable ID')),
-    `T4[${ed.name}]: next SKILL names the run's mission list AND carries the format itself`);
+  assert(n.includes('<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl')
+      && n.includes(norm('keys exactly in this order and nothing else')) && !n.includes('mission-list.md'),
+    `T4[${ed.name}]: next SKILL names the run's mission ledger AND carries the format itself (#1089)`);
   assert(n.includes(norm('kaola-workflow-finalize')),
     `T4[${ed.name}]: next SKILL routes onward to finalization`);
 }
@@ -168,8 +169,8 @@ for (const ed of codexEditions) {
     // Hand-wrapped markdown: collapse whitespace before matching, or a re-wrap that changes nothing
     // semantically would redden the pin (and, worse, invite someone to weaken it).
     const content = fs.readFileSync(path.join(REPO, f), 'utf8').replace(/\s+/g, ' ');
-    assert(content.includes('mission-list.md'),
-      `T6b: ${f} must bind its acceptance check to the run's own recorded results (mission-list.md)`);
+    assert(content.includes('kaola-workflow/.ledger/issue-<N>.jsonl') && !content.includes('mission-list.md'),
+      `T6b: ${f} must bind its acceptance check to the run's own recorded results (the mission ledger, #1089)`);
     assert(/issue statement/.test(content),
       `T6b: ${f} must name the issue statement as the outer obligation`);
     assert(/covering test/.test(content) && /validation receipt/.test(content) && /prose evidence/.test(content),
@@ -875,7 +876,7 @@ function checkGlobalContract({ blocks, globalContract }) {
     { token: '`changed_paths`', surfaces: FN_ALL },
     { token: '<!-- PIN: sink-reports-orchestrator-owns -->', surfaces: FN_ALL },
     // next × 6
-    { token: 'mission-list.md', surfaces: NX_ALL },
+    { token: '<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl', surfaces: NX_ALL },
     { token: 'Look for the work, not for the worker.', surfaces: NX_ALL },
     { token: '--target-issue', surfaces: NX_ALL },
     { token: '--target-issues', surfaces: NX_ALL },

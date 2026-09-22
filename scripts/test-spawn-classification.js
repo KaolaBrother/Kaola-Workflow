@@ -88,7 +88,6 @@ const CEILINGS = Object.freeze({
   'scripts/test-generate-routing-surfaces.js': 1,
   'scripts/test-git-fixture.js': 2,
   'scripts/test-issue-probe-memo.js': 1,
-  'scripts/test-ledger-compare.js': 1,
   'scripts/test-release.js': 4,
   'scripts/test-route-reachability.js': 1,
   'scripts/test-run-chains.js': 5,

@@ -190,7 +190,7 @@ function partB() {
 // was deleted. Keeping the arm would mean either re-adding rows for machinery that is gone or
 // hand-listing a hundred historical names, and either one turns the check into the typed list it
 // exists to avoid. So only the forward half survives, and totality is no longer witnessed against
-// anything a run really produced. It re-arms on its own the day a mission-list run archives.
+// anything a run really produced. It re-arms on its own the day a mission-ledger run archives.
 // ===========================================================================
 
 // collectDeclaredArtifactNames — every artifact path the production scripts name as a literal.
@@ -402,10 +402,6 @@ const NON_ATOMIC_EXEMPT = [
   {
     file: 'kaola-workflow-global-contract.js', api: 'renameSync', klass: 'atomic-helper-internal',
     why: 'the global-contract transaction publishes each complete temp file by same-directory atomic rename and rolls the batch back on any later write failure',
-  },
-  {
-    file: 'kaola-workflow-ledger-compare.js', api: 'writeFileSync', klass: 'outside-project-space',
-    why: 'diffSummary writes both mission-list texts into a private fs.mkdtempSync scratch directory under os.tmpdir() purely so `diff -u` (or `git diff --no-index`) can render a bounded operator summary; the directory is removed in a finally block, nothing is ever read back for a durability decision, and no kaola-workflow/<project>/ record path is touched at any point',
   },
   {
     file: 'kaola-workflow-sink-merge.js', api: 'copyFileSync', klass: 'mirror-copy',

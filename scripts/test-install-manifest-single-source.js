@@ -139,15 +139,14 @@ assert.ok(manifest.supportScripts('gitea').includes('kaola-gitea-workflow-gap-sw
     '#407: install.sh must not retain a hand-maintained SUPPORT_HOOK_NAMES array literal');
 }
 
-// --- 4. #412: kaola-workflow-ledger-compare.js must be in supportScripts for ALL forges. ---
-// This guards against the #399 ledger-regression guard silently disarming on manual install.
+// --- 4. #1089: kaola-workflow-ledger-compare.js is RETIRED with the Step-8a record-regression guard
+// (the mission ledger lives only in the main checkout, so there is nothing to compare). It must not
+// ship to any forge, and its source must be gone from every tree.
 for (const forge of manifest.FORGES) {
   const scripts = manifest.supportScripts(forge);
-  // ledger-compare is byte-identical across editions, so no forge-port rename — the canonical
-  // name must appear verbatim in every forge's support set.
   assert.ok(
-    scripts.includes('kaola-workflow-ledger-compare.js'),
-    `#412: kaola-workflow-ledger-compare.js must be in supportScripts('${forge}') — got: [${scripts.join(', ')}]`
+    !scripts.some(name => /ledger-compare\.js$/.test(name)),
+    `#1089: ledger-compare must not be in supportScripts('${forge}') — got: [${scripts.join(', ')}]`
   );
 }
 

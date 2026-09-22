@@ -96,8 +96,8 @@ const dispatchSource = fs.readFileSync(path.join(ROOT, 'templates', 'routing', '
 const roleContracts = fs.readFileSync(path.join(ROOT, 'templates', 'agents', 'behavior-contracts.json'), 'utf8');
 for (const phrase of [
   'Machines decide facts; humans decide values', 'Own your own verdicts',
-  'item', 'status', 'dispatched', 'result', 'three write moments',
-  'Finalization, issue closure, archive, and sink are not Mission List items',
+  '`n`', '`name`', '`details`', '`status`', 'three write moments',
+  'Finalization, issue closure, archive, and sink are not missions',
 ]) ok(source.includes(phrase), `A1: universal contract carries ${phrase}`);
 {
   const nextN = nextSource.replace(/\s+/g, ' ');

@@ -112,8 +112,8 @@ function git(cwd, args) { return execFileSync('git', ['-C', cwd, ...args], { enc
   git(repo, ['mv', 'docs/old-name.md', 'docs/new-name.md']);
 
   const out = mirrorFinalizationArtifacts(wt, proj);
-  assert(out && !out.refused && out.ledger_compare === 'skipped_no_record',
-    'D (#423): with no run record the mirror guard fails OPEN (skipped_no_record), got ' + JSON.stringify(out));
+  assert(out && !out.refused && out.mirror === 'mirrored' && !('ledger_compare' in out),
+    'D (#423/#1089): with no run record the mirror proceeds (no record compare exists), got ' + JSON.stringify(out));
   assert(fs.existsSync(path.join(wt, 'docs', 'new-name.md')),
     'D (#423): renamed file is mirrored to worktree by its NEW path even when no plan present');
   fs.rmSync(tmp, { recursive: true, force: true });

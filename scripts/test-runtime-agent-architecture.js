@@ -658,7 +658,7 @@ assert(!/KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(initSource),
   const retired = /Repair or re-review work (?:must append|appends) (?:a )?new mission(?: rather than rewriting the closed item)?\./i;
   const keepsFinalizationOutsideList = text => {
     const n = norm(text);
-    return /Finalization, Issue closure, archive, and sink are not Mission List items\./i.test(n)
+    return /Finalization, Issue closure, archive, and sink are not missions\./i.test(n)
       && /The last run mission establishes readiness for finalization\./i.test(n)
       && /The finalization summary, closure evidence, archive state, and sink receipt own the transaction's truth\./i.test(n);
   };
@@ -673,7 +673,7 @@ assert(!/KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(initSource),
   const globalContract = read('templates/global/kaola-workflow-global.md') || '';
   const globalLifecycleBoundary = text => {
     const n = norm(text);
-    return /Finalization, issue closure, archive, and sink are not Mission List items/i.test(n)
+    return /Finalization, issue closure, archive, and sink are not missions/i.test(n)
       && /last mission[^.]*readiness/i.test(n)
       && /lifecycle records[^.]*final truth/i.test(n);
   };
@@ -689,8 +689,8 @@ assert(!/KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(initSource),
       && /independent causal class/i.test(n);
   };
   assert(globalLifecycleBoundary(globalContract)
-      && issue1042OperationSources.every(text => !/Finalization[^.]*are Mission List items/i.test(norm(text))),
-    'A3[issue-1042]: global authority keeps lifecycle work outside Mission List and operations do not contradict it');
+      && issue1042OperationSources.every(text => !/Finalization[^.]*are missions/i.test(norm(text))),
+    'A3[issue-1042]: global authority keeps lifecycle work outside the mission ledger and operations do not contradict it');
   assert(issue1042OperationSources.every(text => !retired.test(norm(text))),
     'A3[issue-1042]: next/finalize reject the old absolute repair/re-review append rule');
   assert(globalAttemptBoundary(globalContract)
@@ -704,23 +704,23 @@ assert(!/KW-(?:AGENTS-MANAGED|CLAUDE-OVERLAY-MANAGED)/.test(initSource),
     && globalLifecycleBoundary(text)),
     'A3[issue-1042]: compact recovery retains attempt/lifecycle boundary through the global source');
   const compactSurfaceNorms = compactRecoverySources.map(norm);
-  assert(compactSurfaceNorms.every(text => /a completed item and (?:its )?result are immutable/i.test(text)
+  assert(compactSurfaceNorms.every(text => /A `done` or `failed` line is immutable/i.test(text)
     && /one dispatch has one result/i.test(text)),
     'A3[issue-1042]: generated compact prompts retain immutability and one-dispatch/one-result invariants');
-  const fixture = 'Finalization, Issue closure, archive, and sink are not Mission List items. The last run mission establishes readiness for finalization. The finalization summary, closure evidence, archive state, and sink receipt own the transaction\'s truth. A failed command, intermediate finding, repair attempt, or review round does not by itself create a mission. Keep working within the current promised outcome while custody and causal boundary remain unchanged. Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class.';
+  const fixture = 'Finalization, Issue closure, archive, and sink are not missions. The last run mission establishes readiness for finalization. The finalization summary, closure evidence, archive state, and sink receipt own the transaction\'s truth. A failed command, intermediate finding, repair attempt, or review round does not by itself create a mission. Keep working within the current promised outcome while custody and causal boundary remain unchanged. Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class.';
   assert(keepsFinalizationOutsideList(fixture) && keepsAttemptsInsideOutcome(fixture),
     'A3[issue-1042] mutation setup: canonical boundary fixture is accepted');
   assert(!keepsFinalizationOutsideList(fixture.replace('are not', 'are')),
-    'A3[issue-1042] mutation RED: finalization inside Mission List is rejected');
+    'A3[issue-1042] mutation RED: finalization inside the mission ledger is rejected');
   assert(!keepsAttemptsInsideOutcome(fixture.replace('does not by itself', 'must')),
     'A3[issue-1042] mutation RED: one mission per repair/re-review attempt is rejected');
   const compactRecoveryMutationSubject = compactRecoverySources[0] || '';
   assert(!nextMissionEnumeration(nextSource.replace(
     /An item is a mission — a recoverable outcome/i, 'An item is a specification and selector')),
   'A3[issue-1042] next mutation RED: mission enumeration teaching is rejected');
-  assert(!/Finalization, issue closure, archive, and sink are not Mission List items/i.test(
-    compactRecoveryMutationSubject.replace('are not Mission List items', 'are Mission List items')),
-  'A3[issue-1042] compact-prompt mutation RED: finalization inside Mission List is rejected');
+  assert(!/Finalization, issue closure, archive, and sink are not missions/i.test(
+    compactRecoveryMutationSubject.replace('are not missions', 'are missions')),
+  'A3[issue-1042] compact-prompt mutation RED: finalization inside the mission ledger is rejected');
 }
 
 // The retired byte migrator and canonical project template are gone. Exercise every freshly

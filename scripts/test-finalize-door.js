@@ -2342,18 +2342,6 @@ if (failed > 0) {
 (function T12_refusalNamesTheGiveTheClaimBackRoute() {
   console.log('T12: a refusing finalize names `release` as the route that gives the claim back');
 
-  const missionList = statuses => {
-    const lines = ['# T12 fixture', ''];
-    statuses.forEach((s, i) => {
-      lines.push('- item: mission ' + (i + 1));
-      lines.push('  status: ' + s);
-      if (s !== 'todo') lines.push('  dispatched: agent-' + (i + 1) + ', output to out/' + (i + 1) + '.md');
-      if (s === 'done') lines.push('  result: out/' + (i + 1) + '.md');
-      lines.push('');
-    });
-    return lines.join('\n');
-  };
-
   // Each door: a fixture that reaches it, the refusal it must produce, and whether the main-root
   // cue is a new demand or a regression pin. `run` returns the finalize result; `clean` tears down.
   const DOORS = [
@@ -2383,21 +2371,20 @@ if (failed > 0) {
     {
       reason: 'finalize_mirror_refused',
       mainRootCue: 'regression',
-      // A main copy that is BOTH staler than the worktree's ledger and unwritable: the transaction
-      // owns that sync, cannot perform it, and refuses fail-closed before any side effect.
+      // #1089 trigger swap: the diverged-and-unwritable MAIN mission list this door used to reach it
+      // through is retired (there is no record-regression guard left to refuse). The still-live
+      // trigger is an UNWRITABLE worktree project folder — the mirror's destination: the transaction
+      // owns the main -> worktree copy, cannot perform it, and refuses fail-closed before any side
+      // effect.
       build(tag) {
         const fx = buildWorktreeRun(tag, 'issue-9070', null);
-        fs.writeFileSync(path.join(fx.wt, 'kaola-workflow', fx.project, 'mission-list.md'),
-          missionList(['done', 'done', 'done']));
         const mainProj = path.join(fx.mainRoot, 'kaola-workflow', fx.project);
         fs.mkdirSync(path.join(mainProj, '.cache'), { recursive: true });
-        fs.writeFileSync(path.join(mainProj, 'workflow-state.md'), 'stale\n');
-        fs.writeFileSync(path.join(mainProj, 'mission-list.md'), missionList(['done', 'todo', 'todo']));
-        fs.chmodSync(path.join(mainProj, 'mission-list.md'), 0o444);
-        fs.chmodSync(path.join(mainProj, 'workflow-state.md'), 0o444);
-        fs.chmodSync(path.join(mainProj, '.cache'), 0o555);
-        fs.chmodSync(mainProj, 0o555);
-        fx.locked = mainProj;
+        fs.writeFileSync(path.join(mainProj, 'finalization-summary.md'), '# Finalization\n');
+        const wtProj = path.join(fx.wt, 'kaola-workflow', fx.project);
+        fs.chmodSync(path.join(wtProj, '.cache'), 0o555);
+        fs.chmodSync(wtProj, 0o555);
+        fx.locked = wtProj;
         return fx;
       },
       run(fx, claimPath) { return runFinalizeKeepWorktree(fx, claimPath); },
@@ -3420,8 +3407,8 @@ function headingSequence(text) {
   // fixed, only its four field meanings and three write moments (ADR 0017), and a script that
   // counts missions cannot prove completion. This fixture's content is therefore no longer read
   // for statistics; it exists only so `## Mission List` is a real, non-empty file finalize can see
-  // and leave alone (scripts/test-issue-1054-mission-list-carriers.js owns the layout-independence
-  // and no-auto-statistics pins across all four claim.js trees).
+  // and leave alone. #1089 retired the Markdown mission list as the run record; the file name is
+  // kept here only as an arbitrary project-folder file finalize must carry and not rewrite.
   const MISSION_LIST = [
     '# goal: pin the fill-if-empty writer',
     '',

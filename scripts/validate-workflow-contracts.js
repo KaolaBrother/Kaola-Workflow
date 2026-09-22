@@ -260,16 +260,17 @@ for (const file of nextSurfaces) {
   // '--target-issues' were proven duplicate by subtraction against required-blocks.js — see
   // .cache/implementation-validators.md.
 
-  // THE MISSION LIST. It is the run's only coordination record, so the surface must name the file,
-  // carry the format itself rather than pointing at it, and carry the three write moments. The
-  // reader of an installed surface is in a consumer repo, where no path into this repository's
+  // THE MISSION LEDGER (#1089). It is the run's only coordination record, so the surface must name
+  // the file, carry the format itself rather than pointing at it, and carry the three write moments.
+  // The reader of an installed surface is in a consumer repo, where no path into this repository's
   // docs resolves — so the order/absence facts have to travel with the surface.
-  assertIncludes(file, 'kaola-workflow/{project}/mission-list.md');
+  assertIncludes(file, '<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl');
+  assertNotIncludes(file, 'mission-list.md');
   // #1054 item 27 (nx-mission-list): 'nothing depends on a stable ID', 'absent fields are simply
   // absent', 'status: todo', 'dispatched: self', 'before the work goes', and 'mission, not a
   // specification' were proven duplicate by subtraction against required-blocks.js — see
   // .cache/implementation-validators.md.
-  assertBefore(file, 'Write the mission list', 'Run it');
+  assertBefore(file, 'Write the mission ledger', 'Run it');
 
   // CONCURRENCY CARRIES NO MACHINERY. This is a subtraction made durable: without the sentence,
   // nothing stops a proof obligation from being reintroduced as "just a small check".
@@ -355,22 +356,21 @@ assertConcept('AGENTS.md', 'compact durable state contract', [
   'only optional local roadmap file',
   'kaola-workflow/<run>/',
   'workflow-state.md',
-  'mission-list.md'
+  'kaola-workflow/.ledger/issue-<N>.jsonl'
 ]);
-assertConcept('templates/global/kaola-workflow-global.md', 'machine-global Mission List contract', [
-  'Mission List',
-  'item',
-  'status',
-  'dispatched',
-  'result',
+assertConcept('templates/global/kaola-workflow-global.md', 'machine-global Mission Ledger contract', [
+  'Mission Ledger',
+  '`n`, `name`, `details`, `status`',
   'in-flight',
   'kaola-workflow/{project}/workflow-state.md',
-  'kaola-workflow/{project}/mission-list.md',
+  'kaola-workflow/.ledger/issue-<N>.jsonl',
+  'mission-ledger.jsonl',
 ]);
+assertNotIncludes('templates/global/kaola-workflow-global.md', 'mission-list.md');
 assertConcept('templates/routing/compact-recovery.skeleton.md', 'compact durable-state route', [
   'AGENTS.md',
   'workflow-state.md',
-  'mission-list.md',
+  'kaola-workflow/.ledger/issue-<N>.jsonl',
   'Workflow Next',
   'Finalization',
 ]);
@@ -451,7 +451,7 @@ assertNotIncludes('commands/workflow-init.md', 'claude_dispatch_posture: teams |
   const globalContract = norm(read('templates/global/kaola-workflow-global.md'));
   const dispatchContract = norm(read('templates/routing/dispatch-contract.md'));
   for (const file of ['commands/workflow-init.md', 'templates/routing/init.skeleton.md']) assertAgentOwnedInit(file);
-  for (const taught of ['Mission List', '`item`', '`status`', '`dispatched`', '`result`',
+  for (const taught of ['Mission Ledger', '`n`', '`name`', '`details`', '`status`',
     'three write moments']) {
     assert(globalContract.includes(norm(taught)),
       'the machine-global contract must teach mission behavior — missing "' + taught + '"');
@@ -727,44 +727,18 @@ for (const forge of ['', '-gitlab', '-gitea']) {
   assert(!exists('plugins/kaola-workflow' + forge + '/agents/contractor.toml'),
     'plugins/kaola-workflow' + forge + '/agents/contractor.toml must be retired');
 }
-// #399/#816: the Step-8a artifact mirror lives INSIDE cmdFinalize and must still run the
-// ledger-regression guard BEFORE the copy. #837 SUBTRACTS the operator obligation the guard used to
-// raise (the "sync worktree→main FIRST" recovery phrase): the transaction performs that sync itself,
-// and the refusal survives only for a sync the script cannot perform. Pin the guard, the retained
-// top-level reason, and the re-typed inner reason, so a change that drops the guard or silently
-// re-opens the operator obligation cannot pass — the 2026-06-11 audit reproduced the clobber live.
-// #1054 (superseding #837, item 28: TEST-AUTHOR EDIT, not implementer): this block used to pin
-// the ledger guard's SOURCE SHAPE literally (`if (!verdict.safe) {`, `inner_reason:
-// 'mirror_sync_failed',`, …), which collided head-on with #1054's own in-flight rewrite of those
-// same lines (compareLedgers now decides the mirror by CONTENT, not by the #837 worktree-wins
-// auto-repair the guard used to attempt). Pin the BEHAVIOR the guard exists to protect instead:
-// a refactor that reshapes the source while keeping the outcome stays green here; one that drops
-// the outcome (auto-repairs a divergence, or stops refusing) reds regardless of wording.
+// #1089: the Step-8a artifact mirror no longer guards a run record — the mission ledger lives only
+// in the main checkout, so the compare module and its receipt are gone. Pin the retirement and the
+// behavior that replaces the guard: a linked-worktree mirror carries NO ledger into the worktree.
 assertIncludes('scripts/kaola-workflow-claim.js', "reason: 'finalize_mirror_refused',");
+assert(!exists('scripts/kaola-workflow-ledger-compare.js'),
+  'scripts/kaola-workflow-ledger-compare.js is retired (#1089) and must not exist');
+assertNotIncludes('scripts/kaola-workflow-claim.js', 'compareLedgers');
+assertNotIncludes('scripts/kaola-workflow-claim.js', 'mirror-digest');
 {
-  const ledgerCompare = require('./kaola-workflow-ledger-compare.js');
-  assert(typeof ledgerCompare.compareLedgers === 'function',
-    'scripts/kaola-workflow-ledger-compare.js must export compareLedgers');
   const claimModule = require('./kaola-workflow-claim.js');
   assert(typeof claimModule.mirrorFinalizationArtifacts === 'function',
     'scripts/kaola-workflow-claim.js must export mirrorFinalizationArtifacts');
-
-  // compareLedgers decides by CONTENT (#1054's whole premise — a count/format proxy read 0 on the
-  // real table-form Mission List and produced a false-safe over production data).
-  const missingDest = ledgerCompare.compareLedgers('src text', null);
-  assert(missingDest.safe === true && missingDest.reason === 'first_sync',
-    'compareLedgers(src, missing-dest) must be safe/first_sync, got: ' + JSON.stringify(missingDest));
-  const identical = ledgerCompare.compareLedgers('same text', 'same text');
-  assert(identical.safe === true && identical.reason === 'identical',
-    'compareLedgers(identical texts) must be safe/identical, got: ' + JSON.stringify(identical));
-  const diverged = ledgerCompare.compareLedgers('src text v2', 'dest text v1 — different content');
-  assert(diverged.safe === false && diverged.reason === 'content_diverged',
-    'compareLedgers(diverged texts) must be unsafe/content_diverged, got: ' + JSON.stringify(diverged));
-
-  // mirrorFinalizationArtifacts (the exported write-path sibling of the unexported read-only
-  // probeFinalizeMirror) must refuse fail-closed, zero-write, under mirror_sync_failed on a REAL
-  // linked worktree whose mission-list.md diverged from the main copy — never guess a repair
-  // direction (the retired #837 worktree-wins auto-merge).
   const G = require('./test-git-fixture');
   const fsMod = require('fs');
   const os = require('os');
@@ -780,20 +754,17 @@ assertIncludes('scripts/kaola-workflow-claim.js', "reason: 'finalize_mirror_refu
     fsMod.mkdirSync(kwRoot, { recursive: true });
     G.exec(mainRoot, ['worktree', 'add', '-b', 'workflow/' + project, '--', wtPath, 'main'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-
     const srcDir = pathMod.join(mainRoot, 'kaola-workflow', project);
-    const destDir = pathMod.join(wtPath, 'kaola-workflow', project);
     fsMod.mkdirSync(srcDir, { recursive: true });
-    fsMod.mkdirSync(destDir, { recursive: true });
-    fsMod.writeFileSync(pathMod.join(srcDir, 'mission-list.md'),
-      '# Goal\n\n- item: a\n  status: done\n  result: out/a.md\n');
-    fsMod.writeFileSync(pathMod.join(destDir, 'mission-list.md'),
-      '# Goal\n\n- item: a\n  status: todo\n');
-
+    fsMod.writeFileSync(pathMod.join(srcDir, 'finalization-summary.md'), '# Summary\n');
+    const ledgerFile = pathMod.join(mainRoot, 'kaola-workflow', '.ledger', 'issue-99001.jsonl');
+    fsMod.mkdirSync(pathMod.dirname(ledgerFile), { recursive: true });
+    fsMod.writeFileSync(ledgerFile, '{"n":1,"name":"a","details":"","status":"done"}\n');
     const result = claimModule.mirrorFinalizationArtifacts(wtPath, project);
-    assert(result && result.refused === true && result.inner_reason === 'mirror_sync_failed',
-      'mirrorFinalizationArtifacts must refuse a diverged main/worktree mission-list.md under ' +
-      'inner_reason mirror_sync_failed (no automatic repair direction), got: ' + JSON.stringify(result));
+    assert(result && result.mirror === 'mirrored' && !('ledger_compare' in result),
+      'mirrorFinalizationArtifacts must mirror without a ledger compare, got: ' + JSON.stringify(result));
+    assert(!fsMod.existsSync(pathMod.join(wtPath, 'kaola-workflow', '.ledger')),
+      'the mission ledger must never be mirrored into a linked worktree (#1089)');
   } finally {
     try {
       G.exec(mainRoot, ['worktree', 'remove', '--force', wtPath],

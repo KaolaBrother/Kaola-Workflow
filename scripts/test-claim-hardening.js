@@ -1385,165 +1385,133 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     } finally { cleanup816(fx); }
   }
 
-  // --- T2 (restored, #877; T2a re-derived under #1054): the worktree<->main anti-clobber fence,
-  // end-to-end over the MISSION LIST. The #399 property outlived the node executor whose
-  // `## Node Ledger` it used to count, and #1054 (owner-approved scope correction,
-  // kaola-workflow/bundle-1054/.cache/sync-guard-trace.md) retired the done-COUNT proxy entirely:
-  // `compareLedgers` now decides by byte CONTENT (`first_sync` / `identical` / `content_diverged`
-  // — scripts/test-ledger-compare.js pins the comparison itself), and the automatic
-  // worktree-wins repair for a diverged pair is RETIRED — every divergence, including the
-  // "main is merely staler" case T2a used to repair automatically, now refuses fail-closed and
-  // is zero-write on BOTH sides; the Main Orchestrator reconciles by hand. Three arms:
-  //   (a) main staler (content-diverged) -> `--check` classifies `sync_failed` (not the retired
-  //       `sync_required`) and mutates neither record; the transaction then REFUSES
-  //       (`finalize_mirror_refused` / `mirror_sync_failed`), preserving BOTH records exactly as
-  //       found — preservation by REFUSAL, not by an automatic repair that picks a winner.
-  //   (b) main staler + UNwritable -> `--check` classifies `sync_failed`; the transaction
-  //       refuses fail-closed (`finalize_mirror_refused` / `mirror_sync_failed`) and the
-  //       worktree record is byte-untouched. (Writability no longer distinguishes (a) from (b)
-  //       in the VERDICT — both are content-diverged and both refuse — so (b) is retained
-  //       unchanged as its own arm only because it additionally proves the unwritable-tree path
-  //       reaches the identical refusal, not a raw I/O error.)
-  //   (c) no worktree record       -> the legitimate first sync passes (fail-open).
+  // --- T2 (restored, #877; re-derived under #1054; RETIRED-AND-INVERTED under #1089): the
+  // worktree<->main record-regression guard is GONE. #1089 (owner-ordered hard retire) moved the
+  // run's mission record out of the project folder into the main checkout's gitignored
+  // `kaola-workflow/.ledger/issue-<N>.jsonl`, which never enters a worktree — so there is no second
+  // copy to diverge, and `compareLedgers`, its `.cache/mirror-digest.json` receipt and the
+  // `ledger_compare` transaction field are retired. Three arms:
+  //   (a) a main/worktree divergence of a project-folder file named `mission-list.md` (the retired
+  //       record's old name) is now an ORDINARY mirrored file: `--check` is ready, the transaction
+  //       mirrors main -> worktree and archives; no refusal, no digest receipt, no ledger_compare.
+  //   (b) the live refusal the old arm (b) also exercised is kept on a still-live trigger — an
+  //       UNWRITABLE existing worktree project folder (the mirror's destination): `--check`
+  //       classifies `sync_failed`, the transaction refuses fail-closed (`finalize_mirror_refused` /
+  //       `mirror_sync_failed`), zero-write on the worktree side, nothing archived, no commit.
+  //   (c) a main-only file still rides the mirror into the archive, and the receipt carries no
+  //       retired `ledger_compare` field.
   {
-    // An independent tiny oracle: counting via the mechanism under test would be circular.
-    const countDone816 = text => (String(text).match(/^[ \t]*status:[ \t]*done[ \t]*$/gim) || []).length;
-    const missionList816 = statuses => {
+    const oldRecord816 = statuses => {
       const lines = ['# close issue #816 — fence fixture', ''];
       statuses.forEach((s, i) => {
         lines.push('- item: mission ' + (i + 1));
         lines.push('  status: ' + s);
-        if (s !== 'todo') lines.push('  dispatched: agent-' + (i + 1) + ', output to out/' + (i + 1) + '.md');
-        if (s === 'done') lines.push('  result: out/' + (i + 1) + '.md');
         lines.push('');
       });
       return lines.join('\n');
     };
 
-    // (a) staler main, content-diverged: --check is read-only; the transaction now REFUSES
-    // fail-closed instead of repairing — preservation by refusal, both records left exactly as
-    // found, neither side picked as a winner.
+    // (a) INVERTED: divergence no longer refuses.
     {
       const fx = mk816('issue-816b');
       try {
-        const wtRecord = missionList816(['done', 'done', 'done']);
-        const mainRecord = missionList816(['done', 'in-flight', 'todo']);
+        const wtRecord = oldRecord816(['done', 'done', 'done']);
+        const mainRecord = oldRecord816(['done', 'in-flight', 'todo']);
         fs.writeFileSync(path.join(fx.wtProjDir, 'mission-list.md'), wtRecord);
         fs.writeFileSync(path.join(fx.mainProjDir, 'mission-list.md'), mainRecord);
-        // A main-only Finalization artifact — a refusal must not touch it either.
         fs.writeFileSync(path.join(fx.mainProjDir, 'finalization-summary.md'), '# Finalization\n');
 
         const chk = runFinalize816(fx, ['--check', '--json']);
-        assert(chk.status !== 0 && chk.json && chk.json.ok === false,
-          '#816(T2a): #1054 — a content-diverged pair IS an unmet precondition now (the automatic '
-          + 'repair is retired), got status=' + chk.status + ' json=' + JSON.stringify(chk.json));
-        assert(chk.json && chk.json.checks && chk.json.checks.mirror === 'sync_failed',
-          '#816(T2a): --check must classify the diverged pair as sync_failed (the retired '
-          + '`sync_required` token no longer exists), got ' + JSON.stringify(chk.json && chk.json.checks));
-        assert(chk.json && Array.isArray(chk.json.reasons) && chk.json.reasons.includes('mirror_sync_failed'),
-          '#816(T2a): --check reasons must carry the typed mirror_sync_failed token, got '
-          + JSON.stringify(chk.json && chk.json.reasons));
-        assert(fs.readFileSync(path.join(fx.wtProjDir, 'mission-list.md'), 'utf8') === wtRecord
-          && fs.readFileSync(path.join(fx.mainProjDir, 'mission-list.md'), 'utf8') === mainRecord,
-          '#816(T2a): --check must leave BOTH mission-list records byte-unchanged');
+        assert(chk.status === 0 && chk.json && chk.json.ok === true
+          && chk.json.checks && chk.json.checks.mirror === 'ready'
+          && Array.isArray(chk.json.reasons) && !chk.json.reasons.includes('mirror_sync_failed'),
+          '#816(T2a)/#1089: a diverged former run-record file is no longer an unmet precondition, got status='
+          + chk.status + ' json=' + JSON.stringify(chk.json));
 
         const r = runFinalize816(fx);
-        assert(r.status !== 0 && r.json && r.json.reason === 'finalize_mirror_refused',
-          '#816(T2a): the transaction must refuse under the pinned top-level reason instead of '
-          + 'repairing, got status=' + r.status + ' json=' + JSON.stringify(r.json)
-          + ' stderr=' + String(r.stderr || '').slice(0, 400));
-        assert(r.json && r.json.inner_reason === 'mirror_sync_failed',
-          '#816(T2a): the refusal must be re-typed mirror_sync_failed, got ' + JSON.stringify(r.json));
-        const detail = String((r.json && r.json.detail) || '');
-        assert(detail.includes(path.join(fx.mainProjDir, 'mission-list.md'))
-          && detail.includes(path.join(fx.wtProjDir, 'mission-list.md')),
-          '#816(T2a): the refusal detail names BOTH absolute mission-list.md paths, got '
-          + detail.slice(0, 400));
-        assert(/dest \(worktree copy\)|src \(main copy\)|^[-+]/m.test(detail),
-          '#816(T2a): the refusal detail carries a diff-shaped summary, got ' + detail.slice(0, 400));
-
-        // Preservation BY REFUSAL: both sides are byte-exactly what they were planted as — no
-        // repair picked a winner. The worktree keeps its 3 done items and main keeps its 1;
-        // nothing regressed and nothing advanced.
-        assert(fs.readFileSync(path.join(fx.wtProjDir, 'mission-list.md'), 'utf8') === wtRecord
-          && countDone816(wtRecord) === 3,
-          '#816(T2a): the worktree record is untouched and still carries its 3 done items');
-        assert(fs.readFileSync(path.join(fx.mainProjDir, 'mission-list.md'), 'utf8') === mainRecord
-          && countDone816(mainRecord) === 1,
-          '#816(T2a): the main record is ALSO untouched — the retired worktree-wins repair did not '
-          + 'overwrite it');
-        assert(fs.readFileSync(path.join(fx.mainProjDir, 'finalization-summary.md'), 'utf8') === '# Finalization\n',
-          '#816(T2a): the main-only Finalization artifact is untouched by the refusal');
-        assert(!fs.existsSync(path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project))
-          && !fs.existsSync(path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project)),
-          '#816(T2a): the refusing transaction must archive nothing');
+        assert(r.status === 0 && r.json && r.json.reason !== 'finalize_mirror_refused',
+          '#816(T2a)/#1089: the transaction must no longer refuse over a record divergence, got status='
+          + r.status + ' json=' + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 400));
+        const tx = r.json && r.json.finalize_transaction;
+        assert(tx && tx.mirror === 'mirrored' && !Object.prototype.hasOwnProperty.call(tx, 'ledger_compare'),
+          '#816(T2a)/#1089: the mirror continues and the retired ledger_compare field is absent, got '
+          + JSON.stringify(tx));
+        const archived = path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project);
+        assert(fs.existsSync(path.join(archived, 'finalization-summary.md')),
+          '#816(T2a)/#1089: the main-only Finalization artifact still rides the mirror into the archive');
+        assert(!fs.existsSync(path.join(archived, '.cache', 'mirror-digest.json')),
+          '#816(T2a)/#1089: the retired .cache/mirror-digest.json receipt is never written');
       } finally { cleanup816(fx); }
     }
 
-    // (b) staler main + UNwritable: fail-closed refusal, zero-write on the worktree side.
+    // (b) TRIGGER SWAPPED: an unwritable existing destination still refuses fail-closed.
     {
-      const fx = mk816('issue-816d');
-      const mainRecordPath = path.join(fx.mainProjDir, 'mission-list.md');
-      const mainCacheDir = path.join(fx.mainProjDir, '.cache');
-      try {
-        const wtRecord = missionList816(['done', 'done', 'done']);
-        const mainRecord = missionList816(['done', 'todo', 'todo']);
-        fs.writeFileSync(path.join(fx.wtProjDir, 'mission-list.md'), wtRecord);
-        fs.writeFileSync(mainRecordPath, mainRecord);
-        fs.chmodSync(mainRecordPath, 0o444);
-        fs.chmodSync(mainCacheDir, 0o555);
-        fs.chmodSync(fx.mainProjDir, 0o555);
+      const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+      if (uid === 0) {
+        console.error('SKIP: #816(T2b) — running as uid 0, where chmod 555 is inert.');
+      } else {
+        const fx = mk816('issue-816d');
+        const wtStatePath = path.join(fx.wtProjDir, 'workflow-state.md');
+        try {
+          fs.writeFileSync(path.join(fx.mainProjDir, 'finalization-summary.md'), '# Finalization\n');
+          const wtStateBefore = fs.readFileSync(wtStatePath, 'utf8');
+          fs.chmodSync(fx.wtCacheDir, 0o555);
+          fs.chmodSync(fx.wtProjDir, 0o555);
+          let axisCode = null;
+          try { fs.accessSync(fx.wtProjDir, fs.constants.W_OK); } catch (e) { axisCode = e && e.code; }
+          assert(axisCode === 'EACCES',
+            '#816(T2b) premise: the worktree project folder must be genuinely unwritable; accessSync gave '
+            + JSON.stringify(axisCode));
 
-        const chk = runFinalize816(fx, ['--check', '--json']);
-        assert(chk.status !== 0 && chk.json && chk.json.ok === false,
-          '#816(T2b): an unperformable sync IS an unmet precondition, got status=' + chk.status
-          + ' json=' + JSON.stringify(chk.json));
-        assert(chk.json && chk.json.checks && chk.json.checks.mirror === 'sync_failed',
-          '#816(T2b): --check must classify the unwritable main copy as sync_failed, got '
-          + JSON.stringify(chk.json && chk.json.checks));
-        assert(chk.json && Array.isArray(chk.json.reasons) && chk.json.reasons.includes('mirror_sync_failed'),
-          '#816(T2b): the reason must carry the typed mirror_sync_failed token, got '
-          + JSON.stringify(chk.json && chk.json.reasons));
+          const chk = runFinalize816(fx, ['--check', '--json']);
+          assert(chk.status !== 0 && chk.json && chk.json.ok === false,
+            '#816(T2b): an unperformable mirror IS an unmet precondition, got status=' + chk.status
+            + ' json=' + JSON.stringify(chk.json));
+          assert(chk.json && chk.json.checks && chk.json.checks.mirror === 'sync_failed',
+            '#816(T2b): --check must classify the unwritable destination as sync_failed, got '
+            + JSON.stringify(chk.json && chk.json.checks));
+          assert(chk.json && Array.isArray(chk.json.reasons) && chk.json.reasons.includes('mirror_sync_failed'),
+            '#816(T2b): the reason must carry the typed mirror_sync_failed token, got '
+            + JSON.stringify(chk.json && chk.json.reasons));
 
-        const r = runFinalize816(fx);
-        assert(r.status !== 0 && r.json && r.json.reason === 'finalize_mirror_refused',
-          '#816(T2b): the transaction must refuse under the pinned top-level reason, got status='
-          + r.status + ' json=' + JSON.stringify(r.json));
-        assert(r.json && r.json.inner_reason === 'mirror_sync_failed',
-          '#816(T2b): the refusal must be re-typed mirror_sync_failed, got ' + JSON.stringify(r.json));
-        assert(fs.readFileSync(path.join(fx.wtProjDir, 'mission-list.md'), 'utf8') === wtRecord,
-          '#816(T2b): the refusal must be zero-write on the worktree side — the complete record survives');
-        assert(fs.readFileSync(mainRecordPath, 'utf8') === mainRecord,
-          '#816(T2b): the staler main record must not be half-advanced by a failed sync');
-        assert(!fs.existsSync(path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project))
-          && !fs.existsSync(path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project)),
-          '#816(T2b): the refusing transaction must archive nothing');
-        assert(!/^chore: (finalize|archive) /m.test(gOut816(fx.wtRoot, ['log', '--format=%s', '-5'])),
-          '#816(T2b): the refusing transaction must author no bookkeeping commit');
-      } finally {
-        try { fs.chmodSync(fx.mainProjDir, 0o755); } catch (_) {}
-        try { fs.chmodSync(mainCacheDir, 0o755); } catch (_) {}
-        try { fs.chmodSync(mainRecordPath, 0o644); } catch (_) {}
-        cleanup816(fx);
+          const r = runFinalize816(fx);
+          assert(r.status !== 0 && r.json && r.json.reason === 'finalize_mirror_refused',
+            '#816(T2b): the transaction must refuse under the pinned top-level reason, got status='
+            + r.status + ' json=' + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 400));
+          assert(r.json && r.json.inner_reason === 'mirror_sync_failed',
+            '#816(T2b): the refusal must be re-typed mirror_sync_failed, got ' + JSON.stringify(r.json));
+          assert(fs.readFileSync(wtStatePath, 'utf8') === wtStateBefore
+            && !fs.existsSync(path.join(fx.wtProjDir, 'finalization-summary.md')),
+            '#816(T2b): the refusal must be zero-write on the worktree side');
+          assert(!fs.existsSync(path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project))
+            && !fs.existsSync(path.join(fx.wtRoot, 'kaola-workflow', 'archive', fx.project)),
+            '#816(T2b): the refusing transaction must archive nothing');
+          assert(!/^chore: (finalize|archive) /m.test(gOut816(fx.wtRoot, ['log', '--format=%s', '-5'])),
+            '#816(T2b): the refusing transaction must author no bookkeeping commit');
+        } finally {
+          try { fs.chmodSync(fx.wtProjDir, 0o755); } catch (_) {}
+          try { fs.chmodSync(fx.wtCacheDir, 0o755); } catch (_) {}
+          cleanup816(fx);
+        }
       }
     }
 
-    // (c) no worktree record: the legitimate first sync fails open and carries the record in.
+    // (c) a main-only file rides the mirror; no ledger_compare field.
     {
       const fx = mk816('issue-816e');
       try {
-        fs.writeFileSync(path.join(fx.mainProjDir, 'mission-list.md'), missionList816(['done', 'done']));
+        const mainOnly = oldRecord816(['done', 'done']);
+        fs.writeFileSync(path.join(fx.mainProjDir, 'mission-list.md'), mainOnly);
         const r = runFinalize816(fx);
         assert(r.status === 0,
-          '#816(T2c): the first sync (no worktree record) must pass, got status=' + r.status
+          '#816(T2c): a main-only file must mirror and finalize, got status=' + r.status
           + ' json=' + JSON.stringify(r.json) + ' stderr=' + String(r.stderr || '').slice(0, 400));
         const tx = r.json && r.json.finalize_transaction;
-        assert(tx && tx.mirror === 'mirrored' && tx.ledger_compare === 'pass',
-          '#816(T2c): the fail-open first sync must be recorded as a plain pass, got ' + JSON.stringify(tx));
+        assert(tx && tx.mirror === 'mirrored' && !Object.prototype.hasOwnProperty.call(tx, 'ledger_compare'),
+          '#816(T2c)/#1089: recorded as a plain mirror with no retired ledger_compare field, got ' + JSON.stringify(tx));
         const archivedRecord = path.join(fx.mainRoot, 'kaola-workflow', 'archive', fx.project, 'mission-list.md');
-        assert(fs.existsSync(archivedRecord)
-          && countDone816(fs.readFileSync(archivedRecord, 'utf8')) === 2,
-          '#816(T2c): the first sync must carry the main record into the archived run folder');
+        assert(fs.existsSync(archivedRecord) && fs.readFileSync(archivedRecord, 'utf8') === mainOnly,
+          '#816(T2c): the mirror must carry the main-only file into the archived run folder');
       } finally { cleanup816(fx); }
     }
   }
@@ -3592,11 +3560,11 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   }
 
   // DELETED: #837 P3, P4 and P5 — the three mirror-sync scenarios, which staled a plan file's
-  // `## Node Ledger` rows that no longer exist. Their PROPERTIES did not die with them: #877
-  // re-pointed compareLedgers at the mission list's `status: done` items, and the restored
-  // #816(T2) block above pins all three again over mission-list fixtures — the sync-required
-  // classification and its read-only guarantee (T2a), the mirror_sync_failed fail-closed anchor
-  // (T2b), and the fail-open first sync (T2c). scripts/test-ledger-compare.js pins the counting.
+  // `## Node Ledger` rows that no longer exist. #877 re-pointed their record-regression property at
+  // the mission list, and #1089 retired it outright (the mission ledger never enters a worktree, so
+  // there is nothing to compare); the #816(T2) block above now pins that the divergence no longer
+  // refuses (T2a), the still-live mirror_sync_failed fail-closed anchor on an unwritable
+  // destination (T2b), and the plain main->worktree mirror (T2c).
   // P1/P2 above pin the one-pass `--check` report on a run with nothing to sync; P6-P9 below pin
   // the usage surface and the four contract-validator literals.
 
@@ -5130,7 +5098,7 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
         + 'the entry-kind fault to be named as such' },
     { name: 'R5_dangling', rel: 'mission-list.md', kind: 'dangling', expect: 'refuse',
       why: 'a DANGLING symlink — no target, therefore no bytes, therefore invisible to a comparison '
-        + 'that only weighs bytes. The name is the ADR 0017 run record itself' },
+        + 'that only weighs bytes. The name is the retired ADR 0017 run record\'s' },
     { name: 'R6_fifo', rel: 'pipe.md', kind: 'fifo', expect: 'refuse',
       why: 'a FIFO — the same class reached by a different entry kind, so the guard cannot be a '
         + 'symlink special case' },

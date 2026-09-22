@@ -90,7 +90,8 @@ for (const forge of FORGES) {
       && /completely\s+reload the installed Kaola-Workflow Finalization prompt/.test(prompt),
       `B3[${runtime}/${forge}]: compact recovery reloads the complete active operation prompt`);
     assert(/Read project `AGENTS\.md`/.test(prompt)
-      && /workflow-state\.md/.test(prompt) && /mission-list\.md/.test(prompt),
+      && /workflow-state\.md/.test(prompt) && /kaola-workflow\/\.ledger\/issue-<N>\.jsonl/.test(prompt)
+      && !/mission-list\.md/.test(prompt),
       `B3[${runtime}/${forge}]: prompt resumes from durable files`);
     assert(!/node\s|\.js\b|PreToolUse|PostToolUse|sidecar|opaque token|chunk bitmap/i.test(prompt),
       `B4[${runtime}/${forge}]: runtime prompt contains no executable prompt machinery`);

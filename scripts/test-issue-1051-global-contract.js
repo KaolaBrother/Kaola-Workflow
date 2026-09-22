@@ -66,7 +66,9 @@ function teachesFullClaimPath(text) {
   return String(text).includes('kaola-workflow/{project}/workflow-state.md');
 }
 function teachesFullRunPath(text) {
-  return String(text).includes('kaola-workflow/{project}/mission-list.md');
+  // #1089: the run is recorded in the main checkout's mission ledger.
+  return String(text).includes('kaola-workflow/.ledger/issue-<N>.jsonl')
+    && !String(text).includes('mission-list.md');
 }
 function teachesForgeBacklog(text) {
   return /The forge's open issue list is backlog truth/i.test(text);
@@ -88,7 +90,7 @@ function teachesOrganizingDoesNotClaim(text) {
 }
 function teachesOrganizingDoesNotCreateMissionList(text) {
   return /organiz(?:e|ing) issues/i.test(text)
-    && /Mission List/i.test(text)
+    && /mission ledger/i.test(text)
     && /does not auto-create/i.test(text);
 }
 function teachesDailyGovernanceDoesNotCreateRun(text) {
@@ -98,7 +100,7 @@ function teachesActiveRunRespected(text) {
   return /active run/i.test(text) && /respect/i.test(text);
 }
 function teachesFourFields(text) {
-  return ['item', 'status', 'dispatched', 'result'].every(field => String(text).includes(field));
+  return ['`n`', '`name`', '`details`', '`status`'].every(field => String(text).includes(field));
 }
 function teachesThreeWrites(text) {
   return /three write moments/i.test(text)
@@ -106,15 +108,15 @@ function teachesThreeWrites(text) {
     && /output will land/i.test(text);
 }
 function teachesImmutableResults(text) {
-  return /completed item and its result are immutable/i.test(text)
-    && /FAIL/i.test(text) && /BLOCKED/i.test(text);
+  return /A `done` or `failed` line is immutable/i.test(text)
+    && /including `failed` or `blocked`/i.test(text);
 }
 function teachesRecoverableOutcome(text) {
   return /mission is a recoverable outcome/i.test(text)
     && /failed command, intermediate finding, repair attempt, or review round does not create another mission/i.test(text);
 }
 function teachesLifecycleOutsideList(text) {
-  return /Finalization, issue closure, archive, and sink are not Mission List items/i.test(text);
+  return /Finalization, issue closure, archive, and sink are not missions/i.test(text);
 }
 function teachesMissionEnumeration(text) {
   return /An item is a mission — a recoverable outcome/i.test(text)
@@ -154,7 +156,7 @@ function teachesReverifyAfterMutation(text) {
     || (/re-verif/i.test(text) && /scope of the change/i.test(text));
 }
 function teachesResumeFrontier(text) {
-  return /list minus done minus in-flight/i.test(text)
+  return /ledger minus done minus in-flight/i.test(text)
     && /in-flight/i.test(text);
 }
 function teachesNoReclaimInFlight(text) {
@@ -172,11 +174,11 @@ ok(teachesPriorityConfig(global),
 ok(teachesFullClaimPath(global),
   'A1: global names kaola-workflow/{project}/workflow-state.md as the claim path');
 ok(teachesFullRunPath(global),
-  'A1: global names kaola-workflow/{project}/mission-list.md as the run path');
+  'A1: global names kaola-workflow/.ledger/issue-<N>.jsonl as the run path (#1089)');
 ok(teachesOrganizingDoesNotClaim(global),
   'A1: organizing issues does not auto-claim');
 ok(teachesOrganizingDoesNotCreateMissionList(global),
-  'A1: organizing issues does not auto-create a Mission List');
+  'A1: organizing issues does not auto-create a mission ledger');
 ok(teachesDailyGovernanceDoesNotCreateRun(global),
   'A1: daily governance does not auto-create a run');
 ok(teachesActiveRunRespected(global),
@@ -193,12 +195,12 @@ for (const token of [
   ok(global.includes(token), `A1: backlog/governance token stays in global: ${token}`);
 }
 
-ok(teachesFourFields(global), 'A2: global keeps the four Mission List fields');
+ok(teachesFourFields(global), 'A2: global keeps the four mission ledger keys');
 ok(teachesThreeWrites(global), 'A2: global keeps the three write moments including output landing');
-ok(teachesImmutableResults(global), 'A2: global keeps immutable completed results including FAIL/BLOCKED');
+ok(teachesImmutableResults(global), 'A2: global keeps immutable terminal lines including failed/blocked');
 ok(teachesRecoverableOutcome(global), 'A2: global keeps recoverable-outcome and no-attempt-mission');
 ok(teachesLifecycleOutsideList(global), 'A2: global keeps finalization/closure/archive/sink outside the list');
-ok(/Finalization/i.test(finalize) && /not a Mission List item/i.test(finalize),
+ok(/Finalization/i.test(finalize) && /It is not a mission/i.test(finalize),
   'A2: Finalize owns lifecycle operations');
 ok(teachesMissionEnumeration(next),
   'A2: Next keeps the mission-is-not enumeration and causal-class append judgment');
@@ -238,8 +240,8 @@ ok(teachesReverifyAfterMutation(global + ' ' + next),
 
 ok(/there is no local backlog mirror/i.test(global) && !/\bMCP\b/.test(globalRaw),
   'A5: global keeps the no-local-backlog-mirror rule and adds no MCP machinery');
-ok(teachesFourFields(global) && !/`effort`/.test((global.split('Mission List')[1] || '')),
-  'A5: run-record format stays the four fields (no new field machinery in the Mission List section)');
+ok(teachesFourFields(global) && !/`effort`/.test((global.split('Mission Ledger')[1] || '')),
+  'A5: run-record format stays the four fields (no new field machinery in the Mission Ledger section)');
 
 {
   ok(!teachesFullClaimPath('`workflow-state.md` records the claim; `kaola-workflow/{project}/mission-list.md` records the run.'),
@@ -251,10 +253,10 @@ ok(teachesFourFields(global) && !/`effort`/.test((global.split('Mission List')[1
   ok(keepsProjectOnlyStricter('Project instructions add only verified local facts and stricter constraints.'),
     'A6 mutation RED: restoring stricter-constraints-only is detected');
 
-  const autoCreate = 'Organizing issues auto-creates a Mission List and auto-claims the work.';
+  const autoCreate = 'Organizing issues auto-creates a mission ledger and auto-claims the work.';
   ok(!teachesOrganizingDoesNotClaim(autoCreate)
       && !teachesOrganizingDoesNotCreateMissionList(autoCreate),
-    'A6 mutation RED: auto-creating a Mission List from daily organizing is rejected');
+    'A6 mutation RED: auto-creating a mission ledger from daily organizing is rejected');
 
   const dropPriority = global.replace(/priority_top_tier_labels/g, '');
   ok(!teachesPriorityConfig(dropPriority),
