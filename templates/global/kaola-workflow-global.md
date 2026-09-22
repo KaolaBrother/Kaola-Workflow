@@ -22,21 +22,28 @@ safety boundaries.
   else is generated or tracked under `.roadmap/`; there is no local backlog mirror to refresh.
 - Declare top-priority labels in `kaola-workflow/config.json` under `priority_top_tier_labels`.
 - `kaola-workflow/{project}/workflow-state.md` records the claim;
-  `kaola-workflow/{project}/mission-list.md` records the run.
-- Organizing issues does not auto-claim and does not auto-create a Mission List. Daily governance
+  `kaola-workflow/.ledger/issue-<N>.jsonl` in the main checkout records the run.
+- Organizing issues does not auto-claim and does not auto-create a mission ledger. Daily governance
   does not auto-create a run; when an active run exists, other operations respect it.
 
-## Mission List
+## Mission Ledger
 
-- One run has one Mission List with `item`, `status`, `dispatched`, and `result`.
-- Use three write moments: create; write `dispatched` before the work goes out, including where the
-  output will land; then write `result`. A completed item and its result are immutable. One dispatch
-  has one result, including `FAIL` or `BLOCKED`.
+- One run has one mission ledger at `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`, where `N`
+  is the run's `issue_number`. It is gitignored, lives only in the main checkout, and is never
+  copied into a worktree.
+- One JSON object per line, one line per mission, keys exactly `n`, `name`, `details`, `status`;
+  `status` is `todo`, `in-flight`, `done`, `failed`, or `blocked`. No header and no other keys.
+- Only the run's Main Orchestrator writes it, rewriting the whole file, at three write moments:
+  create with `todo`; before the work goes out, set `in-flight` and add to `details` where it went,
+  including where the output will land; then set the terminal status and add where the outcome
+  landed. A `done` or `failed` line is immutable. One dispatch has one result, including `failed`
+  or `blocked`.
 - A mission is a recoverable outcome. A failed command, intermediate finding, repair attempt, or
-  review round does not create another mission. `BLOCKED` means the current owner cannot safely or
+  review round does not create another mission. `blocked` means the current owner cannot safely or
   legitimately continue.
-- Resume by trusting done results, reconciling in-flight locators, and continuing the frontier: the
-  list minus done minus in-flight.
+- Resume by trusting done lines, reconciling in-flight locators, and continuing the frontier: the
+  ledger minus done minus in-flight.
 - Mutation invalidates affected PASS evidence.
-- Finalization, issue closure, archive, and sink are not Mission List items. The last mission only
-  establishes readiness; lifecycle records own the transaction's final truth.
+- Finalization, issue closure, archive, and sink are not missions. Archive moves the ledger to
+  `kaola-workflow/archive/<project>/mission-ledger.jsonl`. The last mission only establishes
+  readiness; lifecycle records own the transaction's final truth.

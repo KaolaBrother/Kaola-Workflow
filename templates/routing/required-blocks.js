@@ -34,19 +34,26 @@
 // authoring surface for universal wording.
 const GLOBAL_CONTRACT_BLOCKS = [
   {
-    block_id: 'global-mission-list',
+    // #1089: the ledger's path, shape and single-writer rule are the Workflow↔Runner contract, so
+    // each is pinned where it is authored once.
+    block_id: 'global-mission-ledger',
     content_tokens: [
       'kaola-workflow/{project}/workflow-state.md',
-      'kaola-workflow/{project}/mission-list.md',
+      '`kaola-workflow/.ledger/issue-<N>.jsonl` in the main checkout records the run',
+      'lives only in the main checkout, and is never copied into a worktree',
+      'keys exactly `n`, `name`, `details`, `status`',
+      '`todo`, `in-flight`, `done`, `failed`, or `blocked`',
+      'Only the run\'s Main Orchestrator writes it',
       'three write moments',
       'before the work goes out',
       'where the output will land',
-      'completed item and its result are immutable',
-      'One dispatch has one result, including `FAIL` or `BLOCKED`',
+      'A `done` or `failed` line is immutable',
+      'One dispatch has one result, including `failed` or `blocked`',
       'A failed command, intermediate finding, repair attempt, or review round does not create another mission',
-      '`BLOCKED` means the current owner cannot safely or legitimately continue',
+      '`blocked` means the current owner cannot safely or legitimately continue',
       'recoverable outcome',
-      'the list minus done minus in-flight',
+      'the ledger minus done minus in-flight',
+      '`kaola-workflow/archive/<project>/mission-ledger.jsonl`',
     ],
   },
   {
@@ -120,49 +127,34 @@ const REQUIRED_BLOCKS = [
   // ==== next (ASYMMETRIC: command basename workflow-next, skill basename
   //      kaola-workflow-next) ====
   {
-    // The mission list is the run's only coordination record, and the three
-    // write moments are the only discipline that keeps it true. `dispatched`
-    // written AFTER the work goes out is the exact failure the file exists to
-    // prevent, so that ordering is pinned as text rather than left to survive
-    // by habit. The FORMAT ITSELF is carried on these surfaces rather than
-    // pointed at: a reader of an installed command is in a consumer repo, where
-    // no path into this repository's docs resolves. The two order/absence facts
-    // are pinned individually because they live nowhere else on a shipped
-    // surface, and an unpinned fact is one edit from gone.
+    // The mission ledger (#1089) is the run's only coordination record, and the
+    // three write moments are the only discipline that keeps it true. The
+    // dispatch locator written AFTER the work goes out is the exact failure the
+    // file exists to prevent, so that ordering is pinned as text rather than
+    // left to survive by habit. The FORMAT ITSELF is carried on these surfaces
+    // rather than pointed at: a reader of an installed command is in a consumer
+    // repo, where no path into this repository's docs resolves.
     //
-    // THE FIELD TABLE IS PINNED BY THE ROW, not by its words. The table is the
-    // format's normative definition — it is the only place on a shipped surface
-    // that binds each field NAME to its content AND to the write moment it is
-    // written at, so the whole table could have been deleted with every token
-    // above still present. Each row is one field's complete definition, so the
-    // row is the unit.
-    //
-    // WHY THE ROW AND NOT THE CLAUSE: `**where the output was to land**` also
-    // appears in write moment 2 further down the surface. A bare-clause token
-    // would therefore stay green while the locator was stripped from the
-    // `dispatched` ROW — green for a reason unrelated to the property it names.
-    // The row token is what makes the locator undeletable where it is bound to
-    // the field.
-    //
-    // NOT PINNED: the header and delimiter rows. Losing them breaks the table's
-    // rendering, which a reader sees immediately, and costs no rule — the rows
-    // below carry the format.
-    block_id: 'nx-mission-list',
+    // THE KEY TABLE IS PINNED BY THE ROW: each row is one key's complete
+    // definition, and the `details` row is the only place that binds the
+    // dispatch locator to the field, so the row is the unit.
+    block_id: 'nx-mission-ledger',
     topic: 'next',
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
-      'mission-list.md',
-      'status: todo',
-      'in-flight',
-      'nothing depends on a stable ID',
-      'absent fields are simply absent',
+      '<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl',
+      'never write it inside a worktree',
+      'ledger_not_gitignored',
+      'keys exactly in this order and nothing else',
+      '| `n` | the mission number: 1, 2, 3 … by position, never renumbered |',
+      '| `name` | the mission — one line |',
+      '| `details` | hints and facts; at dispatch add who took it and **where the output will land**; at close add where the outcome landed |',
+      '| `status` | `todo` \\| `in-flight` \\| `done` \\| `failed` \\| `blocked` |',
+      'Only you write it, rewriting the whole file.',
       'before the work goes',
+      'A `done` or `failed` line never changes again',
       'dispatched: self',
-      '| `item` | the mission — one line of prose, hints and facts | at creation |',
-      '| `status` | `todo` \\| `in-flight` \\| `done` | on change |',
-      '| `dispatched` | what went out and to whom, and **where the output was to land** | at dispatch |',
-      '| `result` | where the outcome landed — a path, or a few lines inline | at close |',
       'Append a mission only for a new recoverable outcome that changes custody or for a newly discovered independent causal class.',
       'recoverable outcome',
       'does not by itself create a mission',
@@ -294,14 +286,11 @@ const REQUIRED_BLOCKS = [
     ],
   },
   {
-    // #1054 item 8: Mission List is retired from this sentence's list of finalize-
-    // transaction findings landing places. A completed Mission's result is
-    // immutable (ADR 0017) and finalization is not a Mission List item, so nothing
-    // here may claim Mission List as a place the TRANSACTION's own findings land —
-    // that description was the coupling the audit named directly. `## Validation`
-    // and `## Changed Paths` remain the two durable destinations, compared to
-    // nothing, that this block still pins.
-    block_id: 'fn-mission-list-report',
+    // #1054 item 8: the mission record is not a landing place for the finalize
+    // transaction's own findings. A completed mission's result is immutable (ADR
+    // 0017) and finalization is not a mission. `## Validation` and `## Changed
+    // Paths` remain the two durable destinations this block pins.
+    block_id: 'fn-mission-ledger-report',
     topic: 'finalize',
     runtime_tag: 'both',
     surface_type_tag: 'both',

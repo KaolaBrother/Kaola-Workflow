@@ -91,24 +91,33 @@ choice goes back to the user.
 
 ## Resume
 
-On resume, read `mission-list.md` top to bottom and reconcile in-flight locators.
+On resume, read the mission ledger top to bottom and reconcile in-flight locators.
 Look for the work, not for the worker. Check the locator: if the output the dispatch promised has
 landed, close it; otherwise re-dispatch, unless you can positively show the dispatch is alive.
 
-## Write the mission list
+## Write the mission ledger
 
-Create `kaola-workflow/{project}/mission-list.md` immediately after claim: one H1 goal and ordered
-entries. Items are positional; nothing depends on a stable ID, and absent fields are simply absent.
+Create the ledger immediately after claim at the claim's `ledger_path`:
+`<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`, with `main_root` and `issue_number` from
+`workflow-state.md`. It lives only in the main checkout — never write it inside a worktree — and it
+is gitignored; if the claim reports `ledger_not_gitignored`, tell the user. One JSON object per line,
+one line per mission, keys exactly in this order and nothing else:
 
-| field | content | written |
-|---|---|---|
-| `item` | the mission — one line of prose, hints and facts | at creation |
-| `status` | `todo` \| `in-flight` \| `done` | on change |
-| `dispatched` | what went out and to whom, and **where the output was to land** | at dispatch |
-| `result` | where the outcome landed — a path, or a few lines inline | at close |
+| key | content |
+|---|---|
+| `n` | the mission number: 1, 2, 3 … by position, never renumbered |
+| `name` | the mission — one line |
+| `details` | hints and facts; at dispatch add who took it and **where the output will land**; at close add where the outcome landed |
+| `status` | `todo` \| `in-flight` \| `done` \| `failed` \| `blocked` |
 
-Create with `status: todo`; before the work goes out, set `in-flight` and write the locator; close
-with `done` and result. Inline work uses `dispatched: self`.
+```jsonl
+{"n":1,"name":"Implement the fix","details":"dispatched: self — output lands on the run branch","status":"in-flight"}
+```
+
+Only you write it, rewriting the whole file. Create every line with `status` `todo`; before the work
+goes out, set `in-flight` and add the locator to `details`; close with `done` or `failed` and where
+the result landed. A `done` or `failed` line never changes again; `blocked` waits on a ruling and may
+return to `in-flight`. Inline work records `dispatched: self`.
 An item is a mission — a recoverable outcome. A failed command, intermediate finding, repair
 attempt, or review round does not by itself create a mission. Keep working within the current
 promised outcome while custody and causal boundary remain unchanged. Append a mission only for a
@@ -140,7 +149,7 @@ Before continuing or stopping print:
 Workflow project: {project}
 Issue: {issue or set}
 Branch: {branch from workflow-state.md, or TBD if not yet claimed}
-Mission list: {n done / n in-flight / n todo}
+Mission ledger: {n done / n in-flight / n todo}
 <!-- SPLICE:nx-required-next -->
 ```
 

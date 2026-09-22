@@ -70,8 +70,9 @@ when the runtime does not reload instructions into the current context.
 Create only artifacts the inspected repository actually needs. A normal first initialization may
 add `kaola-workflow/archive/`, a concise documentation index and project docs, `docs/decisions/`, and
 `CHANGELOG.md`. Never overwrite a useful file or fill one with generic boilerplate merely because a
-path is listed here. Do not create an active `workflow-state.md` or `mission-list.md`; `/workflow-next`
-owns the run.
+path is listed here. Do not create an active `workflow-state.md` or a mission ledger; `/workflow-next`
+owns the run. Ensure `.gitignore` carries `kaola-workflow/.ledger/` (the main checkout's live mission
+ledgers) beside any existing `kaola-workflow/.locks/`, `.sessions/`, `.tickers/` lines.
 
 ## Legacy Backlog Layer
 

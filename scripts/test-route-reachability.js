@@ -654,7 +654,7 @@ function checkGlobalContract({ blocks, globalContract }) {
 // and write only project-local facts. This is composition, not restatement.
 {
   const globalIds = GLOBAL_CONTRACT_BLOCKS.map(b => b.block_id).sort();
-  assert(globalIds.join(',') === 'global-forge-is-the-backlog,global-mission-list',
+  assert(globalIds.join(',') === 'global-forge-is-the-backlog,global-mission-ledger',
     'GLOBAL-CONTRACT: the sole source must retain both mission-list and forge-backlog obligation blocks; got '
     + JSON.stringify(globalIds));
   const globalFailures = checkGlobalContract({

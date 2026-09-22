@@ -7,7 +7,8 @@ Recovery marker: `KW-COMPACT-RECOVERY-V2`.
 
 ## Resume the active operation
 
-Read project `AGENTS.md`, active `workflow-state.md`, and `mission-list.md`. With open work,
+Read project `AGENTS.md`, active `workflow-state.md`, and the run's mission ledger
+(`<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`). With open work,
 completely reload the installed Workflow Next prompt and resume its frontier without intake or
 claim. When all missions are done,
 completely reload the installed Kaola-Workflow Finalization prompt and continue from its receipts.

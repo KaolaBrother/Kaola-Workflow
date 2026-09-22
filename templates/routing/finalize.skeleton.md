@@ -23,7 +23,8 @@ history, and resolving real content conflicts require the proposal, reason, and 
 <!-- /PIN -->
 
 Finalization validates, docks docs, writes terminal records, settles closure, archives, commits, and
-sinks. It is not a Mission List item. Read `workflow-state.md` and `mission-list.md`.
+sinks. It is not a mission. Read `workflow-state.md` and the mission ledger at
+`<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`; archive moves it into the run's archive folder.
 
 ## Card: validation, acceptance, and documentation
 
