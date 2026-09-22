@@ -255,7 +255,7 @@ function collectClosedSet(candidateNumbers) {
 //
 // The second and third rules are GONE with the mechanism that made them derivable. They asked the
 // state for a plan hash and then asked the plan's `## Node Ledger` which `.cache/<id>.md` files a
-// `complete` row obliged; there is no ledger to ask, and a mission-list `result` is free text, not
+// `complete` row obliged; there is no ledger to ask, and a mission ledger `details` cell is free text, not
 // a file list. That is the same vanished-declaration this campaign meets everywhere, and inventing
 // a replacement demand here would be a blanket rule wearing a derivation's clothes — it would flag
 // two thirds of a mature archive corpus as drift. LOCAL and report-only either way: an incomplete

@@ -198,6 +198,7 @@ RETIRED_SUPPORT_SCRIPTS=(
   "kaola-workflow-repair-state.js" "kaola-workflow-plan-validator.js" "kaola-workflow-next-action.js"
   "kaola-workflow-commit-node.js" "kaola-workflow-adaptive-handoff.js" "kaola-workflow-adaptive-node.js"
   "kaola-workflow-replan.js" "kaola-workflow-task-mirror.js"
+  "kaola-workflow-ledger-compare.js"
 )
 
 # Remove the retired support scripts from a deployed scripts dir. Each canonical base is removed

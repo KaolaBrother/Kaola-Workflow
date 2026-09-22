@@ -55,10 +55,17 @@ const ADAPTIVE_PATH = 'adaptive';
 const NEXT_COMMAND = '/workflow-next';
 const NEXT_SKILL = 'kaola-workflow-next';
 
-// The one durable coordination record: `kaola-workflow/<run>/mission-list.md`. Named here rather
-// than spelled at each reader so the file's name lives in the same byte-identical module every
-// edition already loads.
-const MISSION_LIST_FILE = 'mission-list.md';
+// The mission ledger (#1089, ADR 0027): the run's one coordination record. It lives in the MAIN
+// checkout only — `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`, N = the run's
+// `issue_number` — gitignored, never mirrored into a worktree, and MOVED to
+// `kaola-workflow/archive/<project>/mission-ledger.jsonl` (tracked) at archive. One JSON object per
+// line, one line per mission, keys exactly `n`, `name`, `details`, `status` in that order. Named
+// here so the path contract lives in the one byte-identical module every edition already loads.
+const LEDGER_DIR_REL = 'kaola-workflow/.ledger';
+const LEDGER_GITIGNORE_LINE = 'kaola-workflow/.ledger/';
+const ARCHIVED_LEDGER_FILE = 'mission-ledger.jsonl';
+const LEDGER_KEYS = Object.freeze(['n', 'name', 'details', 'status']);
+const LEDGER_STATUSES = Object.freeze(['todo', 'in-flight', 'done', 'failed', 'blocked']);
 
 // The retired frozen-plan artifact. Kept only as a name: the finalize mirror still has to recognise
 // a legacy project folder that carries one, and nothing authors it any more.
@@ -1048,8 +1055,8 @@ const KERNEL_RECORDS = Object.freeze(['plan', 'claim/sink', 'evidence', 'forge']
 
 const KERNEL_ARTIFACT_REGISTRY = Object.freeze([
   // ---- Plan -------------------------------------------------------------------------------
-  [MISSION_LIST_FILE, 'record', 'plan', 'agent',
-    'the goal in its H1 and, per item, the mission / status / dispatched / result — decomposition and position in one file'],
+  [ARCHIVED_LEDGER_FILE, 'record', 'plan', 'agent',
+    'the archived mission ledger (#1089): per mission n / name / details / status — moved here from kaola-workflow/.ledger/issue-<N>.jsonl at archive'],
 
   // ---- Claim / sink -----------------------------------------------------------------------
   ['workflow-state.md', 'record', 'claim/sink', 'script',
@@ -1060,8 +1067,6 @@ const KERNEL_ARTIFACT_REGISTRY = Object.freeze([
     'the tests-green oracle receipt (npm repo kind), candidate-bound'],
   ['.cache/run-gaps.json', 'record', 'evidence', 'script',
     'the run-gap sweep result; its writer refuses to overwrite a prior cycle, so it is durable gap evidence'],
-  ['.cache/mirror-digest.json', 'record', 'evidence', 'script',
-    '#1054 R1: the Step-8a artifact mirror\'s own prior-write receipt (sha256 of the bytes it last copied); lets the next mirror recognize an untouched dest as its own forward copy instead of refusing a legitimately advanced source as a conflict'],
   ['.cache/origin/selection-record.json', 'record', 'evidence', 'script',
     'the gate-validated selection record; the degenerate form exists so "explicit target" is distinguishable from "record lost"'],
   [/^\.cache\/validation-vectors\/[^/]+\.json$/, 'record', 'evidence', 'script',
@@ -1103,7 +1108,7 @@ const KERNEL_ARTIFACT_REGISTRY = Object.freeze([
   [/^\.cache\/[^/]+\.(?:md|log|txt|json|jsonl|diff|patch)$/, 'record', 'evidence', 'agent',
     'the free-form evidence band: per-item evidence and the attachments it cites — what was produced, how verified, where it lives'],
   [/^[^/]+\.md$/, 'record', 'evidence', 'agent',
-    'the project-root prose band: agent-authored run reports docked beside the mission list'],
+    'the project-root prose band: agent-authored run reports docked beside workflow-state.md'],
 ]);
 
 // classifyDurableArtifact — total over project-relative paths. Returns the first matching registry
@@ -1857,18 +1862,49 @@ function changedPathsSinceBase(root, base, project) {
   return out;
 }
 
-// parseGoal — the run's goal, read from the mission list's H1 (`# <goal>`). One line, at the top of
-// the one file, because the same usage limit that kills a subagent applies to the session holding
-// the goal in context.
-//
-// The H1 is the WHOLE grammar: the FIRST `# ` heading wins, so an item's prose further down cannot
-// displace it. Tolerates a leading UTF-8 BOM. Returns { goal: <string> } when present, { goal: null }
-// when absent — the same shape its readers already destructure. Pure (no fs).
-function parseGoal(content) {
-  const text = String(content || '').replace(/^﻿/, '');
-  const m = text.match(/^#[ \t]+(.+?)[ \t]*$/m);
-  const goal = m ? m[1].trim() : '';
-  return { goal: goal || null };
+// ledgerPath — the ONE path rule: pure string join of the canonical (main-checkout) root and the
+// run's issue number. No scan, no discovery; a Runner Host holding `--repo` and the session's N
+// computes the same string.
+function ledgerPath(mainRoot, issueNumber) {
+  const n = String(issueNumber == null ? '' : issueNumber).trim();
+  if (!/^[1-9][0-9]*$/.test(n)) return null;
+  const path = require('path');
+  return path.join(String(mainRoot || ''), LEDGER_DIR_REL, 'issue-' + n + '.jsonl');
+}
+
+// validateLedger — the shape rule, pure. Every non-empty line parses to an object whose keys are
+// EXACTLY `n,name,details,status` in that order, `n` runs 1..k with no gap, `name` is a one-line
+// non-empty string, `details` a string, `status` a member of LEDGER_STATUSES. Returns
+// { ok, missions, errors } — `missions` holds every line that parsed, so a reader can still count.
+function validateLedger(text) {
+  const errors = [];
+  const missions = [];
+  const lines = String(text == null ? '' : text).split('\n');
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  lines.forEach((line, i) => {
+    const at = 'line ' + (i + 1);
+    let obj;
+    try { obj = JSON.parse(line); } catch (_) { errors.push(at + ': not JSON'); return; }
+    if (!isPlainObject(obj)) { errors.push(at + ': not an object'); return; }
+    if (Object.keys(obj).join(',') !== LEDGER_KEYS.join(',')) errors.push(at + ': keys must be exactly ' + LEDGER_KEYS.join(','));
+    if (obj.n !== missions.length + 1) errors.push(at + ': n must be ' + (missions.length + 1));
+    if (typeof obj.name !== 'string' || !obj.name.trim() || /[\r\n]/.test(obj.name)) errors.push(at + ': name must be one non-empty line');
+    if (typeof obj.details !== 'string') errors.push(at + ': details must be a string');
+    if (!LEDGER_STATUSES.includes(obj.status)) errors.push(at + ': status must be one of ' + LEDGER_STATUSES.join('|'));
+    missions.push(obj);
+  });
+  return { ok: errors.length === 0, missions, errors };
+}
+
+// serializeLedger — the canonical bytes for a mission array: one line per mission, keys in the fixed
+// order, trailing newline. `n` is positional (index + 1), never taken from the caller.
+function serializeLedger(missions) {
+  return (missions || []).map((m, i) => JSON.stringify({
+    n: i + 1,
+    name: String(m && m.name != null ? m.name : ''),
+    details: String(m && m.details != null ? m.details : ''),
+    status: String(m && m.status != null ? m.status : 'todo')
+  }) + '\n').join('');
 }
 
 module.exports = {
@@ -1948,6 +1984,12 @@ module.exports = {
   CLAUDE_MANIFEST_RELPATHS,
   RELEASE_FILES,
   changedPathsSinceBase,
-  MISSION_LIST_FILE,
-  parseGoal,
+  LEDGER_DIR_REL,
+  LEDGER_GITIGNORE_LINE,
+  ARCHIVED_LEDGER_FILE,
+  LEDGER_KEYS,
+  LEDGER_STATUSES,
+  ledgerPath,
+  validateLedger,
+  serializeLedger,
 };

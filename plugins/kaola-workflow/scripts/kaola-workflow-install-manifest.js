@@ -56,7 +56,6 @@ const repoRoot = findRepoRoot(__dirname);
 //   kaola-workflow-release-surface-drift.js — dev/CI release drift checker
 //   validate-workflow-contracts.js + forge siblings — CI-only contract validators
 //   install-codex-agent-profiles.js (gitlab/gitea) — Codex-only agent setup, not claude runtime
-// Note: kaola-workflow-ledger-compare.js IS in this list (tracked separately; added in #412).
 const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-claim.js',
   'kaola-workflow-active-folders.js',
@@ -69,7 +68,6 @@ const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-adaptive-schema.js',
   'kaola-workflow-resolve-agent-model.js',
   'kaola-workflow-codex-preflight.js',
-  'kaola-workflow-ledger-compare.js',
   'kaola-workflow-gap-sweep.js',
   'kaola-workflow-run-chains.js',
   'kaola-workflow-telemetry-report.js',

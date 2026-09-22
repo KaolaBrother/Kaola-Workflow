@@ -23,6 +23,8 @@ node_modules/
 kaola-workflow/.locks/
 kaola-workflow/.sessions/
 kaola-workflow/.tickers/
+# #1089: the live mission ledgers (Host-readable, main checkout only; moved into archive/ at archive).
+kaola-workflow/.ledger/
 .kw-env
 kaola-workflow/issue-55/
 .kw/

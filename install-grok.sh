@@ -126,7 +126,7 @@ fi
 RETIRED_AGENTS=(planner code-architect synthesizer build-error-resolver metric-optimizer adversarial-verifier security-reviewer)
 RETIRED_COMMANDS=()
 RETIRED_HOOKS=(kaola-workflow-subagent-dispatch-log.sh)
-RETIRED_SUPPORT_SCRIPTS=()
+RETIRED_SUPPORT_SCRIPTS=(kaola-workflow-ledger-compare.js)
 RETIRED_COMPACT_HOOK_SHA256="e2b3de7a84558d27d8f78fab2e2d83febce8019b44a6d2cb5399877d85daa96f"
 RETIRED_COMPACT_PROMPT_SHA256="91d82092e5fc7245bcec2c412967239819a9bf9b38a74abd27d86df7a0b45dac"
 

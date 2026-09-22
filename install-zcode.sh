@@ -154,7 +154,7 @@ RETIRED_COMMANDS=(kaola-workflow-finalize workflow-init workflow-next)
 # authority for retiring the basename. The later compact/runtime wrappers are handled separately
 # by retire_generated_hook_shells(), which deletes only byte-identical generated content.
 RETIRED_HOOKS=(kaola-workflow-subagent-dispatch-log.sh)
-RETIRED_SUPPORT_SCRIPTS=()
+RETIRED_SUPPORT_SCRIPTS=(kaola-workflow-ledger-compare.js)
 
 WORKFLOW_SKILLS=(
   kaola-workflow-finalize kaola-workflow-init kaola-workflow-next

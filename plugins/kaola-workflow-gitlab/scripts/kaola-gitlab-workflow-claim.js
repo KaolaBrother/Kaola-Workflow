@@ -23,10 +23,9 @@ const {
   readActiveFolders
 } = require('./kaola-gitlab-workflow-active-folders');
 const closureContract = require('./kaola-workflow-closure-contract');
-// parseGoal reads the run's goal (the mission list's H1); the two expansion readers feed the
-// archive rollup line below. All three come from the kernel, so nothing in the finalize/archive
-// path loads a plan reader.
-const { parseGoal } = adaptiveSchema;
+// #1089: the mission ledger's path rule and shape rule come from the kernel, so every edition
+// resolves `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl` from the same bytes.
+const { ledgerPath, validateLedger, serializeLedger } = adaptiveSchema;
 
 const CLAIM_LABEL = forge.CLAIM_LABEL || 'workflow:in-progress';
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
@@ -1096,6 +1095,8 @@ function claimProject(root, args) {
   const remoteClaim = postAdvisoryClaim(issueIid, project, projectInfo); // #356: surface footprint status
   return Object.assign(
     { status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueIid, project, branch, worktree_path: worktreePath, remote_claim: remoteClaim },
+    // #1089: where the orchestrator writes the mission ledger, plus a finding when it is not ignored.
+    prepareMissionLedger(root, issueIid),
     // #403.8: classified worktree-error token alongside the raw message.
     worktreeError ? { worktree_error: worktreeError, worktree_error_class: classifyWorktreeError(worktreeError) } : {},
     // #933: the substitution is reported, never silent. Both halves name the DECLINED directory —
@@ -1289,6 +1290,8 @@ function claimBundle(root, opts) {
       branch,
       worktree_path: worktreePath
     },
+    // #1089: the bundle's one ledger is named by its primary issue (bundle path mirror).
+    prepareMissionLedger(root, targets[0]),
     // #403.8: classified worktree-error token alongside the raw message (bundle path mirror).
     worktreeError ? { worktree_error: worktreeError, worktree_error_class: classifyWorktreeError(worktreeError) } : {},
     baseBranch ? { base_branch: baseBranch } : {},
@@ -2494,6 +2497,9 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
   // MEASUREMENT in verifyArchiveComplete: every file the source holds must reach the destination
   // before either live copy is deleted.
   const state = stateFile(root, project);
+  // #1089: the issue number that names this run's ledger, read before the terminal stamp.
+  let ledgerIssue = null;
+  try { ledgerIssue = field(fs.readFileSync(state, 'utf8'), 'issue_number'); } catch (_) {}
   try {
     let content = fs.readFileSync(state, 'utf8');
     // #333: status is the terminal state; receipts and sink facts remain the closure safety proof.
@@ -2656,6 +2662,11 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     if (fs.existsSync(dest)) dest += '.archived-' + new Date().toISOString().replace(/[:.]/g, '-');
     fs.renameSync(src, dest);
   }
+  // #1089: MOVE the run's mission ledger out of `kaola-workflow/.ledger/` into the archive, where
+  // it is tracked. After this, presence under `.ledger/` means a live run. Runs after both live
+  // copies are gone so the completeness proof above compares folders the ledger never sat in.
+  // Fail-soft: the archive is already complete; a failed move is reported, never a rollback.
+  const ledger = moveMissionLedger(root, ledgerIssue, dest);
   // #686: archive-time reap of dangling refs/kaola-workflow/barrier/<tag>/* refs for THIS project.
   // archiveProjectDir is the convergence point for finalize-closed, discard-abandoned, and the
   // active-folders backstop, so this ONE insertion covers every archive path. Placed AFTER the live
@@ -2685,7 +2696,20 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
   } catch (_) { /* fail-soft: archiving must never be blocked/rolled back by a ref-reap failure */ }
   // ADR 0018 §5: the roadmap-source unlink + MAIN-orphan reconcile + mirror regenerate that used to
   // run here on a closed status is retired — there is no local roadmap mirror left to keep in sync.
-  return { archived: true, dest };
+  return Object.assign({ archived: true, dest }, ledger ? { ledger } : {});
+}
+
+// #1089: 'moved' | 'absent' | 'failed: <message>'; null when the run carries no issue number.
+function moveMissionLedger(root, issueNumber, dest) {
+  const from = liveLedgerPath(root, issueNumber);
+  if (!from || !dest) return null;
+  if (!fs.existsSync(from)) return 'absent';
+  try {
+    fs.renameSync(from, path.join(dest, adaptiveSchema.ARCHIVED_LEDGER_FILE));
+    return 'moved';
+  } catch (e) {
+    return 'failed: ' + String((e && e.message) || e).slice(0, 200);
+  }
 }
 
 // #832: classify the fate of an archive destination the CALLING root cannot commit, so a receipt
@@ -3120,31 +3144,71 @@ function buildClosureReceipt(project, issueNumber, steps) {
 // The verdict is deleted; the measurement under it is kept and named for what it actually is.
 //
 // Advisory only — never throws, never blocks finalize.
-// planDirs: ordered array of run folders to search (archive dest first, then live).
 //   Returns { declared, source, probed }:
-//   declared — a goal TEXT was found. Not a claim that anything was achieved.
-//   source   — 'env' (KAOLA_GOAL, non-empty after trim) | 'plan' (the mission list's H1) | null.
+//   declared — a goal was declared. Not a claim that anything was achieved.
+//   source   — 'env' (KAOLA_GOAL, non-empty after trim) | 'ledger' (the run's mission ledger exists
+//              and is non-empty) | null.
 //   probed   — every file examined, in order, so a reader can see exactly what was inspected
 //              and re-run the same check by hand. Empty when KAOLA_GOAL answered first and no file
 //              was opened — which is itself the honest record of what happened.
-// The goal is read from the run record's H1. A folder carrying no mission list declares nothing,
-// which is the honest answer rather than a second reader kept alive for a record shape that is
-// going away.
-function computeGoalDeclaration(planDirs) {
+// #1089: the goal is the issue itself; the ledger carries no goal line. A run that recorded
+// missions has declared what it set out to do, and a run with no ledger declares nothing.
+// ledgerFiles: ordered candidate paths (the archived `mission-ledger.jsonl` first, then the live
+// `.ledger/issue-<N>.jsonl` for a crash-resume where the move did not complete).
+function computeGoalDeclaration(ledgerFiles) {
   const probed = [];
   const envGoal = (process.env.KAOLA_GOAL || '').trim();
   if (envGoal) return { declared: true, source: 'env', probed };
-  for (const dir of (planDirs || [])) {
-    if (!dir) continue;
-    const recordPath = path.join(dir, adaptiveSchema.MISSION_LIST_FILE);
-    probed.push(recordPath);
+  for (const file of (ledgerFiles || [])) {
+    if (!file) continue;
+    probed.push(file);
     try {
-      if (!fs.existsSync(recordPath)) continue;
-      const { goal } = parseGoal(fs.readFileSync(recordPath, 'utf8'));
-      if (goal) return { declared: true, source: 'plan', probed };
+      if (fs.statSync(file).isFile() && fs.readFileSync(file, 'utf8').trim()) {
+        return { declared: true, source: 'ledger', probed };
+      }
     } catch (_) {}
   }
   return { declared: false, source: null, probed };
+}
+
+// #1089: the run's live ledger path, resolved against the MAIN checkout (never a worktree) from
+// the issue number the claim recorded. null when either input is missing.
+function liveLedgerPath(root, issueNumber) {
+  let mainRoot = null;
+  try { mainRoot = fs.realpathSync(mainRootFromCoord(getCoordRoot(root))); } catch (_) { mainRoot = root; }
+  return ledgerPath(mainRoot, issueNumber);
+}
+
+// #1089: the claim-time half of the ledger contract. Creates `kaola-workflow/.ledger/` in the main
+// checkout (the orchestrator writes the file itself, right after the claim) and REPORTS — never
+// edits — a consumer `.gitignore` that does not cover it. Workflow does not own the consumer's
+// environment. Best-effort: a failure here costs a finding, never the claim.
+function prepareMissionLedger(root, issueNumber) {
+  const file = liveLedgerPath(root, issueNumber);
+  if (!file) return {};
+  const out = { ledger_path: file };
+  try { fs.mkdirSync(path.dirname(file), { recursive: true }); } catch (_) {}
+  try {
+    const mainRoot = path.dirname(path.dirname(path.dirname(file)));
+    execFileSync('git', ['-C', mainRoot, 'check-ignore', '-q', '--',
+      path.relative(mainRoot, file).split(path.sep).join('/')], { stdio: ['ignore', 'ignore', 'ignore'] });
+  } catch (e) {
+    if (e && e.status === 1) {
+      out.ledger_finding = 'ledger_not_gitignored: add `' + adaptiveSchema.LEDGER_GITIGNORE_LINE
+        + '` to this repository\'s .gitignore (claim reports it; it never edits .gitignore)';
+    }
+  }
+  return out;
+}
+
+// #1089: the reference writer — whole-file rewrite through the kernel's atomic replace, canonical
+// key order, positional `n`. Refuses a mission array that would not validate.
+function writeMissionLedger(file, missions) {
+  const text = serializeLedger(missions);
+  const verdict = validateLedger(text);
+  if (!verdict.ok) throw new Error('mission ledger invalid: ' + verdict.errors.join('; '));
+  adaptiveSchema.writeFileAtomicReplace(file, text);
+  return text;
 }
 
 // Source-missing Finalization must bind to one archive transaction authority, never merely to the
@@ -3254,43 +3318,6 @@ const FINALIZE_MIRROR_TREE_BOUND = new Set([
   '.cache/chain-receipt.json',
   '.cache/' + adaptiveSchema.OUTCOME_LOG_NAME,
 ]);
-
-// #1054 R1: the mirror's own prior-write receipt — see compareLedgers' `priorDigest` arm in
-// kaola-workflow-ledger-compare.js. TRANSACTION STATE, not a run record: it exists solely so the
-// NEXT mirror invocation in THIS worktree can recognize an untouched dest as its own prior copy,
-// and it is never read by anything outside `mirrorFinalizationArtifacts`.
-//
-// DECISION (archive): left UNEXCLUDED, on purpose. Once a project is archived, `!fs.existsSync
-// (destDir) && findArchiveAuthorities(...).length > 0` short-circuits every future call to
-// `skipped_post_archive` before this file is ever read again, so a copy sitting in the archive is
-// simply inert — the same shape as `.cache/chain-receipt.json` or `.cache/run-gaps.json`, both also
-// TREE_BOUND/JSON evidence that rides into the archive unexcluded. Actively dropping it would need
-// its own carve-out through `verifyArchiveComplete`'s "every file the source holds must reach the
-// destination" proof (the same seam `SINK_JOURNAL_RE` occupies for the sink's OWN journals,
-// sink-receipt.json/sink-fallback.json — a different family: those are 'forge' records disposed at
-// terminal success because a live one left behind would misdescribe unfinished sink progress as
-// current; this one describes nothing the archive step or a reader could misread). That is real
-// machinery this review finding does not warrant, so none is built; enforcement point is simply
-// "there is none" — `copyDir` carries it unconditionally, like every other `.cache/*.json` file.
-const MIRROR_DIGEST_REL = path.join('.cache', 'mirror-digest.json');
-function sha256Hex(text) {
-  return require('crypto').createHash('sha256').update(text, 'utf8').digest('hex');
-}
-// Missing or unparsable degrades to `null` — never throws — so a reader falls back to no
-// `priorDigest`, i.e. the pre-R1 behaviour (compareLedgers' new arm simply does not fire).
-function readMirrorDigest(destDir) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(destDir, MIRROR_DIGEST_REL), 'utf8'));
-    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
-  } catch (_) { return null; }
-}
-// Best-effort: called only after the mirror copy itself already succeeded, so a write failure here
-// must not turn a successful mirror into a refusal — it only costs the NEXT run the prior_mirror
-// leniency, which falls back to the ordinary content comparison, never to a silent bypass.
-function writeMirrorDigest(destDir, entries) {
-  try { writeFile(path.join(destDir, MIRROR_DIGEST_REL), JSON.stringify(entries, null, 2) + '\n'); }
-  catch (_) { /* transaction state; losing it degrades gracefully on the next mirror */ }
-}
 
 // Finalization residue the orchestrator authored OUTSIDE kaola-workflow/ in the main checkout
 // (CHANGELOG, docs, .env.example …) belongs on the branch too, so the commit gate can hand it to the
@@ -3409,24 +3436,12 @@ function mirrorResidueOutsideProject(mainRoot, root, plan) {
 }
 
 // Step 8a — artifact mirror. The FINAL copy direction is always main checkout → linked worktree:
-// the worktree holds the complete ledger and the main copy is the one carrying the Finalization
-// artifacts the orchestrator just authored. Before copying, the ledger-regression guard checks
-// whether that copy would DISCARD content the worktree already has — by CONTENT identity, not by
-// counting how much either side records as done (#1054: a count is a proxy that reads 0 on the
-// current table-form Mission List, producing a real false-safe over production data — see
-// `kaola-workflow/bundle-1054/.cache/sync-guard-trace.md`).
-//
-// #1054 (superseding #837): when the guard finds the two copies have DIVERGED, the transaction no
-// longer guesses a repair direction. #837's automatic worktree-wins merge assumed the worktree is
-// always the more-current side; the trace above found a real run whose evidence paths point at the
-// OPPOSITE topology, so an unconditional "worktree wins" copy can silently overwrite a newer main
-// record. The transaction instead refuses fail-closed, zero-write on both sides, under the SAME
-// pinned reason (`mirror_sync_failed`) — carrying both absolute paths and a bounded diff so the
-// Main Orchestrator, which owns exactly this judgment, can reconcile by hand and rerun
-// `finalize --check`.
+// the main copy is the one carrying the Finalization artifacts the orchestrator just authored.
+// #1089: the run's mission ledger never enters this copy — it lives only in the main checkout's
+// `kaola-workflow/.ledger/`, so there is no second copy to diverge and no regression to compare.
 // Returns one of:
 //   { mirror: 'not_needed' | 'source_absent' | 'skipped_post_archive' | 'mirrored',
-//     ledger_compare: <token>, mirrored_paths: [<rel>…] }
+//     mirrored_paths: [<rel>…] }
 //   { refused: true, inner_reason: 'mirror_sync_failed', detail[, residue_conflicts] }
 // `mirrored_paths` names ONLY the non-`kaola-workflow/` residue this function authored in the
 // worktree — the caller must treat those paths as its own, never as operator dirt.
@@ -3438,8 +3453,8 @@ function mirrorFinalizationArtifacts(root, project) {
   let mainRoot = null;
   try {
     mainRoot = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
-    if (mainRoot === fs.realpathSync(root)) return { mirror: 'not_needed', ledger_compare: 'not_needed', mirrored_paths: [] };
-  } catch (_) { return { mirror: 'not_needed', ledger_compare: 'not_needed', mirrored_paths: [] }; }
+    if (mainRoot === fs.realpathSync(root)) return { mirror: 'not_needed', mirrored_paths: [] };
+  } catch (_) { return { mirror: 'not_needed', mirrored_paths: [] }; }
   // #1077: the residue plan is taken FIRST, so the refusal precedes every write below — the
   // post-archive resume mirrors residue too, and the project-folder copy must not land beside a
   // refusal either. Zero-write on both sides.
@@ -3464,52 +3479,10 @@ function mirrorFinalizationArtifacts(root, project) {
       && !mainClaimNeedsMirror(srcDir, root, project)) {
     return {
       mirror: 'skipped_post_archive',
-      ledger_compare: 'not_needed',
       mirrored_paths: mirrorResidueOutsideProject(mainRoot, root, residuePlan)
     };
   }
-  if (!fs.existsSync(srcDir)) return { mirror: 'source_absent', ledger_compare: 'not_needed', mirrored_paths: [] };
-  // Record-regression guard (fail-open on a first sync — the compare module owns that semantics).
-  let ledgerCompare = 'skipped_no_record';
-  const srcRecord = path.join(srcDir, adaptiveSchema.MISSION_LIST_FILE);
-  let srcRecordText = null;
-  if (fs.existsSync(srcRecord)) {
-    try {
-      const { compareLedgers } = require('./kaola-workflow-ledger-compare.js');
-      const destRecord = path.join(destDir, adaptiveSchema.MISSION_LIST_FILE);
-      let destText = null;
-      try { destText = fs.readFileSync(destRecord, 'utf8'); } catch (_) {}
-      srcRecordText = fs.readFileSync(srcRecord, 'utf8');
-      // #1054 R1: the receipt this same function wrote after ITS OWN last successful copy — read
-      // BEFORE the compare, degrading a missing or unparsable file to no priorDigest (today's
-      // pre-R1 behaviour), never throwing.
-      const priorDigest = readMirrorDigest(destDir);
-      const verdict = compareLedgers(srcRecordText, destText, {
-        priorDigest: priorDigest ? priorDigest[adaptiveSchema.MISSION_LIST_FILE] : undefined
-      });
-      if (!verdict.safe) {
-        // #1054 — no automatic repair: a content-diverged (or diff-unavailable) verdict is a MACHINE
-        // stop, not a machine-repairable state. Refuse fail-closed under the pinned top-level reason,
-        // zero-write on both sides (nothing has been copied either direction at this point), and hand
-        // the orchestrator both absolute paths plus the diff so it can decide which side is current.
-        return {
-          refused: true,
-          inner_reason: 'mirror_sync_failed',
-          detail: 'the run record diverged between the main checkout and the linked worktree ('
-            + verdict.reason + ') — main copy: ' + srcRecord + '; worktree copy: ' + destRecord
-            + '. Reconcile by hand (the Main Orchestrator owns which side is current) and rerun '
-            + '`finalize --check`.'
-            + (verdict.diff ? '\n' + verdict.diff : '')
-        };
-      }
-      ledgerCompare = 'pass';
-    } catch (e) {
-      // A programmer error (missing/renamed export — the cross-edition drift class) must not be
-      // swallowed into a silent bypass of the guard.
-      if (e instanceof TypeError || e instanceof ReferenceError) throw e;
-      ledgerCompare = 'skipped_no_script';
-    }
-  }
+  if (!fs.existsSync(srcDir)) return { mirror: 'source_absent', mirrored_paths: [] };
   // The main→worktree copy is a WRITE, and it was the one write in this function with no failure
   // path: an unwritable destination (`kaola-workflow/` read-only in the worktree) made mergeCopyDir
   // throw its raw `EACCES … mkdir` straight out of the transaction, so the operator got a node stack
@@ -3527,17 +3500,8 @@ function mirrorFinalizationArtifacts(root, project) {
         + 'linked worktree (' + destDir + '): ' + String((e && e.message) || e).slice(0, 400)
     };
   }
-  // #1054 R1: record what this successful copy just wrote into dest, so the NEXT mirror can
-  // recognize an untouched dest as its own prior write (see the priorDigest read above) instead of
-  // refusing the source's legitimate forward progress as a conflict. Best-effort: the mirror already
-  // succeeded by this point, and losing the receipt only costs the next run the prior_mirror leniency
-  // — it falls back to the ordinary (pre-R1) content comparison, never to a silent bypass.
-  if (srcRecordText !== null) {
-    writeMirrorDigest(destDir, { [adaptiveSchema.MISSION_LIST_FILE]: sha256Hex(srcRecordText) });
-  }
   return {
     mirror: 'mirrored',
-    ledger_compare: ledgerCompare,
     mirrored_paths: mirrorResidueOutsideProject(mainRoot, root, residuePlan)
   };
 }
@@ -3753,11 +3717,9 @@ function emitFinalizeCommitFailure(project, step, committed, finalizeTx) {
 // Read-only classification of what Step 8a WILL do. Mirrors mirrorFinalizationArtifacts' own
 // branch order exactly, minus every write.
 //   'not_needed' | 'ready' | 'sync_failed' | 'source_absent' | 'skipped_post_archive'
-// `destAuthorityAbsent` carries the one bit the state token cannot: 'ready' is reached from THREE
-// distinct situations (no source record, a safe compare, and a compare that threw — compareLedgers
-// fails open on a null destination), so 'ready' ALONE never means "the mirror will construct the
-// authority". 'ready' AND destAuthorityAbsent does mean exactly that, which is what the authority
-// prediction reads.
+// `destAuthorityAbsent` carries the one bit the state token cannot: 'ready' ALONE never means "the
+// mirror will construct the authority". 'ready' AND destAuthorityAbsent does mean exactly that,
+// which is what the authority prediction reads.
 //
 // It is the AUTHORITY FILE, not the directory. The bit used to be `!existsSync(destDir)`, which
 // answers "the mirror will create the DIRECTORY" — a different question, and false for the ordinary
@@ -3778,15 +3740,10 @@ function emitFinalizeCommitFailure(project, step, committed, finalizeTx) {
 // `sync_failed`, the token this probe already carries for "the mirror the script owes cannot be
 // performed" — no new vocabulary, and the same `mirror_sync_failed` reason the transaction emits for
 // that failure.
-//
-// #1054: `sync_required` (a content-diverged verdict the transaction would repair automatically) is
-// RETIRED — the transaction no longer attempts that repair (see the doc comment above
-// `mirrorFinalizationArtifacts`), so a diverged compare is unconditionally `sync_failed` here too:
-// the prediction must agree with what the transaction will actually do, and it will always refuse.
 // #1077: `residue_plan` is what the residue mirror WILL copy and what it will refuse over, from
-// the same `residueMirrorPlan` the transaction reads. Conflicts are `sync_failed` here for the
-// same reason a diverged record is: the transaction will always refuse them, and the prediction
-// must agree. `residue_conflicts` is set beside the state only then.
+// the same `residueMirrorPlan` the transaction reads. Conflicts are `sync_failed` here because the
+// transaction will always refuse them, and the prediction must agree. `residue_conflicts` is set
+// beside the state only then.
 function probeFinalizeMirror(root, project) {
   let mainRoot = null;
   const noPlan = { copy: [], conflicts: [] };
@@ -3813,29 +3770,7 @@ function probeFinalizeMirror(root, project) {
   // What 'ready' promises: mergeCopyDir mkdirs destDir and copies into it. Probed once, here, so
   // every 'ready' return below carries the same answer.
   const ready = mirrorDestWritable(destDir) ? 'ready' : 'sync_failed';
-  const srcRecord = path.join(srcDir, adaptiveSchema.MISSION_LIST_FILE);
-  if (!fs.existsSync(srcRecord)) return { state: ready, mainRoot, destAuthorityAbsent, residue_plan: residuePlan };
-  try {
-    const { compareLedgers } = require('./kaola-workflow-ledger-compare.js');
-    let destText = null;
-    try { destText = fs.readFileSync(path.join(destDir, adaptiveSchema.MISSION_LIST_FILE), 'utf8'); } catch (_) {}
-    // #1054 R1 follow-up: the prediction must agree with what the transaction will actually do, and
-    // the transaction now reads its own prior-write receipt (see `mirrorFinalizationArtifacts`
-    // above and `readMirrorDigest`, shared rather than duplicated here) — a main-side advance over
-    // an untouched worktree copy is `ready`, not `sync_failed`, once a receipt says so.
-    const priorDigest = readMirrorDigest(destDir);
-    const verdict = compareLedgers(fs.readFileSync(srcRecord, 'utf8'), destText, {
-      priorDigest: priorDigest ? priorDigest[adaptiveSchema.MISSION_LIST_FILE] : undefined
-    });
-    if (verdict.safe) return { state: ready, mainRoot, destAuthorityAbsent, residue_plan: residuePlan };
-    // #1054: a content-diverged (or diff-unavailable) verdict is always a machine stop — the
-    // transaction never attempts an automatic repair for it (see `mirrorFinalizationArtifacts`), so
-    // the prediction must always agree: `sync_failed`, regardless of writability.
-    return { state: 'sync_failed', mainRoot, destAuthorityAbsent, residue_plan: residuePlan };
-  } catch (e) {
-    if (e instanceof TypeError || e instanceof ReferenceError) throw e;
-    return { state: ready, mainRoot, destAuthorityAbsent, residue_plan: residuePlan };
-  }
+  return { state: ready, mainRoot, destAuthorityAbsent, residue_plan: residuePlan };
 }
 
 // Can Step 8a's main→worktree copy actually write? `mergeCopyDir` mkdirs `destDir` recursively, so
@@ -4011,9 +3946,8 @@ function predictFinalizeAuthority(root, project, mirror) {
 // For both: the durable write is not optional. A conversion that emits a finding and drops the
 // state the refusal was freezing is a deletion, not a conversion.
 //
-// A missing run record is not an error either: the mission list is a convention, not a
-// precondition. Neither measurement here reads it; the sibling (C) report below does, and is silent
-// in its entirety when the record is absent.
+// A missing mission ledger is not an error either: it is a convention, not a precondition, and
+// neither measurement here reads it.
 //
 // Returns { validation, changed_paths, changed_paths_probe } — no ok, because there is nothing here
 // to fail.
@@ -4277,7 +4211,6 @@ function cmdFinalize() {
   // from the emit alone.
   const finalizeTx = {
     mirror: 'not_needed',
-    ledger_compare: 'not_needed',
     residue_mirrored: 0,
     impl_commit: 'not_checked',
     roadmap_staged: false,
@@ -4387,7 +4320,6 @@ function cmdFinalize() {
       return;
     }
     finalizeTx.mirror = mirror.mirror;
-    finalizeTx.ledger_compare = mirror.ledger_compare;
     mirroredResiduePaths = Array.isArray(mirror.mirrored_paths) ? mirror.mirrored_paths : [];
     finalizeTx.residue_mirrored = mirroredResiduePaths.length;
   }
@@ -4502,9 +4434,8 @@ function cmdFinalize() {
   // outcome — re-run the chains, fix the red, or proceed knowingly.
   // #837: probed by the SAME pure helper the one-pass `--check` report reads. `--base` is sourced
   // from the flag and/or KAOLA_FINALIZE_BASE env, defaulting to `main`.
-  // #1054: finalize no longer reads or reports on the Mission List's content — the orchestrator
-  // reads that record and the run's evidence directly; an orchestrator-authored `## Mission List`
-  // section in finalization-summary.md is left exactly as written, never inserted or overwritten.
+  // #1054: finalize never reads or reports on the mission ledger's content — the orchestrator reads
+  // that record and the run's evidence directly.
   let finalizeValidation = null;
   let finalizeChangedPaths = [];
   let finalizeChangedProbe = 'measured';
@@ -4893,11 +4824,11 @@ function cmdFinalize() {
   // order (archiveProjectDir already ran).
   closureReceipt.selection_evidence = probeSelectionEvidence([archiveCacheDir, liveCacheDir]);
   // Advisory goal DECLARATION (presence, never satisfaction — see computeGoalDeclaration). Probe
-  // archive-dest first (the plan was already renamed there), then the live location as a fallback
+  // archive-dest first (the ledger was already moved there), then the live location as a fallback
   // for a crash-resume where the archive did not complete.
   const goalDeclaration = computeGoalDeclaration([
-    result.dest,
-    path.join(root, 'kaola-workflow', args.project)
+    result.dest ? path.join(result.dest, adaptiveSchema.ARCHIVED_LEDGER_FILE) : null,
+    liveLedgerPath(root, issueNumber)
   ]);
   closureReceipt.goal_declared = goalDeclaration.declared;
   closureReceipt.goal_declared_source = goalDeclaration.source;
@@ -5929,14 +5860,10 @@ function missingArchiveSidecars(liveDir, destDir) {
 }
 function listSourceEvidenceFiles(srcDir) {
   const rels = [];
-  // #906: the fixed names come from the KERNEL, not from a hand-typed list. This port carried three
-  // names where the canonical and Codex editions carry four: `mission-list.md` — the ADR 0017 run
-  // record itself — was absent, so on this edition alone a main-only `mission-list.md` was outside the
-  // required set and the archive-and-delete took it at exit 0. Measured by running all four editions'
-  // exported verifyArchiveComplete over one identical fixture. Reading the constants closes the set by
-  // construction rather than by a fourth hand-typed copy.
-  for (const f of [adaptiveSchema.MISSION_LIST_FILE, adaptiveSchema.PLAN_FILE,
-                   'workflow-state.md', 'finalization-summary.md']) {
+  // #906: the fixed names match the canonical and Codex editions exactly (one identical fixture ran
+  // through all four editions' exported verifyArchiveComplete). #1089: the mission ledger never
+  // sits in a project folder, so it is not on this list.
+  for (const f of [adaptiveSchema.PLAN_FILE, 'workflow-state.md', 'finalization-summary.md']) {
     if (fs.existsSync(path.join(srcDir, f))) rels.push(f);
   }
   let cacheEntries = [];
@@ -6707,6 +6634,12 @@ module.exports = {
   // behaviors that used to live as executable prose (artifact mirror incl. rename handling, the
   // ledger-regression guard's fail-open, and the single-project staging rule).
   mirrorFinalizationArtifacts,
+  // #1089: the mission ledger's claim-side helpers (path, claim-time prep, reference writer, archive move).
+  liveLedgerPath,
+  prepareMissionLedger,
+  writeMissionLedger,
+  moveMissionLedger,
+  computeGoalDeclaration,
   probeImplementationCommit,
   checkFinalizeStagingGuard,
   appendClosureBlock,

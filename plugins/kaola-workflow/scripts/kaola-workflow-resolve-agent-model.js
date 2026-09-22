@@ -244,8 +244,8 @@ function modelFromFile(agentName, agentDir) {
 // resolution.
 //
 // The chain used to have a THIRD step in front of these two — a per-node `model` cell the caller
-// read off the frozen plan and applied before asking this function. That cell is gone: an item on
-// the mission list carries no role and no model, and the orchestrator decides the model at the
+// read off the frozen plan and applied before asking this function. That cell is gone: a mission in
+// the mission ledger carries no role and no model, and the orchestrator decides the model at the
 // moment it dispatches. A caller may still pass an explicit model; it simply no longer comes from
 // a declaration made before the work was understood.
 //

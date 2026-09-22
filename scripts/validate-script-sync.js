@@ -47,11 +47,6 @@ const COMMON_SCRIPTS = [
   'validate-workflow-contracts.js',
   // #266 AC-B: Codex agent-profile freshness preflight (true 4-tree byte-identical)
   'kaola-workflow-codex-preflight.js',
-  // NOTE (#399): the Step-8a mirror-regression guard (kaola-workflow-ledger-compare.js)
-  // is FORGE-NEUTRAL but ALSO shell-resolved by the gitlab/gitea finalize SKILLs (whose contract
-  // validators forbid a `plugins/kaola-workflow/scripts/` cross-tree reference), so it must ship to
-  // ALL FOUR trees. It lives in the 4-tree BYTE_IDENTICAL_GROUPS below (closure-contract pattern),
-  // not here — the byte group already enforces the claude↔codex parity COMMON_SCRIPTS would.
   // #407: install.sh SUPPORT_*_NAMES single-source manifest. Required by the byte-identical
   // validate-workflow-contracts.js (claude↔codex), so the codex copy must carry it too — module
   // load is side-effect-free (repoRoot is computed but no fs access until a function is called),
@@ -134,18 +129,6 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow/scripts/kaola-workflow-validation-runner.js',
       'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-validation-runner.js',
       'plugins/kaola-workflow-gitea/scripts/kaola-workflow-validation-runner.js',
-    ],
-  },
-  {
-    // #399: the Step-8a ledger-regression guard is forge-neutral (no rename) but the
-    // gitlab/gitea finalize SKILLs shell-resolve it from their OWN tree (their contract validators
-    // forbid a base-tree `plugins/kaola-workflow/scripts/` reference), so it byte-ships to all four.
-    label: 'ledger-compare module copies',
-    files: [
-      'scripts/kaola-workflow-ledger-compare.js',
-      'plugins/kaola-workflow/scripts/kaola-workflow-ledger-compare.js',
-      'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-ledger-compare.js',
-      'plugins/kaola-workflow-gitea/scripts/kaola-workflow-ledger-compare.js',
     ],
   },
   {

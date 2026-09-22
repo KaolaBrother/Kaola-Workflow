@@ -1996,7 +1996,7 @@ function sinkPreflight(mainRoot, project, branch) {
     // cannot express the divergence test — which is why the content read FOLLOWS it rather than
     // replacing it, and why neither probe alone is enough.
     // CLASSIFICATION-ONLY — `continue`, never projDuplicates. Bucket 2's action is fs.unlinkSync, and
-    // main holds the run's only finalization-summary.md and mission-list.md; routing the mirror
+    // main holds the run's only finalization-summary.md and mission-ledger.jsonl; routing the mirror
     // through that removal would destroy the run record archive_commit is about to land. Every byte
     // stays on disk, and on a refusal this exemption mutates nothing at all.
     // Scoped on a SEGMENT BOUNDARY (the trailing '/'): a SIBLING project's archive tree stays
