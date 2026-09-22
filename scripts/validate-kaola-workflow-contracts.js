@@ -305,7 +305,7 @@ for (const file of shippedManifests) {
       file + ': shipped plugin manifest must not advertise retired workflow grammar (' + label +
       ') — the workflow is adaptive-only (#769)');
   }
-  assertConcept(file, 'the adaptive mission-list model', ['adaptive', 'mission list']);
+  assertConcept(file, 'the adaptive mission-ledger model', ['adaptive', 'mission ledger']);
 }
 
 // #1047: runtime dispatch posture belongs to installed adapters and diagnostics, not project init.
