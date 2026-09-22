@@ -434,9 +434,14 @@ function retireChecks() {
   // ---------- 10. docs presence ----------
   check(fs.existsSync(path.join(REPO, 'docs/decisions/0027-the-mission-ledger.md')), 'docs: docs/decisions/0027-the-mission-ledger.md exists');
   const changelog = read(path.join(REPO, 'CHANGELOG.md'));
-  const unrel = /^## \[Unreleased\][^\n]*\n([\s\S]*?)(?=^## \[)/m.exec(changelog);
-  check(!!unrel, 'docs: CHANGELOG has an [Unreleased] section');
-  check(!!unrel && /#1089\b/.test(unrel[1]), 'docs: CHANGELOG [Unreleased] mentions #1089');
+  // Release-stable (the #1031 changelog-witness precedent): a release cut renames [Unreleased], so
+  // the entry is found in whichever section carries it — pending under [Unreleased] before the cut,
+  // under its own dated release heading after it.
+  const sections = changelog.split(/^(?=## \[)/m).filter(s => s.startsWith('## ['));
+  const home = sections.find(s => /#1089\b/.test(s.slice(s.indexOf('\n'))));
+  check(!!home, 'docs: CHANGELOG documents #1089 in a release section (including [Unreleased])');
+  check(!!home && /^## \[(Unreleased|\d+\.\d+\.\d+\] - \d{4}-\d{2}-\d{2})/.test(home),
+    'docs: the #1089 entry sits under [Unreleased] or a dated release heading');
 }
 
 const requested = process.argv[2];
