@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow",
-  "version": "12.2.4",
+  "version": "12.2.5",
   "description": "Recoverable engineering workflows for coding agents: issue claims, mission ledgers, validation, and delivery across ten runtimes and GitHub, GitLab, and Gitea. Pairs with Kaola Project Runner for cross-runtime collaboration.",
   "repository": {
     "type": "git",
