@@ -1,7 +1,7 @@
 name = "code-reviewer"
 description = "Code reviewer. Independently examines the exact frozen candidate for defects it introduces and delivers verifiable findings; the brief may focus the review on refuting a stated claim, on trust-boundary and exploitability risks, or on correctness and test custody, and the orchestrator holds the verdict."
 nickname_candidates = ["Reviewer", "Critic", "Inspector"]
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 model_reasoning_effort = "max"
 developer_instructions = '''
 # Code Reviewer

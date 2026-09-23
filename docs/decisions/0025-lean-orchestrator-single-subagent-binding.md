@@ -120,7 +120,7 @@ children", and this ADR does not pretend to have that number.
    | Runtime | Kaola role profiles | Subagent binding and carrier |
    |---|---|---|
    | Claude Code | 7 | profile frontmatter `model: sonnet`; effort not pinned |
-   | Codex (GitHub, GitLab, Gitea plugins) | 7 TOML each | TOML pins `model = "gpt-5.6-luna"` and `model_reasoning_effort = "max"`; file values take precedence over spawn parameters and the parent session, so dispatch omits per-call `model`/`reasoning_effort` |
+   | Codex (GitHub, GitLab, Gitea plugins) | 7 TOML each | TOML pins `model = "gpt-6-luna"` and `model_reasoning_effort = "max"`; file values take precedence over spawn parameters and the parent session, so dispatch omits per-call `model`/`reasoning_effort` |
    | Grok Build | 7 | `model: grok-4.7` + `effort: medium` (`model: inherit` retired; `AgentDefinition.model` accepts a concrete id) |
    | Cursor | 7 | `model: grok-4.7[effort=medium]`; the call omits `model` because a custom subagent that omits it inherits the parent and is not routed by Auto |
    | Devin | none | vendor harness: `run_subagent` / `read_subagent` with built-in `subagent_general` or user-owned profiles; an unpinned custom profile would be routed by the organization's Default subagent model router, a lever Kaola does not own |
@@ -140,13 +140,15 @@ children", and this ADR does not pretend to have that number.
    skills, hooks, and the global contract only, and their installers remove the fourteen profiles an
    earlier release deployed, recognising Kaola ownership by the managed marker (and, where a manifest
    exists, its recorded hash) and never touching a user-owned file.
-8. **Codex pins `gpt-5.6-luna` at `max` in the file.** #1059's reason stands: `luna` sits below
+8. **Codex pins `gpt-6-luna` at `max` in the file.** #1059's reason stands: `luna` sits below
    `astra` and needs `max` to be reliable, and this repository has dispatched it per call at
    `luna/max` throughout. Moving the pin from the call into the TOML flips the kernel validator and
    the preflight from "both runtime-strength keys must be omitted" to "both must be present and equal
    the binding"; a pre-#1062 installed profile that omits them is classified as migration input and
    reinstalled. `CODEX_PINNED_STANDARD/REASONING/HEAVY_ROLES` become one `CODEX_PINNED_ROLES` plus
-   `CODEX_PINNED_MODEL` / `CODEX_PINNED_EFFORT`.
+   `CODEX_PINNED_MODEL` / `CODEX_PINNED_EFFORT`. The pin was Luna 5.6 at acceptance; #1090
+   (2026-09-23) moved it to Luna 6 (`gpt-6-luna`), effort still `max`, after a read-only
+   `model/list` probe confirmed the id and its `max` effort.
 9. **Version.** Deleting installed role directories and dispatch vocabulary breaks consumers that
    dispatch a retired name (they fall into the inline `capability_gap` path), so the release is major:
    11.1.1 → 12.0.0, Codex plugin versions in lockstep. The changelog carries the migration map above

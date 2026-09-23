@@ -56,9 +56,9 @@ surface exists.
 | heavy | `fable` | `gpt-5.6-sol` / `high` | inherit + `effort: xhigh` | `grok-4.7[effort=xhigh]` | classifies as reasoning | session model | `GLM-5.3` / `thoughtLevel: max` |
 
 **Current mapping note (2026-09-05, #1049).** The historical matrix above and the measurements in
-§4 remain unchanged. Current Codex dispatch uses `gpt-5.6-luna`/`max` for standard,
-`gpt-6-astra`/`medium` for reasoning, and `gpt-6-astra`/`high` for heavy; role profiles omit a
-fixed model and inherit the active host policy.
+§4 remain unchanged. Current Codex dispatch uses `gpt-6-luna`/`max` (Luna 6 since #1090) for
+standard, `gpt-6-astra`/`medium` for reasoning, and `gpt-6-astra`/`high` for heavy; role profiles
+omit a fixed model and inherit the active host policy.
 
 **Grok id note (2026-09-22, #1088).** The Cursor column now names `grok-4.7`: Cursor CLI
 `2026.09.15-d2fe57e` lists `grok-4.7-{low,medium,high,xhigh}`, and Grok CLI `1.0.40` lists

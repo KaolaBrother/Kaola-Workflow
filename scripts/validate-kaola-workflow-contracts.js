@@ -378,18 +378,18 @@ assert(JSON.stringify(sorted(codexInstaller.CODEX_PINNED_ROLES))
 assert(JSON.stringify(sorted(codexPreflight.CODEX_PINNED_ROLES))
     === JSON.stringify(sorted(codexSchema.CODEX_PINNED_ROLES)),
   'Codex preflight pinned-role policy must match adaptive schema');
-assert(codexSchema.CODEX_PINNED_MODEL === 'gpt-5.6-luna'
+assert(codexSchema.CODEX_PINNED_MODEL === 'gpt-6-luna'
     && codexSchema.CODEX_PINNED_EFFORT === 'max',
-  'Codex pinned subagent binding must be gpt-5.6-luna/max');
+  'Codex pinned subagent binding must be gpt-6-luna/max');
 for (const edition of ['kaola-workflow', 'kaola-workflow-gitlab', 'kaola-workflow-gitea']) {
   const dir = path.join(root, 'plugins', edition, 'agents');
   for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.toml')).sort()) {
     const text = fs.readFileSync(path.join(dir, file), 'utf8');
     const top = codexSchema.profileTopLevelShape(text).outside;
-    assert((top.match(/^model\s*=\s*"gpt-5\.6-luna"\s*$/gm) || []).length === 1
+    assert((top.match(/^model\s*=\s*"gpt-6-luna"\s*$/gm) || []).length === 1
         && (top.match(/^model_reasoning_effort\s*=\s*"max"\s*$/gm) || []).length === 1,
       'plugins/' + edition + '/agents/' + file
-        + ' must carry exactly one model = "gpt-5.6-luna" and one model_reasoning_effort = "max" line');
+        + ' must carry exactly one model = "gpt-6-luna" and one model_reasoning_effort = "max" line');
     const role = file.slice(0, -5);
     assert(codexSchema.validateProfileText(text, role).length === 0,
       'plugins/' + edition + '/agents/' + file + ' fails kernel profile validation: '
@@ -558,9 +558,9 @@ for (const rel of ['commands/workflow-next.md', 'commands/kaola-workflow-finaliz
       edition + ' must bind behavior, adapter, and resolved profile digests for ' + role);
       assert(!/[0-9a-f]{64}/.test(entry.sourceText) && !entry.sourceText.includes('runtime-adapter'),
         edition + ' must not carry receipt hashes in agent-visible text for ' + role);
-      assert(/^model\s*=\s*"gpt-5\.6-luna"\s*$/m.test(entry.sourceText)
+      assert(/^model\s*=\s*"gpt-6-luna"\s*$/m.test(entry.sourceText)
         && /^model_reasoning_effort\s*=\s*"max"\s*$/m.test(entry.sourceText),
-        edition + ' pinned profiles must carry the gpt-5.6-luna/max subagent binding');
+        edition + ' pinned profiles must carry the gpt-6-luna/max subagent binding');
     }
   }
   assert(new Set(installerFiles).size === 1,

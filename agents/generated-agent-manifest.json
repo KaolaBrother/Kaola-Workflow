@@ -104,8 +104,8 @@
       "path": "plugins/kaola-workflow/agents/code-explorer.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "374525f1e24a7827312807c78ee6c61853ce699f91407eedee3c7f502647043d",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "f1e1a9ea9201c8fb8e9dc53fd146bbc6a15ae3e8a4ea421417a4d7cb56e54d23"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "9a190d8144b678e8c101fc81377ef02292355081244da4ddd842e444b79f0605"
     },
     {
       "runtime": "codex",
@@ -114,8 +114,8 @@
       "path": "plugins/kaola-workflow/agents/code-reviewer.toml",
       "behavior_contract_version": 4,
       "behavior_sha256": "ed38928fee228b6ae0923439c26f3e6edde6f831cc2422147ab46e73ecb15aec",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "0559d2c443e3158c43984a5d8f1b799e35669ec419de1be40bf36b8afdf84b30"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "2b6c5dfb4f1a90d2352196c73e5958375ca91ee1e7abde21fe910c156b659e80"
     },
     {
       "runtime": "codex",
@@ -124,8 +124,8 @@
       "path": "plugins/kaola-workflow/agents/doc-updater.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "91a8ccd836198c0038ff801e760b7e0e0a139fd6a08d7e70ce4257a94028b805",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "594607b60a93b386af57c3cedc1d3fcbed4730bd9e0b9a56174eccec1e16293d"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "057f1a940edaabd324240d37e62d883c7dfdc140dc185e585d4df043a79c836d"
     },
     {
       "runtime": "codex",
@@ -134,8 +134,8 @@
       "path": "plugins/kaola-workflow/agents/implementer.toml",
       "behavior_contract_version": 2,
       "behavior_sha256": "f1bf58a9727f7109faaae348b4fe9f0d5607329973b65e6579f0384f75cac037",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "49e034704e9a9311b9bfb47fdeacfa7ff9bac6b637752098da994b622854341f"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "2e2232cd7e9086b5cbb9d8cbb320cf51195c6e863a0741da926111c9b4ba866b"
     },
     {
       "runtime": "codex",
@@ -144,8 +144,8 @@
       "path": "plugins/kaola-workflow/agents/investigator.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "7c87b4b2a180cac6c95922c07c07ca16c95469f2103b5949b5a30b230cf1d715",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "e906748b8fcb5b8e0ebb3c2aaac541345cd48ce4bcb417c23bb2d8aadd4c94d5"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "de1e629d8e38b901c4972b2262143e6fcb0c052616bc4ae29fc873573548acac"
     },
     {
       "runtime": "codex",
@@ -154,8 +154,8 @@
       "path": "plugins/kaola-workflow/agents/knowledge-lookup.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "547dad2cf9920b9c29bb0a13932dfea26c8b4a7e9a969bf68622d6255ba65ac9",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "25d291f45b151d9f3b18497d524e31bc7fe7de937c9c22a206d79128932d3389"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "3eb6112d0b882e28b3be99205e0a8a3fa26de8792a4701071a3051d7a4f14440"
     },
     {
       "runtime": "codex",
@@ -164,8 +164,8 @@
       "path": "plugins/kaola-workflow/agents/tdd-guide.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "76b895f9de63596592cacc620f0d04a7257b5d022f3de76a9ae1575b462bd272",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "9cb94d2e7643626a8782a19610e63d76190a7a0f6c963ec884c101c482c8458e"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "4b2250cda1bbe03544f81cbb628a5e66b558b765b1200a238b99bdc3ab519380"
     },
     {
       "runtime": "codex",
@@ -174,8 +174,8 @@
       "path": "plugins/kaola-workflow-gitlab/agents/code-explorer.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "374525f1e24a7827312807c78ee6c61853ce699f91407eedee3c7f502647043d",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "f1e1a9ea9201c8fb8e9dc53fd146bbc6a15ae3e8a4ea421417a4d7cb56e54d23"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "9a190d8144b678e8c101fc81377ef02292355081244da4ddd842e444b79f0605"
     },
     {
       "runtime": "codex",
@@ -184,8 +184,8 @@
       "path": "plugins/kaola-workflow-gitlab/agents/code-reviewer.toml",
       "behavior_contract_version": 4,
       "behavior_sha256": "ed38928fee228b6ae0923439c26f3e6edde6f831cc2422147ab46e73ecb15aec",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "0559d2c443e3158c43984a5d8f1b799e35669ec419de1be40bf36b8afdf84b30"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "2b6c5dfb4f1a90d2352196c73e5958375ca91ee1e7abde21fe910c156b659e80"
     },
     {
       "runtime": "codex",
@@ -194,8 +194,8 @@
       "path": "plugins/kaola-workflow-gitlab/agents/doc-updater.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "91a8ccd836198c0038ff801e760b7e0e0a139fd6a08d7e70ce4257a94028b805",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "594607b60a93b386af57c3cedc1d3fcbed4730bd9e0b9a56174eccec1e16293d"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "057f1a940edaabd324240d37e62d883c7dfdc140dc185e585d4df043a79c836d"
     },
     {
       "runtime": "codex",
@@ -204,8 +204,8 @@
       "path": "plugins/kaola-workflow-gitlab/agents/implementer.toml",
       "behavior_contract_version": 2,
       "behavior_sha256": "f1bf58a9727f7109faaae348b4fe9f0d5607329973b65e6579f0384f75cac037",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "49e034704e9a9311b9bfb47fdeacfa7ff9bac6b637752098da994b622854341f"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "2e2232cd7e9086b5cbb9d8cbb320cf51195c6e863a0741da926111c9b4ba866b"
     },
     {
       "runtime": "codex",
@@ -214,8 +214,8 @@
       "path": "plugins/kaola-workflow-gitlab/agents/investigator.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "7c87b4b2a180cac6c95922c07c07ca16c95469f2103b5949b5a30b230cf1d715",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "e906748b8fcb5b8e0ebb3c2aaac541345cd48ce4bcb417c23bb2d8aadd4c94d5"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "de1e629d8e38b901c4972b2262143e6fcb0c052616bc4ae29fc873573548acac"
     },
     {
       "runtime": "codex",
@@ -224,8 +224,8 @@
       "path": "plugins/kaola-workflow-gitlab/agents/knowledge-lookup.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "547dad2cf9920b9c29bb0a13932dfea26c8b4a7e9a969bf68622d6255ba65ac9",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "25d291f45b151d9f3b18497d524e31bc7fe7de937c9c22a206d79128932d3389"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "3eb6112d0b882e28b3be99205e0a8a3fa26de8792a4701071a3051d7a4f14440"
     },
     {
       "runtime": "codex",
@@ -234,8 +234,8 @@
       "path": "plugins/kaola-workflow-gitlab/agents/tdd-guide.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "76b895f9de63596592cacc620f0d04a7257b5d022f3de76a9ae1575b462bd272",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "9cb94d2e7643626a8782a19610e63d76190a7a0f6c963ec884c101c482c8458e"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "4b2250cda1bbe03544f81cbb628a5e66b558b765b1200a238b99bdc3ab519380"
     },
     {
       "runtime": "codex",
@@ -244,8 +244,8 @@
       "path": "plugins/kaola-workflow-gitea/agents/code-explorer.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "374525f1e24a7827312807c78ee6c61853ce699f91407eedee3c7f502647043d",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "f1e1a9ea9201c8fb8e9dc53fd146bbc6a15ae3e8a4ea421417a4d7cb56e54d23"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "9a190d8144b678e8c101fc81377ef02292355081244da4ddd842e444b79f0605"
     },
     {
       "runtime": "codex",
@@ -254,8 +254,8 @@
       "path": "plugins/kaola-workflow-gitea/agents/code-reviewer.toml",
       "behavior_contract_version": 4,
       "behavior_sha256": "ed38928fee228b6ae0923439c26f3e6edde6f831cc2422147ab46e73ecb15aec",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "0559d2c443e3158c43984a5d8f1b799e35669ec419de1be40bf36b8afdf84b30"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "2b6c5dfb4f1a90d2352196c73e5958375ca91ee1e7abde21fe910c156b659e80"
     },
     {
       "runtime": "codex",
@@ -264,8 +264,8 @@
       "path": "plugins/kaola-workflow-gitea/agents/doc-updater.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "91a8ccd836198c0038ff801e760b7e0e0a139fd6a08d7e70ce4257a94028b805",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "594607b60a93b386af57c3cedc1d3fcbed4730bd9e0b9a56174eccec1e16293d"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "057f1a940edaabd324240d37e62d883c7dfdc140dc185e585d4df043a79c836d"
     },
     {
       "runtime": "codex",
@@ -274,8 +274,8 @@
       "path": "plugins/kaola-workflow-gitea/agents/implementer.toml",
       "behavior_contract_version": 2,
       "behavior_sha256": "f1bf58a9727f7109faaae348b4fe9f0d5607329973b65e6579f0384f75cac037",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "49e034704e9a9311b9bfb47fdeacfa7ff9bac6b637752098da994b622854341f"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "2e2232cd7e9086b5cbb9d8cbb320cf51195c6e863a0741da926111c9b4ba866b"
     },
     {
       "runtime": "codex",
@@ -284,8 +284,8 @@
       "path": "plugins/kaola-workflow-gitea/agents/investigator.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "7c87b4b2a180cac6c95922c07c07ca16c95469f2103b5949b5a30b230cf1d715",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "e906748b8fcb5b8e0ebb3c2aaac541345cd48ce4bcb417c23bb2d8aadd4c94d5"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "de1e629d8e38b901c4972b2262143e6fcb0c052616bc4ae29fc873573548acac"
     },
     {
       "runtime": "codex",
@@ -294,8 +294,8 @@
       "path": "plugins/kaola-workflow-gitea/agents/knowledge-lookup.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "547dad2cf9920b9c29bb0a13932dfea26c8b4a7e9a969bf68622d6255ba65ac9",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "25d291f45b151d9f3b18497d524e31bc7fe7de937c9c22a206d79128932d3389"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "3eb6112d0b882e28b3be99205e0a8a3fa26de8792a4701071a3051d7a4f14440"
     },
     {
       "runtime": "codex",
@@ -304,8 +304,8 @@
       "path": "plugins/kaola-workflow-gitea/agents/tdd-guide.toml",
       "behavior_contract_version": 1,
       "behavior_sha256": "76b895f9de63596592cacc620f0d04a7257b5d022f3de76a9ae1575b462bd272",
-      "adapter_capabilities_sha256": "d4066d8785290b5013bc9cf607c3f20977b0077965127fc42a010a6145307876",
-      "resolved_profile_sha256": "9cb94d2e7643626a8782a19610e63d76190a7a0f6c963ec884c101c482c8458e"
+      "adapter_capabilities_sha256": "e95ffaebbd97e129863b14778351f397bbe98e829eeccf0b62d28f3e4ec28471",
+      "resolved_profile_sha256": "4b2250cda1bbe03544f81cbb628a5e66b558b765b1200a238b99bdc3ab519380"
     },
     {
       "runtime": "grok",

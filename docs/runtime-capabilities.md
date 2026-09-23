@@ -142,7 +142,7 @@ both `workflow-next` and `kaola-workflow-finalize`:
 | Class | Adapter | Binding |
 | --- | --- | --- |
 | binding | Claude | profile `model: sonnet`; effort not pinned |
-| binding | Codex (GitHub / GitLab / Gitea) | TOML `model = "gpt-5.6-luna"` + `model_reasoning_effort = "max"` |
+| binding | Codex (GitHub / GitLab / Gitea) | TOML `model = "gpt-6-luna"` + `model_reasoning_effort = "max"` |
 | binding | Grok | `model: grok-4.7` + `effort: medium` |
 | binding | Cursor | `model: grok-4.7[effort=medium]` |
 | native_only | OpenCode | no Kaola profiles; vendor harness (`general` / `explore` / `scout`), session-inherited model |

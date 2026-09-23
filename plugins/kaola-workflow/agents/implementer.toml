@@ -1,6 +1,6 @@
 name = "implementer"
 description = "Implementer. Writes the production change for an assigned outcome — behavior, fixes, refactors, scaffolding, config, migrations, glue — and delivers it with the verification it actually ran; does not alter acceptance meaning."
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 model_reasoning_effort = "max"
 developer_instructions = '''
 # Implementer

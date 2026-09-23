@@ -55,7 +55,7 @@ moments. Its carrier is [the mission ledger](decisions/0027-the-mission-ledger.m
 - **[0025 — Lean orchestrator; one subagent binding per runtime; seven roles](decisions/0025-lean-orchestrator-single-subagent-binding.md)**
   — the orchestrator holds judgment and acceptance; the per-role intent axis and
   the 14-role roster are retired in favor of seven roles; every profile-installing adapter
-  declares exactly one `subagent_default` (Claude `sonnet`; Codex `gpt-5.6-luna` / `max` pinned in
+  declares exactly one `subagent_default` (Claude `sonnet`; Codex `gpt-6-luna` / `max` pinned in
   the TOML; Grok `grok-4.7` / `effort: medium`; Cursor `grok-4.7[effort=medium]`); OpenCode, Kimi,
   ZCode, Devin, Droid, and DSH are `native_only` — no Kaola role profiles, vendor-harness dispatch.
 

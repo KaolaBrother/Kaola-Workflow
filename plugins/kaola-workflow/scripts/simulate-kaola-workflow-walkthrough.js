@@ -1216,12 +1216,12 @@ function testInstallSchemaPruneManifest332() {
       assert(profilePolicy.CODEX_PINNED_ROLES.includes(role),
         '#332 AC3 (#1062): ' + role + ' must belong to the single pinned role roster');
       const codexSchema = require(path.join(pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
-      assert(codexSchema.CODEX_PINNED_MODEL === 'gpt-5.6-luna'
+      assert(codexSchema.CODEX_PINNED_MODEL === 'gpt-6-luna'
         && codexSchema.CODEX_PINNED_EFFORT === 'max',
-        '#332 AC3 (#1062): the single subagent binding pins gpt-5.6-luna at max effort');
-      assert((body.match(/^model = "gpt-5\.6-luna"$/gm) || []).length === 1
+        '#332 AC3 (#1062): the single subagent binding pins gpt-6-luna at max effort');
+      assert((body.match(/^model = "gpt-6-luna"$/gm) || []).length === 1
         && (body.match(/^model_reasoning_effort = "max"$/gm) || []).length === 1,
-        '#332 AC3 (#1062): ' + role + ' carries exactly one model = "gpt-5.6-luna" and one '
+        '#332 AC3 (#1062): ' + role + ' carries exactly one model = "gpt-6-luna" and one '
           + 'model_reasoning_effort = "max" top-level line');
     }
     const manifestPath = path.join(agentsDir, manifestBase);

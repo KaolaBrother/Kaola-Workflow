@@ -1,6 +1,6 @@
 name = "knowledge-lookup"
 description = "Knowledge lookup. Finds authoritative external sources for facts the local codebase cannot establish and delivers sourced conclusions with verified dates and explicit unknowns."
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 model_reasoning_effort = "max"
 developer_instructions = '''
 # Knowledge Lookup

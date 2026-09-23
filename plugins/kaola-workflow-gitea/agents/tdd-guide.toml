@@ -1,6 +1,6 @@
 name = "tdd-guide"
 description = "Test author. Holds custody of the acceptance tests: writes tests that distinguish correct from incorrect behavior for the assigned outcome, proves they fail on the recorded baseline, and never writes production code."
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 model_reasoning_effort = "max"
 developer_instructions = '''
 # Test Author

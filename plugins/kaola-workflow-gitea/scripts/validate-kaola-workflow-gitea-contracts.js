@@ -434,18 +434,18 @@ assert(JSON.stringify(sortGiteaPolicy(giteaInstaller.CODEX_PINNED_ROLES))
 assert(JSON.stringify(sortGiteaPolicy(giteaPreflight.CODEX_PINNED_ROLES))
     === JSON.stringify(sortGiteaPolicy(giteaSchema.CODEX_PINNED_ROLES)),
   'Gitea preflight pinned-role policy must match adaptive schema');
-assert(giteaSchema.CODEX_PINNED_MODEL === 'gpt-5.6-luna'
+assert(giteaSchema.CODEX_PINNED_MODEL === 'gpt-6-luna'
     && giteaSchema.CODEX_PINNED_EFFORT === 'max',
-  'Gitea pinned subagent binding must be gpt-5.6-luna/max');
+  'Gitea pinned subagent binding must be gpt-6-luna/max');
 {
   const dir = path.join(root, pluginRoot, 'agents');
   for (const file of fs.readdirSync(dir).filter(name => name.endsWith('.toml')).sort()) {
     const text = fs.readFileSync(path.join(dir, file), 'utf8');
     const top = giteaSchema.profileTopLevelShape(text).outside;
-    assert((top.match(/^model\s*=\s*"gpt-5\.6-luna"\s*$/gm) || []).length === 1
+    assert((top.match(/^model\s*=\s*"gpt-6-luna"\s*$/gm) || []).length === 1
         && (top.match(/^model_reasoning_effort\s*=\s*"max"\s*$/gm) || []).length === 1,
       pluginRoot + '/agents/' + file
-        + ' must carry exactly one model = "gpt-5.6-luna" and one model_reasoning_effort = "max" line');
+        + ' must carry exactly one model = "gpt-6-luna" and one model_reasoning_effort = "max" line');
     const role = file.slice(0, -5);
     assert(giteaSchema.validateProfileText(text, role).length === 0,
       pluginRoot + '/agents/' + file + ' fails kernel profile validation: '
@@ -517,9 +517,9 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
     pluginRoot + ' must bind behavior, adapter, and resolved profile digests for ' + role);
     assert(!/[0-9a-f]{64}/.test(entry.sourceText) && !entry.sourceText.includes('runtime-adapter'),
       pluginRoot + ' must not carry receipt hashes in agent-visible text for ' + role);
-    assert(/^model\s*=\s*"gpt-5\.6-luna"\s*$/m.test(entry.sourceText)
+    assert(/^model\s*=\s*"gpt-6-luna"\s*$/m.test(entry.sourceText)
       && /^model_reasoning_effort\s*=\s*"max"\s*$/m.test(entry.sourceText),
-      pluginRoot + ' pinned profiles must carry the gpt-5.6-luna/max subagent binding');
+      pluginRoot + ' pinned profiles must carry the gpt-6-luna/max subagent binding');
   }
   assertIncludes(installerFile, 'profile_source_repair');
 

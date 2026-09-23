@@ -55,7 +55,7 @@ affected failure frontier before freezing a candidate and reviewing that exact h
 Codex subagent dispatch uses a native role-dispatch packet, not Claude call syntax. When the main
 Codex session invokes a role, it names the installed role, supplies the task prompt and working
 directory, and follows the `spawn_agent` schema exposed by that host. The runtime block exposes the
-single subagent default binding — `model = "gpt-5.6-luna"` and
+single subagent default binding — `model = "gpt-6-luna"` and
 `model_reasoning_effort = "max"`, pinned in every installed TOML profile — while a
 host-supported task-sensitive model, effort, service-tier, or history-fork choice remains valid.
 Because the profile pins both keys, dispatch omits per-call `model` and `reasoning_effort`; the

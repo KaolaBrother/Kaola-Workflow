@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Codex subagent binding moves to Luna 6 (#1090).** Every Kaola Codex role TOML (7 per plugin,
+  GitHub/GitLab/Gitea) now pins `model = "gpt-6-luna"` with `model_reasoning_effort = "max"`
+  (was Luna 5.6; effort unchanged). `CODEX_PINNED_MODEL` in
+  `kaola-workflow-adaptive-schema.js` is `gpt-6-luna`, and `validateProfileText`, the Codex
+  preflight, and the three contract validators require it. A read-only `codex app-server`
+  `model/list` probe (codex-cli 0.155.1) confirmed the id and its `max` effort. Profiles installed
+  by an earlier release read as `profiles_stale`; the preflight autofix, or a rerun of
+  `install-codex-agent-profiles.js`, reinstalls the new bytes. The `gpt-5.6-sol` and `gpt-6-astra`
+  references and every other runtime's binding are unchanged.
+
 ## [12.2.4] - 2026-09-22
 
 ### Changed

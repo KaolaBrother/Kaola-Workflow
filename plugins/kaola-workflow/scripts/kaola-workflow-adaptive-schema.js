@@ -83,7 +83,7 @@ const CODEX_PINNED_ROLES = Object.freeze([
   'knowledge-lookup',
   'tdd-guide',
 ]);
-const CODEX_PINNED_MODEL = 'gpt-5.6-luna';
+const CODEX_PINNED_MODEL = 'gpt-6-luna';
 const CODEX_PINNED_EFFORT = 'max';
 
 // Codex agent-profile schema (issue #332; #29 audit convergence). ONE authoring source for the

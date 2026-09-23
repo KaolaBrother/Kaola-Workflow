@@ -217,8 +217,8 @@ function codexV2FieldHits(text) {
 
 // #1049 — the Codex child binding is a dispatch contract carried by each Codex forge adapter and
 // rendered into Next, Finalize, and compact-recovery surfaces. Under #1062 there is exactly one
-// binding: every TOML profile pins `gpt-5.6-luna`/`max` and calls omit per-call model and effort.
-const CODEX_BINDING = Object.freeze({ model: 'gpt-5.6-luna', effort: 'max' });
+// binding: every TOML profile pins `gpt-6-luna`/`max` and calls omit per-call model and effort.
+const CODEX_BINDING = Object.freeze({ model: 'gpt-6-luna', effort: 'max' });
 
 function regexEscape(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -240,12 +240,12 @@ function codexBindingGaps(text) {
 }
 
 const CODEX_BINDING_FIXTURE = [
-  '**Subagent default:** every installed Kaola TOML profile pins `model = "gpt-5.6-luna"`',
+  '**Subagent default:** every installed Kaola TOML profile pins `model = "gpt-6-luna"`',
   'and `model_reasoning_effort = "max"`; file values take precedence.',
 ].join(' ');
 assert(codexBindingGaps(CODEX_BINDING_FIXTURE).length === 0,
   'A1049/oracle: the single Luna/max binding parses as valid');
-assert(codexBindingGaps(CODEX_BINDING_FIXTURE.replaceAll('gpt-5.6-luna', 'gpt-5.6-sol'))
+assert(codexBindingGaps(CODEX_BINDING_FIXTURE.replaceAll('gpt-6-luna', 'gpt-5.6-sol'))
     .includes('binding-model'),
   'A1049/oracle RED: the historical Sol model is rejected');
 assert(codexBindingGaps(CODEX_BINDING_FIXTURE.replace('effort = "max"', 'effort = "xhigh"'))
@@ -424,8 +424,8 @@ function runtimeDelegationGaps(runtime, text) {
       ['registration-lookup', [/\.codex\/config\.toml/]],
       ['profile-lookup', [/\.codex\/agents\/kaola-workflow\/<role>\.toml/]],
       ['carrier', [/spawn_agent.*agent_type|agent_type.*spawn_agent/]],
-      ['binding-model', [/gpt-5\.6-luna/]],
-      ['binding-effort', [/gpt-5\.6-luna[\s\S]*max|max[\s\S]*gpt-5\.6-luna/]],
+      ['binding-model', [/gpt-6-luna/]],
+      ['binding-effort', [/gpt-6-luna[\s\S]*max|max[\s\S]*gpt-6-luna/]],
     ],
     opencode: [
       ['native-only-design', [/installs no kaola role profiles by design/]],
@@ -1000,12 +1000,12 @@ for (const role of ROLE_NAMES) {
     .filter(profile => profile.runtime === 'codex')
     .filter(profile => {
       const content = String(profile.content || '');
-      return (content.match(/^model\s*=\s*"gpt-5\.6-luna"\s*$/gm) || []).length !== 1
+      return (content.match(/^model\s*=\s*"gpt-6-luna"\s*$/gm) || []).length !== 1
         || (content.match(/^model_reasoning_effort\s*=\s*"max"\s*$/gm) || []).length !== 1;
     })
     .map(profileKey);
   assert(unpinnedCodexProfiles.length === 0,
-    'A1049/profiles: all 21 Codex role profiles pin exactly one model = "gpt-5.6-luna" and one '
+    'A1049/profiles: all 21 Codex role profiles pin exactly one model = "gpt-6-luna" and one '
       + 'model_reasoning_effort = "max" — gaps ' + JSON.stringify(unpinnedCodexProfiles));
 
   let routing = null;

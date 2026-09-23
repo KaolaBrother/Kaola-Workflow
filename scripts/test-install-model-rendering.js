@@ -102,8 +102,8 @@ function mutateAgentCall(text, role, mutate) {
       label + ' must remain runtime-neutral and carry no vendor model literal');
   }
   const vendorLeakMutation = globalContract
-    + '\nUse gpt-5.6-luna as the universal default for every standard role.\n';
-  assert(vendorModelLiterals(vendorLeakMutation).includes('gpt-5.6-luna'),
+    + '\nUse gpt-6-luna as the universal default for every standard role.\n';
+  assert(vendorModelLiterals(vendorLeakMutation).includes('gpt-6-luna'),
     '#1035 mutation: a vendor model hardcoded into the universal consumer contract is detected');
   assert(!/model_reasoning_effort\s*=/.test(initSkel),
     '#1047: workflow-init carries no runtime model-configuration tutorial');
@@ -509,18 +509,18 @@ function enableMultiAgentV2(homeRoot) {
   }
 }
 
-// The supported binding is the single gpt-5.6-luna/max pin on every generated profile; an exact
+// The supported binding is the single gpt-6-luna/max pin on every generated profile; an exact
 // historical Sol/medium pair is stale migration input rather than fresh schema input, and a
 // profile with no pin at all is now schema-invalid.
 {
   const current = fs.readFileSync(path.join(root, 'plugins/kaola-workflow/agents/implementer.toml'), 'utf8');
   const legacyPinned = current
-    .replace(/^model = "gpt-5\.6-luna"$/m, 'model = "gpt-5.6-sol"')
+    .replace(/^model = "gpt-6-luna"$/m, 'model = "gpt-5.6-sol"')
     .replace(/^model_reasoning_effort = "max"$/m, 'model_reasoning_effort = "medium"');
   assert.deepStrictEqual(codexProfileInstaller.validateProfileText(current, 'implementer'), [],
     'a profile carrying the single pinned binding must satisfy the source schema');
   assert(codexProfileInstaller.validateProfileText(
-    current.replace(/^model = "gpt-5\.6-luna"$\n/m, '')
+    current.replace(/^model = "gpt-6-luna"$\n/m, '')
       .replace(/^model_reasoning_effort = "max"$\n/m, ''), 'implementer').length > 0,
     'an unpinned profile must FAIL the source schema — omission is no longer the binding');
   assert.strictEqual(typeof codexProfileInstaller.classifyProfilePinPosture, 'function',
@@ -528,7 +528,7 @@ function enableMultiAgentV2(homeRoot) {
   assert.strictEqual(codexProfileInstaller.classifyProfilePinPosture(legacyPinned), 'legacy_pinned',
     'an exact historical Sol/medium pair is stale migration input, not fresh');
   assert.strictEqual(codexProfileInstaller.classifyProfilePinPosture(current), 'malformed',
-    'the current gpt-5.6-luna/max pin is not a legacy migration pair');
+    'the current gpt-6-luna/max pin is not a legacy migration pair');
 }
 
 // A previous manifest proves stale ownership only when it still binds the exact
@@ -3506,7 +3506,7 @@ try {
       const legacyProfilePath = path.join(projectAgentsDir, 'implementer.toml');
       const currentProfile = fs.readFileSync(legacyProfilePath, 'utf8');
       fs.writeFileSync(legacyProfilePath, currentProfile
-        .replace(/^model = "gpt-5\.6-luna"$/m, 'model = "gpt-5.6-sol"')
+        .replace(/^model = "gpt-6-luna"$/m, 'model = "gpt-5.6-sol"')
         .replace(/^model_reasoning_effort = "max"$/m, 'model_reasoning_effort = "medium"'));
       const configBeforeMigration = fs.readFileSync(projectConfigPath, 'utf8');
       // spawn-class: environment
@@ -3527,9 +3527,9 @@ try {
       const migratedProfile = fs.readFileSync(legacyProfilePath, 'utf8');
       assert.strictEqual(migratedProfile, currentProfile,
         'legacy migration restores the current pinned-binding source bytes');
-      assert(/^model\s*=\s*"gpt-5\.6-luna"$/m.test(migratedProfile)
+      assert(/^model\s*=\s*"gpt-6-luna"$/m.test(migratedProfile)
         && /^model_reasoning_effort\s*=\s*"max"$/m.test(migratedProfile),
-        'legacy migration installs the single gpt-5.6-luna/max subagent binding');
+        'legacy migration installs the single gpt-6-luna/max subagent binding');
       assert.strictEqual(fs.readFileSync(projectConfigPath, 'utf8'), configBeforeMigration,
         'profile migration does not rewrite the root-level user-owned dispatch posture');
       // #775 (Codex 0.145 re-baseline): dispatch mode is binary now — the whole 0.142/0.144
@@ -3796,7 +3796,7 @@ try {
       const sourceProfile = fs.readFileSync(path.join(root, 'plugins', 'kaola-workflow', 'agents', 'implementer.toml'), 'utf8');
       const mixedProfile = sourceProfile
         .replace(/^name = "implementer"$/m, 'name = "wrong-role"')
-        .replace(/^model = "gpt-5\.6-luna"$/m, 'model = "gpt-5.6-sol"')
+        .replace(/^model = "gpt-6-luna"$/m, 'model = "gpt-5.6-sol"')
         .replace(/^model_reasoning_effort = "max"$/m, 'model_reasoning_effort = "medium"');
       fs.writeFileSync(path.join(mixedAgentsDir, 'implementer.toml'), mixedProfile);
       const inspection = preflightMod.inspectScope({

@@ -592,7 +592,7 @@ against. Bundled
 
 The `standard` / `reasoning` / `heavy` intent axis is retired (ADR 0025, #1062); no mission-ledger
 field records a model pair. Each adapter that installs profiles declares exactly one
-`subagent_default` — Claude `model: sonnet`; Codex `model = "gpt-5.6-luna"` /
+`subagent_default` — Claude `model: sonnet`; Codex `model = "gpt-6-luna"` /
 `model_reasoning_effort = "max"` pinned in the TOML; Grok `model: grok-4.7` / `effort: medium`;
 Cursor `model: grok-4.7[effort=medium]` — and next/finalize exposes that binding at
 the point of dispatch. It remains a default rather than scheduler state or a prohibition on native

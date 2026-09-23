@@ -40,8 +40,8 @@ assert.ok(Array.isArray(schema.CODEX_PINNED_ROLES) && schema.CODEX_PINNED_ROLES.
   'production must export the 7-role CODEX_PINNED_ROLES catalog');
 assert.deepStrictEqual([...schema.CODEX_PINNED_ROLES].sort(), BEHAVIOR_ROLES,
   'Codex pinned-role catalog is derived from the behavior authority roster');
-assert.strictEqual(schema.CODEX_PINNED_MODEL, 'gpt-5.6-luna',
-  'the single Codex subagent binding pins model gpt-5.6-luna');
+assert.strictEqual(schema.CODEX_PINNED_MODEL, 'gpt-6-luna',
+  'the single Codex subagent binding pins model gpt-6-luna');
 assert.strictEqual(schema.CODEX_PINNED_EFFORT, 'max',
   'the single Codex subagent binding pins effort max');
 assert.deepStrictEqual(
@@ -53,7 +53,7 @@ assert.deepStrictEqual(
 // The two tables answer different questions:
 //   - DEFAULT_AGENT_MODELS is the Claude binding — every role ships the one `model: sonnet` pin.
 //   - CODEX_PINNED_ROLES is the Codex role catalog — every TOML carries the one
-//     gpt-5.6-luna/max subagent binding declared by CODEX_PINNED_MODEL/EFFORT.
+//     gpt-6-luna/max subagent binding declared by CODEX_PINNED_MODEL/EFFORT.
 for (const [role, model] of Object.entries(resolver.DEFAULT_AGENT_MODELS)) {
   assert.strictEqual(model, 'sonnet',
     `${role} must default to the single Claude subagent binding (sonnet)`);

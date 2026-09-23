@@ -1848,7 +1848,7 @@ adapter declares none and carries only `named_roles: false`, `deterministic_prof
 a `delegation_guidance` of `native_routes` plus `availability`:
 
 - Claude profiles pin `model: sonnet`; effort is not pinned;
-- Codex TOML profiles pin `model = "gpt-5.6-luna"` and `model_reasoning_effort = "max"`; file
+- Codex TOML profiles pin `model = "gpt-6-luna"` and `model_reasoning_effort = "max"`; file
   values take precedence over spawn parameters and the parent session, so dispatch omits both;
 - Grok profiles pin `model: grok-4.7` + `effort: medium`;
 - Cursor profiles pin `model: grok-4.7[effort=medium]`; omit-model dispatch is the named-catalog
@@ -1858,9 +1858,9 @@ a `delegation_guidance` of `native_routes` plus `availability`:
   session model or a vendor router owns the choice, so dispatch goes through the vendor harness.
 
 The kernel anchor `kaola-workflow-adaptive-schema.js` exports `CODEX_PINNED_ROLES`,
-`CODEX_PINNED_MODEL` (`gpt-5.6-luna`), and `CODEX_PINNED_EFFORT` (`max`) — replacing the three
+`CODEX_PINNED_MODEL` (`gpt-6-luna`), and `CODEX_PINNED_EFFORT` (`max`) — replacing the three
 retired per-tier roster constants — and
-`validateProfileText`, which now requires exactly one `model = "gpt-5.6-luna"` and one
+`validateProfileText`, which now requires exactly one `model = "gpt-6-luna"` and one
 `model_reasoning_effort = "max"` top-level line in every Codex TOML (the pre-#1062 rule required
 both keys omitted).
 

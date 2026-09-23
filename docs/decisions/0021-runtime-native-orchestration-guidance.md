@@ -59,12 +59,12 @@ ADR 0019's owner-approved matrix remains the default dispatch binding:
 
 | intent | Claude | Codex | OpenCode | Kimi | Grok | Cursor | ZCode |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| standard | `sonnet`, runtime effort | `gpt-5.6-luna` / `max` | session; optional standard model pin | session model/thinking | inherited model + profile `medium` | profile `grok-4.7[effort=medium]` | profile `GLM-5.3` / `thoughtLevel: high` |
+| standard | `sonnet`, runtime effort | `gpt-6-luna` / `max` | session; optional standard model pin | session model/thinking | inherited model + profile `medium` | profile `grok-4.7[effort=medium]` | profile `GLM-5.3` / `thoughtLevel: high` |
 | reasoning | `opus`, runtime effort | `gpt-6-astra` / `medium` | optional reasoning-role model pin, otherwise session | session model/thinking | inherited model + profile `high` | profile `grok-4.7[effort=high]` | profile `GLM-5.3` / `thoughtLevel: max` |
 | heavy | `fable`, runtime effort | `gpt-6-astra` / `high` | classifies with reasoning for the optional pin, otherwise session | session model/thinking | inherited model + profile `xhigh` | profile `grok-4.7[effort=xhigh]` | profile `GLM-5.3` / `thoughtLevel: max` |
 
 **Current mapping note (2026-09-05, #1049).** Codex reasoning now uses `gpt-6-astra` with
-`medium` effort and heavy uses `gpt-6-astra` with `high`; standard remains `gpt-5.6-luna`/`max`.
+`medium` effort and heavy uses `gpt-6-astra` with `high`; standard is `gpt-6-luna`/`max` (Luna 6 since #1090, 2026-09-23; effort unchanged).
 Codex profiles continue to omit a fixed model, and all other runtime rows retain their native
 bindings.
 

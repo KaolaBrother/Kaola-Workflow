@@ -368,7 +368,7 @@ The named flag always carries the `--forge=` the check ran under. Exit code is 1
 | Delivery | plugin (`.codex-plugin/` + `skills/` + `agents/*.toml`) | `.opencode/commands` + hooks plugin (no Kaola role profiles) |
 | Agent format | TOML profiles | none — `native_only`; vendor harness routes |
 | Forge coupling | shares the forge edition machinery (github/gitlab/gitea) | `--forge` flag; variants generated from the routing registry, outside the edition machinery |
-| Models | baked per-agent (`gpt-5.6-luna` / `max` TOML pins) | **inherited** — a subagent runs the model and reasoning effort of the session that dispatched it, which is why Kaola installs no profiles |
+| Models | baked per-agent (`gpt-6-luna` / `max` TOML pins) | **inherited** — a subagent runs the model and reasoning effort of the session that dispatched it, which is why Kaola installs no profiles |
 
 ## Verification
 

@@ -343,13 +343,13 @@
         "tool_binding": "host_policy",
         "hook_scope": "plugin_runtime",
         "subagent_default": {
-          "model": "gpt-5.6-luna",
+          "model": "gpt-6-luna",
           "effort": "max",
-          "summary": "every installed Kaola TOML profile pins `model = \"gpt-5.6-luna\"` and `model_reasoning_effort = \"max\"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`"
+          "summary": "every installed Kaola TOML profile pins `model = \"gpt-6-luna\"` and `model_reasoning_effort = \"max\"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`"
         },
         "delegation_guidance": {
           "profile_lookup": "Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.",
-          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; omit per-call `model` and `reasoning_effort` because the TOML profile pins `gpt-5.6-luna` / `max` and file values take precedence, while preserving supported `fork_turns` and service-tier choices.",
+          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; omit per-call `model` and `reasoning_effort` because the TOML profile pins `gpt-6-luna` / `max` and file values take precedence, while preserving supported `fork_turns` and service-tier choices.",
           "tool_boundary": "The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.",
           "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
           "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
@@ -387,13 +387,13 @@
         "tool_binding": "host_policy",
         "hook_scope": "plugin_runtime",
         "subagent_default": {
-          "model": "gpt-5.6-luna",
+          "model": "gpt-6-luna",
           "effort": "max",
-          "summary": "every installed Kaola TOML profile pins `model = \"gpt-5.6-luna\"` and `model_reasoning_effort = \"max\"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`"
+          "summary": "every installed Kaola TOML profile pins `model = \"gpt-6-luna\"` and `model_reasoning_effort = \"max\"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`"
         },
         "delegation_guidance": {
           "profile_lookup": "Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.",
-          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; omit per-call `model` and `reasoning_effort` because the TOML profile pins `gpt-5.6-luna` / `max` and file values take precedence, while preserving supported `fork_turns` and service-tier choices.",
+          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; omit per-call `model` and `reasoning_effort` because the TOML profile pins `gpt-6-luna` / `max` and file values take precedence, while preserving supported `fork_turns` and service-tier choices.",
           "tool_boundary": "The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.",
           "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
           "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."
@@ -431,13 +431,13 @@
         "tool_binding": "host_policy",
         "hook_scope": "plugin_runtime",
         "subagent_default": {
-          "model": "gpt-5.6-luna",
+          "model": "gpt-6-luna",
           "effort": "max",
-          "summary": "every installed Kaola TOML profile pins `model = \"gpt-5.6-luna\"` and `model_reasoning_effort = \"max\"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`"
+          "summary": "every installed Kaola TOML profile pins `model = \"gpt-6-luna\"` and `model_reasoning_effort = \"max\"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`"
         },
         "delegation_guidance": {
           "profile_lookup": "Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.",
-          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; omit per-call `model` and `reasoning_effort` because the TOML profile pins `gpt-5.6-luna` / `max` and file values take precedence, while preserving supported `fork_turns` and service-tier choices.",
+          "dispatch_carrier": "Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: \"<role>\"`; omit per-call `model` and `reasoning_effort` because the TOML profile pins `gpt-6-luna` / `max` and file values take precedence, while preserving supported `fork_turns` and service-tier choices.",
           "tool_boundary": "The Codex host policy owns the actual tool boundary; the generated TOML profile owns the role behavior, not a duplicated tool list.",
           "native_routes": "Native alternatives include the general `default`, implementation-owning `worker`, read-heavy `explorer`, and any other type the host reports; use each only under its real contract.",
           "availability": "Honor the current session's multi-agent exposure, V1/V2 call schema, type catalog, history-fork choices, and host-owned nesting/concurrency limits; a missing custom `agent_type` does not hide other `spawn_agent` routes."

@@ -1387,7 +1387,7 @@ function classifyProfilePinPosture(text) {
 }
 
 const LEGACY_PIN_ONLY_REASONS = new Set([
-  "top-level 'model' must be present and equal \"gpt-5.6-luna\"",
+  "top-level 'model' must be present and equal \"gpt-6-luna\"",
   "top-level 'model_reasoning_effort' must be present and equal \"max\""
 ]);
 
