@@ -1,0 +1,8 @@
+{
+  "selection_mode": "none-recorded",
+  "selection_bundle": "#1095",
+  "selection_priority_basis": "none recorded (none-recorded); the caller named #1095, and no backlog ranking was persisted",
+  "selection_rejected": "none recorded (none-recorded); no alternatives were persisted",
+  "selection_disjointness": "none recorded (none-recorded); the claim itself is the disjointness check",
+  "clarifications": "none"
+}
