@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow",
-  "version": "12.2.5",
+  "version": "12.2.6",
   "description": "Kaola-Workflow for Codex, driven by an adaptive, resumable mission ledger, using GitHub issues, pull requests, gh, and repo-backed workflow artifacts.",
   "author": {
     "name": "KaolaBrother",
