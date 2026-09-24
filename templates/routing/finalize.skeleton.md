@@ -114,13 +114,15 @@ records what this issue turned out to be and lands on the issue it corrects.
 <!-- /PIN -->
 
 <!-- SPLICE:fz-issue-closure -->
-after acceptance and the closure decision. Keep-open applies to the entire claimed set, releases all
-claims, and is merge-sink-only; otherwise every issue closes or none does.
+and only after acceptance, the closure decision, and a verified merge. The merge sink closes them
+itself; a request sink writes one `Closes #n` line per member, so they close when the request merges
+into the default branch. Never close an issue by hand before the merge is verified. Keep-open
+applies to the entire claimed set, releases all claims, and is merge-sink-only.
 
 ## Card: close, archive, sink, and reconcile
 
-Capture branch, sink kind, issue and `issue_numbers` before archive. `--issue-numbers` closes the
-whole set or none:
+Capture branch, sink kind, issue and `issue_numbers` before archive. Both sinks take
+`--issue-numbers`, which closes the whole set or none:
 
 ```bash
 <!-- SLOT:fz-scripts-resolver -->

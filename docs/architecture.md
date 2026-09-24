@@ -339,13 +339,15 @@ content conflict still halts and asks a human.
 ### PR sink (intent-based or fallback)
 
 ```text
-Final commit ──► push branch ──► create PR/MR ──► record pr_url + pr_number in workflow-state.md
+Final commit ──► push branch ──► create PR/MR (one `Closes #n` per claimed member)
+    ──► record pr_url + pr_number in workflow-state.md
     ──► metadata follow-up commit (worktree clean, folder stays active)
     ──► next /workflow-next: watch-pr detects MERGED/CLOSED ──► archive the folder
 ```
 
 Selection: a PR intent in the user's prompt sets `KAOLA_SINK=pr` before startup; otherwise
-`sink: merge`. A merge sink that exits 3 (merge-impossible — branch protected, non-fast-forward,
+`sink: merge`. Each claim records its forge's one request-sink noun (`pr` on GitHub and Gitea, `mr`
+on GitLab), rewriting the other forge's noun. A merge sink that exits 3 (merge-impossible — branch protected, non-fast-forward,
 permission denied) can pivot to a PR, except under keep-open, where a PR body's `Closes #N` would
 close the issue the run deliberately kept open.
 

@@ -97,6 +97,14 @@ const FINALIZE_ATTEST_FLAG_RETIRED_NOTE = 'note: --attest-contractor-spawn has n
   + 'finalize seam is orchestrator-owned and records no dispatch attestation. Ignoring.';
 let finalizeAttestFlagRetiredWarned = false;
 
+// #1094 (V1): GitHub's request sink has one canonical noun, `pr`. The finalize skill's alias
+// accepts either noun, but deferral, watch-pr and archive recognize only `pr`, so the claim
+// records the foreign `mr` as `pr`. Every other value passes through unchanged.
+function canonicalSink(raw) {
+  const sink = String(raw).trim();
+  return sink === 'mr' ? 'pr' : sink;
+}
+
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
@@ -1280,7 +1288,7 @@ function claimProject(root, args) {
       project,
       issue_number: issueNumber,
       branch,
-      sink: args.sink || process.env.KAOLA_SINK || 'merge',
+      sink: canonicalSink(args.sink || process.env.KAOLA_SINK || 'merge'),
       worktree_path: worktreePath,
       worktree_error: worktreeError,
       base_branch: baseBranch,
@@ -1921,7 +1929,7 @@ function claimExplicitBundle(root, args) {
     targets,
     project,
     branch,
-    sink: args.sink || process.env.KAOLA_SINK || 'merge',
+    sink: canonicalSink(args.sink || process.env.KAOLA_SINK || 'merge'),
     selectionRecordDigest: args.selectionRecordDigest, // the selection record's durable anchor
     selectionRecordBytes: args.selectionRecordBytes    // ...and the bytes it is a digest OF
   });
@@ -6865,6 +6873,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  canonicalSink,
   archiveProjectDir,
   findArchiveAuthorities,
   resolveFinalizeAuthority,

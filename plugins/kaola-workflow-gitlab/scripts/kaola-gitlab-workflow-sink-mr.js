@@ -63,6 +63,8 @@ function parseArgs(argv) {
     const key = argv[i];
     if (key === '--branch' && argv[i + 1]) { args.branch = argv[++i]; continue; }
     if (key === '--issue' && argv[i + 1]) { args.issue = parseInt(argv[++i], 10); continue; }
+    // #1094: the claimed member set (finalize's `--issue-numbers`) — one `Closes #n` per member.
+    if (key === '--issue-numbers' && argv[i + 1]) { args.issueNumbers = parseIssueNumbers(argv[++i]); continue; }
     if (key === '--project' && argv[i + 1]) { args.project = argv[++i]; continue; }
     if (key === '--title' && argv[i + 1]) { args.title = argv[++i]; continue; }
     if (key === '--description' && argv[i + 1]) { args.description = argv[++i]; continue; }
@@ -73,6 +75,31 @@ function parseArgs(argv) {
     if (key === '--sha' && argv[i + 1]) { args.sha = argv[++i]; continue; }
   }
   return args;
+}
+
+function parseIssueNumbers(raw) {
+  const nums = String(raw || '').split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n > 0);
+  return Array.from(new Set(nums)).sort((a, b) => a - b);
+}
+
+// #1094: the members this request closes. The `--issue-numbers` flag wins; when it is absent, the
+// state's `issue_numbers` line (live or archived) supplies the set, as sink-merge's #393a does, so
+// a flag omission cannot leave bundle members open. The primary `--issue` is always a member.
+// A singleton claim has no issue_numbers line and closes only `--issue`, exactly as before.
+function resolveMemberSet(args, stateFile) {
+  let members = Array.isArray(args.issueNumbers) ? args.issueNumbers.slice() : [];
+  if (members.length === 0) {
+    try {
+      const m = fs.readFileSync(stateFile, 'utf8').match(/^issue_numbers:\s*(.+?)\s*$/m);
+      if (m) members = parseIssueNumbers(m[1]);
+    } catch (_) {}
+  }
+  if (args.issue != null && !members.includes(args.issue)) members.push(args.issue);
+  return Array.from(new Set(members)).sort((a, b) => a - b);
+}
+
+function closesBody(members) {
+  return members.map(n => 'Closes #' + n).join('\n');
 }
 
 function readConfig() {
@@ -212,7 +239,7 @@ function ensureMergeRequest(args, opts) {
     sourceBranch: args.branch,
     targetBranch: targetBranch,
     title: args.title || ('Workflow branch ' + args.branch),
-    description: args.description || (args.issue ? 'Closes #' + args.issue : '')
+    description: args.description || closesBody(resolveMemberSet(args, path.join(projectFolder, 'workflow-state.md')))
   });
 
   assert(mr && mr.mr_iid, 'GitLab MR creation did not return an IID');
@@ -291,6 +318,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  parseArgs,
+  resolveMemberSet,
+  closesBody,
   appendSummary,
   ensureMergeRequest,
   findMergeRequestForBranch,

@@ -205,6 +205,40 @@ withForge({
   assert.strictEqual(pr.pr_number, 9);
 });
 
+// Test 2b (#1094): the PR sink closes the whole claimed set — one `Closes #n` per member, from
+// `--issue-numbers` or, when the flag is absent, from the state's issue_numbers line.
+{
+  const parsed = sinkPr.parseArgs(['--branch', 'b', '--project', 'p', '--issue', '71', '--issue-numbers', '72,71,72']);
+  assert.deepStrictEqual(parsed.issueNumbers, [71, 72]);
+  const descriptions = [];
+  withForge({
+    listPullRequests() { return []; },
+    createPullRequest(opts) {
+      descriptions.push(opts.description);
+      return { pr_number: 11, pr_url: 'https://gitea.example/group/project/pulls/11', state: 'open', source_branch: opts.sourceBranch };
+    },
+    discoverProject() {
+      return { full_name: 'group/project', html_url: 'https://gitea.example/group/project', owner: 'group', name: 'project' };
+    }
+  }, () => {
+    const root = tempRoot('kw-gt-pr-members-');
+    writeWorkflow(root, 'bundle-71-72', 71);
+    sinkPr.ensurePullRequest(Object.assign({ branch: 'feature-bundle' }, parsed, { project: 'bundle-71-72' }), { root, skipPush: true });
+    const stateRoot = tempRoot('kw-gt-pr-members-state-');
+    const dir = writeWorkflow(stateRoot, 'bundle-73-74', 73);
+    fs.appendFileSync(path.join(dir, 'workflow-state.md'), 'issue_numbers: 73,74\n');
+    sinkPr.ensurePullRequest({ branch: 'feature-state', project: 'bundle-73-74', issue: 73 }, { root: stateRoot, skipPush: true });
+    // Finalize archives before the sink runs: the ARCHIVED state's issue_numbers supplies the set.
+    const archRoot = tempRoot('kw-gt-pr-members-archived-');
+    const liveDir = writeWorkflow(archRoot, 'bundle-75-76', 75);
+    fs.appendFileSync(path.join(liveDir, 'workflow-state.md'), 'issue_numbers: 75,76\n');
+    fs.mkdirSync(path.join(archRoot, 'kaola-workflow', 'archive'), { recursive: true });
+    fs.renameSync(liveDir, path.join(archRoot, 'kaola-workflow', 'archive', 'bundle-75-76'));
+    sinkPr.ensurePullRequest({ branch: 'feature-archived', project: 'bundle-75-76', issue: 75 }, { root: archRoot, skipPush: true });
+  });
+  assert.deepStrictEqual(descriptions, ['Closes #71\nCloses #72', 'Closes #73\nCloses #74', 'Closes #75\nCloses #76']);
+}
+
 // Test 3: mergePullRequest opts verification
 withForge({
   mergePullRequest(project, prNumber, opts) {

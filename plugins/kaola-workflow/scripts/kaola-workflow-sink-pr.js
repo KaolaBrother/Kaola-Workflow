@@ -63,9 +63,36 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--branch' && argv[i + 1]) { args.branch = argv[++i]; continue; }
     if (argv[i] === '--issue' && argv[i + 1]) { args.issue = parseInt(argv[++i], 10); continue; }
+    // #1094: the claimed member set (finalize's `--issue-numbers`) — one `Closes #n` per member.
+    if (argv[i] === '--issue-numbers' && argv[i + 1]) { args.issueNumbers = parseIssueNumbers(argv[++i]); continue; }
     if (argv[i] === '--project' && argv[i + 1]) { args.project = argv[++i]; continue; }
   }
   return args;
+}
+
+function parseIssueNumbers(raw) {
+  const nums = String(raw || '').split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n > 0);
+  return Array.from(new Set(nums)).sort((a, b) => a - b);
+}
+
+// #1094: the members this PR closes. The `--issue-numbers` flag wins; when it is absent, the
+// state's `issue_numbers` line (live or archived) supplies the set, as sink-merge's #393a does, so
+// a flag omission cannot leave bundle members open. The primary `--issue` is always a member.
+// A singleton claim has no issue_numbers line and closes only `--issue`, exactly as before.
+function resolveMemberSet(args, stateFile) {
+  let members = Array.isArray(args.issueNumbers) ? args.issueNumbers.slice() : [];
+  if (members.length === 0) {
+    try {
+      const m = fs.readFileSync(stateFile, 'utf8').match(/^issue_numbers:\s*(.+?)\s*$/m);
+      if (m) members = parseIssueNumbers(m[1]);
+    } catch (_) {}
+  }
+  if (args.issue != null && !members.includes(args.issue)) members.push(args.issue);
+  return Array.from(new Set(members)).sort((a, b) => a - b);
+}
+
+function closesBody(members) {
+  return members.map(n => 'Closes #' + n).join('\n');
 }
 
 function updateStateSinkBlock(stateFile, prUrl, prNumber) {
@@ -161,6 +188,7 @@ function main() {
   const projectFolder = resolveProjectDir(root, args.project);
   const stateFile = path.join(projectFolder, 'workflow-state.md');
   const summaryFile = path.join(projectFolder, 'finalization-summary.md');
+  const members = resolveMemberSet(args, stateFile);
 
   // #336: keep-open is merge-sink-only — the PR body 'Closes #N' would auto-close the
   // kept-open issue, and watch-pr's archive-on-merge would delete the preserved roadmap source.
@@ -224,8 +252,8 @@ function main() {
     '--base', baseBranch,
     '--fill',
   ];
-  if (args.issue != null) {
-    prCreateArgs.push('--body', 'Closes #' + args.issue);
+  if (members.length > 0) {
+    prCreateArgs.push('--body', closesBody(members));
   }
 
   const prUrl = ghExec(prCreateArgs);
@@ -284,4 +312,8 @@ function main() {
   }
 }
 
-try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
+if (require.main === module) {
+  try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
+}
+
+module.exports = { parseArgs, resolveMemberSet, closesBody };

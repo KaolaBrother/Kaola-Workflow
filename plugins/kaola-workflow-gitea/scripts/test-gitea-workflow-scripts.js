@@ -1138,6 +1138,32 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
   }
 }
 
+// #1094 (V1): the claim records the foreign sink noun as Gitea's canonical `pr` — from the flag
+// and from KAOLA_SINK — so watch-pr and archive see the one noun they recognize; merge is untouched.
+assert.strictEqual(claim.canonicalSink('mr'), 'pr');
+assert.strictEqual(claim.canonicalSink('pr'), 'pr');
+assert.strictEqual(claim.canonicalSink('merge'), 'merge');
+for (const [n, argv, env] of [[611, ['--sink', 'mr'], {}], [612, [], { KAOLA_SINK: 'mr' }]]) {
+  const root = tempRoot('kw-gt-sink-noun-');
+  const binDir = path.join(tempRoot('kw-gt-sink-noun-bin-'), 'bin'); // outside the repo: keeps the tree clean
+  writeTeaShimOpen(binDir);
+  try {
+    initGitRepo(root);
+    const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', String(n)].concat(argv), {
+      cwd: root, encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKTREE_NATIVE: '0', ...env,
+        ...teaMockEnv(binDir), PATH: binDir + path.delimiter + (process.env.PATH || '') }
+    });
+    assert.strictEqual(result.status, 0, 'V1 startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const out = JSON.parse(result.stdout.trim().split('\n').pop());
+    const state = fs.readFileSync(path.join(root, 'kaola-workflow', out.project, 'workflow-state.md'), 'utf8');
+    assert(/^sink: pr$/m.test(state), '#1094 V1: a foreign `mr` sink must be recorded as `pr`, got:\n' + state);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(path.dirname(binDir), { recursive: true, force: true });
+  }
+}
+
 // #725/#770: the Issue #101 KAOLA_PATH=fast startup test is retired — first (#725) because fast
 // was never an installed path (refused path_not_installed), and now (#770) because the path
 // SELECTOR itself is retired: a stale KAOLA_PATH=fast is silently ignored and the claim ACQUIRES

@@ -211,8 +211,7 @@ Next: {the next command, or the frontier item you are opening}
 ## Co-active Folders
 
 Distinct active folders have separate state, branches, and worktrees. Keep their commits separate,
-and never touch another session's branch, worktree, folder, or issues. After finalization closes
-the whole set and archives the folder, stop and await explicit redirection; never auto-route.
-Multi-issue closure is all-or-nothing.
+and never touch another session's branch, worktree, folder, or issues. After finalization, stop and
+await explicit redirection; never auto-route.
 
 <!-- KW-COMPACT-RECOVERY-END -->

@@ -201,6 +201,37 @@ withForge({
   assert.strictEqual(mr.mr_iid, 9);
 });
 
+// #1094: the MR sink closes the whole claimed set — one `Closes #n` per member, from
+// `--issue-numbers` or, when the flag is absent, from the state's issue_numbers line.
+{
+  const parsed = sinkMr.parseArgs(['--branch', 'b', '--project', 'p', '--issue', '71', '--issue-numbers', '72,71,72']);
+  assert.deepStrictEqual(parsed.issueNumbers, [71, 72]);
+  const descriptions = [];
+  withForge({
+    listMergeRequests() { return []; },
+    createMergeRequest(opts) {
+      descriptions.push(opts.description);
+      return { mr_iid: 11, mr_url: 'https://gitlab.example/group/project/-/merge_requests/11', web_url: 'https://gitlab.example/group/project/-/merge_requests/11', state: 'opened', source_branch: opts.sourceBranch };
+    }
+  }, () => {
+    const root = tempRoot('kw-gl-mr-members-');
+    writeWorkflow(root, 'bundle-71-72', 71);
+    sinkMr.ensureMergeRequest(Object.assign({ branch: 'feature-bundle' }, parsed, { project: 'bundle-71-72' }), { root, skipPush: true });
+    const stateRoot = tempRoot('kw-gl-mr-members-state-');
+    const dir = writeWorkflow(stateRoot, 'bundle-73-74', 73);
+    fs.appendFileSync(path.join(dir, 'workflow-state.md'), 'issue_numbers: 73,74\n');
+    sinkMr.ensureMergeRequest({ branch: 'feature-state', project: 'bundle-73-74', issue: 73 }, { root: stateRoot, skipPush: true });
+    // Finalize archives before the sink runs: the ARCHIVED state's issue_numbers supplies the set.
+    const archRoot = tempRoot('kw-gl-mr-members-archived-');
+    const liveDir = writeWorkflow(archRoot, 'bundle-75-76', 75);
+    fs.appendFileSync(path.join(liveDir, 'workflow-state.md'), 'issue_numbers: 75,76\n');
+    fs.mkdirSync(path.join(archRoot, 'kaola-workflow', 'archive'), { recursive: true });
+    fs.renameSync(liveDir, path.join(archRoot, 'kaola-workflow', 'archive', 'bundle-75-76'));
+    sinkMr.ensureMergeRequest({ branch: 'feature-archived', project: 'bundle-75-76', issue: 75 }, { root: archRoot, skipPush: true });
+  });
+  assert.deepStrictEqual(descriptions, ['Closes #71\nCloses #72', 'Closes #73\nCloses #74', 'Closes #75\nCloses #76']);
+}
+
 withForge({
   mergeMergeRequest(mrIid, opts) {
     assert.strictEqual(mrIid, 10);

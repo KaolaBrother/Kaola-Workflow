@@ -1648,6 +1648,40 @@ function testInstallProfilesFeaturesTableHandling() {
   }
 }
 
+// #1094 (V1): the claim records the foreign sink noun as GitLab's canonical `mr` — from the flag
+// and from KAOLA_SINK — so watch-mr and archive see the one noun they recognize; merge is untouched.
+assert.strictEqual(claim.canonicalSink('pr'), 'mr');
+assert.strictEqual(claim.canonicalSink('mr'), 'mr');
+assert.strictEqual(claim.canonicalSink('merge'), 'merge');
+for (const [n, argv, env] of [[611, ['--sink', 'pr'], {}], [612, [], { KAOLA_SINK: 'pr' }]]) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-sink-noun-')));
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-sink-noun-bin-')); // outside the repo: keeps the tree clean
+  try {
+    initGitRepo(root);
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'glab'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view')) process.stdout.write('{\"state\":\"open\"}\\n');",
+      "else if (a.includes('repo view')) process.stdout.write('{\"id\":77}\\n');",
+      "else process.stdout.write('[]\\n');"
+    ]);
+    const r = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', String(n)].concat(argv), {
+      cwd: root, encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKTREE_NATIVE: '0', ...env, ...glabMockEnv(binDir),
+             PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '') }
+    });
+    assert.strictEqual(r.status, 0, 'V1 startup must exit 0\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+    const out = JSON.parse(r.stdout.trim().split('\n').pop());
+    const state = fs.readFileSync(path.join(root, 'kaola-workflow', out.project, 'workflow-state.md'), 'utf8');
+    assert(/^sink: mr$/m.test(state), '#1094 V1: a foreign `pr` sink must be recorded as `mr`, got:\n' + state);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(binDir, { recursive: true, force: true });
+    const kwRoot = root + '.kw';
+    if (fs.existsSync(kwRoot)) fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
 // --- Task 5: fail-open fix — classifier must not silently pass on forge failure ---
 // #507 update: a generic/unknown forge error (no e.status/e.signal) is classified as transient
 // ('killed' fallback) and retried, then surfaces as verdict:indeterminate (not target_unavailable).

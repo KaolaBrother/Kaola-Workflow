@@ -1305,9 +1305,16 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
 
 - **Script**: `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` /
   `kaola-gitea-workflow-sink-pr.js`.
+- **Usage**: `--branch B --project P [--issue N] [--issue-numbers A,B]`. Finalize passes the
+  claimed member set as `--issue-numbers`, the same set the merge sink takes.
 - **Contract**: push branch, create the PR/MR (`gh pr create` / `glab mr create` / `tea pr create`),
   record `pr_url` and `pr_number` in the `## Sink` block, then create a deliberate metadata
   follow-up commit (`chore: record PR metadata for {project}`) so the worktree is left clean.
+- **Closure**: the PR/MR body carries one `Closes #n` line per claimed member, so merging it into
+  the default branch closes the whole set, as the merge sink does. The member set is `--issue-numbers`; when the flag is
+  absent, the state's `issue_numbers` line (live, then archived) supplies it. The primary `--issue`
+  is always a member. A singleton claim writes exactly `Closes #N`, as before. Keep-open stays
+  merge-sink-only: the sink refuses a project carrying `issue_action: comment_keep_open`.
 - **Exit codes**: `0` created and recorded · `1` push or creation failed.
 - **Offline**: `KAOLA_WORKFLOW_OFFLINE=1` writes an `OFFLINE_PLACEHOLDER` commit instead of real
   metadata.
@@ -1908,7 +1915,9 @@ project, `name` as identity) and the effective project or user `.codex/config.to
   answers `target_ambiguity` at exit 0, writing nothing. Bundle numbers are sorted and deduped
   before validation.
 - **`KAOLA_WORKTREE_NATIVE`** (ON by default; `0` disables) — see Worktree provisioning above.
-- **`KAOLA_SINK`** — `pr` selects the PR sink; the default is the merge sink.
+- **`KAOLA_SINK`** — `pr` selects the PR sink; the default is the merge sink. Each claim records
+  its forge's single request-sink noun: GitHub and Gitea record `mr` as `pr`, GitLab records `pr`
+  as `mr`, from either `KAOLA_SINK` or `--sink`. `merge` is unchanged.
 - **`KAOLA_GOAL`** — advisory goal text. Finalization records that a goal was DECLARED, with its
   source; nothing checks whether it was met.
 - **`KAOLA_SESSION_MARKER`** — a stable session identity for lane classification; otherwise
@@ -1994,7 +2003,9 @@ checks both the live folder and the archive before updating state, returning
 
 **`kaola-gitea-workflow-sink-pr.js`** — `ensurePullRequest(args, opts)` creates or reuses a PR and
 returns `{pr, project}`, updating the `## Sink` block with `pr_url`, `pr_number`, `full_name` and
-`project_html_url`.
+`project_html_url`. `parseArgs(argv)`, `resolveMemberSet(args, stateFile)` and
+`closesBody(members)` build the `Closes #n` body; the GitHub `kaola-workflow-sink-pr.js` and GitLab
+`kaola-gitlab-workflow-sink-mr.js` export the same three.
 
 **`kaola-gitea-workflow-sink-merge.js`** — `classifyMergeError(error)`, `closeLinkedIssue(root,
 project, issueIid, opts)`, `fastForwardMain(args, opts)`, `finalValidationPassed(root, project)`,

@@ -155,14 +155,16 @@ closes. Never close quietly against text now known to be wrong. A correction is 
 records what this issue turned out to be and lands on the issue it corrects.
 <!-- /PIN -->
 
-If the project links issues, close every Gitea issue in the set — but only
-after acceptance and the closure decision. Keep-open applies to the entire claimed set, releases all
-claims, and is merge-sink-only; otherwise every issue closes or none does.
+If the project links issues, every claimed Gitea issue closes on the merge and PR sinks alike,
+and only after acceptance, the closure decision, and a verified merge. The merge sink closes them
+itself; a request sink writes one `Closes #n` line per member, so they close when the request merges
+into the default branch. Never close an issue by hand before the merge is verified. Keep-open
+applies to the entire claimed set, releases all claims, and is merge-sink-only.
 
 ## Card: close, archive, sink, and reconcile
 
-Capture branch, sink kind, issue and `issue_numbers` before archive. `--issue-numbers` closes the
-whole set or none:
+Capture branch, sink kind, issue and `issue_numbers` before archive. Both sinks take
+`--issue-numbers`, which closes the whole set or none:
 
 ```bash
 kaola_script(){ _n="$1"; _p="plugins/kaola-workflow-gitea/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow-gitea/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
@@ -202,7 +204,7 @@ The archive still fails loudly if it would lose a file. Every run file must land
 if [ "$SINK_KIND" != merge ] && [ -n "$SINK_KEEP_OPEN_FLAG" ]; then exit 1; fi
 case "$SINK_KIND" in
   mr|pr)
-    node "$KAOLA_SCRIPTS/kaola-gitea-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG --project {project}
+    node "$KAOLA_SCRIPTS/kaola-gitea-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG --project {project}
     ;;
   merge|*)
     node "$KAOLA_SCRIPTS/kaola-gitea-workflow-sink-merge.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_FLAG --project {project} --sink --json

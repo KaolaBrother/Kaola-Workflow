@@ -27,7 +27,9 @@ flowchart LR
 
 The forge holds the backlog; Git holds the changes; local run files preserve progress and evidence.
 Finalization reconciles documentation and issue closure, then records the archive and delivery
-outcome. **A delivered PR/MR is distinct from a merged change.**
+outcome. **A delivered PR/MR is distinct from a merged change.** Both delivery routes close every
+claimed issue once the change merges: the merge sink closes the set itself, and a PR/MR carries one
+`Closes #n` line per claimed issue.
 
 | Capability | What it gives you |
 |---|---|

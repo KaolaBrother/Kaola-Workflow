@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **The PR/MR sink closes the whole claimed set (#1094).** `kaola-workflow-sink-pr.js`,
+  `kaola-gitea-workflow-sink-pr.js` and `kaola-gitlab-workflow-sink-mr.js` accept
+  `--issue-numbers A,B` and write one `Closes #n` line per member in the PR/MR body. Before, they
+  wrote only `Closes #<primary>`, so a multi-issue run delivered by PR/MR left every other member
+  open and `watch-pr` / `watch-mr` reported `partial`. Without the flag, the state's
+  `issue_numbers` line supplies the set. A singleton still writes exactly `Closes #N`. Finalize's
+  PR/MR case now passes `$SINK_ISSUE_NUMBERS_FLAG`, and keep-open stays merge-sink-only.
+- **Each forge claim records one request-sink noun (#1094).** At claim time, GitHub and Gitea
+  record `--sink mr` / `KAOLA_SINK=mr` as `pr`, and GitLab records `pr` as `mr`, so finalize,
+  `watch-pr` / `watch-mr` and archive all see the noun their forge recognizes. Before, a GitHub
+  `mr` fell through to the merge sink, and a foreign noun on Gitea or GitLab was never archived by
+  the watcher. The finalize skill's `mr|pr)` alias is unchanged.
+- **The finalize and next prose matches this behavior (#1094).** Finalize says every claimed issue
+  closes on both the merge and PR/MR sinks, and only after acceptance, the closure decision and a
+  verified merge: the merge sink closes them itself, and a PR/MR closes them through its `Closes #n`
+  lines when it merges into the default branch. Issues are never closed by hand first. Next no
+  longer restates finalize's closure rules.
+
 ## [12.2.5] - 2026-09-23
 
 ### Changed

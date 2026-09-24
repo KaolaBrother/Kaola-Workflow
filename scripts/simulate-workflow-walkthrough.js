@@ -7951,6 +7951,103 @@ function testSinkPrKeepOpenRefusal() {
   }
 }
 
+// #1094 — the PR sink closes the whole claimed set: one `Closes #n` per member of `--issue-numbers`
+// (or of the state's issue_numbers line when the flag is absent); a singleton stays `Closes #N`.
+function testSinkPrClosesEveryMember() {
+  const sinkPr = require(sinkPrScript);
+  const same = (x, y) => JSON.stringify(x) === JSON.stringify(y);
+  assert(same(sinkPr.parseArgs(['--issue-numbers', '12, 11,12,x']).issueNumbers, [11, 12]),
+    '#1094: --issue-numbers parses to a sorted unique member set');
+  const noState = path.join(os.tmpdir(), 'kw-1094-no-such-state.md');
+  assert(sinkPr.closesBody(sinkPr.resolveMemberSet({ issue: 7 }, noState)) === 'Closes #7',
+    '#1094: a singleton still writes exactly one Closes line');
+  assert(sinkPr.closesBody(sinkPr.resolveMemberSet({ issue: 11, issueNumbers: [11, 12, 13] }, noState)) ===
+    'Closes #11\nCloses #12\nCloses #13', '#1094: a bundle writes one Closes line per member');
+  assert(same(sinkPr.resolveMemberSet({ issueNumbers: [12, 13], issue: 11 }, noState), [11, 12, 13]),
+    '#1094: the primary issue is always a member');
+
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-members-')));
+  const remotePath = tmp + '-remote';
+  try {
+    initGitRepoWithBareRemote(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV };
+    const binDir = path.join(tmp, '.bin');
+    const argvLog = path.join(tmp, '.gh-argv.json');
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, 'gh'), '#!' + process.execPath + '\n' +
+      "require('fs').appendFileSync(" + JSON.stringify(argvLog) + ", JSON.stringify(process.argv.slice(2)) + '\\n');\n" +
+      "if (process.argv[2] === 'pr' && process.argv[3] === 'create') process.stdout.write('https://github.com/test/repo/pull/41\\n');\n");
+    fs.chmodSync(path.join(binDir, 'gh'), 0o755);
+    fs.writeFileSync(path.join(tmp, '.gitignore'), '.bin/\n.gh-argv.json\n');
+    // None passes --issue-numbers: the state's issue_numbers line supplies the set — from the LIVE
+    // folder, and from the ARCHIVED folder (finalize archives before the sink runs). A singleton
+    // (no issue_numbers line) still writes exactly one Closes line.
+    const cases = [
+      { project: 'bundle-11-12', archived: false, issue: 11, numbers: '11,12', body: 'Closes #11\nCloses #12' },
+      { project: 'bundle-21-22', archived: true, issue: 21, numbers: '21,22', body: 'Closes #21\nCloses #22' },
+      { project: 'issue-7', archived: false, issue: 7, numbers: null, body: 'Closes #7' },
+    ];
+    for (const c of cases) {
+      const branch = 'workflow/' + c.project;
+      G.git(tmp, ['checkout', '-q', 'main'], { env });
+      G.git(tmp, ['checkout', '-b', branch], { env });
+      const projectDir = c.archived
+        ? path.join(tmp, 'kaola-workflow', 'archive', c.project)
+        : path.join(tmp, 'kaola-workflow', c.project);
+      fs.mkdirSync(projectDir, { recursive: true });
+      fs.writeFileSync(path.join(projectDir, 'workflow-state.md'),
+        'status: ' + (c.archived ? 'closed' : 'active') + '\n\n## Sink\nbranch: ' + branch + '\nissue_number: ' + c.issue + '\n' +
+        (c.numbers ? 'issue_numbers: ' + c.numbers + '\n' : '') + 'sink: pr\n');
+      fs.writeFileSync(path.join(projectDir, 'finalization-summary.md'), '# Finalization\n');
+      G.git(tmp, ['add', '-A'], { env });
+      G.git(tmp, ['commit', '-m', c.project + ' work'], { env });
+      fs.rmSync(argvLog, { force: true });
+      // spawn-class: cli-contract
+      const result = spawnSync(process.execPath, [
+        sinkPrScript, '--project', c.project, '--branch', branch, '--issue', String(c.issue)
+      ], {
+        cwd: tmp, encoding: 'utf8', timeout: 60000,
+        env: { ...env, KAOLA_WORKFLOW_OFFLINE: '0', PATH: binDir + path.delimiter + (process.env.PATH || '') }
+      });
+      assert(result.status === 0, '#1094 ' + c.project + ': online sink-pr should exit 0\nstderr: ' + result.stderr);
+      const calls = fs.readFileSync(argvLog, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+      const create = calls.find(x => x[0] === 'pr' && x[1] === 'create');
+      assert(create, '#1094 ' + c.project + ': sink-pr must call gh pr create, got: ' + JSON.stringify(calls));
+      assert(create[create.indexOf('--body') + 1] === c.body,
+        '#1094 ' + c.project + ': the PR body must close every claimed member, got: ' + JSON.stringify(create));
+    }
+    console.log('testSinkPrClosesEveryMember: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #1094 (V1): the claim records the foreign `mr` sink noun as GitHub's canonical `pr` — from the
+// flag and from KAOLA_SINK — so the finalize `pr)` route, watch-pr and archive all see it; before,
+// `mr` fell through to the merge sink. `merge` is untouched.
+function testClaimNormalizesForeignSinkNoun() {
+  const claimMod = require(claimScript);
+  assert(claimMod.canonicalSink('mr') === 'pr', '#1094 V1: mr normalizes to pr');
+  assert(claimMod.canonicalSink('pr') === 'pr', '#1094 V1: pr stays pr');
+  assert(claimMod.canonicalSink('merge') === 'merge', '#1094 V1: merge stays merge');
+  for (const [n, argv, env] of [[9611, ['--sink', 'mr'], {}], [9612, [], { KAOLA_SINK: 'mr' }]]) {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-noun-')));
+    try {
+      initGitRepo(tmp);
+      seedClassifierVerdictFromBody(n, '');
+      const out = json(runNode(claimScript, ['startup', '--target-issue', String(n), '--runtime', 'claude'].concat(argv), tmp,
+        Object.assign({ KAOLA_WORKTREE_NATIVE: '0' }, env)));
+      assert(out.claim === 'acquired', '#1094 V1: startup should acquire, got ' + JSON.stringify(out));
+      const state = read(statePath(tmp, 'issue-' + n));
+      assert(/^sink: pr$/m.test(state), '#1094 V1: a foreign `mr` sink must be recorded as `pr`, got:\n' + state);
+      console.log('testClaimNormalizesForeignSinkNoun (' + (argv.length ? 'flag' : 'env') + '): PASSED');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+}
+
 function testSinkMergeCloseFailureWarning() {
   // #619(1): a failed issue close on the LEGACY (non---sink) path must fail CLOSED — mirroring the
   // #497 fix already on the --sink transaction's closure step. Pre-fix, sink-merge emitted a stderr
@@ -11573,6 +11670,8 @@ function buildRegistry() {
   add('testSinkMergeKeepOpenRequiresIssue',               testSinkMergeKeepOpenRequiresIssue);
   add('testSinkMergeKeepOpenArchivedStateGuard',          testSinkMergeKeepOpenArchivedStateGuard);
   add('testSinkPrKeepOpenRefusal',                        testSinkPrKeepOpenRefusal);
+  add('testSinkPrClosesEveryMember',                      testSinkPrClosesEveryMember);
+  add('testClaimNormalizesForeignSinkNoun',               testClaimNormalizesForeignSinkNoun);
   add('testClosureAuditOfflineRemoteClassesSkipped',      testClosureAuditOfflineRemoteClassesSkipped);
   add('testClosureAuditArchiveContentDrift832',           testClosureAuditArchiveContentDrift832);
   add('testClosureAuditStaleInProgressLabels',            testClosureAuditStaleInProgressLabels);

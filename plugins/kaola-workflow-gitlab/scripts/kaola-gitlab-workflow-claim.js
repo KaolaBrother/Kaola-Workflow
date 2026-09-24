@@ -92,6 +92,14 @@ const FINALIZE_ATTEST_FLAG_RETIRED_NOTE = 'note: --attest-contractor-spawn has n
   + 'finalize seam is orchestrator-owned and records no dispatch attestation. Ignoring.';
 let finalizeAttestFlagRetiredWarned = false;
 
+// #1094 (V1): GitLab's request sink has one canonical noun, `mr`. The finalize skill's alias
+// accepts either noun, but deferral, watch-mr and archive recognize only `mr`, so the claim
+// records the foreign `pr` as `mr`. Every other value passes through unchanged.
+function canonicalSink(raw) {
+  const sink = String(raw).trim();
+  return sink === 'pr' ? 'mr' : sink;
+}
+
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
@@ -1067,7 +1075,7 @@ function claimProject(root, args) {
       project,
       issue_iid: issueIid,
       branch,
-      sink: args.sink || process.env.KAOLA_SINK || 'merge',
+      sink: canonicalSink(args.sink || process.env.KAOLA_SINK || 'merge'),
       worktree_path: worktreePath,
       worktree_error: worktreeError,
       base_branch: baseBranch,
@@ -1454,7 +1462,7 @@ function claimExplicitBundle(root, args) {
     targets,
     project,
     branch,
-    sink: args.sink || process.env.KAOLA_SINK || 'merge',
+    sink: canonicalSink(args.sink || process.env.KAOLA_SINK || 'merge'),
     selectionRecordDigest: args.selectionRecordDigest, // the selection record's durable anchor
     selectionRecordBytes: args.selectionRecordBytes    // ...and the bytes it is a digest OF
   });
@@ -6574,6 +6582,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  canonicalSink,
   findArchiveAuthorities,
   resolveFinalizeAuthority,
   isSafeBranchArg,
