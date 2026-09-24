@@ -15,7 +15,6 @@ owner-authored instruction file. Show the smallest useful change first.
 Creating a missing project scaffold is reversible and needs no separate approval.
 <!-- /PIN -->
 
-
 ## Inspect
 
 Read every applicable instruction file, then inspect the repository before writing:
@@ -25,9 +24,7 @@ pwd
 git rev-parse --is-inside-work-tree
 git status --short --branch
 git remote -v
-for file in AGENTS.md; do
-  test ! -f "$file" || { printf '\n--- %s ---\n' "$file"; cat "$file"; }
-done
+test ! -f AGENTS.md || { printf '\n--- AGENTS.md ---\n'; cat AGENTS.md; }
 for file in CLAUDE.md .claude/CLAUDE.md CLAUDE.local.md; do
   test ! -f "$file" || printf '\nSHADOWING INSTRUCTION FILE (hides AGENTS.md from Claude Code): %s\n' "$file"
 done
@@ -35,8 +32,7 @@ find docs -maxdepth 2 -type f 2>/dev/null | sort
 test -d kaola-workflow && find kaola-workflow -maxdepth 3 -type f | sort
 ```
 
-
-   Active folder lifecycle: `kaola-workflow-claim.js` manages claim/startup (atomic folder create), status, release/discard, watch-pr, and finalize/archive. No legacy coordination layer is used.
+Active folder lifecycle: `kaola-workflow-claim.js` manages claim/startup (atomic folder create), status, release/discard, watch-pr, and finalize/archive.
 
 ## Maintain project instructions
 
@@ -47,19 +43,18 @@ surface, leave project rules in place and report a separate installation check f
 tree.
 
 The Agent owns the meaning and prose of project instructions. Derive useful local facts and stricter
-constraints from the repository itself. Omit unknowns; do not persist placeholders. There are no required headings, order, wording, bytes, or length,
-and no parser or writer owns the
-result.
+constraints from the repository itself. Omit unknowns; do not persist placeholders. There are
+no required headings, order, wording, bytes, or length, and no parser or writer owns the result.
 
-Preserve valid owner content. Before changing an existing user-authored or owner-authored instruction file,
-show the minimal diff and obtain consent.
-Keep `AGENTS.md` as the single project-fact authority for every supported runtime. Claude Code
-(≥ 2.1.277) reads it directly, so do not create a `CLAUDE.md`, `.claude/CLAUDE.md`, or
-`CLAUDE.local.md`: any repository `CLAUDE.md` shadows `AGENTS.md` for Claude Code. If the inspection
-reported one, treat it as a shadowing file — when it holds only an `@AGENTS.md` import, propose
-deleting it; when it holds owner content, propose moving the Claude-specific facts into `AGENTS.md`
-and deleting it. Both proposals need owner authorization before the write. Do not copy the global
-workflow or dispatch contract into the repository.
+Preserve valid owner content.
+Before changing an existing user-authored or owner-authored instruction file, show the minimal
+diff and obtain consent. Keep `AGENTS.md` as the single project-fact authority for every supported
+runtime. Claude Code (≥ 2.1.277) reads it directly, so do not create a `CLAUDE.md`,
+`.claude/CLAUDE.md`, or `CLAUDE.local.md`: any repository `CLAUDE.md` shadows `AGENTS.md` for
+Claude Code. If the inspection reported one, treat it as a shadowing file — when it holds only an
+`@AGENTS.md` import, propose deleting it; when it holds owner content, propose moving the
+Claude-specific facts into `AGENTS.md` and deleting it. Both proposals need owner authorization
+before the write. Do not copy the global workflow or dispatch contract into the repository.
 
 An active run is a reload warning, not a prompt-write lock. Reconcile in-flight custody before a
 meaning-changing edit. After an edit, use a fresh top-level Agent/session for reliable validation
@@ -70,27 +65,28 @@ when the runtime does not reload instructions into the current context.
 Create only artifacts the inspected repository actually needs. A normal first initialization may
 add `kaola-workflow/archive/`, a concise documentation index and project docs, `docs/decisions/`, and
 `CHANGELOG.md`. Never overwrite a useful file or fill one with generic boilerplate merely because a
-path is listed here. Do not create an active `workflow-state.md` or a mission ledger; `/workflow-next`
+path is listed here. Do not create an active `workflow-state.md` or a mission ledger; Workflow Next
 owns the run. Ensure `.gitignore` carries `kaola-workflow/.ledger/`, the main checkout's live mission
 ledgers; archive moves each one into the tracked run archive.
 
 ## Legacy Backlog Layer
 
 <!-- PIN: backlog-migration -->
-If tracked `kaola-workflow/ROADMAP.md` or `.roadmap/issue-*.md` files exist, measure and report them;
-init never deletes them and an upgrade never migrates them. Ask separately before moving priority to
-forge labels, posting unresolved residue, deleting tracked files, or changing owner rules.
+If tracked `kaola-workflow/ROADMAP.md` or `kaola-workflow/.roadmap/issue-*.md` files exist, measure
+and report them; init never deletes them and an upgrade never migrates them. Ask separately before
+moving priority to forge labels, posting unresolved residue, deleting tracked files, or changing
+owner rules.
 
 If migration is approved, preserve priority and unresolved residue first, then remove the retired
 files in one tracked movement. Never `git rm --cached`, never delete only from disk, and never leave a
 half-migrated layer. Declining is a complete answer: the frozen files are inert and may remain.
 <!-- /PIN -->
 
-## Git And Issue Summary
+## Summary
 
 Re-read every instruction file changed, run `git status --short --branch`, and report:
 
-- the repository and forge facts actually observed;
+- the repository and remote facts actually observed;
 - whether the runtime-loaded global contract was available, and any separate installation check needed;
 - which project instructions and missing artifacts changed, with consent status;
 - unresolved unknowns or legacy-backlog decisions;

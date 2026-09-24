@@ -364,8 +364,10 @@ Contract.
 
 **The forge is the backlog — there is no local mirror of it** (`decisions/0018-the-forge-is-the-backlog.md`).
 An issue's title, labels, and comments are what the work is; comments override the body where they
-disagree. `claim.js list-open` returns the whole open issue list ordered by its bare `P0`–`P3`
-priority-label tier, then by number — ordering, never selecting; the orchestrator still picks. Before
+disagree. `claim.js list-open` returns up to 100 open issues ordered by priority tier (a `P<n>`
+label ranks as tier `n`, a label listed in `priority_top_tier_labels` as tier 1, and an issue with
+neither sorts last), then by number — ordering, never selecting; the orchestrator still picks. Any
+read error yields an empty list, which means unmeasured rather than an empty backlog. Before
 claiming, the pick step reads each shortlisted candidate's own body and comments (never the full
 list). The one surviving local file is the optional `kaola-workflow/.roadmap/_rules.md`, for standing
 project-local rules, read directly by the pick step.

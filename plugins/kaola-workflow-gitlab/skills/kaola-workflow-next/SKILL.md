@@ -57,7 +57,7 @@ stop condition.
 Host: Codex. If the running host is not Codex, ignore this adapter section entirely and use the Kaola adapter installed for the actual host; if none is installed, record `capability_gap: no Kaola adapter for host <name>` and work inline.
 
 Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.
-Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: "<role>"`; omit per-call `model` and `reasoning_effort` because the TOML profile pins `gpt-6-luna` / `max` and file values take precedence, while preserving supported `fork_turns` and service-tier choices.
+Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: "<role>"`, preserving supported `fork_turns` and service-tier choices.
 
 **Subagent default:** every installed Kaola TOML profile pins `model = "gpt-6-luna"` and `model_reasoning_effort = "max"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`.
 **Roles:** `code-explorer`, `code-reviewer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `tdd-guide`.
@@ -80,14 +80,15 @@ State the proposed destructive Git, deploy, credential, schema/public-API, capab
 forge-reorganization action and why; wait. Everything checkable remains yours to execute.
 <!-- /PIN -->
 
-## Intake, freshness, claim, and resume
+## Intake, freshness, and claim
 
 - **The user named an issue**: select it exactly. Never substitute another, and never adopt an active folder's issue in its place.
 - **The user described a task but named no issue**: resolve or file its issue; priority never outranks the requested work.
-- If neither is named, rank the open issue list ordered by its `P0`–`P3` priority tier (`list-open`,
-  below), then apply `.roadmap/_rules.md`, active folders, and archived summaries. Rank by that
-  priority tier, then by scope. A shared contract/schema runs alone; otherwise prefer a closeable three-to-five issue
-  set when the frontier offers it.
+- If neither is named, start from `list-open` (below: at most 100 open issues, sorted by priority
+  tier, then number; an empty list means unmeasured, not an empty backlog), then apply
+  `kaola-workflow/.roadmap/_rules.md`, active folders, and archived summaries, and break ties by
+  scope. A shared contract/schema runs alone; otherwise prefer a closeable three-to-five issue set
+  when the frontier offers it.
 
 State the selection aloud before you claim it, including any skipped frontier item. **Everything
 before the claim is free**: perform read-only measurement or ask when the pick is genuinely
@@ -121,14 +122,16 @@ node "$CLAIM_JS" list-open
 node "$CLAIM_JS" watch-mr >/dev/null 2>&1 || true
 ```
 
-If a GitLab remote and an authenticated `glab` are available, read the open issues:
+If a GitLab remote and an authenticated `glab` are available, read each shortlisted issue's body and comments:
 
 ```bash
 glab issue view {N} --comments -F json
 ```
 
-Repeat the detail read for each shortlisted `{N}`. Set `KAOLA_TARGET_ISSUES` to the selected
-comma-separated set, then claim it (use `--target-issue N` for a singleton):
+Set `KAOLA_TARGET_ISSUES` to the selected comma-separated set, then claim it. For a single issue,
+leave `KAOLA_TARGET_ISSUES` unset and pass `--target-issue N` instead; a one-member
+`--target-issues` claims `bundle-N`. When you chose the issue yourself because nothing was named,
+add `--target-source orchestrator_selected`.
 
 ```bash
 kaola_script(){ _n="$1"; _p="plugins/kaola-workflow-gitlab/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow-gitlab/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
@@ -202,7 +205,7 @@ Before continuing or stopping print:
 Workflow project: {project}
 Issue: {issue or set}
 Branch: {branch from workflow-state.md, or TBD if not yet claimed}
-Mission ledger: {n done / n in-flight / n todo}
+Mission ledger: {n done / n in-flight / n todo / n blocked / n failed}
 Next: {the next skill, or the frontier item you are opening}
 ```
 

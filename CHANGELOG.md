@@ -21,6 +21,31 @@
   verified merge: the merge sink closes them itself, and a PR/MR closes them through its `Closes #n`
   lines when it merges into the default branch. Issues are never closed by hand first. Next no
   longer restates finalize's closure rules.
+- **Next, Finalization, and Init prompts: accuracy and concision pass (#1095, review #1091).**
+  Every routing surface is regenerated from `templates/routing/`.
+  - Finalization: the summary card now creates `## Validation` and `## Changed Paths` with empty
+    bodies, because the finalize transaction fills an empty heading and never overwrites one that
+    has a body. The earlier "record it there" wording dropped the transaction's measurement. The
+    card now says to record a keep-open decision as `issue_action: comment_keep_open` in the
+    `## Sink` block (merge sink only). A filed follow-up's existence check lands in
+    `finalization-summary.md` Follow-Up Items, never in a `done` ledger line. The untiered-issue
+    rule names both `P<n>` labels and `priority_top_tier_labels`. The recorder example takes
+    `--verdict "<pass|fail>"`. A note says the sink-capture variables do not survive a fresh
+    shell. The sink-resume sentence moves from the closure-audit pin to the sink pin. Duplicate
+    freeze and brief sentences are removed.
+  - Next: the `## Intake, freshness, claim, and resume` heading is now `## Intake, freshness, and
+    claim`. The backlog bullet states `list-open`'s limits: at most 100 issues, and an empty list
+    means unmeasured. It also uses the prefixed `kaola-workflow/.roadmap/_rules.md` path. The
+    shortlist read now says it reads each issue's body and comments. For a single issue, the claim
+    guidance leaves `KAOLA_TARGET_ISSUES` unset and uses `--target-issue N` (a one-member
+    `--target-issues` claims `bundle-N`). It adds `--target-source orchestrator_selected` for a
+    self-chosen issue. The status line also counts `blocked` and `failed` missions.
+  - Init: the Codex skill's closing heading is `## Summary`, and its lifecycle line drops the
+    history narration. "Workflow Next owns the run" replaces a Claude-only slash command. The
+    legacy path reads `kaola-workflow/.roadmap/issue-*.md`. `AGENTS.md` is read without a
+    one-file loop. The double blank lines that dropped command regions left behind are removed.
+  - The Codex runtime adapter's dispatch line no longer repeats the per-call model/effort
+    omission that the subagent-default line already states.
 
 ## [12.2.5] - 2026-09-23
 

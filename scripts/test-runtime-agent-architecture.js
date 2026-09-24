@@ -551,7 +551,9 @@ for (const shadowing of ['CLAUDE.md', '.claude/CLAUDE.md', 'CLAUDE.local.md']) {
 
 // A3 — workflow-init is a project-only consumer of a compatible global contract.
 const initSource = read('templates/routing/init.skeleton.md') || '';
-assert(/for file in AGENTS\.md; do/.test(initSource)
+// #1095 (receipt I4): the single-file loop became a direct `test ! -f AGENTS.md || { … cat AGENTS.md; }`;
+// the outcome pinned — root AGENTS.md is read, by name, with no discovery — is unchanged.
+assert(/test ! -f AGENTS\.md \|\| \{ printf '\\n--- AGENTS\.md ---\\n'; cat AGENTS\.md; \}/.test(initSource)
     && /for file in CLAUDE\.md \.claude\/CLAUDE\.md CLAUDE\.local\.md; do/.test(initSource)
     && /SHADOWING INSTRUCTION FILE/.test(initSource)
     && !/git ls-files|find \. -name AGENTS\.md/.test(initSource),

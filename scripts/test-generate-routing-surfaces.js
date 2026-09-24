@@ -417,12 +417,14 @@ const ctx = (surface_type, forge) => ({ surface_type, forge });
   // stray bare fence swallowing the next intended block. Required prose
   // landmarks are also required to occur outside every fence.
   const markdownStructureViolations = (text, surfaceType) => {
+    // #1095 (receipt I5): the skill surface runs no forge CLI, so its closing heading is
+    // `## Summary`; the command surface, which does inspect issues, keeps `## Git And Issue Summary`.
     const requiredOutside = [
       '## Inspect',
       '## Maintain project instructions',
       '## Add only missing project structure',
       '## Legacy Backlog Layer',
-      '## Git And Issue Summary',
+      surfaceType === 'skill' ? '## Summary' : '## Git And Issue Summary',
     ];
     const outside = new Set();
     const violations = [];

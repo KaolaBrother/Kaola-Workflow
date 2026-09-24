@@ -266,7 +266,7 @@ const REQUIRED_BLOCKS = [
     surface_type_tag: 'both',
     content_tokens: [
       '**measures** the receipt and **reports** what it found',
-      'under `validation`',
+      'writes its typed validation finding under `## Validation`',
       '## Validation',
       'finalization-summary.md',
       'chain-receipt.json',
@@ -287,15 +287,17 @@ const REQUIRED_BLOCKS = [
   },
   {
     // #1054 item 8: the mission record is not a landing place for the finalize
-    // transaction's own findings. A completed mission's result is immutable (ADR
-    // 0017) and finalization is not a mission. `## Validation` and `## Changed
-    // Paths` remain the two durable destinations this block pins.
+    // transaction's own findings. A `done` ledger line is immutable (ADR 0017)
+    // and finalization is not a mission. `## Validation` and `## Changed Paths`
+    // remain the two durable destinations; #1095 (receipt F1) pins that the
+    // orchestrator leaves both bodies empty, because the transaction fills an
+    // empty heading and never overwrites one that has a body (#1004).
     block_id: 'fn-mission-ledger-report',
     topic: 'finalize',
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
-      '`## Validation` and `## Changed Paths` are where the finalize transaction\'s own findings land',
+      'It fills an empty heading and never overwrites one that has a body, so leave both bodies empty',
     ],
   },
   {
@@ -329,6 +331,8 @@ const REQUIRED_BLOCKS = [
       'resynchronize',
       'request instead',
       'clean up after the sink',
+      // #1095 (receipt F10): sink-resume guidance lives with the sink, not the closure audit.
+      'If the sink reported that it did not complete, the step it names is where to resume',
     ],
   },
   {
@@ -349,13 +353,13 @@ const REQUIRED_BLOCKS = [
     runtime_tag: 'both',
     surface_type_tag: 'both',
     // The bare words 'closure audit' would be a SUBSTRING of the marker itself
-    // and therefore vacuous against a marker-preserving interior gut. The two
-    // interior sentences below are what this block actually enforces: the sweep
-    // exists, and an incomplete sink resumes at the step it named.
+    // and therefore vacuous against a marker-preserving interior gut. The
+    // interior sentence below is what this block actually enforces: the sweep
+    // exists. The sink-resume rule moved to fn-sink-reports-orchestrator-owns
+    // (#1095, receipt F10).
     content_tokens: [
       '<!-- PIN: closure-audit -->',
       'after-the-fact drift detector',
-      'If the sink reported that it did not complete, the step it names is where to resume',
     ],
   },
   {
@@ -383,15 +387,17 @@ const REQUIRED_BLOCKS = [
     // active folders, archived summaries) and Step 2's pre-claim shortlist-read
     // paragraph (comment beats body). Tokens are drawn from both, so gutting either
     // span alone — while leaving the other and the marker intact — still reds this
-    // block.
+    // block. #1095 (receipt N1/N2): the bullet now states the measured `list-open`
+    // bounds (100-issue cap; an empty list is unmeasured) and the prefixed
+    // `_rules.md` path, so those are what the tokens pin.
     block_id: 'nx-forge-is-the-backlog',
     topic: 'next',
     runtime_tag: 'both',
     surface_type_tag: 'both',
     content_tokens: [
       '<!-- PIN: forge-is-the-backlog -->',
-      'the open issue list ordered by its `P0`–`P3` priority tier (`list-open`, below)',
-      'Rank by that priority tier, then by scope.',
+      'start from `list-open` (below: at most 100 open issues, sorted by priority tier, then number; an empty list means unmeasured, not an empty backlog)',
+      '`kaola-workflow/.roadmap/_rules.md`, active folders, and archived summaries, and break ties by scope.',
       'read each shortlisted candidate\'s own body and comments',
       'Comments are current state: where a comment contradicts the body, the comment wins',
     ],
@@ -423,10 +429,10 @@ const REQUIRED_BLOCKS = [
     // ("append ... to .cache/run-gaps-manual.md and re-run the scanner") and the
     // issue-body-length transcription are RETIRED — that machinery no longer
     // exists on the surface or in the script. The existence-and-body check and its
-    // landing place are REWORDED, not dropped: the record now names the finalize
-    // transaction's own record explicitly, and states — rather than merely implies
-    // by omission — that a completed Mission's result stays immutable and is never
-    // the landing place (#1054 item 7, ADR 0017).
+    // landing place are REWORDED, not dropped: the record now names
+    // `finalization-summary.md` Follow-Up Items explicitly, and states — rather
+    // than merely implies by omission — that a `done` ledger line is immutable and
+    // is never the landing place (#1054 item 7, #1095 receipt F4, ADR 0017).
     //
     // THE TIER RULE TAKES TWO TOKENS, because it is two obligations. The duty is one;
     // the consequence is the other, and it is pinned separately because it is the
@@ -451,7 +457,9 @@ const REQUIRED_BLOCKS = [
       'For each real run-discovered defect, file a follow-up and record `filed: #N`.',
       // The tier duty and its measured consequence, in surface order.
       'Give it a priority tier in the same breath',
-      'an issue filed without a `P0`–`P3` label sorts **last** on the open list, beneath every tiered issue',
+      // #1095 (receipt F6): the sorter tiers any `P<n>` label and every configured
+      // top-tier label; only an issue carrying neither sorts last.
+      'an issue with neither a `P<n>` label nor a label from `priority_top_tier_labels` sorts **last** on the open list, beneath every tiered issue',
       'post that correction as a comment on the issue before it closes.',
       'Never close quietly against text now known to be wrong.',
       'A correction is not a follow-up — it records what this issue turned out to be and lands on the issue it corrects.',
@@ -464,12 +472,12 @@ const REQUIRED_BLOCKS = [
       '`## Proposed remedy (non-binding)` is optional and carries that label when it appears.',
       'Add one `searched:` line recording the duplicate probe you actually ran — its query and its hit count',
       // The filing verification: the check itself, and the record it lands in. The
-      // second is not decoration — a completed Mission's result is immutable (ADR
-      // 0017) and Finalization is not a Mission List item, so nothing here may write
-      // a new fact back into one; the finalize transaction's own record is the only
-      // legitimate landing place (#1054 item 7).
-      'confirm the issue exists and its body is non-empty, and record that in this run\'s own finalize-transaction record',
-      'never in a completed Mission\'s result, which stays immutable',
+      // second is not decoration — a `done` ledger line is immutable (ADR 0017) and
+      // Finalization is not a mission, so nothing here may write a new fact back into
+      // one; `finalization-summary.md` Follow-Up Items is the landing place (#1054
+      // item 7, #1095 receipt F4).
+      'confirm the issue exists and its body is non-empty, and record that in `finalization-summary.md` under Follow-Up Items',
+      'never in a `done` ledger line, which is immutable',
     ],
   },
 

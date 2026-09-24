@@ -48,6 +48,10 @@ function eq(actual, expected, msg) {
 // claim, and resume" and "Run it" are the sections the issue names, not wording this suite
 // invents), up to the next H2 or end of file.
 // ---------------------------------------------------------------------------
+// #1095 (receipt N6): the section was renamed from "Intake, freshness, claim, and resume" because
+// Resume has its own section; the meanings this suite detects inside it are unchanged.
+const INTAKE_HEADING = 'Intake, freshness, and claim';
+
 function section(md, headingText) {
   const lines = String(md).split('\n');
   const start = lines.findIndex(l => l.trim() === '## ' + headingText);
@@ -244,8 +248,8 @@ const NEXT_SKELETON_PATH = path.join(REPO, 'templates', 'routing', 'next.skeleto
 assert(fs.existsSync(NEXT_SKELETON_PATH), 'templates/routing/next.skeleton.md exists');
 const skeletonText = fs.existsSync(NEXT_SKELETON_PATH) ? fs.readFileSync(NEXT_SKELETON_PATH, 'utf8') : '';
 
-const intakeSection = section(skeletonText, 'Intake, freshness, claim, and resume');
-assert(intakeSection !== null, 'skeleton: "## Intake, freshness, claim, and resume" section is present');
+const intakeSection = section(skeletonText, INTAKE_HEADING);
+assert(intakeSection !== null, 'skeleton: "## ' + INTAKE_HEADING + '" section is present');
 for (const [name, spec] of Object.entries(ADDITION_1_CLAUSES)) {
   assert(intakeSection !== null && conceptPresent(intakeSection, spec.fragments),
     'skeleton Intake section carries addition-1 clause (' + name + ')');
@@ -278,7 +282,7 @@ for (const row of nextRows) {
     assert(false, 'render ' + row.path + ' did not throw: ' + e.message);
     continue;
   }
-  const intake = section(rendered, 'Intake, freshness, claim, and resume');
+  const intake = section(rendered, INTAKE_HEADING);
   const runIt = section(rendered, 'Run it');
   assert(intake !== null, row.path + ': Intake section renders');
   assert(runIt !== null, row.path + ': Run it section renders');
@@ -317,7 +321,7 @@ function findParagraphMatchingAll(text, fragments) {
   if (canonicalRow) {
     const canonicalRendered = gen.renderSkeleton(gen.loadSkeleton(canonicalRow.skeleton, canonicalRow.topic),
       { surface_type: canonicalRow.surface_type, forge: canonicalRow.forge }, ir);
-    const canonicalIntake = section(canonicalRendered, 'Intake, freshness, claim, and resume');
+    const canonicalIntake = section(canonicalRendered, INTAKE_HEADING);
     const addition1Paragraph = canonicalIntake && findParagraphMatchingAll(canonicalIntake, allAddition1Fragments);
     assert(!!addition1Paragraph, 'the addition-1 paragraph (all five clauses in one paragraph) is found in the github/command canonical render');
 
@@ -381,7 +385,7 @@ for (const edition of EDITIONS) {
       assert(false, edition.name + '/' + forge + ': renderCommand did not throw: ' + e.message);
       continue;
     }
-    const intake = section(out, 'Intake, freshness, claim, and resume');
+    const intake = section(out, INTAKE_HEADING);
     const runIt = section(out, 'Run it');
     assert(intake !== null, edition.name + '/' + forge + ': rendered Next carries the Intake section');
     assert(runIt !== null, edition.name + '/' + forge + ': rendered Next carries the Run it section');

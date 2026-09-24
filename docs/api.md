@@ -551,8 +551,9 @@ section is appended at the tail; present with an empty body, and it is filled **
 its position relative to its neighbours; present with content, and it is left exactly as written. So
 the transaction never overwrites prose an orchestrator wrote, and the section is idempotent by
 **content rather than by heading** — a crash-resumed re-entry still cannot stack a second copy of a
-section that already says something, while a summary that pre-created the two headings, as the
-finalize surface's summary card instructs, receives the measurements instead of dropping them.
+section that already says something, while a summary that pre-created the two headings with empty
+bodies, as the finalize surface's summary card instructs, receives the measurements instead of
+dropping them.
 `## Finalize Findings` is written by the same function under a different rule (see below).
 
 `changed_paths_probe` is added to the envelope only when it is not `measured`; `unavailable` means

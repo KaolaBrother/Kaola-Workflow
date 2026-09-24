@@ -53,7 +53,7 @@ stop condition.
 Host: Codex. If the running host is not Codex, ignore this adapter section entirely and use the Kaola adapter installed for the actual host; if none is installed, record `capability_gap: no Kaola adapter for host <name>` and work inline.
 
 Find the effective project or user `.codex/config.toml`, inspect its managed `[agents.<role>]` registration, then inspect the referenced `.codex/agents/kaola-workflow/<role>.toml` profile; `agents.toml` is installer source, not an installed lookup path.
-Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: "<role>"`; omit per-call `model` and `reasoning_effort` because the TOML profile pins `gpt-6-luna` / `max` and file values take precedence, while preserving supported `fork_turns` and service-tier choices.
+Dispatch with the `spawn_agent` schema exposed by this Codex host and `agent_type: "<role>"`, preserving supported `fork_turns` and service-tier choices.
 
 **Subagent default:** every installed Kaola TOML profile pins `model = "gpt-6-luna"` and `model_reasoning_effort = "max"`; file values take precedence over spawn parameters and the parent session, so omit per-call `model` and `reasoning_effort`.
 **Roles:** `code-explorer`, `code-reviewer`, `doc-updater`, `implementer`, `investigator`, `knowledge-lookup`, `tdd-guide`.
@@ -71,15 +71,13 @@ taking one. Closing issues with open work, reorganizing forge work, force-pushin
 history, and resolving real content conflicts require the proposal, reason, and user's answer.
 <!-- /PIN -->
 
-Finalization validates, docks docs, writes terminal records, settles closure, archives, commits, and
-sinks. It is not a mission. Read `workflow-state.md` and the mission ledger at
+It is not a mission. Read `workflow-state.md` and the mission ledger at
 `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`; archive moves it into the run's archive folder.
 
 ## Card: validation, acceptance, and documentation
 
-Freeze a candidate; mutation invalidates prior PASS evidence for changed bytes.
-
-Run the producer-selected diff-scoped chains after the candidate is frozen:
+Freeze the candidate (mutation invalidates prior PASS evidence for changed bytes), then run the
+producer-selected diff-scoped chains:
 
 ```bash
 kaola_script(){ _n="$1"; _p="plugins/kaola-workflow/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
@@ -93,21 +91,21 @@ For a consumer without `test:kaola-workflow:*`, run its own validation and recor
 kaola_script(){ _n="$1"; _p="plugins/kaola-workflow/scripts/$_n"; [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; _p="$(find "$HOME/.codex/plugins/cache" -path "*/kaola-workflow/*/scripts/$_n" -print -quit 2>/dev/null)"; [ -n "$_p" ] && [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; return 1; }
 CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"; KAOLA_SCRIPTS="$(dirname "$CLAIM_JS")"
 node "$KAOLA_SCRIPTS/kaola-workflow-validation-runner.js" record \
-  --project {project} --verdict pass --command "<exact command>"
+  --project {project} --verdict "<pass|fail>" --command "<exact command>"
 ```
 
-The recorder writes `.cache/final-validation.md` with column-0 `verdict: pass`, the exact command,
-and `validated_candidate_hash`; run it from the candidate worktree the finalize transaction reads.
+Pass the verdict you observed. The recorder writes `.cache/final-validation.md` with column-0
+`verdict:`, the exact command, and `validated_candidate_hash`; the finalize gate accepts only
+`verdict: pass`. Run it from the candidate worktree the finalize transaction reads.
 
 On failure, repair a trivial correction inline, or dispatch a suggested route: `tdd-guide` or
 yourself for acceptance meaning; `implementer` or yourself for a build, type, lint, or tooling
-failure; after your own verdict on a review finding, `implementer` or yourself for the fix. Use the
-live runtime adapter and a self-sufficient brief.
+failure; after your own verdict on a review finding, `implementer` or yourself for the fix.
 
-
-The runner **measures** the receipt and **reports** what it found; you own the verdict. Record its
-typed result under `validation` in `finalization-summary.md`; preserve `chain-receipt.json` and
-`final-validation.md`. Fix meaningful findings, re-freeze, then rerun affected evidence.
+The runner **measures** the receipt and **reports** what it found; you own the verdict. The finalize
+transaction writes its typed validation finding under `## Validation` in `finalization-summary.md`;
+leave that heading's body empty. Preserve `chain-receipt.json` and `final-validation.md`. Fix
+meaningful findings, re-freeze, then rerun affected evidence.
 
 Record the acceptance legs — automated/local/manual/UAT — with exact commands, outputs, commit,
 and anything unexecuted. A user may own an explicit acceptance exception; record its boundary.
@@ -122,24 +120,26 @@ examples. Dispatch `doc-updater` when useful; it must transcribe real signatures
 or return BLOCK, never invent fields. Write one docking evidence file, `.cache/doc-docking.md`,
 with checked files, fixes/no-impact reasons, and `DOCKED`/`BLOCKED`; continue only when docked.
 
-The finalize transaction reports `changed_paths` — every path the branch changed outside
-`kaola-workflow/` run state. Put it under `## Changed Paths`. `## Validation`
-and `## Changed Paths` are where the finalize transaction's own findings land.
+The finalize transaction measures `validation` and `changed_paths` (every path the branch changed
+outside `kaola-workflow/` run state) and writes them under `## Validation` and `## Changed Paths`.
+It fills an empty heading and never overwrites one that has a body, so leave both bodies empty.
 
 ## Card: summary
 
-Create `finalization-summary.md` with Delivered, Files Changed, Test Coverage, `## Validation`,
-`## Changed Paths`, Documentation Docking, Follow-Up Items, and final readiness status. Scan all
-run records for deferred items, partial work, conflicts, review follow-ups, and user value
-decisions. Ask before reorganizing forge work. A run may intentionally keep the whole issue set
-open only through the recorded closure decision; never silently mix per-member outcomes.
+Create `finalization-summary.md` with Delivered, Files Changed, Test Coverage, `## Validation` and
+`## Changed Paths` (empty, for the transaction), Documentation Docking, Follow-Up Items, and final
+readiness status. Scan all run records for deferred items, partial work, conflicts, review
+follow-ups, and user value decisions. Ask before reorganizing forge work. A run may intentionally
+keep the whole issue set open only through the recorded closure decision; never silently mix
+per-member outcomes. Record a keep-open decision as `issue_action: comment_keep_open` in the
+`## Sink` block of `workflow-state.md` (merge sink only).
 
 ## Card: file or correct run-discovered work
 
 <!-- PIN: forge-is-the-backlog -->
 For each real run-discovered defect, file a follow-up and record `filed: #N`. Give it a priority tier
-in the same breath: an issue filed without a `P0`–`P3` label sorts **last** on the open list, beneath
-every tiered issue.
+in the same breath: an issue with neither a `P<n>` label nor a label from `priority_top_tier_labels`
+sorts **last** on the open list, beneath every tiered issue.
 
 `## Measured` carries only what this run observed; every figure there names the commit it was
 measured at and the command or artifact it came from. `## Hypothesis` carries attributions no run
@@ -147,8 +147,8 @@ has confirmed; a cause derived by reading code lands there by default. `## Propo
 (non-binding)` is optional and carries that label when it appears. Add one `searched:` line recording
 the duplicate probe you actually ran — its query and its hit count.
 
-After filing, confirm the issue exists and its body is non-empty, and record that in this run's own
-finalize-transaction record — never in a completed Mission's result, which stays immutable.
+After filing, confirm the issue exists and its body is non-empty, and record that in
+`finalization-summary.md` under Follow-Up Items — never in a `done` ledger line, which is immutable.
 
 When evidence corrects the current issue, post that correction as a comment on the issue before it
 closes. Never close quietly against text now known to be wrong. A correction is not a follow-up — it
@@ -185,6 +185,10 @@ SINK_KEEP_OPEN_FLAG=""; [ "$SINK_ISSUE_ACTION" = comment_keep_open ] && SINK_KEE
 ACTIVE_WORKTREE_PATH=$(awk '/^worktree_path:/{print $2}' "$SINK_STATE_FILE"); [ -d "$ACTIVE_WORKTREE_PATH" ] || ACTIVE_WORKTREE_PATH="$PWD"
 ```
 
+The next two blocks read these variables, and a fresh shell does not keep them: run them in the
+same shell invocation as this capture block, or carry the captured values into them literally.
+Capture before the transaction, because archive moves `workflow-state.md`.
+
 Run the read-only check as one precondition checklist, clear every reported reason, then run the
 same ONE resumable script transaction. It never authors implementation commits. The transaction
 owns worktree-to-main project-folder sync; never hand-copy a staler main copy. If sync fails because
@@ -216,7 +220,9 @@ esac
 The sink reports; it does not judge your work. It reports validation, ancestry, publication,
 closure, and cleanup findings and stops without merging when it cannot preserve truth;
 get the merge correct, resynchronize, or publish a review request instead. Then clean up after the
-sink; never touch another session's branch/worktree/folder, and ask on real content conflict.
+sink; never touch another session's branch/worktree/folder, and ask on real content conflict. If
+the sink reported that it did not complete, the step it names is where to resume; receipts keep
+retry idempotent.
 <!-- /PIN -->
 
 <!-- PIN: closure-audit -->
@@ -229,9 +235,7 @@ node "$KAOLA_SCRIPTS/kaola-workflow-closure-audit.js" --project {project}       
 # node "$KAOLA_SCRIPTS/kaola-workflow-closure-audit.js" --project {project} --execute  # repair safe local drift, scoped
 ```
 
-It reports scoped and outside-scope drift without turning exit zero into a verdict. If the sink
-reported that it did not complete, the step it names is where to resume; receipts keep retry
-idempotent.
+It reports scoped and outside-scope drift without turning exit zero into a verdict.
 <!-- /PIN -->
 
 Only after every issue is closed (or the user-authorized whole set is kept open), the folder is

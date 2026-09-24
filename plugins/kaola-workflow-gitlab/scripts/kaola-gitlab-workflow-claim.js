@@ -938,8 +938,8 @@ function listOpenIssues(root) {
 }
 
 // ADR 0018 §5 item 2 / §8 step 2: the CLI entry point for the priority-tier sorter above.
-// Ordering is not selecting (next.skeleton.md:39: "You select the target. No script picks for
-// you.") — this always returns the FULL open-issue list, tier-sorted then number-sorted, never
+// Ordering is not selecting (the Next surface leaves the choice to the agent) — this always
+// returns the FULL open-issue list, tier-sorted then number-sorted, never
 // truncated or filtered to a single "winner". listOpenIssues already degrades to [] on any error
 // (including OFFLINE, via glabExec's own OFFLINE short-circuit) rather than throwing, so this
 // command exits 0 unconditionally.
@@ -3988,9 +3988,9 @@ function probeFinalizeValidationGate(root, authorityDir, authorityState, base) {
 // writable before the commit that carries it AND again if a later step finds something, or one of
 // the two is silently lost. Only the findings flush passes it, and it alone relocates the section
 // it restates to the tail of the file.
-// #1004: idempotence is by CONTENT, not by heading. The finalize surface's summary card tells the
-// orchestrator to pre-create `## Validation` and `## Changed Paths`, so keying on the heading meant
-// an obedient run computed both findings and then dropped them — empty sections measured across
+// #1004: idempotence is by CONTENT, not by heading. The finalize surface's summary card has the
+// orchestrator pre-create `## Validation` and `## Changed Paths` with empty bodies (#1095), so keying
+// on the heading meant an obedient run computed both findings and then dropped them — empty sections measured across
 // this repository's own archived summaries. A heading whose body is blank is the finding's own slot
 // and gets FILLED where it sits; a heading whose body carries prose is the operator's record and is
 // never overwritten.

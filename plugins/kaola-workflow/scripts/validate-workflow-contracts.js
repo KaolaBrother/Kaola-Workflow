@@ -513,10 +513,11 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'verdict: pass');
 // reader to reproduce a content address by hand, and naming the producer without the field lets a
 // later edit drop the requirement the producer exists to satisfy. The invocation needle is split at
 // the line continuation, so it pins the verb attached to the script AND the flags that make the
-// record land bound.
+// record land bound. #1095 (receipt F12): the verdict is the one observed, so the example carries a
+// quoted `<pass|fail>` placeholder rather than a hard-coded pass; the flag shape pinned is unchanged.
 assertIncludes('commands/kaola-workflow-finalize.md', 'validated_candidate_hash');
 assertIncludes('commands/kaola-workflow-finalize.md', 'kaola-workflow-validation-runner.js" record');
-assertIncludes('commands/kaola-workflow-finalize.md', '--project {project} --verdict pass --command');
+assertIncludes('commands/kaola-workflow-finalize.md', '--project {project} --verdict "<pass|fail>" --command');
 assertIncludes('commands/kaola-workflow-finalize.md', '--keep-worktree');
 // The compressed surface no longer carries numbered steps. Pin the outcome: sink metadata is
 // captured before archive, while the active workflow-state file still exists.

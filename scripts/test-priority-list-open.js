@@ -18,7 +18,7 @@
 //             (number, title, labels, updatedAt, url), tier-sorted then number-sorted.
 //           - ALWAYS the full open-issue list, reordered — never truncated, filtered, or
 //             reduced to a single "winner". Ordering is not selecting
-//             (next.skeleton.md:39 — "You select the target. No script picks for you.").
+//             (the Next surface leaves the choice to the agent).
 //   exit:   0 on success, including under KAOLA_WORKFLOW_OFFLINE=1 (must not throw/crash).
 //
 // The subcommand name (`list-open`) and the `{ issues: [...] }` envelope are this suite's own
@@ -187,7 +187,7 @@ function testUnlabeledSortsLastAndSurvives() {
   // "return the top one" mutant fails this line specifically.
   assert(numbers.length === 3,
     'testUnlabeledSortsLastAndSurvives: all 3 input issues must be present (ordering is not '
-    + 'selecting — next.skeleton.md:39), got ' + JSON.stringify(numbers));
+    + 'selecting — the Next surface leaves the choice to the agent), got ' + JSON.stringify(numbers));
   assert(numbers.includes(7),
     'testUnlabeledSortsLastAndSurvives: the unlabeled issue #7 (tier 99) must still be in the '
     + 'list, got ' + JSON.stringify(numbers));
