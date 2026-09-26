@@ -301,17 +301,20 @@ preflight        pure read; names any foreign dirt
     ↓
 push_upstream    push the feature branch to origin
     ↓
-merge            fetch, rebase onto origin/<default>, run the validation chains over the rebased
-                 tree, then fast-forward merge with a bounded race retry
+merge            build the private integration worktree W at .kw/integrate/<project>, rebase the
+                 candidate onto origin/<default> INSIDE W, and run the validation chains over W's
+                 tree — the shared checkout is never switched or rebased (#1097)
     ↓
 finalize         archive the project folder — CONFIRMED, not assumed. An archive that was required
                  and did not happen stops here with sink_incomplete, before anything is published
     ↓
 stash_restore    no-op today — kept for receipts an older sink left mid-run with a stash to pop
     ↓
-archive_commit   stage and commit the archive at its actual destination
+archive_commit   stage and commit the archive at its actual destination (W's private index)
     ↓
-push_main        push the default branch
+push_main        acquire the short-scope publish lock and push the candidate as a compare-and-swap
+                 (re-rebase on a base advance, recording invalidated_evidence); then advance the
+                 shared checkout fast-forward-only, reporting cleanup.main_checkout
     ↓
 closure          close the issue idempotently, verified live
     ↓

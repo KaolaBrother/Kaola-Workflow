@@ -74,6 +74,14 @@ Devin / Droid / DSH. Most
 older records describe the node/DAG executor retired by ADR 0017 or project-prompt ownership
 retired by ADR 0023 and ADR 0026.
 
+- **[0028 — The merge sink merges outside the shared checkout](decisions/0028-the-merge-sink-leaves-the-shared-checkout.md)**
+  (#1097) — the `--sink` transaction builds, rebases, validates, and archives in a private
+  integration worktree `W` at `.kw/integrate/<project>` instead of switching the shared checkout;
+  publication is a short-scope compare-and-swap lock, and the shared checkout is advanced
+  fast-forward-only and reported as `cleanup.main_checkout`. Eliminates `#1096`'s untracked-conflict
+  rule and the tracked-dirt refusal by construction, retaining only the `#562` worktree-clean guard
+  and the `#893` divergent-own-archive refusal.
+
 - **[0027 — The mission ledger](decisions/0027-the-mission-ledger.md)** (#1089) — replaces ADR 0017's
   carrier only: one gitignored JSONL file per run at `<main_root>/kaola-workflow/.ledger/issue-<N>.jsonl`,
   keys exactly `n` / `name` / `details` / `status`, main checkout only, moved to

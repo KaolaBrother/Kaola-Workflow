@@ -30,10 +30,12 @@ Finalization reconciles documentation and issue closure, then records the archiv
 outcome. **A delivered PR/MR is distinct from a merged change.** Both delivery routes close every
 claimed issue once the change merges: the merge sink closes the set itself, and a PR/MR carries one
 `Closes #n` line per claimed issue. The merge sink also reports what it found: every envelope names
-whether the deliverable reached the mainline and what teardown cleaned up, and it refuses — without
-touching anything — only over changes that would collide with the merge (tracked local edits, or
-untracked files the branch or remote already carries); a sibling run's in-flight files no longer
-block it.
+whether the deliverable reached the mainline and what teardown cleaned up. It merges in a private
+integration worktree rather than the shared checkout, so it never switches or rebases your working
+tree — concurrent sinks serialize on a short-scope publish lock, and foreign local changes are spared
+by git's own overlap protection (the checkout simply stays behind, reported). It refuses — without
+touching anything — only over a dirty development worktree or its own archive diverging from the
+branch copy.
 
 | Capability | What it gives you |
 |---|---|

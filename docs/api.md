@@ -911,6 +911,22 @@ does not validate (throws `mission ledger invalid: …`), and replaces the file 
 `liveLedgerPath(root, issueNumber)` resolves `ledgerPath` against the main checkout from any
 worktree, and `moveMissionLedger(root, issueNumber, dest)` is archive's move.
 
+### Kernel publish-primitive exports — `kaola-workflow-adaptive-schema.js` (#1097)
+
+The W-model sink owns these in the byte-identical anchor so the root and both forge ports share one
+implementation.
+
+| Export | Contract |
+|---|---|
+| `INTEGRATE_DIR_REL` / `integrationWorktreePath(mainRoot, project)` | the one path rule for the private integration worktree: `.kw/integrate/<project>` (pure string join, mirroring `ledgerPath`, no discovery) |
+| `ensureIntegrationWorktree(mainRoot, project, ref)` | materialize or reuse `W` on `ref`. `W` is private scratch, so reuse resets it hard (`checkout --detach --force`, `reset --hard`, `clean -ffdx`) and an untalkable tree is rebuilt from the ref. Returns `{ ok, path, reused, head, ref }` or `{ ok: false, reason: 'ref_unresolved' \| 'worktree_list_failed' \| 'worktree_add_failed', detail, path }`. Reuse is the resume path: a run aborted after the rebase re-attaches to the recorded candidate SHA |
+| `removeIntegrationWorktree(mainRoot, project)` | dispose `W`; `{ removed, reason }`, `reason: 'missing'` when it is already gone |
+| `commitPathsOntoCandidate(mainRoot, opts)` | commit a working-tree pathspec onto a candidate **without a checkout**, through a private index — the archive commit's mechanism |
+| `acquirePublishLock(root, opts)` | the short-scope serializer for the publish transaction (`opts.project`). Returns `{ acquired, path, holder }` or `{ acquired: false, reason: 'publish_busy', holder }`; the wait is bounded by `KAOLA_WORKFLOW_PUBLISH_LOCK_WAIT_MS`. Fail-closed: an unreadable lock is not treated as free |
+| `releasePublishLock(lock)` | unlink the lock, but only the bytes whose `pid` and `acquired_at` still match — a lock another lane took over is not ours to delete |
+| `advanceCheckedOutDefault(mainRoot, defBranch, candidate, opts)` | fast-forward the shared checkout (`opts.pathspec` scopes it); `{ advanced, reason, detail }`. The only other thing the sink does to the shared checkout, and report-only |
+| `publishTargetRef(root, defBranch)` | the ref publication pushes onto |
+
 ### Kernel path-stream decoders — `kaola-workflow-adaptive-schema.js`
 
 Every reader that turns a git path stream back into filenames goes through the same anchor, so a
@@ -1050,9 +1066,14 @@ all four byte-identical copies. Nothing keeps the two spellings in step.
 - **Script**: `kaola-workflow-sink-merge.js` (GitHub) / `kaola-gitlab-workflow-sink-merge.js` /
   `kaola-gitea-workflow-sink-merge.js`.
 - **`--sink` mode** is one resumable transaction: preflight (pure read; names any foreign dirt with
-  zero mutation) → push branch → rebase onto the mainline → run the validation chains →
-  fast-forward merge (with a bounded race retry, `MAX_AUTOMERGE_RETRIES=3`) → push mainline →
-  close the issue idempotently → archive → clean up.
+  zero mutation) → push branch → **build the private integration worktree `W`** at
+  `.kw/integrate/<project>` (a fresh linked worktree checked out on the candidate) → rebase the
+  candidate onto the mainline **inside `W`** → run the validation chains **inside `W`**, a tree with
+  no untracked files → **publish under the short-scope lock** (`publishTargetRef`: compare-and-swap
+  push of `W`'s candidate onto the default branch, re-rebase and retry on a base advance, then
+  advance the shared checkout fast-forward-only and report `cleanup.main_checkout`) → close the issue
+  idempotently → archive → clean up (dispose `W`, re-probe and keep a dirty development worktree).
+  The shared checkout is never switched or rebased by the merge — see the W-model notes below.
 - Preflight does **not** count finalize's own archive mirror as foreign dirt (issue #893): untracked
   paths under `kaola-workflow/archive/<project>/` — the tree `cmdFinalize --keep-worktree` writes into
   the main checkout and leaves for this sink's archive step to commit. Existence and content are two
@@ -1064,27 +1085,24 @@ all four byte-identical copies. Nothing keeps the two spellings in step.
   exemption is scoped to this project on a segment boundary — a project-name prefix look-alike never
   inherits it, and a sibling project's tree falls to the unified untracked rule below — and is
   classification-only: no exempted path is ever removed.
-- Preflight classifies **untracked (`??`) paths by conflict, not ownership** (issue #1096, owner
-  decision D1=b): an untracked path counts as foreign dirt only when it conflicts with a candidate
-  tip tree — when it is present at the path in the `branch` tree or the `origin/<default>` tree,
-  probed with `git cat-file -e` (the same primitive the #893 arm uses), or when an ancestor folder
-  of the path exists as a FILE in either tree (probed with `git cat-file -t`): an untracked
-  directory sitting where the tree carries a plain file is a checkout collision too, and would
-  otherwise crash the merge step's `git checkout` past preflight with no typed envelope. Those two
-  tip trees are what the transaction's checkout and fast-forward steps write onto the working copy
-  (`git checkout <branch>` and the fast-forward loop's `pull --ff-only`); the rebase's replay of
-  intermediate commits is a known remaining gap tracked separately (#1097), and the rule claims
-  nothing about it. An untracked path conflicting with neither tip tree is never staged or modified
-  by the sink: a sibling's `archive/<project>/` tree waiting for its own `archive_commit` (the
-  #1075 co-active window, and a sibling's `sink-receipt.json` from an interrupted run), another
-  run's live claim folder, a registered worktree's directory, or any other unrelated untracked file
-  no longer blocks the sink. TRACKED statuses — staged or unstaged modifications, deletions — are
-  untouched by the rule and still refuse `sink_blocked`: a tracked edit is a local change to
-  committed content that an in-place checkout would overwrite, and refusing it stays correct until
-  the merge moves out of the shared checkout. The three former special exemptions (#715 sibling
-  sink receipts, #1075 verified co-active sibling live folders, registered worktree paths) were
-  each a special case of this rule and are gone. The rule is classification-only — no path it
-  exempts is ever staged, touched, or removed, and a refusal still mutates nothing.
+- The merge is **structurally out of the shared checkout** (issue #1097), so preflight no longer
+  classifies tracked or untracked foreign content in the main checkout at all. The merge builds and
+  rebases its candidate in the private integration worktree `W` (`.kw/integrate/<project>`), a fresh
+  linked worktree with no untracked files, so nothing foreign can collide with the switch or the
+  rebase's replay of intermediate commits; the archive commit is assembled from the main checkout's
+  untracked bytes through a private index rather than a working-tree `git add`. #1096's unified
+  untracked-conflict rule and the tracked-dirt refusal it sat beside are **gone — eliminated by
+  construction, not relaxed**: git's own overlap protection on the single post-publish fast-forward
+  (`advanceCheckedOutDefault`) is what spares foreign content, and when a tracked path does overlap
+  the publish the checkout simply stays behind, reported as `cleanup.main_checkout: behind` rather
+  than blocking the sink. The three former special exemptions (#715 sibling sink receipts, #1075
+  verified co-active sibling live folders, registered worktree paths) and the retired
+  `untrackedPathConflictsWithCandidateFolder` helper have no remaining duty. The one untracked class
+  that still refuses is **this run's own archive present in the main checkout at bytes that diverge
+  from (or cannot be compared with) the branch copy** under `kaola-workflow/archive/<project>/` — two
+  archives disagreeing, where letting one side silently win would misreport the run record (`#893`).
+  The remaining refusal and the removal of byte-identical project-state duplicates are both
+  classification-only: a refusal still mutates nothing.
 - `.cache/sink-receipt.json` tracks each step so a re-run resumes from the last incomplete one
   without double-applying.
 - **The `finalize` step's archive is confirmed, not assumed.** `archiveProjectDir` is judged by what it
@@ -1142,9 +1160,11 @@ and a route forward. A converted guard still stops the sink — nothing is merge
   `no_implementation_changes` report when a branch's entire diff versus the mainline is
   `kaola-workflow/**` artifacts, turning silent implementation loss into a loud, recoverable
   failure. Skipped when the mainline is unresolvable — it cannot judge, so it does not block.
-- **`worktree_dirty`** — `sinkPreflight` runs `assertWorktreeClean` before the merge step
-  force-removes the linked worktree, so a worktree carrying uncommitted work is refused rather than
-  removed. Fail-closed:
+- **`worktree_dirty`** — `sinkPreflight` runs `assertWorktreeClean` at the transaction boundary
+  (`#562`, retained): a worktree carrying uncommitted work is refused rather than destroyed. The
+  W-model no longer removes the development worktree at merge time, but a dirty or unprobeable linked
+  worktree is still a protected user-work boundary, so the guard stays and refuses before the
+  transaction mutates. Fail-closed:
   a dirty **or** unprobeable worktree refuses, with zero mutation and the worktree intact.
   Resume-safe — an already-removed worktree matches no `worktree list` block and passes. The
   status probe reads every untracked record (`-uall`), not tracked ones alone, and exempts only
@@ -1202,15 +1222,36 @@ remote and only the forge-side closure (or keep-open verification) remains. The 
 durable record; a re-run resumes idempotently from the named step. Envelopes emitted outside the
 transaction (the legacy path, `main()`'s flag refusals) carry no `publication` field.
 
-**`cleanup` reports teardown outcomes on the success envelope (issue #1096).** Worktree removal and
-remote/local branch deletion used to swallow every failure, so a worktree or branch that survived a
-`status:sinked` sink was invisible until the next collision. The success envelope now carries a
-`cleanup` summary — `worktree`, `remote_branch`, `local_branch` — naming each action's outcome:
-`removed` / `deleted`, `skipped_missing` (the worktree was already gone), `skipped_offline` (the
-remote branch push is skipped under `KAOLA_WORKFLOW_OFFLINE=1`), or `failed: <git's first error
-line>`. It is report-only: teardown runs strictly after everything that defines success has landed,
-so a cleanup failure never blocks a successful sink — the summary says what remains for the operator
-to sweep, not whether the sink succeeded.
+**`cleanup` reports teardown outcomes on the success envelope (issues #1096, #1097).** Worktree
+removal and remote/local branch deletion used to swallow every failure, so a worktree or branch that
+survived a `status:sinked` sink was invisible until the next collision. The success envelope now
+carries a `cleanup` summary naming each action's outcome:
+
+| field | values |
+|---|---|
+| `integration_worktree` | `removed` (the private `W` was disposed), `absent` (no `W` in the receipt), `kept: <reason>` / `failed: <git's first error line>` |
+| `worktree` | `removed`, `kept_dirty` (the development worktree still held uncommitted work at teardown — the `#562` probe refused, or git's own non-force refusal confirmed it), `skipped_missing` (already gone), `failed: <git's first error line>` |
+| `remote_branch` | `deleted`, `skipped_offline` (skipped under `KAOLA_WORKFLOW_OFFLINE=1`), `failed: <git's first error line>` |
+| `local_branch` | `deleted`, `kept: checked out by the dev worktree (<worktree outcome>)` (a kept worktree still holds the branch, so the delete is not attempted), `kept: branch tip is not the published candidate`, `skipped_missing`, `failed: …` |
+| `main_checkout` | `advanced` (git fast-forwarded the shared checkout), `behind: <reason>` (a tracked overlap or a refused fast-forward left the checkout where it was — nothing destroyed), `skipped_offline` |
+
+Teardown never `--force`-removes the development worktree: the `#562` probe is the gate and a
+non-force `git worktree remove` is the physical backstop, so a worktree the caller cannot prove clean
+is kept (`kept_dirty`), never forced over. It is report-only: teardown runs strictly after everything
+that defines success has landed, so a cleanup failure never blocks a successful sink — the summary
+says what remains for the operator to sweep, not whether the sink succeeded.
+
+**W-model publish fields (issue #1097).** The private integration worktree makes the merge a
+compare-and-swap on the remote rather than an in-place checkout:
+
+| field | meaning |
+|---|---|
+| `receipt.integration_worktree` | repo-relative path of `W` (`.kw/integrate/<project>`), recorded so a resumed run re-materializes the same tree |
+| `receipt.candidate_head` / `receipt.candidate_base` | the candidate commit `W` carries and the default-branch tip it was rebased onto; the publish refuses and re-rebases when `origin/<def>` no longer equals `candidate_base` |
+| `publish_busy` | a `sink_incomplete`/refusal reason: another live `--sink` holds the short-scope publish lock for this project. The block is bounded by `KAOLA_WORKFLOW_PUBLISH_LOCK_WAIT_MS`; the holder is named in `holder`. Retry after the other sink finishes |
+| `invalidated_evidence` | an array on the receipt, additive and idempotent per `(evidence, to_base)` pair: when the base advances after a PASS was measured, the affected evidence (`post_rebase_tests`, and `finalize_validation` once the archive committed) is recorded as bound to a now-superseded candidate and re-acquired on the new one — never silently carried forward (issue #1095 AC5) |
+| `integration_worktree_failed` | a `sink_incomplete` at step `merge`: `W` could not be materialized. Nothing has been merged |
+| `rebase_conflict` \| `chains_red` \| `non_fast_forward` | bounded publish outcomes (`MAX_AUTOMERGE_RETRIES`): the candidate could not be replayed cleanly, the re-run chains failed over the new candidate, or the base kept moving — nothing is published |
 
 **`verifyArchiveComplete` returns three keys, not two.** `mismatched[]` conflated two different
 facts — *this file arrived with different bytes* and *this entry could not be byte-compared at all*
@@ -2009,8 +2050,10 @@ separate module instance); before #1056 their local copies hard-coded the 30000 
 so those two editions now honour `KAOLA_GH_REMOTE_TIMEOUT_MS` for the git probes as well — the
 unset default is still 30000.
 
-**`scripts/kaola-workflow-sink-merge.js`** — `classifyMergeError(error)`, plus the sink transaction
-primitives.
+**`scripts/kaola-workflow-sink-merge.js`** — `classifyMergeError(error)`, `sinkPreflight(...)` (the
+`#562` worktree-clean guard and the `#893` divergent-own-archive refusal), plus the sink transaction
+primitives. The W-model merge/rebase/publish mechanics it drives live in the kernel (see the
+publish-primitive exports above).
 
 **`scripts/kaola-workflow-run-chains.js`** — `main`, `KNOWN_CHAINS`, `CHAIN_COMMANDS`,
 `resolveChains`, `resolveTimeoutMs`, `resolveConcurrency`, `resolveChainRetry`, `runChainWithRetry`,

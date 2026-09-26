@@ -4,6 +4,20 @@
 
 ### Changed
 
+- **The merge sink merges in a private integration worktree, not the shared checkout (#1097).** The
+  `--sink` transaction now builds and rebases its candidate in `W` — a fresh linked worktree at
+  `.kw/integrate/<project>` — and runs the validation chains there, so the shared checkout is never
+  switched or rebased and `#1096`'s unified untracked-conflict rule and the tracked-dirt refusal it
+  sat beside are **eliminated by construction** rather than relaxed. Publication is a short-scope
+  compare-and-swap: `acquirePublishLock` serializes concurrent sinks on one project (`publish_busy`
+  names a live holder), the candidate is pushed as a non-forced update and re-rebased while the
+  default branch keeps moving, and the shared checkout is then advanced fast-forward-only and
+  reported as `cleanup.main_checkout` (`advanced` or `behind: <reason>`) — foreign tracked or
+  untracked content is spared by git's own overlap protection, never destroyed. The `#562`
+  worktree-clean guard is retained at preflight; the development worktree is no longer removed at
+  merge time and is re-probed and kept (`kept_dirty`) at teardown, never force-removed, with
+  `cleanup.integration_worktree` / `cleanup.worktree` / `cleanup.local_branch` reporting each
+  outcome. The pinned test suites carry the canonical AC2/AC3 arms plus the GitLab and Gitea ports.
 - **The merge sink's untracked-file rule is one rule (#1096).** `sinkPreflight` no longer refuses
   every untracked `kaola-workflow/` path it does not own and no longer consults the worktree
   registry: an untracked path is foreign dirt only when it conflicts with a candidate tip tree —

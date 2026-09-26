@@ -230,15 +230,15 @@ main-only evidence that existed in no archive, at exit 0. The destination is nes
 resolved archive authority rather than placed beside it, which stays load-bearing for what the run's
 own `archive_commit` pathspec lands: the nested form is committed with the archive so the orphan
 reaches git history, while a sibling `archive/<project>.orphan-<ts>` outside the own archive band is
-untracked and carried by no candidate tree, so under the #1096 unified preflight rule the sink simply
-passes it through — it no longer refuses, and it is not committed (see `api.md` § the sink preflight
-rule). Nesting also places it one
+untracked and carried by no candidate tree, so the W-model sink (#1097), which merges outside the
+shared checkout, simply passes it through — it does not refuse, and it is not committed (see `api.md`
+§ the sink preflight rule). Nesting also places it one
 level below where archive authorities are resolved, so no suffix rule can collide with it — a
 `.archived-` suffix was measured to break the next resume with `archive_authority_ambiguous`. The
 envelope reports `main_live_orphan`, `main_live_orphaned_to` and `main_live_orphan_error`; see
 `api.md` § Finalize envelope. A failed rename leaves the folder exactly where it was, and the move is
 skipped when the archive authority is not under the main checkout, because moving into a tree the
-sink is about to force-remove would be a new destruction route wearing a rescue's name.
+sink is about to remove would be a new destruction route wearing a rescue's name.
 
 ## Workflow State Fields
 
