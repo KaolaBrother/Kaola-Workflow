@@ -258,6 +258,12 @@ const DECLARED_NOT_ARTIFACT = new Set([
   '.cache/attestation-removed.json',// self-test fixture name inside the adaptive-node --selftest block
   '.cache/conc.json', '.cache/serial.json', '.cache/t30-concurrent.json',
   '.cache/t30-serial.json', '.cache/t31.json',   // run-chains concurrency self-test fixtures
+  // #1097: the scanner's `*_NAME = '…\.lock'` heuristic over-collects this one. `PUBLISH_LOCK_NAME`
+  // is a NAME constant ending `.lock`, but the publish lock is written by publishLockPath() into the
+  // git COMMON dir (`git rev-parse --git-common-dir`, one per repository, shared by every worktree) —
+  // never into a project `.cache/` folder, precisely so it cannot appear as dirt in a worktree. It is
+  // a repo-level, not project-level, artifact and carries no `.cache/` path.
+  '.cache/kaola-workflow-publish.lock',
 ]);
 
 function partC() {
@@ -370,6 +376,10 @@ const NON_ATOMIC_EXEMPT = [
   {
     file: 'kaola-workflow-adaptive-schema.js', api: 'appendFileSync', klass: 'append-only',
     why: 'appendOutcomeRecord writing outcome-log.jsonl — a parent-owned run sidecar ruled preference, whose writer swallows every error and whose reader reports a diagnostic, never a verdict. It moved into this file when the module that used to host it was deleted, and this ledger row moved with it',
+  },
+  {
+    file: 'kaola-workflow-adaptive-schema.js', api: 'writeSync', klass: 'outside-project-space',
+    why: 'acquirePublishLock writing the holder token into the lock file it just created atomically with O_EXCL. The lock is a mutual-exclusion token in the git COMMON dir (one per repository, shared by every worktree), not a project record — losing or tearing it only costs a wait, and its own reader treats unreadable bytes as residue rather than a verdict',
   },
   {
     file: 'kaola-workflow-claim.js', api: 'copyFileSync', klass: 'mirror-copy',

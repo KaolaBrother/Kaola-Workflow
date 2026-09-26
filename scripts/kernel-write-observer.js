@@ -44,6 +44,19 @@ if (LOG) {
   //   `<base>.tmp-<pid>-<hex>`         the re-plan source publisher (adaptive-node.js)
   const ATOMIC_TMP = /(^\..+\.\d+\.\d+\.[0-9a-z]+\.tmp$)|(\.tmp-\d+-[0-9a-f]+$)/;
 
+  // The relocation half of a reversible move-aside: `advanceCheckedOutDefault` (adaptive-schema.js)
+  // moves this sink's OWN untracked archive files that the candidate carries BYTE-IDENTICALLY to
+  // `<path>.kw-advance-aside-<pid>`, so the shared checkout can fast-forward over them; it then
+  // either deletes the copy (the tracked content supersedes it, same bytes) or renames it back
+  // (the fast-forward refused). NEITHER half is a record WRITE: the moved bytes are identical to
+  // the candidate blob by construction, so the relocation authors nothing and the record path
+  // always ends the window with its authoritative content (the tracked content, or the restored
+  // original). Recognized by SHAPE, like ATOMIC_TMP — the aside destination and the aside source
+  // are the two halves, so a rename is skipped when EITHER basename carries this suffix.
+  const ASIDE_SUFFIX = /\.kw-advance-aside-\d+$/;
+  const isRelocationHalf = (to, from) => ASIDE_SUFFIX.test(path.basename(String(to)))
+    || ASIDE_SUFFIX.test(path.basename(String(from)));
+
   // Resolve to the project-relative artifact path, or null. Loaded lazily and defensively: the
   // observer must stay inert if the schema module is mid-edit or unavailable.
   let toRel = null;
@@ -128,10 +141,12 @@ if (LOG) {
   wrap('open', args => { if (isWriteFlag(args[1])) record('open', args[0], { flags: String(args[1]) }); });
   wrap('renameSync', args => {
     const from = String(args[0]);
+    if (isRelocationHalf(args[1], from)) return;
     record('rename', args[1], { from, atomic_tmp: ATOMIC_TMP.test(path.basename(from)) });
   });
   wrap('rename', args => {
     const from = String(args[0]);
+    if (isRelocationHalf(args[1], from)) return;
     record('rename', args[1], { from, atomic_tmp: ATOMIC_TMP.test(path.basename(from)) });
   });
 
@@ -151,6 +166,7 @@ if (LOG) {
     wrapP('copyFile', args => record('copyFile', args[1]));
     wrapP('rename', args => {
       const from = String(args[0]);
+      if (isRelocationHalf(args[1], from)) return;
       record('rename', args[1], { from, atomic_tmp: ATOMIC_TMP.test(path.basename(from)) });
     });
   } catch (_) { /* never throw */ }
