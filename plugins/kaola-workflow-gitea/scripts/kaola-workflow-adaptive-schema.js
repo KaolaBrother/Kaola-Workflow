@@ -2252,6 +2252,15 @@ function commitPathsOntoCandidate(mainRoot, opts) {
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env, maxBuffer: VALIDATION_GIT_MAX_BUFFER });
   try {
     git(['read-tree', candidate]);
+    // #1097: an arm may name its own source root. The default arms read this root's working tree
+    // (the archive bytes archiveProjectDir just wrote there); a candidate-side arm names the
+    // integration worktree instead, so the removals it stages are the sink's OWN candidate-tree
+    // mutations — a foreign deletion in the shared checkout can never ride the commit through an
+    // arm that never reads that working tree. git ≥2.0 `add <pathspec>` stages deletions of
+    // index-tracked paths missing from the arm's working tree, which is exactly why the source
+    // root of every arm is part of its contract.
+    const gitAt = (root) => (args) => execFileSync('git', ['-C', (root || mainRoot)].concat(args),
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env, maxBuffer: VALIDATION_GIT_MAX_BUFFER });
     const addArm = (spec, force) => {
       if (!spec.paths.length) return;
       // Order matters to git here: an `:(exclude…)` magic must precede the `--` separator, or git
@@ -2261,24 +2270,37 @@ function commitPathsOntoCandidate(mainRoot, opts) {
       for (const s of spec.excludes) args.push(s);
       args.push('--');
       for (const s of spec.paths) args.push(s);
-      try { git(args); }
+      try { gitAt(spec.root)(args); }
       catch (err) {
         out.addErrors.push({
           pathspecs: spec.paths.concat(spec.excludes),
           force: !!force,
+          root: spec.root || mainRoot,
           status: err && err.status != null ? err.status : null,
           stderr: firstLine(err && err.stderr)
         });
       }
     };
-    addArm({ paths, excludes }, false);
-    // The forced arm is already an explicit override of the ignore rules, so the excludes do not
-    // ride along: the caller scopes `forcePaths` to paths it PROVED are required run evidence.
-    addArm({ paths: forcePaths, excludes: [] }, true);
+    const armList = [];
+    if (paths.length || excludes.length) armList.push({ root: mainRoot, paths, excludes, force: false });
+    if (forcePaths.length) armList.push({ root: mainRoot, paths: forcePaths, excludes: [], force: true });
+    for (const arm of (options.arms || [])) {
+      armList.push({
+        root: arm.root || mainRoot,
+        paths: (arm.paths || []).map(String).filter(Boolean),
+        excludes: (arm.excludes || []).map(String).filter(Boolean),
+        force: !!arm.force
+      });
+    }
+    for (const arm of armList) addArm(arm, arm.force);
     let stagedRaw = '';
     try { stagedRaw = git(['diff-index', '--cached', '--name-only', '-z', candidate, '--']); } catch (_) {}
     out.staged = splitNulPaths(stagedRaw);
-    if (!out.staged.length) return out;
+    // A caller that needs to MEASURE the staged set first (e.g. to write it into a summary that must
+    // ride the same commit) passes commit:false and then calls again with the file updated. The
+    // commit is still built ONCE, so the "one archive commit carries the whole archive" invariant is
+    // preserved.
+    if (!out.staged.length || options.commit === false) return out;
     out.tree = git(['write-tree']).trim();
     out.committed = git(['commit-tree', out.tree, '-p', candidate, '-m', message]).trim();
     return out;
@@ -2323,14 +2345,22 @@ function shiftOwnUntracked(mainRoot, candidate, pathspec, movedOut) {
     const abs = path.join(mainRoot, rel);
     let st;
     try { st = fs.lstatSync(abs); } catch (_) { continue; }
-    if (!st.isFile()) continue;
     let blob;
     try { blob = execFileSync('git', ['-C', mainRoot, 'cat-file', 'blob', candidate + ':' + rel],
       { stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: VALIDATION_GIT_MAX_BUFFER }); }
     catch (_) { continue; } // the candidate tree does not carry it: not a collision
-    let disk;
-    try { disk = fs.readFileSync(abs); } catch (_) { continue; }
-    if (!blob.equals(disk)) continue; // differing bytes: the fast-forward must refuse, not clobber
+    // A symlink is committed as a 120000 blob whose bytes ARE the link target, so the disk comparison
+    // is the readlink target, not the (possibly dangling, possibly external) file content.
+    if (st.isSymbolicLink()) {
+      let target = null;
+      try { target = fs.readlinkSync(abs); } catch (_) { continue; }
+      if (!blob.equals(Buffer.from(target))) continue;
+    } else {
+      if (!st.isFile()) continue;
+      let disk;
+      try { disk = fs.readFileSync(abs); } catch (_) { continue; }
+      if (!blob.equals(disk)) continue; // differing bytes: the fast-forward must refuse, not clobber
+    }
     const aside = abs + '.kw-advance-aside-' + process.pid;
     try { fs.renameSync(abs, aside); } catch (_) { continue; }
     movedOut.push({ rel, abs, aside });

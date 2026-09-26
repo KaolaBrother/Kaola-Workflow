@@ -153,16 +153,16 @@ function deriveSinkPublication() {
   if (!ctx) return 'unknown';
   if (OFFLINE) return 'unknown';
   if (!ctx.receipt || !ctx.receipt.steps || ctx.receipt.steps.push_main !== 'done') return 'not_published';
-  let head = ctx.receipt.published_head || null;
-  if (!head) {
-    try {
-      head = execFileSync('git', ['-C', ctx.mainRoot, 'rev-parse', ctx.branch],
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
-    } catch (_) { return 'unknown'; }
-  }
+  // #1097: the published ref is the CANDIDATE, never the (now never-rebased) feature branch. Prefer
+  // the stamped published_head, then the published candidate SHA. The old fallback resolved the
+  // branch tip, which in the W-model is the pre-rebase tip and would mis-report.
+  let head = ctx.receipt.published_head || ctx.receipt.post_rebase_candidate || ctx.receipt.candidate_head || null;
   if (!head) return 'unknown';
+  // Whether the online or (OFFLINE) local default ref is the target: the same helper the sink's
+  // publish and the claim-side audit use, so all three ask one question.
+  const target = adaptiveSchema.publishTargetRef(ctx.mainRoot, ctx.defBranch);
   try {
-    execFileSync('git', ['-C', ctx.mainRoot, 'merge-base', '--is-ancestor', head, ctx.defBranch],
+    execFileSync('git', ['-C', ctx.mainRoot, 'merge-base', '--is-ancestor', head, target],
       { stdio: 'ignore' });
     return 'published';
   } catch (e) {
@@ -956,6 +956,190 @@ function ffMergeLoop(args, mainRoot, defBranch) {
   }
 }
 
+// ===========================================================================
+// #1097 — THE ISOLATED INTEGRATION TRANSACTION.
+//
+// The --sink merge used to happen IN the shared main checkout: `git -C mainRoot checkout <branch>`,
+// a rebase there, an ff-only merge there, the archive commit against mainRoot's HEAD. That made
+// every sink serialize on the one working tree the operator and every other lane read, and it is
+// why preflight had to refuse on ANY foreign modification a checkout might collide with.
+//
+// From here the transaction runs in a private integration worktree W
+// (`<mainRoot>/.kw/integrate/<project>`, detached HEAD, gitignored): the rebase, the fast-forward
+// candidate and the post-rebase test gate all happen there, and the archive commit is built from
+// mainRoot's UNTRACKED bytes through a private index (commitPathsOntoCandidate) so mainRoot's
+// checkout is never touched. The shared checkout sees exactly ONE git operation — a reported
+// post-publish fast-forward (advanceCheckedOutDefault) — and only when git can do it without
+// touching a user change.
+//
+// These three helpers are the transaction's W-model core. The legacy (non---sink) entry point keeps
+// its own doRebase/ffMergeLoop unchanged (out of scope: no rendered surface calls it).
+// ===========================================================================
+
+// The candidate ref: the integration worktree's current detached HEAD. This is what gets published
+// and what every post-merge ancestry question is asked about, in place of the (now never rebased)
+// feature-branch ref.
+function integrationCandidate(wtPath) {
+  return execFileSync('git', ['-C', wtPath, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+}
+
+// alreadyUpToDate, fixed: the question is whether the base is already an ANCESTOR of the candidate,
+// not whether mainRoot's HEAD shares a merge base with origin/<def>. The old `merge-base HEAD
+// origin/<def>` compared the WRONG tip (mainRoot's default branch, not the feature branch). Returns
+// true (skip the rebase) when the base ref cannot be resolved — the same OFFLINE posture as before.
+function integrationAlreadyUpToDate(mainRoot, branch, defBranch) {
+  try {
+    execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', 'origin/' + defBranch, branch],
+      { stdio: ['ignore', 'ignore', 'ignore'] });
+    return true;
+  } catch (e) {
+    if (e && e.status === 1) return false; // verified not-ancestor: a rebase IS needed
+    return true; // unresolvable base ref: nothing to rebase against
+  }
+}
+
+// Rebase the integration candidate onto origin/<def>, then re-take the measurement in W. A content
+// conflict aborts the rebase and is reported as 'conflict' (never auto-resolved — the same posture
+// the legacy loop holds). Returns { result: 'green'|'red'|'skipped'|'conflict', finding }.
+function integrationRebase(args, wtPath, defBranch, alreadyUpToDate) {
+  if (alreadyUpToDate) return { result: 'skipped', finding: null };
+  try {
+    execFileSync('git', ['-C', wtPath, 'rebase', 'origin/' + defBranch], { encoding: 'utf8' });
+  } catch (_) {
+    try { execFileSync('git', ['-C', wtPath, 'rebase', '--abort'], { encoding: 'utf8' }); } catch (_) {}
+    return { result: 'conflict', finding: null };
+  }
+  // The measurement runs over the W tree — a fresh private checkout with no untracked files, so the
+  // rebase's replay of intermediate commits cannot collide with anything (#1096's gap is structural
+  // here, not guarded).
+  return runTestGate(wtPath);
+}
+
+// Record that a measurement bound to a now-superseded candidate is INVALID. #1097 AC5: when the
+// base advances after validation, the affected PASS evidence is named explicitly and re-acquired —
+// never silently carried forward. Additive and idempotent per (evidence, to_base) pair.
+function recordInvalidatedEvidence(receipt, evidence, boundTo, fromBase, toBase) {
+  if (!receipt.invalidated_evidence) receipt.invalidated_evidence = [];
+  receipt.invalidated_evidence.push({
+    evidence: evidence,
+    bound_to: boundTo || null,
+    from_base: fromBase || null,
+    to_base: toBase || null,
+    at: new Date().toISOString()
+  });
+}
+
+// The locked publish. Acquire the short-scope lock, then reconcile-and-publish:
+//   - fetch (online), confirm the candidate's recorded base still equals origin/<def>;
+//   - on a base advance: record invalidated_evidence, re-rebase in W (the rebase REPLAYS the
+//     archive commit too, since it is part of the candidate), re-take the test gate, bind the new
+//     result to the new candidate, and retry — bounded by MAX_AUTOMERGE_RETRIES;
+//   - push `origin <candidate>:refs/heads/<def>` — an ordinary push, so the server's fast-forward
+//     check IS the compare-and-swap; NEVER --force;
+//   - advance the local checkout/branch (advanceCheckedOutDefault), reported.
+// Returns:
+//   { ok:true, candidate, main_checkout } on publication;
+//   { ok:false, reason:'publish_busy', holder } — another live holder owns the lock;
+//   { ok:false, reason:'not_published', detail } — OFFLINE ff refused, or a lock/probe fault;
+//   { ok:false, reason:'non_fast_forward' } / { ok:false, reason:'chains_red' } — bounded retries.
+function runIntegrationPublish(args, mainRoot, wtPath, defBranch, receipt, archivePathspec) {
+  const lock = adaptiveSchema.acquirePublishLock(mainRoot, { project: args.project });
+  if (!lock.acquired) {
+    if (lock.reason === 'publish_busy') {
+      return { ok: false, reason: 'publish_busy', holder: lock.holder || null };
+    }
+    return { ok: false, reason: 'not_published', detail: 'publish lock unavailable: ' + (lock.detail || lock.reason) };
+  }
+  try {
+    let attempts = 0;
+    // A resumed old-model receipt has no integration worktree; its candidate is the local default
+    // ref the old model already merged. resolveCandidate prefers W whenever W is present.
+    const resolveCandidate = () => {
+      if (wtPath && fs.existsSync(wtPath)) {
+        try { return integrationCandidate(wtPath); } catch (_) {}
+      }
+      return receipt.candidate_head || null;
+    };
+    let candidate = resolveCandidate();
+    if (!candidate) return { ok: false, reason: 'not_published', detail: 'no candidate to publish' };
+    for (;;) {
+      if (!OFFLINE) {
+        try { execFileSync('git', ['-C', mainRoot, 'fetch', 'origin'], { encoding: 'utf8' }); } catch (_) {}
+      }
+      let originDef = null;
+      if (!OFFLINE) {
+        try {
+          originDef = execFileSync('git', ['-C', mainRoot, 'rev-parse', 'origin/' + defBranch],
+            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        } catch (_) { originDef = null; }
+      }
+      // The candidate's recorded base must still be the tip we are publishing onto.
+      if (originDef && receipt.candidate_base && originDef !== receipt.candidate_base) {
+        recordInvalidatedEvidence(receipt, 'post_rebase_tests',
+          receipt.post_rebase_candidate || receipt.candidate_head, receipt.candidate_base, originDef);
+        if (receipt.archive_commit === 'done') {
+          recordInvalidatedEvidence(receipt, 'finalize_validation',
+            receipt.candidate_head, receipt.candidate_base, originDef);
+        }
+        attempts++;
+        if (attempts > MAX_AUTOMERGE_RETRIES) return { ok: false, reason: 'non_fast_forward' };
+        if (!(wtPath && fs.existsSync(wtPath))) {
+          // No W to re-rebase (old-model resume): re-fetch and retry the push; a persistent base
+          // advance ends in non_fast_forward below.
+          continue;
+        }
+        try {
+          execFileSync('git', ['-C', wtPath, 'rebase', 'origin/' + defBranch], { encoding: 'utf8' });
+        } catch (_) {
+          try { execFileSync('git', ['-C', wtPath, 'rebase', '--abort'], { encoding: 'utf8' }); } catch (_) {}
+          return { ok: false, reason: 'rebase_conflict' };
+        }
+        const gate = runTestGate(wtPath);
+        if (gate.result === 'red') {
+          receipt.post_rebase_tests = 'red';
+          return { ok: false, reason: 'chains_red' };
+        }
+        candidate = resolveCandidate();
+        receipt.candidate_base = originDef;
+        receipt.candidate_head = candidate;
+        receipt.post_rebase_candidate = candidate;
+        receipt.post_rebase_tests = gate.result === 'skipped' ? (receipt.post_rebase_tests || 'skipped') : gate.result;
+        continue;
+      }
+      if (OFFLINE) {
+        // No remote: the local ref IS the publish target, so the fast-forward IS the publication.
+        // A refusal here is a resumable not_published (nothing was published).
+        const adv = adaptiveSchema.advanceCheckedOutDefault(mainRoot, defBranch, candidate,
+          { pathspec: archivePathspec });
+        if (!adv.advanced) {
+          return { ok: false, reason: 'not_published', detail: 'offline fast-forward refused: ' + (adv.detail || adv.reason) };
+        }
+        return { ok: true, candidate, main_checkout: 'advanced' };
+      }
+      try {
+        execFileSync('git', ['-C', mainRoot, 'push', 'origin', candidate + ':refs/heads/' + defBranch],
+          { encoding: 'utf8' });
+      } catch (_) {
+        // Server-side CAS refused (another lane published first, or the base moved under us).
+        // Re-enter the loop to re-rebase and retry; bounded by the same counter.
+        attempts++;
+        if (attempts > MAX_AUTOMERGE_RETRIES) return { ok: false, reason: 'non_fast_forward' };
+        continue;
+      }
+      // Published. Advance the shared checkout — REPORT-ONLY (publication already happened).
+      const adv = adaptiveSchema.advanceCheckedOutDefault(mainRoot, defBranch, candidate,
+        { pathspec: archivePathspec });
+      return {
+        ok: true,
+        candidate,
+        main_checkout: adv.advanced ? 'advanced' : ('behind: ' + (adv.detail || adv.reason || 'ff refused'))
+      };
+    }
+  } finally {
+    try { adaptiveSchema.releasePublishLock(lock); } catch (_) {}
+  }
+}
+
 function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch, postRebaseTests) {
   // #617: capture the feature branch's commit SHA now, before Step 9 below deletes the branch
   // ref — this is "the recorded implementation commit" the remote-closed-after-publish invariant
@@ -1567,6 +1751,10 @@ function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers,
       // on a field that is sometimes absent — the difference between an empty list and a missing one
       // is the silence the report exists to close.
       archived_paths: [],
+      // #1097: present-and-empty from the start, like archived_paths. Every measurement invalidated
+      // by a base advance is appended here ({evidence, bound_to, from_base, to_base, at}) so the loss
+      // of a PASS is explicit and durable rather than silently carried forward.
+      invalidated_evidence: [],
       steps
     }, existingArchive && path.basename(existingArchive) !== project
       ? { archive_dest: path.relative(mainRoot, existingArchive).split(path.sep).join('/') } : {}, extra || {});
@@ -1858,56 +2046,15 @@ function repoWideIgnoredNames(root, rels) {
 // { ok: false, reason: 'worktree_dirty', detail } on the #562 dirty/unprobeable worktree guard.
 // INVARIANT: if foreign_dirt is non-empty, NO mutation occurs.
 //
-// #1096 (D1=b): the ONE unified rule for UNTRACKED (??) paths — foreign dirt ONLY when the path
-// conflicts with a candidate tree, meaning it is present AT THE PATH in the `branch` tree or the
-// `origin/<defBranch>` tree (probed with `git cat-file -e`, the same primitive #893's arm uses),
-// OR an ancestor folder of the path exists as a FILE in either tree (the directory-vs-file
-// collision — `git checkout <branch>` must write that file where the working copy holds an
-// untracked directory; see untrackedPathConflictsWithCandidateFolder below). Those two tip trees
-// are what the transaction's checkout and fast-forward steps write onto the working copy
-// (`git checkout <branch>`, ffMergeLoop's `pull --ff-only` of origin/<defBranch>); the rebase's
-// replay of INTERMEDIATE commits is a known remaining gap that belongs to #1097 — this rule
-// claims nothing about it. A path conflicting with neither tip tree is never staged or modified
-// by this sink. The rule replaced the three special exemptions (#715 sibling sink receipts,
-// #1075 verified co-active sibling live folders, registered worktree paths), each a special case
-// of it.
-// TRACKED statuses (staged/unstaged modifications, deletions) are untouched by the rule and stay
-// sink_blocked: a tracked edit is a local change to committed content that an in-place checkout
-// would overwrite, and moving the merge out of the shared checkout is a deliberate follow-up.
-//
-// #1096 repair (review round 1): DIRECTORY-VS-FILE conflict probe for that rule. `git checkout
-// <branch>` writes every blob the branch tree carries; when an untracked DIRECTORY sits in the
-// working copy at a path a candidate tree carries as a plain FILE (the untracked `foo/bar` under
-// a branch-carried blob `foo`), the checkout cannot create the file and throws — past preflight,
-// untyped, and on a worktree-postured run already AFTER the merge step staged and removed the
-// worktree. `cat-file -e <ref>:foo/bar` does not resolve through a blob, so the exact-path probe
-// alone cannot see that collision; probe each ANCESTOR of the path with `cat-file -t` instead:
-// 'blob' IS the conflict, 'tree' is an ordinary directory (keep walking), and a gitlink
-// ('commit') is not a conflict this rule decides — a path carried AT the gitlink is already
-// refused by the exact-path arm, and deeper submodule questions belong to #1097. The walk is
-// shallow → deep and stops at the first ancestor present in NEITHER tree (nothing deeper can
-// exist there either), so the common sibling-lane shape — untracked
-// `kaola-workflow/archive/<sib>/…` over a branch that never carried the archive — costs a bounded
-// handful of probes.
-function untrackedPathConflictsWithCandidateFolder(mainRoot, branch, defBranch, filePath) {
-  const parts = filePath.split('/');
-  for (let i = 1; i < parts.length; i++) {
-    const ancestor = parts.slice(0, i).join('/');
-    let presentInAnyTree = false;
-    for (const ref of [branch, defBranch ? 'origin/' + defBranch : null]) {
-      if (!ref) continue;
-      let type = null;
-      try {
-        type = execFileSync('git', ['-C', mainRoot, 'cat-file', '-t', ref + ':' + ancestor],
-          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
-      } catch (_) {}
-      if (type === 'blob') return true;
-      if (type === 'tree' || type === 'commit') presentInAnyTree = true;
-    }
-    if (!presentInAnyTree) return false;
-  }
-  return false;
-}
+// #1097: the #1096 unified untracked-conflict rule and the tracked-foreign-dirt refusal it sat
+// beside are GONE — structurally eliminated, not merely relaxed. The merge now happens in the
+// private integration worktree W, so mainRoot's checkout is never switched, no foreign path can
+// collide with it, and the rebase's replay of intermediate commits happens in a fresh private tree
+// with no untracked files. Foreign TRACKED and UNTRACKED content in mainRoot is preserved by git's
+// own overlap protection on the ONE post-publish fast-forward (advanceCheckedOutDefault), which
+// reports `cleanup.main_checkout: behind` rather than destroying anything. The retired
+// `untrackedPathConflictsWithCandidateFolder` helper and the #715/#1075/#562 exemptions it
+// subsumed had no remaining safety duty once the checkout left the shared tree.
 
 function sinkPreflight(mainRoot, project, branch, defBranch) {
   // #562: worktree-clean data-loss guard — mirror the legacy path's assertWorktreeClean (:1461). The
@@ -2024,59 +2171,34 @@ function sinkPreflight(mainRoot, project, branch, defBranch) {
       try { workBytes = fs.readFileSync(path.join(mainRoot, filePath)); } catch (_) {}
       // Byte-equality is the ONLY thing that exempts a path the branch carries. A read that failed
       // leaves branchBytes null and can never satisfy this, so unverifiable falls through with
-      // divergent — no continue: both stay foreign dirt below.
+      // divergent. #1097: divergent/unverifiable own-archive paths are the ONE bucket that still
+      // refuses (see the bucket-3 comment below).
       if (branchBytes !== null && workBytes !== null && branchBytes.equals(workBytes)) continue;
+      foreignDirt.push(filePath);
+      continue;
     }
 
-    // #1096 (D1=b): the unified UNTRACKED rule — see the block comment on sinkPreflight. A `??`
-    // path counts as foreign dirt ONLY when it conflicts with a candidate tip tree: present AT THE
-    // PATH in the `branch` tree (what `git checkout <branch>` writes, and what defBranch becomes
-    // after the ff merge) or in the `origin/<defBranch>` tree (what ffMergeLoop's `pull --ff-only`
-    // can bring onto the working copy mid-transaction), or an ANCESTOR folder of it exists as a
-    // FILE in either tree — the directory-vs-file collision that would otherwise crash the merge
-    // step's checkout past preflight (review round 1; see
-    // untrackedPathConflictsWithCandidateFolder). `cat-file -e` is the exact-path probe — it
-    // interrogates the tree, emits no bytes of its own to overflow, and a ref that does not resolve
-    // (no remote at all) reads as a tree that cannot conflict with anything; the ancestor probe
-    // exists because `cat-file -e` cannot resolve a path THROUGH a blob. CLASSIFICATION-ONLY: the
-    // `continue` never stages, touches, or removes the path (not-refusing is not mutation), and on
-    // a refusal nothing here has mutated anything. A conflicting path falls through to bucket 3
-    // exactly as before — that includes the #893 arm's divergent own-archive copies — and every
-    // TRACKED status skips this arm entirely and stays refused. The rebase's replay of
-    // intermediate commits is NOT covered here (#1097); this arm claims only the two tip trees.
-    if (xy === '??') {
-      let candidateHas = false;
-      try {
-        execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', branch + ':' + filePath],
-          { stdio: ['ignore', 'ignore', 'ignore'] });
-        candidateHas = true;
-      } catch (_) {}
-      if (!candidateHas && defBranch) {
-        try {
-          execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', 'origin/' + defBranch + ':' + filePath],
-            { stdio: ['ignore', 'ignore', 'ignore'] });
-          candidateHas = true;
-        } catch (_) {}
-      }
-      if (!candidateHas
-        && untrackedPathConflictsWithCandidateFolder(mainRoot, branch, defBranch, filePath)) {
-        candidateHas = true;
-      }
-      if (!candidateHas) continue;
-    }
-
-    // Bucket 3: foreign dirt — tracked changes of any kind, and untracked paths the candidate
-    // trees carry
-    foreignDirt.push(filePath);
+    // #1097: TRACKED foreign modifications and every non-conflicting UNTRACKED path are NO LONGER
+    // refused. The merge happens in the integration worktree W, so mainRoot's checkout is never
+    // switched and no foreign path can collide with it; the archive commit is built from mainRoot's
+    // untracked bytes through a private index. #1096's unified untracked-conflict rule and the
+    // tracked-dirt refusal it sat beside are structurally eliminated: git's own overlap protection on
+    // the single post-publish fast-forward (advanceCheckedOutDefault) is what spares foreign content,
+    // and when a tracked path DOES overlap the publish it reports `cleanup.main_checkout: behind`
+    // rather than blocking. Nothing here mutates: a skipped path is skipped by not being classified.
   }
 
-  // If ANY bucket-3 paths exist, refuse with ZERO mutation
+  // If ANY bucket-3 paths exist, refuse with ZERO mutation. #1097: the sole remaining bucket-3 class
+  // is this run's OWN archive present in the main checkout at bytes that DIVERGE from the branch copy
+  // — two archives disagreeing, where letting one side silently win would misreport the run record.
   if (foreignDirt.length > 0) {
     return {
       ok: false,
       reason: 'sink_blocked',
       foreign_dirt: foreignDirt,
-      detail: 'main checkout carries changes not owned by this sink; resolve (commit/stash/restore) before re-running. This sink never touches another project\'s files.'
+      detail: 'this run\'s own archive is present in the main checkout at bytes that DIVERGE from (or '
+        + 'could not be compared with) the branch copy under kaola-workflow/archive/' + project
+        + '/; refusing rather than letting one side silently win. Resolve the divergence, then re-run.'
     };
   }
 
@@ -2160,6 +2282,15 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   // the legacy path and main()'s flag refusals emit outside the transaction and keep their
   // byte-identical envelopes.
   sinkPublicationCtx = { receipt, mainRoot, defBranch, branch: args.branch };
+  // #1097 resume: a receipt that records an integration worktree no longer on disk is rebuilt at the
+  // recorded candidate, so the finalize/archive_commit/publish steps have their root. The merge step
+  // recorded the candidate; a resumed run must not re-rebase to reconstruct it.
+  if (receipt.candidate_head && receipt.integration_worktree) {
+    const wtAbs = path.join(mainRoot, receipt.integration_worktree);
+    if (!fs.existsSync(wtAbs)) {
+      try { adaptiveSchema.ensureIntegrationWorktree(mainRoot, args.project, receipt.candidate_head); } catch (_) {}
+    }
+  }
   // Reassignable: the finalize step's archiveProjectDir renames the live folder (receipt included)
   // into the archive dest — every later write must follow it there, or writeSinkReceipt's mkdirSync
   // resurrects a phantom empty live .cache/ and the authoritative receipt forks from the archive.
@@ -2321,7 +2452,10 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       let wtStageErr = null;
       let wtStageSrc = null;
       try {
-        const { removeWorktree: removeWt, worktreePathFor: wtPathFor } = require('./kaola-workflow-claim.js');
+        // #1097: worktreePathFor only. The dev worktree is NO LONGER removed here — it survives
+        // until post-publish teardown, so a "stage then remove" coupling is gone; this is pure
+        // capture of the worktree-only content into tmp.
+        const { worktreePathFor: wtPathFor } = require('./kaola-workflow-claim.js');
         // #1055: readActiveFolders is a pure re-export of active-folders.js — imported from its owner.
         const { readActiveFolders: readAF } = require('./kaola-workflow-active-folders');
         const folder = readAF(mainRoot, { excludeClosedIssues: false }).find(f => f.project === args.project);
@@ -2337,7 +2471,6 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
             } catch (e) { wtStageDir = null; wtStageErr = e; wtStageSrc = wtProjDir; }
           }
         }
-        if (!wtStageErr) removeWt(mainRoot, args.project, folder);
       } catch (_) {}
       if (wtStageErr) {
         sinkEmit({
@@ -2355,25 +2488,52 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
         return;
       }
 
-      // Resolve merge base for up-to-date check
-      const originRef = 'origin/' + defBranch;
-      let alreadyUpToDate = false;
+      // #1097: build the private integration worktree W at the development branch tip. W is
+      // detached, gitignored (<mainRoot>/.kw/integrate/<project>), and regenerable — the dev
+      // worktree keeps its registration and its checkout throughout.
+      let branchTip = null;
       try {
-        const mergeBase = execFileSync('git', ['-C', mainRoot, 'merge-base', 'HEAD', originRef],
-          { encoding: 'utf8' }).trim();
-        const originHead = execFileSync('git', ['-C', mainRoot, 'rev-parse', originRef],
-          { encoding: 'utf8' }).trim();
-        alreadyUpToDate = (mergeBase === originHead);
-      } catch (_) { alreadyUpToDate = true; }
+        branchTip = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', args.branch],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      } catch (_) {}
+      if (!branchTip) {
+        recordStopOnReceipt(null, null);
+        sinkEmit({
+          result: 'refuse', reason: 'branch_missing', step: 'merge',
+          branch: args.branch, project: args.project,
+          detail: 'branch ' + args.branch + ' does not resolve, so there is nothing to integrate.',
+        }, 1);
+        return;
+      }
+      const W = adaptiveSchema.ensureIntegrationWorktree(mainRoot, args.project, branchTip);
+      if (!W.ok) {
+        recordStopOnReceipt(null, null);
+        sinkEmit({
+          result: 'refuse', reason: 'integration_worktree_failed', step: 'merge',
+          branch: args.branch, project: args.project, detail: W.reason + ': ' + (W.detail || ''),
+        }, 1);
+        return;
+      }
+      const wtWorktree = W.path;
+      receipt.integration_worktree = path.relative(mainRoot, wtWorktree).split(path.sep).join('/');
+      receipt.integrated_from = branchTip;
+      // The base the candidate is built on: origin/<def> online, the local default ref OFFLINE.
+      let candidateBase = null;
+      for (const ref of ['origin/' + defBranch, defBranch]) {
+        try {
+          candidateBase = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', ref],
+            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+          if (candidateBase) break;
+        } catch (_) {}
+      }
+      receipt.candidate_base = candidateBase || null;
 
-      // Check out feature branch (worktree now removed, branch ref freed)
-      execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
-      // The post-rebase measurement. Red STOPS the sink here, before the fast-forward: the merge
-      // has not happened, nothing is published, and the merge step stays NOT done so a re-run after
-      // a fix resumes exactly here. This is the same terminal state the old throw produced — the
-      // difference is that the result is now typed, named on the receipt, and carries a way out.
-      let testGate = doRebase(args, alreadyUpToDate, mainRoot, defBranch);
-      if (testGate.result === 'red') {
+      // alreadyUpToDate is asked of the CANDIDATE (branch tip), not mainRoot's HEAD.
+      const alreadyUpToDate = integrationAlreadyUpToDate(mainRoot, args.branch, defBranch);
+      // The post-rebase measurement, taken in W before publication. Red STOPS the sink with nothing
+      // published; the merge step stays NOT done so a re-run resumes here.
+      const rebaseOutcome = integrationRebase(args, wtWorktree, defBranch, alreadyUpToDate);
+      if (rebaseOutcome.result === 'red') {
         recordStopOnReceipt('post_rebase_tests', 'red');
         sinkEmit({
           result: 'report',
@@ -2383,76 +2543,31 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
           post_rebase_tests: 'red',
           branch: args.branch,
           default_branch: defBranch,
-          detail: 'the post-rebase chains are RED over ' + args.branch + '. Nothing was merged into '
-            + defBranch + ', nothing was pushed, and no issue was closed; the merge step is left NOT done '
-            + 'so a re-run resumes here once the chains are green. Run sink-pr instead if the right call '
-            + 'is to stage this for review.',
+          detail: 'the post-rebase chains are RED over ' + args.branch + ' in the isolated integration '
+            + 'worktree. Nothing was published, no issue was closed, and the main checkout was not touched; '
+            + 'the merge step is left NOT done so a re-run resumes here once the chains are green. Run '
+            + 'sink-pr instead if the right call is to stage this for review.',
         }, 1);
         return;
       }
-      const ffOutcome = ffMergeLoop(args, mainRoot, defBranch);
-      // The FF loop can re-take the measurement after a race re-rebase; carry the newer result.
-      if (ffOutcome.testGate && ffOutcome.testGate.result !== 'skipped') testGate = ffOutcome.testGate;
-      if (!ffOutcome.merged) {
-        receipt.merge = ffOutcome.reason;
-        // chains_red is the CONVERTED arm and must surface under its own name. It used to `return
-        // false` into giveUp, which printed "FF race: exhausted retries" — a red suite reported as
-        // a merge race, which is not a wording problem but the sink naming the wrong cause.
-        if (ffOutcome.reason === 'chains_red') {
-          recordStopOnReceipt('post_rebase_tests', 'red');
-          sinkEmit({
-            result: 'report',
-            status: 'not_merged',
-            reason: 'chains_red',
-            step: 'merge',
-            post_rebase_tests: 'red',
-            branch: args.branch,
-            default_branch: defBranch,
-            detail: 'the chains went RED on the re-rebased tree during fast-forward recovery — '
-              + defBranch + ' had advanced, ' + args.branch + ' was rebased onto it, and the re-taken '
-              + 'measurement failed. This is a red suite, NOT a merge race. Nothing was merged or pushed; '
-              + 'the merge step is left NOT done so a re-run resumes here.',
-          }, 1);
-          return;
-        }
+      if (rebaseOutcome.result === 'conflict') {
+        // A true content conflict is never auto-resolved. The dev worktree still exists, so the
+        // resolution happens there.
         recordStopOnReceipt(null, null);
-        if (ffOutcome.reason === 'non_fast_forward') {
-          // A failed fast-forward stops like everything else, and it gets a typed envelope because
-          // an output-blind consumer cannot act on a bare exit code. It is not a CONVERT — nothing
-          // about the work was judged — but the resolutions are real and worth naming: this is the
-          // ordinary consequence of another lane merging first.
-          sinkEmit({
-            result: 'report',
-            status: 'not_merged',
-            reason: 'non_fast_forward',
-            step: 'merge',
-            branch: args.branch,
-            default_branch: defBranch,
-            detail: 'branch ' + args.branch + ' did not fast-forward onto ' + defBranch + ' after '
-              + MAX_AUTOMERGE_RETRIES + ' attempts. Nothing was merged, nothing was pushed and no issue '
-              + 'was closed; the merge step is left NOT done so a re-run resumes here. Rebase onto the '
-              + 'updated ' + defBranch + ' and re-run the sink (the normal answer when another lane '
-              + 'merged first), resynchronize whatever diverged and re-run, or run sink-pr instead.',
-          }, 2);
-          return;
-        }
-        // rebase_conflict KEEPS its bare loud failure: a true content conflict is never
-        // auto-resolved, and there is no resolution the sink could sanction on the operator's behalf.
-        process.stderr.write('sink-merge --sink: FF merge failed after retries\n');
+        process.stderr.write('sink-merge --sink: rebase conflict in the integration worktree ' + wtWorktree
+          + ' — resolve it on branch ' + args.branch + ' in the development worktree, then re-run --sink.\n');
         process.exitCode = 2;
         return;
       }
-      receipt.post_rebase_tests = testGate.result;
-      // Land the staged worktree-only content now that checkout has resolved whether the branch
-      // itself tracks kaola-workflow/<project>/. #707: per-FILE union — a checkout-resolved
-      // (branch-tracked) file is authoritative and is never overwritten, but a file that exists
-      // ONLY in the worktree copy (untracked per-node .cache evidence) always lands. The previous
-      // all-or-nothing guard discarded the whole stage whenever the live folder existed, dropping
-      // the run's node evidence on every worktree-postured sink (evidence-empty archives).
+      receipt.post_rebase_tests = rebaseOutcome.result;
+      receipt.candidate_head = integrationCandidate(wtWorktree);
+      receipt.post_rebase_candidate = receipt.candidate_head;
+
+      // Land the staged worktree-only content into W's live folder, per-FILE union (#619(4)/#707):
+      // a branch-tracked file W already holds wins; a worktree-only file always lands.
       if (wtStageDir) {
         try {
-          const mainProjDir = path.join(mainRoot, 'kaola-workflow', args.project);
-          sinkLandStagedUnion(wtStageDir, mainProjDir);
+          sinkLandStagedUnion(wtStageDir, path.join(wtWorktree, 'kaola-workflow', args.project));
         } catch (_) {}
         try { fs.rmSync(wtStageDir, { recursive: true, force: true }); } catch (_) {}
         disarmStagedJournalNote(); // #980: past the landing, there is no un-landed stage to name
@@ -2477,9 +2592,27 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
         // ADR 0018 §5: archiveProjectDir no longer touches kaola-workflow/.roadmap/ at all, so the
         // keep-open roadmap-source retention that used to be scoped here via excludeIssues (#705)
         // is retired with it — there is no local roadmap source left for a kept-open issue to lose.
-        const archiveResult = archiveProjectDir(mainRoot, args.project, 'closed', undefined, {
-          keepWorktree: false,
-        });
+        //
+        // #1097: the archive SOURCE is the integration worktree W, not mainRoot. W is a linked
+        // worktree, so archiveProjectDir's isLinkedRun branch copies W/kaola-workflow/<project> into
+        // MAIN's archive band (untracked there, #832 unchanged) and verifies before deleting either
+        // live copy. The subsequent archive_commit builds the commit from those mainRoot bytes.
+        const wtForArchive = receipt.integration_worktree
+          ? path.join(mainRoot, receipt.integration_worktree) : null;
+        const archiveRoot = (wtForArchive && fs.existsSync(wtForArchive)) ? wtForArchive : mainRoot;
+        // #746: a live folder that recorded nothing (journal residue only, no workflow-state.md) is
+        // not an archive refusal — the sink SKIPS it. In the W-model the source is the integration
+        // worktree, so the probe is asked of that folder directly; a state-less folder is residue, not
+        // a run record, and archiveProjectDir's linked-run completeness gate (which requires
+        // workflow-state.md as the archive's identity anchor) would otherwise refuse over it.
+        const liveSrcDir = path.join(archiveRoot, 'kaola-workflow', args.project);
+        const skipStateLess = fs.existsSync(liveSrcDir) && !fs.existsSync(path.join(liveSrcDir, 'workflow-state.md'));
+        // The completion contract treats "no run record to archive" as `source-missing`; a state-less
+        // folder is that same no-op with a more specific note, so the token is kept and the reason is
+        // recorded beside it.
+        const archiveResult = skipStateLess
+          ? { skipped: 'source-missing', note: 'state-less-source' }
+          : archiveProjectDir(archiveRoot, args.project, 'closed', undefined, { keepWorktree: false });
         // An incomplete archive fails the sink loudly, whatever made it incomplete. The former
         // discriminator was `missing.length > 0` OR a non-allowlisted snapshot_error, and BOTH halves
         // were wrong now: snapshot_error has no producer left, and verifyArchiveComplete can fail with
@@ -2678,6 +2811,17 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
         : (args.issue != null ? [args.issue] : []);
       const roadmapPathspecs = [];
       for (const n of memberNums) roadmapPathspecs.push('kaola-workflow/.roadmap/issue-' + n + '.md');
+      // #1097: the commit is built from mainRoot's UNTRACKED archive bytes through a PRIVATE index
+      // (commitPathsOntoCandidate), never from a checkout of mainRoot. The candidate is the
+      // integration worktree's HEAD, so the archive commit is part of the candidate that gets
+      // published and mainRoot's index and working tree are untouched. Resolve W here once: every
+      // probe below that asks "is this path present on disk" or "is it tracked" asks it of the
+      // CANDIDATE's own checkout (W) or the candidate HEAD — never of mainRoot's working tree,
+      // which now carries foreign dirt that preflight no longer refuses (#1097 AC3).
+      const wtForCommit = receipt.integration_worktree
+        ? path.join(mainRoot, receipt.integration_worktree) : null;
+      const candidateProbeRoot = (wtForCommit && fs.existsSync(wtForCommit)) ? wtForCommit : mainRoot;
+      const candidateProbeHead = receipt.candidate_head || 'HEAD';
       // #700: the sole-archiver rename moves the LIVE folder (kaola-workflow/<project>/) into the
       // suffixed archive. When that live folder was tracked (committed on the branch, then merged into
       // main), its removal must be committed too — else main is left with a staged/unstaged deletion
@@ -2685,12 +2829,15 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       // flow's live folder was in the worktree, never main-tracked → nothing to stage).
       const livePathspec = 'kaola-workflow/' + args.project + '/';
       let liveTracked = false;
-      try { const t = execFileSync('git', ['-C', mainRoot, 'ls-tree', '--name-only', 'HEAD', '--', livePathspec], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); liveTracked = t.length > 0; } catch (_) { liveTracked = false; }
+      try { const t = execFileSync('git', ['-C', mainRoot, 'ls-tree', '--name-only', candidateProbeHead, '--', livePathspec], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); liveTracked = t.length > 0; } catch (_) { liveTracked = false; }
       // Only stage a roadmap path that is present (keep-open) OR tracked at HEAD (a close deletion) —
-      // a bare pathspec that matches nothing would abort `git add`/`git commit`.
+      // a bare pathspec that matches nothing would abort `git add`/`git commit`. #1097: the probes
+      // ask W and the candidate HEAD, so the staged set is the sink's OWN candidate-tree mutations —
+      // a foreign deletion of the roadmap source in mainRoot's working tree is preserved instead of
+      // being swept into the mainline by an arm that no longer reads that working tree.
       const stagedRoadmap = roadmapPathspecs.filter(rp => {
-        if (fs.existsSync(path.join(mainRoot, rp))) return true;
-        try { execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', 'HEAD:' + rp], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; } catch (_) { return false; }
+        if (fs.existsSync(path.join(candidateProbeRoot, rp))) return true;
+        try { execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', candidateProbeHead + ':' + rp], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; } catch (_) { return false; }
       });
       // #832: a consumer whose .gitignore covers the archive band makes `git add <archive>` a
       // REFUSAL ("The following paths are ignored by one of your .gitignore files"), not a commit —
@@ -2762,48 +2909,57 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
         const ignoredHere = new Set(ignoredUntrackedUnder(mainRoot, projectPathspec));
         forcePaths = requiredPaths.filter(p => ignoredHere.has(p));
       }
-      const commitPaths = (archiveIgnored ? [] : [projectPathspec])
-        .concat(stagedRoadmap, liveTracked ? [livePathspec] : []);
-      // The live-path excludes are only meaningful when livePathspec itself is in commitPaths —
-      // otherwise nothing includes that subtree and the exclude has no include to narrow. Measured
-      // (git 2.54.0), narrower than "any unreached subtree": `git add` silently stages NOTHING at
-      // all, exit 0, when an `:(exclude,glob)`'s directory component is a literal STRING PREFIX of
-      // another pathspec's (the include's) leaf directory component — e.g. exclude
-      // `kaola-workflow/issue-9500/**/x` beside an include whose leaf dir is
-      // `issue-9500.archived-<ts>` (a #700 collision-suffixed dest, built from the same
-      // `args.project`, so this triggers whenever the archive gets suffixed). A second real include
-      // pathspec masks it either way — measured. Boundary verified with OUR OWN
-      // `**/sink-receipt.json` / `**/sink-fallback.json` tail only: at that tail, an unrelated
-      // exclude subtree sharing no such prefix does not trigger it — but a wider tail (`**` alone, or
-      // `**/x`) trips it regardless of the prefix relationship, so this scoping does not generalise
-      // to a different glob tail. This surfaced once `stagedRoadmap` stopped reliably supplying that
-      // second include (ADR 0018 §5 retired the roadmap-mirror regeneration that used to do so) — the
-      // bug could always have fired once the archive collision-suffixed (#700); the retirement
-      // removed the mask, it did not create the defect.
-      const excludes = [excludeReceipt, excludeFallback]
-        .concat(liveTracked ? [excludeLiveReceipt, excludeLiveFallback] : []);
-      // The staging runs TWICE (once before the archived_paths report, once after the durable copy is
-      // appended to the summary), so the ordinary sweep and the #901 forced sweep are one step. The
-      // errors are RETURNED, never discarded: `git add <dir>` exits 1 whenever an ignored directory
-      // sits under the pathspec — measured, and still true after that directory's files are in the
-      // index — so the status alone is not a fault and must not become a refusal on its own. It is
-      // routed into the per-path blob verdict below, the only place that can tell a harmless exit 1
-      // from a partial add. That routing is exactly what `catch (_) {}` used to throw away.
-      const stageArchive = () => {
-        const errs = [];
-        try {
-          execFileSync('git', ['-C', mainRoot, 'add', '--', ...commitPaths, ...excludes], { encoding: 'utf8' });
-        } catch (e) { errs.push('git add: ' + String((e && e.message) || e).trim()); }
-        if (forcePaths.length) {
-          try {
-            execFileSync('git', ['-C', mainRoot, 'add', '-f', '--', ...forcePaths], { encoding: 'utf8' });
-          } catch (e) { errs.push('git add -f: ' + String((e && e.message) || e).trim()); }
-        }
-        return errs;
-      };
+      // #1097: the archive commit's staging arms are split by SOURCE. The ARCHIVE band arm reads
+      // mainRoot's working tree — that is where archiveProjectDir's linked-run branch just wrote
+      // the untracked archive bytes. The CANDIDATE-SIDE arm (roadmap sources, the live-folder
+      // removal) reads the integration worktree W: those removals are the sink's OWN candidate-tree
+      // mutations, and staging them from mainRoot would sweep whatever foreign working-tree state
+      // preflight no longer refuses (git ≥2.0 `add <pathspec>` stages the deletion of an
+      // index-tracked path missing from the arm's working tree). Without W (the legacy resume
+      // path), both arms read mainRoot exactly as before.
+      const archiveArmPaths = (archiveIgnored ? [] : [projectPathspec]);
+      const candidateSidePaths = stagedRoadmap.concat(liveTracked ? [livePathspec] : []);
+      // The live-path excludes ride only with the live include that narrows them — measured
+      // (git 2.54.0): `git add` silently stages NOTHING, exit 0, when an `:(exclude,glob)`'s
+      // directory component is a literal STRING PREFIX of an include's leaf directory component
+      // (e.g. the live `issue-9500/**` excludes beside a collision-suffixed
+      // `issue-9500.archived-<ts>` include, #700). Keeping each exclude on its own arm, beside
+      // its own include, is what keeps the trap closed on both arms at once.
+      const commitArms = [];
+      if (archiveArmPaths.length) {
+        commitArms.push({ paths: archiveArmPaths, excludes: [excludeReceipt, excludeFallback] });
+      }
+      if (candidateSidePaths.length) {
+        commitArms.push((wtForCommit && fs.existsSync(wtForCommit))
+          ? {
+            root: wtForCommit,
+            paths: candidateSidePaths,
+            excludes: liveTracked ? [excludeLiveReceipt, excludeLiveFallback] : []
+          }
+          : {
+            paths: candidateSidePaths,
+            excludes: liveTracked ? [excludeLiveReceipt, excludeLiveFallback] : []
+          });
+      }
+      const commitPaths = archiveArmPaths.concat(candidateSidePaths);
+      let candidateBefore = null;
+      try {
+        candidateBefore = wtForCommit && fs.existsSync(wtForCommit)
+          ? integrationCandidate(wtForCommit)
+          : (receipt.candidate_head || null);
+      } catch (_) { candidateBefore = receipt.candidate_head || null; }
       let addErrors = [];
-      if (fs.existsSync(archiveDir) && commitPaths.length > 0) {
-        addErrors = stageArchive();
+      let committedCandidate = candidateBefore;
+      if (fs.existsSync(archiveDir) && commitPaths.length > 0 && candidateBefore) {
+        // Phase 1: stage + MEASURE the set the commit would carry, without committing, so the
+        // archived_paths report can be written into finalization-summary.md and ride the SAME commit.
+        const measure = adaptiveSchema.commitPathsOntoCandidate(mainRoot, {
+          candidate: candidateBefore,
+          arms: commitArms,
+          forcePaths,
+          commit: false
+        });
+        addErrors = addErrors.concat(measure.addErrors.map(e => 'git add: ' + (e.stderr || JSON.stringify(e))));
         if (forcePaths.length) {
           // Overriding a rule the consumer wrote is never silent. Recorded on the receipt (so it
           // rides the emitted envelope) as well as on stderr, and scoped to files this project's own
@@ -2813,33 +2969,27 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
             + archiveRel + ' are covered by this repository\'s .gitignore; force-added so the archive survives a '
             + 'fresh clone: ' + forcePaths.join(', ') + '\n');
         }
-        // #893: name what this commit carries under THIS project's own archive path. Taken from the
-        // index AFTER the add and BEFORE the commit — the one moment the answer is knowable and
-        // still changeable. Scoped to projectPathspec, so a SIBLING's archive residue (#715-exempt
-        // at preflight, and never in commitPaths) is correctly absent: reporting a path this sink
-        // never touched would be a different lie from staying silent about one it did.
-        receipt.archived_paths = stagedPathsUnder(mainRoot, projectPathspec, excludes);
-        // The durable copy has to be written before the commit that captures it, then re-staged so
-        // the appended text rides that same commit instead of being left dirty behind it. The path
-        // set cannot shift underneath the report: the writer only ever appends to a summary the add
-        // already swept, and never creates one.
-        if (persistArchivedPathsToSummary(archiveDir, receipt.archived_paths)) {
-          addErrors = addErrors.concat(stageArchive());
-        }
-        let hasStaged = false;
-        try {
-          execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--quiet', '--', ...commitPaths, ...excludes], { stdio: 'ignore' });
-        } catch (e) {
-          if (e && e.status === 1) hasStaged = true;
-        }
-        if (hasStaged) {
-          // #521: the COMMIT-side :(exclude) is defensive — `git commit -- <ps>` would re-sweep an
-          // already-tracked modified journal even after an exclude-aware `git add`. Kept so the guard
-          // holds if a future change ever modifies a tracked non-receipt band file at archive_commit.
-          try {
-            execFileSync('git', ['-C', mainRoot, 'commit', '-m', 'chore: archive ' + args.project + ' [sink]', '--', ...commitPaths, ...excludes],
-              { encoding: 'utf8' });
-          } catch (_) {}
+        // #893: name what this commit carries under THIS project's own archive path, from the
+        // PRIVATE index's measured staged set — the FULL set, taken once.
+        receipt.archived_paths = measure.staged.filter(p => p === archiveRel || p.startsWith(projectPathspec));
+        // The durable copy is written to disk BEFORE the commit that captures it.
+        if (measure.staged.length) persistArchivedPathsToSummary(archiveDir, receipt.archived_paths);
+        // Phase 2: the SINGLE commit — re-add (picking up the appended summary) and commit-tree.
+        const commitRes = adaptiveSchema.commitPathsOntoCandidate(mainRoot, {
+          candidate: candidateBefore,
+          arms: commitArms,
+          forcePaths,
+          message: 'chore: archive ' + args.project + ' [sink]'
+        });
+        addErrors = addErrors.concat(commitRes.addErrors.map(e => 'git add: ' + (e.stderr || JSON.stringify(e))));
+        if (commitRes.committed) committedCandidate = commitRes.committed;
+        if (committedCandidate && committedCandidate !== candidateBefore) {
+          // Advance the integration worktree to the archive commit so later steps (and a re-rebase)
+          // see it. Detached, private, and disposable — a hard checkout is safe here.
+          if (wtForCommit && fs.existsSync(wtForCommit)) {
+            try { execFileSync('git', ['-C', wtForCommit, 'checkout', '--detach', '--force', committedCandidate], { encoding: 'utf8' }); } catch (_) {}
+          }
+          receipt.candidate_head = committedCandidate;
         }
       }
       // #700: do NOT stepDone unless the archive THIS sink produced is COMMITTED or ALREADY present
@@ -2852,7 +3002,7 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       // resumable sink_incomplete (leave the step NOT done so a re-run retries it).
       let archiveAtHead = false;
       try {
-        const t = execFileSync('git', ['-C', mainRoot, 'cat-file', '-t', 'HEAD:' + archiveRel], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        const t = execFileSync('git', ['-C', mainRoot, 'cat-file', '-t', (committedCandidate || candidateBefore) + ':' + archiveRel], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
         archiveAtHead = (t === 'tree');
       } catch (_) { archiveAtHead = false; }
       // #901: the ONE question that makes archive_commit:"done" truthful — is each required archive
@@ -2864,7 +3014,7 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       // set that cannot false-refuse. `missingBlobs` is the single measurement both arms below read.
       let missingBlobs = [];
       if (requiredPaths.length > 0) {
-        const blobs = new Set(blobPathsUnder(mainRoot, 'HEAD', archiveRel));
+        const blobs = new Set(blobPathsUnder(mainRoot, (committedCandidate || candidateBefore || 'HEAD'), archiveRel));
         missingBlobs = requiredPaths.filter(p => !blobs.has(p));
       }
       if (missingBlobs.length > 0) receipt.archive_missing_paths = missingBlobs;
@@ -2877,7 +3027,7 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       // half the cases. REPORT, NOT REFUSE — see the helper; this is a rescue path, and the bytes are
       // not lost, only unreachable from the archive. What changes is that the sink stops saying
       // "complete" without qualification when part of what it committed is a pointer outward.
-      const unbackedLinks = symlinkTargetsOutsideArchive(mainRoot, archiveRel, 'HEAD');
+      const unbackedLinks = symlinkTargetsOutsideArchive(mainRoot, archiveRel, (committedCandidate || candidateBefore || 'HEAD'));
       if (unbackedLinks.length > 0) {
         receipt.archive_unbacked_symlinks = unbackedLinks;
         process.stderr.write('sink-merge --sink: WARNING: ' + unbackedLinks.length + ' archived path(s) under '
@@ -2958,34 +3108,125 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
     }
 
     if (step === 'push_main') {
-      // Push main (defBranch) — already-pushed is a no-op.
-      // #497: a HARD push failure must NOT report status:sinked. The deliverable advanced LOCALLY but
-      // never reached the remote; the old code only warned then ran stepDone('push_main'), so the run
-      // fell through to status:sinked (the #484 freshness guard checks branch ANCESTRY, which holds on
-      // a local FF merge regardless of push) and a re-run skipped the already-`done` push → never
-      // retried. Instead: record the outcome in the receipt, do NOT stepDone, and emit a non-sinked
-      // refusal so the caller can detect + retry. The branch is preserved (we return before teardown).
-      if (!OFFLINE) {
+      // #1097: the publish is a SHORT locked transaction — fetch, confirm the candidate base is
+      // still the remote tip, push the candidate to refs/heads/<def> (server-side CAS, never --force),
+      // advance the local checkout. The rebase, the test gate, the archive and the closure are NOT
+      // inside the lock. A concurrent lane is only ever blocked for one fetch+push.
+      //
+      // Resume from an OLD-MODEL receipt: merge recorded `done` but no candidate_head. The old model
+      // merged straight into the local <def>, so the local default ref IS the candidate to publish.
+      if (!receipt.candidate_head) {
         try {
-          if (FORCE_PUSH_MAIN_FAIL) throw new Error('[TEST ONLY] KAOLA_WORKFLOW_FORCE_PUSH_MAIN_FAIL — push main forced to fail');
-          execFileSync('git', ['-C', mainRoot, 'push', 'origin', defBranch], { encoding: 'utf8' });
-        } catch (e) {
-          receipt.push_main = 'failed';
+          const localDef = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', defBranch],
+            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+          if (localDef) receipt.candidate_head = localDef;
+        } catch (_) {}
+      }
+      const archiveRelForPublish = (receipt.archive_dest || ('kaola-workflow/archive/' + args.project)).replace(/\/+$/, '');
+      // The test-only push-failure seam, kept for the pre-existing #497 regression: it forces the
+      // publish to fail without going near the lock.
+      if (FORCE_PUSH_MAIN_FAIL && !OFFLINE) {
+        receipt.push_main = 'failed';
+        receipt.updated_at = new Date().toISOString();
+        writeSinkReceipt(receiptPath, receipt);
+        sinkEmit({
+          result: 'refuse',
+          reason: 'sink_incomplete',
+          step: 'push_main',
+          push_main: 'failed',
+          branch: args.branch,
+          default_branch: defBranch,
+          detail: 'the candidate could not be pushed to ' + defBranch + ' — the deliverable is NOT on the remote. Refusing to report status:sinked (a transient push failure must not look like a completed sink). The push step is left NOT done so a re-run retries it. Resolve the push fault and re-run --sink.',
+        }, 1);
+        return;
+      }
+      const wtForPublish = receipt.integration_worktree
+        ? path.join(mainRoot, receipt.integration_worktree) : null;
+      const publish = runIntegrationPublish(args, mainRoot, wtForPublish, defBranch, receipt,
+        archiveRelForPublish + '/');
+      if (!publish.ok) {
+        if (publish.reason === 'publish_busy') {
+          // The issue's "queueable state": another live sink holds the publish lock. Nothing was
+          // published; the push_main step stays NOT done, so a re-run resumes here.
+          receipt.push_main = 'not_merged';
           receipt.updated_at = new Date().toISOString();
           writeSinkReceipt(receiptPath, receipt);
-          process.stderr.write('sink-merge --sink: push main failed: ' + (e.message || String(e)) + '\n');
           sinkEmit({
-            result: 'refuse',
-            reason: 'sink_incomplete',
+            result: 'report',
+            status: 'not_merged',
+            reason: 'publish_busy',
             step: 'push_main',
-            push_main: 'failed',
+            holder: publish.holder || null,
             branch: args.branch,
             default_branch: defBranch,
-            detail: 'the merge landed on the LOCAL ' + defBranch + ' but `git push origin ' + defBranch + '` failed — the deliverable is NOT on the remote. Refusing to report status:sinked (a transient push failure must not look like a completed sink). The push step is left NOT done so a re-run retries it. Resolve the push fault and re-run --sink.',
+            detail: 'another sink holds the publish lock for this repository (holder: '
+              + (publish.holder ? JSON.stringify(publish.holder) : 'unknown')
+              + '). Nothing was published; the push_main step is left NOT done, so re-running --sink '
+              + 'resumes here once the holder releases. Held time is one fetch+push (seconds); if the '
+              + 'holder is dead on this host it is taken over automatically, otherwise remove '
+              + adaptiveSchema.publishLockPath(mainRoot) + ' manually.',
+          }, 2);
+          return;
+        }
+        if (publish.reason === 'chains_red') {
+          recordStopOnReceipt('post_rebase_tests', 'red');
+          sinkEmit({
+            result: 'report',
+            status: 'not_merged',
+            reason: 'chains_red',
+            step: 'push_main',
+            post_rebase_tests: 'red',
+            branch: args.branch,
+            default_branch: defBranch,
+            detail: 'the base advanced after validation and the re-taken post-rebase chains are RED over '
+              + 'the re-rebased candidate. Nothing was published; the affected evidence is recorded in '
+              + 'invalidated_evidence. The push_main step is left NOT done so a re-run resumes here once '
+              + 'the chains are green.',
           }, 1);
           return;
         }
+        if (publish.reason === 'non_fast_forward') {
+          sinkEmit({
+            result: 'report',
+            status: 'not_merged',
+            reason: 'non_fast_forward',
+            step: 'push_main',
+            branch: args.branch,
+            default_branch: defBranch,
+            detail: 'the candidate could not be published onto ' + defBranch + ' after '
+              + MAX_AUTOMERGE_RETRIES + ' re-rebase attempts — the default branch kept advancing. Nothing '
+              + 'was published (never a --force) and no issue was closed; the push_main step is left NOT '
+              + 'done so a re-run resumes here. The base moving under a concurrent lane is the ordinary '
+              + 'cause.',
+          }, 2);
+          return;
+        }
+        if (publish.reason === 'rebase_conflict') {
+          recordStopOnReceipt(null, null);
+          process.stderr.write('sink-merge --sink: rebase conflict while re-rebasing the candidate during '
+            + 'publish — resolve it on branch ' + args.branch + ' in the development worktree, then re-run --sink.\n');
+          process.exitCode = 2;
+          return;
+        }
+        // not_published: the OFFLINE fast-forward was refused (a resumable non-publication), or the
+        // lock could not be used at all.
+        receipt.push_main = 'failed';
+        receipt.updated_at = new Date().toISOString();
+        writeSinkReceipt(receiptPath, receipt);
+        sinkEmit({
+          result: 'refuse',
+          reason: 'sink_incomplete',
+          step: 'push_main',
+          push_main: 'failed',
+          branch: args.branch,
+          default_branch: defBranch,
+          detail: 'the candidate was not published to ' + defBranch + ' (' + (publish.detail || publish.reason)
+            + '). Refusing to report status:sinked. The push step is left NOT done so a re-run retries it.',
+        }, 1);
+        return;
       }
+      receipt.published_head = publish.candidate;
+      receipt.main_checkout = publish.main_checkout || null;
       stepDone('push_main');
       // #517: keep-open verification — if keepIssueOpen was set, the merge commit body may have
       // contained a "close/fix/resolve #N" keyword that caused GitHub to auto-close the issue at
@@ -3018,14 +3259,26 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       // commits, orphaning the pre-rebase SHA even though the (rebased) content did land on
       // defBranch. The branch ref itself still exists at this point (teardown runs only after
       // the whole step loop completes), so re-resolving it here is safe and always current.
-      let implRef = null;
-      try {
-        implRef = execFileSync('git', ['-C', mainRoot, 'rev-parse', args.branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-      } catch (_) {}
+      // #1097: the implementation ref is the PUBLISHED CANDIDATE (published_head), resolved against
+      // the published ref — `origin/<def>` online, the local <def> OFFLINE. The feature-branch ref is
+      // no longer rebased in the W-model, so it is NOT an ancestor of the default branch; the
+      // candidate that was actually pushed is.
+      let implRef = receipt.published_head || receipt.candidate_head || null;
+      if (!implRef) {
+        try {
+          implRef = execFileSync('git', ['-C', mainRoot, 'rev-parse', args.branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        } catch (_) {}
+      }
       let published = false;
       if (implRef) {
+        // OFFLINE: the publish target is the LOCAL <def> — runIntegrationPublish's offline arm
+        // fast-forwarded it, and that local ref is the whole publication. Probing `origin/<def>`
+        // instead would read a STALE remote-tracking ref (offline skips the fetch, so the ref that
+        // resolves is the pre-run one) and refuse a publication the sink just made.
+        const publishRef = OFFLINE ? defBranch : adaptiveSchema.publishTargetRef(mainRoot, defBranch);
         try {
-          execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', implRef, defBranch], { encoding: 'utf8', stdio: 'ignore' });
+          execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', implRef,
+            publishRef], { encoding: 'utf8', stdio: 'ignore' });
           published = true;
         } catch (_) { published = false; }
       }
@@ -3148,15 +3401,20 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
 
   // #484 FRESHNESS GUARD. A stale all-`done` sink-receipt resumed from the tracked
   // archive/<project>/.cache/ fallback (resolveSinkReceiptPath) makes the step loop skip merge +
-  // push_main and fall through to status:sinked WITHOUT the branch ever landing on the default branch —
-  // main silently not advanced, the deliverable lost. Before any teardown or success emission, assert
-  // the branch tip IS an ancestor of the resolved default branch (the merge actually applied).
-  // OFFLINE-safe: the merge step merges into the LOCAL defBranch, so ancestry holds regardless of
-  // push_main. A non-ancestor (or a branch that no longer exists) is a stale / never-applied receipt →
+  // push_main and fall through to status:sinked WITHOUT the deliverable ever landing on the default
+  // branch — main silently not advanced, the deliverable lost. Before any teardown or success
+  // emission, assert the PUBLISHED CANDIDATE (never the feature branch, which the W-model does not
+  // rebase) is an ancestor of the published ref (`origin/<def>` online, local <def> OFFLINE — the
+  // same offline split as the closure gate: offline skips the fetch, so `origin/<def>` is the stale
+  // pre-run tracking ref and the local <def> the offline run fast-forwarded is the publication).
+  // OFFLINE-safe. A non-ancestor (or no candidate at all) is a stale / never-applied receipt →
   // typed refusal stale_sink_receipt; never a false status:sinked.
+  const freshnessTarget = OFFLINE ? defBranch : adaptiveSchema.publishTargetRef(mainRoot, defBranch);
+  const freshnessRef = receipt.published_head || receipt.candidate_head || args.branch;
   let merged = false;
   try {
-    execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', args.branch, defBranch], { encoding: 'utf8', stdio: 'ignore' });
+    execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', freshnessRef,
+      freshnessTarget], { encoding: 'utf8', stdio: 'ignore' });
     merged = true;
   } catch (_) { merged = false; }
   if (!merged) {
@@ -3165,7 +3423,7 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       reason: 'stale_sink_receipt',
       branch: args.branch,
       default_branch: defBranch,
-      detail: 'all sink steps report "done" but branch "' + args.branch + '" is NOT an ancestor of "' + defBranch + '" — the merge was never applied (a stale receipt resumed from kaola-workflow/archive/' + args.project + '/.cache/sink-receipt.json). Refusing to report status:sinked (main would silently not advance and the deliverable would be lost). Reset the receipt steps or remove the stale archived sink-receipt.json, then re-run --sink so the branch actually merges.',
+      detail: 'all sink steps report "done" but the recorded candidate ("' + freshnessRef + '") is NOT an ancestor of "' + freshnessTarget + '" — the merge was never applied (a stale receipt resumed from kaola-workflow/archive/' + args.project + '/.cache/sink-receipt.json). Refusing to report status:sinked (main would silently not advance and the deliverable would be lost). Reset the receipt steps or remove the stale archived sink-receipt.json, then re-run --sink so the branch actually merges.',
     }, 1);
     return;
   }
@@ -3224,28 +3482,53 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
     }
   }
 
-  // #1096: TEARDOWN, REPORTED. Worktree removal and branch deletion ran under catch (_) {} — a
-  // failed cleanup was invisible beside a status:sinked envelope, so a worktree or branch that
-  // survived a "clean" sink was discovered only by the next collision. The actions themselves are
-  // UNCHANGED (same order, same force semantics); each outcome now lands in the envelope's
-  // `cleanup` summary. REPORT-ONLY: teardown runs strictly after everything that defines success
-  // has landed, so a cleanup failure never blocks a successful sink — the summary says what remains
-  // for the operator to sweep, not whether the sink succeeded.
+  // #1096/#1097: TEARDOWN, REPORTED. Integration-worktree removal, development-worktree removal and
+  // branch deletion each land in the envelope's `cleanup` summary. REPORT-ONLY: teardown runs after
+  // everything that defines success has landed, so a cleanup failure never blocks a successful sink.
   const cleanupSummary = {};
+  // #1097: remove the private integration worktree W first — it is scratch, always safe to drop.
+  if (receipt.integration_worktree) {
+    try {
+      const rm = adaptiveSchema.removeIntegrationWorktree(mainRoot, args.project);
+      cleanupSummary.integration_worktree = rm.removed ? 'removed' : ('kept: ' + (rm.reason || 'remove failed'));
+    } catch (e) {
+      cleanupSummary.integration_worktree = 'failed: ' + cleanupErrText(e);
+    }
+  } else {
+    cleanupSummary.integration_worktree = 'absent';
+  }
+  // #1097: the development worktree survived the merge (it is no longer removed at merge time). Re-
+  // PROBE it before removal and keep it when dirty — never `--force` over work written during the
+  // window between the merge and this point.
   try {
     const { removeWorktree: removeWt } = require('./kaola-workflow-claim.js');
     // #1055: readActiveFolders is a pure re-export of active-folders.js — imported from its owner.
     const { readActiveFolders: readAF } = require('./kaola-workflow-active-folders');
     const folder = readAF(mainRoot, { excludeClosedIssues: false }).find(f => f.project === args.project);
-    const wtRes = removeWt(mainRoot, args.project, folder);
-    cleanupSummary.worktree = wtRes && wtRes.removed
-      ? 'removed'
-      : (wtRes && wtRes.reason === 'missing'
-        ? 'skipped_missing'
-        : 'failed: ' + ((wtRes && (wtRes.detail || wtRes.reason)) || 'git worktree remove failed'));
+    const devWt = (folder && folder.worktree_path) || null;
+    let devDirty = false;
+    if (devWt && fs.existsSync(devWt)) {
+      try {
+        const st = execFileSync('git', ['-C', devWt, 'status', '--porcelain', '-uall'],
+          { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim();
+        devDirty = worktreeDirtRecords(st).length > 0;
+      } catch (_) { devDirty = true; } // unprobeable: fail closed, keep it
+    }
+    if (devDirty) {
+      cleanupSummary.worktree = 'kept_dirty';
+    } else {
+      const wtRes = removeWt(mainRoot, args.project, folder);
+      cleanupSummary.worktree = wtRes && wtRes.removed
+        ? 'removed'
+        : (wtRes && wtRes.reason === 'missing'
+          ? 'skipped_missing'
+          : 'failed: ' + ((wtRes && (wtRes.detail || wtRes.reason)) || 'git worktree remove failed'));
+    }
   } catch (e) {
     cleanupSummary.worktree = 'failed: ' + cleanupErrText(e);
   }
+  // #1097: the shared checkout's disposition, REPORTED (advanced | behind: <reason>).
+  cleanupSummary.main_checkout = receipt.main_checkout || (OFFLINE ? 'skipped_offline' : 'behind: not attempted');
 
   if (!OFFLINE) {
     try {
@@ -3257,22 +3540,26 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   } else {
     cleanupSummary.remote_branch = 'skipped_offline';
   }
+  // #1097: delete the local feature branch ONLY when its tip is still the integrated_from we
+  // published, AND that candidate was actually published. The ref was never rebased in the W-model,
+  // so a plain ancestry test against <def> would now be false; the identity test is the safe one.
   try {
-    execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', args.branch, defBranch],
-      { encoding: 'utf8', stdio: 'ignore' });
-    try {
-      execFileSync('git', ['-C', mainRoot, 'branch', '-D', '--', args.branch], { encoding: 'utf8' });
-      cleanupSummary.local_branch = 'deleted';
-    } catch (e) {
-      cleanupSummary.local_branch = 'failed: ' + cleanupErrText(e);
+    const tip = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', args.branch],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const safeToDelete = !!tip && !!receipt.integrated_from && tip === receipt.integrated_from
+      && !!receipt.published_head;
+    if (safeToDelete) {
+      try {
+        execFileSync('git', ['-C', mainRoot, 'branch', '-D', '--', args.branch], { encoding: 'utf8' });
+        cleanupSummary.local_branch = 'deleted';
+      } catch (e) {
+        cleanupSummary.local_branch = 'failed: ' + cleanupErrText(e);
+      }
+    } else {
+      cleanupSummary.local_branch = 'kept: branch tip is not the published candidate';
     }
   } catch (_) {
-    try {
-      execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' });
-      cleanupSummary.local_branch = 'deleted';
-    } catch (e) {
-      cleanupSummary.local_branch = 'failed: ' + cleanupErrText(e);
-    }
+    cleanupSummary.local_branch = 'skipped_missing';
   }
 
   // Emit success
