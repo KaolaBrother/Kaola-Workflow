@@ -10670,10 +10670,23 @@ function testSinkTransactionBlockedByForeignDirt() {
     });
     G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
-    // Plant FOREIGN DIRT: an untracked file in a DIFFERENT project's kaola-workflow folder.
+    // Plant FOREIGN DIRT (#1096 shape): the feature branch CARRIES a file in a DIFFERENT project's
+    // kaola-workflow folder, and main holds an UNTRACKED copy at the same path — porcelain says
+    // `??` and the branch tree says carried, which is exactly the collision the unified untracked
+    // rule refuses. (Before #1096 a merely-untracked file carried by no tree was enough to block;
+    // #1096 moved that boundary, so the branch now carries the path.)
+    G.git(tmp, ['checkout', 'workflow/issue-4291'], { encoding: 'utf8' });
     const foreignDir = path.join(tmp, 'kaola-workflow', 'other-project');
     fs.mkdirSync(foreignDir, { recursive: true });
     fs.writeFileSync(path.join(foreignDir, 'workflow-state.md'), 'status: active\n');
+    G.git(tmp, ['add', 'kaola-workflow/other-project/workflow-state.md'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: sibling lane content'], {
+      encoding: 'utf8',
+      env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
+    });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
+    fs.mkdirSync(foreignDir, { recursive: true });
+    fs.writeFileSync(path.join(foreignDir, 'workflow-state.md'), 'status: active (untracked main copy)\n');
 
     // Record the git status BEFORE running --sink.
     const statusBefore = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout;
@@ -10722,11 +10735,12 @@ function testSinkTransactionBlockedByForeignDirt() {
   }
 }
 
-// #715 (b): an interrupted SIBLING sink's untracked archive receipt
+// #715 (b) → #1096: an interrupted SIBLING sink's untracked archive receipt
 // (kaola-workflow/archive/<sibling>/.cache/sink-receipt.json, mid-cycle steps) must NOT be
-// classified as foreign dirt (exact-path exemption, any project live or archived), while a
-// genuinely-foreign file still is. The refusal stays sink_blocked on the foreign file alone,
-// mutates nothing, and leaves the sibling receipt byte-untouched.
+// classified as foreign dirt — under the #1096 unified rule because it is untracked and carried
+// by no candidate tree, the old exact-path exemption having been deleted with the rule change —
+// while a genuinely-foreign file still is. The refusal stays sink_blocked on the foreign file
+// alone, mutates nothing, and leaves the sibling receipt byte-untouched.
 function testSinkForeignDirtExemptsSiblingReceipt715() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-sibling-receipt-')));
   try {
@@ -10758,11 +10772,24 @@ function testSinkForeignDirtExemptsSiblingReceipt715() {
     }, null, 2) + '\n';
     fs.writeFileSync(siblingReceiptAbs, siblingReceiptBody);
 
-    // Plant genuinely-foreign dirt (must still refuse + be listed).
+    // Plant genuinely-foreign dirt (#1096 shape — must still refuse + be listed): the feature
+    // branch CARRIES a file in another project's lane, and main holds an UNTRACKED copy at the
+    // same path. The sibling receipt is untracked and carried by no tree, so under the unified
+    // rule it is not dirt at all — the foreign file alone forces the refusal, which is what makes
+    // the receipt's absence from the listing observable.
+    G.git(tmp, ['checkout', 'workflow/issue-7152'], { encoding: 'utf8' });
     const foreignRel = 'kaola-workflow/other-project/workflow-state.md';
     const foreignDir = path.join(tmp, 'kaola-workflow', 'other-project');
     fs.mkdirSync(foreignDir, { recursive: true });
     fs.writeFileSync(path.join(foreignDir, 'workflow-state.md'), 'status: active\n');
+    G.git(tmp, ['add', foreignRel], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'feat: sibling lane content'], {
+      encoding: 'utf8',
+      env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
+    });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
+    fs.mkdirSync(foreignDir, { recursive: true });
+    fs.writeFileSync(path.join(foreignDir, 'workflow-state.md'), 'status: active (untracked main copy)\n');
 
     const statusBefore = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout;
 

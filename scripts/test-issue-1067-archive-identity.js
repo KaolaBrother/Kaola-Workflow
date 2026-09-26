@@ -45,11 +45,14 @@ function runEdition(edition) {
   check(fs.realpathSync(resolveFinalizeAuthority(wt, project).authorityDir) === fs.realpathSync(path.join(root, current)), 'linked crash resume selects the sole state-bearing archive despite two historical doc copies');
   fs.rmSync(path.join(root, 'kaola-workflow', project), { recursive: true });
   G.git(root, ['worktree', 'remove', '--force', wt]);
-  write(root, 'foreign.txt', 'must remain foreign\n');
-  let pre = sinkPreflight(root, project, 'workflow/issue-1067');
-  check(!pre.ok, 'foreign dirt must refuse');
+  // #1096: the forcing dirt is a TRACKED modification — the preflight contract that survives every
+  // rule change. (The old plant was an untracked foreign.txt carried by no tree; under #1096's
+  // unified rule untracked-and-not-carried is not dirt, so it can no longer force this.)
+  write(root, 'README.md', 'fixture modified by a foreign hand\n');
+  let pre = sinkPreflight(root, project, 'workflow/issue-1067', 'main');
+  check(!pre.ok, 'tracked foreign modification must refuse');
   check(!JSON.stringify(pre).includes(current + '/workflow-state.md'), 'current collision archive must not be foreign dirt: ' + JSON.stringify(pre));
-  check(JSON.stringify(pre).includes('foreign.txt'), 'foreign file remains reported');
+  check(JSON.stringify(pre).includes('README.md'), 'tracked foreign modification remains reported');
   const journal = resolveSinkReceiptPath(root, project);
   check(journal === path.join(root, current, '.cache/sink-receipt.json'), 'new journal must follow current claim archive, got ' + journal);
   check(resolveRunRecordDir(root, project, null) === path.join(root, current), 'durable findings follow current archive when caller has no explicit destination');
@@ -58,8 +61,15 @@ function runEdition(edition) {
   const split = partitionDriftByScope({archive_content_incomplete: [{project, missing:['workflow-state.md']}]}, scope);
   check(split.inScope.archive_content_incomplete.length === 0, 'old unclaimed archive finding must not contaminate current claim scope');
   check(split.outScope.archive_content_incomplete.length === 1, 'historical finding remains visible outside scope');
+  // #1096: same-name run dirt must remain foreign the way every contract honors it — as a
+  // TRACKED modification. (Untracked, this path is carried by no candidate tree and no longer
+  // blocks; committing it and then modifying it keeps the #893-adjacent fence meaningful.)
   write(root, old + '.archived-older/workflow-state.md', state('2026-08-01T00:00:00.000Z', 'closed'));
-  pre = sinkPreflight(root, project, 'workflow/issue-1067');
+  G.git(root, ['add', old + '.archived-older/workflow-state.md']);
+  G.git(root, ['commit', '-m', 'historical claimed archive']);
+  write(root, old + '.archived-older/workflow-state.md', state('2026-08-01T00:00:00.000Z', 'closed') + 'modified by a foreign hand\n');
+  pre = sinkPreflight(root, project, 'workflow/issue-1067', 'main');
+  check(!pre.ok, 'tracked same-name run dirt must still refuse');
   check(JSON.stringify(pre).includes('.archived-older/workflow-state.md'), 'other same-name run dirt must remain foreign');
   check(resolveFinalizeAuthority(root, project).innerReason === 'archive_authority_ambiguous', 'two claimed historical archives without live anchor must not be chosen by timestamp');
   const ambiguous = resolveScope(root, {project, issues: []});

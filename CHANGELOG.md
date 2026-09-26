@@ -1,5 +1,29 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **The merge sink's untracked-file rule is one rule (#1096).** `sinkPreflight` no longer refuses
+  every untracked `kaola-workflow/` path it does not own and no longer consults the worktree
+  registry: an untracked path is foreign dirt only when it conflicts with a candidate tip tree —
+  present at the path in the feature branch's tree or in `origin/<default>`, or sitting where an
+  ancestor folder exists as a file in either tree (the directory-vs-file collision that would
+  otherwise crash the merge step's checkout with no typed envelope) — and every tracked change
+  (staged, unstaged, deleted) still refuses exactly as before. The #715 exact-path sink-receipt
+  exemption, the #1075 co-active-sibling verification, and the registered-worktree-path allowance
+  are deleted. A sibling run's in-flight lane content (live folder, archive window, interrupted
+  sink receipt) sitting untracked in the shared checkout no longer blocks this sink, which passes
+  it through untouched. All four sink copies (root, Codex, GitLab, Gitea) carry the same rule.
+- **The merge sink reports publication and cleanup (#1096).** Every envelope the sink transaction
+  emits carries `publication` — `published`, `not_published`, or `unknown` — derived from the
+  receipt's own steps plus the #631 ancestry probe, never guessed: a refusal after the deliverable
+  reached the mainline now reads as merged-with-finalization-pending, and an offline run says
+  `unknown`. The success envelope also carries `cleanup`, reporting worktree removal and
+  remote/local branch deletion (`removed` / `deleted` / `skipped_missing` / `skipped_offline` /
+  `failed: …`) instead of swallowing those failures — report-only, never blocking `status:sinked`.
+  `docs/api.md` documents both fields.
+
 ## [12.2.6] - 2026-09-24
 
 ### Changed

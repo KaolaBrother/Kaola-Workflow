@@ -77,13 +77,53 @@ process.on('exit', () => {
     + 'it somewhere durable before re-running the sink.\n');
 });
 
+// #1096: PUBLICATION ON THE TRANSACTION'S ENVELOPES — one field, derived never guessed, from
+// existing receipt facts plus the same ancestry probe the #617 closure gate runs:
+//   'not_published' — steps.push_main is not 'done': nothing has been pushed to the mainline;
+//   'published'     — push_main done AND a head (the stamped published_head, else the live branch
+//                     tip, resolvable while the branch ref still exists pre-teardown) is an
+//                     ancestor of defBranch;
+//   'unknown'       — offline (the push step is skipped, so 'done' certifies nothing about the
+//                     remote) or a probe that could not answer — never a guess, either way.
+// Module-scoped like sinkFindings: armed once inside runSinkTransaction, so every envelope OUTSIDE
+// the transaction (the legacy path, main()'s flag refusals) keeps its byte-identical shape.
+let sinkPublicationCtx = null;
+function deriveSinkPublication() {
+  const ctx = sinkPublicationCtx;
+  if (!ctx) return 'unknown';
+  if (OFFLINE) return 'unknown';
+  if (!ctx.receipt || !ctx.receipt.steps || ctx.receipt.steps.push_main !== 'done') return 'not_published';
+  let head = ctx.receipt.published_head || null;
+  if (!head) {
+    try { head = execFileSync('git', ['-C', ctx.mainRoot, 'rev-parse', ctx.branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null; } catch (_) { return 'unknown'; }
+  }
+  if (!head) return 'unknown';
+  try {
+    execFileSync('git', ['-C', ctx.mainRoot, 'merge-base', '--is-ancestor', head, ctx.defBranch], { stdio: 'ignore' });
+    return 'published';
+  } catch (e) {
+    // exit 1 is a VERIFIED not-ancestor; anything above 1 is a probe fault — reported, not guessed.
+    if (e && e.status === 1) return 'not_published';
+    return 'unknown';
+  }
+}
+
+// #1096: the first line of a git failure, for the `cleanup` summary — a whole execFileSync error
+// is noise on an envelope; the first line is the diagnosis.
+function cleanupErrText(e) {
+  const raw = (e && e.stderr) ? String(e.stderr) : ((e && e.message) ? e.message : String(e));
+  return String(raw).trim().split('\n')[0] || 'git failed';
+}
+
 // Attach the findings to an emitted envelope. Attached ONLY when non-empty, so a run that found
 // nothing emits byte-identical output; applied at every emission so a KEEP-class refusal downstream
-// of a finding cannot swallow it.
+// of a finding cannot swallow it. #1096: the publication field rides the same mechanism — armed
+// once by runSinkTransaction, absent from every envelope the transaction did not emit.
 function sinkEmit(payload, exitCode) {
   let out = payload;
   if (sinkFindings.length) out = Object.assign({}, out, { findings: sinkFindings });
   if (resolvedProjectNote) out = Object.assign({}, out, { resolved_project_note: resolvedProjectNote });
+  if (sinkPublicationCtx) out = Object.assign({}, out, { publication: deriveSinkPublication() });
   process.stdout.write(JSON.stringify(out) + '\n');
   if (exitCode != null) process.exitCode = exitCode;
 }
@@ -1852,42 +1892,38 @@ function repoWideIgnoredNames(root, rels) {
   } catch (_) { return new Set(); }
 }
 
-// #1075: SIBLING live-claim-folder exemption verifier — the set of projects whose untracked
-// kaola-workflow/<project>/ folder at this main root is a VERIFIED co-active run, not foreign dirt.
-// Verified: status 'active' in the sibling's own state file; main_root realpath-equal to THIS main
-// root; worktree_path realpath resolves, differs from the main checkout, and is a worktree
-// REGISTERED in this repository on the claim's OWN branch; neither project dir nor state file a
-// symlink; never this sink's own project or branch; and a registered worktree certifies at most
-// ONE folder — two folders claiming the same registered worktree certify neither. Any verification
-// fault skips the folder — unverifiable is not verified, and its paths stay bucket-3 foreign dirt.
-// Pure fs plus the already-collected worktree list; readActiveFolders (excludeClosedIssues:false)
-// makes no forge calls and already skips 'archive', dot-dirs, unsafe names, and symlinked dirs.
-function coActiveSiblingProjects(mainRoot, project, branch, registeredWorktrees) {
-  const out = new Set();
-  let mainReal;
-  try { mainReal = fs.realpathSync(mainRoot); } catch (_) { return out; }
-  let folders = [];
-  try { folders = readActiveFolders(mainRoot, { excludeClosedIssues: false }); } catch (_) { return out; }
-  const candidates = [];
-  for (const f of folders) {
-    if (f.project === project || f.status !== 'active') continue;
-    if (!f.main_root || !f.branch || !f.worktree_path || f.branch === branch) continue;
-    try {
-      if (fs.lstatSync(f.project_dir).isSymbolicLink() || fs.lstatSync(f.state_file).isSymbolicLink()) continue;
-      if (fs.realpathSync(f.main_root) !== mainReal) continue;
-      const wtReal = fs.realpathSync(f.worktree_path);
-      if (wtReal === mainReal) continue;
-      if (!registeredWorktrees.some(w => w.real === wtReal && w.branch === f.branch)) continue;
-      candidates.push({ project: f.project, wtReal });
-    } catch (_) { continue; }
+// #1096 (D1=b): the ONE unified rule for UNTRACKED (??) paths — foreign dirt ONLY when the path
+// conflicts with a candidate tip tree: present AT THE PATH in the `branch` tree or the
+// `origin/<defBranch>` tree, probed with `cat-file -e` (the same primitive #893's arm uses), OR an
+// ancestor folder of the path exists as a FILE in either tree (the directory-vs-file collision —
+// `git checkout <branch>` must write that file where the working copy holds an untracked directory;
+// see untrackedPathConflictsWithCandidateFolder below). Those two tip trees are what the
+// transaction's checkout and fast-forward steps write onto the working copy (`git checkout
+// <branch>`, ffMergeLoop's `pull --ff-only`); the rebase's replay of INTERMEDIATE commits is a
+// known remaining gap that belongs to #1097 — this rule claims nothing about it. A path
+// conflicting with neither tip tree is never staged or modified by this sink. It replaced the
+// three special exemptions (#715 sibling sink receipts, #1075 verified co-active sibling live
+// folders, registered worktree paths), each a special case of this rule. TRACKED statuses
+// (staged/unstaged modifications, deletions) are untouched by the rule and stay sink_blocked: a
+// tracked edit is a local change to committed content that an in-place checkout would overwrite,
+// and moving the merge out of the shared checkout is a deliberate follow-up.
+function untrackedPathConflictsWithCandidateFolder(mainRoot, branch, defBranch, filePath) {
+  const parts = filePath.split('/');
+  for (let i = 1; i < parts.length; i++) {
+    const ancestor = parts.slice(0, i).join('/');
+    let presentInAnyTree = false;
+    for (const ref of [branch, defBranch ? 'origin/' + defBranch : null]) {
+      if (!ref) continue;
+      let type = null;
+      try { type = execFileSync('git', ['-C', mainRoot, 'cat-file', '-t', ref + ':' + ancestor], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null; } catch (_) {}
+      if (type === 'blob') return true;
+      if (type === 'tree' || type === 'commit') presentInAnyTree = true;
+    }
+    if (!presentInAnyTree) return false;
   }
-  for (const c of candidates) {
-    if (candidates.filter(x => x.wtReal === c.wtReal).length === 1) out.add(c.project);
-  }
-  return out;
+  return false;
 }
-
-function sinkPreflight(mainRoot, project, branch) {
+function sinkPreflight(mainRoot, project, branch, defBranch) {
   // #562: worktree-clean data-loss guard — the --sink merge step force-removes the linked worktree with
   // NO clean precondition, so a dirty worktree's uncommitted work would be destroyed. Mirror the legacy
   // path's assertWorktreeClean. It throws on a dirty OR unprobeable worktree (fail-closed); convert to
@@ -1902,31 +1938,6 @@ function sinkPreflight(mainRoot, project, branch) {
   const lines = porcelain.split('\n').filter(Boolean);
   const ownArchiveDir = currentArchiveDir(mainRoot, project, branch);
   const ownArchivePrefix = ownArchiveDir ? path.relative(mainRoot, ownArchiveDir).split(path.sep).join('/') + '/' : 'kaola-workflow/archive/' + project + '/';
-  const worktreePaths = new Set();
-  // #1075: the same parse also records each registered worktree's realpath and branch for
-  // coActiveSiblingProjects — the sibling verifier needs the repository's own registry, not a
-  // claim file's say-so, to certify a worktree_path.
-  const registeredWorktrees = [];
-  try {
-    const list = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
-    for (const block of list.split(/\n\n+/)) {
-      const m = block.match(/^worktree (.+)$/m);
-      if (m) {
-        try {
-          const rel = path.relative(mainRoot, m[1]);
-          if (!rel.startsWith('..')) worktreePaths.add(rel.replace(/\\/g, '/'));
-        } catch (_) {}
-        let real = null;
-        try { real = fs.realpathSync(m[1]); } catch (_) {}
-        const bm = block.match(/^branch refs\/heads\/(.+)$/m);
-        registeredWorktrees.push({ real, branch: bm ? bm[1] : '' });
-      }
-    }
-  } catch (_) {}
-  // #1075: VERIFIED co-active sibling live-claim folders — computed once before classification;
-  // members are `continue`d below (classification-only, never staged/touched/removed), and a folder
-  // that fails verification is absent so its paths stay bucket-3 foreign dirt.
-  const coActiveSiblings = coActiveSiblingProjects(mainRoot, project, branch, registeredWorktrees);
   // ADR 0018 §5 retired the bucket-1 auto-stash of a claim-time roadmap source: no production code
   // writes into kaola-workflow/.roadmap/ any more, so there is nothing left to catch here.
   const projDuplicates = [], foreignDirt = [];
@@ -1950,21 +1961,6 @@ function sinkPreflight(mainRoot, project, branch) {
       try { execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', branch + ':' + filePath], { stdio: 'ignore' }); branchHas = true; } catch (_) {}
       if (branchHas) { projDuplicates.push(filePath); continue; }
     }
-    // #518: the sink's own receipt file (live OR archive path) is sink-owned — exempt it.
-    // It may appear as ?? (untracked) or D  (tracked deletion from a prior loadOrInitReceipt).
-    // #715: the exemption is keyed on the EXACT path, not on THIS sink's project — an interrupted
-    // SIBLING sink leaves kaola-workflow/{,archive/}<sibling>/.cache/sink-receipt.json as untracked
-    // residue at the main root, and refusing it as foreign dirt would block this sink on the
-    // sibling's in-progress artifact. The exemption is classification-only: this sink never stages,
-    // touches, or mutates the sibling receipt (the never-touches-another-project invariant is about
-    // mutation; not-refusing is not mutation). Match is EXACT — <seg> is exactly one path segment,
-    // any project live or archived; no prefix or directory exemption: anything else under a sibling
-    // tree (kaola-workflow/archive/<other>/workflow-state.md, sink-receipt.json.tmp, a nested
-    // x/.cache/sink-receipt.json, a trailing-slash form) stays bucket-3 foreign dirt. Unconditional
-    // across porcelain statuses (?? and D  alike, as before). sink-fallback.json is deliberately
-    // NOT exempted.
-    const SINK_RECEIPT_EXEMPT = /^kaola-workflow\/(?:archive\/)?[^/]+\/\.cache\/sink-receipt\.json$/;
-    if (SINK_RECEIPT_EXEMPT.test(filePath)) continue;
     // #893: THIS sink's OWN archive mirror. `cmdFinalize --keep-worktree` writes the archive tree into
     // the MAIN root and leaves it UNTRACKED there (it cannot stage a path outside its own worktree, so
     // it defers the commit to this sink's archive_commit step); bucket 2's list is live-path-only, so
@@ -1993,19 +1989,24 @@ function sinkPreflight(mainRoot, project, branch) {
       // branchBytes null and can never satisfy it, so unverifiable falls through with divergent.
       if (branchBytes !== null && workBytes !== null && branchBytes.equals(workBytes)) continue;
     }
-    // #1075: a VERIFIED co-active SIBLING run's live claim folder — kaola-workflow/<sibling>/… —
-    // left untracked at the main checkout by a worktree-posture run on this same root; two such runs
-    // otherwise refuse each other's folder as foreign dirt and deadlock. Membership comes from
-    // coActiveSiblingProjects above (status active, same main_root realpath, worktree_path realpath
-    // REGISTERED in this repo on the claim's own branch, not the main checkout, not this sink's
-    // branch, no symlinked folder/state file). The match is a full SEGMENT bounded by '/', so a
-    // prefix look-alike (<sibling>x/…) is not exempted; 'archive' and this sink's own project can
-    // never be in the set. CLASSIFICATION-ONLY — `continue` like the #715 receipt arm: never
-    // staged/touched/removed; ?? only; anything failing verification stays bucket-3 foreign dirt.
-    const siblingSeg = filePath.match(/^kaola-workflow\/([^/]+)\//);
-    if (xy === '??' && siblingSeg && coActiveSiblings.has(siblingSeg[1])) continue;
-    const isWorktreePath = worktreePaths.has(filePath) || Array.from(worktreePaths).some(wt => filePath === wt + '/' || filePath.startsWith(wt + '/'));
-    if (isWorktreePath) continue;
+    // #1096 (D1=b): the unified UNTRACKED rule — see the block comment on sinkPreflight. `cat-file
+    // -e` interrogates the tree, emits no bytes of its own, and a ref that does not resolve (no
+    // remote at all) reads as a tree that cannot conflict with anything — but it cannot resolve a
+    // path THROUGH a blob, so the ancestor probe catches the directory-vs-file collision that would
+    // otherwise crash the merge step's checkout past preflight (review round 1). CLASSIFICATION-ONLY
+    // — the `continue` never stages, touches, or removes the path; a conflicting path falls through
+    // to bucket 3 exactly as before (including #893's divergent own-archive copies), and every
+    // TRACKED status skips this arm entirely and stays refused. The rebase's replay of intermediate
+    // commits is NOT covered (#1097) — only the two tip trees.
+    if (xy === '??') {
+      let candidateHas = false;
+      try { execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', branch + ':' + filePath], { stdio: 'ignore' }); candidateHas = true; } catch (_) {}
+      if (!candidateHas && defBranch) {
+        try { execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', 'origin/' + defBranch + ':' + filePath], { stdio: 'ignore' }); candidateHas = true; } catch (_) {}
+      }
+      if (!candidateHas && untrackedPathConflictsWithCandidateFolder(mainRoot, branch, defBranch, filePath)) candidateHas = true;
+      if (!candidateHas) continue;
+    }
     foreignDirt.push(filePath);
   }
   if (foreignDirt.length > 0) {
@@ -2065,6 +2066,11 @@ function persistSinkClosureMetadata(mainRoot, args, sinkReceipt, archiveResult) 
 function runSinkTransaction(args, mainRoot, defBranch) {
   const loaded = loadOrInitReceipt(mainRoot, args.project, args.branch, args.issue, args.issueNumbers, defBranch, args.keepIssueOpen);
   const { receipt, newCycle } = loaded;
+  // #1096: arm the publication reporter — every envelope this transaction emits (including every
+  // refusal) carries `publication` derived from this live receipt plus ancestry. Armed only here:
+  // the legacy path and main()'s flag refusals emit outside the transaction and keep their
+  // byte-identical envelopes.
+  sinkPublicationCtx = { receipt, mainRoot, defBranch, branch: args.branch };
   // Reassignable: the finalize step's archiveProjectDir renames the live folder (receipt included)
   // into the archive dest — every later write must follow it there, or writeSinkReceipt's mkdirSync
   // resurrects a phantom empty live .cache/ and the authoritative receipt forks from the archive.
@@ -2116,7 +2122,7 @@ function runSinkTransaction(args, mainRoot, defBranch) {
     if (step === 'preflight') {
       const memberSet = deriveMemberSet(mainRoot, args.project, args.issueNumbers);
       args.issueNumbers = memberSet.members; args.member_source = memberSet.source;
-      const preResult = sinkPreflight(mainRoot, args.project, args.branch);
+      const preResult = sinkPreflight(mainRoot, args.project, args.branch, defBranch);
       if (!preResult.ok) {
         // sink_blocked and worktree_dirty KEEP — proceeding destroys the user's own uncommitted
         // work, so no proceed-path exists.
@@ -2881,20 +2887,41 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       }
     }
   }
-  // Cleanup: remove worktree + branch
-  try { const folder = readActiveFolders(mainRoot, { excludeClosedIssues: false }).find(f => f.project === args.project); removeWorktree(mainRoot, args.project, folder); } catch (_) {}
-  if (!OFFLINE) { try { execFileSync('git', ['-C', mainRoot, 'push', 'origin', '--delete', '--', args.branch], { encoding: 'utf8' }); } catch (_) {} }
+  // #1096: TEARDOWN, REPORTED. The actions are UNCHANGED (same order, same force semantics); each
+  // outcome now lands in the envelope's `cleanup` summary instead of a swallowed catch. REPORT-ONLY:
+  // teardown runs strictly after everything that defines success has landed, so a cleanup failure
+  // never blocks a successful sink — the summary says what remains for the operator to sweep.
+  const cleanupSummary = {};
+  try {
+    const folder = readActiveFolders(mainRoot, { excludeClosedIssues: false }).find(f => f.project === args.project);
+    const wtRes = removeWorktree(mainRoot, args.project, folder);
+    cleanupSummary.worktree = wtRes && wtRes.removed
+      ? 'removed'
+      : (wtRes && wtRes.reason === 'missing' ? 'skipped_missing' : 'failed: ' + ((wtRes && (wtRes.detail || wtRes.reason)) || 'git worktree remove failed'));
+  } catch (e) {
+    cleanupSummary.worktree = 'failed: ' + cleanupErrText(e);
+  }
+  if (!OFFLINE) {
+    try { execFileSync('git', ['-C', mainRoot, 'push', 'origin', '--delete', '--', args.branch], { encoding: 'utf8' }); cleanupSummary.remote_branch = 'deleted'; }
+    catch (e) { cleanupSummary.remote_branch = 'failed: ' + cleanupErrText(e); }
+  } else {
+    cleanupSummary.remote_branch = 'skipped_offline';
+  }
   try {
     execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', args.branch, defBranch], { stdio: 'ignore' });
-    try { execFileSync('git', ['-C', mainRoot, 'branch', '-D', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
-  } catch (_) { try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); } catch (_) {} }
+    try { execFileSync('git', ['-C', mainRoot, 'branch', '-D', '--', args.branch], { encoding: 'utf8' }); cleanupSummary.local_branch = 'deleted'; }
+    catch (e) { cleanupSummary.local_branch = 'failed: ' + cleanupErrText(e); }
+  } catch (_) {
+    try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); cleanupSummary.local_branch = 'deleted'; }
+    catch (e) { cleanupSummary.local_branch = 'failed: ' + cleanupErrText(e); }
+  }
   const finalReceipt = JSON.parse(fs.existsSync(receiptPath) ? fs.readFileSync(receiptPath, 'utf8') : JSON.stringify(receipt));
   // #653: dispose the crash-resume journals now that finalReceipt is captured — strictly after
   // every step, the freshness guard, and teardown, so an earlier crash leaves the journal intact.
   const journalDisposed = disposeSinkJournals(mainRoot, args.project, receipt.archive_dest);
   // A successful sink still carries its findings: green is not the same as nothing-found, and the
   // journal that held them is gone by now — the archived `## Sink Findings` is what outlives this.
-  sinkEmit({ result: 'ok', status: 'sinked', journal_disposed: journalDisposed, receipt: finalReceipt });
+  sinkEmit({ result: 'ok', status: 'sinked', journal_disposed: journalDisposed, cleanup: cleanupSummary, receipt: finalReceipt });
 }
 
 const SINK_USAGE = 'usage: kaola-gitea-workflow-sink-merge.js --branch B --project P [--issue N] [--issue-numbers A,B] [--keep-issue-open] [--sink]\n'

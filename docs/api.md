@@ -610,11 +610,10 @@ the archive has already landed and a crash left `<mainRoot>/kaola-workflow/<proj
 folder is renamed to `<archive-authority>/.orphan-main-live-<ISO-ts>/`. The goal is only to stop the
 active-folder scan from reading a finished run as a live claim, and a move achieves that with nothing
 lost — the earlier `rmSync` destroyed main-only evidence that was in no archive, at exit 0. It is
-nested **inside** the resolved archive authority rather than placed beside it, which is measured and
-load-bearing: a sibling `archive/<project>.orphan-<ts>` makes the next sink refuse `sink_blocked`
-naming the rescued evidence as foreign dirt, while the nested form is covered by the own-archive
-exemption, so the sink completes and its `archive_commit` step lands the orphan in git history. Three
-fields report it:
+nested **inside** the resolved archive authority rather than placed beside it, which stays
+load-bearing for what the run's own `archive_commit` pathspec lands: the nested form is committed
+with the archive so the orphan reaches git history, while a sibling path outside the own archive band
+is left untracked where it stands (#1096 — see the sink preflight rule below). Three fields report it:
 
 | Field | Meaning |
 |---|---|
@@ -1062,19 +1061,30 @@ all four byte-identical copies. Nothing keeps the two spellings in step.
   because two archives disagreeing refuses rather than letting one side win; **carried but unreadable
   or truncated** → unverifiable, which is not the same fact as absent, so foreign dirt too (a copy
   merely larger than `GIT_MAX_BUFFER` overflows the content read on an otherwise healthy repo). The
-  exemption is scoped to this project on a segment boundary (a sibling project's tree, and a
-  project-name prefix look-alike, both still refuse) and is classification-only — no exempted path is
-  ever removed.
-- Preflight does **not** count a verified co-active sibling run's live claim folder as foreign
-  dirt (issue #1075): untracked paths under `kaola-workflow/<sibling>/` are exempt when the
-  sibling's own `workflow-state.md` reads `status: active`, its `main_root` realpath-equals this
-  main checkout, and its `worktree_path` realpath resolves to a worktree registered in this
-  repository (`git worktree list`) checked out on the claim's own branch — never the main
-  checkout, never this sink's own project or branch, neither folder nor state file a symlink,
-  and at most one folder certified per registered worktree (two folders claiming the same
-  worktree certify neither). The match is a full segment — `<sibling>` is exactly one path
-  component — and the exemption is classification-only: exempted bytes are never staged,
-  touched, or removed, and anything failing verification stays foreign dirt.
+  exemption is scoped to this project on a segment boundary — a project-name prefix look-alike never
+  inherits it, and a sibling project's tree falls to the unified untracked rule below — and is
+  classification-only: no exempted path is ever removed.
+- Preflight classifies **untracked (`??`) paths by conflict, not ownership** (issue #1096, owner
+  decision D1=b): an untracked path counts as foreign dirt only when it conflicts with a candidate
+  tip tree — when it is present at the path in the `branch` tree or the `origin/<default>` tree,
+  probed with `git cat-file -e` (the same primitive the #893 arm uses), or when an ancestor folder
+  of the path exists as a FILE in either tree (probed with `git cat-file -t`): an untracked
+  directory sitting where the tree carries a plain file is a checkout collision too, and would
+  otherwise crash the merge step's `git checkout` past preflight with no typed envelope. Those two
+  tip trees are what the transaction's checkout and fast-forward steps write onto the working copy
+  (`git checkout <branch>` and the fast-forward loop's `pull --ff-only`); the rebase's replay of
+  intermediate commits is a known remaining gap tracked separately (#1097), and the rule claims
+  nothing about it. An untracked path conflicting with neither tip tree is never staged or modified
+  by the sink: a sibling's `archive/<project>/` tree waiting for its own `archive_commit` (the
+  #1075 co-active window, and a sibling's `sink-receipt.json` from an interrupted run), another
+  run's live claim folder, a registered worktree's directory, or any other unrelated untracked file
+  no longer blocks the sink. TRACKED statuses — staged or unstaged modifications, deletions — are
+  untouched by the rule and still refuse `sink_blocked`: a tracked edit is a local change to
+  committed content that an in-place checkout would overwrite, and refusing it stays correct until
+  the merge moves out of the shared checkout. The three former special exemptions (#715 sibling
+  sink receipts, #1075 verified co-active sibling live folders, registered worktree paths) were
+  each a special case of this rule and are gone. The rule is classification-only — no path it
+  exempts is ever staged, touched, or removed, and a refusal still mutates nothing.
 - `.cache/sink-receipt.json` tracks each step so a re-run resumes from the last incomplete one
   without double-applying.
 - **The `finalize` step's archive is confirmed, not assumed.** `archiveProjectDir` is judged by what it
@@ -1175,6 +1185,32 @@ attempted — a sink with nothing to close is never false-flagged.
 | `archive_commit` | the archive was staged and committed, but a file the archive holds on disk did not become a blob at `HEAD`. `archive_missing_paths` names every one and `archive_add_errors` carries the `git add` output. Returned before teardown, so the branch, the worktree and the on-disk archive are all retained — nothing recoverable is lost | fix whatever git could not index (a mode, a permission) and re-run; the step is left NOT done |
 | `push_main` | the fast-forward landed locally but pushing the mainline threw | branch preserved; resolve the push fault and re-run |
 | `closure` | at least one issue could not be closed, or an exit-0 close could not be verified | the step is left NOT done, so a re-run retries it |
+
+**`publication` names where the deliverable stands, on every `--sink` envelope (issue #1096).** Each
+envelope the merge-sink transaction emits — every refusal and the terminal success alike — carries
+one top-level field, `publication: 'published' | 'not_published' | 'unknown'`:
+
+| value | meaning |
+|---|---|
+| `published` | the receipt records `push_main` done and a head — the stamped `published_head` (#631), else the live branch tip — resolves as an ancestor of the default branch. Same probe the #617 closure gate runs |
+| `not_published` | `push_main` is not `done`: nothing has been pushed to the mainline, whatever landed locally |
+| `unknown` | offline (the push step is skipped, so a `done` step certifies nothing about the remote), or a probe that could not answer — never a guess in either direction |
+
+A `sink_incomplete` at `closure` or `keep_open_verify` with `publication: 'published'` is therefore
+readable at the envelope's top level as **merged, finalization pending**: the deliverable is on the
+remote and only the forge-side closure (or keep-open verification) remains. The receipt stays the
+durable record; a re-run resumes idempotently from the named step. Envelopes emitted outside the
+transaction (the legacy path, `main()`'s flag refusals) carry no `publication` field.
+
+**`cleanup` reports teardown outcomes on the success envelope (issue #1096).** Worktree removal and
+remote/local branch deletion used to swallow every failure, so a worktree or branch that survived a
+`status:sinked` sink was invisible until the next collision. The success envelope now carries a
+`cleanup` summary — `worktree`, `remote_branch`, `local_branch` — naming each action's outcome:
+`removed` / `deleted`, `skipped_missing` (the worktree was already gone), `skipped_offline` (the
+remote branch push is skipped under `KAOLA_WORKFLOW_OFFLINE=1`), or `failed: <git's first error
+line>`. It is report-only: teardown runs strictly after everything that defines success has landed,
+so a cleanup failure never blocks a successful sink — the summary says what remains for the operator
+to sweep, not whether the sink succeeded.
 
 **`verifyArchiveComplete` returns three keys, not two.** `mismatched[]` conflated two different
 facts — *this file arrived with different bytes* and *this entry could not be byte-compared at all*

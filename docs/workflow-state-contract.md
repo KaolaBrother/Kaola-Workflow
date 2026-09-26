@@ -227,10 +227,12 @@ standing, finalize renames that folder to `<archive-authority>/.orphan-main-live
 than removing it. The backstop's goal is only to stop the active-folder scan from reading a finished
 run as a live claim, and a move achieves that with nothing lost; the earlier removal destroyed
 main-only evidence that existed in no archive, at exit 0. The destination is nested **inside** the
-resolved archive authority rather than placed beside it, which is measured, not stylistic: a sibling
-`archive/<project>.orphan-<ts>` makes the next sink refuse `sink_blocked` with the rescued evidence
-named as foreign dirt, while the nested form is covered by the own-archive exemption, so the sink
-completes and its `archive_commit` step lands the orphan in git history. Nesting also places it one
+resolved archive authority rather than placed beside it, which stays load-bearing for what the run's
+own `archive_commit` pathspec lands: the nested form is committed with the archive so the orphan
+reaches git history, while a sibling `archive/<project>.orphan-<ts>` outside the own archive band is
+untracked and carried by no candidate tree, so under the #1096 unified preflight rule the sink simply
+passes it through — it no longer refuses, and it is not committed (see `api.md` § the sink preflight
+rule). Nesting also places it one
 level below where archive authorities are resolved, so no suffix rule can collide with it — a
 `.archived-` suffix was measured to break the next resume with `archive_authority_ambiguous`. The
 envelope reports `main_live_orphan`, `main_live_orphaned_to` and `main_live_orphan_error`; see

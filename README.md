@@ -29,7 +29,11 @@ The forge holds the backlog; Git holds the changes; local run files preserve pro
 Finalization reconciles documentation and issue closure, then records the archive and delivery
 outcome. **A delivered PR/MR is distinct from a merged change.** Both delivery routes close every
 claimed issue once the change merges: the merge sink closes the set itself, and a PR/MR carries one
-`Closes #n` line per claimed issue.
+`Closes #n` line per claimed issue. The merge sink also reports what it found: every envelope names
+whether the deliverable reached the mainline and what teardown cleaned up, and it refuses — without
+touching anything — only over changes that would collide with the merge (tracked local edits, or
+untracked files the branch or remote already carries); a sibling run's in-flight files no longer
+block it.
 
 | Capability | What it gives you |
 |---|---|
