@@ -231,9 +231,11 @@ cleanup findings and stops without merging when it cannot preserve truth; get th
 resynchronize, or publish a review request instead. Every `--sink` envelope also carries
 `publication` — `published`, `not_published`, or `unknown` — naming whether the deliverable
 reached the mainline, so a refusal after publication reads as merged with finalization pending.
-Then clean up after the sink; never touch another session's branch/worktree/folder, and ask on
-real content conflict. If the sink reported that it did not complete, the step it names is where
-to resume; receipts keep retry idempotent.
+The sink never switches or rebases your main checkout; after publication it advances that
+checkout only when git can fast-forward it without touching your modifications, and otherwise
+reports `cleanup.main_checkout`. Then clean up after the sink; never touch another session's
+branch/worktree/folder, and ask on real content conflict. If the sink reported that it did not
+complete, the step it names is where to resume; receipts keep retry idempotent.
 <!-- /PIN -->
 
 <!-- PIN: closure-audit -->
