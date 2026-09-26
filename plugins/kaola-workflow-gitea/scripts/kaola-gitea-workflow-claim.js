@@ -5522,7 +5522,25 @@ function collectStale(root) {
         const isArchivedW = fs.existsSync(path.join(root, 'kaola-workflow', 'archive', projectName));
         const isClosedW = (!OFFLINE && issueNumber != null) ? issueIsClosed(issueNumber) : false;
         const inActiveSetW = issueNumber != null && activeSet.has(issueNumber);
-        if ((isArchivedW || isClosedW) && !inActiveSetW) {
+        // (review round): inActiveSetW alone cannot protect a LIVE sink's W. Once the issue is
+        // closed (the normal state around a sink run) readActiveFolders drops the folder on its
+        // default closed-issue path, so activeSet no longer names the project and this arm would
+        // classify the sink's own publish candidate as stale mid-flight. Guard with the sink's
+        // own resumability record instead — the same sink-receipt.json the sink resumes from
+        // (live project .cache first, archive .cache once closure moved the folder): steps not
+        // all done means a sink that still owns this W. All-done or absent (a pre-receipt
+        // legacy leftover, or a completed sink's garbage) sweeps exactly as before.
+        let sinkResumableW = false;
+        for (const receiptPathW of [
+          path.join(root, 'kaola-workflow', projectName, '.cache', 'sink-receipt.json'),
+          path.join(root, 'kaola-workflow', 'archive', projectName, '.cache', 'sink-receipt.json'),
+        ]) {
+          let receiptW = null;
+          try { receiptW = JSON.parse(fs.readFileSync(receiptPathW, 'utf8')); } catch (_) { receiptW = null; }
+          if (!receiptW || !receiptW.steps || typeof receiptW.steps !== 'object') continue;
+          if (Object.values(receiptW.steps).some((v) => v !== 'done')) { sinkResumableW = true; break; }
+        }
+        if ((isArchivedW || isClosedW) && !inActiveSetW && !sinkResumableW) {
           stale_integration_worktrees.push({
             path: wtPath,
             project: projectName,
@@ -5648,7 +5666,7 @@ function cmdStaleWorktreeCleanup() {
       dryBuckets.would_remove.push(wt.path);
       continue;
     }
-    const rmResult = adaptiveSchema.removeIntegrationWorktree(root, wt.project, { worktree_path: wt.path });
+    const rmResult = adaptiveSchema.removeIntegrationWorktree(root, wt.project);
     if (rmResult && rmResult.removed) buckets.removed.push(wt.path);
     else buckets.failed_preserve.push(wt.path);
   }

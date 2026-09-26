@@ -1609,6 +1609,50 @@ function testStaleWorktreeCleanup() {
     }
   }
 
+  // Sub-case 2b (#1097 review round): a LIVE sink's integration W must survive the sweep while
+  // its sink receipt is resumable. The stale trigger is the CLOSED issue — the exact condition
+  // that makes readActiveFolders drop the folder on its default path, so the active-set guard
+  // protects nothing around a sink run — and the guard is the sink's own resumability record
+  // (steps not all done). All-done (a completed sink's leftover) sweeps exactly as before.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-cleanup-sc2b-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeTeaShimForStale(binDir);
+      // The integration W lives INSIDE the repo at <root>/.kw/integrate/<project> (the arm scans
+      // that path), not under the `<tmp>.kw` sibling convention the lane arms use.
+      const wPath = path.join(tmp, '.kw', 'integrate', 'issue-400');
+      fs.mkdirSync(path.dirname(wPath), { recursive: true });
+      const rW = G.git(tmp, ['worktree', 'add', '--detach', '--', wPath, 'HEAD'], { encoding: 'utf8' });
+      assert.strictEqual(rW.status, 0, 'sc2b: worktree add failed: ' + rW.stderr);
+      const receiptPath = path.join(tmp, 'kaola-workflow', 'issue-400', '.cache', 'sink-receipt.json');
+      fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
+      const writeReceipt = (pushMain, closureStep) => fs.writeFileSync(receiptPath, JSON.stringify({
+        project: 'issue-400',
+        steps: { preflight: 'done', push_upstream: 'done', merge: 'done', finalize: 'done',
+          stash_restore: 'done', archive_commit: 'done', push_main: pushMain, closure: closureStep }
+      }, null, 2) + '\n');
+      writeReceipt('pending', 'pending');
+      const out1 = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
+      assert(out1.dry_run === false, 'sc2b: dry_run must be false, got: ' + JSON.stringify(out1));
+      assert(fs.existsSync(wPath),
+        'sc2b: a resumable sink receipt (steps not all done) must protect the sink\'s W from --execute — it is the publish candidate a resumed sink rebuilds');
+      assert(!Array.isArray(out1.removed) || !out1.removed.some(p => p === wPath),
+        'sc2b: removed must NOT contain the live sink\'s W, got: ' + JSON.stringify(out1.removed));
+      writeReceipt('done', 'done');
+      const out2 = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
+      assert(!fs.existsSync(wPath),
+        'sc2b: a completed sink\'s (all steps done) leftover W must sweep exactly as before — the guard is receipt-driven, never a blanket exemption');
+      assert(Array.isArray(out2.removed) && out2.removed.some(p => p === wPath),
+        'sc2b: removed must contain the completed sink\'s W, got: ' + JSON.stringify(out2.removed));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
   // Sub-case 3: execute-dirty-no-flag — dirty worktree + --execute (no archive/export/force)
   {
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-cleanup-sc3-')));

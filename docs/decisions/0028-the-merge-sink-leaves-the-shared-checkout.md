@@ -31,8 +31,11 @@ checkout is shared, every foreign byte in it was a hazard to that sequence:
    bytes through a private index rather than a working-tree `git add`.
 
 2. **Publication is a short-scope compare-and-swap.** `acquirePublishLock` serializes concurrent
-   sinks for one project (`publish_busy` names a live holder; the wait is bounded by
-   `KAOLA_WORKFLOW_PUBLISH_LOCK_WAIT_MS`). The candidate is pushed as an ordinary, non-forced update
+   sinks for one repository — one lock in the git common dir, shared across worktrees
+   (`publish_busy` names a live holder; the wait is bounded by
+   `KAOLA_WORKFLOW_PUBLISH_LOCK_WAIT_MS`). The lock is held only for the base check and the push
+   itself: the re-rebase and the re-taken chains run outside it, so a concurrent lane is only ever
+   blocked for seconds. The candidate is pushed as an ordinary, non-forced update
    — the server's fast-forward check is the CAS; `--force` is never used. When the base advances, the
    affected PASS evidence is recorded in `invalidated_evidence` and re-acquired by rebasing `W` again
    and re-running the chains, bounded by `MAX_AUTOMERGE_RETRIES`.

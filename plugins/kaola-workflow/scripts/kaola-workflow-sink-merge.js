@@ -368,13 +368,6 @@ function persistSinkFindingsToSummary(destDir, postRebaseTests, archiveCollision
 // plain `--name-only` stream C-quotes an embedded newline and emits a trailing space RAW (measured
 // with `od -c`), so the `.trim()` here reported a file really named `notes.md ` as `.cache/notes.md` —
 // a path that exists nowhere — and left the quoted form of the others in the archive verbatim.
-function stagedPathsUnder(mainRoot, pathspec, excludes) {
-  try {
-    const out = execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--name-only', '-z', '--', pathspec, ...(excludes || [])],
-      { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] });
-    return out.split('\0').filter(Boolean);
-  } catch (_) { return []; }
-}
 
 // #893's durable half. The sink commits its whole own-archive pathspec, and it cannot tell a file
 // finalize mirrored from one nobody wrote — the archive is a copy of a folder that lives untracked
@@ -1043,7 +1036,10 @@ function recordInvalidatedEvidence(receipt, evidence, boundTo, fromBase, toBase)
 //   { ok:false, reason:'not_published', detail } — OFFLINE ff refused, or a lock/probe fault;
 //   { ok:false, reason:'non_fast_forward' } / { ok:false, reason:'chains_red' } — bounded retries.
 function runIntegrationPublish(args, mainRoot, wtPath, defBranch, receipt, archivePathspec) {
-  const lock = adaptiveSchema.acquirePublishLock(mainRoot, { project: args.project });
+  // #1097 (review F1): `let` — the lock is RELEASED for the long work (the re-rebase + the
+  // re-taken test gate) and re-acquired before the push, so the finally releases whatever is
+  // held on every exit path and the hold stays seconds-only.
+  let lock = adaptiveSchema.acquirePublishLock(mainRoot, { project: args.project });
   if (!lock.acquired) {
     if (lock.reason === 'publish_busy') {
       return { ok: false, reason: 'publish_busy', holder: lock.holder || null };
@@ -1088,6 +1084,14 @@ function runIntegrationPublish(args, mainRoot, wtPath, defBranch, receipt, archi
           // advance ends in non_fast_forward below.
           continue;
         }
+        // #1097 (review F1): the lock is SECONDS-ONLY — the kernel's own contract
+        // (adaptive-schema.js: "NEVER a long hold: the merge/rebase/test-gate happen OUTSIDE
+        // it"). The re-rebase and the re-taken test gate below can run for minutes, so they run
+        // OUTSIDE the lock: released here, re-acquired (and the base re-checked through this
+        // loop's head) before the push. A base advance while the lock is open re-enters this
+        // arm — evidence recorded, bounded retries — never a lost publication.
+        try { adaptiveSchema.releasePublishLock(lock); } catch (_) {}
+        lock = null;
         try {
           execFileSync('git', ['-C', wtPath, 'rebase', 'origin/' + defBranch], { encoding: 'utf8' });
         } catch (_) {
@@ -1104,6 +1108,19 @@ function runIntegrationPublish(args, mainRoot, wtPath, defBranch, receipt, archi
         receipt.candidate_head = candidate;
         receipt.post_rebase_candidate = candidate;
         receipt.post_rebase_tests = gate.result === 'skipped' ? (receipt.post_rebase_tests || 'skipped') : gate.result;
+        // #1097 (review F1): re-acquire for the push. The loop's head re-fetches and re-compares
+        // origin/<def> against the candidate_base just stamped, so a base that advanced while
+        // the lock was open re-enters the arm above (bounded) instead of publishing onto it; a
+        // second holder that slipped in meanwhile is the typed, resumable publish_busy — never
+        // waited out or forced.
+        const relock = adaptiveSchema.acquirePublishLock(mainRoot, { project: args.project });
+        if (!relock.acquired) {
+          if (relock.reason === 'publish_busy') {
+            return { ok: false, reason: 'publish_busy', holder: relock.holder || null };
+          }
+          return { ok: false, reason: 'not_published', detail: 'publish lock unavailable: ' + (relock.detail || relock.reason) };
+        }
+        lock = relock;
         continue;
       }
       if (OFFLINE) {
@@ -1116,15 +1133,66 @@ function runIntegrationPublish(args, mainRoot, wtPath, defBranch, receipt, archi
         }
         return { ok: true, candidate, main_checkout: 'advanced' };
       }
+      // The test-only push-failure seam (#497 regression) rides the REAL push call: one extra
+      // refspec git cannot parse makes the actual `git push` fail for a reason that is NOT a
+      // base advance — exactly the class the classification below has to tell apart from a
+      // CAS rejection.
+      const pushArgs = ['push', 'origin', candidate + ':refs/heads/' + defBranch]
+        .concat(FORCE_PUSH_MAIN_FAIL ? ['KAOLA_WORKFLOW_TEST_INVALID_REFSPEC'] : []);
       try {
-        execFileSync('git', ['-C', mainRoot, 'push', 'origin', candidate + ':refs/heads/' + defBranch],
-          { encoding: 'utf8' });
-      } catch (_) {
-        // Server-side CAS refused (another lane published first, or the base moved under us).
-        // Re-enter the loop to re-rebase and retry; bounded by the same counter.
-        attempts++;
-        if (attempts > MAX_AUTOMERGE_RETRIES) return { ok: false, reason: 'non_fast_forward' };
-        continue;
+        execFileSync('git', ['-C', mainRoot].concat(pushArgs), { encoding: 'utf8' });
+      } catch (pushErr) {
+        // #1097 (review F2): a refused push is a CAS rejection ONLY when the remote tip actually
+        // moved past the base this attempt published onto — the one race a re-rebase answers.
+        // With the remote STATIC, two shapes remain: a candidate that is NOT a descendant of
+        // origin/<def> — divergent histories, the old-model resume whose local ref never saw the
+        // remote's advance; no retry can publish it as-is, but the bounded re-entry lets a base
+        // that moves mid-loop recover through the CAS arm, and the give-up stays typed (never a
+        // --force) — and everything else (auth, network, hook, protected branch, an unparseable
+        // refspec): a PUSH FAULT, not a lost race. Reporting a fault as non_fast_forward burned
+        // the retries and then claimed the default branch kept advancing when it never moved.
+        // Re-fetch and compare: moved → re-rebase and retry (bounded); static + not a
+        // descendant → the typed divergence give-up (bounded); otherwise → a resumable push fault.
+        let originDefAfter = null;
+        try { execFileSync('git', ['-C', mainRoot, 'fetch', 'origin'], { encoding: 'utf8' }); } catch (_) {}
+        try {
+          originDefAfter = execFileSync('git', ['-C', mainRoot, 'rev-parse', 'origin/' + defBranch],
+            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        } catch (_) { originDefAfter = null; }
+        if (originDefAfter && originDefAfter !== (receipt.candidate_base || originDef)) {
+          // A genuine base advance — the server-side CAS refused because the remote moved.
+          attempts++;
+          if (attempts > MAX_AUTOMERGE_RETRIES) return { ok: false, reason: 'non_fast_forward' };
+          continue;
+        }
+        if (originDefAfter) {
+          let descendant = false;
+          try {
+            execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', originDefAfter, candidate],
+              { stdio: ['ignore', 'ignore', 'ignore'] });
+            descendant = true;
+          } catch (_) { descendant = false; }
+          if (!descendant) {
+            // Static remote, non-descendant candidate: divergent histories. Bounded re-entry
+            // (a base that moves mid-loop recovers through the CAS arm); the give-up is typed.
+            attempts++;
+            if (attempts > MAX_AUTOMERGE_RETRIES) {
+              return {
+                ok: false, reason: 'non_fast_forward',
+                detail: 'origin/' + defBranch + ' did not move and the candidate is not a fast-forward of '
+                  + 'it — the ref histories diverged (an old-model resume whose local ' + defBranch
+                  + ' never saw the remote\'s advance). Retried the bounded count; never a --force.'
+              };
+            }
+            continue;
+          }
+        }
+        return {
+          ok: false, reason: 'not_published',
+          detail: 'push to origin/' + defBranch + ' failed without the remote tip moving ('
+            + String((pushErr && pushErr.stderr) || (pushErr && pushErr.message) || pushErr).split('\n')[0]
+            + ') — a push fault, not a lost race; resumable at the same step'
+        };
       }
       // Published. Advance the shared checkout — REPORT-ONLY (publication already happened).
       const adv = adaptiveSchema.advanceCheckedOutDefault(mainRoot, defBranch, candidate,
@@ -1136,7 +1204,7 @@ function runIntegrationPublish(args, mainRoot, wtPath, defBranch, receipt, archi
       };
     }
   } finally {
-    try { adaptiveSchema.releasePublishLock(lock); } catch (_) {}
+    if (lock) { try { adaptiveSchema.releasePublishLock(lock); } catch (_) {} }
   }
 }
 
@@ -3131,23 +3199,11 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
         } catch (_) {}
       }
       const archiveRelForPublish = (receipt.archive_dest || ('kaola-workflow/archive/' + args.project)).replace(/\/+$/, '');
-      // The test-only push-failure seam, kept for the pre-existing #497 regression: it forces the
-      // publish to fail without going near the lock.
-      if (FORCE_PUSH_MAIN_FAIL && !OFFLINE) {
-        receipt.push_main = 'failed';
-        receipt.updated_at = new Date().toISOString();
-        writeSinkReceipt(receiptPath, receipt);
-        sinkEmit({
-          result: 'refuse',
-          reason: 'sink_incomplete',
-          step: 'push_main',
-          push_main: 'failed',
-          branch: args.branch,
-          default_branch: defBranch,
-          detail: 'the candidate could not be pushed to ' + defBranch + ' — the deliverable is NOT on the remote. Refusing to report status:sinked (a transient push failure must not look like a completed sink). The push step is left NOT done so a re-run retries it. Resolve the push fault and re-run --sink.',
-        }, 1);
-        return;
-      }
+      // The test-only push-failure seam (#497 regression) now rides the REAL push call inside
+      // runIntegrationPublish — an unparseable extra refspec on the actual `git push`, so the
+      // regression leg measures the real path (lock acquired, real push attempted, classified
+      // as a push fault — not a CAS rejection — and refused resumable), never a made-up
+      // envelope emitted before the lock.
       const wtForPublish = receipt.integration_worktree
         ? path.join(mainRoot, receipt.integration_worktree) : null;
       const publish = runIntegrationPublish(args, mainRoot, wtForPublish, defBranch, receipt,
@@ -3201,11 +3257,11 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
             step: 'push_main',
             branch: args.branch,
             default_branch: defBranch,
-            detail: 'the candidate could not be published onto ' + defBranch + ' after '
+            detail: publish.detail || ('the candidate could not be published onto ' + defBranch + ' after '
               + MAX_AUTOMERGE_RETRIES + ' re-rebase attempts — the default branch kept advancing. Nothing '
               + 'was published (never a --force) and no issue was closed; the push_main step is left NOT '
               + 'done so a re-run resumes here. The base moving under a concurrent lane is the ordinary '
-              + 'cause.',
+              + 'cause.'),
           }, 2);
           return;
         }

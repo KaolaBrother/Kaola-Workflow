@@ -2685,6 +2685,11 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
         '## Sink', 'branch: ' + branch, 'sink: merge', 'issue_action: comment_keep_open', ''
       ].join('\n'));
       fs.writeFileSync(path.join(archDir, 'finalization-summary.md'), '# Finalization\n\n## Final Validation\n\n- `npm test`: pass\n');
+      // (review F4d): a tracked roadmap source — the path the candidate-side staging arm
+      // MATCHES, so the deletion leg below proves a foreign deletion stays OUT of the archive
+      // commit (that arm reads W, where the file still exists; base.txt matches no arm).
+      fs.mkdirSync(path.join(root, 'kaola-workflow', '.roadmap'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), '# roadmap source ' + issue + '\n');
       fs.writeFileSync(path.join(root, 'base.txt'), 'base');
       git('add', '-A'); git('commit', '-m', 'base + archived keep-open run');
       git('branch', branch); git('checkout', branch);
@@ -2758,6 +2763,99 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
           '#1097 AC3 gitea (deleted): the foreign deletion must remain deleted');
         assert(fx.git('status', '--porcelain', '-uall').includes(' D base.txt'),
           '#1097 AC3 gitea (deleted): the deletion must remain un-restored');
+      } finally { drop(fx); }
+    }
+    // Leg 4 (review F4d): a DELETION of a tracked file a commit arm MATCHES — the roadmap
+    // source the candidate-side arm stages from W. The deletion must stay OUT of the archive
+    // commit: the published candidate still carries the file, and the local deletion remains
+    // (deleted, un-restored) in the shared checkout. base.txt, which no arm matches, never
+    // proved this.
+    {
+      const project = 'issue-109735', issue = 109735;
+      const fx = build(project, issue);
+      try {
+        const roadmapRel = 'kaola-workflow/.roadmap/issue-' + issue + '.md';
+        fs.rmSync(path.join(fx.root, roadmapRel));
+        const r = run(fx.root, project, issue);
+        const out = parseLast(r.stdout);
+        assert(r.status === 0 && out.status === 'sinked',
+          '#1097 AC3 gitea (roadmap-deleted): the isolated merge must complete over the arm-matched foreign deletion; got exit=' + r.status + ' ' + JSON.stringify(out) + '\nstderr: ' + String(r.stderr || '').slice(-800));
+        assert(!fs.existsSync(path.join(fx.root, roadmapRel)),
+          '#1097 AC3 gitea (roadmap-deleted): the foreign deletion must remain deleted');
+        assert(fx.git('status', '--porcelain', '-uall').includes(' D ' + roadmapRel),
+          '#1097 AC3 gitea (roadmap-deleted): the deletion must remain un-restored');
+        assert(fx.git('cat-file', '-t', 'origin/main:' + roadmapRel).trim() === 'blob',
+          '#1097 AC3 gitea (roadmap-deleted): the deletion must stay OUT of the archive commit — the published candidate still carries the roadmap source');
+      } finally { drop(fx); }
+    }
+    // Leg 5 (review F4b): the BEHIND half of the advance report — the report the envelope
+    // contract promises and no port arm had pinned. An untracked foreign file at a path the
+    // candidate ADDS (feat-<project>.md, at the checkout root) blocks git's fast-forward —
+    // overlap protection, by design — so the sink still publishes (the push is the publication;
+    // the checkout advance is report-only), the shared checkout stays where it was,
+    // cleanup.main_checkout reports 'behind: …' honestly, and the foreign file survives
+    // byte-identical.
+    {
+      const project = 'issue-109736', issue = 109736;
+      const fx = build(project, issue);
+      try {
+        const featRel = 'feat-' + project + '.md';
+        fs.writeFileSync(path.join(fx.root, featRel), 'foreign untracked bytes — not the candidate\'s\n');
+        const mainBefore = fx.git('rev-parse', 'main').trim();
+        const r = run(fx.root, project, issue);
+        const out = parseLast(r.stdout);
+        assert(r.status === 0 && out.status === 'sinked',
+          '#1097 AC3 gitea (behind): a blocked fast-forward must never block the sink; got exit=' + r.status + ' ' + JSON.stringify(out) + '\nstderr: ' + String(r.stderr || '').slice(-800));
+        assert(out.publication === 'published',
+          '#1097 AC3 gitea (behind): the publication is the push — it must say published; got ' + JSON.stringify(out.publication));
+        assert(out.cleanup && String(out.cleanup.main_checkout).indexOf('behind') === 0,
+          '#1097 AC3 gitea (behind): a blocked fast-forward must be reported as cleanup.main_checkout behind; got ' + JSON.stringify(out && out.cleanup && out.cleanup.main_checkout));
+        assert(fs.readFileSync(path.join(fx.root, featRel), 'utf8') === 'foreign untracked bytes — not the candidate\'s\n',
+          '#1097 AC3 gitea (behind): the foreign untracked file must survive the refused fast-forward byte-identically');
+        assert(fx.git('cat-file', '-t', 'origin/main:' + featRel).trim() === 'blob',
+          '#1097 AC3 gitea (behind): the publication must carry the candidate\'s file — the ref was still pushed; only the local checkout stayed behind');
+        assert(fx.git('rev-parse', 'main').trim() === mainBefore,
+          '#1097 AC3 gitea (behind): the local default ref must stay exactly where it was');
+      } finally { drop(fx); }
+    }
+    // Leg 6 (review F3): the OLD-MODEL resume, on this port. A pre-#1097 receipt — merge done,
+    // NO candidate_head, archive_commit left pending — with the old model's end state (the
+    // branch fast-forwarded into LOCAL main, never pushed). Without the archive_commit-side
+    // adoption this port built no archive commit and the #700 guard refused forever; with it
+    // the local default ref IS the candidate, the archive commit has something to build on,
+    // and the resume publishes exactly the already-merged tip.
+    {
+      const project = 'issue-109737', issue = 109737;
+      const fx = build(project, issue);
+      try {
+        // The old model's end state: the branch merged (fast-forwarded) into LOCAL main, never pushed.
+        fx.git('merge', '--ff-only', fx.branch);
+        const localMain = fx.git('rev-parse', 'main').trim();
+        // The pre-#1097 receipt: merge done, NO candidate_head (the field postdates the old
+        // model), archive_commit + push_main left pending — the resume shape the adoption answers.
+        const receiptBody = JSON.stringify({
+          project, branch: fx.branch, issue_number: issue, issue_numbers: [issue],
+          resolved_default_branch: 'main', branch_head: fx.git('rev-parse', fx.branch).trim(),
+          keep_open_requested: false,
+          claim_ts: new Date().toISOString(),
+          started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+          stash_ref: null, removed_duplicates: [],
+          steps: { preflight: 'done', push_upstream: 'done', merge: 'done', finalize: 'pending',
+            stash_restore: 'pending', archive_commit: 'pending', push_main: 'pending', closure: 'pending' },
+        }, null, 2) + '\n';
+        const liveRel = 'kaola-workflow/' + project + '/.cache/sink-receipt.json';
+        fs.mkdirSync(path.dirname(path.join(fx.root, liveRel)), { recursive: true });
+        fs.writeFileSync(path.join(fx.root, liveRel), receiptBody);
+        const r = run(fx.root, project, issue);
+        const out = parseLast(r.stdout);
+        assert(r.status === 0 && out.status === 'sinked',
+          '#1097 old-model gitea: the resumed pre-#1097 receipt must complete — the archive_commit-side adoption builds on the local default ref; got exit=' + r.status + ' ' + JSON.stringify(out) + '\nstderr: ' + String(r.stderr || '').slice(-800));
+        assert(out.publication === 'published',
+          '#1097 old-model gitea: the adopted local candidate must publish; got ' + JSON.stringify(out.publication));
+        assert(fx.git('cat-file', '-t', 'origin/main:feat-' + project + '.md').trim() === 'blob',
+          '#1097 old-model gitea: the adopted candidate must carry the branch deliverable onto origin/main');
+        assert(fx.git('rev-parse', 'origin/main').trim() === localMain,
+          '#1097 old-model gitea: origin/main must end exactly at the old model\'s already-merged local tip');
       } finally { drop(fx); }
     }
     console.log('Gitea #1097 AC3 tracked foreign changes ride through preserved: PASSED');
@@ -2984,6 +3082,40 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
     fs.rmSync(root, { recursive: true, force: true });
     try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
     try { fs.rmSync(bin, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// #1097 (review F4a): the dead-holder lock takeover, on THIS edition's kernel copy — a
+// same-host holder whose pid is provably dead is taken over, never waited out; a LIVE holder
+// never is. The canonical suite pins the same rule at its CLI boundary.
+{
+  const schema = require(path.join(__dirname, 'kaola-workflow-adaptive-schema.js'));
+  const { spawnSync } = require('child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-tea-1097-lock-'));
+  try {
+    G.exec(root, ['init', '-b', 'main'], { encoding: 'utf8' });
+    G.exec(root, ['config', 'user.email', 't@t'], { encoding: 'utf8' });
+    G.exec(root, ['config', 'user.name', 't'], { encoding: 'utf8' });
+    const lockPath = schema.publishLockPath(root);
+    // A provably dead pid: the probe child prints its own pid and exits; spawnSync reaps it, so
+    // kill(pid, 0) answers ESRCH on every platform we run on.
+    // spawn-class: crash
+    const probe = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+    const deadPid = parseInt(String(probe.stdout || '').trim(), 10);
+    assert(Number.isInteger(deadPid) && deadPid > 1,
+      'Gitea #1097 lock (takeover): the probe must yield a dead pid; got ' + JSON.stringify(probe && probe.stdout));
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: deadPid, hostname: os.hostname(), project: 'issue-109751', acquired_at: new Date().toISOString() }) + '\n');
+    const taken = schema.acquirePublishLock(root, { project: 'issue-109751', waitMs: 3000 });
+    assert(taken && taken.acquired,
+      'Gitea #1097 lock (takeover): a same-host dead holder\'s lock must be taken over, not waited out; got ' + JSON.stringify(taken));
+    try { schema.releasePublishLock(taken); } catch (_) {}
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, hostname: os.hostname(), project: 'issue-109751', acquired_at: new Date().toISOString() }) + '\n');
+    const refused = schema.acquirePublishLock(root, { project: 'issue-109751', waitMs: 300 });
+    assert(!refused.acquired && refused.reason === 'publish_busy',
+      'Gitea #1097 lock (takeover): a LIVE same-host holder must never be taken over; got ' + JSON.stringify(refused));
+    console.log('Gitea #1097 lock: a dead holder\'s lock is taken over (same host, dead pid), a live holder never is: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 

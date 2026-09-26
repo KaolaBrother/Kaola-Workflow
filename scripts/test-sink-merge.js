@@ -1174,17 +1174,14 @@ function plantLiveFolder(tmpRoot, project, files) {
 // the branch-carried untracked plant is NOT dirt: the sink completes, and the plant survives
 // byte-identical at a divergent byte count from the branch copy.
 
-// (1096b2) was the origin/<default> leg of the same deleted rule — no longer reachable, since the
-// only checkout mainRoot performs is the post-publish fast-forward, whose overlap protection is
-// git's own (reported as cleanup.main_checkout: behind, never a preflight refusal).
+// (1096b2) was the origin/<default> leg of the same deleted rule — it no longer exists as a
+// preflight refusal: the only checkout mainRoot performs is the post-publish fast-forward, and
+// git's own overlap protection covers it (reported as cleanup.main_checkout: behind, never a
+// preflight refusal).
 //
 // (1096b3) was the directory-vs-file collision probe for that rule — the checkout it guarded no
-// longer happens in the shared tree, so the probe has no reachable condition and is deleted with it.
-// so that is where the leg is pinned: origin/<default> carries the path, the branch does not, and
-// (1096b2) The origin/<default> leg of the deleted rule no longer exists as a preflight refusal:
-// the only checkout mainRoot performs is the post-publish fast-forward, and git's own overlap
-// protection covers it (reported as cleanup.main_checkout: behind). The (1096b3) directory-vs-file
-// probe is deleted with the rule it guarded.
+// longer happens in the shared tree, so the probe has no reachable condition and is deleted
+// with it.
 
 // (1096c → #1097 AC3) TRACKED foreign changes — unstaged, staged, deleted — no longer block the
 // merge, because the merge never happens in the shared checkout. The isolation is the replacement
@@ -1240,8 +1237,89 @@ function plantLiveFolder(tmpRoot, project, files) {
     assert(git(fx3.tmpRoot, ['status', '--porcelain', '-uall']).stdout.includes(' D kaola-workflow/.roadmap/issue-109732.md'),
       '#1097 AC3 (deleted): the deletion must remain un-restored');
     cleanup(fx3);
+
+    // Leg 4 (review F4b): the BEHIND half of the advance report — the report the envelope
+    // contract promises and no arm had pinned. An untracked foreign file at a path the
+    // candidate ADDS outside the archive pathspec (DELIVERABLE.txt, at the checkout root)
+    // blocks git's fast-forward — overlap protection, by design — so the sink still publishes
+    // (the push is the publication; the checkout advance is report-only), the shared checkout
+    // stays where it was, cleanup.main_checkout reports 'behind: …' honestly, the foreign file
+    // survives byte-identical, and the local default ref ends BEHIND the published tip.
+    const project4 = 'issue-109733';
+    const fx4 = buildSoleArchiverFixture(project4, 109733, {});
+    fx4.projectName = project4;
+    const mainBefore4 = git(fx4.tmpRoot, ['rev-parse', 'main']).stdout.trim();
+    fs.writeFileSync(path.join(fx4.tmpRoot, 'DELIVERABLE.txt'), 'foreign untracked bytes — not the candidate\'s\n');
+    const r4 = runSink(fx4, ['--issue', '109733']);
+    const o4 = lastJson(r4);
+    assert(r4.status === 0 && o4 && o4.status === 'sinked',
+      '#1097 AC3 (behind): a blocked fast-forward must never block the sink; got ' + r4.status
+        + '\nstdout: ' + (o4 && JSON.stringify(o4)) + '\nstderr: ' + String(r4.stderr || '').slice(-800));
+    assert(o4 && o4.publication === 'published',
+      '#1097 AC3 (behind): the publication is the push — it must say published; got ' + JSON.stringify(o4 && o4.publication));
+    assert(o4 && o4.cleanup && String(o4.cleanup.main_checkout).indexOf('behind') === 0,
+      '#1097 AC3 (behind): a blocked fast-forward must be reported as cleanup.main_checkout behind; got '
+        + JSON.stringify(o4 && o4.cleanup && o4.cleanup.main_checkout));
+    assert(fs.readFileSync(path.join(fx4.tmpRoot, 'DELIVERABLE.txt'), 'utf8') === 'foreign untracked bytes — not the candidate\'s\n',
+      '#1097 AC3 (behind): the foreign untracked file must survive the refused fast-forward byte-identically');
+    assert(git(fx4.tmpRoot, ['rev-parse', '--verify', '--quiet', 'origin/main:DELIVERABLE.txt']).status === 0,
+      '#1097 AC3 (behind): the publication must carry the candidate\'s DELIVERABLE.txt — the ref was still pushed; only the local checkout stayed behind');
+    assert(git(fx4.tmpRoot, ['rev-parse', 'main']).stdout.trim() === mainBefore4,
+      '#1097 AC3 (behind): the local default ref must stay exactly where it was');
+    assert(git(fx4.tmpRoot, ['merge-base', '--is-ancestor', 'main', 'origin/main']).status === 0,
+      '#1097 AC3 (behind): the local default ref must end an ancestor of the published tip (behind, never diverged)');
+    cleanup(fx4);
   } finally {
     cleanup(fx);
+  }
+})();
+
+// #1097 (review F4c): the REFUSED fast-forward restores what it moved aside. The advance shifts
+// this run's own untracked, branch-carried, byte-identical archive files aside to let the
+// fast-forward through; when git refuses the ff for an UNRELATED overlap, every moved file is
+// restored byte-identically and no .kw-advance-aside-* residue survives — a crash between the
+// move and the restore must not be able to strand the run's own record at an aside path.
+(function testAdvanceCheckedOutDefaultRestoresMovedAsideOnRefusal1097() {
+  console.log('Test (#1097 advance): a refused fast-forward restores the moved-aside own-archive files byte-identically, leaving no aside residue');
+  const schema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+  const project = 'issue-109734';
+  const tmpRoot = makeTmpRoot();
+  try {
+    git(tmpRoot, ['init', '-b', 'main']);
+    git(tmpRoot, ['config', 'user.email', 'test@example.com']);
+    git(tmpRoot, ['config', 'user.name', 'Test User']);
+    fs.writeFileSync(path.join(tmpRoot, 'README.md'), 'base\n');
+    git(tmpRoot, ['add', '-A']);
+    git(tmpRoot, ['commit', '-m', 'base']);
+    git(tmpRoot, ['checkout', '-b', 'work']);
+    fs.writeFileSync(path.join(tmpRoot, 'README.md'), 'candidate\n');
+    const archiveRel = 'kaola-workflow/archive/' + project + '/finalization-summary.md';
+    fs.mkdirSync(path.dirname(path.join(tmpRoot, archiveRel)), { recursive: true });
+    const summaryBytes = 'the run\'s own finalization summary\n';
+    fs.writeFileSync(path.join(tmpRoot, archiveRel), summaryBytes);
+    git(tmpRoot, ['add', '-A']);
+    git(tmpRoot, ['commit', '-m', 'candidate: modifies README, adds the own-archive file']);
+    const candidate = git(tmpRoot, ['rev-parse', 'work']).stdout.trim();
+    git(tmpRoot, ['checkout', 'main']);
+    // The own-archive mirror: the SAME bytes, untracked in the shared checkout, under the
+    // pathspec — the exact set shiftOwnUntracked moves aside for the ff.
+    fs.mkdirSync(path.dirname(path.join(tmpRoot, archiveRel)), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, archiveRel), summaryBytes);
+    // The UNRELATED overlap that refuses the ff: a local edit to a tracked file the candidate
+    // modifies (git: "Your local changes to the following files would be overwritten by merge").
+    fs.writeFileSync(path.join(tmpRoot, 'README.md'), 'foreign edit\n');
+    const adv = schema.advanceCheckedOutDefault(tmpRoot, 'main', candidate, { pathspec: 'kaola-workflow/archive/' + project + '/' });
+    assert(adv && adv.advanced === false && adv.reason === 'behind',
+      '#1097 advance (restore): the refused fast-forward must report behind, never advanced; got ' + JSON.stringify(adv));
+    assert(fs.readFileSync(path.join(tmpRoot, 'README.md'), 'utf8') === 'foreign edit\n',
+      '#1097 advance (restore): the foreign edit must survive the refused fast-forward');
+    assert(fs.existsSync(path.join(tmpRoot, archiveRel)) && fs.readFileSync(path.join(tmpRoot, archiveRel), 'utf8') === summaryBytes,
+      '#1097 advance (restore): the moved-aside own-archive file must be RESTORED byte-identically');
+    const archiveDirEntries = fs.readdirSync(path.dirname(path.join(tmpRoot, archiveRel)));
+    assert(!archiveDirEntries.some(n => /\.kw-advance-aside-/.test(n)),
+      '#1097 advance (restore): no .kw-advance-aside-* residue may survive the refused fast-forward; got ' + JSON.stringify(archiveDirEntries));
+  } finally {
+    try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
   }
 })();
 
@@ -1301,6 +1379,134 @@ function plantLiveFolder(tmpRoot, project, files) {
   } finally {
     try { if (lock) adaptiveSchema.releasePublishLock(lock); } catch (_) {}
     cleanup(fx);
+  }
+})();
+
+// #1097 (review F4a): a dead holder's lock is TAKEN OVER, not waited out — the takeover is the
+// kernel's own recovery rule: same hostname (the pid namespace is local, so a foreign host's pid
+// says nothing) AND a provably dead pid. The inverse half is pinned directly here too: a LIVE
+// same-host holder is never taken over (the publish_busy arm above pins it at the CLI boundary).
+(function testDeadHolderLockIsTakenOver1097() {
+  console.log('Test (#1097 lock): a dead holder\'s lock is taken over (same host, provably dead pid), and a live same-host holder never is');
+  const project = 'issue-109751';
+  const issue = 109751;
+  const fx = buildSoleArchiverFixture(project, issue, {});
+  const adaptiveSchema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+  const { spawnSync } = require('child_process');
+  try {
+    const lockPath = adaptiveSchema.publishLockPath(fx.tmpRoot);
+    // A provably dead pid: the probe child prints its own pid and exits; spawnSync reaps it, so
+    // kill(pid, 0) answers ESRCH on every platform we run on (pid recycling within this test's
+    // lifetime is not observed in practice — and the assertion below would catch it honestly).
+    // spawn-class: crash
+    const probe = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+    const deadPid = parseInt(String(probe.stdout || '').trim(), 10);
+    assert(Number.isInteger(deadPid) && deadPid > 1,
+      '#1097 lock (takeover): the probe must yield a dead pid; got ' + JSON.stringify(probe && probe.stdout));
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: deadPid, hostname: os.hostname(), project, acquired_at: new Date().toISOString() }) + '\n');
+    const taken = adaptiveSchema.acquirePublishLock(fx.tmpRoot, { project, waitMs: 3000 });
+    assert(taken && taken.acquired,
+      '#1097 lock (takeover): a same-host dead holder\'s lock must be taken over, not waited out; got ' + JSON.stringify(taken));
+    try { adaptiveSchema.releasePublishLock(taken); } catch (_) {}
+    // The inverse: a LIVE holder (this process) is never taken over, however long the wait.
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, hostname: os.hostname(), project, acquired_at: new Date().toISOString() }) + '\n');
+    const refused = adaptiveSchema.acquirePublishLock(fx.tmpRoot, { project, waitMs: 300 });
+    assert(refused && !refused.acquired && refused.reason === 'publish_busy',
+      '#1097 lock (takeover): a LIVE same-host holder must never be taken over; got ' + JSON.stringify(refused));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// #1097 (review F1): the lock's HOLD SCOPE, observed from OUTSIDE the sink. The gate-hold protocol
+// pins the window: while the resumed sink is inside its re-rebase + re-taken test gate (the long
+// work), a SECOND acquirer must GET the lock — the hold is seconds-only, released for the gate —
+// and after the gate the sink must re-acquire, re-check the base, and complete the publication.
+(function testPublishLockIsReleasedForTheGateWindow1097() {
+  console.log('Test (#1097 lock scope): the lock is released for the re-rebase + test gate — a second acquirer gets it DURING the gate, and the sink re-acquires and completes');
+  const project = 'issue-109750';
+  const issue = 109750;
+  const gateHoldDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1097-gate-'));
+  const startedFile = path.join(gateHoldDir, 'gate-started');
+  const releaseFile = path.join(gateHoldDir, 'gate-release');
+  const fx = buildPostRebaseGateFixture(project, issue, { gateHold: { startedFile, releaseFile } });
+  const adaptiveSchema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+  const { spawn } = require('child_process');
+  try {
+    // Run 1 stops after the archive commit — the receipt carries candidate_head + W (the AC5
+    // shape), so run 2 goes straight to push_main and hits the base-advance arm.
+    const r1 = runSink(fx, ['--issue', String(issue)], { KAOLA_WORKFLOW_SINK_ABORT_AFTER: 'archive_commit' });
+    assert(r1.status === 99, '#1097 lock scope: run 1 must stop on the abort seam (exit 99); got ' + r1.status);
+    // A second lane lands on origin/main — the advance that makes run 2's publish re-rebase and
+    // re-take the gate: the long work the lock must be released for.
+    fs.writeFileSync(path.join(fx.advanceDir, 'SECOND-LANE.txt'), 'a second lane landed before the publish\n');
+    git(fx.advanceDir, ['add', '-A']);
+    git(fx.advanceDir, ['commit', '-m', 'feat: second lane lands between merge and publish']);
+    git(fx.advanceDir, ['push', 'origin', 'main']);
+
+    // Run 2 in the background — the AC2 wrapper pattern (disk markers, never piped stdio
+    // events: this process's event loop never runs under the polling sleeps below).
+    const outFile = path.join(gateHoldDir, 'run2.out'), errFile = path.join(gateHoldDir, 'run2.err'), doneFile = path.join(gateHoldDir, 'run2.done');
+    const cmd = JSON.stringify(process.execPath) + ' ' + JSON.stringify(sinkMergeScript)
+      + ' --branch ' + JSON.stringify(fx.branch)
+      + ' --project ' + JSON.stringify(project)
+      + ' --issue ' + JSON.stringify(String(issue))
+      + ' --sink --json'
+      + ' > ' + JSON.stringify(outFile) + ' 2> ' + JSON.stringify(errFile)
+      + '; echo $? > ' + JSON.stringify(doneFile);
+    spawn('/bin/sh', ['-c', cmd], {
+      cwd: fx.tmpRoot, encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_WORKFLOW_SKIP_TESTGATE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(fx.binDir, 'gh.js'),
+      }),
+    });
+    // The rendezvous: the gate is RUNNING (startedFile written by the gate-hold script inside
+    // run 2's npm test). Bounded, so a sink that refused early fails the test, not the hang.
+    const deadline = Date.now() + 30000;
+    for (;;) {
+      if (fs.existsSync(startedFile)) break;
+      if (Date.now() > deadline) {
+        throw new Error('#1097 lock scope: the gate never started within 30s; stderr tail: '
+          + (() => { try { return fs.readFileSync(errFile, 'utf8').slice(-600); } catch (_) { return '(none yet)'; } })());
+      }
+      // spawn-class: concurrency
+      require('child_process').execSync('sleep 0.05');
+    }
+    // THE MEASUREMENT: while run 2 is inside its gate, the lock must be FREE — the hold is
+    // released for the re-rebase + gate. A lock held across the gate would answer publish_busy.
+    const midGate = adaptiveSchema.acquirePublishLock(fx.tmpRoot, { project: 'a-second-acquirer', waitMs: 1500 });
+    assert(midGate && midGate.acquired,
+      '#1097 lock scope: a second acquirer must GET the lock during the gate — the hold is released for the re-rebase + test gate; got ' + JSON.stringify(midGate));
+    adaptiveSchema.releasePublishLock(midGate);
+    // Let the gate finish; the sink re-acquires, re-checks the base, and publishes.
+    fs.writeFileSync(releaseFile, 'released\n');
+    const deadline2 = Date.now() + 90000;
+    while (!fs.existsSync(doneFile)) {
+      if (Date.now() > deadline2) {
+        throw new Error('#1097 lock scope: run 2 never finished; stderr tail: '
+          + (() => { try { return fs.readFileSync(errFile, 'utf8').slice(-600); } catch (_) { return '(none yet)'; } })());
+      }
+      // spawn-class: concurrency
+      require('child_process').execSync('sleep 0.1');
+    }
+    const code2 = parseInt(fs.readFileSync(doneFile, 'utf8').trim(), 10);
+    const ls2 = String(fs.readFileSync(outFile, 'utf8') || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+    const out2 = ls2.length ? JSON.parse(ls2[ls2.length - 1]) : null;
+    assert(code2 === 0 && out2 && out2.status === 'sinked',
+      '#1097 lock scope: the sink must re-acquire after the gate and complete; got exit ' + code2
+        + '\nstdout: ' + JSON.stringify(out2) + '\nstderr: ' + String(fs.readFileSync(errFile, 'utf8') || '').slice(-600));
+    assert(out2 && out2.publication === 'published',
+      '#1097 lock scope: the re-acquired publish must publish; got ' + JSON.stringify(out2 && out2.publication));
+    // The completed sink disposes its journal (#653), so the gate evidence is read from the
+    // envelope's receipt — the same receipt shape every #1097 completed-run arm reads.
+    const rc2 = out2 && out2.receipt;
+    assert(rc2 && rc2.post_rebase_tests === 'green',
+      '#1097 lock scope: the gate really ran and was recorded green; got ' + JSON.stringify(rc2 && rc2.post_rebase_tests));
+  } finally {
+    try { fs.rmSync(gateHoldDir, { recursive: true, force: true }); } catch (_) {}
+    cleanupGateFixture(fx);
   }
 })();
 
@@ -1687,12 +1893,21 @@ function readSavedJournal1097(tmpRoot, project) {
   fs.mkdirSync(path.join(remotePath, 'hooks'), { recursive: true });
   fs.writeFileSync(path.join(remotePath, 'hooks', 'pre-receive'), '#!/bin/sh\nsleep 1.2\nexit 0\n');
   fs.chmodSync(path.join(remotePath, 'hooks', 'pre-receive'), 0o755);
+  // #1097 (review): declared in the FUNCTION scope, not inside the try — the finally below must
+  // remove it even when an assertion throws mid-arm, and a block-scoped const made the finally's
+  // rmSync throw a swallowed ReferenceError on every red run, leaking the kw-ac2-run-* temp dir.
+  let runDir = null;
   try {
     fs.writeFileSync(path.join(tmpRoot, 'README.md'), 'fixture\n');
     git(tmpRoot, ['add', '-A']);
     git(tmpRoot, ['commit', '-m', 'chore: base']);
     git(tmpRoot, ['push', 'origin', 'main']);
     const headBefore = git(tmpRoot, ['rev-parse', 'main']).stdout.trim();
+    // (review) The per-branch-ref sole-touch baseline: only the publish's fast-forward may write
+    // the shared checkout's local default-branch ref, so the reflog delta is asserted against
+    // this count after both lanes finish.
+    const reflogRawBefore = git(tmpRoot, ['reflog', 'show', '--format=%H', 'refs/heads/main']).stdout;
+    const reflogBefore = reflogRawBefore.trim() ? reflogRawBefore.trim().split('\n').length : 0;
 
     for (const [project, issue] of lanes) {
       git(tmpRoot, ['checkout', '-b', 'workflow/' + project]);
@@ -1724,7 +1939,7 @@ function readSavedJournal1097(tmpRoot, project) {
     // to <lane>.out, stderr to <lane>.err, and the exit status to <lane>.done after node exits;
     // fs.existsSync/readFileSync poll disk, which works under synchronous sleeps.
     const { spawn } = require('child_process');
-    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ac2-run-'));
+    runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ac2-run-'));
     const procs = lanes.map(([project, issue]) => {
       const base = path.join(runDir, project);
       const outFile = base + '.out', errFile = base + '.err', doneFile = base + '.done';
@@ -1850,12 +2065,20 @@ function readSavedJournal1097(tmpRoot, project) {
       '#1097 AC2: the shared checkout must end on the default branch');
     assert(git(tmpRoot, ['merge-base', '--is-ancestor', 'main', 'origin/main']).status === 0,
       '#1097 AC2: the shared checkout\'s HEAD must be an ancestor of the published tip');
+    // (review) The per-branch-ref sole-touch: exactly one reflog entry per lane that reported
+    // `advanced` — no other writer may touch the shared checkout's local default-branch ref.
+    const reflogRawAfter = git(tmpRoot, ['reflog', 'show', '--format=%H', 'refs/heads/main']).stdout;
+    const reflogAfter = reflogRawAfter.trim() ? reflogRawAfter.trim().split('\n').length : 0;
+    const advancedLanes = outs.filter(o => o.out && o.out.cleanup && o.out.cleanup.main_checkout === 'advanced').length;
+    assert(reflogAfter === reflogBefore + advancedLanes,
+      '#1097 AC2: only the publish\'s fast-forward may write the local default-branch ref — one reflog entry per advanced lane, no other writer; got '
+        + (reflogAfter - reflogBefore) + ' new reflog entries for ' + advancedLanes + ' advanced lane(s)');
     for (const [project] of lanes) {
       assert(!fs.existsSync(path.join(tmpRoot, 'kaola-workflow', project)),
         '#1097 AC2: no live folder may be left in the shared checkout — ' + project);
     }
   } finally {
-    try { fs.rmSync(runDir, { recursive: true, force: true }); } catch (_) {}
+    try { if (runDir) fs.rmSync(runDir, { recursive: true, force: true }); } catch (_) {}
     for (const [project] of lanes) {
       try { git(tmpRoot, ['worktree', 'remove', '--force', '--', path.join(tmpRoot, '.kw', 'worktrees', project)]); } catch (_) {}
       try { git(tmpRoot, ['worktree', 'remove', '--force', '--', path.join(tmpRoot, '.kw', 'integrate', project)]); } catch (_) {}
@@ -3822,9 +4045,31 @@ function buildPostRebaseGateFixture(project, issue, opts) {
   fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap'), { recursive: true });
   fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'), roadmapSource(issue));
   fs.writeFileSync(path.join(tmpRoot, 'kaola-workflow', 'ROADMAP.md'), roadmapMirror([issue]));
+  // #1097 (review F1): opts.gateHold = { startedFile, releaseFile } replaces the instant gate
+  // with the hold protocol: the gate script signals startedFile when npm test reaches it, then
+  // polls for releaseFile (a synchronous Atomics.wait sleep — the gate is a real `npm test` the
+  // sink runs; the hold script itself is a plain node file, so no child spawn is involved) and
+  // exits 0. The lock-scope test uses it to observe the gate window from OUTSIDE the sink.
+  let testScript = 'exit ' + (opts.testExit != null ? opts.testExit : 0);
+  if (opts.gateHold) {
+    const gateScript = path.join(binDir, 'gate-hold.js');
+    fs.writeFileSync(gateScript, [
+      "const fs = require('fs');",
+      "const sab = new Int32Array(new SharedArrayBuffer(4));",
+      "try { fs.writeFileSync(" + JSON.stringify(opts.gateHold.startedFile) + ", String(process.pid)); } catch (_) {}",
+      "const deadline = Date.now() + 60000;",
+      "for (;;) {",
+      "  if (fs.existsSync(" + JSON.stringify(opts.gateHold.releaseFile) + ")) break;",
+      "  if (Date.now() > deadline) break;",
+      "  Atomics.wait(sab, 0, 0, 50);",
+      "}",
+      "process.exit(0);",
+    ].join('\n'));
+    testScript = JSON.stringify(process.execPath) + ' ' + JSON.stringify(gateScript);
+  }
   fs.writeFileSync(path.join(tmpRoot, 'package.json'), JSON.stringify({
     name: 'sink-gate-fixture', version: '1.0.0', private: true,
-    scripts: { test: 'exit ' + (opts.testExit != null ? opts.testExit : 0), 'test:kaola-workflow:claude': 'exit 0' },
+    scripts: { test: testScript, 'test:kaola-workflow:claude': 'exit 0' },
   }, null, 2) + '\n');
   git(tmpRoot, ['add', '-A']);
   git(tmpRoot, ['commit', '-m', 'chore: roadmap + npm-edition package.json']);

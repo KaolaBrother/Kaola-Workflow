@@ -9,7 +9,8 @@
   `.kw/integrate/<project>` — and runs the validation chains there, so the shared checkout is never
   switched or rebased and `#1096`'s unified untracked-conflict rule and the tracked-dirt refusal it
   sat beside are **eliminated by construction** rather than relaxed. Publication is a short-scope
-  compare-and-swap: `acquirePublishLock` serializes concurrent sinks on one project (`publish_busy`
+  compare-and-swap: `acquirePublishLock` serializes concurrent sinks for one repository (one lock in
+  the git common dir, shared across worktrees; `publish_busy`
   names a live holder), the candidate is pushed as a non-forced update and re-rebased while the
   default branch keeps moving, and the shared checkout is then advanced fast-forward-only and
   reported as `cleanup.main_checkout` (`advanced` or `behind: <reason>`) — foreign tracked or

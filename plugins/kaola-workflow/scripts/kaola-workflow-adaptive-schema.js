@@ -2225,10 +2225,12 @@ function removeIntegrationWorktree(mainRoot, project) {
 // added into it and committed with `commit-tree`. mainRoot's checkout is never touched; the archive
 // bytes are still read from mainRoot's working tree (#832's rule is unchanged).
 //
-// Returns { committed, staged, tree, addErrors, indexPath, error }. `staged` is every path the new
+// Returns { committed, staged, tree, addErrors, error }. `staged` is every path the new
 // commit actually carries over the candidate (the report #893/#1096 wants, measured not inferred),
 // `addErrors` is every `git add` that exited non-zero (git exits 1 while still staging a path's
-// non-ignored siblings — #901), and `committed` is null when nothing was staged.
+// non-ignored siblings — #901), and `committed` is null when nothing was staged. Every caller
+// stages through `arms` (each naming its own source root) plus the optional `forcePaths` arm —
+// the top-level `paths`/`excludes` options never had a caller and are gone.
 function commitPathsOntoCandidate(mainRoot, opts) {
   const { execFileSync } = require('child_process');
   const fs = require('fs');
@@ -2236,17 +2238,12 @@ function commitPathsOntoCandidate(mainRoot, opts) {
   const path = require('path');
   const options = opts || {};
   const candidate = String(options.candidate || '').trim();
-  const paths = (options.paths || []).map(String).filter(Boolean);
-  // The exclude specs arrive as full pathspec-magic strings (`:(exclude,glob)…`) — the caller owns
-  // their meaning; this primitive only appends them to the tracked arm.
-  const excludes = (options.excludes || []).map(String).filter(Boolean);
   const forcePaths = (options.forcePaths || []).map(String).filter(Boolean);
   const message = String(options.message || '');
-  const out = { committed: null, staged: [], tree: null, addErrors: [], indexPath: null, error: null };
+  const out = { committed: null, staged: [], tree: null, addErrors: [], error: null };
   if (!candidate) { out.error = 'no candidate'; return out; }
   const indexDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-candidate-index-'));
   const indexPath = path.join(indexDir, 'index');
-  out.indexPath = indexPath;
   const env = Object.assign({}, process.env, { GIT_INDEX_FILE: indexPath });
   const git = (args) => execFileSync('git', ['-C', mainRoot].concat(args),
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env, maxBuffer: VALIDATION_GIT_MAX_BUFFER });
@@ -2282,7 +2279,6 @@ function commitPathsOntoCandidate(mainRoot, opts) {
       }
     };
     const armList = [];
-    if (paths.length || excludes.length) armList.push({ root: mainRoot, paths, excludes, force: false });
     if (forcePaths.length) armList.push({ root: mainRoot, paths: forcePaths, excludes: [], force: true });
     for (const arm of (options.arms || [])) {
       armList.push({

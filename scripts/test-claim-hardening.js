@@ -5316,6 +5316,105 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   }
 }
 
+// --- #1097 (review round): the stale sweep must never take a LIVE sink's integration W -------
+// collectStale's integration arm classified a W stale on (archived || issue closed) && !active.
+// But around a sink run the issue is exactly what closes, and readActiveFolders drops a CLOSED
+// issue's folder on its default path (#895) — so the active-set guard protects nothing and a
+// concurrent stale-worktree-cleanup could sweep the sink's own publish candidate W mid-flight
+// (between its recorded steps). The guard is the sink's own resumability record: a
+// sink-receipt.json (live .cache, or archive .cache once closure moved the folder) whose steps
+// are not all 'done' means a sink that still owns the W. This test forces the exact shape: a
+// clean integration W + a CLOSED issue + a mid-flight receipt — --execute must SURVIVE it; flip
+// the receipt to all-done (a completed sink's leftover) and the same sweep removes it.
+{
+  const { execFileSync: execFS1097R, spawnSync: spawnS1097R } = require('child_process');
+  const CLAIM1097R = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_1097R = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g1097R = (cwd, args) => execFS1097R('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_1097R });
+
+  const tmp1097R = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1097r-sweep-')));
+  const binDir1097R = path.join(tmp1097R, 'bin');
+  // The sink's integration W lives INSIDE the repo at <root>/.kw/integrate/<project> — NOT the
+  // `<tmp>.kw` sibling convention the lane-worktree arms use (they are found by git
+  // registration; the integrate arm is found by scanning <root>/.kw/integrate).
+  const wPath1097R = path.join(tmp1097R, '.kw', 'integrate', 'issue-96202');
+  const receiptPath1097R = path.join(tmp1097R, 'kaola-workflow', 'issue-96202', '.cache', 'sink-receipt.json');
+  const writeReceipt1097R = (pushMain, closureStep) => fs.writeFileSync(receiptPath1097R, JSON.stringify({
+    project: 'issue-96202',
+    steps: { preflight: 'done', push_upstream: 'done', merge: 'done', finalize: 'done',
+      stash_restore: 'done', archive_commit: 'done', push_main: pushMain, closure: closureStep }
+  }, null, 2) + '\n');
+  try {
+    g1097R(tmp1097R, ['init', '-b', 'main']);
+    g1097R(tmp1097R, ['config', 'user.email', 't@t.com']);
+    g1097R(tmp1097R, ['config', 'user.name', 'Test']);
+    g1097R(tmp1097R, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(tmp1097R, 'README.md'), 'fixture\n');
+    g1097R(tmp1097R, ['add', 'README.md']);
+    g1097R(tmp1097R, ['commit', '-m', 'init']);
+
+    // The sink's integration W: a registered, clean, DETACHED worktree under .kw/integrate/.
+    fs.mkdirSync(path.dirname(wPath1097R), { recursive: true });
+    g1097R(tmp1097R, ['worktree', 'add', '--detach', '--', wPath1097R, 'HEAD']);
+
+    // gh mock: the issue reports CLOSED — the stale trigger, and the exact condition that makes
+    // readActiveFolders drop the folder, so the OLD active-set guard protected nothing.
+    fs.mkdirSync(binDir1097R, { recursive: true });
+    fs.writeFileSync(path.join(binDir1097R, 'gh.js'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view 96202')) { process.stdout.write('{\"state\":\"closed\"}\\n'); process.exit(0); }",
+      "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); process.exit(0); }",
+      "process.stdout.write('[\\n'); process.exit(0);"
+    ].join('\n'));
+
+    // The mid-flight receipt: everything through archive_commit done, push_main + closure
+    // pending — the exact window between finalize and push_main.
+    fs.mkdirSync(path.dirname(receiptPath1097R), { recursive: true });
+    writeReceipt1097R('pending', 'pending');
+    // spawn-class: cli-contract
+    const r1_1097R = spawnS1097R(process.execPath, [CLAIM1097R, 'stale-worktree-cleanup', '--execute'], {
+      cwd: tmp1097R,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir1097R, 'gh.js')
+      })
+    });
+    let out1_1097R = {};
+    try { out1_1097R = JSON.parse(r1_1097R.stdout); } catch (_) {}
+    assert(out1_1097R.dry_run === false, '#1097 sweep: dry_run must be false, got ' + JSON.stringify(out1_1097R) + '\nstderr: ' + r1_1097R.stderr);
+    assert(fs.existsSync(wPath1097R),
+      '#1097 sweep: a resumable sink receipt (steps not all done) must protect the sink\'s W from --execute — the W is the publish candidate a resumed sink rebuilds at candidate_head');
+    assert(!Array.isArray(out1_1097R.removed) || !out1_1097R.removed.some(p => p === wPath1097R),
+      '#1097 sweep: removed must NOT contain the live sink\'s W, got ' + JSON.stringify(out1_1097R.removed));
+
+    // All-done: a COMPLETED sink's leftover W sweeps exactly as before — the guard is
+    // receipt-driven, never a blanket exemption for .kw/integrate.
+    writeReceipt1097R('done', 'done');
+    // spawn-class: cli-contract
+    const r2_1097R = spawnS1097R(process.execPath, [CLAIM1097R, 'stale-worktree-cleanup', '--execute'], {
+      cwd: tmp1097R,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir1097R, 'gh.js')
+      })
+    });
+    let out2_1097R = {};
+    try { out2_1097R = JSON.parse(r2_1097R.stdout); } catch (_) {}
+    assert(!fs.existsSync(wPath1097R),
+      '#1097 sweep: a completed sink\'s (all steps done) leftover W must sweep exactly as before');
+    assert(Array.isArray(out2_1097R.removed) && out2_1097R.removed.some(p => p === wPath1097R),
+      '#1097 sweep: removed must contain the completed sink\'s W, got ' + JSON.stringify(out2_1097R.removed) + '\nstderr: ' + r2_1097R.stderr);
+  } finally {
+    fs.rmSync(tmp1097R, { recursive: true, force: true });
+  }
+}
+
 spawnCensus.report();
 
 if (failed > 0) {
