@@ -2057,13 +2057,9 @@ function repoWideIgnoredNames(root, rels) {
 // subsumed had no remaining safety duty once the checkout left the shared tree.
 
 function sinkPreflight(mainRoot, project, branch, defBranch) {
-  // #562: worktree-clean data-loss guard — mirror the legacy path's assertWorktreeClean (:1461). The
-  // --sink merge step force-removes the linked worktree (removeWorktree → `git worktree remove --force`)
-  // with NO clean precondition, so a dirty worktree's uncommitted work would be silently destroyed — the
-  // exact #496/#506 data-loss hazard the legacy path already guards. assertWorktreeClean throws on a
-  // dirty OR unprobeable worktree (fail-closed); convert that to the typed refusal sinkPreflight returns
-  // so runSinkTransaction's preflight handler surfaces result:'refuse' + exit 1 with ZERO mutation.
-  // Resume-safe: an already-removed worktree matches no `worktree list` block and returns cleanly.
+  // #562: keep the worktree-clean data-loss guard at the sink preflight boundary. The W-model
+  // no longer removes the development worktree during merge, but a dirty or unprobeable linked
+  // worktree remains a protected user-work boundary and must stop before this transaction mutates.
   try {
     assertWorktreeClean(mainRoot, branch, [project]);
   } catch (err) {
@@ -2942,6 +2938,18 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
           });
       }
       const commitPaths = archiveArmPaths.concat(candidateSidePaths);
+      // #1097 old-model resume adoption: a receipt whose merge is `done` but whose candidate_head
+      // was never recorded predates the W-model — the old model merged straight into the local
+      // <def>, so that ref IS the candidate. Adopt and STAMP it here (push_main adopts the same
+      // way before its publish), or the archive commit below has nothing to build on and the
+      // #700 guard refuses an archive that DID land.
+      if (!receipt.candidate_head && receipt.steps && receipt.steps.merge === 'done') {
+        try {
+          const localDef = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', defBranch],
+            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+          if (localDef) receipt.candidate_head = localDef;
+        } catch (_) {}
+      }
       let candidateBefore = null;
       try {
         candidateBefore = wtForCommit && fs.existsSync(wtForCommit)
@@ -3501,11 +3509,41 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   // PROBE it before removal and keep it when dirty — never `--force` over work written during the
   // window between the merge and this point.
   try {
-    const { removeWorktree: removeWt } = require('./kaola-workflow-claim.js');
+    const { removeWorktree: removeWt, worktreePathFor: wtPathFor } = require('./kaola-workflow-claim.js');
     // #1055: readActiveFolders is a pure re-export of active-folders.js — imported from its owner.
     const { readActiveFolders: readAF } = require('./kaola-workflow-active-folders');
     const folder = readAF(mainRoot, { excludeClosedIssues: false }).find(f => f.project === args.project);
-    const devWt = (folder && folder.worktree_path) || null;
+    // #1097: at teardown time the live folder is usually already archived onto the candidate, so
+    // readActiveFolders finds nothing and folder.worktree_path is null — measured: the probe was
+    // skipped, devDirty stayed false, and the removal destroyed a marker-carrying dev worktree.
+    // Resolution order, and the order is load-bearing: the folder record first (a live record),
+    // then GIT'S OWN WORKTREE LIST — the authority on where this run's branch is checked out,
+    // which finds a linked worktree wherever its creator put it (claim.js's canonical
+    // `.kw/worktrees/<project>` is the common case, not the only one) — and the canonical
+    // computed path LAST and only when something actually exists there (wtPathFor computes a
+    // location, it does not verify one, so an unconditional fallback would shadow the authority
+    // with a path that is usually absent — measured: skipped_missing over a live worktree).
+    let devWt = (folder && folder.worktree_path) || null;
+    if (!devWt) {
+      try {
+        const list = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'],
+          { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+        for (const block of String(list).split('\n\n')) {
+          const lines = block.split('\n').filter(Boolean);
+          const wt = lines.find(l => l.startsWith('worktree '));
+          if (wt && lines.includes('branch refs/heads/' + args.branch)) {
+            devWt = wt.slice('worktree '.length);
+            break;
+          }
+        }
+      } catch (_) {}
+    }
+    if (!devWt) {
+      try {
+        const canonical = wtPathFor(mainRoot, args.project);
+        if (canonical && fs.existsSync(canonical)) devWt = canonical;
+      } catch (_) {}
+    }
     let devDirty = false;
     if (devWt && fs.existsSync(devWt)) {
       try {
@@ -3517,12 +3555,31 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
     if (devDirty) {
       cleanupSummary.worktree = 'kept_dirty';
     } else {
-      const wtRes = removeWt(mainRoot, args.project, folder);
-      cleanupSummary.worktree = wtRes && wtRes.removed
-        ? 'removed'
-        : (wtRes && wtRes.reason === 'missing'
-          ? 'skipped_missing'
-          : 'failed: ' + ((wtRes && (wtRes.detail || wtRes.reason)) || 'git worktree remove failed'));
+      // NON-FORCE removal: the probe above is the gate, this is the physical backstop. A rare
+      // probe miss (a transient worktree state read clean over present dirt) must not turn into
+      // a forced destruction — `git worktree remove` without --force refuses over any modified
+      // or untracked file itself, and a refused removal leaves the worktree standing.
+      const wtRes = removeWt(mainRoot, args.project, folder, { force: false });
+      if (wtRes && wtRes.removed) {
+        cleanupSummary.worktree = 'removed';
+      } else if (wtRes && wtRes.reason === 'missing') {
+        cleanupSummary.worktree = 'skipped_missing';
+      } else if (devWt && fs.existsSync(devWt)) {
+        // The removal refused and the worktree still stands: re-probe dirt. A dirty verdict is
+        // the honest kept_dirty (git's own refusal said exactly this); a clean-but-unremovable
+        // worktree (e.g. an open file) stays a reported failure, never a silent one.
+        let nowDirty = true;
+        try {
+          const st2 = execFileSync('git', ['-C', devWt, 'status', '--porcelain', '-uall'],
+            { encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).trim();
+          nowDirty = worktreeDirtRecords(st2).length > 0;
+        } catch (_) { nowDirty = true; }
+        cleanupSummary.worktree = nowDirty
+          ? 'kept_dirty'
+          : 'failed: ' + ((wtRes && (wtRes.detail || wtRes.reason)) || 'git worktree remove refused (worktree still standing, probe clean)');
+      } else {
+        cleanupSummary.worktree = 'failed: ' + ((wtRes && (wtRes.detail || wtRes.reason)) || 'git worktree remove failed');
+      }
     }
   } catch (e) {
     cleanupSummary.worktree = 'failed: ' + cleanupErrText(e);
@@ -3543,23 +3600,30 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   // #1097: delete the local feature branch ONLY when its tip is still the integrated_from we
   // published, AND that candidate was actually published. The ref was never rebased in the W-model,
   // so a plain ancestry test against <def> would now be false; the identity test is the safe one.
-  try {
-    const tip = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', args.branch],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    const safeToDelete = !!tip && !!receipt.integrated_from && tip === receipt.integrated_from
-      && !!receipt.published_head;
-    if (safeToDelete) {
-      try {
-        execFileSync('git', ['-C', mainRoot, 'branch', '-D', '--', args.branch], { encoding: 'utf8' });
-        cleanupSummary.local_branch = 'deleted';
-      } catch (e) {
-        cleanupSummary.local_branch = 'failed: ' + cleanupErrText(e);
+  // A KEPT dev worktree still has the branch checked out — git refuses the delete and the refusal
+  // is the design working, not a fault — so the delete is not attempted and the keep is reported.
+  const devWorktreeKept = String(cleanupSummary.worktree || '').indexOf('kept') === 0;
+  if (devWorktreeKept) {
+    cleanupSummary.local_branch = 'kept: checked out by the dev worktree (' + cleanupSummary.worktree + ')';
+  } else {
+    try {
+      const tip = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', args.branch],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      const safeToDelete = !!tip && !!receipt.integrated_from && tip === receipt.integrated_from
+        && !!receipt.published_head;
+      if (safeToDelete) {
+        try {
+          execFileSync('git', ['-C', mainRoot, 'branch', '-D', '--', args.branch], { encoding: 'utf8' });
+          cleanupSummary.local_branch = 'deleted';
+        } catch (e) {
+          cleanupSummary.local_branch = 'failed: ' + cleanupErrText(e);
+        }
+      } else {
+        cleanupSummary.local_branch = 'kept: branch tip is not the published candidate';
       }
-    } else {
-      cleanupSummary.local_branch = 'kept: branch tip is not the published candidate';
+    } catch (_) {
+      cleanupSummary.local_branch = 'skipped_missing';
     }
-  } catch (_) {
-    cleanupSummary.local_branch = 'skipped_missing';
   }
 
   // Emit success

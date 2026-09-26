@@ -581,7 +581,12 @@ function worktreeDirtyState(wtPath) {
 // reports the machine failure under the same `mirror_sync_failed` reason #837 already ships for a
 // sync the script owes and cannot perform. One rule, one wording: there is no second code for
 // "the archive could not be moved to safety".
-function removeWorktree(root, project, folder) {
+function removeWorktree(root, project, folder, opts) {
+  // opts.force (default true): the --sink teardown passes { force: false } so git ITSELF refuses
+  // over any modified or untracked file the caller's own dirt probe might have missed — the
+  // probe is the gate, the non-force removal is the physical backstop, and a worktree the caller
+  // cannot prove clean is kept, never --forced over.
+  const force = !(opts && opts.force === false);
   const wtPath = (folder && folder.worktree_path) || worktreePathFor(root, project);
   if (!wtPath || !fs.existsSync(wtPath)) return { removed: false, reason: 'missing' };
   let archiveRescued = false;
@@ -625,7 +630,7 @@ function removeWorktree(root, project, folder) {
     }
   }
   try {
-    execFileSync('git', ['worktree', 'remove', '--force', '--', wtPath], {
+    execFileSync('git', ['worktree', 'remove'].concat(force ? ['--force'] : []).concat(['--', wtPath]), {
       cwd: root,
       stdio: ['ignore', 'ignore', 'ignore']
     });

@@ -10,7 +10,7 @@ const classifier = require('./kaola-gitlab-workflow-classifier');
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 // #579: shared resolver — single source replacing local re-impls.
 const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, isParkedLanePath,
-  splitNulPaths } = adaptiveSchema;
+  splitNulPaths, publishTargetRef } = adaptiveSchema;
 // #579: lane session helpers from forge classifier (in-process; no subprocess).
 const { resolveSessionMarker, classifyLane } = classifier;
 
@@ -404,7 +404,12 @@ function provisionWorktree(root, project, branch) {
 // reports the machine failure under the same `mirror_sync_failed` reason #837 already ships for a
 // sync the script owes and cannot perform. One rule, one wording: there is no second code for
 // "the archive could not be moved to safety".
-function removeWorktree(root, project, folder) {
+function removeWorktree(root, project, folder, opts) {
+  // opts.force (default true): the --sink teardown passes { force: false } so git ITSELF refuses
+  // over any modified or untracked file the caller's own dirt probe might have missed — the
+  // probe is the gate, the non-force removal is the physical backstop, and a worktree the caller
+  // cannot prove clean is kept, never --forced over.
+  const force = !(opts && opts.force === false);
   const wtPath = (folder && folder.worktree_path) || worktreePathFor(root, project);
   if (!wtPath || !fs.existsSync(wtPath)) return { removed: false, reason: 'missing' };
   let archiveRescued = false;
@@ -448,7 +453,7 @@ function removeWorktree(root, project, folder) {
     }
   }
   try {
-    execFileSync('git', ['worktree', 'remove', '--force', '--', wtPath], {
+    execFileSync('git', ['worktree', 'remove'].concat(force ? ['--force'] : []).concat(['--', wtPath]), {
       cwd: root,
       stdio: ['ignore', 'ignore', 'ignore']
     });
@@ -5474,6 +5479,41 @@ function collectStale(root) {
     }
   }
 
+  // #1097: integration worktrees (`.kw/integrate/<project>`) are invisible to
+  // listWorkflowWorktrees by design — they never sit on a workflow/issue-* branch (the merge
+  // checks out the candidate, detached, inside them) — so the stale sweep has to name them
+  // itself or an interrupted run's W outlives its project forever. Classification is the same
+  // rule the lane worktrees get: stale once the project is archived or its issue is closed and
+  // the project is not active. A W that is none of those is a LIVE run's publish candidate — the
+  // sweep must never touch it. Disposable by design (the sink's resume rebuilds W at the
+  // recorded candidate_head), so removal is safe once it is genuinely stale.
+  const stale_integration_worktrees = [];
+  try {
+    const integrateBase = path.join(root, ...String(adaptiveSchema.INTEGRATE_DIR_REL || '.kw/integrate').split('/'));
+    if (fs.existsSync(integrateBase)) {
+      for (const name of fs.readdirSync(integrateBase)) {
+        const wtPath = path.join(integrateBase, name);
+        let isDir = false;
+        try { isDir = fs.statSync(wtPath).isDirectory(); } catch (_) { isDir = false; }
+        if (!isDir) continue;
+        const projectName = name;
+        const numMatch = projectName.match(/issue-(\d+)/);
+        const issueNumber = numMatch ? Number(numMatch[1]) : null;
+        const isArchivedW = fs.existsSync(path.join(root, 'kaola-workflow', 'archive', projectName));
+        const isClosedW = (!OFFLINE && issueNumber != null) ? issueIsClosed(issueNumber) : false;
+        const inActiveSetW = issueNumber != null && activeSet.has(issueNumber);
+        if ((isArchivedW || isClosedW) && !inActiveSetW) {
+          stale_integration_worktrees.push({
+            path: wtPath,
+            project: projectName,
+            issue_number: issueNumber,
+            state: worktreeDirtyState(wtPath)
+          });
+        }
+      }
+    }
+  } catch (_) {}
+
   let localBranches = [];
   try {
     const raw = execFileSync('git', ['-C', root, 'for-each-ref', '--format=%(refname:short)',
@@ -5497,22 +5537,22 @@ function collectStale(root) {
     }
   }
 
-  return { stale_worktrees, stale_branches, active_worktrees };
+  return { stale_worktrees, stale_branches, active_worktrees, stale_integration_worktrees };
 }
 
 function cmdStaleWorktreeCheck() {
   const root = getRoot();
   const r = collectStale(root);
-  output({ ...r, count: r.stale_worktrees.length + r.stale_branches.length });
+  output({ ...r, count: r.stale_worktrees.length + r.stale_branches.length + r.stale_integration_worktrees.length });
 }
 
 function cmdStaleWorktreeCleanup() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
-  const { stale_worktrees, stale_branches } = collectStale(root);
+  const { stale_worktrees, stale_branches, stale_integration_worktrees } = collectStale(root);
 
   // Refuse entire run if cwd is inside any candidate worktree
-  for (const wt of stale_worktrees) {
+  for (const wt of stale_worktrees.concat(stale_integration_worktrees || [])) {
     if (fs.existsSync(wt.path) && cwdInside(wt.path)) {
       output({ cleanup: false, reason: 'refusing to operate from inside a target worktree: ' + wt.path }, 1);
       return;
@@ -5586,6 +5626,34 @@ function cmdStaleWorktreeCleanup() {
         removedBranches.add(branch);
       }
     }
+  }
+
+  // #1097: stale integration worktrees. No branch rides them (that is why listWorkflowWorktrees
+  // cannot see them), so this is the whole disposal: the same dirty/unprobeable protections the
+  // lane worktrees get — a stale W is disposable by design, but only once its state is KNOWN and
+  // clean — then the kernel's own remover (it knows the `.kw/integrate/<project>` path rule and
+  // the deregistration), never a branch deletion. Dry-run reports `would_remove` beside the lane
+  // answers so an operator can preview the whole sweep in one read.
+  for (const wt of (stale_integration_worktrees || [])) {
+    if (cwdInside(wt.path)) {
+      (dryRun ? dryBuckets : buckets).skipped_unprobeable.push(wt.path);
+      continue;
+    }
+    if (wt.state === 'unprobeable') {
+      (dryRun ? dryBuckets : buckets).skipped_unprobeable.push(wt.path);
+      continue;
+    }
+    if (wt.state === 'dirty' && !(args.archive || args.export || args.force)) {
+      (dryRun ? dryBuckets : buckets).skipped_dirty.push(wt.path);
+      continue;
+    }
+    if (dryRun) {
+      dryBuckets.would_remove.push(wt.path);
+      continue;
+    }
+    const rmResult = adaptiveSchema.removeIntegrationWorktree(root, wt.project, { worktree_path: wt.path });
+    if (rmResult && rmResult.removed) buckets.removed.push(wt.path);
+    else buckets.failed_preserve.push(wt.path);
   }
 
   // Branch deletion: worktree-removed branches + loose stale_branches
@@ -6120,7 +6188,13 @@ function cmdVerifySink() {
       implRef = execFileSync('git', ['-C', root, 'rev-parse', branchName], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     } catch (_) {}
   }
-  const sinkTarget = defaultBranch(root);
+  // #1097: the sink target is the PUBLISHED ref — `origin/<def>` when it resolves — via the same
+  // kernel helper the sink's publish loop, its CAS and its publication verdict use
+  // (publishTargetRef), so the claim-side audit and the sink ask one question and cannot drift.
+  // The old probe answered the LOCAL <def>: a local main that lagged its own remote (the sink
+  // pushes the candidate to origin/<def> and advances the local ref only afterwards, inside the
+  // publish lock) false-alarmed impl_commit_not_ancestor on a genuinely published run.
+  const sinkTarget = publishTargetRef(root, defaultBranch(root));
   checks.impl_commit = implRef || null;
   checks.sink_target = sinkTarget;
   if (!implRef) {
