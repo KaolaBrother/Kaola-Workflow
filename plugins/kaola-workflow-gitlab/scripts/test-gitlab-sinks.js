@@ -2665,4 +2665,375 @@ console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
   }
 }
 
+// ---------------------------------------------------------------------------
+// #1097 AC2 + AC3, ported from the canonical suite (scripts/test-sink-merge.js). The preflight
+// deletion and these arms are hand-ported per forge, so a canonical-only green would not see a
+// port that kept the old refusal — the same reason the #912/#973/#978 arms above state their
+// expectations in this file instead of importing one.
+//
+
+// AC3: TRACKED foreign changes in the shared checkout — unstaged, staged, deleted — no longer
+// block the merge, because the merge never happens in the shared checkout: it happens in the
+// private integration worktree, and the ONE post-publish fast-forward carries git's own overlap
+// protection. The sink completes, every foreign path survives byte-identical with its index entry
+// intact, and the merge is published.
+{
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-1097-ac3-mock-'));
+  const logFile = path.join(bin, 'glab-calls.log');
+  const storeFile = path.join(bin, 'issue-notes.json');
+  const mockPath = path.join(bin, 'mock-glab.js');
+  try {
+    fs.writeFileSync(storeFile, '{}');
+    fs.writeFileSync(mockPath, [
+      '#!/usr/bin/env node',
+      "'use strict';",
+      "const fs = require('fs');",
+      "const path = require('path');",
+      'const argv = process.argv.slice(2);',
+      "const a = argv.join(' ');",
+      'const logFile = ' + JSON.stringify(logFile) + ';',
+      'const storeFile = ' + JSON.stringify(storeFile) + ';',
+      "function log(m){ try { fs.appendFileSync(logFile, m + '\\n'); } catch(_){} }",
+      "function loadStore(){ try { return JSON.parse(fs.readFileSync(storeFile, 'utf8')); } catch(_){ return {}; } }",
+      "if (a.includes('repo view')) {",
+      "  let d = process.cwd(); let inRepo = false;",
+      "  for (;;) { if (fs.existsSync(path.join(d, '.git'))) { inRepo = true; break; } const p = path.dirname(d); if (p === d) break; d = p; }",
+      "  if (!inRepo) { log('REJECTED-wrong-cwd:' + process.cwd() + ' args=' + a); process.stderr.write('glab: not a git repository\\n'); process.exit(1); }",
+      '  process.stdout.write(JSON.stringify({id:77,path_with_namespace:"group/project",web_url:"https://gitlab.example/group/project"}) + "\\n"); process.exit(0);',
+      '}',
+      "if (a.includes('issue view')) { const m = a.match(/issue view (\\d+)/); process.stdout.write(JSON.stringify({iid: m ? Number(m[1]) : 0, state:'opened'}) + '\\n'); process.exit(0); }",
+      "const closeM = a.match(/issue close (\\d+)/); if (closeM) { log('close:' + closeM[1]); process.exit(0); }",
+      "if (a.includes('issue update') && a.includes('--unlabel')) { const m = a.match(/issue update (\\d+)/); log('label-removed:' + (m ? m[1] : '?')); process.exit(0); }",
+      "const delM = a.match(/issues\\/(\\d+)\\/notes\\/(\\d+)/);",
+      "if (a.includes('api') && a.includes('--method DELETE') && delM) {",
+      '  const id = Number(delM[2]); const s = loadStore();',
+      '  for (const k of Object.keys(s)) s[k] = (s[k] || []).filter(function(c){ return Number(c && c.id) !== id; });',
+      "  try { fs.writeFileSync(storeFile, JSON.stringify(s, null, 2)); } catch(_){}",
+      "  log('note-deleted:' + id); process.stdout.write('{}\\n'); process.exit(0);",
+      '}',
+      "const listM = a.match(/issues\\/(\\d+)\\/notes$/);",
+      "if (a.includes('api') && listM) { process.stdout.write(JSON.stringify(loadStore()[listM[1]] || []) + '\\n'); process.exit(0); }",
+      "process.stdout.write('\\n'); process.exit(0);",
+    ].join('\n'));
+    // The #936 posture: the archived state with forge identity committed on main, so the
+    // keep-open closure below resolves identity from the run record without any cwd-sensitive
+    // forge call.
+    const build = (project, issue) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-1097-ac3-'));
+      const remotePath = root + '-remote';
+      const branch = 'workflow/' + project;
+      const git = (...a) => G.exec(root, a, { encoding: 'utf8' });
+      git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+      const archDir = path.join(root, 'kaola-workflow', 'archive', project);
+      fs.mkdirSync(archDir, { recursive: true });
+      fs.writeFileSync(path.join(archDir, 'workflow-state.md'), [
+        '# Kaola-Workflow State', 'status: closed', 'step: complete',
+        'issue_iid: ' + issue, 'issue_number: ' + issue,
+        'project_id: 77', 'path_with_namespace: group/project',
+        'project_web_url: https://gitlab.example/group/project', '',
+        '## Sink', 'branch: ' + branch, 'sink: merge', 'issue_action: comment_keep_open', ''
+      ].join('\n'));
+      fs.writeFileSync(path.join(archDir, 'finalization-summary.md'), '# Finalization\n\n## Final Validation\n\n- `npm test`: pass\n');
+      fs.writeFileSync(path.join(root, 'base.txt'), 'base');
+      git('add', '-A'); git('commit', '-m', 'base + archived keep-open run');
+      git('branch', branch); git('checkout', branch);
+      fs.writeFileSync(path.join(root, 'feat-' + project + '.md'), 'feat'); git('add', '-A'); git('commit', '-m', 'feat: deliverable ' + issue);
+      git('checkout', 'main');
+      G.execRaw(['init', '--bare', '-b', 'main', remotePath], { encoding: 'utf8' });
+      G.exec(root, ['remote', 'add', 'origin', remotePath], { encoding: 'utf8' });
+      G.exec(root, ['push', '-u', 'origin', 'main'], { encoding: 'utf8' });
+      G.exec(root, ['push', '-u', 'origin', branch], { encoding: 'utf8' });
+      G.exec(root, ['branch', '--set-upstream-to=origin/' + branch, branch], { encoding: 'utf8' });
+      return { root, remotePath, branch, git };
+    };
+    const run = (root, project, issue) => spawnSync(process.execPath,
+      [sinkScript, '--branch', 'workflow/' + project, '--issue', String(issue), '--project', project, '--keep-issue-open', '--sink'],
+      { cwd: root, encoding: 'utf8', timeout: 120000,
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKFLOW_SKIP_TESTGATE: '1', KAOLA_GLAB_MOCK_SCRIPT: mockPath } });
+    const drop = (fx) => {
+      fs.rmSync(fx.root, { recursive: true, force: true });
+      try { fs.rmSync(fx.remotePath, { recursive: true, force: true }); } catch (_) {}
+    };
+
+    // Leg 1: an UNSTAGED tracked modification.
+    {
+      const project = 'issue-109730', issue = 109730;
+      const fx = build(project, issue);
+      try {
+        fs.writeFileSync(path.join(fx.root, 'base.txt'), 'unstaged local edit\n');
+        const indexBefore = fx.git('ls-files', '-s', 'base.txt');
+        const r = run(fx.root, project, issue);
+        const out = parseLast(r.stdout);
+        assert(r.status === 0 && out.status === 'sinked',
+          '#1097 AC3 gitlab (unstaged): the isolated merge must complete over the unstaged foreign modification; got exit=' + r.status + ' ' + JSON.stringify(out) + '\nstderr: ' + String(r.stderr || '').slice(-800));
+        assert(out.publication === 'published',
+          '#1097 AC3 gitlab (unstaged): the merge must publish; got ' + JSON.stringify(out.publication));
+        assert(fs.readFileSync(path.join(fx.root, 'base.txt'), 'utf8') === 'unstaged local edit\n',
+          '#1097 AC3 gitlab (unstaged): the foreign bytes must survive byte-identical');
+        assert(fx.git('ls-files', '-s', 'base.txt') === indexBefore,
+          '#1097 AC3 gitlab (unstaged): the foreign path\'s index entry must be unchanged');
+      } finally { drop(fx); }
+    }
+    // Leg 2: a STAGED tracked modification.
+    {
+      const project = 'issue-109731', issue = 109731;
+      const fx = build(project, issue);
+      try {
+        fs.writeFileSync(path.join(fx.root, 'base.txt'), 'staged local edit\n');
+        fx.git('add', '--', 'base.txt');
+        const stagedIndex = fx.git('ls-files', '-s', 'base.txt');
+        const r = run(fx.root, project, issue);
+        const out = parseLast(r.stdout);
+        assert(r.status === 0 && out.status === 'sinked',
+          '#1097 AC3 gitlab (staged): the isolated merge must complete over the staged foreign modification; got exit=' + r.status + ' ' + JSON.stringify(out) + '\nstderr: ' + String(r.stderr || '').slice(-800));
+        assert(fs.readFileSync(path.join(fx.root, 'base.txt'), 'utf8') === 'staged local edit\n',
+          '#1097 AC3 gitlab (staged): the staged foreign bytes must survive byte-identical');
+        assert(fx.git('ls-files', '-s', 'base.txt') === stagedIndex,
+          '#1097 AC3 gitlab (staged): the staged index entry must be unchanged');
+      } finally { drop(fx); }
+    }
+    // Leg 3: a worktree DELETION of a tracked file.
+    {
+      const project = 'issue-109732', issue = 109732;
+      const fx = build(project, issue);
+      try {
+        fs.rmSync(path.join(fx.root, 'base.txt'));
+        const r = run(fx.root, project, issue);
+        const out = parseLast(r.stdout);
+        assert(r.status === 0 && out.status === 'sinked',
+          '#1097 AC3 gitlab (deleted): the isolated merge must complete over the deleted foreign file; got exit=' + r.status + ' ' + JSON.stringify(out) + '\nstderr: ' + String(r.stderr || '').slice(-800));
+        assert(!fs.existsSync(path.join(fx.root, 'base.txt')),
+          '#1097 AC3 gitlab (deleted): the foreign deletion must remain deleted');
+        assert(fx.git('status', '--porcelain', '-uall').includes(' D base.txt'),
+          '#1097 AC3 gitlab (deleted): the deletion must remain un-restored');
+      } finally { drop(fx); }
+    }
+    console.log('GitLab #1097 AC3 tracked foreign changes ride through preserved: PASSED');
+  } finally {
+    try { fs.rmSync(bin, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// AC2: two concurrent sinks on two projects serialize on the ONE short-scope publish lock and
+// both land linearly — each in its OWN integration worktree, the shared checkout's HEAD never
+// leaves the default branch, and each lane's dev worktree (with its foreign marker, planted at
+// the rendezvous — after both preflights passed, so the #562 guard is green and the markers
+// exercise the post-merge teardown window) survives the OTHER lane's merge and its own teardown
+// (kept_dirty). The remote's pre-receive hook sleeps, so the first holder's push is observably
+// slow and the second demonstrably WAITS at the lock (the rendezvous is the lock itself, not a
+// timing guess); receive.denyNonFastForwards is the CAS fence a real forge carries.
+{
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+  const lanes = [['issue-109748', 109748], ['issue-109749', 109749]];
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-1097-ac2-mock-'));
+  const logFile = path.join(bin, 'glab-calls.log');
+  const storeFile = path.join(bin, 'issue-notes.json');
+  const mockPath = path.join(bin, 'mock-glab.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-1097-ac2-'));
+  const remotePath = root + '-remote';
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-ac2-run-'));
+  // G.exec is execFileSync: it returns stdout and THROWS on a non-zero exit — right for the
+  // fixture's side-effect calls below. The .status reads (merge-base / verify --quiet) must
+  // NOT throw on the failure path the assert is about, so they go through G.git's spawnSync
+  // result instead.
+  const git = (...a) => G.exec(root, a, { encoding: 'utf8' });
+  const gitStatus = (...a) => G.git(root, a, { encoding: 'utf8' });
+  try {
+    fs.writeFileSync(storeFile, '{}');
+    fs.writeFileSync(mockPath, [
+      '#!/usr/bin/env node',
+      "'use strict';",
+      "const fs = require('fs');",
+      "const path = require('path');",
+      'const argv = process.argv.slice(2);',
+      "const a = argv.join(' ');",
+      'const logFile = ' + JSON.stringify(logFile) + ';',
+      'const storeFile = ' + JSON.stringify(storeFile) + ';',
+      "function log(m){ try { fs.appendFileSync(logFile, m + '\\n'); } catch(_){} }",
+      "function loadStore(){ try { return JSON.parse(fs.readFileSync(storeFile, 'utf8')); } catch(_){ return {}; } }",
+      "if (a.includes('repo view')) {",
+      "  let d = process.cwd(); let inRepo = false;",
+      "  for (;;) { if (fs.existsSync(path.join(d, '.git'))) { inRepo = true; break; } const p = path.dirname(d); if (p === d) break; d = p; }",
+      "  if (!inRepo) { log('REJECTED-wrong-cwd:' + process.cwd() + ' args=' + a); process.stderr.write('glab: not a git repository\\n'); process.exit(1); }",
+      '  process.stdout.write(JSON.stringify({id:77,path_with_namespace:"group/project",web_url:"https://gitlab.example/group/project"}) + "\\n"); process.exit(0);',
+      '}',
+      "if (a.includes('issue view')) { const m = a.match(/issue view (\\d+)/); process.stdout.write(JSON.stringify({iid: m ? Number(m[1]) : 0, state:'opened'}) + '\\n'); process.exit(0); }",
+      "const closeM = a.match(/issue close (\\d+)/); if (closeM) { log('close:' + closeM[1]); process.exit(0); }",
+      "if (a.includes('issue update') && a.includes('--unlabel')) { const m = a.match(/issue update (\\d+)/); log('label-removed:' + (m ? m[1] : '?')); process.exit(0); }",
+      "const delM = a.match(/issues\\/(\\d+)\\/notes\\/(\\d+)/);",
+      "if (a.includes('api') && a.includes('--method DELETE') && delM) {",
+      '  const id = Number(delM[2]); const s = loadStore();',
+      '  for (const k of Object.keys(s)) s[k] = (s[k] || []).filter(function(c){ return Number(c && c.id) !== id; });',
+      "  try { fs.writeFileSync(storeFile, JSON.stringify(s, null, 2)); } catch(_){}",
+      "  log('note-deleted:' + id); process.stdout.write('{}\\n'); process.exit(0);",
+      '}',
+      "const listM = a.match(/issues\\/(\\d+)\\/notes$/);",
+      "if (a.includes('api') && listM) { process.stdout.write(JSON.stringify(loadStore()[listM[1]] || []) + '\\n'); process.exit(0); }",
+      "process.stdout.write('\\n'); process.exit(0);",
+    ].join('\n'));
+    git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    fs.writeFileSync(path.join(root, 'base.txt'), 'base');
+    git('add', '-A'); git('commit', '-m', 'base');
+    G.execRaw(['init', '--bare', '-b', 'main', remotePath], { encoding: 'utf8' });
+    git('remote', 'add', 'origin', remotePath);
+    git('push', '-u', 'origin', 'main');
+    // The CAS fence + the rendezvous clock (same as the canonical arm).
+    G.exec(remotePath, ['config', 'receive.denyNonFastForwards', 'true'], { encoding: 'utf8' });
+    fs.mkdirSync(path.join(remotePath, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(remotePath, 'hooks', 'pre-receive'), '#!/bin/sh\nsleep 1.2\nexit 0\n');
+    fs.chmodSync(path.join(remotePath, 'hooks', 'pre-receive'), 0o755);
+    const headBefore = git('rev-parse', 'main').trim();
+    // Two phases: every branch is committed while no `.kw/` exists yet, and only then are the
+    // dev worktrees added. A single-phase loop lets lane 2's `git add -A` sweep lane 1's
+    // just-created dev worktree in as an embedded-repo gitlink (measured: `warning: adding
+    // embedded git repository: .kw/worktrees/<sibling>`), so the candidate tree would carry a
+    // path shape this arm never intended to measure.
+    for (const [project, issue] of lanes) {
+      const branch = 'workflow/' + project;
+      git('checkout', '-b', branch);
+      const liveDir = path.join(root, 'kaola-workflow', project);
+      fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), [
+        '# Kaola-Workflow State', 'status: active', 'step: complete',
+        'issue_iid: ' + issue, 'issue_number: ' + issue,
+        'project_id: 77', 'path_with_namespace: group/project',
+        'project_web_url: https://gitlab.example/group/project', '',
+        '## Sink', 'branch: ' + branch, 'sink: merge', 'issue_action: comment_keep_open', ''
+      ].join('\n'));
+      fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'), '# Finalization\n\n## Final Validation\n\n- `npm test`: pass\n');
+      fs.writeFileSync(path.join(root, 'DELIVERABLE-' + project + '.txt'), 'deliverable for ' + project + '\n');
+      git('add', '-A'); git('commit', '-m', 'feat: deliverable + live state ' + issue);
+      git('push', '-u', 'origin', branch);
+      git('checkout', 'main');
+    }
+    // The dev worktrees start CLEAN so the #562 preflight passes; the foreign markers are
+    // planted at the rendezvous (below), after both preflights, to exercise the teardown.
+    for (const [project] of lanes) {
+      git('worktree', 'add', '--', path.join(root, '.kw', 'worktrees', project), 'workflow/' + project);
+    }
+    // Spawn BOTH sinks concurrently. The wrapper shell writes the envelope to <lane>.out, stderr
+    // to <lane>.err, and the exit status to <lane>.done after node exits — the rendezvous and
+    // wait loops below poll under execSync('sleep …'), which starves this process's event loop,
+    // so piped children's events never fire (measured in the canonical suite); disk polling works.
+    const { spawn } = require('child_process');
+    const procs = lanes.map(([project, issue]) => {
+      const base = path.join(runDir, project);
+      const outFile = base + '.out', errFile = base + '.err', doneFile = base + '.done';
+      const cmd = JSON.stringify(process.execPath) + ' ' + JSON.stringify(sinkScript)
+        + ' --branch ' + JSON.stringify('workflow/' + project)
+        + ' --project ' + JSON.stringify(project)
+        + ' --issue ' + JSON.stringify(String(issue))
+        + ' --keep-issue-open --sink --json'
+        + ' > ' + JSON.stringify(outFile) + ' 2> ' + JSON.stringify(errFile)
+        + '; echo $? > ' + JSON.stringify(doneFile);
+      const p = spawn('/bin/sh', ['-c', cmd], {
+        cwd: root, encoding: 'utf8',
+        env: Object.assign({}, process.env, {
+          KAOLA_WORKFLOW_OFFLINE: '0',
+          KAOLA_WORKFLOW_SKIP_TESTGATE: '1',
+          KAOLA_GLAB_MOCK_SCRIPT: mockPath,
+        }),
+      });
+      p.outFile = outFile; p.errFile = errFile; p.doneFile = doneFile;
+      return p;
+    });
+    // THE RENDEZVOUS: both merges have built their Ws — the overlap window is open. Bounded, so
+    // a sink that refused early fails the test instead of hanging it.
+    const deadline = Date.now() + 30000;
+    for (;;) {
+      const allBuilt = lanes.every(([project]) => fs.existsSync(path.join(root, '.kw', 'integrate', project)));
+      if (allBuilt) break;
+      if (Date.now() > deadline) {
+        throw new Error('#1097 AC2 gitlab: rendezvous timeout — both integration worktrees must exist during the overlap; done markers at '
+          + procs.map(p => { try { return fs.readFileSync(p.doneFile, 'utf8').trim(); } catch (_) { return '(running)'; } }).join(','));
+      }
+      require('child_process').execSync('sleep 0.05');
+    }
+    const headAtOverlap = git('rev-parse', '--abbrev-ref', 'HEAD').trim();
+    assert(headAtOverlap === 'main', '#1097 AC2 gitlab: the shared checkout\'s HEAD must still be the default branch during the overlap; got ' + JSON.stringify(headAtOverlap));
+    assert(git('rev-parse', 'main').trim() === headBefore,
+      '#1097 AC2 gitlab: the shared checkout\'s HEAD must not have moved during either merge');
+    for (const [project] of lanes) {
+      const wt = path.join(root, '.kw', 'worktrees', project);
+      fs.writeFileSync(path.join(wt, 'marker-' + project + '.txt'), 'foreign dev-worktree marker for ' + project + '\n');
+      const liveDir = path.join(root, 'kaola-workflow', project);
+      assert(!fs.existsSync(path.join(liveDir, 'workflow-state.md')) && !fs.existsSync(path.join(liveDir, 'finalization-summary.md')),
+        '#1097 AC2 gitlab: no live run content may land in the shared checkout during the merge — ' + project + ' lives in its own W');
+      assert(fs.existsSync(path.join(root, '.kw', 'integrate', project)),
+        '#1097 AC2 gitlab: each lane must own its own integration worktree — .kw/integrate/' + project);
+      assert(fs.existsSync(wt) && fs.existsSync(path.join(wt, 'marker-' + project + '.txt')),
+        '#1097 AC2 gitlab: the dev worktree and its foreign marker must survive the OTHER lane\'s merge — ' + wt);
+    }
+    // Wait for both, bounded, polling the DONE MARKERS (disk), never p.exitCode.
+    const deadline2 = Date.now() + 60000;
+    while (procs.some(p => !fs.existsSync(p.doneFile))) {
+      if (Date.now() > deadline2) {
+        for (const p of procs) try { p.kill('SIGKILL'); } catch (_) {}
+        throw new Error('#1097 AC2 gitlab: both sinks must finish; stderr tails: '
+          + procs.map(p => { try { return fs.readFileSync(p.errFile, 'utf8').slice(-400); } catch (_) { return '(no stderr yet)'; } }).join('\n---\n'));
+      }
+      require('child_process').execSync('sleep 0.1');
+    }
+    const outs = procs.map(p => {
+      let code = null, outText = '', stderr = '';
+      try { code = parseInt(fs.readFileSync(p.doneFile, 'utf8').trim(), 10); } catch (_) {}
+      try { outText = fs.readFileSync(p.outFile, 'utf8'); } catch (_) {}
+      try { stderr = fs.readFileSync(p.errFile, 'utf8'); } catch (_) {}
+      return { code, out: parseLast(outText), stderr: String(stderr) };
+    });
+    for (let i = 0; i < lanes.length; i++) {
+      const [project] = lanes[i];
+      const { code, out, stderr } = outs[i];
+      assert(code === 0 && out && out.status === 'sinked',
+        '#1097 AC2 gitlab (' + project + '): the concurrent sink must complete; got ' + code + '\nstdout: ' + JSON.stringify(out) + '\nstderr: ' + stderr.slice(-800));
+      assert(out && out.publication === 'published',
+        '#1097 AC2 gitlab (' + project + '): the lane must publish; got ' + JSON.stringify(out && out.publication));
+      const candidate = out && out.receipt && out.receipt.published_head;
+      assert(candidate && gitStatus('merge-base', '--is-ancestor', candidate, 'origin/main').status === 0,
+        '#1097 AC2 gitlab (' + project + '): the published candidate must be an ancestor of origin/main (linear, never overwritten)');
+      assert(gitStatus('rev-parse', '--verify', '--quiet', 'origin/main:DELIVERABLE-' + project + '.txt').status === 0,
+        '#1097 AC2 gitlab (' + project + '): the deliverable must land on origin/main');
+      const dest = out && out.receipt && out.receipt.archive_dest;
+      assert(dest && git('cat-file', '-t', 'origin/main:' + dest + '/workflow-state.md').trim() === 'blob',
+        '#1097 AC2 gitlab (' + project + '): the archive must land on origin/main');
+      assert(out && out.cleanup && (out.cleanup.main_checkout === 'advanced' || String(out.cleanup.main_checkout).indexOf('behind') === 0),
+        '#1097 AC2 gitlab (' + project + '): the advance must be reported (advanced or honestly behind); got ' + JSON.stringify(out && out.cleanup && out.cleanup.main_checkout));
+      assert(out && out.cleanup && out.cleanup.integration_worktree === 'removed',
+        '#1097 AC2 gitlab (' + project + '): the teardown must remove this lane\'s own W; got ' + JSON.stringify(out && out.cleanup && out.cleanup.integration_worktree));
+      const wt = path.join(root, '.kw', 'worktrees', project);
+      assert(fs.existsSync(wt) && fs.readFileSync(path.join(wt, 'marker-' + project + '.txt'), 'utf8') === 'foreign dev-worktree marker for ' + project + '\n',
+        '#1097 AC2 gitlab (' + project + '): the dev worktree and its foreign marker must survive both lanes');
+      assert(out && out.cleanup && out.cleanup.worktree === 'kept_dirty',
+        '#1097 AC2 gitlab (' + project + '): the lane\'s own teardown must report kept_dirty for its marker-carrying dev worktree; got ' + JSON.stringify(out && out.cleanup && out.cleanup.worktree));
+      assert(out && out.cleanup && out.cleanup.local_branch === 'kept: checked out by the dev worktree (kept_dirty)',
+        '#1097 AC2 gitlab (' + project + '): a kept dev worktree holds the branch checked out — the delete must be skipped and the keep reported; got '
+          + JSON.stringify(out && out.cleanup && out.cleanup.local_branch));
+    }
+    assert(git('rev-parse', '--abbrev-ref', 'HEAD').trim() === 'main',
+      '#1097 AC2 gitlab: the shared checkout must end on the default branch');
+    assert(gitStatus('merge-base', '--is-ancestor', 'main', 'origin/main').status === 0,
+      '#1097 AC2 gitlab: the shared checkout\'s HEAD must be an ancestor of the published tip');
+    for (const [project] of lanes) {
+      assert(!fs.existsSync(path.join(root, 'kaola-workflow', project)),
+        '#1097 AC2 gitlab: no live folder may be left in the shared checkout — ' + project);
+    }
+    console.log('GitLab #1097 AC2 concurrent sinks serialize and both publish linearly: PASSED');
+  } finally {
+    try { fs.rmSync(runDir, { recursive: true, force: true }); } catch (_) {}
+    for (const [project] of lanes) {
+      // Cleanup-only removals: the sink already disposed its own W, so the integrate removal
+      // legitimately fails and must stay quiet (stdio ignored) — noise here would read as a
+      // failure the assertions above already decided against.
+      try { G.exec(root, ['worktree', 'remove', '--force', '--', path.join(root, '.kw', 'worktrees', project)], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+      try { G.exec(root, ['worktree', 'remove', '--force', '--', path.join(root, '.kw', 'integrate', project)], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+    try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(bin, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 console.log('GitLab sink tests passed');

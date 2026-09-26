@@ -4018,11 +4018,18 @@ function testSinkRefusesOnPushUpstreamFailure() {
 // #619(4): the standalone `worktree_sync` SINK_STEP always ran AFTER the 'merge' step already
 // removed the linked worktree, so its own `git worktree list` scan could never find a matching
 // block — wtPath was always null and the copy it attempted never ran, yet stepDone('worktree_sync')
-// recorded it as done every time (a no-op receipt attestation). The fix moves the copy INLINE into
-// the 'merge' step, BEFORE the worktree is removed. This test proves the copy is now REAL: an
-// untracked marker file that exists ONLY inside the linked worktree's project folder (mirroring a
-// live kaola-workflow/<project>/.cache/worktree-only-marker.json crash-resume artifact, which is gitignored
-// and therefore invisible to git checkout) must survive into mainRoot after the --sink transaction.
+// recorded it as done every time (a no-op receipt attestation). The fix moved the copy INLINE into
+// the 'merge' step, BEFORE the worktree was removed.
+// #1097: the W-model removed the destruction that copy guarded against — the merge now happens in
+// the private integration worktree `.kw/integrate/<project>` and NEVER removes the dev worktree,
+// so there is no removal left to copy ahead of. The requirement that survives is the one #619 was
+// actually about: an untracked marker file that exists ONLY inside the linked worktree's project
+// folder (mirroring a live kaola-workflow/<project>/.cache/worktree-only-marker.json crash-resume
+// artifact) must never be LOST to the sink. It is kept the direct way now: the teardown's
+// NON-FORCE removal is the physical backstop — git itself refuses to remove a worktree carrying
+// an untracked file — so after the --sink transaction the worktree is still standing with the
+// marker byte-identical IN PLACE, and the cleanup receipt reports a standing worktree, never a
+// removal it did not perform.
 function testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-wtsync-')));
   const remotePath = initGitRepoWithBareRemote(tmp);
@@ -4057,27 +4064,19 @@ function testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge() {
     assert(result.status === 0, '#619(4): --sink must succeed, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     assert(parsed.status === 'sinked', '#619(4): expected status:sinked, got ' + JSON.stringify(parsed));
 
-    // The untracked marker must have survived somewhere under kaola-workflow/ — either still under
-    // the live project dir, or moved into the archive dir (the normal outcome, since the 'finalize'
-    // step archives kaola-workflow/<project> -> kaola-workflow/archive/<project> via a filesystem
-    // rename that carries untracked content along; archiveProjectDir may suffix the destination
-    // with .archived-<ts> if an archive dir already exists, e.g. from an earlier receipt write, so
-    // search recursively rather than assuming one fixed landing path).
-    const findMarker = (dir) => {
-      let found = false;
-      let entries;
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return false; }
-      for (const entry of entries) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) { if (findMarker(full)) found = true; }
-        else if (entry.name === 'worktree-only-marker.json') {
-          try { if (fs.readFileSync(full, 'utf8').includes('untracked-worktree-only')) found = true; } catch (_) {}
-        }
-      }
-      return found;
-    };
-    const survived = findMarker(path.join(tmp, 'kaola-workflow'));
-    assert(survived, '#619(4): the untracked worktree-only marker must be copied into mainRoot before the worktree is destroyed; not found anywhere under kaola-workflow/');
+    // The worktree must still be standing — never removed — with the marker byte-identical IN
+    // PLACE. That is #619's no-loss requirement under the W-model: the artifact is not copied
+    // anywhere because nothing is destroyed; it stays exactly where the run left it, in the
+    // worktree git refused to remove, recoverable by cd-ing into it.
+    assert(fs.existsSync(wtPath), '#619(4): the dev worktree must still be standing after the --sink transaction');
+    const markerAbs = path.join(wtPath, markerRel);
+    assert(fs.existsSync(markerAbs) && fs.readFileSync(markerAbs, 'utf8') === '{"marker":"untracked-worktree-only"}\n',
+      '#619(4): the untracked worktree-only marker must survive byte-identical in the standing worktree; got '
+      + (fs.existsSync(markerAbs) ? 'different bytes at ' + markerAbs : 'missing at ' + markerAbs));
+    const wtReport = parsed.cleanup && parsed.cleanup.worktree;
+    assert(typeof wtReport === 'string' && wtReport !== 'removed' && wtReport !== 'skipped_missing',
+      '#619(4): the cleanup receipt must not claim the worktree removed over untracked-only content; got '
+      + JSON.stringify(wtReport));
     console.log('testSinkTransactionSyncsUntrackedWorktreeProjectDirOnMerge: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -10650,17 +10649,31 @@ function testHarnessSelfCheck() {
 // #429 Script-owned worktree sink — three new scenarios
 // ---------------------------------------------------------------------------
 
-// (a) #429 Blocked preflight (FOREIGN dirt) refuses, mutates nothing.
-// Seeds main with an untracked file not owned by this sink. Runs --sink.
-// Asserts: exit 1, JSON reason:'sink_blocked', foreign_dirt lists the exact path,
-// AND git status --porcelain is BYTE-IDENTICAL pre/post (no stash, no rm, no merge).
+// (a) #429 → #1097: foreign dirt no longer blocks at PREFLIGHT — the #1096 unified untracked rule
+// is deleted together with the shared-checkout merge it guarded, so an untracked main copy of a
+// foreign lane path the branch carries passes preflight and survives all the way to the publish.
+// There GIT'S OWN overlap protection is the guard: the offline fast-forward refuses to overwrite
+// an untracked working tree file, and the sink reports the typed, RETRYABLE sink_incomplete at
+// push_main — never a claimed sinked over an unpublished candidate, and never a destroyed foreign
+// file. Seeds the exact #1096 collision shape (branch carries the foreign lane path, main holds an
+// untracked copy at the same path) and asserts: exit non-zero, reason sink_incomplete with step
+// push_main, the foreign file byte-identical on disk, and git status --porcelain BYTE-IDENTICAL
+// pre/post (no stash, no rm, no merge into the shared checkout; the fixture gitignores the `.kw/`
+// integration home exactly as the real repo does, so the comparison is exact).
 function testSinkTransactionBlockedByForeignDirt() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-blocked-')));
   try {
     initGitRepo(tmp);
+    // #1097: the fixture mirrors the real repo's `.kw/` home being gitignored, so the designed
+    // integration-worktree home never reaches porcelain and the byte-identity below stays exact.
+    fs.writeFileSync(path.join(tmp, '.gitignore'), '.kw/\n');
+    G.git(tmp, ['add', '.gitignore'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'chore: gitignore kw home'], {
+      encoding: 'utf8',
+      env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
+    });
 
-    // Create a feature branch with an impl commit + the project folder already archived
-    // (standard lane: finalize runs before --sink so the live folder is gone).
+    // Create a feature branch with an impl commit (the run's real work).
     G.git(tmp, ['checkout', '-b', 'workflow/issue-4291'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'impl-4291.txt'), 'impl\n');
     G.git(tmp, ['add', 'impl-4291.txt'], { encoding: 'utf8' });
@@ -10670,11 +10683,12 @@ function testSinkTransactionBlockedByForeignDirt() {
     });
     G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
 
-    // Plant FOREIGN DIRT (#1096 shape): the feature branch CARRIES a file in a DIFFERENT project's
+    // Plant the #1096 collision shape: the feature branch CARRIES a file in a DIFFERENT project's
     // kaola-workflow folder, and main holds an UNTRACKED copy at the same path — porcelain says
-    // `??` and the branch tree says carried, which is exactly the collision the unified untracked
-    // rule refuses. (Before #1096 a merely-untracked file carried by no tree was enough to block;
-    // #1096 moved that boundary, so the branch now carries the path.)
+    // `??` and the branch tree says carried. Under the deleted unified rule this refused at
+    // preflight (sink_blocked); the W-model deletes the rule with the shared-checkout merge, and
+    // the collision resurfaces where it physically lives — the publish's fast-forward, where
+    // git's own overlap protection refuses to overwrite the untracked copy.
     G.git(tmp, ['checkout', 'workflow/issue-4291'], { encoding: 'utf8' });
     const foreignDir = path.join(tmp, 'kaola-workflow', 'other-project');
     fs.mkdirSync(foreignDir, { recursive: true });
@@ -10704,30 +10718,26 @@ function testSinkTransactionBlockedByForeignDirt() {
       env: { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_OFFLINE: '1' }
     });
 
-    assert(result.status !== 0, '#429: --sink with foreign dirt must exit non-zero, got ' + result.status +
+    assert(result.status !== 0, '#429: the sink must never claim success over the unpublished candidate the foreign collision stopped, got ' + result.status +
       '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
 
     // Parse the JSON output
     let out;
     try { out = JSON.parse(result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop()); }
     catch (e) { throw new Error('#429: stdout must contain JSON, got: ' + result.stdout + '\nstderr: ' + result.stderr); }
-    assert(out.reason === 'sink_blocked',
-      '#429: reason must be sink_blocked, got: ' + JSON.stringify(out));
-    assert(Array.isArray(out.foreign_dirt) && out.foreign_dirt.length > 0,
-      '#429: foreign_dirt must be a non-empty array, got: ' + JSON.stringify(out));
-    // The exact foreign file must be listed
-    const listed = out.foreign_dirt.some(p => p.includes('other-project') || p.includes('workflow-state.md'));
-    assert(listed, '#429: foreign_dirt must list the planted file, got: ' + JSON.stringify(out.foreign_dirt));
+    assert(out.reason === 'sink_incomplete' && out.step === 'push_main' && out.push_main === 'failed',
+      '#429: the refusal must be the typed RETRYABLE sink_incomplete at push_main — git\'s own overlap protection refusing to overwrite the untracked foreign file, the step left not-done so a re-run retries it; got ' + JSON.stringify(out));
 
     // ZERO MUTATION: git status must be byte-identical to before
     const statusAfter = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout;
     assert(statusBefore === statusAfter,
-      '#429: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) +
+      '#429: git status must be unchanged after the publish refusal\nbefore: ' + JSON.stringify(statusBefore) +
       '\nafter:  ' + JSON.stringify(statusAfter));
 
     // The foreign file must still exist unchanged
-    assert(fs.existsSync(path.join(foreignDir, 'workflow-state.md')),
-      '#429: foreign file must still exist after sink_blocked refuse');
+    assert(fs.existsSync(path.join(foreignDir, 'workflow-state.md')) &&
+      fs.readFileSync(path.join(foreignDir, 'workflow-state.md'), 'utf8') === 'status: active (untracked main copy)\n',
+      '#429: the foreign file must survive byte-identical after the refusal');
 
     console.log('testSinkTransactionBlockedByForeignDirt: PASSED');
   } finally {
@@ -10735,18 +10745,28 @@ function testSinkTransactionBlockedByForeignDirt() {
   }
 }
 
-// #715 (b) → #1096: an interrupted SIBLING sink's untracked archive receipt
-// (kaola-workflow/archive/<sibling>/.cache/sink-receipt.json, mid-cycle steps) must NOT be
-// classified as foreign dirt — under the #1096 unified rule because it is untracked and carried
-// by no candidate tree, the old exact-path exemption having been deleted with the rule change —
-// while a genuinely-foreign file still is. The refusal stays sink_blocked on the foreign file
-// alone, mutates nothing, and leaves the sibling receipt byte-untouched.
+// #715 (b) → #1096 → #1097: an interrupted SIBLING sink's untracked archive receipt
+// (kaola-workflow/archive/<sibling>/.cache/sink-receipt.json, mid-cycle steps) must NOT block this
+// sink. Under the #1096 unified untracked rule the receipt needed an exact-path exemption, and this
+// test planted a genuinely-foreign file beside it to keep the refusal observable. The rule is
+// deleted with the shared-checkout merge: untracked content carried by no candidate tree collides
+// with nothing the publish does, so the exemption became deletion and the strongest observable is
+// completion itself — the sink COMPLETES over the sibling receipt, publishes, and leaves the
+// receipt byte-untouched and uncommitted.
 function testSinkForeignDirtExemptsSiblingReceipt715() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-sibling-receipt-')));
   try {
     initGitRepo(tmp);
+    // #1097: the fixture mirrors the real repo's `.kw/` home being gitignored, so the designed
+    // integration-worktree home never reaches porcelain and the byte-identity below stays exact.
+    fs.writeFileSync(path.join(tmp, '.gitignore'), '.kw/\n');
+    G.git(tmp, ['add', '.gitignore'], { encoding: 'utf8' });
+    G.git(tmp, ['commit', '-m', 'chore: gitignore kw home'], {
+      encoding: 'utf8',
+      env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
+    });
 
-    // Create a feature branch with an impl commit (same shape as the #429 blocked scenario).
+    // Create a feature branch with an impl commit (the run's real work).
     G.git(tmp, ['checkout', '-b', 'workflow/issue-7152'], { encoding: 'utf8' });
     fs.writeFileSync(path.join(tmp, 'impl-7152.txt'), 'impl\n');
     G.git(tmp, ['add', 'impl-7152.txt'], { encoding: 'utf8' });
@@ -10772,27 +10792,6 @@ function testSinkForeignDirtExemptsSiblingReceipt715() {
     }, null, 2) + '\n';
     fs.writeFileSync(siblingReceiptAbs, siblingReceiptBody);
 
-    // Plant genuinely-foreign dirt (#1096 shape — must still refuse + be listed): the feature
-    // branch CARRIES a file in another project's lane, and main holds an UNTRACKED copy at the
-    // same path. The sibling receipt is untracked and carried by no tree, so under the unified
-    // rule it is not dirt at all — the foreign file alone forces the refusal, which is what makes
-    // the receipt's absence from the listing observable.
-    G.git(tmp, ['checkout', 'workflow/issue-7152'], { encoding: 'utf8' });
-    const foreignRel = 'kaola-workflow/other-project/workflow-state.md';
-    const foreignDir = path.join(tmp, 'kaola-workflow', 'other-project');
-    fs.mkdirSync(foreignDir, { recursive: true });
-    fs.writeFileSync(path.join(foreignDir, 'workflow-state.md'), 'status: active\n');
-    G.git(tmp, ['add', foreignRel], { encoding: 'utf8' });
-    G.git(tmp, ['commit', '-m', 'feat: sibling lane content'], {
-      encoding: 'utf8',
-      env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
-    });
-    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8' });
-    fs.mkdirSync(foreignDir, { recursive: true });
-    fs.writeFileSync(path.join(foreignDir, 'workflow-state.md'), 'status: active (untracked main copy)\n');
-
-    const statusBefore = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout;
-
     const result = spawnSync(process.execPath, [
       sinkMergeScript,
       '--sink',
@@ -10806,29 +10805,106 @@ function testSinkForeignDirtExemptsSiblingReceipt715() {
       env: { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_OFFLINE: '1' }
     });
 
-    assert(result.status !== 0, '#715: --sink must still refuse on the genuinely-foreign file, got ' + result.status +
+    assert(result.status === 0, '#715: the sink must COMPLETE over the sibling receipt — untracked content carried by no candidate tree blocks nothing; got ' + result.status +
       '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     let out;
     try { out = JSON.parse(result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop()); }
     catch (e) { throw new Error('#715: stdout must contain JSON, got: ' + result.stdout + '\nstderr: ' + result.stderr); }
-    assert(out.reason === 'sink_blocked',
-      '#715: reason must be sink_blocked, got: ' + JSON.stringify(out));
-    assert(Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(foreignRel),
-      '#715: foreign_dirt must still list the genuinely-foreign file ' + foreignRel + ', got: ' + JSON.stringify(out.foreign_dirt));
-    assert(Array.isArray(out.foreign_dirt) && !out.foreign_dirt.includes(siblingReceiptRel),
-      '#715: the sibling interrupted-sink receipt must NOT appear in foreign_dirt, got: ' + JSON.stringify(out.foreign_dirt));
+    assert(out.status === 'sinked' && out.cleanup && out.cleanup.main_checkout === 'advanced',
+      '#715: the completed sink must report status:sinked with the shared checkout advanced onto the candidate (the offline publication target); got ' + JSON.stringify(out));
 
-    // ZERO MUTATION: git status byte-identical, and the sibling receipt byte-untouched.
-    const statusAfter = G.git(tmp, ['status', '--porcelain'], { encoding: 'utf8' }).stdout;
-    assert(statusBefore === statusAfter,
-      '#715: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) +
-      '\nafter:  ' + JSON.stringify(statusAfter));
+    // The sibling receipt must be byte-untouched and still UNTRACKED — neither touched nor
+    // committed by this sink — and a completed sink leaves no other untracked residue behind:
+    // with -uall the ONLY untracked path in the whole tree is the sibling receipt itself (the
+    // sink's own archive band lands as a TRACKED commit, invisible to porcelain).
     assert(fs.existsSync(siblingReceiptAbs) && fs.readFileSync(siblingReceiptAbs, 'utf8') === siblingReceiptBody,
-      '#715: the sibling receipt must be byte-untouched after the refuse (classification-only exemption)');
+      '#715: the sibling interrupted-sink receipt must be byte-untouched after the completed sink');
+    const statusAfterAll = G.git(tmp, ['status', '--porcelain', '-uall'], { encoding: 'utf8' }).stdout.trim();
+    assert(statusAfterAll === '?? ' + siblingReceiptRel,
+      '#715: the completed sink must leave the sibling receipt as the only untracked path; got\n' + JSON.stringify(statusAfterAll));
 
     console.log('testSinkForeignDirtExemptsSiblingReceipt715: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// #1097: the isolated-merge scenario. The merge happens in the private integration worktree
+// `.kw/integrate/<project>`, never in the shared checkout: the shared checkout's HEAD never
+// leaves the default branch (its reflog records NO checkout over the run — the old model's
+// checkout dance left two), its foreign content survives byte-identical with index entries
+// intact (the compact AC3: an unstaged tracked edit plus an untracked foreign file), the
+// teardown removes the integration worktree, and the shared checkout advances only through
+// git's own overlap-protected fast-forward.
+function testSinkMergesInIsolatedIntegrationWorktree1097() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-isolated-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  const project = 'issue-9505';
+  const branch = 'workflow/' + project;
+  const env = { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_SKIP_TESTGATE: '1', GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+  try {
+    // The branch carries only the deliverable — no run state on it, so no run_not_finalized
+    // stop — and it is pushed, so push_upstream is green.
+    G.git(tmp, ['checkout', '-b', branch], { encoding: 'utf8', env });
+    fs.writeFileSync(path.join(tmp, 'DELIVERABLE-' + project + '.txt'), 'deliverable\n');
+    G.git(tmp, ['add', '-A'], { encoding: 'utf8', env });
+    G.git(tmp, ['commit', '-m', 'feat: deliverable ' + project], { encoding: 'utf8', env });
+    G.git(tmp, ['push', '-u', 'origin', branch], { encoding: 'utf8', env });
+    G.git(tmp, ['checkout', 'main'], { encoding: 'utf8', env });
+
+    // Foreign content in the shared checkout: an unstaged tracked edit + an untracked file.
+    fs.writeFileSync(path.join(tmp, 'README.md'), 'unstaged foreign edit\n');
+    fs.writeFileSync(path.join(tmp, 'FOREIGN-UNTRACKED.txt'), 'foreign untracked\n');
+    const indexBefore = G.git(tmp, ['ls-files', '-s', 'README.md'], { encoding: 'utf8' }).stdout;
+    const reflogCountBefore = G.git(tmp, ['reflog', 'show', '--format=%gs', 'HEAD'], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean).length;
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--branch', branch, '--project', project, '--sink', '--json',
+    ], { cwd: tmp, encoding: 'utf8', timeout: 90000, env: { ...env, KAOLA_WORKFLOW_OFFLINE: '0' } });
+    const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+    const out = parseLast(result.stdout);
+    assert(result.status === 0, '#1097: --sink must succeed, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out.status === 'sinked', '#1097: expected status:sinked, got ' + JSON.stringify(out));
+
+    // The integration worktree was used and disposed.
+    assert(out.cleanup && out.cleanup.integration_worktree === 'removed',
+      '#1097: the teardown must remove the private integration worktree; got ' + JSON.stringify(out.cleanup && out.cleanup.integration_worktree));
+    assert(!fs.existsSync(path.join(tmp, '.kw', 'integrate', project)),
+      '#1097: the integration worktree must be gone from disk after the teardown');
+
+    // ISOLATION, measured on the shared checkout's own reflog: the old model checked the branch
+    // out in the shared checkout (and back), leaving "checkout: moving from …" entries; the
+    // W-model leaves NONE — the only new reflog entries over the run are the post-publish
+    // fast-forward's.
+    const reflogAfter = G.git(tmp, ['reflog', 'show', '--format=%gs', 'HEAD'], { encoding: 'utf8' }).stdout;
+    const newEntries = reflogAfter.split('\n').filter(Boolean).slice(reflogCountBefore);
+    assert(newEntries.length > 0 && newEntries.every(l => !l.startsWith('checkout:')),
+      '#1097: the shared checkout\'s HEAD must never be checked out to the branch over the run; new reflog entries: ' + JSON.stringify(newEntries));
+
+    // The compact AC3: the foreign content survives byte-identical, index entries intact.
+    assert(fs.readFileSync(path.join(tmp, 'README.md'), 'utf8') === 'unstaged foreign edit\n',
+      '#1097: the unstaged foreign edit must survive byte-identical');
+    assert(G.git(tmp, ['ls-files', '-s', 'README.md'], { encoding: 'utf8' }).stdout === indexBefore,
+      '#1097: the foreign path\'s index entry must be unchanged');
+    assert(fs.readFileSync(path.join(tmp, 'FOREIGN-UNTRACKED.txt'), 'utf8') === 'foreign untracked\n',
+      '#1097: the untracked foreign file must survive byte-identical');
+
+    // The shared checkout ends on the default branch, advanced to the published tip, and the
+    // publication is real (the remote carries the deliverable).
+    assert(G.git(tmp, ['rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim() === 'main',
+      '#1097: the shared checkout must end on the default branch');
+    assert(out.cleanup && out.cleanup.main_checkout === 'advanced',
+      '#1097: the shared checkout must be advanced onto the published candidate; got ' + JSON.stringify(out.cleanup && out.cleanup.main_checkout));
+    assert(G.git(tmp, ['merge-base', '--is-ancestor', 'HEAD', 'origin/main'], { encoding: 'utf8' }).status === 0,
+      '#1097: the shared checkout\'s HEAD must be at or behind the published tip');
+    assert(out.publication === 'published',
+      '#1097: the online sink must publish; got ' + JSON.stringify(out.publication));
+    assert(G.git(tmp, ['rev-parse', '--verify', '--quiet', 'origin/main:DELIVERABLE-' + project + '.txt'], { encoding: 'utf8' }).status === 0,
+      '#1097: the deliverable must land on origin/main');
+    console.log('testSinkMergesInIsolatedIntegrationWorktree1097: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
   }
 }
 
@@ -11764,6 +11840,7 @@ function buildRegistry() {
   // #429 sink transaction tests
   add('testSinkTransactionBlockedByForeignDirt',          testSinkTransactionBlockedByForeignDirt);
   add('testSinkForeignDirtExemptsSiblingReceipt715',      testSinkForeignDirtExemptsSiblingReceipt715);
+  add('testSinkMergesInIsolatedIntegrationWorktree1097',  testSinkMergesInIsolatedIntegrationWorktree1097);
   add('testSinkTransactionCrashResume',                   testSinkTransactionCrashResume);
   add('testSinkTransactionCleanEndToEnd',                 testSinkTransactionCleanEndToEnd);
   add('testTwoLanesInOneCheckout579',                     testTwoLanesInOneCheckout579);

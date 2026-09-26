@@ -388,7 +388,7 @@ function runSinkAt(script, fx, extraArgs, extraEnv) {
     env: Object.assign({}, process.env, {
       KAOLA_WORKFLOW_OFFLINE: '0',
       KAOLA_WORKFLOW_SKIP_TESTGATE: '1',
-      KAOLA_GH_MOCK_SCRIPT: path.join(fx.binDir, 'gh.js'),
+      ...(fx.binDir ? { KAOLA_GH_MOCK_SCRIPT: path.join(fx.binDir, 'gh.js') } : {}),
     }, extraEnv || {}),
   });
 }
@@ -416,7 +416,7 @@ function runSinkLegacyAt(script, fx, extraArgs, extraEnv) {
     env: Object.assign({}, process.env, {
       KAOLA_WORKFLOW_OFFLINE: '0',
       KAOLA_WORKFLOW_SKIP_TESTGATE: '1',
-      KAOLA_GH_MOCK_SCRIPT: path.join(fx.binDir, 'gh.js'),
+      ...(fx.binDir ? { KAOLA_GH_MOCK_SCRIPT: path.join(fx.binDir, 'gh.js') } : {}),
     }, extraEnv || {}),
   });
 }
@@ -806,7 +806,7 @@ function plantWorktreeUntracked973(wtPath, opts) {
     'n1-impl.md': 'binding: n1-impl nonce70701\n\nimplementer evidence (worktree copy)\n',
     'n2-review.md': 'binding: n2-review nonce70701\n\nverdict: pass\n',
   };
-  const fx = buildWorktreeEvidenceFixture(project, issue, { evidence });
+  const fx = buildWorktreeEvidenceFixture(project, issue, { evidence, gitignore: '.kw/\n' });
   fx.projectName = project;
   try {
     const result = runSink(fx, ['--issue', String(issue)]);
@@ -974,7 +974,7 @@ function plantWorktreeUntracked973(wtPath, opts) {
 })();
 
 (function testOwnProjectReceiptsRemainExempt() {
-  console.log('Test (#715 m): regression lock for #518 — THIS sink\'s own live + archive receipts remain unlisted while a tracked foreign modification refuses');
+  console.log('Test (#715 m → #1097): regression lock for #518 — THIS sink\'s own live + archive receipts are never listed, never committed, never touched, while a tracked foreign modification rides through preserved');
   const project = 'issue-71503';
   const issue = 71503;
   const fx = buildSoleArchiverFixture(project, issue, {});
@@ -999,29 +999,33 @@ function plantWorktreeUntracked973(wtPath, opts) {
     fs.writeFileSync(path.join(fx.tmpRoot, liveRel), receiptBody);
     fs.mkdirSync(path.dirname(path.join(fx.tmpRoot, archRel)), { recursive: true });
     fs.writeFileSync(path.join(fx.tmpRoot, archRel), receiptBody);
-    // #1096: the forcing idiom had to change with the unified rule. The old plant was an untracked
-    // file ABSENT from both candidate trees — exactly what #1096 (D1=b) says is NOT dirt, so the
-    // refusal (and with it the whole regression lock) silently vanished. A TRACKED modification is
-    // the forcing shape that survives every preflight contract: porcelain XY with a non-? status
-    // column is dirt unconditionally, never reaching an exemption at all.
+    // #1097: the forcing idiom changed again — and this time the modification no longer refuses:
+    // the merge happens in the isolated integration worktree, so a tracked foreign modification
+    // in the shared checkout is preserved (#1097 AC3) instead of blocking the sink. What the lock
+    // must still prove is the #518 core: the own live + archive receipts never block anything,
+    // never get committed (#520), and never get touched by a sink that passes them through.
     const foreignRel = 'README.md';
     fs.writeFileSync(path.join(fx.tmpRoot, foreignRel), 'locally modified by a foreign hand\n');
 
     const result = runSink(fx, ['--issue', String(issue)]);
     const out = lastJson(result);
 
-    assert(result.status !== 0, '#715 m: sink must refuse on the tracked foreign modification; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-    assert(out && out.reason === 'sink_blocked', '#715 m: reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
-    assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(foreignRel),
-      '#715 m: foreign_dirt must list the tracked foreign modification; got ' + JSON.stringify(out && out.foreign_dirt));
-    // #1096: the receipts stay unlisted for a new reason — not the #518/#715 exact-path exemption
-    // (deleted), but the unified rule itself: both are untracked and neither candidate tree carries
-    // them, so they are not dirt at all. The observable contract (own journals never block, never
-    // get listed, never get touched) is unchanged.
-    assert(out && Array.isArray(out.foreign_dirt) && !out.foreign_dirt.includes(liveRel),
-      '#715 m: the own LIVE receipt must remain unlisted; got ' + JSON.stringify(out && out.foreign_dirt));
-    assert(out && Array.isArray(out.foreign_dirt) && !out.foreign_dirt.includes(archRel),
-      '#715 m: the own ARCHIVE receipt must remain unlisted; got ' + JSON.stringify(out && out.foreign_dirt));
+    assert(result.status === 0, '#715 m: the isolated merge must complete over the tracked foreign modification; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#715 m: status must be sinked; got ' + JSON.stringify(out && out.status));
+    assert(out && out.publication === 'published', '#715 m: the merge must publish; got ' + JSON.stringify(out && out.publication));
+    assert(fs.readFileSync(path.join(fx.tmpRoot, foreignRel), 'utf8') === 'locally modified by a foreign hand\n',
+      '#715 m: the tracked foreign modification must survive byte-identical (#1097 AC3)');
+    // #653 journal lifecycle: on a COMPLETED sink the journals are DISPOSED — that is the designed
+    // end of a disposable crash-resume scratch file, not a destroy defect. What the lock still
+    // pins on a run that passes them through: the disposal is the ONLY thing that takes them
+    // (journal_disposed: true — they were treated as journals the run recognized), and neither
+    // journal is ever COMMITTED (#520) — not by the archive arm, not by the live arm.
+    assert(out && out.journal_disposed === true,
+      '#715 m: the own live + archive receipts must be disposed by the journal lifecycle on a completed sink (journal_disposed), never abandoned or arbitrarily destroyed; got ' + JSON.stringify(out && out.journal_disposed));
+    for (const rel of [liveRel, archRel]) {
+      assert(git(fx.tmpRoot, ['rev-parse', 'HEAD:' + rel]).status !== 0,
+        '#715 m: ' + rel + ' must NOT be committed at HEAD — a sink-receipt.json never enters the tracked tree');
+    }
   } finally {
     cleanup(fx);
   }
@@ -1163,216 +1167,700 @@ function plantLiveFolder(tmpRoot, project, files) {
   }
 })();
 
-// (1096b1) The rule's refusal half, on the BRANCH tree leg. An untracked path the branch carries is
-// exactly what `git checkout <branch>` — the transaction's own first step — would collide with, so
-// it stays bucket-3: refuse, name it, mutate nothing. Driven through all FOUR sink copies: the
-// gitlab/gitea preflight is hand-ported per forge, so a canonical-only green would not see a port
-// that kept any deleted exemption arm.
-[
-  ['root', sinkMergeScript, null],
-  ['codex', path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-sink-merge.js'), null],
-  ['gitlab', path.join(repoRoot, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-sink-merge.js'), 'KAOLA_GLAB_MOCK_SCRIPT'],
-  ['gitea', path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-sink-merge.js'), 'KAOLA_TEA_MOCK_SCRIPT'],
-].forEach(([label, script, mockEnvName], index) => {
-  (function testUntrackedConflictingBranchPathStillBlocks() {
-    console.log('Test (#1096 b1 ' + label + '): an UNTRACKED path the BRANCH tree carries still refuses as foreign dirt — the checkout the transaction is about to perform would collide with it');
-    const project = 'issue-' + (109610 + index);
-    const issue = 109610 + index;
-    const fx = buildSoleArchiverFixture(project, issue, {});
-    fx.projectName = project;
-    try {
-      const rel = 'kaola-workflow/other-' + (109611 + index) + '/workflow-state.md';
-      // Commit the path on the FEATURE branch (pushed — the upstream sync must stay green), then
-      // plant a DIFFERENT untracked copy at the same rel in main: porcelain says `??`, main's index
-      // never saw the path, and the branch tree carries it — the exact collision shape.
-      git(fx.tmpRoot, ['checkout', fx.branch]);
-      fs.mkdirSync(path.dirname(path.join(fx.tmpRoot, rel)), { recursive: true });
-      fs.writeFileSync(path.join(fx.tmpRoot, rel), 'branch copy\n');
-      git(fx.tmpRoot, ['add', '--', rel]);
-      git(fx.tmpRoot, ['commit', '-m', 'feat: sibling lane content']);
-      git(fx.tmpRoot, ['push', 'origin', fx.branch]);
-      git(fx.tmpRoot, ['checkout', 'main']);
-      fs.mkdirSync(path.dirname(path.join(fx.tmpRoot, rel)), { recursive: true });
-      fs.writeFileSync(path.join(fx.tmpRoot, rel), 'untracked main copy — different bytes\n');
-      const statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+// (1096b1 → #1097) The old refusal half is GONE. An untracked path the branch tree carries used to
+// collide with the in-place `git checkout <branch>`; the W-model never checks the branch out in
+// mainRoot, so the path is carried by no checkout mainRoot performs. The AC3 replacement below
+// (testForeignContentIsPreservedAmongTheCandidateTrees1097) drives all four sink copies and asserts
+// the branch-carried untracked plant is NOT dirt: the sink completes, and the plant survives
+// byte-identical at a divergent byte count from the branch copy.
 
-      const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
-      const result = runSinkAt(script, fx, ['--issue', String(issue)], extraEnv);
-      const out = lastJson(result);
-
-      assert(result.status !== 0, '#1096 b1 (' + label + '): the sink must refuse on the branch-carried untracked path; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-      assert(out && out.reason === 'sink_blocked', '#1096 b1 (' + label + '): reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
-      assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(rel),
-        '#1096 b1 (' + label + '): foreign_dirt must list ' + rel + '; got ' + JSON.stringify(out && out.foreign_dirt));
-      const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
-      assert(statusBefore === statusAfter, '#1096 b1 (' + label + '): git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) + '\nafter: ' + JSON.stringify(statusAfter));
-    } finally {
-      cleanup(fx);
-    }
-  })();
-});
-
-// (1096b2) The origin/<default> leg, at the UNIT boundary. Through the CLI entry point this leg is
-// correctly shadowed by the sync gates — origin/<default> ahead of local main is a main-out-of-date
-// refusal before preflight ever runs — but mid-transaction a `pull --ff-only` can advance the
-// working copy past what local main resolved, and the leg is why an untracked lane file the
-// unpulled origin already tracks still refuses. sinkPreflight is where the classification lives,
+// (1096b2) was the origin/<default> leg of the same deleted rule — no longer reachable, since the
+// only checkout mainRoot performs is the post-publish fast-forward, whose overlap protection is
+// git's own (reported as cleanup.main_checkout: behind, never a preflight refusal).
+//
+// (1096b3) was the directory-vs-file collision probe for that rule — the checkout it guarded no
+// longer happens in the shared tree, so the probe has no reachable condition and is deleted with it.
 // so that is where the leg is pinned: origin/<default> carries the path, the branch does not, and
-// the untracked plant at that rel is foreign dirt; with origin rewound to local main the SAME plant
-// passes (carried by no candidate tree).
-(function testUntrackedConflictingOriginDefaultPathStillBlocks() {
-  console.log('Test (#1096 b2): an UNTRACKED path the origin/<default> tree carries — and the branch does not — is still foreign dirt at the preflight boundary, and passes once nothing carries it');
-  const { sinkPreflight } = require(sinkMergeScript);
-  const project = 'issue-109620';
-  const issue = 109620;
+// (1096b2) The origin/<default> leg of the deleted rule no longer exists as a preflight refusal:
+// the only checkout mainRoot performs is the post-publish fast-forward, and git's own overlap
+// protection covers it (reported as cleanup.main_checkout: behind). The (1096b3) directory-vs-file
+// probe is deleted with the rule it guarded.
+
+// (1096c → #1097 AC3) TRACKED foreign changes — unstaged, staged, deleted — no longer block the
+// merge, because the merge never happens in the shared checkout. The isolation is the replacement
+// for the refusal: the sink completes, and every foreign path survives byte-identical with its
+// index state intact. This is the complete AC3 (the old #1096 Slice-1 half only proved it for
+// non-conflicting UNTRACKED paths).
+(function testForeignTrackedModificationsNoLongerBlock1097() {
+  console.log('Test (#1097 AC3): tracked foreign changes — unstaged, staged, deleted — no longer block the sink; each survives byte-identical with its index entry intact, and the merge is published');
+  const project = 'issue-109730';
+  const issue = 109730;
   const fx = buildSoleArchiverFixture(project, issue, {});
   fx.projectName = project;
   try {
-    const rel = 'kaola-workflow/archive/other-109621/workflow-state.md';
-    // Advance ORIGIN/main with a commit carrying the sibling path and leave LOCAL main at the old
-    // tip: origin/<default> carries the path; local main — and its index — does not.
-    git(fx.tmpRoot, ['checkout', '-b', 'advance-10962', 'main']);
-    fs.mkdirSync(path.dirname(path.join(fx.tmpRoot, rel)), { recursive: true });
-    fs.writeFileSync(path.join(fx.tmpRoot, rel), 'origin copy\n');
-    git(fx.tmpRoot, ['add', '--', rel]);
-    git(fx.tmpRoot, ['commit', '-m', 'chore: sibling archive lands on origin main']);
-    git(fx.tmpRoot, ['push', 'origin', 'advance-10962:main']);
-    git(fx.tmpRoot, ['checkout', 'main']);
-    git(fx.tmpRoot, ['branch', '-D', 'advance-10962']);
-    fs.mkdirSync(path.dirname(path.join(fx.tmpRoot, rel)), { recursive: true });
-    fs.writeFileSync(path.join(fx.tmpRoot, rel), 'untracked main copy\n');
-
-    const pre = sinkPreflight(fx.tmpRoot, project, fx.branch, 'main');
-
-    assert(pre && pre.ok === false, '#1096 b2: the origin-carried untracked path must refuse; got ' + JSON.stringify(pre));
-    assert(pre && pre.reason === 'sink_blocked', '#1096 b2: reason must be sink_blocked; got ' + JSON.stringify(pre && pre.reason));
-    assert(pre && Array.isArray(pre.foreign_dirt) && pre.foreign_dirt.includes(rel),
-      '#1096 b2: foreign_dirt must list ' + rel + '; got ' + JSON.stringify(pre && pre.foreign_dirt));
-    // Control, in the same fixture: rewind origin/main to local main, so the path is carried by
-    // no candidate tree — the untracked plant the #1096 acceptance passes through.
-    git(fx.tmpRoot, ['push', '-f', 'origin', 'main:main']);
-    const pre2 = sinkPreflight(fx.tmpRoot, project, fx.branch, 'main');
-    assert(pre2 && pre2.ok === true, '#1096 b2 control: with origin rewound the same untracked path must pass — it is carried by no candidate tree; got ' + JSON.stringify(pre2));
-  } finally {
-    cleanup(fx);
-  }
-})();
-
-// (1096b3) Review round 1: the DIRECTORY-VS-FILE half of the conflict rule. `git checkout <branch>`
-// cannot write a tracked FILE at a path where the working copy holds an untracked DIRECTORY (and
-// the exact-path probe cannot see it — `cat-file -e <ref>:dir/file` does not resolve through a
-// blob), so preflight must refuse there BEFORE the merge step stages the worktree, removes it, and
-// crashes at the checkout with no typed envelope. The reverse shape — an untracked FILE at a path
-// the branch carries as a DIRECTORY — is already refused by the exact-path probe, because
-// `<ref>:<dir>` resolves to the tree object and `cat-file -e` answers 0 for trees; both legs run in
-// one fixture so the boundary reads as one rule. Driven through all FOUR sink copies: the
-// ancestor probe is hand-ported per forge alongside the rule.
-[
-  ['root', sinkMergeScript, null],
-  ['codex', path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-sink-merge.js'), null],
-  ['gitlab', path.join(repoRoot, 'plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-sink-merge.js'), 'KAOLA_GLAB_MOCK_SCRIPT'],
-  ['gitea', path.join(repoRoot, 'plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-sink-merge.js'), 'KAOLA_TEA_MOCK_SCRIPT'],
-].forEach(([label, script, mockEnvName], index) => {
-  (function testUntrackedDirectoryVsBranchFileStillBlocks() {
-    console.log('Test (#1096 b3 ' + label + '): an untracked DIRECTORY where a candidate tree carries a plain FILE (and the untracked-FILE-at-tree-path reverse shape) still refuses — a checkout collision the exact-path probe cannot see');
-    const project = 'issue-' + (109650 + index);
-    const issue = 109650 + index;
-    const fx = buildSoleArchiverFixture(project, issue, {});
-    fx.projectName = project;
-    try {
-      // On the BRANCH (pushed — upstream sync stays green): a plain file at `collide1096` …
-      git(fx.tmpRoot, ['checkout', fx.branch]);
-      fs.writeFileSync(path.join(fx.tmpRoot, 'collide1096'), 'branch file, in the way of an untracked directory\n');
-      // … and a DIRECTORY at `dirc1096/` the reverse leg uses.
-      const dirRel = 'dirc1096/x.txt';
-      fs.mkdirSync(path.dirname(path.join(fx.tmpRoot, dirRel)), { recursive: true });
-      fs.writeFileSync(path.join(fx.tmpRoot, dirRel), 'branch dir content\n');
-      git(fx.tmpRoot, ['add', '--', 'collide1096', dirRel]);
-      git(fx.tmpRoot, ['commit', '-m', 'feat: shapes for the directory-vs-file rule']);
-      git(fx.tmpRoot, ['push', 'origin', fx.branch]);
-      git(fx.tmpRoot, ['checkout', 'main']);
-      // In MAIN, both untracked counterparts: a DIRECTORY holding a file where the branch carries
-      // the plain file, and a plain FILE where the branch carries the directory.
-      fs.mkdirSync(path.join(fx.tmpRoot, 'collide1096'), { recursive: true });
-      fs.writeFileSync(path.join(fx.tmpRoot, 'collide1096', 'inner.txt'), 'untracked main copy\n');
-      fs.writeFileSync(path.join(fx.tmpRoot, 'dirc1096'), 'untracked main file in the way of a branch directory\n');
-      const statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
-
-      const extraEnv = mockEnvName ? { [mockEnvName]: path.join(fx.binDir, 'gh.js') } : null;
-      const result = runSinkAt(script, fx, ['--issue', String(issue)], extraEnv);
-      const out = lastJson(result);
-
-      assert(result.status !== 0, '#1096 b3 (' + label + '): the sink must refuse on the directory-vs-file collisions; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-      assert(out && out.reason === 'sink_blocked', '#1096 b3 (' + label + '): reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
-      assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes('collide1096/inner.txt'),
-        '#1096 b3 (' + label + '): foreign_dirt must list collide1096/inner.txt — its ancestor is a branch-carried FILE; got ' + JSON.stringify(out && out.foreign_dirt));
-      assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes('dirc1096'),
-        '#1096 b3 (' + label + '): foreign_dirt must list dirc1096 — the branch carries a DIRECTORY there; got ' + JSON.stringify(out && out.foreign_dirt));
-      const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
-      assert(statusBefore === statusAfter, '#1096 b3 (' + label + '): git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) + '\nafter: ' + JSON.stringify(statusAfter));
-    } finally {
-      cleanup(fx);
-    }
-  })();
-});
-
-// (1096c) Every TRACKED status stays dirt — staged, unstaged, deleted — never reaching the unified
-// arm at all. One fixture, three legs, porcelain equal before/after each refusal: the sink never
-// stashes, restores, or reverts the operator's local work to unblock itself.
-(function testTrackedForeignModificationsStillBlock() {
-  console.log('Test (#1096 c): TRACKED foreign changes — unstaged modification, staged modification, worktree deletion — still refuse sink_blocked with zero mutation');
-  const project = 'issue-109630';
-  const issue = 109630;
-  const fx = buildSoleArchiverFixture(project, issue, {});
-  fx.projectName = project;
-  try {
-    const mainBefore = git(fx.tmpRoot, ['rev-parse', 'main']).stdout.trim();
-    const remoteBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
-
     // Leg 1: an UNSTAGED tracked modification.
     fs.writeFileSync(path.join(fx.tmpRoot, 'README.md'), 'unstaged local edit\n');
-    let statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+    let indexBefore = git(fx.tmpRoot, ['ls-files', '-s', 'README.md']).stdout;
     let result = runSink(fx, ['--issue', String(issue)]);
     let out = lastJson(result);
-    assert(result.status !== 0, '#1096 c (unstaged): the sink must refuse on the unstaged tracked modification; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-    assert(out && out.reason === 'sink_blocked', '#1096 c (unstaged): reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
-    assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes('README.md'),
-      '#1096 c (unstaged): foreign_dirt must list README.md; got ' + JSON.stringify(out && out.foreign_dirt));
-    assertNothingPublished(fx, '#1096 c (unstaged)', { mainBefore, remoteBefore });
-    assert(git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout === statusBefore,
-      '#1096 c (unstaged): git status must be unchanged after sink_blocked refuse');
+    assert(result.status === 0, '#1097 AC3 (unstaged): the isolated merge must complete; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#1097 AC3 (unstaged): status must be sinked; got ' + JSON.stringify(out && out.status));
+    assert(out && out.publication === 'published', '#1097 AC3 (unstaged): the merge published; got ' + JSON.stringify(out && out.publication));
+    assert(fs.readFileSync(path.join(fx.tmpRoot, 'README.md'), 'utf8') === 'unstaged local edit\n',
+      '#1097 AC3 (unstaged): the foreign bytes must survive byte-identical');
+    assert(git(fx.tmpRoot, ['ls-files', '-s', 'README.md']).stdout === indexBefore,
+      '#1097 AC3 (unstaged): the foreign path\'s index entry must be unchanged');
 
-    // Leg 2: a STAGED tracked modification.
-    fs.writeFileSync(path.join(fx.tmpRoot, 'kaola-workflow', 'ROADMAP.md'), 'staged local edit\n');
-    git(fx.tmpRoot, ['add', '--', 'kaola-workflow/ROADMAP.md']);
-    statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
-    result = runSink(fx, ['--issue', String(issue)]);
-    out = lastJson(result);
-    assert(result.status !== 0, '#1096 c (staged): the sink must refuse on the staged tracked modification; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-    assert(out && out.reason === 'sink_blocked', '#1096 c (staged): reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
-    assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes('kaola-workflow/ROADMAP.md'),
-      '#1096 c (staged): foreign_dirt must list kaola-workflow/ROADMAP.md; got ' + JSON.stringify(out && out.foreign_dirt));
-    assertNothingPublished(fx, '#1096 c (staged)', { mainBefore, remoteBefore });
-    assert(git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout === statusBefore,
-      '#1096 c (staged): git status must be unchanged after sink_blocked refuse');
+    // Leg 2: a STAGED tracked modification, in a fresh fixture.
+    const project2 = 'issue-109731';
+    const fx2 = buildSoleArchiverFixture(project2, 109731, {});
+    fx2.projectName = project2;
+    fs.writeFileSync(path.join(fx2.tmpRoot, 'kaola-workflow', 'ROADMAP.md'), 'staged local edit\n');
+    git(fx2.tmpRoot, ['add', '--', 'kaola-workflow/ROADMAP.md']);
+    const stagedIndex = git(fx2.tmpRoot, ['ls-files', '-s', 'kaola-workflow/ROADMAP.md']).stdout;
+    const r2 = runSink(fx2, ['--issue', '109731']);
+    const o2 = lastJson(r2);
+    assert(r2.status === 0 && o2 && o2.status === 'sinked', '#1097 AC3 (staged): the sink must complete; got ' + r2.status + ' ' + JSON.stringify(o2 && o2.status));
+    assert(fs.readFileSync(path.join(fx2.tmpRoot, 'kaola-workflow', 'ROADMAP.md'), 'utf8') === 'staged local edit\n',
+      '#1097 AC3 (staged): the staged foreign bytes must survive byte-identical');
+    assert(git(fx2.tmpRoot, ['ls-files', '-s', 'kaola-workflow/ROADMAP.md']).stdout === stagedIndex,
+      '#1097 AC3 (staged): the staged index entry must be unchanged');
+    cleanup(fx2);
 
-    // Leg 3: a worktree DELETION of a tracked file (unstaged ` D`).
-    fs.rmSync(path.join(fx.tmpRoot, 'kaola-workflow', '.roadmap', 'issue-' + issue + '.md'));
-    statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
-    result = runSink(fx, ['--issue', String(issue)]);
-    out = lastJson(result);
-    assert(result.status !== 0, '#1096 c (deleted): the sink must refuse on the tracked deletion; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-    assert(out && out.reason === 'sink_blocked', '#1096 c (deleted): reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
-    assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes('kaola-workflow/.roadmap/issue-' + issue + '.md'),
-      '#1096 c (deleted): foreign_dirt must list the deleted tracked path; got ' + JSON.stringify(out && out.foreign_dirt));
-    assertNothingPublished(fx, '#1096 c (deleted)', { mainBefore, remoteBefore });
-    assert(git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout === statusBefore,
-      '#1096 c (deleted): git status must be unchanged after sink_blocked refuse');
+    // Leg 3: a worktree DELETION of a tracked file, in a third fixture.
+    const project3 = 'issue-109732';
+    const fx3 = buildSoleArchiverFixture(project3, 109732, {});
+    fx3.projectName = project3;
+    fs.rmSync(path.join(fx3.tmpRoot, 'kaola-workflow', '.roadmap', 'issue-109732.md'));
+    const r3 = runSink(fx3, ['--issue', '109732']);
+    const o3 = lastJson(r3);
+    assert(r3.status === 0 && o3 && o3.status === 'sinked', '#1097 AC3 (deleted): the sink must complete; got ' + r3.status + ' ' + JSON.stringify(o3 && o3.status));
+    assert(!fs.existsSync(path.join(fx3.tmpRoot, 'kaola-workflow', '.roadmap', 'issue-109732.md')),
+      '#1097 AC3 (deleted): the foreign deletion must remain deleted');
+    assert(git(fx3.tmpRoot, ['status', '--porcelain', '-uall']).stdout.includes(' D kaola-workflow/.roadmap/issue-109732.md'),
+      '#1097 AC3 (deleted): the deletion must remain un-restored');
+    cleanup(fx3);
   } finally {
     cleanup(fx);
   }
 })();
 
+// ---------------------------------------------------------------- #1097 — the new contract's own arms
+//
+// AC2 (concurrency), AC5 (invalidated evidence + the typed publish verdicts), the publish lock,
+// the resume shapes, and the two #1096 gap regressions the deleted rule never covered. All
+// forge-neutral, so all driven through the canonical sink; the gitlab/gitea suites carry the
+// ported AC2/AC3 arms (the preflight deletion + the arms split are hand-ported per forge, so a
+// canonical-only green would not see a port that kept the old refusal).
+
+// The publish lock, at the CLI boundary. The lock is the whole serialization primitive, so its
+// observable contract is the sink's own: a held lock is a typed, resumable `publish_busy` — never
+// a wait-forever, never a destroyed holder's lock — and a re-run after the holder releases
+// completes the publication.
+(function testPublishBusyIsTypedAndResumable1097() {
+  console.log('Test (#1097 lock): a held publish lock is a typed resumable publish_busy (exit 2, holder named, nothing pushed, the step retryable), and the holder\'s lock survives the refusal');
+  const project = 'issue-109740';
+  const issue = 109740;
+  const fx = buildSoleArchiverFixture(project, issue, {});
+  fx.projectName = project;
+  const adaptiveSchema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+  let lock = null;
+  try {
+    lock = adaptiveSchema.acquirePublishLock(fx.tmpRoot, { project: 'a-foreign-holder' });
+    assert(lock && lock.acquired, '#1097 lock: the test must hold the lock before the sink runs; got ' + JSON.stringify(lock));
+    const originMainBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+
+    // A short wait cap so the refused arm answers in bounded time instead of parking on the
+    // 60s production default: the contract being pinned is the verdict, not the patience.
+    const result = runSink(fx, ['--issue', String(issue)], {
+      KAOLA_WORKFLOW_PUBLISH_LOCK_WAIT_MS: '200',
+    });
+    const out = lastJson(result);
+    assert(result.status === 2, '#1097 lock: the busy verdict must exit 2 (queueable, distinct from a failure); got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.result === 'report' && out.status === 'not_merged' && out.reason === 'publish_busy' && out.step === 'push_main',
+      '#1097 lock: must emit result:report status:not_merged reason:publish_busy step:push_main; got ' + JSON.stringify(out));
+    assert(out && out.holder && out.holder.project === 'a-foreign-holder',
+      '#1097 lock: the holder must be named on the envelope so an operator can route the wait; got ' + JSON.stringify(out && out.holder));
+    assert(out && out.publication === 'not_published',
+      '#1097 lock: a busy refusal published nothing — publication must say not_published; got ' + JSON.stringify(out && out.publication));
+    assert(git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim() === originMainBefore,
+      '#1097 lock: origin/main must be untouched by the refused run');
+    // The refused sink must not have destroyed the holder's lock — the lock is only ever
+    // unlinked by its own holder or a proven-dead-pid takeover.
+    assert(fs.existsSync(adaptiveSchema.publishLockPath(fx.tmpRoot)),
+      '#1097 lock: the holder\'s lock file must survive the refused run (a refusal never releases another holder\'s lock)');
+
+    // Release, then the resumable half: the re-run completes the publication.
+    adaptiveSchema.releasePublishLock(lock);
+    const result2 = runSink(fx, ['--issue', String(issue)]);
+    const out2 = lastJson(result2);
+    assert(result2.status === 0 && out2 && out2.status === 'sinked',
+      '#1097 lock: once the holder releases, a re-run must complete; got ' + result2.status + ' ' + JSON.stringify(out2 && out2.status));
+    assert(out2 && out2.publication === 'published',
+      '#1097 lock: the resumable re-run must publish; got ' + JSON.stringify(out2 && out2.publication));
+  } finally {
+    try { if (lock) adaptiveSchema.releasePublishLock(lock); } catch (_) {}
+    cleanup(fx);
+  }
+})();
+
+// The abort seam (KAOLA_WORKFLOW_SINK_ABORT_AFTER) exits 99 with NO envelope — the crash-resume
+// shape. Every "run 1 recorded X" assertion in the #1097 arms below reads the SAVED JOURNAL off
+// disk (exactly what a resumed run reads), never an envelope the aborted process never emitted.
+function readSavedJournal1097(tmpRoot, project) {
+  const p = findSinkJournal(tmpRoot, project);
+  assert(p, '#1097: the aborted run must leave a sink journal on disk for the resume to read');
+  return JSON.parse(fs.readFileSync(p, 'utf8'));
+}
+
+// AC5, first half — the base advanced between the merge and the publish. A concurrent lane
+// landed on origin/main after this run's candidate was validated, so the publish loop must:
+// record WHICH evidence it is about to invalidate (post_rebase_tests, bound to the old candidate,
+// from the old base to the new), re-rebase the candidate in W — the rebase REPLAYS the archive
+// commit, since it is part of the candidate — re-take the gate, and publish the NEW candidate.
+(function testAdvancedBaseRecordsInvalidatedEvidenceAndRepublishes1097() {
+  console.log('Test (#1097 AC5): a base advance between merge and publish records invalidated_evidence, re-rebases in W, and publishes post_rebase_candidate == published_head');
+  const project = 'issue-109741';
+  const issue = 109741;
+  const fx = buildPostRebaseGateFixture(project, issue, { testExit: 0 });
+  try {
+    // Run 1 stops AFTER the archive commit (the candidate W holds includes it), before the push.
+    const r1 = runSink(fx, ['--issue', String(issue)], { KAOLA_WORKFLOW_SINK_ABORT_AFTER: 'archive_commit' });
+    assert(r1.status === 99, '#1097 AC5: run 1 must stop on the abort seam (exit 99); got ' + r1.status);
+    const saved1 = readSavedJournal1097(fx.tmpRoot, project);
+    assert(saved1 && saved1.candidate_head,
+      '#1097 AC5: run 1 must stop after archive_commit with the candidate recorded; got ' + JSON.stringify(saved1 && saved1.steps));
+    const candidateBefore = saved1.candidate_head;
+    const baseBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+
+    // A second lane lands on origin/main — the base advance that invalidates the gate evidence.
+    fs.writeFileSync(path.join(fx.advanceDir, 'SECOND-LANE.txt'), 'a second lane landed before the publish\n');
+    git(fx.advanceDir, ['add', '-A']);
+    git(fx.advanceDir, ['commit', '-m', 'feat: second lane lands between merge and publish']);
+    git(fx.advanceDir, ['push', 'origin', 'main']);
+    const baseAfter = git(fx.advanceDir, ['rev-parse', 'origin/main']).stdout.trim();
+    assert(baseAfter !== baseBefore, '#1097 AC5: the second lane must actually advance origin/main');
+
+    // Run 2 resumes: merge/finalize/archive_commit are done, so it goes straight to push_main,
+    // sees the moved base, and runs the whole record→re-rebase→gate→publish sequence.
+    const r2 = runSink(fx, ['--issue', String(issue)]);
+    const o2 = lastJson(r2);
+    assert(r2.status === 0 && o2 && o2.status === 'sinked',
+      '#1097 AC5: the resumed run must complete over the advanced base; got ' + r2.status + '\nstdout: ' + r2.stdout + '\nstderr: ' + r2.stderr);
+    assert(o2 && o2.publication === 'published', '#1097 AC5: the re-rebased candidate must publish; got ' + JSON.stringify(o2 && o2.publication));
+    const rc = o2 && o2.receipt;
+    assert(rc && Array.isArray(rc.invalidated_evidence) && rc.invalidated_evidence.length > 0,
+      '#1097 AC5: the base advance must be recorded in invalidated_evidence; got ' + JSON.stringify(rc && rc.invalidated_evidence));
+    const ev = rc && rc.invalidated_evidence[0];
+    assert(ev && ev.evidence === 'post_rebase_tests' && ev.from_base === baseBefore && ev.to_base === baseAfter,
+      '#1097 AC5: the entry must name the invalidated evidence and both bases; got ' + JSON.stringify(ev));
+    assert(rc && rc.post_rebase_candidate && rc.published_head && rc.post_rebase_candidate === rc.published_head,
+      '#1097 AC5: the published head must be the post-rebase candidate; got ' + JSON.stringify(rc));
+    // The published candidate is a descendant of BOTH lanes' results — linear, never a force.
+    assert(git(fx.tmpRoot, ['merge-base', '--is-ancestor', baseAfter, 'origin/main']).status === 0,
+      '#1097 AC5: the second lane\'s commit must still be an ancestor of origin/main (never overwritten)');
+    // The replayed archive (a rebase replays the archive commit at a NEW sha — content-equivalent,
+    // never the same sha) and the first lane's deliverable both land on the mainline.
+    const dest = rc && rc.archive_dest;
+    assert(dest && catFileType(fx.tmpRoot, 'origin/main:' + dest + '/workflow-state.md') === 'blob',
+      '#1097 AC5: the replayed archive commit must carry the archived workflow-state.md onto origin/main');
+    assert(catFileType(fx.tmpRoot, 'origin/main:DELIVERABLE.txt') === 'blob',
+      '#1097 AC5: the deliverable must land on origin/main through the replayed candidate');
+    assert(fs.existsSync(path.join(fx.advanceDir, 'SECOND-LANE.txt')),
+      '#1097 AC5: control — the advancing lane\'s bytes must be intact');
+  } finally {
+    cleanupGateFixture(fx);
+  }
+})();
+
+// AC5, second half — RED on the re-rebase. The same advance shape, but the second lane's tree
+// carries a RED test script, so the re-taken gate fails over the re-rebased candidate: the sink
+// must stop at the publication door (exit 1, chains_red, post_rebase_tests red, nothing pushed)
+// with the affected evidence recorded, ready to resume once the chains are green.
+(function testRedReRebaseAtPublishStopsChainsRed1097() {
+  console.log('Test (#1097 AC5): a RED re-rebase at publish stops the sink chains_red — nothing publishes over invalidated evidence');
+  const project = 'issue-109742';
+  const issue = 109742;
+  const fx = buildPostRebaseGateFixture(project, issue, { testExit: 0 });
+  try {
+    // Run 1 skips the gate entirely (its own gate is green anyway) and stops after the archive
+    // commit — a validated candidate, exactly the evidence a base advance invalidates.
+    const r1 = runSink(fx, ['--issue', String(issue)], { KAOLA_WORKFLOW_SINK_ABORT_AFTER: 'archive_commit' });
+    assert(r1.status === 99, '#1097 AC5 (red): run 1 must stop on the abort seam (exit 99); got ' + r1.status);
+    const saved1 = readSavedJournal1097(fx.tmpRoot, project);
+    assert(saved1 && saved1.candidate_head,
+      '#1097 AC5 (red): run 1 must stop after archive_commit with the candidate recorded');
+    const originMainBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+
+    // The second lane lands RED: its tree carries `test: exit 7`, so the gate re-taken over the
+    // re-rebased candidate fails.
+    const pkg = JSON.parse(fs.readFileSync(path.join(fx.advanceDir, 'package.json'), 'utf8'));
+    pkg.scripts.test = 'exit 7';
+    fs.writeFileSync(path.join(fx.advanceDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
+    git(fx.advanceDir, ['add', '-A']);
+    git(fx.advanceDir, ['commit', '-m', 'feat: second lane lands red']);
+    git(fx.advanceDir, ['push', 'origin', 'main']);
+
+    // Run 2 takes the gate for real this time.
+    const r2 = runSinkWithGate(fx, ['--issue', String(issue)]);
+    const o2 = lastJson(r2);
+    assert(r2.status === 1, '#1097 AC5 (red): the red re-rebase must stop the sink (exit 1); got ' + r2.status + '\nstdout: ' + r2.stdout + '\nstderr: ' + r2.stderr);
+    assert(o2 && o2.result === 'report' && o2.status === 'not_merged' && o2.reason === 'chains_red' && o2.step === 'push_main',
+      '#1097 AC5 (red): must emit result:report status:not_merged reason:chains_red step:push_main; got ' + JSON.stringify(o2));
+    assert(o2 && o2.publication === 'not_published',
+      '#1097 AC5 (red): nothing published over red evidence — publication must say not_published; got ' + JSON.stringify(o2 && o2.publication));
+    assert(git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim() === git(fx.advanceDir, ['rev-parse', 'origin/main']).stdout.trim()
+      && git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim() !== originMainBefore,
+      '#1097 AC5 (red): origin/main must carry the second lane\'s advance and nothing from this sink');
+  } finally {
+    cleanupGateFixture(fx);
+  }
+})();
+
+// AC5, third half — the typed give-up. An old-model receipt (merge done, no candidate_head, no
+// W) whose local default ref DIVERGED from an origin/<def> that keeps rejecting the push: the
+// bounded retry loop must end in the typed non_fast_forward (exit 2, never a --force), with the
+// push_main step left not-done and nothing published.
+(function testDivergedBaseOnOldModelResumeEndsNonFastForward1097() {
+  console.log('Test (#1097 AC5): a persistently non-fast-forwardable publish ends in the typed non_fast_forward — never a --force');
+  const project = 'issue-109743';
+  const issue = 109743;
+  const fx = buildSoleArchiverFixture(project, issue, { noPriorArchive: true });
+  fx.projectName = project;
+  try {
+    // The old model's end state: the branch merged (fast-forwarded) into LOCAL main, never pushed.
+    git(fx.tmpRoot, ['checkout', 'main']);
+    git(fx.tmpRoot, ['merge', '--ff-only', fx.branch]);
+    // A sibling lane advances origin/main from the ORIGINAL base — the remote never saw the local
+    // merge, so its advance starts where the fixture left it: local main (base + branch) and
+    // origin/main (base + sibling) DIVERGE, neither a fast-forward of the other.
+    const siblingDir = fx.tmpRoot + '-sibling';
+    G.raw(['clone', fx.remotePath, siblingDir], { encoding: 'utf8' });
+    git(siblingDir, ['config', 'user.email', 'test@example.com']);
+    git(siblingDir, ['config', 'user.name', 'Test User']);
+    fs.writeFileSync(path.join(siblingDir, 'SIBLING-LANE.txt'), 'a sibling lane landed on the remote first\n');
+    git(siblingDir, ['add', '-A']);
+    git(siblingDir, ['commit', '-m', 'feat: sibling lane']);
+    git(siblingDir, ['push', 'origin', 'main']);
+    git(fx.tmpRoot, ['fetch', 'origin']);
+    const localMain = git(fx.tmpRoot, ['rev-parse', 'main']).stdout.trim();
+    const originMain = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+    assert(localMain !== originMain
+      && git(fx.tmpRoot, ['merge-base', '--is-ancestor', originMain, 'main']).status !== 0,
+      '#1097 AC5 (nff) precondition: local main and origin/main must have DIVERGED (neither a fast-forward of the other)');
+
+    // The old-model receipt: merge done, NO candidate_head (the field postdates the old model),
+    // the local default ref as the only candidate — the resume shape push_main must adopt.
+    const receiptBody = JSON.stringify({
+      project, branch: fx.branch, issue_number: issue, issue_numbers: [issue],
+      resolved_default_branch: 'main', branch_head: git(fx.tmpRoot, ['rev-parse', fx.branch]).stdout.trim(),
+      keep_open_requested: false,
+      claim_ts: new Date().toISOString(),
+      started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      stash_ref: null, removed_duplicates: [],
+      steps: { preflight: 'done', push_upstream: 'done', merge: 'done', finalize: 'pending',
+        stash_restore: 'pending', archive_commit: 'pending', push_main: 'pending', closure: 'pending' },
+    }, null, 2) + '\n';
+    const liveRel = 'kaola-workflow/' + project + '/.cache/sink-receipt.json';
+    fs.mkdirSync(path.dirname(path.join(fx.tmpRoot, liveRel)), { recursive: true });
+    fs.writeFileSync(path.join(fx.tmpRoot, liveRel), receiptBody);
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+    assert(result.status === 2, '#1097 AC5 (nff): the typed give-up must exit 2; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.result === 'report' && out.status === 'not_merged' && out.reason === 'non_fast_forward' && out.step === 'push_main',
+      '#1097 AC5 (nff): must emit result:report status:not_merged reason:non_fast_forward step:push_main; got ' + JSON.stringify(out));
+    assert(out && out.publication === 'not_published',
+      '#1097 AC5 (nff): nothing published — publication must say not_published; got ' + JSON.stringify(out && out.publication));
+    assert(git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim() === originMain,
+      '#1097 AC5 (nff): origin/main must be untouched — the loop never force-pushed');
+  } finally {
+    try { fs.rmSync(fx.tmpRoot + '-sibling', { recursive: true, force: true }); } catch (_) {}
+    cleanup(fx);
+  }
+})();
+
+// Resume, first shape — W is REUSED, not rebuilt. A resumed run that has the recorded candidate
+// must not remove and re-add the integration worktree: an untracked probe planted inside W after
+// run 1 must still be there after run 2 touched every step after the merge. A rebuild would have
+// dropped it (worktree add starts a clean checkout); the reuse is the contract.
+(function testResumeReusesTheIntegrationWorktree1097() {
+  console.log('Test (#1097 resume): a resumed run reuses the recorded integration worktree — an untracked probe inside W survives run 2');
+  const project = 'issue-109744';
+  const issue = 109744;
+  const fx = buildSoleArchiverFixture(project, issue, {});
+  fx.projectName = project;
+  try {
+    const r1 = runSink(fx, ['--issue', String(issue)], { KAOLA_WORKFLOW_SINK_ABORT_AFTER: 'merge' });
+    assert(r1.status === 99, '#1097 resume: run 1 must stop on the abort seam (exit 99); got ' + r1.status);
+    const saved1 = readSavedJournal1097(fx.tmpRoot, project);
+    assert(saved1 && saved1.candidate_head && saved1.integration_worktree,
+      '#1097 resume: run 1 must stop after merge with the candidate and W recorded; got ' + JSON.stringify(saved1 && saved1.steps));
+    const wPath = path.join(fx.tmpRoot, saved1.integration_worktree);
+    assert(fs.existsSync(wPath), '#1097 resume: W must exist after run 1');
+    const probeRel = 'resume-probe-' + issue + '.txt';
+    fs.writeFileSync(path.join(wPath, probeRel), 'untracked probe inside W\n');
+
+    // Run 2 completes every later step (abort after closure keeps W on disk so the probe is
+    // observable — teardown never runs on an aborted pass).
+    const r2 = runSink(fx, ['--issue', String(issue)], { KAOLA_WORKFLOW_SINK_ABORT_AFTER: 'closure' });
+    assert(fs.existsSync(path.join(wPath, probeRel)),
+      '#1097 resume: the untracked probe inside W must survive run 2 — a resumed run reuses the recorded worktree, never a remove-and-rebuild');
+    assert(fs.existsSync(wPath), '#1097 resume: W itself must still exist on the aborted pass (teardown never ran)');
+
+    // Run 3 completes the run end to end.
+    const r3 = runSink(fx, ['--issue', String(issue)]);
+    const o3 = lastJson(r3);
+    assert(r3.status === 0 && o3 && o3.status === 'sinked',
+      '#1097 resume: the third run must complete; got ' + r3.status + ' ' + JSON.stringify(o3 && o3.status));
+    assert(o3 && o3.publication === 'published', '#1097 resume: the completed run must publish; got ' + JSON.stringify(o3 && o3.publication));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// Resume, second shape — the ARCHIVE COMMIT is the candidate. A run that stopped after
+// archive_commit resumes by publishing the candidate that ALREADY carries the archive (the
+// W checkout the archive_commit step advanced), not merely the branch tip: the archive must
+// land on origin/main exactly once, through one commit, with archived_paths durable at HEAD.
+(function testResumePublishesTheArchiveCommitCandidate1097() {
+  console.log('Test (#1097 resume): a run stopped after archive_commit resumes by publishing the archive-carrying candidate — the archive lands exactly once');
+  const project = 'issue-109745';
+  const issue = 109745;
+  const fx = buildSoleArchiverFixture(project, issue, {});
+  fx.projectName = project;
+  try {
+    const r1 = runSink(fx, ['--issue', String(issue)], { KAOLA_WORKFLOW_SINK_ABORT_AFTER: 'archive_commit' });
+    assert(r1.status === 99, '#1097 resume (archive): run 1 must stop on the abort seam (exit 99); got ' + r1.status);
+    const saved1 = readSavedJournal1097(fx.tmpRoot, project);
+    assert(saved1 && saved1.candidate_head && saved1.archive_dest,
+      '#1097 resume (archive): run 1 must stop after archive_commit with the candidate and the archive dest recorded; got ' + JSON.stringify(saved1 && saved1.steps));
+    const candidateBefore = saved1.candidate_head;
+    const originMainBefore = git(fx.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
+
+    const r2 = runSink(fx, ['--issue', String(issue)]);
+    const o2 = lastJson(r2);
+    assert(r2.status === 0 && o2 && o2.status === 'sinked',
+      '#1097 resume (archive): the resumed run must complete; got ' + r2.status + ' ' + JSON.stringify(o2 && o2.status));
+    assert(o2 && o2.publication === 'published', '#1097 resume (archive): the resumed run must publish; got ' + JSON.stringify(o2 && o2.publication));
+    const rc = o2 && o2.receipt;
+    assert(rc && rc.published_head === candidateBefore,
+      '#1097 resume (archive): the published head must be run 1\'s archive-carrying candidate (' + candidateBefore + '); got ' + JSON.stringify(rc && rc.published_head));
+    // The archive is durable at origin/main HEAD, once, with its evidence. The candidate chain
+    // legitimately carries the branch's own commits beside the archive commit, so "exactly once"
+    // is measured on the ARCHIVE commits specifically — a resume that re-archived would double
+    // them, and nothing else produces a `chore: archive … [sink]` subject.
+    const dest = rc && rc.archive_dest;
+    assert(dest && catFileType(fx.tmpRoot, 'origin/main:' + dest + '/workflow-state.md') === 'blob',
+      '#1097 resume (archive): the archived workflow-state.md must be a blob at origin/main HEAD');
+    const archiveSubjects = git(fx.tmpRoot, ['log', '--format=%s', originMainBefore + '..origin/main']).stdout
+      .split('\n').filter(s => /\[sink\]$/.test(s)).length;
+    assert(archiveSubjects === 1,
+      '#1097 resume (archive): exactly ONE archive commit must have landed on origin/main, never a re-archived second; got ' + archiveSubjects);
+    assert(git(fx.tmpRoot, ['merge-base', '--is-ancestor', candidateBefore, 'origin/main']).status === 0,
+      '#1097 resume (archive): the archive-carrying candidate must be an ancestor of origin/main');
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// #1096 gap (i) — the mid-history deleted path. The deleted untracked-conflict rule only ever
+// probed the CANDIDATE TREES' tips, so a path the branch carried and then deleted MID-HISTORY
+// (carried by no tip) with a live untracked copy in the shared checkout was invisible to every
+// probe — and under the old model the checkout machinery could still collide with it. #1097
+// answers the whole class: the merge never happens in the shared checkout, so the untracked
+// copy is neither a refusal nor a casualty — the sink completes and the copy is preserved.
+(function testUntrackedMidHistoryDeletedPathPublishesAndPreserves1097() {
+  console.log('Test (#1096 i → #1097): an untracked copy of a path the branch carried and deleted MID-HISTORY never blocks — the sink publishes and the copy is preserved untracked');
+  const project = 'issue-109746';
+  const issue = 109746;
+  const fx = buildSoleArchiverFixture(project, issue, {});
+  fx.projectName = project;
+  try {
+    // The branch carries P at a MID-HISTORY commit and deletes it again at the tip.
+    git(fx.tmpRoot, ['checkout', fx.branch]);
+    fs.writeFileSync(path.join(fx.tmpRoot, 'P-' + issue + '.txt'), 'branch copy, mid-history\n');
+    git(fx.tmpRoot, ['add', '--', 'P-' + issue + '.txt']);
+    git(fx.tmpRoot, ['commit', '-m', 'feat: add the mid-history path']);
+    git(fx.tmpRoot, ['rm', '--', 'P-' + issue + '.txt']);
+    git(fx.tmpRoot, ['commit', '-m', 'chore: remove the mid-history path']);
+    git(fx.tmpRoot, ['push', 'origin', fx.branch]);
+    git(fx.tmpRoot, ['checkout', 'main']);
+    // The shared checkout holds a live UNTRACKED copy at that path.
+    const rel = 'P-' + issue + '.txt';
+    fs.writeFileSync(path.join(fx.tmpRoot, rel), 'untracked shared-checkout copy — different bytes\n');
+    const bytes = 'untracked shared-checkout copy — different bytes\n';
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+    assert(result.status === 0 && out && out.status === 'sinked',
+      '#1096 i: the isolated merge must complete over the untracked mid-history copy; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.publication === 'published', '#1096 i: the merge must publish; got ' + JSON.stringify(out && out.publication));
+    assert(fs.readFileSync(path.join(fx.tmpRoot, rel), 'utf8') === bytes,
+      '#1096 i: the untracked copy must survive byte-identical');
+    const line = git(fx.tmpRoot, ['status', '--porcelain', '-uall', '--', rel]).stdout.replace(/\n$/, '');
+    assert(line === '?? ' + rel, '#1096 i: the copy must remain untracked; got ' + JSON.stringify(line));
+    // The delivered work landed and the mid-history churn never reached the mainline.
+    assert(catFileType(fx.tmpRoot, 'origin/main:DELIVERABLE.txt') === 'blob',
+      '#1096 i: the deliverable must land on origin/main');
+    assert(git(fx.tmpRoot, ['rev-parse', 'origin/main:' + rel]).status !== 0
+      || catFileType(fx.tmpRoot, 'origin/main:' + rel) === null,
+      '#1096 i: the mid-history deleted path must NOT be back on the mainline');
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// #1096 gap (ii) — the gitlink. A branch carrying a GITLINK (a submodule-shaped commit record)
+// at S, with the shared checkout holding untracked content under S/: no file-shaped probe the
+// deleted rule ran could see it, and no checkout the transaction performs can "write" a gitlink
+// over a live directory — git records the sha and leaves the directory's contents alone (a
+// gitlink boundary is opaque to porcelain, exactly like any embedded repository's contents).
+// Measured: the advance therefore SUCCEEDS and reports `advanced`, the untracked content
+// survives byte-identical on disk behind the boundary, and the publication carries the gitlink
+// to the remote at mode 160000. The #1097 contract holds end to end: nothing blocks, nothing is
+// destroyed, and every step reports what it actually did.
+(function testUntrackedDirUnderBranchGitlinkPublishesBehind1097() {
+  console.log('Test (#1096 ii → #1097): untracked content under a branch-carried GITLINK path never blocks the publication; the advance succeeds, the gitlink lands at mode 160000, and the content survives behind the gitlink boundary');
+  const project = 'issue-109747';
+  const issue = 109747;
+  const fx = buildSoleArchiverFixture(project, issue, {});
+  fx.projectName = project;
+  try {
+    // A gitlink at S on the branch: a commit sha recorded with mode 160000, no .gitmodules —
+    // the shape a nested-repo commit leaves behind.
+    const gitlinkDir = 'S-' + issue;
+    git(fx.tmpRoot, ['checkout', fx.branch]);
+    const anyCommit = git(fx.tmpRoot, ['rev-parse', 'HEAD']).stdout.trim();
+    git(fx.tmpRoot, ['update-index', '--add', '--cacheinfo', '160000,' + anyCommit + ',' + gitlinkDir]);
+    git(fx.tmpRoot, ['commit', '-m', 'feat: record a gitlink at ' + gitlinkDir]);
+    git(fx.tmpRoot, ['push', 'origin', fx.branch]);
+    git(fx.tmpRoot, ['checkout', 'main']);
+    // The shared checkout holds live UNTRACKED content under S/.
+    const inner = path.join(gitlinkDir, 'inner.txt');
+    fs.mkdirSync(path.join(fx.tmpRoot, gitlinkDir), { recursive: true });
+    fs.writeFileSync(path.join(fx.tmpRoot, inner), 'untracked shared-checkout content under the gitlink path\n');
+    const bytes = 'untracked shared-checkout content under the gitlink path\n';
+
+    const result = runSink(fx, ['--issue', String(issue)]);
+    const out = lastJson(result);
+    assert(result.status === 0 && out && out.status === 'sinked',
+      '#1096 ii: the publication must complete over the untracked directory under the gitlink path; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.publication === 'published', '#1096 ii: the gitlink must reach the remote; got ' + JSON.stringify(out && out.publication));
+    assert(out && out.cleanup && out.cleanup.main_checkout === 'advanced',
+      '#1096 ii: the advance must succeed (git records the gitlink sha and leaves the live directory\'s contents alone — measured) and report it; got ' + JSON.stringify(out && out.cleanup && out.cleanup.main_checkout));
+    // The gitlink landed on the mainline, mode 160000.
+    const entry = git(fx.tmpRoot, ['ls-tree', 'origin/main', '--', gitlinkDir]).stdout.trim();
+    assert(/^160000 /.test(entry), '#1096 ii: origin/main must carry the gitlink at mode 160000; got ' + JSON.stringify(entry));
+    // The untracked content is preserved on disk, byte-identical, behind the gitlink boundary —
+    // porcelain does not descend into a gitlink, exactly as it does not into any embedded
+    // repository, so the boundary's emptiness is the measurement, not a missing untracked line.
+    assert(fs.readFileSync(path.join(fx.tmpRoot, inner), 'utf8') === bytes,
+      '#1096 ii: the untracked content under S/ must survive byte-identical');
+    const line = git(fx.tmpRoot, ['status', '--porcelain', '-uall', '--', gitlinkDir + '/']).stdout.replace(/\n$/, '');
+    assert(line === '',
+      '#1096 ii: porcelain must stay empty behind the gitlink boundary (git does not descend into a gitlink — measured); got ' + JSON.stringify(line));
+  } finally {
+    cleanup(fx);
+  }
+})();
+
+// AC2 — concurrency, end to end. Two sinks on two projects, spawned simultaneously, merging in
+// their OWN integration worktrees while the shared checkout is never checked out to any branch,
+// then publishing through the ONE short-scope publish lock. The remote's pre-receive hook sleeps,
+// so the first holder's push is observably slow and the second sink demonstrably WAITS at the
+// lock (the rendezvous is the lock itself, not a timing guess); receive.denyNonFastForwards is
+// the CAS fence a real forge carries. The pinned outcome: both runs complete, both deliverables
+// and both archives land LINEARLY on origin/main (the loser re-rebases onto the winner's
+// result), each sink used its own W, the dev worktrees and their foreign markers survive the
+// OTHER lane's merge, and the shared checkout's HEAD never left the default branch.
+(function testConcurrentSinksSerializeAndBothPublishLinearly1097() {
+  console.log('Test (#1097 AC2): two concurrent sinks serialize on the publish lock and both land linearly — own Ws, shared HEAD untouched, dev worktrees preserved');
+  const lanes = [['issue-109748', 109748], ['issue-109749', 109749]];
+  const tmpRoot = makeTmpRoot();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const remotePath = initGitRepoWithBareRemote(tmpRoot);
+  writeGhMock(binDir, logFile);
+  // The CAS fence + the rendezvous clock.
+  git(remotePath, ['config', 'receive.denyNonFastForwards', 'true']);
+  fs.mkdirSync(path.join(remotePath, 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(remotePath, 'hooks', 'pre-receive'), '#!/bin/sh\nsleep 1.2\nexit 0\n');
+  fs.chmodSync(path.join(remotePath, 'hooks', 'pre-receive'), 0o755);
+  try {
+    fs.writeFileSync(path.join(tmpRoot, 'README.md'), 'fixture\n');
+    git(tmpRoot, ['add', '-A']);
+    git(tmpRoot, ['commit', '-m', 'chore: base']);
+    git(tmpRoot, ['push', 'origin', 'main']);
+    const headBefore = git(tmpRoot, ['rev-parse', 'main']).stdout.trim();
+
+    for (const [project, issue] of lanes) {
+      git(tmpRoot, ['checkout', '-b', 'workflow/' + project]);
+      const liveDir = path.join(tmpRoot, 'kaola-workflow', project);
+      fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
+      fs.writeFileSync(path.join(liveDir, 'workflow-state.md'), liveState(project, issue, new Date().toISOString()));
+      fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'), '# Finalization Summary\n\nREADY FOR FINAL GIT GATE\n');
+      fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE-' + project + '.txt'), 'deliverable for ' + project + '\n');
+      git(tmpRoot, ['add', '-A']);
+      git(tmpRoot, ['commit', '-m', 'feat: deliverable + live state']);
+      git(tmpRoot, ['push', '-u', 'origin', 'workflow/' + project]);
+      git(tmpRoot, ['checkout', 'main']);
+      // The dev worktree starts CLEAN so #562 preflight can pass. The foreign marker is planted
+      // after both sinks have built W, during the rendezvous, to exercise the post-merge window
+      // and make each lane's teardown report kept_dirty.
+      const wt = path.join(tmpRoot, '.kw', 'worktrees', project);
+      git(tmpRoot, ['worktree', 'add', '--', wt, 'workflow/' + project]);
+    }
+    git(tmpRoot, ['fetch', 'origin']);
+    const porcelainBefore = git(tmpRoot, ['status', '--porcelain', '-uall']).stdout;
+
+    // Spawn BOTH sinks concurrently. The pre-receive sleep makes the first publish hold the lock
+    // long enough that the second demonstrably waits (the default 60s wait covers it comfortably).
+    // WHY a shell wrapper with output-to-file and a done marker, not a plain spawn with stdio
+    // pipes: the rendezvous and wait loops below poll under execSync('sleep …'), which starves
+    // this process's event loop — a piped child's `exitCode` and stdio `data` events never fire
+    // while the loops spin (measured: the wait loop saw null exit codes and empty stdio until its
+    // deadline, over sinks that had both exited 0 in 7s). The wrapper shell writes the envelope
+    // to <lane>.out, stderr to <lane>.err, and the exit status to <lane>.done after node exits;
+    // fs.existsSync/readFileSync poll disk, which works under synchronous sleeps.
+    const { spawn } = require('child_process');
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ac2-run-'));
+    const procs = lanes.map(([project, issue]) => {
+      const base = path.join(runDir, project);
+      const outFile = base + '.out', errFile = base + '.err', doneFile = base + '.done';
+      const cmd = JSON.stringify(process.execPath) + ' ' + JSON.stringify(sinkMergeScript)
+        + ' --branch ' + JSON.stringify('workflow/' + project)
+        + ' --project ' + JSON.stringify(project)
+        + ' --issue ' + JSON.stringify(String(issue))
+        + ' --sink --json'
+        + ' > ' + JSON.stringify(outFile) + ' 2> ' + JSON.stringify(errFile)
+        + '; echo $? > ' + JSON.stringify(doneFile);
+      const p = spawn('/bin/sh', ['-c', cmd], {
+        cwd: tmpRoot, encoding: 'utf8',
+        env: Object.assign({}, process.env, {
+          KAOLA_WORKFLOW_OFFLINE: '0',
+          KAOLA_WORKFLOW_SKIP_TESTGATE: '1',
+          KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js'),
+        }),
+      });
+      p.outFile = outFile; p.errFile = errFile; p.doneFile = doneFile;
+      return p;
+    });
+
+    // THE RENDEZVOUS: both merges have built their Ws — the overlap window is open. Bounded, so
+    // a sink that refused early fails the test instead of hanging it.
+    const deadline = Date.now() + 30000;
+    for (;;) {
+      const allBuilt = lanes.every(([project]) => fs.existsSync(path.join(tmpRoot, '.kw', 'integrate', project)));
+      if (allBuilt) break;
+      if (Date.now() > deadline) {
+        throw new Error('#1097 AC2: rendezvous timeout — both integration worktrees must exist during the overlap; done markers at '
+          + procs.map(p => { try { return fs.readFileSync(p.doneFile, 'utf8').trim(); } catch (_) { return '(running)'; } }).join(','));
+      }
+      require('child_process').execSync('sleep 0.05');
+    }
+    // The overlap assertions — the state the OLD model could not hold: the shared checkout never
+    // carried a branch checkout, never landed a live folder, and both lanes' own Ws exist side by
+    // side (per-project ownership of the integration surface).
+    const headAtOverlap = git(tmpRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).stdout.trim();
+    assert(headAtOverlap === 'main', '#1097 AC2: the shared checkout\'s HEAD must still be the default branch during the overlap; got ' + JSON.stringify(headAtOverlap));
+    assert(git(tmpRoot, ['rev-parse', 'main']).stdout.trim() === headBefore,
+      '#1097 AC2: the shared checkout\'s HEAD must not have moved during either merge');
+    for (const [project] of lanes) {
+      const wt = path.join(tmpRoot, '.kw', 'worktrees', project);
+      fs.writeFileSync(path.join(wt, 'marker-' + project + '.txt'), 'foreign dev-worktree marker for ' + project + '\n');
+      // No LIVE RUN CONTENT may land in the shared checkout during the merge — that is the old
+      // model's violation (workflow-state.md/finalization-summary.md materializing via the branch
+      // checkout). The `.cache/` subfolder alone is the DESIGNED crash-resume receipt journal's
+      // home in the main checkout (measured: the only entry present during the overlap), disposed
+      // by the journal lifecycle before the run ends (#715 m) — bookkeeping, not live content,
+      // and it must not read as a landed run.
+      const liveDir = path.join(tmpRoot, 'kaola-workflow', project);
+      assert(!fs.existsSync(path.join(liveDir, 'workflow-state.md')) && !fs.existsSync(path.join(liveDir, 'finalization-summary.md')),
+        '#1097 AC2: no live run content may land in the shared checkout during the merge — ' + project + ' lives in its own W; got '
+          + (fs.existsSync(liveDir) ? fs.readdirSync(liveDir).join(',') : '(no folder)'));
+      assert(fs.existsSync(path.join(tmpRoot, '.kw', 'integrate', project)),
+        '#1097 AC2: each lane must own its own integration worktree — .kw/integrate/' + project);
+      assert(fs.existsSync(wt) && fs.existsSync(path.join(wt, 'marker-' + project + '.txt')),
+        '#1097 AC2: the dev worktree and its foreign marker must survive the OTHER lane\'s merge — ' + wt);
+    }
+
+    // Wait for both, bounded. Poll the DONE MARKERS (disk), never p.exitCode — see the spawn
+    // comment above: the event loop never runs under these synchronous sleeps.
+    const deadline2 = Date.now() + 60000;
+    while (procs.some(p => !fs.existsSync(p.doneFile))) {
+      if (Date.now() > deadline2) {
+        for (const p of procs) try { p.kill('SIGKILL'); } catch (_) {}
+        throw new Error('#1097 AC2: both sinks must finish; stderr tails: '
+          + procs.map(p => {
+            try { return fs.readFileSync(p.errFile, 'utf8').slice(-400); } catch (_) { return '(no stderr yet)'; }
+          }).join('\n---\n'));
+      }
+      require('child_process').execSync('sleep 0.1');
+    }
+
+    const outs = procs.map(p => {
+      let code = null, outText = '', stderr = '';
+      try { code = parseInt(fs.readFileSync(p.doneFile, 'utf8').trim(), 10); } catch (_) {}
+      try { outText = fs.readFileSync(p.outFile, 'utf8'); } catch (_) {}
+      try { stderr = fs.readFileSync(p.errFile, 'utf8'); } catch (_) {}
+      const ls = String(outText).trim().split('\n').filter(l => l.trim().startsWith('{'));
+      return { code, out: ls.length ? JSON.parse(ls[ls.length - 1]) : null, stderr: String(stderr) };
+    });
+    for (let i = 0; i < lanes.length; i++) {
+      const [project, issue] = lanes[i];
+      const { code, out, stderr } = outs[i];
+      assert(code === 0 && out && out.status === 'sinked',
+        '#1097 AC2 (' + project + '): the concurrent sink must complete; got ' + code + '\nstdout: ' + (out && JSON.stringify(out)) + '\nstderr: ' + stderr.slice(-800));
+      assert(out && out.publication === 'published',
+        '#1097 AC2 (' + project + '): the lane must publish; got ' + JSON.stringify(out && out.publication));
+      // LINEARITY: this lane's published candidate is an ancestor of the final origin/main —
+      // the loser re-rebased onto the winner's result, so both results survive in one line.
+      const candidate = out && out.receipt && out.receipt.published_head;
+      assert(candidate && git(tmpRoot, ['merge-base', '--is-ancestor', candidate, 'origin/main']).status === 0,
+        '#1097 AC2 (' + project + '): the published candidate must be an ancestor of origin/main (linear, never overwritten)');
+      assert(git(tmpRoot, ['rev-parse', '--verify', '--quiet', 'origin/main:DELIVERABLE-' + project + '.txt']).status === 0,
+        '#1097 AC2 (' + project + '): the deliverable must land on origin/main');
+      const dest = out && out.receipt && out.receipt.archive_dest;
+      assert(dest && catFileType(tmpRoot, 'origin/main:' + dest + '/workflow-state.md') === 'blob',
+        '#1097 AC2 (' + project + '): the archive must land on origin/main');
+      assert(out && out.cleanup && (out.cleanup.main_checkout === 'advanced' || String(out.cleanup.main_checkout).indexOf('behind') === 0),
+        '#1097 AC2 (' + project + '): the advance must be reported (advanced or honestly behind); got ' + JSON.stringify(out && out.cleanup && out.cleanup.main_checkout));
+      assert(out && out.cleanup && out.cleanup.integration_worktree === 'removed',
+        '#1097 AC2 (' + project + '): the teardown must remove this lane\'s own W; got ' + JSON.stringify(out && out.cleanup && out.cleanup.integration_worktree));
+      // The dev worktree and its marker survive the OTHER lane's merge AND this lane's own
+      // teardown (dirty → kept_dirty), byte-identical.
+      const wt = path.join(tmpRoot, '.kw', 'worktrees', project);
+      assert(fs.existsSync(wt) && fs.readFileSync(path.join(wt, 'marker-' + project + '.txt'), 'utf8') === 'foreign dev-worktree marker for ' + project + '\n',
+        '#1097 AC2 (' + project + '): the dev worktree and its foreign marker must survive both lanes');
+      assert(out && out.cleanup && out.cleanup.worktree === 'kept_dirty',
+        '#1097 AC2 (' + project + '): the lane\'s own teardown must report kept_dirty for its marker-carrying dev worktree; got ' + JSON.stringify(out && out.cleanup && out.cleanup.worktree));
+      // A kept dev worktree still has the branch checked out — the branch delete is SKIPPED and
+      // the keep is REPORTED (never a 'failed: cannot delete branch used by worktree' misread of
+      // the design working as intended).
+      assert(out && out.cleanup && out.cleanup.local_branch === 'kept: checked out by the dev worktree (kept_dirty)',
+        '#1097 AC2 (' + project + '): a kept dev worktree holds the branch checked out — the delete must be skipped and the keep reported; got '
+          + JSON.stringify(out && out.cleanup && out.cleanup.local_branch));
+    }
+    // The shared checkout ends on the default branch, at the published tip, with no live folders
+    // and no foreign-casualty residue (the markers live in the dev worktrees, not here).
+    assert(git(tmpRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).stdout.trim() === 'main',
+      '#1097 AC2: the shared checkout must end on the default branch');
+    assert(git(tmpRoot, ['merge-base', '--is-ancestor', 'main', 'origin/main']).status === 0,
+      '#1097 AC2: the shared checkout\'s HEAD must be an ancestor of the published tip');
+    for (const [project] of lanes) {
+      assert(!fs.existsSync(path.join(tmpRoot, 'kaola-workflow', project)),
+        '#1097 AC2: no live folder may be left in the shared checkout — ' + project);
+    }
+  } finally {
+    try { fs.rmSync(runDir, { recursive: true, force: true }); } catch (_) {}
+    for (const [project] of lanes) {
+      try { git(tmpRoot, ['worktree', 'remove', '--force', '--', path.join(tmpRoot, '.kw', 'worktrees', project)]); } catch (_) {}
+      try { git(tmpRoot, ['worktree', 'remove', '--force', '--', path.join(tmpRoot, '.kw', 'integrate', project)]); } catch (_) {}
+    }
+    cleanup({ tmpRoot, remotePath, binDir, logFile });
+  }
+})();
 // (1096d) The envelope report. `publication` rides EVERY envelope runSinkTransaction emits — derived
 // from the receipt's own steps plus the #631 ancestry probe, never guessed: nothing pushed to the
 // mainline is `not_published`; a pushed head that IS an ancestor of the default branch is
@@ -1409,20 +1897,23 @@ function plantLiveFolder(tmpRoot, project, files) {
   } finally {
     cleanup(fx);
   }
-  // Leg 2: a preflight refusal never pushed anything — the same field must say not_published, so
-  // a refusal that lands AFTER push_main can be told apart from one that landed before it.
+  // Leg 2 (#1097-remade): a refusal that lands BEFORE push_main — the forced archive refusal
+  // (the (x4) seam) stops the run at finalize, past merge, before any push — so the same field
+  // must say not_published, and a refusal that lands AFTER push_main can still be told apart.
+  // (#1097 removed the old shape — a tracked foreign modification — from preflight's refusal set:
+  // the merge no longer happens in the shared checkout, so the modification no longer blocks it.)
   const project2 = 'issue-109641';
   const issue2 = 109641;
   const fx2 = buildSoleArchiverFixture(project2, issue2, {});
   fx2.projectName = project2;
   try {
-    fs.writeFileSync(path.join(fx2.tmpRoot, 'README.md'), 'local edit forcing a preflight refusal\n');
-    const result = runSink(fx2, ['--issue', String(issue2)]);
+    const result = runSink(fx2, ['--issue', String(issue2)], { KAOLA_WORKFLOW_FORCE_ARCHIVE_REFUSAL: '1' });
     const out = lastJson(result);
     assert(result.status !== 0, '#1096 d: the refused sink must exit non-zero; got ' + result.status);
-    assert(out && out.reason === 'sink_blocked', '#1096 d: reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
+    assert(out && out.result === 'refuse' && out.reason === 'sink_incomplete' && out.step === 'finalize',
+      '#1096 d: must emit result:refuse reason:sink_incomplete step:finalize; got ' + JSON.stringify(out));
     assert(out && out.publication === 'not_published',
-      '#1096 d: a preflight refusal pushed nothing — publication must say not_published; got ' + JSON.stringify(out && out.publication));
+      '#1096 d: a pre-push refusal pushed nothing — publication must say not_published; got ' + JSON.stringify(out && out.publication));
   } finally {
     cleanup(fx2);
   }
@@ -1469,14 +1960,17 @@ function plantLiveFolder(tmpRoot, project, files) {
   } finally {
     cleanup(fx4);
   }
-  // Leg 5 (AC6): a PUSH_MAIN failure — the merge landed LOCALLY, never on the remote (#497). The
-  // step stays not-done, and publication must say not_published so a caller can tell this refusal
-  // from a post-publication one.
+  // Leg 5 (AC6, #1097-remade): a PUSH_MAIN failure — nothing landed anywhere (#497 + #1097). The
+  // old model had the merge in LOCAL main already; the W-model advances the shared checkout only
+  // AFTER a successful push, inside the same lock, so a failed push leaves local main UNTOUCHED,
+  // the candidate alive in the retained integration worktree, and the step stays not-done.
+  // publication must say not_published so a caller can tell this refusal from a post-publication one.
   const project5 = 'issue-109644';
   const issue5 = 109644;
   const fx5 = buildSoleArchiverFixture(project5, issue5, {});
   fx5.projectName = project5;
   try {
+    const mainBefore = git(fx5.tmpRoot, ['rev-parse', 'main']).stdout.trim();
     const remoteBefore = git(fx5.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim();
     const result = runSink(fx5, ['--issue', String(issue5)], { KAOLA_WORKFLOW_FORCE_PUSH_MAIN_FAIL: '1' });
     const out = lastJson(result);
@@ -1485,10 +1979,12 @@ function plantLiveFolder(tmpRoot, project, files) {
       '#1096 d (push-fail): must emit result:refuse reason:sink_incomplete step:push_main push_main:failed; got ' + JSON.stringify(out));
     assert(out && out.publication === 'not_published',
       '#1096 d (push-fail): the push failed — publication must say not_published; got ' + JSON.stringify(out && out.publication));
-    assert(git(fx5.tmpRoot, ['merge-base', '--is-ancestor', fx5.branch, 'main']).status === 0,
-      '#1096 d (push-fail): the merge must still have landed on LOCAL main');
+    assert(git(fx5.tmpRoot, ['rev-parse', 'main']).stdout.trim() === mainBefore,
+      '#1096 d (push-fail): #1097 — local main must NOT have advanced: the advance runs only after a successful push, inside the publish lock');
     assert(git(fx5.tmpRoot, ['rev-parse', 'origin/main']).stdout.trim() === remoteBefore,
       '#1096 d (push-fail): origin/main must NOT have advanced');
+    assert(fs.existsSync(path.join(fx5.tmpRoot, '.kw', 'integrate', project5)),
+      '#1096 d (push-fail): the integration worktree must be RETAINED on the refused push — it holds the only advanced candidate and the resumable run');
   } finally {
     cleanup(fx5);
   }
@@ -1628,13 +2124,14 @@ function buildKeepWorktreeArchiveMirrorFixture(project, issue, opts) {
   }
 })();
 
-// (w2) The same classification claim isolated from the rest of the transaction: a genuinely foreign
-// TRACKED MODIFICATION forces the refusal, so the mirror's absence from the listing is directly
-// observable (the #715 (m) idiom, under the #1096 forcing contract — the old untracked plant was
-// carried by no candidate tree and stopped blocking). The "foreign change is listed" and "zero
-// mutation" clauses are FENCES; the "mirror paths are absent" clauses are NEW BEHAVIOUR.
+// (w2 → #1097) The classification claim's last observable: with a genuinely foreign TRACKED
+// MODIFICATION riding along (#1097 AC3 — it no longer forces a refusal; the merge happens in the
+// isolated worktree), this sink still lands its own untracked archive mirror at HEAD, the foreign
+// modification survives byte-identical, and nothing about the mirror ever needs an exemption:
+// there is no foreign-dirt listing left to be exempted from. The "mirror lands at HEAD" clauses
+// are the (w1) landing property; the "foreign change preserved" clause is NEW BEHAVIOUR (#1097).
 (function testKeepWorktreeArchiveMirrorNotListedAsForeignDirt() {
-  console.log('Test (#893 w2): with a genuinely foreign TRACKED modification forcing the refusal, this project\'s own untracked archive mirror must NOT appear in foreign_dirt and must be left byte-untouched');
+  console.log('Test (#893 w2 → #1097): with a genuinely foreign TRACKED modification riding along, this project\'s own untracked archive mirror still lands at HEAD and the foreign change survives byte-identical');
   const project = 'issue-89302';
   const issue = 89302;
   const mirror = archiveMirrorFiles(project, issue);
@@ -1642,28 +2139,32 @@ function buildKeepWorktreeArchiveMirrorFixture(project, issue, opts) {
   const fx = buildKeepWorktreeArchiveMirrorFixture(project, issue, { plant });
   fx.projectName = project;
   try {
-    // #1096: a TRACKED modification is the forcing shape that survives every preflight contract —
-    // porcelain XY with a non-? status column is dirt unconditionally.
+    // #1097: a TRACKED modification is no longer a forcing shape — it is the AC3 preserved
+    // content. The merge never happens in the shared checkout, so the modification rides through.
     const foreignRel = 'README.md';
     fs.writeFileSync(path.join(fx.tmpRoot, foreignRel), 'locally modified by a foreign hand\n');
-    const statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
     const result = runSink(fx, ['--issue', String(issue)]);
     const out = lastJson(result);
 
-    assert(result.status !== 0, '#893 w2: sink must refuse on the tracked foreign modification; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-    assert(out && out.reason === 'sink_blocked', '#893 w2: reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
-    assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(foreignRel),
-      '#893 w2: foreign_dirt must still list the genuinely foreign tracked modification; got ' + JSON.stringify(out && out.foreign_dirt));
+    assert(result.status === 0, '#893 w2: the isolated merge must complete over the foreign tracked modification; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#893 w2: status must be sinked; got ' + JSON.stringify(out && out.status));
+    assert(out && out.publication === 'published', '#893 w2: the merge must publish; got ' + JSON.stringify(out && out.publication));
+    assert(fs.readFileSync(path.join(fx.tmpRoot, foreignRel), 'utf8') === 'locally modified by a foreign hand\n',
+      '#893 w2: the genuinely foreign tracked modification must survive byte-identical (#1097 AC3)');
     for (const rel of Object.keys(mirror)) {
-      const dirtRel = 'kaola-workflow/archive/' + project + '/' + rel;
-      assert(out && Array.isArray(out.foreign_dirt) && !out.foreign_dirt.includes(dirtRel),
-        '#893 w2: ' + dirtRel + ' is this sink\'s own archive mirror and must NOT be listed as foreign dirt; got ' + JSON.stringify(out && out.foreign_dirt));
-      const abs = path.join(fx.tmpRoot, dirtRel);
-      assert(fs.existsSync(abs) && fs.readFileSync(abs, 'utf8') === mirror[rel],
-        '#893 w2: ' + dirtRel + ' must be byte-untouched after a refusal (the exemption is classification-only)');
+      const headRel = 'kaola-workflow/archive/' + project + '/' + rel;
+      const atHead = showAtHead(fx.tmpRoot, headRel);
+      const ok = rel === 'finalization-summary.md'
+        ? (atHead !== null && atHead.startsWith(mirror[rel]))
+        : atHead === mirror[rel];
+      assert(ok, '#893 w2: ' + headRel + ' is this sink\'s own archive mirror and must land at HEAD byte-for-byte; got ' + JSON.stringify(atHead));
     }
-    const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
-    assert(statusBefore === statusAfter, '#893 w2: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) + '\nafter: ' + JSON.stringify(statusAfter));
+    // The foreign modification stays exactly the foreign modification it was: still listed by
+    // porcelain, still unstaged (the leading ` M` column is the unstaged marker — trim() would
+    // eat it and turn the assertion into a staged-or-not no-op), never restored, reverted, or
+    // committed by this sink.
+    const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall', '--', foreignRel]).stdout.replace(/\n$/, '');
+    assert(statusAfter === ' M ' + foreignRel, '#893 w2: the foreign modification must remain the working tree\'s own unstaged change; got ' + JSON.stringify(statusAfter));
   } finally {
     cleanup(fx);
   }
@@ -1760,19 +2261,19 @@ function buildKeepWorktreeArchiveMirrorFixture(project, issue, opts) {
   }
 })();
 
-// (w11) The BYTE-EQUAL half of (w4)'s three-way rule, observed on the refusal listing the way (w2)
-// observes the plain mirror: a mirrored file the branch carries at the SAME bytes is a duplicate of
-// what the branch already has, not a divergence — it must not appear in foreign_dirt. (Driven to
-// refusal with a genuinely foreign TRACKED MODIFICATION, as in (w2) under the #1096 forcing
-// contract: letting preflight pass instead lands the untracked duplicate in front of
-// `git checkout`, which refuses to overwrite it — a transaction abort past preflight, outside what
-// this test measures.) This is the arm whose content read was
-// dead code since 3973af23 removed the `archiveKey` const but left `git show archiveKey:...`
-// behind: the ReferenceError is swallowed by the catch, branchBytes stays null, byte-equality can
-// never be observed, and every branch-carried path falls through to bucket 3 — the case (w11)
-// exists to lock.
+// (w11 → #1097) The BYTE-EQUAL half of (w4)'s three-way rule, in the W-model's own observable: a
+// mirrored file the branch carries at the SAME bytes is a duplicate of what the branch already
+// has, not a divergence — so the post-publish advance ABSORBS it (the identical tracked content
+// supersedes the untracked copy) and reports main_checkout: advanced, never behind. The old
+// forcing idiom (a foreign TRACKED MODIFICATION driving preflight to a refusal) is gone with the
+// refusal: #1097 AC3 preserves that modification instead, and it rides along here as the
+// pass-through content. (The contrast arm is (w4): a DIVERGENT branch copy at this project's own
+// archive path still refuses sink_blocked.) This is the arm whose content read was dead code since
+// 3973af23 removed the `archiveKey` const but left `git show archiveKey:...` behind: the
+// ReferenceError was swallowed by the catch, branchBytes stayed null, byte-equality could never be
+// observed, and every branch-carried path fell through to bucket 3 — the case (w11) exists to lock.
 (function testByteEqualBranchCopyRemainsExempt() {
-  console.log('Test (#893 w11): a mirrored file the BRANCH carries at byte-equal content must NOT be listed as foreign dirt — carried and byte-equal is a duplicate');
+  console.log('Test (#893 w11 → #1097): a mirrored file the BRANCH carries at byte-equal content is absorbed as a duplicate — the advance reports main_checkout: advanced — while the foreign modification rides through preserved');
   const project = 'issue-89311';
   const issue = 89311;
   const mirror = archiveMirrorFiles(project, issue);
@@ -1784,25 +2285,25 @@ function buildKeepWorktreeArchiveMirrorFixture(project, issue, opts) {
   });
   fx.projectName = project;
   try {
-    // #1096: the forcing shape that survives every preflight contract — a TRACKED modification
-    // (the old untracked plant was carried by no candidate tree and stopped blocking).
+    // #1097 AC3: the riding-along content — a foreign TRACKED modification, preserved.
     const foreignRel = 'README.md';
     fs.writeFileSync(path.join(fx.tmpRoot, foreignRel), 'locally modified by a foreign hand\n');
-    const statusBefore = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
     const result = runSink(fx, ['--issue', String(issue)]);
     const out = lastJson(result);
 
-    assert(result.status !== 0, '#893 w11: sink must refuse on the tracked foreign modification; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
-    assert(out && out.reason === 'sink_blocked', '#893 w11: reason must be sink_blocked; got ' + JSON.stringify(out && out.reason));
-    assert(out && Array.isArray(out.foreign_dirt) && out.foreign_dirt.includes(foreignRel),
-      '#893 w11: foreign_dirt must still list the genuinely foreign tracked modification; got ' + JSON.stringify(out && out.foreign_dirt));
-    assert(out && Array.isArray(out.foreign_dirt) && !out.foreign_dirt.includes(equalRel),
-      '#893 w11: ' + equalRel + ' is byte-equal to the branch copy and must NOT be listed as foreign dirt; got ' + JSON.stringify(out && out.foreign_dirt));
-    const abs = path.join(fx.tmpRoot, equalRel);
-    assert(fs.existsSync(abs) && fs.readFileSync(abs, 'utf8') === mirror['mission-list.md'],
-      '#893 w11: ' + equalRel + ' must be byte-untouched after a refusal (the exemption is classification-only)');
-    const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall']).stdout;
-    assert(statusBefore === statusAfter, '#893 w11: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) + '\nafter: ' + JSON.stringify(statusAfter));
+    assert(result.status === 0, '#893 w11: the byte-equal duplicate is not dirt — the sink must complete; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out && out.status === 'sinked', '#893 w11: status must be sinked; got ' + JSON.stringify(out && out.status));
+    assert(out && out.publication === 'published', '#893 w11: the merge must publish; got ' + JSON.stringify(out && out.publication));
+    assert(out && out.cleanup && out.cleanup.main_checkout === 'advanced',
+      '#893 w11: the byte-equal untracked duplicate must be absorbed by the advance (the identical tracked content supersedes it), never a behind report; got ' + JSON.stringify(out && out.cleanup && out.cleanup.main_checkout));
+    // The duplicate's bytes ARE the tracked bytes now at HEAD: carried and byte-equal, landed.
+    const atHead = showAtHead(fx.tmpRoot, equalRel);
+    assert(atHead === mirror['mission-list.md'],
+      '#893 w11: the branch-carried byte-equal copy must land at HEAD; got ' + JSON.stringify(atHead));
+    assert(fs.readFileSync(path.join(fx.tmpRoot, foreignRel), 'utf8') === 'locally modified by a foreign hand\n',
+      '#893 w11: the foreign tracked modification must survive byte-identical (#1097 AC3)');
+    const statusAfter = git(fx.tmpRoot, ['status', '--porcelain', '-uall', '--', foreignRel]).stdout.replace(/\n$/, '');
+    assert(statusAfter === ' M ' + foreignRel, '#893 w11: the foreign modification must remain the working tree\'s own unstaged change; got ' + JSON.stringify(statusAfter));
   } finally {
     cleanup(fx);
   }
@@ -3483,20 +3984,22 @@ function runSinkWithGate(fx, extraArgs) {
 
 // --------------------------------------------------------------------------- (w) #980
 //
-// (v) drives the red stop; this drives the SAME stop on a worktree-postured run, where it opens a
-// window (v)'s fixture has no worktree to expose. Both sink routes copy <wt>/kaola-workflow/<project>/
-// into an OS tmpdir (kw-wtsync-*) and force-remove the worktree BEFORE the merge, then land the copy
-// per-file (#707 h) only after the merge succeeds. Every stop between those two — this red gate, a
-// red chain during FF recovery, a failed fast-forward, a rebase conflict, and the uncaught
-// `git checkout` throw sitting between them — ended the process with the staged copy the ONLY
-// surviving journal, parked under a generated name reported nowhere the operator would look, until
-// OS tmp reaping took it. #619(4) is the same class for the destroy case.
+// (v) drives the red stop; this drives the SAME stop on a worktree-postured run. Both sink routes
+// copy <wt>/kaola-workflow/<project>/ into an OS tmpdir (kw-wtsync-*) before the merge, then land the
+// copy per-file (#707 h) after the merge succeeds. Before #1097 the worktree was force-removed
+// BEFORE the merge, so every stop between the removal and the landing — the red gate, a red chain
+// during FF recovery, a failed fast-forward, a rebase conflict, and the uncaught `git checkout`
+// throw — ended the process with the staged copy the ONLY surviving journal, parked under a
+// generated name reported nowhere the operator would look, until OS tmp reaping took it (#619(4)
+// is the same class for the destroy case).
 //
-// THE PIN IS DISCOVERABILITY, not a mechanism. Naming the path in the failure output, landing it into
-// the archive band before stopping, and deferring the removal until the landing commits are all
-// admissible answers; parking it silently is the one forbidden outcome. So the oracle asks only
-// whether the journal is reachable from what the run said, or already sitting where the operator
-// reads — never how it got there.
+// #1097 CLOSES THE WINDOW AT ITS ROOT: the dev worktree is no longer removed at merge time (it is
+// preserved to post-publish teardown), so the journal's ORIGINAL home outlives every stop, and the
+// staged copy is a secondary transport copy, never the only surviving journal. The findability
+// oracle stays — it still asks whether the journal is reachable from what the run said, or already
+// sitting where the operator reads — but it gains the answer #1097 guarantees: the surviving
+// worktree itself. THE PIN IS DISCOVERABILITY, not a mechanism; parking the only copy silently
+// remains the one forbidden outcome.
 (function testStagedJournalIsFindableWhenTheSinkStopsBeforeLanding980() {
   console.log('Test (#980 w): a run that stages the worktree journal and then stops before landing it must leave the operator able to FIND the staged copy — not park it under a generated tmpdir name reported nowhere');
   const project = 'issue-87709';
@@ -3551,25 +4054,31 @@ function runSinkWithGate(fx, extraArgs) {
       '#980 (w) premise: the run must stop at the RED post-rebase gate — that is the stop that opens '
       + 'the window between the removal and the landing. ' + seen);
 
-    // Premise 3 — the removal actually HAPPENED. Without it the worktree still holds the journal, it
-    // is trivially findable, and the pin below is vacuous. This is the clause that makes the arm
-    // about the staged copy rather than about the original.
-    assert(!fs.existsSync(fx.wtPath),
-      '#980 (w) premise: the linked worktree must be GONE after the stop — the stage-then-remove-then-'
-      + 'stop ordering is the whole window this arm measures, and a surviving worktree means the run '
-      + 'never reached it. ' + seen);
+    // Premise 3 — #1097 INVERTED: the dev worktree must STILL EXIST after the stop. The old
+    // stage-then-remove-then-stop window (the worktree force-removed BEFORE the merge, making the
+    // staged copy the only survivor) is gone with the removal: #1097 preserves the dev worktree
+    // through the merge to post-publish teardown, which a stopped run never reaches. That is
+    // exactly what closes the window — the journal's ORIGINAL home outlives the stop.
+    assert(fs.existsSync(fx.wtPath),
+      '#980 (w) premise (#1097): the linked worktree must STILL EXIST after the stop — the dev '
+      + 'worktree is preserved to post-publish teardown (#1097), and a surviving worktree is the '
+      + 'journal\'s durable home, not a sign the run never reached it. ' + seen);
 
-    // Premise 4 — the bytes were not destroyed. If they were, that is a strictly worse defect than
-    // the one this arm pins, and it must not be reported as this one.
-    assert(survivors.length > 0,
-      '#980 (w) premise: the staged copy must still exist somewhere after the stop. The worktree is '
-      + 'gone and the stage is the only copy left; losing it outright is a destroy defect (#619(4)), '
-      + 'not the naming defect this arm measures. ' + seen);
+    // Premise 4 — the bytes were not destroyed, in the journal's ORIGINAL home. The worktree
+    // survives and must still hold the journal; losing it outright is a destroy defect (#619(4)),
+    // not the naming defect this arm measures.
+    assert(filesContaining973(fx.wtPath, NONCE).length > 0,
+      '#980 (w) premise: the journal must still exist IN THE SURVIVING WORKTREE after the stop. '
+      + 'The staged copy is a secondary transport copy under #1097, so the worktree copy is the '
+      + 'durable one; losing it outright is a destroy defect (#619(4)), not the naming defect this '
+      + 'arm measures. ' + seen);
 
     // ================================ THE PIN ================================
-    // Findable means one of two things, and the arm accepts either: a path the run NAMED leads to the
-    // journal, or the journal is already in the band the operator reads (the live/archive folder).
-    // Anything else is a generated name nobody was told about.
+    // Findable means one of three things now, and the arm accepts any: the journal still sits in
+    // its original, recorded home (the surviving dev worktree — the claim's own worktree path,
+    // which the operator already knows); a path the run NAMED leads to it; or it is already in the
+    // band the operator reads (the live/archive folder). Anything else is a generated name nobody
+    // was told about.
     const namedPaths = (combined.match(/\/[^\s'"()\n]+/g) || []);
     const reachableFromOutput = namedPaths.some(p => {
       try {
@@ -3579,14 +4088,15 @@ function runSinkWithGate(fx, extraArgs) {
       } catch (_) { return false; }
     });
     const inOperatorBand = inFixture.some(rel => rel.startsWith('kaola-workflow' + path.sep));
+    const inOriginalHome = fs.existsSync(fx.wtPath) && filesContaining973(fx.wtPath, NONCE).length > 0;
 
-    assert(reachableFromOutput || inOperatorBand,
-      '#980 (w): the staged run journal must be FINDABLE after a stop that leaves it un-landed. The '
-      + 'worktree it came from is gone, so this staged copy is the run\'s only surviving journal, and '
-      + 'it currently sits under a generated kw-wtsync-* name that appears nowhere in the output and '
-      + 'nowhere the operator looks — OS tmp reaping eventually takes it. Naming the path in the '
-      + 'failure output, landing it into the archive band before stopping, or deferring the removal '
-      + 'until the landing commits all satisfy this; parking it silently does not. '
+    assert(inOriginalHome || reachableFromOutput || inOperatorBand,
+      '#980 (w) (#1097): the staged run journal must be FINDABLE after a stop that leaves it '
+      + 'un-landed — and under #1097 it is, twice over: its original home (the dev worktree, '
+      + 'preserved to post-publish teardown) survives the stop, and the staged copy is a secondary '
+      + 'transport copy, never the only surviving journal. Naming the staged path in the failure '
+      + 'output, or landing it into the archive band before stopping, still satisfies this; a '
+      + 'worktree removal that outlives the landing does not exist any more. '
       + 'survivors=' + JSON.stringify(survivors) + ' ' + seen);
   } finally {
     cleanupGateFixture(fx);
@@ -3868,9 +4378,13 @@ function assertArchiveFailureStopsTheSink(fx, label, opts) {
 
     // Nothing was destroyed on the way to the stop. The seam returns before archiveProjectDir stamps
     // or moves anything, so the live folder the sink declined to archive must still be there for the
-    // re-run clause 6 promises.
-    assert(fs.existsSync(path.join(fx.tmpRoot, 'kaola-workflow', project, 'workflow-state.md')),
-      '(x4): the live project folder must survive a refused archive — the stop exists to keep the run record, not to trade it for a clean tree');
+    // re-run clause 6 promises. #1097: the live folder's locus is the integration worktree W — the
+    // merge landed it there, the shared checkout never carried it — and W is retained on the stop
+    // (teardown never runs), which is exactly what makes the re-run resumable.
+    assert(fs.existsSync(path.join(fx.tmpRoot, '.kw', 'integrate', project, 'kaola-workflow', project, 'workflow-state.md')),
+      '(x4): the live project folder must survive a refused archive IN THE RETAINED INTEGRATION WORKTREE — the stop exists to keep the run record, not to trade it for a clean tree');
+    assert(fs.existsSync(path.join(fx.tmpRoot, '.kw', 'integrate', project)),
+      '(x4): the integration worktree itself must be retained on the refused archive — it holds the only advanced candidate and the resumable run');
   } finally {
     cleanup(fx);
   }
@@ -4684,17 +5198,24 @@ function assertPreflightGuardScope912(label, script) {
   // Same arm lettering as the GitLab and Gitea suites carry, so one expectation reads the same in
   // all three.
 
-  // (b) the data-loss guard (#346/#496/#562).
+  // (b) the data-loss guard (#346/#496/#562). The sink must refuse before mutation when the
+  // linked development worktree is dirty or unprobeable. The W-model removes the merge-time
+  // destruction window, but #562 remains the protected work boundary required by the issue.
   {
     const fx = mkBranched('issue-91203', 91203, true);
     try {
-      const r = preflight(fx);
-      assert(r.reason === 'worktree_dirty',
-        '#912 (b/' + label + '): a branch-postured run whose linked worktree has uncommitted changes must STILL '
-        + 'refuse worktree_dirty — the sink force-removes that worktree, so proceeding destroys the work. Got ' + r.seen);
-      assert(r.exit !== 0, '#912 (b/' + label + '): the dirty-worktree refusal must exit non-zero. Got ' + r.seen);
+      const r = spawnSync(process.execPath,
+        [script, '--branch', fx.branch, '--project', fx.project, '--issue', String(fx.issue), '--sink', '--json'],
+        { cwd: fx.tmpRoot, encoding: 'utf8', timeout: 90000,
+          env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      const out = lastJson(r);
+      const seen = 'exit=' + r.status + ' envelope=' + JSON.stringify(out)
+        + '\nstderr: ' + String(r.stderr || '').slice(0, 600);
+      assert(r.status !== 0 && out && out.reason === 'worktree_dirty',
+        '#912 (b/' + label + '): a dirty linked worktree must refuse worktree_dirty before the isolated '
+        + 'merge mutates anything. Got ' + seen);
       assert(fs.existsSync(fx.wt) && fs.readFileSync(path.join(fx.wt, 'FEATURE.txt'), 'utf8') === 'uncommitted edit\n',
-        '#912 (b/' + label + '): the refusal must leave the linked worktree and its uncommitted file byte-intact');
+        '#912 (b/' + label + '): the completed sink must leave the linked worktree and its uncommitted file byte-intact');
     } finally { drop(fx); }
   }
 
@@ -4709,20 +5230,32 @@ function assertPreflightGuardScope912(label, script) {
     } finally { drop(fx); }
   }
 
-  // (d) the fail-closed half of the guard (#506): a run whose probe faults must still refuse even
-  // though the worktree is clean — unprobeable is "could not verify", never "nothing there".
-  // Swallowing the probe fault leaves (b) and (c) green and breaks this one.
+  // (d) the fail-closed half of the guard (#506). The legacy entry is the one route that still
+  // REMOVES the dev worktree (`removeWorktree --force` at its Step 3), so the probe fault is
+  // driven there, at the removal site, before any mutation: unprobeable is "could not verify",
+  // never "nothing there". The fixture is the legacy in-place posture the #973 (i-control) arm
+  // completes on — the branch carries only the deliverable, the live run folder sits untracked in
+  // main — so every precondition before Step 3 is green and the run cannot stop early on one of
+  // them: the guard's own fail-closed message is the non-vacuity oracle, and its presence proves
+  // the run reached the guard and failed ON the fault.
   {
-    const fx = mkBranched('issue-91204', 91204, false);
+    const fx = buildLegacyWorktreeFixture973('issue-91204', 91204);
     try {
-      const r = preflight(fx, { KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL: '1' });
-      assert(r.reason === 'worktree_dirty',
-        '#912 (d/' + label + '): a run whose worktree-list probe faults must STILL refuse worktree_dirty '
-        + '(fail closed) — a transient enumeration fault is not evidence that there is no worktree to '
-        + 'protect. Got ' + r.seen);
-      assert(fs.existsSync(fx.wt),
+      const r = runSinkLegacyAt(script, fx,
+        ['--issue', '91204', '--keep-issue-open'],
+        { KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL: '1',
+          KAOLA_GH_MOCK_SCRIPT: path.join(fx.binDir, 'gh.js') });
+      const stderr = String(r.stderr || '');
+      assert(r.status !== 0 && stderr.includes('worktree list probe failed'),
+        '#912 (d/' + label + '): a legacy run whose worktree-list probe faults must STILL refuse (fail closed) '
+        + 'at the removal site — a transient enumeration fault is not evidence that there is no worktree to '
+        + 'protect. Got exit=' + r.status + '\nstderr: ' + stderr.slice(0, 600));
+      assert(fs.existsSync(fx.wtPath),
         '#912 (d/' + label + '): the fail-closed refusal must leave the linked worktree in place');
-    } finally { drop(fx); }
+    } finally {
+      drop({ tmpRoot: fx.tmpRoot, remotePath: fx.remotePath });
+      try { fs.rmSync(fx.binDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (_) {}
+    }
   }
 }
 
@@ -4887,11 +5420,20 @@ function assertUntrackedWorkIsNotSilentlyDestroyed973(label, sinkScript, project
     const out = lastJson(result);
     const combined = String(result.stdout || '') + String(result.stderr || '');
     const survivors = filesContaining973(fx.tmpRoot, NONCE);
+    // #1097: the protection this arm pins moved from refuse-at-preflight to KEEP-AT-TEARDOWN — the
+    // --sink merge runs in the private integration worktree and never removes the dev worktree, so
+    // the run completes and the envelope's `cleanup.worktree: kept_dirty` is the sink TELLING the
+    // operator exactly that: this worktree carries uncommitted work and was kept for it. That typed
+    // disposition is a first-class way of being told here, beside the refusal shapes it replaced.
+    // The refusal itself is not gone from the codebase — the guard lives where the hazard lives,
+    // at the legacy entry's forced removal, which (i) holds below.
     // Deliberately generous, because "the operator was told" has more than one honest shape: a
-    // refusal (non-zero exit), a typed finding on the envelope, or the path named in what the run
-    // printed. Any one of them is being told; none of them is a mechanism this arm requires.
+    // refusal (non-zero exit), a typed finding on the envelope, the kept-dirty disposition on the
+    // envelope, or the path named in what the run printed. Any one of them is being told; none of
+    // them is a mechanism this arm requires.
     const told = result.status !== 0
       || !!(out && out.reason)
+      || (out && out.cleanup && out.cleanup.worktree === 'kept_dirty')
       || combined.includes(GENUINE_REL)
       || combined.includes('helper.js');
     const seen = 'exit=' + result.status
@@ -5019,7 +5561,11 @@ function assertUntrackedSymlinkIsNotSilentlyDestroyed973(label, sinkScript, proj
     const out = lastJson(result);
     const combined = String(result.stdout || '') + String(result.stderr || '');
     const survivors = symlinksTo973(fx.tmpRoot, LINK_TARGET);
-    const told = result.status !== 0 || !!(out && out.reason) || combined.includes(LINK_REL);
+    // #1097: same conversion as (e) — the --sink protection is keep-at-teardown, so the envelope's
+    // `cleanup.worktree: kept_dirty` disposition counts as the sink telling the operator.
+    const told = result.status !== 0 || !!(out && out.reason)
+      || (out && out.cleanup && out.cleanup.worktree === 'kept_dirty')
+      || combined.includes(LINK_REL);
     const seen = 'exit=' + result.status
       + ' status=' + JSON.stringify(out && out.status)
       + ' reason=' + JSON.stringify(out && out.reason)
@@ -5332,10 +5878,14 @@ function assertBackslashLaneNameIsNotSilentlyDestroyed978(label, sinkScript, pro
     const out = lastJson(result);
     const combined = String(result.stdout || '') + String(result.stderr || '');
     const survivors = filesContaining973(fx.tmpRoot, NONCE);
-    // Same generous shape as (e): any honest signal counts and no mechanism is required. The named
-    // token is the SEGMENT, which survives C-quoting unchanged — the full literal name would fail
-    // to match its own quoted form in a refusal message.
-    const told = result.status !== 0 || !!(out && out.reason) || combined.includes(SEG);
+    // Same generous shape as (e), with the #1097 conversion: any honest signal counts and no
+    // mechanism is required. The named token is the SEGMENT, which survives C-quoting unchanged —
+    // the full literal name would fail to match its own quoted form in a refusal message.
+    // `cleanup.worktree: kept_dirty` counts too: the --sink protection is keep-at-teardown, and
+    // that disposition is the sink telling the operator the worktree carries uncommitted work.
+    const told = result.status !== 0 || !!(out && out.reason)
+      || (out && out.cleanup && out.cleanup.worktree === 'kept_dirty')
+      || combined.includes(SEG);
     const seen = 'exit=' + result.status
       + ' status=' + JSON.stringify(out && out.status)
       + ' reason=' + JSON.stringify(out && out.reason)
@@ -5408,7 +5958,11 @@ function assertEmbeddedRepoUnderLanePrefixIsNotSilentlyDestroyed978(label, sinkS
     const out = lastJson(result);
     const combined = String(result.stdout || '') + String(result.stderr || '');
     const survivors = filesContaining973(fx.tmpRoot, NONCE);
-    const told = result.status !== 0 || !!(out && out.reason) || combined.includes(SEG);
+    // #1097: same conversion as (e)/(j) — the --sink protection is keep-at-teardown, so the
+    // envelope's `cleanup.worktree: kept_dirty` disposition counts as the sink telling the operator.
+    const told = result.status !== 0 || !!(out && out.reason)
+      || (out && out.cleanup && out.cleanup.worktree === 'kept_dirty')
+      || combined.includes(SEG);
     const seen = 'exit=' + result.status
       + ' status=' + JSON.stringify(out && out.status)
       + ' reason=' + JSON.stringify(out && out.reason)
