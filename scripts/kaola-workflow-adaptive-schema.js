@@ -1907,6 +1907,501 @@ function serializeLedger(missions) {
   }) + '\n').join('');
 }
 
+// ===========================================================================
+// #1097 — THE ISOLATED INTEGRATION WORKTREE AND THE PUBLISH DOOR.
+//
+// One shared resource made every lane serialize: the MAIN CHECKOUT. The sink merged by checking the
+// feature branch out IN `mainRoot` — the working tree the operator and every other lane read — so a
+// merge could only proceed when that checkout was byte-clean, and the preflight therefore had to
+// refuse on ANY foreign modification (tracked or untracked) a checkout might have collided with.
+// That refusal was #1096's rule, and the collision it guarded is structurally gone once the merge
+// happens somewhere else.
+//
+// So the merge, the rebase and the post-rebase test gate move into a PRIVATE integration worktree W
+// at `<mainRoot>/.kw/integrate/<project>` (detached HEAD, gitignored), and the only two things the
+// sink still does to the shared checkout are (1) stage this run's own archive into mainRoot's
+// working tree (untracked, exactly as before) and (2) fast-forward `mainRoot` onto the published
+// candidate IF git can do it without touching a user change. Both are REPORTED, never forced.
+//
+// These primitives live in the kernel because the integration worktree, the private-index commit
+// and the publish lock are the same git mechanics on every forge; only the CLI that talks to the
+// forge differs. They are forge-neutral by construction: no `gh`, no `glab`, no remote name is
+// assumed beyond `origin` (already the kernel's assumption in `defaultBranch`).
+// ===========================================================================
+
+const INTEGRATE_DIR_REL = '.kw/integrate';
+const PUBLISH_LOCK_NAME = 'kaola-workflow-publish.lock';
+// The publish-lock wait cap. The lock is held for one fetch plus one push, so this is a WEDGE net,
+// not a queueing policy: a holder that outlives it is reported (`publish_busy`), never waited out
+// forever. `KAOLA_WORKFLOW_PUBLISH_LOCK_WAIT_MS` shortens it for tests.
+const PUBLISH_LOCK_WAIT_MS = 60000;
+// How long an UNPARSEABLE lock file must sit untouched before it is treated as residue. A readable
+// lock is judged by its holder (same host + dead pid ⇒ takeover); only bytes we cannot read at all
+// fall back to age, so a torn write from a killed process cannot wedge every later lane.
+const PUBLISH_LOCK_UNREADABLE_TAKEOVER_MS = 120000;
+
+function publishLockWaitMsNow() {
+  const raw = process.env.KAOLA_WORKFLOW_PUBLISH_LOCK_WAIT_MS;
+  if (raw == null || raw === '') return PUBLISH_LOCK_WAIT_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : PUBLISH_LOCK_WAIT_MS;
+}
+
+// The one blocking sleep in the standard library, with no dependency. A CLI transaction holds the
+// lock across an `await`-free stretch, so the wait has to be synchronous.
+function syncSleep(ms) {
+  const n = Math.max(0, Math.floor(Number(ms) || 0));
+  if (!n) return;
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, n);
+  } catch (_) {
+    const end = Date.now() + n;
+    while (Date.now() < end) { /* last resort: spin */ }
+  }
+}
+
+function firstLine(text) {
+  const s = String(text == null ? '' : text).split('\n').map(l => l.trim()).filter(Boolean);
+  return s.length ? s[0] : '';
+}
+
+// The repo's COMMON git dir: one per repository, shared by every linked worktree. The publish lock
+// lives here rather than in a working tree for two reasons — it must be shared by every worktree a
+// lane might run the sink from, and it must not appear as dirt in any of them.
+function gitCommonDir(root) {
+  const { execFileSync } = require('child_process');
+  const path = require('path');
+  const out = execFileSync('git', ['-C', root, 'rev-parse', '--git-common-dir'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  return path.isAbsolute(out) ? out : path.resolve(String(root || '.'), out);
+}
+
+function publishLockPath(root) {
+  const path = require('path');
+  return path.join(gitCommonDir(root), PUBLISH_LOCK_NAME);
+}
+
+// A pid is alive if it exists or exists-but-not-ours. Anything else (ESRCH, or a pid we cannot
+// signal at all) is dead — including the ordinary case of a pid recycled onto a process we cannot
+// see, which is why the takeover below ALSO requires the same hostname.
+function processIsAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) return false;
+  try { process.kill(n, 0); return true; } catch (err) { return !!(err && err.code === 'EPERM'); }
+}
+
+function readPublishLockHolder(lockPath) {
+  const fs = require('fs');
+  try {
+    const obj = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    return (obj && typeof obj === 'object') ? obj : null;
+  } catch (_) { return null; }
+}
+
+// Held in module state so the process-exit hook can unlink it even on a path the transaction's
+// `finally` never reaches (a hard `process.exit` from a nested helper, an unhandled throw in a
+// signal handler). The `finally` release is still the normal one; this is the backstop.
+let heldPublishLock = null;
+let publishLockExitHookInstalled = false;
+function installPublishLockExitHook() {
+  if (publishLockExitHookInstalled) return;
+  publishLockExitHookInstalled = true;
+  process.on('exit', () => { try { releasePublishLock(heldPublishLock); } catch (_) {} });
+}
+
+// acquirePublishLock — the short-scope serializer for the publish transaction (fetch → push).
+// NEVER a long hold: the merge/rebase/test-gate happen OUTSIDE it, in W, which is why a concurrent
+// lane is only ever blocked for the duration of one fetch+push. Returns
+//   { acquired:true, path, holder, waited_ms }
+//   { acquired:false, reason:'publish_busy', holder }      (waited the cap out, holder reported)
+//   { acquired:false, reason:'lock_error', detail }        (the lock dir/file could not be used)
+function acquirePublishLock(root, opts) {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const options = opts || {};
+  const waitMs = Number.isFinite(options.waitMs) ? options.waitMs : publishLockWaitMsNow();
+  const deadline = Date.now() + waitMs;
+  const token = {
+    pid: process.pid,
+    hostname: os.hostname(),
+    project: String(options.project == null ? '' : options.project),
+    acquired_at: new Date().toISOString()
+  };
+  let lockPath;
+  try { lockPath = publishLockPath(root); } catch (err) {
+    return { acquired: false, reason: 'lock_error', detail: String((err && err.message) || err) };
+  }
+  try { fs.mkdirSync(path.dirname(lockPath), { recursive: true }); } catch (_) {}
+  let sawHolder = null;
+  for (;;) {
+    // `wx` is the atomic create — the whole mutual exclusion on every filesystem we run on.
+    try {
+      const fd = fs.openSync(lockPath, 'wx');
+      try {
+        fs.writeSync(fd, JSON.stringify(token) + '\n');
+        try { fs.fsyncSync(fd); } catch (_) {}
+      } finally { fs.closeSync(fd); }
+      installPublishLockExitHook();
+      heldPublishLock = { path: lockPath, holder: token };
+      return { acquired: true, path: lockPath, holder: token, waited_ms: waitMs - (deadline - Date.now()) };
+    } catch (err) {
+      if (!err || err.code !== 'EEXIST') {
+        return { acquired: false, reason: 'lock_error', detail: String((err && err.message) || err) };
+      }
+    }
+    const holder = readPublishLockHolder(lockPath);
+    if (holder) sawHolder = holder;
+    // Stale takeover, ONLY when we can prove the holder is gone: same hostname (the pid namespace
+    // is local, so a foreign host's pid says nothing) AND a dead pid. The rename is what makes the
+    // takeover race-free: two waiters both see the dead lock, but only one rename succeeds and the
+    // loser's next `wx` create is the ordinary contended case again.
+    if (holder && String(holder.hostname) === token.hostname && !processIsAlive(holder.pid)) {
+      const aside = lockPath + '.stale-' + process.pid + '-' + Date.now();
+      try { fs.renameSync(lockPath, aside); } catch (_) { continue; }
+      try { fs.rmSync(aside, { force: true }); } catch (_) {}
+      continue;
+    }
+    // Unreadable bytes (a torn write from a killed process): age is the only signal left, and it
+    // must be well past the cap before we treat them as residue rather than a live holder mid-write.
+    if (!holder) {
+      try {
+        const st = fs.statSync(lockPath);
+        if (Date.now() - st.mtimeMs > Math.max(waitMs, PUBLISH_LOCK_UNREADABLE_TAKEOVER_MS)) {
+          const aside = lockPath + '.unreadable-' + process.pid + '-' + Date.now();
+          try { fs.renameSync(lockPath, aside); } catch (_) { continue; }
+          try { fs.rmSync(aside, { force: true }); } catch (_) {}
+          continue;
+        }
+      } catch (_) { continue; } // vanished between create and stat: retry the create
+    }
+    if (Date.now() >= deadline) {
+      return { acquired: false, reason: 'publish_busy', holder: sawHolder, path: lockPath };
+    }
+    syncSleep(Math.min(250, Math.max(1, deadline - Date.now())));
+  }
+}
+
+// releasePublishLock — unlink, but only the bytes WE wrote. A lock already taken over by another
+// lane (we overran, it judged us dead) is not ours to delete; releasing it would hand the door to a
+// third lane while the second one is inside.
+function releasePublishLock(lock) {
+  const fs = require('fs');
+  if (!lock || !lock.acquired || !lock.path) return { released: false };
+  let released = false;
+  try {
+    const cur = readPublishLockHolder(lock.path);
+    if (cur && cur.pid === lock.holder.pid && cur.acquired_at === lock.holder.acquired_at) {
+      fs.rmSync(lock.path, { force: true });
+      released = true;
+    }
+  } catch (_) {}
+  if (heldPublishLock && heldPublishLock.path === lock.path) heldPublishLock = null;
+  return { released };
+}
+
+// The one path rule for W, mirroring `ledgerPath`: pure string join, no discovery.
+function integrationWorktreePath(mainRoot, project) {
+  const path = require('path');
+  return path.join(String(mainRoot || ''), INTEGRATE_DIR_REL, String(project || ''));
+}
+
+function registeredWorktreePaths(mainRoot) {
+  const { execFileSync } = require('child_process');
+  const fs = require('fs');
+  let out;
+  try {
+    out = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (_) { return null; }
+  const set = new Set();
+  for (const line of String(out).split('\n')) {
+    if (line.indexOf('worktree ') !== 0) continue;
+    const raw = line.slice('worktree '.length);
+    set.add(raw);
+    try { set.add(fs.realpathSync(raw)); } catch (_) {}
+  }
+  return set;
+}
+
+// Which worktree currently has `def` checked out, or null. Used to decide whether a ref-only
+// advance is legal: git itself refuses to move a branch checked out in a worktree, and we report
+// that as `behind` rather than fighting it.
+function worktreeCheckedOutBranch(mainRoot, def) {
+  const { execFileSync } = require('child_process');
+  let out;
+  try {
+    out = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (_) { return null; }
+  let current = null;
+  for (const line of String(out).split('\n')) {
+    if (line.indexOf('worktree ') === 0) { current = line.slice('worktree '.length); continue; }
+    if (line === 'branch refs/heads/' + def) return current;
+  }
+  return null;
+}
+
+// ensureIntegrationWorktree — W is PRIVATE SCRATCH: the sink owns it, nothing user-authored ever
+// lives there, and it is regenerable from a ref. So both the reuse and the rebuild paths may reset
+// it hard and clean it, and a W that git cannot even talk to is rebuilt rather than trusted.
+//
+// Reuse matters for resume: a run aborted AFTER the rebase must not pay a second rebase, and the
+// receipt records the candidate SHA — re-attaching to that SHA is the whole recovery. Rebuild
+// matters for the crash shapes reuse cannot cover (a deleted directory, a corrupt admin dir).
+function ensureIntegrationWorktree(mainRoot, project, ref) {
+  const { execFileSync } = require('child_process');
+  const fs = require('fs');
+  const path = require('path');
+  const wtPath = integrationWorktreePath(mainRoot, project);
+  const git = (args, cwd) => execFileSync('git', ['-C', cwd || mainRoot].concat(args),
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  let sha;
+  try { sha = git(['rev-parse', '--verify', String(ref) + '^{commit}']).trim(); }
+  catch (err) { return { ok: false, reason: 'ref_unresolved', detail: String((err && err.message) || err), path: wtPath }; }
+  const registered = registeredWorktreePaths(mainRoot);
+  if (registered === null) return { ok: false, reason: 'worktree_list_failed', path: wtPath };
+  let realWt = wtPath;
+  try { realWt = fs.realpathSync(wtPath); } catch (_) {}
+  let reused = false;
+  if (fs.existsSync(wtPath)) {
+    if (registered.has(wtPath) || registered.has(realWt)) {
+      try {
+        git(['checkout', '--detach', '--force', sha], wtPath);
+        git(['reset', '--hard', sha], wtPath);
+        git(['clean', '-ffdx'], wtPath);
+        reused = true;
+      } catch (_) {
+        try { git(['worktree', 'remove', '--force', wtPath]); } catch (_) {}
+        try { fs.rmSync(wtPath, { recursive: true, force: true }); } catch (_) {}
+        reused = false;
+      }
+    } else {
+      // Residue on disk that git does not know about (a crashed add, a manual mkdir): drop it.
+      try { fs.rmSync(wtPath, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+  if (!reused) {
+    try {
+      fs.mkdirSync(path.dirname(wtPath), { recursive: true });
+      git(['worktree', 'add', '--detach', '--force', wtPath, sha]);
+    } catch (err) {
+      return { ok: false, reason: 'worktree_add_failed', detail: String((err && err.message) || err), path: wtPath };
+    }
+  }
+  let head = '';
+  try { head = git(['rev-parse', 'HEAD'], wtPath).trim(); } catch (_) {}
+  return { ok: true, path: wtPath, reused, head, ref: sha };
+}
+
+function removeIntegrationWorktree(mainRoot, project) {
+  const { execFileSync } = require('child_process');
+  const fs = require('fs');
+  const wtPath = integrationWorktreePath(mainRoot, project);
+  if (!fs.existsSync(wtPath)) return { removed: false, reason: 'missing', path: wtPath };
+  try {
+    execFileSync('git', ['-C', mainRoot, 'worktree', 'remove', '--force', '--', wtPath],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return { removed: true, path: wtPath };
+  } catch (err) {
+    // A registration git cannot unlink (the directory was already deleted, or the admin files are
+    // half-gone) is pruned instead: `prune` clears the registration, the rm clears any residue.
+    try {
+      execFileSync('git', ['-C', mainRoot, 'worktree', 'prune'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      fs.rmSync(wtPath, { recursive: true, force: true });
+      return { removed: true, path: wtPath, pruned: true };
+    } catch (err2) {
+      return { removed: false, reason: 'remove_failed', detail: String((err2 && err2.message) || err2), path: wtPath };
+    }
+  }
+}
+
+// commitPathsOntoCandidate — commit a working-tree pathspec onto a candidate WITHOUT a checkout.
+//
+// This is the one git operation that used to force the sink's checkout of the feature branch in
+// mainRoot: the archive lives as untracked bytes in mainRoot's working tree, and committing it
+// needed a branch checked out. The fix is the thing git itself provides for exactly this shape —
+// a PRIVATE index (GIT_INDEX_FILE) seeded from the candidate commit, with the working-tree bytes
+// added into it and committed with `commit-tree`. mainRoot's checkout is never touched; the archive
+// bytes are still read from mainRoot's working tree (#832's rule is unchanged).
+//
+// Returns { committed, staged, tree, addErrors, indexPath, error }. `staged` is every path the new
+// commit actually carries over the candidate (the report #893/#1096 wants, measured not inferred),
+// `addErrors` is every `git add` that exited non-zero (git exits 1 while still staging a path's
+// non-ignored siblings — #901), and `committed` is null when nothing was staged.
+function commitPathsOntoCandidate(mainRoot, opts) {
+  const { execFileSync } = require('child_process');
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const options = opts || {};
+  const candidate = String(options.candidate || '').trim();
+  const paths = (options.paths || []).map(String).filter(Boolean);
+  // The exclude specs arrive as full pathspec-magic strings (`:(exclude,glob)…`) — the caller owns
+  // their meaning; this primitive only appends them to the tracked arm.
+  const excludes = (options.excludes || []).map(String).filter(Boolean);
+  const forcePaths = (options.forcePaths || []).map(String).filter(Boolean);
+  const message = String(options.message || '');
+  const out = { committed: null, staged: [], tree: null, addErrors: [], indexPath: null, error: null };
+  if (!candidate) { out.error = 'no candidate'; return out; }
+  const indexDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-candidate-index-'));
+  const indexPath = path.join(indexDir, 'index');
+  out.indexPath = indexPath;
+  const env = Object.assign({}, process.env, { GIT_INDEX_FILE: indexPath });
+  const git = (args) => execFileSync('git', ['-C', mainRoot].concat(args),
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env, maxBuffer: VALIDATION_GIT_MAX_BUFFER });
+  try {
+    git(['read-tree', candidate]);
+    const addArm = (spec, force) => {
+      if (!spec.paths.length) return;
+      // Order matters to git here: an `:(exclude…)` magic must precede the `--` separator, or git
+      // silently stages nothing and still exits 0 (measured, git 2.54).
+      const args = ['add'];
+      if (force) args.push('-f');
+      for (const s of spec.excludes) args.push(s);
+      args.push('--');
+      for (const s of spec.paths) args.push(s);
+      try { git(args); }
+      catch (err) {
+        out.addErrors.push({
+          pathspecs: spec.paths.concat(spec.excludes),
+          force: !!force,
+          status: err && err.status != null ? err.status : null,
+          stderr: firstLine(err && err.stderr)
+        });
+      }
+    };
+    addArm({ paths, excludes }, false);
+    // The forced arm is already an explicit override of the ignore rules, so the excludes do not
+    // ride along: the caller scopes `forcePaths` to paths it PROVED are required run evidence.
+    addArm({ paths: forcePaths, excludes: [] }, true);
+    let stagedRaw = '';
+    try { stagedRaw = git(['diff-index', '--cached', '--name-only', '-z', candidate, '--']); } catch (_) {}
+    out.staged = splitNulPaths(stagedRaw);
+    if (!out.staged.length) return out;
+    out.tree = git(['write-tree']).trim();
+    out.committed = git(['commit-tree', out.tree, '-p', candidate, '-m', message]).trim();
+    return out;
+  } catch (err) {
+    out.error = String((err && err.message) || err);
+    return out;
+  } finally {
+    try { fs.rmSync(indexDir, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// The publish ref: `origin/<def>` when it resolves (the remote's view is the one a push is
+// compared against), the LOCAL branch otherwise. ONE helper, because the sink's publication
+// verdict, its push CAS and the claim-side audit must all ask the same question — three copies of
+// this probe would be three answers.
+function publishTargetRef(root, defBranch) {
+  const { execFileSync } = require('child_process');
+  const def = String(defBranch || '').trim() || 'main';
+  try {
+    execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', 'origin/' + def],
+      { stdio: ['ignore', 'ignore', 'ignore'] });
+    return 'origin/' + def;
+  } catch (_) { return def; }
+}
+
+// Move aside only this sink's OWN untracked archive files that the candidate tree carries
+// BYTE-IDENTICALLY. Those are the single real checkout collision (a fast-forward writing a tracked
+// file over an identical untracked one). Anything else — a differing byte, an untracked file the
+// candidate does not carry, an untracked DIRECTORY where the candidate has a file — is left alone,
+// and if git then refuses the fast-forward that refusal is the honest `behind` report.
+function shiftOwnUntracked(mainRoot, candidate, pathspec, movedOut) {
+  const { execFileSync } = require('child_process');
+  const fs = require('fs');
+  const path = require('path');
+  if (!pathspec) return;
+  let raw = '';
+  try {
+    raw = execFileSync('git', ['-C', mainRoot, 'ls-files', '--others', '--exclude-standard', '-z', '--', pathspec],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (_) { return; }
+  for (const rel of splitNulPaths(raw)) {
+    const abs = path.join(mainRoot, rel);
+    let st;
+    try { st = fs.lstatSync(abs); } catch (_) { continue; }
+    if (!st.isFile()) continue;
+    let blob;
+    try { blob = execFileSync('git', ['-C', mainRoot, 'cat-file', 'blob', candidate + ':' + rel],
+      { stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: VALIDATION_GIT_MAX_BUFFER }); }
+    catch (_) { continue; } // the candidate tree does not carry it: not a collision
+    let disk;
+    try { disk = fs.readFileSync(abs); } catch (_) { continue; }
+    if (!blob.equals(disk)) continue; // differing bytes: the fast-forward must refuse, not clobber
+    const aside = abs + '.kw-advance-aside-' + process.pid;
+    try { fs.renameSync(abs, aside); } catch (_) { continue; }
+    movedOut.push({ rel, abs, aside });
+  }
+}
+
+function restoreMoved(moved) {
+  const fs = require('fs');
+  for (const m of moved) {
+    try { fs.renameSync(m.aside, m.abs); } catch (_) {}
+  }
+}
+
+// advanceCheckedOutDefault — the second and last thing the sink does to the shared checkout, and a
+// REPORT, not a requirement. Moves `def` onto the published candidate when git can: a fast-forward
+// in mainRoot, or a compare-and-swap ref update when `def` is not checked out anywhere. Anything
+// else (dirty conflicting paths, `def` checked out in another worktree, a diverged local branch)
+// returns { advanced:false, reason:'behind', detail } — the sink still reports `published`.
+//
+// Returns { advanced:true, strategy:'ff'|'ref', head, moved? } or
+//         { advanced:false, strategy, reason:'behind', detail }.
+function advanceCheckedOutDefault(mainRoot, defBranch, candidate, opts) {
+  const { execFileSync } = require('child_process');
+  const fs = require('fs');
+  const options = opts || {};
+  const sha = String(candidate || '').trim();
+  const def = String(defBranch || '').trim();
+  if (!sha || !def) return { advanced: false, strategy: null, reason: 'behind', detail: 'no candidate or default branch' };
+  let head = '';
+  try { head = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--abbrev-ref', 'HEAD'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) {}
+  if (head === def) {
+    const moved = [];
+    try {
+      shiftOwnUntracked(mainRoot, sha, options.pathspec, moved);
+      execFileSync('git', ['-C', mainRoot, 'merge', '--ff-only', '--no-edit', sha],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+      restoreMoved(moved);
+      return {
+        advanced: false, strategy: 'ff', reason: 'behind',
+        detail: firstLine((err && err.stderr) || (err && err.message)) || 'fast-forward refused'
+      };
+    }
+    // The moved copies are byte-identical to what the fast-forward just wrote at those paths, so
+    // there is nothing to restore: the tracked content supersedes them.
+    for (const m of moved) { try { fs.rmSync(m.aside, { force: true }); } catch (_) {} }
+    return { advanced: true, strategy: 'ff', head: sha, moved: moved.map(m => m.rel) };
+  }
+  const elsewhere = worktreeCheckedOutBranch(mainRoot, def);
+  if (elsewhere) {
+    return { advanced: false, strategy: 'ref', reason: 'behind', detail: def + ' is checked out at ' + elsewhere };
+  }
+  let old = '';
+  try {
+    old = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', 'refs/heads/' + def],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (_) {}
+  const args = ['-C', mainRoot, 'update-ref', 'refs/heads/' + def, sha];
+  if (old) args.push(old);
+  try {
+    execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return { advanced: true, strategy: 'ref', head: sha };
+  } catch (err) {
+    return {
+      advanced: false, strategy: 'ref', reason: 'behind',
+      detail: firstLine((err && err.stderr) || (err && err.message)) || 'ref update refused'
+    };
+  }
+}
+
 module.exports = {
   LANE_STALENESS_MS,
   SHARED_STATE_FIELDS,
@@ -1922,6 +2417,20 @@ module.exports = {
   mainRootFromCoord,
   resolveMainRoot,
   defaultBranch,
+  // #1097 — the isolated integration worktree, the private-index candidate commit, the short-scope
+  // publish lock, and the reported fast-forward of the shared checkout. Forge-neutral: the same git
+  // mechanics on every edition, which is why they live here and not in a sink-merge port.
+  INTEGRATE_DIR_REL,
+  integrationWorktreePath,
+  ensureIntegrationWorktree,
+  removeIntegrationWorktree,
+  commitPathsOntoCandidate,
+  acquirePublishLock,
+  releasePublishLock,
+  publishLockPath,
+  publishLockWaitMsNow,
+  advanceCheckedOutDefault,
+  publishTargetRef,
   ADAPTIVE_PATH,
   NEXT_COMMAND,
   NEXT_SKILL,
