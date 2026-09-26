@@ -1757,6 +1757,7 @@ function readSavedJournal1097(tmpRoot, project) {
         throw new Error('#1097 AC2: rendezvous timeout — both integration worktrees must exist during the overlap; done markers at '
           + procs.map(p => { try { return fs.readFileSync(p.doneFile, 'utf8').trim(); } catch (_) { return '(running)'; } }).join(','));
       }
+      // spawn-class: concurrency
       require('child_process').execSync('sleep 0.05');
     }
     // The overlap assertions — the state the OLD model could not hold: the shared checkout never
@@ -1796,6 +1797,7 @@ function readSavedJournal1097(tmpRoot, project) {
             try { return fs.readFileSync(p.errFile, 'utf8').slice(-400); } catch (_) { return '(no stderr yet)'; }
           }).join('\n---\n'));
       }
+      // spawn-class: concurrency
       require('child_process').execSync('sleep 0.1');
     }
 
@@ -5204,6 +5206,7 @@ function assertPreflightGuardScope912(label, script) {
   {
     const fx = mkBranched('issue-91203', 91203, true);
     try {
+      // spawn-class: cli-contract
       const r = spawnSync(process.execPath,
         [script, '--branch', fx.branch, '--project', fx.project, '--issue', String(fx.issue), '--sink', '--json'],
         { cwd: fx.tmpRoot, encoding: 'utf8', timeout: 90000,

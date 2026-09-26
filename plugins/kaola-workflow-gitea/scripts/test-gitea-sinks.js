@@ -2697,6 +2697,7 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
       G.exec(root, ['branch', '--set-upstream-to=origin/' + branch, branch], { encoding: 'utf8' });
       return { root, remotePath, branch, git };
     };
+    // spawn-class: cli-contract
     const run = (root, project, issue) => spawnSync(process.execPath,
       [sinkScript, '--branch', 'workflow/' + project, '--issue', String(issue), '--project', project, '--keep-issue-open', '--sink'],
       { cwd: root, encoding: 'utf8', timeout: 120000,
@@ -2898,6 +2899,7 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
         throw new Error('#1097 AC2 gitea: rendezvous timeout — both integration worktrees must exist during the overlap; done markers at '
           + procs.map(p => { try { return fs.readFileSync(p.doneFile, 'utf8').trim(); } catch (_) { return '(running)'; } }).join(','));
       }
+      // spawn-class: concurrency
       require('child_process').execSync('sleep 0.05');
     }
     const headAtOverlap = git('rev-parse', '--abbrev-ref', 'HEAD').trim();
@@ -2923,6 +2925,7 @@ console.log('Gitea #592 --issue-numbers-only sink closure test: PASSED');
         throw new Error('#1097 AC2 gitea: both sinks must finish; stderr tails: '
           + procs.map(p => { try { return fs.readFileSync(p.errFile, 'utf8').slice(-400); } catch (_) { return '(no stderr yet)'; } }).join('\n---\n'));
       }
+      // spawn-class: concurrency
       require('child_process').execSync('sleep 0.1');
     }
     const outs = procs.map(p => {
