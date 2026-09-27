@@ -494,7 +494,7 @@ function main() {
       const probe = JSON.parse(ghExec([
         'api', 'graphql',
         '-f', 'query=query($u:URI!){resource(url:$u){...on PullRequest{isMergeQueueEnabled}}}',
-        '-F', 'u=' + prUrl,
+        '-f', 'u=' + prUrl,
       ]));
       queueEnabled = !!(probe && probe.data && probe.data.resource &&
         probe.data.resource.isMergeQueueEnabled === true);
