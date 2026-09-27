@@ -1825,19 +1825,27 @@ without a readable state file is not a record. The outcome is one of three:
 | Records on the branch | Owner | Receipt read |
 |---|---|---|
 | none | — | derived: `kaola-workflow/issue-<N>/.cache/`, then `kaola-workflow/archive/issue-<N>/.cache/` (unchanged from #1100) |
-| exactly one live record | the live record, whatever the archives hold; if it has a `claim_ts`, every folder carrying that same `claim_ts` is the same run | those folders' `.cache/`, live first, plus the unclaimed derived folders below |
+| exactly one live record, and no archived record with a strictly newer `claim_ts` | the live record; if it has a `claim_ts`, every folder carrying that same `claim_ts` is the same run | those folders' `.cache/`, live first, plus the unclaimed derived folders below |
 | no live record | the record with the strictly newest `claim_ts` (the sink's `readCurrentClaimTs` rule; ISO-8601 sorts lexicographically); a lone record needs no `claim_ts` | that folder's `.cache/`, plus the unclaimed derived folders below |
-| two or more live records, a `claim_ts` tie, or an unstamped record among several | ambiguous | only the unclaimed derived folders below |
+| two or more live records, a live record beside a newer archived `claim_ts`, a `claim_ts` tie, or an unstamped record among several | ambiguous | only the unclaimed derived folders below |
 
 A folder that is read pins the worktree when its receipt's `steps` are not all `done`, exactly as
 before. The **unclaimed derived folders** are `kaola-workflow/issue-<N>/` and
-`kaola-workflow/archive/issue-<N>/` when their `workflow-state.md` is missing, unreadable or names no
-`branch` — the #1100 receipt-only folder, the sink's own #832 archive skeleton, a corrupted state. No
-record can see them, yet a receipt surviving there is a sink that has not finished (a terminal sink
-disposes it), so it keeps the pin it had before #1102. Reading only the owning run's folders means
-an old run's leftover receipt never pins a newer run of the same issue. This is not the sink's
-`currentArchiveDir`: it skips unreadable folders instead of failing closed, and it never compares
-receipt contents.
+`kaola-workflow/archive/issue-<N>/` when they are not records: their `workflow-state.md` is missing,
+unreadable, names no `branch`, or names this branch without a safe `name` — the #1100 receipt-only
+folder, the sink's own #832 archive skeleton, a corrupted state. A derived folder whose state names
+another branch belongs to another run and is never read. A receipt surviving in an unclaimed folder
+is a sink that has not finished (a terminal sink disposes it), so it keeps the pin it had before
+#1102 — except that, when the resolved current run has a `claim_ts`, a receipt whose `claim_ts` (or, for an older
+receipt shape, `started_at`) predates that run's `claim_ts` is skipped. That is the sink's own #694
+cross-run rule: it refuses to resume such a receipt as an earlier run's.
+
+So a receipt from an older run never pins a newer resolved run of the same issue: the resolved
+run's own folders are the only records read, and an older derived receipt is dated out. Only an
+undatable derived receipt — no stamp on the receipt or on the resolved run, or any derived receipt
+when the owner is ambiguous —
+keeps the base pin. This is not the sink's `currentArchiveDir`: it skips unreadable folders instead
+of failing closed.
 
 The JSON shape is identical across all three forges; GitLab and Gitea match their own branch prefix
 (`workflow/gitlab-issue-*`, `workflow/gitea-issue-*`).
