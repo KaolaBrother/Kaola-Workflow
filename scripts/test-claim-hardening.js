@@ -6244,6 +6244,17 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       stateR(path.join(fx.root, ...AR, 'issue-96401.archived-2026-09-02T00-00-00-000Z'), 'issue-96401',
         ['branch: workflow/issue-96401', 'claim_ts: 2026-09-01T00:00:00.000Z']);
     }, true, 'a stamped live mid-sink run next to an older stamped archive must stay pinned');
+
+    // D5 (guard) — a derived folder whose readable state names ANOTHER branch belongs to another run:
+    // it is never unclaimed, so its mid-flight receipt must not pin this worktree.
+    mCase('D5', (fx) => {
+      stateR(path.join(fx.root, 'kaola-workflow', 'bundle-96401-96402'), 'bundle-96401-96402',
+        ['branch: workflow/issue-96401', 'claim_ts: 2026-09-27T00:00:00.000Z']);
+      const d = path.join(fx.root, ...AR, 'issue-96401');
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, 'workflow-state.md'), '## Sink\nbranch: workflow/other-96401\n');
+      receiptR(d, { project: 'issue-96401', steps: PENDING_N });
+    }, false, 'a derived folder whose state names another branch must never pin this worktree');
   }
 
   fs.rmSync(binDir1102, { recursive: true, force: true });

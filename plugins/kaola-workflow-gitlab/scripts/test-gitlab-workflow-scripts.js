@@ -2342,6 +2342,17 @@ function testStaleWorktreeCleanup() {
       state2g(path.join(fx.tmp, ...AR2G, 'issue-400.archived-2026-09-02T00-00-00-000Z'), 'issue-400',
         ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-01T00:00:00.000Z']);
     }, true, 'a stamped live mid-sink run next to an older stamped archive must stay pinned');
+
+    // D5 (guard) — a derived folder whose readable state names ANOTHER branch belongs to another run:
+    // it is never unclaimed, so its mid-flight receipt must not pin this worktree.
+    mCase('D5', (fx) => {
+      state2g(path.join(fx.tmp, 'kaola-workflow', 'bundle-400-402'), 'bundle-400-402',
+        ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-27T00:00:00.000Z']);
+      const d = path.join(fx.tmp, ...AR2G, 'issue-400');
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, 'workflow-state.md'), '## Sink\nbranch: workflow/other-400\n');
+      receipt2g(d, { project: 'issue-400', steps: PENDING2G });
+    }, false, 'a derived folder whose state names another branch must never pin this worktree');
   }
 
   // Sub-case 3: execute-dirty-no-flag — dirty worktree + --execute (no archive/export/force)
