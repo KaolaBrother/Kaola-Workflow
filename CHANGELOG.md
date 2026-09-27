@@ -107,7 +107,9 @@
   Per runtime: Codex keeps the `install-codex-agent-profiles.js` entry name, now retiring profiles,
   their record, and the `# BEGIN/END kaola-workflow agents` block (reported as `… agent record: …` /
   `… agent registrations (<reason>): …`) and installing only the hook, hook home, and carrier.
-  Pre-rename `codex-workflow` leftovers are only reported, and `CODEX_HOME` is untouched. Cursor
+  Hook-trust tables that Codex itself writes inside that block (`[hooks.state."…"]`) do not keep
+  the block from retiring, and they stay verbatim. The record is kept while any profile it proves
+  is kept. Pre-rename `codex-workflow` leftovers are only reported, and `CODEX_HOME` is untouched. Cursor
   consumes receipt `agents/` rows, which no longer make the authority stale, and migrates a project
   on its next `--target` install or `--ensure-target`. ZCode and Devin need byte proof rather than
   the managed marker, and `install-devin.sh --check` fails only while a released profile remains.

@@ -277,7 +277,10 @@ Per runtime:
   preflight, and older plugin caches invoke it. In the target scope (the home directory under
   `--global`, or a project root) it retires `.codex/agents/kaola-workflow/*.toml` and the
   `.kaola-managed-profiles.json` record, and strips the `# BEGIN/END kaola-workflow agents` block
-  from `.codex/config.toml` only when the block's body is exactly one a release wrote. It reports
+  from `.codex/config.toml` only when the block's body is exactly one a release wrote. Codex itself
+  writes hook-trust tables (`[hooks.state."…"]` with `trusted_hash = …`) inside that block; they
+  are not part of the proof, and they stay byte-for-byte where the block was. The record is kept
+  while any profile it proves is kept, so a later run can still retire that profile. It reports
   that block separately:
 
   ```text
@@ -288,7 +291,8 @@ Per runtime:
   Codex adds these reasons: `referenced_by_user_config` (a `config_file` entry left in that
   `config.toml` still points at the profile, so it is kept), `unsupported_record` (the record is
   unparseable or has a newer schema), `ambiguous_markers` (the marker lines are not one well-formed
-  pair), `mixed_managed_block` (the block's body is not one a release wrote), and `not_writable`
+  pair), `mixed_managed_block` (the block's body, apart from Codex's own `hooks.state` tables, is not one
+  a release wrote), and `not_writable`
   (the block would be removed, but `config.toml` cannot be written; every profile it still
   registers is kept with it). `config.toml` is always written before any profile is deleted. A
   scope whose `.codex` (or any directory between the scope root and it) is a symlink is kept
