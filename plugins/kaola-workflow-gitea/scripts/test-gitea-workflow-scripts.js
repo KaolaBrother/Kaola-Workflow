@@ -1653,6 +1653,71 @@ function testStaleWorktreeCleanup() {
     }
   }
 
+  // Sub-case 2c (#1100): the LANE arm carries the same sink resumability pin. The lane worktree
+  // (`<tmp>.kw/issue-<N>`, registered on a workflow/* branch) classifies on the SAME
+  // (closed || archived) && !active rule as the integration arm, and readActiveFolders drops a
+  // CLOSED issue's folder on its default path — so a closed issue alone would sweep the run's own
+  // lane worktree while the run still owns it. The pin is the same sink-receipt.json (steps not
+  // all done). All-done or absent sweeps exactly as before.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-cleanup-sc2c-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeTeaShimForStale(binDir);
+      const wtPath = path.join(kwRoot, 'issue-400');
+      addWorktree(tmp, 'workflow/gitea-issue-400', wtPath);
+      const receiptPath = path.join(tmp, 'kaola-workflow', 'issue-400', '.cache', 'sink-receipt.json');
+      fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
+      const writeReceipt = (pushMain, closureStep) => fs.writeFileSync(receiptPath, JSON.stringify({
+        project: 'issue-400',
+        steps: { preflight: 'done', push_upstream: 'done', merge: 'done', finalize: 'done',
+          stash_restore: 'done', archive_commit: 'done', push_main: pushMain, closure: closureStep }
+      }, null, 2) + '\n');
+      writeReceipt('pending', 'pending');
+      const out1 = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
+      assert(out1.dry_run === false, 'sc2c: dry_run must be false, got: ' + JSON.stringify(out1));
+      assert(fs.existsSync(wtPath),
+        'sc2c: a resumable sink receipt (steps not all done) must protect the run\'s own LANE worktree from --execute');
+      assert(!Array.isArray(out1.removed) || !out1.removed.some(p => p === wtPath),
+        'sc2c: removed must NOT contain the pinned lane worktree, got: ' + JSON.stringify(out1.removed));
+      assert(Array.isArray(out1.active_worktrees) && out1.active_worktrees.some(w => w.path === wtPath),
+        'sc2c: the pinned lane worktree must be reported active, got: ' + JSON.stringify(out1.active_worktrees));
+      writeReceipt('done', 'done');
+      const out2 = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
+      assert(!fs.existsSync(wtPath),
+        'sc2c: a completed run\'s (all steps done) leftover lane worktree must sweep exactly as before — the pin is receipt-driven, never a blanket exemption');
+      assert(Array.isArray(out2.removed) && out2.removed.some(p => p === wtPath),
+        'sc2c: removed must contain the completed run\'s lane worktree, got: ' + JSON.stringify(out2.removed));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 2d (#1100): with NO sink receipt at all the closed-issue lane worktree sweeps exactly
+  // as before — the pin covers a resumable sink, it is not an unknown-exemption.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-cleanup-sc2d-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeTeaShimForStale(binDir);
+      const wtPath = path.join(kwRoot, 'issue-200');
+      addWorktree(tmp, 'workflow/gitea-issue-200', wtPath);
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
+      assert(!fs.existsSync(wtPath),
+        'sc2d: with no sink receipt the closed-issue lane worktree must sweep as before');
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
+        'sc2d: removed must contain the no-receipt lane worktree, got: ' + JSON.stringify(out.removed));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
   // Sub-case 3: execute-dirty-no-flag — dirty worktree + --execute (no archive/export/force)
   {
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-cleanup-sc3-')));

@@ -5415,6 +5415,150 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
   }
 }
 
+// --- #1100: the LANE worktree arm must carry the same sink resumability pin -------------------
+// collectStale's LANE arm (`for (const wt of registeredWorktrees)`, the .kw/worktrees/<branch>
+// worktrees) classifies on the SAME rule the integration arm uses — (isClosed || isArchived) &&
+// !inActiveSet — but got no equivalent of 57fc4c67's sinkResumableW guard. readActiveFolders drops
+// a CLOSED issue's folder on its default path, so in the window after the issue closes and before
+// the run finishes with its lane worktree, the active-set guard protects nothing and an operator's
+// stale-worktree-cleanup --execute can classify the run's OWN lane worktree stale. The pin is the
+// same source of truth: a sink-receipt.json (live .cache, or archive .cache once closure moved the
+// folder) whose steps are not all 'done' means a run that still owns this lane worktree. All-done
+// or absent sweeps exactly as before.
+{
+  const { execFileSync: execFS1100, spawnSync: spawnS1100 } = require('child_process');
+  const CLAIM1100 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const GIT_ENV_1100 = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+    GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'
+  });
+  const g1100 = (cwd, args) => execFS1100('git', ['-C', cwd].concat(args), { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV_1100 });
+
+  const tmp1100 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1100-lane-')));
+  const kwRoot1100 = tmp1100 + '.kw';
+  const binDir1100 = path.join(tmp1100, 'bin');
+  const wtPath1100 = path.join(kwRoot1100, 'issue-96301');
+  const receiptPath1100 = path.join(tmp1100, 'kaola-workflow', 'issue-96301', '.cache', 'sink-receipt.json');
+  const writeReceipt1100 = (pushMain, closureStep) => fs.writeFileSync(receiptPath1100, JSON.stringify({
+    project: 'issue-96301',
+    steps: { preflight: 'done', push_upstream: 'done', merge: 'done', finalize: 'done',
+      stash_restore: 'done', archive_commit: 'done', push_main: pushMain, closure: closureStep }
+  }, null, 2) + '\n');
+  try {
+    g1100(tmp1100, ['init', '-b', 'main']);
+    g1100(tmp1100, ['config', 'user.email', 't@t.com']);
+    g1100(tmp1100, ['config', 'user.name', 'Test']);
+    g1100(tmp1100, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(tmp1100, 'README.md'), 'fixture\n');
+    g1100(tmp1100, ['add', 'README.md']);
+    g1100(tmp1100, ['commit', '-m', 'init']);
+
+    // The LANE worktree: the `<tmp>.kw` sibling convention, registered on a workflow/issue-* branch
+    // so listWorkflowWorktrees finds it. Clean, so nothing but the pin can save it.
+    fs.mkdirSync(kwRoot1100, { recursive: true });
+    g1100(tmp1100, ['worktree', 'add', '-b', 'workflow/issue-96301', '--', wtPath1100, 'HEAD']);
+
+    // gh mock: the issue reports CLOSED — the stale trigger, and the exact condition that makes
+    // readActiveFolders drop the folder, so the OLD active-set guard protected nothing.
+    fs.mkdirSync(binDir1100, { recursive: true });
+    fs.writeFileSync(path.join(binDir1100, 'gh.js'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view 96301')) { process.stdout.write('{\"state\":\"closed\"}\\n'); process.exit(0); }",
+      "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); process.exit(0); }",
+      "process.stdout.write('[\\n'); process.exit(0);"
+    ].join('\n'));
+
+    // Mid-flight receipt: everything through archive_commit done, push_main + closure pending.
+    fs.mkdirSync(path.dirname(receiptPath1100), { recursive: true });
+    writeReceipt1100('pending', 'pending');
+    // spawn-class: cli-contract
+    const r1_1100 = spawnS1100(process.execPath, [CLAIM1100, 'stale-worktree-cleanup', '--execute'], {
+      cwd: tmp1100,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir1100, 'gh.js')
+      })
+    });
+    let out1_1100 = {};
+    try { out1_1100 = JSON.parse(r1_1100.stdout); } catch (_) {}
+    assert(out1_1100.dry_run === false, '#1100 lane sweep: dry_run must be false, got ' + JSON.stringify(out1_1100) + '\nstderr: ' + r1_1100.stderr);
+    assert(fs.existsSync(wtPath1100),
+      '#1100 lane sweep: a resumable sink receipt (steps not all done) must protect the run\'s own LANE worktree from --execute — the issue closing is exactly the window the lane worktree is still in use');
+    assert(!Array.isArray(out1_1100.removed) || !out1_1100.removed.some(p => p === wtPath1100),
+      '#1100 lane sweep: removed must NOT contain the live run\'s lane worktree, got ' + JSON.stringify(out1_1100.removed));
+    assert(Array.isArray(out1_1100.active_worktrees) && out1_1100.active_worktrees.some(w => w.path === wtPath1100),
+      '#1100 lane sweep: the pinned lane worktree must be reported active, got ' + JSON.stringify(out1_1100.active_worktrees));
+
+    // All-done: a COMPLETED run's leftover lane worktree sweeps exactly as before — the pin is
+    // receipt-driven, never a blanket exemption for lane worktrees.
+    writeReceipt1100('done', 'done');
+    // spawn-class: cli-contract
+    const r2_1100 = spawnS1100(process.execPath, [CLAIM1100, 'stale-worktree-cleanup', '--execute'], {
+      cwd: tmp1100,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir1100, 'gh.js')
+      })
+    });
+    let out2_1100 = {};
+    try { out2_1100 = JSON.parse(r2_1100.stdout); } catch (_) {}
+    assert(!fs.existsSync(wtPath1100),
+      '#1100 lane sweep: a completed run\'s (all steps done) leftover lane worktree must sweep exactly as before');
+    assert(Array.isArray(out2_1100.removed) && out2_1100.removed.some(p => p === wtPath1100),
+      '#1100 lane sweep: removed must contain the completed run\'s lane worktree, got ' + JSON.stringify(out2_1100.removed) + '\nstderr: ' + r2_1100.stderr);
+  } finally {
+    fs.rmSync(tmp1100, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot1100, { recursive: true, force: true }); } catch (_) {}
+  }
+
+  // The absent-receipt half: no sink-receipt at all (a pre-receipt legacy leftover, or a run whose
+  // folder never wrote one) keeps the ORIGINAL behavior — a CLOSED issue's clean lane worktree is
+  // stale. The pin must never turn "unknown" into "protected".
+  const tmp1100b = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1100-lane-noreceipt-')));
+  const kwRoot1100b = tmp1100b + '.kw';
+  const binDir1100b = path.join(tmp1100b, 'bin');
+  const wtPath1100b = path.join(kwRoot1100b, 'issue-96302');
+  try {
+    g1100(tmp1100b, ['init', '-b', 'main']);
+    g1100(tmp1100b, ['config', 'user.email', 't@t.com']);
+    g1100(tmp1100b, ['config', 'user.name', 'Test']);
+    g1100(tmp1100b, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(tmp1100b, 'README.md'), 'fixture\n');
+    g1100(tmp1100b, ['add', 'README.md']);
+    g1100(tmp1100b, ['commit', '-m', 'init']);
+    fs.mkdirSync(kwRoot1100b, { recursive: true });
+    g1100(tmp1100b, ['worktree', 'add', '-b', 'workflow/issue-96302', '--', wtPath1100b, 'HEAD']);
+    fs.mkdirSync(binDir1100b, { recursive: true });
+    fs.writeFileSync(path.join(binDir1100b, 'gh.js'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view 96302')) { process.stdout.write('{\"state\":\"closed\"}\\n'); process.exit(0); }",
+      "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); process.exit(0); }",
+      "process.stdout.write('[\\n'); process.exit(0);"
+    ].join('\n'));
+    // spawn-class: cli-contract
+    const r3_1100 = spawnS1100(process.execPath, [CLAIM1100, 'stale-worktree-cleanup', '--execute'], {
+      cwd: tmp1100b,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir1100b, 'gh.js')
+      })
+    });
+    let out3_1100 = {};
+    try { out3_1100 = JSON.parse(r3_1100.stdout); } catch (_) {}
+    assert(!fs.existsSync(wtPath1100b),
+      '#1100 lane sweep: with NO sink receipt at all the closed-issue lane worktree must sweep exactly as before (the pin covers a resumable sink, it is not an unknown-exemption)');
+    assert(Array.isArray(out3_1100.removed) && out3_1100.removed.some(p => p === wtPath1100b),
+      '#1100 lane sweep: removed must contain the no-receipt lane worktree, got ' + JSON.stringify(out3_1100.removed) + '\nstderr: ' + r3_1100.stderr);
+  } finally {
+    fs.rmSync(tmp1100b, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot1100b, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 spawnCensus.report();
 
 if (failed > 0) {
