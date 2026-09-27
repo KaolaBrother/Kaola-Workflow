@@ -30,17 +30,17 @@
   BRANCH spells, so it could only ever find a run whose folder is named `issue-<N>`. A bundle or
   custom-named run (`bundle-<set>`, `branch-issue-merge-sink`, …) files its receipt under a folder of
   another name, so both reads missed and the pin was silently inert for exactly the runs the sweep
-  could then treat as stale. Both worktree arms now take the project from the run's own records — the
-  run folder in the worktree's checkout, and the live/archive run registers in the main checkout —
-  and never from a recomputed name. Identity safety is the hard half: `workflow/issue-<N>` is reused
-  across runs of one issue, so a record is attributed to a worktree only when its `branch` matches
-  AND its `worktree_path` agrees; when the path cannot separate two runs of the same folder (the
-  ordinary case, since the worktree path is a pure function of the project name) only the newest
-  claim that still carries a receipt counts. An unresolvable or conflicting owner leaves the worktree
-  unpinned — today's behavior — rather than guessing. The receipt lookup also reads the
-  `archive/<project>.archived-<ts>/` collision-renamed destination the same way the archive's own
-  `isArchived` check already did. All-done and missing-receipt behavior is unchanged, and all four
-  claim copies (root, Codex, GitLab, Gitea) carry the same change.
+  could then treat as stale. The lane arm now resolves the owning run from the MAIN checkout's live
+  and archive `workflow-state.md` records whose `branch` is the worktree's branch, and reads the
+  receipt from that one folder — never from every folder sharing the resolved name, so an old run's
+  leftover receipt cannot pin a new run. Which record is current follows the sink's own
+  `currentArchiveDir` rule rather than a second policy: a live record's `claim_ts` names the current
+  claim and only a folder carrying it counts; with no live record the match must name exactly one
+  project, and timestamps do not authorize choosing the later of two claimed histories. When no
+  record names the worktree the derived `issue-<N>` behavior is kept verbatim, so the #1100 pin is
+  unchanged for ordinary runs. The integration arm already holds the true project as its directory
+  name and passes it straight through. All-done and missing-receipt behavior is unchanged, and all
+  four claim copies (root, Codex, GitLab, Gitea) carry the same change.
 
 ### Changed
 

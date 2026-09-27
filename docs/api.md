@@ -1810,20 +1810,21 @@ never stale while its project holds a `sink-receipt.json` whose `steps` are not 
 receipt (a pre-receipt legacy leftover) or an all-done one (a completed run's leftover) sweeps
 exactly as before, so the pin is receipt-driven, never a blanket exemption.
 
-The pin reads that receipt from the project the worktree actually belongs to, which is **not**
-derivable from the branch: `buildBranchName` spells the branch after the run's first member
+The pin reads that receipt from the run that actually owns the worktree, which is **not** derivable
+from the branch: `buildBranchName` spells the branch after the run's first member
 (`workflow/issue-<N>`) even when the run folder is `bundle-<set>` or a custom name, and the forge
-ports add their own prefix. Both arms therefore resolve the owning project from the run records that
-already exist — the run folder inside the worktree's own checkout, and the live plus archive run
-registers of the main checkout — and search the live `kaola-workflow/<project>/.cache/` and
-`kaola-workflow/archive/<project>/.cache/` (including the `archive/<project>.archived-<ts>/`
-collision-renamed destination) for the receipt. A record is attributed to a worktree only when its
-`branch` matches and its `worktree_path` agrees; when the path cannot separate two runs of the same
-folder — the ordinary case, because the worktree path is a pure function of the project name — only
-the newest `claim_ts` that still carries a receipt counts. When no owner can be established the
-worktree stays unpinned, which is the behavior that predates this resolution; the sweep never
-guesses. The integration arm needs no resolution — `.kw/integrate/<project>` is already the true
-project — so it passes its directory name straight through.
+ports add their own prefix. The **lane arm** therefore resolves the owning run from the main
+checkout's live and archive `workflow-state.md` records whose `branch` is the worktree's branch, and
+reads the receipt from that one folder — never from every folder sharing the resolved name, so an old
+run's leftover receipt cannot pin a new run's worktree. Which record is current follows the sink's own
+`currentArchiveDir` rule rather than a second policy: a live record's `claim_ts` names the current
+claim, so only a folder carrying that claim counts; with no live record the matching folders must
+name exactly one project, and timestamps do not authorize choosing the later of two claimed
+histories. When no record names the worktree, the derived `issue-<N>` behavior is kept **verbatim** —
+so the #1100 pin is unchanged for ordinary runs and a moved or partially-written state never drops
+it. The **integration arm** needs no resolution — `.kw/integrate/<project>` is already the true
+project — so it passes its directory name straight through, reading
+`kaola-workflow/<project>/.cache/sink-receipt.json`.
 
 The JSON shape is identical across all three forges; GitLab and Gitea match their own branch prefix
 (`workflow/gitlab-issue-*`, `workflow/gitea-issue-*`).
