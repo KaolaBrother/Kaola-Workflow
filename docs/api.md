@@ -1385,17 +1385,42 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
   `kaola-gitea-workflow-sink-pr.js`.
 - **Usage**: `--branch B --project P [--issue N] [--issue-numbers A,B]`. Finalize passes the
   claimed member set as `--issue-numbers`, the same set the merge sink takes.
-- **Contract**: push branch, create the PR/MR (`gh pr create` / `glab mr create` / `tea pr create`),
-  record `pr_url` and `pr_number` in the `## Sink` block, then create a deliberate metadata
-  follow-up commit (`chore: record PR metadata for {project}`) so the worktree is left clean.
+- **Main checkout**: every project-directory read and write targets the MAIN checkout
+  (`resolveMainRoot`), not the linked worktree's own toplevel. A folder that is neither live
+  (`kaola-workflow/{project}/`) nor archived (`kaola-workflow/archive/{project}/`) is refused before
+  any push or request is created.
+- **Identity and reuse**: the sink resolves the existing PR/MR BEFORE any push — the durable
+  `.cache/sink-pr-result.json` record first, then the state's `pr_url`/`mr_url`, then an open-request
+  scan for this source branch. An OPEN request is reusable only when its source branch and target
+  branch match and its body carries every member's `Closes #n` (a bundle closes all or none);
+  otherwise it is refused by name and nothing is modified. A MERGED request reports
+  `sink_pr: already_merged` (GitHub stdout) or `already_merged: true` (GitLab/Gitea return value) and
+  is never re-pushed or re-created; a
+  CLOSED-unmerged request is refused as `pr_closed_unmerged` / `mr_closed_unmerged` (the archive is
+  the only run record, and reopening is the orchestrator's call). Re-entry is idempotent: the `## Sink`
+  block is rewritten line-wise and only when its bytes change, the summary skips a PR URL it already
+  holds, and the durable record is not rewritten when unchanged.
+- **Contract**: push the branch only on the create path, create the PR/MR (`gh pr create` /
+  `glab mr create` / `tea pr create`), record `pr_url`/`pr_number` (or `mr_url`/`mr_iid`) in the
+  `## Sink` block, then publish the run's archive. In the non-linked posture (main checkout HEAD is
+  the run branch) the archive is staged and committed on HEAD as before. In the linked posture the
+  archive commit is built from the main checkout's working tree through the kernel's private index
+  onto the branch tip (`commitPathsOntoCandidate`), the local branch is advanced ff-only in the
+  worktree that holds it or by compare-and-swap `update-ref` otherwise, then pushed. The main
+  checkout's index and HEAD are never touched, the default branch is never pushed, and a push is
+  never forced.
+- **Output**: the GitHub sink's final stdout line is machine-readable — `sink_pr: created`,
+  `sink_pr: reused`, or `sink_pr: already_merged`. This line is additive; the sink had no stdout
+  contract before. GitLab and Gitea keep their existing `MR URL:` / `PR URL:` stdout and instead
+  return `already_merged: true` from `ensureMergeRequest` / `ensurePullRequest` on the merged lane.
 - **Closure**: the PR/MR body carries one `Closes #n` line per claimed member, so merging it into
   the default branch closes the whole set, as the merge sink does. The member set is `--issue-numbers`; when the flag is
   absent, the state's `issue_numbers` line (live, then archived) supplies it. The primary `--issue`
   is always a member. A singleton claim writes exactly `Closes #N`, as before. Keep-open stays
   merge-sink-only: the sink refuses a project carrying `issue_action: comment_keep_open`.
-- **Exit codes**: `0` created and recorded · `1` push or creation failed.
+- **Exit codes**: `0` created/reused/recorded · `1` push, creation, or a reuse/closed-unmerged refusal.
 - **Offline**: `KAOLA_WORKFLOW_OFFLINE=1` writes an `OFFLINE_PLACEHOLDER` commit instead of real
-  metadata.
+  metadata. A placeholder is never treated as an identity by the reuse lookup.
 - The folder stays active until `watch-pr` / `watch-mr` observes MERGED or CLOSED; both archive it.
 - The PR sink emits no closure receipt — the authoritative receipt for a `sink: pr` project is
   emitted by the watcher at merge. This is documented behavior, not a gap.
@@ -1587,6 +1612,40 @@ emitted.
 `closure_invariants` are additive. On the MERGED lane the disposition is OBSERVATION-derived via
 `probeIssueState`: `closed` when observed closed, `kept-open` when observed open (a merged PR with
 no close keyword), `unknown` when the probe is unavailable.
+
+**`reconciled[]` (archived `sink: pr` / `sink: mr` runs).** The live-folder loop above never sees a
+standard PR-path run again, because finalize archives it before the sink runs. `reconciled[]` is the
+second face: it scans the MAIN checkout's archive band for archived `sink: pr` / `sink: mr` runs
+carrying a real `pr_url`/`mr_url` (never an `OFFLINE_PLACEHOLDER`, never another sink kind) and
+reports each against actual forge state. The scan is bounded and stateless: a run leaves it the
+moment its archive becomes tracked at `HEAD`, and an explicit `--issue N` reaches an already-tracked
+run. Publication and closeout are reported separately, and reconciliation never re-merges, re-creates,
+pushes the mainline, or closes members by hand — manual closure of any remaining member is the
+orchestrator's call once the merge is verified.
+
+```json
+{
+  "watched": 0,
+  "reconciled": [{
+    "folder": "issue-N",
+    "pr_url": "https://github.com/o/r/pull/N",
+    "publication": "published",
+    "archive": "published",
+    "closeout": "closed",
+    "main_checkout": "advanced",
+    "receipt": { "project": "issue-N", "archive": "closed", "branch_removed": "kept" },
+    "closure_invariants": { "ok": true, "violations": [] }
+  }]
+}
+```
+
+`publication` is `published` (the request merged), `pending` (still open), or `not_published` — the
+last carries `reason: 'pr_closed_unmerged'` / `'mr_closed_unmerged'`. On the published lane `archive`
+is `published` when the archive reached `origin/<default>`, else `local_only` (the pre-#1098 legacy
+shape, reported and not repaired); `closeout` is `closed` when every member's issue is observed
+closed, else `incomplete`; `main_checkout` is `advanced` or a `behind: ...` string naming the exact
+refusal. GitLab entries carry `mr_url` where GitHub and Gitea carry `pr_url`. The key is emitted only
+when at least one run reconciles.
 
 ### Closure history
 
@@ -2080,6 +2139,12 @@ opts)`, `fastForwardMain(args, opts)`, `finalValidationPassed(root, project)`,
 **`kaola-gitlab-workflow-claim.js`** — `getCoordRoot(root)` (same contract); `cmdSinkFallback()`
 checks both the live folder and the archive before updating state, returning
 `{updated: false, reason: 'project archived'}` rather than recreating an archived project.
+`watch-mr` emits `reconciled[]` for archived `sink: mr` runs, the GitLab twin of `watch-pr`'s
+(see `watch-pr` / `watch-mr` output).
+
+**`kaola-gitlab-forge.js`** — `normalizeMergeRequest(raw)` carries `description`/`body` and
+`target_branch` as well as `state`/`source_branch`/`mr_url`, because MR reuse reads the target branch
+and every member's `Closes #n` out of the normalized view.
 
 ### Gitea edition
 
@@ -2091,8 +2156,9 @@ checks both the live folder and the archive before updating state, returning
 `viewPullRequest`, `listPullRequests`, `mergePullRequest` (passes `opts.sha` as `head_commit_id`),
 `checkServerVersion` (Gitea ≥ 1.17), `checkRepoSquashEnabled`, `ensureLabel`.
 
-**`kaola-gitea-workflow-sink-pr.js`** — `ensurePullRequest(args, opts)` creates or reuses a PR and
-returns `{pr, project}`, updating the `## Sink` block with `pr_url`, `pr_number`, `full_name` and
+**`kaola-gitea-workflow-sink-pr.js`** — `ensurePullRequest(args, opts)` creates, reuses, or reports
+an already-merged PR and returns `{pr, project}` (plus `already_merged: true` on the merged lane),
+updating the `## Sink` block with `pr_url`, `pr_number`, `full_name` and
 `project_html_url`. `parseArgs(argv)`, `resolveMemberSet(args, stateFile)` and
 `closesBody(members)` build the `Closes #n` body; the GitHub `kaola-workflow-sink-pr.js` and GitLab
 `kaola-gitlab-workflow-sink-mr.js` export the same three.

@@ -29,7 +29,11 @@ The forge holds the backlog; Git holds the changes; local run files preserve pro
 Finalization reconciles documentation and issue closure, then records the archive and delivery
 outcome. **A delivered PR/MR is distinct from a merged change.** Both delivery routes close every
 claimed issue once the change merges: the merge sink closes the set itself, and a PR/MR carries one
-`Closes #n` line per claimed issue. The merge sink also reports what it found: every envelope names
+`Closes #n` line per claimed issue. The PR/MR route is a request sink, not a merge: it publishes the
+request (reusing an open one on the same head and base rather than opening a second) and carries the
+run's archive with it, and once that request merges `watch-pr`/`watch-mr` reconcile the archived run
+— reporting publication and closeout separately, never re-merging or pushing the mainline. The merge
+sink also reports what it found: every envelope names
 whether the deliverable reached the mainline and what teardown cleaned up. It merges in a private
 integration worktree rather than the shared checkout, so it never switches or rebases your working
 tree — concurrent sinks serialize on a short-scope publish lock, and foreign local changes are spared

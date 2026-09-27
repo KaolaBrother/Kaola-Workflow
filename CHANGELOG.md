@@ -4,6 +4,36 @@
 
 ### Changed
 
+- **The PR/MR sink reuses the request it already opened and carries the archive with it (#1098).** The
+  request sinks (`kaola-workflow-sink-pr.js`, `kaola-gitlab-workflow-sink-mr.js`,
+  `kaola-gitea-workflow-sink-pr.js`) now resolve the existing PR/MR **before** any push — the durable
+  `.cache/sink-pr-result.json` record first, then the state's `pr_url`/`mr_url`, then an open-request
+  scan for this source branch — and reuse an open request only after verifying its target branch and
+  every claimed member's `Closes #n`. A merged request reports `sink_pr: already_merged` (GitHub
+  stdout) or `already_merged: true` (GitLab/Gitea return value) and is never
+  re-pushed or re-created; a closed-unmerged one is refused as `pr_closed_unmerged` /
+  `mr_closed_unmerged` (the archive is the only run record, and reopening is the orchestrator's call).
+  Every project-directory read and write resolves against the **main checkout**, and a folder that is
+  neither live nor archived is refused before a request is created, so a linked worktree can no longer
+  re-create a live folder or bypass the keep-open guard. Writes are idempotent: the `## Sink` block is
+  rewritten line-wise only when its bytes change, the summary no longer appends a duplicate PR URL, and
+  the durable record is left alone when unchanged. The run's archive now rides the request: in the
+  linked posture the archive commit is built from the main checkout's working tree onto the branch tip
+  through the kernel's private index (`commitPathsOntoCandidate`), the local branch is advanced
+  ff-only in its holder or by compare-and-swap `update-ref`, and only then pushed — never the default
+  branch, never a force, and never touching the main checkout's index or HEAD. The GitHub sink's final
+  stdout line is machine-readable (`sink_pr: created | reused | already_merged`); GitLab and Gitea
+  return `already_merged` from their ensure functions instead. Keep-open stays
+  merge-sink-only.
+- **`watch-pr` / `watch-mr` reconcile archived `sink: pr` / `sink: mr` runs (#1098).** A standard PR
+  path archives the run before the sink executes, so the live-folder loop never saw it again. A new
+  `reconciled[]` face scans the main checkout's archive band for archived request runs with a real
+  request URL and reports each against actual forge state. The scan is bounded and stateless — a run
+  leaves it once its archive is tracked at `HEAD`, and `--issue N` reaches an already-tracked run —
+  and reconciliation reports publication and closeout **separately**: it never re-merges, re-creates,
+  or pushes the mainline, and manual closure of any remaining member stays the orchestrator's call
+  after the merge is verified. GitLab's `normalizeMergeRequest` now carries `description` and
+  `target_branch` for the reuse check.
 - **The merge sink merges in a private integration worktree, not the shared checkout (#1097).** The
   `--sink` transaction now builds and rebases its candidate in `W` — a fresh linked worktree at
   `.kw/integrate/<project>` — and runs the validation chains there, so the shared checkout is never
