@@ -2,7 +2,9 @@
 'use strict';
 
 // Issue #1052: standalone Cursor CLI/local Workflow startup and normal resume must execute
-// Repo role prep through the installed --ensure-target transaction against the CLI workspace.
+// Repo prep through the installed --ensure-target transaction against the CLI workspace.
+// Since #1101 Repo prep materializes the managed Workflow commands (Kaola-Workflow ships no
+// Cursor agents), so the prep probe is a managed command and the write set carries no agents/.
 // TEST CUSTODY ONLY. Drives the real claim.js CLI, generated Next default fences, and the
 // real cursor-surface helper. Normal CLI-positive generated path uses demonstrated
 // `--workspace` context only — not invented CURSOR_PRODUCT / KAOLA_CURSOR_* / CURSOR_WORKSPACE.
@@ -27,7 +29,8 @@ const G = require('./test-git-fixture');
 const REPO = path.resolve(__dirname, '..');
 const CLAIM = path.join(REPO, 'scripts', 'kaola-workflow-claim.js');
 const INSTALLER = path.join(REPO, 'install-cursor.sh');
-const IMPLEMENTER = 'implementer.md';
+// A managed file Repo prep materializes into <workspace>/.cursor/commands/.
+const PREP_PROBE = 'workflow-next.md';
 // Owned explicit identity for standalone CLI/local prep. Omitted product/host is
 // not CLI. Do not treat `--runtime cursor` alone as authorization to write Repo.
 const CURSOR_CLI_LOCAL = Object.freeze(['--product', 'cli', '--host', 'local']);
@@ -110,8 +113,8 @@ function snapshotTree(root) {
   });
 }
 
-function hasProjectAgents(workspace) {
-  return fs.existsSync(path.join(workspace, '.cursor', 'agents', IMPLEMENTER));
+function hasProjectPrep(workspace) {
+  return fs.existsSync(path.join(workspace, '.cursor', 'commands', PREP_PROBE));
 }
 
 function issueDir(workspace, n) {
@@ -237,7 +240,7 @@ function writeMissionList(workspace, issue, extraInFlight) {
     '| item | status | dispatched | result |',
     '|---|---|---|---|',
     '| Completed outcome | done | inline | PASS: frozen completed result |',
-    '| ' + (extraInFlight || 'In-flight outcome') + ' | in-flight | implementer → worktree |  |',
+    '| ' + (extraInFlight || 'In-flight outcome') + ' | in-flight | Task child → worktree |  |',
     '',
   ].join('\n');
   fs.writeFileSync(path.join(dir, 'mission-list.md'), body);
@@ -262,7 +265,7 @@ function stateField(workspace, issue, name) {
 }
 
 function assertNoExtraRepoWrite(r, workspace, label) {
-  assert(r.status === 0 && acquired(r.json) && !hasProjectAgents(workspace),
+  assert(r.status === 0 && acquired(r.json) && !hasProjectPrep(workspace),
     label + ' (got ' + JSON.stringify(r.json) + ' raw=' + r.raw.slice(0, 300) + ')');
 }
 
@@ -582,16 +585,18 @@ try {
     const r = runClaim(sandbox, nested, [
       'startup', '--target-issue', '10521', '--runtime', 'cursor',
     ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
-    const agents = path.join(workspace, '.cursor', 'agents', IMPLEMENTER);
+    const agents = path.join(workspace, '.cursor', 'commands', PREP_PROBE);
     const receipt = path.join(workspace, '.cursor', 'kaola-workflow-materialization.json');
-    const nestedAgents = path.join(nested, '.cursor', 'agents', IMPLEMENTER);
-    const neighborAgents = path.join(neighbor, '.cursor', 'agents', IMPLEMENTER);
+    const nestedAgents = path.join(nested, '.cursor', 'commands', PREP_PROBE);
+    const neighborAgents = path.join(neighbor, '.cursor', 'commands', PREP_PROBE);
     assert(r.status === 0 && r.json && (r.json.claim === 'acquired' || r.json.status === 'acquired'),
       '#1052-startup-empty: Cursor CLI/local startup must still acquire after prep (got '
       + JSON.stringify(r.json) + ' raw=' + r.raw.slice(0, 400) + ')');
     assert(fs.existsSync(agents) && fs.existsSync(receipt),
       '#1052-startup-empty: startup must prepare the CLI workspace via ensure-target before named dispatch can be skipped (missing '
       + agents + ' or receipt)');
+    assert(!fs.existsSync(path.join(workspace, '.cursor', 'agents')),
+      '#1052-startup-empty: Repo prep materializes no agents/ directory (#1101: no Kaola Cursor agents)');
     assert(!fs.existsSync(nestedAgents),
       '#1052-startup-empty: decoy nested cwd must not receive Repo prep');
     assert(!fs.existsSync(neighborAgents),
@@ -601,13 +606,18 @@ try {
     const managedSnap = root => managed(root).map(name =>
       name + ':' + fs.readFileSync(path.join(root, '.cursor', name)).toString('hex'));
     assert(JSON.stringify(managedSnap(workspace)) === JSON.stringify(managedSnap(twin)),
-      '#1052-startup-empty: startup prep must reuse the full ensure-target write set, not an agents-only copy — workspace='
+      '#1052-startup-empty: startup prep must reuse the full ensure-target write set, not a partial copy — workspace='
       + JSON.stringify(managed(workspace)) + ' twin=' + JSON.stringify(managed(twin)));
     let receiptBody = null;
     try { receiptBody = JSON.parse(fs.readFileSync(receipt, 'utf8')); } catch (_) { /* asserted below */ }
     assert(receiptBody && receiptBody.kind === 'cursor_project_materialization' && receiptBody.target === workspace,
       '#1052-startup-empty: project receipt must be the real ensure-target transaction for the CLI workspace (got '
       + JSON.stringify(receiptBody) + ')');
+    const receiptFiles = Object.keys((receiptBody && receiptBody.files) || {});
+    assert(receiptFiles.includes('commands/' + PREP_PROBE)
+      && !receiptFiles.some(rel => rel.startsWith('agents/')),
+      '#1052-startup-empty: the prep receipt owns the managed commands and records no agents/ path (got '
+      + JSON.stringify(receiptFiles) + ')');
     const restart = JSON.stringify(r.json);
     assert(/new_process_same_chat/.test(restart) || r.json.restart_required === true
       || r.json.reload_boundary === 'new_process_same_chat'
@@ -621,7 +631,7 @@ try {
   // --- fail-closed collision: no claim folder, no overwrite, install fault not Task-unsupported
   {
     const workspace = makeRepo(sandbox, 'collision');
-    const collisionFile = path.join(workspace, '.cursor', 'agents', IMPLEMENTER);
+    const collisionFile = path.join(workspace, '.cursor', 'commands', PREP_PROBE);
     fs.mkdirSync(path.dirname(collisionFile), { recursive: true });
     fs.writeFileSync(collisionFile, 'UNMANAGED_OWNER_BYTES\n');
     const before = snapshotTree(path.join(workspace, '.cursor'));
@@ -645,7 +655,7 @@ try {
   {
     const workspace = makeRepo(sandbox, 'symlink');
     const owner = path.join(workspace, 'outside-owner.md');
-    const link = path.join(workspace, '.cursor', 'agents', IMPLEMENTER);
+    const link = path.join(workspace, '.cursor', 'commands', PREP_PROBE);
     fs.writeFileSync(owner, 'SYMLINK_OWNER_BYTES\n');
     fs.mkdirSync(path.dirname(link), { recursive: true });
     fs.symlinkSync(owner, link);
@@ -669,7 +679,7 @@ try {
     const r = runClaim(sandbox, workspace, [
       'startup', '--target-issue', '10524', '--runtime', 'cursor',
     ].concat(CURSOR_CLI_LOCAL).concat(['--json']), { CURSOR_HOME: isolatedHome });
-    assert(r.status !== 0 && !fs.existsSync(issueDir(workspace, 10524)) && !hasProjectAgents(workspace),
+    assert(r.status !== 0 && !fs.existsSync(issueDir(workspace, 10524)) && !hasProjectPrep(workspace),
       '#1052-missing-authority: missing global authority must fail closed before claim (status='
       + r.status + ' json=' + JSON.stringify(r.json) + ')');
     assert(diagnosticIsInstallFault(r.raw) && !/Task unsupported/i.test(r.raw),
@@ -679,21 +689,21 @@ try {
   // --- stale global authority
   {
     const workspace = makeRepo(sandbox, 'stale');
-    const globalAgent = path.join(sandbox.cursorHome, 'agents', IMPLEMENTER);
+    const globalAgent = path.join(sandbox.cursorHome, 'commands', PREP_PROBE);
     const original = fs.readFileSync(globalAgent);
     fs.writeFileSync(globalAgent, 'STALE_GLOBAL_AUTHORITY_BYTES\n');
     const r = runClaim(sandbox, workspace, [
       'startup', '--target-issue', '10525', '--runtime', 'cursor',
     ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
     fs.writeFileSync(globalAgent, original);
-    assert(r.status !== 0 && !fs.existsSync(issueDir(workspace, 10525)) && !hasProjectAgents(workspace),
+    assert(r.status !== 0 && !fs.existsSync(issueDir(workspace, 10525)) && !hasProjectPrep(workspace),
       '#1052-stale-authority: hash-stale global authority must fail before claim mutation (status='
       + r.status + ' json=' + JSON.stringify(r.json) + ')');
     assert(diagnosticIsInstallFault(r.raw),
       '#1052-stale-authority: diagnostic must be an install fault — ' + r.raw.slice(0, 400));
   }
 
-  // --- resume of an existing run: check missing roles, no re-claim, preserve Mission List
+  // --- resume of an existing run: check missing Repo prep, no re-claim, preserve Mission List
   {
     const workspace = makeRepo(sandbox, 'resume');
     const first = runClaim(sandbox, workspace, [
@@ -705,8 +715,8 @@ try {
     const statePath = path.join(issueDir(workspace, 10526), 'workflow-state.md');
     const stateBefore = fs.readFileSync(statePath, 'utf8');
     const missionBefore = writeMissionList(workspace, 10526);
-    assert(!hasProjectAgents(workspace),
-      '#1052-resume-seed: the claude startup must not have written Cursor project roles');
+    assert(!hasProjectPrep(workspace),
+      '#1052-resume-seed: the claude startup must not have written Cursor Repo prep');
     const resume = runClaim(sandbox, workspace, [
       'resume', '--project', 'issue-10526', '--runtime', 'cursor',
     ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
@@ -714,8 +724,8 @@ try {
     const missionAfter = fs.readFileSync(path.join(issueDir(workspace, 10526), 'mission-list.md'), 'utf8');
     assert(resume.json && resume.json.resumed === true && resume.json.project === 'issue-10526',
       '#1052-resume: resume must keep the existing run identity (got ' + JSON.stringify(resume.json) + ')');
-    assert(hasProjectAgents(workspace),
-      '#1052-resume: missing/stale roles must still be prepared on resume');
+    assert(hasProjectPrep(workspace),
+      '#1052-resume: missing/stale Repo prep must still be restored on resume');
     assert(stateAfter === stateBefore,
       '#1052-resume: resume must not mutate the existing claim identity/state bytes');
     assert(missionAfter === missionBefore,
@@ -738,13 +748,13 @@ try {
       '#1052-idempotent: consistent CLI startup must still claim (got ' + JSON.stringify(r.json) + ')');
     assert(JSON.stringify(after) === JSON.stringify(before),
       '#1052-idempotent: already-consistent ensure must be a byte-level no-write');
-    const agentPath = path.join(workspace, '.cursor', 'agents', IMPLEMENTER);
+    const agentPath = path.join(workspace, '.cursor', 'commands', PREP_PROBE);
     fs.unlinkSync(agentPath);
     const refresh = runClaim(sandbox, workspace, [
       'resume', '--project', 'issue-10527', '--runtime', 'cursor',
     ].concat(CURSOR_CLI_LOCAL).concat(['--json']));
     assert(fs.existsSync(agentPath),
-      '#1052-refresh: a missing managed role on resume must be restored by ensure-target');
+      '#1052-refresh: a missing managed command on resume must be restored by ensure-target');
     const refreshJson = JSON.stringify(refresh.json || {});
     assert(/new_process_same_chat/.test(refreshJson) || refresh.json.restart_required === true
       || refresh.json.reload_boundary === 'new_process_same_chat'
@@ -763,11 +773,11 @@ try {
       KAOLA_GH_MOCK_SCRIPT: sandbox.ghOpen,
     });
     const wt = r.json && (r.json.worktree_path || (r.json.folder && r.json.folder.worktree_path) || '');
-    assert(hasProjectAgents(workspace),
+    assert(hasProjectPrep(workspace),
       '#1052-workspace-vs-worktree: CLI workspace must receive Repo prep (json='
       + JSON.stringify(r.json) + ')');
     if (wt) {
-      assert(!fs.existsSync(path.join(wt, '.cursor', 'agents', IMPLEMENTER)),
+      assert(!fs.existsSync(path.join(wt, '.cursor', 'commands', PREP_PROBE)),
         '#1052-workspace-vs-worktree: claim-created write-worktree must not be the ensure target ('
         + wt + ')');
     }
@@ -780,8 +790,8 @@ try {
       'startup', '--target-issue', '10529', '--runtime', 'claude', '--json',
     ]);
     assert(claude.json && (claude.json.claim === 'acquired' || claude.json.status === 'acquired')
-      && !hasProjectAgents(workspace),
-      '#1052-non-cursor: --runtime claude must not write Cursor project roles (got '
+      && !hasProjectPrep(workspace),
+      '#1052-non-cursor: --runtime claude must not write Cursor Repo prep (got '
       + JSON.stringify(claude.json) + ')');
 
     const appLocal = makeRepo(sandbox, 'app-local');
@@ -790,8 +800,8 @@ try {
       '--product', 'app', '--host', 'local', '--json',
     ]);
     assert(app.json && (app.json.claim === 'acquired' || app.json.status === 'acquired')
-      && !hasProjectAgents(appLocal),
-      '#1052-app-local: explicit Cursor App/local must not infer CLI ensure or write project roles (got '
+      && !hasProjectPrep(appLocal),
+      '#1052-app-local: explicit Cursor App/local must not infer CLI ensure or write Repo prep (got '
       + JSON.stringify(app.json) + ' raw=' + app.raw.slice(0, 300) + ')');
 
     const appCloud = makeRepo(sandbox, 'app-cloud');
@@ -800,7 +810,7 @@ try {
       '--product', 'app', '--host', 'cloud', '--json',
     ]);
     assert(cloud.json && (cloud.json.claim === 'acquired' || cloud.json.status === 'acquired')
-      && !hasProjectAgents(appCloud),
+      && !hasProjectPrep(appCloud),
       '#1052-app-cloud: explicit Cursor App/Cloud must not apply CLI ensure (got '
       + JSON.stringify(cloud.json) + ' raw=' + cloud.raw.slice(0, 300) + ')');
 
@@ -810,7 +820,7 @@ try {
     const list = runClaim(sandbox, ro, ['list-open', '--runtime', 'cursor', '--json']);
     const afterStatus = snapshotTree(ro);
     assert(status.status === 0 && list.status === 0 && JSON.stringify(afterStatus) === JSON.stringify(beforeStatus)
-      && !hasProjectAgents(ro),
+      && !hasProjectPrep(ro),
       '#1052-readonly: ordinary status/list-open keep zero-write semantics under --runtime cursor');
     const beforeCliStatus = snapshotTree(ro);
     const statusCli = runClaim(sandbox, ro, ['status', '--runtime', 'cursor'].concat(CURSOR_CLI_LOCAL).concat(['--json']));
@@ -818,7 +828,7 @@ try {
     const afterCliStatus = snapshotTree(ro);
     assert(statusCli.status === 0 && listCli.status === 0
       && JSON.stringify(afterCliStatus) === JSON.stringify(beforeCliStatus)
-      && !hasProjectAgents(ro),
+      && !hasProjectPrep(ro),
       '#1052-readonly-cli-local: status/list-open stay zero-write even with explicit CLI/local identity');
   }
 
@@ -877,7 +887,7 @@ try {
     ]);
     assert(resumeOmitted.json && resumeOmitted.json.resumed === true
       && resumeOmitted.json.project === 'issue-10549'
-      && !hasProjectAgents(resumeWorkspace),
+      && !hasProjectPrep(resumeWorkspace),
       '#1052-identity-resume-omitted: resume --runtime cursor without product/host must not write Repo (got '
       + JSON.stringify(resumeOmitted.json) + ')');
   }
@@ -897,8 +907,8 @@ try {
     assert(first.status === 0 && acquired(first.json) && wt && fs.existsSync(wt),
       '#1052-worktree-cwd-seed: claude startup must create a write-worktree (got '
       + JSON.stringify(first.json) + ')');
-    assert(!hasProjectAgents(workspace) && !hasProjectAgents(wt),
-      '#1052-worktree-cwd-seed: non-Cursor seed must not have written Cursor project roles');
+    assert(!hasProjectPrep(workspace) && !hasProjectPrep(wt),
+      '#1052-worktree-cwd-seed: non-Cursor seed must not have written Cursor Repo prep');
     // Linked write-worktrees do not automatically carry the live kaola-workflow folder.
     // Copy it so resume can locate the run; the oracle is which tree receives Repo prep.
     fs.cpSync(issueDir(workspace, 10547), issueDir(wt, 10547), { recursive: true });
@@ -908,12 +918,12 @@ try {
     assert(resume.json && resume.json.resumed === true && resume.json.project === 'issue-10547',
       '#1052-worktree-cwd: resume from write-worktree cwd must keep the existing run (got '
       + JSON.stringify(resume.json) + ' raw=' + resume.raw.slice(0, 400) + ')');
-    assert(hasProjectAgents(mainRoot) || hasProjectAgents(workspace),
+    assert(hasProjectPrep(mainRoot) || hasProjectPrep(workspace),
       '#1052-worktree-cwd: Repo prep must target the recorded CLI workspace/main_root, not silent cwd ('
       + mainRoot + ')');
-    assert(!fs.existsSync(path.join(wt, '.cursor', 'agents', IMPLEMENTER)),
+    assert(!fs.existsSync(path.join(wt, '.cursor', 'commands', PREP_PROBE)),
       '#1052-worktree-cwd: claim-created write-worktree must not receive extra Repo writes (' + wt + ')');
-    assert(!hasProjectAgents(decoy),
+    assert(!hasProjectPrep(decoy),
       '#1052-worktree-cwd: a decoy cwd/repo must not receive Repo prep');
   }
 
@@ -928,9 +938,9 @@ try {
     assert(r.status === 0 && acquired(r.json),
       '#1052-cursor-workspace: explicit CLI workspace locator must still allow claim (got '
       + JSON.stringify(r.json) + ' raw=' + r.raw.slice(0, 400) + ')');
-    assert(hasProjectAgents(workspace),
+    assert(hasProjectPrep(workspace),
       '#1052-cursor-workspace: prep must target --cursor-workspace, not the decoy git toplevel');
-    assert(!hasProjectAgents(decoyCwd),
+    assert(!hasProjectPrep(decoyCwd),
       '#1052-cursor-workspace: decoy cwd git toplevel must not receive extra Repo writes');
   }
 
@@ -988,18 +998,18 @@ try {
       assert(r.status === 0 && acquired(r.json),
         tag + '-startup-empty: CLI/local startup must still acquire after prep (got '
         + JSON.stringify(r.json) + ' raw=' + r.raw.slice(0, 400) + ')');
-      const agents = path.join(workspace, '.cursor', 'agents', IMPLEMENTER);
+      const agents = path.join(workspace, '.cursor', 'commands', PREP_PROBE);
       const receipt = path.join(workspace, '.cursor', 'kaola-workflow-materialization.json');
       assert(fs.existsSync(agents) && fs.existsSync(receipt),
         tag + '-startup-empty: must execute installed --ensure-target Repo prep on the CLI workspace');
-      assert(!fs.existsSync(path.join(nested, '.cursor', 'agents', IMPLEMENTER)),
+      assert(!fs.existsSync(path.join(nested, '.cursor', 'commands', PREP_PROBE)),
         tag + '-startup-empty: decoy nested cwd must not receive Repo prep');
       const managed = rel => walkRel(path.join(rel, '.cursor'))
         .filter(name => name !== 'kaola-workflow-materialization.json');
       const managedSnap = root => managed(root).map(name =>
         name + ':' + fs.readFileSync(path.join(root, '.cursor', name)).toString('hex'));
       assert(JSON.stringify(managedSnap(workspace)) === JSON.stringify(managedSnap(twin)),
-        tag + '-startup-empty: prep must reuse the full installed ensure-target write set, not an agents-only copy');
+        tag + '-startup-empty: prep must reuse the full installed ensure-target write set, not a partial copy');
     }
 
     {
@@ -1011,7 +1021,7 @@ try {
       assert(!refusedUnknownIdentity(app),
         tag + '-app-local-flags: App/local identity flags must be known (got ' + JSON.stringify(app.json) + ')');
       assertNoExtraRepoWrite(app, workspace,
-        tag + '-app-local: explicit Cursor App/local must not infer CLI ensure or write project roles');
+        tag + '-app-local: explicit Cursor App/local must not infer CLI ensure or write Repo prep');
     }
 
     {
@@ -1049,7 +1059,7 @@ try {
       ]);
       assert(resumeOmitted.json && resumeOmitted.json.resumed === true
         && resumeOmitted.json.project === 'issue-11549'
-        && !hasProjectAgents(resumeWorkspace),
+        && !hasProjectPrep(resumeWorkspace),
         tag + '-identity-resume-omitted: resume without product/host must not write Repo (got '
         + JSON.stringify(resumeOmitted.json) + ')');
     }
@@ -1070,8 +1080,8 @@ try {
         + JSON.stringify(resume.json) + ')');
       assert(resume.json && resume.json.resumed === true && resume.json.project === 'issue-11526',
         tag + '-resume: resume must keep the existing run (got ' + JSON.stringify(resume.json) + ')');
-      assert(hasProjectAgents(workspace),
-        tag + '-resume: missing roles must be prepared on CLI/local resume');
+      assert(hasProjectPrep(workspace),
+        tag + '-resume: missing Repo prep must be restored on CLI/local resume');
       const missionAfter = fs.readFileSync(path.join(issueDir(workspace, 11526), 'mission-list.md'), 'utf8');
       assert(missionAfter === missionBefore,
         tag + '-resume: Mission List bytes must be preserved');
@@ -1097,9 +1107,9 @@ try {
       assert(resume.json && resume.json.resumed === true && resume.json.project === 'issue-11547',
         tag + '-worktree-cwd: resume from write-worktree cwd must keep the run (got '
         + JSON.stringify(resume.json) + ' raw=' + resume.raw.slice(0, 400) + ')');
-      assert(hasProjectAgents(mainRoot) || hasProjectAgents(workspace),
+      assert(hasProjectPrep(mainRoot) || hasProjectPrep(workspace),
         tag + '-worktree-cwd: Repo prep must target recorded main_root, not write-worktree cwd');
-      assert(!fs.existsSync(path.join(wt, '.cursor', 'agents', IMPLEMENTER)),
+      assert(!fs.existsSync(path.join(wt, '.cursor', 'commands', PREP_PROBE)),
         tag + '-worktree-cwd: write-worktree must not receive extra Repo writes');
     }
 
@@ -1116,9 +1126,9 @@ try {
       assert(r.status === 0 && acquired(r.json),
         tag + '-cursor-workspace: explicit locator must still allow claim (got '
         + JSON.stringify(r.json) + ' raw=' + r.raw.slice(0, 400) + ')');
-      assert(hasProjectAgents(workspace),
+      assert(hasProjectPrep(workspace),
         tag + '-cursor-workspace: prep must target --cursor-workspace, not decoy cwd');
-      assert(!hasProjectAgents(decoyCwd),
+      assert(!hasProjectPrep(decoyCwd),
         tag + '-cursor-workspace: decoy cwd must not receive extra Repo writes');
     }
   }
@@ -1281,7 +1291,7 @@ try {
         return tok;
       }));
       const appPrep = cursorPrep(appRun.json);
-      assert(appRun.status === 0 && acquired(appRun.json) && !hasProjectAgents(appWs)
+      assert(appRun.status === 0 && acquired(appRun.json) && !hasProjectPrep(appWs)
         && !(appPrep && appPrep.status === 'materialized'),
         tag + '-c1-app-drive: App/Cloud executing the installed Next startup argv must not trigger ensureCursorCliLocalPrep / extra Repo writes (argv='
         + JSON.stringify(appStartArgv) + ' json=' + JSON.stringify(appRun.json) + ' raw='
@@ -1297,7 +1307,7 @@ try {
         const appResumeArgv = emittedClaimArgv(appResumeLine, 'resume', expandCtx(seedApp));
         const appResumeRun = runNamedClaim(sandbox, seedApp, port.claim, appResumeArgv);
         const appResumePrep = cursorPrep(appResumeRun.json);
-        assert(appResumeRun.json && appResumeRun.json.resumed === true && !hasProjectAgents(seedApp)
+        assert(appResumeRun.json && appResumeRun.json.resumed === true && !hasProjectPrep(seedApp)
           && !(appResumePrep && appResumePrep.status === 'materialized'),
           tag + '-c1-app-resume-drive: App/Cloud executing the installed Next resume argv must not trigger CLI ensure (argv='
           + JSON.stringify(appResumeArgv) + ' json=' + JSON.stringify(appResumeRun.json) + ')');
@@ -1454,7 +1464,7 @@ try {
       const appFirstPrep = cursorPrep(appFirstJson);
       assert(!logInvokesCliLocalIdentity(appFirstLog, port.claimBase)
         && !(appFirstPrep && appFirstPrep.status === 'materialized')
-        && !hasProjectAgents(appWs),
+        && !hasProjectPrep(appWs),
         tag + '-c1-host-gate-first-resume: compact-recovery first ## Resume fence in an App/Cloud-like env (CLAIM_JS unset, no CLI product/host, sibling agent still on PATH) must not invoke named '
         + port.claimBase + ' with --product cli --host local and must not set cursor_prep.status=materialized (status='
         + appFirst.status + ' log=' + JSON.stringify(appFirstLog.slice(0, 400))
@@ -1477,7 +1487,7 @@ try {
         + firstLine + ' log=' + JSON.stringify(cliLog.slice(0, 500)) + ')');
       const cliRaw = String(cliRun.stderr || '') + '\n' + String(cliRun.stdout || '');
       assert(!prepFailedStaleForge(cliJson, cliRaw)
-        && cliRun.status === 0 && acquired(cliJson) && hasProjectAgents(opened)
+        && cliRun.status === 0 && acquired(cliJson) && hasProjectPrep(opened)
         && cliPrep && (cliPrep.status === 'materialized' || cliPrep.status === 'current'),
         tag + '-c1-first-claim-cli-matching-authority: isolated install-cursor.sh --global --forge='
         + port.forge + ' + generated ' + port.forge + ' Next first unstamped fence + '
@@ -1500,7 +1510,7 @@ try {
       const appLog = readArgvLog();
       const appJson = lastJson(appRun.stdout) || lastJson(appRun.stderr);
       const appPrep = cursorPrep(appJson);
-      assert(appRun.status === 0 && acquired(appJson) && !hasProjectAgents(appOpened)
+      assert(appRun.status === 0 && acquired(appJson) && !hasProjectPrep(appOpened)
         && !(appPrep && appPrep.status === 'materialized')
         && !logInvokesCliLocalIdentity(appLog, port.claimBase),
         tag + '-c1-first-claim-app: same default first claim fence with App-like demonstrated context (--worker-dir, no --workspace, CURSOR_INVOKED_AS=cursor-agent, sibling agent on PATH, no invented gate env) must not obtain local-CLI prep or forge --product cli --host local that materializes (status='
@@ -1517,7 +1527,7 @@ try {
       const unknownLog = readArgvLog();
       const unknownJson = lastJson(unknownRun.stdout) || lastJson(unknownRun.stderr);
       const unknownPrep = cursorPrep(unknownJson);
-      assert(unknownRun.status === 0 && acquired(unknownJson) && !hasProjectAgents(unknownWs)
+      assert(unknownRun.status === 0 && acquired(unknownJson) && !hasProjectPrep(unknownWs)
         && !(unknownPrep && unknownPrep.status === 'materialized')
         && !logInvokesCliLocalIdentity(unknownLog, port.claimBase),
         tag + '-c1-first-claim-unknown: default first claim fence with no demonstrated --workspace must not obtain local-CLI prep (status='
@@ -1534,7 +1544,7 @@ try {
       const genericLog = readArgvLog();
       const genericJson = lastJson(genericRun.stdout) || lastJson(genericRun.stderr);
       const genericPrep = cursorPrep(genericJson);
-      assert(genericRun.status === 0 && acquired(genericJson) && !hasProjectAgents(consumer)
+      assert(genericRun.status === 0 && acquired(genericJson) && !hasProjectPrep(consumer)
         && !(genericPrep && genericPrep.status === 'materialized')
         && !logInvokesCliLocalIdentity(genericLog, port.claimBase),
         tag + '-c1-generic-workspace-not-cli: first generated fence as grandchild of living unrelated-tool --workspace <repo> (not YYYY.MM.DD-hash/index.js) must keep unknown/App/Cloud non-writing; a generic --workspace flag is not CLI identity (status='
@@ -1553,7 +1563,7 @@ try {
       const bothLog = readArgvLog();
       const bothJson = lastJson(bothRun.stdout) || lastJson(bothRun.stderr);
       const bothPrep = cursorPrep(bothJson);
-      assert(bothRun.status === 0 && acquired(bothJson) && !hasProjectAgents(bothWs)
+      assert(bothRun.status === 0 && acquired(bothJson) && !hasProjectPrep(bothWs)
         && !(bothPrep && bothPrep.status === 'materialized')
         && !logInvokesCliLocalIdentity(bothLog, port.claimBase),
         tag + '-c1-workspace-and-worker-dir: ancestor with both --workspace and --worker-dir must not take the workspace branch first as CLI; preserve App/unknown non-writing (status='
@@ -1570,11 +1580,11 @@ try {
       }, cliWorkspaceArgv(openedWt));
       const wtJson = lastJson(wtRun.stdout) || lastJson(wtRun.stderr);
       const wtPrep = cursorPrep(wtJson);
-      assert(wtRun.status === 0 && acquired(wtJson) && hasProjectAgents(openedWt)
+      assert(wtRun.status === 0 && acquired(wtJson) && hasProjectPrep(openedWt)
         && wtPrep && (wtPrep.status === 'materialized' || wtPrep.status === 'current'),
         tag + '-c2-cli-opened-worktree: CLI opened directly in an independent worktree (--workspace=that worktree, no invented CURSOR_WORKSPACE) must prep that worktree (json='
         + JSON.stringify(wtJson) + ' raw=' + String(wtRun.stderr || wtRun.stdout || '').slice(0, 300) + ')');
-      assert(!hasProjectAgents(main),
+      assert(!hasProjectPrep(main),
         tag + '-c2-cli-opened-worktree-not-main: recorded main_root/main checkout must not receive Repo prep when --workspace is the independent worktree');
     }
 
@@ -1587,11 +1597,11 @@ try {
       }, cliWorkspaceArgv(main));
       const mainJson = lastJson(mainRun.stdout) || lastJson(mainRun.stderr);
       const mainPrep = cursorPrep(mainJson);
-      assert(mainRun.status === 0 && acquired(mainJson) && hasProjectAgents(main)
+      assert(mainRun.status === 0 && acquired(mainJson) && hasProjectPrep(main)
         && mainPrep && (mainPrep.status === 'materialized' || mainPrep.status === 'current'),
         tag + '-c2-main-cli-other-cwd: main-workspace CLI (--workspace=main) whose shell cwd is another worktree must prep the opened main, not cwd/git toplevel (json='
         + JSON.stringify(mainJson) + ' raw=' + String(mainRun.stderr || mainRun.stdout || '').slice(0, 300) + ')');
-      assert(!hasProjectAgents(otherWt),
+      assert(!hasProjectPrep(otherWt),
         tag + '-c2-main-cli-other-cwd-not-wt: shell-cwd worktree must not receive Repo prep when demonstrated --workspace is main');
     }
 
@@ -1618,7 +1628,7 @@ try {
         ? fs.realpathSync(spacedPrep.target)
         : '';
       assert(spacedRun.status === 0 && acquired(spacedJson)
-        && hasProjectAgents(spaced)
+        && hasProjectPrep(spaced)
         && spacedPrep && (spacedPrep.status === 'materialized' || spacedPrep.status === 'current')
         && prepTarget === spaced,
         tag + '-c2-spaced-workspace-full: demonstrated CLI --workspace with spaces must prep the full opened dir via Darwin ps args= → tokenizePsCommandLine, not silently skip and not the truncated prefix (status='
@@ -1627,7 +1637,7 @@ try {
         + ' ps=' + JSON.stringify(spacedPs)
         + ' naive=' + JSON.stringify(spacedNaive)
         + ' log=' + JSON.stringify(spacedLog.slice(0, 400)) + ')');
-      assert(!hasProjectAgents(truncated),
+      assert(!hasProjectPrep(truncated),
         tag + '-c2-spaced-workspace-not-prefix: existing truncated prefix must not receive Repo prep (truncated='
         + truncated + ')');
     }
@@ -1653,7 +1663,7 @@ try {
       const everyPrep = cursorPrep(everyJson);
       assert(!logInvokesCliLocalIdentity(everyLog, port.claimBase)
         && !(everyPrep && everyPrep.status === 'materialized')
-        && !hasProjectAgents(everyWs),
+        && !hasProjectPrep(everyWs),
         tag + '-c1-host-gate-every-fence: App executing every startup/resume bash fence must not run the cli/local identity; prose-only skip does not count (status='
         + everyRun.status + ' log=' + JSON.stringify(everyLog.slice(0, 500))
         + ' json='         + JSON.stringify(everyJson) + ')');

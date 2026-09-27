@@ -161,16 +161,12 @@ assert(marketplace.plugins.some(plugin =>
 const commandFiles = listFiles(pluginRoot + '/commands', file => file.endsWith('.md'));
 const skillFiles = listSkillFiles();
 const hookFiles = listFiles(pluginRoot + '/hooks');
-const agentFiles = listFiles(pluginRoot + '/agents', file => file.endsWith('.toml'));
 
 // issue #341: the forbidden-token scan runs BEFORE any count assertion, so a forge
 // leak is never hidden behind a stale agent/command/skill count (the #328 latent
-// defect: a `gh` leak in issue-scout.toml was masked by `agentFiles.length === 13`
-// short-circuiting the chain until an unrelated count bump exposed it).
-for (const file of [
-  ...commandFiles, ...skillFiles, ...hookFiles, ...agentFiles,
-  ...(exists(pluginRoot + '/config/agents.toml') ? [pluginRoot + '/config/agents.toml'] : [])
-]) {
+// defect: a `gh` leak in issue-scout.toml was masked by a stale agent count short-circuiting the
+// chain until an unrelated count bump exposed it).
+for (const file of [...commandFiles, ...skillFiles, ...hookFiles]) {
   assertNoForbidden(file);
 }
 
@@ -182,36 +178,11 @@ assert(exists(pluginRoot + '/hooks/hooks.json'), 'GitLab hooks.json missing');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assert(!hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'GitLab phantom-advisor hook must be removed (#372)');
-assert(exists(pluginRoot + '/config/agents.toml'), 'GitLab agents config missing');
+// #1101: GitLab ships no Codex role profile and no role registration.
+assert(!exists(pluginRoot + '/agents'), 'GitLab agents/ must stay retired (#1101)');
+assert(!exists(pluginRoot + '/config/agents.toml'), 'GitLab config/agents.toml must stay retired (#1101)');
 
-// #340 derived parity guard (enumeration-free): the dispatch config/agents.toml must register
-// exactly the agent profiles present in agents/ — both directions. A profile copied without its
-// [agents.<name>] table is undispatchable (the #328 issue-scout miss); a table without its profile
-// dangles. Derives both sides (no hardcoded names/counts), so a future agent addition never edits it.
-{
-  const configNames = new Set();
-  const reCfg = /^\[agents\.([a-z0-9-]+)\]/gm;
-  let cm;
-  while ((cm = reCfg.exec(read(pluginRoot + '/config/agents.toml'))) !== null) configNames.add(cm[1]);
-  const dirNames = new Set(agentFiles.map(f => path.basename(f, '.toml')));
-  const missingTables = [...dirNames].filter(n => !configNames.has(n)).sort();
-  const danglingTables = [...configNames].filter(n => !dirNames.has(n)).sort();
-  assert(missingTables.length === 0 && danglingTables.length === 0,
-    'config/agents.toml must register exactly the agent profiles in agents/ (#340)' +
-    (missingTables.length ? ' — profiles missing a [agents.*] table: ' + missingTables.join(', ') : '') +
-    (danglingTables.length ? ' — [agents.*] tables with no profile: ' + danglingTables.join(', ') : ''));
-}
 
-// #451 (supersedes #405): the <role>-max xhigh effort-variant matrix is RETIRED (gitlab port). No
-// generated -max profile files and no [agents.<role>-max] tables may survive — the per-node tier
-// drives a session reasoning-effort signal instead. Forbid both.
-{
-  const configText = read(pluginRoot + '/config/agents.toml');
-  const strayMaxFiles = agentFiles.map(f => path.basename(f)).filter(n => n.endsWith('-max.toml')).sort();
-  assert(strayMaxFiles.length === 0, '#451 gl: retired -max profile file(s) must be removed: ' + strayMaxFiles.join(', '));
-  const maxTables = (configText.match(/^\[agents\.[a-z0-9-]+-max\]/gm) || []);
-  assert(maxTables.length === 0, '#451 gl: config/agents.toml must not register [agents.<role>-max] tables: ' + maxTables.join(', '));
-}
 
 // #372: the advisor-gate vocabulary is retired — ban it across command + skill files so the
 // removed mandates cannot silently return (concat-built; no literal in this source).
@@ -404,125 +375,45 @@ assertNotIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', '--codex-
 // mechanism, but that is pinned where it is actually produced/consumed, not in these reviewer role
 // prompts. No pin on the three reviewer `.toml` bodies' CURRENT wording replaces it: assertConcept
 // is norm+includes, so it reds on an equivalent rephrasing — a new wording gate, not a behavior
-// check. The structural authority (generate-agent-profiles.js --check, validate-vendored-agents.js:
-// render == authority, hash-bound) and native-host acceptance (mission 14) already carry this
-// responsibility.
+// check. #1101 retired the reviewer role bodies themselves.
 
-
-// issue #332: source agent-profile schema wall (AC2). require() THIS tree's own
-// installer copy (require.main guard means require() never runs main()) and assert its
-// source-tree validator passes for the GitLab plugin tree — every agents/*.toml has a
-// matching non-empty top-level `name`, a description, valid nickname_candidates, inherited
-// runtime-key omission, the single subagent binding, non-blank developer_instructions, every config_file resolves, and every toml is referenced by
-// exactly one [agents.*] entry (catches the issue-scout class of omission forever).
-const gitlabInstaller = require('./install-codex-agent-profiles.js');
-const gitlabProfiles = gitlabInstaller.validateSourceProfiles(path.join(root, pluginRoot));
-assert(gitlabProfiles.ok,
-  'GitLab source agent profiles fail schema validation:\n  - ' + gitlabProfiles.errors.join('\n  - '));
+// #1101: the kernel carries no pinned role policy, the preflight reports Kaola-owned leftovers
+// instead of validating profiles, and the resolver module keeps only the Codex session proof.
 const gitlabSchema = require('./kaola-workflow-adaptive-schema.js');
 const gitlabPreflight = require('./kaola-workflow-codex-preflight.js');
-const sortGitlabPolicy = values => [...values].sort();
-assert(JSON.stringify(sortGitlabPolicy(gitlabInstaller.CODEX_PINNED_ROLES))
-    === JSON.stringify(sortGitlabPolicy(gitlabSchema.CODEX_PINNED_ROLES)),
-  'GitLab installer pinned-role policy must match adaptive schema');
-assert(JSON.stringify(sortGitlabPolicy(gitlabPreflight.CODEX_PINNED_ROLES))
-    === JSON.stringify(sortGitlabPolicy(gitlabSchema.CODEX_PINNED_ROLES)),
-  'GitLab preflight pinned-role policy must match adaptive schema');
-assert(gitlabSchema.CODEX_PINNED_MODEL === 'gpt-6-luna'
-    && gitlabSchema.CODEX_PINNED_EFFORT === 'max',
-  'GitLab pinned subagent binding must be gpt-6-luna/max');
-{
-  const dir = path.join(root, pluginRoot, 'agents');
-  for (const file of fs.readdirSync(dir).filter(name => name.endsWith('.toml')).sort()) {
-    const text = fs.readFileSync(path.join(dir, file), 'utf8');
-    const top = gitlabSchema.profileTopLevelShape(text).outside;
-    assert((top.match(/^model\s*=\s*"gpt-6-luna"\s*$/gm) || []).length === 1
-        && (top.match(/^model_reasoning_effort\s*=\s*"max"\s*$/gm) || []).length === 1,
-      pluginRoot + '/agents/' + file
-        + ' must carry exactly one model = "gpt-6-luna" and one model_reasoning_effort = "max" line');
-    const role = file.slice(0, -5);
-    assert(gitlabSchema.validateProfileText(text, role).length === 0,
-      pluginRoot + '/agents/' + file + ' fails kernel profile validation: '
-        + gitlabSchema.validateProfileText(text, role).join('; '));
-  }
+for (const retired of ['CODEX_PINNED_ROLES', 'CODEX_PINNED_MODEL', 'CODEX_PINNED_EFFORT', 'validateProfileText']) {
+  assert(!(retired in gitlabSchema), 'GitLab kernel must not export ' + retired + ' (#1101)');
+  assert(!(retired in gitlabPreflight), 'GitLab preflight must not export ' + retired + ' (#1101)');
 }
-assert(gitlabInstaller.CODEX_STANDARD_MODEL === 'gpt-5.6-sol'
-    && gitlabInstaller.CODEX_STANDARD_EFFORT === 'medium'
-    && gitlabPreflight.CODEX_STANDARD_MODEL === gitlabInstaller.CODEX_STANDARD_MODEL
-    && gitlabPreflight.CODEX_STANDARD_EFFORT === gitlabInstaller.CODEX_STANDARD_EFFORT,
-  'GitLab installer/preflight historical standard migration pair must be gpt-5.6-sol/medium');
-assert(gitlabInstaller.CODEX_REASONING_MODEL === 'gpt-5.6-sol'
-    && gitlabInstaller.CODEX_REASONING_EFFORT === 'xhigh'
-    && gitlabPreflight.CODEX_REASONING_MODEL === gitlabInstaller.CODEX_REASONING_MODEL
-    && gitlabPreflight.CODEX_REASONING_EFFORT === gitlabInstaller.CODEX_REASONING_EFFORT,
-  'GitLab installer/preflight historical reasoning migration pair must be gpt-5.6-sol/xhigh');
+assert(gitlabPreflight.RETIRED_ROLE_RESIDUE_STATUS === 'retired_role_residue',
+  'GitLab preflight reports retired-role residue');
+assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', 'loadCodexSessionProof');
 
-assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', '.codex-plugin');
-assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', 'isCodexPluginScriptDir');
-
-// issue #332: edition byte-parity guard (the #291/#254 "edition port missed" class).
-// The agent role profiles + config/agents.toml are forge-neutral and MUST stay
-// byte-identical to the codex (plugins/kaola-workflow/) tree — a per-edition divergence
-// (e.g. the historical workflow-planner.toml #272 drift) is illegal. Reference = codex.
+// issue #332: edition byte-parity guard (the #291/#254 "edition port missed" class). The shared
+// Codex scripts are forge-neutral and MUST stay byte-identical to the codex
+// (plugins/kaola-workflow/) tree. Reference = codex.
 function assertByteParity(relPath) {
   const ours = fs.readFileSync(path.join(root, pluginRoot, relPath));
   const ref = fs.readFileSync(path.join(root, 'plugins/kaola-workflow', relPath));
   assert(ours.equals(ref),
     'GitLab ' + relPath + ' must be byte-identical to the codex (plugins/kaola-workflow/) copy');
 }
-assertByteParity('config/agents.toml');
-for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).filter(f => f.endsWith('.toml')).sort()) {
-  assertByteParity(path.join('agents', tomlFile));
+for (const shared of ['scripts/install-codex-agent-profiles.js', 'scripts/kaola-workflow-codex-preflight.js',
+  'scripts/kaola-workflow-resolve-agent-model.js']) {
+  assertByteParity(shared);
 }
 
-// #1033: the generated all-role architecture wall must be wired into the Claude chain.
+// #1033 / #1101: the native-only guard and runtime architecture acceptance run in the Claude chain.
 {
   const pkg = JSON.parse(read('package.json'));
   const claudeChain = (pkg.scripts || {})['test:kaola-workflow:claude'] || '';
-  assert(claudeChain.includes('generate-agent-profiles.js --check')
+  assert(claudeChain.includes('test-issue-1101-native-only.js')
     && claudeChain.includes('test-runtime-agent-architecture.js'),
-  '#1033: Claude chain must check generated profiles and runtime architecture acceptance');
+  '#1101: Claude chain must run the native-only guard and runtime architecture acceptance');
 }
 
-// Reviewer-contract-v2 edition wall: prove generated source identity, exact installed-profile
-// enforcement, read-only-but-gating cache inspection, validation-runner distribution, shared
-// lifecycle exports, and the complete authoring/execution/finalization guidance family.
+// Validation-runner distribution: the edition ships the canonical runner byte-for-byte.
 {
-  const generator = require(path.join(root, 'scripts', 'generate-agent-profiles.js'));
-  const generatedErrors = generator.checkGeneratedProfiles(root);
-  assert(generatedErrors.length === 0,
-    'generated agent profiles must be current: ' + generatedErrors.join('; '));
-
-  const installerFile = pluginRoot + '/scripts/install-codex-agent-profiles.js';
-  const installer = require(path.join(root, installerFile));
-  const sourceCheck = installer.validateSourceProfiles(path.join(root, pluginRoot));
-  assert(sourceCheck.ok,
-    pluginRoot + ' profile source contract failed: ' + sourceCheck.errors.join('; '));
-  for (const role of generator.ROLES) {
-    const entry = sourceCheck.entries.find(candidate => candidate.role === role);
-    assert(entry && entry.sourceText,
-    pluginRoot + ' must expose generated agent source for ' + role);
-    const sidecar = generator.manifestProfileEntry('codex', role, root, 'codex-gitlab');
-    assert(generator.sha256(entry.sourceText) === sidecar.resolved_profile_sha256,
-      pluginRoot + ' profile source must match its generated manifest sidecar digest for ' + role);
-    assert(/^[0-9a-f]{64}$/.test(sidecar.behavior_sha256)
-      && /^[0-9a-f]{64}$/.test(sidecar.adapter_capabilities_sha256)
-      && /^[0-9a-f]{64}$/.test(sidecar.resolved_profile_sha256),
-    pluginRoot + ' must bind behavior, adapter, and resolved profile digests for ' + role);
-    assert(!/[0-9a-f]{64}/.test(entry.sourceText) && !entry.sourceText.includes('runtime-adapter'),
-      pluginRoot + ' must not carry receipt hashes in agent-visible text for ' + role);
-    assert(/^model\s*=\s*"gpt-6-luna"\s*$/m.test(entry.sourceText)
-      && /^model_reasoning_effort\s*=\s*"max"\s*$/m.test(entry.sourceText),
-      pluginRoot + ' pinned profiles must carry the gpt-6-luna/max subagent binding');
-  }
-  assertIncludes(installerFile, 'profile_source_repair');
-
-  const preflightFile = pluginRoot + '/scripts/kaola-workflow-codex-preflight.js';
-  assertIncludes(preflightFile, "scope: 'repository'");
-  assertIncludes(preflightFile, "scope: 'plugin_cache'");
-  assertIncludes(preflightFile, 'profile_bytes_mismatch');
-  assertIncludes(preflightFile, 'pluginCacheStale');
-
   const runnerFile = pluginRoot + '/scripts/kaola-workflow-validation-runner.js';
   assert(exists(runnerFile), runnerFile + ' is missing');
   assert(read(runnerFile) === read('scripts/kaola-workflow-validation-runner.js'),
@@ -530,11 +421,6 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   const installManifest = require(path.join(root, 'scripts', 'kaola-workflow-install-manifest.js'));
   assert(installManifest.supportScripts('gitlab').includes('kaola-workflow-validation-runner.js'),
     'manual edition install must ship the deterministic validation runner');
-
-
-  // The three reviewer-contract-v2 PIN anchors are asserted on THESE SAME EDITION PATHS by the root
-  // validator's authoring / execution / finalization surface loops — with a SUPERSET of needles
-  // (each also pins the contract fields) — in the always-selected claude chain.
 }
 
 // #505 ITEM 1 / #816: the foreign-archive staging guard moved from bash prose INTO the finalize
@@ -555,7 +441,7 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-sink-merge.js', 'rea
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-sink-merge.js', 'probeIssueClosed');
 
 
-// PROVENANCE_BAN: GitLab prompt surfaces (agents/*.toml, commands/*.md, skills/*/SKILL.md) must
+// PROVENANCE_BAN: GitLab prompt surfaces (commands/*.md, skills/*/SKILL.md) must
 // not embed issue numbers (#NNN), decision IDs (D-NNN-NN), invariant tags (INV-NN), ADR citations,
 // or PR/MR/AC refs. Only the rule belongs in prompts; provenance belongs in CHANGELOG.md,
 // docs/decisions/, and commit messages. Allowed: #N/#<issue>/#<n> placeholders, runtime vars
@@ -563,7 +449,7 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-sink-merge.js', 'pro
 // See docs/conventions.md.
 {
   const PROVENANCE_BAN = /#\d{1,4}|D-\d{3}-\d{2}|\bINV-\d+|ADR[ -]\d{2,4}|\b(?:PR|MR|AC)#\d+/;
-  for (const rel of [...agentFiles, ...commandFiles, ...skillFiles]) {
+  for (const rel of [...commandFiles, ...skillFiles]) {
     const lines = read(rel).split('\n');
     for (let i = 0; i < lines.length; i++) {
       const m = lines[i].match(PROVENANCE_BAN);
@@ -577,8 +463,7 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-sink-merge.js', 'pro
 }
 
 // B2 model-noun purge (#609, the forge-codex twin of #537; #610 renamed the plan vocabulary to
-// neutral tokens with legacy aliases): forge-codex prompt surfaces (agents/*.toml,
-// config/agents.toml, skills/*/SKILL.md) must not use Claude model NOUNS (Opus/Sonnet/haiku) as
+// neutral tokens with legacy aliases): forge-codex prompt surfaces (skills/*/SKILL.md) must not use Claude model NOUNS (Opus/Sonnet/haiku) as
 // runtime-model prose ("the Opus orchestrator", "reasoning-class (Opus)", "no haiku"). The plan
 // tokens translate to a per-spawn reasoning_effort at dispatch, so a Claude model name reads
 // as nonsense here. The ONLY permitted opus/sonnet are the B1 LEGACY-ALIAS mentions: the closed
@@ -592,11 +477,7 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-sink-merge.js', 'pro
     .replace(/\{opus\|sonnet\}/g, '')
     .replace(/model:\s*(?:opus|sonnet)\b/g, '')
     .replace(/`opus`\/`sonnet`/g, ''); // #610: the legacy-alias-pair mention
-  const b2Surfaces = [
-    ...agentFiles,
-    ...(exists(pluginRoot + '/config/agents.toml') ? [pluginRoot + '/config/agents.toml'] : []),
-    ...skillFiles
-  ];
+  const b2Surfaces = [...skillFiles];
   for (const rel of b2Surfaces) {
     const lines = read(rel).split('\n');
     for (let i = 0; i < lines.length; i++) {

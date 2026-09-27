@@ -178,6 +178,7 @@ mustFlag(kernelViolations({}, "const X = 'gpt-6-luna';"), 'pinned Codex model li
 // 1. Retired artifacts, packaging, and callers.
 // ---------------------------------------------------------------------------
 function trackedFiles() {
+  // spawn-class: environment
   const r = spawnSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' });
   assert.strictEqual(r.status, 0, 'git ls-files failed: ' + r.stderr);
   return r.stdout.split('\0').filter(Boolean).filter(f => fs.existsSync(path.join(ROOT, f)));

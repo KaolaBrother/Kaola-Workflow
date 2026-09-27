@@ -14,10 +14,11 @@
 //
 // Grok CLI is a coding-agent RUNTIME, not a forge, and it does not ride
 // install.sh / edition-sync.js / npm test. It is delivered the Grok-native
-// way: named agents under `.grok/agents/<role>.md` (spawn_subagent types),
-// flat commands under `.grok/commands/<name>.md`, and one `.grok/rules/`
-// compact-safe prompt. ONE canonical binding (#1062): every generated Grok
-// agent pins model: grok-4.7 with effort: medium.
+// way: flat commands under `.grok/commands/<name>.md`; the machine-global
+// transaction owns the one compact-safe Rule. Kaola-Workflow ships no Grok
+// agents and pins no subagent model or effort (#1101): subagents are Grok's
+// own `spawn_subagent` types, and the generated tree's agents/ directory is a
+// retired surface that --check flags and --write prunes.
 //
 // Outside `npm test`, the forge chains, and the fast gate: an additive
 // runtime edition is not a forge. The script exists so the suite is
@@ -29,7 +30,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const forgeLayout = require('./runtime-edition-forge.js');
-const reviewerGenerator = require('./generate-agent-profiles.js');
+const adapterFacts = require('./runtime-adapter-facts.js');
 const globalContract = require('./kaola-workflow-global-contract.js');
 
 const REPO = path.resolve(__dirname, '..');
@@ -111,38 +112,26 @@ function generatedTreeFiles(label) {
   return walkFiles(path.join(TREE_ROOT, label), label);
 }
 
-const trackedAgents = () => fs.readdirSync(path.join(REPO, 'agents'))
-  .filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
 const commandNamesFor = forge => forgeLayout.commandSources(forge)
   .map(s => s.basename.replace(/\.md$/, '')).sort();
-const behaviorContracts = reviewerGenerator.loadBehaviorContracts(REPO).roles;
 
-function expectedNativeTools(role) {
-  const required = new Set(behaviorContracts[role].capability_requirements || []);
-  const tools = ['Read', 'Grep', 'Glob'];
-  if (required.has('scoped_write')) tools.splice(1, 0, 'Write', 'Edit');
-  if (required.has('command_execution')) tools.push('Bash');
-  if (required.has('external_research')) tools.push('WebSearch', 'WebFetch');
-  return tools;
-}
+// The seven Kaola roles retired by #1101, named only so this suite can prove none returns.
+const RETIRED_ROLES = Object.freeze([
+  'code-explorer', 'code-reviewer', 'doc-updater', 'implementer', 'investigator',
+  'knowledge-lookup', 'tdd-guide',
+]);
+const RETIRED_ROLE_RE = new RegExp('\\b(?:' + RETIRED_ROLES.join('|') + ')\\b');
 
-// #1062 — the Grok binding is the adapter's single `subagent_default`, not a
-// per-role tier. Derive the expected Grok binding from runtime-capabilities.json
-// so a binding change is judged by the adapter authority itself.
-const GROK_SUBAGENT_DEFAULT = reviewerGenerator.loadRuntimeAdapters(REPO)
-  .runtimes.grok.capabilities.subagent_default || {};
-
-function canonicalAgentClass() {
-  return { model: GROK_SUBAGENT_DEFAULT.model, effort: GROK_SUBAGENT_DEFAULT.effort };
-}
+// The Grok adapter records only native facts; no Kaola role or model-binding capability.
+const GROK_ADAPTER = adapterFacts.loadRuntimeAdapters(REPO).runtimes.grok;
 
 // ---------------------------------------------------------------------------
-// GROK_RUNTIME_NATIVE — the single subagent binding as a DECLARED table entry,
-// not merely as prose. Deleting the declaration reds this suite.
+// GROK_RUNTIME_NATIVE — the native-only subagent rule as a DECLARED table
+// entry, not merely as prose. Deleting the declaration reds this suite.
 // ---------------------------------------------------------------------------
 const GROK_RUNTIME_NATIVE = Object.freeze({
-  single_subagent_binding:
-    'Grok generated agents pin the one subagent binding model: grok-4.7 with effort: medium; per-call model and effort are omitted because the profile pins both.',
+  native_subagents:
+    'Grok subagents are the host\'s own spawn_subagent types; the edition ships no agents and sets no per-call or profile model or effort.',
 });
 
 const GROK_SYNC_SRC = fs.readFileSync(path.join(REPO, 'scripts', 'sync-grok-edition.js'), 'utf8');
@@ -264,7 +253,6 @@ assert(treeLabel('github') === '.grok'
   && treeLabel('gitea') === '.grok-gitea',
   'D1: treeLabel is .grok / .grok-gitlab / .grok-gitea (kimi-style outSuffix)');
 
-const canonAgents = trackedAgents();
 const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
 
 // ---------------------------------------------------------------------------
@@ -273,128 +261,59 @@ const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
 // readdir-driven loop iterate over nothing.
 // ---------------------------------------------------------------------------
 {
-  const provisioned = fs.existsSync(path.join(TREE_ROOT, '.grok', 'agents'))
-    && fs.existsSync(path.join(TREE_ROOT, '.grok', 'commands'));
+  const provisioned = fs.existsSync(path.join(TREE_ROOT, '.grok', 'commands'));
   assert(provisioned,
-    'G0: the generated .grok/agents and .grok/commands trees exist after sync --write');
+    'G0: the generated .grok/commands tree exists after sync --write');
   if (!provisioned) {
     console.error('FATAL: sync --write reported success but produced no tree at '
       + path.join(TREE_ROOT, '.grok') + ' — nothing below can be tested.');
     process.exit(1);
   }
-  assert(canonAgents.length > 0 && canonCommandNames.length > 0,
-    'G0-roster: the canonical agents/ inventory and routing-registry command surfaces are both non-empty');
-  assert(canonAgents.length === 7 && canonAgents.includes('knowledge-lookup'),
-    'G0-roster: the canonical agents/*.md inventory is exactly the seven-role catalog — got '
-    + JSON.stringify(canonAgents));
-  for (const retired of ['planner', 'code-architect', 'synthesizer', 'build-error-resolver',
-    'metric-optimizer', 'adversarial-verifier', 'security-reviewer']) {
-    assert(!canonAgents.includes(retired),
-      'G0-roster: retired role ' + retired + ' is absent from the canonical inventory');
+  assert(canonCommandNames.length > 0,
+    'G0-roster: the routing-registry command surfaces are non-empty');
+  assert(!fs.existsSync(path.join(REPO, 'agents')),
+    'G0-roster: the repository tracks no canonical agents/ role inventory (#1101)');
+  const caps = GROK_ADAPTER.capabilities || {};
+  for (const retired of ['named_roles', 'subagent_default', 'dispatch_conformance', 'role_dispatch',
+    'model_carrier', 'profile_format']) {
+    assert(!Object.prototype.hasOwnProperty.call(caps, retired),
+      'G0-binding: the Grok adapter records no ' + retired + ' role or model-binding capability');
   }
-  assert(GROK_SUBAGENT_DEFAULT.model === 'grok-4.7' && GROK_SUBAGENT_DEFAULT.effort === 'medium',
-    'G0-binding: runtime adapter subagent_default is model grok-4.7 / effort medium — got '
-    + JSON.stringify(GROK_SUBAGENT_DEFAULT));
+  assert(/spawn_subagent/.test(String((caps.delegation_guidance || {}).native_routes || '')),
+    'G0-adapter: the Grok adapter records the native spawn_subagent route as a host fact');
   assert(!/const\s+GROK_MODEL_EFFORTS\b|function\s+effortForModelToken\b/.test(GROK_SYNC_SRC),
     'G0-adapter: sync-grok-edition carries no executable hardcoded effort table; '
     + 'runtime-capabilities.json is the sole runtime identifier authority');
-  for (const name of canonAgents) {
-    const { fm } = parseFrontmatter(read('agents/' + name + '.md'));
-    assert(String(fm.model || '').trim() === 'sonnet',
-      'G0-roster: ' + name + ' canonical profile carries the single Claude binding model: sonnet — got '
-      + JSON.stringify(fm.model));
-  }
+  assert(!/renderAgent|writeAgents|listCanonAgents/.test(GROK_SYNC_SRC)
+    && /require\('\.\/runtime-adapter-facts'\)/.test(GROK_SYNC_SRC),
+    'G0-adapter: sync-grok-edition renders no agent and takes its adapter facts from runtime-adapter-facts');
 }
 
-function agentRel(name, forge) {
-  return treeLabel(forge || DEFAULT_FORGE) + '/agents/' + name + '.md';
-}
 function commandRel(name, forge) {
   return treeLabel(forge || DEFAULT_FORGE) + '/commands/' + name + '.md';
 }
 
-{
-  const heavyVariants = ['code-reviewer-heavy', 'adversarial-verifier-heavy', 'security-reviewer-heavy'];
-  for (const name of heavyVariants) {
-    assert(!canonAgents.includes(name),
-      'G0-ac6: no grok heavy-variant reviewer agent ' + name + ' in the canonical roster (escalation is claude+codex only)');
-    assert(!exists(agentRel(name)),
-      'G0-ac6: generated grok tree must not ship ' + name);
-  }
-}
-
 // ---------------------------------------------------------------------------
-// G1: agents — exact set = canonical agents/*.md. knowledge-lookup MUST be
-// present. Frontmatter: name, description, and the single adapter binding
-// model: grok-4.7 with effort: medium (#1062 — one subagent binding per
-// adapter, no tier axis). `reasoning_effort:` is not a Grok agent field. Frontmatter `tools:`
-// is the enforced native allowlist derived from the role capability contract; prose-only
-// restrictions do not satisfy this contract. Body examples may still name MCP tool ids.
+// G1: agents — Kaola-Workflow ships no Grok agents (#1101). After --write the
+// generated tree has no agents/ directory at all, and no generated file carries
+// a profile frontmatter model: or effort: binding.
 // ---------------------------------------------------------------------------
 {
-  const dir = path.join(TREE_ROOT, '.grok', 'agents');
-  const gen = fs.readdirSync(dir).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
-  assert(JSON.stringify(gen) === JSON.stringify(canonAgents),
-    'G1: .grok/agents set == canonical agents/*.md — canonical=' + JSON.stringify(canonAgents)
-    + ' generated=' + JSON.stringify(gen));
-  assert(gen.includes('knowledge-lookup'),
-    'G1: knowledge-lookup MUST be present under .grok/agents/');
-  for (const name of canonAgents) {
-    const rel = agentRel(name);
-    assert(exists(rel), 'G1[' + name + ']: generated agent exists');
-    if (!exists(rel)) continue;
-    const content = read(rel);
-    const { fm, raw } = parseFrontmatter(content);
-    assert(fm.name === name, 'G1[' + name + ']: frontmatter name is the role — got ' + JSON.stringify(fm.name));
-    assert(typeof fm.description === 'string' && fm.description.trim().length > 0,
-      'G1[' + name + ']: frontmatter has a non-empty description');
-    assert(fm.model === 'grok-4.7',
-      'G1[' + name + ']: frontmatter model is the single binding grok-4.7 — got ' + JSON.stringify(fm.model));
-    assert(fm.promptMode === 'full',
-      'G1[' + name + ']: native camelCase promptMode is full — got ' + JSON.stringify(fm.promptMode));
-    assert(!Object.prototype.hasOwnProperty.call(fm, 'permissionMode'),
-      'G1[' + name + ']: permissionMode is omitted; tool restrictions belong to tools/capabilityMode, '
-      + 'and the native enum does not accept plan — got ' + JSON.stringify(fm.permissionMode));
-    assert(fm.agentsMd === 'true',
-      'G1[' + name + ']: native camelCase agentsMd enables project instructions — got '
-      + JSON.stringify(fm.agentsMd));
-    assert(!/^(?:prompt_mode|permission_mode|agents_md)\s*:/m.test(raw),
-      'G1[' + name + ']: frontmatter contains no ignored snake_case spellings for Grok native fields');
-    const canonical = canonicalAgentClass();
-    assert(canonical.model === 'grok-4.7' && canonical.effort === 'medium',
-      'G1[' + name + ']: adapter binding is known — got ' + JSON.stringify(canonical));
-    const expectedEffort = canonical.effort;
-    assert(fm.effort === expectedEffort,
-      'G1[' + name + ']: effort is ' + JSON.stringify(expectedEffort)
-      + ' under the single subagent binding — got ' + JSON.stringify(fm.effort));
-    assert((raw.match(/^\s*effort\s*:/gm) || []).length === 1,
-      'G1[' + name + ']: carries exactly one effort: field');
-    assert(!/^\s*reasoning_effort\s*:/m.test(raw),
-      'G1[' + name + ']: does not use reasoning_effort: (Grok native field is effort:)');
-    assert(!/\bmcp__/.test(raw),
-      'G1[' + name + ']: frontmatter carries no Claude MCP tool id (mcp__) — a tools: list of those '
-      + 'ids drops the agent on Grok inspect; body examples may still name them');
-    let tools = null;
-    try { tools = JSON.parse(fm.tools); } catch (_) { tools = null; }
-    const expectedTools = expectedNativeTools(name);
-    assert((raw.match(/^tools\s*:/gm) || []).length === 1 && Array.isArray(tools),
-      'G1[' + name + ']: frontmatter carries exactly one executable tools allowlist');
-    assert(Array.isArray(tools) && JSON.stringify(tools) === JSON.stringify(expectedTools),
-      'G1[' + name + ']: tools allowlist derives from behavior capabilities — expected '
-      + JSON.stringify(expectedTools) + ' got ' + JSON.stringify(tools));
-    if (!behaviorContracts[name].capability_requirements.includes('command_execution')) {
-      assert(Array.isArray(tools) && !tools.includes('Bash'),
-        'G1[' + name + ']: a no-shell role lacks Bash in its enforced tools allowlist');
-    }
+  assert(!fs.existsSync(path.join(TREE_ROOT, '.grok', 'agents')),
+    'G1: the generated .grok tree has no agents/ directory after sync --write');
+  for (const rel of generatedTreeFiles('.grok')) {
+    const { raw } = parseFrontmatter(read(rel));
+    assert(!/^\s*(?:model|effort|reasoning_effort)\s*:/m.test(raw),
+      'G1: ' + rel + ' carries no pinned model/effort frontmatter');
   }
 }
 
 // ---------------------------------------------------------------------------
 // G2: commands — exact set = routing-registry commandSources() for the forge,
-// not a hand list. No line-start Agent( cards (rewrite target is spawn_subagent().
-// No CLAUDE_PLUGIN_ROOT, no ~/.claude/kaola-workflow. --runtime grok present
-// (not --runtime claude). No model="{...}" placeholders, no per-call model="
-// overrides, no vendor slugs.
+// not a hand list. No Agent(/spawn_subagent( role card and no retired role name
+// (#1101). No CLAUDE_PLUGIN_ROOT, no ~/.claude/kaola-workflow. --runtime grok
+// present (not --runtime claude). No model="{...}" placeholders, no per-call
+// model=" overrides, no vendor slugs.
 // ---------------------------------------------------------------------------
 {
   const dir = path.join(TREE_ROOT, '.grok', 'commands');
@@ -433,23 +352,20 @@ function commandRel(name, forge) {
     // pointer once and no marked dispatch region.
     const dispatchNeedle = /Runtime dispatch contract \(always loaded\)/i;
     assert(!dispatchNeedle.test(content) && !content.includes(DISPATCH_END)
-      && content.split(reviewerGenerator.ALWAYS_LOADED_DISPATCH_POINTER).length - 1 === 1,
+      && content.split(adapterFacts.ALWAYS_LOADED_DISPATCH_POINTER).length - 1 === 1,
       'G2[' + name + ']: generated command carries the always-loaded-carrier pointer once, no dispatch block');
-    assert(!/^Agent\(/m.test(content),
-      'G2[' + name + ']: no stale line-start Agent( example card remains in the generated surface');
+    assert(!/^(?:Agent|Task|spawn_subagent)\(/m.test(content) && !/subagent_type\s*=/.test(content),
+      'G2[' + name + ']: no role dispatch card (Agent( / spawn_subagent( with subagent_type=) remains');
+    const role = content.match(RETIRED_ROLE_RE);
+    assert(!role,
+      'G2[' + name + ']: generated command names no retired Kaola role — found ' + JSON.stringify(role && role[0]));
   }
-  assert(/spawn_subagent\(/.test(GROK_SYNC_SRC),
-    'G2: Grok renderer retains the native spawn_subagent( carrier without requiring an example card');
 }
 
 {
   const B2_MODEL_NOUN = /\b(Opus|Sonnet)\b/;
+  // #1101 — no pinned binding remains, so a vendor model slug is banned everywhere.
   const VENDOR_SLUG = /\bgrok-4\.\d\b|\bgrok-build\b/;
-  // #1062 — the binding legitimately names grok-4.7 on profile `model:`/`effort:` lines and on
-  // the `**Subagent default:**` declaration; the slug is banned everywhere else.
-  const stripBindingLines = content => content.split('\n')
-    .filter(line => !/^\s*(?:model|effort)\s*:/.test(line) && !line.includes('**Subagent default:**'))
-    .join('\n');
   let runtimeGrok = 0;
   for (const rel of generatedTreeFiles('.grok')) {
     const content = read(rel);
@@ -463,9 +379,9 @@ function commandRel(name, forge) {
     assert(!/model="\{/.test(content),
       'G2-leak: ' + rel + ': no model="{...}" placeholder');
     assert(!/\bmodel="/.test(content),
-      'G2-leak: ' + rel + ': no per-call model=" override (the profile pins the binding)');
-    assert(!VENDOR_SLUG.test(stripBindingLines(content)),
-      'G2-leak: ' + rel + ': no vendor model slug (grok-4.x / grok-build) outside the declared binding');
+      'G2-leak: ' + rel + ': no per-call model=" override');
+    assert(!VENDOR_SLUG.test(content),
+      'G2-leak: ' + rel + ': no vendor model slug (grok-4.x / grok-build)');
     const lines = content.split('\n');
     for (let i = 0; i < lines.length; i++) {
       const m = lines[i].match(B2_MODEL_NOUN);
@@ -484,89 +400,74 @@ function commandRel(name, forge) {
 }
 
 // ---------------------------------------------------------------------------
-// G2-declaration: GROK_RUNTIME_NATIVE.single_subagent_binding exists, names the
-// one binding, and the generated tree matches it. The separate model: grok-4.7
-// assertion below must remain even if this declaration changes.
+// G2-declaration: GROK_RUNTIME_NATIVE.native_subagents exists, states the
+// native-only rule, and the generated tree matches it: no generated file pins a
+// model or effort, per call or in frontmatter, and nothing dispatches a role.
 // ---------------------------------------------------------------------------
 {
-  const KEY = 'single_subagent_binding';
+  const KEY = 'native_subagents';
   const reason = GROK_RUNTIME_NATIVE[KEY];
   assert(typeof reason === 'string' && reason.trim().length >= 20,
     'G2-declaration: GROK_RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason');
-  assert(/grok-4\.7/i.test(reason) && /medium/i.test(reason),
-    'G2-declaration: the "' + KEY + '" reason must state the grok-4.7 / medium binding');
-  for (const name of canonAgents) {
-    const rel = agentRel(name);
-    if (!exists(rel)) continue;
-    const { fm, raw } = parseFrontmatter(read(rel));
-    const canonical = canonicalAgentClass();
-    assert(/^\s*model\s*:\s*grok-4\.7\s*$/m.test(raw),
-      'G2-declaration: ' + rel + ' independently carries model: grok-4.7 (the model contract is '
-      + 'separate from ' + KEY + ')');
-    assert(fm.effort === canonical.effort,
-      'G2-declaration: ' + rel + ' carries effort: ' + canonical.effort
-      + ' under the single subagent binding');
-  }
+  assert(/spawn_subagent/.test(reason) && /no agents/i.test(reason) && /no\b[^.]*model/i.test(reason),
+    'G2-declaration: the "' + KEY + '" reason must state native spawn_subagent types, no agents, no model');
   for (const rel of generatedTreeFiles('.grok')) {
     const content = read(rel);
-    assert(!/\bmodel="/.test(content),
-      'G2-declaration: ' + rel + ' carries a per-call model=" override, contradicting '
-      + KEY);
+    assert(!/\bmodel="/.test(content) && !/\beffort="/.test(content),
+      'G2-declaration: ' + rel + ' carries a per-call model/effort override, contradicting ' + KEY);
+    assert(!/^\s*(?:model|effort)\s*:/m.test(parseFrontmatter(content).raw),
+      'G2-declaration: ' + rel + ' carries a pinned model/effort frontmatter line, contradicting ' + KEY);
   }
 }
 
 // ---------------------------------------------------------------------------
 // G3: --check re-renders from canonical and agrees with the tree --write just
 // produced (render determinism across processes). Then a planted drift must
-// turn --check red.
+// turn --check red. A planted leftover agents/*.md (a pre-#1101 role render)
+// is reported as a retired role profile, and --write prunes it along with the
+// then-empty agents/ directory.
 // ---------------------------------------------------------------------------
 {
   const ok = runGeneratorCli(['--check']);
   assert(ok.status === 0,
     'G3: sync-grok-edition --check exits 0 against the tree --write just produced'
     + (ok.status !== 0 ? ' — ' + String(ok.stderr || ok.stdout).split('\n')[0] : ''));
-  const probe = path.join(TREE_ROOT, '.grok', 'agents', 'implementer.md');
-  assert(fs.existsSync(probe), 'G3: implementer.md exists to plant drift against');
+  const probe = path.join(TREE_ROOT, '.grok', 'commands', 'workflow-next.md');
+  assert(fs.existsSync(probe), 'G3: commands/workflow-next.md exists to plant drift against');
   const orig = fs.existsSync(probe) ? fs.readFileSync(probe, 'utf8') : '';
   try {
     fs.appendFileSync(probe, '\n<!-- grok-edition drift probe -->\n');
     const drifted = runGeneratorCli(['--check']);
     assert(drifted.status !== 0,
-      'G3: --check exits non-zero on a drifted generated agent (got ' + drifted.status + ')');
+      'G3: --check exits non-zero on a drifted generated command (got ' + drifted.status + ')');
   } finally {
     try { fs.writeFileSync(probe, orig); } catch (_) { /* restore best-effort */ }
   }
   assert(runGeneratorCli(['--check']).status === 0,
     'G3: --check exits 0 after the planted drift is restored');
-}
 
-// ---------------------------------------------------------------------------
-// G4: reviewer roles keep their behavior identity and carry no in-body receipt
-// hashes — the generated-agent-manifest.json sidecar records the digest of the
-// exact rendered bytes.
-// ---------------------------------------------------------------------------
-for (const role of reviewerGenerator.ROLES) {
-  const canonical = reviewerGenerator.behaviorIdentityFromCore(read('agents/' + role + '.md'));
-  const grokText = read(agentRel(role));
-  let grok = null;
-  try { grok = reviewerGenerator.behaviorIdentityFromCore(grokText); } catch (e) {
-    assert(false, 'G4-reviewer[' + role + ']: the generated agent still carries an extractable behavior core — ' + e.message);
-    grok = { role: null, behavior_contract_version: null, behavior_contract_hash: null, core: null };
+  const agentsDir = path.join(TREE_ROOT, '.grok', 'agents');
+  const leftover = path.join(agentsDir, 'implementer.md');
+  try {
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(leftover, '---\nname: implementer\nmodel: grok-4.7\neffort: medium\n---\nretired render\n');
+    const flagged = runGeneratorCli(['--check']);
+    const out = String(flagged.stdout || '') + String(flagged.stderr || '');
+    assert(flagged.status !== 0,
+      'G3-retired: --check exits non-zero on a leftover agents/implementer.md (got ' + flagged.status + ')');
+    assert(/\.grok\/agents\/implementer\.md/.test(out) && /retired role profile/.test(out),
+      'G3-retired: --check names the leftover as a retired role profile — got '
+      + JSON.stringify(out.split('\n').filter(l => /agents/.test(l)).slice(0, 2)));
+    const w = runGenerator(['--write']);
+    assert(w.status === 0 && /pruned\s+\.grok\/agents\/implementer\.md \(retired role profile\)/.test(String(w.stdout || '')),
+      'G3-retired: --write prunes the leftover as a retired role profile');
+    assert(!fs.existsSync(leftover) && !fs.existsSync(agentsDir),
+      'G3-retired: after --write neither the leftover nor the empty agents/ directory remains');
+    assert(runGeneratorCli(['--check']).status === 0,
+      'G3-retired: --check is green again after --write prunes the leftover');
+  } finally {
+    try { fs.rmSync(leftover, { force: true }); fs.rmdirSync(agentsDir); } catch (_) { /* pruned */ }
   }
-  assert(grok.role === canonical.role
-    && grok.behavior_contract_version === canonical.behavior_contract_version
-    && grok.behavior_contract_hash === canonical.behavior_contract_hash,
-    'G4-reviewer[' + role + ']: grok agent retains normalized reviewer behavior identity');
-  assert(grok.core === canonical.core,
-    'G4-reviewer[' + role + ']: grok render preserves reviewer behavior-core bytes');
-  assert(reviewerGenerator.sha256(grokText)
-      === reviewerGenerator.manifestProfileEntry('grok', role).resolved_profile_sha256,
-    'G4-reviewer[' + role + ']: grok agent matches its generated manifest sidecar digest');
-  assert(!/[0-9a-f]{64}/.test(grokText) && !grokText.includes('runtime-adapter'),
-    'G4-reviewer[' + role + ']: grok agent carries no receipt hashes in agent-visible text');
-  assert(reviewerGenerator.manifestProfileEntry('grok', role).resolved_profile_sha256
-      !== reviewerGenerator.manifestProfileEntry('claude', role).resolved_profile_sha256,
-    'G4-reviewer[' + role + ']: grok sidecar digest is stamped over grok bytes (not the Claude render)');
 }
 
 // ---------------------------------------------------------------------------
@@ -651,22 +552,8 @@ for (const role of reviewerGenerator.ROLES) {
       'G7[' + forge + ']: ' + label + '/commands is exactly commandSources(' + forge
       + ') — expected ' + JSON.stringify(expected) + ' got ' + JSON.stringify(actual));
     const agentDir = path.join(abs, 'agents');
-    const agents = fs.existsSync(agentDir)
-      ? fs.readdirSync(agentDir).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort()
-      : [];
-    assert(JSON.stringify(agents) === JSON.stringify(canonAgents),
-      'G7[' + forge + ']: agent set is the canonical roster, including knowledge-lookup');
-    for (const name of canonAgents) {
-      const rel = agentRel(name, forge);
-      const content = exists(rel) ? read(rel) : '';
-      const { fm } = parseFrontmatter(content);
-      const canonical = canonicalAgentClass();
-      assert(fm.model === 'grok-4.7',
-        'G7[' + forge + '][' + name + ']: generated model is the single binding grok-4.7');
-      assert(fm.effort === canonical.effort,
-        'G7[' + forge + '][' + name + ']: generated effort follows the single subagent binding'
-        + ' — expected ' + canonical.effort + ' got ' + JSON.stringify(fm.effort));
-    }
+    assert(!fs.existsSync(agentDir),
+      'G7[' + forge + ']: ' + label + ' has no agents/ directory (Kaola ships no Grok agents)');
     const c = runGeneratorCli(['--forge=' + forge, '--check']);
     assert(c.status === 0,
       'G7[' + forge + ']: --check is green after --write (got ' + c.status + ')');
@@ -699,6 +586,8 @@ for (const role of reviewerGenerator.ROLES) {
     assert(uninstallStart >= 0 && hasRetiredHookCleanup(installerSource.slice(uninstallStart)),
       'R3: uninstall cleanup consumes the bounded RETIRED_HOOKS list for hook removal');
     const firstLine = r => String(r.stderr || r.stdout || '').split('\n')[0];
+    // #1101: the edition deploys no agent; any Markdown under an agents/ dir is user-owned.
+    const agentFiles = dir => (fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort() : []);
     function runInstaller(extraArgs, opts) {
       opts = opts || {};
       const home = opts.home || fs.mkdtempSync(path.join(tmpBase(), 'grok-i-home-'));
@@ -725,12 +614,9 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-project: install-grok.sh --target exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
       const agentsDir = path.join(r.dest, '.grok', 'agents');
       const commandsDir = path.join(r.dest, '.grok', 'commands');
-      assert(fs.existsSync(path.join(agentsDir, 'knowledge-lookup.md')),
-        'G8-project: deploys knowledge-lookup.md under <target>/.grok/agents/');
-      for (const name of canonAgents) {
-        assert(fs.existsSync(path.join(agentsDir, name + '.md')),
-          'G8-project[' + name + ']: agent deployed under <target>/.grok/agents/');
-      }
+      assert(agentFiles(agentsDir).length === 0,
+        'G8-project: deploys no agent under <target>/.grok/agents/ — found '
+        + JSON.stringify(agentFiles(agentsDir)));
       for (const name of canonCommandNames) {
         assert(fs.existsSync(path.join(commandsDir, name + '.md')),
           'G8-project[' + name + ']: command deployed under <target>/.grok/commands/');
@@ -746,13 +632,14 @@ for (const role of reviewerGenerator.ROLES) {
       clean(r);
     }
 
-    // --global: agents/commands land under GROK_HOME (the ~/.grok equivalent), un-nested.
+    // --global: commands land under GROK_HOME (the ~/.grok equivalent), un-nested; no agents.
     {
       const r = runInstaller(['--global'], { skipTarget: true });
       assert(r.status === 0,
         'G8-global: install-grok.sh --global exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
-      assert(fs.existsSync(path.join(r.grokHome, 'agents', 'knowledge-lookup.md')),
-        'G8-global: deploys knowledge-lookup under $GROK_HOME/agents/ (un-nested)');
+      assert(agentFiles(path.join(r.grokHome, 'agents')).length === 0,
+        'G8-global: deploys no agent under $GROK_HOME/agents/ — found '
+        + JSON.stringify(agentFiles(path.join(r.grokHome, 'agents'))));
       for (const name of canonCommandNames) {
         assert(fs.existsSync(path.join(r.grokHome, 'commands', name + '.md')),
           'G8-global[' + name + ']: command deployed under $GROK_HOME/commands/');
@@ -769,7 +656,7 @@ for (const role of reviewerGenerator.ROLES) {
 
     // --forge=gitlab renders `.grok-gitlab/` as the generator SOURCE tree, then
     // copies content into the runtime-native dest Grok actually scans:
-    // <target>/.grok/{agents,commands,rules}. Same split as kimi (.kimi-gitlab
+    // <target>/.grok/commands. Same split as kimi (.kimi-gitlab
     // → .kimi-code/skills) and opencode (.opencode-gitlab → .opencode/).
     {
       const r = runInstaller(['--forge=gitlab']);
@@ -778,12 +665,8 @@ for (const role of reviewerGenerator.ROLES) {
         + ' — ' + firstLine(r) + ')');
       const agentsDir = path.join(r.dest, '.grok', 'agents');
       const commandsDir = path.join(r.dest, '.grok', 'commands');
-      assert(fs.existsSync(path.join(agentsDir, 'knowledge-lookup.md')),
-        'G8-gitlab: deploys knowledge-lookup under <target>/.grok/agents/ (Grok does not scan .grok-gitlab/)');
-      for (const name of canonAgents) {
-        assert(fs.existsSync(path.join(agentsDir, name + '.md')),
-          'G8-gitlab[' + name + ']: agent deployed under <target>/.grok/agents/');
-      }
+      assert(agentFiles(agentsDir).length === 0,
+        'G8-gitlab: deploys no agent under <target>/.grok/agents/ — found ' + JSON.stringify(agentFiles(agentsDir)));
       const expected = commandNamesFor('gitlab');
       for (const name of expected) {
         assert(fs.existsSync(path.join(commandsDir, name + '.md')),
@@ -829,8 +712,8 @@ for (const role of reviewerGenerator.ROLES) {
       const r = runInstaller(['--no-scripts']);
       assert(r.status === 0,
         'G8-noscripts: --no-scripts exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
-      assert(fs.existsSync(path.join(r.dest, '.grok', 'agents', 'knowledge-lookup.md')),
-        'G8-noscripts: agents still deploy');
+      assert(canonCommandNames.every(n => fs.existsSync(path.join(r.dest, '.grok', 'commands', n + '.md'))),
+        'G8-noscripts: commands still deploy');
       assert(!fs.existsSync(path.join(r.grokHome, 'kaola-workflow', 'scripts')),
         'G8-noscripts: skips $GROK_HOME/kaola-workflow/scripts');
       assert(!fs.existsSync(path.join(r.dest, '.grok', 'rules',
@@ -843,11 +726,19 @@ for (const role of reviewerGenerator.ROLES) {
       clean(r);
     }
 
-    // --uninstall removes only kaola-deployed names.
+    // --uninstall removes only kaola-deployed names. Ownership is never inferred from a retired
+    // role's name (#1101): a user-authored agents/implementer.md survives install and uninstall.
     {
-      const r = runInstaller([]);
-      assert(r.status === 0, 'G8-uninstall: seed install exits 0');
-      const agentsDir = path.join(r.dest, '.grok', 'agents');
+      const dest = fs.mkdtempSync(path.join(tmpBase(), 'grok-i-dest-'));
+      const agentsDir = path.join(dest, '.grok', 'agents');
+      const userRole = path.join(agentsDir, 'implementer.md');
+      const userRoleBody = '---\nname: implementer\ndescription: my own agent\n---\nuser-authored\n';
+      fs.mkdirSync(agentsDir, { recursive: true });
+      fs.writeFileSync(userRole, userRoleBody);
+      const r = runInstaller([], { dest });
+      assert(r.status === 0, 'G8-uninstall: seed install exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
+      assert(fs.existsSync(userRole) && fs.readFileSync(userRole, 'utf8') === userRoleBody,
+        'G8-install: a user-authored agent named like a retired role survives install byte-for-byte');
       const userFile = path.join(agentsDir, 'notes.md');
       const userBody = 'user-owned, not kaola-deployed\n';
       fs.writeFileSync(userFile, userBody);
@@ -861,16 +752,14 @@ for (const role of reviewerGenerator.ROLES) {
       });
       assert(ru.status === 0,
         'G8-uninstall: --uninstall exits 0 (got ' + ru.status + ' — ' + firstLine(ru) + ')');
-      for (const name of canonAgents) {
-        assert(!fs.existsSync(path.join(agentsDir, name + '.md')),
-          'G8-uninstall[' + name + ']: kaola-deployed agent is removed');
-      }
       for (const name of canonCommandNames) {
         assert(!fs.existsSync(path.join(r.dest, '.grok', 'commands', name + '.md')),
           'G8-uninstall[' + name + ']: kaola-deployed command is removed');
       }
       assert(fs.existsSync(userFile) && fs.readFileSync(userFile, 'utf8') === userBody,
         'G8-uninstall: a user-owned file in the agents dir survives (only kaola-deployed names are removed)');
+      assert(fs.existsSync(userRole) && fs.readFileSync(userRole, 'utf8') === userRoleBody,
+        'G8-uninstall: a user-authored agent named like a retired role survives uninstall');
       if (fs.existsSync(path.dirname(userJs))) {
         assert(fs.existsSync(userJs) && fs.readFileSync(userJs, 'utf8') === userJsBody,
           'G8-uninstall: a user-authored helper in the scripts dir survives');

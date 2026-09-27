@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 
+// test-issue-1045-cursor-conformance.js — the Cursor dispatch contract and doctor/helper
+// conformance. Since #1101 the contract is native-only: the always-loaded Rule states that
+// Kaola-Workflow defines no subagent roles or model bindings and dispatches through Cursor's own
+// `Task` catalog; the doctor reports no role dispatch contract; the installed helper materializes
+// commands without any agents/ profile.
+
 const assert = require('assert');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -40,7 +46,7 @@ function main() {
     }));
     // #1069: the dispatch-carrier wording now rides the always-loaded Rule; the
     // generated commands carry the pointer only.
-    const agentGen = require(path.join(ROOT, 'scripts', 'generate-agent-profiles.js'));
+    const adapterFacts = require(path.join(ROOT, 'scripts', 'runtime-adapter-facts.js'));
     const gc = require(path.join(ROOT, 'scripts', 'kaola-workflow-global-contract.js'));
     const registry = JSON.parse(fs.readFileSync(
       path.join(ROOT, 'templates', 'global', 'runtime-contract-adapters.json'), 'utf8'));
@@ -49,18 +55,24 @@ function main() {
         path.join(ROOT, 'templates', 'global', 'kaola-workflow-global.md'), 'utf8'),
       target: registry.targets.find(row => row.id === 'cursor-cli-local'),
     }).toString('utf8');
-    assert.match(rule,
-      /exact-binding[^.]*post-resolution assertion/i,
-      'always-loaded Rule: exact-binding policy must be a post-resolution assertion');
-    assert.match(rule,
-      /flat `subagent_type(?::[^`]+)?`[^.]*MUST omit[^.]*per-call `model`/i,
-      'always-loaded Rule: named call uses the flat field and forbids a model override');
+    // #1101: the retired named-profile binding (flat subagent_type + MUST omit model +
+    // exact-binding post-resolution assertion) is replaced by the native-only rule.
+    for (const statement of [
+      'Kaola-Workflow defines no subagent roles, role profiles, or subagent model and effort bindings.',
+      'Kaola-Workflow installing no profiles is never evidence that the host lacks subagent capability.',
+    ]) {
+      assert.ok(rule.includes(statement), 'always-loaded Rule states the native-only rule: ' + statement);
+    }
+    assert.match(rule, /Dispatch with `Task`; its `subagent_type` names a type from the live catalog/,
+      'always-loaded Rule: dispatch uses the native Task route and its live catalog');
+    assert.doesNotMatch(rule, /exact-binding|MUST omit[^.]*per-call `model`|\bgrok-4\.\d\b|profile pin/i,
+      'always-loaded Rule: no retired named-profile model binding remains');
     assert.doesNotMatch(rule,
       /(?:call|dispatch|construct)[^.]{0,180}`subagentType\.custom\.name`/i,
       'always-loaded Rule: provider encoding must not be a controller call instruction');
     for (const surface of rendered) {
       assert.strictEqual(
-        surface.text.split(agentGen.ALWAYS_LOADED_DISPATCH_POINTER).length - 1, 1,
+        surface.text.split(adapterFacts.ALWAYS_LOADED_DISPATCH_POINTER).length - 1, 1,
         surface.name + ': command carries the always-loaded-carrier pointer exactly once');
       assert.doesNotMatch(surface.text, /KW-RUNTIME-DISPATCH-(?:START|END)/,
         surface.name + ': command carries no dispatch markers');
@@ -94,11 +106,10 @@ function main() {
     assert.strictEqual(report.runtime, 'cursor');
     assert.strictEqual(report.product_surface, 'cli');
     assert.strictEqual(report.execution_host, 'local');
-    assert.match(report.dispatch_contract.call_shape, /subagent_type/);
-    assert.strictEqual(report.dispatch_contract.named_model_field, 'omit');
-    assert.strictEqual(report.dispatch_contract.exact_binding, 'post_resolution_assertion');
-    assert.strictEqual(report.dispatch_contract.provider_model_evidence,
-      'providerOptions.cursor.modelName');
+    assert.ok(!Object.prototype.hasOwnProperty.call(report, 'dispatch_contract'),
+      'doctor reports no retired role dispatch contract');
+    assert.ok(!Object.prototype.hasOwnProperty.call(report, 'named_catalog'),
+      'doctor reports no retired named role catalog');
 
     const ensure = run(process.execPath, [helper, '--ensure-target', target, '--json'], {
       cwd: target, env,
@@ -107,13 +118,18 @@ function main() {
     const ensured = JSON.parse(ensure.stdout);
     assert.ok(ensured.status === 'materialized' || ensured.status === 'current',
       'installed helper still materializes a target without a source checkout');
+    assert.ok(fs.existsSync(path.join(target, '.cursor', 'commands', 'workflow-next.md'))
+      && !fs.existsSync(path.join(target, '.cursor', 'agents')),
+      'installed helper materializes commands and no agents/ profile');
 
     const receipt = JSON.parse(fs.readFileSync(path.join(cursorHome, 'kaola-workflow',
       'cursor-authority.json'), 'utf8'));
     assert.ok(receipt.files['kaola-workflow/templates/agents/runtime-capabilities.json'],
       'global authority receipt owns the installed capability registry');
+    assert.deepStrictEqual(Object.keys(receipt.files).filter(rel => rel.startsWith('agents/')), [],
+      'global authority receipt records no agents/ path');
 
-    process.stdout.write('issue-1045 cursor conformance passed (24 assertions).\n');
+    process.stdout.write('issue-1045 cursor conformance passed.\n');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

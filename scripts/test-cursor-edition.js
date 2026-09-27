@@ -13,15 +13,15 @@
 //
 // Cursor is a coding-agent RUNTIME, not a forge, and it does not ride
 // install.sh / edition-sync.js / npm test. It is delivered the Cursor-native
-// way: named agents under `.cursor/agents/<role>.md` (Task types),
-// flat commands under `.cursor/commands/<name>.md`. The machine-global contract
+// way: flat commands under `.cursor/commands/<name>.md`. The machine-global contract
 // transaction owns the one always-applied Rule; this edition owns no duplicate
 // project Rule, hook declaration, or hook subprocess.
-// One canonical subagent binding (#1062): every generated
-// agent carries the unquoted Grok 4.7 frontmatter pin grok-4.7[effort=medium]. Named-profile
-// command cards carry no static per-dispatch model override; a built-in-only catalog-miss path may
-// use only a resolver-listed live model slug. Compact recovery is carried by the global transaction
-// for standalone CLI, App local, and Cloud materialization; ordinary tool use has no Kaola injection.
+// Kaola-Workflow ships no Cursor agents and pins no subagent model (#1101): subagents are Cursor's
+// own Task types from the live catalog. The generated tree's agents/ directory is a retired
+// surface that --check flags and --write prunes, and a receipt that owned agents/*.md from an
+// earlier release loses its unchanged ones on reinstall. Compact recovery is carried by the global
+// transaction for standalone CLI, App local, and Cloud materialization; ordinary tool use has no
+// Kaola injection.
 //
 // Outside `npm test`, the forge chains, and the fast gate: an additive
 // runtime edition is not a forge. The script exists so the suite is
@@ -34,7 +34,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const forgeLayout = require('./runtime-edition-forge.js');
-const reviewerGenerator = require('./generate-agent-profiles.js');
+const adapterFacts = require('./runtime-adapter-facts.js');
 const G = require('./test-git-fixture');
 const syncMod = require('./sync-cursor-edition.js');
 const cursorSurface = require('./kaola-workflow-cursor-surface.js');
@@ -195,11 +195,22 @@ function noKaolaCursorHooks(mapping, label) {
   return parsed;
 }
 
-// Path B is a semantic relation, not a bag of nearby words. The live Cursor
-// enum's built-in-only case carries the omitted model on the parent; it does
-// not resolve a generated profile pin. Keep this oracle on the generated
-// command bytes because those are what workflow-next and finalize ship.
+// Path B was the retired built-in-only catalog-miss relation ("omit-model is the parent, not a
+// profile pin"). With no Kaola profile there is no pin to contrast (#1101): the always-loaded Rule
+// and the generated commands must carry no such relation, and the Rule instead states the
+// native-only rule. The detector stays so a reintroduced relation is observed, not assumed away.
 const PATH_B_COMMANDS = Object.freeze(['workflow-next', 'kaola-workflow-finalize']);
+const NATIVE_ONLY_STATEMENTS = Object.freeze([
+  'Kaola-Workflow defines no subagent roles, role profiles, or subagent model and effort bindings.',
+  'Kaola-Workflow installing no profiles is never evidence that the host lacks subagent capability.',
+]);
+// The seven Kaola roles retired by #1101, named only so this suite can prove none returns.
+const RETIRED_ROLES = Object.freeze([
+  'code-explorer', 'code-reviewer', 'doc-updater', 'implementer', 'investigator',
+  'knowledge-lookup', 'tdd-guide',
+]);
+const RETIRED_ROLE_RE = new RegExp('\\b(?:' + RETIRED_ROLES.join('|') + ')\\b');
+const VENDOR_SLUG = /\bgrok-4\.\d\b|\bgrok-build\b/;
 
 function normalizePathBTerm(value) {
   return String(value || '').replace(/[\`'"]/g, '').replace(/\s+/g, ' ').trim().toLowerCase()
@@ -231,24 +242,35 @@ function inspectPathBConsumers(root) {
     }
     const found = pathBRelations(fs.readFileSync(absolute, 'utf8'));
     relations[name] = found;
-    if (found.length !== 1) {
-      errors.push(name + ': expected exactly one built-in-only omit-model relation, found ' + found.length);
-      continue;
-    }
-    const relation = found[0];
-    if (relation.positive !== 'parent' || relation.negative !== 'profile pin') {
-      errors.push(name + ':' + relation.lineNumber + ': expected omit-model → parent and not → profile pin; '
-        + 'got omit-model → ' + JSON.stringify(relation.positive) + ' and not → '
-        + JSON.stringify(relation.negative));
+    if (found.length !== 0) {
+      errors.push(name + ': carries ' + found.length + ' retired built-in-only omit-model relation(s)');
     }
   }
   return { ok: errors.length === 0, errors, relations };
 }
 
+// The always-loaded Rule's native-only verdict: it states both native-only sentences and carries
+// no omit-model/profile-pin relation, no vendor model slug, and no retired role name.
+function nativeDispatchRuleVerdict(ruleText) {
+  const text = String(ruleText || '');
+  const errors = [];
+  for (const statement of NATIVE_ONLY_STATEMENTS) {
+    if (!text.includes(statement)) errors.push('missing native-only statement ' + JSON.stringify(statement));
+  }
+  const relations = pathBRelations(text);
+  if (relations.length) errors.push('carries ' + relations.length + ' retired omit-model/profile-pin relation(s)');
+  const slug = text.match(VENDOR_SLUG);
+  if (slug) errors.push('names vendor model slug ' + slug[0]);
+  const role = text.match(RETIRED_ROLE_RE);
+  if (role) errors.push('names retired role ' + role[0]);
+  return { ok: errors.length === 0, errors };
+}
+
 // Issue #1052: executable Workflow startup/resume is the skip-proof for standalone
-// CLI Repo prep. Next must describe that program order. Finalize entered independently
-// keeps the existing pre-dispatch ensure guarantee. Shared negatives (App/Cloud, no
-// ambient cwd, no sessionStart, fail-closed install faults) stay required on both.
+// CLI Repo prep. Next must describe that program order. Shared negatives (App/Cloud, no
+// ambient cwd, no sessionStart, fail-closed install faults) stay required on Next. The
+// Finalize pre-dispatch ensure existed only to materialize named role profiles before a
+// named dispatch (#1101 retired both), so Finalize must carry no such section.
 const CURSOR_CLI_MATERIALIZATION_COMMANDS = Object.freeze([
   'workflow-next',
   'kaola-workflow-finalize',
@@ -287,7 +309,7 @@ function namedForgeClaimScript(forge) {
 
 function cursorCliNextEnsureLocator(block, errors) {
   const source = String(block || '');
-  const heading = '## Cursor standalone CLI startup and resume Repo role prep';
+  const heading = '## Cursor standalone CLI startup and resume Repo prep';
   const start = source.indexOf(heading);
   const appendix = start >= 0 ? source.slice(start) : source;
   if (/git\s+rev-parse\s+--show-toplevel/.test(appendix)) {
@@ -376,24 +398,29 @@ function cursorCliMaterializationVerdict(text, forge, surface) {
   const errors = [];
   const source = String(text || '');
   const kind = surface === 'next' ? 'next' : 'finalize';
-  const heading = kind === 'next'
-    ? null
-    : '## Cursor standalone CLI pre-dispatch materialization';
-  const start = heading ? source.indexOf(heading) : 0;
-  const end = heading && start >= 0 ? source.indexOf('\n## ', start + heading.length) : -1;
-  const block = kind === 'next'
-    ? source
-    : (start < 0 ? '' : source.slice(start, end < 0 ? source.length : end));
+  const block = source;
   const ensureCalls = block.split(/\r?\n/)
     .filter(line => /\bnode\b/.test(line) && /--ensure-target\b/.test(line));
 
-  if (kind === 'finalize' && start < 0) {
-    errors.push('missing standalone CLI pre-dispatch materialization section');
+  if (kind === 'finalize') {
+    if (/## Cursor standalone CLI pre-dispatch materialization/.test(block)) {
+      errors.push('Finalize still carries the retired pre-dispatch materialization section');
+    }
+    if (/--ensure-target\b/.test(block) || /CURSOR_MATERIALIZER/.test(block)) {
+      errors.push('Finalize still runs a pre-dispatch --ensure-target materialization');
+    }
+    if (/named Kaola child dispatch|do not impersonate|Repo role prep/i.test(block)) {
+      errors.push('Finalize still conditions dispatch on a named Kaola role');
+    }
+    if (/^(?:Agent|Task)\(/m.test(block) || /subagent_type\s*=/.test(block)) {
+      errors.push('Finalize still carries a role dispatch call card');
+    }
+    return { ok: errors.length === 0, errors, block, ensureCalls };
   }
 
-  if (kind === 'next') {
+  {
     if (!/\bstartup\b/i.test(block) || !/\bresume\b/i.test(block)) {
-      errors.push('Next does not state that Workflow startup and resume execute Repo role prep');
+      errors.push('Next does not state that Workflow startup and resume execute Repo prep');
     }
     const startupLines = cursorCliOperatorClaimLines(block, 'startup')
       .filter(line => /--runtime(?:\s+|=)cursor\b/.test(line));
@@ -444,12 +471,16 @@ function cursorCliMaterializationVerdict(text, forge, surface) {
     if (/Immediately before the first named Kaola child dispatch/i.test(block)) {
       errors.push('Next still locates Repo prep at first named dispatch, which is skippable');
     }
-    if (/(?:treat|record|report)\s+missing named.{0,80}capability_gap/i.test(block)
-        && /skip/i.test(block)) {
-      errors.push('missing named roles are authorized as a capability_gap skip of Repo prep');
+    // #1101: Repo prep materializes commands only; it is never conditioned on a role catalog.
+    const prepHeading = '## Cursor standalone CLI startup and resume Repo prep';
+    const prepAt = block.indexOf(prepHeading);
+    const prep = prepAt >= 0 ? block.slice(prepAt) : '';
+    if (prepAt < 0) errors.push('Next lacks the "' + prepHeading + '" section');
+    if (/capability_gap/.test(prep)) {
+      errors.push('Next Repo prep is conditioned on a role catalog (capability_gap skip)');
     }
-    if (!/(?:must not|do not|never)\s+treat missing named.{0,100}capability_gap|(?:missing named|missing project).{0,120}(?:not|never).{0,80}capability_gap/i.test(block)) {
-      errors.push('Next does not forbid treating missing named roles as capability_gap that skips Repo prep');
+    if (/\broles?\b/i.test(prep) || RETIRED_ROLE_RE.test(prep)) {
+      errors.push('Next Repo prep names a Kaola role');
     }
     if (!/new_process_same_chat|new Cursor CLI process/i.test(block)) {
       errors.push('Next does not report the measured CLI restart-required boundary');
@@ -459,55 +490,13 @@ function cursorCliMaterializationVerdict(text, forge, surface) {
     cursorCliNextEnsureLocator(block, errors);
     return { ok: errors.length === 0, errors, block, ensureCalls };
   }
-
-  if (ensureCalls.length !== 1) {
-    errors.push('expected one installed-helper --ensure-target call, found ' + ensureCalls.length);
-  } else {
-    const call = ensureCalls[0];
-    if (!/--ensure-target\s+"\$PWD"(?:\s|$)/.test(call)) {
-      errors.push('helper target is not the exact explicit "$PWD" workspace');
-    }
-    if (!call.includes('--forge=' + forge)) {
-      errors.push('helper call does not carry the generated forge --forge=' + forge);
-    }
-    if (!/node\s+"\$CURSOR_MATERIALIZER"/.test(call)) {
-      errors.push('helper call does not execute the installed materializer binding');
-    }
-  }
-  if (!/CURSOR_MATERIALIZER=.*\$\{CURSOR_HOME:-\$HOME\/\.cursor\}\/kaola-workflow\/scripts\/kaola-workflow-cursor-surface\.js/.test(block)) {
-    errors.push('materializer is not resolved from the installed global Cursor authority');
-  }
-  // #1074: the Finalize trailer is a pointer into the Next Repo-prep section —
-  // the shared host boundary and fail-closed fault list live there once.
-  if (!/standalone Cursor CLI on the local host only/i.test(block)
-      || !/Next command['’]s Repo role prep section/i.test(block)) {
-    errors.push('Finalize does not scope itself to standalone local CLI and defer the host boundary to Next');
-  }
-  if (!/Immediately before the first named Kaola child dispatch/i.test(block)) {
-    errors.push('installed helper is not required immediately before named dispatch');
-  }
-  const flatBlock = block.replace(/\s+/g, ' ');
-  const currentAt = flatBlock.indexOf('status: current');
-  const noOpAt = flatBlock.indexOf('no-op', currentAt);
-  const materializedAt = flatBlock.indexOf('status: materialized');
-  const stopAt = flatBlock.indexOf('stop named dispatch', materializedAt);
-  const restartAt = flatBlock.indexOf('new Cursor CLI process', stopAt);
-  if (!(currentAt >= 0 && noOpAt > currentAt && materializedAt > noOpAt
-      && stopAt > materializedAt && restartAt > stopAt)) {
-    errors.push('current/materialized outcomes do not preserve no-op versus restart behavior');
-  }
-  if (!/fails closed/i.test(block)
-      || !/Next section['’]s diagnostic list/i.test(block)) {
-    errors.push('Finalize does not fail closed via the Next section diagnostic list');
-  }
-  return { ok: errors.length === 0, errors, block, ensureCalls };
 }
 
-// A child mode lets the mutation fixture exercise this same generated-byte
-// oracle without recursively running the full edition suite. #1069: the
-// relation rides the always-loaded Rule (the global contract render), not the
+// A child mode lets the mutation fixture exercise this same native-only oracle
+// without recursively running the full edition suite. #1069: the dispatch
+// contract rides the always-loaded Rule (the global contract render), not the
 // command bytes, so the oracle renders the rule from the tree under test.
-if (process.argv.includes('--path-b-oracle')) {
+if (process.argv.includes('--native-dispatch-oracle')) {
   let ruleText = null;
   try {
     const gc = require(path.join(TREE_ROOT, 'scripts', 'kaola-workflow-global-contract.js'));
@@ -518,19 +507,15 @@ if (process.argv.includes('--path-b-oracle')) {
       path.join(TREE_ROOT, 'templates', 'global', 'kaola-workflow-global.md'), 'utf8');
     ruleText = gc.renderContract({ source, target }).toString('utf8');
   } catch (e) {
-    console.error('PATH-B-ORACLE RED: kaola-workflow-global rule: render failed — ' + e.message);
+    console.error('NATIVE-DISPATCH-ORACLE RED: kaola-workflow-global rule: render failed — ' + e.message);
     process.exit(1);
   }
-  const rows = pathBRelations(ruleText);
-  if (rows.length !== 1 || rows[0].positive !== 'parent' || rows[0].negative !== 'profile pin') {
-    console.error('PATH-B-ORACLE RED: kaola-workflow-global rule: expected exactly one '
-      + 'omit-model → parent / not → profile pin relation, found '
-      + JSON.stringify(rows.map(r => ({
-        lineNumber: r.lineNumber, positive: r.positive, negative: r.negative,
-      }))));
+  const verdict = nativeDispatchRuleVerdict(ruleText);
+  if (!verdict.ok) {
+    console.error('NATIVE-DISPATCH-ORACLE RED: kaola-workflow-global rule: ' + verdict.errors.join(' | '));
     process.exit(1);
   }
-  console.log('PATH-B-ORACLE GREEN: built-in-only omit-model carries the parent, not a profile pin');
+  console.log('NATIVE-DISPATCH-ORACLE GREEN: the always-loaded Rule states the native-only rule and pins no model');
   process.exit(0);
 }
 
@@ -642,42 +627,23 @@ if (process.argv.includes('--cli-materialization-oracle')) {
     }
   }
   if (oracleFailed) process.exit(1);
-  console.log('CLI-MATERIALIZATION-ORACLE GREEN: Next CLI identity vs App/Cloud shared-file, --cursor-workspace operator argv, named claim.js flags, locator, and Finalize pre-dispatch ensure');
+  console.log('CLI-MATERIALIZATION-ORACLE GREEN: Next CLI identity vs App/Cloud shared-file, --cursor-workspace operator argv, named claim.js flags, locator, and no Finalize pre-dispatch ensure');
   process.exit(0);
 }
 
-const trackedAgents = () => fs.readdirSync(path.join(REPO, 'agents'))
-  .filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
 const commandNamesFor = forge => forgeLayout.commandSources(forge)
   .map(s => s.basename.replace(/\.md$/, '')).sort();
 
-// #1018/#1055/#1062: renderAgent delegates entirely to
-// generate-agent-profiles.renderRuntimeRole('cursor', name), whose model line is driven by
-// templates/agents/runtime-capabilities.json's cursor adapter (capabilities.subagent_default).
-// Pin the SAME meaning — one binding for every role — against that REAL chain: the adapter's own
-// declared values and the actual rendered .cursor agent output. Do NOT read
-// sync-cursor-edition.js source text — a retired table there proves nothing about behavior.
-const CURSOR_ADAPTER_CAPS = JSON.parse(fs.readFileSync(
-  path.join(REPO, 'templates', 'agents', 'runtime-capabilities.json'), 'utf8')).runtimes.cursor.capabilities;
-// Hardcoded independently of the adapter file so a mutation to the adapter's own
-// subagent_default values is caught rather than compared against itself.
-const CURSOR_REAL_BINDING_PIN = 'grok-4.7[effort=medium]';
-
-function canonicalAgentClass() {
-  const binding = (CURSOR_ADAPTER_CAPS.subagent_default) || {};
-  return {
-    model: binding.model,
-    pin: binding.model && binding.effort ? `${binding.model}[effort=${binding.effort}]` : null,
-  };
-}
+// The Cursor adapter records only native host facts (#1101): no role, profile, or model binding.
+const CURSOR_ADAPTER_CAPS = adapterFacts.loadRuntimeAdapters(REPO).runtimes.cursor.capabilities;
 
 // ---------------------------------------------------------------------------
-// CURSOR_RUNTIME_NATIVE — the frontmatter binding pin as a DECLARED
-// table entry, not merely as prose. Deleting the declaration reds this suite.
+// CURSOR_RUNTIME_NATIVE — the native-only subagent rule and the recovery carrier
+// as DECLARED table entries, not merely as prose. Deleting either reds this suite.
 // ---------------------------------------------------------------------------
 const CURSOR_RUNTIME_NATIVE = Object.freeze({
-  frontmatter_binding_pin:
-    'Cursor generated agent frontmatter pins the one subagent binding as unquoted grok-4.7[effort=medium]; command cards omit per-call model dispatch.',
+  native_subagents:
+    'Cursor subagents are the host\'s own Task types from the live catalog; the edition ships no agents, no frontmatter model pin, and no per-call model.',
   machine_global_recovery_rule:
     'Cursor standalone CLI, App local, and App-started Cloud receive one machine-global alwaysApply Rule; no tool-use hook or Kaola hook subprocess is installed, so ordinary tool use adds zero context.',
 });
@@ -799,7 +765,6 @@ assert(treeLabel('github') === '.cursor'
   && treeLabel('gitea') === '.cursor-gitea',
   'D1: treeLabel is .cursor / .cursor-gitlab / .cursor-gitea (kimi-style outSuffix)');
 
-const canonAgents = trackedAgents();
 const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
 
 // ---------------------------------------------------------------------------
@@ -808,163 +773,57 @@ const canonCommandNames = commandNamesFor(DEFAULT_FORGE);
 // readdir-driven loop iterate over nothing.
 // ---------------------------------------------------------------------------
 {
-  const provisioned = fs.existsSync(path.join(TREE_ROOT, '.cursor', 'agents'))
-    && fs.existsSync(path.join(TREE_ROOT, '.cursor', 'commands'));
+  const provisioned = fs.existsSync(path.join(TREE_ROOT, '.cursor', 'commands'));
   assert(provisioned,
-    'G0: the generated .cursor/agents and .cursor/commands trees exist after sync --write');
+    'G0: the generated .cursor/commands tree exists after sync --write');
   if (!provisioned) {
     console.error('FATAL: sync --write reported success but produced no tree at '
       + path.join(TREE_ROOT, '.cursor') + ' — nothing below can be tested.');
     process.exit(1);
   }
-  assert(canonAgents.length === 7 && canonAgents.includes('knowledge-lookup'),
-    'G0-roster: the canonical agents/*.md inventory is exactly the seven-role catalog — got '
-    + JSON.stringify(canonAgents));
-  for (const retired of ['planner', 'code-architect', 'synthesizer', 'build-error-resolver',
-    'metric-optimizer', 'adversarial-verifier', 'security-reviewer']) {
-    assert(!canonAgents.includes(retired),
-      'G0-roster: retired role ' + retired + ' is absent from the canonical inventory');
+  assert(canonCommandNames.length > 0,
+    'G0-roster: the routing-registry command surfaces are non-empty');
+  assert(!fs.existsSync(path.join(REPO, 'agents')),
+    'G0-roster: the repository tracks no canonical agents/ role inventory (#1101)');
+  for (const retired of ['named_roles', 'subagent_default', 'dispatch_conformance', 'role_dispatch',
+    'intent_mapping', 'model_carrier', 'profile_format']) {
+    assert(!Object.prototype.hasOwnProperty.call(CURSOR_ADAPTER_CAPS, retired),
+      'G0-binding: the Cursor adapter records no ' + retired + ' role or model-binding capability');
   }
-  assert(CURSOR_ADAPTER_CAPS.subagent_default
-      && CURSOR_ADAPTER_CAPS.subagent_default.model === 'grok-4.7'
-      && CURSOR_ADAPTER_CAPS.subagent_default.effort === 'medium',
-    'G0-binding: templates/agents/runtime-capabilities.json cursor subagent_default is '
-    + 'grok-4.7/medium — got ' + JSON.stringify(CURSOR_ADAPTER_CAPS.subagent_default));
-  assert(!CURSOR_ADAPTER_CAPS.intent_mapping,
-    'G0-binding: cursor adapter carries no retired intent_mapping tier axis');
-  {
-    const rendered = reviewerGenerator.renderRuntimeRole('cursor', 'implementer').content;
-    const pinLine = 'model: ' + CURSOR_REAL_BINDING_PIN;
-    assert(rendered.split(/\r?\n/).includes(pinLine),
-      'G0-binding: renderRuntimeRole(cursor, implementer) renders the single binding pin '
-      + JSON.stringify(pinLine) + ' — got ' + rendered.slice(0, 300));
-  }
-  for (const name of canonAgents) {
-    const rendered = reviewerGenerator.renderRuntimeRole('cursor', name).content;
-    assert(rendered.split(/\r?\n/).includes('model: ' + CURSOR_REAL_BINDING_PIN),
-      'G0-binding: renderRuntimeRole(cursor, ' + name + ') renders the single binding pin '
-      + JSON.stringify(CURSOR_REAL_BINDING_PIN));
+  assert(/`Task`/.test(String((CURSOR_ADAPTER_CAPS.delegation_guidance || {}).native_routes || '')),
+    'G0-adapter: the Cursor adapter records the native Task route as a host fact');
+  // The retired agent renderer and catalog copier are gone from the generator's surface; nothing
+  // can render or copy a role profile (the old fail-closed renderAgent probes have no subject).
+  for (const retired of ['renderAgent', 'agentRel', 'listCanonAgents', 'copyListCanonAgents',
+    'isReadOnlyRole', 'CURSOR_MODEL_DISPATCH_GUIDANCE', 'cursorCliMaterializationProse', 'CANON_AGENTS_DIR']) {
+    assert(!Object.prototype.hasOwnProperty.call(syncMod, retired),
+      'G0-roster: sync-cursor-edition exports no retired agent surface ' + retired);
   }
 }
 
-// An unrecognised canonical class must be rejected by the subject rather than
-// silently inventing a fallback roster or emitting inherit. This synthetic
-// canonical document exercises the generator's fail-closed branch directly.
-{
-  const unknownCanonical = [
-    '---',
-    'name: cursor-unknown-class-probe',
-    'description: unknown class probe',
-    'model: unsupported-class-token',
-    '---',
-    '',
-    'probe',
-    '',
-  ].join('\n');
-  let rejected = false;
-  try {
-    syncMod.renderAgent(unknownCanonical, 'cursor-unknown-class-probe');
-  } catch (_) {
-    rejected = true;
-  }
-  assert(rejected,
-    'G0-roster: renderAgent rejects an unsupported canonical model token (fail closed; no invented roster)');
-}
-
-{
-  // A retired role name must be rejected by the subject rather than silently rendering under the
-  // new seven-role catalog — fail closed, no invented roster entry.
-  let rejected = false;
-  try {
-    syncMod.renderAgent('probe', 'planner');
-  } catch (_) {
-    rejected = true;
-  }
-  assert(rejected,
-    'G0-roster: renderAgent rejects the retired role planner (fail closed; #1062 catalog) — got no throw');
-  const rendered = syncMod.renderAgent('probe', 'implementer');
-  assert(/model: grok-4\.7\[effort=medium\]/.test(rendered),
-    'G0-binding: renderAgent pins every surviving role as grok-4.7[effort=medium] — got '
-    + rendered.slice(0, 200));
-}
-
-function agentRel(name, forge) {
-  return treeLabel(forge || DEFAULT_FORGE) + '/agents/' + name + '.md';
-}
 function commandRel(name, forge) {
   return treeLabel(forge || DEFAULT_FORGE) + '/commands/' + name + '.md';
 }
 
-{
-  const heavyVariants = ['code-reviewer-heavy', 'adversarial-verifier-heavy', 'security-reviewer-heavy'];
-  for (const name of heavyVariants) {
-    assert(!canonAgents.includes(name),
-      'G0-ac6: no cursor heavy-variant reviewer agent ' + name + ' (escalation is claude+codex only)');
-    assert(!exists(agentRel(name)),
-      'G0-ac6: generated cursor tree must not ship ' + name);
-  }
-}
-
 // ---------------------------------------------------------------------------
-// G1: agents — exact set = canonical agents/*.md. knowledge-lookup MUST be
-// present. Frontmatter: name, description, and one exact unquoted model pin
-// derived from the canonical model class. NO separate effort: /
-// reasoning_effort: field. Frontmatter `tools:` is absent or contains no Claude MCP
-// tool ids (mcp__). Body examples may still name those tools — Grok inspect
-// dropped knowledge-lookup for an unquoted YAML description, not for body mcp__.
+// G1: agents — Kaola-Workflow ships no Cursor agents (#1101). After --write the
+// generated tree has no agents/ directory at all, and no generated file carries
+// a frontmatter model pin, effort field, or readonly role flag.
 // ---------------------------------------------------------------------------
 {
-  const dir = path.join(TREE_ROOT, '.cursor', 'agents');
-  const gen = fs.readdirSync(dir).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
-  assert(JSON.stringify(gen) === JSON.stringify(canonAgents),
-    'G1: .cursor/agents set == canonical agents/*.md — canonical=' + JSON.stringify(canonAgents)
-    + ' generated=' + JSON.stringify(gen));
-  assert(gen.includes('knowledge-lookup'),
-    'G1: knowledge-lookup MUST be present under .cursor/agents/');
-  for (const name of canonAgents) {
-    const rel = agentRel(name);
-    assert(exists(rel), 'G1[' + name + ']: generated agent exists');
-    if (!exists(rel)) continue;
-    const content = read(rel);
-    const { fm, raw } = parseFrontmatter(content);
-    assert(fm.name === name, 'G1[' + name + ']: frontmatter name is the role — got ' + JSON.stringify(fm.name));
-    assert(typeof fm.description === 'string' && fm.description.trim().length > 0,
-      'G1[' + name + ']: frontmatter has a non-empty description');
-    const canonical = canonicalAgentClass();
-    assert(canonical.pin === CURSOR_REAL_BINDING_PIN,
-      'G1[' + name + ']: adapter binding is known — got ' + JSON.stringify(canonical.model));
-    const modelLines = raw.split(/\r?\n/).filter(line => /^\s*model\s*:/.test(line));
-    assert(modelLines.length === 1 && modelLines[0] === 'model: ' + canonical.pin,
-      'G1[' + name + ']: model line is exactly the unquoted single-binding pin '
-      + JSON.stringify(canonical.pin) + ' — got ' + JSON.stringify(modelLines));
-    assert(!/^\s*model\s*:\s*["']/m.test(raw),
-      'G1[' + name + ']: model pin is not YAML-quoted (bracket syntax must remain raw)');
-    assert(!/^\s*effort\s*:/m.test(raw) && !/^\s*reasoning_effort\s*:/m.test(raw),
-      'G1[' + name + ']: no separate effort: / reasoning_effort: field (effort belongs in model ID)');
-    assert(fm.readonly === 'true' || fm.readonly === 'false',
-      'G1[' + name + ']: frontmatter readonly is true or false — got ' + JSON.stringify(fm.readonly));
-    assert(!/^\s*prompt_mode\s*:/m.test(raw) && !/^\s*permission_mode\s*:/m.test(raw)
-      && !/^\s*agents_md\s*:/m.test(raw),
-      'G1[' + name + ']: NO Grok-only prompt_mode / permission_mode / agents_md fields');
-    assert(!/\bmcp__/.test(raw),
-      'G1[' + name + ']: frontmatter carries no Claude MCP tool id (mcp__) — a tools: list of those '
-      + 'ids is not a Cursor agent field; body examples may still name them');
-    assert(!Object.prototype.hasOwnProperty.call(fm, 'tools') || !/\bmcp__/.test(String(fm.tools)),
-      'G1[' + name + ']: tools: is absent, or contains no mcp__ ids — got '
-      + JSON.stringify(fm.tools));
-    const canonFm = parseFrontmatter(fs.readFileSync(path.join(REPO, 'agents', name + '.md'), 'utf8')).fm;
-    const toolSet = new Set(syncMod.parseTools(canonFm.tools).map(x => String(x).toLowerCase()));
-    const expectedReadonly = syncMod.isReadOnlyRole(toolSet) ? 'true' : 'false';
-    assert(fm.readonly === expectedReadonly,
-      'G1[' + name + ']: readonly matches Write/Edit derivation from canonical tools — expected '
-      + expectedReadonly + ' got ' + JSON.stringify(fm.readonly));
+  assert(!fs.existsSync(path.join(TREE_ROOT, '.cursor', 'agents')),
+    'G1: the generated .cursor tree has no agents/ directory after sync --write');
+  for (const rel of generatedTreeFiles('.cursor')) {
+    const { raw } = parseFrontmatter(read(rel));
+    assert(!/^\s*(?:model|effort|reasoning_effort|readonly)\s*:/m.test(raw),
+      'G1: ' + rel + ' carries no pinned model/effort or readonly role frontmatter');
   }
 }
 
 // ---------------------------------------------------------------------------
 // G2: commands — exact set = routing-registry commandSources() for the forge,
-// not a hand list. Finalize keeps the canonical dispatch example as a compact fenced Task( card —
-// the same fields with the tool renamed — and must not grow invented static call cards beyond it.
+// not a hand list. No generated command carries a role dispatch call card (#1101 removed the
+// canonical Finalize card) or grows invented static subagent_type=/description= fields.
 // Compact recovery is carried by the global transaction's always-applied Rule, not by a command hook or
 // a runtime stamp in generated command prose. No CLAUDE_PLUGIN_ROOT, no ~/.claude/kaola-workflow.
 // No model="{...}" placeholders, no per-call model=" overrides, and no vendor model dispatch
@@ -996,23 +855,14 @@ function commandRel(name, forge) {
       'G2[' + name + ']: no line-start Claude Agent( dispatch card');
     assert(!/\bmodel\s*=\s*["']/.test(content),
       'G2[' + name + ']: generated command stays free of per-call model dispatch');
+    assert(!lineStartCall(content) && staticDispatchFields(content).length === 0,
+      'G2[' + name + ']: no line-start Agent(/Task( role card and no static subagent_type=/description= fields');
+    const role = content.match(RETIRED_ROLE_RE);
+    assert(!role,
+      'G2[' + name + ']: generated command names no retired Kaola role — found ' + JSON.stringify(role && role[0]));
     if (name === 'kaola-workflow-finalize') {
-      // #1074: the canonical example renders as a compact fenced Task( card —
-      // same fields, tool renamed — not a prose paragraph or an invented card.
-      const canonicalCard = (canon.match(/```text\nAgent\(\n[\s\S]*?^\)\n```/m) || [null])[0];
-      assert(canonicalCard && content.includes(canonicalCard.replace('Agent(', 'Task(')),
-        'G2[kaola-workflow-finalize]: the canonical dispatch example renders as the same fenced '
-        + 'card with Agent( renamed to Task(');
-      const callCards = content.match(/^(?:Agent|Task)\(/gm) || [];
-      assert(callCards.length === 1 && callCards[0] === 'Task(',
-        'G2[kaola-workflow-finalize]: exactly one line-start call card, renamed to Task( — got '
-        + JSON.stringify(callCards));
-      const outsideCard = canonicalCard
-        ? content.replace(canonicalCard.replace('Agent(', 'Task('), '')
-        : content;
-      assert(staticDispatchFields(outsideCard).length === 0,
-        'G2[kaola-workflow-finalize]: no invented static subagent_type= or description= fields '
-        + 'escape outside the canonical Task( card');
+      assert(!/^(?:Agent|Task)\(/m.test(canon),
+        'G2[kaola-workflow-finalize]: the canonical Finalize carries no role dispatch card to transform');
       const recoveryRel = '.cursor/rules/' + CURSOR_RECOVERY_RULE;
       const recovery = renderedGlobalRule();
       const recoveryVerdict = recoveryRuleVerdict(recovery);
@@ -1036,44 +886,44 @@ function commandRel(name, forge) {
     const content = exists(commandRel(name)) ? read(commandRel(name)) : '';
     assert(!/<!--\s*KW-RUNTIME-DISPATCH-(?:START|END)\s*-->/.test(content)
       && !/Runtime dispatch contract \(always loaded\)/i.test(content)
-      && content.split(reviewerGenerator.ALWAYS_LOADED_DISPATCH_POINTER).length - 1 === 1,
+      && content.split(adapterFacts.ALWAYS_LOADED_DISPATCH_POINTER).length - 1 === 1,
       'G2[' + name + ']: generated command carries the always-loaded-carrier pointer once, no dispatch block');
     assert(/CLI, App local, and App Cloud are separate hosts/i.test(cursorRule),
       'G2[' + name + ']: Cursor CLI, App local, and App Cloud remain distinct surfaces/hosts (in the always-loaded Rule)');
-    assert(/a file on disk is not discovery proof/i.test(cursorRule),
-      'G2[' + name + ']: the always-loaded Rule still warns that on-disk bytes are not live-catalog proof');
-    assert(/MUST omit the per-call `model`/i.test(cursorRule)
-      && /exact-binding requirement is a post-resolution assertion/i.test(cursorRule),
-      'G2[' + name + ']: named-profile binding owns model resolution even under exact-binding policy (in the always-loaded Rule)');
+    assert(/The live Task catalog is authoritative/i.test(cursorRule),
+      'G2[' + name + ']: the always-loaded Rule makes the live Task catalog, not on-disk bytes, authoritative');
+    const nativeVerdict = nativeDispatchRuleVerdict(cursorRule);
+    assert(nativeVerdict.ok,
+      'G2[' + name + ']: the always-loaded Rule states the native-only rule and pins no model (host '
+      + 'defaults decide) — ' + nativeVerdict.errors.join(' | '));
   }
 
-  // #1069: the built-in-only omit-model relation moved into the always-loaded Rule with the rest
-  // of the adapter facts; the command renders carry none of it.
+  // #1101: the retired built-in-only omit-model relation (parent, not profile pin) is gone from
+  // both the always-loaded Rule and the command renders; there is no Kaola profile to contrast.
   const pathBVerdict = inspectPathBConsumers(TREE_ROOT);
-  const ruleRelations = pathBRelations(cursorRule);
-  const commandsCarryNone = Object.values(pathBVerdict.relations).every(found => found.length === 0);
-  assert(pathBVerdict.ok === false || commandsCarryNone,
-    'G2-path-b: generated workflow-next and finalize commands carry no dispatch-contract relation');
-  assert(commandsCarryNone && ruleRelations.length === 1
-    && ruleRelations[0].positive === 'parent' && ruleRelations[0].negative === 'profile pin',
-    'G2-path-b: the always-loaded Rule carries the built-in-only omit-model relation '
-    + '(parent, not profile pin) exactly once'
-    + (commandsCarryNone ? '' : ' — commands: ' + pathBVerdict.errors.join(' | ')));
+  assert(pathBVerdict.ok,
+    'G2-path-b: generated workflow-next and finalize commands carry no omit-model relation — '
+    + pathBVerdict.errors.join(' | '));
+  assert(pathBRelations(cursorRule).length === 0,
+    'G2-path-b: the always-loaded Rule carries no retired omit-model/profile-pin relation');
+  assert(pathBRelations('If the enum is built-in-only, omit-model is the parent, not a profile pin.').length === 1,
+    'G2-path-b-mutation RED: the relation detector still observes a reintroduced omit-model relation');
 
-  const nativeBoundary = 'Use the live Task schema for tdd-guide with task, custody, evidence, and stop boundaries.';
+  const nativeBoundary = 'Use the live Task schema for generalPurpose with task, custody, evidence, and stop boundaries.';
   assert(!lineStartCall(nativeBoundary) && staticDispatchFields(nativeBoundary).length === 0,
     'G2-mutation: honest live-schema prose has no portable static dispatch fields');
   const inventedCard = nativeBoundary
-    + '\nTask(\n  subagent_type="tdd-guide",\n  description="Routed fix"\n)';
+    + '\nTask(\n  subagent_type="generalPurpose",\n  description="Routed fix"\n)';
   assert(lineStartCall(inventedCard) && staticDispatchFields(inventedCard).length === 2,
     'G2-mutation RED: appending a static Task(subagent_type, description) card is detected');
 }
 
 // ---------------------------------------------------------------------------
-// G2-cli-materialization — both generated dispatch consumers preserve the
-// standalone-CLI-only safe materialization transaction. Mutate the generated
-// subject itself to prove the oracle rejects an omitted/ambient target and an
-// App/Cloud scope inversion.
+// G2-cli-materialization — generated Next preserves the standalone-CLI-only
+// safe Repo prep transaction; generated Finalize carries no retired
+// pre-dispatch role materialization (#1101). Mutate the generated subject
+// itself to prove the oracle rejects an App/Cloud scope inversion, a
+// role-catalog skip, and a reintroduced Finalize materialization section.
 // ---------------------------------------------------------------------------
 {
   for (const name of CURSOR_CLI_MATERIALIZATION_COMMANDS) {
@@ -1086,25 +936,26 @@ function commandRel(name, forge) {
         ? ('G2-cli-materialization[' + name + ']: generated Next states executable startup/resume '
           + 'Repo prep for standalone CLI/local, without a skippable first-named-dispatch ensure — '
           + verdict.errors.join(' | '))
-        : ('G2-cli-materialization[' + name + ']: generated Finalize keeps the installed safe helper '
-          + 'with explicit "$PWD" for standalone CLI before named dispatch — '
+        : ('G2-cli-materialization[' + name + ']: generated Finalize carries no retired pre-dispatch '
+          + 'role materialization, ensure call, or role card — '
           + verdict.errors.join(' | ')));
 
     if (verdict.block) {
       if (surface === 'finalize') {
-        const omitted = content.replace('--ensure-target "$PWD"', '--ensure-target');
-        const omittedVerdict = cursorCliMaterializationVerdict(omitted, DEFAULT_FORGE, surface);
-        assert(omitted !== content && !omittedVerdict.ok
-          && omittedVerdict.errors.some(error => /exact explicit/.test(error)),
-        'G2-cli-materialization-mutation[' + name + ']: removing the explicit target is rejected — '
-          + omittedVerdict.errors.join(' | '));
-
-        const ambient = content.replace('--ensure-target "$PWD"', '--ensure-target "."');
-        const ambientVerdict = cursorCliMaterializationVerdict(ambient, DEFAULT_FORGE, surface);
-        assert(ambient !== content && !ambientVerdict.ok
-          && ambientVerdict.errors.some(error => /exact explicit/.test(error)),
-        'G2-cli-materialization-mutation[' + name + ']: ambientizing the target to cwd shorthand is rejected — '
-          + ambientVerdict.errors.join(' | '));
+        const reintroduced = content + '\n## Cursor standalone CLI pre-dispatch materialization\n\n'
+          + 'Immediately before the first named Kaola child dispatch, run the installed transaction:\n\n'
+          + '```sh\nnode "$CURSOR_MATERIALIZER" --ensure-target "$PWD" --forge=github --json\n```\n';
+        const reintroducedVerdict = cursorCliMaterializationVerdict(reintroduced, DEFAULT_FORGE, surface);
+        assert(!reintroducedVerdict.ok
+          && reintroducedVerdict.errors.some(error => /retired pre-dispatch materialization section/.test(error))
+          && reintroducedVerdict.errors.some(error => /--ensure-target/.test(error)),
+        'G2-cli-materialization-mutation[' + name + ']: reintroducing the retired Finalize '
+          + 'pre-dispatch materialization is rejected — ' + reintroducedVerdict.errors.join(' | '));
+        const roleCard = content + '\n```text\nTask(\n  subagent_type="implementer",\n)\n```\n';
+        const roleCardVerdict = cursorCliMaterializationVerdict(roleCard, DEFAULT_FORGE, surface);
+        assert(!roleCardVerdict.ok && roleCardVerdict.errors.some(error => /role dispatch call card/.test(error)),
+          'G2-cli-materialization-mutation[' + name + ']: reintroducing a role Task( card is rejected — '
+          + roleCardVerdict.errors.join(' | '));
       }
 
       // #1074: only the Next trailer still carries the shared App-host
@@ -1121,11 +972,11 @@ function commandRel(name, forge) {
       }
 
       if (surface === 'next') {
-        const gapSkip = content + '\nTreat missing named Kaola roles as capability_gap and skip Repo role prep.\n';
+        const gapSkip = content + '\nTreat missing named Kaola roles as capability_gap and skip Repo prep.\n';
         const gapVerdict = cursorCliMaterializationVerdict(gapSkip, DEFAULT_FORGE, surface);
         assert(!gapVerdict.ok
           && gapVerdict.errors.some(error => /capability_gap skip/.test(error)),
-        'G2-cli-materialization-mutation[' + name + ']: authorizing a named-role capability_gap skip is rejected — '
+        'G2-cli-materialization-mutation[' + name + ']: conditioning Repo prep on a role catalog (capability_gap skip) is rejected — '
           + gapVerdict.errors.join(' | '));
 
         const forgedDefault = content.replace(
@@ -1180,186 +1031,132 @@ function commandRel(name, forge) {
 }
 
 // ---------------------------------------------------------------------------
-// G2-trailer (#1074): the two compressed Cursor CLI trailers state each shared
-// policy sentence exactly once across both surfaces, Finalize carries the
-// compact Task call with one "do not impersonate", and the combined trailer
-// stays within the measured word budget.
+// G2-trailer (#1074): the compressed Cursor CLI trailer lives on Next only
+// (#1101 retired the Finalize one); each shared policy sentence occurs exactly
+// once, Finalize carries no Cursor trailer and no "do not impersonate" role
+// fallback, and the trailer stays within the measured word budget.
 // ---------------------------------------------------------------------------
 {
-  const TRAILER_HEADINGS = {
-    'workflow-next': '## Cursor standalone CLI startup and resume Repo role prep',
-    'kaola-workflow-finalize': '## Cursor standalone CLI pre-dispatch materialization',
-  };
+  const NEXT_HEADING = '## Cursor standalone CLI startup and resume Repo prep';
   for (const forge of syncMod.FORGES || ['github', 'gitlab', 'gitea']) {
-    const trailers = {};
-    const surfaces = {};
-    for (const name of ['workflow-next', 'kaola-workflow-finalize']) {
-      const canon = fs.readFileSync(syncMod.canonCommandPath(name + '.md', forge), 'utf8');
-      const rendered = syncMod.renderCommand(canon, name, forge);
-      const start = rendered.indexOf(TRAILER_HEADINGS[name]);
-      assert(start >= 0,
-        'G2-trailer[' + forge + '/' + name + ']: compressed Cursor CLI trailer heading is present');
-      trailers[name] = start >= 0 ? rendered.slice(start) : '';
-      surfaces[name] = rendered;
-    }
-    const combined = (trailers['workflow-next'] + '\n' + trailers['kaola-workflow-finalize'])
-      .replace(/\s+/g, ' ');
+    const render = name => syncMod.renderCommand(
+      fs.readFileSync(syncMod.canonCommandPath(name + '.md', forge), 'utf8'), name, forge);
+    const next = render('workflow-next');
+    const finalize = render('kaola-workflow-finalize');
+    const start = next.indexOf(NEXT_HEADING);
+    assert(start >= 0,
+      'G2-trailer[' + forge + '/workflow-next]: compressed Cursor CLI trailer heading is present');
+    const trailer = (start >= 0 ? next.slice(start) : '').replace(/\s+/g, ' ');
     for (const sentence of [
       'never substitute an ambient cwd copier or a sessionStart materializer',
       'do not apply or infer this CLI materialization rule',
     ]) {
-      assert(combined.split(sentence).length - 1 === 1,
-        'G2-trailer[' + forge + ']: "' + sentence.slice(0, 48) + '…" occurs exactly once across the two trailers');
+      assert(trailer.split(sentence).length - 1 === 1,
+        'G2-trailer[' + forge + ']: "' + sentence.slice(0, 48) + '…" occurs exactly once in the Next trailer');
+      assert(!finalize.includes(sentence),
+        'G2-trailer[' + forge + ']: Finalize repeats no Next trailer sentence ("' + sentence.slice(0, 32) + '…")');
     }
-    assert(surfaces['kaola-workflow-finalize'].split('do not impersonate').length - 1 === 1,
-      'G2-trailer[' + forge + ']: Finalize carries "do not impersonate" exactly once (compact Task call)');
-    const words = combined.split(/\s+/).filter(Boolean).length;
+    assert(!/## Cursor standalone CLI/.test(finalize),
+      'G2-trailer[' + forge + ']: Finalize carries no Cursor CLI trailer (the pre-dispatch one is retired)');
+    assert(!finalize.includes('do not impersonate'),
+      'G2-trailer[' + forge + ']: Finalize carries no "do not impersonate" role fallback');
+    const words = trailer.split(/\s+/).filter(Boolean).length;
     assert(words <= 300,
-      'G2-trailer[' + forge + ']: combined Cursor CLI trailers stay within 300 words (got ' + words + ')');
+      'G2-trailer[' + forge + ']: the Cursor CLI trailer stays within 300 words (got ' + words + ')');
   }
 }
 
 // ---------------------------------------------------------------------------
-// G2-path-b-mutation — mutate the actual Cursor adapter authority in a
-// throwaway source tree, regenerate both shipped consumers, and require the
-// semantic oracle above to go RED. A phrase-presence check or the exported
-// CURSOR_MODEL_DISPATCH_BLOCK residue would not observe this path.
+// G2-native-mutation — copy the source into a throwaway tree (no git, so the
+// child's TREE_ROOT is the scratch itself) and run the native-only Rule oracle:
+// the unmutated copy is GREEN; (a) reintroducing a retired subagent_default
+// binding capability makes the adapter authority refuse to load at all; (b)
+// smuggling a pinned model into the native facts reaches the Rule and the
+// oracle rejects it. The generated commands carry no dispatch relation.
 // ---------------------------------------------------------------------------
 {
-  const SOURCE_TREES = ['scripts', 'agents', 'commands', 'hooks', 'templates'];
-  const scratch = fs.realpathSync(fs.mkdtempSync(path.join(tmpBase(), 'cursor-g2-path-b-')));
-  try {
-    const missing = SOURCE_TREES.filter(name => !fs.existsSync(path.join(REPO, name)));
-    assert(missing.length === 0,
-      'G2-path-b-mutation: fixture source trees exist — missing ' + JSON.stringify(missing));
-    if (missing.length === 0) {
+  const SOURCE_TREES = ['scripts', 'commands', 'hooks', 'templates'];
+  const missing = SOURCE_TREES.filter(name => !fs.existsSync(path.join(REPO, name)));
+  assert(missing.length === 0,
+    'G2-native-mutation: fixture source trees exist — missing ' + JSON.stringify(missing));
+  const mutations = [
+    { id: 'unmutated', apply: () => {}, green: true },
+    {
+      id: 'subagent-default',
+      apply: cursor => { cursor.capabilities.subagent_default = { model: 'grok-4.7', effort: 'medium' }; },
+      expect: /retired role capability subagent_default on cursor/,
+    },
+    {
+      id: 'pinned-model-fact',
+      apply: cursor => {
+        cursor.capabilities.delegation_guidance.availability += ' Every child pins model grok-4.7.';
+      },
+      expect: /names vendor model slug grok-4\.7/,
+    },
+  ];
+  for (const mutation of missing.length ? [] : mutations) {
+    const scratch = fs.realpathSync(fs.mkdtempSync(path.join(tmpBase(), 'cursor-g2-native-')));
+    try {
       for (const name of SOURCE_TREES) {
         fs.cpSync(path.join(REPO, name), path.join(scratch, name), { recursive: true });
       }
-
       const adapterPath = path.join(scratch, 'templates', 'agents', 'runtime-capabilities.json');
-      const adapterText = fs.readFileSync(adapterPath, 'utf8');
-      let authority = null;
-      try { authority = JSON.parse(adapterText); } catch (e) {
-        assert(false, 'G2-path-b-mutation: runtime-capabilities.json parses — ' + e.message);
+      const authority = JSON.parse(fs.readFileSync(adapterPath, 'utf8'));
+      mutation.apply(authority.runtimes.cursor);
+      fs.writeFileSync(adapterPath, JSON.stringify(authority, null, 2) + '\n');
+
+      // spawn-class: environment
+      const probe = spawnSync(process.execPath,
+        [path.join(scratch, 'scripts', 'test-cursor-edition.js'), '--native-dispatch-oracle'], {
+          cwd: scratch, encoding: 'utf8',
+        });
+      const probeOutput = String(probe.stdout || '') + String(probe.stderr || '');
+      if (mutation.green) {
+        assert(probe.status === 0 && /NATIVE-DISPATCH-ORACLE GREEN/.test(probeOutput),
+          'G2-native-mutation GREEN: the unmutated source passes the same oracle — '
+          + JSON.stringify(probeOutput.trim().slice(0, 400)));
+        continue;
       }
+      assert(probe.status !== 0,
+        'G2-native-mutation[' + mutation.id + '] RED: the native-only Rule oracle exits non-zero '
+        + '(got ' + probe.status + ')');
+      assert(mutation.expect.test(probeOutput),
+        'G2-native-mutation[' + mutation.id + '] RED: the failure names the contradiction — '
+        + JSON.stringify(probeOutput.trim().slice(0, 400)));
 
-      const carrier = authority && authority.runtimes && authority.runtimes.cursor
-        && authority.runtimes.cursor.capabilities
-        && authority.runtimes.cursor.capabilities.delegation_guidance
-        && authority.runtimes.cursor.capabilities.delegation_guidance.dispatch_carrier;
-      const authorityRelation = pathBRelations(carrier);
-      const relationReady = typeof carrier === 'string'
-        && authorityRelation.length === 1
-        && authorityRelation[0].positive === 'parent'
-        && authorityRelation[0].negative === 'profile pin';
-      assert(relationReady,
-        'G2-path-b-mutation: Cursor adapter dispatch_carrier has the parent/not-profile Path B relation');
-
-      if (relationReady) {
-        const parentRelation = /\bomit-model\s+is\s+the\s+parent\s*,\s*not\s+(?:a\s+)?profile\s+pin\b/i;
-        const mutatedCarrier = carrier.replace(parentRelation,
-          'omit-model is the profile pin, not the parent');
-        const mutationReady = mutatedCarrier !== carrier;
-        assert(mutationReady,
-          'G2-path-b-mutation: the actual Cursor dispatch_carrier has one reversible Path B predicate');
-
-        if (mutationReady) {
-          authority.runtimes.cursor.capabilities.delegation_guidance.dispatch_carrier = mutatedCarrier;
-          fs.writeFileSync(adapterPath, JSON.stringify(authority, null, 2) + '\n');
-
-          const syncPath = path.join(scratch, 'scripts', 'sync-cursor-edition.js');
-          // spawn-class: environment
-          const rootProbe = spawnSync(process.execPath, [syncPath, '--print-tree-root'], {
-            cwd: scratch, encoding: 'utf8',
-          });
-          const printedRoot = String(rootProbe.stdout || '').trim();
-          const rootReady = rootProbe.status === 0 && printedRoot === scratch;
-          assert(rootReady,
-            'G2-path-b-mutation: scratch generator writes its own tree — status ' + rootProbe.status
-            + ', root ' + JSON.stringify(printedRoot) + ', expected ' + JSON.stringify(scratch));
-
-          if (rootReady) {
-            // spawn-class: environment
-            const generated = spawnSync(process.execPath, [syncPath, '--write'], {
-              cwd: scratch, encoding: 'utf8',
-            });
-            const generatedOutput = String(generated.stdout || '') + String(generated.stderr || '');
-            assert(generated.status === 0,
-              'G2-path-b-mutation: reversed adapter regenerates Cursor consumers — exit '
-              + generated.status + ' — ' + generatedOutput.split('\n').slice(0, 3).join(' | '));
-
-            if (generated.status === 0) {
-              // #1069: the adapter relation no longer reaches the generated
-              // commands at all — they carry the pointer. The reversal must
-              // reach the always-loaded Rule instead.
-              const mutatedVerdict = inspectPathBConsumers(scratch);
-              const commandsClean = PATH_B_COMMANDS.every(name =>
-                (mutatedVerdict.relations[name] || []).length === 0);
-              assert(commandsClean,
-                'G2-path-b-mutation: generated commands carry no dispatch relation after '
-                + 'adapter reversal — ' + JSON.stringify(mutatedVerdict.relations));
-
-              // spawn-class: environment
-              const probe = spawnSync(process.execPath,
-                [path.join(scratch, 'scripts', 'test-cursor-edition.js'), '--path-b-oracle'], {
-                  cwd: scratch, encoding: 'utf8',
-                });
-              const probeOutput = String(probe.stdout || '') + String(probe.stderr || '');
-              assert(probe.status !== 0,
-                'G2-path-b-mutation RED: the focused carrier oracle exits non-zero on the '
-                + 'reversed adapter relation (got ' + probe.status + ')');
-              assert(/PATH-B-ORACLE RED: kaola-workflow-global rule:/.test(probeOutput),
-              'G2-path-b-mutation RED: oracle names the contradictory always-loaded carrier — '
-                + JSON.stringify(probeOutput.trim()));
-            }
-          }
-        }
+      if (mutation.id === 'pinned-model-fact') {
+        const syncPath = path.join(scratch, 'scripts', 'sync-cursor-edition.js');
+        // spawn-class: environment
+        const generated = spawnSync(process.execPath, [syncPath, '--write'], { cwd: scratch, encoding: 'utf8' });
+        assert(generated.status === 0,
+          'G2-native-mutation: the mutated adapter still regenerates Cursor commands — exit ' + generated.status);
+        const mutatedVerdict = inspectPathBConsumers(scratch);
+        assert(mutatedVerdict.ok && PATH_B_COMMANDS.every(name =>
+          !VENDOR_SLUG.test(fs.readFileSync(path.join(scratch, '.cursor', 'commands', name + '.md'), 'utf8'))),
+        'G2-native-mutation: generated commands carry no dispatch relation or model slug after the '
+          + 'adapter mutation — they carry only the pointer');
       }
+    } finally {
+      try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
     }
-  } finally {
-    try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
   }
 }
 
-// G2-leak forbids vendor model slugs on command/rule cards except for the
-// explicit subagent binding inside the runtime-delegation block on next/finalize.
+// G2-leak forbids vendor model slugs everywhere: on generated command/rule
+// bytes and in the always-loaded Rule (#1101 — no binding block remains).
 {
   const B2_MODEL_NOUN = /\b(Opus|Sonnet)\b/;
-  const VENDOR_SLUG = /\bgrok-4\.\d\b|\bgrok-build\b/;
-  const DELEGATION_START = '<!-- KW-RUNTIME-DELEGATION-START -->';
-  const DELEGATION_END = '<!-- KW-RUNTIME-DELEGATION-END -->';
   const TIER_GUIDANCE_COMMANDS = new Set([
     commandRel('workflow-next'),
     commandRel('kaola-workflow-finalize'),
   ]);
 
-  // #1069: the runtime-delegation block now lives only in the always-loaded
-  // Rule; generated commands carry the pointer and must carry no vendor slug.
+  // #1069: the runtime-delegation block lives only in the always-loaded Rule; generated commands
+  // carry the pointer and must carry no vendor slug.
   function vendorSlugScope(rel, content) {
     if (VENDOR_SLUG.test(content)) {
       return { ok: false, reason: 'vendor model slug on generated command bytes '
-        + '(the binding block lives in the always-loaded Rule)' };
-    }
-    return { ok: true, reason: '' };
-  }
-
-  function vendorSlugScopeOnRule(content) {
-    const startCount = content.split(DELEGATION_START).length - 1;
-    const endCount = content.split(DELEGATION_END).length - 1;
-    const start = content.indexOf(DELEGATION_START);
-    const end = content.indexOf(DELEGATION_END);
-    if (startCount !== 1 || endCount !== 1 || start < 0 || end < start) {
-      return { ok: false, reason: 'runtime-delegation block is not unique and ordered' };
-    }
-
-    const inside = content.slice(start + DELEGATION_START.length, end);
-    const outside = content.slice(0, start) + content.slice(end + DELEGATION_END.length);
-    if (!VENDOR_SLUG.test(inside)) {
-      return { ok: false, reason: 'runtime-delegation block has no binding model slug' };
-    }
-    if (VENDOR_SLUG.test(outside)) {
-      return { ok: false, reason: 'vendor model slug escaped the runtime-delegation block' };
+        + '(no Kaola subagent binding exists)' };
     }
     return { ok: true, reason: '' };
   }
@@ -1379,12 +1176,8 @@ function commandRel(name, forge) {
       'G2-leak: ' + rel + ': no model="{...}" placeholder');
     assert(!/\bmodel="/.test(content),
       'G2-leak: ' + rel + ': no per-call model=" override in generated dispatch surfaces');
-    if (!/\/agents\//.test(rel)) {
-      const scope = vendorSlugScope(rel, content);
-      assert(scope.ok,
-        'G2-leak: ' + rel + ': vendor model slugs are confined to the unique runtime-delegation binding block on next/finalize — '
-        + scope.reason);
-    }
+    const scope = vendorSlugScope(rel, content);
+    assert(scope.ok, 'G2-leak: ' + rel + ': ' + scope.reason);
     const lines = content.split('\n');
     for (let i = 0; i < lines.length; i++) {
       const m = lines[i].match(B2_MODEL_NOUN);
@@ -1397,10 +1190,9 @@ function commandRel(name, forge) {
   }
   const recoveryRel = '.cursor/rules/' + CURSOR_RECOVERY_RULE;
   const recovery = renderedGlobalRule();
-  const ruleScope = vendorSlugScopeOnRule(recovery);
-  assert(ruleScope.ok,
-    'G2-leak: always-loaded Rule confines the binding slug to the unique runtime-delegation block — '
-    + ruleScope.reason);
+  const ruleSlug = recovery.match(VENDOR_SLUG);
+  assert(!ruleSlug,
+    'G2-leak: the always-loaded Rule names no vendor model slug — found ' + JSON.stringify(ruleSlug && ruleSlug[0]));
   const recoveryVerdict = recoveryRuleVerdict(recovery);
   assert(recoveryVerdict.ok,
     'G2: compact recovery and always-loaded dispatch contract are carried by the global transaction render — '
@@ -1408,8 +1200,7 @@ function commandRel(name, forge) {
   assert(!exists(recoveryRel),
     'G2: generated edition contains no duplicate compact-recovery Rule');
 
-  // Mutation bite: an allowed command path is not itself a blanket exemption.
-  // The same scope check must reject a binding slug copied past the closing marker.
+  // Mutation bite: the scope check rejects a model slug appended to a dispatch consumer.
   for (const rel of TIER_GUIDANCE_COMMANDS) {
     if (!exists(rel)) {
       assert(false, 'G2-leak-mutation: ' + rel + ': generated consumer exists for the mutation oracle');
@@ -1423,17 +1214,18 @@ function commandRel(name, forge) {
 }
 
 // ---------------------------------------------------------------------------
-// G2-declaration: CURSOR_RUNTIME_NATIVE.frontmatter_binding_pin exists, names
-// the one subagent binding pin, and the generated tree matches it.
+// G2-declaration: CURSOR_RUNTIME_NATIVE.native_subagents exists, states the
+// native-only rule, and the generated tree matches it: no generated file pins a
+// model, per call or in frontmatter.
 // ---------------------------------------------------------------------------
 {
-  const KEY = 'frontmatter_binding_pin';
+  const KEY = 'native_subagents';
   const reason = CURSOR_RUNTIME_NATIVE[KEY];
   assert(typeof reason === 'string' && reason.trim().length >= 20,
     'G2-declaration: CURSOR_RUNTIME_NATIVE must declare "' + KEY + '" with a one-line reason');
-  assert(/frontmatter/i.test(reason) && /grok-4\.7/i.test(reason)
-    && /medium/i.test(reason) && /unquoted/i.test(reason),
-    'G2-declaration: the "' + KEY + '" reason must state the unquoted grok-4.7[effort=medium] frontmatter pin');
+  assert(/Task/.test(reason) && /live catalog/i.test(reason) && /no agents/i.test(reason)
+    && /no frontmatter model pin/i.test(reason),
+    'G2-declaration: the "' + KEY + '" reason must state native Task types, no agents, and no model pin');
   const resumeKey = 'machine_global_recovery_rule';
   const resumeReason = CURSOR_RUNTIME_NATIVE[resumeKey];
   assert(typeof resumeReason === 'string' && resumeReason.trim().length >= 20,
@@ -1442,76 +1234,63 @@ function commandRel(name, forge) {
     && /Cloud/i.test(resumeReason) && /alwaysApply/i.test(resumeReason)
     && /no tool-use hook/i.test(resumeReason) && /zero context/i.test(resumeReason),
     'G2-declaration: the "' + resumeKey + '" reason must state the shared alwaysApply rule and zero ordinary tool-use injection');
-  for (const name of canonAgents) {
-    const rel = agentRel(name);
-    if (!exists(rel)) continue;
-    const { raw } = parseFrontmatter(read(rel));
-    const canonical = canonicalAgentClass();
-    assert(raw.split(/\r?\n/).includes('model: ' + canonical.pin),
-      'G2-declaration: ' + rel + ' carries the single unquoted frontmatter pin '
-      + JSON.stringify(canonical.pin));
-    assert(!/^\s*effort\s*:/m.test(raw) && !/^\s*reasoning_effort\s*:/m.test(raw),
-      'G2-declaration: ' + rel + ' carries a separate effort field; effort belongs in the model ID');
-  }
   for (const rel of generatedTreeFiles('.cursor')) {
     const content = read(rel);
     assert(!/\bmodel="/.test(content),
-      'G2-declaration: ' + rel + ' carries a per-call model=" override; command cards must omit dispatch model');
+      'G2-declaration: ' + rel + ' carries a per-call model=" override, contradicting ' + KEY);
+    assert(!/^\s*(?:model|effort)\s*:/m.test(parseFrontmatter(content).raw),
+      'G2-declaration: ' + rel + ' carries a frontmatter model/effort pin, contradicting ' + KEY);
   }
 }
 
 // ---------------------------------------------------------------------------
 // G3: --check re-renders from canonical and agrees with the tree --write just
 // produced (render determinism across processes). Then a planted drift must
-// turn --check red.
+// turn --check red. A planted leftover agents/*.md (a pre-#1101 role render)
+// is reported as a retired role profile, and --write prunes it along with the
+// then-empty agents/ directory.
 // ---------------------------------------------------------------------------
 {
   const ok = runGeneratorCli(['--check']);
   assert(ok.status === 0,
     'G3: sync-cursor-edition --check exits 0 against the tree --write just produced'
     + (ok.status !== 0 ? ' — ' + String(ok.stderr || ok.stdout).split('\n')[0] : ''));
-  const probe = path.join(TREE_ROOT, '.cursor', 'agents', 'implementer.md');
-  assert(fs.existsSync(probe), 'G3: implementer.md exists to plant drift against');
+  const probe = path.join(TREE_ROOT, '.cursor', 'commands', 'workflow-next.md');
+  assert(fs.existsSync(probe), 'G3: commands/workflow-next.md exists to plant drift against');
   const orig = fs.existsSync(probe) ? fs.readFileSync(probe, 'utf8') : '';
   try {
     fs.appendFileSync(probe, '\n<!-- cursor-edition drift probe -->\n');
     const drifted = runGeneratorCli(['--check']);
     assert(drifted.status !== 0,
-      'G3: --check exits non-zero on a drifted generated agent (got ' + drifted.status + ')');
+      'G3: --check exits non-zero on a drifted generated command (got ' + drifted.status + ')');
   } finally {
     try { fs.writeFileSync(probe, orig); } catch (_) { /* restore best-effort */ }
   }
   assert(runGeneratorCli(['--check']).status === 0,
     'G3: --check exits 0 after the planted drift is restored');
-}
 
-// ---------------------------------------------------------------------------
-// G4: reviewer roles keep their behavior identity and carry no in-body receipt
-// hashes — the generated-agent-manifest.json sidecar records the digest of the
-// exact rendered bytes.
-// ---------------------------------------------------------------------------
-for (const role of reviewerGenerator.ROLES) {
-  const canonical = reviewerGenerator.behaviorIdentityFromCore(read('agents/' + role + '.md'));
-  const cursorText = read(agentRel(role));
-  let cursor = null;
-  try { cursor = reviewerGenerator.behaviorIdentityFromCore(cursorText); } catch (e) {
-    assert(false, 'G4-reviewer[' + role + ']: the generated agent still carries an extractable behavior core — ' + e.message);
-    cursor = { role: null, behavior_contract_version: null, behavior_contract_hash: null, core: null };
+  const agentsDir = path.join(TREE_ROOT, '.cursor', 'agents');
+  const leftover = path.join(agentsDir, 'implementer.md');
+  try {
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(leftover, '---\nname: implementer\nmodel: grok-4.7[effort=medium]\nreadonly: false\n---\nretired render\n');
+    const flagged = runGeneratorCli(['--check']);
+    const out = String(flagged.stdout || '') + String(flagged.stderr || '');
+    assert(flagged.status !== 0,
+      'G3-retired: --check exits non-zero on a leftover agents/implementer.md (got ' + flagged.status + ')');
+    assert(/\.cursor\/agents\/implementer\.md/.test(out) && /retired role profile/.test(out),
+      'G3-retired: --check names the leftover as a retired role profile — got '
+      + JSON.stringify(out.split('\n').filter(l => /agents/.test(l)).slice(0, 2)));
+    const w = runGenerator(['--write']);
+    assert(w.status === 0 && /pruned\s+\.cursor\/agents\/implementer\.md \(retired role profile\)/.test(String(w.stdout || '')),
+      'G3-retired: --write prunes the leftover as a retired role profile');
+    assert(!fs.existsSync(leftover) && !fs.existsSync(agentsDir),
+      'G3-retired: after --write neither the leftover nor the empty agents/ directory remains');
+    assert(runGeneratorCli(['--check']).status === 0,
+      'G3-retired: --check is green again after --write prunes the leftover');
+  } finally {
+    try { fs.rmSync(leftover, { force: true }); fs.rmdirSync(agentsDir); } catch (_) { /* pruned */ }
   }
-  assert(cursor.role === canonical.role
-    && cursor.behavior_contract_version === canonical.behavior_contract_version
-    && cursor.behavior_contract_hash === canonical.behavior_contract_hash,
-    'G4-reviewer[' + role + ']: cursor agent retains normalized reviewer behavior identity');
-  assert(cursor.core === canonical.core,
-    'G4-reviewer[' + role + ']: cursor render preserves reviewer behavior-core bytes');
-  assert(reviewerGenerator.sha256(cursorText)
-      === reviewerGenerator.manifestProfileEntry('cursor', role).resolved_profile_sha256,
-    'G4-reviewer[' + role + ']: cursor agent matches its generated manifest sidecar digest');
-  assert(!/[0-9a-f]{64}/.test(cursorText) && !cursorText.includes('runtime-adapter'),
-    'G4-reviewer[' + role + ']: cursor agent carries no receipt hashes in agent-visible text');
-  assert(reviewerGenerator.manifestProfileEntry('cursor', role).resolved_profile_sha256
-      !== reviewerGenerator.manifestProfileEntry('claude', role).resolved_profile_sha256,
-    'G4-reviewer[' + role + ']: cursor sidecar digest is stamped over cursor bytes (not the Claude render)');
 }
 
 // ---------------------------------------------------------------------------
@@ -1659,12 +1438,8 @@ for (const role of reviewerGenerator.ROLES) {
     assert(JSON.stringify(actual) === JSON.stringify(expected),
       'G7[' + forge + ']: ' + label + '/commands is exactly commandSources(' + forge
       + ') — expected ' + JSON.stringify(expected) + ' got ' + JSON.stringify(actual));
-    const agentDir = path.join(abs, 'agents');
-    const agents = fs.existsSync(agentDir)
-      ? fs.readdirSync(agentDir).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort()
-      : [];
-    assert(JSON.stringify(agents) === JSON.stringify(canonAgents),
-      'G7[' + forge + ']: agent set is the canonical roster, including knowledge-lookup');
+    assert(!fs.existsSync(path.join(abs, 'agents')),
+      'G7[' + forge + ']: ' + label + ' has no agents/ directory (Kaola ships no Cursor agents)');
     for (const name of CURSOR_CLI_MATERIALIZATION_COMMANDS) {
       const rel = commandRel(name, forge);
       const surface = cursorCliMaterializationSurface(name);
@@ -1672,11 +1447,10 @@ for (const role of reviewerGenerator.ROLES) {
       assert(verdict.ok,
         surface === 'next'
           ? ('G7[' + forge + '][' + name + ']: generated Next keeps startup/resume Repo prep on '
-            + 'standalone CLI/local with App/Cloud negative and no named-role capability_gap skip — '
+            + 'standalone CLI/local with App/Cloud negative and no role-catalog skip — '
             + verdict.errors.join(' | '))
-          : ('G7[' + forge + '][' + name + ']: generated Finalize keeps explicit "$PWD" and exact '
-            + '--forge=' + forge + ' without applying the rule to App local/Cloud — '
-            + verdict.errors.join(' | ')));
+          : ('G7[' + forge + '][' + name + ']: generated Finalize carries no retired pre-dispatch '
+            + 'role materialization — ' + verdict.errors.join(' | ')));
     }
     const c = runGeneratorCli(['--forge=' + forge, '--check']);
     assert(c.status === 0,
@@ -1686,9 +1460,10 @@ for (const role of reviewerGenerator.ROLES) {
   try {
     const staged = runGenerator(['--forge=github', '--write', '--tree-root=' + isolatedRoot]);
     assert(staged.status === 0
-      && fs.existsSync(path.join(isolatedRoot, '.cursor', 'agents', 'implementer.md'))
-      && fs.existsSync(path.join(isolatedRoot, '.cursor', 'commands', 'workflow-next.md')),
-    'G7[isolated]: --tree-root renders a complete github source under the explicit staging root');
+      && fs.existsSync(path.join(isolatedRoot, '.cursor', 'commands', 'workflow-next.md'))
+      && fs.existsSync(path.join(isolatedRoot, '.cursor', 'hooks.json'))
+      && !fs.existsSync(path.join(isolatedRoot, '.cursor', 'agents')),
+    'G7[isolated]: --tree-root renders a complete github source (commands + hooks.json, no agents/) under the explicit staging root');
     const relative = runGeneratorCli(['--write', '--tree-root=relative-staging']);
     assert(relative.status === 2,
       'G7[isolated]: --tree-root refuses a relative path (got ' + relative.status + ')');
@@ -1741,6 +1516,11 @@ for (const role of reviewerGenerator.ROLES) {
       && /--tree-root="\$STAGING_ROOT"/.test(installerSource),
     'G8-source: normal installs render canonical Cursor bytes only in an isolated staging root');
     const firstLine = r => String(r.stderr || r.stdout || '').split('\n')[0];
+    // #1101: the edition deploys no agent; any Markdown under an agents/ dir is user-owned.
+    const agentFiles = dir => (fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort() : []);
+    const receiptAgentPaths = file => (fs.existsSync(file)
+      ? Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).files || {}).filter(rel => rel.startsWith('agents/'))
+      : ['<missing receipt>']);
     function runInstaller(extraArgs, opts) {
       opts = opts || {};
       const home = opts.home || fs.mkdtempSync(path.join(tmpBase(), 'cursor-i-home-'));
@@ -1762,19 +1542,25 @@ for (const role of reviewerGenerator.ROLES) {
       }
     };
 
-    // Project deploy.
+    // Project deploy. A user agent under CURSOR_HOME/agents is never copied into the project
+    // (the retired catalog copier's guarantee, now trivially: nothing under agents/ is managed).
     {
-      const r = runInstaller([]);
+      const seededHome = fs.mkdtempSync(path.join(tmpBase(), 'cursor-i-ch-'));
+      fs.mkdirSync(path.join(seededHome, 'agents'), { recursive: true });
+      fs.writeFileSync(path.join(seededHome, 'agents', 'user-agent.md'), '# stray user agent\n');
+      const r = runInstaller([], { cursorHome: seededHome });
       assert(r.status === 0,
         'G8-project: install-cursor.sh --target exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
       const agentsDir = path.join(r.dest, '.cursor', 'agents');
       const commandsDir = path.join(r.dest, '.cursor', 'commands');
-      assert(fs.existsSync(path.join(agentsDir, 'knowledge-lookup.md')),
-        'G8-project: deploys knowledge-lookup.md under <target>/.cursor/agents/');
-      for (const name of canonAgents) {
-        assert(fs.existsSync(path.join(agentsDir, name + '.md')),
-          'G8-project[' + name + ']: agent deployed under <target>/.cursor/agents/');
-      }
+      assert(agentFiles(agentsDir).length === 0,
+        'G8-project: deploys no agent under <target>/.cursor/agents/ (not even a CURSOR_HOME user agent) — found '
+        + JSON.stringify(agentFiles(agentsDir)));
+      assert(fs.readFileSync(path.join(seededHome, 'agents', 'user-agent.md'), 'utf8') === '# stray user agent\n',
+        'G8-project: the user agent under CURSOR_HOME/agents is left untouched');
+      assert(receiptAgentPaths(path.join(r.cursorHome, cursorSurface.AUTHORITY_RECEIPT_REL)).length === 0
+        && receiptAgentPaths(path.join(r.dest, '.cursor', cursorSurface.PROJECT_RECEIPT_REL)).length === 0,
+        'G8-project: neither the global authority receipt nor the project receipt records an agents/ path');
       for (const name of canonCommandNames) {
         assert(fs.existsSync(path.join(commandsDir, name + '.md')),
           'G8-project[' + name + ']: command deployed under <target>/.cursor/commands/');
@@ -1799,7 +1585,7 @@ for (const role of reviewerGenerator.ROLES) {
       clean(r);
     }
 
-    // --global: agents/commands land under CURSOR_HOME (the ~/.cursor equivalent), un-nested.
+    // --global: commands land under CURSOR_HOME (the ~/.cursor equivalent), un-nested; no agents.
     {
       const stagingParent = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-staging-parent-'));
       const r = runInstaller(['--global'], {
@@ -1808,8 +1594,11 @@ for (const role of reviewerGenerator.ROLES) {
       });
       assert(r.status === 0,
         'G8-global: install-cursor.sh --global exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
-      assert(fs.existsSync(path.join(r.cursorHome, 'agents', 'knowledge-lookup.md')),
-        'G8-global: deploys knowledge-lookup under $CURSOR_HOME/agents/ (un-nested)');
+      assert(agentFiles(path.join(r.cursorHome, 'agents')).length === 0,
+        'G8-global: deploys no agent under $CURSOR_HOME/agents/ — found '
+        + JSON.stringify(agentFiles(path.join(r.cursorHome, 'agents'))));
+      assert(receiptAgentPaths(path.join(r.cursorHome, cursorSurface.AUTHORITY_RECEIPT_REL)).length === 0,
+        'G8-global: the Cursor global authority receipt records no agents/ path');
       for (const name of canonCommandNames) {
         assert(fs.existsSync(path.join(r.cursorHome, 'commands', name + '.md')),
           'G8-global[' + name + ']: command deployed under $CURSOR_HOME/commands/');
@@ -1850,22 +1639,25 @@ for (const role of reviewerGenerator.ROLES) {
         assert(r.status === 0,
           'G8-global-git: install-cursor.sh --global from a git-fixture cwd exits 0 (got '
           + r.status + ' — ' + firstLine(r) + ')');
-        assert(!fs.existsSync(path.join(gitRepo, '.cursor', 'agents', 'implementer.md')),
-          'G8-global-git: --global from a git-fixture cwd does not write <toplevel>/.cursor/agents/implementer.md');
+        assert(!fs.existsSync(path.join(gitRepo, '.cursor', 'commands', 'workflow-next.md')),
+          'G8-global-git: --global from a git-fixture cwd does not write <toplevel>/.cursor/commands/workflow-next.md');
         assert(fs.readFileSync(path.join(gitRepo, '.cursor', 'agents', 'user-owned.md'), 'utf8') === 'keep\n',
           'G8-global-git: --global leaves an existing unmanaged project file untouched');
         assert(!/also deploying/i.test(r.stdout + r.stderr),
           'G8-global-git: --global does not announce an ambient project deploy');
         assert(!fs.existsSync(path.join(r.cursorHome, '.cursor')),
           'G8-global-git: still creates NO nested .cursor/ under CURSOR_HOME');
-        assert(fs.existsSync(path.join(r.cursorHome, 'agents', 'knowledge-lookup.md')),
-          'G8-global-git: still deploys un-nested agents under $CURSOR_HOME/agents/');
+        assert(fs.existsSync(path.join(r.cursorHome, 'commands', 'workflow-next.md')),
+          'G8-global-git: still deploys un-nested commands under $CURSOR_HOME/commands/');
         const targeted = runInstaller(['--target', gitRepo], { skipTarget: true, cwd: gitRepo, home: r.home, cursorHome: r.cursorHome });
         assert(targeted.status === 0,
           'G8-explicit-target: --target DIR still materializes project .cursor/ (got '
           + targeted.status + ' — ' + firstLine(targeted) + ')');
-        assert(fs.existsSync(path.join(gitRepo, '.cursor', 'agents', 'implementer.md')),
-          'G8-explicit-target: --target DIR writes <dir>/.cursor/agents/implementer.md');
+        assert(fs.existsSync(path.join(gitRepo, '.cursor', 'commands', 'workflow-next.md'))
+          && !fs.existsSync(path.join(gitRepo, '.cursor', 'agents', 'implementer.md')),
+          'G8-explicit-target: --target DIR writes <dir>/.cursor/commands/workflow-next.md and no agent');
+        assert(fs.readFileSync(path.join(gitRepo, '.cursor', 'agents', 'user-owned.md'), 'utf8') === 'keep\n',
+          'G8-explicit-target: the project user agent survives explicit materialization');
         clean(r);
       } finally {
         try { fs.rmSync(gitRepo, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
@@ -1943,8 +1735,8 @@ for (const role of reviewerGenerator.ROLES) {
           const first = runHelper(['--ensure-target', fresh, '--forge=github', '--json'], fresh);
           let firstBody = null;
           try { firstBody = JSON.parse(first.stdout); } catch (_) { /* asserted below */ }
-          const globalAgent = path.join(global.cursorHome, 'agents', 'implementer.md');
-          const targetAgent = path.join(fresh, '.cursor', 'agents', 'implementer.md');
+          const globalAgent = path.join(global.cursorHome, 'commands', 'workflow-next.md');
+          const targetAgent = path.join(fresh, '.cursor', 'commands', 'workflow-next.md');
           assert(first.status === 0 && firstBody && firstBody.status === 'materialized'
             && fs.existsSync(targetAgent) && fs.readFileSync(targetAgent).equals(fs.readFileSync(globalAgent)),
           'G8-installed-helper-materialized: first explicit target call materializes bytes from installed global authority — '
@@ -1969,7 +1761,7 @@ for (const role of reviewerGenerator.ROLES) {
             + firstLine(modified));
 
           const collision = makeTarget('collision');
-          const collisionFile = path.join(collision, '.cursor', 'agents', 'implementer.md');
+          const collisionFile = path.join(collision, '.cursor', 'commands', 'workflow-next.md');
           fs.mkdirSync(path.dirname(collisionFile), { recursive: true });
           fs.writeFileSync(collisionFile, 'UNPROVED_OWNER_BYTES\n');
           const beforeCollision = snapshot(path.join(collision, '.cursor'));
@@ -1982,7 +1774,7 @@ for (const role of reviewerGenerator.ROLES) {
 
           const symlink = makeTarget('symlink');
           const symlinkOwner = path.join(symlink, 'outside-owner.md');
-          const symlinkFile = path.join(symlink, '.cursor', 'agents', 'implementer.md');
+          const symlinkFile = path.join(symlink, '.cursor', 'commands', 'workflow-next.md');
           fs.writeFileSync(symlinkOwner, 'SYMLINK_OWNER_BYTES\n');
           fs.mkdirSync(path.dirname(symlinkFile), { recursive: true });
           fs.symlinkSync(symlinkOwner, symlinkFile);
@@ -2066,15 +1858,16 @@ for (const role of reviewerGenerator.ROLES) {
         const installed = runInstaller(['--target', dest, '--no-scripts'], {
           skipTarget: true, dest, home: global.home, cursorHome: global.cursorHome,
         });
-        assert(/collision|unmanaged/i.test(doctorText),
-          'G8-collision-doctor: doctor identifies canonical-name unmanaged collisions — got '
+        assert(/collision|unmanaged/i.test(doctorText) && doctorText.includes('workflow-next.md')
+          && !/agents\/implementer\.md/.test(doctorText),
+          'G8-collision-doctor: doctor identifies the canonical command collision and no agent collision — got '
           + JSON.stringify(doctorText.slice(0, 500)));
         assert(installed.status !== 0,
           'G8-collision: explicit target refuses unmanaged canonical-name files (got '
           + installed.status + ' — ' + firstLine(installed) + ')');
         assert(fs.readFileSync(ownerAgent, 'utf8') === 'OWNER_AGENT_COLLISION\n'
           && fs.readFileSync(ownerCommand, 'utf8') === 'OWNER_COMMAND_COLLISION\n',
-        'G8-collision: refused install preserves both agent and command owner bytes');
+        'G8-collision: refused install preserves the command owner bytes and the user agent (never managed)');
         // spawn-class: environment
         const uninstalled = spawnSync('bash', [INSTALLER, '--uninstall', '--target', dest, '--yes'], {
           env: Object.assign({}, process.env, { HOME: global.home, CURSOR_HOME: global.cursorHome }),
@@ -2097,8 +1890,8 @@ for (const role of reviewerGenerator.ROLES) {
       const outside = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g8-symlink-owner-'));
       const global = runInstaller(['--global'], { skipTarget: true });
       try {
-        const ownerTarget = path.join(outside, 'owner-implementer.md');
-        const link = path.join(dest, '.cursor', 'agents', 'implementer.md');
+        const ownerTarget = path.join(outside, 'owner-workflow-next.md');
+        const link = path.join(dest, '.cursor', 'commands', 'workflow-next.md');
         fs.writeFileSync(ownerTarget, 'OWNER_SYMLINK_TARGET\n');
         fs.mkdirSync(path.dirname(link), { recursive: true });
         fs.symlinkSync(ownerTarget, link);
@@ -2134,8 +1927,8 @@ for (const role of reviewerGenerator.ROLES) {
         const installed = runInstaller(['--target', dest, '--no-scripts'], {
           skipTarget: true, dest, home: global.home, cursorHome: global.cursorHome,
         });
-        const globalAgent = path.join(global.cursorHome, 'agents', 'implementer.md');
-        const targetAgent = path.join(dest, '.cursor', 'agents', 'implementer.md');
+        const globalAgent = path.join(global.cursorHome, 'commands', 'workflow-next.md');
+        const targetAgent = path.join(dest, '.cursor', 'commands', 'workflow-next.md');
         assert(installed.status === 0 && fs.existsSync(globalAgent) && fs.existsSync(targetAgent)
           && fs.readFileSync(targetAgent).equals(fs.readFileSync(globalAgent)),
         'G8-freshness: explicit target bytes equal the installed global authority');
@@ -2179,7 +1972,7 @@ for (const role of reviewerGenerator.ROLES) {
           skipTarget: true, dest: secondDest, home: global.home, cursorHome: global.cursorHome,
         });
         assert(missingAuthority.status !== 0
-          && !fs.existsSync(path.join(secondDest, '.cursor', 'agents', 'implementer.md')),
+          && !fs.existsSync(path.join(secondDest, '.cursor', 'commands', 'workflow-next.md')),
         'G8-authority: explicit target refuses a missing/stale installed global authority instead of '
           + 'falling back to repository source bytes');
       } finally {
@@ -2231,30 +2024,29 @@ for (const role of reviewerGenerator.ROLES) {
         'G8-doctor: App Cloud requires environment-Build project materialization');
       assert(doc.surfaces.app.execution_hosts.cloud.remote_injection === 'agent_confirmed_cloud_environment_setup_install_and_save',
         'G8-doctor: App Cloud names the Agent-confirmed setup/install/save carrier');
-      assert(doc.surfaces.app.execution_hosts.cloud.named_catalog === 'project_custom_from_saved_environment_build',
-        'G8-doctor: App Cloud named catalog comes from the saved Build project carrier');
+      assert(!Object.prototype.hasOwnProperty.call(doc, 'named_catalog')
+        && !Object.prototype.hasOwnProperty.call(doc, 'dispatch_contract')
+        && !Object.prototype.hasOwnProperty.call(doc.surfaces.app.execution_hosts.cloud, 'named_catalog'),
+        'G8-doctor: the report carries no retired named_catalog or dispatch_contract role field (#1101)');
       assert(doc.surfaces.app.execution_hosts.cloud.reload === 'new_same_repository_cloud_parent_after_environment_save',
         'G8-doctor: App Cloud requires a new same-repository parent after environment save');
       assert(doc.surfaces.cli.execution_hosts.local.required_project_materialization === 'yes',
         'G8-doctor: CLI requires explicit project materialization');
-      assert(doc.runtime_build === 'unknown' && doc.named_catalog === 'unknown',
-        'G8-doctor: current Build and live catalog stay unknown without a current observation');
+      assert(doc.runtime_build === 'unknown',
+        'G8-doctor: current Build stays unknown without a current observation');
       assert(doc.evidence_stamp
-        && doc.evidence_stamp.runtime_build === 'bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2'
-        && doc.selected_host.named_catalog === 'project_custom_from_saved_environment_build',
-      'G8-doctor: historical Build/catalog remain typed under evidence_stamp/selected_host');
+        && doc.evidence_stamp.runtime_build === 'bld-20260827-56284e4a-bc0c-4cb6-b873-a48d180693e2',
+      'G8-doctor: historical Build remains typed under evidence_stamp');
       const currentIdentityGaps = report => [
         report.runtime_build !== 'unknown' ? 'current-build-inferred' : null,
-        report.named_catalog !== 'unknown' ? 'live-catalog-inferred' : null,
       ].filter(Boolean);
       assert(currentIdentityGaps(doc).length === 0,
         'G8-doctor-current-identity: empty host has no inferred current identity');
       const flattenedHistoricalEvidence = Object.assign({}, doc, {
         runtime_build: doc.evidence_stamp.runtime_build,
-        named_catalog: doc.selected_host.named_catalog,
       });
       assert(JSON.stringify(currentIdentityGaps(flattenedHistoricalEvidence))
-        === JSON.stringify(['current-build-inferred', 'live-catalog-inferred']),
+        === JSON.stringify(['current-build-inferred']),
       'G8-doctor-current-identity mutation RED: flattening historical evidence is detected');
       assert(typeof doc.kaola_workflow_version === 'string'
         && doc.kaola_workflow_version.length > 0,
@@ -2323,7 +2115,7 @@ for (const role of reviewerGenerator.ROLES) {
 
     // --forge=gitlab renders `.cursor-gitlab/` as the generator SOURCE tree, then
     // copies content into the runtime-native dest Cursor actually scans:
-    // <target>/.cursor/{agents,commands,hooks}. Same split as kimi (.kimi-gitlab
+    // <target>/.cursor/{commands,hooks.json}. Same split as kimi (.kimi-gitlab
     // → .kimi-code/skills) and opencode (.opencode-gitlab → .opencode/).
     {
       const r = runInstaller(['--forge=gitlab']);
@@ -2332,12 +2124,8 @@ for (const role of reviewerGenerator.ROLES) {
         + ' — ' + firstLine(r) + ')');
       const agentsDir = path.join(r.dest, '.cursor', 'agents');
       const commandsDir = path.join(r.dest, '.cursor', 'commands');
-      assert(fs.existsSync(path.join(agentsDir, 'knowledge-lookup.md')),
-        'G8-gitlab: deploys knowledge-lookup under <target>/.cursor/agents/ (Cursor does not scan .cursor-gitlab/)');
-      for (const name of canonAgents) {
-        assert(fs.existsSync(path.join(agentsDir, name + '.md')),
-          'G8-gitlab[' + name + ']: agent deployed under <target>/.cursor/agents/');
-      }
+      assert(agentFiles(agentsDir).length === 0,
+        'G8-gitlab: deploys no agent under <target>/.cursor/agents/ — found ' + JSON.stringify(agentFiles(agentsDir)));
       const expected = commandNamesFor('gitlab');
       for (const name of expected) {
         assert(fs.existsSync(path.join(commandsDir, name + '.md')),
@@ -2369,7 +2157,7 @@ for (const role of reviewerGenerator.ROLES) {
       clean(r);
     }
 
-    // --no-scripts skips support scripts; agents/commands still deploy. No edition
+    // --no-scripts skips support scripts; commands still deploy. No edition
     // install mode may reintroduce a duplicate Rule or Cursor hook carrier.
     {
       const withScripts = runInstaller([]);
@@ -2385,8 +2173,8 @@ for (const role of reviewerGenerator.ROLES) {
       const r = runInstaller(['--no-scripts']);
       assert(r.status === 0,
         'G8-noscripts: --no-scripts exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
-      assert(fs.existsSync(path.join(r.dest, '.cursor', 'agents', 'knowledge-lookup.md')),
-        'G8-noscripts: agents still deploy');
+      assert(canonCommandNames.every(n => fs.existsSync(path.join(r.dest, '.cursor', 'commands', n + '.md'))),
+        'G8-noscripts: commands still deploy');
       assert(!fs.existsSync(path.join(r.dest, '.cursor', 'rules', CURSOR_RECOVERY_RULE)),
         'G8-noscripts: no-scripts mode also leaves the retired recovery Rule absent');
       assert(!fs.existsSync(path.join(r.cursorHome, 'kaola-workflow', 'scripts')),
@@ -2511,6 +2299,7 @@ for (const role of reviewerGenerator.ROLES) {
       assert(!kaolaHookRows(merged).length && !merged.hooks.sessionStart,
         'G8-merge: strips retired Kaola sessionStart without adding a replacement hook');
       const userFile = path.join(dest, '.cursor', 'agents', 'notes.md');
+      fs.mkdirSync(path.dirname(userFile), { recursive: true });
       fs.writeFileSync(userFile, 'user-owned, not kaola-deployed\n');
       // spawn-class: environment
       const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', dest, '--yes'], {
@@ -2531,14 +2320,19 @@ for (const role of reviewerGenerator.ROLES) {
       clean(r);
     }
 
-    // --uninstall removes only kaola-deployed names.
+    // --uninstall removes only kaola-deployed names; a user-authored agent named like a retired
+    // role is never inferred to be Kaola-owned (#1101).
     {
       const r = runInstaller([]);
       assert(r.status === 0, 'G8-uninstall: seed install exits 0');
       const agentsDir = path.join(r.dest, '.cursor', 'agents');
+      fs.mkdirSync(agentsDir, { recursive: true });
       const userFile = path.join(agentsDir, 'notes.md');
       const userBody = 'user-owned, not kaola-deployed\n';
       fs.writeFileSync(userFile, userBody);
+      const userRole = path.join(agentsDir, 'implementer.md');
+      const userRoleBody = '---\nname: implementer\ndescription: my own agent\n---\nuser-authored\n';
+      fs.writeFileSync(userRole, userRoleBody);
       const userJs = path.join(r.cursorHome, 'kaola-workflow', 'scripts', 'my-local-helper.js');
       const userJsBody = '// user-authored\n';
       if (fs.existsSync(path.dirname(userJs))) fs.writeFileSync(userJs, userJsBody);
@@ -2549,47 +2343,74 @@ for (const role of reviewerGenerator.ROLES) {
       });
       assert(ru.status === 0,
         'G8-uninstall: --uninstall exits 0 (got ' + ru.status + ' — ' + firstLine(ru) + ')');
-      for (const name of canonAgents) {
-        assert(!fs.existsSync(path.join(agentsDir, name + '.md')),
-          'G8-uninstall[' + name + ']: kaola-deployed agent is removed');
-      }
       for (const name of canonCommandNames) {
         assert(!fs.existsSync(path.join(r.dest, '.cursor', 'commands', name + '.md')),
           'G8-uninstall[' + name + ']: kaola-deployed command is removed');
       }
       assert(fs.existsSync(userFile) && fs.readFileSync(userFile, 'utf8') === userBody,
         'G8-uninstall: a user-owned file in the agents dir survives (only kaola-deployed names are removed)');
+      assert(fs.existsSync(userRole) && fs.readFileSync(userRole, 'utf8') === userRoleBody,
+        'G8-uninstall: a user-authored agent named like a retired role survives uninstall');
       if (fs.existsSync(path.dirname(userJs))) {
         assert(fs.existsSync(userJs) && fs.readFileSync(userJs, 'utf8') === userJsBody,
           'G8-uninstall: a user-authored helper in the scripts dir survives');
       }
       clean(r);
     }
-  }
-}
 
-// #1014: catalog preflight copies only listCanonAgents() names. A stray
-// user-agent.md in CURSOR_HOME/agents must not land in project .cursor/agents.
-// Prefer the exported helper; missing export is RED.
-{
-  const copy = syncMod.copyListCanonAgents;
-  assert(typeof copy === 'function',
-    'G9-catalog: sync-cursor-edition.js exports copyListCanonAgents(srcDir, destDir) '
-    + '(copies only listCanonAgents() names; not a glob of *.md)');
-  if (typeof copy === 'function') {
-    const src = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g9-src-'));
-    const dest = fs.mkdtempSync(path.join(tmpBase(), 'cursor-g9-dest-'));
-    try {
-      fs.writeFileSync(path.join(src, 'implementer.md'), '# implementer\n');
-      fs.writeFileSync(path.join(src, 'user-agent.md'), '# stray\n');
-      copy(src, dest);
-      assert(fs.existsSync(path.join(dest, 'implementer.md')),
-        'G9-catalog: listCanonAgents() name implementer.md is copied into the project agents dir');
-      assert(!fs.existsSync(path.join(dest, 'user-agent.md')),
-        'G9-catalog: stray user-agent.md in CURSOR_HOME/agents is NOT copied into project .cursor/agents');
-    } finally {
-      try { fs.rmSync(src, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
-      try { fs.rmSync(dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    // #1101 upgrade: a receipt from an earlier release that owned agents/*.md loses every
+    // unchanged receipt-owned agent on reinstall (global authority and project materialization),
+    // keeps a modified one on disk, and the rewritten receipt records no agents/ path at all.
+    // Upgrade order is global then project: the project transaction verifies the installed
+    // authority, so the global reinstall runs first (as install-all does).
+    {
+      const r = runInstaller([]);
+      assert(r.status === 0, 'G8-agent-migration: seed install exits 0 (got ' + r.status + ' — ' + firstLine(r) + ')');
+      const plant = (root, receiptFile) => {
+        const receipt = JSON.parse(fs.readFileSync(receiptFile, 'utf8'));
+        const unchanged = path.join(root, 'agents', 'implementer.md');
+        const modified = path.join(root, 'agents', 'tdd-guide.md');
+        fs.mkdirSync(path.dirname(unchanged), { recursive: true });
+        fs.writeFileSync(unchanged, '---\nname: implementer\nmodel: grok-4.7[effort=medium]\n---\nretired render\n');
+        fs.writeFileSync(modified, '---\nname: tdd-guide\nmodel: grok-4.7[effort=medium]\n---\nretired render\n');
+        receipt.files['agents/implementer.md'] = { sha256: sha256File(unchanged), mode: 0o644 };
+        receipt.files['agents/tdd-guide.md'] = { sha256: sha256File(modified), mode: 0o644 };
+        fs.writeFileSync(receiptFile, JSON.stringify(receipt, null, 2) + '\n');
+        fs.writeFileSync(modified, 'OWNER_EDITED_RETIRED_PROFILE\n');
+        return { unchanged, modified };
+      };
+      const globalReceipt = path.join(r.cursorHome, cursorSurface.AUTHORITY_RECEIPT_REL);
+      const projectRoot = path.join(r.dest, '.cursor');
+      const projectReceipt = path.join(projectRoot, cursorSurface.PROJECT_RECEIPT_REL);
+      const ready = r.status === 0 && fs.existsSync(globalReceipt) && fs.existsSync(projectReceipt);
+      assert(ready, 'G8-agent-migration: the seed install wrote both the global and the project receipt');
+      if (ready) {
+        const globalPlant = plant(r.cursorHome, globalReceipt);
+        const projectPlant = plant(projectRoot, projectReceipt);
+        const globalAgain = runInstaller(['--global'], {
+          skipTarget: true, home: r.home, cursorHome: r.cursorHome, dest: r.dest,
+        });
+        assert(globalAgain.status === 0,
+          'G8-agent-migration: --global reinstall over an authority receipt that owned agents/*.md exits 0 (got '
+          + globalAgain.status + ' — ' + firstLine(globalAgain) + ')');
+        const again = runInstaller([], { home: r.home, cursorHome: r.cursorHome, dest: r.dest });
+        assert(again.status === 0,
+          'G8-agent-migration: project reinstall over a project receipt that owned agents/*.md exits 0 (got '
+          + again.status + ' — ' + firstLine(again) + ')');
+        for (const [scope, planted, receiptFile] of [
+          ['global', globalPlant, globalReceipt], ['project', projectPlant, projectReceipt],
+        ]) {
+          assert(!fs.existsSync(planted.unchanged),
+            'G8-agent-migration[' + scope + ']: an unchanged receipt-owned agents/implementer.md is removed on reinstall');
+          assert(fs.existsSync(planted.modified)
+            && fs.readFileSync(planted.modified, 'utf8') === 'OWNER_EDITED_RETIRED_PROFILE\n',
+            'G8-agent-migration[' + scope + ']: a modified receipt-owned agents/tdd-guide.md is kept byte-for-byte');
+          assert(receiptAgentPaths(receiptFile).length === 0,
+            'G8-agent-migration[' + scope + ']: the rewritten receipt records no agents/ path — got '
+            + JSON.stringify(receiptAgentPaths(receiptFile)));
+        }
+      }
+      clean(r);
     }
   }
 }
