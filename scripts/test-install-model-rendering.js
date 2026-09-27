@@ -2146,6 +2146,62 @@ function enableMultiAgentV2(homeRoot) {
     }
   }
 
+  // #1104: the same live cache copy with a matching manifest stays ok under
+  // either --home form.
+  {
+    const fixture = cacheFixture();
+    const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-link-'));
+    try {
+      for (const script of ['kaola-workflow-codex-preflight.js', 'kaola-workflow-adaptive-schema.js']) {
+        fs.copyFileSync(path.join(pluginRoot, 'scripts', script),
+          path.join(fixture.versionRoot, 'scripts', script));
+      }
+      const realHome = fs.realpathSync(fixture.homeRoot);
+      const linkedHome = path.join(linkRoot, 'home');
+      fs.symlinkSync(realHome, linkedHome);
+      for (const [label, home] of [['symlinked', linkedHome], ['real', realHome]]) {
+        // spawn-class: environment
+        const run = spawnSync(process.execPath,
+          [path.join(fixture.versionRoot, 'scripts', 'kaola-workflow-codex-preflight.js'),
+            '--doctor', '--home', home, '--project-root', fixture.projectRoot, '--json'],
+          { encoding: 'utf8', env: withCodexVersionAttestation() });
+        assert.strictEqual(run.status, 0,
+          `live cached CLI doctor with a ${label} --home accepts a matching manifest: `
+            + run.stdout + run.stderr);
+        assert.strictEqual(JSON.parse(run.stdout).status, 'ok',
+          `live cached CLI doctor with a ${label} --home reports ok for a matching manifest`);
+      }
+    } finally {
+      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
+      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
+      fs.rmSync(linkRoot, { recursive: true, force: true });
+    }
+  }
+
+  // #1104: a lexical scriptDir reaching the live cache through a symlinked cache
+  // layer keeps the lexical containment check and its non-symlink refusal.
+  for (const layer of ['.codex', 'version']) {
+    const fixture = cacheFixture();
+    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-layer-'));
+    try {
+      const linked = layer === '.codex' ? path.join(fixture.homeRoot, '.codex') : fixture.versionRoot;
+      const outside = path.join(outsideRoot, 'target');
+      fs.renameSync(linked, outside);
+      fs.symlinkSync(outside, linked);
+      const result = doctor(fixture, true);
+      assert.strictEqual(result.exitCode, 2,
+        `live installed-source doctor rejects a symlinked ${layer} cache layer reached lexically`);
+      assert.strictEqual(result.result.status, 'plugin_identity_invalid',
+        `symlinked ${layer} cache layer has a typed identity refusal`);
+      assert(result.result.error.includes('plugin_cache_path_unsafe'),
+        `symlinked ${layer} cache layer refusal names plugin_cache_path_unsafe`);
+    } finally {
+      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
+      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
+      fs.rmSync(outsideRoot, { recursive: true, force: true });
+    }
+  }
+
   {
     const fixture = cacheFixture();
     const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-outside-'));
