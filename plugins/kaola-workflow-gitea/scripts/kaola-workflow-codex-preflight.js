@@ -1365,6 +1365,13 @@ function residueInstallCommand(installerPath, scope, homeDir) {
   return `${homePrefix}node ${installerPath} --global`;
 }
 
+// What the user does with what the installer keeps. config.toml is never deleted: it holds the
+// user's own settings, and only the managed block inside it is Kaola's.
+const PRESERVED_REPAIR = 'What the installer keeps (modified since install, or with no ownership '
+  + 'record) is yours to review: in config.toml remove only the lines from "' + BEGIN_MARKER + '" to "'
+  + END_MARKER + '" (never the file), and remove a kept profile under .codex/agents/kaola-workflow/ '
+  + 'only after checking no remaining config_file line points at it.';
+
 function residueScopeRepair(installerPath, scope, homeDir) {
   const command = residueInstallCommand(installerPath, scope, homeDir);
   if (scope.residue.managed_block === 'invalid') {
@@ -1374,8 +1381,7 @@ function residueScopeRepair(installerPath, scope, homeDir) {
   }
   return 'Kaola-Workflow no longer installs Codex role profiles. Re-run the Kaola Codex installer for '
     + `this scope; it removes the Kaola-owned retired role profiles and managed config block: ${command}. `
-    + 'A file the installer cannot prove Kaola-owned (modified since install, or with no ownership '
-    + 'record) is preserved and reported by the installer; review it and delete it by hand.';
+    + PRESERVED_REPAIR;
 }
 
 function residueScopeReport(installerPath, scope, homeDir) {
@@ -1799,9 +1805,8 @@ function runPreflight(opts) {
       result: {
         ...verified.result,
         autofix_attempted: true,
-        repair: 'The Kaola Codex installer ran and preserved these files because it cannot prove '
-          + 'Kaola installed them unchanged; review each one and delete it by hand, then re-run this '
-          + 'preflight.',
+        repair: 'The Kaola Codex installer ran and kept what it cannot prove Kaola installed '
+          + `unchanged. ${PRESERVED_REPAIR} Then re-run this preflight.`,
       },
     };
   }

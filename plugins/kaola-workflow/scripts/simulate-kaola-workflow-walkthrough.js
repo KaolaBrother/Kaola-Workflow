@@ -909,8 +909,18 @@ function testCodexPreflight266() {
       fs.writeFileSync(autofixConfig, staleConfig);
       autofixResult = runScript(preflightScript, ['--project-root', autofixRoot, '--json'], h266);
       autofixJson = JSON.parse(autofixResult.stdout);
+      // The repair names the managed block to remove and never tells the user to delete
+      // config.toml (it holds their model, MCP servers, and other settings) — neither at the top
+      // level nor in any per-scope repair.
+      const repairs = [autofixJson.repair, ...(autofixJson.residue || []).map(entry => entry.repair)];
+      for (const text of repairs) {
+        assert(!/delete (?:it|each one|them) by hand/.test(text) && !/delete[^.]*config\.toml/.test(text),
+          '#1101 N2: a preflight repair must never tell the user to delete config.toml, got: ' + text);
+      }
+      assert(repairs.some(text => text.includes(BEGIN_AGENTS_MARKER) && /config\.toml/.test(text)),
+        '#1101 N2: the repair names the "' + BEGIN_AGENTS_MARKER + '" block in config.toml as what to remove');
       assert(autofixResult.status === 1 && autofixJson.status === 'retired_role_residue'
-        && autofixJson.autofix_attempted === true && /delete it by hand/.test(autofixJson.repair),
+        && autofixJson.autofix_attempted === true,
         '#1101 case1 autofix: an edited block is not provably Kaola\'s — the installer keeps it and the gate reports '
         + 'it as residue for the user (exit 1, autofix_attempted), not an installer failure, got '
         + autofixResult.status + ' ' + JSON.stringify(autofixJson));
