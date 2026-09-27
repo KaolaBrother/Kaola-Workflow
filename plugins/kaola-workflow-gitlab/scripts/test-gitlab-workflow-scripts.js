@@ -2126,6 +2126,69 @@ function testStaleWorktreeCleanup() {
           'sc2g R4: a mid-sink issue-<N> run whose state carries no claim_ts must stay PINNED, got: ' + JSON.stringify(out));
       } finally { cleanup2g(fx); }
     }
+
+    // --- N1/N2/N4/N8 (repair round 2): the base's archive reads stay, and ambiguity unpins.
+    // N1 — #1097 integration arm: closure already moved the project into archive/ (state + mid-flight
+    // receipt), no live folder. The sink resumes from archive/<project>/.cache, so W stays pinned.
+    {
+      const fx = mkRepo();
+      try {
+        const wPath = path.join(fx.tmp, '.kw', 'integrate', 'issue-400');
+        fs.mkdirSync(path.dirname(wPath), { recursive: true });
+        const r = G.git(fx.tmp, ['worktree', 'add', '--detach', '--', wPath, 'HEAD'], { encoding: 'utf8' });
+        assert.strictEqual(r.status, 0, 'git worktree add --detach failed: ' + r.stderr);
+        const arch = path.join(fx.tmp, 'kaola-workflow', 'archive', 'issue-400');
+        state2g(arch, 'issue-400', ['branch: workflow/gitlab-issue-400', 'claim_ts: 2026-09-27T03:00:00.000Z']);
+        receipt2g(arch, { project: 'issue-400', branch: 'workflow/gitlab-issue-400', steps: PENDING2G });
+        const out = cls2g(fx);
+        assert(Array.isArray(out.stale_integration_worktrees) && !out.stale_integration_worktrees.some(w => w.path === wPath),
+          'sc2g N1: an integration W whose archived project holds a mid-flight receipt must stay PINNED, got: ' + JSON.stringify(out));
+      } finally { cleanup2g(fx); }
+    }
+
+    // N2 — #832 receipt-only skeleton: no live folder, so the sink wrote its receipt to
+    // archive/issue-<N>/.cache, and no workflow-state.md names the branch. The base read pins it.
+    {
+      const fx = mkRepo();
+      try {
+        receipt2g(path.join(fx.tmp, 'kaola-workflow', 'archive', 'issue-400'), { project: 'issue-400', branch: 'workflow/gitlab-issue-400', steps: PENDING2G });
+        const out = cls2g(fx);
+        assert(out.active_worktrees.some(w => w.path === fx.wtPath),
+          'sc2g N2: a receipt-only archive/issue-<N>/.cache skeleton must keep the lane worktree PINNED, got: ' + JSON.stringify(out));
+      } finally { cleanup2g(fx); }
+    }
+
+    // N4 — two archived runs, no live record: the OLD plain archive was abandoned mid-sink, the NEW
+    // suffixed one completed and disposed its receipt. The old run must not pin.
+    {
+      const fx = mkRepo();
+      try {
+        const a = path.join(fx.tmp, 'kaola-workflow', 'archive', 'issue-400');
+        state2g(a, 'issue-400', ['branch: workflow/gitlab-issue-400', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-20T00:00:00.000Z']);
+        receipt2g(a, { project: 'issue-400', branch: 'workflow/gitlab-issue-400', claim_ts: '2026-09-20T00:00:00.000Z', steps: PENDING2G });
+        const b = path.join(fx.tmp, 'kaola-workflow', 'archive', 'issue-400.archived-2026-09-27T00-00-00-000Z');
+        state2g(b, 'issue-400', ['branch: workflow/gitlab-issue-400', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-26T00:00:00.000Z']);
+        const out = cls2g(fx);
+        assert(out.stale_worktrees.some(w => w.path === fx.wtPath),
+          'sc2g N4: an OLD abandoned archive\'s mid-flight receipt must NOT pin the worktree when a newer claim exists, got: ' + JSON.stringify(out));
+      } finally { cleanup2g(fx); }
+    }
+
+    // N8 — two LIVE records on one branch (an old issue-<N> leftover with a mid-flight receipt, the
+    // current custom-named run with none): ambiguous, never first-in-directory-order, so unpinned.
+    {
+      const fx = mkRepo();
+      try {
+        const old = path.join(fx.tmp, 'kaola-workflow', 'issue-400');
+        state2g(old, 'issue-400', ['branch: workflow/gitlab-issue-400', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-01T00:00:00.000Z']);
+        receipt2g(old, { project: 'issue-400', steps: PENDING2G });
+        state2g(path.join(fx.tmp, 'kaola-workflow', 'zz-custom'), 'zz-custom',
+          ['branch: workflow/gitlab-issue-400', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T00:00:00.000Z']);
+        const out = cls2g(fx);
+        assert(out.stale_worktrees.some(w => w.path === fx.wtPath),
+          'sc2g N8: two live records on one branch are ambiguous and must leave the worktree UNPINNED, got: ' + JSON.stringify(out));
+      } finally { cleanup2g(fx); }
+    }
   }
 
   // Sub-case 3: execute-dirty-no-flag — dirty worktree + --execute (no archive/export/force)

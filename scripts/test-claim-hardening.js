@@ -5998,6 +5998,95 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
           '#1102 R5: a worktree-side leftover of an OLD run must not pin the worktree that main\'s live register names as the current run, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
       } finally { cleanupR(fx); }
     }
+
+    // --- N1/N2/N4/N8 (repair round 2): the base's archive reads stay, and ambiguity unpins -----
+    const PENDING_N = { preflight: 'done', merge: 'done', push_main: 'pending', closure: 'pending' };
+
+    // N1 — #1097 integration arm: closure already moved the project into archive/ (state + mid-flight
+    // receipt), no live folder. The sink resumes from archive/<project>/.cache, so W stays pinned.
+    {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-1102n1-')));
+      const wPath = path.join(root, '.kw', 'integrate', 'issue-96401');
+      try {
+        g1102(root, ['init', '-b', 'main']);
+        g1102(root, ['config', 'commit.gpgsign', 'false']);
+        fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+        g1102(root, ['add', 'README.md']);
+        g1102(root, ['commit', '-m', 'init']);
+        fs.mkdirSync(path.dirname(wPath), { recursive: true });
+        g1102(root, ['worktree', 'add', '--detach', '--', wPath, 'HEAD']);
+        const arch = path.join(root, ...AR, 'issue-96401');
+        stateR(arch, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-27T03:00:00.000Z']);
+        receiptR(arch, { project: 'issue-96401', branch: 'workflow/issue-96401', steps: PENDING_N });
+        const c = clsR(root, wPath);
+        assert(Array.isArray(c.out.stale_integration_worktrees) && !c.out.stale_integration_worktrees.some(w => w.path === wPath),
+          '#1102 N1: an integration W whose archived project holds a mid-flight receipt must stay PINNED — the sink resumes from archive/<project>/.cache (#1097), got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+      } finally {
+        try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+      }
+    }
+
+    // N2 — #832 receipt-only skeleton: with no live folder the sink writes its receipt to
+    // archive/issue-<N>/.cache, and no workflow-state.md names the branch. The derived read is the
+    // base's two-path read, so the lane worktree stays pinned.
+    {
+      const fx = mkRepo();
+      try {
+        receiptR(path.join(fx.root, ...AR, 'issue-96401'), { project: 'issue-96401', branch: 'workflow/issue-96401', steps: PENDING_N });
+        const c = clsR(fx.root, fx.wtPath);
+        assert(c.active && !c.stalled,
+          '#1102 N2: a receipt-only archive/issue-<N>/.cache skeleton must keep the lane worktree PINNED (base derived read), got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+      } finally { cleanupR(fx); }
+    }
+
+    // N4 — two archived runs of one issue, no live record. The OLD run (plain archive) was abandoned
+    // mid-sink; the NEW run (suffixed) completed and disposed its receipt. The old run must not pin.
+    {
+      const fx = mkRepo();
+      try {
+        const a = path.join(fx.root, ...AR, 'issue-96401');
+        stateR(a, 'issue-96401', ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-20T00:00:00.000Z']);
+        receiptR(a, { project: 'issue-96401', branch: 'workflow/issue-96401', claim_ts: '2026-09-20T00:00:00.000Z', steps: PENDING_N });
+        const b = path.join(fx.root, ...AR, 'issue-96401.archived-2026-09-27T00-00-00-000Z');
+        stateR(b, 'issue-96401', ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-26T00:00:00.000Z']);
+        const c = clsR(fx.root, fx.wtPath);
+        assert(c.stalled && !c.active,
+          '#1102 N4: an OLD abandoned archive\'s mid-flight receipt must NOT pin the worktree when a newer claim of the same issue exists, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+      } finally { cleanupR(fx); }
+    }
+
+    // N5 (guard) — the suffixed archive IS the current run (newest claim, mid-flight receipt), the
+    // older plain archive is disposed. The current run's receipt pins.
+    {
+      const fx = mkRepo();
+      try {
+        const a = path.join(fx.root, ...AR, 'issue-96401');
+        stateR(a, 'issue-96401', ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-20T00:00:00.000Z']);
+        const b = path.join(fx.root, ...AR, 'issue-96401.archived-2026-09-27T00-00-00-000Z');
+        stateR(b, 'issue-96401', ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-26T00:00:00.000Z']);
+        receiptR(b, { project: 'issue-96401', branch: 'workflow/issue-96401', steps: PENDING_N });
+        const c = clsR(fx.root, fx.wtPath);
+        assert(c.active && !c.stalled,
+          '#1102 N5: the newest archived claim\'s own mid-flight receipt must keep the lane worktree PINNED, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+      } finally { cleanupR(fx); }
+    }
+
+    // N8 — two LIVE records on one branch: an old never-archived issue-<N> leftover with a mid-flight
+    // receipt, and the current custom-named run with no receipt. Two live claims cannot be told apart
+    // (and must not depend on directory order), so the worktree stays unpinned.
+    {
+      const fx = mkRepo();
+      try {
+        const old = path.join(fx.root, 'kaola-workflow', 'issue-96401');
+        stateR(old, 'issue-96401', ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-01T00:00:00.000Z']);
+        receiptR(old, { project: 'issue-96401', steps: PENDING_N });
+        stateR(path.join(fx.root, 'kaola-workflow', 'zz-custom'), 'zz-custom',
+          ['branch: workflow/issue-96401', 'worktree_path: ' + fx.wtPath, 'claim_ts: 2026-09-27T00:00:00.000Z']);
+        const c = clsR(fx.root, fx.wtPath);
+        assert(c.stalled && !c.active,
+          '#1102 N8: two live records on one branch are ambiguous and must leave the worktree UNPINNED, not pick the first in directory order, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
+      } finally { cleanupR(fx); }
+    }
   }
 
   fs.rmSync(binDir1102, { recursive: true, force: true });
