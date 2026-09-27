@@ -5706,6 +5706,26 @@ function cmdWorktreeStatus() {
   output({ worktrees: listWorkflowWorktrees(root) });
 }
 
+// #1097/#1100: the one resumability source of truth both stale-sweep worktree arms share. The
+// sink-receipt.json is written by the run's own finalization steps (live .cache first, archive
+// .cache once closure moved the folder); steps that are not ALL 'done' mean a sink that still owns
+// its worktrees and may resume at any recorded step. A missing or all-done receipt is NOT
+// resumable: a pre-receipt legacy leftover and a completed run's garbage both sweep as before, so
+// this is a receipt-driven pin, never a blanket exemption. (Called from the integration arm since
+// 57fc4c67 and from the lane arm since #1100.)
+function sinkReceiptResumable(root, projectName) {
+  for (const receiptPath of [
+    path.join(root, 'kaola-workflow', projectName, '.cache', 'sink-receipt.json'),
+    path.join(root, 'kaola-workflow', 'archive', projectName, '.cache', 'sink-receipt.json'),
+  ]) {
+    let receipt = null;
+    try { receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8')); } catch (_) { receipt = null; }
+    if (!receipt || !receipt.steps || typeof receipt.steps !== 'object') continue;
+    if (Object.values(receipt.steps).some((v) => v !== 'done')) return true;
+  }
+  return false;
+}
+
 function collectStale(root) {
   const activeFolders = readActiveFolders(root);
   const activeSet = new Set(activeFolders.map(f => f.issue_number).filter(n => n != null));
@@ -5724,8 +5744,16 @@ function collectStale(root) {
     const isArchived = fs.existsSync(path.join(root, 'kaola-workflow', 'archive', projectName));
     const isClosed = OFFLINE ? false : issueIsClosed(issueNumber);
     const inActiveSet = activeSet.has(issueNumber);
+    // #1100: inActiveSet alone cannot protect a LIVE run's LANE worktree — the same closed-issue
+    // active-set drop that #1097 repaired for the integration arm applies verbatim here, because
+    // the lane arm classifies on the identical (isClosed || isArchived) && !inActiveSet rule.
+    // Once the issue is closed readActiveFolders drops the folder on its default path, so an
+    // operator-run `stale-worktree-cleanup --execute` could sweep the run's own checkout out from
+    // under it mid-run. Pin it with the run's own resumability record, exactly as the integration
+    // arm does: steps not all done means a sink that still owns this lane worktree.
+    const sinkResumable = sinkReceiptResumable(root, projectName);
 
-    if ((isClosed || isArchived) && !inActiveSet) {
+    if ((isClosed || isArchived) && !inActiveSet && !sinkResumable) {
       stale_worktrees.push({
         path: wt.worktree,
         branch: wt.branch,
@@ -5769,16 +5797,7 @@ function collectStale(root) {
         // (live project .cache first, archive .cache once closure moved the folder): steps not
         // all done means a sink that still owns this W. All-done or absent (a pre-receipt
         // legacy leftover, or a completed sink's garbage) sweeps exactly as before.
-        let sinkResumableW = false;
-        for (const receiptPathW of [
-          path.join(root, 'kaola-workflow', projectName, '.cache', 'sink-receipt.json'),
-          path.join(root, 'kaola-workflow', 'archive', projectName, '.cache', 'sink-receipt.json'),
-        ]) {
-          let receiptW = null;
-          try { receiptW = JSON.parse(fs.readFileSync(receiptPathW, 'utf8')); } catch (_) { receiptW = null; }
-          if (!receiptW || !receiptW.steps || typeof receiptW.steps !== 'object') continue;
-          if (Object.values(receiptW.steps).some((v) => v !== 'done')) { sinkResumableW = true; break; }
-        }
+        const sinkResumableW = sinkReceiptResumable(root, projectName);
         if ((isArchivedW || isClosedW) && !inActiveSetW && !sinkResumableW) {
           stale_integration_worktrees.push({
             path: wtPath,

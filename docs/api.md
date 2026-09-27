@@ -1727,6 +1727,16 @@ Detection, per worktree or branch: extract the issue number from the branch name
 the issue is closed on the forge (skipped offline) or `kaola-workflow/archive/issue-<N>` exists.
 `count` is `stale_worktrees.length + stale_branches.length`. Exit 0.
 
+**Sink-resumability pin (#1097 integration worktrees, #1100 lane worktrees).** The active folder
+set alone cannot protect a live run's worktrees: once the issue closes — the normal state around a
+sink run — `readActiveFolders` drops that folder on its default path, so the closed-issue rule would
+otherwise classify the run's own worktree stale mid-run. A lane worktree (`workflow/issue-<N>`) or
+an integration worktree (`.kw/integrate/issue-<N>`) is therefore never stale while its project holds
+a `sink-receipt.json` — read from the live `kaola-workflow/issue-<N>/.cache/` first, then
+`kaola-workflow/archive/issue-<N>/.cache/` once closure moved the folder — whose `steps` are not all
+`done`. A missing receipt (a pre-receipt legacy leftover) or an all-done one (a completed run's
+leftover) sweeps exactly as before, so the pin is receipt-driven, never a blanket exemption.
+
 The JSON shape is identical across all three forges; GitLab and Gitea match their own branch prefix
 (`workflow/gitlab-issue-*`, `workflow/gitea-issue-*`).
 

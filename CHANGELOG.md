@@ -192,6 +192,19 @@
 
 ### Fixed
 
+- **The stale-worktree sweep pins a live run's LANE worktree, not just its integration worktree
+  (#1100).** `collectStale`'s lane arm (`workflow/issue-<N>` worktrees) classifies on the same
+  `(closed || archived) && !active` rule #1097's commit 57fc4c67 guarded for the integration arm,
+  but had no resumability guard of its own. Since `readActiveFolders` drops a CLOSED issue's folder
+  on its default path, the active-set guard protects nothing in the window after an issue closes
+  and before a run finishes with its lane worktree — an operator-run
+  `stale-worktree-cleanup --execute` could classify the run's own checkout stale and remove it. The
+  lane arm now shares the integration arm's sink-resumability pin — a lane worktree whose project
+  holds a `sink-receipt.json` (live `.cache`, or archive `.cache` once closure moved the folder)
+  with steps not all `done` is never classified stale; a missing receipt or an all-done one sweeps
+  exactly as before. Both arms read one private helper (`sinkReceiptResumable`), so the two rules
+  cannot drift. All four claim copies (root, Codex, GitLab, Gitea) carry the same change.
+
 - **Finalize `changed_paths` reports prose the run authored (VRPCadCore#952).** The measurement
   reused the validation bookkeeping band (`isBookkeepingPath`), which drops `docs/**`, repo-root
   `CHANGELOG.md`, and repo-root `README.md` — so a run whose deliverable was documentation reported
