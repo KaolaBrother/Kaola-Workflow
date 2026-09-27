@@ -1822,6 +1822,189 @@ try {
       fs.rmSync(projectRoot, { recursive: true, force: true });
     }
   }
+
+  // #1105 (N6 c2/c3/c4/c6/c9): the rest of the live behaviour #1101 left untested.
+  // spawn-class: environment
+  const runCli = (homeRoot, args) => spawnSync(process.execPath, [preflightPath, ...args],
+    { cwd: pluginRoot, encoding: 'utf8', env: { ...process.env, HOME: homeRoot } });
+  const writeFile = (file, content) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content);
+  };
+  const snapshotTree = dir => {
+    const bytes = {};
+    const walk = current => {
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else bytes[path.relative(dir, full)] = fs.readFileSync(full).toString('base64');
+      }
+    };
+    walk(dir);
+    return bytes;
+  };
+
+  // c3: from a nested cwd, residue in the repository-root .codex layer is found, and the doctor
+  // lists every layer from the root to the cwd.
+  {
+    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-nested-home-'));
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-nested-repo-'));
+    try {
+      fs.mkdirSync(path.join(repoRoot, '.git'));
+      plantFrozenCodex(path.join(repoRoot, '.codex'));
+      trustCodexProject(homeRoot, repoRoot, 'trusted');
+      const nested = path.join(repoRoot, 'a', 'b');
+      fs.mkdirSync(nested, { recursive: true });
+      const rootProfile = path.join(repoRoot, '.codex', 'agents', 'kaola-workflow', 'implementer.toml');
+
+      const normal = runCli(homeRoot,
+        ['--project-root', nested, '--home', homeRoot, '--no-autofix', '--json']);
+      assert.strictEqual(normal.status, 1,
+        'c3: nested cwd reports repository-root residue: ' + normal.stdout + normal.stderr);
+      const normalJson = JSON.parse(normal.stdout);
+      assert.strictEqual(normalJson.status, 'retired_role_residue', 'c3: typed residue status');
+      assert(normalJson.residue_paths.includes(rootProfile),
+        'c3: residue_paths name the repository-root profile: ' + JSON.stringify(normalJson.residue_paths));
+      assert(normalJson.residue_paths.includes(path.join(repoRoot, '.codex', 'config.toml')),
+        'c3: residue_paths name the repository-root managed block');
+
+      const doctor = runCli(homeRoot, ['--doctor', '--project-root', nested, '--home', homeRoot, '--json']);
+      const doctorDirs = (JSON.parse(doctor.stdout).scopes || []).map(scope => scope.codex_dir);
+      for (const dir of [path.join(repoRoot, '.codex'), path.join(repoRoot, 'a', '.codex'),
+        path.join(nested, '.codex')]) {
+        assert(doctorDirs.includes(dir), `c3: doctor lists the ${dir} layer: ` + JSON.stringify(doctorDirs));
+      }
+      assert(fs.existsSync(rootProfile), 'c3: --no-autofix and the doctor never mutate');
+    } finally {
+      fs.rmSync(homeRoot, { recursive: true, force: true });
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  }
+
+  // c2: custom project_root_markers find the trusted root layer, and an exact nested untrusted
+  // record outranks the trusted-root fallback for that layer.
+  {
+    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-markers-home-'));
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-markers-project-'));
+    try {
+      const nested = path.join(projectRoot, 'nested');
+      writeFile(path.join(projectRoot, 'ROOT.marker'), '');
+      const rootConfig = path.join(projectRoot, '.codex', 'config.toml');
+      const nestedConfig = path.join(nested, '.codex', 'config.toml');
+      writeFile(rootConfig, '[features.multi_agent_v2]\nenabled = true\nmax_wait_timeout_ms = 1800000\n');
+      writeFile(nestedConfig, '[features.multi_agent_v2]\nmax_concurrent_threads_per_session = 2\n');
+      writeFile(path.join(homeRoot, '.codex', 'config.toml'), 'project_root_markers = ["ROOT.marker"]\n');
+      trustCodexProject(homeRoot, projectRoot, 'trusted');
+      trustCodexProject(homeRoot, nested, 'untrusted');
+
+      const normal = runCli(homeRoot,
+        ['--project-root', nested, '--home', homeRoot, '--no-autofix', '--json']);
+      assert.strictEqual(normal.status, 0, 'c2: marker-rooted layers are ok: ' + normal.stdout + normal.stderr);
+      const normalJson = JSON.parse(normal.stdout);
+      assert.strictEqual(normalJson.max_wait_timeout_ms, 1800000,
+        'c2: the trusted marker-root layer enters the effective runtime');
+      assert.strictEqual(normalJson.max_concurrent_threads_per_session, 4,
+        'c2: the exact untrusted nested layer stays out of the effective runtime');
+      assert.deepStrictEqual(normalJson.effective_config_paths,
+        [path.join(homeRoot, '.codex', 'config.toml'), rootConfig],
+        'c2: only the global and trusted root layers are loaded');
+
+      const doctor = runCli(homeRoot, ['--doctor', '--project-root', nested, '--home', homeRoot, '--json']);
+      const scopes = JSON.parse(doctor.stdout).scopes || [];
+      const rootScope = scopes.find(scope => scope.codex_dir === path.join(projectRoot, '.codex'));
+      const nestedScope = scopes.find(scope => scope.codex_dir === path.join(nested, '.codex'));
+      assert(rootScope && rootScope.project_trust === 'trusted' && rootScope.config_layer_ignored === false,
+        'c2: the marker-root layer is trusted and active: ' + JSON.stringify(scopes));
+      assert(nestedScope && nestedScope.project_trust === 'untrusted' && nestedScope.config_layer_ignored === true,
+        'c2: the exact untrusted nested layer is ignored: ' + JSON.stringify(scopes));
+    } finally {
+      fs.rmSync(homeRoot, { recursive: true, force: true });
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  }
+
+  // c4: autofix proves every scope repairable before the first installer runs. A repairable global
+  // scope and a later project scope with an unbalanced marker pair refuse with exit 4, and the
+  // global scope is left byte-identical.
+  {
+    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-order-home-'));
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-order-project-'));
+    try {
+      plantFrozenCodex(path.join(homeRoot, '.codex'));
+      trustCodexProject(homeRoot, projectRoot, 'trusted');
+      writeFile(path.join(projectRoot, '.codex', 'config.toml'),
+        '# BEGIN kaola-workflow agents\n[agents.implementer]\n'
+        + 'config_file = "./agents/kaola-workflow/implementer.toml"\n');
+      const globalBefore = snapshotTree(path.join(homeRoot, '.codex'));
+      assert(Object.keys(globalBefore).some(rel => rel.startsWith(path.join('agents', 'kaola-workflow') + path.sep)),
+        'c4: the global scope carries repairable residue');
+
+      const run = runCli(homeRoot, ['--project-root', projectRoot, '--home', homeRoot, '--json']);
+      assert.strictEqual(run.status, 4, 'c4: a later ambiguous scope refuses autofix: ' + run.stdout + run.stderr);
+      const json = JSON.parse(run.stdout);
+      assert.strictEqual(json.status, 'autofix_unsafe', 'c4: typed autofix_unsafe status');
+      assert.strictEqual(json.scope, projectRoot, 'c4: the refusal names the ambiguous project scope');
+      assert.deepStrictEqual(snapshotTree(path.join(homeRoot, '.codex')), globalBefore,
+        'c4: the repairable global scope is byte-identical after the refusal');
+    } finally {
+      fs.rmSync(homeRoot, { recursive: true, force: true });
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  }
+
+  // c6: bounds combine per field across layers; a later layer never resets a field it leaves unset.
+  {
+    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-bounds-home-'));
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-bounds-project-'));
+    try {
+      writeFile(path.join(homeRoot, '.codex', 'config.toml'),
+        '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 6\n');
+      trustCodexProject(homeRoot, projectRoot, 'trusted');
+      writeFile(path.join(projectRoot, '.codex', 'config.toml'),
+        '[features.multi_agent_v2]\nmax_wait_timeout_ms = 1800000\n');
+      const run = runCli(homeRoot, ['--project-root', projectRoot, '--home', homeRoot, '--no-autofix', '--json']);
+      assert.strictEqual(run.status, 0, 'c6: two-layer bounds are ok: ' + run.stdout + run.stderr);
+      const json = JSON.parse(run.stdout);
+      assert.strictEqual(json.max_concurrent_threads_per_session, 6, 'c6: the global thread cap survives');
+      assert.strictEqual(json.max_concurrent_threads_per_session_source, 'config', 'c6: the cap comes from config');
+      assert.strictEqual(json.effective_subagent_width, 5, 'c6: width follows the global cap');
+      assert.strictEqual(json.max_wait_timeout_ms, 1800000, 'c6: the project wait bound is added');
+    } finally {
+      fs.rmSync(homeRoot, { recursive: true, force: true });
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  }
+
+  // c9: the doctor refuses a redirected plugin manifest file or manifest directory before trusting
+  // the identity it names.
+  for (const [label, linkRel, expectedError] of [
+    ['plugin.json symlink', path.join('.codex-plugin', 'plugin.json'), 'plugin_manifest_unsafe'],
+    ['.codex-plugin symlink', '.codex-plugin', 'plugin_manifest_path_unsafe'],
+  ]) {
+    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-manifest-home-'));
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-manifest-project-'));
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-manifest-plugin-'));
+    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-n6-manifest-outside-'));
+    try {
+      fs.cpSync(path.join(pluginRoot, '.codex-plugin'), path.join(sourceRoot, '.codex-plugin'), { recursive: true });
+      fs.mkdirSync(path.join(sourceRoot, 'scripts'));
+      const linked = path.join(sourceRoot, linkRel);
+      const target = path.join(outsideRoot, path.basename(linkRel));
+      fs.renameSync(linked, target);
+      fs.symlinkSync(target, linked);
+      const result = codexPreflight.runDoctor({
+        projectRoot, home: homeRoot, scriptDir: path.join(sourceRoot, 'scripts'),
+      });
+      assert.strictEqual(result.exitCode, 2, `c9: ${label} is refused: ` + JSON.stringify(result.result));
+      assert.strictEqual(result.result.status, 'plugin_identity_invalid', `c9: ${label} has a typed identity refusal`);
+      assert(result.result.error.startsWith(expectedError + ':'),
+        `c9: ${label} refusal names ${expectedError}: ${result.result.error}`);
+    } finally {
+      for (const dir of [homeRoot, projectRoot, sourceRoot, outsideRoot]) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  }
 }
 
 console.log('Install model rendering tests passed');
