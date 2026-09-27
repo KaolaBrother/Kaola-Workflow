@@ -28,8 +28,8 @@ const codexDir = path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts');
 //   validate-kaola-workflow-contracts.js (Codex-only) — Codex contract validator;
 //     the Claude validator is validate-workflow-contracts.js (in the allowlist below).
 //
-//   install-codex-agent-profiles.js (Codex-only) — installs .codex/agents/ TOML
-//     profiles; not used by the Claude pack.
+//   install-codex-agent-profiles.js (Codex-only) — Codex install/migration (it retires the
+//     Kaola role profiles earlier releases installed); not used by the Claude pack.
 //
 // Hook files that must stay byte-identical across every install surface are
 // checked below. `hooks/hooks.json` IS covered (HOOKS_JSON_FAMILY, below), via the
