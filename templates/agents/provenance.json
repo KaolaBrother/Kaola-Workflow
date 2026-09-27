@@ -1,14 +1,14 @@
 {
   "schema_version": 3,
-  "authority": "Kaola-Workflow defines no subagent roles: the seven Kaola-authored role contracts and every generated role profile were retired by #1101 (ADR 0029). This file keeps the attribution for material that remains readable in git history and kaola-workflow/archive/: earlier versions of three retired role contracts were derived from the origin below. It describes no current content.",
+  "authority": "Kaola-Workflow defines no subagent roles: the seven Kaola-authored role contracts and every generated role profile were retired by #1101 (ADR 0029), and seven more roles were retired earlier by #1062 (ADR 0025). This file keeps the attribution for material that remains readable in git history, kaola-workflow/archive/, and the repository-only migration fixtures under scripts/fixtures/issue-1101/ (excluded from the npm package): earlier versions of six retired role contracts were derived from the origin below. It describes no current contract.",
   "origins": {
     "everything_claude_code": {
       "repository": "https://github.com/affaan-m/everything-claude-code",
       "pinned_commit": "922d2d8f8b64f4e50936e24465cb3bcac81ac0e1",
       "license": "MIT License",
       "copyright": "Copyright (c) 2026 Affaan Mustafa",
-      "relationship": "historical (derived contracts retired by #1054; roles retired by #1101)",
-      "retained_material": "none in the current tree; earlier derived contracts remain in git history and kaola-workflow/archive/ under this license"
+      "relationship": "historical (derived contracts retired by #1054; roles retired by #1062 and #1101)",
+      "retained_material": "none in any current contract or shipped file; earlier derived contracts remain in git history, kaola-workflow/archive/, and the repository-only migration fixtures under scripts/fixtures/issue-1101/ (frozen installs of earlier releases, excluded from the npm package) under this license"
     }
   },
   "retired_roles": {
@@ -71,6 +71,53 @@
         "derived_through": "kaola-workflow v10.5.0 (behavior-contracts.json before #1054)",
         "retired_by": "#1054",
         "measurement": "rewritten body (#1054) shares 0 eight-word shingles with the pinned upstream file (longest shared run 0 words); the pre-#1054 body shared 14.6% of its eight-word shingles (longest shared run 136 words); method and table in the #1054 run record, .cache/source-classification.md"
+      }
+    }
+  },
+  "earlier_retired_roles": {
+    "build-error-resolver": {
+      "source_kind": "kaola_authored",
+      "retired_by": "#1062",
+      "history": {
+        "origin": "everything_claude_code",
+        "upstream_path": "agents/build-error-resolver.md",
+        "upstream_url": "https://github.com/affaan-m/everything-claude-code/blob/922d2d8f8b64f4e50936e24465cb3bcac81ac0e1/agents/build-error-resolver.md",
+        "source_commit": "922d2d8f8b64f4e50936e24465cb3bcac81ac0e1",
+        "source_blob_sha": "2ab19ac35497ae2e1b7a33f238a6953867fc5572",
+        "source_sha256": "57e8d92be91812bafae1240cf628f39e5910e6e3c69a78edb51db764192e7afc",
+        "derived_through": "kaola-workflow v10.5.0 (behavior-contracts.json before #1054)",
+        "retired_by": "#1054",
+        "measurement": "rewritten body (#1054) shares 0 eight-word shingles with the pinned upstream file (longest shared run 4 words); the pre-#1054 body shared 73.1% of its eight-word shingles (longest shared run 400 words); method and table in the #1054 run record, .cache/source-classification.md"
+      }
+    },
+    "code-architect": {
+      "source_kind": "kaola_authored",
+      "retired_by": "#1062",
+      "history": {
+        "origin": "everything_claude_code",
+        "upstream_path": "agents/code-architect.md",
+        "upstream_url": "https://github.com/affaan-m/everything-claude-code/blob/922d2d8f8b64f4e50936e24465cb3bcac81ac0e1/agents/code-architect.md",
+        "source_commit": "922d2d8f8b64f4e50936e24465cb3bcac81ac0e1",
+        "source_blob_sha": "e99b3c718087e3be05c1763182cf904b8b25edb4",
+        "source_sha256": "bb981dc0e80fea545f22c4613f1b1e4af4f8ee03b17333264804d36864b2e9d4",
+        "derived_through": "kaola-workflow v10.5.0 (behavior-contracts.json before #1054)",
+        "retired_by": "#1054",
+        "measurement": "rewritten body (#1054) shares 0 eight-word shingles with the pinned upstream file (longest shared run 0 words); the pre-#1054 body shared 40.2% of its eight-word shingles (longest shared run 139 words); method and table in the #1054 run record, .cache/source-classification.md"
+      }
+    },
+    "planner": {
+      "source_kind": "kaola_authored",
+      "retired_by": "#1062",
+      "history": {
+        "origin": "everything_claude_code",
+        "upstream_path": "agents/planner.md",
+        "upstream_url": "https://github.com/affaan-m/everything-claude-code/blob/922d2d8f8b64f4e50936e24465cb3bcac81ac0e1/agents/planner.md",
+        "source_commit": "922d2d8f8b64f4e50936e24465cb3bcac81ac0e1",
+        "source_blob_sha": "c311f492bd1d3bae077c86716163966789eefae2",
+        "source_sha256": "2c53525c1ad9c20b8cd20823e6cac8964797dc753001813e438a078bb0b62f14",
+        "derived_through": "kaola-workflow v10.5.0 (behavior-contracts.json before #1054)",
+        "retired_by": "#1054",
+        "measurement": "rewritten body (#1054) shares 0 eight-word shingles with the pinned upstream file (longest shared run 0 words); the pre-#1054 body shared 60.1% of its eight-word shingles (longest shared run 283 words); method and table in the #1054 run record, .cache/source-classification.md"
       }
     }
   }

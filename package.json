@@ -35,6 +35,7 @@
     "hooks/",
     "plugins/",
     "scripts/",
+    "!scripts/fixtures/issue-1101/",
     "templates/",
     "install.sh",
     "install-all.sh",

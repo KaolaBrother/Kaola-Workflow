@@ -84,7 +84,11 @@
   routes and availability, compact carrier, and install scope; role, profile, and model-binding
   capabilities are rejected by the new `scripts/runtime-adapter-facts.js`, which also renders the
   adapter section. `templates/agents/provenance.json` moves to `schema_version: 3` and keeps only
-  the attribution for the retired contracts. `kaola-workflow-resolve-agent-model.js` keeps only
+  the attribution for the retired contracts: `retired_roles` for the seven roles #1101 retires and
+  `earlier_retired_roles` for the three #1062 roles whose earlier contract was derived from
+  Everything Claude Code. The #1101 migration fixtures under `scripts/fixtures/issue-1101/` (frozen
+  installs of earlier releases, some carrying those ECC-derived renders) are excluded from the npm
+  package by `package.json` `files`. `kaola-workflow-resolve-agent-model.js` keeps only
   the Codex session proof (`loadCodexSessionProof`); its tests move to
   `scripts/test-codex-session-proof.js`.
 - **Installers retire the role profiles earlier releases installed, only on proof (#1101).** The

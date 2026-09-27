@@ -907,18 +907,22 @@ const provenancePattern = /Everything Claude Code|\bvendored\b|upstream provenan
     + JSON.stringify(provenanceOutputs));
 }
 const provenanceDoc = read('docs/agents-source.md') || '';
-// #1101: provenance.json is schema 3 — history only, one `retired_roles` record per retired role.
-// docs/agents-source.md documents that under "Historical origin"; the ECC origin facts
-// (repository/commit/license/copyright/blob-SHA) and the three roles whose earlier contract carried
-// an ECC `history` record stay discoverable. The roles retired before #1062 no longer carry a
-// record in provenance.json, so their names left the page with it.
+// #1101: provenance.json is schema 3 — history only, one `retired_roles` record per role retired by
+// #1101, plus an `earlier_retired_roles` record for each role retired by #1062 whose earlier contract
+// carried an ECC `history` (build-error-resolver, code-architect, planner). docs/agents-source.md
+// documents both under "Historical origin" with the ECC origin facts, and says truthfully where
+// ECC-derived bytes still exist (repository-only migration fixtures, excluded from the package).
+const ECC_EARLIER_RETIRED = ['build-error-resolver', 'code-architect', 'planner'];
 for (const token of [
   'Repository:', 'Pinned commit:', 'Upstream blob SHA', 'License:', 'Copyright:',
-  'kaola_authored', 'Historical origin', 'retired_roles',
-  'code-explorer', 'doc-updater', 'tdd-guide',
+  'kaola_authored', 'Historical origin', 'retired_roles', 'earlier_retired_roles',
+  'code-explorer', 'doc-updater', 'tdd-guide', ...ECC_EARLIER_RETIRED,
+  'scripts/fixtures/issue-1101/',
 ]) {
   assert(provenanceDoc.includes(token), `A8: durable provenance metadata records ${token}`);
 }
+assert(!/No current file contains that material/.test(provenanceDoc),
+  'A8: the doc must not claim no current file contains ECC-derived material (the migration fixtures do)');
 {
   let provenance = null;
   try { provenance = JSON.parse(read('templates/agents/provenance.json') || 'null'); } catch (_) { provenance = null; }
@@ -927,6 +931,12 @@ for (const token of [
       && JSON.stringify(sorted(Object.keys(retired))) === JSON.stringify(RETIRED_ROLE_NAMES)
       && Object.values(retired).every(record => record.retired_by === '#1101'),
     'A8: provenance.json (schema 3) keeps one retired_roles history record per role retired by #1101');
+  const earlier = provenance && provenance.earlier_retired_roles ? provenance.earlier_retired_roles : {};
+  assert(JSON.stringify(sorted(Object.keys(earlier))) === JSON.stringify(sorted(ECC_EARLIER_RETIRED))
+      && ECC_EARLIER_RETIRED.every(role => earlier[role].retired_by === '#1062'
+        && earlier[role].history && earlier[role].history.origin === 'everything_claude_code'
+        && earlier[role].history.source_commit === '922d2d8f8b64f4e50936e24465cb3bcac81ac0e1'),
+    'A8: provenance.json keeps the ECC history of the three roles retired by #1062');
 }
 
 // A9 — mutation proof: the one shared dispatch contract reaches every runtime carrier. The contract
