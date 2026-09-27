@@ -434,6 +434,68 @@ try {
     check(r2.status !== 0 && /install_target_unsafe/.test(r2.out), 'a symlinked hooks.json write target still refuses');
   });
 
+  // C12 — a symlinked scope `.codex` PARENT is not followed either: the whole scope is kept and
+  // reported (project), or the HOME write-target check refuses before anything is touched (global).
+  // Before this, the leaf-only config check rewrote config.toml behind a symlinked project .codex.
+  section('C12 a symlinked project .codex is kept and reported as a whole scope', () => {
+    const home = makeHome('symlink-codex-project');
+    const target = plantFixture(CURRENT, 'proj/.codex', home, 'elsewhere/codex');
+    fs.symlinkSync(target, codexOf(path.join(home, 'proj')));
+    const before = snapshot(target);
+    const r = installProject(home);
+    check(r.status === 0, `a symlinked project .codex does not refuse the install (H9)\n${r.out}`);
+    check(JSON.stringify(snapshot(target)) === JSON.stringify(before),
+      'nothing behind the symlinked .codex changed (config.toml, profiles, record)');
+    check(hasLine(r.out, PRESERVED_REG('non_regular') + configOf(path.join(home, 'proj'))),
+      'the registrations behind the symlinked .codex are reported, not removed');
+    check(!r.out.includes(REMOVED_REG), 'no registration block is reported removed');
+    check(countPrefix(r.out, REMOVED) === 0, 'no profile is removed through the symlinked .codex');
+    const u = uninstallProject(home);
+    check(u.status === 0 && JSON.stringify(snapshot(target)) === JSON.stringify(before),
+      `uninstall through the symlinked .codex changes nothing either\n${u.out}`);
+  });
+
+  section('C12 a symlinked global .codex refuses before anything is touched', () => {
+    const home = makeHome('symlink-codex-global');
+    const target = plantFixture(CURRENT, '.codex', home, 'elsewhere/codex');
+    fs.symlinkSync(target, codexOf(home));
+    const before = snapshot(target);
+    for (const [label, r] of [['install', installGlobal(home)], ['uninstall', uninstallGlobal(home)]]) {
+      check(r.status !== 0 && /_target_unsafe: .*\.codex is a symlink/.test(r.out),
+        `${label} --global refuses a symlinked ~/.codex\n${r.out}`);
+      check(JSON.stringify(snapshot(target)) === JSON.stringify(before), `${label}: nothing behind it changed`);
+    }
+  });
+
+  // C13 — config.toml is written BEFORE any profile or record is deleted. When the write fails
+  // (a read-only config.toml), the block is kept and reported, every profile it still registers is
+  // kept, and the install finishes with no raw stack. Before this, the profiles were deleted first
+  // and the install then crashed with EACCES, leaving the block pointing at missing files.
+  section('C13 a read-only config.toml keeps the block and every profile it registers', () => {
+    const home = makeHome('readonly-config');
+    plantFixture(CURRENT, '.codex', home);
+    const cfg = configOf(home);
+    const cfgBefore = readText(cfg);
+    const profilesBefore = tomls(nsOf(home));
+    fs.chmodSync(cfg, 0o444);
+    try {
+      const r = installGlobal(home);
+      check(r.status === 0, `a read-only config.toml does not fail the install\n${r.out}`);
+      check(!/EACCES|\n\s+at /.test(r.out), 'no raw error or stack is printed');
+      check(readText(cfg) === cfgBefore, 'the read-only config.toml is unchanged');
+      check(hasLine(r.out, PRESERVED_REG('not_writable') + cfg), 'the kept block is reported as not_writable');
+      check(profilesBefore.length === 7 && JSON.stringify(tomls(nsOf(home))) === JSON.stringify(profilesBefore),
+        'every profile the kept block registers is kept');
+      check(countPrefix(r.out, REMOVED) === 0, 'no profile is reported removed');
+      check(/^status: ok$/m.test(r.out), 'the install still completes');
+    } finally {
+      fs.chmodSync(cfg, 0o644);
+    }
+    const again = installGlobal(home);
+    check(again.status === 0 && readText(cfg).indexOf(BEGIN) === -1 && tomls(nsOf(home)).length === 0,
+      `once writable, the next install retires the block and the profiles\n${again.out}`);
+  });
+
   // C12 (H6) — pre-rename codex-workflow leftovers are reported, never touched.
   section('C12 pre-rename codex-workflow leftovers are only reported', () => {
     const home = makeHome('pre-rename');

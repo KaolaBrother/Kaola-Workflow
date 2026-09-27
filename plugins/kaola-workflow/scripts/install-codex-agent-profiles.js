@@ -2177,11 +2177,12 @@ const hex = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const isPlainBasename = n => typeof n === 'string' && n !== '' && n !== '.' && n !== '..'
   && path.basename(n) === n && !n.includes('/') && !n.includes('\\');
 
-// Decide the registration block of one config.toml without writing it.
+// Decide the registration block of one config.toml without writing it. Every path component from
+// the scope root down to config.toml is checked, so a symlinked `.codex` is never written through.
 function planConfigRetirement(configPath = targetConfig) {
   const st = lstatIfPresent(configPath);
   if (!st) return { state: 'absent', text: '' };
-  if (st.isSymbolicLink() || !st.isFile()) return { state: 'non_regular', text: '' };
+  if (installTargetPathProblem(projectRoot, configPath, 'file')) return { state: 'non_regular', text: '' };
   const text = read(configPath);
   const range = managedMarkerRange(text);
   if (range.state === 'absent') return { state: 'absent', text };
@@ -2225,7 +2226,7 @@ function readOwnershipRecord(agentsDir) {
 }
 
 // Retire one scope's profiles. `referenced` holds the config_file paths that must stay.
-function retireProfiles({ agentsDir = targetAgentsDir, authority = projectRoot, referenced = new Set(), apply = true } = {}) {
+function retireProfiles({ agentsDir = targetAgentsDir, authority = projectRoot, referenced = new Set() } = {}) {
   const res = { removed: [], preserved: [], recordRemoved: null, warnings: [] };
   const st = lstatIfPresent(agentsDir);
   const problem = installTargetPathProblem(authority, agentsDir, 'directory');
@@ -2249,17 +2250,17 @@ function retireProfiles({ agentsDir = targetAgentsDir, authority = projectRoot, 
     const recorded = record.rows[name];
     if (referenced.has(file)) { res.preserved.push({ reason: 'referenced_by_user_config', file }); continue; }
     if (recorded === digest || (RELEASED_PROFILE_SHA256[name] || []).includes(digest)) {
-      if (apply) fs.unlinkSync(file);
+      fs.unlinkSync(file);
       res.removed.push(file);
     } else {
       res.preserved.push({ reason: recorded ? 'modified_since_install' : 'no_ownership_record', file });
     }
   }
   if (record.present && record.readable) {
-    if (apply) fs.unlinkSync(record.file);
+    fs.unlinkSync(record.file);
     res.recordRemoved = record.file;
   }
-  if (apply) { try { fs.rmdirSync(agentsDir); } catch (_) { /* a preserved file keeps the dir */ } }
+  try { fs.rmdirSync(agentsDir); } catch (_) { /* a preserved file keeps the dir */ }
   return res;
 }
 
@@ -2278,7 +2279,9 @@ function reportLegacyLeftovers(configText) {
   return lines;
 }
 
-// Retire this scope's profiles, record and registrations; returns report lines.
+// Retire this scope's profiles, record and registrations; returns report lines. The config is
+// written first: when that write fails, the block stays and every profile it registers stays with
+// it, so no registration is ever left pointing at a deleted file.
 function retireScope() {
   const lines = [];
   const plan = planConfigRetirement();
@@ -2286,13 +2289,23 @@ function retireScope() {
   if (plan.state === 'non_regular') {
     try { remaining = fs.readFileSync(targetConfig, 'utf8'); } catch (_) { remaining = ''; }
   }
-  const profiles = retireProfiles({ referenced: configFileReferences(remaining) });
   if (plan.state === 'retire') {
-    fs.writeFileSync(targetConfig, plan.next);
-    lines.push(REMOVED_REGISTRATIONS + targetConfig);
+    try {
+      fs.writeFileSync(targetConfig, plan.next);
+      lines.push(REMOVED_REGISTRATIONS + targetConfig);
+    } catch (_) {
+      remaining = plan.text;
+      lines.push(preservedRegistrationsLine('not_writable', targetConfig));
+    }
   } else if (plan.state !== 'absent') {
     lines.push(preservedRegistrationsLine(plan.state, targetConfig));
   }
+  // A scope whose .codex (or any parent below the scope root) is a symlink is kept whole.
+  if (installTargetPathProblem(projectRoot, targetCodexDir, 'directory')) {
+    if (lstatIfPresent(targetAgentsDir)) lines.push(preservedLine('non_regular', targetAgentsDir));
+    return lines;
+  }
+  const profiles = retireProfiles({ referenced: configFileReferences(remaining) });
   lines.push(...profiles.warnings);
   for (const file of profiles.removed) lines.push(REMOVED + file);
   if (profiles.recordRemoved) lines.push(REMOVED_RECORD + profiles.recordRemoved);
@@ -2486,14 +2499,8 @@ module.exports = {
   copyHookScripts,
   installTargetPathProblem,
   validateInstallTargets,
-  // #1101: retirement of what earlier releases installed (pure apart from the reported unlinks).
-  managedMarkerRange,
-  planConfigRetirement,
-  configFileReferences,
-  readOwnershipRecord,
-  retireProfiles,
+  // #1101: the released-profile catalog that proves a pre-record install (read by its tests).
   RELEASED_PROFILE_SHA256,
-  RELEASED_BLOCK_BODY_SHA256,
   MANIFEST_BASENAME,
   // #598: effort-gated dispatch-posture derivation (pure; exported for unit tests).
   detectCodexDispatchMode,
