@@ -34,6 +34,11 @@ for (const id of ['dsh_cli', 'dsh_home', 'dsh_instructions', 'dsh_skills', 'dsh_
 }
 // #1101: Kaola-Workflow defines no subagent roles on any runtime. The DSH adapter records only
 // what the host itself provides; no retired role, profile, or model-binding capability survives.
+// Host facts (not role facts), restored in #1101's review round (N6).
+assert.strictEqual(dshAdapter.capabilities.instruction_loading, 'direct',
+  'DSH discovers instructions from user-global AGENTS.md plus the project chain');
+assert.strictEqual(dshAdapter.capabilities.hook_scope, 'none',
+  'DSH edition installs no hook surface');
 for (const key of facts.RETIRED_CAPABILITIES) {
   assert(!Object.prototype.hasOwnProperty.call(dshAdapter.capabilities, key),
     'DSH adapter carries no retired role capability ' + key);

@@ -34,6 +34,11 @@ for (const id of ['droid_agents_md', 'droid_skills', 'droid_commands', 'droid_su
 }
 // #1101: Kaola-Workflow defines no subagent roles on any runtime. The Droid adapter records only
 // what the host itself provides; no retired role, profile, or model-binding capability survives.
+// Host facts (not role facts), restored in #1101's review round (N6).
+assert.strictEqual(droidAdapter.capabilities.instruction_loading, 'direct',
+  'Droid discovers instructions root-to-cwd plus personal dirs');
+assert.strictEqual(droidAdapter.capabilities.hook_scope, 'user_and_project',
+  'Droid measures a user+project hook surface');
 for (const key of facts.RETIRED_CAPABILITIES) {
   assert(!Object.prototype.hasOwnProperty.call(droidAdapter.capabilities, key),
     'Droid adapter carries no retired role capability ' + key);
