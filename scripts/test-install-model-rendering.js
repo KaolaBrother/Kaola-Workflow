@@ -2107,6 +2107,45 @@ function enableMultiAgentV2(homeRoot) {
     }
   }
 
+  // #1104: the CLI's __dirname is realpath-resolved, so the live cache copy must
+  // keep its manifest/path identity check when --home reaches it through a symlink.
+  {
+    const fixture = cacheFixture();
+    const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-link-'));
+    try {
+      for (const script of ['kaola-workflow-codex-preflight.js', 'kaola-workflow-adaptive-schema.js']) {
+        fs.copyFileSync(path.join(pluginRoot, 'scripts', script),
+          path.join(fixture.versionRoot, 'scripts', script));
+      }
+      const manifestPath = path.join(fixture.versionRoot, '.codex-plugin', 'plugin.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      manifest.version = '0.0.0';
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+      const realHome = fs.realpathSync(fixture.homeRoot);
+      const linkedHome = path.join(linkRoot, 'home');
+      fs.symlinkSync(realHome, linkedHome);
+      for (const [label, home] of [['symlinked', linkedHome], ['real', realHome]]) {
+        // spawn-class: environment
+        const run = spawnSync(process.execPath,
+          [path.join(fixture.versionRoot, 'scripts', 'kaola-workflow-codex-preflight.js'),
+            '--doctor', '--home', home, '--project-root', fixture.projectRoot, '--json'],
+          { encoding: 'utf8', env: withCodexVersionAttestation() });
+        assert.strictEqual(run.status, 2,
+          `live cached CLI doctor with a ${label} --home rejects manifest version drift: `
+            + run.stdout + run.stderr);
+        const report = JSON.parse(run.stdout);
+        assert.strictEqual(report.status, 'plugin_identity_invalid',
+          `live cached CLI doctor with a ${label} --home has a typed identity refusal`);
+        assert(report.error.includes('plugin_manifest_version_mismatch'),
+          `live cached CLI doctor with a ${label} --home names the manifest version mismatch`);
+      }
+    } finally {
+      fs.rmSync(fixture.homeRoot, { recursive: true, force: true });
+      fs.rmSync(fixture.projectRoot, { recursive: true, force: true });
+      fs.rmSync(linkRoot, { recursive: true, force: true });
+    }
+  }
+
   {
     const fixture = cacheFixture();
     const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-cache-doctor-outside-'));
