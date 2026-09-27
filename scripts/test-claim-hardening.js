@@ -6366,16 +6366,27 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
     fs.writeFileSync(path.join(dir, '.cache', 'sink-receipt.json'), JSON.stringify(obj, null, 2) + '\n');
   };
   const AR1103 = ['kaola-workflow', 'archive'];
+  const relDest1103 = (root, dir) => path.relative(root, dir).split(path.sep).join('/');
   const SUFFIX1103 = 'issue-96401.archived-2026-09-27T09-00-00-000Z';
 
-  // A — THE COLLISION-RENAMED ARCHIVE, lane arm, DERIVED fallback. No workflow-state.md anywhere, so
-  // no record names the branch: the base read is the two literal paths, and the run's only receipt
-  // sits in the suffixed archive with the live folder gone. Pre-fix the pin read two absent paths and
-  // the closed issue swept the run's own worktree.
+  // A — THE COLLISION-RENAMED ARCHIVE, lane arm, DERIVED fallback. No record names the branch, so the
+  // base read is the two literal paths, and the run's only receipt sits in the suffixed archive with
+  // the live folder gone. Pre-fix the pin read two absent paths and the closed issue swept the run's
+  // own worktree.
+  //
+  // (repair round) The fixture is anchored the way a real finalize writes a collision archive:
+  // `archive/<project>.archived-<ts>/workflow-state.md` carrying the run's `claim_ts`, and a receipt
+  // whose `claim_ts` and `archive_dest` name that same folder. A receipt alone is NOT enough — the
+  // sink's `currentArchiveDir` cannot name a single current archive from an unanchored one, and an
+  // ambiguous archive must pin nothing (see J/K/L). The assertion is unchanged.
   {
     const fx = makeRepo1103();
     try {
-      receipt1103(path.join(fx.root, ...AR1103, SUFFIX1103), midFlight1103('issue-96401'));
+      const dirA = path.join(fx.root, ...AR1103, SUFFIX1103);
+      state1103(dirA, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-27T00:00:00.000Z']);
+      receipt1103(dirA, midFlight1103('issue-96401', {
+        claim_ts: '2026-09-27T00:00:00.000Z', archive_dest: relDest1103(fx.root, dirA)
+      }));
       const c = cls1103(fx.root, fx.wtPath);
       assert(c.active && !c.stalled,
         '#1103 A: a receipt-only run archived as archive/<project>.archived-<ts>/ must keep its derived lane pin — the live folder is gone, so the two literal paths find nothing, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);
@@ -6400,7 +6411,13 @@ assert(resolveCodexDispatchModeFlag({}).invalid === undefined
       g1103(root, ['commit', '-m', 'init']);
       fs.mkdirSync(path.dirname(wPath), { recursive: true });
       g1103(root, ['worktree', 'add', '--detach', '--', wPath, 'HEAD']);
-      receipt1103(path.join(root, ...AR1103, SUFFIX1103), midFlight1103('issue-96401'));
+      // (repair round) Anchored exactly as A: the suffixed archive carries the run's claim_ts and the
+      // receipt names it back via claim_ts + archive_dest, so `currentArchiveDir` resolves it.
+      const dirB = path.join(root, ...AR1103, SUFFIX1103);
+      state1103(dirB, 'issue-96401', ['branch: workflow/issue-96401', 'claim_ts: 2026-09-27T00:00:00.000Z']);
+      receipt1103(dirB, midFlight1103('issue-96401', {
+        claim_ts: '2026-09-27T00:00:00.000Z', archive_dest: relDest1103(root, dirB)
+      }));
       const c = cls1103(root, wPath);
       assert(!classifyIntegration1103(c.out, wPath),
         '#1103 B: an integration W whose only receipt is in archive/<project>.archived-<ts>/ must stay PINNED — the sink resumes from that .cache once closure moved the folder, got ' + JSON.stringify(c.out) + '\nstderr: ' + c.stderr);

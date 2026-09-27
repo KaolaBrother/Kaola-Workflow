@@ -2221,10 +2221,20 @@ function testStaleWorktreeCleanup() {
 
     // 2h-A — derived fallback: no record names the branch, the run's only receipt is the suffixed
     // archive, the live folder is gone. Pre-fix the two literal paths found nothing and swept it.
+    //
+    // (repair round) The fixture is anchored the way a real finalize writes a collision archive:
+    // `archive/<project>.archived-<ts>/workflow-state.md` carrying the run's `claim_ts`, and a
+    // receipt whose `claim_ts` and `archive_dest` name that same folder. A receipt alone is NOT
+    // enough — the sink's `currentArchiveDir` cannot name a single current archive from an
+    // unanchored one, and an ambiguous archive must pin nothing (see sc2i). Assertion unchanged.
     {
       const fx = mkRepo();
       try {
-        receipt2h(path.join(fx.tmp, ...AR2H, SUFFIX2H), { project: 'issue-400', steps: PENDING2H });
+        const dirA = path.join(fx.tmp, ...AR2H, SUFFIX2H);
+        state2h(dirA, 'issue-400', ['branch: workflow/gitea-issue-400', 'claim_ts: 2026-09-27T00:00:00.000Z']);
+        receipt2h(dirA, { project: 'issue-400', branch: 'workflow/gitea-issue-400',
+          claim_ts: '2026-09-27T00:00:00.000Z',
+          archive_dest: path.relative(fx.tmp, dirA).split(path.sep).join('/'), steps: PENDING2H });
         const c = cls2h(fx);
         assert(c.active && !c.stalled,
           'sc2h-A: a receipt-only run archived as archive/<project>.archived-<ts>/ must keep its derived lane pin, got: ' + JSON.stringify(c.out));
