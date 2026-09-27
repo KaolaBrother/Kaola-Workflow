@@ -31,13 +31,9 @@ const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'))
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
 
-// #1101: the Codex preflight sets no version floor, so no suite attests a Codex version.
-
-// #775: seed [agents] enabled=true into the shared sandbox HOME too — owner decision D2 means
-// preflight would otherwise refuse codex_multi_agent_v2_required (exit 7) before reaching any of
-// the profile-freshness checks the tests below that reuse kwSandboxHome are actually about.
-fs.mkdirSync(path.join(kwSandboxHome, '.codex'), { recursive: true });
-fs.writeFileSync(path.join(kwSandboxHome, '.codex', 'config.toml'), '[features.multi_agent_v2]\nenabled = true\n\n');
+// #1101: the Codex preflight sets no version floor and requires no dispatch mode, so no suite
+// attests a Codex version and the shared sandbox HOME is seeded with no Codex config at all: a
+// clean HOME is exactly the shape the preflight passes on (multi_agent_v2 reported, never required).
 
 const forge = require('./kaola-gitea-forge');
 const active = require('./kaola-gitea-workflow-active-folders');
@@ -106,11 +102,10 @@ function trustCodexProject(homeRoot, projectRoot) {
     prefix + '[projects.' + JSON.stringify(path.resolve(projectRoot)) + ']\ntrust_level = "trusted"\n');
 }
 
-// #775: fixtures below expect preflight to pass at exit 0 for a "fresh, fully working" install —
-// that now additionally requires the top-level [agents] table's enabled=true (owner decision D2:
-// Kaola never writes this itself). PREPENDED, never appended: TOML forbids re-declaring a bare
-// [agents] header once an [agents.<role>] sub-table has already opened it, and the managed block
-// (when present, e.g. a project config after install-codex-agent-profiles.js) opens exactly that.
+// #1101: multi_agent_v2 is a host fact the preflight and the installer REPORT and never require or
+// write (the #775 codex_multi_agent_v2_required refusal went with Kaola's roles). Fixtures that pin
+// the V2-enabled report, or a project layer inheriting it from HOME, enable it here — PREPENDED so
+// the feature table stays ahead of whatever tables the fixture already holds.
 function enableMultiAgentV2(homeRoot) {
   const configPath = path.join(homeRoot, '.codex', 'config.toml');
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -1311,11 +1306,49 @@ function testStaleWorktreeCheck() {
 
 const giteaPluginRoot = path.resolve(__dirname, '..');
 const installProfilesScript = path.join(giteaPluginRoot, 'scripts', 'install-codex-agent-profiles.js');
-// Derived from the plugin's own roster rather than pinned as an integer. The installer's contract is
-// "install exactly the roster it ships", so measuring the roster is the assertion; a hard-coded count
-// only turns every roster change into a false red in a file that has nothing to do with the roster.
-const GT_ROSTER_TOMLS = fs.readdirSync(path.join(giteaPluginRoot, 'agents'))
-  .filter(f => f.endsWith('.toml')).sort();
+// #1101: the entry point keeps its name (install-all.sh, the preflight's autofix, and older plugin
+// caches invoke it) but installs no role profile and registers none. It retires what earlier
+// releases installed, only on ownership proof, and installs the non-role Codex content: the global
+// compact hook, its version-less hook home, and the global contract carrier.
+//
+// The frozen pre-#1101 Codex scope — seven role profiles, their ownership record, and the managed
+// `# BEGIN/END kaola-workflow agents` registration block — exactly as the last role-shipping release
+// installed it (scripts/fixtures/issue-1101/PROVENANCE.md). No suite reads git history.
+const RELEASED_CODEX_SCOPE_FIXTURE = path.join(giteaPluginRoot, '..', '..', 'scripts', 'fixtures', 'issue-1101',
+  'v12.2.6-46fbe12d', 'home', 'proj', 'dot-codex');
+const KW_AGENTS_BEGIN = '# BEGIN kaola-workflow agents';
+
+function releasedCodexBlock() {
+  return fs.readFileSync(path.join(RELEASED_CODEX_SCOPE_FIXTURE, 'config.toml'), 'utf8');
+}
+
+// Plant that release's install into <scopeRoot>/.codex, after whatever config.toml the scope holds.
+function plantReleasedCodexScope(scopeRoot) {
+  const codexDir = path.join(scopeRoot, '.codex');
+  const agentsDir = path.join(codexDir, 'agents', 'kaola-workflow');
+  const sourceDir = path.join(RELEASED_CODEX_SCOPE_FIXTURE, 'agents', 'kaola-workflow');
+  fs.mkdirSync(agentsDir, { recursive: true });
+  const profiles = [];
+  for (const name of fs.readdirSync(sourceDir).sort()) {
+    const dest = path.join(agentsDir, name.startsWith('dot-') ? '.' + name.slice(4) : name);
+    fs.copyFileSync(path.join(sourceDir, name), dest);
+    if (dest.endsWith('.toml')) profiles.push(dest);
+  }
+  assert.ok(profiles.length > 0, 'the frozen pre-#1101 Codex fixture must carry role profiles');
+  const configPath = path.join(codexDir, 'config.toml');
+  const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+  fs.writeFileSync(configPath, (existing ? existing.replace(/\s*$/, '\n\n') : '') + releasedCodexBlock());
+  return { codexDir, agentsDir, configPath, profiles, record: path.join(agentsDir, '.kaola-managed-profiles.json') };
+}
+
+// The installer's retirement report lines — one place, so a wording change is one edit.
+const RETIRED_REMOVED = file => 'Removed retired Kaola-Workflow agent: ' + file;
+const RETIRED_RECORD_REMOVED = file => 'Removed retired Kaola-Workflow agent record: ' + file;
+const RETIRED_REGISTRATIONS_REMOVED = file => 'Removed retired Kaola-Workflow agent registrations: ' + file;
+const RETIRED_PRESERVED = (reason, file) => 'Preserved retired Kaola-Workflow agent (' + reason + '): ' + file;
+function stdoutHasLine(stdout, line) {
+  return String(stdout || '').split(/\r?\n/).includes(line);
+}
 
 function runInstallProfiles(target, extraEnv, extraArgs) {
   const args = (extraArgs && extraArgs.length) ? extraArgs : [];
@@ -1466,24 +1499,11 @@ function testInstallProfilesFeaturesTableHandling() {
     const freshHomeEnv = { HOME: tempHomeFresh, USERPROFILE: tempHomeFresh };
     const existingHomeEnv = { HOME: tempHomeExisting, USERPROFILE: tempHomeExisting };
     const freshResult = runInstallProfiles(fresh, freshHomeEnv);
-    const freshConfig = fs.readFileSync(path.join(fresh, '.codex', 'config.toml'), 'utf8');
-    // #775: the installer no longer writes any [features]/multi_agent flag at all — owner decision
-    // D2 keeps [agents].enabled a user hand-edit reported (never written) by preflight.
-    assert.ok(!freshConfig.includes('[features]'), '#775: fresh install must NOT write any [features] table');
-    assert.ok(freshConfig.includes('# BEGIN kaola-workflow agents'), 'fresh install should include managed block');
-    assert.ok(freshConfig.includes('[agents.code-explorer]'), 'fresh install should include managed [agents.*] entries');
-    // #332: the installer now also writes a .kaola-managed-profiles.json manifest into
-    // this dir, so count TOML entries only (raw readdir includes the manifest dotfile).
-        const freshAgentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
-    assert.strictEqual(
-      fs.readdirSync(freshAgentsDir).filter(f => f.endsWith('.toml')).length,
-      GT_ROSTER_TOMLS.length,
-      'the installer must place exactly the roster the plugin ships'
-    );
-    assert.ok(
-      fs.existsSync(path.join(freshAgentsDir, '.kaola-managed-profiles.json')),
-      '#332: fresh install must write the managed-profiles manifest'
-    );
+    // #775/#1101: the installer writes no [features]/multi_agent flag, and — Kaola defining no
+    // roles — no managed `# BEGIN kaola-workflow agents` block, no [agents.*] entry, no
+    // agents/kaola-workflow/ profile, and no ownership record: a clean project scope gets nothing.
+    assert.ok(!fs.existsSync(path.join(fresh, '.codex')),
+      '#1101: a fresh install must write nothing into the project .codex (no config, profiles, or record)');
 
     // #284/#372/#447: hooks.json assertions — hooks are GLOBAL (in temp HOME/.codex)
     // #447 AC1: hooks land in the global HOME/.codex, NOT in the project dir
@@ -1513,9 +1533,10 @@ function testInstallProfilesFeaturesTableHandling() {
     const existingCodexDir = path.join(existing, '.codex');
     fs.mkdirSync(existingCodexDir, { recursive: true });
     const existingConfigPath = path.join(existingCodexDir, 'config.toml');
-    fs.writeFileSync(existingConfigPath, [
+    const existingBefore = [
       '[features]', 'goals = true', '', '[projects."/tmp/example"]', 'trust_level = "trusted"', ''
-    ].join('\n'));
+    ].join('\n');
+    fs.writeFileSync(existingConfigPath, existingBefore);
 
     runInstallProfiles(existing, existingHomeEnv);
     runInstallProfiles(existing, existingHomeEnv);
@@ -1526,7 +1547,10 @@ function testInstallProfilesFeaturesTableHandling() {
       'existing config must contain exactly one [features] table'
     );
     assert.ok(updated.includes('goals = true'), 'existing [features] content must be preserved');
-    assert.ok(updated.includes('[agents.code-explorer]'), 'managed agent block should still be installed');
+    // #1101: idempotent and hands-off — two installs leave the user's config byte-identical (no
+    // managed block, no [agents.*] entry) and create no agents/ directory.
+    assert.strictEqual(updated, existingBefore, '#1101: two installs must leave an existing config.toml byte-identical');
+    assert.ok(!fs.existsSync(path.join(existingCodexDir, 'agents')), '#1101: the installer must create no agents/ directory');
 
     // #284/#447: idempotency — hooks land in global HOME/.codex; each id appears exactly once
     const existingHooksPath = path.join(tempHomeExisting, '.codex', 'hooks.json');
@@ -3079,231 +3103,220 @@ testGiteaWorktreePathForHiddenLocal();
 testGiteaLegacyWorktreeCleanupDryRun();
 
 // ---------------------------------------------------------------------------
-// AC-7 (#266/#1044): preflight regression tests plus the static compact prompt.
+// AC-7 (#266/#1044/#1101): Codex preflight regression tests plus the static compact prompt.
+// #1101: Kaola-Workflow installs no Codex role profiles, so the preflight neither requires nor
+// validates them; the profiles_missing / profiles_stale / config_stale refusals, the exit-6 profile
+// schema gate, and the exit-7 codex_multi_agent_v2_required refusal are gone. What it still gates:
+// the config-layer safety of HOME and every trusted project .codex layer, and retired-role residue —
+// a RETIRED_PROFILE_FILES or ownership-record file inside a Kaola-owned .codex/agents/kaola-workflow/
+// directory, or the `# BEGIN/END kaola-workflow agents` block — with the installer as the one repair.
+// Dispatch mode, posture, and the V2 bounds are host facts: reported, never enforced.
 // ---------------------------------------------------------------------------
 
-const giteaPreflightScript     = path.join(giteaPluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
+const giteaPreflightScript = path.join(giteaPluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
 
-// Case 1 + Case 2 + Case 5: preflight tests (stale config, missing profiles, no-silent-fallback)
+// Every preflight/doctor run in this section goes through this one site. `home` (optional) becomes
+// the child's HOME; `script` (optional) runs another copy of the preflight, e.g. a plugin-cache one.
+function runGiteaPreflight(args, home, script) {
+  const env = home ? { ...process.env, HOME: home, USERPROFILE: home } : process.env;
+  // spawn-class: cli-contract
+  const result = spawnSync(process.execPath, [script || giteaPreflightScript, ...args], { encoding: 'utf8', env });
+  if (result.error) throw result.error;
+  let json = null;
+  try { json = JSON.parse(result.stdout); } catch (_) { json = null; }
+  return { status: result.status, stdout: result.stdout, json };
+}
+
+// Cases 1, 2, 5 (#266), re-expressed for #1101: a clean scope passes with nothing installed;
+// residue refuses with the installer as its repair; autofix runs that installer; a refusal never
+// falls back to a local mode.
 function testGiteaPreflight266() {
-  // #571: hermetic-HOME retrofit — spawn each preflight call with an empty temp HOME so the
-  // new global-first short-circuit finds no ~/.codex and falls through to project-scope assertions.
-  const emptyHomeGt = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-266-hermetic-home-'));
-  const hEnvGt = { ...process.env, HOME: emptyHomeGt, USERPROFILE: emptyHomeGt };
+  // #571: hermetic HOME — every preflight call reads an empty temp HOME, never the developer's.
+  const emptyHomegt = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-266-hermetic-home-'));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-266-preflight-'));
+  const pf = args => runGiteaPreflight(args, emptyHomegt);
+  const readOnly = ['--project-root', root, '--no-autofix', '--json'];
+  const configPath = path.join(root, '.codex', 'config.toml');
+  // A user-owned [agents.<name>] table outside the managed markers is the user's, never residue.
+  const origConfig = '[agents.my-reviewer]\ndescription = "user-owned reviewer"\nconfig_file = "./agents/my-reviewer.toml"\n';
   try {
-    // Install every shipped profile into the fixture.
-    const installResult = spawnSync(process.execPath, [installProfilesScript, root], {
-      cwd: giteaPluginRoot, encoding: 'utf8'
-    });
-    if (installResult.error) throw installResult.error;
-    assert.ok(installResult.status === 0, 'gitea preflight fixture install failed: ' + installResult.stderr);
+    // Project-scoped Codex layers are ignored until the project is explicitly trusted: an untrusted
+    // layer's config never enters the effective runtime (and is not a refusal).
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, '[features.multi_agent_v2]\nenabled = true\n');
+    let r = pf(readOnly);
+    assert.strictEqual(r.status, 0,
+      '#266 gt trust guard: an untrusted project layer is ignored, not refused, got ' + r.status + '\n' + r.stdout);
+    assert.strictEqual(r.json.project_trust, 'unknown', '#266 gt trust guard: expected unknown trust, got ' + r.json.project_trust);
+    assert.strictEqual(r.json.multi_agent_v2_enabled, false,
+      '#266 gt trust guard: the untrusted layer\'s multi_agent_v2 must not load');
+    assert.ok(!r.json.effective_config_paths.includes(configPath),
+      '#266 gt trust guard: the untrusted layer must not be an effective config path: ' + JSON.stringify(r.json.effective_config_paths));
+    trustCodexProject(emptyHomegt, root);
+    r = pf(readOnly);
+    assert.strictEqual(r.status, 0, '#266 gt trust guard: trusted layer must pass, got ' + r.status + '\n' + r.stdout);
+    assert.strictEqual(r.json.project_trust, 'trusted', '#266 gt trust guard: expected trusted, got ' + r.json.project_trust);
+    assert.ok(r.json.multi_agent_v2_enabled === true && r.json.effective_config_paths.includes(configPath),
+      '#266 gt trust guard: once trusted, the project layer loads');
+    enableMultiAgentV2(emptyHomegt);
 
-    // Project-scoped Codex layers are ignored until the project is explicitly trusted.
-    const trustRequiredResult = spawnSync(process.execPath,
-      [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
-      { encoding: 'utf8', env: hEnvGt });
-    assert.strictEqual(trustRequiredResult.status, 4,
-      '#266 gt trust guard: unknown project trust must exit 4, got ' + trustRequiredResult.status
-        + '\n' + trustRequiredResult.stdout);
-    const trustRequiredJson = JSON.parse(trustRequiredResult.stdout);
-    assert.strictEqual(trustRequiredJson.status, 'project_trust_required',
-      '#266 gt trust guard: expected project_trust_required, got ' + trustRequiredJson.status);
-    assert.strictEqual(trustRequiredJson.project_trust, 'unknown',
-      '#266 gt trust guard: expected unknown trust, got ' + trustRequiredJson.project_trust);
-    trustCodexProject(emptyHomeGt, root);
-    enableMultiAgentV2(emptyHomeGt);
+    // --- GREEN: a clean trusted scope passes with nothing installed ---
+    fs.writeFileSync(configPath, origConfig);
+    r = pf(readOnly);
+    assert.strictEqual(r.status, 0,
+      '#266 gt case1 RED-discriminator: clean fixture must exit 0, got ' + r.status + '\n' + r.stdout);
+    assert.ok(r.json.status === 'ok' && r.json.autofixed === false,
+      '#266 gt case1 RED-discriminator: clean fixture must return status:ok, got ' + JSON.stringify(r.json));
 
-    // --- GREEN: fresh fixture must pass preflight ---
-    const freshResult = spawnSync(process.execPath,
-      [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
-      { encoding: 'utf8', env: hEnvGt });
-    assert.strictEqual(freshResult.status, 0,
-      '#266 gt case1 RED-discriminator: fresh fixture must exit 0, got ' + freshResult.status + '\n' + freshResult.stdout);
-    const freshJson = JSON.parse(freshResult.stdout);
-        assert.strictEqual(freshJson.status, 'ok',
-          '#266 gt case1 RED-discriminator: fresh fixture must return status:ok, got ' + freshJson.status);
+    function configWithV2Enabled(extraLines) {
+      return '[features.multi_agent_v2]\nenabled = true\n' + (extraLines ? extraLines + '\n' : '') + '\n' + origConfig;
+    }
+    // #775/#1101: dispatch mode is binary and REPORTED — V2 on is v2-task-name, V2 off is null (there
+    // is no v1 fallback), and neither is a refusal: subagent dispatch belongs to the host.
+    function assertDispatchModeForConfig(body, expectedEnabled, label, checkDoctor) {
+      fs.writeFileSync(configPath, body);
+      const result = pf(readOnly);
+      assert.strictEqual(result.status, 0,
+        label + ': dispatch mode is a reported host fact, never a refusal, got ' + result.status + '\n' + result.stdout);
+      assert.strictEqual(result.json.status, 'ok', label + ': status');
+      assert.strictEqual(result.json.multi_agent_v2_enabled, expectedEnabled, label + ': multi_agent_v2_enabled');
+      assert.strictEqual(result.json.dispatch_mode, expectedEnabled ? 'v2-task-name' : null,
+        label + ': dispatch_mode must be v2-task-name when V2 is on and null when off (no v1 fallback)');
+      if (checkDoctor) {
+        const doctor = pf(['--doctor', '--project-root', root, '--json']);
+        assert.strictEqual(doctor.status, 0, label + ': doctor must pass, got ' + doctor.status + '\n' + doctor.stdout);
+        const projectScope = doctor.json.scopes.find(s => s.scope === 'project');
+        assert.ok(projectScope && projectScope.dispatch_mode === (expectedEnabled ? 'v2-task-name' : null),
+          label + ': doctor project scope dispatch_mode, got ' + JSON.stringify(projectScope));
+      }
+    }
+    // NOTE: this fixture's HOME layer has V2 enabled — a project layer that does NOT set `enabled`
+    // inherits HOME's true; only an EXPLICIT project-layer `enabled = false` overrides it.
+    assertDispatchModeForConfig(origConfig, true, '#775 gt no project-layer V2 table -> inherits enabled=true from HOME', false);
+    assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\n' + origConfig, false,
+      '#1101 gt project layer explicitly overrides enabled=false -> reported, exit 0', true);
+    assertDispatchModeForConfig(configWithV2Enabled(), true, '#775 gt [features.multi_agent_v2] enabled = true', true);
+    assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\n[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, false,
+      '#775 gt warning suppression alone must not enable v2', false);
+    assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\nmulti_agent_v2 = true\n\n' + origConfig, false,
+      '#775 gt a retired top-level multi_agent_v2 key is not read (no more [features] grammar)', false);
 
-        // --- Case 1 RED: remove a role from the managed block → config_stale ---
-        const configPath = path.join(root, '.codex', 'config.toml');
-        const origConfig = fs.readFileSync(configPath, 'utf8');
-        // #775: config/agents.toml's managed block no longer opens with [features] — managedBlock()
-        // is the raw bundled template, so there is nothing to strip here. `configWithAgentsEnabled`
-        // PREPENDS a user-owned [agents] table (TOML forbids re-declaring [agents] once the managed
-        // block's [agents.<role>] sub-tables have already opened it).
-        function configWithAgentsEnabled(extraLines) {
-          return '[features.multi_agent_v2]\nenabled = true\n' + (extraLines ? extraLines + '\n' : '') + '\n' + origConfig;
-        }
-        // #775: dispatch mode is binary now — the whole 0.142/0.144 transport-mode grammar
-        // (tool_namespace / hide_spawn_agent_metadata / non_code_mode_only, the dotted/quoted/
-        // array-of-table [features.multi_agent_v2] parsing edge cases, the codex_v2_*_transport_unsafe
-        // refusals) is retired along with the [features.multi_agent_v2] table shape; the ONLY
-        // question left is whether the top-level [agents] table's `enabled` is true (v2-task-name,
-        // exit 0) or not (codex_multi_agent_v2_required, exit 7 — there is no v1 fallback).
-        function assertDispatchModeForConfig(body, expectedEnabled, label, checkDoctor) {
-          fs.writeFileSync(configPath, body);
-          const result = spawnSync(process.execPath,
-            [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
-            { encoding: 'utf8', env: hEnvGt });
-          if (!expectedEnabled) {
-            assert.strictEqual(result.status, 7,
-              label + ': v2-disabled config must refuse with exit 7, got ' + result.status + '\n' + result.stdout);
-            const json = JSON.parse(result.stdout);
-            assert.strictEqual(json.status, 'codex_multi_agent_v2_required', label + ': status');
-            assert.strictEqual(json.multi_agent_v2_enabled, false, label + ': multi_agent_v2_enabled');
-            assert.strictEqual(json.dispatch_mode, null, label + ': dispatch_mode must be null when v2 is disabled (no v1 fallback)');
-            return;
-          }
-          assert.strictEqual(result.status, 0,
-            label + ': v2-enabled config must pass preflight, got ' + result.status + '\n' + result.stdout);
-          const json = JSON.parse(result.stdout);
-          assert.strictEqual(json.dispatch_mode, 'v2-task-name', label + ': dispatch_mode');
-          assert.strictEqual(json.multi_agent_v2_enabled, true, label + ': multi_agent_v2_enabled');
-          if (checkDoctor) {
-            const doctorResult = spawnSync(process.execPath,
-              [giteaPreflightScript, '--doctor', '--project-root', root, '--json'],
-              { encoding: 'utf8', env: hEnvGt });
-            const doctorJson = JSON.parse(doctorResult.stdout);
-            const projectScope = doctorJson.scopes.find(s => s.scope === 'project');
-            assert.ok(projectScope && projectScope.dispatch_mode === 'v2-task-name',
-              label + ': doctor project scope expected v2-task-name, got ' + JSON.stringify(projectScope));
-          }
-        }
-        // NOTE: this fixture's HOME layer already has [agents].enabled = true seeded (so the
-        // "GREEN: fresh fixture must pass preflight" check above passes) — a project layer that
-        // does NOT set `enabled` inherits HOME's true; only an EXPLICIT project-layer
-        // `enabled = false` can override it back off.
-        assertDispatchModeForConfig(origConfig, true, '#775 gt no project-layer [agents] table -> inherits enabled=true from HOME', false);
-        assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\n' + origConfig, false, '#775 gt project layer explicitly overrides enabled=false', false);
-        assertDispatchModeForConfig(configWithAgentsEnabled(), true, '#775 gt [agents]\\nenabled = true', true);
-        assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\n[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, false,
-          '#775 gt warning suppression alone must not enable v2', false);
-        assertDispatchModeForConfig('[features.multi_agent_v2]\nenabled = false\n\nmulti_agent_v2 = true\n\n' + origConfig, false,
-          '#775 gt a retired top-level multi_agent_v2 key is not read (no more [features] grammar)', false);
+    // #598 AC2 gt: effort-gated dispatch POSTURE (distinct from dispatch_mode). Report-only: every
+    // posture — 'none' included, now that V2 off is no refusal — exits 0.
+    function assertDispatchPostureForConfig(body, expectedPosture, label) {
+      fs.writeFileSync(configPath, body);
+      const result = pf(readOnly);
+      assert.strictEqual(result.status, 0,
+        label + ': dispatch-posture WARN must never fail preflight, got ' + result.status + '\n' + result.stdout);
+      assert.strictEqual(result.json.dispatch_posture, expectedPosture,
+        label + ': expected dispatch_posture ' + expectedPosture + ', got ' + result.json.dispatch_posture);
+      assert.strictEqual(result.json.dispatch_posture_warning === null, expectedPosture === 'proactive',
+        label + ': dispatch_posture_warning must be null iff proactive, got ' + JSON.stringify(result.json.dispatch_posture_warning));
+    }
+    assertDispatchPostureForConfig(origConfig, 'explicitRequestOnly', '#598 gt base fixture (V2 enabled via HOME layer, no effort)');
+    assertDispatchPostureForConfig('[features.multi_agent_v2]\nenabled = false\n\n' + origConfig, 'none',
+      '#1101 gt V2 off -> posture none is reported and passes');
+    assertDispatchPostureForConfig('model_reasoning_effort = "ultra"\n\n' + origConfig, 'proactive',
+      '#598 gt effort=ultra with V2 enabled -> proactive');
+    assertDispatchPostureForConfig('model_reasoning_effort = "xhigh"\n\n' + origConfig, 'explicitRequestOnly',
+      '#598 gt effort=xhigh (below ultra) stays explicitRequestOnly');
+    assertDispatchPostureForConfig(configWithV2Enabled(), 'explicitRequestOnly',
+      '#775 gt V2 enabled at the project layer too, no effort -> explicitRequestOnly');
+    assertDispatchPostureForConfig(configWithV2Enabled('model_reasoning_effort = "ultra"'), 'explicitRequestOnly',
+      '#775 gt effort INSIDE a table is not a TOML root key -> ignored');
 
-        // #598 AC2 gt: effort-gated MultiAgentMode dispatch-POSTURE (distinct from dispatch_mode
-        // above — posture reflects whether the runtime will REFUSE a spawn, not just whether the
-        // tools are exposed). #775: 'none' now ALWAYS coincides with the codex_multi_agent_v2_required
-        // refusal, so every case here uses a v2-enabled config and must still exit 0.
-        function assertDispatchPostureForConfig(body, expectedPosture, label) {
-          fs.writeFileSync(configPath, body);
-          const result = spawnSync(process.execPath,
-            [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
-            { encoding: 'utf8', env: hEnvGt });
-          assert.strictEqual(result.status, 0,
-            label + ': dispatch-posture WARN must never fail preflight, got ' + result.status + '\n' + result.stdout);
-          const json = JSON.parse(result.stdout);
-          assert.strictEqual(json.dispatch_posture, expectedPosture,
-            label + ': expected dispatch_posture ' + expectedPosture + ', got ' + json.dispatch_posture);
-          assert.strictEqual(json.dispatch_posture_warning === null, expectedPosture === 'proactive',
-            label + ': dispatch_posture_warning must be null iff proactive, got ' + JSON.stringify(json.dispatch_posture_warning));
-        }
-        assertDispatchPostureForConfig(origConfig, 'explicitRequestOnly', '#598 gt base fixture ([agents] enabled via HOME layer, no effort)');
-        // NOTE: a 'none' posture ALWAYS now coincides with codex_multi_agent_v2_required (exit 7) —
-        // there is no longer a passing-preflight case that reports posture 'none'.
-        assertDispatchPostureForConfig('model_reasoning_effort = "ultra"\n\n' + origConfig, 'proactive',
-          '#598 gt effort=ultra with [agents] enabled -> proactive');
-        assertDispatchPostureForConfig('model_reasoning_effort = "xhigh"\n\n' + origConfig, 'explicitRequestOnly',
-          '#598 gt effort=xhigh (below ultra) stays explicitRequestOnly');
-        assertDispatchPostureForConfig(configWithAgentsEnabled(), 'explicitRequestOnly',
-          '#775 gt [agents] enabled=true at the project layer too, no effort -> explicitRequestOnly');
-        assertDispatchPostureForConfig(
-          configWithAgentsEnabled('model_reasoning_effort = "ultra"'),
-          'explicitRequestOnly', '#775 gt effort INSIDE the [agents] table is not a valid TOML root key -> ignored');
+    // --- Case 1 RED (#1101): the managed block an earlier release wrote is retired-role residue,
+    // named by path, with the exact scoped installer command as the repair; --no-autofix writes nothing.
+    const blockConfig = origConfig + '\n' + releasedCodexBlock();
+    fs.writeFileSync(configPath, blockConfig);
+    r = pf(readOnly);
+    assert.strictEqual(r.status, 1, '#266 gt case1: a managed block must exit 1, got ' + r.status + '\n' + r.stdout);
+    assert.strictEqual(r.json.status, 'retired_role_residue', '#266 gt case1: must return retired_role_residue, got ' + r.json.status);
+    assert.deepStrictEqual(r.json.residue_paths, [configPath], '#266 gt case1: residue_paths must name the config');
+    assert.ok(r.json.residue.length === 1 && r.json.residue[0].managed_block === 'present' && r.json.safe_autofix === true,
+      '#266 gt case1: one project scope with a present, safely autofixable block, got ' + JSON.stringify(r.json.residue));
+    assert.ok(r.json.repair.includes(`node ${installProfilesScript} ${root}`),
+      '#266 gt case1: repair must name the exact scoped installer command, got ' + r.json.repair);
+    assert.strictEqual(fs.readFileSync(configPath, 'utf8'), blockConfig, '#266 gt case1: --no-autofix must not write');
 
-        fs.writeFileSync(configPath, origConfig);
-        const staleConfig = origConfig.replace('[agents.implementer]', '[agents.STALE-implementer]');
-        fs.writeFileSync(configPath, staleConfig);
+    // An unbalanced marker pair is a manual repair: reported unsafe, and autofix refuses before
+    // any installer run (exit 4 autofix_unsafe) with the config untouched.
+    const unbalanced = origConfig + '\n' + KW_AGENTS_BEGIN + '\n[agents.implementer]\nconfig_file = "./agents/kaola-workflow/implementer.toml"\n';
+    fs.writeFileSync(configPath, unbalanced);
+    r = pf(readOnly);
+    assert.ok(r.status === 1 && r.json.residue[0].managed_block === 'invalid' && r.json.safe_autofix === false,
+      '#1101 gt: unbalanced markers are residue that is not safe to autofix, got ' + r.stdout);
+    r = pf(['--project-root', root, '--json']);
+    assert.strictEqual(r.status, 4, '#1101 gt: autofix over unbalanced markers must exit 4, got ' + r.status + '\n' + r.stdout);
+    assert.strictEqual(r.json.status, 'autofix_unsafe', '#1101 gt: status autofix_unsafe, got ' + r.json.status);
+    assert.strictEqual(fs.readFileSync(configPath, 'utf8'), unbalanced, '#1101 gt: autofix_unsafe must not write the config');
 
-    const staleResult = spawnSync(process.execPath,
-      [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
-      { encoding: 'utf8', env: hEnvGt });
-    assert.notStrictEqual(staleResult.status, 0,
-      '#266 gt case1: stale managed block must cause non-zero exit, got ' + staleResult.status);
-    const staleJson = JSON.parse(staleResult.stdout);
-    assert.strictEqual(staleJson.status, 'config_stale',
-      '#266 gt case1: must return config_stale, got ' + staleJson.status);
-    assert.ok(Array.isArray(staleJson.missing_roles) && staleJson.missing_roles.includes('implementer'),
-      '#266 gt case1: missing_roles must include implementer, got ' + JSON.stringify(staleJson.missing_roles));
-
-    // --- Case 1 GREEN (autofix): ---
+    // --- Case 1 GREEN (autofix): the installer retires a released install, the user's table stays. ---
     const autofixRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-266-preflight-autofix-'));
     try {
-      trustCodexProject(emptyHomeGt, autofixRoot);
-      fs.mkdirSync(path.join(autofixRoot, '.codex', 'agents', 'kaola-workflow'), { recursive: true });
-      fs.writeFileSync(path.join(autofixRoot, '.codex', 'config.toml'), staleConfig);
-      const srcAgentsDir = path.join(root, '.codex', 'agents', 'kaola-workflow');
-      const dstAgentsDir = path.join(autofixRoot, '.codex', 'agents', 'kaola-workflow');
-      for (const f of fs.readdirSync(srcAgentsDir)) {
-        fs.copyFileSync(path.join(srcAgentsDir, f), path.join(dstAgentsDir, f));
+      trustCodexProject(emptyHomegt, autofixRoot);
+      fs.mkdirSync(path.join(autofixRoot, '.codex'), { recursive: true });
+      fs.writeFileSync(path.join(autofixRoot, '.codex', 'config.toml'), origConfig);
+      const planted = plantReleasedCodexScope(autofixRoot);
+      r = runGiteaPreflight(['--project-root', autofixRoot, '--json'], emptyHomegt);
+      assert.strictEqual(r.status, 0,
+        '#266 gt case1 autofix: must exit 0 after repair, got ' + r.status + '\n' + r.stdout);
+      assert.ok(r.json.status === 'ok' && r.json.autofixed === true,
+        '#266 gt case1 autofix: must return ok+autofixed:true, got ' + JSON.stringify(r.json));
+      for (const file of [...planted.profiles, planted.record, planted.configPath]) {
+        assert.ok(r.json.autofixed_residue_paths.includes(file), '#1101 gt autofix: must report ' + file);
       }
-      const autofixResult = spawnSync(process.execPath,
-        [giteaPreflightScript, '--project-root', autofixRoot, '--json'],
-        { encoding: 'utf8', env: hEnvGt });
-      assert.strictEqual(autofixResult.status, 0,
-        '#266 gt case1 autofix: must exit 0 after repair, got ' + autofixResult.status + '\n' + autofixResult.stdout);
-      const autofixJson = JSON.parse(autofixResult.stdout);
-      assert.ok(autofixJson.status === 'ok' && autofixJson.autofixed === true,
-        '#266 gt case1 autofix: must return ok+autofixed:true, got ' + JSON.stringify(autofixJson));
+      assert.ok(!fs.existsSync(planted.agentsDir), '#1101 gt autofix: the Kaola-owned profile dir must be gone');
+      const repaired = fs.readFileSync(planted.configPath, 'utf8');
+      assert.ok(!repaired.includes(KW_AGENTS_BEGIN) && repaired.includes('[agents.my-reviewer]'),
+        '#1101 gt autofix: the managed block goes, the user-owned table stays: ' + repaired);
     } finally {
       fs.rmSync(autofixRoot, { recursive: true, force: true });
     }
 
-    // Restore config for case 2
+    // --- Case 2 RED (#1101): a planted agents/kaola-workflow/implementer.toml is residue ---
     fs.writeFileSync(configPath, origConfig);
+    const kaolaAgentsDir = path.join(root, '.codex', 'agents', 'kaola-workflow');
+    const wpToml = path.join(kaolaAgentsDir, 'implementer.toml');
+    fs.mkdirSync(kaolaAgentsDir, { recursive: true });
+    fs.writeFileSync(wpToml, 'name = "implementer"\n');
+    r = pf(readOnly);
+    assert.strictEqual(r.status, 1, '#266 gt case2: planted implementer.toml must exit 1, got ' + r.status + '\n' + r.stdout);
+    assert.strictEqual(r.json.status, 'retired_role_residue', '#266 gt case2: must return retired_role_residue, got ' + r.json.status);
+    assert.deepStrictEqual(r.json.residue[0].retired_profile_files, [wpToml], '#266 gt case2: retired_profile_files names implementer.toml');
+    assert.ok(fs.existsSync(wpToml), '#266 gt case2: the preflight never deletes');
 
-    // --- Case 2 RED: remove a profile toml file → profiles_missing ---
-    const wpToml = path.join(root, '.codex', 'agents', 'kaola-workflow', 'implementer.toml');
-    const savedToml = fs.readFileSync(wpToml);
+    // --- Case 5 RED: the refusal must NOT emit subagent-invoked or local-fallback (no silent fallback) ---
+    assert.ok(!r.stdout.includes('subagent-invoked'),
+      '#266 gt case5: preflight refusal must NOT emit subagent-invoked, got: ' + r.stdout);
+    assert.ok(!r.stdout.includes('local-fallback'),
+      '#266 gt case5: preflight refusal must NOT emit local-fallback, got: ' + r.stdout);
+
+    // --- Case 2 GREEN: removed -> clean again. User files are never residue: a profile outside the
+    // Kaola-owned dir (even under a retired role name), a non-retired name inside it, and the user's
+    // [agents.*] tables.
     fs.unlinkSync(wpToml);
+    fs.writeFileSync(path.join(root, '.codex', 'agents', 'my-reviewer.toml'), 'name = "my-reviewer"\n');
+    fs.writeFileSync(path.join(root, '.codex', 'agents', 'implementer.toml'), 'name = "implementer"\n');
+    fs.writeFileSync(path.join(kaolaAgentsDir, 'my-custom.toml'), 'name = "my-custom"\n');
+    fs.writeFileSync(configPath, origConfig + '\n[agents.implementer]\nconfig_file = "./agents/implementer.toml"\n');
+    r = pf(readOnly);
+    assert.strictEqual(r.status, 0,
+      '#266 gt case2 GREEN: user files and tables are never residue, got ' + r.status + '\n' + r.stdout);
 
-    const missingResult = spawnSync(process.execPath,
-      [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
-      { encoding: 'utf8', env: hEnvGt });
-    assert.notStrictEqual(missingResult.status, 0,
-      '#266 gt case2: missing profile toml must cause non-zero exit, got ' + missingResult.status);
-    const missingJson = JSON.parse(missingResult.stdout);
-    assert.strictEqual(missingJson.status, 'profiles_missing',
-      '#266 gt case2: must return profiles_missing, got ' + missingJson.status);
-    assert.ok(Array.isArray(missingJson.missing_roles) && missingJson.missing_roles.includes('implementer'),
-      '#266 gt case2: missing_roles must include implementer');
-
-    // Restore toml
-    fs.writeFileSync(wpToml, savedToml);
-
-    // --- Case 2 GREEN: restored → fresh again ---
-    const restoredResult = spawnSync(process.execPath,
-      [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
-      { encoding: 'utf8', env: hEnvGt });
-    assert.strictEqual(restoredResult.status, 0,
-      '#266 gt case2 GREEN: restored fixture must pass, got ' + restoredResult.status);
-
-    // --- Case 5 RED: absent profile → REFUSES, stdout must NOT contain subagent-invoked or local-fallback ---
-    fs.unlinkSync(wpToml);
-    const refusalResult = spawnSync(process.execPath,
-      [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
-      { encoding: 'utf8', env: hEnvGt });
-    assert.notStrictEqual(refusalResult.status, 0,
-      '#266 gt case5 RED: absent profile must cause non-zero exit, got ' + refusalResult.status);
-    assert.ok(!refusalResult.stdout.includes('subagent-invoked'),
-      '#266 gt case5: preflight refusal must NOT emit subagent-invoked, got: ' + refusalResult.stdout);
-    assert.ok(!refusalResult.stdout.includes('local-fallback'),
-      '#266 gt case5: preflight refusal must NOT emit local-fallback, got: ' + refusalResult.stdout);
-    // Restore
-    fs.writeFileSync(wpToml, savedToml);
-
-    console.log('testGiteaPreflight266 (#266 cases 1,2,5): PASSED');
+    console.log('testGiteaPreflight266 (#266 cases 1,2,5 / #1101 residue): PASSED');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
-    fs.rmSync(emptyHomeGt, { recursive: true, force: true });
+    fs.rmSync(emptyHomegt, { recursive: true, force: true });
   }
 }
 
 // ---------------------------------------------------------------------------
-// #598 AC1 gt: installer dispatch-posture REPORT. ATTESTATION-STYLE / NON-FATAL — the
-// installer must REPORT the effective effort-gated MultiAgentMode posture and, when
-// non-proactive, the exact remediation, and this must NEVER change the install's own
-// exit code. Also asserts stdout still ENDS with `status: ok` (#332 AC3 invariant).
+// #598 AC1 gt: installer dispatch-posture REPORT. ATTESTATION-STYLE / NON-FATAL — the installer
+// REPORTS the effective posture and multi_agent_v2 state it reads and never writes either; this never
+// changes the install's exit code, and stdout still ENDS with `status: ok` (#332 AC3 invariant).
+// #1101: V2 off is reported as a host fact, not as a preflight requirement; the #601 remediation
+// that steered users toward an ultra effort went with Kaola's roles (Kaola sets no model or effort).
 // ---------------------------------------------------------------------------
 function testGiteaDispatchPosture598() {
   const postureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-598-posture-home-'));
@@ -3315,37 +3328,36 @@ function testGiteaDispatchPosture598() {
     assert.strictEqual(fresh.status, 0, '#598 gt AC1: fresh install must exit 0: ' + fresh.stderr);
     assert.strictEqual(fresh.stdout.trim().split('\n').pop(), 'status: ok',
       '#598 gt AC1: existing #332 AC3 "stdout ends with status: ok" invariant must be preserved: ' + fresh.stdout);
-    assert.ok(/Kaola-Workflow Codex multi_agent_v2: NOT enabled \(see codex_multi_agent_v2_required at preflight\)/.test(fresh.stdout),
-      '#775 gt AC1: a fresh install (no [agents] enabled=true) must report multi_agent_v2 not enabled: ' + fresh.stdout);
+    assert.ok(stdoutHasLine(fresh.stdout, 'Kaola-Workflow Codex multi_agent_v2: not enabled'),
+      '#1101 gt AC1: a fresh install must report multi_agent_v2 not enabled: ' + fresh.stdout);
+    assert.ok(!/codex_multi_agent_v2_required/.test(fresh.stdout),
+      '#1101 gt AC1: V2 off must not be framed as a preflight requirement: ' + fresh.stdout);
     assert.ok(/Kaola-Workflow Codex dispatch posture: none/.test(fresh.stdout),
-      '#775 gt AC1: a fresh install with no [agents] enabled=true must report posture none: ' + fresh.stdout);
-    assert.ok(/0\.145\.0/.test(fresh.stdout), '#775 gt AC1/AC2: report must carry the version-guard note: ' + fresh.stdout);
+      '#775 gt AC1: a fresh install with V2 off must report posture none: ' + fresh.stdout);
+    assert.ok(/0\.145\.0/.test(fresh.stdout), '#775 gt AC2: the posture report must carry its Codex-version note: ' + fresh.stdout);
+    assert.ok(!/set model_reasoning_effort|model_reasoning_effort\s*=\s*"ultra"/.test(fresh.stdout),
+      '#1101 gt: the non-proactive note must not direct the user to set a model or effort: ' + fresh.stdout);
+    assert.ok(!fs.existsSync(path.join(postureProj, '.codex')), '#1101 gt: reporting posture writes no project config');
 
     const postureConfigPath = path.join(postureProj, '.codex', 'config.toml');
-    const beforeUltra = fs.readFileSync(postureConfigPath, 'utf8');
-    fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n\n' + beforeUltra);
+    const userConfig = 'model_reasoning_effort = "ultra"\n\n[features.multi_agent_v2]\nenabled = true\n';
+    fs.mkdirSync(path.dirname(postureConfigPath), { recursive: true });
+    fs.writeFileSync(postureConfigPath, userConfig);
     const reinstalled = spawnSync(process.execPath, [installProfilesScript, postureProj],
       { cwd: giteaPluginRoot, encoding: 'utf8', env: freshEnv });
-    assert.strictEqual(reinstalled.status, 0, '#598 gt AC1: re-install with [agents] enabled + effort=ultra must still exit 0: ' + reinstalled.stderr);
+    assert.strictEqual(reinstalled.status, 0, '#598 gt AC1: re-install with V2 enabled + effort=ultra must still exit 0: ' + reinstalled.stderr);
     assert.ok(/Kaola-Workflow Codex dispatch posture: proactive/.test(reinstalled.stdout),
       '#775 gt AC1: v2 enabled + effort=ultra must report proactive posture: ' + reinstalled.stdout);
     // #842: the label reports STATE and must not credit the RETIRED key for it — the detector reads
-    // features.multi_agent_v2, and `[agents] enabled = true` is not what enabled V2 here or
-    // anywhere. Same predicates as AC1 in scripts/test-install-model-rendering.js: one claim, one
-    // wording, across all four chains that pinned the old label.
+    // features.multi_agent_v2, and `[agents] enabled = true` is not what enabled V2 here or anywhere.
     assert.ok(/Kaola-Workflow Codex multi_agent_v2: enabled/.test(reinstalled.stdout),
       '#775 gt AC1: enabled config must report multi_agent_v2 enabled: ' + reinstalled.stdout);
     assert.ok(!/multi_agent_v2: enabled \([^)]*\[agents\]/.test(reinstalled.stdout),
       '#842 gt AC1: ...and must NOT attribute it to [agents]: ' + reinstalled.stdout);
     assert.ok(!/refuse sub-agent spawns/.test(reinstalled.stdout),
       '#598 gt AC1: a proactive posture must NOT print the non-proactive remediation: ' + reinstalled.stdout);
-    // #601: the remediation (still printed while posture is non-proactive, i.e. the FIRST fresh
-    // install above) must LEAD with the always-available, always-documented in-session ask,
-    // before the effort-gated (undocumented/server-gated) ultra clause.
-    const askIdx601 = fresh.stdout.indexOf('explicitly ask for sub-agents');
-    const ultraIdx601 = fresh.stdout.indexOf('model_reasoning_effort = "ultra"');
-    assert.ok(askIdx601 !== -1 && ultraIdx601 !== -1 && askIdx601 < ultraIdx601,
-      '#601 gt: remediation must lead with the in-session ask before the effort-gated ultra clause: ' + fresh.stdout);
+    assert.strictEqual(fs.readFileSync(postureConfigPath, 'utf8'), userConfig,
+      '#598/#1101 gt: the installer reports posture and never writes model_reasoning_effort or multi_agent_v2');
 
     console.log('testGiteaDispatchPosture598 (#598 AC1 installer report): PASSED');
   } finally {
@@ -3355,34 +3367,31 @@ function testGiteaDispatchPosture598() {
 }
 
 // ---------------------------------------------------------------------------
-// #571: global-first preflight gate — install once to ~/.codex, all repos pass (Gitea edition).
+// #571: global-first preflight gate (Gitea edition). #1101: nothing needs installing for any repo
+// to pass; what the global scope still carries is residue, which no clean project masks.
 // ---------------------------------------------------------------------------
 function testGiteaPreflight571() {
-  // --- Test (a): global-only install ⇒ gate PASSES (scope:'global') ---
-  // RED-first discriminator: old gate checks project scope only → exit 1 (RED); GREEN after gate change.
+  // --- Test (a): a clean HOME passes every repo — V2 off is reported, not refused ---
   const tempHome571a = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-571a-home-'));
   try {
-    const env571a = { ...process.env, HOME: tempHome571a, USERPROFILE: tempHome571a };
-    const setupInstall = spawnSync(process.execPath, [installProfilesScript, tempHome571a], {
-      cwd: giteaPluginRoot, encoding: 'utf8', env: env571a
-    });
-    assert.strictEqual(setupInstall.status, 0,
-      '#571 gt test(a): positional-form install to tempHome must exit 0: ' + setupInstall.stderr);
-    enableMultiAgentV2(tempHome571a);
+    const env571a = { HOME: tempHome571a, USERPROFILE: tempHome571a };
+    // The positional "$HOME" install form still works and leaves no role content behind.
+    runInstallProfiles(tempHome571a, env571a);
+    assert.ok(!fs.existsSync(path.join(tempHome571a, '.codex', 'agents')),
+      '#1101 gt test(a): installing to HOME must write no agents/ content');
 
     const emptyProject571a = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-571a-proj-'));
     try {
-      const r = spawnSync(process.execPath,
-        [giteaPreflightScript, '--project-root', emptyProject571a, '--no-autofix', '--json'],
-        { encoding: 'utf8', env: env571a });
+      const r = runGiteaPreflight(['--project-root', emptyProject571a, '--no-autofix', '--json'], tempHome571a);
       assert.strictEqual(r.status, 0,
-        '#571 gt test(a) RED-discriminator: global-only install must pass preflight, got ' +
-        r.status + '\n' + r.stdout);
-      const j = JSON.parse(r.stdout);
-      assert.strictEqual(j.status, 'ok', '#571 gt test(a): status must be ok, got ' + j.status);
-      assert.strictEqual(j.scope, 'global', '#571 gt test(a): scope must be global, got ' + j.scope);
+        '#571 gt test(a): a clean HOME with V2 off must pass preflight, got ' + r.status + '\n' + r.stdout);
+      assert.strictEqual(r.json.status, 'ok', '#571 gt test(a): status must be ok, got ' + r.json.status);
+      assert.ok(r.json.multi_agent_v2_enabled === false && r.json.dispatch_mode === null && r.json.dispatch_posture === 'none',
+        '#1101 gt test(a): V2 off must be reported (false/null/none), got ' + JSON.stringify(r.json));
+      assert.strictEqual(r.json.scopes_checked[0], path.join(tempHome571a, '.codex'),
+        '#571 gt test(a): the global scope must be checked first, got ' + JSON.stringify(r.json.scopes_checked));
       assert.ok(!fs.existsSync(path.join(emptyProject571a, '.codex')),
-        '#571 gt test(a): no project .codex must be created when global scope satisfies the gate');
+        '#571 gt test(a): no project .codex must be created');
     } finally {
       fs.rmSync(emptyProject571a, { recursive: true, force: true });
     }
@@ -3390,44 +3399,40 @@ function testGiteaPreflight571() {
     fs.rmSync(tempHome571a, { recursive: true, force: true });
   }
 
-  // --- Test (b): neither scope valid ⇒ FAILS CLOSED ---
+  // --- Test (b): a global ownership record alone is residue — FAILS CLOSED with the --global repair ---
   const tempHome571b = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-571b-home-'));
   const emptyProject571b = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-571b-proj-'));
   try {
-    // #775: seed [agents] enabled=true so this test still reaches the profile-availability check
-    // it was designed to prove, rather than short-circuiting on codex_multi_agent_v2_required.
-    enableMultiAgentV2(tempHome571b);
-    const r = spawnSync(process.execPath,
-      [giteaPreflightScript, '--project-root', emptyProject571b, '--no-autofix', '--json'],
-      { encoding: 'utf8', env: { ...process.env, HOME: tempHome571b, USERPROFILE: tempHome571b } });
-    assert.notStrictEqual(r.status, 0,
-      '#571 gt test(b): neither scope valid must fail closed, got exit ' + r.status);
-    const j = JSON.parse(r.stdout);
-    assert.ok(j.status === 'profiles_missing' || j.status === 'config_stale',
-      '#571 gt test(b): fail-closed must return profiles_missing or config_stale, got ' + j.status);
+    const recordPath = path.join(tempHome571b, '.codex', 'agents', 'kaola-workflow', '.kaola-managed-profiles.json');
+    fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+    fs.writeFileSync(recordPath, '{"schema_version":1,"files":{}}\n');
+    const r = runGiteaPreflight(['--project-root', emptyProject571b, '--no-autofix', '--json'], tempHome571b);
+    assert.strictEqual(r.status, 1, '#571 gt test(b): global residue must fail closed, got exit ' + r.status + '\n' + r.stdout);
+    assert.strictEqual(r.json.status, 'retired_role_residue', '#571 gt test(b): status, got ' + r.json.status);
+    assert.ok(r.json.residue.length === 1 && r.json.residue[0].scope === 'global'
+      && r.json.residue[0].residue_paths.length === 1 && r.json.residue[0].residue_paths[0] === recordPath,
+      '#1101 gt test(b): the global scope names the record, got ' + JSON.stringify(r.json.residue));
+    assert.ok(r.json.repair.includes(`node ${installProfilesScript} --global`),
+      '#1101 gt test(b): the global repair is the --global installer, got ' + r.json.repair);
   } finally {
     fs.rmSync(tempHome571b, { recursive: true, force: true });
     fs.rmSync(emptyProject571b, { recursive: true, force: true });
   }
 
-  // --- Test (c): stale global does NOT short-circuit ---
+  // --- Test (c): a released global install does NOT short-circuit; autofix retires it via --global ---
   const tempHome571c = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-571c-home-'));
   try {
-    const env571c = { ...process.env, HOME: tempHome571c, USERPROFILE: tempHome571c };
-    const setupC = spawnSync(process.execPath, [installProfilesScript, tempHome571c], {
-      cwd: giteaPluginRoot, encoding: 'utf8', env: env571c
-    });
-    assert.strictEqual(setupC.status, 0, '#571 gt test(c): setup install must exit 0');
-    fs.unlinkSync(
-      path.join(tempHome571c, '.codex', 'agents', 'kaola-workflow', 'implementer.toml'));
-
+    const planted = plantReleasedCodexScope(tempHome571c);
     const emptyProject571c = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-571c-proj-'));
     try {
-      const r = spawnSync(process.execPath,
-        [giteaPreflightScript, '--project-root', emptyProject571c, '--no-autofix', '--json'],
-        { encoding: 'utf8', env: env571c });
-      assert.notStrictEqual(r.status, 0,
-        '#571 gt test(c): stale global must not short-circuit, got exit ' + r.status);
+      let r = runGiteaPreflight(['--project-root', emptyProject571c, '--no-autofix', '--json'], tempHome571c);
+      assert.strictEqual(r.status, 1,
+        '#571 gt test(c): a released global install must not short-circuit, got exit ' + r.status);
+      r = runGiteaPreflight(['--project-root', emptyProject571c, '--json'], tempHome571c);
+      assert.ok(r.status === 0 && r.json.autofixed === true,
+        '#1101 gt test(c): autofix must retire the global install, got ' + r.status + '\n' + r.stdout);
+      assert.ok(!fs.existsSync(planted.agentsDir) && !fs.readFileSync(planted.configPath, 'utf8').includes(KW_AGENTS_BEGIN),
+        '#1101 gt test(c): the global profiles and block must be gone');
     } finally {
       fs.rmSync(emptyProject571c, { recursive: true, force: true });
     }
@@ -3438,15 +3443,14 @@ function testGiteaPreflight571() {
   // --- Test (a2): --global installer flag targets os.homedir() ---
   const tempHome571flag = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-571flag-home-'));
   try {
-    const envFlag = { ...process.env, HOME: tempHome571flag, USERPROFILE: tempHome571flag };
-    const globalFlagInstall = spawnSync(process.execPath, [installProfilesScript, '--global'], {
-      cwd: giteaPluginRoot, encoding: 'utf8', env: envFlag
-    });
-    assert.strictEqual(globalFlagInstall.status, 0,
-      '#571 gt test(a2): --global flag install must exit 0: ' + globalFlagInstall.stderr);
-    assert.ok(
-      fs.existsSync(path.join(tempHome571flag, '.codex', 'agents', 'kaola-workflow', 'implementer.toml')),
-      '#571 gt test(a2): --global flag must write implementer.toml to tempHome/.codex');
+    const envFlag = { HOME: tempHome571flag, USERPROFILE: tempHome571flag };
+    const planted = plantReleasedCodexScope(tempHome571flag);
+    const globalFlagInstall = runInstallProfiles('--global', envFlag);
+    const implementer = path.join(planted.agentsDir, 'implementer.toml');
+    assert.ok(!fs.existsSync(implementer) && stdoutHasLine(globalFlagInstall.stdout, RETIRED_REMOVED(implementer)),
+      '#571 gt test(a2): --global must retire the profiles under tempHome/.codex: ' + globalFlagInstall.stdout);
+    assert.ok(fs.existsSync(path.join(tempHome571flag, '.codex', 'hooks.json')),
+      '#571 gt test(a2): --global must install the hooks into tempHome/.codex');
   } finally {
     fs.rmSync(tempHome571flag, { recursive: true, force: true });
   }
@@ -3455,230 +3459,223 @@ function testGiteaPreflight571() {
 }
 
 // ---------------------------------------------------------------------------
-// #332: installer schema + prune + manifest (AC3-AC6) — Gitea edition mirror.
+// #332/#1101: installer retirement — Gitea edition mirror. The installer ships no profile (AC3); an
+// upgrade retires exactly what the ownership record or the released catalog proves Kaola wrote (AC4);
+// a re-run is idempotent (AC5); every file without that proof is preserved and reported (AC6).
 // ---------------------------------------------------------------------------
-const GT_NAME_RE = /^name\s*=\s*"([^"]+)"\s*$/m;
-function giteaListTomls(dir) {
-  return fs.readdirSync(dir).filter(f => f.endsWith('.toml')).sort();
-}
-function testInstallSchemaPruneManifest332Gitea() {
-  const manifestBase = '.kaola-managed-profiles.json';
-
-  // AC3: fresh install — exactly the shipped roster, no docs-lookup, name on each, manifest, sentinel.
+function testInstallRetirement332Gitea() {
+  // AC3: fresh install — nothing in the project scope, nothing to retire, sentinel last.
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-install-fresh-'));
   try {
     const r = runInstallProfiles(fresh);
-    const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
-    const tomls = giteaListTomls(agentsDir);
-    assert.deepStrictEqual(tomls, GT_ROSTER_TOMLS, '#332 gt AC3: fresh install must place exactly the roster the plugin ships');
-    assert.ok(!tomls.includes('docs-lookup.toml'), '#332 gt AC3: docs-lookup.toml must not be installed');
-    for (const f of tomls) {
-      const role = f.replace(/\.toml$/, '');
-      const m = fs.readFileSync(path.join(agentsDir, f), 'utf8').match(GT_NAME_RE);
-      assert.ok(m && m[1] === role, '#332 gt AC3: ' + f + ' must have name = "' + role + '"');
-    }
-    const manifest = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
-    assert.strictEqual(manifest.schema_version, 1, '#332 gt AC3: manifest schema_version 1');
-    assert.strictEqual(manifest.roles.length, GT_ROSTER_TOMLS.length, '#332 gt AC3: manifest must list every shipped role');
-    for (const file of tomls) {
-      const role = file.replace(/\.toml$/, '');
-      const sourceBytes = fs.readFileSync(path.join(giteaPluginRoot, 'agents', file));
-      const installedBytes = fs.readFileSync(path.join(agentsDir, file));
-      assert.ok(sourceBytes.equals(installedBytes),
-        'agent contract: installed ' + file + ' must byte-match the selected source');
-      assert.ok(manifest.files[file] === 'sha256:' + createHash('sha256').update(installedBytes).digest('hex'),
-        'agent contract: manifest must record the installed file digest for ' + file);
-      assert.ok(!('profile_contracts' in manifest),
-        'agent contract: manifest must not carry retired in-body contract identity');
-    }
+    assert.ok(!fs.existsSync(path.join(fresh, '.codex')),
+      '#1101 gt AC3: a fresh install must write no profile, record, or config into the project');
+    assert.ok(!/Removed retired|Preserved retired/.test(r.stdout), '#1101 gt AC3: nothing to retire: ' + r.stdout);
     assert.strictEqual(r.stdout.trim().split('\n').pop(), 'status: ok', '#332 gt AC3: stdout must end with status: ok');
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });
   }
 
-  // AC4 + AC9 write-path: upgrade-over-old-state repairs malformed + retired files.
+  // AC4: upgrade over the last role-shipping release, with user content and two unproven files.
   const upgrade = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-install-upgrade-'));
   try {
-    const agentsDir = path.join(upgrade, '.codex', 'agents', 'kaola-workflow');
-    fs.mkdirSync(agentsDir, { recursive: true });
-    fs.writeFileSync(path.join(agentsDir, 'code-explorer.toml'),
-      'model_reasoning_effort = "medium"\ndeveloper_instructions = """stale no-name body"""\n');
-    fs.writeFileSync(path.join(agentsDir, 'docs-lookup.toml'),
-      'model_reasoning_effort = "medium"\ndeveloper_instructions = """retired role body"""\n');
-    fs.writeFileSync(path.join(upgrade, '.codex', 'config.toml'), [
-      '# BEGIN kaola-workflow agents', '[features]', 'multi_agent = true',
-      '[agents.docs-lookup]', 'config_file = "./agents/kaola-workflow/docs-lookup.toml"',
-      '# END kaola-workflow agents', ''
-    ].join('\n'));
-    const r = runInstallProfiles(upgrade);
-    assert.ok(!fs.existsSync(path.join(agentsDir, 'docs-lookup.toml')), '#332 gt AC4: retired docs-lookup pruned');
-    const ce = fs.readFileSync(path.join(agentsDir, 'code-explorer.toml'), 'utf8');
-    assert.ok(GT_NAME_RE.test(ce) && ce.match(GT_NAME_RE)[1] === 'code-explorer', '#332 gt AC4: code-explorer rewritten with name');
-    const cfg = fs.readFileSync(path.join(upgrade, '.codex', 'config.toml'), 'utf8');
-    assert.ok(cfg.includes('[agents.knowledge-lookup]') && !cfg.includes('[agents.docs-lookup]'),
-      '#332 gt AC9: block must register knowledge-lookup and drop docs-lookup');
-    assert.ok(r.stdout.includes('docs-lookup.toml (retired)'), '#332 gt AC4: stdout reports retired prune');
+    const codexDir = path.join(upgrade, '.codex');
+    fs.mkdirSync(path.join(codexDir, 'agents'), { recursive: true });
+    const userConfig = '[features]\ngoals = true\n\n[agents.my-reviewer]\ndescription = "user-owned"\nconfig_file = "./agents/my-reviewer.toml"\n';
+    fs.writeFileSync(path.join(codexDir, 'config.toml'), userConfig);
+    const userProfile = path.join(codexDir, 'agents', 'my-reviewer.toml');
+    fs.writeFileSync(userProfile, 'name = "my-reviewer"\n');
+    const planted = plantReleasedCodexScope(upgrade);
+    const edited = path.join(planted.agentsDir, 'code-reviewer.toml');
+    fs.appendFileSync(edited, '\n# edited by the user\n');
+    const unrecorded = path.join(planted.agentsDir, 'docs-lookup.toml');
+    fs.writeFileSync(unrecorded, 'developer_instructions = """retired role body"""\n');
 
-    // AC5: idempotency.
-    const m1 = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
-    runInstallProfiles(upgrade);
-    const m2 = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
-    assert.strictEqual(JSON.stringify(m1.files), JSON.stringify(m2.files), '#332 gt AC5: manifest.files stable');
+    const r = runInstallProfiles(upgrade);
+    for (const file of planted.profiles.filter(f => f !== edited)) {
+      assert.ok(!fs.existsSync(file) && stdoutHasLine(r.stdout, RETIRED_REMOVED(file)),
+        '#1101 gt AC4: a recorded released profile is removed and reported: ' + file + '\n' + r.stdout);
+    }
+    assert.ok(!fs.existsSync(planted.record) && stdoutHasLine(r.stdout, RETIRED_RECORD_REMOVED(planted.record)),
+      '#1101 gt AC4: the ownership record is retired once read');
+    assert.ok(stdoutHasLine(r.stdout, RETIRED_REGISTRATIONS_REMOVED(planted.configPath)),
+      '#1101 gt AC4: the released registration block is removed and reported: ' + r.stdout);
+    const cfg = fs.readFileSync(planted.configPath, 'utf8');
+    assert.ok(!cfg.includes(KW_AGENTS_BEGIN) && !cfg.includes('[agents.code-explorer]'),
+      '#1101 gt AC4: no managed block or role registration survives: ' + cfg);
+    assert.ok(cfg.startsWith(userConfig), '#1101 gt AC4: the user-owned config survives byte-for-byte: ' + cfg);
+    assert.ok(fs.existsSync(userProfile), '#1101 gt AC4: a user profile outside the Kaola dir is untouched');
+    assert.ok(fs.readFileSync(edited, 'utf8').endsWith('# edited by the user\n')
+      && stdoutHasLine(r.stdout, RETIRED_PRESERVED('modified_since_install', edited)),
+      '#1101 gt AC4: an edited profile is preserved and reported: ' + r.stdout);
+    assert.ok(fs.existsSync(unrecorded) && stdoutHasLine(r.stdout, RETIRED_PRESERVED('no_ownership_record', unrecorded)),
+      '#332/#1101 gt AC4: an unrecorded retired-name file is preserved and reported: ' + r.stdout);
+    assert.strictEqual(r.stdout.trim().split('\n').pop(), 'status: ok', '#332 gt AC4: stdout must end with status: ok');
+
+    // AC5: idempotency — nothing more is removed, config bytes are stable, the preserved stay preserved.
+    const again = runInstallProfiles(upgrade);
+    assert.ok(!/Removed retired/.test(again.stdout), '#332 gt AC5: a re-run removes nothing: ' + again.stdout);
+    assert.strictEqual(fs.readFileSync(planted.configPath, 'utf8'), cfg, '#332 gt AC5: config bytes stable');
+    assert.ok(fs.existsSync(edited) && fs.existsSync(unrecorded)
+      && stdoutHasLine(again.stdout, RETIRED_PRESERVED('no_ownership_record', edited))
+      && stdoutHasLine(again.stdout, RETIRED_PRESERVED('no_ownership_record', unrecorded)),
+      '#332 gt AC5: the preserved files are still preserved and reported: ' + again.stdout);
   } finally {
     fs.rmSync(upgrade, { recursive: true, force: true });
   }
 
-  // AC6: unknown user TOML preserved + reported.
+  // AC6: an unknown user TOML in the Kaola dir is preserved + reported.
   const custom = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-install-custom-'));
   try {
-    runInstallProfiles(custom);
     const agentsDir = path.join(custom, '.codex', 'agents', 'kaola-workflow');
-    fs.writeFileSync(path.join(agentsDir, 'my-custom.toml'), 'name = "my-custom"\nmodel_reasoning_effort = "low"\ndeveloper_instructions = """x"""\n');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    const mine = path.join(agentsDir, 'my-custom.toml');
+    fs.writeFileSync(mine, 'name = "my-custom"\nmodel_reasoning_effort = "low"\ndeveloper_instructions = """x"""\n');
     const r = runInstallProfiles(custom);
-    assert.ok(fs.existsSync(path.join(agentsDir, 'my-custom.toml')), '#332 gt AC6: user TOML survives');
-    assert.ok(r.stdout.includes('unmanaged extra profiles left in place: my-custom.toml'), '#332 gt AC6: stdout reports unmanaged extra');
+    assert.ok(fs.existsSync(mine), '#332 gt AC6: user TOML survives');
+    assert.ok(stdoutHasLine(r.stdout, RETIRED_PRESERVED('no_ownership_record', mine)),
+      '#332 gt AC6: stdout reports the preserved user TOML: ' + r.stdout);
   } finally {
     fs.rmSync(custom, { recursive: true, force: true });
   }
 
-  console.log('testInstallSchemaPruneManifest332Gitea (#332 AC3-AC6,AC9-path): PASSED');
+  console.log('testInstallRetirement332Gitea (#332 AC3-AC6 / #1101 retirement): PASSED');
 }
 
 // ---------------------------------------------------------------------------
-// #332: preflight schema/stale/manifest/doctor (AC7-AC11) — Gitea edition mirror.
+// #332/#1101: preflight residue / autofix / doctor (AC7-AC11) — Gitea edition mirror.
 // ---------------------------------------------------------------------------
 function testGiteaPreflight332() {
-  function pf(args) {
-    return spawnSync(process.execPath, [giteaPreflightScript, ...args], { encoding: 'utf8' });
-  }
+  const pf = args => runGiteaPreflight(args);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-preflight-'));
   try {
     trustCodexProject(kwSandboxHome, root);
-    runInstallProfiles(root);
-    const agentsDir = path.join(root, '.codex', 'agents', 'kaola-workflow');
-    const ce = path.join(agentsDir, 'code-explorer.toml');
-    const savedCe = fs.readFileSync(ce, 'utf8');
+    const planted = plantReleasedCodexScope(root);
+    const readOnly = ['--project-root', root, '--no-autofix', '--json'];
 
-    const reviewer = path.join(agentsDir, 'code-reviewer.toml');
-    fs.writeFileSync(reviewer, fs.readFileSync(reviewer, 'utf8').replace(
-      'Code reviewer. Independently examines', 'Code reviewer. Modified: independently examines'));
-    let r = pf(['--project-root', root, '--no-autofix', '--json']);
-    let j = JSON.parse(r.stdout);
-    assert.ok(r.status !== 0 && j.status === 'profiles_stale',
-      'reviewer contract: modified project profile must refuse as profiles_stale');
-    assert.strictEqual(j.repair, `node ${installProfilesScript} ${root}`,
-      'reviewer contract: project repair must name the exact scoped installer command');
+    // AC7: a user-edited released profile is still residue by name; autofix hands it to the
+    // installer, which preserves it (no ownership proof), so the re-verification still refuses as
+    // residue (exit 1, autofix_attempted) — and the preflight neither deletes nor "restores" those bytes.
+    const edited = path.join(planted.agentsDir, 'code-reviewer.toml');
+    fs.appendFileSync(edited, '\n# edited by the user\n');
+    const editedBytes = fs.readFileSync(edited);
+    let r = pf(readOnly);
+    assert.ok(r.status === 1 && r.json.status === 'retired_role_residue',
+      '#332 gt AC7: a released install must refuse as retired_role_residue, got ' + r.status + '\n' + r.stdout);
+    for (const file of [...planted.profiles, planted.record, planted.configPath]) {
+      assert.ok(r.json.residue_paths.includes(file), '#332 gt AC7: residue_paths must name ' + file);
+    }
+    assert.ok(r.json.repair.includes(`node ${installProfilesScript} ${root}`),
+      '#332 gt AC7: project repair must name the exact scoped installer command, got ' + r.json.repair);
     r = pf(['--project-root', root, '--json']);
-    assert.strictEqual(r.status, 0, 'reviewer contract: project profile drift must autofix');
-    assert.ok(fs.readFileSync(reviewer).equals(
-      fs.readFileSync(path.join(giteaPluginRoot, 'agents', 'code-reviewer.toml'))),
-    'reviewer contract: project autofix must restore exact source bytes');
+    assert.strictEqual(r.status, 1, '#1101 gt AC7: autofix that leaves a preserved file must exit 1, got ' + r.status + '\n' + r.stdout);
+    assert.ok(r.json.status === 'retired_role_residue' && r.json.autofix_attempted === true
+      && r.json.residue_paths.length === 1 && r.json.residue_paths[0] === edited,
+      '#1101 gt AC7: the re-verification names only the preserved file, got ' + r.stdout);
+    assert.ok(fs.readFileSync(edited).equals(editedBytes), '#1101 gt AC7: the edited file is neither deleted nor restored');
+    for (const file of planted.profiles.filter(f => f !== edited)) {
+      assert.ok(!fs.existsSync(file), '#1101 gt AC7: the proven profiles are retired by the autofix run: ' + file);
+    }
 
-    // AC7a: an incomplete installed copy differs from the selected generated source, so the
-    // complete self-hashed profile contract reports profiles_stale under --no-autofix.
-    fs.writeFileSync(ce, savedCe.replace(/^name = "code-explorer"\n/m, ''));
-    r = pf(['--project-root', root, '--no-autofix', '--json']);
-    assert.notStrictEqual(r.status, 0, '#332 gt AC7a: incomplete installed profile must refuse');
-    j = JSON.parse(r.stdout);
-    assert.strictEqual(j.status, 'profiles_stale', '#332 gt AC7a: status profiles_stale');
-    assert.ok(j.stale_profiles.some(item => item.role === 'code-explorer'),
-      '#332 gt AC7a: stale_profiles names code-explorer');
+    // AC8: once the user removes it, the scope is clean.
+    fs.unlinkSync(edited);
+    r = pf(readOnly);
+    assert.ok(r.status === 0 && r.json.status === 'ok', '#332 gt AC8: clean scope passes, got ' + r.stdout);
 
-    // AC8: autofix repairs.
-    r = pf(['--project-root', root, '--json']);
-    assert.strictEqual(r.status, 0, '#332 gt AC8: autofix exits 0');
-    j = JSON.parse(r.stdout);
-    assert.ok(j.status === 'ok' && j.autofixed === true, '#332 gt AC8: ok autofixed');
+    // AC7b: any retired role name in the Kaola dir is residue — docs-lookup included.
+    const docsLookup = path.join(planted.agentsDir, 'docs-lookup.toml');
+    fs.mkdirSync(planted.agentsDir, { recursive: true });
+    fs.writeFileSync(docsLookup, 'name = "docs-lookup"\n');
+    r = pf(readOnly);
+    assert.ok(r.status === 1 && r.json.residue[0].retired_profile_files.includes(docsLookup),
+      '#332 gt AC7b: retired_profile_files lists docs-lookup, got ' + r.stdout);
+    fs.unlinkSync(docsLookup);
 
-    // AC7b: stale docs-lookup -> profiles_stale.
-    fs.copyFileSync(ce, path.join(agentsDir, 'docs-lookup.toml'));
-    r = pf(['--project-root', root, '--no-autofix', '--json']);
-    j = JSON.parse(r.stdout);
-    assert.ok(r.status !== 0 && j.status === 'profiles_stale', '#332 gt AC7b: profiles_stale');
-    assert.ok(j.stale_files.includes('docs-lookup.toml'), '#332 gt AC7b: stale_files lists docs-lookup');
-    pf(['--project-root', root, '--json']);
-    assert.ok(!fs.existsSync(path.join(agentsDir, 'docs-lookup.toml')), '#332 gt AC7b: autofix prunes docs-lookup');
+    // A future-schema ownership record is still residue by name — no profile-schema gate (exit 6) remains.
+    fs.writeFileSync(planted.record, JSON.stringify({ schema_version: 2, files: {} }));
+    r = pf(readOnly);
+    assert.ok(r.status === 1 && r.json.residue_paths.includes(planted.record),
+      '#1101 gt: a future-schema record is residue (exit 1), got ' + r.status + '\n' + r.stdout);
+    fs.unlinkSync(planted.record);
 
-    // AC9: an injected retired role changes the canonical managed bytes, so
-    // config_stale wins; doctor retains the role-level evidence.
-    const cfgPath = path.join(root, '.codex', 'config.toml');
-    fs.writeFileSync(cfgPath, fs.readFileSync(cfgPath, 'utf8').replace('# END kaola-workflow agents',
-      '[agents.docs-lookup]\nconfig_file = "./agents/kaola-workflow/docs-lookup.toml"\n\n# END kaola-workflow agents'));
-    r = pf(['--project-root', root, '--no-autofix', '--json']);
-    j = JSON.parse(r.stdout);
-    assert.ok(r.status !== 0 && j.status === 'config_stale',
-      '#332 gt AC9: canonical managed-block drift must return config_stale, got ' + j.status);
+    // AC9: an edited managed block (a retired role injected) is residue; doctor reports it
+    // read-only; autofix leaves an edited block to the user (exit 1, autofix_attempted), bytes untouched.
+    const cleanConfig = fs.readFileSync(planted.configPath, 'utf8');
+    const editedBlock = cleanConfig + '\n' + releasedCodexBlock().replace(
+      '# END kaola-workflow agents',
+      '[agents.docs-lookup]\nconfig_file = "./agents/kaola-workflow/docs-lookup.toml"\n\n# END kaola-workflow agents');
+    fs.writeFileSync(planted.configPath, editedBlock);
+    r = pf(readOnly);
+    assert.ok(r.status === 1 && r.json.residue[0].managed_block === 'present',
+      '#332 gt AC9: an edited managed block must be residue, got ' + r.stdout);
     const managedDoctor = pf(['--doctor', '--project-root', root, '--json']);
-    const managedDoctorJson = JSON.parse(managedDoctor.stdout);
-    const managedProjectScope = managedDoctorJson.scopes.find(s => s.scope === 'project');
-    assert.ok(managedDoctor.status !== 0 && managedProjectScope && managedProjectScope.managed_block_drift === true,
-      '#332 gt AC9: doctor must report canonical managed-block drift');
-    assert.ok(managedProjectScope.stale_roles_in_block.includes('docs-lookup'),
-      '#332 gt AC9: doctor stale_roles_in_block lists docs-lookup');
-    pf(['--project-root', root, '--json']);
-
-    // schema_version 2 -> exit 6.
-    const manifestPath = path.join(agentsDir, '.kaola-managed-profiles.json');
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    manifest.schema_version = 2;
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    const managedProjectScope = managedDoctor.json.scopes.find(s => s.scope === 'project');
+    assert.ok(managedDoctor.status === 1 && managedDoctor.json.status === 'stale' && managedProjectScope
+      && managedProjectScope.retired_role_residue === true && managedProjectScope.managed_block === 'present'
+      && managedProjectScope.read_only === true,
+      '#332 gt AC9: doctor must report the project block read-only, got ' + managedDoctor.stdout);
+    assert.ok(managedProjectScope.repair.includes(`node ${installProfilesScript} ${root}`),
+      '#332 gt AC9: doctor names the exact scoped installer command');
     r = pf(['--project-root', root, '--json']);
-    j = JSON.parse(r.stdout);
-    assert.ok(r.status === 6 && j.status === 'profile_schema_version_unsupported', '#332 gt: exit 6 on future manifest');
-    manifest.schema_version = 1;
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    assert.ok(r.status === 1 && r.json.status === 'retired_role_residue' && r.json.autofix_attempted === true
+      && r.json.residue_paths.length === 1 && r.json.residue_paths[0] === planted.configPath,
+      '#1101 gt AC9: autofix must leave an edited block to the user, got ' + r.status + '\n' + r.stdout);
+    assert.strictEqual(fs.readFileSync(planted.configPath, 'utf8'), editedBlock,
+      '#1101 gt AC9: neither the doctor nor the installer rewrites an edited block');
+    fs.writeFileSync(planted.configPath, cleanConfig);
 
-    // doctor AC10/AC11.
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-doctor-home-'));
+    // doctor AC10/AC11. The HOME is realpath'd so the plugin-cache identity check below sees the
+    // same path the preflight's own __dirname resolves to.
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-doctor-home-')));
     const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-doctor-proj-'));
     try {
-      runInstallProfiles(home);
-      enableMultiAgentV2(home);
-      runInstallProfiles(proj);
+      const userPlanted = plantReleasedCodexScope(home);
       trustCodexProject(home, proj);
-      fs.copyFileSync(path.join(home, '.codex', 'agents', 'kaola-workflow', 'code-explorer.toml'),
-        path.join(home, '.codex', 'agents', 'kaola-workflow', 'docs-lookup.toml'));
       r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
-      assert.strictEqual(r.status, 1, '#332 gt AC10: doctor exit 1 on stale user scope');
-      j = JSON.parse(r.stdout);
-      const userScope = j.scopes.find(s => s.scope === 'user');
-      assert.ok(userScope.stale_files.includes('docs-lookup.toml'), '#332 gt AC10: user scope reports docs-lookup');
-      assert.strictEqual(userScope.repair, `node ${installProfilesScript} ${home}`,
-        '#332 gt AC10: user scope repair must be the exact scoped installer command');
-      fs.unlinkSync(path.join(home, '.codex', 'agents', 'kaola-workflow', 'docs-lookup.toml'));
-      runInstallProfiles(home);
+      assert.strictEqual(r.status, 1, '#332 gt AC10: doctor exit 1 on user-scope residue');
+      const userScope = r.json.scopes.find(s => s.scope === 'user');
+      const projectScope = r.json.scopes.find(s => s.scope === 'project');
+      assert.ok(userScope.retired_role_residue === true
+        && userScope.residue_paths.includes(path.join(userPlanted.agentsDir, 'implementer.toml')),
+        '#332 gt AC10: user scope reports the retired profiles, got ' + JSON.stringify(userScope));
+      assert.ok(userScope.repair.includes(`HOME=${home} node ${installProfilesScript} --global`),
+        '#332 gt AC10: user scope repair must be the exact --global installer command, got ' + userScope.repair);
+      assert.ok(projectScope.retired_role_residue === false && projectScope.repair === null,
+        '#332 gt AC10: a clean project scope carries no repair');
+      assert.ok(fs.existsSync(userPlanted.agentsDir), '#332 gt AC10: doctor is read-only');
+      runInstallProfiles('--global', { HOME: home, USERPROFILE: home });
       r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
-      assert.strictEqual(r.status, 0, '#332 gt AC10: doctor exit 0 when both clean');
+      assert.ok(r.status === 0 && r.json.status === 'ok' && r.json.retired_role_residue === false,
+        '#332 gt AC10: doctor exit 0 when both scopes are clean, got ' + r.stdout);
+
+      // AC11: a plugin-cache copy reports its marketplace/name/version identity; a cache path
+      // whose version is not the manifest's is plugin_identity_invalid (exit 2).
       const pluginIdentity = JSON.parse(fs.readFileSync(
         path.join(giteaPluginRoot, '.codex-plugin', 'plugin.json'), 'utf8'));
-      const cacheRoot = path.join(home, '.codex', 'plugins', 'cache', 'm',
-        pluginIdentity.name, pluginIdentity.version);
-      const cacheAgents = path.join(cacheRoot, 'agents');
-      fs.mkdirSync(cacheRoot, { recursive: true });
-      fs.cpSync(path.join(giteaPluginRoot, 'agents'), cacheAgents, { recursive: true });
-      fs.cpSync(path.join(giteaPluginRoot, 'config'), path.join(cacheRoot, 'config'), { recursive: true });
-      fs.cpSync(path.join(giteaPluginRoot, '.codex-plugin'), path.join(cacheRoot, '.codex-plugin'),
-        { recursive: true });
-      const cachedReviewer = path.join(cacheAgents, 'code-reviewer.toml');
-      fs.writeFileSync(cachedReviewer, fs.readFileSync(cachedReviewer, 'utf8').replace(
-        'Code reviewer. Independently examines', 'Precision-first cached code review specialist'));
-      r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
-      assert.strictEqual(r.status, 1, '#332 gt AC11: stale plugin_cache must fail doctor');
-      j = JSON.parse(r.stdout);
-      const cacheScope = j.scopes.find(s => s.scope === 'plugin_cache');
-      assert.ok(cacheScope && cacheScope.read_only === true && cacheScope.stale_profiles.length > 0,
-        '#332 gt AC11: cache scope read_only + stale profile evidence');
-      assert.strictEqual(cacheScope.repair,
-        'codex plugin remove ' + pluginIdentity.name + '@m && codex plugin add '
-          + pluginIdentity.name + '@m  # refresh plugin cache',
-        '#332 gt AC11: cache scope must name the exact refresh command');
+      function cachedPreflight(version) {
+        const cacheRoot = path.join(home, '.codex', 'plugins', 'cache', 'm', pluginIdentity.name, version);
+        fs.mkdirSync(path.join(cacheRoot, 'scripts'), { recursive: true });
+        for (const file of ['kaola-workflow-codex-preflight.js', 'kaola-workflow-adaptive-schema.js']) {
+          fs.copyFileSync(path.join(giteaPluginRoot, 'scripts', file), path.join(cacheRoot, 'scripts', file));
+        }
+        fs.cpSync(path.join(giteaPluginRoot, '.codex-plugin'), path.join(cacheRoot, '.codex-plugin'), { recursive: true });
+        return path.join(cacheRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
+      }
+      const doctorArgs = ['--doctor', '--home', home, '--project-root', proj, '--json'];
+      r = runGiteaPreflight(doctorArgs, null, cachedPreflight(pluginIdentity.version));
+      assert.strictEqual(r.status, 0, '#332 gt AC11: a matching plugin cache must pass doctor, got ' + r.stdout);
+      assert.deepStrictEqual(r.json.plugin, { name: pluginIdentity.name, version: pluginIdentity.version },
+        '#332 gt AC11: doctor reports the cached plugin identity');
+      r = runGiteaPreflight(doctorArgs, null, cachedPreflight('0.0.0-not-the-manifest'));
+      assert.ok(r.status === 2 && r.json.status === 'plugin_identity_invalid'
+        && /plugin_manifest_version_mismatch/.test(r.json.error),
+        '#332 gt AC11: a mismatched cache version must be plugin_identity_invalid, got ' + r.status + '\n' + r.stdout);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
       fs.rmSync(proj, { recursive: true, force: true });
     }
 
-    fs.writeFileSync(ce, savedCe);
-    console.log('testGiteaPreflight332 (#332 AC7-AC11): PASSED');
+    console.log('testGiteaPreflight332 (#332 AC7-AC11 / #1101 residue): PASSED');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -3714,8 +3711,8 @@ function testForbiddenOnly341() {
   assert.ok(scanIdx !== -1, '#341 gt: validator must contain the assertNoForbidden(file); scan loop');
   // Needles carry the `assert(` prefix so they match the real count assertions, not a
   // `.length ===` substring inside the #341 scan-loop comment. The agent-profile count assertion
-  // is gone — the derived config/agents.toml parity guard covers agents/ enumeration-free — so the
-  // ordering property is pinned on the two surface counts that remain.
+  // went with the profiles themselves (#1101: the plugin ships no agents/), so the ordering
+  // property is pinned on the two surface counts that remain.
   for (const countNeedle of [
     'assert(commandFiles.length ===', 'assert(skillFiles.length ==='
   ]) {
@@ -3738,10 +3735,11 @@ function testForbiddenOnly341() {
       '#341 gt: forbidden-only must report "contains forbidden reference"');
 
     // clean file → exit 0, sentinel. issue-scout.toml (the original #328 leak regression
-    // lock) is retired (#789); implementer.toml is an equally permanent, GitLab-vocabulary-free
-    // agent profile. Root-relative path resolves from any cwd.
+    // lock) is retired (#789), and so is every agent profile (#1101); the generated Codex
+    // compact-recovery prompt is a permanent, forge-vocabulary-free file the validator's own hook
+    // scan covers. Root-relative path resolves from any cwd.
     const cleanRun = spawnSync(process.execPath,
-      [validatorScript, '--forbidden-only', 'plugins/kaola-workflow-gitea/agents/implementer.toml'],
+      [validatorScript, '--forbidden-only', 'plugins/kaola-workflow-gitea/hooks/kaola-workflow-codex-compact-recovery.md'],
       { encoding: 'utf8' });
     assert.strictEqual(cleanRun.status, 0,
       '#341 gt: clean file must exit 0 (stderr: ' + (cleanRun.stderr || '') + ')');
@@ -3900,7 +3898,7 @@ function testGiteaBoundary2FetchRetry507() {
 }
 
 
-testInstallSchemaPruneManifest332Gitea();
+testInstallRetirement332Gitea();
 testGiteaPreflight266();
 testGiteaDispatchPosture598();
 testGiteaPreflight571();
