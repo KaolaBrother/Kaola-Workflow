@@ -8514,6 +8514,59 @@ function testSinkPrLinkedPosturePublishesArchive() {
   }
 }
 
+// #1098 B1 (review round 2) — the linked posture publishes the ARCHIVE ONLY, never a LIVE run
+// folder. The kernel's publish helper used to test the caller's `pathspec`, which for a live project
+// is `kaola-workflow/<project>`; the existence check passed and the live folder was committed and
+// pushed onto the PR branch. Merged, main would then carry a tracked live-run folder
+// (`status: active`) with the run's `.cache`. Nothing under `kaola-workflow/` other than the project's
+// archive band may ever reach the request branch.
+function testSinkPrLiveFolderIsNeverPushed() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-live-')));
+  const remotePath = tmp + '-remote';
+  const wtRoot = tmp + '-wt';
+  const env = { ...process.env, ...GIT_ISOLATION_ENV };
+  const branch = 'workflow/issue-43';
+  const wt = path.join(wtRoot, 'issue-43');
+  try {
+    initGitRepoWithBareRemote(tmp);
+    G.git(tmp, ['worktree', 'add', '-b', branch, wt], { env });
+    fs.writeFileSync(path.join(wt, 'feat.txt'), 'f\n');
+    G.git(wt, ['add', 'feat.txt'], { env });
+    G.git(wt, ['commit', '-m', 'feat'], { env });
+    G.git(tmp, ['push', 'origin', branch], { env });
+    // A LIVE project folder: status active, no archive band anywhere.
+    const liveDir = path.join(tmp, 'kaola-workflow', 'issue-43');
+    fs.mkdirSync(path.join(liveDir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(liveDir, 'workflow-state.md'),
+      'status: active\nissue_number: 43\n\n## Sink\nbranch: ' + branch + '\nsink: pr\n');
+    fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'), '# Finalization\n');
+    const binDir = path.join(tmp, '.bin');
+    writeSinkPrStubGh(binDir, { list: '[]', create: 'https://github.com/test/repo/pull/43' });
+    const r = spawnSync(process.execPath, [sinkPrScript, '--project', 'issue-43', '--branch', branch, '--issue', '43'],
+      { cwd: tmp, encoding: 'utf8', timeout: 60000, env: sinkPrOnlineEnv(binDir, env) });
+    assert(r.status === 0,
+      '#1098 B1: the live-folder run must still exit 0\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+    // THE POINT: the request branch carries the feature and nothing from the live run folder.
+    const remoteTree = G.git(tmp, ['ls-tree', '-r', '--name-only', 'origin/' + branch], { env }).stdout.toString();
+    for (const leaked of ['workflow-state.md', 'finalization-summary.md', '.cache/sink-pr-result.json']) {
+      assert(!remoteTree.includes('kaola-workflow/issue-43/' + leaked),
+        '#1098 B1: the live run folder must never reach the request branch, found kaola-workflow/issue-43/'
+        + leaked + '\nbranch tree:\n' + remoteTree);
+    }
+    assert(!/^kaola-workflow\//m.test(remoteTree),
+      '#1098 B1: nothing under kaola-workflow/ may be published for a live (unarchived) project, got:\n' + remoteTree);
+    // The live folder is untouched on disk and its placeholder/record still lives there.
+    assert(fs.existsSync(path.join(liveDir, 'workflow-state.md')),
+      '#1098 B1: the live folder must stay on disk');
+    console.log('testSinkPrLiveFolderIsNeverPushed: PASSED');
+  } finally {
+    try { G.git(tmp, ['worktree', 'remove', '--force', wt], { env }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(wtRoot, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
 // #1098 T9 (F1) — a REFUSED archive push must be recovered by the next run. Run 1 creates the PR and
 // builds the archive commit, but the remote hook refuses the push: exit 1 and the branch is ahead of
 // origin. Run 2 reuses the PR; `commitPathsOntoCandidate` sees the tree already equals the tip and
@@ -12696,6 +12749,7 @@ function buildRegistry() {
   add('testSinkPrReuseRefusesMissingCloses',              testSinkPrReuseRefusesMissingCloses);
   add('testSinkPrReuseRefusesBaseMismatch',               testSinkPrReuseRefusesBaseMismatch);
   add('testSinkPrLinkedPosturePublishesArchive',          testSinkPrLinkedPosturePublishesArchive);
+  add('testSinkPrLiveFolderIsNeverPushed',                testSinkPrLiveFolderIsNeverPushed);
   add('testSinkPrRePushesArchiveAfterRefusedPush',        testSinkPrRePushesArchiveAfterRefusedPush);
   add('testSinkPrProbeFailureFailsClosed',                testSinkPrProbeFailureFailsClosed);
   add('testSinkPrOfflineDoesNotCommitOnMain',             testSinkPrOfflineDoesNotCommitOnMain);

@@ -257,9 +257,8 @@ function publishArchiveWithPr(root, project, branch, projectFolder, prUrl, optio
   const res = adaptiveSchema.publishPathsOntoRequestBranch(root, {
     branch: branch,
     pathspec: relDir,
-    project: project,
     message: 'chore: record PR metadata for ' + project,
-    forcePush: opts.skipPush === true
+    skipPush: opts.skipPush === true
   });
   if (!res.ok) {
     const detail = res.detail || res.error;
@@ -325,15 +324,15 @@ function main() {
     const prNumber = 0;
     updateStateSinkBlock(stateFile, prUrl, prNumber);
     appendSummary(summaryFile, prUrl, prNumber);
-    // #1098 F6: OFFLINE changes no git history. The LINKED posture is the one where the run branch
-    // is checked out in a worktree OTHER than `root` — then `root` is the MAIN checkout, and
-    // committing would land a metadata commit on main's HEAD; never touching main's index or HEAD is
-    // the sink's contract, so the files are left written for the caller. Every other shape (the
-    // non-linked single checkout, including a fixture whose run branch was never created) keeps the
-    // legacy local metadata commit exactly as before. No push happens in either case.
-    const branchHolder = adaptiveSchema.worktreeCheckedOutBranch(root, args.branch);
-    const linkedElsewhere = !!branchHolder && branchHolder !== root;
-    if (!linkedElsewhere) {
+    // #1098 F6/N2: OFFLINE changes git history ONLY in the non-linked posture — the checkout the sink
+    // runs in IS the main root, i.e. the run's own single checkout, which keeps its legacy local
+    // metadata commit exactly as before. When the run started from a linked worktree, `root` is the
+    // SHARED main checkout, and committing there would land a metadata commit on main's HEAD;
+    // never touching main's index or HEAD is the sink's contract, so the files are left written for
+    // the caller. No push happens in either case (OFFLINE has no remote).
+    const runToplevel = getRoot();
+    const nonLinked = runToplevel === root;
+    if (nonLinked) {
       const relState = path.relative(root, stateFile);
       const relSummary = path.relative(root, summaryFile);
       spawnSync('git', ['-C', root, 'add', relState, relSummary], { stdio: 'pipe' });

@@ -2497,9 +2497,11 @@ function publishPathsOntoRequestBranch(mainRoot, opts) {
   const root = String(mainRoot || '').trim();
   const branch = String(options.branch || '').trim();
   const pathspec = String(options.pathspec || '').trim();
-  const project = String(options.project || '').trim();
   const message = String(options.message || '');
-  const forcePush = options.forcePush === true; // test contexts that stub the push away
+  // `skipPush` is a test/harness affordance: the push itself is performed with spawnSync, so a
+  // caller that injects its own exec cannot observe it. It is NOT a force switch — this helper
+  // never forces a push.
+  const skipPush = options.skipPush === true;
   if (!root || !branch || !pathspec) {
     return { ok: false, error: 'publish_args', detail: 'mainRoot, branch and pathspec are required' };
   }
@@ -2516,19 +2518,25 @@ function publishPathsOntoRequestBranch(mainRoot, opts) {
     if (diff.status !== 0) {
       const commit = spawnSync('git', ['-C', root, 'commit', '-m', message], { stdio: 'pipe' });
       if (commit.status !== 0) {
-        return { ok: false, error: 'commit_failed', detail: firstLine(commit) };
+        return { ok: false, error: 'commit_failed', detail: firstLine(commit.stderr || commit.stdout) };
       }
     }
-    if (!forcePush) {
+    if (!skipPush) {
       const push = spawnSync('git', ['-C', root, 'push', 'origin', branch], { stdio: 'pipe' });
-      if (push.status !== 0) return { ok: false, error: 'push_failed', detail: firstLine(push) };
+      if (push.status !== 0) return { ok: false, error: 'push_failed', detail: firstLine(push.stderr || push.stdout) };
     }
-    return { ok: true, pushed: !forcePush };
+    return { ok: true, pushed: !skipPush };
   }
 
-  // A live (not yet archived) project has no archive band to publish; its records stay with the
-  // finalize transaction, and a re-entry after archive publishes them.
-  if (!fs.existsSync(path.join(root, pathspec))) return { ok: true, pushed: false };
+  // #1098 B1: the linked posture publishes the ARCHIVE ONLY. The caller's `pathspec` is the resolved
+  // project folder, which for a LIVE (not yet archived) run is `kaola-workflow/<project>` — publishing
+  // that would commit the live run folder (`status: active`, the summary, the .cache records) onto the
+  // request branch, and a merge would then carry a tracked live-run folder into main. The archive band
+  // is the only thing that rides a request: a live project has none, so there is nothing to publish
+  // and its records stay with the finalize transaction.
+  const projectName = path.basename(pathspec.replace(/\/+$/, ''));
+  const archiveSpec = path.join('kaola-workflow', 'archive', projectName).split(path.sep).join('/') + '/';
+  if (!fs.existsSync(path.join(root, archiveSpec))) return { ok: true, pushed: false };
 
   let tip = '';
   try {
@@ -2538,7 +2546,7 @@ function publishPathsOntoRequestBranch(mainRoot, opts) {
     return { ok: false, error: 'branch_missing', detail: branch };
   }
 
-  const ignoredHere = ignoredUntrackedUnder(root, pathspec);
+  const ignoredHere = ignoredUntrackedUnder(root, archiveSpec);
   const byName = repoWideIgnoredNames(root, ignoredHere);
   const forcePaths = ignoredHere.filter(p => {
     const base = p.split('/').pop();
@@ -2547,10 +2555,10 @@ function publishPathsOntoRequestBranch(mainRoot, opts) {
   const commitRes = commitPathsOntoCandidate(root, {
     candidate: tip,
     arms: [{
-      paths: [pathspec],
+      paths: [archiveSpec],
       excludes: [
-        ':(exclude,glob)' + pathspec + '**/sink-receipt.json',
-        ':(exclude,glob)' + pathspec + '**/sink-fallback.json'
+        ':(exclude,glob)' + archiveSpec + '**/sink-receipt.json',
+        ':(exclude,glob)' + archiveSpec + '**/sink-fallback.json'
       ]
     }],
     forcePaths: forcePaths,
@@ -2565,14 +2573,14 @@ function publishPathsOntoRequestBranch(mainRoot, opts) {
     const holder = worktreeCheckedOutBranch(root, branch);
     if (holder) {
       const merge = spawnSync('git', ['-C', holder, 'merge', '--ff-only', '--no-edit', commitRes.committed], { stdio: 'pipe' });
-      if (merge.status !== 0) return { ok: false, error: 'ff_refused', detail: firstLine(merge) };
+      if (merge.status !== 0) return { ok: false, error: 'ff_refused', detail: firstLine(merge.stderr || merge.stdout) };
     } else {
       const cas = spawnSync('git', ['-C', root, 'update-ref', 'refs/heads/' + branch, commitRes.committed, tip], { stdio: 'pipe' });
-      if (cas.status !== 0) return { ok: false, error: 'cas_refused', detail: firstLine(cas) };
+      if (cas.status !== 0) return { ok: false, error: 'cas_refused', detail: firstLine(cas.stderr || cas.stdout) };
     }
   }
 
-  if (forcePush) return { ok: true, pushed: false, committed: commitRes.committed || null };
+  if (skipPush) return { ok: true, pushed: false, committed: commitRes.committed || null };
 
   // Push whenever origin does not already carry the local tip: a normal, non-forced push, which is a
   // no-op when the branch is current.
@@ -2583,7 +2591,7 @@ function publishPathsOntoRequestBranch(mainRoot, opts) {
   } catch (_) { remoteTip = ''; }
   if (remoteTip === newTip) return { ok: true, pushed: false, committed: commitRes.committed || null };
   const push = spawnSync('git', ['-C', root, 'push', 'origin', branch], { stdio: 'pipe' });
-  if (push.status !== 0) return { ok: false, error: 'push_failed', detail: firstLine(push) };
+  if (push.status !== 0) return { ok: false, error: 'push_failed', detail: firstLine(push.stderr || push.stdout) };
   return { ok: true, pushed: true, committed: commitRes.committed || null };
 }
 

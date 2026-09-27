@@ -167,14 +167,12 @@ withForge({
   });
   assert.strictEqual(pr.pr_number, 8);
   assert.strictEqual(project.full_name, 'group/project');
-  // #1098 F1: MEANING CHANGED. The lookup precedes the push, so reuse never pushes the CREATE path's
-  // pre-flight push — but it MUST still be able to publish a branch that origin has not received
-  // (that is the archive-push retry). This case passes `gitExec`, i.e. the skipPush/stub context, so
-  // no push is issued; the real re-push contract is covered end-to-end by the walkthrough's
-  // testSinkPrRePushesArchiveAfterRefusedPush. What this assertion now pins is that reuse did NOT
-  // take the create path.
-  assert(Array.isArray(calls) && calls.every(c => JSON.stringify(c) !== JSON.stringify(['git', ['push', 'origin', 'feature']])),
-    '#1098: reuse must not take the create path\'s pre-flight push');
+  // #1098 B2 (review round 2): the round-1 assertion here ("reuse must not push") was REMOVED. It
+  // could never fail: the kernel performs the publish push with spawnSync, so the injected `gitExec`
+  // never observes it. "Reuse does not take the create path" is already pinned by the surrounding
+  // `createPullRequest` stub, which throws if it is reached. Push-on-reuse is pinned end to end by
+  // the GitHub walkthrough test `testSinkPrRePushesArchiveAfterRefusedPush`, which drives the shared
+  // kernel function and asserts the archive actually reaches origin.
   const state = fs.readFileSync(path.join(root, 'kaola-workflow', 'sink-project', 'workflow-state.md'), 'utf8');
   assert(state.includes('sink: pr'));
   assert(state.includes('pr_url: https://gitea.example/group/project/pulls/8'));
@@ -3397,6 +3395,74 @@ function gt1098SeedRecord(dir, project, branch, prUrl, prNumber) {
   });
   assert.strictEqual(mergeCalls, 0, '#1098 F4: a MERGED PR must never be merged again');
 }
+
+// ── #1098 B2 (review round 2) — the F4 fix, pinned at the CLI ─────────────────────────────────
+// The round-1 F4 block called `ensurePullRequest` directly, which never merged even on the broken
+// code: the bug lived in `main()`, so that block passed at the round-1 candidate and pinned nothing.
+// These two cases drive the REAL CLI (the forge is reached through KAOLA_TEA_MOCK_SCRIPT, so every
+// `tea` call is recorded) on an already-merged PR and assert the merge API is never invoked — in both
+// the explicit `--merge` lane and the config `pr_auto_merge: true` lane.
+function gt1098RunMergedPrCli(tag, extraArgs, configJson) {
+  const root = tempRoot('kw-gt-1098-cli-' + tag + '-');
+  const dir = gt1098WriteTaskFixture(root, 'climerged-' + tag, 690);
+  gt1098SeedRecord(dir, 'climerged-' + tag, 'feature-cli-' + tag,
+    'https://gitea.example/group/project/pulls/90', 90);
+  const callLog = path.join(root, 'tea-calls.log');
+  const mock = path.join(root, 'tea-mock.js');
+  // The mock records every invocation; `pr view` reports the PR already merged, and the merge API
+  // (`api -X POST …/merge`) would be recorded — that record is the assertion.
+  fs.writeFileSync(mock, [
+    "const fs = require('fs');",
+    "const args = process.argv.slice(2);",
+    "fs.appendFileSync(" + JSON.stringify(callLog) + ", args.join(' ') + '\\n');",
+    "if (args[0] === 'pr' && args[1] === 'view') { process.stdout.write(JSON.stringify({ number: 90, state: 'merged', head: { label: 'feature-cli-" + tag + "' }, base: { label: 'main' }, body: 'Closes #690', html_url: 'https://gitea.example/group/project/pulls/90' }) + '\\n'); process.exit(0); }",
+    "if (args[0] === 'pr' && args[1] === 'list') { process.stdout.write('[]\\n'); process.exit(0); }",
+    "if (args[0] === 'repo' && args[1] === 'view') { process.stdout.write('{\"full_name\":\"group/project\",\"html_url\":\"https://gitea.example/group/project\"}\\n'); process.exit(0); }",
+    "process.stdout.write('{}\\n'); process.exit(0);"
+  ].join('\n'));
+  const home = tempRoot('kw-gt-1098-home-' + tag + '-');
+  if (configJson) {
+    const cfgDir = path.join(home, '.config', 'kaola-workflow');
+    fs.mkdirSync(cfgDir, { recursive: true });
+    fs.writeFileSync(path.join(cfgDir, 'config.json'), configJson);
+  }
+  const r = spawnSync(process.execPath, [
+    path.join(__dirname, 'kaola-gitea-workflow-sink-pr.js'),
+    '--project', 'climerged-' + tag, '--branch', 'feature-cli-' + tag, '--issue', '690'
+  ].concat(extraArgs || []), {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 60000,
+    env: Object.assign({}, process.env, {
+      HOME: home, USERPROFILE: home,
+      KAOLA_WORKFLOW_OFFLINE: '0',
+      KAOLA_TEA_MOCK_SCRIPT: mock
+    })
+  });
+  const calls = (() => { try { return fs.readFileSync(callLog, 'utf8'); } catch (_) { return ''; } })();
+  return { r, calls };
+}
+
+{
+  const { r, calls } = gt1098RunMergedPrCli('merge', ['--merge']);
+  assert(r.status === 0,
+    '#1098 B2: an already-merged PR with --merge must exit 0, got ' + r.status + '\nstderr: ' + r.stderr);
+  assert(/sink_pr: already_merged/.test(r.stdout),
+    '#1098 B2: the CLI must disclose the already_merged lane, got: ' + r.stdout);
+  assert(!/\/merge\b/.test(calls),
+    '#1098 B2: --merge must NOT call the merge API on an already-merged PR, got calls:\n' + calls);
+}
+
+{
+  const { r, calls } = gt1098RunMergedPrCli('auto',
+    [], JSON.stringify({ pr_auto_merge: true }) + '\n');
+  assert(r.status === 0,
+    '#1098 B2: an already-merged PR under pr_auto_merge must exit 0, got ' + r.status + '\nstderr: ' + r.stderr);
+  assert(!/\/merge\b/.test(calls),
+    '#1098 B2: pr_auto_merge must NOT call the merge API on an already-merged PR, got calls:\n' + calls);
+}
+
+console.log('Gitea #1098 B2 CLI already-merged tests passed');
 
 console.log('Gitea #1098 §2.1 PR-identity tests passed');
 

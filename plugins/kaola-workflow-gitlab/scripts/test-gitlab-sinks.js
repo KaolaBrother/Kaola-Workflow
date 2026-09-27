@@ -167,14 +167,12 @@ withForge({
     gitExec(bin, args) { calls.push([bin, args]); return ''; }
   });
   assert.strictEqual(mr.mr_iid, 8);
-  // #1098 F1: MEANING CHANGED. The lookup precedes the push, so reuse never pushes the CREATE path's
-  // pre-flight push — but it MUST still be able to publish a branch that origin has not received
-  // (that is the archive-push retry). This case passes `gitExec`, i.e. the skipPush/stub context, so
-  // no push is issued; the real re-push contract is covered end-to-end by the walkthrough's
-  // testSinkPrRePushesArchiveAfterRefusedPush. What this assertion now pins is that reuse did NOT
-  // take the create path.
-  assert(Array.isArray(calls) && calls.every(c => JSON.stringify(c) !== JSON.stringify(['git', ['push', 'origin', 'feature']])),
-    '#1098: reuse must not take the create path\'s pre-flight push');
+  // #1098 B2 (review round 2): the round-1 assertion here ("reuse must not push") was REMOVED. It
+  // could never fail: the kernel performs the publish push with spawnSync, so the injected `gitExec`
+  // never observes it. "Reuse does not take the create path" is already pinned by the surrounding
+  // `createMergeRequest` stub, which throws if it is reached. Push-on-reuse is pinned end to end by
+  // the GitHub walkthrough test `testSinkPrRePushesArchiveAfterRefusedPush`, which drives the shared
+  // kernel function and asserts the archive actually reaches origin.
   const state = fs.readFileSync(path.join(root, 'kaola-workflow', 'sink-project', 'workflow-state.md'), 'utf8');
   assert(state.includes('sink: mr'));
   assert(state.includes('mr_url: https://gitlab.example/group/project/-/merge_requests/8'));
@@ -3473,6 +3471,75 @@ function gl1098WriteTaskFixture(root, project, issueIid) {
   });
   assert.strictEqual(mergeCalls, 0, '#1098 F4: a MERGED MR must never be merged again');
 }
+
+// ── #1098 B2 (review round 2) — the F4 fix, pinned at the CLI ─────────────────────────────────
+// The round-1 F4 blocks called `ensureMergeRequest` directly, which never merged even on the broken
+// code: the bug lived in `main()`, so those blocks passed at 79798456 and pinned nothing. These two
+// cases drive the REAL CLI (the forge is reached through KAOLA_GLAB_MOCK_SCRIPT, so `glab` calls are
+// recorded) on an already-merged MR and assert the merge API is never invoked — in both the explicit
+// `--merge` lane and the config `mr_auto_merge: true` lane.
+function gl1098RunMergedMrCli(tag, extraArgs, configJson) {
+  const root = tempRoot('kw-gl-1098-cli-' + tag + '-');
+  const dir = gl1098WriteTaskFixture(root, 'climerged-' + tag, 690);
+  fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.cache', 'sink-pr-result.json'),
+    JSON.stringify({ project: 'climerged-' + tag, branch: 'feature-cli-' + tag,
+      mr_url: 'https://gitlab.example/group/project/-/merge_requests/90', mr_iid: 90 }, null, 2) + '\n');
+  const callLog = path.join(root, 'glab-calls.log');
+  const mock = path.join(root, 'glab-mock.js');
+  // The mock records every invocation; `mr view` reports the MR already MERGED, and `mr merge` would
+  // be recorded — that record is the assertion.
+  fs.writeFileSync(mock, [
+    "const fs = require('fs');",
+    "const args = process.argv.slice(2);",
+    "fs.appendFileSync(" + JSON.stringify(callLog) + ", args.join(' ') + '\\n');",
+    "if (args[0] === 'mr' && args[1] === 'view') { process.stdout.write(JSON.stringify({ iid: 90, state: 'merged', source_branch: 'feature-cli-" + tag + "', target_branch: 'main', description: 'Closes #690', web_url: 'https://gitlab.example/group/project/-/merge_requests/90' }) + '\\n'); process.exit(0); }",
+    "if (args[0] === 'mr' && args[1] === 'list') { process.stdout.write('[]\\n'); process.exit(0); }",
+    "process.stdout.write('{}\\n'); process.exit(0);"
+  ].join('\n'));
+  const home = tempRoot('kw-gl-1098-home-' + tag + '-');
+  if (configJson) {
+    const cfgDir = path.join(home, '.config', 'kaola-workflow');
+    fs.mkdirSync(cfgDir, { recursive: true });
+    fs.writeFileSync(path.join(cfgDir, 'config.json'), configJson);
+  }
+  const r = spawnSync(process.execPath, [
+    path.join(__dirname, 'kaola-gitlab-workflow-sink-mr.js'),
+    '--project', 'climerged-' + tag, '--branch', 'feature-cli-' + tag, '--issue', '690'
+  ].concat(extraArgs || []), {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 60000,
+    env: Object.assign({}, process.env, {
+      HOME: home, USERPROFILE: home,
+      KAOLA_WORKFLOW_OFFLINE: '0',
+      KAOLA_GLAB_MOCK_SCRIPT: mock
+    })
+  });
+  const calls = (() => { try { return fs.readFileSync(callLog, 'utf8'); } catch (_) { return ''; } })();
+  return { r, calls };
+}
+
+{
+  const { r, calls } = gl1098RunMergedMrCli('merge', ['--merge']);
+  assert(r.status === 0,
+    '#1098 B2: an already-merged MR with --merge must exit 0, got ' + r.status + '\nstderr: ' + r.stderr);
+  assert(/sink_mr: already_merged/.test(r.stdout),
+    '#1098 B2: the CLI must disclose the already_merged lane, got: ' + r.stdout);
+  assert(!/^mr merge/m.test(calls),
+    '#1098 B2: --merge must NOT call `glab mr merge` on an already-merged MR, got calls:\n' + calls);
+}
+
+{
+  const { r, calls } = gl1098RunMergedMrCli('auto',
+    [], JSON.stringify({ mr_auto_merge: true }) + '\n');
+  assert(r.status === 0,
+    '#1098 B2: an already-merged MR under mr_auto_merge must exit 0, got ' + r.status + '\nstderr: ' + r.stderr);
+  assert(!/^mr merge/m.test(calls),
+    '#1098 B2: mr_auto_merge must NOT call `glab mr merge` on an already-merged MR, got calls:\n' + calls);
+}
+
+console.log('GitLab #1098 B2 CLI already-merged tests passed');
 
 console.log('GitLab #1098 §2.1 MR-identity tests passed');
 

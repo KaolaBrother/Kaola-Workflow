@@ -39,9 +39,10 @@
   linked posture the archive commit is built from the main checkout's working tree onto the branch tip
   through the kernel's private index (`commitPathsOntoCandidate`), the local branch is advanced
   ff-only in its holder or by compare-and-swap `update-ref`, and only then pushed — never the default
-  branch, never a force, and never touching the main checkout's index or HEAD. The GitHub sink's final
-  stdout line is machine-readable (`sink_pr: created | reused | already_merged`); GitLab and Gitea
-  return `already_merged` from their ensure functions instead. Keep-open stays
+  branch, never a force, and never touching the main checkout's index or HEAD. All three sinks now
+  disclose their lane on a machine-readable first stdout line (`sink_pr: created | reused |
+  already_merged`; GitLab and Gitea print `sink_mr:` / `sink_pr:` above their existing URL lines and
+  also return `already_merged` from their ensure functions). Keep-open stays
   merge-sink-only.
 - **`watch-pr` / `watch-mr` reconcile archived `sink: pr` / `sink: mr` runs (#1098).** A standard PR
   path archives the run before the sink executes, so the live-folder loop never saw it again. A new

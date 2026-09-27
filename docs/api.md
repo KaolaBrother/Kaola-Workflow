@@ -1409,10 +1409,12 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
   worktree that holds it or by compare-and-swap `update-ref` otherwise, then pushed. The main
   checkout's index and HEAD are never touched, the default branch is never pushed, and a push is
   never forced.
-- **Output**: the GitHub sink's final stdout line is machine-readable — `sink_pr: created`,
-  `sink_pr: reused`, or `sink_pr: already_merged`. This line is additive; the sink had no stdout
-  contract before. GitLab and Gitea keep their existing `MR URL:` / `PR URL:` stdout and instead
-  return `already_merged: true` from `ensureMergeRequest` / `ensurePullRequest` on the merged lane.
+- **Output**: all three sinks disclose the lane on a machine-readable first stdout line — the GitHub
+  sink prints `sink_pr: created` / `sink_pr: reused` / `sink_pr: already_merged`, and GitLab and Gitea
+  print the same shape as `sink_mr: …` / `sink_pr: …` followed by their existing `MR URL:` /
+  `PR URL:` lines. GitLab and Gitea additionally return `already_merged: true` from
+  `ensureMergeRequest` / `ensurePullRequest` on the merged lane. The lane line is additive; existing
+  consumers match by `includes`, so the extra line breaks nothing.
 - **Closure**: the PR/MR body carries one `Closes #n` line per claimed member, so merging it into
   the default branch closes the whole set, as the merge sink does. The member set is `--issue-numbers`; when the flag is
   absent, the state's `issue_numbers` line (live, then archived) supplies it. The primary `--issue`
@@ -1421,8 +1423,10 @@ fault. Re-run after resolving it (for example, removing a stale `index.lock`).
 - **Exit codes**: `0` created/reused/already-merged and recorded · `1` push, creation, probe failure
   (`pr_probe_failed` / `mr_probe_failed` on a durable record), or a reuse/closed-unmerged refusal.
 - **Offline**: `KAOLA_WORKFLOW_OFFLINE=1` writes an `OFFLINE_PLACEHOLDER` record instead of real
-  metadata, and changes no git history in the linked posture (main's index and HEAD stay untouched).
-  A placeholder is never treated as an identity by the reuse lookup.
+  metadata, and changes no git history in the linked posture — when the sink runs from a linked
+  worktree, `root` is the shared main checkout and its index and HEAD stay untouched. Only in the
+  non-linked posture (the checkout the sink runs in IS the main root) does the legacy local metadata
+  commit still happen. A placeholder is never treated as an identity by the reuse lookup.
 - The PR sink emits no closure receipt — the authoritative receipt for a `sink: pr` project is
   emitted by the watcher at merge. This is documented behavior, not a gap.
 

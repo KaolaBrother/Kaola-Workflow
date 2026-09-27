@@ -250,9 +250,8 @@ function publishArchiveWithPr(root, project, branch, projectFolder, prUrl, optio
   const res = adaptiveSchema.publishPathsOntoRequestBranch(root, {
     branch: branch,
     pathspec: relDir,
-    project: project,
     message: 'chore: record PR metadata for ' + project,
-    forcePush: opts.skipPush === true
+    skipPush: opts.skipPush === true
   });
   if (!res.ok) {
     if (res.error === 'branch_missing') {
@@ -318,12 +317,15 @@ function ensurePullRequest(args, opts) {
     const summaryFile = path.join(root, 'kaola-workflow', args.project, 'finalization-summary.md');
     updateStateSinkBlock(stateFile, prUrl, prNumber, project.full_name, project.html_url);
     appendSummary(summaryFile, prUrl, prNumber);
-    // #1098 F6: OFFLINE changes no git history. In the LINKED posture the run branch lives in a
-    // worktree other than `root` (the MAIN checkout), where committing would land a metadata commit
-    // on main's HEAD — never touching main's index or HEAD is the sink's contract, so the files are
-    // left written for the caller. Every other shape keeps the legacy local metadata commit.
-    const branchHolder = adaptiveSchema.worktreeCheckedOutBranch(root, args.branch);
-    if (!(branchHolder && branchHolder !== root)) {
+    // #1098 F6/N2: OFFLINE changes git history ONLY in the non-linked posture — the checkout the
+    // sink runs in IS the main root, i.e. the run's own single checkout, which keeps its legacy
+    // local metadata commit exactly as before. When the run started from a linked worktree, `root`
+    // is the SHARED main checkout, and committing there would land a metadata commit on main's
+    // HEAD; never touching main's index or HEAD is the sink's contract, so the files are left
+    // written for the caller. No push happens in either case (OFFLINE has no remote).
+    const runToplevel = getRoot();
+    const nonLinked = runToplevel === root;
+    if (nonLinked) {
       const relState = path.relative(root, stateFile);
       const relSummary = path.relative(root, summaryFile);
       spawnSync('git', ['-C', root, 'add', relState, relSummary], { stdio: 'pipe' });
